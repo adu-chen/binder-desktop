@@ -1,0 +1,154 @@
+---
+文档编号：ED-M-S-01
+文档状态：A
+负责模块：ED
+文档职责：ED 编辑器模块级状态机设计——文档编辑会话机（SM-ED-01），含 APC §6 必备字段；登记 A-SYS-M-S-01 总图，登记 ED↔WS 脏态/保存 X-INTER-001 跨模块转移契约；说明 decoration 呈现不独立建机的豁免依据
+上游约束：A-ED-M-T-01_编辑器技术设计.md（ED-EDIT/ED-DECOR 链路、BR-ED-STATE-001/002 规则）、A-CORE-C-P-01_APC.md（§6 状态机必备字段与强制阈值）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003 注册前置、X-INTER-001 跨模块转移）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01 save 保存机）、A-SYS-I-P-02_IPC协议.md（统一错误形状）、ADU.md（§3.1 STATE_MACHINE 格式）
+直接承接：SM-ED-01 经 rules 字段承载 A-ED-M-T-01 规则；machine_id 登记 A-SYS-M-S-01 总图；edit/saved 转移点对接 WS SM-WS-01（X-INTER-001）
+使用边界：本文定义 ED 状态机内部；不重定义规则（归 A-ED-M-T-01）、不定义 SM-WS-01 内部（归 A-WS-M-S-01）、不为 decoration 呈现独立建机（依附消费方终态机与 SM-ED-01，APC §6 纯展示豁免，§4 说明）；inline-assist/autocomplete 归属未定，不预建其状态机
+变更要求：transitions/forbidden_transitions 变更须同步 A-ED-M-T-01 对应规则并重跑测试矩阵；ED↔WS 转移点变更须与 WS 共同复核 X-INTER-001；machine_id 一经登记总图不可更改
+治理成熟度：draft
+---
+
+# Binder 编辑器状态机设计（ED · L2 技术设计）
+
+## §1 文档定位
+
+本文承接 A-ED-M-T-01 的状态化核心链，按 APC §6 定义 ED 状态机并登记 A-SYS-M-S-01 总图：
+
+```
+A-ED-M-T-01（规则 SSOT：ED-EDIT）→ 本文 SM-ED-01（states/transitions）
+本文 machine_id ──登记──→ A-SYS-M-S-01 §3 总图
+SM-ED-01 edit/saved 转移点 ──对接──→ WS SM-WS-01（X-INTER-001 跨模块转移契约）
+```
+
+满足 X-SEQ-003：文档编辑会话为有状态/跨层/多步核心链（加载经 WS→编辑→脏态→save 经 WS→关闭），
+在此建机后方可进入实现。decoration 呈现与分页不独立建机，豁免依据见 §4。
+
+## §2 SM-ED-01 · 文档编辑会话机
+
+<!-- STATE_MACHINE
+machine_id: SM-ED-01
+owner_module: ED
+status: active
+summary: 单文档编辑会话生命周期（加载经 WS / 编辑脏态驱动 SM-WS-01 / 解析失败降级只读 / 脏态不静默关闭）
+source_type: design
+chain: ED-EDIT
+rules: BR-ED-STATE-001, BR-ED-DATA-001, BR-ED-DATA-002
+initial_state: Closed
+terminal_states: Closed
+-->
+
+- **machine_id**：SM-ED-01　**owner_module**：ED
+- **scope**：单个 workspace 内文档一次编辑会话（打开→编辑→保存协同→关闭）的完整生命周期
+- **context**：目标 DocRef（A-SYS-I-P-01）、编辑模型（内容块树）、脏态标记、加载/解析结果
+- **states**：Closed、Loading、Ready、Editing、ReadOnly、Conflicted
+- **events**：open、loadOk、parseFail、loadFail、edit、saved、close、confirmDiscard、retry、
+  externalChange、saveConflict、conflictKeepMine、conflictReload
+- **transitions（主表）**：
+
+| from | event | guard | to | action |
+|---|---|---|---|---|
+| Closed | open | 路径在 workspace root 内（X-FORBID-004，WS 侧守护） | Loading | 经 WS 读取内容 |
+| Loading | loadOk | 内容解析为编辑模型成功 | Ready | 装载编辑模型（md 直载 / docx 经 DOC 转换） |
+| Loading | parseFail | — | ReadOnly | 降级只读呈现，不静默丢内容 |
+| Loading | loadFail | — | Closed | 统一错误形状，会话不建立 |
+| Ready | edit | — | Editing | 更新编辑模型；驱动 SM-WS-01 Idle→Dirty（X-INTER-001） |
+| Ready | externalChange | 无脏态（BR-ED-STATE-003） | Loading | 自动重载磁盘内容 + 非阻断提示 |
+| Editing | edit | — | Editing | 持续编辑，脏态保持 |
+| Editing | saved | SM-WS-01 达 Saved（X-INTER-001 回执） | Ready | 脏态清除 |
+| Editing | externalChange / saveConflict | 有脏态（WS 事件/SM-WS-01 冲突回执） | Conflicted | 冲突提示，等待用户显式裁决 |
+| Conflicted | conflictKeepMine | 用户显式选择保留己方编辑 | Editing | 脏态保留；后续 save 经 overrideConfirmed 覆盖确认 |
+| Conflicted | conflictReload | 用户显式选择放弃并重载 | Loading | 丢弃脏态（显式）+ 重载磁盘内容 |
+| Ready | close | — | Closed | 会话关闭 |
+| ReadOnly | close | — | Closed | 会话关闭 |
+| ReadOnly | retry | — | Loading | 重新加载解析 |
+| Editing | close | 脏态已保存（saved 先行）或用户 confirmDiscard | Closed | 关闭；丢弃须经显式确认 |
+
+- **error_states**：ReadOnly（解析失败降级态，recovery：retry→Loading）；loadFail 直接回 Closed
+  （会话不建立，统一错误形状）
+- **recovery_paths**：ReadOnly→retry→Loading；save 失败不改变本机状态（停留 Editing，SM-WS-01
+  SaveError 侧重试，ED 保持脏态可重试）
+- **forbidden_transitions**：
+  - Closed → Editing（未经加载不得编辑）
+  - Loading → Editing（加载未完成不得编辑）
+  - ReadOnly → Editing（只读降级态不得编辑，须 retry 重载成功后方可）
+  - Editing → Closed 且无 saved/confirmDiscard（脏态不得静默关闭，BR-ED-STATE-001）
+  - Editing（收到 externalChange）→ Loading 直达（**有脏态不得静默重载**，必经 Conflicted 显式裁决）
+  - Conflicted → Ready/Editing/Loading 无用户显式选择（冲突不得自动消解，BR-ED-STATE-003）
+- **acceptance_criteria**：唯一进入 Editing 的路径经 Ready；脏态会话关闭必经 saved 或显式
+  confirmDiscard；parseFail 不丢内容（ReadOnly 可见）；loadFail 不建立会话；离线时 open/edit/close
+  全链可用（不依赖在线鉴权）；外部变更下两个方向的内容损失（覆盖外部修改/丢弃己方脏态）均必经
+  用户显式选择
+- **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions）
+
+## §3 跨模块转移契约（X-INTER-001：ED ↔ WS）
+
+| 转移点 | 方向 | 契约 |
+|---|---|---|
+| 脏态产生 | SM-ED-01（Ready→Editing 的 edit）→ SM-WS-01（Idle→Dirty） | ED 的 edit 事件是 SM-WS-01 Dirty 的唯一业务驱动源；语义为"编辑模型已偏离落盘内容" |
+| 保存回执 | SM-WS-01（Saving→Saved）→ SM-ED-01（Editing→Ready 的 saved） | WS 落盘成功回执驱动 ED 清脏态；SaveError 不发 saved，ED 停留 Editing 可重试 |
+
+两侧对接一致性（事件语义、回执时机）登记 A-SYS-M-S-01 §5，在 G5 跨模块联调验证。
+SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文不重定义。
+
+## §4 不独立建机的呈现链（豁免说明，APC §6）
+
+- **decoration 呈现**（ED-DECOR）：呈现/复位由消费方信号驱动（DE diff 终态机、AG 回合机），自身
+  无独立业务状态——其"状态"即消费方状态机的投影，按 APC §6 纯展示豁免不建机；约束由
+  BR-ED-STATE-002 承载，挂载/复位正确性入 §5 测试。若后续暴露独立状态（如批量 diff 呈现编排），
+  再补机并登记总图。
+- **分页布局**：纯呈现层重排（BR-ED-DATA-003），无跨层副作用，按 APC §6 豁免。
+- **inline-assist / autocomplete**：归属已确认为 AG（2026-06-11 人类确认，A-SYS-M-S-01 §3），
+  其状态机由 AG G2 在 AG M-S 定义，ED 不建机、只提供 decoration 承载面。
+
+## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
+
+- **SM-ED-01 正路**：Closed→open→Loading→loadOk→Ready→edit→Editing→saved→Ready→close→Closed。
+- **降级与错误路**：parseFail→ReadOnly（内容可见）→retry→Loading；loadFail→Closed 会话不建立；
+  save 失败停留 Editing 可重试（SM-WS-01 SaveError 侧验证归 WS）。
+- **禁止转移**：Closed/Loading/ReadOnly→Editing 不可达；Editing 无 saved/confirmDiscard 时 close
+  被拒（脏态不静默丢失）。
+- **跨模块转移（X-INTER-001，G5 联调）**：edit→SM-WS-01 Dirty 唯一驱动；Saved 回执→ED 清脏态；
+  SaveError 不清脏态。
+- **离线验收**（REQ-CORE-009）：断网下 open/edit/save（本地落盘）/close 全链可用。
+- decoration 挂载/复位（非状态机项）：按 blockId 挂载、终态复位不残留，入 ED-DECOR 集成测试
+  （BR-ED-STATE-002）。
+
+## §6 总图登记（A-SYS-M-S-01）
+
+| 核心链 | machine_id | 本文状态 | 总图回填动作 |
+|---|---|---|---|
+| 文档编辑会话 | SM-ED-01 | active | A-SYS-M-S-01 §3 新增「文档编辑会话｜ED｜SM-ED-01｜active」行 |
+| ED↔WS 脏态/保存转移 | —（转移契约非机） | — | A-SYS-M-S-01 §5 X-INTER-001 登记本文 §3 两个转移点 |
+
+> autocomplete / inline-assist 已确认归 AG（2026-06-11 人类确认），其 machine_id 由 AG G2 回填，本文不代填。
+
+## §7 术语归属说明
+
+状态机框架词不注册 TERM（ADU §3.2）。业务名词内容块（Block）/ 编辑器装饰层（EditorDecoration）
+已在 A-ED-M-T-01 §0 注册（主责 ED）；diff/pending_diff 主责归 DE，本文引用不抢注。
+
+## §8 技术债务与盲区（诚实声明）
+
+- **多会话并发**：多文档同时打开（多 SM-ED-01 实例）的实例隔离与资源上限属实现期运行时调度，
+  本文定单实例转移语义。
+- **docx 会话的转换失败细分**：Loading 中 DOC 转换失败与解析失败目前同走 parseFail→ReadOnly；
+  DOC G2 后如需细分（转换错误 vs 模型不兼容）回填本文。
+- **confirmDiscard 的 UI 交互形态**（确认弹层/自动暂存草稿等）属实现期产品决策，本文只锁
+  "脏态不得静默丢失"语义。
+
+## §9 后续动作
+
+1. 本文落地后同步编辑 A-SYS-M-S-01：§3 新增文档编辑会话行（SM-ED-01），§5 登记 ED↔WS 转移点。
+2. 随下一次 `npm run governance:generate` 复跑核对（STATE_MACHINE 块为门评追溯材料，规则由
+   A-ED-M-T-01 注册）。
+3. 待人类宣布 ED G2 闭合（AI 不自行宣布晋级，APC §2）；DOC G2 后细分 docx 转换失败路径（§8）。
+
+## 变更记录
+
+| 日期 | 版本 | 变更内容 |
+|------|------|---------|
+| 2026-06-11 | v1.0 | 初版（ED G2 状态机件）：定义 SM-ED-01 文档编辑会话机（Closed/Loading/Ready/Editing/ReadOnly，含 APC §6 全部必备字段）；ED↔WS 脏态/保存 X-INTER-001 转移契约（edit→Dirty 唯一驱动、Saved 回执清脏态）；decoration/分页/未归属辅助链不建机的豁免说明；满足 X-SEQ-003 注册前置；测试矩阵（正路/降级/禁止转移/离线验收）；债务（多会话并发、docx 失败细分、confirmDiscard 形态延后） |
+| 2026-06-11 | v1.1 | 人类决策同步：inline-assist/autocomplete 归属确认为 AG（§4/§6 表述更新，状态机由 AG G2 定义，ED 仅承载呈现） |
+| 2026-06-12 | v1.2 | Q2 缺口补遗：SM-ED-01 新增 Conflicted 态与 externalChange/saveConflict/conflictKeepMine/conflictReload 事件；forbidden 增「有脏态不得静默重载」「冲突不得自动消解」；acceptance 同步（承载 BR-ED-STATE-003，对接 SM-WS-01 冲突路径与 BR-WS-OBS-001 事件） |

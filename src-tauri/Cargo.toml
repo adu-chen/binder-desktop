@@ -1,0 +1,23 @@
+[package]
+name = "binder"
+version = "0.1.0"
+description = "Binder — 本地优先的 AI 原生写作工作台"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "binder_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+# workspace.db 持久化（PI-SYS-03）。bundled：自带 sqlite C 库，免系统依赖。
+rusqlite = { version = "0.32", features = ["bundled"] }
+# 目录选择器（PI-FE-00）：欢迎页"打开/新建 workspace"经此选目录后调 ws.open_workspace。
+tauri-plugin-dialog = "2"

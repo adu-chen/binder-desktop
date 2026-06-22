@@ -1,0 +1,717 @@
+#!/usr/bin/env node
+// 生成 adus.md 的自动生成区。
+// 来源一：设计文档（.md 文件）中的 <!-- MODULE -->、<!-- DOMAIN -->、<!-- RULE -->、<!-- CHAIN -->、<!-- CONSTRAINT --> 标注块
+// 来源二：源代码（.ts / .tsx 文件）中的 @GOV 标注
+// 来源三：triage 报告文件（*_triage.md）
+// adus.md 元信息头部（文档头 + 边界说明 + 变更记录，## 【自动生成区】之前的内容）保持不变。
+// 用法：npm run governance:generate（或 node scripts/generate_adus.mjs）
+
+
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
+import { join, relative, dirname, extname, basename } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT      = join(__dirname, '..');
+
+// ── governance.config.json 读取 ───────────────────────────────────────────
+const configPath = join(ROOT, 'governance.config.json');
+if (!existsSync(configPath)) {
+  console.error('错误：未找到 governance.config.json，请先在项目根目录创建该文件');
+  process.exit(1);
+}
+const govConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+if (!govConfig.adus_path || !govConfig.adus_path.trim()) {
+  console.error('错误：governance.config.json 中 adus_path 为空，请先完成 bootstrap 流程');
+  process.exit(1);
+}
+
+const PROJECT_ROOT = join(ROOT, (govConfig.project_root || '.').trim());
+const DOCS      = join(PROJECT_ROOT, 'docs');
+const SRC       = join(PROJECT_ROOT, 'src');
+const SRC_TAURI = join(PROJECT_ROOT, 'src-tauri', 'src'); // Rust 后端源码根
+const TESTS     = join(PROJECT_ROOT, 'tests');
+const OUTPUT    = join(ROOT, govConfig.adus_path.trim());
+
+// 自动生成区的起始标记
+const AUTO_MARKER = '## 【自动生成区】';
+
+// 跳过的目录（源代码扫描）
+const SKIP_DIRS = new Set(['node_modules', 'generated', 'build', 'dist', '__mocks__', 'target']);
+
+// 治理控制文档本身不扫描；APC 是宪章文档、ADUS 是自动生成索引，两者不含业务标注块，同样排除
+const GOVERNANCE_FILES = new Set(['adu.md', 'adus.md', 'ADP.md', 'CLAUDE.md']);
+const APC_PATH  = govConfig.apc_path  ? govConfig.apc_path.trim()  : null;
+const ADUS_PATH = govConfig.adus_path ? govConfig.adus_path.trim() : null;
+
+// ── 文件收集 ──────────────────────────────────────────────────────────────
+
+function collectSourceFiles(dir, results = []) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return results; }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      collectSourceFiles(full, results);
+    } else if (entry.endsWith('.ts') || entry.endsWith('.tsx') || entry.endsWith('.rs')) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+function collectDesignDocs(dir, results = []) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return results; }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      // 不递归到 scripts/ 自身
+      if (entry !== 'scripts') collectDesignDocs(full, results);
+    } else if (entry.endsWith('.md') && !GOVERNANCE_FILES.has(basename(full))) {
+      const relFull = relative(ROOT, full);
+      // 跳过 triage 报告、APC 宪章和 ADUS 索引
+      if (!basename(full).endsWith('_triage.md') && relFull !== APC_PATH && relFull !== ADUS_PATH) results.push(full);
+    }
+  }
+  return results;
+}
+
+function collectTriageFiles(dir, results = []) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return results; }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      if (entry !== 'scripts') collectTriageFiles(full, results);
+    } else if (entry.endsWith('_triage.md')) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+function collectTestFiles(dir, results = []) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return results; }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      collectTestFiles(full, results);
+    } else if (
+      entry.endsWith('.test.ts') || entry.endsWith('.spec.ts') ||
+      entry.endsWith('.test.tsx') || entry.endsWith('.spec.tsx')
+    ) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+function collectTestCoverage(testsDir) {
+  const coverageMap = new Map();
+  if (!existsSync(testsDir)) return coverageMap;
+
+  const coverRe = /^\s*\/\/\s*covers:\s*(\S+)\s*$/;
+  const blockRe = /(?:describe|it|test)\s*\(\s*['"`]([^'"`]+)['"`]/;
+
+  for (const filePath of collectTestFiles(testsDir)) {
+    const relPath = relative(ROOT, filePath);
+    const lines   = readFileSync(filePath, 'utf8').split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+      const m = coverRe.exec(lines[i]);
+      if (!m) continue;
+      const ruleId = m[1];
+
+      let testName = 'file-level';
+      for (let j = i - 1; j >= 0; j--) {
+        const bm = blockRe.exec(lines[j]);
+        if (bm) { testName = bm[1]; break; }
+      }
+
+      const entry = `${relPath}::${testName}`;
+      if (!coverageMap.has(ruleId)) coverageMap.set(ruleId, []);
+      coverageMap.get(ruleId).push(entry);
+    }
+  }
+  return coverageMap;
+}
+
+// ── 设计文档标注块解析 ────────────────────────────────────────────────────
+
+function parseAnnotationBlocks(filePath) {
+  const src = readFileSync(filePath, 'utf8');
+  const rules       = [];
+  const chains      = [];
+  const constraints = [];
+  const modules     = [];
+  const domains     = [];
+  const terms       = [];
+
+  // 匹配 <!-- MODULE/DOMAIN/RULE/CHAIN/CONSTRAINT ... -->
+  const blockRe = /<!--\s*(MODULE|DOMAIN|RULE|CHAIN|CONSTRAINT|TERM)\s*([\s\S]*?)-->/g;
+  let m;
+  while ((m = blockRe.exec(src)) !== null) {
+    const kind    = m[1];
+    const body    = m[2];
+    const fields  = parseKVBlock(body);
+
+    if (kind === 'RULE') {
+      if (fields['rule_id']) rules.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'CHAIN') {
+      if (fields['chain_id']) chains.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'CONSTRAINT') {
+      if (fields['constraint_id']) constraints.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'MODULE') {
+      if (fields['module_code']) modules.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'DOMAIN') {
+      if (fields['domain_code']) domains.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'TERM') {
+      if (fields['term_id']) terms.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    }
+  }
+  return { rules, chains, constraints, modules, domains, terms };
+}
+
+function parseKVBlock(body) {
+  const result = {};
+  for (const line of body.split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    const val = line.slice(idx + 1).trim();
+    if (key) result[key] = val;
+  }
+  return result;
+}
+
+// ── triage 报告解析 ───────────────────────────────────────────────────────
+
+function parseTriageRecords(filePath) {
+  const src = readFileSync(filePath, 'utf8');
+  const records = [];
+  // 按 codes: 字段拆分记录块
+  const blocks = src.split(/(?=^codes:)/m);
+  for (const block of blocks) {
+    if (!block.trim()) continue;
+    const fields = {};
+    for (const line of block.split('\n')) {
+      const idx = line.indexOf(':');
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim();
+      const val = line.slice(idx + 1).trim();
+      if (key) fields[key] = val;
+    }
+    if (fields['codes'] && fields['分类']) {
+      records.push({
+        codes:    fields['codes'],
+        file:     fields['文件'] ?? '',
+        type:     fields['分类'],
+        resolved: fields['已解决'] ?? '否',
+      });
+    }
+  }
+  return records;
+}
+
+// ── @GOV 解析 ─────────────────────────────────────────────────────────────
+
+function parseGovBlocks(filePath) {
+  const src   = readFileSync(filePath, 'utf8');
+  const lines = src.split('\n');
+  const blocks = [];
+
+  let inGov = false, govLines = [], startLine = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!inGov && line.includes('@GOV')) {
+      inGov = true; govLines = []; startLine = i + 1;
+      continue;
+    }
+    if (inGov) {
+      if (line.includes('*/')) {
+        const block = parseGovContent(govLines, filePath, startLine);
+        if (block) blocks.push(block);
+        inGov = false; govLines = [];
+      } else {
+        govLines.push(line);
+      }
+    }
+  }
+  return blocks;
+}
+
+function extractField(lines, fieldName) {
+  const prefixes = [`* ${fieldName}:`, `*  ${fieldName}:`];
+  let value = null, capturing = false;
+
+  for (const line of lines) {
+    const t = line.trim();
+    if (prefixes.some(p => t.startsWith(p))) {
+      value = t.replace(/^\*\s+[\w]+:\s*/, '').trim();
+      capturing = true;
+      continue;
+    }
+    if (capturing) {
+      const isCont = t.startsWith('*') &&
+        !t.match(/^\*\s+(codes|type|chain|rules|boundary)\s*:/);
+      if (isCont) value += ' ' + t.replace(/^\*\s*/, '').trim();
+      else capturing = false;
+    }
+  }
+  return value;
+}
+
+function parseGovContent(lines, filePath, startLine) {
+  const codesRaw = extractField(lines, 'codes');
+  const type     = extractField(lines, 'type');
+  const chainRaw = extractField(lines, 'chain');
+  const rulesRaw = extractField(lines, 'rules');
+
+  if (!codesRaw || !type || !chainRaw) return null;
+
+  const chains = chainRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const rules  = (rulesRaw && rulesRaw !== '[]')
+    ? rulesRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  // codes 字段可能包含多行（续行以逗号结尾），清理空白后合并
+  const codesClean = codesRaw.replace(/\s+/g, ' ').trim();
+
+  return {
+    codes: codesClean,
+    type,
+    chains,
+    rules,
+    file: relative(ROOT, filePath),
+    line: startLine,
+  };
+}
+
+// ── Markdown 表格 ──────────────────────────────────────────────────────────
+
+function mdTable(headers, rows) {
+  if (!rows.length) return '';
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map(r => String(r[i] ?? '').length))
+  );
+  const pad = (s, w) => String(s ?? '').padEnd(w);
+  return [
+    `| ${headers.map((h, i) => pad(h, widths[i])).join(' | ')} |`,
+    `| ${widths.map(w => '-'.repeat(w)).join(' | ')} |`,
+    ...rows.map(r => `| ${r.map((c, i) => pad(c, widths[i])).join(' | ')} |`),
+  ].join('\n');
+}
+
+// ── 模块编码表 ─────────────────────────────────────────────────────────────
+
+function buildModuleTable(allModules) {
+  if (!allModules.length) {
+    return `（设计文档中存在 \`<!-- MODULE -->\` 标注块后自动生成）
+
+格式：
+\`\`\`
+| module_code | module_name | description | 来源文档 |
+|-------------|-------------|-------------|---------|
+\`\`\``;
+  }
+  const rows = allModules.map(m => [
+    m['module_code'] ?? '',
+    m['module_name'] ?? '',
+    m['description'] ?? '',
+    m['sourceFile'] ?? '',
+  ]);
+  return mdTable(['module_code', 'module_name', 'description', '来源文档'], rows);
+}
+
+// ── 规则域注册表 ───────────────────────────────────────────────────────────
+
+const BUILTIN_DOMAINS = [
+  ['STATE',   '状态语义、生命周期、阶段闭合'],
+  ['DATA',    '数据结构、字段定义、schema'],
+  ['PERSIST', '持久化、恢复、重建'],
+  ['VERIFY',  '验证、审计、一致性检查'],
+  ['GOV',     '文档治理、命名、变更控制'],
+  ['OBS',     '可观测性、错误处理、恢复'],
+];
+
+function buildDomainRegistry(allDomains) {
+  const rows = [
+    ...BUILTIN_DOMAINS.map(([code, desc]) => [code, desc, '内置']),
+    ...allDomains.map(d => [d['domain_code'] ?? '', d['description'] ?? '', d['sourceFile'] ?? '']),
+  ];
+  return mdTable(['domain_code', 'description', '来源'], rows);
+}
+
+// ── 规则注册表 ─────────────────────────────────────────────────────────────
+
+function buildRuleRegistry(allRules, coverageMap = new Map()) {
+  if (!allRules.length) {
+    return `（设计文档中存在 \`<!-- RULE -->\` 标注块后自动生成）
+
+格式：
+\`\`\`
+| rule_id | 域 | 主链路 | 来源文档 | registry_status | 测试覆盖 |
+|---------|-----|-------|---------|----------------|---------|
+\`\`\``;
+  }
+  const rows = allRules.map(r => {
+    const ruleId  = r['rule_id'] ?? '';
+    const entries = coverageMap.get(ruleId);
+    const coverageStr = entries ? entries.join(', ') : 'MISSING';
+    return [
+      ruleId,
+      r['域'] ?? r['domain'] ?? '',
+      r['主链路'] ?? r['main_chain'] ?? '',
+      r['sourceFile'] ?? '',
+      r['registry_status'] ?? 'registered',
+      coverageStr,
+    ];
+  });
+  return mdTable(['rule_id', '域', '主链路', '来源文档', 'registry_status', '测试覆盖'], rows);
+}
+
+// ── 链路注册表 ─────────────────────────────────────────────────────────────
+
+function buildChainRegistry(allChains) {
+  if (!allChains.length) {
+    return `（设计文档中存在 \`<!-- CHAIN -->\` 标注块后自动生成）
+
+格式：
+\`\`\`
+| chain_id | 主责模块 | status | 集成测试 |
+|----------|---------|--------|---------|
+\`\`\``;
+  }
+  const rows = allChains.map(c => [
+    c['chain_id'] ?? '',
+    c['主责模块'] ?? c['owner_module'] ?? '',
+    c['status'] ?? 'active',
+    c['集成测试'] ?? c['integration_tests'] ?? '',
+  ]);
+  return mdTable(['chain_id', '主责模块', 'status', '集成测试'], rows);
+}
+
+// ── 跨模块约束表 ───────────────────────────────────────────────────────────
+
+function buildConstraintTable(allConstraints) {
+  if (!allConstraints.length) {
+    return `（设计文档中存在 \`<!-- CONSTRAINT -->\` 标注块后自动生成）
+
+格式：
+\`\`\`
+| constraint_id | 摘要 | 涉及模块 | 链路影响 | 来源文档 |
+|---------------|------|---------|---------|---------|
+\`\`\``;
+  }
+  const rows = allConstraints.map(c => [
+    c['constraint_id'] ?? '',
+    c['摘要'] ?? c['summary'] ?? '',
+    c['涉及模块'] ?? c['modules'] ?? '',
+    c['链路影响'] ?? c['chains'] ?? '',
+    c['sourceFile'] ?? '',
+  ]);
+  return mdTable(['constraint_id', '摘要', '涉及模块', '链路影响', '来源文档'], rows);
+}
+
+// ── 术语注册表 ─────────────────────────────────────────────────────────────
+
+function buildTermRegistry(allTerms) {
+  if (!allTerms.length) {
+    return `（设计文档中存在 \`<!-- TERM -->\` 标注块后自动生成）
+
+格式：
+\`\`\`
+| term_id | 所属链路 | 正式中文名 | 正式英文名 | 禁用别名 | 来源文档 |
+|---------|---------|-----------|-----------|---------|---------|
+\`\`\``;
+  }
+  const rows = allTerms.map(t => [
+    t['term_id'] ?? '',
+    t['chains'] ?? t['chain'] ?? '',
+    t['zh'] ?? '',
+    t['en'] ?? '',
+    t['forbidden'] ?? '',
+    t['sourceFile'] ?? '',
+  ]);
+  return mdTable(['term_id', '所属链路', '正式中文名', '正式英文名', '禁用别名', '来源文档'], rows);
+}
+
+// ── 链路视图 ───────────────────────────────────────────────────────────────
+
+function buildChainView(govBlocks, knownChainIds) {
+  const chainMap = new Map();
+  const unknownChains = new Set();
+
+  for (const b of govBlocks) {
+    for (const chain of b.chains) {
+      if (!chainMap.has(chain)) chainMap.set(chain, []);
+      chainMap.get(chain).push(b);
+      if (knownChainIds.size > 0 && !knownChainIds.has(chain)) {
+        unknownChains.add(chain);
+      }
+    }
+  }
+
+  if (!chainMap.size) {
+    return `（源代码中存在 @GOV 标注后自动生成）
+
+格式：
+\`\`\`
+#### [CHAIN-ID]
+
+| codes | type | rules | 文件 | 行号 |
+|-------|------|-------|------|------|
+\`\`\``;
+  }
+
+  const parts = [...chainMap.keys()].sort().map(chainId => {
+    const rows = chainMap.get(chainId).map(b => [
+      b.codes,
+      b.type,
+      b.rules.length ? b.rules.join(', ') : '[]',
+      b.file,
+      String(b.line),
+    ]);
+    const warning = unknownChains.has(chainId)
+      ? `\n> ⚠ P1：chain_id \`${chainId}\` 未在链路注册表中找到对应 <!-- CHAIN --> 标注块\n`
+      : '';
+    return `#### ${chainId}${warning}\n\n` + mdTable(['codes', 'type', 'rules', '文件', '行号'], rows);
+  });
+
+  return parts.join('\n\n');
+}
+
+// ── 规则视图 ───────────────────────────────────────────────────────────────
+
+function buildRuleView(govBlocks) {
+  const ruleMap = new Map();
+  for (const b of govBlocks) {
+    for (const rule of b.rules) {
+      if (!ruleMap.has(rule)) ruleMap.set(rule, []);
+      ruleMap.get(rule).push(b);
+    }
+  }
+
+  if (!ruleMap.size) {
+    return `（源代码中存在 @GOV 标注后自动生成）
+
+格式：
+\`\`\`
+#### [rule_id]
+
+| codes | type | chain | 文件 | 行号 |
+|-------|------|-------|------|------|
+\`\`\``;
+  }
+
+  return [...ruleMap.keys()].sort().map(ruleId => {
+    const rows = ruleMap.get(ruleId).map(b => [
+      b.codes,
+      b.type,
+      b.chains.join(', '),
+      b.file,
+      String(b.line),
+    ]);
+    return `#### ${ruleId}\n\n` + mdTable(['codes', 'type', 'chain', '文件', '行号'], rows);
+  }).join('\n\n');
+}
+
+// ── triage 汇总 ───────────────────────────────────────────────────────────
+
+function buildTriageSummary(triageRecords) {
+  const note = '\n\n注：triage 汇总为精简视图，只包含 codes、文件、分类、已解决四列。\n完整的七字段记录（含原因、已采取动作、需要人类介入）\n保存在各模块的 [模块]_triage.md 报告文件中。';
+  if (!triageRecords.length) {
+    return `（triage 报告存在后自动生成）
+
+| codes | 文件 | 分类 | 已解决 |
+|-------|------|------|--------|
+| （待生成） | | | |` + note;
+  }
+  const rows = triageRecords.map(r => [r.codes, r.file, r.type, r.resolved]);
+  return mdTable(['codes', '文件', '分类', '已解决'], rows) + note;
+}
+
+// ── timestamp churn 防护 ──────────────────────────────────────────────────
+
+function contentChanged(oldContent, newContent) {
+  const strip = s => s.split('\n')
+    .filter(line => !line.includes('最后生成') && !line.includes('Last generated'))
+    .join('\n');
+  return strip(oldContent) !== strip(newContent);
+}
+
+// ── 主流程 ─────────────────────────────────────────────────────────────────
+
+function main() {
+  // 1. 扫描源代码 @GOV 块（前端 src/ 的 .ts/.tsx + Rust 后端 src-tauri/src/ 的 .rs）
+  const srcFiles  = [...collectSourceFiles(SRC), ...collectSourceFiles(SRC_TAURI)];
+  const govBlocks = [];
+  for (const f of srcFiles) govBlocks.push(...parseGovBlocks(f));
+
+  // 2. 扫描设计文档标注块
+  const docFiles = collectDesignDocs(DOCS);
+  const allRules = [], allChains = [], allConstraints = [], allModules = [], allDomains = [], allTerms = [];
+  for (const f of docFiles) {
+    const { rules, chains, constraints, modules, domains, terms } = parseAnnotationBlocks(f);
+    allRules.push(...rules);
+    allChains.push(...chains);
+    allConstraints.push(...constraints);
+    allModules.push(...modules);
+    allDomains.push(...domains);
+    allTerms.push(...terms);
+  }
+
+  // 3. 扫描 triage 报告
+  const triageFiles = collectTriageFiles(PROJECT_ROOT);
+  const triageRecords = [];
+  for (const f of triageFiles) triageRecords.push(...parseTriageRecords(f));
+
+  // 4. 扫描测试覆盖 covers 注释
+  const coverageMap = collectTestCoverage(TESTS);
+
+  const timestamp       = new Date().toISOString();
+  const knownChainIds   = new Set(allChains.map(c => c['chain_id']).filter(Boolean));
+  const moduleTable     = buildModuleTable(allModules);
+  const domainRegistry  = buildDomainRegistry(allDomains);
+  const chainRegistry   = buildChainRegistry(allChains);
+  const ruleRegistry    = buildRuleRegistry(allRules, coverageMap);
+  const constraintTable = buildConstraintTable(allConstraints);
+  const termRegistry    = buildTermRegistry(allTerms);
+  const chainView       = buildChainView(govBlocks, knownChainIds);
+  const ruleView        = buildRuleView(govBlocks);
+  const triageSummary   = buildTriageSummary(triageRecords);
+
+  // 5. 读取现有 adus.md，提取元信息头部（自动生成区之前的内容）
+  let metadataHeader = '';
+  let existingContent = '';
+  if (existsSync(OUTPUT)) {
+    existingContent = readFileSync(OUTPUT, 'utf8');
+    const markerIdx = existingContent.indexOf('\n' + AUTO_MARKER);
+    if (markerIdx !== -1) {
+      metadataHeader = existingContent.slice(0, markerIdx);
+    } else {
+      metadataHeader = existingContent;
+    }
+  }
+
+  // 首次生成时的默认模板
+  if (!metadataHeader.trim()) {
+    const today = new Date().toISOString().slice(0, 10);
+    metadataHeader = `---
+文档编号：CORE-GOV-01
+文档状态：A
+负责模块：CORE
+文档职责：ADU 派生检索索引
+上游约束：CORE-GOV-00
+直接承接：ADU / ADP / CLAUDE 的规则、链路、代码块检索
+使用边界：不定义治理规则，不定义开发过程，不替代 adu.md、ADP.md 或 CLAUDE.md
+变更要求：运行 npm run governance:generate 刷新自动生成区
+---
+
+# ADU 派生检索索引
+
+本文件由 \`governance:generate\` 自动生成。
+所有索引内容来自设计文档标注块、源代码 @GOV 标注、测试覆盖注释和 triage 报告。
+运行 \`npm run governance:generate\` 刷新。
+
+边界：
+- adu.md 是静态治理规则源。
+- ADP.md 是开发过程运行时协议。
+- CLAUDE.md 是 AI 会话入口与执行路由协议。
+- adus.md 只提供派生检索索引，不定义规则、不定义过程、不承载人类裁决。
+
+自动生成边界：
+- \`## 【自动生成区】\` 之前仅保留元信息头部，包括文档头、边界说明和变更记录。
+- 元信息头部不得写入规则、链路、模块、约束、裁决或索引内容。
+- \`## 【自动生成区】\` 及之后内容禁止人工编辑，应由 \`npm run governance:generate\` 刷新。
+
+---
+
+## 变更记录
+
+| 日期 | 版本 | 变更内容 |
+|------|------|---------|
+| ${today} | v1.0 | 初始版本 |`;
+  }
+
+  // 5. 去掉头部末尾所有分隔线，避免多次运行后重复堆叠
+  const trimmedMetadataHeader = metadataHeader.trimEnd().replace(/(\n\s*---\s*)+$/, '');
+
+  // 6. 拼装完整输出
+  const autoArea = `
+## 【自动生成区】
+
+<!-- 自动生成。禁止人工编辑。-->
+<!-- 运行：npm run governance:generate -->
+<!-- 最后生成时间：${timestamp} -->
+
+### 模块编码表
+
+${moduleTable}
+
+### 规则域注册表
+
+${domainRegistry}
+
+### 链路注册表
+
+${chainRegistry}
+
+### 规则注册表
+
+${ruleRegistry}
+
+### 跨模块约束表（X-INDEX）
+
+${constraintTable}
+
+### 术语注册表
+
+${termRegistry}
+
+### 链路视图
+
+${chainView}
+
+### 规则视图
+
+${ruleView}
+
+### triage 汇总
+
+${triageSummary}
+`;
+
+  const newContent = trimmedMetadataHeader + '\n\n---\n' + autoArea;
+  const stats = [
+    `@GOV 块: ${govBlocks.length}`,
+    `模块标注: ${allModules.length}`,
+    `域标注: ${allDomains.length}`,
+    `规则标注: ${allRules.length}`,
+    `链路标注: ${allChains.length}`,
+    `约束标注: ${allConstraints.length}`,
+    `triage 记录: ${triageRecords.length}`,
+    `术语标注: ${allTerms.length}`,
+  ].join('，');
+
+  if (existingContent && !contentChanged(existingContent, newContent)) {
+    console.log(`adus.md 内容无变化，跳过写入 — ${stats}`);
+    return;
+  }
+  mkdirSync(dirname(OUTPUT), { recursive: true });
+  writeFileSync(OUTPUT, newContent, 'utf8');
+  console.log(`adus.md 已生成 — ${stats} — ${timestamp}`);
+}
+
+main();

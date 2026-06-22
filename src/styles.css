@@ -1,0 +1,221 @@
+/*
+ * PI-FE-01 · DesignToken 体系与 Workbench 布局骨架
+ * 承接 A-SYS-C-T-02 §3 界面骨架 / TERM-SYS-001（DesignToken）。
+ * Token 精确值来源：docs/binder_ui/app-styles.css §8 Design Tokens（L4 参考稿，照搬不重设计）。
+ * 此文件是前端唯一颜色/尺寸来源——组件内不得硬编码原始色值与像素（DesignToken 约束）。
+ */
+
+:root {
+  /* —— 纸面 / 表面（Binder Core VI · D 调色板） —— */
+  --bg-page:     #F4F1EA;
+  --bg-elevated: #F8F5EC;
+  --bg-sunken:   #E6E2D8;
+  --bg-card:     #FFFFFF;
+  --bg-overlay:  rgba(14, 12, 10, 0.04);
+
+  /* —— 墨色阶（D-INK + 中性透明阶） —— */
+  --ink:   #0E0C0A;
+  --ink-2: #221F1A;
+  --ink-3: rgba(14, 12, 10, 0.70);
+  --ink-4: rgba(14, 12, 10, 0.50);
+  --ink-5: rgba(14, 12, 10, 0.30);
+  --ink-6: rgba(14, 12, 10, 0.16);
+
+  /* —— 分割线 —— */
+  --rule:        rgba(14, 12, 10, 0.10);
+  --rule-strong: rgba(14, 12, 10, 0.22);
+  --rule-faint:  rgba(14, 12, 10, 0.06);
+
+  /* —— 强调 · D-CLAY 锈红（VI 要求极克制使用） —— */
+  --rust:      #C24A2A;
+  --rust-2:    #A33C20;
+  --rust-bg:   rgba(194, 74, 42, 0.10);
+  --rust-tint: rgba(194, 74, 42, 0.32);
+
+  /* —— 语义色（仅状态语义，不作品牌色） —— */
+  --forest:    #2E6F4A;
+  --forest-2:  #1F5235;
+  --forest-bg: rgba(46, 111, 74, 0.10);
+  --gold:      #B58A2E;
+  --gold-bg:   rgba(181, 138, 46, 0.14);
+
+  /* —— 字体（IBM Plex 家族 + Noto SC） —— */
+  --font-sans:  "IBM Plex Sans", "Inter", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-serif: "Instrument Serif", "Source Serif 4", Georgia, serif;
+
+  /* —— 间距阶 —— */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-12: 48px;
+
+  /* —— 圆角（主结构硬朗，多为 0） —— */
+  --r-0: 0;
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-3: 8px;
+
+  /* —— 几何（布局栅格尺寸，A-SYS-C-T-02 §4） —— */
+  --rail-w:      44px;
+  --side-w:      272px;
+  --chat-w:      372px;
+  --titlebar-h:  32px;
+  --statusbar-h: 24px;
+  --diffstrip-h: 44px;
+
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--bg-page);
+  font-size: 14px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+
+/* mono 标签：所有大写编号/标签（A-SYS-C-T-02 视觉规范） */
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+/* ——————————————————————————————————————————————
+ * 欢迎页（无活动 workspace 时；PI-FE-03 将填充交互）
+ * —————————————————————————————————————————————— */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: var(--sp-3);
+  background: var(--bg-page);
+}
+.welcome h1 {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+.muted { color: var(--ink-4); margin: 0; }
+.actions { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-4); }
+
+button {
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-1);
+  background: var(--bg-card);
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+button:hover { background: var(--bg-elevated); }
+button.ghost { background: transparent; color: var(--ink-4); }
+button:disabled { opacity: 0.5; cursor: default; }
+.hint { color: var(--ink-5); font-size: 12px; margin-top: var(--sp-8); }
+
+/* ——————————————————————————————————————————————
+ * 主工作台（A-SYS-C-T-02 §4 全局布局）
+ * 行：[titlebar 32] [work 1fr] [diffstrip auto] [statusbar 24]
+ * work 列：[rail 44] [side 272] [center 1fr] [chat 372]
+ * —————————————————————————————————————————————— */
+.workbench {
+  display: grid;
+  grid-template-rows: var(--titlebar-h) 1fr auto var(--statusbar-h);
+  grid-template-areas:
+    "titlebar"
+    "work"
+    "diffstrip"
+    "statusbar";
+  height: 100vh;
+  background: var(--bg-page);
+}
+
+.titlebar {
+  grid-area: titlebar;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  background: var(--bg-elevated);
+  border-bottom: 0.5px solid var(--rule);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.work {
+  grid-area: work;
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--side-w) 1fr var(--chat-w);
+  grid-template-areas: "rail side center chat";
+  min-height: 0;
+}
+
+.rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  background: var(--bg-sunken);
+  border-right: 0.5px solid var(--rule);
+}
+
+.side {
+  grid-area: side;
+  background: var(--bg-elevated);
+  border-right: 0.5px solid var(--rule);
+  overflow: auto;
+  padding: var(--sp-3);
+}
+
+.center {
+  grid-area: center;
+  background: var(--bg-page);
+  overflow: auto;
+  padding: var(--sp-4);
+}
+
+.chat {
+  grid-area: chat;
+  background: var(--bg-elevated);
+  border-left: 0.5px solid var(--rule);
+  overflow: auto;
+  padding: var(--sp-3);
+}
+
+/* DiffStrip：无待裁决修改时隐藏（TERM-DE-001 计数为 0 → hidden，A-SYS-C-T-02 §4） */
+.diffstrip {
+  grid-area: diffstrip;
+  height: var(--diffstrip-h);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--sp-4);
+  background: var(--rust-bg);
+  border-top: 2px solid var(--rust);
+}
+.diffstrip[hidden] { display: none; }
+
+.statusbar {
+  grid-area: statusbar;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-4);
+  background: var(--bg-sunken);
+  border-top: 0.5px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-4);
+}

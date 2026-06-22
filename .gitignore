@@ -1,0 +1,13 @@
+# dependencies
+node_modules
+# build output
+dist
+src-tauri/target
+# rust
+**/*.rs.bk
+# os
+.DS_Store
+# logs
+*.log
+# claude local machine settings (permission allowlist; per-machine, not source)
+.claude/settings.local.json

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Binder UI · 全案原型</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" />
+
+  <link rel="stylesheet" href="app-styles.css" />
+  <link rel="stylesheet" href="app-styles-ext.css" />
+
+  <style>
+    body { background: #DCD8CC; }
+    .artboard-host { background: var(--bg-page); width: 100%; height: 100%; overflow: hidden; }
+  </style>
+
+  <!-- React + Babel pinned -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="mock-data.jsx"></script>
+  <script type="text/babel" src="binder-parts.jsx"></script>
+  <script type="text/babel" src="binder-editor.jsx"></script>
+  <script type="text/babel" src="binder-chat.jsx"></script>
+  <script type="text/babel" src="binder-app.jsx"></script>
+  <script type="text/babel" src="binder-showcase.jsx"></script>
+  <script type="text/babel" src="binder-showcase-2.jsx"></script>
+  <script type="text/babel" src="binder-showcase-3.jsx"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState } = React;
+    const { DesignCanvas, DCSection, DCArtboard } = window;
+    const { TweaksPanel, useTweaks, TweakSection, TweakColor, TweakRadio, TweakToggle } = window;
+    const { BinderMark, BinderWordmark } = window.BinderParts;
+    const { DiffStatesPage } = window.BinderShowcase;
+    const { ToolStatesPage, TabFileNodePage, GreenReviewPage, AssistOverlaysPage } = window.BinderShowcase2;
+    const { FlowA, FlowB, FlowC, FlowD, FlowF, FlowG, FlowH, EmptyLoadingErrorPage, TokensPage } = window.BinderShowcase3;
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "accent": "#C24A2A",
+      "paper": "#F4F1EA",
+      "showInlineAssist": false
+    }/*EDITMODE-END*/;
+
+    /* Cover artboard — index of the prototype */
+    function Cover() {
+      const sections = [
+        ['00', 'COVER',     '系统索引',        '本页'],
+        ['01', 'MAIN',      '主工作台 · 多状态', '6 frame'],
+        ['02', 'DIFF',      'Diff Card · 8 状态', '8 + 5'],
+        ['03', 'TOOL',      'Tool Call · 6 状态', '6'],
+        ['04', 'STATES',    'Tab · 节点 · 状态条', '4'],
+        ['05', 'REVIEW',    'Green Review 装饰层', '2'],
+        ['06', 'OVERLAYS',  '⌘J · ⌘K 浮层', '2'],
+        ['07', 'FLOWS',     '链路 A · B · C · D · F · G · H', '7'],
+        ['08', 'STATES',    '空态 · 加载态 · 错误态', '6 · 6 · 6'],
+        ['09', 'TOKENS',    '设计规范 · 颜色 / 字体 / 间距 / z-index', '4'],
+      ];
+      return (
+        <div className="page" style={{background:'var(--bg-page)'}}>
+          <div className="page-hd">
+            <div className="page-hd-l">
+              <span className="code">BINDER UI · 全案原型 · v1.0</span>
+            </div>
+            <span className="sub">2026 · SPRING · DESIGN HANDOFF</span>
+          </div>
+          <div className="page-body" style={{display:'flex', flexDirection:'column', gap:24}}>
+            <div style={{display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:24}}>
+              <div style={{display:'flex', flexDirection:'column', gap:16}}>
+                <div style={{display:'flex', alignItems:'center', gap:14}}>
+                  <BinderMark size={56} variant="accented" />
+                  <div>
+                    <BinderWordmark size={44} />
+                    <div style={{fontFamily:'var(--font-mono)', fontSize:11, color:'var(--ink-4)', letterSpacing:'0.1em', textTransform:'uppercase', marginTop:6}}>
+                      LOCAL-FIRST AI DOCUMENT WORKBENCH
+                    </div>
+                  </div>
+                </div>
+                <div style={{maxWidth: 560, fontSize: 14, color:'var(--ink-2)', lineHeight: 1.65, fontFamily:'var(--font-sans)'}}>
+                  本原型基于产品事实文档与 Binder Core VI 完成。
+                  覆盖三栏主界面、对象状态、空态/加载/错误态、关键链路 A→H、
+                  以及设计 tokens——可作为前端实现的直接输入。
+                </div>
+                <div style={{fontFamily:'var(--font-mono)', fontSize:10, color:'var(--rust)', letterSpacing:'0.12em', textTransform:'uppercase', fontWeight:600}}>
+                  <span style={{color:'var(--ink)'}}>原则</span> · 先确认再生效 · 中间态可见 · 可控可追踪
+                </div>
+              </div>
+              <div style={{
+                fontFamily:'var(--font-mono)', fontSize:9, color:'var(--ink-5)',
+                writingMode:'vertical-rl', letterSpacing:'0.3em', textTransform:'uppercase',
+              }}>
+                PROD · C · R · 00 · COVER
+              </div>
+            </div>
+
+            <div style={{display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:0, border:'0.5px solid var(--rule)', background:'var(--bg-card)'}}>
+              {sections.map(([code, en, name, count], i) => (
+                <div key={code} style={{
+                  padding:'14px 14px',
+                  borderRight: ((i+1) % 5) ? '0.5px solid var(--rule-faint)' : 'none',
+                  borderBottom: i < 5 ? '0.5px solid var(--rule-faint)' : 'none',
+                  display:'flex', flexDirection:'column', gap:4,
+                }}>
+                  <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline'}}>
+                    <span style={{fontFamily:'var(--font-mono)', fontSize:14, fontWeight:700, color:'var(--rust)', letterSpacing:'0.04em'}}>§{code}</span>
+                    <span style={{fontFamily:'var(--font-mono)', fontSize:9, color:'var(--ink-5)', letterSpacing:'0.08em'}}>{count}</span>
+                  </div>
+                  <div style={{fontFamily:'var(--font-mono)', fontSize:10, color:'var(--ink-4)', letterSpacing:'0.1em'}}>{en}</div>
+                  <div style={{fontSize:13, color:'var(--ink)', fontWeight:500, lineHeight:1.35}}>{name}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{display:'grid', gridTemplateColumns: '1.5fr 1fr', gap:16}}>
+              <div style={{background:'var(--bg-card)', border:'0.5px solid var(--rule)', padding:'14px 18px'}}>
+                <div style={{fontFamily:'var(--font-mono)', fontSize:10, color:'var(--rust)', letterSpacing:'0.12em', textTransform:'uppercase', fontWeight:600, marginBottom:10}}>核心对象</div>
+                <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'4px 14px', fontSize:11, color:'var(--ink-3)', fontFamily:'var(--font-mono)', letterSpacing:'0.04em'}}>
+                  {['Workspace','File','Editor Tab','Document','Selection','Chat Session','Chat Message','Tool Call','Diff Card','Pending Diff','Green Review','Reference','Inline Assist','AutoComplete'].map(t =>
+                    <span key={t}>· {t}</span>
+                  )}
+                </div>
+              </div>
+              <div style={{background:'var(--bg-card)', border:'0.5px solid var(--rule)', padding:'14px 18px'}}>
+                <div style={{fontFamily:'var(--font-mono)', fontSize:10, color:'var(--rust)', letterSpacing:'0.12em', textTransform:'uppercase', fontWeight:600, marginBottom:10}}>VI</div>
+                <div style={{display:'flex', gap:8}}>
+                  <div style={{flex:1, height:32, background:'var(--ink)'}} />
+                  <div style={{flex:1, height:32, background:'var(--rust)'}} />
+                  <div style={{flex:1, height:32, background:'var(--forest)'}} />
+                  <div style={{flex:1, height:32, background:'var(--gold)'}} />
+                  <div style={{flex:1, height:32, background:'var(--bg-card)', border:'0.5px solid var(--rule)'}} />
+                </div>
+                <div style={{fontFamily:'var(--font-mono)', fontSize:9, color:'var(--ink-4)', letterSpacing:'0.06em', marginTop:8, lineHeight:1.6}}>
+                  INK · CLAY · FOREST · GOLD · PAPER<br/>
+                  IBM PLEX SANS · IBM PLEX MONO · NOTO SC
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Root() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+      React.useEffect(() => {
+        const r = document.documentElement.style;
+        r.setProperty('--rust', t.accent);
+        r.setProperty('--rust-2', t.accent);
+        const hex = t.accent.replace('#','');
+        const rr = parseInt(hex.slice(0,2),16), gg = parseInt(hex.slice(2,4),16), bb = parseInt(hex.slice(4,6),16);
+        r.setProperty('--rust-bg', `rgba(${rr},${gg},${bb},0.10)`);
+        r.setProperty('--rust-tint', `rgba(${rr},${gg},${bb},0.32)`);
+        r.setProperty('--bg-page', t.paper);
+      }, [t.accent, t.paper]);
+
+      const ArtboardApp = (props) => (
+        <div className="artboard-host">
+          <window.BinderApp {...props} />
+        </div>
+      );
+      const WelcomeArt = () => (
+        <div className="artboard-host">
+          <window.BinderWelcome />
+        </div>
+      );
+
+      return (
+        <>
+          <DesignCanvas>
+
+            <DCSection id="cover" title="00 · 系统索引" subtitle="COVER · 全案目录与设计原则">
+              <DCArtboard id="cover" label="00 · COVER" width={1100} height={780}>
+                <Cover />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="main"
+              title="01 · 主工作台 · MAIN WORKBENCH"
+              subtitle="三栏 · TipTap 编辑器 · chat/agent 对话 · 底部 Pending Diff 审阅条">
+
+              <DCArtboard id="A" label="01·A · 主工作态 · 浅色 · Diff 待决策"
+                width={1440} height={880}>
+                <ArtboardApp initialModule="files" initialFile="spec"
+                  initialMode="agent" initialMessages="diff" />
+              </DCArtboard>
+
+              <DCArtboard id="B" label="01·B · 时间轴聚焦 · 恢复预览"
+                width={1440} height={880}>
+                <ArtboardApp initialModule="timeline" initialFile="spec"
+                  initialMode="agent" initialMessages="timeline"
+                  initialTimelineNode="1284" />
+              </DCArtboard>
+
+              <DCArtboard id="C" label="01·C · 主工作态 · 深色"
+                width={1440} height={880}>
+                <ArtboardApp initialModule="files" initialFile="spec"
+                  initialMode="agent" initialMessages="diff" dark={true} />
+              </DCArtboard>
+
+              <DCArtboard id="D" label="01·D · ⌘K 局部修改 · Inline Assist"
+                width={1440} height={880}>
+                <ArtboardApp initialModule="files" initialFile="spec"
+                  initialMode="agent" initialMessages="diff"
+                  showInlineAssist={true} />
+              </DCArtboard>
+
+              <DCArtboard id="W" label="01·W · 欢迎页 · 无 workspace · 仅 chat"
+                width={1440} height={880}>
+                <WelcomeArt />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="diff" title="02 · Diff Card · 8 状态"
+              subtitle="STATE MACHINE · 5.1 · expired · conflict · error · …">
+              <DCArtboard id="diff-states" label="02 · DIFF CARD · 8 状态 + 5 失效原因"
+                width={1280} height={1280}>
+                <DiffStatesPage />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="tool" title="03 · Tool Call · 6 状态"
+              subtitle="STATE 5.5 · pending · executing · authorization · done · failed · skipped">
+              <DCArtboard id="tool-states" label="03 · TOOL CALL · 6 状态"
+                width={1280} height={880}>
+                <ToolStatesPage />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="states" title="04 · Tab · 节点 · 状态条"
+              subtitle="STATE 5.2 · 5.4 · DiffAllActionsBar · StatusBar">
+              <DCArtboard id="tab-node" label="04 · TAB / NODE / BAR / STATUS · 状态合集"
+                width={1280} height={900}>
+                <TabFileNodePage />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="review" title="05 · Green Review · 编辑器装饰层"
+              subtitle="ProseMirror Decoration · 4 状态 · 一一对应">
+              <DCArtboard id="review" label="05 · GREEN REVIEW · 装饰层"
+                width={1280} height={760}>
+                <GreenReviewPage />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="overlays" title="06 · M2 续写 · M3 局部修改"
+              subtitle="⌘J AutoComplete · ⌘K Inline Assist">
+              <DCArtboard id="overlays" label="06 · ⌘J + ⌘K · 浮层"
+                width={1280} height={880}>
+                <AssistOverlaysPage />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="flows" title="07 · 关键链路 · A → H"
+              subtitle="完整流程帧 · 用户决策 + 异步状态 + 异常处理">
+              <DCArtboard id="flow-a" label="07·A · AI 修改当前文档 (核心)"
+                width={1700} height={620}>
+                <FlowA />
+              </DCArtboard>
+              <DCArtboard id="flow-b" label="07·B · 批量接受 · 倒序执行"
+                width={1280} height={620}>
+                <FlowB />
+              </DCArtboard>
+              <DCArtboard id="flow-c" label="07·C · Diff 失效处理"
+                width={1280} height={620}>
+                <FlowC />
+              </DCArtboard>
+              <DCArtboard id="flow-d" label="07·D · 外部文件被修改"
+                width={1280} height={620}>
+                <FlowD />
+              </DCArtboard>
+              <DCArtboard id="flow-f" label="07·F · ⌘K Inline Assist · 4 帧"
+                width={1440} height={620}>
+                <FlowF />
+              </DCArtboard>
+              <DCArtboard id="flow-g" label="07·G · 关闭警告 · Pending Diff"
+                width={920} height={620}>
+                <FlowG />
+              </DCArtboard>
+              <DCArtboard id="flow-h" label="07·H · 危险工具的授权门"
+                width={1280} height={620}>
+                <FlowH />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="empty" title="08 · 空态 · 加载态 · 错误态"
+              subtitle="A 空态 · B 加载态 · C 错误态 — 全覆盖">
+              <DCArtboard id="ele" label="08 · EMPTY · LOADING · ERROR"
+                width={1280} height={1400}>
+                <EmptyLoadingErrorPage />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="tokens" title="09 · Design Tokens · 规范"
+              subtitle="VI · TYPE · SPACING · Z-INDEX">
+              <DCArtboard id="tokens" label="09 · DESIGN TOKENS"
+                width={1280} height={1180}>
+                <TokensPage />
+              </DCArtboard>
+            </DCSection>
+
+          </DesignCanvas>
+
+          <TweaksPanel title="Binder · Tweaks">
+            <TweakSection label="VI · 颜色" />
+            <TweakColor label="主强调色 · Accent"
+              value={t.accent}
+              options={['#C24A2A', '#0E0C0A', '#2E6F4A', '#B58A2E', '#3B6EA5']}
+              onChange={(v) => setTweak('accent', v)} />
+            <TweakColor label="纸面色 · Paper"
+              value={t.paper}
+              options={['#F4F1EA', '#EFE9DD', '#F8F4E8', '#E8E2D0']}
+              onChange={(v) => setTweak('paper', v)} />
+            <TweakSection label="状态" />
+            <TweakToggle label="主工作台 D · 显示 ⌘K Inline Assist"
+              value={t.showInlineAssist}
+              onChange={(v) => setTweak('showInlineAssist', v)} />
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+  </script>
+</body>
+</html>

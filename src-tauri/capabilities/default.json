@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Binder 默认窗口能力（脚手架基线，实现期按模块 command 收紧）",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open"]
+}
