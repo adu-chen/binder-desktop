@@ -1,19 +1,16 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-00+PI-FE-01",
+  "scope_id": "PI-FE-03",
   "allowed_files": [
-    "src/styles.css",
-    "src/shell/Workbench.tsx",
-    "src/services/workspaceService.ts",
     "src-tauri/src/lib.rs",
-    "src-tauri/Cargo.toml",
-    "src-tauri/capabilities/default.json",
-    "package.json",
-    "package-lock.json",
+    "src/services/workspaceService.ts",
+    "src/store/workspaceShell.ts",
+    "src/shell/Welcome.tsx",
+    "src/shell/App.tsx",
+    "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
-    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    ".governance/active_scope.json"
+    ".governance/active_scope.json",
+    ".governance/issues/PI-FE-03.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -23,6 +20,6 @@
     "src-tauri/src/ipc/mod.rs",
     "src-tauri/src/workspace/lifecycle.rs"
   ],
-  "confirmation": "PENDING",
-  "scope_reason": "PI-FE-00（IPC dispatch 信封桥接 + 目录选择器）与 PI-FE-01（DesignToken + Workbench 四栏布局），承接 A-CORE-X-L-03；confirmation 须人类由 PENDING 改 YES。"
+  "confirmation": "YES",
+  "scope_reason": "PI-FE-03 复用后端既有 lifecycle 函数（list/switch/active），仅在 lib.rs 加路由 + 前端欢迎页；人类已授权连续推进并确认 confirmation=YES。"
 }

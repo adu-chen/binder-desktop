@@ -60,15 +60,53 @@ async function callCommand<T>(command: string, params: Record<string, unknown>):
  * 打开/新建 workspace：弹目录选择器（plugin-dialog）→ ws.open_workspace → 投影后端活动态。
  * 用户取消选择则静默返回（不视为错误）。workspace 活动态以后端为准，前端只投影（X-FORBID-007）。
  */
+function toView(ref: WorkspaceRefDto): WorkspaceRefView {
+  return { workspaceId: ref.workspace_id, rootPath: ref.root_path };
+}
+
+function ipcMessage(e: unknown): string {
+  const err = e as Partial<IpcError>;
+  return err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e);
+}
+
 export async function openWorkspace(): Promise<void> {
   const selected = await open({ directory: true, multiple: false, title: "选择 workspace 目录" });
   if (selected === null || Array.isArray(selected)) return; // 用户取消
   try {
     const ref = await callCommand<WorkspaceRefDto>("ws.open_workspace", { rootPath: selected });
-    const view: WorkspaceRefView = { workspaceId: ref.workspace_id, rootPath: ref.root_path };
-    workspaceShell._projectActive(view);
+    workspaceShell._projectActive(toView(ref));
   } catch (e) {
-    const err = e as IpcError;
-    console.error(`ws.open_workspace failed [${err.code ?? "?"}]: ${err.message ?? e}`);
+    console.error(`ws.open_workspace failed ${ipcMessage(e)}`);
+  }
+}
+
+/** 拉取最近 workspace 列表（投影 loading → ready/error；BR-SYS-OBS-002 错误形状）。 */
+export async function loadRecentWorkspaces(): Promise<void> {
+  workspaceShell._projectRecentLoading();
+  try {
+    const list = await callCommand<WorkspaceRefDto[]>("ws.list_workspaces", {});
+    workspaceShell._projectRecent(list.map(toView));
+  } catch (e) {
+    workspaceShell._projectRecentError(ipcMessage(e));
+  }
+}
+
+/** 切换到已注册 workspace（最近列表点击入口）；活动态以后端为准。 */
+export async function switchWorkspace(workspaceId: string): Promise<void> {
+  try {
+    const ref = await callCommand<WorkspaceRefDto>("ws.switch_workspace", { workspaceId });
+    workspaceShell._projectActive(toView(ref));
+  } catch (e) {
+    console.error(`ws.switch_workspace failed ${ipcMessage(e)}`);
+  }
+}
+
+/** 启动恢复：投影后端当前活动 workspace（无则保持欢迎页）。 */
+export async function restoreActiveWorkspace(): Promise<void> {
+  try {
+    const ref = await callCommand<WorkspaceRefDto | null>("ws.active_workspace", {});
+    if (ref) workspaceShell._projectActive(toView(ref));
+  } catch (e) {
+    console.error(`ws.active_workspace failed ${ipcMessage(e)}`);
   }
 }

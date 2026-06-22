@@ -74,7 +74,7 @@
 
 ---
 
-### PI-FE-02　Logo 与 Left Rail
+### PI-FE-02　Logo 与 Left Rail　✅ G4 已实现（2026-06-23，tsc 绿 + scoped audit 无越界；BinderMark/Wordmark SVG + LeftRail 5 模块导航）
 
 - **承接**：A-SYS-C-T-02 §3 Left Rail 界面分区 / 路线图 §9 UI 就位 / VI 参考 `docs/binder-vi/project/`。
 - **文件范围**：
@@ -92,7 +92,7 @@
 
 ---
 
-### PI-FE-03　欢迎页完整实现（WS 前端 · 入口链路）
+### PI-FE-03　欢迎页完整实现（WS 前端 · 入口链路）　✅ G4 已实现（2026-06-23，tsc + cargo test 84 + build + scoped audit 绿；最近列表三态 + 启动恢复活动态）
 
 - **承接**：A-SYS-C-T-02 §4.1 应用启动流程 / REQ-WS-001 / command `ws.open_workspace` + `ws.list_workspaces` / X-FORBID-007 / TERM-WS-001（Workspace）。
 - **文件范围**：

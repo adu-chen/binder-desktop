@@ -2,9 +2,9 @@ import { useSyncExternalStore } from "react";
 
 /**
  * 前端外壳状态投影层（X-FORBID-007）。
- * 前端 Store 不另立权威业务状态——activeWorkspace 是后端 workspace 活动态（workspace.is_active，
- * WS 模块控制态）的投影。此处为脚手架占位：实现期（PI-WS-01 / PI-SYS-05）由 ws.* command 回填，
- * 经 Service 层（X-SEQ-002）订阅后端状态，不在前端维护与后端可漂移的并行状态。
+ * 前端 Store 不另立权威业务状态——activeWorkspace 与 recent 是后端 workspace 控制态
+ * （workspace.is_active / workspaces 表，WS 模块控制态）的投影，经 Service 层（X-SEQ-002）回填。
+ * recentStatus 是 UI 请求态（视图层），非业务态——仅描述最近列表的拉取过程。
  */
 
 export interface WorkspaceRefView {
@@ -12,18 +12,33 @@ export interface WorkspaceRefView {
   rootPath: string;
 }
 
+export type RecentStatus = "idle" | "loading" | "ready" | "error";
+
 interface ShellState {
   activeWorkspace: WorkspaceRefView | null;
+  recent: WorkspaceRefView[];
+  recentStatus: RecentStatus;
+  recentError: string | null;
 }
 
-let state: ShellState = { activeWorkspace: null };
+let state: ShellState = {
+  activeWorkspace: null,
+  recent: [],
+  recentStatus: "idle",
+  recentError: null,
+};
 const listeners = new Set<() => void>();
 
 function emit() {
   for (const l of listeners) l();
 }
 
-// 占位：实现期由后端事件（ws.* 投影）驱动，不在前端自行决定权威态。
+function setState(patch: Partial<ShellState>) {
+  state = { ...state, ...patch };
+  emit();
+}
+
+// 投影后端状态：所有写入均代表后端控制态/请求态变更，前端不自行决定权威业务态。
 export const workspaceShell = {
   subscribe(cb: () => void) {
     listeners.add(cb);
@@ -32,10 +47,19 @@ export const workspaceShell = {
   getSnapshot(): ShellState {
     return state;
   },
-  // 脚手架内部用：投影后端活动态变更（实现期替换为后端订阅）。
+  // 投影后端活动态变更。
   _projectActive(ws: WorkspaceRefView | null) {
-    state = { activeWorkspace: ws };
-    emit();
+    setState({ activeWorkspace: ws });
+  },
+  // 投影最近列表拉取过程（loading → ready/error）。
+  _projectRecentLoading() {
+    setState({ recentStatus: "loading", recentError: null });
+  },
+  _projectRecent(list: WorkspaceRefView[]) {
+    setState({ recent: list, recentStatus: "ready", recentError: null });
+  },
+  _projectRecentError(message: string) {
+    setState({ recentStatus: "error", recentError: message });
   },
 };
 

@@ -45,6 +45,9 @@ struct AppState {
 fn build_registry() -> CommandRegistry {
     let mut reg = CommandRegistry::new();
     reg.register("ws.open_workspace");
+    reg.register("ws.list_workspaces");
+    reg.register("ws.switch_workspace");
+    reg.register("ws.active_workspace");
     reg
 }
 
@@ -68,6 +71,9 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
     }
     let routed = match request.command.as_str() {
         "ws.open_workspace" => route_open_workspace(&request, &state),
+        "ws.list_workspaces" => route_list_workspaces(&state),
+        "ws.switch_workspace" => route_switch_workspace(&request, &state),
+        "ws.active_workspace" => route_active_workspace(&state),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
             "IPC_ROUTE_MISSING",
@@ -104,6 +110,55 @@ fn route_open_workspace(
 
     serde_json::to_value(&ws)
         .map_err(|e| IpcError::new("WS_SERIALIZE_FAILED", &e.to_string(), false, false))
+}
+
+/// 序列化 WS 生命周期结果为 JSON 投影（统一错误形状收口）。
+fn ws_json<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, IpcError> {
+    serde_json::to_value(value)
+        .map_err(|e| IpcError::new("WS_SERIALIZE_FAILED", &e.to_string(), false, false))
+}
+
+/// 锁定 workspace.db 连接（繁忙即可重试错误）。
+fn lock_db<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, Connection>, IpcError> {
+    state
+        .db
+        .lock()
+        .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))
+}
+
+/// 路由 `ws.list_workspaces`：回已注册 workspace 列表（最近列表入口，PI-WS-05）。
+fn route_list_workspaces(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let conn = lock_db(state)?;
+    let list = workspace::lifecycle::list_workspaces(&conn)
+        .map_err(|e| IpcError::new("WS_LIST_FAILED", &e.to_string(), true, false))?;
+    ws_json(&list)
+}
+
+/// 路由 `ws.switch_workspace`：按 workspace_id 切活动态（单活动不变量，BR-WS-PERSIST-002）。
+fn route_switch_workspace(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let workspace_id = request
+        .params
+        .get("workspaceId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| IpcError::new("WS_ID_REQUIRED", "缺少 workspaceId 参数", false, false))?;
+    let mut conn = lock_db(state)?;
+    let ws = workspace::lifecycle::switch_workspace(&mut conn, workspace_id)
+        .map_err(|e| IpcError::new("WS_SWITCH_FAILED", &e.to_string(), true, false))?;
+    ws_json(&ws)
+}
+
+/// 路由 `ws.active_workspace`：回当前活动 workspace（启动恢复入口；无则 null）。
+fn route_active_workspace(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let conn = lock_db(state)?;
+    let active = workspace::lifecycle::active_workspace(&conn)
+        .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?;
+    ws_json(&active)
 }
 
 pub fn run() {
