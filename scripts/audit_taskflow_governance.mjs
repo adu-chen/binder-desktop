@@ -451,11 +451,14 @@ addCheck({
   gov_blocks: govBlocks.length, referenced_rules: referencedRules.size, referenced_chains: referencedChains.size,
 });
 
-// ── 测试覆盖注释（project_root/tests） ────────────────────────────────────
+// ── 测试覆盖注释（project_root/tests TS + src 前端 co-located + src-tauri Rust 内联 #[cfg(test)]） ──
+// covers 注释可出现在：独立 TS 测试文件（tests/），或源码内联测试（Rust #[cfg(test)] mod tests /
+// 前端 co-located *.test.tsx）。sourceFiles 已含 src 的 .ts/.tsx 与 src-tauri/src 的 .rs，一并扫描，
+// 使 Rust 后端内联覆盖注释被计入（惯用写法，避免对 Rust 项目结构性漏计）。
 const testsDir = PROJECT_ROOT_REL === '.' ? 'tests' : `${PROJECT_ROOT_REL}/tests`;
 const testFiles = collectFiles(testsDir, f => f.endsWith('.test.ts') || f.endsWith('.spec.ts') || f.endsWith('.test.tsx') || f.endsWith('.spec.tsx'));
 const coveredRules = new Set();
-for (const file of testFiles) {
+for (const file of [...testFiles, ...sourceFiles]) {
   for (const m of readText(file).matchAll(/^\s*\/\/\s*covers:\s*(\S+)\s*$/gm)) {
     coveredRules.add(m[1]);
   }
