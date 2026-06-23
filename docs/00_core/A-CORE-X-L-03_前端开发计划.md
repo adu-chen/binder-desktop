@@ -315,6 +315,15 @@
 
 ---
 
+### PI-TEST-02　组件状态机渲染测试（jsdom + @testing-library）　✅ G4 已实现（2026-06-23，vitest 56 passed + tsc + build + scoped audit 绿）
+- **承接**：APC §10 / A-CORE-X-L-03。测互斥状态可视化组件：FileTreeNode 6 态 / DiffCard 8 态 / EditorTab 6 态。排除 AG 桩组件。
+- **文件范围**：装 jsdom + @testing-library/react + @testing-library/dom；`FileTreeNode/DiffCard/EditorTab.test.tsx`（`@vitest-environment jsdom` docblock，仅组件测试用 jsdom，单元/契约仍 node）。
+- **实现要点**：断言渲染产物（class/标记/按钮可用性）验证状态互斥；不触发点击调后端（DiffCard mock invoke 隔离）。
+- **A 类债务**：容器组件（FileTree/TimelinePanel/ChatPanel）的交互流程测试与 AG 桩面、e2e 仍留后续（G5）。
+- **验收**：vitest 56 全过；tsc/build 绿；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```
