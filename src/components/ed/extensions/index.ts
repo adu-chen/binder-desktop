@@ -1,6 +1,7 @@
 import StarterKit from "@tiptap/starter-kit";
 import type { Extensions } from "@tiptap/core";
 import { BlockIdExtension } from "./BlockIdExtension";
+import { DiffDecorationExtension } from "./DiffDecorationExtension";
 
 /**
  * ED 编辑器扩展注册入口（PI-FE-05）。
@@ -19,7 +20,8 @@ export function buildEditorExtensions(): Extensions {
     StarterKit,
     // 稳定 blockId（BR-ED-DATA-001）——必须在 StarterKit 之后，为其块类型附加全局属性。
     BlockIdExtension,
-    // —— 预留：DiffDecorationExtension（PI-FE-07）——
+    // GreenReview 装饰层（BR-ED-STATE-002 / TERM-ED-003，PI-FE-07）——依赖 blockId 锚定。
+    DiffDecorationExtension,
     // —— 预留：CopyReferenceExtension ——
     // —— 预留：PageTopCaretExtension ——
     // —— 预留：FontSize ——

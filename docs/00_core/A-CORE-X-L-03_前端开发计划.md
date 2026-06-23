@@ -178,7 +178,7 @@
 
 ---
 
-### PI-FE-07　Diff 状态机前端——DiffCard + GreenReview + 批量操作条（DE 模块前端）
+### PI-FE-07　Diff 状态机前端——DiffCard + GreenReview + 批量操作条（DE 模块前端）　✅ G4 已实现（2026-06-23，tsc + build + scoped audit 绿；DiffCard 8 态 + expired 5 原因 + GreenReview 装饰层填扩展槽 + 批量条倒序 + 双向同步）
 
 - **承接**：DE 模块 L2（A-DE-M-T-01）/ SM-DE-01（diff 终态状态机）/ DE-DIFF chain / command `de.accept_diff` + `de.reject_diff` + `de.generate_diff` / X-INTER-001（DiffCard↔GreenReview 双向同步须在状态机总图登记跨模块转移） / TERM-DE-001（PendingDiff）/ TERM-DE-003（DiffCard）/ TERM-ED-002（EditorDecoration）/ TERM-ED-003（GreenReview）。
 - **文件范围**：

@@ -1,6 +1,7 @@
 import { useAgStore, agStore, type ChatMode } from "../../store/agStore";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
+import { DiffList } from "../de/DiffList";
 
 /**
  * Chat 面板（A-SYS-C-T-02 §3 对话区 · PI-FE-06）。
@@ -31,7 +32,10 @@ export function ChatPanel() {
         </div>
         <span className="label">会话 · 1</span>
       </div>
-      <MessageList />
+      <div className="chatpanel-scroll">
+        <MessageList />
+        <DiffList />
+      </div>
       <Composer />
     </div>
   );

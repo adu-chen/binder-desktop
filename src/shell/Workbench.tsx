@@ -5,6 +5,8 @@ import { BinderWordmark } from "../components/brand/BinderWordmark";
 import { FileTree } from "../components/ws/FileTree";
 import { Editor } from "../components/ed/Editor";
 import { ChatPanel } from "../components/ag/ChatPanel";
+import { DiffAllActionsBar } from "../components/de/DiffAllActionsBar";
+import { useDeStore } from "../store/deStore";
 
 /**
  * 主工作台（A-SYS-C-T-02 §3/§4 界面分区与全局布局）。有活动 workspace 后的主界面。
@@ -15,7 +17,10 @@ import { ChatPanel } from "../components/ag/ChatPanel";
 export function Workbench() {
   const { activeWorkspace } = useWorkspaceShell();
   const [activePanel, setActivePanel] = useState<RailPanelId>("files");
-  const pendingDiffCount = 0; // 占位：PI-FE-07 由 deStore 投影后端 pending_diffs 计数
+  const { diffs, batchState } = useDeStore();
+  // DiffStrip 显隐投影待裁决修改（PendingDiff）计数 + 批量应用过程。
+  const pendingDiffCount = diffs.filter((d) => d.state === "pending").length;
+  const showDiffStrip = pendingDiffCount > 0 || batchState !== "idle";
 
   return (
     <div className="workbench">
@@ -42,9 +47,8 @@ export function Workbench() {
         </aside>
       </div>
 
-      <div className="diffstrip" hidden={pendingDiffCount === 0}>
-        {/* PI-FE-07 DE 批量裁决条 */}
-        <span className="label">{pendingDiffCount} 待裁决</span>
+      <div className="diffstrip" hidden={!showDiffStrip}>
+        <DiffAllActionsBar />
       </div>
 
       <footer className="statusbar">

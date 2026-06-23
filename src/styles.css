@@ -385,17 +385,81 @@ button:disabled { opacity: 0.5; cursor: default; }
 .composer-input:focus { outline: none; border-color: var(--rust-tint); }
 .composer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: var(--sp-2); }
 
-/* DiffStrip：无待裁决修改时隐藏（TERM-DE-001 计数为 0 → hidden，A-SYS-C-T-02 §4） */
+/* 对话区滚动容器（消息 + diff 卡同滚，PI-FE-07） */
+.chatpanel-scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
+.chatpanel-scroll .msglist { flex: none; overflow: visible; }
+
+/* Diff 卡（DiffCard 8 状态，PI-FE-07） */
+.difflist { display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 var(--sp-3) var(--sp-3); }
+.diffcard {
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-1);
+  background: var(--bg-card);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 13px;
+}
+.diffcard-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.diffcard-title { font-weight: 500; color: var(--ink-2); }
+.diffcard-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.06em;
+  padding: 1px 5px; border-radius: var(--r-1); color: var(--ink-4); background: var(--bg-sunken);
+}
+.diffcard-body { margin: var(--sp-2) 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
+.diffcard-line { white-space: pre-wrap; }
+.diffcard-before { color: var(--rust-2); text-decoration: line-through; opacity: 0.8; }
+.diffcard-after { color: var(--forest-2); }
+.diffcard-hint { font-size: 11px; color: var(--ink-4); margin-bottom: var(--sp-1); }
+.diffcard-ok { color: var(--forest); }
+.diffcard-warn { color: var(--gold); }
+.diffcard-err { color: var(--rust); }
+.diffcard-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-1); }
+.diffcard-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
+.diffcard-accept { border-color: var(--forest); color: var(--forest); }
+.diffcard-progress { height: 3px; background: var(--gold-bg); border-radius: 2px; overflow: hidden; margin-bottom: var(--sp-1); }
+.diffcard-progress span { display: block; height: 100%; width: 70%; background: var(--gold); animation: diff-fill 0.24s linear; }
+@keyframes diff-fill { from { width: 0; } to { width: 70%; } }
+/* 8 状态边界色（互斥可辨，参考稿 §6.1） */
+.diffcard-pending { border-color: var(--rust); }
+.diffcard-pending .diffcard-badge { color: var(--rust); background: var(--rust-bg); }
+.diffcard-validating, .diffcard-applying { border-color: var(--gold); }
+.diffcard-validating .diffcard-badge, .diffcard-applying .diffcard-badge { color: var(--gold); background: var(--gold-bg); }
+.diffcard-accepted { border-color: var(--forest); }
+.diffcard-accepted .diffcard-badge { color: var(--forest); background: var(--forest-bg); }
+.diffcard-rejected { opacity: 0.5; }
+.diffcard-expired { border-style: dashed; border-color: var(--ink-5); }
+.diffcard-conflict { border-color: var(--gold); }
+.diffcard-conflict .diffcard-badge { color: var(--gold); background: var(--gold-bg); }
+.diffcard-error { border-color: var(--rust); }
+.diffcard-error .diffcard-badge { color: var(--rust); background: var(--rust-bg); }
+
+/* GreenReview 装饰层（4 态，叠加在正文，X-FORBID-005，PI-FE-07） */
+.green-review { border-radius: 2px; transition: background 0.2s, box-shadow 0.2s; }
+.green-review-pending { box-shadow: inset 2px 0 0 var(--rust); background: var(--rust-bg); }
+.green-review-applying { box-shadow: inset 2px 0 0 var(--gold); background: var(--gold-bg); }
+.green-review-accepted { box-shadow: inset 2px 0 0 var(--forest); background: var(--forest-bg); }
+.green-review-expired { box-shadow: inset 2px 0 0 var(--ink-5); opacity: 0.6; }
+
+/* DiffStrip：无待裁决修改时隐藏（PendingDiff 计数为 0 → hidden，A-SYS-C-T-02 §4） */
 .diffstrip {
   grid-area: diffstrip;
-  height: var(--diffstrip-h);
+  min-height: var(--diffstrip-h);
   display: flex;
-  align-items: center;
-  padding: 0 var(--sp-4);
-  background: var(--rust-bg);
-  border-top: 2px solid var(--rust);
+  align-items: stretch;
 }
 .diffstrip[hidden] { display: none; }
+.diffbar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-4);
+}
+.diffbar-idle { background: var(--rust-bg); border-top: 2px solid var(--rust); }
+.diffbar-applying { background: var(--gold-bg); border-top: 2px solid var(--gold); }
+.diffbar-done { background: var(--forest-bg); border-top: 2px solid var(--forest); }
+.diffbar-count { font-family: var(--font-mono); font-size: 12px; color: var(--rust); font-weight: 600; }
+.diffbar-actions { display: flex; gap: var(--sp-2); }
 
 /* 文件树（PI-FE-04） */
 .filetree { display: flex; flex-direction: column; }
