@@ -14,6 +14,31 @@ function genBlockId(): string {
   return `b_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * blockId 去重/补齐纯逻辑（BR-ED-DATA-001 核心，供 appendTransaction 与单测共用）。
+ * 入参为文档顺序的当前 blockId 序列；返回等长修复序列：`null` = 既有且唯一，保持稳定不变；
+ * `string` = 该位置 id 缺失或与前序重复，须改取的新唯一 id（不复用已出现 id、全序列唯一）。
+ */
+export function reconcileBlockIds(
+  ids: (string | null)[],
+  gen: () => string = genBlockId,
+): (string | null)[] {
+  const seen = new Set<string>();
+  const fixes: (string | null)[] = [];
+  for (const id of ids) {
+    if (id !== null && !seen.has(id)) {
+      seen.add(id);
+      fixes.push(null); // 既有且唯一 → 稳定保持
+    } else {
+      let nid = gen();
+      while (seen.has(nid)) nid = gen(); // 不复用/不冲突
+      seen.add(nid);
+      fixes.push(nid); // 缺失或重复 → 新 id
+    }
+  }
+  return fixes;
+}
+
 const blockIdPluginKey = new PluginKey("blockId");
 
 /**
@@ -54,25 +79,22 @@ export const BlockIdExtension = Extension.create({
         // 文档变更后补齐缺失 / 去重 blockId：缺失即赋新；重复（复制/分裂）令后出现者改取新 id，
         // 保证既有块 id 稳定、删除不复用、全文唯一。
         appendTransaction: (_transactions, _oldState, newState) => {
-          const seen = new Set<string>();
-          const fixes: { pos: number; id: string }[] = [];
+          // 收集文档顺序的块位置与当前 id，交纯逻辑 reconcileBlockIds 判定修复。
+          const slots: { pos: number; id: string | null }[] = [];
           newState.doc.descendants((node, pos) => {
             if (!BLOCK_TYPES.includes(node.type.name)) return;
-            const id: string | null = node.attrs.blockId ?? null;
-            if (id === null || seen.has(id)) {
-              fixes.push({ pos, id: genBlockId() });
-            } else {
-              seen.add(id);
-            }
+            slots.push({ pos, id: node.attrs.blockId ?? null });
           });
-          if (fixes.length === 0) return null;
+          const fixes = reconcileBlockIds(slots.map((s) => s.id));
+          if (fixes.every((f) => f === null)) return null;
           const tr = newState.tr;
-          for (const fix of fixes) {
-            const node = tr.doc.nodeAt(fix.pos);
-            if (!node) continue;
-            tr.setNodeMarkup(fix.pos, undefined, { ...node.attrs, blockId: fix.id });
-            seen.add(fix.id);
-          }
+          fixes.forEach((newId, i) => {
+            if (newId === null) return;
+            const { pos } = slots[i];
+            const node = tr.doc.nodeAt(pos);
+            if (!node) return;
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs, blockId: newId });
+          });
           tr.setMeta("addToHistory", false); // id 维护不进撤销栈
           return tr;
         },

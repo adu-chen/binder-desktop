@@ -1,15 +1,18 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-09",
+  "scope_id": "PI-FE-10",
   "allowed_files": [
-    "src/services/wsService.ts",
-    "src/services/edService.ts",
+    "src-tauri/src/lib.rs",
+    "src/services/workspaceService.ts",
+    "src/store/wsStore.ts",
     "src/store/edStore.ts",
-    "src/components/ws/FileTree.tsx",
-    "src/components/ed/Editor.tsx",
+    "src/store/deStore.ts",
+    "src/components/shell/WorkspaceMenu.tsx",
+    "src/shell/Workbench.tsx",
+    "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-09.md"
+    ".governance/issues/PI-FE-10.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -17,8 +20,8 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/store/deStore.ts"
+    "src-tauri/src/workspace/lifecycle.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-09 把 PI-BE-01 落盘 command 接到前端——文件树点击打开真实文档、⌘S 保存；纯前端集成；人类已授权继续并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-10 补实现 A-SYS-C-T-02 §4.1 的切换/返回欢迎链路（后端接 close_workspace、前端菜单 + 重置下游 store + 脏态守卫）；人类已授权落地并确认 confirmation=YES。"
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useWorkspaceShell } from "../store/workspaceShell";
 import { LeftRail, type RailPanelId } from "../components/shell/LeftRail";
 import { BinderWordmark } from "../components/brand/BinderWordmark";
+import { WorkspaceMenu } from "../components/shell/WorkspaceMenu";
 import { FileTree } from "../components/ws/FileTree";
 import { Editor } from "../components/ed/Editor";
 import { ChatPanel } from "../components/ag/ChatPanel";

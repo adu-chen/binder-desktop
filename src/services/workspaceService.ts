@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { workspaceShell, type WorkspaceRefView } from "../store/workspaceShell";
+import { wsStore } from "../store/wsStore";
+import { edStore } from "../store/edStore";
+import { deStore } from "../store/deStore";
+
+/**
+ * 切换/打开/关闭 workspace 时重置下游 store——文件树 / 编辑会话 / diff 均清空，
+ * 杜绝切到新项目仍显示旧项目内容或按旧基线误存盘（PI-FE-10）。
+ */
+function resetDownstreamStores() {
+  wsStore.reset();
+  edStore.reset();
+  deStore.reset();
+}
 
 /**
  * Service 层（X-SEQ-002）：封装跨进程 command 调用，前端 UI 经此触达后端，不跨层直连。
@@ -74,6 +87,7 @@ export async function openWorkspace(): Promise<void> {
   if (selected === null || Array.isArray(selected)) return; // 用户取消
   try {
     const ref = await callCommand<WorkspaceRefDto>("ws.open_workspace", { rootPath: selected });
+    resetDownstreamStores(); // 打开新项目前清旧（从 Workbench 内打开亦适用）
     workspaceShell._projectActive(toView(ref));
   } catch (e) {
     console.error(`ws.open_workspace failed ${ipcMessage(e)}`);
@@ -95,10 +109,26 @@ export async function loadRecentWorkspaces(): Promise<void> {
 export async function switchWorkspace(workspaceId: string): Promise<void> {
   try {
     const ref = await callCommand<WorkspaceRefDto>("ws.switch_workspace", { workspaceId });
+    resetDownstreamStores(); // 切换后清旧项目文件树/编辑/diff
     workspaceShell._projectActive(toView(ref));
   } catch (e) {
     console.error(`ws.switch_workspace failed ${ipcMessage(e)}`);
   }
+}
+
+/**
+ * 返回欢迎页/关闭当前 workspace：ws.close_workspace（置非活动，控制态可恢复）→ 投影 null → App 回 Welcome。
+ * 活动态以后端为准（X-FORBID-007）；关闭即使后端失败也回欢迎页（避免卡在坏 workspace）。
+ */
+export async function closeWorkspace(): Promise<void> {
+  const active = workspaceShell.getSnapshot().activeWorkspace;
+  try {
+    if (active) await callCommand("ws.close_workspace", { workspaceId: active.workspaceId });
+  } catch (e) {
+    console.error(`ws.close_workspace failed ${ipcMessage(e)}`);
+  }
+  resetDownstreamStores();
+  workspaceShell._projectActive(null);
 }
 
 /** 启动恢复：投影后端当前活动 workspace（无则保持欢迎页）。 */

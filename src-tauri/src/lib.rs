@@ -47,6 +47,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.open_workspace");
     reg.register("ws.list_workspaces");
     reg.register("ws.switch_workspace");
+    reg.register("ws.close_workspace");
     reg.register("ws.active_workspace");
     reg.register("ws.list_docs");
     reg.register("ws.read_doc");
@@ -81,6 +82,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.open_workspace" => route_open_workspace(&request, &state),
         "ws.list_workspaces" => route_list_workspaces(&state),
         "ws.switch_workspace" => route_switch_workspace(&request, &state),
+        "ws.close_workspace" => route_close_workspace(&request, &state),
         "ws.active_workspace" => route_active_workspace(&state),
         "ws.list_docs" => route_list_docs(&state),
         "ws.read_doc" => route_read_doc(&request, &state),
@@ -167,6 +169,20 @@ fn route_switch_workspace(
     let ws = workspace::lifecycle::switch_workspace(&mut conn, workspace_id)
         .map_err(|e| IpcError::new("WS_SWITCH_FAILED", &e.to_string(), true, false))?;
     ws_json(&ws)
+}
+
+/// 路由 `ws.close_workspace`：置非活动（控制态保留可恢复，BR-WS-PERSIST-002）；前端据此回欢迎页。
+fn route_close_workspace(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let workspace_id = request
+        .params
+        .get("workspaceId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| IpcError::new("WS_ID_REQUIRED", "缺少 workspaceId 参数", false, false))?;
+    let conn = lock_db(state)?;
+    workspace::lifecycle::close_workspace(&conn, workspace_id)
+        .map_err(|e| IpcError::new("WS_CLOSE_FAILED", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "workspace_id": workspace_id, "closed": true }))
 }
 
 /// 路由 `ws.active_workspace`：回当前活动 workspace（启动恢复入口；无则 null）。

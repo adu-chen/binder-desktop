@@ -47,6 +47,11 @@ export const wsStore = {
     state = { ...state, status: "error", error: message };
     emit();
   },
+  /** 切换/关闭 workspace 时清空文件树（避免残留旧项目内容）。 */
+  reset() {
+    state = { docs: [], status: "idle", error: null };
+    emit();
+  },
 };
 
 export function useWsStore(): WsState {

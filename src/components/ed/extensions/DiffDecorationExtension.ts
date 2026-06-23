@@ -18,18 +18,48 @@ export function applyGreenReview(view: EditorView, map: Map<string, GreenReviewS
   view.dispatch(view.state.tr.setMeta(greenReviewKey, map));
 }
 
+/** 块引用（文档顺序的 blockId 与位置/尺寸）。 */
+export interface BlockRef {
+  blockId: string | null | undefined;
+  pos: number;
+  size: number;
+}
+/** 装饰规格（位置 + class）。 */
+export interface DecoSpec {
+  pos: number;
+  size: number;
+  className: string;
+}
+
+/**
+ * GreenReview 装饰选择纯逻辑（BR-ED-STATE-002 核心，供 buildDecorations 与单测共用）：
+ * 仅对 blockId 命中映射的块产出装饰（class `green-review green-review-{态}`）；无 blockId 或未命中
+ * （含 rejected 不入映射）→ 无装饰（复位）；空映射 → 空集。不替换 DOM、不阻挡编辑（X-FORBID-005）。
+ */
+export function selectDecorations(
+  blocks: BlockRef[],
+  map: Map<string, GreenReviewState>,
+): DecoSpec[] {
+  if (map.size === 0) return [];
+  const out: DecoSpec[] = [];
+  for (const b of blocks) {
+    if (!b.blockId) continue; // 无 blockId 不装饰
+    const reviewState = map.get(b.blockId);
+    if (!reviewState) continue; // 未命中（复位/rejected）不装饰
+    out.push({ pos: b.pos, size: b.size, className: `green-review green-review-${reviewState}` });
+  }
+  return out;
+}
+
 function buildDecorations(doc: import("@tiptap/pm/model").Node, map: Map<string, GreenReviewState>) {
   if (map.size === 0) return DecorationSet.empty;
-  const decos: Decoration[] = [];
+  const blocks: BlockRef[] = [];
   doc.descendants((node, pos) => {
-    const blockId: string | undefined = node.attrs?.blockId ?? undefined;
-    if (!blockId) return;
-    const reviewState = map.get(blockId);
-    if (!reviewState) return;
-    decos.push(
-      Decoration.node(pos, pos + node.nodeSize, { class: `green-review green-review-${reviewState}` }),
-    );
+    blocks.push({ blockId: node.attrs?.blockId ?? undefined, pos, size: node.nodeSize });
   });
+  const decos: Decoration[] = selectDecorations(blocks, map).map((d) =>
+    Decoration.node(d.pos, d.pos + d.size, { class: d.className }),
+  );
   return DecorationSet.create(doc, decos);
 }
 

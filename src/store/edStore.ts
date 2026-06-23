@@ -92,6 +92,17 @@ export const edStore = {
   setTabState(tabState: TabState) {
     setState({ tabState });
   },
+  /** 切换/关闭 workspace 时清空编辑会话（避免残留旧文档内容/基线）。 */
+  reset() {
+    setState({
+      openPath: null,
+      tabState: "normal",
+      pendingDiffCount: 0,
+      loadedContent: null,
+      baseline: null,
+      loadSeq: 0,
+    });
+  },
 };
 
 export function useEdStore(): EdState {

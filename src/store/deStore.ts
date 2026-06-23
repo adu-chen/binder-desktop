@@ -191,6 +191,11 @@ export const deStore = {
       { batchState: "idle" },
     );
   },
+
+  /** 切换/关闭 workspace 时清空 diff（避免残留旧项目的待裁决修改）。 */
+  reset() {
+    setDiffs([], { batchState: "idle", batchExpiredCount: 0 });
+  },
 };
 
 export function useDeStore(): DeState {
