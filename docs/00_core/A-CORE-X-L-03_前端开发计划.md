@@ -135,7 +135,7 @@
 
 ---
 
-### PI-FE-05　TipTap 编辑器接入（ED 模块前端）
+### PI-FE-05　TipTap 编辑器接入（ED 模块前端）　✅ G4 已实现（2026-06-23，tsc + build 绿；TipTap 3 + BlockIdExtension 稳定 blockId + EditorTab 6 态 + 扩展槽预留）
 
 - **承接**：ED 模块 L2（A-ED-M-T-01）/ SM-ED-01（编辑会话状态机）/ BR-ED-DATA-001（blockId 稳定性）/ BR-ED-STATE-001（脏态管理）/ X-FORBID-005（装饰层不替换 DOM）/ TERM-ED-001（Block）/ TERM-ED-002（EditorDecoration）/ TERM-ED-003（GreenReview，扩展槽预留）。
 - **文件范围**：

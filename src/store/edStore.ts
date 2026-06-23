@@ -1,0 +1,71 @@
+import { useSyncExternalStore } from "react";
+
+/**
+ * ED 编辑会话状态投影层（ED-EDIT · SM-ED-01 · X-FORBID-007）。
+ * tabState 是编辑会话/脏态的视图投影：编辑产生脏态（前端编辑器感知），落盘/外部变更/待裁决由
+ * 保存链（WS）、外部变更事件、DE 投影驱动。前端不另立与后端可漂移的权威落盘态。
+ */
+
+/** EditorTab 6 状态（参考稿 §6.3，视觉互斥）。 */
+export type TabState =
+  | "normal"
+  | "dirty"
+  | "saving"
+  | "saved"
+  | "pending_diff"
+  | "external_changed";
+
+interface EdState {
+  openPath: string | null;
+  tabState: TabState;
+  pendingDiffCount: number;
+}
+
+let state: EdState = { openPath: null, tabState: "normal", pendingDiffCount: 0 };
+const listeners = new Set<() => void>();
+
+function emit() {
+  for (const l of listeners) l();
+}
+function setState(patch: Partial<EdState>) {
+  state = { ...state, ...patch };
+  emit();
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-STATE-001-RB-ED-ED-EDIT-002
+ * type:     RB
+ * chain:    ED-EDIT
+ * rules:    BR-ED-STATE-001
+ * boundary: in=editSessionEvent | out=TabState(dirtyOnEditSavedOnPersistExternalOnConflict)
+ */
+/// 编辑会话脏态守则（BR-ED-STATE-001 投影）：打开文档为 normal/saved；编辑即转 dirty；
+/// 落盘转 saving→saved；外部变更转 external_changed；待裁决转 pending_diff。状态互斥，权威落盘归 WS。
+export const edStore = {
+  subscribe(cb: () => void) {
+    listeners.add(cb);
+    return () => listeners.delete(cb);
+  },
+  getSnapshot(): EdState {
+    return state;
+  },
+  /** 打开文档（初始 saved 基线态）。 */
+  openDoc(path: string) {
+    setState({ openPath: path, tabState: "saved", pendingDiffCount: 0 });
+  },
+  /** 编辑产生脏态（编辑器 onUpdate 驱动）。 */
+  markDirty() {
+    if (state.tabState !== "external_changed" && state.tabState !== "pending_diff") {
+      setState({ tabState: "dirty" });
+    }
+  },
+  /** 设置标签态（保存链/外部变更/DE 投影注入）。 */
+  setTabState(tabState: TabState) {
+    setState({ tabState });
+  },
+};
+
+export function useEdStore(): EdState {
+  return useSyncExternalStore(edStore.subscribe, edStore.getSnapshot);
+}

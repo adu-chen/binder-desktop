@@ -1,19 +1,19 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-04",
+  "scope_id": "PI-FE-05",
   "allowed_files": [
-    "src-tauri/src/workspace/listing.rs",
-    "src-tauri/src/workspace/mod.rs",
-    "src-tauri/src/lib.rs",
-    "src/services/wsService.ts",
-    "src/store/wsStore.ts",
-    "src/components/ws/FileTree.tsx",
-    "src/components/ws/FileTreeNode.tsx",
+    "package.json",
+    "package-lock.json",
+    "src/components/ed/Editor.tsx",
+    "src/components/ed/extensions/BlockIdExtension.ts",
+    "src/components/ed/extensions/index.ts",
+    "src/components/ed/EditorTab.tsx",
+    "src/store/edStore.ts",
     "src/shell/Workbench.tsx",
     "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-04.md"
+    ".governance/issues/PI-FE-05.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -24,5 +24,5 @@
     "src-tauri/src/workspace/lifecycle.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-04 新增 WS 文件枚举（边界守护复用 resolve_in_workspace）+ 前端文件树；人类已授权连续推进并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-05 纯前端 TipTap 接入（基础 md 编辑 + blockId + tab 6 态 + 扩展槽预留），需联网装 TipTap；人类已授权连续推进并确认 confirmation=YES。"
 }

@@ -3,6 +3,7 @@ import { useWorkspaceShell } from "../store/workspaceShell";
 import { LeftRail, type RailPanelId } from "../components/shell/LeftRail";
 import { BinderWordmark } from "../components/brand/BinderWordmark";
 import { FileTree } from "../components/ws/FileTree";
+import { Editor } from "../components/ed/Editor";
 
 /**
  * 主工作台（A-SYS-C-T-02 §3/§4 界面分区与全局布局）。有活动 workspace 后的主界面。
@@ -33,8 +34,7 @@ export function Workbench() {
           )}
         </aside>
         <main className="center">
-          {/* PI-FE-05 ED 编辑器 */}
-          <span className="label">编辑区 · ED</span>
+          <Editor />
         </main>
         <aside className="chat">
           {/* PI-FE-06 AG 对话区 */}
