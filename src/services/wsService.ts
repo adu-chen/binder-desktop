@@ -70,17 +70,17 @@ export async function checkExternalChange(relPath: string, baseline: number): Pr
   return callCommand<ExternalCheckDto>("ws.check_external_change", { relPath, baseline });
 }
 
+/** 拉取当前活动 workspace 文件列表（裸调用，不投影）；供 loadDocs 与启动探测复用。 */
+export async function fetchDocs(): Promise<DocRefView[]> {
+  const docs = await callCommand<DocRefDto[]>("ws.list_docs", {});
+  return docs.map((d) => ({ workspaceId: d.workspace_id, relPath: d.rel_path, docType: d.doc_type }));
+}
+
 /** 加载当前活动 workspace 的文件列表（投影 loading → ready/error）。 */
 export async function loadDocs(): Promise<void> {
   wsStore._projectLoading();
   try {
-    const docs = await callCommand<DocRefDto[]>("ws.list_docs", {});
-    const view: DocRefView[] = docs.map((d) => ({
-      workspaceId: d.workspace_id,
-      relPath: d.rel_path,
-      docType: d.doc_type,
-    }));
-    wsStore._projectDocs(view);
+    wsStore._projectDocs(await fetchDocs());
   } catch (e) {
     const err = e as { code?: string; message?: string };
     wsStore._projectError(err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e));

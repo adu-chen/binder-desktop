@@ -14,7 +14,7 @@ import { BinderWordmark } from "../components/brand/BinderWordmark";
  * 本地编辑离线可用（REQ-CORE-009），登录非进入工作台的前置。
  */
 export function Welcome() {
-  const { recent, recentStatus, recentError } = useWorkspaceShell();
+  const { recent, recentStatus, recentError, notice } = useWorkspaceShell();
 
   useEffect(() => {
     void loadRecentWorkspaces();
@@ -24,6 +24,8 @@ export function Welcome() {
     <main className="welcome">
       <BinderWordmark size={44} />
       <p className="muted">本地优先的 AI 原生写作工作台</p>
+
+      {notice && <p className="welcome-notice">{notice}</p>}
 
       <div className="actions">
         <button onClick={() => void openWorkspace()}>打开 / 新建 workspace</button>

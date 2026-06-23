@@ -19,6 +19,8 @@ interface ShellState {
   recent: WorkspaceRefView[];
   recentStatus: RecentStatus;
   recentError: string | null;
+  /** 外壳级提示（如启动恢复发现历史项目已不可用）；欢迎页展示。 */
+  notice: string | null;
 }
 
 let state: ShellState = {
@@ -26,6 +28,7 @@ let state: ShellState = {
   recent: [],
   recentStatus: "idle",
   recentError: null,
+  notice: null,
 };
 const listeners = new Set<() => void>();
 
@@ -60,6 +63,9 @@ export const workspaceShell = {
   },
   _projectRecentError(message: string) {
     setState({ recentStatus: "error", recentError: message });
+  },
+  setNotice(notice: string | null) {
+    setState({ notice });
   },
 };
 

@@ -1,16 +1,16 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-BE-03+FE-12",
+  "scope_id": "PI-FE-15",
   "allowed_files": [
-    "docs/01_modules/WS/A-WS-I-P-01_工作台接口协议.md",
-    "src-tauri/src/workspace/save.rs",
-    "src-tauri/src/lib.rs",
+    "src/services/workspaceService.ts",
     "src/services/wsService.ts",
-    "src/services/edService.ts",
-    "src/components/ed/Editor.tsx",
+    "src/store/workspaceShell.ts",
+    "src/shell/Welcome.tsx",
+    "src/components/ws/FileTree.tsx",
+    "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-BE-03-FE-12.md"
+    ".governance/issues/PI-FE-15.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -21,5 +21,5 @@
     "src-tauri/src/workspace/lifecycle.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-BE-03+FE-12 补全 SM-WS-01 外部变更感知——后端 check_external_change 比对基线、前端 5s 轮询触发 external_changed 冲突条；人类已授权按计划 P2 开发并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-15 纯前端健壮性——启动探测死项目回退欢迎页 + 文件树手动刷新；空目录可见/搜索需后端，留作后续；人类已授权按建议继续并确认 confirmation=YES。"
 }

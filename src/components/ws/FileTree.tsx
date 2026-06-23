@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useWsStore, type DocRefView } from "../../store/wsStore";
 import { loadDocs } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
@@ -57,15 +57,25 @@ export function FileTree() {
     void openDocument(path);
   };
 
+  // 仅 idle 时自动加载（启动恢复预置 / 切换重置会置 idle）；避免覆盖已预置结果。
   useEffect(() => {
-    void loadDocs();
-  }, []);
+    if (status === "idle") void loadDocs();
+  }, [status]);
 
+  const header = (
+    <div className="filetree-hd">
+      <span className="label">工作区</span>
+      <button className="ghost ftn-refresh" onClick={() => void loadDocs()} title="刷新文件树">
+        ↻
+      </button>
+    </div>
+  );
+
+  let body: ReactNode;
   if (status === "loading" || status === "idle") {
-    return <p className="muted ftn-hint">加载文件…</p>;
-  }
-  if (status === "error") {
-    return (
+    body = <p className="muted ftn-hint">加载文件…</p>;
+  } else if (status === "error") {
+    body = (
       <p className="ftn-error">
         加载失败：{error}
         <button className="ghost ftn-retry" onClick={() => void loadDocs()}>
@@ -73,16 +83,22 @@ export function FileTree() {
         </button>
       </p>
     );
-  }
-  if (tree.length === 0) {
-    return <p className="muted ftn-hint">workspace 为空</p>;
+  } else if (tree.length === 0) {
+    body = <p className="muted ftn-hint">workspace 为空（新增文件后点 ↻ 刷新）</p>;
+  } else {
+    body = (
+      <div className="filetree">
+        {tree.map((n) => (
+          <FileTreeNode key={n.path} node={n} depth={0} openPath={openPath} onOpenFile={handleOpenFile} />
+        ))}
+      </div>
+    );
   }
 
   return (
-    <div className="filetree">
-      {tree.map((n) => (
-        <FileTreeNode key={n.path} node={n} depth={0} openPath={openPath} onOpenFile={handleOpenFile} />
-      ))}
-    </div>
+    <>
+      {header}
+      {body}
+    </>
   );
 }

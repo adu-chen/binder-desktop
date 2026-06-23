@@ -4,6 +4,7 @@ import { workspaceShell, type WorkspaceRefView } from "../store/workspaceShell";
 import { wsStore } from "../store/wsStore";
 import { edStore } from "../store/edStore";
 import { deStore } from "../store/deStore";
+import { fetchDocs } from "./wsService";
 
 /**
  * 切换/打开/关闭 workspace 时重置下游 store——文件树 / 编辑会话 / diff 均清空，
@@ -131,12 +132,32 @@ export async function closeWorkspace(): Promise<void> {
   workspaceShell._projectActive(null);
 }
 
-/** 启动恢复：投影后端当前活动 workspace（无则保持欢迎页）。 */
+/**
+ * 启动恢复：投影后端当前活动 workspace（无则保持欢迎页）。
+ * 死项目探测：恢复前以 ws.list_docs 探 root 可达——读目录失败（目录被删/移）→ ws.close_workspace +
+ * 停欢迎页 + 提示，避免进入坏掉的工作台。可达则用探测结果预置文件树（FileTree 仅 idle 时再加载）。
+ */
 export async function restoreActiveWorkspace(): Promise<void> {
+  let ref: WorkspaceRefDto | null;
   try {
-    const ref = await callCommand<WorkspaceRefDto | null>("ws.active_workspace", {});
-    if (ref) workspaceShell._projectActive(toView(ref));
+    ref = await callCommand<WorkspaceRefDto | null>("ws.active_workspace", {});
   } catch (e) {
     console.error(`ws.active_workspace failed ${ipcMessage(e)}`);
+    return;
+  }
+  if (!ref) return;
+  try {
+    const docs = await fetchDocs(); // 探测 root 可达 + 预置文件树
+    wsStore._projectDocs(docs);
+    workspaceShell._projectActive(toView(ref));
+  } catch (e) {
+    // 死项目（root 不可读）：置非活动、回退欢迎页、提示。
+    console.error(`restore probe failed ${ipcMessage(e)}`);
+    try {
+      await callCommand("ws.close_workspace", { workspaceId: ref.workspace_id });
+    } catch {
+      /* 关闭失败也回退 */
+    }
+    workspaceShell.setNotice(`上次的 workspace「${ref.root_path}」已不可用（可能被移动或删除）`);
   }
 }

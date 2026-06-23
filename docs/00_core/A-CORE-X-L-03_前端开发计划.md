@@ -270,6 +270,15 @@
 
 ---
 
+### PI-FE-15　健壮性收口（死项目回退 + 文件树刷新）　✅ G4 已实现（2026-06-23，tsc + build + scoped audit 绿；启动探测死项目→回退欢迎页+提示、文件树常驻刷新）
+- **承接**：A-SYS-C-T-02 §4.1 / WS-FS / X-FORBID-007 / X-SEQ-002。补 PI-FE-10 标注的启动恢复 root 探测债务。
+- **文件范围**：`workspaceService`（restoreActiveWorkspace 探测 + notice）、`wsService`（fetchDocs 抽取）、`workspaceShell`（notice）、`Welcome`（提示）、`FileTree`（刷新按钮 + 仅 idle 加载）。
+- **实现要点**：恢复前以 ws.list_docs 探 root 可达——死项目（读目录失败）→ ws.close_workspace + 回退欢迎页 + 金色提示；可达则预置文件树（避免二次枚举）。文件树标题区常驻 ↻ 刷新（外部新增文件后无需重开）。
+- **A 类债务**：空目录可见（需后端 listing 返回目录节点）、全文搜索（ws.search 未实现）留作后续 PI。
+- **验收**：历史项目被删后启动回退欢迎页+提示；刷新按钮可重载；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```
