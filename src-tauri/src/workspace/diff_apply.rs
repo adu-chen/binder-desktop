@@ -142,6 +142,66 @@ pub fn discard_diff(conn: &Connection, diff_id: &str, terminal: &str) -> rusqlit
     Ok(())
 }
 
+/// DB status 文本 → DiffStatus 枚举（与 A-SYS-I-P-01 单一来源对齐；未知按 pending 保守）。
+fn parse_status(s: &str) -> crate::types::DiffStatus {
+    use crate::types::DiffStatus::*;
+    match s {
+        "accepted" => Accepted,
+        "rejected" => Rejected,
+        "expired" => Expired,
+        _ => Pending,
+    }
+}
+
+/// 由 rel_path 扩展名推断 doc_type（DocRef 需要；与 listing 一致小写无点）。
+fn doc_type_of(rel_path: &str) -> String {
+    rel_path
+        .rsplit('.')
+        .next()
+        .filter(|ext| *ext != rel_path && !ext.is_empty())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_else(|| "bin".to_string())
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001
+ * type:     QUERY
+ * chain:    WS-DIFF-APPLY
+ * rules:    BR-WS-STATE-001
+ * boundary: in=workspaceIdAndStatusFilter | out=pendingDiffList(restartRecoverable)
+ */
+/// 列举 workspace 的 pending_diff（BR-WS-STATE-001 重启恢复入口）：按 workspace_id 过滤，可选 status
+/// 过滤（None=全部）；按 created_at 升序，使重启后裁决顺序稳定。
+pub fn list_pending_diffs(
+    conn: &Connection,
+    workspace_id: &str,
+    status_filter: Option<&str>,
+) -> rusqlite::Result<Vec<PendingDiff>> {
+    let mut stmt = conn.prepare(
+        "SELECT diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at \
+         FROM pending_diffs WHERE workspace_id = ?1 AND (?2 IS NULL OR status = ?2) \
+         ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map((workspace_id, status_filter), |r| {
+        let rel_path: String = r.get(2)?;
+        let status: String = r.get(4)?;
+        Ok(PendingDiff {
+            diff_id: r.get(0)?,
+            target: DocRef {
+                workspace_id: r.get(1)?,
+                doc_type: doc_type_of(&rel_path),
+                rel_path,
+            },
+            origin_module: r.get(3)?,
+            status: parse_status(&status),
+            payload_ref: r.get(5)?,
+            created_at: r.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +256,34 @@ mod tests {
         assert_eq!(transition(AwaitingDecision, ApplyOk), None, "未经 Applying 不得 Applied");
         assert_eq!(transition(Discarded, Accepted), None, "丢弃后不得绕过裁决再落盘");
         assert_eq!(transition(Applied, ApplyOk), None);
+    }
+
+    // covers: BR-WS-STATE-001
+    // list_pending_diffs：按 workspace 过滤、created_at 升序、可选 status 过滤；重启恢复入口。
+    #[test]
+    fn list_pending_diffs_filters_and_orders() {
+        let conn = fresh();
+        let mut d1 = sample_diff("d1");
+        d1.created_at = 200;
+        let mut d2 = sample_diff("d2");
+        d2.created_at = 100;
+        persist_diff(&conn, &d1).unwrap();
+        persist_diff(&conn, &d2).unwrap();
+        discard_diff(&conn, "d1", "rejected").unwrap();
+
+        // 全部：按 created_at 升序（d2 先于 d1）。
+        let all = list_pending_diffs(&conn, "ws1", None).unwrap();
+        assert_eq!(all.iter().map(|d| d.diff_id.as_str()).collect::<Vec<_>>(), vec!["d2", "d1"]);
+        assert_eq!(all[1].status, DiffStatus::Rejected, "状态从 DB 文本正确解析");
+        assert_eq!(all[0].target.doc_type, "md", "doc_type 由 rel_path 推断");
+
+        // status 过滤：仅 pending → d2。
+        let pending = list_pending_diffs(&conn, "ws1", Some("pending")).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].diff_id, "d2");
+
+        // 其他 workspace 无结果（按 workspace 隔离）。
+        assert!(list_pending_diffs(&conn, "wsX", None).unwrap().is_empty());
     }
 
     // covers: BR-WS-STATE-001

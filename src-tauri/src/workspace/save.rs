@@ -18,6 +18,34 @@ pub fn content_hash(bytes: &[u8]) -> u64 {
     h
 }
 
+/// 读取文档内容 + 加载基线（BR-WS-OBS-001）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DocRead {
+    pub content: String,
+    /// 读取时点内容基线哈希——供 save 校验与外部变更检测。
+    pub baseline: u64,
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-OBS-001-QUERY-WS-WS-FS-003
+ * type:     QUERY
+ * chain:    WS-FS
+ * rules:    BR-WS-OBS-001
+ * boundary: in=docAbsolutePath | out=DocRead(contentWithLoadedBaseline)
+ */
+/// 读文档内容并附加载基线（BR-WS-OBS-001）：基线随读取时点内容计算，供后续 save 一致性校验与外部
+/// 变更检测；非 UTF-8（二进制）按错误回报（二进制读写归 DOC/媒体，不在文本读路）。路径守界由调用方
+/// resolve_in_workspace 保证（X-FORBID-004）。
+pub fn read_doc(abs_path: &Path) -> Result<DocRead, IpcError> {
+    let bytes = std::fs::read(abs_path)
+        .map_err(|e| IpcError::new("WS_READ_FAILED", &format!("读取文档失败: {e}"), true, false))?;
+    let baseline = content_hash(&bytes);
+    let content = String::from_utf8(bytes)
+        .map_err(|_| IpcError::new("WS_NOT_UTF8", "文档非 UTF-8 文本，无法以文本打开", false, false))?;
+    Ok(DocRead { content, baseline })
+}
+
 /// 读取文件当前内容哈希；文件不存在记为 None（新建场景）。
 fn disk_hash(path: &Path) -> std::io::Result<Option<u64>> {
     match std::fs::read(path) {
@@ -167,6 +195,24 @@ mod tests {
         p.push(format!("binder_save_{}_{}.txt", tag, content_hash(tag.as_bytes())));
         let _ = std::fs::remove_file(&p);
         p
+    }
+
+    // covers: BR-WS-OBS-001
+    // read_doc 回内容 + 加载基线，基线与同内容 save 校验一致（读后即可无冲突 save）；非 UTF-8 报错。
+    #[test]
+    fn read_doc_returns_content_and_matching_baseline() {
+        let path = tmp_path("readdoc");
+        std::fs::write(&path, "标题\n正文").unwrap();
+        let r = read_doc(&path).unwrap();
+        assert_eq!(r.content, "标题\n正文");
+        assert_eq!(r.baseline, content_hash("标题\n正文".as_bytes()));
+        // 以读得基线原样 save 不冲突。
+        assert!(save_atomic(&path, "标题\n正文".as_bytes(), Some(r.baseline), false).is_ok());
+        // 非 UTF-8 字节按错误回报。
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        let err = read_doc(&path).unwrap_err();
+        assert_eq!(err.code, "WS_NOT_UTF8");
+        let _ = std::fs::remove_file(&path);
     }
 
     // covers: BR-WS-PERSIST-001

@@ -49,6 +49,12 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.switch_workspace");
     reg.register("ws.active_workspace");
     reg.register("ws.list_docs");
+    reg.register("ws.read_doc");
+    reg.register("ws.save_doc");
+    reg.register("ws.persist_diff");
+    reg.register("ws.list_pending_diffs");
+    reg.register("ws.apply_diff");
+    reg.register("ws.discard_diff");
     reg.register("ag.start_turn");
     reg
 }
@@ -77,6 +83,12 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.switch_workspace" => route_switch_workspace(&request, &state),
         "ws.active_workspace" => route_active_workspace(&state),
         "ws.list_docs" => route_list_docs(&state),
+        "ws.read_doc" => route_read_doc(&request, &state),
+        "ws.save_doc" => route_save_doc(&request, &state),
+        "ws.persist_diff" => route_persist_diff(&request, &state),
+        "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
+        "ws.apply_diff" => route_apply_diff(&request, &state),
+        "ws.discard_diff" => route_discard_diff(&request, &state),
         "ag.start_turn" => route_start_turn(&request),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
@@ -177,6 +189,114 @@ fn route_list_docs(state: &AppState) -> Result<serde_json::Value, IpcError> {
         &active.workspace_id,
     )?;
     ws_json(&docs)
+}
+
+/// 取活动 workspace（无活动即拒）——文件 I/O 路由的公共前置。
+fn active_ws(state: &AppState) -> Result<crate::types::WorkspaceRef, IpcError> {
+    let conn = lock_db(state)?;
+    workspace::lifecycle::active_workspace(&conn)
+        .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))
+}
+
+/// 取请求字符串参数（缺失/空回统一错误形状）。
+fn str_param(request: &CommandRequest, key: &str, code: &str) -> Result<String, IpcError> {
+    request
+        .params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .ok_or_else(|| IpcError::new(code, &format!("缺少 {key} 参数"), false, false))
+}
+
+/// 解析活动 workspace 内相对路径为绝对路径（X-FORBID-004 守界）。
+fn resolve_active(state: &AppState, rel_path: &str) -> Result<(crate::types::WorkspaceRef, std::path::PathBuf), IpcError> {
+    let ws = active_ws(state)?;
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), rel_path)?;
+    Ok((ws, abs))
+}
+
+/// 路由 `ws.read_doc`：读活动 workspace 内文档内容 + 加载基线（BR-WS-OBS-001 / X-FORBID-004）。
+fn route_read_doc(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    let read = workspace::save::read_doc(&abs)?;
+    ws_json(&read)
+}
+
+/// 路由 `ws.save_doc`：原子写入（带基线校验 + 显式 override），回新基线（BR-WS-PERSIST-001 / SM-WS-01）。
+fn route_save_doc(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let content = request
+        .params
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new("WS_CONTENT_REQUIRED", "缺少 content 参数", false, false))?;
+    let baseline = request.params.get("baseline").and_then(|v| v.as_u64());
+    let override_external = request.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    let saved = workspace::save::save_atomic(&abs, content.as_bytes(), baseline, override_external)?;
+    Ok(serde_json::json!({ "baseline": saved.baseline }))
+}
+
+/// 路由 `ws.persist_diff`：持久化 PendingDiff 为 status=pending（重启恢复，BR-WS-STATE-001）。
+fn route_persist_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let diff: crate::types::PendingDiff = serde_json::from_value(request.params.clone())
+        .map_err(|e| IpcError::new("WS_DIFF_MALFORMED", &format!("PendingDiff 解析失败: {e}"), false, false))?;
+    let conn = lock_db(state)?;
+    workspace::diff_apply::persist_diff(&conn, &diff)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "diff_id": diff.diff_id }))
+}
+
+/// 路由 `ws.list_pending_diffs`：回活动 workspace 未裁决 diff 列表（重启恢复入口）。
+fn route_list_pending_diffs(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let status = request.params.get("status").and_then(|v| v.as_str());
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let list = workspace::diff_apply::list_pending_diffs(&conn, &ws.workspace_id, status)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&list)
+}
+
+/// 路由 `ws.apply_diff`：accepted 唯一落盘路径——原子写 + 记一个时间轴节点 + 置 accepted（BR-WS-STATE-001）。
+/// afterContent 由 DE 产出方提供（payload_ref→内容解析归 DE）；本路由执行 WS 侧落盘 effect。
+fn route_apply_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let after_content = request
+        .params
+        .get("afterContent")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new("WS_CONTENT_REQUIRED", "缺少 afterContent 参数", false, false))?;
+    let baseline = request.params.get("baseline").and_then(|v| v.as_u64());
+    let (ws, abs) = resolve_active(state, &rel_path)?;
+    let doc = crate::types::DocRef {
+        workspace_id: ws.workspace_id,
+        doc_type: std::path::Path::new(&rel_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_else(|| "bin".to_string()),
+        rel_path,
+    };
+    let conn = lock_db(state)?;
+    let entry = workspace::diff_apply::apply_diff(&conn, &diff_id, &doc, &abs, after_content.as_bytes(), baseline)?;
+    ws_json(&entry)
+}
+
+/// 路由 `ws.discard_diff`：rejected/expired 仅置终态，不写文件、不记节点（BR-WS-STATE-001）。
+fn route_discard_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let terminal = str_param(request, "terminal", "WS_TERMINAL_REQUIRED")?;
+    if terminal != "rejected" && terminal != "expired" {
+        return Err(IpcError::new("WS_TERMINAL_INVALID", "terminal 须为 rejected/expired", false, false));
+    }
+    let conn = lock_db(state)?;
+    workspace::diff_apply::discard_diff(&conn, &diff_id, &terminal)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "diff_id": diff_id, "status": terminal }))
 }
 
 /**

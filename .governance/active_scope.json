@@ -1,15 +1,12 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-08",
+  "scope_id": "PI-BE-01",
   "allowed_files": [
-    "src/store/assistStore.ts",
-    "src/components/ag/InlineAssistPopover.tsx",
-    "src/components/ag/AutocompleteOverlay.tsx",
-    "src/components/ed/Editor.tsx",
-    "src/styles.css",
-    "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
+    "src-tauri/src/workspace/save.rs",
+    "src-tauri/src/workspace/diff_apply.rs",
+    "src-tauri/src/lib.rs",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-08.md"
+    ".governance/issues/PI-BE-01.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -17,8 +14,8 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/store/deStore.ts"
+    "src-tauri/src/workspace/lifecycle.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-08 纯前端 ⌘K/⌘J 辅助入口 UI；两入口均不产 DiffCard、不进 Diff 链路；人类已授权连续推进并确认 confirmation=YES。"
+  "scope_reason": "PI-BE-01 把 WS 既有落盘原语接入 dispatch，补 read_doc/list_pending_diffs 两个查询并加测试；纯后端 IPC 接线；人类已授权继续后端落盘并确认 confirmation=YES。"
 }
