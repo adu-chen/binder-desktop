@@ -16,14 +16,16 @@ import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
  * GreenReview 与右侧 DiffCard 同源（deStore）→ 双向同步（X-INTER-001）。
  * ⌘K InlineAssist / ⌘J Autocomplete 辅助入口（PI-FE-08）：均经 ED 受控接口编辑，不产 DiffCard。
  */
-const SEED_CONTENT = `
-<p data-block-id="demo-b1">从前有座山。</p>
-<p data-block-id="demo-b2">数据支持这一点。</p>
-<p data-block-id="demo-b3">这个很重要。</p>
-<p data-block-id="demo-b4">其实基本上大概可能。</p>
-`;
+const SEED_CONTENT = "开始写作…";
 
 const AUTOCOMPLETE_STUB = ["，山上有座庙。", "，云雾常年缭绕。", "，住着一位老者。"];
+
+/** 是否按 Markdown 处理（.md/.markdown）；其余按纯文本忠实往返。 */
+function isMarkdownPath(path: string | null): boolean {
+  if (!path) return false;
+  const ext = path.split(".").pop()?.toLowerCase();
+  return ext === "md" || ext === "markdown";
+}
 
 /** 纯文本 → ProseMirror doc（每行一段落，忠实往返；富文本 md 解析序列化为债务）。 */
 function textToDoc(text: string) {
@@ -105,16 +107,24 @@ export function Editor() {
   }, [openPath]);
 
   // 载入真实文档：loadSeq 变更（ws.read_doc 投影）→ setContent（不触发脏态）。
+  // md/markdown 以 Markdown 解析为富文本（字符串经 tiptap-markdown）；其余按纯文本（doc 对象，绕过 md 解析）。
   useEffect(() => {
     if (!editor || loadSeq === 0 || loadedContent === null) return;
-    editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
-  }, [editor, loadSeq, loadedContent]);
+    if (isMarkdownPath(openPath)) {
+      editor.commands.setContent(loadedContent, { emitUpdate: false });
+    } else {
+      editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
+    }
+  }, [editor, loadSeq, loadedContent, openPath]);
 
-  // ⌘S 保存：取纯文本（行→\n）→ ws.save_doc（带加载基线）。冲突回 external_changed 等待裁决。
+  // ⌘S 保存：md 以 getMarkdown 序列化、其余取纯文本（行→\n）→ ws.save_doc（带加载基线）。
   const saveCurrent = async (override: boolean) => {
     if (!editor) return;
-    const text = editor.getText({ blockSeparator: "\n" });
-    await saveDocument(text, override);
+    const mdStorage = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>).markdown;
+    const content = isMarkdownPath(openPath)
+      ? mdStorage.getMarkdown()
+      : editor.getText({ blockSeparator: "\n" });
+    await saveDocument(content, override);
   };
 
   // GreenReview 同步：deStore diff 态变更 → 推送 blockId→GreenReviewState 映射到装饰层。

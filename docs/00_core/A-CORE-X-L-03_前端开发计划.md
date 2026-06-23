@@ -288,6 +288,15 @@
 
 ---
 
+### PI-FE-14　富文本 Markdown 往返（tiptap-markdown）　✅ G4 已实现（2026-06-23，tsc + build + vitest 绿；md 解析为富文本渲染 + getMarkdown 序列化回写）
+- **承接**：A-ED-M-T-01（md/docx 统一编辑模型）/ ED-EDIT / X-FORBID-007。替换 PI-FE-09 纯文本往返。
+- **文件范围**：`package.json`（tiptap-markdown，本地库离线可用）、`extensions/index.ts`（Markdown 扩展）、`Editor.tsx`（md 文件 setContent 解析 + getMarkdown 保存；非 md 维持纯文本）。
+- **实现要点**：.md/.markdown 打开渲染为富文本（# 标题、**粗体** 等）、保存序列化回合法 md；.txt 等维持纯文本往返；blockId 为运行时属性不持久化到 md（往返后重生成）。
+- **A 类债务**：md 保真度限 tiptap-markdown 支持的语法（表格/脚注等扩展按需）；docx 往返仍归 DOC/pandoc 路。
+- **验收**：md 富文本渲染 + 合法 md 写回；txt 纯文本往返；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

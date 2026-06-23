@@ -1,5 +1,6 @@
 import StarterKit from "@tiptap/starter-kit";
 import type { Extensions } from "@tiptap/core";
+import { Markdown } from "tiptap-markdown";
 import { BlockIdExtension } from "./BlockIdExtension";
 import { DiffDecorationExtension } from "./DiffDecorationExtension";
 
@@ -18,6 +19,8 @@ export function buildEditorExtensions(): Extensions {
   return [
     // 基础富文本（段落/标题/列表/引用/代码块/加粗等）。
     StarterKit,
+    // Markdown 往返（PI-FE-14，本地库离线可用）：md 文件解析为富文本 + getMarkdown 序列化回 md。
+    Markdown.configure({ html: false, breaks: true, transformPastedText: true }),
     // 稳定 blockId（BR-ED-DATA-001）——必须在 StarterKit 之后，为其块类型附加全局属性。
     BlockIdExtension,
     // GreenReview 装饰层（BR-ED-STATE-002 / TERM-ED-003，PI-FE-07）——依赖 blockId 锚定。
