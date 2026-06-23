@@ -1,22 +1,23 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-14",
+  "scope_id": "PI-BE-05",
   "allowed_files": [
-    "package.json",
-    "package-lock.json",
-    "src/components/ed/extensions/index.ts",
-    "src/components/ed/Editor.tsx",
-    "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
+    "docs/01_modules/WS/A-WS-M-T-01_工作台技术设计.md",
+    "src-tauri/src/db/mod.rs",
+    "src-tauri/src/workspace/timeline.rs",
+    "src-tauri/src/workspace/diff_apply.rs",
+    "src-tauri/src/lib.rs",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-14.md"
+    ".governance/issues/PI-BE-05.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src-tauri/src/ipc/mod.rs"
+    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/workspace/lifecycle.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-14 纯前端接 tiptap-markdown 做 md WYSIWYG 往返（本地库，离线可用）；人类已确认网络装包；按计划 P2 收尾并确认 confirmation=YES。"
+  "scope_reason": "PI-BE-05 实现时间轴快照存储（解除 WS-03）使 preview/restore 可用，接 3 个 timeline 路由；纯后端；人类已授权按计划 P3 继续并确认 confirmation=YES。"
 }

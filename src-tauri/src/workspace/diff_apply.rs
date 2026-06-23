@@ -112,8 +112,11 @@ pub fn apply_diff(
 ) -> Result<crate::types::TimelineEntry, IpcError> {
     // 1) 原子落盘（失败则不记节点、原文件保持，BR-WS-PERSIST-001）。
     let saved = save::save_atomic(abs_path, after_content, loaded_baseline, true)?;
-    // 2) save 成功后记恰好一个节点。
-    let entry = timeline::append_node(conn, doc, "apply", &format!("blob_{}", saved.baseline), None)
+    // 2) save 成功后存全量快照（内容寻址去重，解除 WS-03）+ 记恰好一个节点指向之。
+    let snapshot_ref = format!("blob_{}", saved.baseline);
+    timeline::store_snapshot(conn, &snapshot_ref, after_content)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("存快照失败: {e}"), true, false))?;
+    let entry = timeline::append_node(conn, doc, "apply", &snapshot_ref, None)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("记时间轴节点失败: {e}"), true, false))?;
     // 3) 置 diff 终态 accepted。
     conn.execute(

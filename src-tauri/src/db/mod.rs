@@ -103,6 +103,18 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        version: 4,
+        // 时间轴快照内容存储（解除 WS-03 快照存储形态债务，PI-BE-05）：全量内容、内容寻址哈希
+        // （snapshot_ref=blob_{hash}）、去重；timeline.snapshot_ref 指向之，供 preview/restore 取回。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS timeline_snapshots (
+                snapshot_ref TEXT PRIMARY KEY,
+                content      BLOB NOT NULL,
+                created_at   INTEGER NOT NULL
+            );
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

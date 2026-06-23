@@ -60,6 +60,9 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.create_doc");
     reg.register("ws.rename_doc");
     reg.register("ws.delete_doc");
+    reg.register("ws.list_timeline");
+    reg.register("ws.preview_node");
+    reg.register("ws.restore_node");
     reg.register("de.generate_diff");
     reg.register("de.accept_diff");
     reg.register("de.reject_diff");
@@ -103,6 +106,9 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.create_doc" => route_create_doc(&request, &state),
         "ws.rename_doc" => route_rename_doc(&request, &state),
         "ws.delete_doc" => route_delete_doc(&request, &state),
+        "ws.list_timeline" => route_list_timeline(&request, &state),
+        "ws.preview_node" => route_preview_node(&request, &state),
+        "ws.restore_node" => route_restore_node(&request, &state),
         "de.generate_diff" => route_generate_diff(&request, &state),
         "de.accept_diff" => route_accept_diff(&request, &state),
         "de.reject_diff" => route_reject_diff(&request, &state),
@@ -357,6 +363,54 @@ fn route_delete_doc(request: &CommandRequest, state: &AppState) -> Result<serde_
     let (_, abs) = resolve_active(state, &rel_path)?;
     workspace::fileops::delete_doc(&abs)?;
     Ok(serde_json::json!({ "rel_path": rel_path, "deleted": true }))
+}
+
+/// 路由 `ws.list_timeline`：回文档时间轴节点（version_seq 升序，BR-WS-DATA-002）。
+fn route_list_timeline(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let ws = active_ws(state)?;
+    let doc = crate::types::DocRef {
+        workspace_id: ws.workspace_id,
+        doc_type: doc_type_of(&rel_path),
+        rel_path,
+    };
+    let conn = lock_db(state)?;
+    let list = workspace::timeline::list_timeline(&conn, &doc)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&list)
+}
+
+/// 路由 `ws.preview_node`：经节点 snapshot_ref 取回该版本内容（SM-WS-03 Previewing，快照不可取回则 guard 拒）。
+fn route_preview_node(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let entry_id = str_param(request, "entryId", "WS_ENTRY_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    let bytes = workspace::timeline::preview_node(&conn, &entry_id)?;
+    Ok(serde_json::json!({ "content": String::from_utf8_lossy(&bytes) }))
+}
+
+/// 路由 `ws.restore_node`：取回快照→原子写回文档（守界）→记一个新时间轴节点（前进式还原，BR-WS-STATE-002）。
+fn route_restore_node(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let entry_id = str_param(request, "entryId", "WS_ENTRY_ID_REQUIRED")?;
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let (rel_path, snapshot_ref) = workspace::timeline::node_locator(&conn, &entry_id)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("WS_NODE_NOT_FOUND", "时间轴节点不存在", false, false))?;
+    let content = workspace::timeline::load_snapshot(&conn, &snapshot_ref)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("WS_SNAPSHOT_UNAVAILABLE", "快照不可取回", false, false))?;
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+    // 原子写回（override：还原即以历史内容覆盖现状，用户显式动作）。
+    workspace::save::save_atomic(&abs, &content, None, true)?;
+    let doc = crate::types::DocRef {
+        workspace_id: ws.workspace_id,
+        doc_type: doc_type_of(&rel_path),
+        rel_path,
+    };
+    // 前进式记新节点（不抹历史；复用同一快照内容，内容寻址去重）。
+    let entry = workspace::timeline::append_node(&conn, &doc, "restore", &snapshot_ref, Some("还原"))
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&entry)
 }
 
 /// 路由 `ws.discard_diff`：rejected/expired 仅置终态，不写文件、不记节点（BR-WS-STATE-001）。

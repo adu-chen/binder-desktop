@@ -4,6 +4,7 @@
 //! 单调递增且不复用（timeline 表 UNIQUE(workspace_id, rel_path, version_seq) 强制）；还原前进式记新
 //! 节点（不抹历史），还原失败保持现状无半还原。快照物理存储形态为实现期 A 类债务（WS-03）。
 
+use crate::ipc::IpcError;
 use crate::types::{DocRef, TimelineEntry};
 use rusqlite::{Connection, OptionalExtension};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,6 +114,55 @@ pub fn list_timeline(conn: &Connection, doc: &DocRef) -> rusqlite::Result<Vec<Ti
     rows.collect()
 }
 
+/// 存储时间轴快照内容（解除 WS-03）：内容寻址（snapshot_ref=blob_{hash}）去重，多节点共享同一内容只存一份。
+pub fn store_snapshot(conn: &Connection, snapshot_ref: &str, content: &[u8]) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO timeline_snapshots (snapshot_ref, content, created_at) VALUES (?1, ?2, ?3)",
+        (snapshot_ref, content, now_millis()),
+    )?;
+    Ok(())
+}
+
+/// 取回快照内容（按 snapshot_ref）；不存在记为 None。
+pub fn load_snapshot(conn: &Connection, snapshot_ref: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row(
+        "SELECT content FROM timeline_snapshots WHERE snapshot_ref = ?1",
+        [snapshot_ref],
+        |r| r.get::<_, Vec<u8>>(0),
+    )
+    .optional()
+}
+
+/// 节点定位信息（preview/restore 用）：rel_path + snapshot_ref。
+pub fn node_locator(conn: &Connection, entry_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+    conn.query_row(
+        "SELECT rel_path, snapshot_ref FROM timeline WHERE entry_id = ?1",
+        [entry_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )
+    .optional()
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-STATE-002-QUERY-WS-WS-TIMELINE-002
+ * type:     QUERY
+ * chain:    WS-TIMELINE
+ * rules:    BR-WS-STATE-002
+ * boundary: in=timelineEntryId | out=nodeSnapshotContent(guardRejectedWhenSnapshotUnavailable)
+ */
+/// 预览节点版本内容（BR-WS-STATE-002 / SM-WS-03 Previewing）：经节点 snapshot_ref 取回快照；
+/// 节点不存在或快照不可取回 → guard 错误（不进入 Previewing，不返回错位内容）。
+pub fn preview_node(conn: &Connection, entry_id: &str) -> Result<Vec<u8>, IpcError> {
+    let db_err = |e: rusqlite::Error| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false);
+    let (_, snapshot_ref) = node_locator(conn, entry_id)
+        .map_err(db_err)?
+        .ok_or_else(|| IpcError::new("WS_NODE_NOT_FOUND", "时间轴节点不存在", false, false))?;
+    load_snapshot(conn, &snapshot_ref)
+        .map_err(db_err)?
+        .ok_or_else(|| IpcError::new("WS_SNAPSHOT_UNAVAILABLE", "快照不可取回", false, false))
+}
+
 /// SM-WS-03 状态（A-WS-M-S-01 §4 时间轴还原机）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestoreState {
@@ -179,6 +229,34 @@ mod tests {
             rel_path: "a.md".into(),
             doc_type: "md".into(),
         }
+    }
+
+    // covers: BR-WS-STATE-002
+    // 快照往返：store 后 preview 取回内容；内容寻址去重（同内容只一份）；节点/快照缺失 guard 拒。
+    #[test]
+    fn snapshot_store_preview_and_guards() {
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)",
+            [],
+        )
+        .unwrap();
+        let d = doc();
+        store_snapshot(&conn, "blob_1", b"version one").unwrap();
+        store_snapshot(&conn, "blob_1", b"version one").unwrap(); // 去重幂等
+        let n = append_node(&conn, &d, "apply", "blob_1", None).unwrap();
+        // preview 取回内容
+        assert_eq!(preview_node(&conn, &n.entry_id).unwrap(), b"version one");
+        // 去重：只存一份
+        let cnt: i64 = conn
+            .query_row("SELECT COUNT(*) FROM timeline_snapshots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cnt, 1);
+        // 节点不存在 → guard
+        assert_eq!(preview_node(&conn, "nope").unwrap_err().code, "WS_NODE_NOT_FOUND");
+        // 节点存在但快照缺失 → guard
+        let orphan = append_node(&conn, &d, "apply", "missing_blob", None).unwrap();
+        assert_eq!(preview_node(&conn, &orphan.entry_id).unwrap_err().code, "WS_SNAPSHOT_UNAVAILABLE");
     }
 
     // covers: BR-WS-DATA-002
