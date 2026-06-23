@@ -1,16 +1,19 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-03",
+  "scope_id": "PI-FE-04",
   "allowed_files": [
+    "src-tauri/src/workspace/listing.rs",
+    "src-tauri/src/workspace/mod.rs",
     "src-tauri/src/lib.rs",
-    "src/services/workspaceService.ts",
-    "src/store/workspaceShell.ts",
-    "src/shell/Welcome.tsx",
-    "src/shell/App.tsx",
+    "src/services/wsService.ts",
+    "src/store/wsStore.ts",
+    "src/components/ws/FileTree.tsx",
+    "src/components/ws/FileTreeNode.tsx",
+    "src/shell/Workbench.tsx",
     "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-03.md"
+    ".governance/issues/PI-FE-04.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -21,5 +24,5 @@
     "src-tauri/src/workspace/lifecycle.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-03 复用后端既有 lifecycle 函数（list/switch/active），仅在 lib.rs 加路由 + 前端欢迎页；人类已授权连续推进并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-04 新增 WS 文件枚举（边界守护复用 resolve_in_workspace）+ 前端文件树；人类已授权连续推进并确认 confirmation=YES。"
 }

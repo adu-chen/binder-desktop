@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useWorkspaceShell } from "../store/workspaceShell";
 import { LeftRail, type RailPanelId } from "../components/shell/LeftRail";
 import { BinderWordmark } from "../components/brand/BinderWordmark";
+import { FileTree } from "../components/ws/FileTree";
 
 /**
  * 主工作台（A-SYS-C-T-02 §3/§4 界面分区与全局布局）。有活动 workspace 后的主界面。
@@ -24,8 +25,12 @@ export function Workbench() {
       <div className="work">
         <LeftRail active={activePanel} onChange={setActivePanel} />
         <aside className="side">
-          {/* PI-FE-04 WS 文件树（及其余面板按 activePanel 切换） */}
-          <span className="label">侧边栏 · {activePanel}</span>
+          {activePanel === "files" ? (
+            <FileTree />
+          ) : (
+            // 其余面板（记忆/知识/模板/时间轴）由后续 PI 填充
+            <span className="label">{activePanel}</span>
+          )}
         </aside>
         <main className="center">
           {/* PI-FE-05 ED 编辑器 */}

@@ -48,6 +48,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.list_workspaces");
     reg.register("ws.switch_workspace");
     reg.register("ws.active_workspace");
+    reg.register("ws.list_docs");
     reg
 }
 
@@ -74,6 +75,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.list_workspaces" => route_list_workspaces(&state),
         "ws.switch_workspace" => route_switch_workspace(&request, &state),
         "ws.active_workspace" => route_active_workspace(&state),
+        "ws.list_docs" => route_list_docs(&state),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
             "IPC_ROUTE_MISSING",
@@ -159,6 +161,20 @@ fn route_active_workspace(state: &AppState) -> Result<serde_json::Value, IpcErro
     let active = workspace::lifecycle::active_workspace(&conn)
         .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?;
     ws_json(&active)
+}
+
+/// 路由 `ws.list_docs`：枚举当前活动 workspace root 下文件为 DocRef 列表（X-FORBID-004 守界）。
+fn route_list_docs(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let conn = lock_db(state)?;
+    let active = workspace::lifecycle::active_workspace(&conn)
+        .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
+    drop(conn); // 枚举文件系统期间不持 db 锁
+    let docs = workspace::listing::list_docs(
+        std::path::Path::new(&active.root_path),
+        &active.workspace_id,
+    )?;
+    ws_json(&docs)
 }
 
 pub fn run() {

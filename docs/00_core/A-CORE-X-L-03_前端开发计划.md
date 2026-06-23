@@ -111,7 +111,7 @@
 
 ---
 
-### PI-FE-04　侧边栏文件树（WS 模块前端）
+### PI-FE-04　侧边栏文件树（WS 模块前端）　✅ G4 已实现（2026-06-23，tsc + cargo test 86 + build + scoped audit 绿；ws.list_docs 枚举守界 + 文件树 6 状态接通 normal/not_supported）
 
 - **承接**：A-SYS-C-T-02 §3 Side Panel WS / BR-WS-DATA-001（DocRef 定位）/ WS-FS chain / X-FORBID-004（不越界） / TERM-WS-001（Workspace）。
 - **文件范围**：

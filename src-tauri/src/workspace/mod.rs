@@ -21,6 +21,9 @@ pub mod timeline;
 /// PI-WS-03 · pending_diffs 持久化与裁决后落盘（BR-WS-STATE-001 / SM-WS-02）。
 pub mod diff_apply;
 
+/// PI-FE-04 · workspace 内文件枚举（ws.list_docs，BR-WS-DATA-001 / X-FORBID-004）。
+pub mod listing;
+
 fn escape_error(rel_path: &str) -> IpcError {
     IpcError::new(
         "WS_PATH_ESCAPE",

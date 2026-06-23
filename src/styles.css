@@ -273,6 +273,61 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .diffstrip[hidden] { display: none; }
 
+/* 文件树（PI-FE-04） */
+.filetree { display: flex; flex-direction: column; }
+.ftn-hint { font-size: 13px; padding: var(--sp-2); }
+.ftn-error { color: var(--rust); font-size: 13px; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2); }
+.ftn-retry { padding: var(--sp-1) var(--sp-2); font-size: 12px; }
+.ftn-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 3px var(--sp-2);
+  font-size: 13px;
+  color: var(--ink-3);
+  cursor: pointer;
+  position: relative;
+}
+.ftn-row:hover { background: var(--bg-overlay); color: var(--ink); }
+.ftn-caret { font-size: 9px; color: var(--ink-5); width: 10px; }
+.ftn-type {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--ink-5);
+  min-width: 22px;
+}
+.ftn-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ftn-dir-row { color: var(--ink-2); font-weight: 500; }
+/* 6 状态视觉（互斥可辨） */
+.ftn-open { color: var(--ink); }
+.ftn-open::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 3px; bottom: 3px;
+  width: 2px;
+  background: var(--rust);
+}
+.ftn-not_supported { color: var(--ink-5); cursor: default; opacity: 0.6; }
+.ftn-not_supported:hover { background: transparent; color: var(--ink-5); }
+.ftn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rust); margin-left: auto; }
+.ftn-ext { color: var(--gold); font-weight: 700; margin-left: auto; }
+.ftn-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--bg-card);
+  background: var(--rust);
+  border-radius: var(--r-1);
+  padding: 0 4px;
+  min-width: 14px;
+  text-align: center;
+}
+
 .statusbar {
   grid-area: statusbar;
   display: flex;
