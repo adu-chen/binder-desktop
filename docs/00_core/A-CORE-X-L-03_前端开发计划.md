@@ -217,7 +217,7 @@
 
 ---
 
-### PI-FE-08　三种 AI 辅助入口 UI（⌘K InlineAssist / ⌘J Autocomplete）
+### PI-FE-08　三种 AI 辅助入口 UI（⌘K InlineAssist / ⌘J Autocomplete）　✅ G4 已实现（2026-06-23，tsc + build + scoped audit 绿；⌘K 替换选区 / ⌘J 续写插入，均不产 DiffCard 不进 Diff 链路）
 
 - **承接**：AG 模块 L2 / SM-AG-02（InlineAssist）/ SM-AG-03（Autocomplete）/ TERM-AG-003（InlineAssist）/ TERM-AG-004（Autocomplete）/ X-FORBID-007。
 - **文件范围**：
