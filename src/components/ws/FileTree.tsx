@@ -11,8 +11,8 @@ import { FileTreeNode, type TreeNode } from "./FileTreeNode";
  * 目录在前、文件在后，同级按名排序。
  */
 
-/** 扁平 DocRef（rel_path）列表 → 嵌套目录树。 */
-function buildTree(docs: DocRefView[]): TreeNode[] {
+/** 扁平 DocRef（rel_path）列表 → 嵌套目录树。导出供单测（纯函数）。 */
+export function buildTree(docs: DocRefView[]): TreeNode[] {
   const root: TreeNode = { name: "", path: "", kind: "dir", children: [] };
   for (const doc of docs) {
     const parts = doc.relPath.split("/").filter(Boolean);

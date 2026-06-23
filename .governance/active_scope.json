@@ -1,14 +1,17 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-16",
+  "scope_id": "PI-TEST-01",
   "allowed_files": [
-    "src/services/wsService.ts",
-    "src/components/ws/TimelinePanel.tsx",
-    "src/shell/Workbench.tsx",
-    "src/styles.css",
+    "src/store/deStore.test.ts",
+    "src/store/wsStore.test.ts",
+    "src/store/workspaceShell.test.ts",
+    "src/components/ws/FileTree.tsx",
+    "src/components/ws/buildTree.test.ts",
+    "src/services/wsService.test.ts",
+    "src/services/edService.test.ts",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-16.md"
+    ".governance/issues/PI-TEST-01.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -18,5 +21,5 @@
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-16 把 PI-BE-05 的时间轴命令接到 LeftRail 时间轴面板（列表/预览/还原）；纯前端；人类已授权按计划 P3 收尾并确认 confirmation=YES。"
+  "scope_reason": "PI-TEST-01 给已转真主干补单元+契约测试（vitest + vi.mock，无新依赖）；排除 AG 桩与 e2e；人类已授权进入测试并确认 confirmation=YES。"
 }

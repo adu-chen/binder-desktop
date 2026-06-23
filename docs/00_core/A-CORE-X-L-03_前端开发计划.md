@@ -306,6 +306,15 @@
 
 ---
 
+### PI-TEST-01　前端测试（单元 + 契约层，已转真主干）　✅ G4 已实现（2026-06-23，vitest 37 passed + tsc + build + scoped audit 绿）
+- **承接**：APC §10（单元/集成测试策略）/ A-CORE-X-L-03。仅测已转真主干（WS/ED/DE 落盘/时间轴/workspace 生命周期），排除仍是桩的 AG 与 e2e（G5）。
+- **文件范围**：`deStore/wsStore/workspaceShell.test.ts`（状态投影 reducer）、`buildTree.test.ts`（扁平→树，FileTree 导出 buildTree）、`wsService/edService.test.ts`（mock invoke 契约：CRUD/信封/保存冲突/外部变更）。
+- **实现要点**：node 环境（不渲染组件，无需 jsdom，无新依赖）；vi.mock @tauri-apps/api/core 验信封与 result/error 互斥；deStore 三终态互斥不可逆 covers BR-DE-STATE-001。
+- **A 类债务**：组件渲染测试（FileTreeNode 6 态/DiffCard 8 态/EditorTab/TimelinePanel）需后续装 jsdom + @testing-library；AG 桩面与 e2e 待模型/云接通（G5）。
+- **验收**：vitest 37 全过；tsc/build 绿；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```
