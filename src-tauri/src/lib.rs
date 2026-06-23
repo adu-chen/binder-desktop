@@ -56,6 +56,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.list_pending_diffs");
     reg.register("ws.apply_diff");
     reg.register("ws.discard_diff");
+    reg.register("ws.check_external_change");
     reg.register("de.generate_diff");
     reg.register("de.accept_diff");
     reg.register("de.reject_diff");
@@ -95,6 +96,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
         "ws.apply_diff" => route_apply_diff(&request, &state),
         "ws.discard_diff" => route_discard_diff(&request, &state),
+        "ws.check_external_change" => route_check_external_change(&request, &state),
         "de.generate_diff" => route_generate_diff(&request, &state),
         "de.accept_diff" => route_accept_diff(&request, &state),
         "de.reject_diff" => route_reject_diff(&request, &state),
@@ -308,6 +310,20 @@ fn route_apply_diff(request: &CommandRequest, state: &AppState) -> Result<serde_
     let conn = lock_db(state)?;
     let entry = workspace::diff_apply::apply_diff(&conn, &diff_id, &doc, &abs, after_content.as_bytes(), baseline)?;
     ws_json(&entry)
+}
+
+/// 路由 `ws.check_external_change`：比对磁盘当前哈希与加载基线（BR-WS-OBS-001 / X-FORBID-004）。
+/// 前端轮询此命令实现 external_change 逻辑契约（物理事件延 SY-02）。
+fn route_check_external_change(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let baseline = request
+        .params
+        .get("baseline")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| IpcError::new("WS_BASELINE_REQUIRED", "缺少 baseline 参数", false, false))?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    let check = workspace::save::check_external_change(&abs, baseline)?;
+    ws_json(&check)
 }
 
 /// 路由 `ws.discard_diff`：rejected/expired 仅置终态，不写文件、不记节点（BR-WS-STATE-001）。

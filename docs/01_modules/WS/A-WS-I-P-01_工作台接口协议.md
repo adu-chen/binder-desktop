@@ -38,6 +38,7 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 |---|---|---|---|---|
 | `ws.list_docs` | workspace_id、过滤条件（可空） | DocRef 列表 | — | BR-WS-DATA-001 |
 | `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
+| `ws.check_external_change` | DocRef、**加载基线哈希** | { changed, deleted, current } | 检测失败（可重试） | BR-WS-OBS-001；§6 external_change 逻辑契约的轮询实现（物理事件延 SY-02） |
 | `ws.create_doc` | DocRef、初始内容（可空） | DocRef + 基线哈希 | 已存在/越界 | BR-WS-DATA-001 |
 | `ws.save_doc` | DocRef、内容、**基线哈希**、override（默认 false） | 新基线哈希 | **save_conflict**（磁盘≠基线且未 override，SM-WS-01 saveConflict）；写入失败 | SM-WS-01 / BR-WS-PERSIST-001 / BR-WS-OBS-001；override=true 即 overrideConfirmed 语义，必须源自用户显式确认 |
 | `ws.search` | workspace_id、查询 | 命中列表（DocRef + 定位） | — | 限界 X-FORBID-004 |
@@ -66,6 +67,9 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.external_change` | DocRef + 变更类型（modified/deleted/moved）+ 当前哈希 | ED（SM-ED-01 externalChange）、DE（过期重检）、REF（锚校验） | BR-WS-OBS-001 |
 
 > 物理传输（Channel/event）维持 SY-02 延实现期选型；本表按 I-P-02 流式逻辑契约声明。
+> **实现选择（PI-BE-03+FE-12，2026-06-23）**：`ws.external_change` 的 ED 侧消费本阶段以前端 5s 轮询
+> `ws.check_external_change`（§3）实现——比对磁盘哈希 vs 加载基线，changed→ED external_changed 冲突裁决。
+> 物理事件推送（Channel/event）转 ED/DE/REF 仍延 SY-02；DE 过期重检与 REF 锚校验待事件传输接通后接入。
 
 ## §7 测试与验收
 

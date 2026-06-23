@@ -61,6 +61,36 @@ pub struct Saved {
     pub baseline: u64,
 }
 
+/// 外部变更检测结果（相对加载基线）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExternalCheck {
+    /// 磁盘内容（或存在性）相对加载基线已变更。
+    pub changed: bool,
+    /// 文件被外部删除。
+    pub deleted: bool,
+    /// 磁盘当前哈希（删除时 None）。
+    pub current: Option<u64>,
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-OBS-001-QUERY-WS-WS-FS-004
+ * type:     QUERY
+ * chain:    WS-FS
+ * rules:    BR-WS-OBS-001
+ * boundary: in=docPathAndLoadedBaseline | out=ExternalCheck(changedOrDeletedVsBaseline)
+ */
+/// 外部变更感知（BR-WS-OBS-001）：比对磁盘当前哈希与加载基线——不一致即 changed；文件被外部删除
+/// → deleted=changed=true。供前端轮询（external_change 逻辑契约，物理事件延 SY-02）触发冲突裁决，
+/// 不静默覆盖外部修改。路径守界由调用方 resolve_in_workspace 保证（X-FORBID-004）。
+pub fn check_external_change(abs_path: &Path, loaded_baseline: u64) -> Result<ExternalCheck, IpcError> {
+    match disk_hash(abs_path) {
+        Ok(None) => Ok(ExternalCheck { changed: true, deleted: true, current: None }),
+        Ok(Some(h)) => Ok(ExternalCheck { changed: h != loaded_baseline, deleted: false, current: Some(h) }),
+        Err(e) => Err(IpcError::new("WS_CHECK_FAILED", &format!("外部变更检测失败: {e}"), true, false)),
+    }
+}
+
 /**
  * @GOV
  * codes:    BR-WS-OBS-001-GUARD-WS-WS-SAVE-001
@@ -213,6 +243,27 @@ mod tests {
         let err = read_doc(&path).unwrap_err();
         assert_eq!(err.code, "WS_NOT_UTF8");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // covers: BR-WS-OBS-001
+    // 外部变更检测三态：未变（changed=false）/ 外部改动（changed=true）/ 外部删除（deleted=changed=true）。
+    #[test]
+    fn external_check_detects_change_and_delete() {
+        let path = tmp_path("extchk");
+        std::fs::write(&path, b"v1").unwrap();
+        let base = content_hash(b"v1");
+        // 未变
+        let c = check_external_change(&path, base).unwrap();
+        assert!(!c.changed && !c.deleted && c.current == Some(base));
+        // 外部改动
+        std::fs::write(&path, b"v2-external").unwrap();
+        let c = check_external_change(&path, base).unwrap();
+        assert!(c.changed && !c.deleted);
+        assert_eq!(c.current, Some(content_hash(b"v2-external")));
+        // 外部删除
+        std::fs::remove_file(&path).unwrap();
+        let c = check_external_change(&path, base).unwrap();
+        assert!(c.changed && c.deleted && c.current.is_none());
     }
 
     // covers: BR-WS-PERSIST-001

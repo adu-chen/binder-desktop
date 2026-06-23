@@ -59,6 +59,17 @@ export async function saveDoc(
   return res.baseline;
 }
 
+export interface ExternalCheckDto {
+  changed: boolean;
+  deleted: boolean;
+  current: number | null;
+}
+
+/** 外部变更检测（ws.check_external_change）：比对磁盘哈希与加载基线（BR-WS-OBS-001）。 */
+export async function checkExternalChange(relPath: string, baseline: number): Promise<ExternalCheckDto> {
+  return callCommand<ExternalCheckDto>("ws.check_external_change", { relPath, baseline });
+}
+
 /** 加载当前活动 workspace 的文件列表（投影 loading → ready/error）。 */
 export async function loadDocs(): Promise<void> {
   wsStore._projectLoading();

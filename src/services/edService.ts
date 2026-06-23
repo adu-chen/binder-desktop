@@ -1,4 +1,4 @@
-import { readDoc, saveDoc } from "./wsService";
+import { readDoc, saveDoc, checkExternalChange } from "./wsService";
 import { edStore } from "../store/edStore";
 
 /**
@@ -50,4 +50,20 @@ export async function saveDocument(content: string, override = false): Promise<S
 export async function reloadDocument(): Promise<void> {
   const { openPath } = edStore.getSnapshot();
   if (openPath) await openDocument(openPath);
+}
+
+/**
+ * 外部变更轮询（实现 external_change 逻辑契约，物理事件延 SY-02）：
+ * 比对磁盘哈希与加载基线，磁盘已被外部改动/删除 → 置 external_changed（触发冲突条裁决）。
+ * 已是 external_changed 则不重复置；无打开文档/无基线则跳过。不静默覆盖外部修改（SM-WS-01）。
+ */
+export async function pollExternalChange(): Promise<void> {
+  const { openPath, baseline, tabState } = edStore.getSnapshot();
+  if (!openPath || baseline === null || tabState === "external_changed") return;
+  try {
+    const r = await checkExternalChange(openPath, baseline);
+    if (r.changed) edStore.setTabState("external_changed");
+  } catch {
+    /* 检测失败不打断编辑（下次轮询重试） */
+  }
 }

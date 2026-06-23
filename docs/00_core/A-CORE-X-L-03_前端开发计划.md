@@ -261,6 +261,15 @@
 
 ---
 
+### PI-BE-03+FE-12　外部变更监视（补全 SM-WS-01）　✅ G4 已实现（2026-06-23，cargo test 98 + tsc + build + scoped audit 绿；ws.check_external_change + 编辑器 5s 轮询触发冲突条）
+- **承接**：A-WS-I-P-01 §6（external_change 逻辑契约）/ SM-WS-01（externalChange）/ BR-WS-OBS-001 / X-FORBID-004 / X-FORBID-007。
+- **文件范围**：`save.rs`（check_external_change，covers BR-WS-OBS-001 三态）、`lib.rs`（ws.check_external_change 路由）、`wsService`（checkExternalChange）、`edService`（pollExternalChange）、`Editor`（5s 轮询）。
+- **实现选择**：external_change 逻辑契约本阶段以前端轮询 `ws.check_external_change` 实现（物理事件 Channel/event 延 SY-02），已补记 A-WS-I-P-01 §3/§6。磁盘≠加载基线/被删 → external_changed → 触发 PI-FE-09 已有冲突条（覆盖/重载）。
+- **A 类债务**：物理事件推送转 ED/DE/REF 延 SY-02；DE 过期重检（PI-DE-03）与 REF 锚校验待事件传输接通；轮询固定 5s 未做防抖/可配。
+- **验收**：外部改动/删除文件后 5s 内编辑器出现冲突条；不静默覆盖；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

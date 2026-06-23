@@ -6,7 +6,7 @@ import { EditorTab } from "./EditorTab";
 import { edStore, useEdStore } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type GreenReviewState } from "../../store/deStore";
 import { assistStore } from "../../store/assistStore";
-import { saveDocument, reloadDocument } from "../../services/edService";
+import { saveDocument, reloadDocument, pollExternalChange } from "../../services/edService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 
@@ -96,6 +96,13 @@ export function Editor() {
   useEffect(() => {
     edStore.openDoc("untitled.md");
   }, []);
+
+  // 外部变更监视：打开真实文档时每 5s 轮询磁盘 vs 加载基线（external_change 逻辑契约，物理事件延 SY-02）。
+  useEffect(() => {
+    if (!openPath) return;
+    const id = window.setInterval(() => void pollExternalChange(), 5000);
+    return () => window.clearInterval(id);
+  }, [openPath]);
 
   // 载入真实文档：loadSeq 变更（ws.read_doc 投影）→ setContent（不触发脏态）。
   useEffect(() => {
