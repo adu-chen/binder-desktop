@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-06-23T02:22:54.137Z -->
+<!-- 最后生成时间：2026-06-23T06:18:08.817Z -->
 
 ### 模块编码表
 
@@ -246,7 +246,7 @@
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | BR-AG-VERIFY-001                                       | src-tauri/src/ag/turn.rs        | 105 |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001 | EFFECT | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 134 |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001  | QUERY  | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 159 |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 303 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 319 |
 
 #### AST-MEMORY
 
@@ -323,6 +323,17 @@
 | BR-DE-DATA-002-DATA-DE-DE-DIFF-001   | DATA  | BR-DE-DATA-002                                     | src-tauri/src/de/generate.rs | 35  |
 | BR-DE-DATA-001-GUARD-DE-DE-DIFF-001  | GUARD | BR-DE-DATA-001                                     | src-tauri/src/de/generate.rs | 54  |
 | BR-DE-STATE-001-RB-DE-DE-DIFF-001    | RB    | BR-DE-STATE-001                                    | src-tauri/src/de/mod.rs      | 47  |
+
+#### DOC-CONVERT
+
+| codes                                     | type  | rules            | 文件                                  | 行号 |
+| ----------------------------------------- | ----- | ---------------- | ----------------------------------- | -- |
+| BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-001  | DATA  | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs | 19 |
+| BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-002 | GUARD | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs | 63 |
+| BR-DOC-STATE-001-RB-DOC-DOC-CONVERT-001   | RB    | BR-DOC-STATE-001 | src-tauri/src/doc/convert.rs        | 56 |
+| BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | BR-DOC-DATA-001  | src-tauri/src/doc/convert.rs        | 89 |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001  | DATA  | BR-DOC-DATA-002  | src-tauri/src/doc/style_subset.rs   | 30 |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002  | DATA  | BR-DOC-DATA-002  | src-tauri/src/doc/style_subset.rs   | 52 |
 
 #### ED-DECOR
 
@@ -494,7 +505,7 @@
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 303 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 319 |
 
 #### BR-AST-DATA-001
 
@@ -579,6 +590,32 @@
 | codes                                | type  | chain   | 文件                         | 行号 |
 | ------------------------------------ | ----- | ------- | -------------------------- | -- |
 | BR-DE-STATE-002-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/expiry.rs | 34 |
+
+#### BR-DOC-DATA-001
+
+| codes                                     | type  | chain       | 文件                           | 行号 |
+| ----------------------------------------- | ----- | ----------- | ---------------------------- | -- |
+| BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | DOC-CONVERT | src-tauri/src/doc/convert.rs | 89 |
+
+#### BR-DOC-DATA-002
+
+| codes                                    | type | chain       | 文件                                | 行号 |
+| ---------------------------------------- | ---- | ----------- | --------------------------------- | -- |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 30 |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 52 |
+
+#### BR-DOC-DATA-003
+
+| codes                                     | type  | chain       | 文件                                  | 行号 |
+| ----------------------------------------- | ----- | ----------- | ----------------------------------- | -- |
+| BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-001  | DATA  | DOC-CONVERT | src-tauri/src/doc/block_backfill.rs | 19 |
+| BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-002 | GUARD | DOC-CONVERT | src-tauri/src/doc/block_backfill.rs | 63 |
+
+#### BR-DOC-STATE-001
+
+| codes                                   | type | chain       | 文件                           | 行号 |
+| --------------------------------------- | ---- | ----------- | ---------------------------- | -- |
+| BR-DOC-STATE-001-RB-DOC-DOC-CONVERT-001 | RB   | DOC-CONVERT | src-tauri/src/doc/convert.rs | 56 |
 
 #### BR-ED-DATA-001 term_ref: TERM-ED-001
 
@@ -799,7 +836,7 @@
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 303 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 319 |
 
 #### TERM-DE-003
 

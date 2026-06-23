@@ -1,4 +1,15 @@
 //! PI-DOC-* · 编辑链Pandoc/预览链LibreOffice/样式子集 · DOC-CONVERT / X-SEQ-004
 //!
-//! G3 脚手架占位：模块文件范围已就位，领域逻辑与 @GOV 块在 G4 实现期落入。
-//! 承接 L2 规则源见对应模块 A-{M}-M-T-01 / A-{M}-X-L-01（Plan Item）。
+//! G4 已落（后端纯逻辑/守卫，全 4 规则）：PI-DOC-02 style_subset（样式三级子集 + 损失告知，
+//! BR-DOC-DATA-002）、PI-DOC-01 convert（SM-DOC-01 转换生命周期 BR-DOC-STATE-001 + 双链分离/依赖守卫
+//! BR-DOC-DATA-001）、PI-DOC-03 block_backfill（blockId 兜底 + 往返保留度评估 BR-DOC-DATA-003）。
+//! Pandoc/LibreOffice 实际子进程调用与 Lua 过滤器为实现期（A 类）。承接 L2 见 A-DOC-M-T-01 / A-DOC-M-S-01。
+
+/// PI-DOC-02 · 样式子集三级执行契约（BR-DOC-DATA-002）。
+pub mod style_subset;
+
+/// PI-DOC-01 · 转换生命周期 SM-DOC-01 + 管线边界（BR-DOC-STATE-001 / BR-DOC-DATA-001）。
+pub mod convert;
+
+/// PI-DOC-03 · 转换层 blockId 兜底（BR-DOC-DATA-003）。
+pub mod block_backfill;
