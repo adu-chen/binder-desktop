@@ -1,4 +1,5 @@
-import { deStore, EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
+import { EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
+import { acceptDiff, rejectDiff, generateSampleDiff } from "../../services/deService";
 
 /**
  * DiffCard（DiffCard / TERM-DE-003 · 参考稿 §6.1）· PI-FE-07。
@@ -50,26 +51,26 @@ export function DiffCard({ diff }: { diff: DiffView }) {
       <div className="diffcard-actions">
         {state === "pending" && (
           <>
-            <button className="diffcard-accept" onClick={() => deStore.accept(diffId)}>接受 ⏎</button>
-            <button className="ghost" onClick={() => deStore.reject(diffId)}>拒绝 ⌫</button>
+            <button className="diffcard-accept" onClick={() => void acceptDiff(diffId)}>接受 ⏎</button>
+            <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝 ⌫</button>
           </>
         )}
         {state === "conflict" && (
           <>
             <button className="diffcard-accept" disabled>接受 ⏎</button>
-            <button className="ghost" onClick={() => deStore.reject(diffId)}>拒绝 ⌫</button>
+            <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝 ⌫</button>
           </>
         )}
         {state === "expired" && (
           <>
-            <button onClick={() => deStore.regenerate(diffId)}>重新生成</button>
-            <button className="ghost" onClick={() => deStore.reject(diffId)}>关闭</button>
+            <button onClick={() => void generateSampleDiff()}>重新生成</button>
+            <button className="ghost" onClick={() => void rejectDiff(diffId)}>关闭</button>
           </>
         )}
         {state === "error" && (
           <>
-            <button onClick={() => deStore.retry(diffId)}>重试 ↻</button>
-            <button className="ghost" onClick={() => deStore.reject(diffId)}>拒绝</button>
+            <button onClick={() => void acceptDiff(diffId)}>重试 ↻</button>
+            <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝</button>
           </>
         )}
         {busy && <button disabled>处理中…</button>}

@@ -418,6 +418,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .composer-input:focus { outline: none; border-color: var(--rust-tint); }
 .composer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: var(--sp-2); }
+.composer-sample { font-size: 12px; padding: var(--sp-1) var(--sp-2); }
 
 /* 对话区滚动容器（消息 + diff 卡同滚，PI-FE-07） */
 .chatpanel-scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; min-height: 0; }

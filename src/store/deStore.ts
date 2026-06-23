@@ -60,15 +60,8 @@ interface DeState {
   batchExpiredCount: number;
 }
 
-// 投影占位演示集（PI-FE-07）：真实 diff 经 de.generate_diff 投影（实现期）。
-const DEMO_DIFFS: DiffView[] = [
-  { diffId: "d1", blockId: "demo-b1", title: "改写开头段", before: "从前有座山。", after: "很久很久以前，有一座云雾缭绕的山。", state: "pending" },
-  { diffId: "d2", blockId: "demo-b2", title: "补充论据", before: "数据支持这一点。", after: "近三年的销售数据持续支持这一结论。", state: "conflict", conflictWith: "d5" },
-  { diffId: "d3", blockId: "demo-b3", title: "修正措辞", before: "这个很重要。", after: "这一点至关重要。", state: "expired", expiredReason: "external_file_changed" },
-  { diffId: "d4", blockId: "demo-b4", title: "精简冗余", before: "其实基本上大概可能。", after: "大概。", state: "error", errorCode: "WS_APPLY_REPLACE_FAILED" },
-];
-
-let state: DeState = { diffs: DEMO_DIFFS, batchState: "idle", batchExpiredCount: 0 };
+// PI-FE-11：diff 来自真实 de.generate_diff/list_diffs（不再有 demo 占位）。
+let state: DeState = { diffs: [], batchState: "idle", batchExpiredCount: 0 };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -101,8 +94,6 @@ export function toGreenReview(s: DiffCardState): GreenReviewState | null {
   }
 }
 
-let timelineCounter = 100;
-
 /**
  * @GOV
  * codes:    BR-DE-STATE-001-RB-DE-DE-DIFF-002
@@ -110,11 +101,11 @@ let timelineCounter = 100;
  * chain:    DE-DIFF
  * rules:    BR-DE-STATE-001
  * term_ref: TERM-DE-001, TERM-DE-003
- * boundary: in=diffDecisionIntent | out=DiffViewState(terminalsIrreversibleAcceptedTriggersApply)
+ * boundary: in=diffStateProjection | out=DiffViewState(terminalsIrreversibleProjectsBackendSMDE01)
  */
-/// diff 裁决意图投影（BR-DE-STATE-001）：accept 经 validating→applying→accepted（唯一触发落盘，
-/// 不可逆）；reject→rejected（不落盘、装饰复位）；regenerate 令 expired 起新生成。三终态互斥不可逆——
-/// 与后端 SM-DE-01 status 一一对应；过渡态为落盘往返呈现，权威落盘归 WS（ws.apply_diff）。
+/// diff 状态投影（BR-DE-STATE-001）：DiffView 8 视觉态投影后端 SM-DE-01（pending/accepted/rejected/
+/// expired 权威态 + validating/applying/conflict/error 过渡呈现态）。三终态互斥不可逆——accepted 唯一
+/// 经 de.accept_diff 触发 ws.apply_diff 落盘（编排在 deService，权威落盘归 WS，X-FORBID-007）。
 export const deStore = {
   subscribe(cb: () => void) {
     listeners.add(cb);
@@ -124,72 +115,22 @@ export const deStore = {
     return state;
   },
 
-  /** 接受单条：pending → validating → applying → accepted（模拟落盘往返；实现期调 ws.apply_diff）。 */
-  accept(id: string) {
-    const target = state.diffs.find((d) => d.diffId === id);
-    if (!target || target.state !== "pending") return; // conflict/终态不可直接接受
-    mapDiff(id, (d) => ({ ...d, state: "validating" }));
-    setTimeout(() => {
-      mapDiff(id, (d) => ({ ...d, state: "applying" }));
-      setTimeout(() => {
-        timelineCounter += 1;
-        mapDiff(id, (d) => ({ ...d, state: "accepted", timelineSeq: timelineCounter }));
-      }, 240);
-    }, 200);
+  /** 新增一条待裁决修改（de.generate_diff 成功后投影；before/after 为本地预览）。 */
+  addDiff(view: DiffView) {
+    setDiffs([...state.diffs, view]);
   },
 
-  /** 拒绝单条：→ rejected（不落盘，装饰复位）。conflict/error 亦可单独拒绝。 */
-  reject(id: string) {
-    mapDiff(id, (d) =>
-      d.state === "accepted" || d.state === "expired" ? d : { ...d, state: "rejected" },
-    );
-  },
-
-  /** 过期重生成：expired → pending（起新一条的占位；实现期由 de.generate_diff 产新 diff）。 */
-  regenerate(id: string) {
-    mapDiff(id, (d) =>
-      d.state === "expired" ? { ...d, state: "pending", expiredReason: undefined } : d,
-    );
-  },
-
-  /** error 重试：error → validating（重走落盘）。 */
-  retry(id: string) {
-    mapDiff(id, (d) => (d.state === "error" ? { ...d, state: "validating", errorCode: undefined } : d));
-    setTimeout(() => {
-      timelineCounter += 1;
-      mapDiff(id, (d) => (d.state === "validating" ? { ...d, state: "accepted", timelineSeq: timelineCounter } : d));
-    }, 300);
-  },
-
-  /**
-   * 全部接受（倒序应用）：从文档靠后的 diff 先应用，避免先序落盘造成后序行号偏移（参考稿 §6.5）。
-   * 过期/冲突/error 不计入可应用集，计入失效统计。
-   */
-  acceptAll() {
-    const appliable = state.diffs.filter((d) => d.state === "pending");
-    const expired = state.diffs.filter((d) => ["expired", "conflict", "error"].includes(d.state));
-    if (appliable.length === 0) return;
-    setDiffs(state.diffs, { batchState: "applying", batchExpiredCount: expired.length });
-    // 倒序：按 blockId 锚的文档顺序假定与数组序一致，从后往前应用。
-    const ordered = [...appliable].reverse();
-    ordered.forEach((d, i) => {
-      setTimeout(() => {
-        timelineCounter += 1;
-        mapDiff(d.diffId, (x) => ({ ...x, state: "accepted", timelineSeq: timelineCounter }));
-        if (i === ordered.length - 1) {
-          setDiffs(state.diffs, { batchState: "done" });
-        }
-      }, 180 * (i + 1));
+  /** 设置某条 diff 的视觉态（裁决往返各阶段；deService 编排调用）。终态不回退。 */
+  setDiffState(id: string, next: DiffCardState, patch: Partial<DiffView> = {}) {
+    mapDiff(id, (d) => {
+      // 三终态互斥不可逆：已 accepted/rejected/expired 不被覆盖。
+      if (["accepted", "rejected", "expired"].includes(d.state)) return d;
+      return { ...d, state: next, ...patch };
     });
   },
 
-  rejectAll() {
-    setDiffs(
-      state.diffs.map((d) =>
-        d.state === "pending" ? { ...d, state: "rejected" } : d,
-      ),
-      { batchState: "idle" },
-    );
+  setBatch(batchState: DeState["batchState"], expiredCount = 0) {
+    setDiffs(state.diffs, { batchState, batchExpiredCount: expiredCount });
   },
 
   /** 切换/关闭 workspace 时清空 diff（避免残留旧项目的待裁决修改）。 */

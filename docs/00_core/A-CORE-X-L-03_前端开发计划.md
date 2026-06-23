@@ -252,6 +252,15 @@
 
 ---
 
+### PI-FE-11　diff 真落盘前端接线（accept→ws.apply_diff）　✅ G4 已实现（2026-06-23，tsc + build + scoped audit 绿；示例修改→de.generate_diff、接受→de.accept_diff 真写盘+编辑器重载、拒绝→de.reject_diff）
+- **承接**：A-DE-I-P-01 §2/§3（de.generate_diff/accept_diff/reject_diff）/ SM-DE-01 / X-INTER-001 / X-FORBID-007 / TERM-DE-001/003。承 PI-BE-02。
+- **文件范围**：`deService`（generate/accept/reject/acceptAll 编排）、`deStore`（去 demo，纯状态投影 addDiff/setDiffState）、`DiffCard`/`DiffAllActionsBar`（接 deService）、`Composer`（"示例修改"入口绕过桩模型）。
+- **实现要点**：示例修改对当前打开文档做确定性变换 → de.generate_diff 持久化 DiffPayload；接受 validating→applying→**de.accept_diff（ws.apply_diff 真写盘+时间轴节点）**→accepted→编辑器重载；拒绝 de.reject_diff 不写文件；全部接受倒序。8 视觉态仍投影后端 SM-DE-01，不另立平行机。
+- **A 类债务**：整文档变换未绑块级 blockId → 该类 diff 无 GreenReview 高亮（块级 diff 时恢复）；de.list_diffs 重启恢复未在前端自动加载（无 before/after 预览）；conflict 态由后端重叠重检驱动（PI-DE-03 未接）。
+- **验收**：打开文档→示例修改→接受→文件真被写入+编辑器显示新内容+时间轴号；拒绝不改文件；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

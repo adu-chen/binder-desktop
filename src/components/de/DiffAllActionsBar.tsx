@@ -1,4 +1,5 @@
-import { useDeStore, deStore } from "../../store/deStore";
+import { useDeStore } from "../../store/deStore";
+import { acceptAllDiffs, rejectAllDiffs } from "../../services/deService";
 
 /**
  * DiffAllActionsBar 批量条（参考稿 §6.5 · PI-FE-07）· DiffStrip 区。
@@ -28,8 +29,8 @@ export function DiffAllActionsBar() {
     <div className="diffbar diffbar-idle">
       <span className="diffbar-count">{pendingCount} 条待裁决</span>
       <div className="diffbar-actions">
-        <button className="diffcard-accept" onClick={() => deStore.acceptAll()}>全部接受</button>
-        <button className="ghost" onClick={() => deStore.rejectAll()}>全部拒绝</button>
+        <button className="diffcard-accept" onClick={() => void acceptAllDiffs()}>全部接受</button>
+        <button className="ghost" onClick={() => void rejectAllDiffs()}>全部拒绝</button>
       </div>
     </div>
   );

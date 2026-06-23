@@ -1,16 +1,16 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-BE-02",
+  "scope_id": "PI-FE-11",
   "allowed_files": [
-    "docs/01_modules/DE/A-DE-M-T-01_对话编辑技术设计.md",
-    "docs/01_modules/DE/A-DE-I-P-01_对话编辑接口协议.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src-tauri/src/db/mod.rs",
-    "src-tauri/src/de/store.rs",
-    "src-tauri/src/de/mod.rs",
-    "src-tauri/src/lib.rs",
+    "src/services/deService.ts",
+    "src/store/deStore.ts",
+    "src/components/de/DiffCard.tsx",
+    "src/components/de/DiffAllActionsBar.tsx",
+    "src/components/ag/Composer.tsx",
+    "src/styles.css",
+    "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-BE-02.md"
+    ".governance/issues/PI-FE-11.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -18,8 +18,8 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/workspace/lifecycle.rs"
+    "src-tauri/src/de/store.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-BE-02 把 DE 既有 generate/payload 逻辑接入 dispatch + 补 payload 持久化（diff_payloads 表），使 accepted 经 de.accept_diff→ws.apply_diff 真落盘；补设计文档待补项 + 注册 TERM-DE-004；人类已授权按计划开发并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-11 把 deStore/DiffCard 接到 PI-BE-02 的 de.* 真命令，使 accept 真落盘 + 编辑器重载；示例修改入口绕过仍是桩的 AG 模型；人类已授权继续并确认 confirmation=YES。"
 }

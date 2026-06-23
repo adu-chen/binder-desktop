@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useAgStore } from "../../store/agStore";
 import { startTurn } from "../../services/agService";
+import { generateSampleDiff } from "../../services/deService";
+import { useEdStore } from "../../store/edStore";
 
 /**
  * Composer（A-SYS-C-T-02 §3 对话区输入 · PI-FE-06）。
@@ -9,6 +11,7 @@ import { startTurn } from "../../services/agService";
  */
 export function Composer() {
   const { sending } = useAgStore();
+  const { openPath } = useEdStore();
   const [text, setText] = useState("");
 
   const send = () => {
@@ -33,7 +36,15 @@ export function Composer() {
         rows={3}
       />
       <div className="composer-actions">
-        <span className="label">⌘↵ 发送</span>
+        {/* 示例修改入口：绕过仍是桩的模型，对当前文档生成真实可落盘 diff（PI-FE-11） */}
+        <button
+          className="ghost composer-sample"
+          onClick={() => void generateSampleDiff()}
+          disabled={!openPath}
+          title={openPath ? "对当前文档生成可落盘的示例修改" : "先打开一个文档"}
+        >
+          示例修改
+        </button>
         <button onClick={send} disabled={sending || !text.trim()}>
           {sending ? "生成中…" : "发送"}
         </button>
