@@ -4,6 +4,7 @@ import { LeftRail, type RailPanelId } from "../components/shell/LeftRail";
 import { BinderWordmark } from "../components/brand/BinderWordmark";
 import { FileTree } from "../components/ws/FileTree";
 import { Editor } from "../components/ed/Editor";
+import { ChatPanel } from "../components/ag/ChatPanel";
 
 /**
  * 主工作台（A-SYS-C-T-02 §3/§4 界面分区与全局布局）。有活动 workspace 后的主界面。
@@ -37,8 +38,7 @@ export function Workbench() {
           <Editor />
         </main>
         <aside className="chat">
-          {/* PI-FE-06 AG 对话区 */}
-          <span className="label">对话区 · AG</span>
+          <ChatPanel />
         </aside>
       </div>
 

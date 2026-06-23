@@ -312,9 +312,78 @@ button:disabled { opacity: 0.5; cursor: default; }
   grid-area: chat;
   background: var(--bg-elevated);
   border-left: 0.5px solid var(--rule);
-  overflow: auto;
-  padding: var(--sp-3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
+
+/* 对话面板（PI-FE-06） */
+.chatpanel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.chatpanel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-sunken);
+  border-bottom: 0.5px solid var(--rule);
+}
+.chatpanel-modes { display: flex; gap: 2px; }
+.chatmode {
+  padding: var(--sp-1) var(--sp-3); font-size: 12px;
+  background: transparent; border: 0.5px solid transparent; color: var(--ink-4);
+  border-radius: var(--r-1);
+}
+.chatmode.active { color: var(--ink); background: var(--bg-card); border-color: var(--rule); }
+
+.msglist { flex: 1; overflow: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+.msglist-empty { font-size: 13px; }
+.msg { display: flex; flex-direction: column; gap: var(--sp-1); }
+.msg-role { color: var(--ink-5); }
+.msg-user .msg-body { background: var(--bg-card); }
+.msg-body {
+  font-size: 13px; line-height: 1.6; color: var(--ink-2);
+  background: var(--bg-card); border: 0.5px solid var(--rule);
+  border-radius: var(--r-1); padding: var(--sp-2) var(--sp-3); white-space: pre-wrap;
+}
+.msg-error .msg-body { color: var(--rust); border-color: var(--rust-tint); background: var(--rust-bg); }
+.msg-caret {
+  display: inline-block; width: 6px; height: 13px; vertical-align: text-bottom;
+  background: var(--rust); margin-left: 2px; animation: ed-spin 1s steps(2) infinite;
+}
+
+.toolcalls { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
+.toolcard {
+  border: 0.5px solid var(--rule); border-radius: var(--r-1);
+  padding: var(--sp-2); background: var(--bg-card); font-size: 12px;
+}
+.toolcard-head { display: flex; align-items: center; gap: var(--sp-2); }
+.toolcard-name { font-family: var(--font-mono); color: var(--ink-2); }
+.toolcard-state { margin-left: auto; font-family: var(--font-mono); font-size: 9px; color: var(--ink-4); text-transform: uppercase; }
+.toolcard-detail { color: var(--ink-4); margin-top: var(--sp-1); }
+.toolcard-spinner {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--gold-bg); border-top-color: var(--gold); animation: ed-spin 0.7s linear infinite;
+}
+.toolcard-bar { height: 3px; background: var(--gold-bg); border-radius: 2px; margin-top: var(--sp-2); overflow: hidden; }
+.toolcard-bar span { display: block; height: 100%; background: var(--gold); }
+.toolcard-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.toolcard-actions button { padding: var(--sp-1) var(--sp-2); font-size: 11px; }
+.toolcard-allow { border-color: var(--rust); color: var(--rust); }
+/* 6 态边界色（互斥可辨） */
+.toolcard-done { border-color: var(--forest); }
+.toolcard-done .toolcard-state { color: var(--forest); }
+.toolcard-awaiting_confirmation { border: 1px solid var(--rust); background: var(--rust-bg); }
+.toolcard-failed { border-color: var(--rust-tint); }
+.toolcard-failed .toolcard-state { color: var(--rust); }
+.toolcard-skipped { opacity: 0.55; }
+.toolcard-executing { border-color: var(--gold); }
+
+.composer { border-top: 0.5px solid var(--rule); padding: var(--sp-2) var(--sp-3); background: var(--bg-elevated); }
+.composer-input {
+  width: 100%; resize: none; border: 0.5px solid var(--rule-strong); border-radius: var(--r-1);
+  padding: var(--sp-2); font-family: var(--font-sans); font-size: 13px; background: var(--bg-card); color: var(--ink);
+}
+.composer-input:focus { outline: none; border-color: var(--rust-tint); }
+.composer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: var(--sp-2); }
 
 /* DiffStrip：无待裁决修改时隐藏（TERM-DE-001 计数为 0 → hidden，A-SYS-C-T-02 §4） */
 .diffstrip {

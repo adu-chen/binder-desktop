@@ -154,7 +154,7 @@
 
 ---
 
-### PI-FE-06　Chat 面板骨架（AG 模块前端）
+### PI-FE-06　Chat 面板骨架（AG 模块前端）　✅ G4 已实现（2026-06-23，tsc + cargo test + build + scoped audit 绿；ag.start_turn 桩走门禁前置 + 流式回显模拟 + ToolCall 6 态）
 
 - **承接**：AG 模块 L2（A-AG-M-T-01）/ SM-AG-01（代理回合状态机）/ command `ag.start_turn` + `turn_stream` / X-SEQ-001（AI 调用前订阅门禁）/ X-FORBID-007 / TERM-AG-001（AgentTurn）/ TERM-AG-002（ToolCall）/ TERM-AG-003（InlineAssist）/ TERM-AG-004（Autocomplete）。
 - **文件范围**：

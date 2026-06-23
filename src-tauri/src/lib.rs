@@ -49,6 +49,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.switch_workspace");
     reg.register("ws.active_workspace");
     reg.register("ws.list_docs");
+    reg.register("ag.start_turn");
     reg
 }
 
@@ -76,6 +77,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.switch_workspace" => route_switch_workspace(&request, &state),
         "ws.active_workspace" => route_active_workspace(&state),
         "ws.list_docs" => route_list_docs(&state),
+        "ag.start_turn" => route_start_turn(&request),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
             "IPC_ROUTE_MISSING",
@@ -175,6 +177,48 @@ fn route_list_docs(state: &AppState) -> Result<serde_json::Value, IpcError> {
         &active.workspace_id,
     )?;
     ws_json(&docs)
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002
+ * type:     GUARD
+ * chain:    AG-TURN
+ * rules:    BR-AG-VERIFY-001
+ * term_ref: TERM-AG-001, TERM-CLOUD-001
+ * boundary: in=turnPrompt | out=AgentTurnReply(gateGatedBeforeModelStubbed)
+ */
+/// 路由 `ag.start_turn`（桩）：驱动 SM-AG-01（Idle→Assembling→AwaitingGate），经 ensure_gate_passed
+/// （SubscriptionGate 桩=Passed，X-SEQ-001 门禁前置结构保留；真实门禁服务端权威 A-SYS-I-P-03）→Streaming，
+/// 回桩化助手回复。模型实际调用与流式分片落实现期（云网关接通）；本桩保留"门禁先于模型"不变量。
+fn route_start_turn(request: &CommandRequest) -> Result<serde_json::Value, IpcError> {
+    use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
+
+    let prompt = request
+        .params
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| IpcError::new("AG_PROMPT_REQUIRED", "缺少 prompt 参数", false, false))?;
+
+    // 结构性走 SM-AG-01：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed。
+    let s = TurnState::Idle;
+    let s = transition(s, TurnEvent::Send).ok_or_else(sm_error)?; // → Assembling
+    let s = transition(s, TurnEvent::Assembled).ok_or_else(sm_error)?; // → AwaitingGate
+    // 门禁前置硬门（X-SEQ-001 / BR-AG-VERIFY-001）：桩 gate=Passed；无有效订阅时此处 Denied 即拒。
+    ensure_gate_passed(GateState::Passed)?;
+    let s = transition(s, TurnEvent::GatePassed).ok_or_else(sm_error)?; // → Streaming
+    debug_assert_eq!(s, TurnState::Streaming);
+
+    let reply = format!(
+        "（桩回复）已收到：{}。模型网关将在实现期接通（A-SYS-I-P-03），届时此处为真实流式产出。",
+        prompt.trim()
+    );
+    Ok(serde_json::json!({ "reply": reply, "turn_state": "streaming" }))
+}
+
+fn sm_error() -> IpcError {
+    IpcError::new("AG_SM_INVALID", "SM-AG-01 非法转移", false, false)
 }
 
 pub fn run() {
