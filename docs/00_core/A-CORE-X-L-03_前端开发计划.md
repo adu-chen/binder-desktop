@@ -279,6 +279,15 @@
 
 ---
 
+### PI-BE-04+FE-13　文件操作（新建/重命名/删除 + 右键菜单）　✅ G4 已实现（2026-06-23，cargo test 101 + tsc + build + scoped audit 绿；ws.create/rename/delete_doc + 文件树右键菜单）
+- **承接**：A-WS-I-P-01 §3/§8（move 签名补）/ BR-WS-DATA-001 / REQ-WS-002 / WS-FS / X-FORBID-004 / X-SEQ-002。
+- **文件范围**：`fileops.rs`（create/rename/delete 守界，3 covers 测试，@GOV BR-WS-DATA-001 + term_ref TERM-WS-001）、`lib.rs`（3 路由）、`wsService`（createDoc/renameDoc/deleteDoc）、`FileTree`/`FileTreeNode`（右键菜单 + 内联输入 + 编排）。
+- **实现要点**：新建（"＋"内联输入路径→ws.create_doc→刷新+打开）、重命名（右键→内联输入→ws.rename_doc，影响打开文档则重开）、删除（右键→确认→ws.delete_doc，删打开文档则清空编辑器）；已存在/越界/不存在均拒。补协议 §8 move 待补项。
+- **A 类债务**：空目录可见（需 listing 返回目录节点）、全文搜索（ws.search）、copy 操作仍延后。
+- **验收**：新建/重命名/删除文件并刷新树；冲突拒绝有提示；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

@@ -40,6 +40,8 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
 | `ws.check_external_change` | DocRef、**加载基线哈希** | { changed, deleted, current } | 检测失败（可重试） | BR-WS-OBS-001；§6 external_change 逻辑契约的轮询实现（物理事件延 SY-02） |
 | `ws.create_doc` | DocRef、初始内容（可空） | DocRef + 基线哈希 | 已存在/越界 | BR-WS-DATA-001 |
+| `ws.rename_doc` | DocRef、新 rel_path | 新 rel_path | **WS_EXISTS**（目标已存在）/源不存在/越界 | BR-WS-DATA-001（§8 move 签名，PI-BE-04 补） |
+| `ws.delete_doc` | DocRef | 删除确认 | 不存在/越界 | BR-WS-DATA-001 |
 | `ws.save_doc` | DocRef、内容、**基线哈希**、override（默认 false） | 新基线哈希 | **save_conflict**（磁盘≠基线且未 override，SM-WS-01 saveConflict）；写入失败 | SM-WS-01 / BR-WS-PERSIST-001 / BR-WS-OBS-001；override=true 即 overrideConfirmed 语义，必须源自用户显式确认 |
 | `ws.search` | workspace_id、查询 | 命中列表（DocRef + 定位） | — | 限界 X-FORBID-004 |
 
@@ -80,7 +82,8 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 ## §8 债务与盲区
 
 - 错误码表（code 枚举值）、序列化与标量类型延实现期统一定义（全模块一张表，归 SYS 实现期补遗）。
-- 跨文档资源操作（move/copy）签名随实现需求补充本文（REQ-WS-002 范围内）。
+- ~~跨文档资源操作（move/copy）签名随实现需求补充本文~~ → **move 已补（PI-BE-04，2026-06-23）**：
+  §3 `ws.rename_doc`（同 workspace 内移动/改名，目标已存在拒绝）+ `ws.delete_doc`。copy 仍延后（按需补）。
 - 媒体/二进制读写（ED 媒体、DOC 字节流）是否独立 command 或复用 read/save 延实现期定。
 
 ## 变更记录

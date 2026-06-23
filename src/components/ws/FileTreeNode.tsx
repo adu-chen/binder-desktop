@@ -60,6 +60,8 @@ interface FileTreeNodeProps {
   stateOverride?: Record<string, FileNodeState>;
   /** 后续 PI 注入的待裁决计数，按 path 查（pending_diff badge）。 */
   pendingCount?: Record<string, number>;
+  /** 右键文件节点（重命名/删除菜单，PI-FE-13）。 */
+  onContextMenu?: (path: string, x: number, y: number) => void;
 }
 
 export function FileTreeNode({
@@ -69,6 +71,7 @@ export function FileTreeNode({
   onOpenFile,
   stateOverride,
   pendingCount,
+  onContextMenu,
 }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(true);
   const indent = { paddingLeft: `${depth * 12 + 8}px` };
@@ -90,6 +93,7 @@ export function FileTreeNode({
               onOpenFile={onOpenFile}
               stateOverride={stateOverride}
               pendingCount={pendingCount}
+              onContextMenu={onContextMenu}
             />
           ))}
       </div>
@@ -112,6 +116,11 @@ export function FileTreeNode({
       disabled={notSupported}
       aria-disabled={notSupported}
       onClick={() => !notSupported && onOpenFile(node.path)}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return;
+        e.preventDefault();
+        onContextMenu(node.path, e.clientX, e.clientY);
+      }}
       title={node.path}
     >
       <span className="ftn-type">{typeGlyph(node.docType)}</span>

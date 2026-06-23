@@ -70,6 +70,23 @@ export async function checkExternalChange(relPath: string, baseline: number): Pr
   return callCommand<ExternalCheckDto>("ws.check_external_change", { relPath, baseline });
 }
 
+/** 新建文档（ws.create_doc，守界，已存在拒绝 WS_EXISTS）。回新文件 rel_path。 */
+export async function createDoc(relPath: string, content = ""): Promise<string> {
+  const r = await callCommand<{ rel_path: string }>("ws.create_doc", { relPath, content });
+  return r.rel_path;
+}
+
+/** 重命名/移动文档（ws.rename_doc，守界，目标已存在拒绝）。回新 rel_path。 */
+export async function renameDoc(relPath: string, newRelPath: string): Promise<string> {
+  const r = await callCommand<{ rel_path: string }>("ws.rename_doc", { relPath, newRelPath });
+  return r.rel_path;
+}
+
+/** 删除文档（ws.delete_doc，守界，不存在拒绝）。 */
+export async function deleteDoc(relPath: string): Promise<void> {
+  await callCommand("ws.delete_doc", { relPath });
+}
+
 /** 拉取当前活动 workspace 文件列表（裸调用，不投影）；供 loadDocs 与启动探测复用。 */
 export async function fetchDocs(): Promise<DocRefView[]> {
   const docs = await callCommand<DocRefDto[]>("ws.list_docs", {});

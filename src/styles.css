@@ -561,6 +561,29 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 13px; line-height: 1; padding: 2px 6px; border-radius: var(--r-1); cursor: pointer;
 }
 .ftn-refresh:hover { background: var(--bg-overlay); color: var(--ink); }
+.filetree-hd-actions { display: flex; gap: 2px; }
+/* 新建/重命名内联输入（PI-FE-13） */
+.ftn-input-row { padding: 0 var(--sp-2) var(--sp-2); }
+.ftn-input {
+  width: 100%; box-sizing: border-box;
+  border: 0.5px solid var(--rust); border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2); font-family: var(--font-mono); font-size: 12px;
+  background: var(--bg-card); color: var(--ink);
+}
+.ftn-input:focus { outline: none; }
+/* 右键上下文菜单（PI-FE-13） */
+.ftn-menu-backdrop { position: fixed; inset: 0; z-index: 19; }
+.ftn-menu {
+  position: fixed; z-index: 20; min-width: 120px;
+  background: var(--bg-card); border: 0.5px solid var(--rule-strong);
+  border-radius: var(--r-2); box-shadow: 0 4px 16px rgba(14, 12, 10, 0.14); padding: var(--sp-1);
+}
+.ftn-menu-item {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  border-radius: var(--r-1); padding: var(--sp-1) var(--sp-2); font-size: 13px; color: var(--ink-2); cursor: pointer;
+}
+.ftn-menu-item:hover { background: var(--bg-overlay); }
+.ftn-menu-del { color: var(--rust); }
 .filetree { display: flex; flex-direction: column; }
 .ftn-hint { font-size: 13px; padding: var(--sp-2); }
 .ftn-error { color: var(--rust); font-size: 13px; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2); }

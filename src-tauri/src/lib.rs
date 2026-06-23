@@ -57,6 +57,9 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.apply_diff");
     reg.register("ws.discard_diff");
     reg.register("ws.check_external_change");
+    reg.register("ws.create_doc");
+    reg.register("ws.rename_doc");
+    reg.register("ws.delete_doc");
     reg.register("de.generate_diff");
     reg.register("de.accept_diff");
     reg.register("de.reject_diff");
@@ -97,6 +100,9 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.apply_diff" => route_apply_diff(&request, &state),
         "ws.discard_diff" => route_discard_diff(&request, &state),
         "ws.check_external_change" => route_check_external_change(&request, &state),
+        "ws.create_doc" => route_create_doc(&request, &state),
+        "ws.rename_doc" => route_rename_doc(&request, &state),
+        "ws.delete_doc" => route_delete_doc(&request, &state),
         "de.generate_diff" => route_generate_diff(&request, &state),
         "de.accept_diff" => route_accept_diff(&request, &state),
         "de.reject_diff" => route_reject_diff(&request, &state),
@@ -324,6 +330,33 @@ fn route_check_external_change(request: &CommandRequest, state: &AppState) -> Re
     let (_, abs) = resolve_active(state, &rel_path)?;
     let check = workspace::save::check_external_change(&abs, baseline)?;
     ws_json(&check)
+}
+
+/// 路由 `ws.create_doc`：workspace 内新建文档（守界，已存在拒绝；BR-WS-DATA-001）。
+fn route_create_doc(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let content = request.params.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    let baseline = workspace::fileops::create_doc(&abs, content.as_bytes())?;
+    Ok(serde_json::json!({ "rel_path": rel_path, "baseline": baseline }))
+}
+
+/// 路由 `ws.rename_doc`：同 workspace 内重命名/移动（两端守界，目标已存在拒绝；BR-WS-DATA-001 / §8 move）。
+fn route_rename_doc(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let new_rel_path = str_param(request, "newRelPath", "WS_NEW_PATH_REQUIRED")?;
+    let (_, from_abs) = resolve_active(state, &rel_path)?;
+    let (_, to_abs) = resolve_active(state, &new_rel_path)?;
+    workspace::fileops::rename_doc(&from_abs, &to_abs)?;
+    Ok(serde_json::json!({ "rel_path": new_rel_path }))
+}
+
+/// 路由 `ws.delete_doc`：删除 workspace 内文档（守界，不存在拒绝；BR-WS-DATA-001）。
+fn route_delete_doc(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    workspace::fileops::delete_doc(&abs)?;
+    Ok(serde_json::json!({ "rel_path": rel_path, "deleted": true }))
 }
 
 /// 路由 `ws.discard_diff`：rejected/expired 仅置终态，不写文件、不记节点（BR-WS-STATE-001）。

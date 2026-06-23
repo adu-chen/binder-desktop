@@ -24,6 +24,9 @@ pub mod diff_apply;
 /// PI-FE-04 · workspace 内文件枚举（ws.list_docs，BR-WS-DATA-001 / X-FORBID-004）。
 pub mod listing;
 
+/// PI-BE-04 · workspace 内文件 CRUD（create/rename/delete，BR-WS-DATA-001 / X-FORBID-004）。
+pub mod fileops;
+
 fn escape_error(rel_path: &str) -> IpcError {
     IpcError::new(
         "WS_PATH_ESCAPE",
