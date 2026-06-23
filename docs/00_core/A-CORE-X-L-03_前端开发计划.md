@@ -243,6 +243,15 @@
 
 ---
 
+### PI-FE-10　workspace 切换 / 返回欢迎页　✅ G4 已实现（2026-06-23，tsc + cargo test + build + scoped audit 绿；标题栏 workspace 菜单 + ws.close_workspace 接线 + 切换重置下游 store + 脏态守卫）
+- **承接**：A-SYS-C-T-02 §4.1（WB→关闭/切换→C）/ A-WS-I-P-01（ws.switch_workspace/close_workspace）/ BR-WS-PERSIST-002 / X-FORBID-007 / X-SEQ-002 / TERM-WS-001。补实现既有设计，不改 SSOT。
+- **文件范围**：`lib.rs`（注册+路由 ws.close_workspace）、`workspaceService`（closeWorkspace + 切换/打开重置下游 store）、`wsStore/edStore/deStore`（reset）、`WorkspaceMenu`（标题栏菜单 + 脏态守卫）、`Workbench`（挂菜单 + 按 workspaceId 重挂面板）。
+- **实现要点**：返回欢迎页 = ws.close_workspace（置非活动可恢复）+ 投影 null；切换/打开后重置 wsStore/edStore/deStore 并按 workspaceId 重挂 FileTree/Editor/ChatPanel，杜绝旧项目内容残留/按旧基线误存；破坏性操作前脏态守卫（编辑器 dirty 或 pending diff → 确认，参考稿链路 G）。
+- **A 类债务**：启动恢复 root 存在性探测（死项目回退欢迎页）延后；脏态守卫为通用确认，未细分「先处理/放弃」逐条处置。
+- **验收**：从 Workbench 可切换/返回欢迎页；切换后文件树与编辑器为新项目内容；脏态守卫生效；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

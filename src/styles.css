@@ -175,6 +175,40 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--ink-3);
 }
 
+/* 标题栏 workspace 菜单（PI-FE-10） */
+.wsmenu { position: relative; }
+.wsmenu-trigger {
+  display: flex; align-items: center; gap: var(--sp-2);
+  background: transparent; border: 0.5px solid transparent; border-radius: var(--r-1);
+  padding: 2px var(--sp-2); cursor: pointer; color: var(--ink-3);
+  font-family: var(--font-mono); font-size: 11px; max-width: 60vw;
+}
+.wsmenu-trigger:hover { background: var(--bg-overlay); border-color: var(--rule); }
+.wsmenu-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsmenu-caret { color: var(--ink-5); font-size: 9px; }
+.wsmenu-pop {
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0;
+  min-width: 280px; max-width: 420px;
+  background: var(--bg-card); border: 0.5px solid var(--rule-strong);
+  border-radius: var(--r-2); box-shadow: 0 6px 20px rgba(14, 12, 10, 0.14);
+  padding: var(--sp-1);
+}
+.wsmenu-section { display: block; padding: var(--sp-1) var(--sp-2); }
+.wsmenu-item {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: none; border-radius: var(--r-1);
+  padding: var(--sp-2); font-size: 13px; color: var(--ink-2); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wsmenu-item:hover { background: var(--bg-overlay); }
+.wsmenu-item.muted { color: var(--ink-4); cursor: default; }
+.wsmenu-item.muted:hover { background: transparent; }
+.wsmenu-close { color: var(--rust); }
+.wsmenu-divider { height: 0.5px; background: var(--rule); margin: var(--sp-1) 0; }
+.wsmenu-confirm { padding: var(--sp-2); font-size: 13px; color: var(--ink-2); }
+.wsmenu-confirm-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.wsmenu-confirm-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
+
 .work {
   grid-area: work;
   display: grid;

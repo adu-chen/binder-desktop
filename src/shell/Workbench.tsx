@@ -22,29 +22,32 @@ export function Workbench() {
   // DiffStrip 显隐投影待裁决修改（PendingDiff）计数 + 批量应用过程。
   const pendingDiffCount = diffs.filter((d) => d.state === "pending").length;
   const showDiffStrip = pendingDiffCount > 0 || batchState !== "idle";
+  // 面板重挂键：workspace 变更即重挂 FileTree/Editor/ChatPanel，载入新项目内容。
+  const wsKey = activeWorkspace?.workspaceId ?? "none";
 
   return (
     <div className="workbench">
       <header className="titlebar">
         <BinderWordmark size={16} />
-        <span className="label">{activeWorkspace?.rootPath ?? "—"}</span>
+        <WorkspaceMenu />
       </header>
 
       <div className="work">
         <LeftRail active={activePanel} onChange={setActivePanel} />
         <aside className="side">
           {activePanel === "files" ? (
-            <FileTree />
+            // 按 workspaceId 重挂：切换项目即刷新文件树为新项目内容（PI-FE-10）。
+            <FileTree key={wsKey} />
           ) : (
             // 其余面板（记忆/知识/模板/时间轴）由后续 PI 填充
             <span className="label">{activePanel}</span>
           )}
         </aside>
         <main className="center">
-          <Editor />
+          <Editor key={wsKey} />
         </main>
         <aside className="chat">
-          <ChatPanel />
+          <ChatPanel key={wsKey} />
         </aside>
       </div>
 
