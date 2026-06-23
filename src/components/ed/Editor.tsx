@@ -6,6 +6,7 @@ import { EditorTab } from "./EditorTab";
 import { edStore, useEdStore } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type GreenReviewState } from "../../store/deStore";
 import { assistStore } from "../../store/assistStore";
+import { saveDocument, reloadDocument } from "../../services/edService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 
@@ -24,8 +25,19 @@ const SEED_CONTENT = `
 
 const AUTOCOMPLETE_STUB = ["，山上有座庙。", "，云雾常年缭绕。", "，住着一位老者。"];
 
+/** 纯文本 → ProseMirror doc（每行一段落，忠实往返；富文本 md 解析序列化为债务）。 */
+function textToDoc(text: string) {
+  const lines = text.split("\n");
+  return {
+    type: "doc",
+    content: lines.map((line) =>
+      line ? { type: "paragraph", content: [{ type: "text", text: line }] } : { type: "paragraph" },
+    ),
+  };
+}
+
 export function Editor() {
-  const { openPath, tabState, pendingDiffCount } = useEdStore();
+  const { openPath, tabState, pendingDiffCount, loadSeq, loadedContent } = useEdStore();
   const { diffs } = useDeStore();
   const hostRef = useRef<HTMLDivElement>(null);
   // 当前辅助操作的目标编辑范围（⌘K=选区，⌘J=光标）。
@@ -45,6 +57,12 @@ export function Editor() {
         if (!host) return false;
         const { from, to, empty } = view.state.selection;
 
+        // ⌘S 保存：ws.save_doc（带加载基线，SM-WS-01）。
+        if (event.key === "s") {
+          event.preventDefault();
+          void saveCurrent(false);
+          return true;
+        }
         // ⌘K InlineAssist：有选区时开内联辅助（替换选区）。
         if (event.key === "k") {
           if (empty) return false;
@@ -78,6 +96,19 @@ export function Editor() {
   useEffect(() => {
     edStore.openDoc("untitled.md");
   }, []);
+
+  // 载入真实文档：loadSeq 变更（ws.read_doc 投影）→ setContent（不触发脏态）。
+  useEffect(() => {
+    if (!editor || loadSeq === 0 || loadedContent === null) return;
+    editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
+  }, [editor, loadSeq, loadedContent]);
+
+  // ⌘S 保存：取纯文本（行→\n）→ ws.save_doc（带加载基线）。冲突回 external_changed 等待裁决。
+  const saveCurrent = async (override: boolean) => {
+    if (!editor) return;
+    const text = editor.getText({ blockSeparator: "\n" });
+    await saveDocument(text, override);
+  };
 
   // GreenReview 同步：deStore diff 态变更 → 推送 blockId→GreenReviewState 映射到装饰层。
   useEffect(() => {
@@ -129,6 +160,29 @@ export function Editor() {
       <div className="editor-tabs">
         <EditorTab name={openPath ?? "untitled.md"} state={tabState} pendingDiffCount={pendingDiffCount} />
       </div>
+      {tabState === "external_changed" && (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--sp-3)",
+            padding: "var(--sp-2) var(--sp-4)",
+            background: "var(--gold-bg)",
+            borderBottom: "2px solid var(--gold)",
+            fontSize: 13,
+            color: "var(--ink-2)",
+          }}
+        >
+          <span>文件被外部修改或保存冲突。</span>
+          <button style={{ padding: "var(--sp-1) var(--sp-3)", fontSize: 12 }} onClick={() => void saveCurrent(true)}>
+            保留我的编辑（覆盖）
+          </button>
+          <button className="ghost" style={{ padding: "var(--sp-1) var(--sp-3)", fontSize: 12 }} onClick={() => void reloadDocument()}>
+            放弃并重载
+          </button>
+        </div>
+      )}
       <div className="editor-paper">
         <EditorContent editor={editor} />
       </div>

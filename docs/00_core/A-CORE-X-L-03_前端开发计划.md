@@ -234,6 +234,15 @@
 
 ---
 
+### PI-FE-09　前后端落盘集成（打开/保存真实文档）　✅ G4 已实现（2026-06-23，tsc + build + scoped audit 绿；文件树点击 → ws.read_doc 载入、⌘S → ws.save_doc 存盘 + 冲突裁决）
+- **承接**：A-WS-I-P-01（ws.read_doc/save_doc）/ WS-FS / WS-SAVE / SM-WS-01 / BR-WS-OBS-001 / BR-WS-PERSIST-001 / BR-ED-STATE-001 / X-SEQ-002 / X-FORBID-007 / TERM-WS-001。承 PI-BE-01 落盘 command。
+- **文件范围**：`wsService`（readDoc/saveDoc）、`edService`（openDocument/saveDocument/reloadDocument 编排）、`edStore`（loadDoc/markSaved + 基线）、`FileTree`（点击 → openDocument）、`Editor`（载入真实内容 + ⌘S + 冲突 banner）。
+- **实现要点**：纯文本忠实往返（行↔\n）；保存带加载基线，磁盘≠基线且未 override → WS_SAVE_CONFLICT（SM-WS-01）→ 编辑器冲突条「覆盖 / 重载」。
+- **A 类债务**：富文本 md 解析/序列化（tiptap-markdown 或 DOC pandoc 路）；外部变更主动监视（ws.external_change 事件订阅）；deStore.accept → ws.apply_diff 真落盘（需真实 diff payload）。
+- **验收**：点击文件载入内容；⌘S 刷新基线；冲突路径有裁决入口；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

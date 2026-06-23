@@ -30,6 +30,35 @@ async function callCommand<T>(command: string, params: Record<string, unknown>):
   return response.result;
 }
 
+export interface DocReadDto {
+  content: string;
+  baseline: number;
+}
+
+/** 读文档内容 + 加载基线（ws.read_doc，守界后端执行）。 */
+export async function readDoc(relPath: string): Promise<DocReadDto> {
+  return callCommand<DocReadDto>("ws.read_doc", { relPath });
+}
+
+/**
+ * 原子保存（ws.save_doc，带基线/override）。冲突时抛 WS_SAVE_CONFLICT（SM-WS-01）。
+ * 返回新基线哈希。
+ */
+export async function saveDoc(
+  relPath: string,
+  content: string,
+  baseline: number | null,
+  override = false,
+): Promise<number> {
+  const res = await callCommand<{ baseline: number }>("ws.save_doc", {
+    relPath,
+    content,
+    baseline,
+    override,
+  });
+  return res.baseline;
+}
+
 /** 加载当前活动 workspace 的文件列表（投影 loading → ready/error）。 */
 export async function loadDocs(): Promise<void> {
   wsStore._projectLoading();

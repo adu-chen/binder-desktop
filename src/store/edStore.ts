@@ -19,9 +19,22 @@ interface EdState {
   openPath: string | null;
   tabState: TabState;
   pendingDiffCount: number;
+  /** 已载入文档内容（纯文本）；编辑器据此 setContent。null = 未打开真实文档（用 seed）。 */
+  loadedContent: string | null;
+  /** 加载基线哈希（后端 ws.read_doc 回；供 ws.save_doc 校验）。 */
+  baseline: number | null;
+  /** 载入序号——内容变更触发编辑器 setContent（区分同路径重载）。 */
+  loadSeq: number;
 }
 
-let state: EdState = { openPath: null, tabState: "normal", pendingDiffCount: 0 };
+let state: EdState = {
+  openPath: null,
+  tabState: "normal",
+  pendingDiffCount: 0,
+  loadedContent: null,
+  baseline: null,
+  loadSeq: 0,
+};
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -53,6 +66,21 @@ export const edStore = {
   /** 打开文档（初始 saved 基线态）。 */
   openDoc(path: string) {
     setState({ openPath: path, tabState: "saved", pendingDiffCount: 0 });
+  },
+  /** 载入真实文档内容 + 加载基线（ws.read_doc 投影）；编辑器据 loadSeq 变更 setContent。 */
+  loadDoc(path: string, content: string, baseline: number) {
+    setState({
+      openPath: path,
+      loadedContent: content,
+      baseline,
+      tabState: "saved",
+      pendingDiffCount: 0,
+      loadSeq: state.loadSeq + 1,
+    });
+  },
+  /** 保存成功：刷新基线，回 saved 态。 */
+  markSaved(baseline: number) {
+    setState({ baseline, tabState: "saved" });
   },
   /** 编辑产生脏态（编辑器 onUpdate 驱动）。 */
   markDirty() {

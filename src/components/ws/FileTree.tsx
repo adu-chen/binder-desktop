@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useWsStore, type DocRefView } from "../../store/wsStore";
 import { loadDocs } from "../../services/wsService";
+import { openDocument } from "../../services/edService";
 import { FileTreeNode, type TreeNode } from "./FileTreeNode";
 
 /**
@@ -50,6 +51,12 @@ export function FileTree() {
   const [openPath, setOpenPath] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(docs), [docs]);
 
+  // 点击文件：高亮 open 态 + 经 ws.read_doc 载入编辑器（X-SEQ-002）。
+  const handleOpenFile = (path: string) => {
+    setOpenPath(path);
+    void openDocument(path);
+  };
+
   useEffect(() => {
     void loadDocs();
   }, []);
@@ -74,7 +81,7 @@ export function FileTree() {
   return (
     <div className="filetree">
       {tree.map((n) => (
-        <FileTreeNode key={n.path} node={n} depth={0} openPath={openPath} onOpenFile={setOpenPath} />
+        <FileTreeNode key={n.path} node={n} depth={0} openPath={openPath} onOpenFile={handleOpenFile} />
       ))}
     </div>
   );
