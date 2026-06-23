@@ -297,6 +297,15 @@
 
 ---
 
+### PI-FE-16　时间轴面板（WS 前端）　✅ G4 已实现（2026-06-23，tsc + build + vitest + scoped audit 绿；LeftRail 时间轴 → 节点列表 + 版本预览 + 还原）
+- **承接**：A-SYS-C-T-02 §3（时间轴归 WS）/ A-WS-I-P-01 §5 / SM-WS-03 / BR-WS-DATA-002/STATE-002 / X-FORBID-007 / TERM-WS-002。承 PI-BE-05。
+- **文件范围**：`wsService`（listTimeline/previewNode/restoreNode）、`TimelinePanel`（节点列表 + 预览 + 还原）、`Workbench`（activePanel=timeline 挂载）。
+- **实现要点**：随打开文档加载时间轴节点（最近在前）；点节点 ws.preview_node 预览历史内容；「还原此版本」→ ws.restore_node 写回 + 前进式记新节点 → 重载编辑器 + 刷新列表。
+- **A 类债务**：预览为整文档纯文本（无逐版本 diff 对比高亮）；非当前打开文档的时间轴未提供入口。
+- **验收**：接受 diff 后时间轴见节点；预览历史；还原写回并编辑器更新；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

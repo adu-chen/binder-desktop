@@ -638,6 +638,31 @@ button:disabled { opacity: 0.5; cursor: default; }
   text-align: center;
 }
 
+/* 时间轴面板（PI-FE-16） */
+.tl-list { display: flex; flex-direction: column; gap: 1px; }
+.tl-node {
+  display: flex; align-items: baseline; gap: var(--sp-2); width: 100%; text-align: left;
+  background: transparent; border: none; border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2); font-size: 12px; color: var(--ink-3); cursor: pointer; position: relative;
+}
+.tl-node:hover { background: var(--bg-overlay); color: var(--ink); }
+.tl-node.active { color: var(--ink); }
+.tl-node.active::before {
+  content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 2px; background: var(--rust);
+}
+.tl-seq { font-family: var(--font-mono); font-size: 10px; color: var(--rust); min-width: 28px; }
+.tl-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-time { font-family: var(--font-mono); font-size: 9px; color: var(--ink-5); }
+.tl-preview { margin-top: var(--sp-2); border-top: 0.5px solid var(--rule); padding-top: var(--sp-2); }
+.tl-preview-hd { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp-2) var(--sp-1); }
+.tl-restore { padding: 2px var(--sp-2); font-size: 11px; border-color: var(--forest); color: var(--forest); }
+.tl-preview-body {
+  margin: 0; padding: var(--sp-2); max-height: 40vh; overflow: auto;
+  background: var(--bg-card); border: 0.5px solid var(--rule); border-radius: var(--r-1);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 .statusbar {
   grid-area: statusbar;
   display: flex;

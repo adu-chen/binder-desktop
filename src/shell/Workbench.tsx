@@ -4,6 +4,7 @@ import { LeftRail, type RailPanelId } from "../components/shell/LeftRail";
 import { BinderWordmark } from "../components/brand/BinderWordmark";
 import { WorkspaceMenu } from "../components/shell/WorkspaceMenu";
 import { FileTree } from "../components/ws/FileTree";
+import { TimelinePanel } from "../components/ws/TimelinePanel";
 import { Editor } from "../components/ed/Editor";
 import { ChatPanel } from "../components/ag/ChatPanel";
 import { DiffAllActionsBar } from "../components/de/DiffAllActionsBar";
@@ -38,8 +39,10 @@ export function Workbench() {
           {activePanel === "files" ? (
             // 按 workspaceId 重挂：切换项目即刷新文件树为新项目内容（PI-FE-10）。
             <FileTree key={wsKey} />
+          ) : activePanel === "timeline" ? (
+            <TimelinePanel key={wsKey} />
           ) : (
-            // 其余面板（记忆/知识/模板/时间轴）由后续 PI 填充
+            // 其余面板（记忆/知识/模板）由后续 PI 填充
             <span className="label">{activePanel}</span>
           )}
         </aside>
