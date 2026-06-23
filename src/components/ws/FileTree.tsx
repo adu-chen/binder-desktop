@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useWsStore, type DocRefView } from "../../store/wsStore";
-import { loadDocs, createDoc, renameDoc, deleteDoc } from "../../services/wsService";
+import { loadDocs, createDoc, renameDoc, deleteDoc, searchDocs, type SearchHitDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
 import { edStore } from "../../store/edStore";
 import { FileTreeNode, type TreeNode } from "./FileTreeNode";
@@ -51,6 +51,30 @@ export function FileTree() {
   const { docs, status, error } = useWsStore();
   const [openPath, setOpenPath] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(docs), [docs]);
+
+  // 全文搜索（ws.search，防抖）：有查询时结果列表替代文件树。
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchHitDto[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const id = window.setTimeout(async () => {
+      try {
+        setResults(await searchDocs(q));
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [query]);
 
   // 右键菜单（重命名/删除）+ 内联输入（新建/重命名）状态。
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
@@ -182,8 +206,38 @@ export function FileTree() {
     </div>
   );
 
+  const searchBox = (
+    <div className="ftn-search">
+      <input
+        className="ftn-search-input"
+        placeholder="全文搜索…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {query && (
+        <button className="ftn-search-clear" onClick={() => setQuery("")} title="清空">×</button>
+      )}
+    </div>
+  );
+
+  // 有查询 → 搜索结果列表替代文件树。
+  const searchResults = (
+    <div className="ftn-results">
+      {searching && <p className="muted ftn-hint">搜索中…</p>}
+      {!searching && results.length === 0 && <p className="muted ftn-hint">无匹配</p>}
+      {results.map((h, i) => (
+        <button key={`${h.rel_path}:${h.line}:${i}`} className="ftn-result" onClick={() => handleOpenFile(h.rel_path)}>
+          <span className="ftn-result-path">{h.rel_path}:{h.line}</span>
+          <span className="ftn-result-prev">{h.preview}</span>
+        </button>
+      ))}
+    </div>
+  );
+
   let body: ReactNode;
-  if (status === "loading" || status === "idle") {
+  if (query.trim()) {
+    body = searchResults;
+  } else if (status === "loading" || status === "idle") {
     body = <p className="muted ftn-hint">加载文件…</p>;
   } else if (status === "error") {
     body = (
@@ -216,6 +270,7 @@ export function FileTree() {
   return (
     <>
       {header}
+      {searchBox}
       {inputRow}
       {body}
       {contextMenu}

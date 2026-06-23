@@ -50,6 +50,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.close_workspace");
     reg.register("ws.active_workspace");
     reg.register("ws.list_docs");
+    reg.register("ws.search");
     reg.register("ws.read_doc");
     reg.register("ws.save_doc");
     reg.register("ws.persist_diff");
@@ -96,6 +97,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.close_workspace" => route_close_workspace(&request, &state),
         "ws.active_workspace" => route_active_workspace(&state),
         "ws.list_docs" => route_list_docs(&state),
+        "ws.search" => route_search(&request, &state),
         "ws.read_doc" => route_read_doc(&request, &state),
         "ws.save_doc" => route_save_doc(&request, &state),
         "ws.persist_diff" => route_persist_diff(&request, &state),
@@ -227,6 +229,14 @@ fn route_list_docs(state: &AppState) -> Result<serde_json::Value, IpcError> {
         &active.workspace_id,
     )?;
     ws_json(&docs)
+}
+
+/// 路由 `ws.search`：活动 workspace 内全文搜索（守界 X-FORBID-004，命中封顶）。
+fn route_search(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let query = request.params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let active = active_ws(state)?;
+    let hits = workspace::listing::search(std::path::Path::new(&active.root_path), query);
+    ws_json(&hits)
 }
 
 /// 取活动 workspace（无活动即拒）——文件 I/O 路由的公共前置。

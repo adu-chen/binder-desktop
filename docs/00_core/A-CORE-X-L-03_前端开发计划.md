@@ -324,6 +324,15 @@
 
 ---
 
+### PI-BE-06+FE-17　workspace 全文搜索（ws.search）　✅ G4 已实现（2026-06-23，cargo test 103 + tsc + vitest + build + scoped audit 绿）
+- **承接**：A-WS-I-P-01 §3（ws.search）/ BR-WS-DATA-001 / WS-FS / X-FORBID-004 / X-SEQ-002 / TERM-WS-001。收口 PI-FE-15 搜索债务。
+- **文件范围**：`listing.rs`（search 守界行级匹配 + covers 测试，@GOV BR-WS-DATA-001 + term_ref TERM-WS-001）、`lib.rs`（ws.search 路由）、`wsService`（searchDocs）、`FileTree`（搜索框 + 结果列表，防抖 250ms）。
+- **实现要点**：递归 root 内行级大小写不敏感子串匹配，跳隐藏/非 UTF-8/>2MB，命中封顶 200；空查询回空；前端有查询时结果列表替代树，点结果打开文件。
+- **A 类债务**：点击结果未跳转到具体行（需编辑器行定位）；正则/大小写敏感选项未做；**文件树空目录可见**仍延后（需 listing 契约改动、价值偏低）。
+- **验收**：搜索出命中、点击打开；跳隐藏/守界；`governance:audit` scoped 无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

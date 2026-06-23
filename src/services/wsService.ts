@@ -87,6 +87,18 @@ export async function deleteDoc(relPath: string): Promise<void> {
   await callCommand("ws.delete_doc", { relPath });
 }
 
+export interface SearchHitDto {
+  rel_path: string;
+  line: number;
+  preview: string;
+}
+
+/** 全文搜索（ws.search，守界，命中封顶）；空查询回空。 */
+export async function searchDocs(query: string): Promise<SearchHitDto[]> {
+  if (!query.trim()) return [];
+  return callCommand<SearchHitDto[]>("ws.search", { query });
+}
+
 export interface TimelineEntryDto {
   entry_id: string;
   target: { rel_path: string; doc_type: string };

@@ -78,10 +78,107 @@ fn walk(root: &Path, dir: &Path, workspace_id: &str, out: &mut Vec<DocRef>) -> R
     Ok(())
 }
 
+/// 全文搜索命中（行级定位）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SearchHit {
+    pub rel_path: String,
+    /// 1-based 行号。
+    pub line: u32,
+    /// 命中行预览（截断）。
+    pub preview: String,
+}
+
+const SEARCH_MAX_HITS: usize = 200;
+const SEARCH_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024; // 跳过 >2MB 文件
+const PREVIEW_MAX: usize = 160;
+
+fn search_walk(root: &Path, dir: &Path, needle: &str, out: &mut Vec<SearchHit>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return }; // 单目录不可读则跳过，不中断整次搜索
+    for entry in entries.flatten() {
+        if out.len() >= SEARCH_MAX_HITS {
+            return;
+        }
+        let name = entry.file_name();
+        if is_hidden(&name.to_string_lossy()) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_dir() {
+            search_walk(root, &path, needle, out);
+        } else if ft.is_file() {
+            if entry.metadata().map(|m| m.len() > SEARCH_MAX_FILE_BYTES).unwrap_or(true) {
+                continue; // 超大/不可读跳过
+            }
+            // 仅文本文件（非 UTF-8 读取失败则跳过）。
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| name.to_string_lossy().to_string());
+            for (i, raw) in content.lines().enumerate() {
+                if raw.to_lowercase().contains(needle) {
+                    let preview: String = raw.trim().chars().take(PREVIEW_MAX).collect();
+                    out.push(SearchHit { rel_path: rel.clone(), line: (i + 1) as u32, preview });
+                    if out.len() >= SEARCH_MAX_HITS {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-DATA-001-QUERY-WS-WS-FS-005
+ * type:     QUERY
+ * chain:    WS-FS
+ * rules:    BR-WS-DATA-001
+ * term_ref: TERM-WS-001
+ * boundary: in=workspaceRootAndQuery | out=SearchHitList(withinRootBoundaryHiddenSkippedCapped)
+ */
+/// workspace 内全文搜索（BR-WS-DATA-001 / X-FORBID-004）：递归仅在 root 子树内、行级大小写不敏感子串匹配；
+/// 跳隐藏项/非 UTF-8/超大文件；命中数封顶。空查询回空（不全表扫描）。
+pub fn search(root: &Path, query: &str) -> Vec<SearchHit> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    search_walk(root, root, &needle, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    // covers: BR-WS-DATA-001
+    // 搜索：行级大小写不敏感子串匹配，回 rel_path+行号+预览；跳隐藏目录；空查询回空。
+    #[test]
+    fn search_matches_lines_case_insensitive_skipping_hidden() {
+        let tmp = std::env::temp_dir().join(format!("binder_search_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("notes")).unwrap();
+        fs::create_dir_all(tmp.join(".binder")).unwrap();
+        fs::write(tmp.join("a.md"), "Hello World\nsecond line").unwrap();
+        fs::write(tmp.join("notes/b.txt"), "another HELLO here").unwrap();
+        fs::write(tmp.join(".binder/secret.md"), "hello hidden").unwrap();
+
+        let hits = search(&tmp, "hello");
+        // 命中 a.md:1 与 notes/b.txt:1（大小写不敏感），隐藏目录跳过
+        let paths: Vec<(&str, u32)> = hits.iter().map(|h| (h.rel_path.as_str(), h.line)).collect();
+        assert!(paths.contains(&("a.md", 1)));
+        assert!(paths.contains(&("notes/b.txt", 1)));
+        assert!(!hits.iter().any(|h| h.rel_path.contains(".binder")), "隐藏目录不应命中");
+        assert_eq!(hits.iter().find(|h| h.rel_path == "a.md").unwrap().preview, "Hello World");
+        // 空查询回空（不全表扫描）
+        assert!(search(&tmp, "   ").is_empty());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     // covers: BR-WS-DATA-001
     // 枚举返回 root 下常规文件的 DocRef（含子目录、统一 / 分隔、按 rel_path 有序）；

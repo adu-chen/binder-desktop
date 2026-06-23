@@ -562,6 +562,25 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .ftn-refresh:hover { background: var(--bg-overlay); color: var(--ink); }
 .filetree-hd-actions { display: flex; gap: 2px; }
+/* 全文搜索（PI-FE-17） */
+.ftn-search { position: relative; padding: 0 var(--sp-2) var(--sp-2); }
+.ftn-search-input {
+  width: 100%; box-sizing: border-box; border: 0.5px solid var(--rule-strong); border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2); font-size: 12px; background: var(--bg-card); color: var(--ink);
+}
+.ftn-search-input:focus { outline: none; border-color: var(--rust-tint); }
+.ftn-search-clear {
+  position: absolute; right: var(--sp-3); top: 50%; transform: translateY(-50%);
+  background: transparent; border: none; color: var(--ink-4); cursor: pointer; font-size: 13px; padding: 0 4px;
+}
+.ftn-results { display: flex; flex-direction: column; gap: 1px; }
+.ftn-result {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left;
+  background: transparent; border: none; border-radius: var(--r-1); padding: var(--sp-1) var(--sp-2); cursor: pointer;
+}
+.ftn-result:hover { background: var(--bg-overlay); }
+.ftn-result-path { font-family: var(--font-mono); font-size: 10px; color: var(--rust); }
+.ftn-result-prev { font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 /* 新建/重命名内联输入（PI-FE-13） */
 .ftn-input-row { padding: 0 var(--sp-2) var(--sp-2); }
 .ftn-input {
