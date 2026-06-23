@@ -36,6 +36,19 @@ forbidden: AI建议, 修改意见, 编辑建议, 产出建议
 AG 代理回合产出中交接 DE 的修改意图载体（目标定位 + 修改内容 + 来源元数据），是 SM-AG-01
 HandingOff 与 DE 生成（SM-DE-01 Generating）之间的交接物；经 DE 生成为待裁决修改后进入裁决。
 
+<!-- TERM
+term_id: TERM-DE-004
+chains: DE-DIFF
+zh: 修改载荷
+en: DiffPayload
+forbidden: diff载荷, 内容载荷, payload, diff内容, 落盘载荷, 提案载荷
+-->
+ChangeProposal 经 DE 组装成的**统一持久化载荷**（target + after_content + before_snapshot +
+is_new_doc），是 accepted 落盘时 `ws.apply_diff` 消费的内容来源。与 ChangeProposal（AG 交接的意图
+载体）、PendingDiff（等待裁决的控制态记录）、DiffCard（对话区视图卡）严格区分：DiffPayload 是
+**落盘内容**的单一形状（BR-DE-DATA-002），经 payload_ref 由 PendingDiff 关联，持久化于 workspace.db
+`diff_payloads` 表（DE 拥有形状、WS db 承载持久化，见 §1 分层）。
+
 ## §1 文档定位
 
 ```

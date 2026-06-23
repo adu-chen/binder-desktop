@@ -66,7 +66,10 @@ DE 是「对话→diff→裁决→落盘」链的中枢：接 AG/CBT 的 ChangeP
 
 - 裁决 UI 形态（逐条/批量，DE-04 待人类）影响是否需 `de.accept_batch`/`de.reject_batch` 批量
   接口——延决策后补；CBT 构建产物的批量裁决同此（CBT-02）。
-- payload 序列化与 before_snapshot 存储形态延实现期（承 A-SYS-I-P-01 实现期）。
+- ~~payload 序列化与 before_snapshot 存储形态延实现期~~ → **已解除（PI-BE-02，2026-06-23）**：
+  DiffPayload（TERM-DE-004）持久化于 workspace.db `diff_payloads` 表（payload_ref 主键，after_content
+  BLOB、before_snapshot TEXT、is_new_doc），经 PendingDiff.payload_ref 关联；`de.accept_diff` 经此取回
+  after_content 触发 `ws.apply_diff` 落盘。DE 拥有载荷形状、WS db 承载持久化（A-DE-M-T-01 §1）。
 - `de.check_expiry` 的触发驱动（定时 vs 呈现时 vs 裁决时）延实现期，本文只定接口语义。
 
 ## 变更记录

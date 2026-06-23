@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-06-23T06:18:08.817Z -->
+<!-- 最后生成时间：2026-06-23T06:45:45.010Z -->
 
 ### 模块编码表
 
@@ -199,6 +199,7 @@
 | TERM-CBT-002   | CBT-BUILD    | 构建任务   | BuildTask        | 构建步骤, 子任务, build单元, 任务项                           | docs/01_modules/CBT/A-CBT-M-T-01_构建技术设计.md      |
 | TERM-DE-001    | DE-DIFF      | 待裁决修改  | PendingDiff      | 修改提案, 变更请求, 待定diff, 修改单, 待审修改                     | docs/01_modules/DE/A-DE-M-T-01_对话编辑技术设计.md      |
 | TERM-DE-002    | DE-DIFF      | 修改建议   | ChangeProposal   | AI建议, 修改意见, 编辑建议, 产出建议                            | docs/01_modules/DE/A-DE-M-T-01_对话编辑技术设计.md      |
+| TERM-DE-004    | DE-DIFF      | 修改载荷   | DiffPayload      | diff载荷, 内容载荷, payload, diff内容, 落盘载荷, 提案载荷         | docs/01_modules/DE/A-DE-M-T-01_对话编辑技术设计.md      |
 | TERM-DOC-001   | DOC-CONVERT  | 样式子集   | StyleSubset      | 样式白名单, 格式子集, 样式范围, 支持样式表                          | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
 | TERM-ED-001    | ED-EDIT      | 内容块    | Block            | 内容节点, 段落块, 文本块, 块节点, chunk                        | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-ED-002    | ED-DECOR     | 编辑器装饰层 | EditorDecoration | 高亮层, 标注层, 覆盖层, overlay层, 装饰器层                     | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |

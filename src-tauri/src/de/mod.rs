@@ -11,6 +11,9 @@ pub mod generate;
 /// PI-DE-03 · 过期保守判定与多 diff 冲突重检（BR-DE-STATE-002 / BR-DE-DATA-003）。
 pub mod expiry;
 
+/// PI-BE-02 · DiffPayload 持久化（diff_payloads，BR-DE-DATA-002）；accepted 落盘取回内容。
+pub mod store;
+
 /// SM-DE-01 状态（A-DE-M-S-01 §2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffState {

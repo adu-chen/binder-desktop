@@ -87,6 +87,22 @@ const MIGRATIONS: &[Migration] = &[
                 created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL );
         "#,
     },
+    Migration {
+        version: 3,
+        // DiffPayload（TERM-DE-004）持久化：accepted 落盘的内容来源，经 PendingDiff.payload_ref 关联
+        // （PI-BE-02 解除 A-DE-I-P-01 §7 存储形态延期项）。after_content 为提案后内容字节。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS diff_payloads (
+                payload_ref     TEXT PRIMARY KEY,
+                workspace_id    TEXT NOT NULL,
+                rel_path        TEXT NOT NULL,
+                after_content   BLOB NOT NULL,
+                before_snapshot TEXT,
+                is_new_doc      INTEGER NOT NULL,
+                created_at      INTEGER NOT NULL
+            );
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

@@ -56,6 +56,10 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.list_pending_diffs");
     reg.register("ws.apply_diff");
     reg.register("ws.discard_diff");
+    reg.register("de.generate_diff");
+    reg.register("de.accept_diff");
+    reg.register("de.reject_diff");
+    reg.register("de.list_diffs");
     reg.register("ag.start_turn");
     reg
 }
@@ -91,6 +95,10 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
         "ws.apply_diff" => route_apply_diff(&request, &state),
         "ws.discard_diff" => route_discard_diff(&request, &state),
+        "de.generate_diff" => route_generate_diff(&request, &state),
+        "de.accept_diff" => route_accept_diff(&request, &state),
+        "de.reject_diff" => route_reject_diff(&request, &state),
+        "de.list_diffs" => route_list_diffs(&request, &state),
         "ag.start_turn" => route_start_turn(&request),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
@@ -313,6 +321,111 @@ fn route_discard_diff(request: &CommandRequest, state: &AppState) -> Result<serd
     workspace::diff_apply::discard_diff(&conn, &diff_id, &terminal)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
     Ok(serde_json::json!({ "diff_id": diff_id, "status": terminal }))
+}
+
+// —— DE diff 链路（PI-BE-02）：生成→裁决→落盘经 dispatch 接入 ——
+
+fn now_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// 不透明 id（diff_id / payload_ref 占位；与 lifecycle ID 同策略，A 类债务）。
+fn gen_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    format!("{prefix}_{}_{}", now_millis(), N.fetch_add(1, Ordering::Relaxed))
+}
+
+fn doc_type_of(rel_path: &str) -> String {
+    std::path::Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_else(|| "bin".to_string())
+}
+
+/// 路由 `de.generate_diff`：组装 ChangeProposal→锚校验生成 PendingDiff（BR-DE-DATA-001）→持久化
+/// DiffPayload + pending_diff（重启恢复）；修改既有须锚 Located，否则 DE_ANCHOR_LOST（不产悬空 diff）。
+fn route_generate_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
+    use crate::types::LocateResult;
+
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let after_content = request
+        .params
+        .get("afterContent")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new("WS_CONTENT_REQUIRED", "缺少 afterContent 参数", false, false))?
+        .to_string();
+    let before_snapshot = request.params.get("beforeSnapshot").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let origin_module = request.params.get("originModule").and_then(|v| v.as_str()).unwrap_or("AG").to_string();
+    let origin_task = request.params.get("originTask").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let anchor_locate = match request.params.get("anchorLocate").and_then(|v| v.as_str()) {
+        Some("anchor_lost") => LocateResult::AnchorLost,
+        Some("undetectable") => LocateResult::Undetectable,
+        _ => LocateResult::Located,
+    };
+
+    let ws = active_ws(state)?;
+    let target = crate::types::DocRef {
+        workspace_id: ws.workspace_id,
+        doc_type: doc_type_of(&rel_path),
+        rel_path,
+    };
+    let proposal = ChangeProposal {
+        origin_task,
+        target,
+        after_content: after_content.into_bytes(),
+        before_snapshot,
+    };
+    let diff_id = gen_id("diff");
+    let payload_ref = format!("pl_{diff_id}");
+    // 锚校验（修改既有须 Located；新建跳过）——失败即 GenFailed 回报，不持久化。
+    let pending = generate_diff(&proposal, &diff_id, &origin_module, &payload_ref, now_millis(), anchor_locate)?;
+    let payload = build_payload(&proposal);
+
+    let conn = lock_db(state)?;
+    crate::de::store::persist_payload(&conn, &payload_ref, &payload)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    workspace::diff_apply::persist_diff(&conn, &pending)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "diff_id": diff_id, "status": "pending" }))
+}
+
+/// 路由 `de.accept_diff`：取回 DiffPayload→ws.apply_diff 落盘（accepted 唯一触发，X-INTER-001）；回时间轴节点。
+fn route_accept_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let stored = crate::de::store::load_payload_for_diff(&conn, &diff_id)?;
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &stored.rel_path)?;
+    let doc = crate::types::DocRef {
+        workspace_id: ws.workspace_id,
+        doc_type: doc_type_of(&stored.rel_path),
+        rel_path: stored.rel_path,
+    };
+    let entry = workspace::diff_apply::apply_diff(&conn, &diff_id, &doc, &abs, &stored.after_content, None)?;
+    ws_json(&entry)
+}
+
+/// 路由 `de.reject_diff`：ws.discard_diff(rejected)，不写文件、不记节点（终态不可逆，SM-DE-01）。
+fn route_reject_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    workspace::diff_apply::discard_diff(&conn, &diff_id, "rejected")
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "diff_id": diff_id, "status": "rejected" }))
+}
+
+/// 路由 `de.list_diffs`：活动 workspace 未裁决 diff 列表（重启恢复，复用 WS 持久化查询）。
+fn route_list_diffs(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let status = request.params.get("status").and_then(|v| v.as_str());
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let list = workspace::diff_apply::list_pending_diffs(&conn, &ws.workspace_id, status)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&list)
 }
 
 /**
