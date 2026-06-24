@@ -13,3 +13,6 @@ pub mod convert;
 
 /// PI-DOC-03 · 转换层 blockId 兜底（BR-DOC-DATA-003）。
 pub mod block_backfill;
+
+/// PI-DOC-01（实现期续接）· Pandoc 编辑链运行时（真实 docx↔markdown 子进程，BR-DOC-DATA-001）。
+pub mod pandoc_runtime;
