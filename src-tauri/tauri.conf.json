@@ -31,6 +31,10 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.png"],
-    "resources": ["resources/libreoffice/**/*"]
+    "resources": [
+      "resources/libreoffice/**/*",
+      "resources/reference.docx",
+      "resources/preserve-styles.lua"
+    ]
   }
 }
