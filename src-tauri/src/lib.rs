@@ -63,6 +63,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.delete_doc");
     reg.register("prv.preview");
     reg.register("prv.export");
+    reg.register("prv.media_src");
     reg.register("ws.list_timeline");
     reg.register("ws.preview_node");
     reg.register("ws.restore_node");
@@ -87,7 +88,7 @@ fn build_registry() -> CommandRegistry {
 /// 经注册表校验后路由到领域逻辑（X-SEQ-002）；未注册 command 一律按统一错误形状拒绝，不进入路由。
 /// 物理传输选型（单 dispatch vs per-command，SY-02）为 A 类债务，本入口落 envelope 路由骨架。
 #[tauri::command]
-fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse {
+fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppState>) -> CommandResponse {
     let correlation_id = request.correlation_id.clone();
     if let Err(err) = state.registry.validate(&request) {
         return CommandResponse { correlation_id, result: None, error: Some(err) };
@@ -112,6 +113,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.delete_doc" => route_delete_doc(&request, &state),
         "prv.preview" => route_preview(&request, &state),
         "prv.export" => route_export(&request, &state),
+        "prv.media_src" => route_media_src(&request, &state, &app),
         "ws.list_timeline" => route_list_timeline(&request, &state),
         "ws.preview_node" => route_preview_node(&request, &state),
         "ws.restore_node" => route_restore_node(&request, &state),
@@ -383,6 +385,21 @@ fn route_preview(request: &CommandRequest, state: &AppState) -> Result<serde_jso
     let ext = std::path::Path::new(&rel_path).extension().and_then(|e| e.to_str()).unwrap_or("");
     let bytes = prv::render_preview(&abs, ext)?;
     Ok(serde_json::json!({ "format": "pdf", "bytes": bytes }))
+}
+
+/// 路由 `prv.media_src`：守界解析媒体文件绝对路径（X-FORBID-004）+ 仅把**该单个文件**加入 asset 协议
+/// scope（最小暴露，不开放整目录）；前端 convertFileSrc(abs) 流式播放音视频（不进内存，只读）。
+fn route_media_src(request: &CommandRequest, state: &AppState, app: &tauri::AppHandle) -> Result<serde_json::Value, IpcError> {
+    use tauri::Manager;
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    if !abs.is_file() {
+        return Err(IpcError::new("PRV_NOT_FOUND", "媒体文件不存在", false, false));
+    }
+    app.asset_protocol_scope()
+        .allow_file(&abs)
+        .map_err(|e| IpcError::new("PRV_SCOPE_FAILED", &format!("授权媒体访问失败: {e}"), false, false))?;
+    Ok(serde_json::json!({ "abs_path": abs.to_string_lossy() }))
 }
 
 /// 路由 `prv.export`：源文档导出为目标格式，落点 = 同目录同名换扩展（workspace 内，守界 X-FORBID-004）。

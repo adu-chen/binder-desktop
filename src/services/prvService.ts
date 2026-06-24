@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 /**
  * PRV Service（X-SEQ-002）：只读预览经 prv.preview 触达 DOC 预览链（LibreOffice → PDF 字节）。
@@ -33,4 +33,13 @@ export async function previewDoc(relPath: string): Promise<string> {
 export async function exportDoc(relPath: string, format: "pdf" | "docx" | "md"): Promise<string> {
   const res = await callCommand<{ rel_path: string }>("prv.export", { relPath, format });
   return res.rel_path;
+}
+
+/**
+ * 音视频源 URL（asset 协议流式）：prv.media_src 守界 + 授权该文件 → convertFileSrc → asset URL。
+ * 大文件不进内存（webview 从磁盘流式解码）；只读。
+ */
+export async function mediaSrc(relPath: string): Promise<string> {
+  const res = await callCommand<{ abs_path: string }>("prv.media_src", { relPath });
+  return convertFileSrc(res.abs_path);
 }

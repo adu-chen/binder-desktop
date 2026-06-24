@@ -1,16 +1,17 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-BE-09+FE-23",
+  "scope_id": "PI-BE-10+FE-24",
   "allowed_files": [
-    "src-tauri/src/prv/mod.rs",
+    "src-tauri/Cargo.toml",
+    "src-tauri/tauri.conf.json",
     "src-tauri/src/lib.rs",
     "src/services/prvService.ts",
     "src/components/prv/PrvPanel.tsx",
-    "src/components/ws/FileTree.tsx",
+    "src/components/ws/FileTreeNode.tsx",
     "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-BE-09-FE-23.md"
+    ".governance/issues/PI-BE-10-FE-24.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -22,5 +23,5 @@
     "src-tauri/src/doc/pandoc_runtime.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-BE-09+FE-23 复用 pandoc/libreoffice 做 prv.export（落 workspace 守界）+ PrvPanel 打印当前预览；音视频预览另起；人类已授权继续并确认 confirmation=YES。"
+  "scope_reason": "PI-BE-10+FE-24 音视频预览走 asset 协议（流式）；prv.media_src 守界 + 动态授权该文件；人类已确认 asset 协议方案并确认 confirmation=YES。"
 }

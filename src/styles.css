@@ -310,6 +310,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .prv-body .muted { padding: var(--sp-6); }
 .prv-error { color: var(--rust); font-size: 13px; padding: var(--sp-6); max-width: 80%; text-align: center; }
 .prv-frame { width: 100%; height: 100%; border: none; background: var(--bg-card); }
+.prv-media { max-width: 96%; max-height: 96%; background: #000; border-radius: var(--r-1); }
+.prv-audio { width: 80%; max-height: none; background: transparent; }
 .editor-tabs {
   display: flex;
   align-items: stretch;

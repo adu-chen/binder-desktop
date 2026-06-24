@@ -28,6 +28,9 @@ export interface TreeNode {
 /** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；docx 经 DOC 预览链只读呈现）。点击 → PRV 预览。 */
 const PREVIEW_ONLY = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt"]);
 
+/** 音视频类型（asset 协议流式预览）；可点击预览，视觉不灰显（与 office 区分）。 */
+const MEDIA_TYPES = new Set(["mp4", "webm", "mov", "m4v", "ogv", "mp3", "wav", "ogg", "m4a", "flac", "aac"]);
+
 /** 文件类型 mono 字形（参考稿 §10：用 mono 字符，实现期可换图标库）。 */
 function typeGlyph(docType?: string): string {
   switch (docType) {
@@ -104,9 +107,12 @@ export function FileTreeNode({
     );
   }
 
-  // 文件节点：预览类型（不可编辑但可只读预览）视觉 not_supported，但可点击触发预览。
-  const previewOnly = PREVIEW_ONLY.has(node.docType ?? "");
-  const notSupported = previewOnly;
+  // 文件节点：office 预览类型视觉 not_supported（灰显，不可编辑）；音视频正常视觉；二者点击均触发只读预览。
+  const dt = node.docType ?? "";
+  const officePreview = PREVIEW_ONLY.has(dt);
+  const mediaPreview = MEDIA_TYPES.has(dt);
+  const previewable = officePreview || mediaPreview;
+  const notSupported = officePreview;
   const overridden = stateOverride?.[node.path];
   const isOpen = openPath === node.path;
   const nodeState: FileNodeState = notSupported
@@ -118,13 +124,13 @@ export function FileTreeNode({
     <button
       className={`ftn-row ftn-file ftn-${nodeState}`}
       style={indent}
-      onClick={() => (previewOnly ? onPreviewFile?.(node.path) : onOpenFile(node.path))}
+      onClick={() => (previewable ? onPreviewFile?.(node.path) : onOpenFile(node.path))}
       onContextMenu={(e) => {
         if (!onContextMenu) return;
         e.preventDefault();
         onContextMenu(node.path, e.clientX, e.clientY);
       }}
-      title={previewOnly ? `${node.path}（只读预览）` : node.path}
+      title={previewable ? `${node.path}（只读预览）` : node.path}
     >
       <span className="ftn-type">{typeGlyph(node.docType)}</span>
       <span className="ftn-name">{node.name}</span>

@@ -383,6 +383,15 @@
 
 ---
 
+### PI-BE-10+FE-24　音视频预览（asset 协议流式）　✅ G4 已实现（2026-06-23，cargo build + tsc + vitest 58 + build + scoped audit 绿）
+- **承接**：A-PRV-I-P-01 §2（音视频→系统解码）/ A-PRV-M-T-01（只读硬边界）/ PRV-VIEW / X-FORBID-004。媒体走 asset 协议流式（非字节回传）。
+- **文件范围**：`Cargo.toml`（tauri protocol-asset feature）、`tauri.conf.json`（开 assetProtocol，scope 空运行时授权）、`lib.rs`（dispatch 增 AppHandle + prv.media_src 守界 + allow_file 仅授权该文件）、`prvService.mediaSrc`（convertFileSrc）、`PrvPanel`（按扩展名分流 PDF/video/audio）、`FileTreeNode`（音视频可点预览）。
+- **实现要点**：点 mp4/mp3 等 → prv.media_src 守界解析 + 把**该单个文件**加入 asset scope（最小暴露）→ convertFileSrc → `<video>/<audio>` 流式系统解码（不进内存，与 PDF 字节回传分流）；只读无编辑。
+- **A 类债务**：媒体格式以浏览器/系统解码能力为准（部分编码不支持）；切 workspace 未清 asset 授权（累积，重启清）。
+- **验收**：点音视频 → 播放器流式播放；PDF 预览不受影响；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```
