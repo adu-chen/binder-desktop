@@ -224,10 +224,7 @@ fn route_list_docs(state: &AppState) -> Result<serde_json::Value, IpcError> {
         .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?
         .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
     drop(conn); // 枚举文件系统期间不持 db 锁
-    let docs = workspace::listing::list_docs(
-        std::path::Path::new(&active.root_path),
-        &active.workspace_id,
-    )?;
+    let docs = workspace::listing::list_docs(std::path::Path::new(&active.root_path))?;
     ws_json(&docs)
 }
 

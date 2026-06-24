@@ -36,7 +36,7 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
 |---|---|---|---|---|
-| `ws.list_docs` | workspace_id、过滤条件（可空） | DocRef 列表 | — | BR-WS-DATA-001 |
+| `ws.list_docs` | workspace_id、过滤条件（可空） | FsEntry 列表（rel_path+doc_type+is_dir，**含空目录**；WS 本地结构非 SYS 共享 DocRef，PI-BE-07 补） | — | BR-WS-DATA-001 |
 | `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
 | `ws.check_external_change` | DocRef、**加载基线哈希** | { changed, deleted, current } | 检测失败（可重试） | BR-WS-OBS-001；§6 external_change 逻辑契约的轮询实现（物理事件延 SY-02） |
 | `ws.create_doc` | DocRef、初始内容（可空） | DocRef + 基线哈希 | 已存在/越界 | BR-WS-DATA-001 |

@@ -12,9 +12,22 @@ import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode"
  * 目录在前、文件在后，同级按名排序。
  */
 
-/** 扁平 DocRef（rel_path）列表 → 嵌套目录树。导出供单测（纯函数）。 */
+/**
+ * 扁平 FsEntry 列表 → 嵌套目录树。导出供单测（纯函数）。
+ * 目录条目（isDir，含空目录）的全部路径段均建为目录节点 → 空目录可见；文件条目末段建叶子。
+ * 同路径目录去重（目录条目与文件父路径合并到同一节点）。
+ */
 export function buildTree(docs: DocRefView[]): TreeNode[] {
   const root: TreeNode = { name: "", path: "", kind: "dir", children: [] };
+  const ensureDir = (cursor: TreeNode, part: string, path: string): TreeNode => {
+    let dir = cursor.children!.find((c) => c.kind === "dir" && c.name === part);
+    if (!dir) {
+      dir = { name: part, path, kind: "dir", children: [] };
+      cursor.children!.push(dir);
+    }
+    return dir;
+  };
+
   for (const doc of docs) {
     const parts = doc.relPath.split("/").filter(Boolean);
     let cursor = root;
@@ -22,15 +35,13 @@ export function buildTree(docs: DocRefView[]): TreeNode[] {
       const part = parts[i];
       const isLeaf = i === parts.length - 1;
       const path = parts.slice(0, i + 1).join("/");
-      if (isLeaf) {
-        cursor.children!.push({ name: part, path, kind: "file", docType: doc.docType });
-      } else {
-        let dir = cursor.children!.find((c) => c.kind === "dir" && c.name === part);
-        if (!dir) {
-          dir = { name: part, path, kind: "dir", children: [] };
-          cursor.children!.push(dir);
+      // 文件条目的末段为叶子；其余段（及目录条目的所有段）均为目录。
+      if (isLeaf && !doc.isDir) {
+        if (!cursor.children!.some((c) => c.kind === "file" && c.name === part)) {
+          cursor.children!.push({ name: part, path, kind: "file", docType: doc.docType });
         }
-        cursor = dir;
+      } else {
+        cursor = ensureDir(cursor, part, path);
       }
     }
   }

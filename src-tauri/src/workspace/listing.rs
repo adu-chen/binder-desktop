@@ -5,8 +5,18 @@
 //! （symlink canonicalize 深化为实现期 A 类债务，与 workspace/mod.rs 既有注记一致）。
 
 use crate::ipc::IpcError;
-use crate::types::DocRef;
 use std::path::Path;
+
+/// 文件树列举条目（WS 本地结构，非 SYS 共享 DocRef）：文件或目录。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FsEntry {
+    /// 相对 root、`/` 分隔的路径。
+    pub rel_path: String,
+    /// 文件扩展名推断的类型（目录为空串）。
+    pub doc_type: String,
+    /// 是否目录（true 时即便为空也在文件树可见）。
+    pub is_dir: bool,
+}
 
 /// 由扩展名推断文档类型（小写无点）；无扩展名归 `bin`（前端按支持集决定可编辑性）。
 fn doc_type_of(path: &Path) -> String {
@@ -28,19 +38,19 @@ fn is_hidden(name: &str) -> bool {
  * chain:    WS-FS
  * rules:    BR-WS-DATA-001
  * term_ref: TERM-WS-001
- * boundary: in=workspaceRootAndId | out=DocRefList(withinRootBoundaryHiddenSkipped)
+ * boundary: in=workspaceRoot | out=FsEntryList(filesAndDirsWithinRootBoundaryHiddenSkipped)
  */
-/// 递归枚举 workspace root 下文件为 DocRef 列表（BR-WS-DATA-001：统一以 DocRef 定位）。
-/// 仅返回常规文件（目录结构由 rel_path 隐含，前端建树）；隐藏项整树跳过；读目录失败回统一错误形状。
-/// 每个 rel_path 以 `/` 分隔、相对 root，天然不越界（X-FORBID-004 由"只下行不上溯"结构保证）。
-pub fn list_docs(root: &Path, workspace_id: &str) -> Result<Vec<DocRef>, IpcError> {
+/// 递归枚举 workspace root 下文件与目录为 FsEntry 列表（BR-WS-DATA-001）：含**空目录**（is_dir=true），
+/// 使目录结构在文件树可见；隐藏项整树跳过；读目录失败回统一错误形状。每个 rel_path 以 `/` 分隔、相对
+/// root，天然不越界（X-FORBID-004 由"只下行不上溯"结构保证）。
+pub fn list_docs(root: &Path) -> Result<Vec<FsEntry>, IpcError> {
     let mut out = Vec::new();
-    walk(root, root, workspace_id, &mut out)?;
+    walk(root, root, &mut out)?;
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     Ok(out)
 }
 
-fn walk(root: &Path, dir: &Path, workspace_id: &str, out: &mut Vec<DocRef>) -> Result<(), IpcError> {
+fn walk(root: &Path, dir: &Path, out: &mut Vec<FsEntry>) -> Result<(), IpcError> {
     let entries = std::fs::read_dir(dir).map_err(|e| {
         IpcError::new(
             "WS_LIST_READ_FAILED",
@@ -60,19 +70,17 @@ fn walk(root: &Path, dir: &Path, workspace_id: &str, out: &mut Vec<DocRef>) -> R
             Ok(t) => t,
             Err(_) => continue, // 元信息不可读则跳过该条目，不中断整次枚举
         };
+        // rel_path 相对 root，统一 `/` 分隔（跨平台前端建树键）。
+        let rel = path
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| name.to_string());
         if file_type.is_dir() {
-            walk(root, &path, workspace_id, out)?;
+            // 目录条目（含空目录可见）+ 递归子树。
+            out.push(FsEntry { rel_path: rel, doc_type: String::new(), is_dir: true });
+            walk(root, &path, out)?;
         } else if file_type.is_file() {
-            // rel_path 相对 root，统一 `/` 分隔（跨平台前端建树键）。
-            let rel = path
-                .strip_prefix(root)
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|_| name.to_string());
-            out.push(DocRef {
-                workspace_id: workspace_id.to_string(),
-                rel_path: rel,
-                doc_type: doc_type_of(&path),
-            });
+            out.push(FsEntry { rel_path: rel, doc_type: doc_type_of(&path), is_dir: false });
         }
     }
     Ok(())
@@ -181,24 +189,27 @@ mod tests {
     }
 
     // covers: BR-WS-DATA-001
-    // 枚举返回 root 下常规文件的 DocRef（含子目录、统一 / 分隔、按 rel_path 有序）；
-    // 隐藏项（.binder）整树跳过；doc_type 由扩展名推断。
+    // 枚举返回 root 下文件与目录的 FsEntry（含**空目录**、统一 / 分隔、按 rel_path 有序）；
+    // 隐藏项（.binder）整树跳过；文件 doc_type 由扩展名推断、目录为空串。
     #[test]
-    fn lists_files_within_root_skipping_hidden() {
+    fn lists_files_and_dirs_including_empty_skipping_hidden() {
         let tmp = std::env::temp_dir().join(format!("binder_list_{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("notes")).unwrap();
+        fs::create_dir_all(tmp.join("empty_dir")).unwrap(); // 空目录：应仍可见
         fs::create_dir_all(tmp.join(".binder")).unwrap();
         fs::write(tmp.join("a.md"), b"a").unwrap();
         fs::write(tmp.join("notes/b.txt"), b"b").unwrap();
         fs::write(tmp.join(".binder/secret.db"), b"x").unwrap();
 
-        let docs = list_docs(&tmp, "ws1").unwrap();
-        let paths: Vec<&str> = docs.iter().map(|d| d.rel_path.as_str()).collect();
-        assert_eq!(paths, vec!["a.md", "notes/b.txt"], "隐藏目录须跳过且有序");
-        assert_eq!(docs[0].doc_type, "md");
-        assert_eq!(docs[1].doc_type, "txt");
-        assert!(docs.iter().all(|d| d.workspace_id == "ws1"));
+        let entries = list_docs(&tmp).unwrap();
+        let paths: Vec<&str> = entries.iter().map(|d| d.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["a.md", "empty_dir", "notes", "notes/b.txt"], "含空目录、跳隐藏、有序");
+        let by = |p: &str| entries.iter().find(|e| e.rel_path == p).unwrap();
+        assert!(by("empty_dir").is_dir && by("notes").is_dir);
+        assert!(!by("a.md").is_dir && by("a.md").doc_type == "md");
+        assert!(!by("notes/b.txt").is_dir && by("notes/b.txt").doc_type == "txt");
+        assert!(!entries.iter().any(|e| e.rel_path.contains(".binder")), "隐藏目录须跳过");
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -209,7 +220,7 @@ mod tests {
     fn missing_root_returns_unified_error() {
         let missing = std::env::temp_dir().join("binder_list_missing_xyz_404");
         let _ = fs::remove_dir_all(&missing);
-        let err = list_docs(&missing, "ws1").unwrap_err();
+        let err = list_docs(&missing).unwrap_err();
         assert_eq!(err.code, "WS_LIST_READ_FAILED");
         assert!(err.retriable);
     }

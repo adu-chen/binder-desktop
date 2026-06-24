@@ -360,4 +360,32 @@ mod tests {
         assert_eq!(err.code, "DOC_LIBREOFFICE_MISSING");
         assert!(err.retriable); // 安装后可重试
     }
+
+    // covers: BR-DOC-DATA-001
+    // 端到端预览（LibreOffice 部署后真跑）：pandoc 造 docx → convert_to_pdf 经内置优化版 LO + macOS 环境
+    // + 嵌字体 filter 生成 PDF；产物为 %PDF 魔数、非空。无 LO 环境自动跳过（不误判）。
+    #[test]
+    fn docx_to_pdf_end_to_end_when_libreoffice_available() {
+        if !libreoffice_available() || !crate::doc::pandoc_runtime::pandoc_available() {
+            return; // 缺 LO 或 pandoc：跳过端到端实测
+        }
+        // 1) pandoc 造一个含必需子集（标题/粗体）的 docx
+        let docx = crate::doc::pandoc_runtime::markdown_to_docx("# 预览标题\n\n**加粗** 正文\n")
+            .expect("pandoc md→docx");
+        let base = std::env::temp_dir().join(format!("binder_lo_e2e_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let docx_path = base.join("input.docx");
+        std::fs::write(&docx_path, &docx).unwrap();
+
+        // 2) 预览链：docx → PDF（经内置优化版 LO + DYLD/SAL/UserInstallation + writer_pdf_Export filter）
+        let out_dir = base.join("out");
+        let pdf = convert_to_pdf(&docx_path, PreviewKind::Docx, &out_dir).expect("docx→pdf");
+
+        // 3) 校验产物为有效 PDF
+        let bytes = std::fs::read(&pdf).unwrap();
+        assert!(bytes.len() > 100, "PDF 非空");
+        assert_eq!(&bytes[..5], b"%PDF-", "产物为 PDF 魔数");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

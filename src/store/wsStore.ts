@@ -6,10 +6,11 @@ import { useSyncExternalStore } from "react";
  * status 是视图层请求态（loading/ready/error），非业务态。
  */
 
+/** 文件树列举条目（FsEntry 投影）：文件或目录（is_dir 使空目录可见）。 */
 export interface DocRefView {
-  workspaceId: string;
   relPath: string;
   docType: string;
+  isDir: boolean;
 }
 
 export type DocsStatus = "idle" | "loading" | "ready" | "error";

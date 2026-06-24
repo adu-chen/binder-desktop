@@ -13,10 +13,10 @@ interface CommandResponse<T> {
   error?: { code: string; message: string; retriable: boolean; reauth_required: boolean };
 }
 
-interface DocRefDto {
-  workspace_id: string;
+interface FsEntryDto {
   rel_path: string;
   doc_type: string;
+  is_dir: boolean;
 }
 
 let seq = 0;
@@ -125,8 +125,8 @@ export async function restoreNode(entryId: string): Promise<void> {
 
 /** 拉取当前活动 workspace 文件列表（裸调用，不投影）；供 loadDocs 与启动探测复用。 */
 export async function fetchDocs(): Promise<DocRefView[]> {
-  const docs = await callCommand<DocRefDto[]>("ws.list_docs", {});
-  return docs.map((d) => ({ workspaceId: d.workspace_id, relPath: d.rel_path, docType: d.doc_type }));
+  const entries = await callCommand<FsEntryDto[]>("ws.list_docs", {});
+  return entries.map((e) => ({ relPath: e.rel_path, docType: e.doc_type, isDir: e.is_dir }));
 }
 
 /** 加载当前活动 workspace 的文件列表（投影 loading → ready/error）。 */

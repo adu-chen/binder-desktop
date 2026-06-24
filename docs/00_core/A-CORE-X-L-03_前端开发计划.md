@@ -357,6 +357,14 @@
 
 ---
 
+### PI-BE-07+FE-21　文件树空目录可见　✅ G4 已实现（2026-06-23，cargo test 111 + tsc + vitest 58 + build + scoped audit 绿）
+- **承接**：A-WS-I-P-01 §3 / BR-WS-DATA-001 / WS-FS / X-FORBID-004 / X-FORBID-007 / TERM-WS-001。收口空目录可见债务。
+- **文件范围**：`listing.rs`（FsEntry 含 is_dir，list_docs 返回文件+目录含空目录，covers 测试）、`lib.rs`（route 签名简化）、`wsService`/`wsStore`（FsEntry 投影，DocRefView 去 workspaceId 加 isDir）、`FileTree.buildTree`（isDir 建空目录 + 去重）、测试更新。
+- **实现要点**：list_docs 不再仅返回文件——递归每个非隐藏目录与文件各一条；空目录 is_dir=true 在文件树可见；不动 SYS 共享 DocRef 语义（FsEntry 为 WS 本地结构）。
+- **验收**：含空子目录的 workspace 文件树显示该目录；隐藏项跳过；vitest 58 全过；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

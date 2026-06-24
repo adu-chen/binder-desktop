@@ -11,7 +11,7 @@ describe("wsStore 文件树状态投影", () => {
   it("loading → ready（投影 docs）", () => {
     wsStore._projectLoading();
     expect(wsStore.getSnapshot().status).toBe("loading");
-    wsStore._projectDocs([{ workspaceId: "w", relPath: "a.md", docType: "md" }]);
+    wsStore._projectDocs([{ relPath: "a.md", docType: "md", isDir: false }]);
     const s = wsStore.getSnapshot();
     expect(s.status).toBe("ready");
     expect(s.docs).toHaveLength(1);
