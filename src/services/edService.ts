@@ -1,4 +1,5 @@
 import { readDoc, saveDoc, checkExternalChange } from "./wsService";
+import { openDocxForEdit, saveDocxFromEdit, isDocxEditable } from "./docService";
 import { edStore } from "../store/edStore";
 
 /**
@@ -11,14 +12,21 @@ interface IpcLikeError {
   message?: string;
 }
 
-/** 打开文档：ws.read_doc → 载入编辑器（内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
+/** 打开文档：docx 经 DOC 编辑链（doc.open_for_edit → HTML），其余经 ws.read_doc（文本）→ 载入编辑器
+ *  （内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
 export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
   try {
+    if (isDocxEditable(relPath)) {
+      // docx 编辑链：docx → 可编辑 HTML（保留样式子集），editFormat=html。
+      const { html, baseline } = await openDocxForEdit(relPath);
+      edStore.loadDoc(relPath, html, baseline, jumpLine, "html");
+      return;
+    }
     const { content, baseline } = await readDoc(relPath);
     edStore.loadDoc(relPath, content, baseline, jumpLine);
   } catch (e) {
     const err = e as IpcLikeError;
-    console.error(`ws.read_doc failed [${err.code ?? "?"}]: ${err.message ?? e}`);
+    console.error(`open document failed [${err.code ?? "?"}]: ${err.message ?? e}`);
   }
 }
 
@@ -41,6 +49,26 @@ export async function saveDocument(content: string, override = false): Promise<S
     const err = e as IpcLikeError;
     const conflict = err.code === "WS_SAVE_CONFLICT";
     // 冲突回脏态等待裁决；其余失败也回脏态（不谎称已存）。
+    edStore.setTabState(conflict ? "external_changed" : "dirty");
+    return { ok: false, conflict, message: err.message ?? String(e) };
+  }
+}
+
+/**
+ * 保存 docx 文档（⌘S，编辑链）：编辑 HTML → doc.save_from_edit（HTML→docx→WS 原子落盘）带加载基线。
+ * 磁盘≠基线且未 override → WS_SAVE_CONFLICT（SM-WS-01，原 docx 不变）。状态投影同 saveDocument。
+ */
+export async function saveDocxDocument(html: string, override = false): Promise<SaveOutcome> {
+  const { openPath, baseline } = edStore.getSnapshot();
+  if (!openPath) return { ok: false, conflict: false, message: "无打开的文档" };
+  edStore.setTabState("saving");
+  try {
+    const newBaseline = await saveDocxFromEdit(openPath, html, baseline, override);
+    edStore.markSaved(newBaseline);
+    return { ok: true };
+  } catch (e) {
+    const err = e as IpcLikeError;
+    const conflict = err.code === "WS_SAVE_CONFLICT";
     edStore.setTabState(conflict ? "external_changed" : "dirty");
     return { ok: false, conflict, message: err.message ?? String(e) };
   }

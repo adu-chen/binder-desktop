@@ -25,8 +25,9 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
-/** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；docx 经 DOC 预览链只读呈现）。点击 → PRV 预览。 */
-const PREVIEW_ONLY = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt"]);
+/** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览）。点击 → PRV 预览。
+ *  注：docx/doc 可编辑——经 DOC 编辑链（doc.open_for_edit/save_from_edit）打开进 TipTap，点击 → 编辑。 */
+const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt"]);
 
 /** 音视频/图片类型（asset 协议预览）；可点击预览，视觉不灰显（与 office 区分）。 */
 const MEDIA_TYPES = new Set([

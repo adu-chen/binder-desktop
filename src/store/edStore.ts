@@ -27,6 +27,8 @@ interface EdState {
   loadSeq: number;
   /** 本次载入后请求跳转的目标行（搜索命中跳行）；跳后清除。null = 不跳。 */
   jumpLine: number | null;
+  /** 编辑模型格式：text=md/纯文本（ws.read_doc/save_doc）；html=docx 编辑链（doc.open_for_edit/save_from_edit）。 */
+  editFormat: "text" | "html";
 }
 
 let state: EdState = {
@@ -37,6 +39,7 @@ let state: EdState = {
   baseline: null,
   loadSeq: 0,
   jumpLine: null,
+  editFormat: "text",
 };
 const listeners = new Set<() => void>();
 
@@ -70,8 +73,15 @@ export const edStore = {
   openDoc(path: string) {
     setState({ openPath: path, tabState: "saved", pendingDiffCount: 0 });
   },
-  /** 载入真实文档内容 + 加载基线（ws.read_doc 投影）；编辑器据 loadSeq 变更 setContent；jumpLine 跳行。 */
-  loadDoc(path: string, content: string, baseline: number, jumpLine: number | null = null) {
+  /** 载入真实文档内容 + 加载基线（ws.read_doc / doc.open_for_edit 投影）；编辑器据 loadSeq 变更 setContent；
+   *  jumpLine 跳行；editFormat=html 时为 docx 编辑链（内容为 HTML）。 */
+  loadDoc(
+    path: string,
+    content: string,
+    baseline: number,
+    jumpLine: number | null = null,
+    editFormat: "text" | "html" = "text",
+  ) {
     setState({
       openPath: path,
       loadedContent: content,
@@ -80,6 +90,7 @@ export const edStore = {
       pendingDiffCount: 0,
       loadSeq: state.loadSeq + 1,
       jumpLine,
+      editFormat,
     });
   },
   /** 跳转完成后清除目标行（避免后续重渲染重复跳）。 */
@@ -110,6 +121,7 @@ export const edStore = {
       baseline: null,
       loadSeq: 0,
       jumpLine: null,
+      editFormat: "text",
     });
   },
 };

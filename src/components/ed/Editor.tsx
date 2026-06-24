@@ -5,7 +5,7 @@ import { applyGreenReview } from "./extensions/DiffDecorationExtension";
 import { edStore, useEdStore } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type GreenReviewState } from "../../store/deStore";
 import { assistStore } from "../../store/assistStore";
-import { saveDocument, reloadDocument, pollExternalChange } from "../../services/edService";
+import { saveDocument, saveDocxDocument, reloadDocument, pollExternalChange } from "../../services/edService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 
@@ -50,7 +50,7 @@ function textToDoc(text: string) {
 }
 
 export function Editor() {
-  const { openPath, tabState, loadSeq, loadedContent } = useEdStore();
+  const { openPath, tabState, loadSeq, loadedContent, editFormat } = useEdStore();
   const { diffs } = useDeStore(); // GreenReview 同步用（标签状态投影已移至 center TabStrip）
   const hostRef = useRef<HTMLDivElement>(null);
   // 当前辅助操作的目标编辑范围（⌘K=选区，⌘J=光标）。
@@ -117,7 +117,10 @@ export function Editor() {
   // md/markdown 以 Markdown 解析为富文本（字符串经 tiptap-markdown）；其余按纯文本（doc 对象，绕过 md 解析）。
   useEffect(() => {
     if (!editor || loadSeq === 0 || loadedContent === null) return;
-    if (isMarkdownPath(openPath)) {
+    if (editFormat === "html") {
+      // docx 编辑链：loadedContent 为 HTML（保留样式子集），TipTap 原生解析。
+      editor.commands.setContent(loadedContent, { emitUpdate: false });
+    } else if (isMarkdownPath(openPath)) {
       editor.commands.setContent(loadedContent, { emitUpdate: false });
     } else {
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
@@ -128,11 +131,16 @@ export function Editor() {
       jumpToLine(editor, jumpLine);
       edStore.clearJump();
     }
-  }, [editor, loadSeq, loadedContent, openPath]);
+  }, [editor, loadSeq, loadedContent, openPath, editFormat]);
 
-  // ⌘S 保存：md 以 getMarkdown 序列化、其余取纯文本（行→\n）→ ws.save_doc（带加载基线）。
+  // ⌘S 保存：docx 以 getHTML → doc.save_from_edit（编辑链回写）；md 以 getMarkdown、其余纯文本 → ws.save_doc。
   const saveCurrent = async (override: boolean) => {
     if (!editor) return;
+    if (editFormat === "html") {
+      // docx 编辑链回写：HTML → docx（--reference-doc）→ WS 原子落盘。
+      await saveDocxDocument(editor.getHTML(), override);
+      return;
+    }
     const mdStorage = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>).markdown;
     const content = isMarkdownPath(openPath)
       ? mdStorage.getMarkdown()
