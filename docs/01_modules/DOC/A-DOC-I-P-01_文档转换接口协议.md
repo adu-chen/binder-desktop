@@ -68,3 +68,4 @@ X-SEQ-004 接口落实：docx 等二进制格式的转换唯一经本文 command
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件，文档往返面）：DOC 接口协议——编辑链 3（open_for_edit 装载+子集告知、save_from_edit 往返落盘 WS、get_style_report）、预览链 1（render_preview docx/Excel/PPT→PDF，与编辑链分离）、§4 跨模块对接索引（ED/WS/PRV）；X-SEQ-004 二进制转换唯一入口固化；零新增注册项；债务（版本/往返实测/Excel·PPT 保真/告知形态延后） |
+| 2026-06-24 | v1.1 | 编辑链 command 实现接线（代码同步）：`doc.open_for_edit`（docx → 可编辑 HTML，经 doc/edit_chain.rs docx+styles + preserve-styles.lua，回 baseline 供冲突保护）、`doc.save_from_edit`（编辑 HTML → docx --reference-doc reference.docx → WS save_atomic 原子落盘 + 外部变更保护）已注册 lib.rs 并路由；处理逻辑对齐旧项目 binder-project（HTML 而非 markdown，承载样式子集「部分支持」层）；资源 reference.docx/preserve-styles.lua 入 bundle.resources。data-block-id 注入兜底（BR-DOC-DATA-003）与样式子集告知（get_style_report）+ extract-media 图片接入为实现期续接（A 类）；前端 docx→TipTap 编辑流接 doc.* command |

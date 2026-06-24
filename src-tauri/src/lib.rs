@@ -64,6 +64,8 @@ fn build_registry() -> CommandRegistry {
     reg.register("prv.preview");
     reg.register("prv.export");
     reg.register("prv.media_src");
+    reg.register("doc.open_for_edit");
+    reg.register("doc.save_from_edit");
     reg.register("ws.list_timeline");
     reg.register("ws.preview_node");
     reg.register("ws.restore_node");
@@ -114,6 +116,8 @@ fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppStat
         "prv.preview" => route_preview(&request, &state),
         "prv.export" => route_export(&request, &state),
         "prv.media_src" => route_media_src(&request, &state, &app),
+        "doc.open_for_edit" => route_open_for_edit(&request, &state),
+        "doc.save_from_edit" => route_save_from_edit(&request, &state),
         "ws.list_timeline" => route_list_timeline(&request, &state),
         "ws.preview_node" => route_preview_node(&request, &state),
         "ws.restore_node" => route_restore_node(&request, &state),
@@ -414,6 +418,42 @@ fn route_export(request: &CommandRequest, state: &AppState) -> Result<serde_json
     let (_, abs_dest) = resolve_active(state, &dest_rel)?;
     prv::export(&abs_src, &src_ext, &format, &abs_dest)?;
     Ok(serde_json::json!({ "rel_path": dest_rel }))
+}
+
+/// 路由 `doc.open_for_edit`（A-DOC-I-P-01 §2 编辑链）：docx → 可编辑 HTML（DOC 编辑链 docx+styles +
+/// preserve-styles.lua，保留样式子集供 TipTap）；回 baseline（docx 字节内容哈希）供保存冲突保护
+/// （SM-WS-01）。转换失败回 convert_failed 不建会话（对接 SM-DOC-01 OpenError / ed loadFail）。
+fn route_open_for_edit(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    // 加载基线：docx 原始字节内容哈希（供 save_from_edit 校验外部变更，BR-WS-OBS-001）。
+    let baseline = std::fs::read(&abs)
+        .map(|b| workspace::save::content_hash(&b))
+        .map_err(|e| IpcError::new("DOC_READ_FAILED", &format!("读 docx 失败: {e}"), true, false))?;
+    // 编辑链：docx → HTML；extract-media 工作目录按文档隔离（图片解出供编辑器；缓存策略实现期）。
+    let work_dir = std::env::temp_dir().join("binder_edit_media").join(format!("{baseline:x}"));
+    let html = doc::edit_chain::docx_to_html(&abs, &work_dir)?;
+    Ok(serde_json::json!({ "format": "html", "html": html, "baseline": baseline }))
+}
+
+/// 路由 `doc.save_from_edit`（A-DOC-I-P-01 §2 编辑链）：编辑 HTML → docx（--reference-doc 统一样式）→
+/// 交 WS 原子落盘（SM-WS-01，baseline 校验外部变更、原文件不变保护）。转换失败回 convert_failed
+/// （SM-DOC-01 SaveError，原 docx 不变）。
+fn route_save_from_edit(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let html = request
+        .params
+        .get("html")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new("DOC_HTML_REQUIRED", "缺少 html 参数", false, false))?;
+    let baseline = request.params.get("baseline").and_then(|v| v.as_u64());
+    let override_external = request.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    // 编辑链回写：HTML → docx 字节（失败原文件不变）。
+    let docx_bytes = doc::edit_chain::html_to_docx(html)?;
+    // WS 原子落盘 + 外部变更保护（SM-WS-01）。
+    let saved = workspace::save::save_atomic(&abs, &docx_bytes, baseline, override_external)?;
+    Ok(serde_json::json!({ "baseline": saved.baseline }))
 }
 
 /// 路由 `ws.list_timeline`：回文档时间轴节点（version_seq 升序，BR-WS-DATA-002）。
