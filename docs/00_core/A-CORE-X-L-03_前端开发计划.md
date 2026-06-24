@@ -392,6 +392,14 @@
 
 ---
 
+### PI-FE-25　图片预览（asset 协议）　✅ G4 已实现（2026-06-23，tsc + vitest 58 + build + scoped audit 绿）
+- **承接**：A-PRV-I-P-01 §2 / PRV-VIEW / PI-BE-10（prv.media_src 格式无关）。修复"图片无法预览"。
+- **文件范围**：`PrvPanel`（image 模式 <img>，prv.media_src→convertFileSrc）、`FileTreeNode`（图片类型并入可点预览）、`styles.css`。
+- **实现要点**：图片复用已就绪的 asset 协议路径（后端无改动）；png/jpg/gif/webp/svg/bmp/avif 点击 → asset URL → <img> 只读呈现。
+- **验收**：点图片显示图片；PDF/音视频不受影响；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

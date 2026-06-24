@@ -11,12 +11,14 @@ import { previewDoc, mediaSrc } from "../../services/prvService";
 
 const VIDEO = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
 const AUDIO = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
+const IMAGE = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "ico"]);
 
-type Mode = "pdf" | "video" | "audio";
+type Mode = "pdf" | "video" | "audio" | "image";
 function modeOf(path: string): Mode {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (VIDEO.has(ext)) return "video";
   if (AUDIO.has(ext)) return "audio";
+  if (IMAGE.has(ext)) return "image";
   return "pdf";
 }
 
@@ -71,7 +73,7 @@ export function PrvPanel({ path }: { path: string }) {
       </div>
       <div className="prv-body">
         {status === "loading" && (
-          <p className="muted">{mode === "pdf" ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载媒体中…"}</p>
+          <p className="muted">{mode === "pdf" ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载中…"}</p>
         )}
         {status === "error" && (
           <p className="prv-error">
@@ -87,6 +89,9 @@ export function PrvPanel({ path }: { path: string }) {
         )}
         {status === "ready" && url && mode === "audio" && (
           <audio className="prv-media prv-audio" src={url} controls />
+        )}
+        {status === "ready" && url && mode === "image" && (
+          <img className="prv-media prv-image" src={url} alt={name} />
         )}
       </div>
     </div>

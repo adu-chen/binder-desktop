@@ -28,8 +28,11 @@ export interface TreeNode {
 /** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；docx 经 DOC 预览链只读呈现）。点击 → PRV 预览。 */
 const PREVIEW_ONLY = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt"]);
 
-/** 音视频类型（asset 协议流式预览）；可点击预览，视觉不灰显（与 office 区分）。 */
-const MEDIA_TYPES = new Set(["mp4", "webm", "mov", "m4v", "ogv", "mp3", "wav", "ogg", "m4a", "flac", "aac"]);
+/** 音视频/图片类型（asset 协议预览）；可点击预览，视觉不灰显（与 office 区分）。 */
+const MEDIA_TYPES = new Set([
+  "mp4", "webm", "mov", "m4v", "ogv", "mp3", "wav", "ogg", "m4a", "flac", "aac",
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "ico",
+]);
 
 /** 文件类型 mono 字形（参考稿 §10：用 mono 字符，实现期可换图标库）。 */
 function typeGlyph(docType?: string): string {
