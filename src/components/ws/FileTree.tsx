@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useWsStore, type DocRefView } from "../../store/wsStore";
 import { loadDocs, createDoc, renameDoc, deleteDoc, searchDocs, type SearchHitDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
-import { edStore } from "../../store/edStore";
-import { FileTreeNode, type TreeNode } from "./FileTreeNode";
+import { edStore, useEdStore } from "../../store/edStore";
+import { useDeStore } from "../../store/deStore";
+import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
 
 /**
  * 文件树容器（A-SYS-C-T-02 §3 Side Panel WS · PI-FE-04）。
@@ -49,8 +50,25 @@ function sortTree(node: TreeNode) {
 
 export function FileTree() {
   const { docs, status, error } = useWsStore();
+  const { openPath: edOpenPath, tabState } = useEdStore();
+  const { diffs } = useDeStore();
   const [openPath, setOpenPath] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(docs), [docs]);
+
+  // 投影打开文档的真实态到节点（优先级 external > pending > dirty；X-FORBID-007）。
+  const { stateOverride, pendingCount } = useMemo(() => {
+    const override: Record<string, FileNodeState> = {};
+    const counts: Record<string, number> = {};
+    if (edOpenPath) {
+      const pending = diffs.filter((d) => d.state === "pending" && d.relPath === edOpenPath).length;
+      if (tabState === "external_changed") override[edOpenPath] = "external_changed";
+      else if (pending > 0) {
+        override[edOpenPath] = "pending_diff";
+        counts[edOpenPath] = pending;
+      } else if (tabState === "dirty") override[edOpenPath] = "dirty_open";
+    }
+    return { stateOverride: override, pendingCount: counts };
+  }, [edOpenPath, tabState, diffs]);
 
   // 全文搜索（ws.search，防抖）：有查询时结果列表替代文件树。
   const [query, setQuery] = useState("");
@@ -261,6 +279,8 @@ export function FileTree() {
             openPath={openPath}
             onOpenFile={handleOpenFile}
             onContextMenu={(path, x, y) => setMenu({ path, x, y })}
+            stateOverride={stateOverride}
+            pendingCount={pendingCount}
           />
         ))}
       </div>

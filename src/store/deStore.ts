@@ -44,6 +44,8 @@ export const EXPIRED_REASON_TEXT: Record<ExpiredReason, string> = {
 export interface DiffView {
   diffId: string;
   blockId: string; // GreenReview 装饰锚（与 ED BlockIdExtension 对齐）
+  /** 目标文档相对路径（pending 按文件归属投影到文件树/标签）。 */
+  relPath?: string;
   title: string;
   before: string;
   after: string;

@@ -1,14 +1,14 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-18",
+  "scope_id": "PI-FE-19",
   "allowed_files": [
+    "src/store/deStore.ts",
+    "src/services/deService.ts",
+    "src/components/ws/FileTree.tsx",
     "src/components/ed/Editor.tsx",
-    "src/store/agStore.ts",
-    "src/components/ag/MessageList.tsx",
-    "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-18.md"
+    ".governance/issues/PI-FE-19.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -18,5 +18,5 @@
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-18 移除 AG 桩期展示数据（编辑器假 untitled.md 占位 + DEMO_TOOLS 6 态演示），界面回到诚实空态；ToolCallCard 组件保留待真实调用；人类已确认收掉并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-19 把文件树/编辑器标签的 6 态可视化接到真实 edStore/deStore 投影；DiffView 补 relPath 使 pending 按文件正确归属；纯前端；人类已授权继续并确认 confirmation=YES。"
 }

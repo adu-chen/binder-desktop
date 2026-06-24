@@ -39,8 +39,14 @@ function textToDoc(text: string) {
 }
 
 export function Editor() {
-  const { openPath, tabState, pendingDiffCount, loadSeq, loadedContent } = useEdStore();
+  const { openPath, tabState, loadSeq, loadedContent } = useEdStore();
   const { diffs } = useDeStore();
+  // 该文档待裁决 diff 数（投影 deStore，按文件归属）+ 标签有效态（互斥：external > pending_diff > 保存态）。
+  const pendingDiffCount = openPath
+    ? diffs.filter((d) => d.state === "pending" && d.relPath === openPath).length
+    : 0;
+  const effectiveTabState =
+    tabState === "external_changed" ? "external_changed" : pendingDiffCount > 0 ? "pending_diff" : tabState;
   const hostRef = useRef<HTMLDivElement>(null);
   // 当前辅助操作的目标编辑范围（⌘K=选区，⌘J=光标）。
   const assistRange = useRef<{ from: number; to: number }>({ from: 0, to: 0 });
@@ -180,7 +186,7 @@ export function Editor() {
   return (
     <div className="editor-host" ref={hostRef}>
       <div className="editor-tabs">
-        <EditorTab name={openPath} state={tabState} pendingDiffCount={pendingDiffCount} />
+        <EditorTab name={openPath} state={effectiveTabState} pendingDiffCount={pendingDiffCount} />
       </div>
       {tabState === "external_changed" && (
         <div

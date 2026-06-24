@@ -49,6 +49,7 @@ export async function generateSampleDiff(): Promise<void> {
     deStore.addDiff({
       diffId: diff_id,
       blockId: "", // 整文档变换，不绑定单块 blockId（块级 GreenReview 留待块级 diff）
+      relPath: openPath, // 按文件归属，供文件树/标签投影 pending
       title: "对当前文档追加一段",
       before: snippet(loadedContent.slice(-48)),
       after: "…追加：AI 追加的一段说明文字。",

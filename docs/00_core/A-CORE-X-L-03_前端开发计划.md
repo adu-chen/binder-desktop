@@ -341,6 +341,14 @@
 
 ---
 
+### PI-FE-19　状态投影接线（文件树/编辑器标签反映真实态）　✅ G4 已实现（2026-06-23，tsc + vitest 56 + build + scoped audit 绿）
+- **承接**：A-SYS-C-T-02（前端态投影后端）/ 参考稿 §6.3/6.4 / X-FORBID-007 / BR-ED-STATE-001 / BR-DE-STATE-001。
+- **文件范围**：`deStore`（DiffView 补 relPath）、`deService`（generateSampleDiff 填 relPath）、`FileTree`（投影打开文档节点态）、`Editor`（EditorTab 有效态）。
+- **实现要点**：把已建的 6 态文件节点 / 6 态编辑标签接到**真实 edStore/deStore 投影**（此前仅测试 override）；优先级 external_changed > pending_diff（按文件归属计数）> dirty_open > open > normal，各态互斥。
+- **验收**：编辑脏态→文件树红点+标签红点；生成 diff→该文件 pending badge；外部变更→金!；vitest 56 全过；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```
