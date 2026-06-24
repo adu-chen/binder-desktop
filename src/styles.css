@@ -304,6 +304,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--sp-2) var(--sp-3); background: var(--bg-sunken); border-bottom: 0.5px solid var(--rule);
 }
+.prv-hd-actions { display: flex; gap: var(--sp-2); }
 .prv-hd button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
 .prv-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-sunken); }
 .prv-body .muted { padding: var(--sp-6); }

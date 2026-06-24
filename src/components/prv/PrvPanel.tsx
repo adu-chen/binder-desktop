@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { prvStore } from "../../store/prvStore";
 import { previewDoc } from "../../services/prvService";
 
@@ -11,6 +11,10 @@ export function PrvPanel({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errMsg, setErrMsg] = useState("");
+  const frameRef = useRef<HTMLIFrameElement>(null);
+
+  // 打印当前预览（系统打印对话框）——只读输出（prv.print 的前端实现）。
+  const print = () => frameRef.current?.contentWindow?.print();
 
   useEffect(() => {
     let revoked: string | null = null;
@@ -44,7 +48,10 @@ export function PrvPanel({ path }: { path: string }) {
     <div className="prv-panel">
       <div className="prv-hd">
         <span className="label">预览（只读） · {name}</span>
-        <button className="ghost" onClick={() => prvStore.close()} title="关闭预览">关闭</button>
+        <span className="prv-hd-actions">
+          <button className="ghost" onClick={print} disabled={status !== "ready"} title="打印">打印</button>
+          <button className="ghost" onClick={() => prvStore.close()} title="关闭预览">关闭</button>
+        </span>
       </div>
       <div className="prv-body">
         {status === "loading" && <p className="muted">渲染预览中…（首次启动 LibreOffice 可能稍慢）</p>}
@@ -54,7 +61,7 @@ export function PrvPanel({ path }: { path: string }) {
             {errMsg.includes("LIBREOFFICE") || errMsg.includes("soffice") ? "（请确认已安装 LibreOffice）" : ""}
           </p>
         )}
-        {status === "ready" && url && <iframe className="prv-frame" src={url} title="文档预览" />}
+        {status === "ready" && url && <iframe ref={frameRef} className="prv-frame" src={url} title="文档预览" />}
       </div>
     </div>
   );

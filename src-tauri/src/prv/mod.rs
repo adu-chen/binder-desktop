@@ -5,6 +5,7 @@
 //! （doc::libreoffice_runtime）。音视频系统解码、导出/打印延后（A-PRV-I-P-01 §4）。
 
 use crate::doc::libreoffice_runtime::{convert_to_pdf, PreviewKind};
+use crate::doc::pandoc_runtime::{docx_to_markdown, markdown_to_docx};
 use crate::ipc::IpcError;
 use std::path::Path;
 
@@ -41,4 +42,49 @@ pub fn render_preview(abs_path: &Path, ext: &str) -> Result<Vec<u8>, IpcError> {
         .map_err(|e| IpcError::new("PRV_IO_ERROR", &format!("读取预览 PDF 失败: {e}"), true, false))?;
     let _ = std::fs::remove_file(&pdf); // 预览产物即用即清（字节已回传）
     Ok(bytes)
+}
+
+/**
+ * @GOV
+ * codes:    BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002
+ * type:     IO
+ * chain:    PRV-VIEW
+ * rules:    BR-PRV-DATA-002
+ * boundary: in=sourceAndTargetFormatAndDest | out=exportedFile(withinWorkspaceOrUnsupportedRejected)
+ */
+/// 导出管线归属编排（BR-PRV-DATA-002）：md/txt→docx（pandoc）、docx→md（pandoc）、office→pdf（libreoffice）；
+/// 转换运行时归 DOC，本模块只做格式编排 + 落点写入（落点守界由调用方 resolve_in_workspace 保证，
+/// X-FORBID-004）。不支持的源→目标组合明确拒绝（不静默产出空文件）。
+pub fn export(abs_src: &Path, src_ext: &str, target_format: &str, abs_dest: &Path) -> Result<(), IpcError> {
+    let read_err = |e: std::io::Error| IpcError::new("PRV_IO_ERROR", &format!("读源失败: {e}"), true, false);
+    let write_err = |e: std::io::Error| IpcError::new("PRV_IO_ERROR", &format!("写导出失败: {e}"), true, false);
+    let src = src_ext.to_ascii_lowercase();
+    match target_format {
+        // 文本（md/txt）→ docx
+        "docx" if matches!(src.as_str(), "md" | "markdown" | "txt") => {
+            let md = std::fs::read_to_string(abs_src).map_err(read_err)?;
+            let bytes = markdown_to_docx(&md)?;
+            std::fs::write(abs_dest, bytes).map_err(write_err)?;
+        }
+        // docx → markdown
+        "md" if matches!(src.as_str(), "docx" | "doc") => {
+            let docx = std::fs::read(abs_src).map_err(read_err)?;
+            let md = docx_to_markdown(&docx)?;
+            std::fs::write(abs_dest, md).map_err(write_err)?;
+        }
+        // office（docx/xls/ppt）→ pdf（复用预览链字节）
+        "pdf" if matches!(src.as_str(), "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt") => {
+            let bytes = render_preview(abs_src, src_ext)?;
+            std::fs::write(abs_dest, bytes).map_err(write_err)?;
+        }
+        _ => {
+            return Err(IpcError::new(
+                "PRV_EXPORT_UNSUPPORTED",
+                &format!("不支持的导出组合: {src} → {target_format}"),
+                false,
+                false,
+            ))
+        }
+    }
+    Ok(())
 }

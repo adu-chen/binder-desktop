@@ -5,6 +5,7 @@ import { openDocument } from "../../services/edService";
 import { edStore, useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
 import { prvStore } from "../../store/prvStore";
+import { exportDoc } from "../../services/prvService";
 import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
 
 /**
@@ -163,6 +164,28 @@ export function FileTree() {
     closeOverlays();
   };
 
+  // 导出：prv.export → 刷新文件树 + 提示落点。
+  const doExport = async (path: string, format: "pdf" | "docx" | "md") => {
+    setMenu(null);
+    try {
+      const dest = await exportDoc(path, format);
+      await loadDocs();
+      window.alert(`已导出：${dest}`);
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      window.alert(`导出失败：${err?.message ?? String(e)}`);
+    }
+  };
+
+  // 按源类型给出可导出目标格式。
+  const exportTargets = (path: string): ("pdf" | "docx" | "md")[] => {
+    const ext = path.split(".").pop()?.toLowerCase();
+    if (ext === "md" || ext === "markdown" || ext === "txt") return ["docx"];
+    if (ext === "docx" || ext === "doc") return ["pdf", "md"];
+    if (["xlsx", "xls", "pptx", "ppt"].includes(ext ?? "")) return ["pdf"];
+    return [];
+  };
+
   // 删除：确认 → ws.delete_doc → 刷新；若删的是当前打开文档则清空编辑器。
   const doDelete = async (path: string) => {
     setMenu(null);
@@ -236,6 +259,15 @@ export function FileTree() {
       >
         重命名
       </button>
+      {exportTargets(menu.path).map((fmt) => (
+        <button
+          key={fmt}
+          className="ftn-menu-item"
+          onMouseDown={(e) => { e.preventDefault(); void doExport(menu.path, fmt); }}
+        >
+          导出 {fmt.toUpperCase()}
+        </button>
+      ))}
       <button className="ftn-menu-item ftn-menu-del" onMouseDown={(e) => { e.preventDefault(); void doDelete(menu.path); }}>
         删除
       </button>

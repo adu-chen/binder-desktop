@@ -374,6 +374,15 @@
 
 ---
 
+### PI-BE-09+FE-23　PRV 导出 + 打印　✅ G4 已实现（2026-06-23，cargo build + tsc + vitest 58 + build + scoped audit 绿）
+- **承接**：A-PRV-I-P-01 §2（prv.export/print）/ BR-PRV-DATA-002 / PRV-VIEW / DOC pandoc/libreoffice / X-FORBID-004。
+- **文件范围**：`prv/mod.rs`（export：md/txt→docx、docx→md（pandoc）、office→pdf（libreoffice），@GOV BR-PRV-DATA-002）、`lib.rs`（prv.export 路由，落点守界）、`prvService`（exportDoc）、`PrvPanel`（打印当前预览 iframe.print）、`FileTree`（右键按源类型导出菜单）。
+- **实现要点**：导出落点=同目录同名换扩展（workspace 内守界）；前端右键 md→DOCX / docx→PDF·MD / xls·ppt→PDF，导出后刷新树+提示；打印用 iframe 系统打印对话框（前端 prv.print）。
+- **A 类债务**：音视频预览另起（需 asset 协议）；md→pdf（需 latex）未做；导出覆盖同名不二次确认；编辑器内打印未做。
+- **验收**：导出生成目标文件并刷新树（有 pandoc/libreoffice 时）；预览打印唤起；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

@@ -62,6 +62,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.rename_doc");
     reg.register("ws.delete_doc");
     reg.register("prv.preview");
+    reg.register("prv.export");
     reg.register("ws.list_timeline");
     reg.register("ws.preview_node");
     reg.register("ws.restore_node");
@@ -110,6 +111,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.rename_doc" => route_rename_doc(&request, &state),
         "ws.delete_doc" => route_delete_doc(&request, &state),
         "prv.preview" => route_preview(&request, &state),
+        "prv.export" => route_export(&request, &state),
         "ws.list_timeline" => route_list_timeline(&request, &state),
         "ws.preview_node" => route_preview_node(&request, &state),
         "ws.restore_node" => route_restore_node(&request, &state),
@@ -381,6 +383,20 @@ fn route_preview(request: &CommandRequest, state: &AppState) -> Result<serde_jso
     let ext = std::path::Path::new(&rel_path).extension().and_then(|e| e.to_str()).unwrap_or("");
     let bytes = prv::render_preview(&abs, ext)?;
     Ok(serde_json::json!({ "format": "pdf", "bytes": bytes }))
+}
+
+/// 路由 `prv.export`：源文档导出为目标格式，落点 = 同目录同名换扩展（workspace 内，守界 X-FORBID-004）。
+fn route_export(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let format = str_param(request, "format", "PRV_FORMAT_REQUIRED")?;
+    let src_ext = std::path::Path::new(&rel_path).extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+    // 落点：源 rel_path 去扩展 + 目标扩展（同目录）。
+    let stem = rel_path.rsplit_once('.').map(|(s, _)| s).unwrap_or(&rel_path);
+    let dest_rel = format!("{stem}.{format}");
+    let (_, abs_src) = resolve_active(state, &rel_path)?;
+    let (_, abs_dest) = resolve_active(state, &dest_rel)?;
+    prv::export(&abs_src, &src_ext, &format, &abs_dest)?;
+    Ok(serde_json::json!({ "rel_path": dest_rel }))
 }
 
 /// 路由 `ws.list_timeline`：回文档时间轴节点（version_seq 升序，BR-WS-DATA-002）。

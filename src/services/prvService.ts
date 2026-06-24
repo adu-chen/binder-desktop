@@ -28,3 +28,9 @@ export async function previewDoc(relPath: string): Promise<string> {
   const blob = new Blob([new Uint8Array(res.bytes)], { type: "application/pdf" });
   return URL.createObjectURL(blob);
 }
+
+/** 导出文档为目标格式（落 workspace 内，守界）；回导出文件 rel_path。 */
+export async function exportDoc(relPath: string, format: "pdf" | "docx" | "md"): Promise<string> {
+  const res = await callCommand<{ rel_path: string }>("prv.export", { relPath, format });
+  return res.rel_path;
+}
