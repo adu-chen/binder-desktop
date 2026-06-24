@@ -16,3 +16,7 @@ pub mod block_backfill;
 
 /// PI-DOC-01（实现期续接）· Pandoc 编辑链运行时（真实 docx↔markdown 子进程，BR-DOC-DATA-001）。
 pub mod pandoc_runtime;
+
+/// PI-DOC-01/03（实现期续接）· LibreOffice 预览链运行时（docx/xlsx/pptx→PDF；移植旧项目处理逻辑，
+/// BR-DOC-DATA-001）。
+pub mod libreoffice_runtime;
