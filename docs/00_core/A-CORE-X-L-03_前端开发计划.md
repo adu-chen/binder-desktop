@@ -400,6 +400,15 @@
 
 ---
 
+### PI-FE-26（PI-A）　center 标签栏 + 预览标签共存　✅ G4 已实现（2026-06-23，tsc + vitest 63 + build + scoped audit 绿）
+- **承接**：A-SYS-C-T-02 §3/§5.3（拍板"单窗多 tab"决策）/ 参考稿 §4 Center 标签栏 / X-FORBID-007。
+- **文件范围**：`tabsStore`（视图层 tabs+activeTabId，openDoc/openPreview/close/activate/reset，+5 covers 测试）、`TabStrip`（center 标签栏，文档标签投影脏态/pending/external）、`Workbench`（标签栏 + 按激活标签渲染 Editor/PrvPanel + 切 workspace 重置标签）、`Editor`（移除内置标签栏）、`PrvPanel`（关闭→tabsStore.close）、`FileTree`（打开/预览→tabsStore）；移除 prvStore（被 tabsStore 取代）。
+- **实现要点**：center 统一标签栏，文档(ED)+预览(PRV)同列共存；**多个预览（office/媒体/图片）可同时开为多标签**；本 PI 编辑标签单个（多文档会话归 PI-B）。同步 A-SYS-C-T-02 记录单窗多 tab 决策。
+- **A 类债务**：多文档标签各自保留未保存编辑（按路径会话）= PI-B；EditorTab 组件保留（PI-B/复用）。
+- **验收**：开多个图片/媒体 → 多标签共存可切换/关闭；文档标签状态标记正确；vitest 63 全过；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

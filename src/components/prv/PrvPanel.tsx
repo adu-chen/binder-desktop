@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { prvStore } from "../../store/prvStore";
+import { tabsStore } from "../../store/tabsStore";
 import { previewDoc, mediaSrc } from "../../services/prvService";
 
 /**
@@ -68,7 +68,16 @@ export function PrvPanel({ path }: { path: string }) {
           {mode === "pdf" && (
             <button className="ghost" onClick={print} disabled={status !== "ready"} title="打印">打印</button>
           )}
-          <button className="ghost" onClick={() => prvStore.close()} title="关闭预览">关闭</button>
+          <button
+            className="ghost"
+            onClick={() => {
+              const id = tabsStore.getSnapshot().activeTabId;
+              if (id) tabsStore.close(id);
+            }}
+            title="关闭预览"
+          >
+            关闭
+          </button>
         </span>
       </div>
       <div className="prv-body">

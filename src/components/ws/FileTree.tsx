@@ -4,7 +4,7 @@ import { loadDocs, createDoc, renameDoc, deleteDoc, searchDocs, type SearchHitDt
 import { openDocument } from "../../services/edService";
 import { edStore, useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
-import { prvStore } from "../../store/prvStore";
+import { tabsStore } from "../../store/tabsStore";
 import { exportDoc } from "../../services/prvService";
 import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
 
@@ -112,16 +112,16 @@ export function FileTree() {
   const [input, setInput] = useState<{ mode: "create" | "rename"; path?: string } | null>(null);
   const [value, setValue] = useState("");
 
-  // 点击文件：高亮 open 态 + 经 ws.read_doc 载入编辑器（X-SEQ-002）；关闭任何预览（回编辑区）。
+  // 点击文件：开/激活文档标签 + 经 ws.read_doc 载入编辑器（X-SEQ-002）。
   const handleOpenFile = (path: string) => {
     setOpenPath(path);
-    prvStore.close();
+    tabsStore.openDoc(path);
     void openDocument(path);
   };
-  // 点击预览类型文件：打开只读预览（docx/Excel/PPT）。
+  // 点击预览类型文件：开/激活预览标签（office/媒体/图片，多标签共存）。
   const handlePreviewFile = (path: string) => {
     setOpenPath(path);
-    prvStore.open(path);
+    tabsStore.openPreview(path);
   };
 
   const closeOverlays = () => {

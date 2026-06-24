@@ -1,13 +1,20 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-25",
+  "scope_id": "PI-FE-26",
   "allowed_files": [
+    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
+    "src/store/tabsStore.ts",
+    "src/store/tabsStore.test.ts",
+    "src/store/prvStore.ts",
+    "src/components/shell/TabStrip.tsx",
+    "src/shell/Workbench.tsx",
+    "src/components/ed/Editor.tsx",
     "src/components/prv/PrvPanel.tsx",
-    "src/components/ws/FileTreeNode.tsx",
+    "src/components/ws/FileTree.tsx",
     "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-25.md"
+    ".governance/issues/PI-FE-26.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -17,5 +24,5 @@
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-25 图片复用已就绪的 prv.media_src（格式无关）做 asset 协议预览；纯前端；用户报告图片无法预览并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-26（PI-A）立 center 标签栏 + 预览多标签共存（单编辑标签，不动 edStore 会话模型）；同步 A-SYS-C-T-02 单窗多 tab 决策；人类已确认分层与两步走并确认 confirmation=YES。"
 }
