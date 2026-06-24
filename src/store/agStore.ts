@@ -39,20 +39,11 @@ interface AgState {
   sending: boolean;
 }
 
-// toolCalls 为占位演示集（PI-FE-06）：真实工具调用经 SM-AG-01 tool 回合驱动（后续 PI）。
-const DEMO_TOOLS: ToolCallView[] = [
-  { id: "t1", name: "read_doc", state: "pending", detail: "排队中" },
-  { id: "t2", name: "search", state: "executing", detail: "执行中 · 62%" },
-  { id: "t3", name: "list_docs", state: "done", detail: "完成 · 12ms" },
-  { id: "t4", name: "delete_file", state: "awaiting_confirmation", detail: "危险操作需授权" },
-  { id: "t5", name: "fetch_url", state: "failed", detail: "超时，可重试" },
-  { id: "t6", name: "rename", state: "skipped", detail: "多次失败后跳过" },
-];
-
+// toolCalls 初始为空：真实工具调用经 SM-AG-01 tool 回合驱动（云端接通后）。ToolCallView 类型保留供其时投影。
 let state: AgState = {
   mode: "chat",
   messages: [],
-  toolCalls: DEMO_TOOLS,
+  toolCalls: [],
   sending: false,
 };
 const listeners = new Set<() => void>();

@@ -296,6 +296,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 /* 编辑器（PI-FE-05） */
 .editor-host { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; }
+.editor-empty { align-items: center; justify-content: center; }
 .editor-tabs {
   display: flex;
   align-items: stretch;

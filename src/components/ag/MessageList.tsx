@@ -29,12 +29,14 @@ export function MessageList() {
         </div>
       ))}
 
-      <div className="toolcalls">
-        <span className="label">工具调用 · 6 态（占位演示）</span>
-        {toolCalls.map((t) => (
-          <ToolCallCard key={t.id} tool={t} />
-        ))}
-      </div>
+      {toolCalls.length > 0 && (
+        <div className="toolcalls">
+          <span className="label">工具调用</span>
+          {toolCalls.map((t) => (
+            <ToolCallCard key={t.id} tool={t} />
+          ))}
+        </div>
+      )}
 
       <div ref={endRef} />
     </div>

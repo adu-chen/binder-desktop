@@ -333,6 +333,14 @@
 
 ---
 
+### PI-FE-18　清理展示桩（编辑器空态 + 移除 DEMO_TOOLS）　✅ G4 已实现（2026-06-23，tsc + vitest 56 + build + scoped audit 绿）
+- **承接**：A-CORE-X-L-03 / CLAUDE.md §2（不以占位冒充正常态）。清掉 AG 桩期遗留展示物。
+- **文件范围**：`Editor.tsx`（未打开文档 → 空态提示，去假 untitled.md）、`agStore.ts`（移除 DEMO_TOOLS，toolCalls 初始空）、`MessageList.tsx`（工具卡仅在有真实 ToolCall 时渲染，去"占位演示"）。
+- **实现要点**：界面回到诚实空态——编辑器空态"从文件树打开一个文档开始编辑"，对话区不再有 6 个演示工具框；ToolCallCard 组件保留，待真实工具调用（云端接通）由 SM-AG-01 驱动。
+- **验收**：未打开文档时编辑器空态、对话区无演示框；打开文件后编辑正常；vitest 56 全过；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

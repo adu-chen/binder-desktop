@@ -95,10 +95,6 @@ export function Editor() {
     },
   });
 
-  useEffect(() => {
-    edStore.openDoc("untitled.md");
-  }, []);
-
   // 外部变更监视：打开真实文档时每 5s 轮询磁盘 vs 加载基线（external_change 逻辑契约，物理事件延 SY-02）。
   useEffect(() => {
     if (!openPath) return;
@@ -172,10 +168,19 @@ export function Editor() {
     }, 220);
   };
 
+  // 未打开真实文档 → 诚实空态（不显示可编辑的假 untitled.md）。
+  if (!openPath) {
+    return (
+      <div className="editor-host editor-empty">
+        <p className="muted">从文件树打开一个文档开始编辑</p>
+      </div>
+    );
+  }
+
   return (
     <div className="editor-host" ref={hostRef}>
       <div className="editor-tabs">
-        <EditorTab name={openPath ?? "untitled.md"} state={tabState} pendingDiffCount={pendingDiffCount} />
+        <EditorTab name={openPath} state={tabState} pendingDiffCount={pendingDiffCount} />
       </div>
       {tabState === "external_changed" && (
         <div
