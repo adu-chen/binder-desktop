@@ -156,9 +156,33 @@
 > 2026-06-12 人类宣布全部客户端模块 G1/G2 闭合、进入 G3。AG 4 项 B 类（B-1~B-4）按人类决定降级为
 > **G3 强制承接**——必须写入 AG Plan Item，不得遗漏，G4 实现前补齐。本台账留作该门禁例外的依据。
 
+## §9 发布期阻断标记（G6 打包，不得绕过）
+
+> 本节登记**发布/打包期硬阻断项**，区别于 §4–§8 的 G2/G3 债务。标记项在 **G6 打包发布前必须满足，
+> 打包流程不得绕过、不得静默降级**。AI 与 CI 在打包路径上遇到本节任一项未满足时**应阻断打包并报错**。
+
+### BLOCK-REL-LO-001　内置 LibreOffice 预览链必须打包在应用内（不得调用设备本地 LO）
+
+- **需求**：预览链（docx/xlsx/pptx→PDF）须使用**应用内打包的优化版 LibreOffice**；其他设备安装后
+  **不依赖、不调用设备本地 LO，不静默降级到系统 LO**（系统兜底仅为开发期便利，发布版须命中内置）。
+- **阻断点（打包不得绕过任一项）**：
+  1. **部署前置**：`scripts/deploy_lo.sh` 必须在 `tauri build` **之前**执行，使
+     `src-tauri/resources/libreoffice/LibreOffice.app`（优化版，~687M）就位；否则包内仅占位 README、无真 LO。
+     建议接入 `beforeBuildCommand` / CI，构建即校验内置 LO 存在（soffice 可执行），缺失即**中断打包**。
+  2. **打包路径核对**：须以真 `tauri build` 产物核对内置路径解析（`doc::libreoffice_runtime::resolve_soffice_path`
+     方法 2 `Contents/Resources/libreoffice/...`）实际命中；建议改用 Tauri `resource_dir()` API 避免布局假设。
+  3. **签名 + 公证**：嵌套的 `LibreOffice.app`（`soffice` + 全部 `.dylib`/Frameworks）必须随主 app
+     **一并代码签名 + 公证**，否则其他设备 macOS Gatekeeper 拦截内置 soffice，预览不可用。优化版为自定义
+     构建（LibreOfficeDev），尤须确保签名链完整。
+- **性质**：G6 发布工程硬门（承 A-CORE-X-L-02 P5/§5、APC §5.2）。
+- **验证（G6 出口）**：在**无系统 LO 的干净设备**安装发布版后，预览 docx→PDF 实际通过（命中内置 LO）。
+- **状态**：标记登记（2026-06-22）；运行时与部署设施已就位（`libreoffice_runtime.rs` + `deploy_lo.sh` +
+  `tauri.conf.json bundle.resources`），**签名/公证 + CI 前置校验待 G6 发布工程落实**。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（门禁债务分类盘点，2026-06-12 时点）：全模块 ~70 项 G2 后债务分 A/B/C；总览（A ~52/B 6/C ~12）；B 类专章（B-1 提示词组装架构、B-2 AG↔AST 写入触发、B-3 AG↔CBT 接管 AG 侧建模、B-4 跨文档产出边界——4 真缺口全涉 AG；B-5/B-6 留痕滞后）；C 类（DE-04/DOC-04/ACCT/ENT/CLOUD/多窗，多属云端或不阻断）；A 类代表 + G3 承接；各模块 G2 闭合就绪度（唯 AG 需补 4 项，余模块就绪）；建议动作 |
 | 2026-06-12 | v1.1 | AG 4 项 B 类已补齐（人类授权，门禁例外闭合）：B-1 提示词组装架构（A-AG-M-T-01 §5.1 + BR-AG-DATA-002）/ B-2 记忆写入触发（§5.2 + BR-AG-STATE-004 + 总图 §5 转移登记）/ B-3 接管 AG 侧建模（SM-AG-01 takeover/fallbackIn/HandedOver + 总图 §5）/ B-4 跨文档产出边界（§3 + BR-AG-DATA-003，DE 协同校验落 PI-DE-01）；新增 3 规则已 generate 注册（60→63），AG 计划 §2bis 状态改「已补齐」；AG 全部 PI 的 G4 阻挡解除（B-5/B-6 留痕滞后仍登记未补） |
+| 2026-06-22 | v1.2 | 新增 §9 发布期阻断标记：BLOCK-REL-LO-001 内置 LibreOffice 预览链必须打包在应用内（不调用设备本地 LO）——阻断点 deploy 前置 + 打包路径核对 + 签名/公证，G6 打包不得绕过、不得静默降级到系统 LO；运行时与部署设施已就位，签名/公证 + CI 前置校验待 G6 落实 |
