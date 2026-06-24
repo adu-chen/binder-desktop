@@ -25,6 +25,8 @@ interface EdState {
   baseline: number | null;
   /** 载入序号——内容变更触发编辑器 setContent（区分同路径重载）。 */
   loadSeq: number;
+  /** 本次载入后请求跳转的目标行（搜索命中跳行）；跳后清除。null = 不跳。 */
+  jumpLine: number | null;
 }
 
 let state: EdState = {
@@ -34,6 +36,7 @@ let state: EdState = {
   loadedContent: null,
   baseline: null,
   loadSeq: 0,
+  jumpLine: null,
 };
 const listeners = new Set<() => void>();
 
@@ -67,8 +70,8 @@ export const edStore = {
   openDoc(path: string) {
     setState({ openPath: path, tabState: "saved", pendingDiffCount: 0 });
   },
-  /** 载入真实文档内容 + 加载基线（ws.read_doc 投影）；编辑器据 loadSeq 变更 setContent。 */
-  loadDoc(path: string, content: string, baseline: number) {
+  /** 载入真实文档内容 + 加载基线（ws.read_doc 投影）；编辑器据 loadSeq 变更 setContent；jumpLine 跳行。 */
+  loadDoc(path: string, content: string, baseline: number, jumpLine: number | null = null) {
     setState({
       openPath: path,
       loadedContent: content,
@@ -76,7 +79,12 @@ export const edStore = {
       tabState: "saved",
       pendingDiffCount: 0,
       loadSeq: state.loadSeq + 1,
+      jumpLine,
     });
+  },
+  /** 跳转完成后清除目标行（避免后续重渲染重复跳）。 */
+  clearJump() {
+    if (state.jumpLine !== null) setState({ jumpLine: null });
   },
   /** 保存成功：刷新基线，回 saved 态。 */
   markSaved(baseline: number) {
@@ -101,6 +109,7 @@ export const edStore = {
       loadedContent: null,
       baseline: null,
       loadSeq: 0,
+      jumpLine: null,
     });
   },
 };

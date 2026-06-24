@@ -11,11 +11,11 @@ interface IpcLikeError {
   message?: string;
 }
 
-/** 打开文档：ws.read_doc → 载入编辑器（内容 + 加载基线）。 */
-export async function openDocument(relPath: string): Promise<void> {
+/** 打开文档：ws.read_doc → 载入编辑器（内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
+export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
   try {
     const { content, baseline } = await readDoc(relPath);
-    edStore.loadDoc(relPath, content, baseline);
+    edStore.loadDoc(relPath, content, baseline, jumpLine);
   } catch (e) {
     const err = e as IpcLikeError;
     console.error(`ws.read_doc failed [${err.code ?? "?"}]: ${err.message ?? e}`);

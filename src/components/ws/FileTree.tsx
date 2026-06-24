@@ -244,7 +244,14 @@ export function FileTree() {
       {searching && <p className="muted ftn-hint">搜索中…</p>}
       {!searching && results.length === 0 && <p className="muted ftn-hint">无匹配</p>}
       {results.map((h, i) => (
-        <button key={`${h.rel_path}:${h.line}:${i}`} className="ftn-result" onClick={() => handleOpenFile(h.rel_path)}>
+        <button
+          key={`${h.rel_path}:${h.line}:${i}`}
+          className="ftn-result"
+          onClick={() => {
+            setOpenPath(h.rel_path);
+            void openDocument(h.rel_path, h.line); // 打开并跳到命中行
+          }}
+        >
           <span className="ftn-result-path">{h.rel_path}:{h.line}</span>
           <span className="ftn-result-prev">{h.preview}</span>
         </button>

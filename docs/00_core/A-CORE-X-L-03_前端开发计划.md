@@ -349,6 +349,14 @@
 
 ---
 
+### PI-FE-20　搜索结果跳行（打开并定位到命中行）　✅ G4 已实现（2026-06-23，tsc + vitest 56 + build + scoped audit 绿）
+- **承接**：PI-BE-06+FE-17（全文搜索）/ ED-EDIT / X-FORBID-007。收口"点搜索结果未跳行"债务。
+- **文件范围**：`edStore`（loadDoc 携带 jumpLine + clearJump）、`edService`（openDocument 增 jumpLine）、`Editor`（jumpToLine：行→块索引定位光标+滚动）、`FileTree`（搜索命中 → openDocument(path, line)）。
+- **实现要点**：jumpLine 随 loadDoc 原子传递，setContent 后定位到目标行对应块并 scrollIntoView，跳后清除；纯文本精确（行=段落），md 近似（块索引≈行号，记债务）。
+- **验收**：点搜索命中打开文件并光标落该行附近+滚动到视区；普通打开行为不变；vitest 56 全过；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

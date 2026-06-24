@@ -27,6 +27,18 @@ function isMarkdownPath(path: string | null): boolean {
   return ext === "md" || ext === "markdown";
 }
 
+/**
+ * 跳转到目标行对应块（搜索命中跳行）：行号 → 顶层块索引（钳制），定位光标 + 滚动到视区。
+ * 纯文本精确（行=段落）；md 近似（块索引≈行号，A 类债务）。
+ */
+function jumpToLine(editor: NonNullable<ReturnType<typeof useEditor>>, line: number) {
+  const doc = editor.state.doc;
+  const idx = Math.min(Math.max(line - 1, 0), Math.max(doc.childCount - 1, 0));
+  let pos = 1; // doc 起始内偏移
+  for (let j = 0; j < idx; j++) pos += doc.child(j).nodeSize;
+  editor.chain().focus().setTextSelection(pos).scrollIntoView().run();
+}
+
 /** 纯文本 → ProseMirror doc（每行一段落，忠实往返；富文本 md 解析序列化为债务）。 */
 function textToDoc(text: string) {
   const lines = text.split("\n");
@@ -116,6 +128,12 @@ export function Editor() {
       editor.commands.setContent(loadedContent, { emitUpdate: false });
     } else {
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
+    }
+    // 搜索命中跳行：内容设入后定位到目标行（块），随后清除请求。
+    const { jumpLine } = edStore.getSnapshot();
+    if (jumpLine !== null) {
+      jumpToLine(editor, jumpLine);
+      edStore.clearJump();
     }
   }, [editor, loadSeq, loadedContent, openPath]);
 
