@@ -25,8 +25,8 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
-/** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览）。 */
-const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt"]);
+/** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；docx 经 DOC 预览链只读呈现）。点击 → PRV 预览。 */
+const PREVIEW_ONLY = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt"]);
 
 /** 文件类型 mono 字形（参考稿 §10：用 mono 字符，实现期可换图标库）。 */
 function typeGlyph(docType?: string): string {
@@ -62,6 +62,8 @@ interface FileTreeNodeProps {
   pendingCount?: Record<string, number>;
   /** 右键文件节点（重命名/删除菜单，PI-FE-13）。 */
   onContextMenu?: (path: string, x: number, y: number) => void;
+  /** 预览类型（docx/Excel/PPT）点击 → 只读预览（PI-FE-22）。 */
+  onPreviewFile?: (path: string) => void;
 }
 
 export function FileTreeNode({
@@ -72,6 +74,7 @@ export function FileTreeNode({
   stateOverride,
   pendingCount,
   onContextMenu,
+  onPreviewFile,
 }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(true);
   const indent = { paddingLeft: `${depth * 12 + 8}px` };
@@ -94,14 +97,16 @@ export function FileTreeNode({
               stateOverride={stateOverride}
               pendingCount={pendingCount}
               onContextMenu={onContextMenu}
+              onPreviewFile={onPreviewFile}
             />
           ))}
       </div>
     );
   }
 
-  // 文件节点：状态优先级 not_supported > 覆盖态 > open > normal。
-  const notSupported = PREVIEW_ONLY.has(node.docType ?? "");
+  // 文件节点：预览类型（不可编辑但可只读预览）视觉 not_supported，但可点击触发预览。
+  const previewOnly = PREVIEW_ONLY.has(node.docType ?? "");
+  const notSupported = previewOnly;
   const overridden = stateOverride?.[node.path];
   const isOpen = openPath === node.path;
   const nodeState: FileNodeState = notSupported
@@ -113,15 +118,13 @@ export function FileTreeNode({
     <button
       className={`ftn-row ftn-file ftn-${nodeState}`}
       style={indent}
-      disabled={notSupported}
-      aria-disabled={notSupported}
-      onClick={() => !notSupported && onOpenFile(node.path)}
+      onClick={() => (previewOnly ? onPreviewFile?.(node.path) : onOpenFile(node.path))}
       onContextMenu={(e) => {
         if (!onContextMenu) return;
         e.preventDefault();
         onContextMenu(node.path, e.clientX, e.clientY);
       }}
-      title={node.path}
+      title={previewOnly ? `${node.path}（只读预览）` : node.path}
     >
       <span className="ftn-type">{typeGlyph(node.docType)}</span>
       <span className="ftn-name">{node.name}</span>

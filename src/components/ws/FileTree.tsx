@@ -4,6 +4,7 @@ import { loadDocs, createDoc, renameDoc, deleteDoc, searchDocs, type SearchHitDt
 import { openDocument } from "../../services/edService";
 import { edStore, useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
+import { prvStore } from "../../store/prvStore";
 import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
 
 /**
@@ -110,10 +111,16 @@ export function FileTree() {
   const [input, setInput] = useState<{ mode: "create" | "rename"; path?: string } | null>(null);
   const [value, setValue] = useState("");
 
-  // 点击文件：高亮 open 态 + 经 ws.read_doc 载入编辑器（X-SEQ-002）。
+  // 点击文件：高亮 open 态 + 经 ws.read_doc 载入编辑器（X-SEQ-002）；关闭任何预览（回编辑区）。
   const handleOpenFile = (path: string) => {
     setOpenPath(path);
+    prvStore.close();
     void openDocument(path);
+  };
+  // 点击预览类型文件：打开只读预览（docx/Excel/PPT）。
+  const handlePreviewFile = (path: string) => {
+    setOpenPath(path);
+    prvStore.open(path);
   };
 
   const closeOverlays = () => {
@@ -296,6 +303,7 @@ export function FileTree() {
             depth={0}
             openPath={openPath}
             onOpenFile={handleOpenFile}
+            onPreviewFile={handlePreviewFile}
             onContextMenu={(path, x, y) => setMenu({ path, x, y })}
             stateOverride={stateOverride}
             pendingCount={pendingCount}

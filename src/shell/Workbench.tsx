@@ -5,6 +5,8 @@ import { BinderWordmark } from "../components/brand/BinderWordmark";
 import { WorkspaceMenu } from "../components/shell/WorkspaceMenu";
 import { FileTree } from "../components/ws/FileTree";
 import { TimelinePanel } from "../components/ws/TimelinePanel";
+import { PrvPanel } from "../components/prv/PrvPanel";
+import { usePrvStore } from "../store/prvStore";
 import { Editor } from "../components/ed/Editor";
 import { ChatPanel } from "../components/ag/ChatPanel";
 import { DiffAllActionsBar } from "../components/de/DiffAllActionsBar";
@@ -20,6 +22,7 @@ export function Workbench() {
   const { activeWorkspace } = useWorkspaceShell();
   const [activePanel, setActivePanel] = useState<RailPanelId>("files");
   const { diffs, batchState } = useDeStore();
+  const { previewPath } = usePrvStore();
   // DiffStrip 显隐投影待裁决修改（PendingDiff）计数 + 批量应用过程。
   const pendingDiffCount = diffs.filter((d) => d.state === "pending").length;
   const showDiffStrip = pendingDiffCount > 0 || batchState !== "idle";
@@ -47,7 +50,7 @@ export function Workbench() {
           )}
         </aside>
         <main className="center">
-          <Editor key={wsKey} />
+          {previewPath ? <PrvPanel key={previewPath} path={previewPath} /> : <Editor key={wsKey} />}
         </main>
         <aside className="chat">
           <ChatPanel key={wsKey} />

@@ -40,11 +40,11 @@ describe("FileTreeNode 6 状态渲染（互斥）", () => {
     expect(container.querySelector(".ftn-file")!.className).toContain("ftn-open");
   });
 
-  it("not_supported：xlsx 灰禁用（优先级最高，覆盖 open）", () => {
+  it("not_supported（预览类型）：xlsx 灰显但可点击预览（不禁用）", () => {
     const { container } = renderNode({ docType: "xlsx", openPath: "a.md" });
     const btn = container.querySelector(".ftn-file") as HTMLButtonElement;
     expect(btn.className).toContain("ftn-not_supported");
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false); // 预览类型可点击触发只读预览（PI-FE-22）
   });
 
   it("dirty_open：红点标记", () => {

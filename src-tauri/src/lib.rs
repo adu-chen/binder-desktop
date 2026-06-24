@@ -61,6 +61,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.create_doc");
     reg.register("ws.rename_doc");
     reg.register("ws.delete_doc");
+    reg.register("prv.preview");
     reg.register("ws.list_timeline");
     reg.register("ws.preview_node");
     reg.register("ws.restore_node");
@@ -108,6 +109,7 @@ fn dispatch(request: CommandRequest, state: State<AppState>) -> CommandResponse 
         "ws.create_doc" => route_create_doc(&request, &state),
         "ws.rename_doc" => route_rename_doc(&request, &state),
         "ws.delete_doc" => route_delete_doc(&request, &state),
+        "prv.preview" => route_preview(&request, &state),
         "ws.list_timeline" => route_list_timeline(&request, &state),
         "ws.preview_node" => route_preview_node(&request, &state),
         "ws.restore_node" => route_restore_node(&request, &state),
@@ -370,6 +372,15 @@ fn route_delete_doc(request: &CommandRequest, state: &AppState) -> Result<serde_
     let (_, abs) = resolve_active(state, &rel_path)?;
     workspace::fileops::delete_doc(&abs)?;
     Ok(serde_json::json!({ "rel_path": rel_path, "deleted": true }))
+}
+
+/// 路由 `prv.preview`：docx/Excel/PPT 经 DOC 预览链出只读 PDF 字节（守界 X-FORBID-004，只读 PRV 硬边界）。
+fn route_preview(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    let ext = std::path::Path::new(&rel_path).extension().and_then(|e| e.to_str()).unwrap_or("");
+    let bytes = prv::render_preview(&abs, ext)?;
+    Ok(serde_json::json!({ "format": "pdf", "bytes": bytes }))
 }
 
 /// 路由 `ws.list_timeline`：回文档时间轴节点（version_seq 升序，BR-WS-DATA-002）。

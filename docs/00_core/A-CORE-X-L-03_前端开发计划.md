@@ -365,6 +365,15 @@
 
 ---
 
+### PI-BE-08+FE-22　PRV 预览（prv.preview + 只读预览面板）　✅ G4 已实现（2026-06-23，cargo test 112 + tsc + vitest 58 + build + scoped audit 绿）
+- **承接**：A-PRV-I-P-01 §2 / A-PRV-M-T-01（BR-PRV-DATA-002 管线归属、只读硬边界）/ PRV-VIEW / DOC libreoffice_runtime / X-FORBID-004 / X-FORBID-007。接已就绪的 DOC 预览链。
+- **文件范围**：`prv/mod.rs`（render_preview：扩展名→PreviewKind→convert_to_pdf→PDF 字节，@GOV BR-PRV-DATA-002）、`lib.rs`（prv.preview 路由，字节回传）、`prvService`/`prvStore`/`PrvPanel`（字节→blob iframe 只读）、`FileTreeNode`（预览类型可点）、`FileTree`（onPreviewFile）、`Workbench`（center 预览/编辑切换）。
+- **实现要点**：点 docx/Excel/PPT → DOC 预览链出 PDF（LibreOffice），字节回传组 blob URL 以 iframe 只读呈现；不支持格式/LibreOffice 缺失/渲染失败各有明确态；只读无编辑（PRV 硬边界）；守界 X-FORBID-004。
+- **A 类债务**：大 PDF 字节走 JSON 数组（base64/流式优化延后）；音视频预览/导出/打印延后；切换 workspace 未自动关预览。
+- **验收**：点预览类型文件出 PDF（或无 LibreOffice 时明确失败态）；只读；vitest 58/cargo 112 全过；scoped 门禁无越界。
+
+---
+
 ## §3 实施顺序
 
 ```

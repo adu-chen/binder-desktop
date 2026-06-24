@@ -1,18 +1,20 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-BE-07+FE-21",
+  "scope_id": "PI-BE-08+FE-22",
   "allowed_files": [
-    "docs/01_modules/WS/A-WS-I-P-01_工作台接口协议.md",
-    "src-tauri/src/workspace/listing.rs",
+    "src-tauri/src/prv/mod.rs",
     "src-tauri/src/lib.rs",
-    "src/services/wsService.ts",
-    "src/store/wsStore.ts",
-    "src/store/wsStore.test.ts",
+    "src/services/prvService.ts",
+    "src/store/prvStore.ts",
+    "src/components/prv/PrvPanel.tsx",
+    "src/components/ws/FileTreeNode.tsx",
+    "src/components/ws/FileTreeNode.test.tsx",
     "src/components/ws/FileTree.tsx",
-    "src/components/ws/buildTree.test.ts",
+    "src/shell/Workbench.tsx",
+    "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-BE-07-FE-21.md"
+    ".governance/issues/PI-BE-08-FE-22.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -20,9 +22,9 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/types/mod.rs",
-    "src-tauri/src/workspace/lifecycle.rs"
+    "src-tauri/src/doc/libreoffice_runtime.rs",
+    "src-tauri/src/doc/pandoc_runtime.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-BE-07+FE-21 让 list_docs 返回目录条目（FsEntry.is_dir）使空目录在文件树可见；不动 DocRef 共享语义；人类已授权继续并确认 confirmation=YES。"
+  "scope_reason": "PI-BE-08+FE-22 接已就绪的 DOC 预览链为 prv.preview 命令 + PRV 只读面板；字节回传；人类已确认 B + 字节回传并确认 confirmation=YES。"
 }
