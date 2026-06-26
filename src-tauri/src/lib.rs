@@ -64,6 +64,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("prv.preview");
     reg.register("prv.export");
     reg.register("prv.media_src");
+    reg.register("doc.create_draft");
     reg.register("doc.open_for_edit");
     reg.register("doc.save_from_edit");
     reg.register("ws.list_timeline");
@@ -116,6 +117,7 @@ fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppStat
         "prv.preview" => route_preview(&request, &state),
         "prv.export" => route_export(&request, &state),
         "prv.media_src" => route_media_src(&request, &state, &app),
+        "doc.create_draft" => route_create_draft(&request, &state),
         "doc.open_for_edit" => route_open_for_edit(&request, &state),
         "doc.save_from_edit" => route_save_from_edit(&request, &state),
         "ws.list_timeline" => route_list_timeline(&request, &state),
@@ -423,6 +425,33 @@ fn route_export(request: &CommandRequest, state: &AppState) -> Result<serde_json
 /// 路由 `doc.open_for_edit`（A-DOC-I-P-01 §2 编辑链）：docx → 可编辑 HTML（DOC 编辑链 docx+styles +
 /// preserve-styles.lua，保留样式子集供 TipTap）；回 baseline（docx 字节内容哈希）供保存冲突保护
 /// （SM-WS-01）。转换失败回 convert_failed 不建会话（对接 SM-DOC-01 OpenError / ed loadFail）。
+/// 路由 `doc.create_draft`（旧版成熟流程）：原生 docx → 同目录草稿副本 `{stem}.draft.{ext}`（守界
+/// X-FORBID-004）。原生 docx 点击为只读预览，"创建草稿进行编辑"后草稿直接进编辑模式（doc.open_for_edit）。
+/// 返回草稿 rel_path。已存在草稿先覆盖。
+fn route_create_draft(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let p = std::path::Path::new(&rel_path);
+    let stem = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| IpcError::new("DOC_PATH_INVALID", "无法解析文件名", false, false))?;
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("docx");
+    let parent = p.parent().map(|x| x.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+    let draft_rel = match parent {
+        Some(d) => format!("{d}/{stem}.draft.{ext}"),
+        None => format!("{stem}.draft.{ext}"),
+    };
+    let (_, abs_src) = resolve_active(state, &rel_path)?;
+    let (_, abs_draft) = resolve_active(state, &draft_rel)?;
+    if !abs_src.exists() {
+        return Err(IpcError::new("DOC_NOT_FOUND", "原文档不存在", false, false));
+    }
+    let _ = std::fs::remove_file(&abs_draft); // 已存在草稿先覆盖
+    std::fs::copy(&abs_src, &abs_draft)
+        .map_err(|e| IpcError::new("DOC_DRAFT_FAILED", &format!("创建草稿失败: {e}"), true, false))?;
+    Ok(serde_json::json!({ "rel_path": draft_rel }))
+}
+
 fn route_open_for_edit(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let (_, abs) = resolve_active(state, &rel_path)?;

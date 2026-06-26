@@ -111,9 +111,14 @@ export function FileTreeNode({
     );
   }
 
-  // 文件节点：office 预览类型视觉 not_supported（灰显，不可编辑）；音视频正常视觉；二者点击均触发只读预览。
+  // 文件节点：office 预览类型视觉 not_supported（灰显）；音视频正常视觉；点击触发只读预览。
+  // docx 成熟流程：原生 docx（非 *.draft.docx）点击 → 只读预览（经"创建草稿"进编辑）；草稿 docx（*.draft.docx）
+  //   点击 → 直接编辑（不灰显，与 md 一致）。Excel/PPT 恒只读预览。
   const dt = node.docType ?? "";
-  const officePreview = PREVIEW_ONLY.has(dt);
+  const isDocx = dt === "docx" || dt === "doc";
+  const isDraftDocx = isDocx && node.name.toLowerCase().includes(".draft.");
+  const nativeDocx = isDocx && !isDraftDocx;
+  const officePreview = PREVIEW_ONLY.has(dt) || nativeDocx;
   const mediaPreview = MEDIA_TYPES.has(dt);
   const previewable = officePreview || mediaPreview;
   const notSupported = officePreview;

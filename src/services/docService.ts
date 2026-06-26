@@ -63,8 +63,27 @@ export async function saveDocxFromEdit(
   return res.baseline;
 }
 
-/** 是否 docx 编辑链文档（经 DOC 编辑链打开/保存，区别于 md 原生与 Excel/PPT 只读预览）。 */
-export function isDocxEditable(relPath: string): boolean {
+/**
+ * 创建草稿（doc.create_draft，旧版成熟流程）：原生 docx → 同目录 `{stem}.draft.docx` 草稿副本。
+ * 原生 docx 点击为只读预览，"创建草稿进行编辑"后草稿直接进编辑模式。返回草稿 relPath。
+ */
+export async function createDocxDraft(relPath: string): Promise<string> {
+  const res = await callCommand<{ rel_path: string }>("doc.create_draft", { relPath });
+  return res.rel_path;
+}
+
+/** 是否 docx 文件（docx/doc）。 */
+function isDocxFile(relPath: string): boolean {
   const ext = relPath.toLowerCase().split(".").pop() ?? "";
   return ext === "docx" || ext === "doc";
+}
+
+/** 是否草稿/可直接编辑的 docx（`*.draft.docx`）：草稿与项目生成的 docx 直接进编辑模式。 */
+export function isDocxEditable(relPath: string): boolean {
+  return isDocxFile(relPath) && relPath.toLowerCase().includes(".draft.");
+}
+
+/** 是否原生 docx（docx/doc 但非草稿）：点击走只读预览，经"创建草稿"进编辑（旧版成熟流程）。 */
+export function isNativeDocxPreview(relPath: string): boolean {
+  return isDocxFile(relPath) && !relPath.toLowerCase().includes(".draft.");
 }
