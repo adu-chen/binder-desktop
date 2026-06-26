@@ -113,6 +113,11 @@ PI-AG-10C  共享契约锚点【先冻结】AgTurnEvent + ag_start_turn + ag.*/d
 
 ### PI-AG-08　工具注册清单与真实执行
 
+> **拆分（2026-06-26，同 10C/10B/10F 模式）**：执行（tool_exec）需运行期上下文（conn/AppState/
+> propose_edit 的 `anchor_locate`，由 ed.locate 在模型循环内提供）且与 lib.rs 既有 route_* 重叠，故拆为
+> **PI-AG-08A 工具注册表**（`tool_registry.rs`，纯数据，**已交付**）+ **PI-AG-08B 工具执行**（`tool_exec.rs`，
+> ws/kb/de 真实执行，与模型循环 PI-AG-11 配套）。下列原 PI-AG-08 内容中「注册/权限」归 08A、「执行路径」归 08B。
+
 - **承接**：BR-AG-STATE-002（`validate_tool` 校验机制已锁，清单/执行延实现期）；X-FORBID-006（写意图→ChangeProposal，不直写）；X-FORBID-004（只读工具限 workspace 内）
 - **文件范围**：`src-tauri/src/ag/tool_registry.rs`（新建，工具注册表 + 权限分级）；`src-tauri/src/ag/tool_exec.rs`（新建，4 工具执行实现）
 - **v1 工具集（4 个）**：

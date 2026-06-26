@@ -23,3 +23,6 @@ pub mod memory_link;
 
 /// PI-AG-07 · 系统提示词正文（三类回合，文本属实现期运营配置）。
 pub mod prompts;
+
+/// PI-AG-08A · 工具注册表（4 工具 + 权限分级，喂 SM-AG-02 validate_tool）。
+pub mod tool_registry;
