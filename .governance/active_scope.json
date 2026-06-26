@@ -1,15 +1,12 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-WIRE-01",
+  "scope_id": "PI-AG-09A",
   "allowed_files": [
-    "src-tauri/Cargo.toml",
-    "src-tauri/Cargo.lock",
     "src-tauri/src/lib.rs",
-    "src-tauri/src/ent/gateway.rs",
+    "src-tauri/src/ag/prompts.rs",
     "src/services/agService.ts",
-    "src/store/agStore.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-WIRE-01.md"
+    ".governance/issues/PI-AG-09A.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -17,9 +14,9 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/components/ed/EditorTab.tsx",
-    "src/store/edStore.ts"
+    "src/store/edStore.ts",
+    "src/components/ed/EditorTab.tsx"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-WIRE-01（PI-AG-10B/10F/11 dev 接线）：加 reqwest；新增 async tauri 命令 ag_start_turn（Channel<AgTurnEvent>，驱动 SM-AG-01 门禁前置→Streaming）→ ent::gateway::stream_invoke 调 localhost dev GW /invoke/stream → 解析归一化 SSE → emit AgTurnEvent；前端 agService 订阅 Channel、agStore 接真实流式，替换桩。人类已授权加 reqwest 并接受 Cargo.lock 与并发改动交错。dev 门禁/密钥沿用 GW（X-FORBID-001 客户端不持密钥不变）。"
+  "scope_reason": "PI-AG-09A（PI-AG-09 当前文档注入子集，修测试暴露的问题）：ag_start_turn 接收 active_doc_path/content（前端从 edStore.openPath/loadedContent 读，只读不改 edStore）→ 注入为当前文档上下文（P0 主事实，BR-AG-DATA-005）；SYSTEM_PROMPT_CHAT 改为诚实——声明当前文档已在上下文、去除未接线的 read_doc/list_docs 工具过度声称（防模型幻觉调用工具）。完整 PI-AG-09（意图沿用/REF/AST/KB/截断）与 PI-AG-08B 真实工具后续。"
 }

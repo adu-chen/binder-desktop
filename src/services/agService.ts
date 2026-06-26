@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore } from "../store/agStore";
+import { edStore } from "../store/edStore";
 
 /**
  * AG 模块 Service 层。
@@ -74,11 +75,15 @@ export async function startTurn(
       }
     };
 
+    // 当前编辑器打开的文档（P0 主事实，PI-AG-09A）：只读 edStore，不改其状态。
+    const ed = edStore.getSnapshot();
     invoke("ag_start_turn", {
       turnId,
       prompt: trimmed,
       provider: opts?.provider,
       model: opts?.model,
+      activeDocPath: ed.openPath ?? undefined,
+      activeDocContent: ed.loadedContent ?? undefined,
       onEvent,
     }).catch((e: unknown) => {
       const err = e as { code?: string; message?: string };

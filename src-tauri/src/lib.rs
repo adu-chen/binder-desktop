@@ -709,12 +709,15 @@ fn default_model(provider: &str) -> String {
 /// 真实裁决经 GW 服务端 X-FORBID-002 归正式版）→ 组装 system(PI-AG-07)+user 消息 → 经 ENT 网关通道
 /// `stream_invoke` 调本地 dev GW（X-FORBID-001：客户端不持密钥/不直连 provider）→ 归一化 SSE 逐事件
 /// 经 `Channel<AgTurnEvent>` 流式回前端（替换 dispatch 内 ag.start_turn 桩）。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn ag_start_turn(
     turn_id: String,
     prompt: String,
     provider: Option<String>,
     model: Option<String>,
+    active_doc_path: Option<String>,
+    active_doc_content: Option<String>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
 ) -> Result<(), IpcError> {
     use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
@@ -732,13 +735,21 @@ async fn ag_start_turn(
 
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| default_model(&provider));
-    // 组装骨架系统层（PI-AG-07）+ 当前轮用户输入（BR-AG-DATA-002）。
-    let messages = serde_json::json!([
-        { "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT },
-        { "role": "user", "content": prompt },
-    ]);
 
-    ent::gateway::stream_invoke(&turn_id, &provider, &model, messages, &on_event).await
+    // 组装：系统层（PI-AG-07）→ 当前文档（P0 主事实，BR-AG-DATA-005，PI-AG-09A）→ 当前轮用户输入。
+    let mut messages = vec![serde_json::json!({
+        "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
+    })];
+    if let Some(content) = active_doc_content.as_deref().filter(|c| !c.trim().is_empty()) {
+        let path = active_doc_path.as_deref().unwrap_or("(未命名)");
+        let ctx = format!(
+            "[当前编辑器打开的文档] 路径：{path}\n以下是该文档的当前完整内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{content}"
+        );
+        messages.push(serde_json::json!({ "role": "system", "content": ctx }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": prompt }));
+
+    ent::gateway::stream_invoke(&turn_id, &provider, &model, serde_json::Value::Array(messages), &on_event).await
 }
 
 pub fn run() {
