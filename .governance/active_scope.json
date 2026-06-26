@@ -1,12 +1,11 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08G",
+  "scope_id": "PI-AG-08H",
   "allowed_files": [
-    "src-tauri/src/ag/blocks.rs",
-    "src-tauri/src/lib.rs",
-    "src-tauri/src/ag/tool_registry.rs",
+    "src/services/edLocate.ts",
+    "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08G.md"
+    ".governance/issues/PI-AG-08H.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -14,9 +13,10 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/de/generate.rs",
-    "src/store/edStore.ts"
+    "src/components/ed/Editor.tsx",
+    "src/store/edStore.ts",
+    "src/store/deStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08G 真实 blockId 锚：ag::blocks 捕获每块 data-block-id（DocBlock.block_id）+ replace_block_by_id（按 id 定位 inner 替换，id 未找到→Err 锚失效，不产错位 diff，对齐 A-DOC-M-T-01/BR-DE-DATA-001 锚语义）；注入块列表展示 [id=…]；propose_edit 优先 block_id（HTML 稳定锚）、回退 block_index（段落号）、content（整篇）。text 无持久 id 仍用位置号。tool def 增 block_id。纯后端。"
+  "scope_reason": "PI-AG-08H ED 真实锚联动：实现 ed.locate_block（前端实时 TipTap DOM 按 data-block-id 定位，types/mod.rs 注明定位归前端）→ LocateResult located/anchor_lost；agService 从 tool_request(propose_edit) 捕获 block_id，diff_proposed 时对实时编辑器校验锚，失效则 diff 卡片加「文档已变动·待复核」警示。纯前端、不改后端/契约（block_id 经既有 tool_request.params 传达，DOM 查询不需编辑器实例）。"
 }

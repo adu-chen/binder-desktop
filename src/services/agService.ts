@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore } from "../store/agStore";
 import { edStore } from "../store/edStore";
 import { deStore } from "../store/deStore";
+import { locateBlock } from "./edLocate";
 
 /**
  * AG 模块 Service 层。
@@ -42,6 +43,8 @@ export async function startTurn(
 
   const turnId = `t-${Date.now()}-${(seq += 1)}`;
   const onEvent = new Channel<AgTurnEvent>();
+  // 本回合最近一次 propose_edit 的目标块锚（从 tool_request.params 捕获，供 diff_proposed 实时校验，PI-AG-08H）。
+  let lastEditBlockId: string | undefined;
 
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -75,18 +78,29 @@ export async function startTurn(
           // AI 经 propose_edit 生成了待裁决修改（PI-AG-08C）：投影为 diff 卡片；
           // 接受经既有 deService.acceptDiff→de.accept_diff→ws.apply_diff 真落盘（X-FORBID-006）。
           const before = edStore.getSnapshot().loadedContent ?? "";
+          // ED 真实锚联动（PI-AG-08H）：对**实时编辑器**校验目标块锚；失效（用户已改动文档）则显式警示，不静默。
+          let title = `AI 建议修改 ${ev.rel_path}`;
+          if (lastEditBlockId && locateBlock(lastEditBlockId) === "anchor_lost") {
+            title = `⚠ 文档已变动，请复核 · ${ev.rel_path}`;
+          }
           deStore.addDiff({
             diffId: ev.diff_id,
-            blockId: "",
+            blockId: lastEditBlockId ?? "",
             relPath: ev.rel_path,
-            title: `AI 建议修改 ${ev.rel_path}`,
+            title,
             before: before.slice(-60),
             after: "（AI 修改建议，接受后应用到文档）",
             state: "pending",
           });
+          lastEditBlockId = undefined;
           break;
         }
         case "tool_request": {
+          // 捕获 propose_edit 的目标块锚，供 diff_proposed 实时校验（PI-AG-08H）。
+          if (ev.tool_name === "propose_edit" && ev.params && typeof ev.params === "object") {
+            const bid = (ev.params as { block_id?: unknown }).block_id;
+            lastEditBlockId = typeof bid === "string" && bid ? bid : undefined;
+          }
           // 工具卡 executing（PI-AG-08D）。参数摘要作 detail。
           const p = typeof ev.params === "object" && ev.params ? JSON.stringify(ev.params) : "";
           agStore.addToolCall(ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined);
