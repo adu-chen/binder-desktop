@@ -40,16 +40,17 @@ export type SaveOutcome = { ok: true } | { ok: false; conflict: boolean; message
 export async function saveDocument(content: string, override = false): Promise<SaveOutcome> {
   const { openPath, baseline } = edStore.getSnapshot();
   if (!openPath) return { ok: false, conflict: false, message: "无打开的文档" };
-  edStore.setTabState("saving");
+  const path = openPath; // 锁定本次保存目标：await 期间用户切标签也只回写该会话（PI-FE-29）。
+  edStore.setTabState(path, "saving");
   try {
-    const newBaseline = await saveDoc(openPath, content, baseline, override);
-    edStore.markSaved(newBaseline);
+    const newBaseline = await saveDoc(path, content, baseline, override);
+    edStore.markSaved(path, newBaseline);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;
     const conflict = err.code === "WS_SAVE_CONFLICT";
     // 冲突回脏态等待裁决；其余失败也回脏态（不谎称已存）。
-    edStore.setTabState(conflict ? "external_changed" : "dirty");
+    edStore.setTabState(path, conflict ? "external_changed" : "dirty");
     return { ok: false, conflict, message: err.message ?? String(e) };
   }
 }
@@ -61,15 +62,16 @@ export async function saveDocument(content: string, override = false): Promise<S
 export async function saveDocxDocument(html: string, override = false): Promise<SaveOutcome> {
   const { openPath, baseline } = edStore.getSnapshot();
   if (!openPath) return { ok: false, conflict: false, message: "无打开的文档" };
-  edStore.setTabState("saving");
+  const path = openPath; // 锁定本次保存目标（PI-FE-29）。
+  edStore.setTabState(path, "saving");
   try {
-    const newBaseline = await saveDocxFromEdit(openPath, html, baseline, override);
-    edStore.markSaved(newBaseline);
+    const newBaseline = await saveDocxFromEdit(path, html, baseline, override);
+    edStore.markSaved(path, newBaseline);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;
     const conflict = err.code === "WS_SAVE_CONFLICT";
-    edStore.setTabState(conflict ? "external_changed" : "dirty");
+    edStore.setTabState(path, conflict ? "external_changed" : "dirty");
     return { ok: false, conflict, message: err.message ?? String(e) };
   }
 }
@@ -88,9 +90,10 @@ export async function reloadDocument(): Promise<void> {
 export async function pollExternalChange(): Promise<void> {
   const { openPath, baseline, tabState } = edStore.getSnapshot();
   if (!openPath || baseline === null || tabState === "external_changed") return;
+  const path = openPath; // 锁定被检测文档：await 期间切标签也只标记该会话（PI-FE-29）。
   try {
-    const r = await checkExternalChange(openPath, baseline);
-    if (r.changed) edStore.setTabState("external_changed");
+    const r = await checkExternalChange(path, baseline);
+    if (r.changed) edStore.setTabState(path, "external_changed");
   } catch {
     /* 检测失败不打断编辑（下次轮询重试） */
   }

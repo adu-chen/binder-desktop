@@ -16,17 +16,17 @@ describe("edStore · SM-ED-01 脏态投影 (BR-ED-STATE-001)", () => {
     edStore.openDoc("a.md");
     edStore.markDirty();
     expect(edStore.getSnapshot().tabState).toBe("dirty");
-    edStore.markSaved(42);
+    edStore.markSaved("a.md", 42);
     expect(edStore.getSnapshot().tabState).toBe("saved");
     expect(edStore.getSnapshot().baseline).toBe(42);
   });
 
   it("外部变更/待裁决与 dirty 互斥：markDirty 不覆盖 external_changed / pending_diff", () => {
     edStore.openDoc("a.md");
-    edStore.setTabState("external_changed");
+    edStore.setTabState("a.md", "external_changed");
     edStore.markDirty();
     expect(edStore.getSnapshot().tabState).toBe("external_changed"); // 不被脏态覆盖
-    edStore.setTabState("pending_diff");
+    edStore.setTabState("a.md", "pending_diff");
     edStore.markDirty();
     expect(edStore.getSnapshot().tabState).toBe("pending_diff");
   });
@@ -89,5 +89,29 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
     const s = edStore.getSnapshot();
     expect(s.loadSeq).toBe(seq);
     expect(s.sessions["nope.md"]).toBeUndefined();
+  });
+
+  // covers: BR-ED-STATE-001
+  // 保存按 path 锁定（PI-FE-29）：模拟异步保存 a 期间切到 b，回写只改 a，不污染 b/活动派生。
+  it("setTabState/markSaved 按 path 锁定：保存途中切标签只改目标会话", () => {
+    edStore.loadDoc("a.md", "A", 1);
+    edStore.loadDoc("b.md", "B", 2); // 活动切到 b
+    edStore.setTabState("a.md", "saving"); // 对 a 发起保存（活动是 b）
+    expect(edStore.getSnapshot().sessions["a.md"].tabState).toBe("saving");
+    expect(edStore.getSnapshot().sessions["b.md"].tabState).toBe("saved"); // b 不受影响
+    expect(edStore.getSnapshot().tabState).toBe("saved"); // 活动 b 派生不被 a 污染
+    edStore.markSaved("a.md", 99); // a 保存完成
+    expect(edStore.getSnapshot().sessions["a.md"]).toMatchObject({ tabState: "saved", baseline: 99 });
+    expect(edStore.getSnapshot()).toMatchObject({ openPath: "b.md", baseline: 2 }); // 活动仍 b
+  });
+
+  it("会话已关闭时 markSaved/setTabState 为空操作（文件已落盘但无会话可更新，不崩）", () => {
+    edStore.loadDoc("a.md", "A", 1);
+    edStore.closeSession("a.md");
+    expect(() => {
+      edStore.markSaved("a.md", 7);
+      edStore.setTabState("a.md", "external_changed");
+    }).not.toThrow();
+    expect(edStore.getSnapshot().sessions["a.md"]).toBeUndefined();
   });
 });

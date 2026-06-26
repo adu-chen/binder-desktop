@@ -420,6 +420,13 @@
 - **实现要点**：纯死代码清理，**无行为变更**；标签渲染统一归 center `TabStrip`（`.tab-*`）。vitest 由 67 → 62（仅移除已废弃组件的 5 条渲染测试，非弱化在用测试）。
 - **验收**：`grep EditorTab`/`grep editor-tabs` 全仓零生产引用；tsc + vitest 62 + build 绿；scoped 门禁无自有文件越界。
 
+### PI-FE-29　保存按 path 锁定（消除异步保存期间切标签竞态）　✅ G4 已实现（2026-06-26，tsc + vitest 64 + build + scoped audit 绿）
+- **承接**：PI-FE-27 登记的 A 类债务"saveDocument/markSaved 作用于活动会话——异步保存期间切标签竞态未按 path 锁定"。SM-WS-01 / BR-WS-OBS-001 / BR-ED-STATE-001 / X-FORBID-007。
+- **文件范围**：`edStore`（新增 `patchSession(path,patch)`；`markSaved(path,baseline)`/`setTabState(path,tabState)` 改按 path 锁定，`markDirty()` 仍作用活动会话；+2 covers 竞态/关闭安全测试）、`edService`（`saveDocument`/`saveDocxDocument`/`pollExternalChange` 进入时捕获目标 `path`，await 完成后据此回写态——不再读 await 后的活动会话）。
+- **实现要点**：保存 A 期间切到 B → 完成后只把 A 标 saved/冲突，B 态不被污染；会话若在保存途中被关闭则回写为空操作（文件仍已落盘，不崩）。edService.test 4 项不变（活动==保存目标时派生一致）。
+- **A 类债务（清零）**：本 PI 收口 PI-FE-27 唯一遗留代码级竞态债务；剩余 A 类债务均为绑定具体 PI 的 G5 联调/实现期项。
+- **验收**：竞态单测验证保存途中切标签只改目标会话；tsc + vitest 64 + build 绿；scoped 门禁无自有文件越界。
+
 ---
 
 ## §3 实施顺序

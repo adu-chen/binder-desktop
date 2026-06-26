@@ -83,18 +83,20 @@ function commit(core: Core) {
   state = { ...core, ...derive(core) };
   emit();
 }
-/** 仅修改活动会话的部分字段（无活动会话时为空操作）。 */
-function patchActive(patch: Partial<EditSession>) {
-  const p = state.activePath;
-  if (!p) return;
-  const cur = state.sessions[p];
+/** 修改指定路径会话的部分字段（会话不存在时为空操作）。异步保存/外部变更轮询按 path 锁定的基础。 */
+function patchSession(path: string, patch: Partial<EditSession>) {
+  const cur = state.sessions[path];
   if (!cur) return;
   commit({
-    sessions: { ...state.sessions, [p]: { ...cur, ...patch } },
-    activePath: p,
+    sessions: { ...state.sessions, [path]: { ...cur, ...patch } },
+    activePath: state.activePath,
     loadSeq: state.loadSeq,
     jumpLine: state.jumpLine,
   });
+}
+/** 仅修改活动会话的部分字段（无活动会话时为空操作）。 */
+function patchActive(patch: Partial<EditSession>) {
+  if (state.activePath) patchSession(state.activePath, patch);
 }
 
 /**
@@ -174,9 +176,10 @@ export const edStore = {
       commit({ sessions: state.sessions, activePath: state.activePath, loadSeq: state.loadSeq, jumpLine: null });
     }
   },
-  /** 保存成功：刷新活动会话基线，回 saved 态。 */
-  markSaved(baseline: number) {
-    patchActive({ baseline, tabState: "saved" });
+  /** 保存成功：刷新指定会话基线，回 saved 态。按 path 锁定 → 异步保存期间切标签不误改他会话（PI-FE-29）。
+   *  会话已被关闭则为空操作（文件仍已落盘，无会话可更新）。 */
+  markSaved(path: string, baseline: number) {
+    patchSession(path, { baseline, tabState: "saved" });
   },
   /** 编辑产生脏态（编辑器 onUpdate 驱动，作用于活动会话）。 */
   markDirty() {
@@ -185,9 +188,10 @@ export const edStore = {
       patchActive({ tabState: "dirty" });
     }
   },
-  /** 设置活动会话标签态（保存链/外部变更/DE 投影注入）。 */
-  setTabState(tabState: TabState) {
-    patchActive({ tabState });
+  /** 设置指定会话标签态（保存链/外部变更轮询/DE 投影注入）。按 path 锁定（PI-FE-29）：异步保存/轮询
+   *  在 await 前捕获目标 path，完成后据此回写，避免期间切标签污染他会话。 */
+  setTabState(path: string, tabState: TabState) {
+    patchSession(path, { tabState });
   },
   /** 关闭某文档会话（关闭标签时调用）；若为活动会话则置空活动（相邻激活由 tabsStore 决定）。 */
   closeSession(path: string) {
