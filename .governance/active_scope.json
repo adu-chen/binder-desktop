@@ -1,23 +1,21 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08C",
+  "scope_id": "PI-AG-08D",
   "allowed_files": [
-    "src-tauri/src/lib.rs",
-    "src-tauri/src/ag/tool_registry.rs",
+    "src/store/agStore.ts",
     "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08C.md"
+    ".governance/issues/PI-AG-08D.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/de/generate.rs",
-    "src/store/deStore.ts",
-    "src/store/edStore.ts"
+    "src/components/ed/EditorTab.tsx",
+    "src/store/edStore.ts",
+    "src/store/deStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08C propose_edit 写工具（X-FORBID-006 闭环）：工具循环中 propose_edit→ag_propose_edit（复用 route_generate_diff 逻辑：ChangeProposal→generate_diff(Located)→persist_payload+persist_diff，限 workspace X-FORBID-004）→ emit DiffProposed；tool_definitions_json 补 propose_edit。前端 agService 收 DiffProposed→deStore.addDiff 显示卡片（调既有 API，不改 deStore）。接受经既有 deService.acceptDiff→de.accept_diff→ws.apply_diff 真落盘。dev：整文档内容替换（块级锚定后续）。"
+  "scope_reason": "PI-AG-08D 前端工具卡片：agStore 补 addToolCall/resolveToolCall/clearToolCalls（toolCalls 投影现有 ToolCallView，MessageList/ToolCallCard UI 已就绪只缺数据源）；agService 收 ToolRequest→addToolCall(executing)、ToolResult→resolveToolCall(done/failed)、startTurn 起清空。纯前端投影，不改后端/事件形状。"
 }

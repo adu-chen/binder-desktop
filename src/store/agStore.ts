@@ -87,6 +87,29 @@ export const agStore = {
       messages: state.messages.map((m) => (m.id === id ? { ...m, streaming: false } : m)),
     });
   },
+  /** 新增一条工具调用卡（executing）；返回卡 id（PI-AG-08D，投影 ToolRequest）。 */
+  addToolCall(name: string, detail?: string): string {
+    const id = `tc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setState({ toolCalls: [...state.toolCalls, { id, name, state: "executing", detail }] });
+    return id;
+  },
+  /** 将该 name 最早的 executing 卡置 done/failed（事件无 call id，按 name+executing 先到先配）。 */
+  resolveToolCall(name: string, ok: boolean, detail?: string) {
+    let matched = false;
+    setState({
+      toolCalls: state.toolCalls.map((t) => {
+        if (!matched && t.name === name && t.state === "executing") {
+          matched = true;
+          return { ...t, state: ok ? "done" : "failed", detail: detail ?? t.detail };
+        }
+        return t;
+      }),
+    });
+  },
+  /** 清空工具卡（新回合起）。 */
+  clearToolCalls() {
+    setState({ toolCalls: [] });
+  },
 };
 
 export function useAgStore(): AgState {

@@ -34,6 +34,7 @@ export async function startTurn(
   if (!trimmed) return;
 
   agStore.pushMessage({ id: uid(), role: "user", content: trimmed });
+  agStore.clearToolCalls(); // 新回合清空旧工具卡（PI-AG-08D）
   agStore.setSending(true);
 
   const assistantId = uid();
@@ -85,7 +86,18 @@ export async function startTurn(
           });
           break;
         }
-        // tool_request / tool_result：工具卡片 UI 后续接入（事件已收，暂不渲染）。
+        case "tool_request": {
+          // 工具卡 executing（PI-AG-08D）。参数摘要作 detail。
+          const p = typeof ev.params === "object" && ev.params ? JSON.stringify(ev.params) : "";
+          agStore.addToolCall(ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined);
+          break;
+        }
+        case "tool_result": {
+          // 工具卡 done/failed（PI-AG-08D）。结果摘要作 detail。
+          const r = (ev.result ?? "").toString();
+          agStore.resolveToolCall(ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined);
+          break;
+        }
         default:
           break;
       }
