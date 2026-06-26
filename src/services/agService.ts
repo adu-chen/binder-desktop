@@ -1,76 +1,95 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore } from "../store/agStore";
 
 /**
- * AG 模块 Service 层（X-SEQ-002）：对话回合经统一 dispatch 信封触达后端。
- * 模型输出当前桩化（云网关实现期接通）；门禁前置（X-SEQ-001）由后端 ensure_gate_passed 结构保证。
- * 流式回显此处为前端模拟（逐字），真实 turn_stream 分片（BR-SYS-STATE-002）实现期替换。
+ * AG 模块 Service 层。
+ * PI-AG-WIRE-01：经独立 async 命令 `ag_start_turn` + Tauri `Channel<AgTurnEvent>` 接**真实流式**
+ * （替换桩 dispatch 回复 + 前端逐字模拟）。门禁前置（X-SEQ-001）由后端 SM-AG-01 ensure_gate_passed
+ * 保证；模型经本地 dev GW（cloud/dev-gateway），客户端不持 provider 密钥（X-FORBID-001）。
  */
 
-interface CommandResponse<T> {
-  correlation_id: string;
-  result?: T;
-  error?: { code: string; message: string; retriable: boolean; reauth_required: boolean };
-}
-
-interface StartTurnResult {
-  reply: string;
-  turn_state: string;
-}
+/** 与后端 `ipc::AgTurnEvent`（serde tag="type" snake_case）逐字段对齐（A-AG-I-P-01 §2.1）。 */
+export type AgTurnEvent =
+  | { type: "chunk"; turn_id: string; text: string }
+  | { type: "tool_request"; turn_id: string; tool_name: string; params: unknown }
+  | { type: "tool_result"; turn_id: string; tool_name: string; result: string; success: boolean }
+  | { type: "diff_proposed"; turn_id: string; diff_id: string; rel_path: string }
+  | { type: "done"; turn_id: string; stop_reason: string }
+  | { type: "error"; turn_id: string; code: string; message: string; retriable: boolean };
 
 let seq = 0;
-async function callCommand<T>(command: string, params: Record<string, unknown>): Promise<T> {
-  const request = { command, correlation_id: `ag-${Date.now()}-${(seq += 1)}`, params };
-  const response = await invoke<CommandResponse<T>>("dispatch", { request });
-  if (response.error) throw response.error;
-  if (response.result === undefined) {
-    throw { code: "IPC_EMPTY_RESULT", message: `${command} 无返回`, retriable: false, reauth_required: false };
-  }
-  return response.result;
-}
-
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-/** 模拟逐字流式回显（实现期由后端 turn_stream 分片驱动）。 */
-function streamInto(messageId: string, text: string): Promise<void> {
-  return new Promise((resolve) => {
-    let i = 0;
-    const step = () => {
-      if (i >= text.length) {
-        agStore.finishMessage(messageId);
-        resolve();
-        return;
-      }
-      const next = text.slice(i, i + 2);
-      agStore.appendToMessage(messageId, next);
-      i += 2;
-      setTimeout(step, 16);
-    };
-    step();
-  });
-}
-
-/** 发起对话回合：门禁前置（后端）→ 流式回显（前端模拟）。 */
-export async function startTurn(prompt: string): Promise<void> {
+/**
+ * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
+ * 需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回 AG_GW_UNREACHABLE 错误终态。
+ */
+export async function startTurn(
+  prompt: string,
+  opts?: { provider?: string; model?: string },
+): Promise<void> {
   const trimmed = prompt.trim();
   if (!trimmed) return;
+
   agStore.pushMessage({ id: uid(), role: "user", content: trimmed });
   agStore.setSending(true);
 
   const assistantId = uid();
-  try {
-    const res = await callCommand<StartTurnResult>("ag.start_turn", { prompt: trimmed });
-    agStore.pushMessage({ id: assistantId, role: "assistant", content: "", streaming: true });
-    await streamInto(assistantId, res.reply);
-  } catch (e) {
-    const err = e as { code?: string; message?: string };
-    agStore.pushMessage({
-      id: assistantId,
-      role: "assistant",
-      content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),
-      error: true,
+  agStore.pushMessage({ id: assistantId, role: "assistant", content: "", streaming: true });
+
+  const turnId = `t-${Date.now()}-${(seq += 1)}`;
+  const onEvent = new Channel<AgTurnEvent>();
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      agStore.setSending(false);
+      resolve();
+    };
+
+    onEvent.onmessage = (ev) => {
+      switch (ev.type) {
+        case "chunk":
+          agStore.appendToMessage(assistantId, ev.text);
+          break;
+        case "done":
+          agStore.finishMessage(assistantId);
+          finish();
+          break;
+        case "error":
+          agStore.finishMessage(assistantId);
+          agStore.pushMessage({
+            id: uid(),
+            role: "assistant",
+            content: `[${ev.code}] ${ev.message}`,
+            error: true,
+          });
+          finish();
+          break;
+        // tool_request / tool_result / diff_proposed：后续 PI（工具卡片 / DE diff 卡片）接入。
+        default:
+          break;
+      }
+    };
+
+    invoke("ag_start_turn", {
+      turnId,
+      prompt: trimmed,
+      provider: opts?.provider,
+      model: opts?.model,
+      onEvent,
+    }).catch((e: unknown) => {
+      const err = e as { code?: string; message?: string };
+      agStore.finishMessage(assistantId);
+      agStore.pushMessage({
+        id: uid(),
+        role: "assistant",
+        content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),
+        error: true,
+      });
+      finish();
     });
-  } finally {
-    agStore.setSending(false);
-  }
+  });
 }

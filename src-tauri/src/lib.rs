@@ -32,7 +32,7 @@ pub mod prv; // PI-PRV-* 预览输出
 pub mod acct; // PI-ACCT-* 账号会话
 pub mod ent; // PI-ENT-* 订阅门控
 
-use ipc::{CommandRegistry, CommandRequest, CommandResponse, IpcError};
+use ipc::{AgTurnEvent, CommandRegistry, CommandRequest, CommandResponse, IpcError};
 use rusqlite::Connection;
 
 /// 应用运行时状态：workspace.db 连接 + command 注册表（PI-FE-00 联通后端）。
@@ -693,6 +693,54 @@ fn sm_error() -> IpcError {
     IpcError::new("AG_SM_INVALID", "SM-AG-01 非法转移", false, false)
 }
 
+/// 供应商默认模型（dev；清单延实现期运营配置）。
+fn default_model(provider: &str) -> String {
+    match provider {
+        "openai" => "gpt-4o-mini",
+        "anthropic" => "claude-sonnet-4-6",
+        _ => "deepseek-chat",
+    }
+    .to_string()
+}
+
+/// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
+///
+/// 驱动 SM-AG-01 门禁前置（X-SEQ-001：唯一经 AwaitingGate+gatePassed 达 Streaming；dev 门禁桩=Passed，
+/// 真实裁决经 GW 服务端 X-FORBID-002 归正式版）→ 组装 system(PI-AG-07)+user 消息 → 经 ENT 网关通道
+/// `stream_invoke` 调本地 dev GW（X-FORBID-001：客户端不持密钥/不直连 provider）→ 归一化 SSE 逐事件
+/// 经 `Channel<AgTurnEvent>` 流式回前端（替换 dispatch 内 ag.start_turn 桩）。
+#[tauri::command]
+async fn ag_start_turn(
+    turn_id: String,
+    prompt: String,
+    provider: Option<String>,
+    model: Option<String>,
+    on_event: tauri::ipc::Channel<AgTurnEvent>,
+) -> Result<(), IpcError> {
+    use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
+
+    if prompt.trim().is_empty() {
+        return Err(IpcError::new("AG_PROMPT_REQUIRED", "缺少 prompt", false, false));
+    }
+
+    // 结构性门禁前置：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed（X-SEQ-001）。
+    let s = transition(TurnState::Idle, TurnEvent::Send).ok_or_else(sm_error)?; // → Assembling
+    let s = transition(s, TurnEvent::Assembled).ok_or_else(sm_error)?; // → AwaitingGate
+    ensure_gate_passed(GateState::Passed)?; // dev 桩=Passed；无订阅时此处 Denied 即拒
+    let s = transition(s, TurnEvent::GatePassed).ok_or_else(sm_error)?; // → Streaming
+    debug_assert_eq!(s, TurnState::Streaming);
+
+    let provider = provider.unwrap_or_else(|| "deepseek".to_string());
+    let model = model.unwrap_or_else(|| default_model(&provider));
+    // 组装骨架系统层（PI-AG-07）+ 当前轮用户输入（BR-AG-DATA-002）。
+    let messages = serde_json::json!([
+        { "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT },
+        { "role": "user", "content": prompt },
+    ]);
+
+    ent::gateway::stream_invoke(&turn_id, &provider, &model, messages, &on_event).await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -704,7 +752,7 @@ pub fn run() {
             app.manage(AppState { db: Mutex::new(conn), registry: build_registry() });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch])
+        .invoke_handler(tauri::generate_handler![dispatch, ag_start_turn])
         .run(tauri::generate_context!())
         .expect("error while running Binder");
 }

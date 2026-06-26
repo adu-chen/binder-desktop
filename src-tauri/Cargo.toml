@@ -21,3 +21,7 @@ thiserror = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # 目录选择器（PI-FE-00）：欢迎页"打开/新建 workspace"经此选目录后调 ws.open_workspace。
 tauri-plugin-dialog = "2"
+# PI-AG-WIRE-01：调本地 dev AI 网关（HTTP + 流式 SSE）。default-features=false 仅 http（客户端只连 localhost GW，
+# 不直连 provider https，X-FORBID-001）；正式版迁独立仓时按需补 TLS。
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+futures-util = "0.3"

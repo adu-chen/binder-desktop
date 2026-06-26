@@ -1,24 +1,25 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-GW-DEV-01",
+  "scope_id": "PI-AG-WIRE-01",
   "allowed_files": [
-    "cloud/dev-gateway/server.mjs",
-    "cloud/dev-gateway/package.json",
-    "cloud/dev-gateway/README.md",
-    "cloud/dev-gateway/.gitignore",
+    "src-tauri/Cargo.toml",
+    "src-tauri/Cargo.lock",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ent/gateway.rs",
+    "src/services/agService.ts",
+    "src/store/agStore.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-GW-DEV-01.md"
+    ".governance/issues/PI-AG-WIRE-01.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/lib.rs",
-    "src/components/ed/EditorTab.tsx"
+    "src/components/ed/EditorTab.tsx",
+    "src/store/edStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-GW-DEV-01 临时本地 dev AI 网关（cloud/dev-gateway/，Node 零依赖 ESM）：OpenAI 兼容适配（OpenAI+DeepSeek）+ Anthropic 适配 + /invoke/stream 归一化 SSE + 最小 /gate/check（dev 恒通过）+ BYOK 内存暂存。让客户端可连上、用用户 key 跑通真实流式 AI。【豁免留痕】人类 2026-06-26 明确授权临时偏离云 APC「代码开发启动迁出独立仓库」约定；正式版仍迁独立仓、改 TS、补 BYOK 加密(GW-02)/AUTH/LIC/真实门禁。密钥不落盘不记录。"
+  "scope_reason": "PI-AG-WIRE-01（PI-AG-10B/10F/11 dev 接线）：加 reqwest；新增 async tauri 命令 ag_start_turn（Channel<AgTurnEvent>，驱动 SM-AG-01 门禁前置→Streaming）→ ent::gateway::stream_invoke 调 localhost dev GW /invoke/stream → 解析归一化 SSE → emit AgTurnEvent；前端 agService 订阅 Channel、agStore 接真实流式，替换桩。人类已授权加 reqwest 并接受 Cargo.lock 与并发改动交错。dev 门禁/密钥沿用 GW（X-FORBID-001 客户端不持密钥不变）。"
 }

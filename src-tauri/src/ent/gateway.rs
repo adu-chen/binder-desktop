@@ -140,6 +140,136 @@ pub fn submit_for_verdict(token: Option<&str>, verdict: ServerVerdict) -> Result
     }
 }
 
+// ── PI-AG-WIRE-01：dev AI 网关 HTTP 流式调用（接 cloud/dev-gateway） ──────────────────
+//
+// 客户端只连 localhost dev GW（X-FORBID-001：不内置 provider SDK、无直连 provider）。GW 归一化 SSE
+// （event: chunk/done/error）→ 解析为 AgTurnEvent emit 到 Channel（承 BR-ENT-STATE-001 流式三终态）。
+// dev 门禁/密钥沿用 GW（真实服务端裁决 X-FORBID-002、BYOK 加密 GW-02 归正式版）。
+
+use crate::ipc::AgTurnEvent;
+
+const DEFAULT_GW_URL: &str = "http://localhost:8787";
+
+fn gw_base_url() -> String {
+    std::env::var("BINDER_GW_URL").unwrap_or_else(|_| DEFAULT_GW_URL.to_string())
+}
+
+/// 调 dev GW `/invoke/stream`，解析归一化 SSE，逐事件 emit `AgTurnEvent` 到 channel。
+/// 密钥不经客户端（GW 用 env/BYOK，X-FORBID-001）。错误/完成均以 AgTurnEvent 终态回传（不 panic）。
+pub async fn stream_invoke(
+    turn_id: &str,
+    provider: &str,
+    model: &str,
+    messages: serde_json::Value,
+    channel: &tauri::ipc::Channel<AgTurnEvent>,
+) -> Result<(), IpcError> {
+    use futures_util::StreamExt;
+
+    let url = format!("{}/invoke/stream", gw_base_url());
+    let body = serde_json::json!({ "provider": provider, "model": model, "messages": messages });
+
+    let resp = match reqwest::Client::new().post(&url).json(&body).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            // 网关不可达（断网/未启动）：明确错误终态，不静默重试。
+            let _ = channel.send(AgTurnEvent::Error {
+                turn_id: turn_id.to_string(),
+                code: "AG_GW_UNREACHABLE".into(),
+                message: format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
+                retriable: true,
+            });
+            return Ok(());
+        }
+    };
+
+    if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        let msg = resp.text().await.unwrap_or_default();
+        let _ = channel.send(AgTurnEvent::Error {
+            turn_id: turn_id.to_string(),
+            code: format!("AG_GW_HTTP_{code}"),
+            message: msg,
+            retriable: code >= 500,
+        });
+        return Ok(());
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut done_sent = false;
+
+    while let Some(item) = stream.next().await {
+        let bytes = match item {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = channel.send(AgTurnEvent::Error {
+                    turn_id: turn_id.to_string(),
+                    code: "AG_GW_STREAM".into(),
+                    message: format!("流式中断：{e}"),
+                    retriable: true,
+                });
+                return Ok(());
+            }
+        };
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+
+        // 按 SSE 事件块（以空行分隔）解析。
+        while let Some(pos) = buf.find("\n\n") {
+            let raw: String = buf[..pos].to_string();
+            buf = buf[pos + 2..].to_string();
+            let (mut event, mut data) = (String::new(), String::new());
+            for line in raw.lines() {
+                if let Some(r) = line.strip_prefix("event:") {
+                    event = r.trim().to_string();
+                } else if let Some(r) = line.strip_prefix("data:") {
+                    data = r.trim().to_string();
+                }
+            }
+            let json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+            match event.as_str() {
+                "chunk" => {
+                    if let Some(text) = json.get("text").and_then(|t| t.as_str()) {
+                        let _ = channel.send(AgTurnEvent::Chunk {
+                            turn_id: turn_id.to_string(),
+                            text: text.to_string(),
+                        });
+                    }
+                }
+                "done" => {
+                    let stop = json
+                        .get("stop_reason")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("stop")
+                        .to_string();
+                    let _ = channel.send(AgTurnEvent::Done {
+                        turn_id: turn_id.to_string(),
+                        stop_reason: stop,
+                    });
+                    done_sent = true;
+                }
+                "error" => {
+                    let _ = channel.send(AgTurnEvent::Error {
+                        turn_id: turn_id.to_string(),
+                        code: json.get("code").and_then(|c| c.as_str()).unwrap_or("AG_GW_ERR").to_string(),
+                        message: json.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+                        retriable: json.get("retriable").and_then(|r| r.as_bool()).unwrap_or(false),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 流自然结束但未收到 done：补一个完成终态（BR-SYS-STATE-002 三终态闭合）。
+    if !done_sent {
+        let _ = channel.send(AgTurnEvent::Done {
+            turn_id: turn_id.to_string(),
+            stop_reason: "stop".into(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::InvokeEvent::*;
