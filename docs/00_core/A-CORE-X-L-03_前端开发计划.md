@@ -414,6 +414,12 @@
 - **A 类债务**：saveDocument/markSaved 作用于"活动会话"——异步保存期间切标签的极端竞态未按 path 锁定（沿用 PI-A 前单会话语义，realistic ⌘S 流程不触发）；EditorTab 组件仍保留（未接线，后续清理）。
 - **验收**：开多个文档 → 各标签独立脏点/状态；A 编辑未存切到 B 再切回 A → A 草稿仍在；docx 草稿与 md 文档混开各按格式往返；vitest 67 全过；scoped 门禁无自有文件越界。
 
+### PI-FE-28　清理未接线的 EditorTab 死代码　✅ G4 已实现（2026-06-26，CODE_CHANGE_MINOR；tsc + vitest 62 + build + scoped audit 绿）
+- **承接**：PI-FE-26（center TabStrip 取代编辑器内置标签栏）/ PI-FE-27 登记的 A 类债务"EditorTab 组件保留未接线，后续清理"。CLAUDE.md §2（不保留死代码）。
+- **文件范围**：删 `EditorTab.tsx`（除自身测试外零生产引用）+ `EditorTab.test.tsx`（无 `covers: BR-*` → 不掉规则覆盖）；`styles.css` 移除死 `.editor-tabs`/`.edtab*` 样式块（保留仍被复用的 `@keyframes ed-spin`）；`edStore.ts` 注释中性化（TabState 6 状态枚举逻辑不动）。
+- **实现要点**：纯死代码清理，**无行为变更**；标签渲染统一归 center `TabStrip`（`.tab-*`）。vitest 由 67 → 62（仅移除已废弃组件的 5 条渲染测试，非弱化在用测试）。
+- **验收**：`grep EditorTab`/`grep editor-tabs` 全仓零生产引用；tsc + vitest 62 + build 绿；scoped 门禁无自有文件越界。
+
 ---
 
 ## §3 实施顺序

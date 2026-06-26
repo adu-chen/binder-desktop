@@ -11,7 +11,7 @@ import { useSyncExternalStore } from "react";
  * 保既有消费方（edService/Editor/WorkspaceMenu/Composer/deService）零改动兼容。
  */
 
-/** EditorTab 6 状态（参考稿 §6.3，视觉互斥）。 */
+/** 编辑标签 6 状态（参考稿 §6.3，视觉互斥；由 center TabStrip 渲染）。 */
 export type TabState =
   | "normal"
   | "dirty"

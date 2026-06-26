@@ -1,18 +1,14 @@
 {
-  "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-27",
+  "task_type": "CODE_CHANGE_MINOR",
+  "scope_id": "PI-FE-28",
   "allowed_files": [
+    "src/components/ed/EditorTab.tsx",
+    "src/components/ed/EditorTab.test.tsx",
+    "src/styles.css",
     "src/store/edStore.ts",
-    "src/store/edStore.test.ts",
-    "src/store/tabsStore.ts",
-    "src/store/tabsStore.test.ts",
-    "src/components/ed/Editor.tsx",
-    "src/services/edService.ts",
-    "src/components/shell/TabStrip.tsx",
-    "src/components/ws/FileTree.tsx",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-27.md"
+    ".governance/issues/PI-FE-28.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -22,5 +18,5 @@
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-27（PI-B）edStore 重构为按路径会话使多文档标签各保留未保存编辑；派生 openPath/tabState 保既有消费方兼容；人类已确认两步走第二步并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-28 纯死代码清理（CODE_CHANGE_MINOR）：删除自 PI-FE-26 起被 center TabStrip 取代、除自身测试外零引用的 EditorTab 组件及其测试与死 .edtab CSS；无行为变更、无规则覆盖损失（EditorTab.test 无 covers: BR-*）。收口 PI-FE-27 登记的 A 类债务。"
 }
