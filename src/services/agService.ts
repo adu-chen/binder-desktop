@@ -34,6 +34,13 @@ export async function startTurn(
   const trimmed = prompt.trim();
   if (!trimmed) return;
 
+  // 本轮之前的对话历史（PI-AG-09B）：传后端按预算保留最近（drop 最旧）。取本轮 user 入栈前的快照。
+  const history = agStore
+    .getSnapshot()
+    .messages.filter((m) => !m.error && m.content.trim())
+    .slice(-30)
+    .map((m) => ({ role: m.role, content: m.content }));
+
   agStore.pushMessage({ id: uid(), role: "user", content: trimmed });
   agStore.clearToolCalls(); // 新回合清空旧工具卡（PI-AG-08D）
   agStore.setSending(true);
@@ -127,6 +134,7 @@ export async function startTurn(
       activeDocPath: ed.openPath ?? undefined,
       activeDocContent: ed.loadedContent ?? undefined,
       activeDocFormat: ed.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
+      history, // 对话历史（PI-AG-09B，后端按预算保留最近）
       onEvent,
     }).catch((e: unknown) => {
       const err = e as { code?: string; message?: string };

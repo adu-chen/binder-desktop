@@ -118,6 +118,45 @@ pub fn assemble_prompt(kind: TurnKind) -> PromptSkeleton {
     }
 }
 
+// ── PI-AG-09B：对话历史 + P0–P3 预算截断 ───────────────────────────────────────────
+//
+// 承 BR-AG-DATA-005（M-T-02 分层截断序）：当前文档/当前轮输入 P0（层保留、超长内容可缩）；历史 P1
+// （按预算保留最近、drop 最旧，确定性可追溯）。历史是 role 结构化层，独立于上面 assemble_context 的
+// 内容源预算（assemble_context 处理 REF/AST/KB 补强源，③）。
+
+/// 对话历史轮（前端 agStore 消息投影）。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct HistTurn {
+    pub role: String,
+    pub content: String,
+}
+
+/// P0 文档层内容封顶（层保留、内容可缩）：超 `max_chars` 截断 + 显式注记（不静默丢弃，可追溯）。
+pub fn cap_text(s: &str, max_chars: usize, note: &str) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max_chars).collect();
+    format!("{head}\n{note}")
+}
+
+/// P1 历史层按预算保留**最近**若干轮（drop 最旧，确定性）。返回 (保留<按时序>, 丢弃数<可追溯>)。
+pub fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> (Vec<HistTurn>, usize) {
+    let mut kept_rev = Vec::new();
+    let mut used = 0usize;
+    for t in turns.iter().rev() {
+        let c = t.content.chars().count();
+        if used.saturating_add(c) > budget_chars {
+            break;
+        }
+        used += c;
+        kept_rev.push(t.clone());
+    }
+    let dropped = turns.len() - kept_rev.len();
+    kept_rev.reverse();
+    (kept_rev, dropped)
+}
+
 /// 单文档边界裁决结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetDecision {
@@ -199,5 +238,30 @@ mod tests {
         assert_eq!(guard_single_doc_target(&cur, &doc("ws1", "a.md")), TargetDecision::Accept);
         assert_eq!(guard_single_doc_target(&cur, &doc("ws1", "b.md")), TargetDecision::EscalateCbt);
         assert_eq!(guard_single_doc_target(&cur, &doc("ws2", "a.md")), TargetDecision::EscalateCbt);
+    }
+
+    // PI-AG-09B：文档层封顶（短不动、长截断 + 注记，不静默）。
+    #[test]
+    fn cap_text_truncates_long_with_note() {
+        assert_eq!(cap_text("短", 10, "[截断]"), "短");
+        let out = cap_text("一二三四五六七八九十", 3, "[已截断]");
+        assert!(out.starts_with("一二三"));
+        assert!(out.contains("[已截断]"));
+        assert!(!out.contains("四"));
+    }
+
+    // PI-AG-09B：历史层按预算保留最近、drop 最旧（确定性、可追溯）。
+    #[test]
+    fn select_recent_history_keeps_newest_drops_oldest() {
+        let h = |r: &str, c: &str| HistTurn { role: r.into(), content: c.into() };
+        let turns = vec![h("user", "aaaa"), h("assistant", "bbbb"), h("user", "cc")];
+        // 预算 6 字：从最近往前 "cc"(2)+"bbbb"(4)=6 放下，"aaaa" 丢弃。
+        let (kept, dropped) = select_recent_history(&turns, 6);
+        assert_eq!(dropped, 1);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].content, "bbbb"); // 时序：旧在前
+        assert_eq!(kept[1].content, "cc");
+        // 预算 0：全丢弃。
+        assert_eq!(select_recent_history(&turns, 0).1, 3);
     }
 }

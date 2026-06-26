@@ -806,6 +806,7 @@ async fn ag_start_turn(
     active_doc_path: Option<String>,
     active_doc_content: Option<String>,
     active_doc_format: Option<String>,
+    history: Vec<ag::context::HistTurn>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), IpcError> {
@@ -825,29 +826,49 @@ async fn ag_start_turn(
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| default_model(&provider));
 
-    // 组装：系统层（PI-AG-07）→ 当前文档（P0 主事实，BR-AG-DATA-005，PI-AG-09A）→ 当前轮用户输入。
-    let mut messages = vec![serde_json::json!({
-        "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
-    })];
     // 文档形态（PI-AG-08F）：editFormat=html 或内容以 < 开头 → 按 docx/html 块；否则 text 段落块。
     let doc_is_html = active_doc_content
         .as_deref()
         .map(|c| crate::ag::blocks::is_html(c, active_doc_format.as_deref()))
         .unwrap_or(false);
-    if let Some(content) = active_doc_content.as_deref().filter(|c| !c.trim().is_empty()) {
-        let path = active_doc_path.as_deref().unwrap_or("(未命名)");
-        // 编号块列表（PI-AG-08E/08F/08G）：HTML 块带稳定 [id=…]（data-block-id）锚，供 propose_edit 精确定位。
-        let blocks = crate::ag::blocks::parse_blocks(content, doc_is_html);
-        let mut block_view = String::new();
-        for (i, b) in blocks.iter().enumerate() {
-            match &b.block_id {
-                Some(id) => block_view.push_str(&format!("Block {i} [id={id}]: {}\n", b.text)),
-                None => block_view.push_str(&format!("Block {i}: {}\n", b.text)),
+
+    // P0 当前文档块视图（PI-AG-08E/08F/08G）；超长封顶（层保留、内容可缩，BR-AG-DATA-005，PI-AG-09B）。
+    const DOC_CTX_CAP: usize = 9000; // 字符（dev；G5 标定）
+    let doc_ctx: Option<String> = active_doc_content
+        .as_deref()
+        .filter(|c| !c.trim().is_empty())
+        .map(|content| {
+            let path = active_doc_path.as_deref().unwrap_or("(未命名)");
+            let blocks = crate::ag::blocks::parse_blocks(content, doc_is_html);
+            let mut block_view = String::new();
+            for (i, b) in blocks.iter().enumerate() {
+                match &b.block_id {
+                    Some(id) => block_view.push_str(&format!("Block {i} [id={id}]: {}\n", b.text)),
+                    None => block_view.push_str(&format!("Block {i}: {}\n", b.text)),
+                }
             }
-        }
-        let ctx = format!(
-            "[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{block_view}\n修改某一块用 propose_edit + new_text：有 [id=…] 的块**优先传 block_id**（稳定锚），否则传 block_index（块号）；改写整篇用 path + content。"
-        );
+            let ctx = format!(
+                "[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{block_view}\n修改某一块用 propose_edit + new_text：有 [id=…] 的块**优先传 block_id**（稳定锚），否则传 block_index（块号）；改写整篇用 path + content。"
+            );
+            crate::ag::context::cap_text(&ctx, DOC_CTX_CAP, "[文档较长，已截取前部；其余内容可用 read_doc 分块读取]")
+        });
+
+    // P1 历史层：总预算扣除 P0（系统/文档/当前输入）后的余额内保留最近若干轮（drop 最旧，PI-AG-09B）。
+    const CTX_BUDGET_CHARS: usize = 16000; // 总预算（~4000 tokens，dev；G5 标定）
+    let p0_chars = ag::prompts::SYSTEM_PROMPT_CHAT.chars().count()
+        + doc_ctx.as_deref().map(|s| s.chars().count()).unwrap_or(0)
+        + prompt.chars().count();
+    let hist_budget = CTX_BUDGET_CHARS.saturating_sub(p0_chars);
+    let (kept_history, _dropped) = crate::ag::context::select_recent_history(&history, hist_budget);
+
+    // 组装顺序（M-T-02 §3 recency）：系统层 → 历史(预算内) → 当前文档(P0,贴近末尾) → 当前轮输入。
+    let mut messages = vec![serde_json::json!({
+        "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
+    })];
+    for t in &kept_history {
+        messages.push(serde_json::json!({ "role": t.role, "content": t.content }));
+    }
+    if let Some(ctx) = &doc_ctx {
         messages.push(serde_json::json!({ "role": "system", "content": ctx }));
     }
     messages.push(serde_json::json!({ "role": "user", "content": prompt }));

@@ -1,11 +1,12 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08H",
+  "scope_id": "PI-AG-09B",
   "allowed_files": [
-    "src/services/edLocate.ts",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/lib.rs",
     "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08H.md"
+    ".governance/issues/PI-AG-09B.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -13,10 +14,9 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/components/ed/Editor.tsx",
     "src/store/edStore.ts",
-    "src/store/deStore.ts"
+    "src/store/agStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08H ED 真实锚联动：实现 ed.locate_block（前端实时 TipTap DOM 按 data-block-id 定位，types/mod.rs 注明定位归前端）→ LocateResult located/anchor_lost；agService 从 tool_request(propose_edit) 捕获 block_id，diff_proposed 时对实时编辑器校验锚，失效则 diff 卡片加「文档已变动·待复核」警示。纯前端、不改后端/契约（block_id 经既有 tool_request.params 传达，DOM 查询不需编辑器实例）。"
+  "scope_reason": "PI-AG-09B（完整 PI-AG-09 第①步）对话历史 + P0–P3 预算截断：ag/context.rs 加 HistTurn/cap_text/select_recent_history（承 BR-AG-DATA-005 分层截断：当前文档 P0 内容可缩、历史 P1 按预算保留最近 drop 最旧，可追溯）；ag_start_turn 接收 history 入参，组装 system→历史(预算内)→当前文档(capped)→当前 user（recency，M-T-02 §3）；agService 传 agStore 历史快照（当前 user 前）。意图沿用判定(②)、REF/AST/KB(③) 后续。assemble_context 的 M-T-02 优先级对齐留 ③。"
 }
