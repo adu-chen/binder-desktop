@@ -1,16 +1,24 @@
 {
-  "task_type": "DOC_ONLY",
-  "scope_id": "DOC-GW-01-DECISION",
+  "task_type": "CODE_CHANGE",
+  "scope_id": "PI-GW-DEV-01",
   "allowed_files": [
-    "docs/02_cloud/A-GW-M-D-01_AI网关功能需求描述.md",
-    ".governance/active_scope.json"
+    "cloud/dev-gateway/server.mjs",
+    "cloud/dev-gateway/package.json",
+    "cloud/dev-gateway/README.md",
+    "cloud/dev-gateway/.gitignore",
+    ".governance/active_scope.json",
+    ".governance/issues/PI-GW-DEV-01.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
-    "docs/00_core/A-CORE-C-P-01_APC.md"
+    "docs/00_core/A-CORE-C-P-01_APC.md",
+    "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
+    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/lib.rs",
+    "src/components/ed/EditorTab.tsx"
   ],
   "confirmation": "YES",
-  "scope_reason": "DOC_ONLY：记录人类对 GW-01 的裁决（平台订阅 + BYOK 双模共存）到 A-GW-M-D-01。仅 REQ/叙述层更新，不放注册类治理块（云 APC 驻留期硬约定）。不写云代码（云 APC：代码开发启动须迁出独立仓库）。"
+  "scope_reason": "PI-GW-DEV-01 临时本地 dev AI 网关（cloud/dev-gateway/，Node 零依赖 ESM）：OpenAI 兼容适配（OpenAI+DeepSeek）+ Anthropic 适配 + /invoke/stream 归一化 SSE + 最小 /gate/check（dev 恒通过）+ BYOK 内存暂存。让客户端可连上、用用户 key 跑通真实流式 AI。【豁免留痕】人类 2026-06-26 明确授权临时偏离云 APC「代码开发启动迁出独立仓库」约定；正式版仍迁独立仓、改 TS、补 BYOK 加密(GW-02)/AUTH/LIC/真实门禁。密钥不落盘不记录。"
 }
