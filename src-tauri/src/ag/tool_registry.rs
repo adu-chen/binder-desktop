@@ -55,6 +55,45 @@ pub fn validate_requested_tool(name: &str) -> ToolDecision {
     validate_tool(registered, registered, false)
 }
 
+/// 发送给模型的工具定义（OpenAI function-calling 格式）。
+/// dev：仅 3 个只读工具（PI-AG-08B）；propose_edit 写/diff 路径（ChangeProposal→DE）后续接入再补。
+pub fn tool_definitions_json() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "list_docs",
+                "description": "列出当前工作区（workspace）内的所有文档（相对路径与类型）。需要了解工作区有哪些文件时调用。",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_doc",
+                "description": "读取当前工作区内指定相对路径文档的完整内容。注意：当前编辑器打开的文档已在上下文提供，无需用本工具重复读取。",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" } },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_text",
+                "description": "在当前工作区内按关键词搜索文档内容，返回命中的文件与片段。",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string", "description": "搜索关键词" } },
+                    "required": ["query"]
+                }
+            }
+        }
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

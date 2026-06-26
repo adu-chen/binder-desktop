@@ -55,21 +55,41 @@ async function pumpProviderSse(resp, onJson) {
 }
 
 // OpenAI 兼容（OpenAI + DeepSeek）：Bearer + chat/completions 流式。
-async function streamOpenAiCompat(provider, { model, messages, apiKey }, res) {
+async function streamOpenAiCompat(provider, { model, messages, apiKey, tools }, res) {
+  const reqBody = { model, messages, stream: true };
+  if (Array.isArray(tools) && tools.length) reqBody.tools = tools; // function-calling（PI-AG-08B）
   const resp = await fetch(provider.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, messages, stream: true }),
+    body: JSON.stringify(reqBody),
   });
   if (!resp.ok) {
     sse(res, 'error', { code: `HTTP_${resp.status}`, message: await resp.text(), retriable: resp.status >= 500 });
     return;
   }
+  // 累积流式 tool_calls（OpenAI/DeepSeek：按 index 拼接 id/name/arguments 片段）。
+  const toolAcc = {};
   await pumpProviderSse(resp, (json) => {
-    const delta = json.choices?.[0]?.delta?.content;
+    const choice = json.choices?.[0];
+    if (!choice) return;
+    const delta = choice.delta?.content;
     if (delta) sse(res, 'chunk', { text: delta });
-    const finish = json.choices?.[0]?.finish_reason;
-    if (finish) sse(res, 'done', { stop_reason: finish });
+    const tcs = choice.delta?.tool_calls;
+    if (Array.isArray(tcs)) {
+      for (const tc of tcs) {
+        const i = tc.index ?? 0;
+        toolAcc[i] = toolAcc[i] || { id: '', name: '', arguments: '' };
+        if (tc.id) toolAcc[i].id = tc.id;
+        if (tc.function?.name) toolAcc[i].name = tc.function.name;
+        if (tc.function?.arguments) toolAcc[i].arguments += tc.function.arguments;
+      }
+    }
+    const finish = choice.finish_reason;
+    if (finish === 'tool_calls') {
+      sse(res, 'tool_calls', { tool_calls: Object.values(toolAcc) }); // 交客户端执行（工具在客户端）
+    } else if (finish) {
+      sse(res, 'done', { stop_reason: finish });
+    }
   });
 }
 
@@ -154,7 +174,7 @@ const server = createServer(async (req, res) => {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    const args = { model: body.model, messages: body.messages, apiKey, maxTokens: body.max_tokens };
+    const args = { model: body.model, messages: body.messages, apiKey, maxTokens: body.max_tokens, tools: body.tools };
     try {
       if (provider.kind === 'anthropic') await streamAnthropic(provider, args, res);
       else await streamOpenAiCompat(provider, args, res);

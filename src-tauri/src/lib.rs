@@ -719,6 +719,7 @@ async fn ag_start_turn(
     active_doc_path: Option<String>,
     active_doc_content: Option<String>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), IpcError> {
     use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
 
@@ -749,7 +750,76 @@ async fn ag_start_turn(
     }
     messages.push(serde_json::json!({ "role": "user", "content": prompt }));
 
-    ent::gateway::stream_invoke(&turn_id, &provider, &model, serde_json::Value::Array(messages), &on_event).await
+    // 工具定义（PI-AG-08B 只读 3 工具）。
+    let tools = ag::tool_registry::tool_definitions_json();
+    // active workspace 根（工具执行限界 X-FORBID-004）；无活动 workspace 时工具回报无法执行。
+    let ws_root: Option<String> = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| workspace::lifecycle::active_workspace(&conn).ok().flatten())
+        .map(|w| w.root_path);
+
+    // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
+    const MAX_ROUNDS: usize = 6;
+    for _round in 0..MAX_ROUNDS {
+        let msgs = serde_json::Value::Array(messages.clone());
+        match ent::gateway::stream_round(&turn_id, &provider, &model, &msgs, &tools, &on_event).await? {
+            ent::gateway::RoundOutcome::Done => return Ok(()),
+            ent::gateway::RoundOutcome::ToolCalls(calls) => {
+                // 先把 assistant 的 tool_calls 入历史（OpenAI 要求 tool 结果前有对应 assistant.tool_calls）。
+                let tc_json: Vec<serde_json::Value> = calls
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "id": c.id, "type": "function",
+                            "function": { "name": c.name, "arguments": c.arguments }
+                        })
+                    })
+                    .collect();
+                messages.push(serde_json::json!({ "role": "assistant", "content": null, "tool_calls": tc_json }));
+
+                for c in &calls {
+                    let params: serde_json::Value =
+                        serde_json::from_str(&c.arguments).unwrap_or(serde_json::Value::Null);
+                    let _ = on_event.send(AgTurnEvent::ToolRequest {
+                        turn_id: turn_id.clone(),
+                        tool_name: c.name.clone(),
+                        params: params.clone(),
+                    });
+                    // 注册/权限校验（BR-AG-STATE-002）→ 执行（限 workspace，X-FORBID-004）。
+                    let (result, success) = match ag::tool_registry::validate_requested_tool(&c.name) {
+                        ag::tool::ToolDecision::Reject(reason) => (reason, false),
+                        ag::tool::ToolDecision::Allow => match ws_root.as_deref() {
+                            None => ("无活动 workspace，无法执行工具".to_string(), false),
+                            Some(root) => {
+                                match ag::tool_exec::exec_read_only(std::path::Path::new(root), &c.name, &params) {
+                                    Ok(r) => (r, true),
+                                    Err(e) => (format!("工具执行失败：{}", e.message), false),
+                                }
+                            }
+                        },
+                    };
+                    let _ = on_event.send(AgTurnEvent::ToolResult {
+                        turn_id: turn_id.clone(),
+                        tool_name: c.name.clone(),
+                        result: result.clone(),
+                        success,
+                    });
+                    // 结果回注模型（SM-AG-02 ResultInjecting）。
+                    messages.push(serde_json::json!({ "role": "tool", "tool_call_id": c.id, "content": result }));
+                }
+                // 继续下一轮：带工具结果再调 GW。
+            }
+        }
+    }
+
+    // 达工具循环上限（BR-AG-STATE-002 LoopAborted）：收尾完成终态。
+    let _ = on_event.send(AgTurnEvent::Done {
+        turn_id: turn_id.clone(),
+        stop_reason: "tool_loop_limit".to_string(),
+    });
+    Ok(())
 }
 
 pub fn run() {

@@ -26,3 +26,6 @@ pub mod prompts;
 
 /// PI-AG-08A · 工具注册表（4 工具 + 权限分级，喂 SM-AG-02 validate_tool）。
 pub mod tool_registry;
+
+/// PI-AG-08B · 工具执行（只读：list_docs/read_doc/search_text，经 WS 限 workspace）。
+pub mod tool_exec;

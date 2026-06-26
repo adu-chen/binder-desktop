@@ -1,12 +1,15 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09A",
+  "scope_id": "PI-AG-08B",
   "allowed_files": [
+    "cloud/dev-gateway/server.mjs",
+    "src-tauri/src/ag/tool_exec.rs",
+    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/ag/mod.rs",
+    "src-tauri/src/ent/gateway.rs",
     "src-tauri/src/lib.rs",
-    "src-tauri/src/ag/prompts.rs",
-    "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09A.md"
+    ".governance/issues/PI-AG-08B.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -18,5 +21,5 @@
     "src/components/ed/EditorTab.tsx"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09A（PI-AG-09 当前文档注入子集，修测试暴露的问题）：ag_start_turn 接收 active_doc_path/content（前端从 edStore.openPath/loadedContent 读，只读不改 edStore）→ 注入为当前文档上下文（P0 主事实，BR-AG-DATA-005）；SYSTEM_PROMPT_CHAT 改为诚实——声明当前文档已在上下文、去除未接线的 read_doc/list_docs 工具过度声称（防模型幻觉调用工具）。完整 PI-AG-09（意图沿用/REF/AST/KB/截断）与 PI-AG-08B 真实工具后续。"
+  "scope_reason": "PI-AG-08B 真实工具（只读 3：read_doc/list_docs/search_text；propose_edit 写/diff 路径后续）：GW 转发 tool 定义 + 累积 OpenAI tool_calls→emit；客户端 tool_exec 经 workspace/kb 执行（复用 route_* 模式，限 active workspace X-FORBID-004）；ag_start_turn 工具循环（SM-AG-02 上限 BR-AG-STATE-002，未注册/越权拒绝回注）。dev OpenAI 兼容（DeepSeek/OpenAI）先行，Anthropic 工具后续。"
 }
