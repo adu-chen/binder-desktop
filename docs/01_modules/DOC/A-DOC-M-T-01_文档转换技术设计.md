@@ -24,6 +24,18 @@ forbidden: 样式白名单, 格式子集, 样式范围, 支持样式表
 docx 进入编辑模式时编辑模型所承载的样式范围三级契约：必需子集（承诺往返保真）、部分支持（尽力
 保留并明示）、明确不处理（不承诺，预览链全保真补偿）；进入编辑即子集化且对用户可知（REQ-DOC-003）。
 
+<!-- TERM
+term_id: TERM-DOC-002
+chains: DOC-CONVERT
+zh: 编辑草稿
+en: EditDraft
+forbidden: 草稿副本, draft文件, 临时编辑文件, 编辑副本
+-->
+原生 docx 进入编辑前创建的同目录副本（命名 `{stem}.draft.docx`）：**原生 docx**（非 `*.draft.docx`）
+点击为只读 PDF 预览，经「创建草稿进行编辑」复制为 EditDraft 后进 HTML 编辑模式；**EditDraft 与项目
+生成的 docx**（均以 `*.draft.docx` 标识）点击直接进编辑。编辑作用于草稿、原 docx 不被改动（保护原始
+文档）；草稿落盘经编辑链 HTML→docx 往返（§2.1）。
+
 ## §1 文档定位
 
 ```
@@ -48,6 +60,41 @@ Lua 过滤器实现延实现期（§9）。
 - 编辑链与预览链**完全分离**：无共享中间态、无功能黏连；预览链失败不影响编辑链，反之亦然。
 - 转换全程**本地执行**（Pandoc/LibreOffice 本地依赖），离线可用，内容不上行（REQ-DOC-005）。
 - 文件读写经 WS（X-FORBID-004）；转换中间产物在 workspace 管理边界内。
+
+### §2.1 编辑链处理逻辑（实现 SSOT，移植旧版 binder-project 实证链路）
+
+**编辑模型为 HTML**（非 markdown）：编辑器 TipTap/ProseMirror 是 HTML 模型，且 markdown 丢失样式子集
+「部分支持」层（颜色/字体/字号）；HTML+styles 才能承载三级子集。
+
+- **打开（docx → 可编辑 HTML，`doc.open_for_edit`）**：
+  `pandoc <docx> --from docx+styles --to html+raw_html+native_divs+native_spans --standalone --wrap=none
+  --extract-media=. --preserve-tabs --lua-filter preserve-styles.lua`
+  - `docx+styles` 读取扩展保留 DOCX 样式；`native_divs/spans` 把样式落为内联 `style=`/`data-custom-style`；
+    `preserve-styles.lua`（资源）强制保留对齐/颜色/字号；`--extract-media` 解出图片至工作目录供编辑器显示。
+  - 回 baseline（docx 字节内容哈希）供保存冲突保护（SM-WS-01）；HTML 超 **15MB** 拒绝（编辑模式上限，防崩溃）。
+- **保存（HTML → docx，`doc.save_from_edit`）**：
+  `pandoc --from html --to docx --reference-doc reference.docx`（参考文档统一样式，往返保真）→ 交 WS
+  `save_atomic` 原子落盘 + 外部变更保护（原文件不变）。
+- **样式子集 ↔ 编辑器扩展**：HTML 的样式需编辑器对应 TipTap 扩展解析为「成熟文本块」，否则显示为生标记
+  （映射见 §4 表）。编辑器扩展集为 DOC 编辑链可用性的前置（前端 ED 承载，A-ED-M-T-01）。
+- **资源（经 bundle.resources 打包）**：`reference.docx`（样式模板）、`preserve-styles.lua`（样式保留过滤器）；
+  预览链 LibreOffice 为优化版（自定义构建精简约 30%，发布期打包不得绕过，A-CORE-X-R-01 §9 BLOCK-REL-LO-001）。
+
+### §2.2 docx 编辑流程（预览/草稿/直编辑，移植旧版成熟链路）
+
+按文件名 `*.draft.docx`（TERM-DOC-002 EditDraft）区分两条入口：
+
+```
+原生 docx（foo.docx）       点击 → 只读 PDF 预览（预览链）
+                            └「创建草稿进行编辑」→ doc.create_draft → foo.draft.docx（同目录副本）
+                                                  → doc.open_for_edit → HTML 编辑（编辑链）
+                                                  → ⌘S → doc.save_from_edit → docx 落盘
+草稿/生成 docx（*.draft.docx）点击 → 直接进 HTML 编辑（编辑链，同上保存）
+```
+
+- **原生 docx 不直接编辑**：保护原始文档，编辑作用于草稿副本（EditDraft）。
+- `doc.create_draft`：原生 docx → `{stem}.draft.docx` 同目录副本（守界 X-FORBID-004，已存在先覆盖）。
+- 流程对偶旧版 `create_draft_docx` + `DocxPdfPreview.handleCreateDraft`；Excel/PPT 无编辑入口（恒只读预览，BR-PRV-DATA-001）。
 
 ## §3 转换通道与生命周期（DOC-CONVERT）
 
@@ -97,6 +144,26 @@ docx 进入编辑模式即按三级样式子集契约子集化：必需子集必
 项尽力保留、其损失必须对用户可知（不静默丢失）；明确不处理项清单公开且由预览链全保真补偿。
 三级清单的变更必须回写本文并同步 ED（编辑模型承载范围）与 PRV（预览补偿）复核，不得在转换代码
 中私自增减子集。
+
+### §4.1 样式子集 ↔ 编辑器扩展映射（前端 ED 承载，实现 SSOT）
+
+编辑链产出的 HTML 样式须由编辑器（TipTap，ED 前端）对应扩展解析为富文本「成熟文本块」，否则内联
+`style=`/颜色/字号/表格在编辑器显示为生标记。扩展集为编辑可用性前置（移植旧版 binder-project）：
+
+| 子集级别 | 样式项 | TipTap 扩展 |
+|---|---|---|
+| 必需子集 | 标题/列表/粗斜 | StarterKit |
+| 必需子集 | 段落对齐 | `TextAlign` |
+| 必需子集 | 下划线 | `Underline` |
+| 必需子集 | 基础表格 | `Table` / `TableRow` / `TableHeader` / `TableCell` |
+| 必需子集 | 嵌入图片 | `Image`（base64/inline） |
+| 部分支持 | 文本颜色 | `TextStyle` + `Color` |
+| 部分支持 | 字体 | `FontFamily` |
+| 部分支持 | 字号 | `FontSize`（自定义扩展，移植旧版） |
+| 增强 | 高亮/上下标 | `Highlight` / `Subscript` / `Superscript` |
+
+> 顺序约束：`TextStyle` 须先于依赖它的 `Color`/`FontFamily`/`FontSize`；StarterKit 禁其 v3 自带
+> `link`/`underline` 避重复。扩展集变更须与本表同步（ED 承载范围 ↔ DOC 子集契约一致）。
 
 ## §5 blockId 转换层兜底（DOC-CONVERT）
 
@@ -214,3 +281,4 @@ status: mapped
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（DOC G2 首件）：DOC 规则 SSOT——双链分离转换管线（编辑链 Pandoc / 预览链 LibreOffice→PDF，旧版 R-ED-M-R-01 v2.0 实证采纳）、转换生命周期与原子性、样式子集三级执行契约（R-ED-M-R-23 实证清单）、blockId 转换层兜底与往返降级契约；注册链路 DOC-CONVERT（P1）、规则 BR-DOC-DATA-001/002/003·BR-DOC-STATE-001、约束 X-SEQ-004、术语 TERM-DOC-001 StyleSubset；REQ_MAP（REQ-DOC-001~005）；债务（版本/过滤器/往返实测/PRV 归属/告知形态延后记明） |
 | 2026-06-11 | v1.1 | DOC-03 解除（随 PRV G2 联合，A-PRV-M-T-01 §2）：Excel/PPT 预览转换归 DOC 预览链扩展（LibreOffice→PDF，X-SEQ-004 覆盖）、音视频系统解码归 PRV；§9 债务更新；保真度实测留实现期 |
+| 2026-06-24 | v1.2 | 实现期处理逻辑细化（文档·设计·代码同步，移植旧版 binder-project 跑通链路）：新增 §2.1 编辑链处理逻辑（编辑模型为 HTML 非 markdown；打开 `pandoc docx+styles → html+raw_html+native_divs+native_spans + preserve-styles.lua + extract-media`，保存 `html → docx --reference-doc reference.docx`；HTML 15MB 上限；资源 reference.docx/preserve-styles.lua 经 bundle）、§2.2 docx 编辑流程（原生 docx→预览→「创建草稿进行编辑」doc.create_draft→编辑；`*.draft.docx`/生成 docx→直编辑；原文档不改动）、§4.1 样式子集↔TipTap 编辑器扩展映射表（必需/部分/增强 ↔ TextAlign/Underline/Table*/Image/TextStyle+Color/FontFamily/FontSize/Highlight/Sub·Superscript）；新增术语 TERM-DOC-002 编辑草稿 EditDraft；命令 doc.open_for_edit/save_from_edit/create_draft 见 A-DOC-I-P-01 v1.1~v1.3；预览链优化版 LibreOffice 打包阻断见 A-CORE-X-R-01 §9。规则/链路不变（BR-DOC-* + DOC-CONVERT），REQ_MAP 不变 |

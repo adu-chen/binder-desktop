@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-06-23T06:45:45.010Z -->
+<!-- 最后生成时间：2026-06-26T02:55:44.319Z -->
 
 ### 模块编码表
 
@@ -115,6 +115,8 @@
 | BR-AG-DATA-002     | DATA    | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-01_对话代理技术设计.md     | registered      | MISSING |
 | BR-AG-STATE-004    | STATE   | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-01_对话代理技术设计.md     | registered      | MISSING |
 | BR-AG-STATE-003    | STATE   | AG-ASSIST                            | docs/01_modules/AG/A-AG-M-T-01_对话代理技术设计.md     | registered      | MISSING |
+| BR-AG-DATA-004     | DATA    | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md      | registered      | MISSING |
+| BR-AG-DATA-005     | DATA    | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md      | registered      | MISSING |
 | BR-AST-DATA-001    | DATA    | AST-MEMORY                           | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md   | registered      | MISSING |
 | BR-AST-STATE-001   | STATE   | AST-MEMORY                           | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md   | registered      | MISSING |
 | BR-AST-DATA-002    | DATA    | AST-MEMORY                           | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md   | registered      | MISSING |
@@ -194,6 +196,7 @@
 | TERM-AG-002    | AG-TOOL      | 工具调用   | ToolCall         | 函数调用, function call, 工具执行, 能力调用                   | docs/01_modules/AG/A-AG-M-T-01_对话代理技术设计.md      |
 | TERM-AG-003    | AG-ASSIST    | 内联辅助   | InlineAssist     | 行内辅助, 内联建议, inline建议, 行内AI                        | docs/01_modules/AG/A-AG-M-T-01_对话代理技术设计.md      |
 | TERM-AG-004    | AG-ASSIST    | 自动补全   | Autocomplete     | 自动完成, 补全建议, 智能补全, 续写补全                            | docs/01_modules/AG/A-AG-M-T-01_对话代理技术设计.md      |
+| TERM-AG-005    | AG-TURN      | 意图沿用判定 | IntentCarryover  | 历史复用, 意图继承, 上下文继承, 意图沿袭, carryover                | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md       |
 | TERM-AST-001   | AST-MEMORY   | 记忆条目   | MemoryEntry      | 记忆点, 记忆项, 记忆片段, memory条目                          | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md    |
 | TERM-CBT-001   | CBT-BUILD    | 构建回合   | BuildRun         | 构建会话, 构建过程, build流程, 项目构建轮                        | docs/01_modules/CBT/A-CBT-M-T-01_构建技术设计.md      |
 | TERM-CBT-002   | CBT-BUILD    | 构建任务   | BuildTask        | 构建步骤, 子任务, build单元, 任务项                           | docs/01_modules/CBT/A-CBT-M-T-01_构建技术设计.md      |
@@ -201,6 +204,7 @@
 | TERM-DE-002    | DE-DIFF      | 修改建议   | ChangeProposal   | AI建议, 修改意见, 编辑建议, 产出建议                            | docs/01_modules/DE/A-DE-M-T-01_对话编辑技术设计.md      |
 | TERM-DE-004    | DE-DIFF      | 修改载荷   | DiffPayload      | diff载荷, 内容载荷, payload, diff内容, 落盘载荷, 提案载荷         | docs/01_modules/DE/A-DE-M-T-01_对话编辑技术设计.md      |
 | TERM-DOC-001   | DOC-CONVERT  | 样式子集   | StyleSubset      | 样式白名单, 格式子集, 样式范围, 支持样式表                          | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
+| TERM-DOC-002   | DOC-CONVERT  | 编辑草稿   | EditDraft        | 草稿副本, draft文件, 临时编辑文件, 编辑副本                       | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
 | TERM-ED-001    | ED-EDIT      | 内容块    | Block            | 内容节点, 段落块, 文本块, 块节点, chunk                        | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-ED-002    | ED-DECOR     | 编辑器装饰层 | EditorDecoration | 高亮层, 标注层, 覆盖层, overlay层, 装饰器层                     | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-KB-001    | KB-RETRIEVE  | 知识条目   | KnowledgeEntry   | 知识点, 资料条目, 知识片段, kb条目                             | docs/01_modules/KB/A-KB-M-T-01_知识库技术设计.md       |
@@ -224,7 +228,7 @@
 
 | codes                               | type | rules                                              | 文件                           | 行号  |
 | ----------------------------------- | ---- | -------------------------------------------------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 125 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 163 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001 | RB   | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39  |
 
 #### AG-TOOL
@@ -247,7 +251,7 @@
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | BR-AG-VERIFY-001                                       | src-tauri/src/ag/turn.rs        | 105 |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001 | EFFECT | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 134 |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001  | QUERY  | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 159 |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 319 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 655 |
 
 #### AST-MEMORY
 
@@ -306,7 +310,7 @@
 
 | codes                                          | type   | rules              | 文件                                   | 行号  |
 | ---------------------------------------------- | ------ | ------------------ | ------------------------------------ | --- |
-| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | BR-SYS-PERSIST-001 | src-tauri/src/db/mod.rs              | 111 |
+| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | BR-SYS-PERSIST-001 | src-tauri/src/db/mod.rs              | 139 |
 | BR-SYS-DATA-002-DATA-SYS-DATA-MIGRATE-001      | DATA   | BR-SYS-DATA-002    | src-tauri/src/types/mod.rs           | 9   |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 38  |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 75  |
@@ -316,25 +320,39 @@
 
 #### DE-DIFF
 
-| codes                                | type  | rules                                              | 文件                           | 行号  |
-| ------------------------------------ | ----- | -------------------------------------------------- | ---------------------------- | --- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-002    | RB    | BR-DE-STATE-001 term_ref: TERM-DE-001, TERM-DE-003 | src/store/deStore.ts         | 107 |
-| BR-DE-STATE-002-GUARD-DE-DE-DIFF-001 | GUARD | BR-DE-STATE-002                                    | src-tauri/src/de/expiry.rs   | 34  |
-| BR-DE-DATA-003-GUARD-DE-DE-DIFF-001  | GUARD | BR-DE-DATA-003                                     | src-tauri/src/de/expiry.rs   | 66  |
-| BR-DE-DATA-002-DATA-DE-DE-DIFF-001   | DATA  | BR-DE-DATA-002                                     | src-tauri/src/de/generate.rs | 35  |
-| BR-DE-DATA-001-GUARD-DE-DE-DIFF-001  | GUARD | BR-DE-DATA-001                                     | src-tauri/src/de/generate.rs | 54  |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-001    | RB    | BR-DE-STATE-001                                    | src-tauri/src/de/mod.rs      | 47  |
+| codes                                 | type   | rules                                              | 文件                            | 行号  |
+| ------------------------------------- | ------ | -------------------------------------------------- | ----------------------------- | --- |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-002     | RB     | BR-DE-STATE-001 term_ref: TERM-DE-001, TERM-DE-003 | src/store/deStore.ts          | 100 |
+| BR-DE-STATE-002-GUARD-DE-DE-DIFF-001  | GUARD  | BR-DE-STATE-002                                    | src-tauri/src/de/expiry.rs    | 34  |
+| BR-DE-DATA-003-GUARD-DE-DE-DIFF-001   | GUARD  | BR-DE-DATA-003                                     | src-tauri/src/de/expiry.rs    | 66  |
+| BR-DE-DATA-002-DATA-DE-DE-DIFF-001    | DATA   | BR-DE-DATA-002                                     | src-tauri/src/de/generate.rs  | 35  |
+| BR-DE-DATA-001-GUARD-DE-DE-DIFF-001   | GUARD  | BR-DE-DATA-001                                     | src-tauri/src/de/generate.rs  | 54  |
+| BR-DE-STATE-002-QUERY-DE-DE-DIFF-001  | QUERY  | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 31  |
+| BR-DE-STATE-002-GUARD-DE-DE-DIFF-002  | GUARD  | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 51  |
+| BR-DE-DATA-003-GUARD-DE-DE-DIFF-002   | GUARD  | BR-DE-DATA-003                                     | src-tauri/src/de/lifecycle.rs | 79  |
+| BR-DE-STATE-002-EFFECT-DE-DE-DIFF-001 | EFFECT | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 99  |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-001     | RB     | BR-DE-STATE-001                                    | src-tauri/src/de/mod.rs       | 53  |
+| BR-DE-DATA-002-IO-DE-DE-DIFF-002      | IO     | BR-DE-DATA-002 term_ref: TERM-DE-004               | src-tauri/src/de/store.rs     | 28  |
+| BR-DE-DATA-002-QUERY-DE-DE-DIFF-001   | QUERY  | BR-DE-DATA-002 term_ref: TERM-DE-004               | src-tauri/src/de/store.rs     | 61  |
 
 #### DOC-CONVERT
 
-| codes                                     | type  | rules            | 文件                                  | 行号 |
-| ----------------------------------------- | ----- | ---------------- | ----------------------------------- | -- |
-| BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-001  | DATA  | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs | 19 |
-| BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-002 | GUARD | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs | 63 |
-| BR-DOC-STATE-001-RB-DOC-DOC-CONVERT-001   | RB    | BR-DOC-STATE-001 | src-tauri/src/doc/convert.rs        | 56 |
-| BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | BR-DOC-DATA-001  | src-tauri/src/doc/convert.rs        | 89 |
-| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001  | DATA  | BR-DOC-DATA-002  | src-tauri/src/doc/style_subset.rs   | 30 |
-| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002  | DATA  | BR-DOC-DATA-002  | src-tauri/src/doc/style_subset.rs   | 52 |
+| codes                                     | type  | rules            | 文件                                       | 行号  |
+| ----------------------------------------- | ----- | ---------------- | ---------------------------------------- | --- |
+| BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-001  | DATA  | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs      | 19  |
+| BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-002 | GUARD | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs      | 63  |
+| BR-DOC-STATE-001-RB-DOC-DOC-CONVERT-001   | RB    | BR-DOC-STATE-001 | src-tauri/src/doc/convert.rs             | 56  |
+| BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | BR-DOC-DATA-001  | src-tauri/src/doc/convert.rs             | 89  |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 63  |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 110 |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-003    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 97  |
+| BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-004  | DATA  | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 158 |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 294 |
+| BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-002  | DATA  | BR-DOC-DATA-001  | src-tauri/src/doc/pandoc_runtime.rs      | 35  |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-001    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/pandoc_runtime.rs      | 55  |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-002    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/pandoc_runtime.rs      | 83  |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001  | DATA  | BR-DOC-DATA-002  | src-tauri/src/doc/style_subset.rs        | 30  |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002  | DATA  | BR-DOC-DATA-002  | src-tauri/src/doc/style_subset.rs        | 52  |
 
 #### ED-DECOR
 
@@ -347,7 +365,7 @@
 | codes                              | type | rules                                | 文件                                               | 行号 |
 | ---------------------------------- | ---- | ------------------------------------ | ------------------------------------------------ | -- |
 | BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | BR-ED-DATA-001 term_ref: TERM-ED-001 | src/components/ed/extensions/BlockIdExtension.ts | 45 |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 49 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 55 |
 
 #### IPC-CALL
 
@@ -366,6 +384,13 @@
 | BR-KB-DATA-001-EFFECT-KB-KB-RETRIEVE-001 | EFFECT | BR-KB-DATA-001 | src-tauri/src/kb/store.rs    | 27 |
 | BR-KB-DATA-001-QUERY-KB-KB-RETRIEVE-001  | QUERY  | BR-KB-DATA-001 | src-tauri/src/kb/store.rs    | 68 |
 | BR-KB-DATA-001-EFFECT-KB-KB-RETRIEVE-002 | EFFECT | BR-KB-DATA-001 | src-tauri/src/kb/store.rs    | 90 |
+
+#### PRV-VIEW
+
+| codes                               | type | rules           | 文件                       | 行号 |
+| ----------------------------------- | ---- | --------------- | ------------------------ | -- |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001 | IO   | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs | 23 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002 | IO   | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs | 48 |
 
 #### REF-INJECT
 
@@ -393,32 +418,38 @@
 | BR-WS-STATE-001-RB-WS-WS-DIFF-APPLY-001     | RB     | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 44  |
 | BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-001 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 70  |
 | BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 96  |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 128 |
-| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 167 |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 131 |
+| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 170 |
 
 #### WS-FS
 
-| codes                             | type  | rules                                | 文件                                 | 行号 |
-| --------------------------------- | ----- | ------------------------------------ | ---------------------------------- | -- |
-| BR-WS-DATA-001-QUERY-WS-WS-FS-002 | QUERY | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/listing.rs | 25 |
-| BR-WS-DATA-001-GUARD-WS-WS-FS-001 | GUARD | BR-WS-DATA-001                       | src-tauri/src/workspace/mod.rs     | 37 |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-003  | QUERY | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 30 |
+| codes                              | type   | rules                                | 文件                                 | 行号  |
+| ---------------------------------- | ------ | ------------------------------------ | ---------------------------------- | --- |
+| BR-WS-DATA-001-EFFECT-WS-WS-FS-001 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 16  |
+| BR-WS-DATA-001-EFFECT-WS-WS-FS-002 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 38  |
+| BR-WS-DATA-001-EFFECT-WS-WS-FS-003 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 63  |
+| BR-WS-DATA-001-QUERY-WS-WS-FS-002  | QUERY  | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/listing.rs | 35  |
+| BR-WS-DATA-001-QUERY-WS-WS-FS-005  | QUERY  | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/listing.rs | 141 |
+| BR-WS-DATA-001-GUARD-WS-WS-FS-001  | GUARD  | BR-WS-DATA-001                       | src-tauri/src/workspace/mod.rs     | 40  |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY  | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 30  |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY  | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 76  |
 
 #### WS-SAVE
 
 | codes                                   | type   | rules             | 文件                              | 行号  |
 | --------------------------------------- | ------ | ----------------- | ------------------------------- | --- |
-| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001      | GUARD  | BR-WS-OBS-001     | src-tauri/src/workspace/save.rs | 65  |
-| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 98  |
-| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 161 |
+| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001      | GUARD  | BR-WS-OBS-001     | src-tauri/src/workspace/save.rs | 95  |
+| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 128 |
+| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 191 |
 
 #### WS-TIMELINE
 
 | codes                                    | type   | rules           | 文件                                  | 行号  |
 | ---------------------------------------- | ------ | --------------- | ----------------------------------- | --- |
-| BR-WS-DATA-002-EFFECT-WS-WS-TIMELINE-001 | EFFECT | BR-WS-DATA-002  | src-tauri/src/workspace/timeline.rs | 42  |
-| BR-WS-DATA-002-QUERY-WS-WS-TIMELINE-001  | QUERY  | BR-WS-DATA-002  | src-tauri/src/workspace/timeline.rs | 86  |
-| BR-WS-STATE-002-RB-WS-WS-TIMELINE-001    | RB     | BR-WS-STATE-002 | src-tauri/src/workspace/timeline.rs | 137 |
+| BR-WS-DATA-002-EFFECT-WS-WS-TIMELINE-001 | EFFECT | BR-WS-DATA-002  | src-tauri/src/workspace/timeline.rs | 43  |
+| BR-WS-DATA-002-QUERY-WS-WS-TIMELINE-001  | QUERY  | BR-WS-DATA-002  | src-tauri/src/workspace/timeline.rs | 87  |
+| BR-WS-STATE-002-QUERY-WS-WS-TIMELINE-002 | QUERY  | BR-WS-STATE-002 | src-tauri/src/workspace/timeline.rs | 147 |
+| BR-WS-STATE-002-RB-WS-WS-TIMELINE-001    | RB     | BR-WS-STATE-002 | src-tauri/src/workspace/timeline.rs | 187 |
 
 ### 规则视图
 
@@ -487,7 +518,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 125 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 163 |
 
 #### BR-AG-STATE-004
 
@@ -506,7 +537,7 @@
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 319 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 655 |
 
 #### BR-AST-DATA-001
 
@@ -568,42 +599,61 @@
 | ---------------------------------- | ---- | ------- | ---------------------------- | -- |
 | BR-DE-DATA-002-DATA-DE-DE-DIFF-001 | DATA | DE-DIFF | src-tauri/src/de/generate.rs | 35 |
 
+#### BR-DE-DATA-002 term_ref: TERM-DE-004
+
+| codes                               | type  | chain   | 文件                        | 行号 |
+| ----------------------------------- | ----- | ------- | ------------------------- | -- |
+| BR-DE-DATA-002-IO-DE-DE-DIFF-002    | IO    | DE-DIFF | src-tauri/src/de/store.rs | 28 |
+| BR-DE-DATA-002-QUERY-DE-DE-DIFF-001 | QUERY | DE-DIFF | src-tauri/src/de/store.rs | 61 |
+
 #### BR-DE-DATA-003
 
-| codes                               | type  | chain   | 文件                         | 行号 |
-| ----------------------------------- | ----- | ------- | -------------------------- | -- |
-| BR-DE-DATA-003-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/expiry.rs | 66 |
+| codes                               | type  | chain   | 文件                            | 行号 |
+| ----------------------------------- | ----- | ------- | ----------------------------- | -- |
+| BR-DE-DATA-003-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/expiry.rs    | 66 |
+| BR-DE-DATA-003-GUARD-DE-DE-DIFF-002 | GUARD | DE-DIFF | src-tauri/src/de/lifecycle.rs | 79 |
 
 #### BR-DE-STATE-001
 
 | codes                             | type | chain   | 文件                      | 行号 |
 | --------------------------------- | ---- | ------- | ----------------------- | -- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-001 | RB   | DE-DIFF | src-tauri/src/de/mod.rs | 47 |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-001 | RB   | DE-DIFF | src-tauri/src/de/mod.rs | 53 |
 
 #### BR-DE-STATE-001 term_ref: TERM-DE-001
 
 | codes                             | type | chain   | 文件                   | 行号  |
 | --------------------------------- | ---- | ------- | -------------------- | --- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 107 |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 100 |
 
 #### BR-DE-STATE-002
 
-| codes                                | type  | chain   | 文件                         | 行号 |
-| ------------------------------------ | ----- | ------- | -------------------------- | -- |
-| BR-DE-STATE-002-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/expiry.rs | 34 |
+| codes                                 | type   | chain   | 文件                            | 行号 |
+| ------------------------------------- | ------ | ------- | ----------------------------- | -- |
+| BR-DE-STATE-002-GUARD-DE-DE-DIFF-001  | GUARD  | DE-DIFF | src-tauri/src/de/expiry.rs    | 34 |
+| BR-DE-STATE-002-QUERY-DE-DE-DIFF-001  | QUERY  | DE-DIFF | src-tauri/src/de/lifecycle.rs | 31 |
+| BR-DE-STATE-002-GUARD-DE-DE-DIFF-002  | GUARD  | DE-DIFF | src-tauri/src/de/lifecycle.rs | 51 |
+| BR-DE-STATE-002-EFFECT-DE-DE-DIFF-001 | EFFECT | DE-DIFF | src-tauri/src/de/lifecycle.rs | 99 |
 
 #### BR-DOC-DATA-001
 
-| codes                                     | type  | chain       | 文件                           | 行号 |
-| ----------------------------------------- | ----- | ----------- | ---------------------------- | -- |
-| BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | DOC-CONVERT | src-tauri/src/doc/convert.rs | 89 |
+| codes                                     | type  | chain       | 文件                                       | 行号  |
+| ----------------------------------------- | ----- | ----------- | ---------------------------------------- | --- |
+| BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | DOC-CONVERT | src-tauri/src/doc/convert.rs             | 89  |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-003    | IO    | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 97  |
+| BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-004  | DATA  | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 158 |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 294 |
+| BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-002  | DATA  | DOC-CONVERT | src-tauri/src/doc/pandoc_runtime.rs      | 35  |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-001    | IO    | DOC-CONVERT | src-tauri/src/doc/pandoc_runtime.rs      | 55  |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-002    | IO    | DOC-CONVERT | src-tauri/src/doc/pandoc_runtime.rs      | 83  |
 
 #### BR-DOC-DATA-002
 
-| codes                                    | type | chain       | 文件                                | 行号 |
-| ---------------------------------------- | ---- | ----------- | --------------------------------- | -- |
-| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 30 |
-| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 52 |
+| codes                                    | type | chain       | 文件                                | 行号  |
+| ---------------------------------------- | ---- | ----------- | --------------------------------- | --- |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003   | IO   | DOC-CONVERT | src-tauri/src/doc/edit_chain.rs   | 63  |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004   | IO   | DOC-CONVERT | src-tauri/src/doc/edit_chain.rs   | 110 |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 30  |
+| BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 52  |
 
 #### BR-DOC-DATA-003
 
@@ -628,7 +678,7 @@
 
 | codes                             | type | chain   | 文件                   | 行号 |
 | --------------------------------- | ---- | ------- | -------------------- | -- |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 49 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 55 |
 
 #### BR-ED-STATE-002 term_ref: TERM-ED-002
 
@@ -673,6 +723,13 @@
 | codes                                   | type  | chain       | 文件                           | 行号 |
 | --------------------------------------- | ----- | ----------- | ---------------------------- | -- |
 | BR-KB-DATA-002-QUERY-KB-KB-RETRIEVE-001 | QUERY | KB-RETRIEVE | src-tauri/src/kb/retrieve.rs | 12 |
+
+#### BR-PRV-DATA-002
+
+| codes                               | type | chain    | 文件                       | 行号 |
+| ----------------------------------- | ---- | -------- | ------------------------ | -- |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001 | IO   | PRV-VIEW | src-tauri/src/prv/mod.rs | 23 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002 | IO   | PRV-VIEW | src-tauri/src/prv/mod.rs | 48 |
 
 #### BR-REF-DATA-001
 
@@ -732,7 +789,7 @@
 
 | codes                                          | type   | chain        | 文件                      | 行号  |
 | ---------------------------------------------- | ------ | ------------ | ----------------------- | --- |
-| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/db/mod.rs | 111 |
+| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/db/mod.rs | 139 |
 
 #### BR-SYS-STATE-001
 
@@ -772,34 +829,39 @@
 
 | codes                             | type  | chain | 文件                             | 行号 |
 | --------------------------------- | ----- | ----- | ------------------------------ | -- |
-| BR-WS-DATA-001-GUARD-WS-WS-FS-001 | GUARD | WS-FS | src-tauri/src/workspace/mod.rs | 37 |
+| BR-WS-DATA-001-GUARD-WS-WS-FS-001 | GUARD | WS-FS | src-tauri/src/workspace/mod.rs | 40 |
 
 #### BR-WS-DATA-001 term_ref: TERM-WS-001
 
-| codes                             | type  | chain | 文件                                 | 行号 |
-| --------------------------------- | ----- | ----- | ---------------------------------- | -- |
-| BR-WS-DATA-001-QUERY-WS-WS-FS-002 | QUERY | WS-FS | src-tauri/src/workspace/listing.rs | 25 |
+| codes                              | type   | chain | 文件                                 | 行号  |
+| ---------------------------------- | ------ | ----- | ---------------------------------- | --- |
+| BR-WS-DATA-001-EFFECT-WS-WS-FS-001 | EFFECT | WS-FS | src-tauri/src/workspace/fileops.rs | 16  |
+| BR-WS-DATA-001-EFFECT-WS-WS-FS-002 | EFFECT | WS-FS | src-tauri/src/workspace/fileops.rs | 38  |
+| BR-WS-DATA-001-EFFECT-WS-WS-FS-003 | EFFECT | WS-FS | src-tauri/src/workspace/fileops.rs | 63  |
+| BR-WS-DATA-001-QUERY-WS-WS-FS-002  | QUERY  | WS-FS | src-tauri/src/workspace/listing.rs | 35  |
+| BR-WS-DATA-001-QUERY-WS-WS-FS-005  | QUERY  | WS-FS | src-tauri/src/workspace/listing.rs | 141 |
 
 #### BR-WS-DATA-002
 
 | codes                                    | type   | chain       | 文件                                  | 行号 |
 | ---------------------------------------- | ------ | ----------- | ----------------------------------- | -- |
-| BR-WS-DATA-002-EFFECT-WS-WS-TIMELINE-001 | EFFECT | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 42 |
-| BR-WS-DATA-002-QUERY-WS-WS-TIMELINE-001  | QUERY  | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 86 |
+| BR-WS-DATA-002-EFFECT-WS-WS-TIMELINE-001 | EFFECT | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 43 |
+| BR-WS-DATA-002-QUERY-WS-WS-TIMELINE-001  | QUERY  | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 87 |
 
 #### BR-WS-OBS-001
 
 | codes                              | type  | chain   | 文件                              | 行号 |
 | ---------------------------------- | ----- | ------- | ------------------------------- | -- |
 | BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 30 |
-| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 65 |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 76 |
+| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 95 |
 
 #### BR-WS-PERSIST-001
 
 | codes                                   | type   | chain   | 文件                              | 行号  |
 | --------------------------------------- | ------ | ------- | ------------------------------- | --- |
-| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | WS-SAVE | src-tauri/src/workspace/save.rs | 98  |
-| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | WS-SAVE | src-tauri/src/workspace/save.rs | 161 |
+| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | WS-SAVE | src-tauri/src/workspace/save.rs | 128 |
+| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | WS-SAVE | src-tauri/src/workspace/save.rs | 191 |
 
 #### BR-WS-PERSIST-002
 
@@ -818,32 +880,33 @@
 | BR-WS-STATE-001-RB-WS-WS-DIFF-APPLY-001     | RB     | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 44  |
 | BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-001 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 70  |
 | BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 96  |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 128 |
-| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 167 |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 131 |
+| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 170 |
 
 #### BR-WS-STATE-002
 
-| codes                                 | type | chain       | 文件                                  | 行号  |
-| ------------------------------------- | ---- | ----------- | ----------------------------------- | --- |
-| BR-WS-STATE-002-RB-WS-WS-TIMELINE-001 | RB   | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 137 |
+| codes                                    | type  | chain       | 文件                                  | 行号  |
+| ---------------------------------------- | ----- | ----------- | ----------------------------------- | --- |
+| BR-WS-STATE-002-QUERY-WS-WS-TIMELINE-002 | QUERY | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 147 |
+| BR-WS-STATE-002-RB-WS-WS-TIMELINE-001    | RB    | WS-TIMELINE | src-tauri/src/workspace/timeline.rs | 187 |
 
 #### TERM-AG-004
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 125 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 163 |
 
 #### TERM-CLOUD-001
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 319 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 655 |
 
 #### TERM-DE-003
 
 | codes                             | type | chain   | 文件                   | 行号  |
 | --------------------------------- | ---- | ------- | -------------------- | --- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 107 |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 100 |
 
 #### TERM-ED-003
 
