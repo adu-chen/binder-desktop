@@ -703,6 +703,56 @@ fn default_model(provider: &str) -> String {
     .to_string()
 }
 
+/// PI-AG-08C · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
+///
+/// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）。
+/// dev：整文档内容替换（content=完整新内容），块级锚定后续。返回 (diff_id, rel_path)。
+fn ag_propose_edit(state: &AppState, params: &serde_json::Value) -> Result<(String, String), IpcError> {
+    use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
+    use crate::types::LocateResult;
+
+    let rel_path = params
+        .get("path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "propose_edit 缺 path 参数", false, false))?
+        .to_string();
+    let after_content = params
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "propose_edit 缺 content 参数", false, false))?
+        .to_string();
+
+    let ws = active_ws(state)?;
+    // 路径限 workspace 内（X-FORBID-004）。
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+    // 既有文档 → before_snapshot=Some（modify）；不存在 → None（新建，is_new_doc 派生）。
+    let before_snapshot = std::fs::read_to_string(&abs).ok();
+
+    let proposal = ChangeProposal {
+        origin_task: "ag_turn".to_string(),
+        target: crate::types::DocRef {
+            workspace_id: ws.workspace_id,
+            doc_type: doc_type_of(&rel_path),
+            rel_path: rel_path.clone(),
+        },
+        after_content: after_content.into_bytes(),
+        before_snapshot,
+    };
+    let diff_id = gen_id("diff");
+    let payload_ref = format!("pl_{diff_id}");
+    // 锚校验（既有须 Located；新建跳过）——失败 GenFailed 回报，不持久化（BR-DE-DATA-001）。
+    let pending = generate_diff(&proposal, &diff_id, "AG", &payload_ref, now_millis(), LocateResult::Located)?;
+    let payload = build_payload(&proposal);
+
+    let conn = lock_db(state)?;
+    crate::de::store::persist_payload(&conn, &payload_ref, &payload)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    workspace::diff_apply::persist_diff(&conn, &pending)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    Ok((diff_id, rel_path))
+}
+
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
 /// 驱动 SM-AG-01 门禁前置（X-SEQ-001：唯一经 AwaitingGate+gatePassed 达 Streaming；dev 门禁桩=Passed，
@@ -790,6 +840,21 @@ async fn ag_start_turn(
                     // 注册/权限校验（BR-AG-STATE-002）→ 执行（限 workspace，X-FORBID-004）。
                     let (result, success) = match ag::tool_registry::validate_requested_tool(&c.name) {
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
+                        // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
+                        ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
+                            match ag_propose_edit(&state, &params) {
+                                Ok((diff_id, rel_path)) => {
+                                    let _ = on_event.send(AgTurnEvent::DiffProposed {
+                                        turn_id: turn_id.clone(),
+                                        diff_id: diff_id.clone(),
+                                        rel_path,
+                                    });
+                                    (format!("已生成修改建议（diff_id={diff_id}），界面已显示待确认卡片，等待用户接受后应用；请勿重复提交。"), true)
+                                }
+                                Err(e) => (format!("生成修改建议失败：{}", e.message), false),
+                            }
+                        }
+                        // 只读工具：经 WS/KB 执行（限 active workspace）。
                         ag::tool::ToolDecision::Allow => match ws_root.as_deref() {
                             None => ("无活动 workspace，无法执行工具".to_string(), false),
                             Some(root) => {

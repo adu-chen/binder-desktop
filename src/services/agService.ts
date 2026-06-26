@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore } from "../store/agStore";
 import { edStore } from "../store/edStore";
+import { deStore } from "../store/deStore";
 
 /**
  * AG 模块 Service 层。
@@ -69,7 +70,22 @@ export async function startTurn(
           });
           finish();
           break;
-        // tool_request / tool_result / diff_proposed：后续 PI（工具卡片 / DE diff 卡片）接入。
+        case "diff_proposed": {
+          // AI 经 propose_edit 生成了待裁决修改（PI-AG-08C）：投影为 diff 卡片；
+          // 接受经既有 deService.acceptDiff→de.accept_diff→ws.apply_diff 真落盘（X-FORBID-006）。
+          const before = edStore.getSnapshot().loadedContent ?? "";
+          deStore.addDiff({
+            diffId: ev.diff_id,
+            blockId: "",
+            relPath: ev.rel_path,
+            title: `AI 建议修改 ${ev.rel_path}`,
+            before: before.slice(-60),
+            after: "（AI 修改建议，接受后应用到文档）",
+            state: "pending",
+          });
+          break;
+        }
+        // tool_request / tool_result：工具卡片 UI 后续接入（事件已收，暂不渲染）。
         default:
           break;
       }

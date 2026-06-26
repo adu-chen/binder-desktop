@@ -90,6 +90,21 @@ pub fn tool_definitions_json() -> serde_json::Value {
                     "required": ["query"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "propose_edit",
+                "description": "对文档提出修改建议（不直接写盘，生成待用户确认的修改卡片，用户接受后才应用）。content 为修改后的【完整文档内容】。需要修改当前文档时用此工具。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "目标文档相对路径（通常是当前打开的文档）" },
+                        "content": { "type": "string", "description": "修改后的完整文档内容（整篇，非片段）" }
+                    },
+                    "required": ["path", "content"]
+                }
+            }
         }
     ])
 }
