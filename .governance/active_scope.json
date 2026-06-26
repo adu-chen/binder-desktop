@@ -1,21 +1,21 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08D",
+  "scope_id": "PI-AG-08E",
   "allowed_files": [
-    "src/store/agStore.ts",
-    "src/services/agService.ts",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ag/tool_registry.rs",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08D.md"
+    ".governance/issues/PI-AG-08E.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src/components/ed/EditorTab.tsx",
-    "src/store/edStore.ts",
-    "src/store/deStore.ts"
+    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/de/generate.rs",
+    "src/store/edStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08D 前端工具卡片：agStore 补 addToolCall/resolveToolCall/clearToolCalls（toolCalls 投影现有 ToolCallView，MessageList/ToolCallCard UI 已就绪只缺数据源）；agService 收 ToolRequest→addToolCall(executing)、ToolResult→resolveToolCall(done/failed)、startTurn 起清空。纯前端投影，不改后端/事件形状。"
+  "scope_reason": "PI-AG-08E 块级锚定编辑：当前文档注入改为编号块列表（doc_blocks，按段 \\n\\n 切，与重建一致）；propose_edit 增块模式（block_index+new_text）——基准用注入给模型的当前内容（base_content）切块、替目标块、重建整篇→既有 generate_diff 路径；整篇模式（content）保留。dev 文本/markdown 段落块；docx/html 块后续。纯后端，diff 卡片不变。"
 }

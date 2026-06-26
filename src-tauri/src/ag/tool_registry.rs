@@ -95,14 +95,16 @@ pub fn tool_definitions_json() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "propose_edit",
-                "description": "对文档提出修改建议（不直接写盘，生成待用户确认的修改卡片，用户接受后才应用）。content 为修改后的【完整文档内容】。需要修改当前文档时用此工具。",
+                "description": "对文档提出修改建议（不直接写盘，生成待用户确认的修改卡片，用户接受后才应用）。两种用法：①改某一块：传 path + block_index（当前文档块列表里的块号）+ new_text（该块的新内容）——优先用此精确方式；②改写整篇：传 path + content（完整新内容）。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "目标文档相对路径（通常是当前打开的文档）" },
-                        "content": { "type": "string", "description": "修改后的完整文档内容（整篇，非片段）" }
+                        "block_index": { "type": "integer", "description": "要修改的块号（来自当前文档块列表 Block N）；块模式必填" },
+                        "new_text": { "type": "string", "description": "该块修改后的新内容；块模式必填" },
+                        "content": { "type": "string", "description": "整篇模式：修改后的完整文档内容" }
                     },
-                    "required": ["path", "content"]
+                    "required": ["path"]
                 }
             }
         }

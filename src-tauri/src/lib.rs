@@ -703,11 +703,27 @@ fn default_model(provider: &str) -> String {
     .to_string()
 }
 
-/// PI-AG-08C · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
+/// 文档分块（PI-AG-08E，dev 文本/markdown：按段 `\n\n` 切，非空 trim）。
+/// **注入编号与块编辑重建用同一函数**，保证模型看到的块号与后端重建对齐。docx/html 块后续。
+fn doc_blocks(content: &str) -> Vec<String> {
+    content
+        .split("\n\n")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// PI-AG-08C/08E · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）。
-/// dev：整文档内容替换（content=完整新内容），块级锚定后续。返回 (diff_id, rel_path)。
-fn ag_propose_edit(state: &AppState, params: &serde_json::Value) -> Result<(String, String), IpcError> {
+/// 两模式：整篇（content）/ 块级（block_index+new_text，基准用 base_content 切块对齐块号，PI-AG-08E）。
+/// 返回 (diff_id, rel_path)。
+fn ag_propose_edit(
+    state: &AppState,
+    params: &serde_json::Value,
+    base_content: Option<&str>,
+) -> Result<(String, String), IpcError> {
     use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
     use crate::types::LocateResult;
 
@@ -717,15 +733,44 @@ fn ag_propose_edit(state: &AppState, params: &serde_json::Value) -> Result<(Stri
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "propose_edit 缺 path 参数", false, false))?
         .to_string();
-    let after_content = params
-        .get("content")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "propose_edit 缺 content 参数", false, false))?
-        .to_string();
 
     let ws = active_ws(state)?;
     // 路径限 workspace 内（X-FORBID-004）。
     let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+
+    // 块模式（block_index+new_text）：基准用注入给模型的当前内容切块、替目标块、重建整篇（块号对齐）。
+    // 整篇模式（content）：直接整篇替换。
+    let after_content = if let Some(bi) = params.get("block_index").and_then(|v| v.as_u64()) {
+        let new_text = params
+            .get("new_text")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "propose_edit 块模式缺 new_text 参数", false, false))?;
+        let base = base_content
+            .map(|s| s.to_string())
+            .or_else(|| std::fs::read_to_string(&abs).ok())
+            .ok_or_else(|| IpcError::new("AG_DOC_READ", "无法读取文档内容以做块编辑", false, false))?;
+        let mut blocks = doc_blocks(&base);
+        let i = bi as usize;
+        if i >= blocks.len() {
+            return Err(IpcError::new(
+                "AG_TOOL_ARG",
+                &format!("block_index {i} 越界（当前共 {} 块）", blocks.len()),
+                false,
+                false,
+            ));
+        }
+        blocks[i] = new_text.to_string();
+        blocks.join("\n\n")
+    } else {
+        params
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                IpcError::new("AG_TOOL_ARG", "propose_edit 缺 content 或 block_index 参数", false, false)
+            })?
+            .to_string()
+    };
+
     // 既有文档 → before_snapshot=Some（modify）；不存在 → None（新建，is_new_doc 派生）。
     let before_snapshot = std::fs::read_to_string(&abs).ok();
 
@@ -793,8 +838,14 @@ async fn ag_start_turn(
     })];
     if let Some(content) = active_doc_content.as_deref().filter(|c| !c.trim().is_empty()) {
         let path = active_doc_path.as_deref().unwrap_or("(未命名)");
+        // 编号块列表（PI-AG-08E）：块号供 propose_edit 块模式精确定位（doc_blocks 与重建同源）。
+        let blocks = doc_blocks(content);
+        let mut block_view = String::new();
+        for (i, b) in blocks.iter().enumerate() {
+            block_view.push_str(&format!("Block {i}: {b}\n"));
+        }
         let ctx = format!(
-            "[当前编辑器打开的文档] 路径：{path}\n以下是该文档的当前完整内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{content}"
+            "[当前编辑器打开的文档] 路径：{path}\n以下按块编号列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{block_view}\n修改某一块用 propose_edit 传 path + block_index（上面的块号）+ new_text（该块新内容）；改写整篇用 path + content（完整内容）。"
         );
         messages.push(serde_json::json!({ "role": "system", "content": ctx }));
     }
@@ -842,7 +893,7 @@ async fn ag_start_turn(
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
                         // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
                         ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
-                            match ag_propose_edit(&state, &params) {
+                            match ag_propose_edit(&state, &params, active_doc_content.as_deref()) {
                                 Ok((diff_id, rel_path)) => {
                                     let _ = on_event.send(AgTurnEvent::DiffProposed {
                                         turn_id: turn_id.clone(),
