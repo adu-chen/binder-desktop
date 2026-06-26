@@ -29,3 +29,6 @@ pub mod tool_registry;
 
 /// PI-AG-08B · 工具执行（只读：list_docs/read_doc/search_text，经 WS 限 workspace）。
 pub mod tool_exec;
+
+/// PI-AG-08E/08F · 文档分块（text 段落 + docx/html 块），块列表注入 + 块级 propose_edit 重建。
+pub mod blocks;

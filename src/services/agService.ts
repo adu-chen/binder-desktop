@@ -112,6 +112,7 @@ export async function startTurn(
       model: opts?.model,
       activeDocPath: ed.openPath ?? undefined,
       activeDocContent: ed.loadedContent ?? undefined,
+      activeDocFormat: ed.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
       onEvent,
     }).catch((e: unknown) => {
       const err = e as { code?: string; message?: string };

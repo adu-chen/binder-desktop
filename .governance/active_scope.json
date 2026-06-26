@@ -1,11 +1,13 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08E",
+  "scope_id": "PI-AG-08F",
   "allowed_files": [
+    "src-tauri/src/ag/blocks.rs",
+    "src-tauri/src/ag/mod.rs",
     "src-tauri/src/lib.rs",
-    "src-tauri/src/ag/tool_registry.rs",
+    "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08E.md"
+    ".governance/issues/PI-AG-08F.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -14,8 +16,9 @@
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
     "src-tauri/src/de/generate.rs",
+    "src-tauri/src/doc/block_backfill.rs",
     "src/store/edStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08E 块级锚定编辑：当前文档注入改为编号块列表（doc_blocks，按段 \\n\\n 切，与重建一致）；propose_edit 增块模式（block_index+new_text）——基准用注入给模型的当前内容（base_content）切块、替目标块、重建整篇→既有 generate_diff 路径；整篇模式（content）保留。dev 文本/markdown 段落块；docx/html 块后续。纯后端，diff 卡片不变。"
+  "scope_reason": "PI-AG-08F docx/html 块编辑：新建 ag/blocks.rs（dev HTML 块解析：扫 data-block-id 元素取 inner 区间+strip 文本；text 段落块）+ replace_block（HTML in-place 非破坏 splice inner、text join）；lib.rs 注入/propose_edit 改用 ag::blocks 且按 active_doc_format（text|html）分流；agService 传 activeDocFormat=edStore.editFormat（只读）。无 HTML parser 依赖（轻量字符串扫描，dev 级，限平铺块元素）。"
 }

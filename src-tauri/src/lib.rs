@@ -703,18 +703,7 @@ fn default_model(provider: &str) -> String {
     .to_string()
 }
 
-/// 文档分块（PI-AG-08E，dev 文本/markdown：按段 `\n\n` 切，非空 trim）。
-/// **注入编号与块编辑重建用同一函数**，保证模型看到的块号与后端重建对齐。docx/html 块后续。
-fn doc_blocks(content: &str) -> Vec<String> {
-    content
-        .split("\n\n")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect()
-}
-
-/// PI-AG-08C/08E · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
+/// PI-AG-08C/08E/08F · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）。
 /// 两模式：整篇（content）/ 块级（block_index+new_text，基准用 base_content 切块对齐块号，PI-AG-08E）。
@@ -723,6 +712,7 @@ fn ag_propose_edit(
     state: &AppState,
     params: &serde_json::Value,
     base_content: Option<&str>,
+    is_html: bool,
 ) -> Result<(String, String), IpcError> {
     use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
     use crate::types::LocateResult;
@@ -749,18 +739,9 @@ fn ag_propose_edit(
             .map(|s| s.to_string())
             .or_else(|| std::fs::read_to_string(&abs).ok())
             .ok_or_else(|| IpcError::new("AG_DOC_READ", "无法读取文档内容以做块编辑", false, false))?;
-        let mut blocks = doc_blocks(&base);
-        let i = bi as usize;
-        if i >= blocks.len() {
-            return Err(IpcError::new(
-                "AG_TOOL_ARG",
-                &format!("block_index {i} 越界（当前共 {} 块）", blocks.len()),
-                false,
-                false,
-            ));
-        }
-        blocks[i] = new_text.to_string();
-        blocks.join("\n\n")
+        // text 段落块 / docx-html 按 data-block-id 块（in-place 非破坏重建），PI-AG-08F。
+        crate::ag::blocks::replace_block(&base, is_html, bi as usize, new_text)
+            .map_err(|m| IpcError::new("AG_TOOL_ARG", &m, false, false))?
     } else {
         params
             .get("content")
@@ -813,6 +794,7 @@ async fn ag_start_turn(
     model: Option<String>,
     active_doc_path: Option<String>,
     active_doc_content: Option<String>,
+    active_doc_format: Option<String>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), IpcError> {
@@ -836,10 +818,15 @@ async fn ag_start_turn(
     let mut messages = vec![serde_json::json!({
         "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
     })];
+    // 文档形态（PI-AG-08F）：editFormat=html 或内容以 < 开头 → 按 docx/html 块；否则 text 段落块。
+    let doc_is_html = active_doc_content
+        .as_deref()
+        .map(|c| crate::ag::blocks::is_html(c, active_doc_format.as_deref()))
+        .unwrap_or(false);
     if let Some(content) = active_doc_content.as_deref().filter(|c| !c.trim().is_empty()) {
         let path = active_doc_path.as_deref().unwrap_or("(未命名)");
-        // 编号块列表（PI-AG-08E）：块号供 propose_edit 块模式精确定位（doc_blocks 与重建同源）。
-        let blocks = doc_blocks(content);
+        // 编号块列表（PI-AG-08E/08F）：块号供 propose_edit 块模式精确定位（block_texts 与重建同源）。
+        let blocks = crate::ag::blocks::block_texts(content, doc_is_html);
         let mut block_view = String::new();
         for (i, b) in blocks.iter().enumerate() {
             block_view.push_str(&format!("Block {i}: {b}\n"));
@@ -893,7 +880,7 @@ async fn ag_start_turn(
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
                         // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
                         ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
-                            match ag_propose_edit(&state, &params, active_doc_content.as_deref()) {
+                            match ag_propose_edit(&state, &params, active_doc_content.as_deref(), doc_is_html) {
                                 Ok((diff_id, rel_path)) => {
                                     let _ = on_event.send(AgTurnEvent::DiffProposed {
                                         turn_id: turn_id.clone(),
