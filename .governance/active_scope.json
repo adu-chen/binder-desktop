@@ -1,22 +1,23 @@
 {
-  "task_type": "CODE_CHANGE_MINOR",
-  "scope_id": "PI-FE-28",
+  "task_type": "CODE_CHANGE",
+  "scope_id": "PI-AG-10C",
   "allowed_files": [
-    "src/components/ed/EditorTab.tsx",
-    "src/components/ed/EditorTab.test.tsx",
-    "src/styles.css",
-    "src/store/edStore.ts",
-    "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
+    "src-tauri/src/ipc/mod.rs",
+    "docs/01_modules/AG/A-AG-I-P-01_对话代理接口协议.md",
+    "docs/01_modules/AG/A-AG-X-L-02_对话代理集成计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-28.md"
+    ".governance/issues/PI-AG-10C.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src-tauri/src/ipc/mod.rs"
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ag/turn.rs",
+    "src/components/ed/EditorTab.tsx",
+    "src/components/ed/EditorTab.test.tsx"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-28 纯死代码清理（CODE_CHANGE_MINOR）：删除自 PI-FE-26 起被 center TabStrip 取代、除自身测试外零引用的 EditorTab 组件及其测试与死 .edtab CSS；无行为变更、无规则覆盖损失（EditorTab.test 无 covers: BR-*）。收口 PI-FE-27 登记的 A 类债务。"
+  "scope_reason": "PI-AG-10C 把已冻结的 AG 回合流式契约落为 src-tauri/src/ipc/mod.rs 的 AgTurnEvent 枚举（避开既有 SYS ipc::StreamEvent 重名，分层不同·非重复），作为前后端双轨同步真源；同步 A-AG-I-P-01 §2.1 / A-AG-X-L-02 命名。不含命令注册(10B)与前端(10F)。人类确认并行窗口已完结、授权开始 agent 开发；并发 PI-FE-28 的暂存改动不触碰。"
 }

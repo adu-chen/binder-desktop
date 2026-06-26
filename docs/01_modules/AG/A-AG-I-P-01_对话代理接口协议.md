@@ -28,13 +28,62 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 
 | command/事件 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ag.start_turn` | DocRef、prompt、注入引用集（@mention ids，可空） | turn_id（SM-AG-01 启动）+ 流式句柄 | **gate_denied**（无订阅/断网，不可绕过）；组装失败（注入锚失效） | 经门禁→网关；BR-AG-STATE-001/VERIFY-001 |
-| `ag.cancel_turn` | turn_id | 中断确认（Cancelled 终态，无半落盘） | — | SM-AG-01 cancel |
-| `ag.turn_stream`（事件） | turn_id（订阅） | 流式分片（token/工具请求/完成/错误终态） | 流式错误→统一错误形状 | BR-SYS-STATE-002 三类终态 |
+| `ag.start_turn` | DocRef、prompt、注入引用集（@mention ids，可空）、`Channel<AgTurnEvent>` 句柄 | turn_id（SM-AG-01 启动）；流式经 channel 回推（§2.1） | **gate_denied**（无订阅/断网，不可绕过）；组装失败（注入锚失效） | 经门禁→网关；BR-AG-STATE-001/VERIFY-001 |
+| `ag.cancel_turn` | turn_id | 中断确认（Cancelled 终态，无半落盘）；前端关闭 channel | — | SM-AG-01 cancel |
+| `ag.turn_stream`（`Channel<AgTurnEvent>`） | turn_id、channel（随 start_turn 传入） | AgTurnEvent 六分支回推（§2.1） | 流式错误→Error 分支（统一错误形状） | BR-SYS-STATE-002 三类终态 |
 | `ag.list_turns` | DocRef（可空） | 回合历史列表（agent_turns，A-SYS-I-P-01） | — | BR-AG-PERSIST-001（重启可恢复、不上云） |
 
 > 含修改建议的回合产出：回合内部经 `de.generate_diff` 交 DE（AG 无直接写盘，X-FORBID-006）；
-> turn_stream 仅回显，落盘必经 diff 裁决链。
+> 流式仅回显，落盘必经 diff 裁决链。
+
+### §2.1 流式回传契约（AgTurnEvent · 前后端双轨同步冻结点）
+
+> 本节是 A-AG-X-L-02 PI-AG-10C 的契约落点——前端轨（PI-AG-10F）与后端轨（PI-AG-10B）共同承接的
+> **唯一真源**。**物理传输** Tauri 2 `Channel<AgTurnEvent>`（SY-02 选型，per-call channel，不经
+> dispatch 信封）；**事件语义**承 BR-SYS-STATE-002 三终态。本节为语义级接口签名，不新增注册类治理块。
+>
+> **与 SYS `ipc::StreamEvent` 的关系（分层不同·非重复）**：`ipc::StreamEvent` 是通用 IPC 传输契约
+> （dispatch 信封 + correlation_id，BR-SYS-STATE-002）；`AgTurnEvent` 是 AG 回合**领域**事件，走
+> 独立 per-call `Channel<T>`（channel 即回合关联，故用 turn_id 而非 correlation_id）。终态语义相通，
+> 但传输层不同故用独立 wire 类型，**不复用** `StreamEvent`（避免把领域事件埋进通用 `data`），
+> 也不与之重名。
+
+**AgTurnEvent 六分支**（`src-tauri/src/ipc/mod.rs`，serde `tag="type"` snake_case）：
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgTurnEvent {
+    Chunk        { turn_id: String, text: String },                                  // 模型输出文本分片
+    ToolRequest  { turn_id: String, tool_name: String, params: serde_json::Value },  // 模型请求工具（SM-AG-02 激活）
+    ToolResult   { turn_id: String, tool_name: String, result: String, success: bool }, // 工具结果回注（展示）
+    DiffProposed { turn_id: String, diff_id: String, rel_path: String },             // ChangeProposal→DE 产出待裁决
+    Done         { turn_id: String, stop_reason: String },                           // 正常完成 / cancelled
+    Error        { turn_id: String, code: String, message: String, retriable: bool },// 错误（含可重试）
+}
+```
+
+**ag_start_turn 命令签名**（独立 `tauri::command`，不走 dispatch 信封）：
+
+```rust
+#[tauri::command]
+async fn ag_start_turn(
+    turn_id: String,
+    prompt: String,
+    active_doc_rel_path: String,
+    mentions: Vec<String>,
+    channel: Channel<AgTurnEvent>,
+    state: State<'_, AppState>,
+) -> Result<(), IpcError>
+```
+
+**三终态映射**（BR-SYS-STATE-002）：完成 → `Done`；用户中断 → `Done { stop_reason: "cancelled" }`（无半落盘）；错误 → `Error`。
+
+**前端消费映射**（PI-AG-10F，`agStore`/`deStore`）：`Chunk`→`appendToMessage`、`ToolRequest`/`ToolResult`→工具卡片、`DiffProposed`→`deStore.stageDiff`（四态卡片）、`Done`→`finishMessage`、`Error`→`pushError`。
+
+**关联命令形状**（同属契约，前后端对齐）：`ag.cancel_turn(turn_id)`（前端关闭 channel）；产出落 `de.generate_diff`→`DiffProposed`；裁决经 `de.accept_diff`/`de.reject_diff`（归 A-DE-I-P-01，本文不重定义）。
+
+**冻结约定**：本 schema 一经冻结，字段增删须前后端**双侧同步**并回写本节；桩阶段（GW 未就绪）后端经 `route_start_turn` 桩从 channel 推 `Chunk×N + Done`，前端零改动切换真实。
 
 ## §3 工具调用回注接口（AG-TOOL / SM-AG-02）
 
@@ -90,3 +139,5 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件，AI 调用面）：AG 接口协议——chat 回合 4（start/cancel/stream/list，门禁不变量内建）、工具回注 1（tool_result 校验回注）、内联辅助 1（request_assist 静默失败、采纳经 ed.apply_edit）、上下文组装对接索引（WS/REF/AST/KB）；门禁前置 X-SEQ-001 固化为接口不变量、产出唯一经 de.generate_diff；零新增注册项；债务（工具清单/节流/接管接口/供给接口延后） |
+| 2026-06-24 | v1.1 | 新增 §2.1 流式回传契约（AgTurnEvent · PI-AG-10C 冻结点）：AgTurnEvent 六分支（Chunk/ToolRequest/ToolResult/DiffProposed/Done/Error）、ag_start_turn 命令签名（Channel<AgTurnEvent> 传输，承 SY-02 选型）、三终态映射（BR-SYS-STATE-002）、前端消费映射（agStore/deStore）、关联命令形状与冻结约定；§2 表格 start_turn/turn_stream 行改为 Channel<AgTurnEvent> 模型并指向 §2.1。前后端双轨同步真源，零新增注册类治理块 |
+| 2026-06-26 | v1.2 | 命名落地修正：AG 回合流式事件定名 **AgTurnEvent**（避开 src-tauri/src/ipc/mod.rs 既有 SYS `StreamEvent` 重名），§2.1 补「与 SYS StreamEvent 分层不同·非重复」说明（通用 dispatch 传输契约 vs AG 领域 per-call Channel）；PI-AG-10C 落地同步 |

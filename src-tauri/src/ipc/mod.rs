@@ -99,6 +99,54 @@ pub enum StreamEvent {
     },
 }
 
+/// AG 回合流式领域事件（A-AG-I-P-01 §2.1 · PI-AG-10C 契约冻结点）。
+///
+/// **与上面 `StreamEvent` 分层不同、非重复**：
+/// - `StreamEvent` 是通用 IPC 传输契约（dispatch 信封 + correlation_id，BR-SYS-STATE-002）。
+/// - `AgTurnEvent` 是 AG 回合**领域**事件，走 Tauri 原生 per-call `Channel<AgTurnEvent>`
+///   （SY-02 选型，不经 dispatch 信封；channel 本身即回合关联，故用 turn_id 而非 correlation_id）。
+///
+/// 三终态（Done / Error / Done{stop_reason:"cancelled"}）语义承 BR-SYS-STATE-002 的
+/// 完成/错误/中断，但因传输层不同（dedicated channel vs dispatch envelope）用独立 wire 类型，
+/// 不复用上面的 `StreamEvent`，避免把领域事件埋进通用 `data`。
+///
+/// 前端按 `type` 标签分发（PI-AG-10F）：chunk→appendToMessage、tool_request/tool_result→工具卡片、
+/// diff_proposed→deStore.stageDiff、done→finishMessage、error→pushError。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgTurnEvent {
+    /// 模型输出文本分片。
+    Chunk { turn_id: String, text: String },
+    /// 模型请求工具调用（SM-AG-02 激活）。
+    ToolRequest {
+        turn_id: String,
+        tool_name: String,
+        params: Value,
+    },
+    /// 工具执行结果回注（供前端展示工具状态）。
+    ToolResult {
+        turn_id: String,
+        tool_name: String,
+        result: String,
+        success: bool,
+    },
+    /// diff 已生成待用户裁决（ChangeProposal→DE 产出，X-FORBID-006）。
+    DiffProposed {
+        turn_id: String,
+        diff_id: String,
+        rel_path: String,
+    },
+    /// 回合正常完成（含 stop_reason:"cancelled" 中断终态）。
+    Done { turn_id: String, stop_reason: String },
+    /// 回合错误（含可重试标记）。
+    Error {
+        turn_id: String,
+        code: String,
+        message: String,
+        retriable: bool,
+    },
+}
+
 /**
  * @GOV
  * codes:    BR-SYS-DATA-003-API-SYS-IPC-CALL-001
@@ -176,6 +224,49 @@ mod tests {
             data: serde_json::json!("tok"),
         };
         assert!(serde_json::to_string(&chunk).unwrap().contains("corr-1"));
+    }
+
+    // covers: BR-SYS-STATE-002
+    // AgTurnEvent（A-AG-I-P-01 §2.1）：六分支 serde 形态 tag=type + snake_case；
+    // 三终态语义（done / done{cancelled} / error）承 BR-SYS-STATE-002，与通用 StreamEvent 分层不同。
+    #[test]
+    fn ag_turn_event_serializes_with_type_tag_and_has_terminal_states() {
+        let chunk = AgTurnEvent::Chunk {
+            turn_id: "t1".into(),
+            text: "tok".into(),
+        };
+        let j = serde_json::to_string(&chunk).unwrap();
+        assert!(j.contains("\"type\":\"chunk\""), "tag=type/snake_case: {j}");
+        assert!(j.contains("turn_id"));
+
+        let diff = AgTurnEvent::DiffProposed {
+            turn_id: "t1".into(),
+            diff_id: "d1".into(),
+            rel_path: "a.md".into(),
+        };
+        assert!(serde_json::to_string(&diff).unwrap().contains("\"type\":\"diff_proposed\""));
+
+        // 三终态：完成 / 中断（done+cancelled）/ 错误
+        let terminals = [
+            AgTurnEvent::Done {
+                turn_id: "t1".into(),
+                stop_reason: "stop".into(),
+            },
+            AgTurnEvent::Done {
+                turn_id: "t1".into(),
+                stop_reason: "cancelled".into(),
+            },
+            AgTurnEvent::Error {
+                turn_id: "t1".into(),
+                code: "E".into(),
+                message: "m".into(),
+                retriable: false,
+            },
+        ];
+        for ev in terminals {
+            let s = serde_json::to_string(&ev).unwrap();
+            let _back: AgTurnEvent = serde_json::from_str(&s).unwrap();
+        }
     }
 
     // covers: BR-SYS-DATA-003
