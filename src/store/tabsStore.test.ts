@@ -4,12 +4,16 @@ import { tabsStore } from "./tabsStore";
 beforeEach(() => tabsStore.reset());
 
 describe("tabsStore 标签模型（视图层）", () => {
-  it("openDoc 单文档标签：复用同一 doc 标签、更新路径", () => {
+  it("openDoc 多文档标签共存：不同路径各开标签，同路径去重 + 激活（PI-FE-27）", () => {
     tabsStore.openDoc("a.md");
     tabsStore.openDoc("b.md");
-    const { tabs } = tabsStore.getSnapshot();
-    expect(tabs.filter((t) => t.kind === "doc")).toHaveLength(1);
-    expect(tabs[0].path).toBe("b.md");
+    let docs = tabsStore.getSnapshot().tabs.filter((t) => t.kind === "doc");
+    expect(docs).toHaveLength(2);
+    tabsStore.openDoc("a.md"); // 同路径 → 不新增，激活已有
+    const s = tabsStore.getSnapshot();
+    docs = s.tabs.filter((t) => t.kind === "doc");
+    expect(docs).toHaveLength(2);
+    expect(s.tabs.find((t) => t.id === s.activeTabId)?.path).toBe("a.md");
   });
 
   it("openPreview 多预览共存，按 path 去重 + 激活", () => {

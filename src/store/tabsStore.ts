@@ -4,7 +4,8 @@ import { edStore } from "./edStore";
 /**
  * center 标签栏状态（视图层导航态 · X-FORBID-007）。
  * tabs 同列承载文档(ED) + 预览(PRV)，activeTabId 决定 center 渲染（参考稿 §4 / A-SYS-C-T-02 §3 单窗多 tab）。
- * 标签是视图导航，非后端业务态——文档内容/脏态仍归 edStore（本 PI 单文档标签；多文档会话归 PI-B）。
+ * 标签是视图导航，非后端业务态——文档内容/脏态仍归 edStore。
+ * 多文档标签（PI-FE-27 / PI-B）：每个文档一标签，激活文档标签 → 切 edStore 活动会话（各自保留未保存编辑）。
  */
 
 export type TabKind = "doc" | "preview";
@@ -48,12 +49,13 @@ export const tabsStore = {
     return state;
   },
 
-  /** 打开文档标签（本 PI 单文档：复用唯一 doc 标签、更新路径）；激活。 */
+  /** 打开文档标签（多文档共存，按 path 去重）；激活并切 edStore 活动会话（复用已载入会话不丢草稿）。
+   *  新文档标签的内容载入由调用方（edService.openDocument→loadDoc，会自设活动会话）负责。 */
   openDoc(path: string) {
-    const existing = state.tabs.find((t) => t.kind === "doc");
+    const existing = state.tabs.find((t) => t.kind === "doc" && t.path === path);
     if (existing) {
-      const tabs = state.tabs.map((t) => (t.id === existing.id ? { ...t, path } : t));
-      setState({ tabs, activeTabId: existing.id });
+      setState({ tabs: state.tabs, activeTabId: existing.id });
+      edStore.setActivePath(path); // 复用已载入会话 → 切活动会话（不重新读盘，保留未保存编辑）
     } else {
       const tab: OpenTab = { id: genId(), path, kind: "doc" };
       setState({ tabs: [...state.tabs, tab], activeTabId: tab.id });
@@ -71,19 +73,28 @@ export const tabsStore = {
     }
   },
 
+  /** 激活标签；切到文档标签 → 同步 edStore 活动会话（恢复该文档未保存编辑）。 */
   activate(id: string) {
-    if (state.activeTabId !== id) setState({ tabs: state.tabs, activeTabId: id });
+    if (state.activeTabId === id) return;
+    setState({ tabs: state.tabs, activeTabId: id });
+    const tab = state.tabs.find((t) => t.id === id);
+    if (tab?.kind === "doc") edStore.setActivePath(tab.path);
   },
 
-  /** 关闭标签；激活相邻。关闭文档标签 → 同步清空编辑器会话。 */
+  /** 关闭标签；激活相邻。关闭文档标签 → 销毁其编辑会话；若相邻激活的是文档标签则切其活动会话。 */
   close(id: string) {
     const idx = state.tabs.findIndex((t) => t.id === id);
     if (idx === -1) return;
     const closing = state.tabs[idx];
+    const wasActive = state.activeTabId === id;
     const tabs = state.tabs.filter((t) => t.id !== id);
-    const activeTabId = state.activeTabId === id ? neighborId(tabs, idx) : state.activeTabId;
+    const activeTabId = wasActive ? neighborId(tabs, idx) : state.activeTabId;
     setState({ tabs, activeTabId });
-    if (closing.kind === "doc") edStore.reset();
+    if (closing.kind === "doc") edStore.closeSession(closing.path);
+    if (wasActive && activeTabId) {
+      const next = tabs.find((t) => t.id === activeTabId);
+      if (next?.kind === "doc") edStore.setActivePath(next.path);
+    }
   },
 
   /** 切换/关闭 workspace 时清空全部标签。 */

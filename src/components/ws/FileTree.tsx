@@ -63,25 +63,25 @@ function sortTree(node: TreeNode) {
 
 export function FileTree() {
   const { docs, status, error } = useWsStore();
-  const { openPath: edOpenPath, tabState } = useEdStore();
+  const { sessions } = useEdStore();
   const { diffs } = useDeStore();
   const [openPath, setOpenPath] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(docs), [docs]);
 
-  // 投影打开文档的真实态到节点（优先级 external > pending > dirty；X-FORBID-007）。
+  // 投影每个已打开文档会话的真实态到对应节点（优先级 external > pending > dirty；X-FORBID-007）。
   const { stateOverride, pendingCount } = useMemo(() => {
     const override: Record<string, FileNodeState> = {};
     const counts: Record<string, number> = {};
-    if (edOpenPath) {
-      const pending = diffs.filter((d) => d.state === "pending" && d.relPath === edOpenPath).length;
-      if (tabState === "external_changed") override[edOpenPath] = "external_changed";
+    for (const [path, sess] of Object.entries(sessions)) {
+      const pending = diffs.filter((d) => d.state === "pending" && d.relPath === path).length;
+      if (sess.tabState === "external_changed") override[path] = "external_changed";
       else if (pending > 0) {
-        override[edOpenPath] = "pending_diff";
-        counts[edOpenPath] = pending;
-      } else if (tabState === "dirty") override[edOpenPath] = "dirty_open";
+        override[path] = "pending_diff";
+        counts[path] = pending;
+      } else if (sess.tabState === "dirty") override[path] = "dirty_open";
     }
     return { stateOverride: override, pendingCount: counts };
-  }, [edOpenPath, tabState, diffs]);
+  }, [sessions, diffs]);
 
   // 全文搜索（ws.search，防抖）：有查询时结果列表替代文件树。
   const [query, setQuery] = useState("");
@@ -113,10 +113,12 @@ export function FileTree() {
   const [value, setValue] = useState("");
 
   // 点击文件：开/激活文档标签 + 经 ws.read_doc 载入编辑器（X-SEQ-002）。
+  // 已有会话（文档已打开）→ 仅切活动标签（openDoc 内 setActivePath），不重新读盘，保留未保存编辑。
   const handleOpenFile = (path: string) => {
     setOpenPath(path);
+    const already = edStore.getSnapshot().sessions[path];
     tabsStore.openDoc(path);
-    void openDocument(path);
+    if (!already) void openDocument(path);
   };
   // 点击预览类型文件：开/激活预览标签（office/媒体/图片，多标签共存）。
   const handlePreviewFile = (path: string) => {

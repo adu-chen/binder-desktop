@@ -11,21 +11,22 @@ const base = (p: string) => p.split("/").pop() ?? p;
 
 export function TabStrip() {
   const { tabs, activeTabId } = useTabsStore();
-  const { openPath, tabState } = useEdStore();
+  const { sessions } = useEdStore();
   const { diffs } = useDeStore();
   if (tabs.length === 0) return null;
 
-  // 文档标签的有效态（互斥：external > pending_diff > 保存态），投影 edStore/deStore。
-  const docPending = openPath ? diffs.filter((d) => d.state === "pending" && d.relPath === openPath).length : 0;
-  const docState =
-    tabState === "external_changed" ? "external_changed" : docPending > 0 ? "pending_diff" : tabState;
-
+  // 各文档标签按其会话独立投影有效态（互斥：external > pending_diff > 保存态），投影 edStore/deStore。
   const marker = (tab: OpenTab) => {
     if (tab.kind !== "doc") return null;
-    if (docState === "dirty") return <span className="tab-dot" aria-label="未保存" />;
-    if (docState === "saving") return <span className="tab-spinner" aria-label="保存中" />;
-    if (docState === "external_changed") return <span className="tab-ext" title="外部修改">!</span>;
-    if (docState === "pending_diff" && docPending > 0) return <span className="tab-badge">{docPending}</span>;
+    const sess = sessions[tab.path];
+    if (!sess) return null;
+    const pending = diffs.filter((d) => d.state === "pending" && d.relPath === tab.path).length;
+    const st =
+      sess.tabState === "external_changed" ? "external_changed" : pending > 0 ? "pending_diff" : sess.tabState;
+    if (st === "dirty") return <span className="tab-dot" aria-label="未保存" />;
+    if (st === "saving") return <span className="tab-spinner" aria-label="保存中" />;
+    if (st === "external_changed") return <span className="tab-ext" title="外部修改">!</span>;
+    if (st === "pending_diff" && pending > 0) return <span className="tab-badge">{pending}</span>;
     return null;
   };
 

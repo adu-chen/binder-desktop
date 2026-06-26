@@ -1,20 +1,18 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-FE-26",
+  "scope_id": "PI-FE-27",
   "allowed_files": [
-    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
+    "src/store/edStore.ts",
+    "src/store/edStore.test.ts",
     "src/store/tabsStore.ts",
     "src/store/tabsStore.test.ts",
-    "src/store/prvStore.ts",
-    "src/components/shell/TabStrip.tsx",
-    "src/shell/Workbench.tsx",
     "src/components/ed/Editor.tsx",
-    "src/components/prv/PrvPanel.tsx",
+    "src/services/edService.ts",
+    "src/components/shell/TabStrip.tsx",
     "src/components/ws/FileTree.tsx",
-    "src/styles.css",
     "docs/00_core/A-CORE-X-L-03_前端开发计划.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-FE-26.md"
+    ".governance/issues/PI-FE-27.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -24,5 +22,5 @@
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-FE-26（PI-A）立 center 标签栏 + 预览多标签共存（单编辑标签，不动 edStore 会话模型）；同步 A-SYS-C-T-02 单窗多 tab 决策；人类已确认分层与两步走并确认 confirmation=YES。"
+  "scope_reason": "PI-FE-27（PI-B）edStore 重构为按路径会话使多文档标签各保留未保存编辑；派生 openPath/tabState 保既有消费方兼容；人类已确认两步走第二步并确认 confirmation=YES。"
 }

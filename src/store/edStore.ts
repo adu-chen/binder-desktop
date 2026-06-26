@@ -4,6 +4,11 @@ import { useSyncExternalStore } from "react";
  * ED 编辑会话状态投影层（ED-EDIT · SM-ED-01 · X-FORBID-007）。
  * tabState 是编辑会话/脏态的视图投影：编辑产生脏态（前端编辑器感知），落盘/外部变更/待裁决由
  * 保存链（WS）、外部变更事件、DE 投影驱动。前端不另立与后端可漂移的权威落盘态。
+ *
+ * 多文档会话（PI-FE-27 / PI-B）：sessions 按路径保存每个已打开文档的会话（内容/基线/态/格式），
+ * activePath 指向当前编辑的文档。多个文档标签各自保留未保存编辑——切换标签不丢草稿。
+ * openPath/tabState/loadedContent/baseline/editFormat 等扁平字段为「活动会话」派生投影，
+ * 保既有消费方（edService/Editor/WorkspaceMenu/Composer/deService）零改动兼容。
  */
 
 /** EditorTab 6 状态（参考稿 §6.3，视觉互斥）。 */
@@ -15,40 +20,81 @@ export type TabState =
   | "pending_diff"
   | "external_changed";
 
-interface EdState {
-  openPath: string | null;
-  tabState: TabState;
-  pendingDiffCount: number;
-  /** 已载入文档内容（纯文本）；编辑器据此 setContent。null = 未打开真实文档（用 seed）。 */
-  loadedContent: string | null;
-  /** 加载基线哈希（后端 ws.read_doc 回；供 ws.save_doc 校验）。 */
+/** 单文档编辑会话（按路径独立保存，切换标签不互相覆盖）。 */
+export interface EditSession {
+  /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。 */
+  content: string | null;
+  /** 加载基线哈希（后端 ws.read_doc / doc.open_for_edit 回；供保存校验）。 */
   baseline: number | null;
-  /** 载入序号——内容变更触发编辑器 setContent（区分同路径重载）。 */
-  loadSeq: number;
-  /** 本次载入后请求跳转的目标行（搜索命中跳行）；跳后清除。null = 不跳。 */
-  jumpLine: number | null;
+  tabState: TabState;
   /** 编辑模型格式：text=md/纯文本（ws.read_doc/save_doc）；html=docx 编辑链（doc.open_for_edit/save_from_edit）。 */
   editFormat: "text" | "html";
 }
 
+interface EdState {
+  /** 已打开文档会话表（按相对路径键控）。 */
+  sessions: Record<string, EditSession>;
+  /** 当前活动文档路径（= 编辑器正在编辑的文档）；null=无活动文档。 */
+  activePath: string | null;
+  /** 载入序号——loadDoc/切换活动会话时递增，驱动编辑器 setContent（区分同路径重载）。 */
+  loadSeq: number;
+  /** 本次载入后请求跳转的目标行（搜索命中跳行）；跳后清除。null = 不跳。 */
+  jumpLine: number | null;
+
+  // —— 以下为「活动会话」派生投影，保既有消费方兼容（X-FORBID-007 单一权威：sessions[activePath]） ——
+  openPath: string | null;
+  tabState: TabState;
+  pendingDiffCount: number;
+  /** 活动会话内容（编辑器据此 setContent）；null = 未打开真实文档。 */
+  loadedContent: string | null;
+  baseline: number | null;
+  editFormat: "text" | "html";
+}
+
+type Core = Pick<EdState, "sessions" | "activePath" | "loadSeq" | "jumpLine">;
+
+/** 由活动会话派生扁平投影字段（活动会话不存在时回落默认）。 */
+function derive(core: Core): Omit<EdState, keyof Core> {
+  const sess = core.activePath ? core.sessions[core.activePath] : undefined;
+  return {
+    openPath: core.activePath,
+    tabState: sess?.tabState ?? "normal",
+    pendingDiffCount: 0,
+    loadedContent: sess?.content ?? null,
+    baseline: sess?.baseline ?? null,
+    editFormat: sess?.editFormat ?? "text",
+  };
+}
+
 let state: EdState = {
-  openPath: null,
-  tabState: "normal",
-  pendingDiffCount: 0,
-  loadedContent: null,
-  baseline: null,
+  sessions: {},
+  activePath: null,
   loadSeq: 0,
   jumpLine: null,
-  editFormat: "text",
+  ...derive({ sessions: {}, activePath: null, loadSeq: 0, jumpLine: null }),
 };
 const listeners = new Set<() => void>();
 
 function emit() {
   for (const l of listeners) l();
 }
-function setState(patch: Partial<EdState>) {
-  state = { ...state, ...patch };
+/** 提交核心态 → 重算派生投影 → 通知。 */
+function commit(core: Core) {
+  state = { ...core, ...derive(core) };
   emit();
+}
+/** 仅修改活动会话的部分字段（无活动会话时为空操作）。 */
+function patchActive(patch: Partial<EditSession>) {
+  const p = state.activePath;
+  if (!p) return;
+  const cur = state.sessions[p];
+  if (!cur) return;
+  commit({
+    sessions: { ...state.sessions, [p]: { ...cur, ...patch } },
+    activePath: p,
+    loadSeq: state.loadSeq,
+    jumpLine: state.jumpLine,
+  });
 }
 
 /**
@@ -61,6 +107,7 @@ function setState(patch: Partial<EdState>) {
  */
 /// 编辑会话脏态守则（BR-ED-STATE-001 投影）：打开文档为 normal/saved；编辑即转 dirty；
 /// 落盘转 saving→saved；外部变更转 external_changed；待裁决转 pending_diff。状态互斥，权威落盘归 WS。
+/// 多文档会话按路径独立保存（PI-FE-27）：脏态/格式/基线均属各自会话，切换活动会话不互相覆盖。
 export const edStore = {
   subscribe(cb: () => void) {
     listeners.add(cb);
@@ -69,12 +116,20 @@ export const edStore = {
   getSnapshot(): EdState {
     return state;
   },
-  /** 打开文档（初始 saved 基线态）。 */
+  /** 打开文档（初始 saved 基线态，内容待 loadDoc 载入）。 */
   openDoc(path: string) {
-    setState({ openPath: path, tabState: "saved", pendingDiffCount: 0 });
+    commit({
+      sessions: {
+        ...state.sessions,
+        [path]: { content: null, baseline: null, tabState: "saved", editFormat: "text" },
+      },
+      activePath: path,
+      loadSeq: state.loadSeq,
+      jumpLine: state.jumpLine,
+    });
   },
-  /** 载入真实文档内容 + 加载基线（ws.read_doc / doc.open_for_edit 投影）；编辑器据 loadSeq 变更 setContent；
-   *  jumpLine 跳行；editFormat=html 时为 docx 编辑链（内容为 HTML）。 */
+  /** 载入真实文档内容 + 加载基线（ws.read_doc / doc.open_for_edit 投影）；建/刷新该路径会话并置为活动；
+   *  编辑器据 loadSeq 变更 setContent；jumpLine 跳行；editFormat=html 时为 docx 编辑链（内容为 HTML）。 */
   loadDoc(
     path: string,
     content: string,
@@ -82,47 +137,73 @@ export const edStore = {
     jumpLine: number | null = null,
     editFormat: "text" | "html" = "text",
   ) {
-    setState({
-      openPath: path,
-      loadedContent: content,
-      baseline,
-      tabState: "saved",
-      pendingDiffCount: 0,
+    commit({
+      sessions: {
+        ...state.sessions,
+        [path]: { content, baseline, tabState: "saved", editFormat },
+      },
+      activePath: path,
       loadSeq: state.loadSeq + 1,
       jumpLine,
-      editFormat,
+    });
+  },
+  /** 切换活动会话到已打开文档（不重新读盘 → 保留该会话未保存编辑）；loadSeq 递增触发编辑器载入会话内容。 */
+  setActivePath(path: string) {
+    if (path === state.activePath || !state.sessions[path]) return;
+    commit({
+      sessions: state.sessions,
+      activePath: path,
+      loadSeq: state.loadSeq + 1,
+      jumpLine: null,
+    });
+  },
+  /** 暂存某会话的当前编辑内容（切换标签前由编辑器序列化回写 → 不丢草稿）；不触发 loadSeq/不改脏态。 */
+  updateContent(path: string, content: string) {
+    const cur = state.sessions[path];
+    if (!cur) return;
+    commit({
+      sessions: { ...state.sessions, [path]: { ...cur, content } },
+      activePath: state.activePath,
+      loadSeq: state.loadSeq,
+      jumpLine: state.jumpLine,
     });
   },
   /** 跳转完成后清除目标行（避免后续重渲染重复跳）。 */
   clearJump() {
-    if (state.jumpLine !== null) setState({ jumpLine: null });
-  },
-  /** 保存成功：刷新基线，回 saved 态。 */
-  markSaved(baseline: number) {
-    setState({ baseline, tabState: "saved" });
-  },
-  /** 编辑产生脏态（编辑器 onUpdate 驱动）。 */
-  markDirty() {
-    if (state.tabState !== "external_changed" && state.tabState !== "pending_diff") {
-      setState({ tabState: "dirty" });
+    if (state.jumpLine !== null) {
+      commit({ sessions: state.sessions, activePath: state.activePath, loadSeq: state.loadSeq, jumpLine: null });
     }
   },
-  /** 设置标签态（保存链/外部变更/DE 投影注入）。 */
-  setTabState(tabState: TabState) {
-    setState({ tabState });
+  /** 保存成功：刷新活动会话基线，回 saved 态。 */
+  markSaved(baseline: number) {
+    patchActive({ baseline, tabState: "saved" });
   },
-  /** 切换/关闭 workspace 时清空编辑会话（避免残留旧文档内容/基线）。 */
-  reset() {
-    setState({
-      openPath: null,
-      tabState: "normal",
-      pendingDiffCount: 0,
-      loadedContent: null,
-      baseline: null,
-      loadSeq: 0,
-      jumpLine: null,
-      editFormat: "text",
+  /** 编辑产生脏态（编辑器 onUpdate 驱动，作用于活动会话）。 */
+  markDirty() {
+    const sess = state.activePath ? state.sessions[state.activePath] : undefined;
+    if (sess && sess.tabState !== "external_changed" && sess.tabState !== "pending_diff") {
+      patchActive({ tabState: "dirty" });
+    }
+  },
+  /** 设置活动会话标签态（保存链/外部变更/DE 投影注入）。 */
+  setTabState(tabState: TabState) {
+    patchActive({ tabState });
+  },
+  /** 关闭某文档会话（关闭标签时调用）；若为活动会话则置空活动（相邻激活由 tabsStore 决定）。 */
+  closeSession(path: string) {
+    if (!state.sessions[path]) return;
+    const sessions = { ...state.sessions };
+    delete sessions[path];
+    commit({
+      sessions,
+      activePath: state.activePath === path ? null : state.activePath,
+      loadSeq: state.loadSeq,
+      jumpLine: state.jumpLine,
     });
+  },
+  /** 切换/关闭 workspace 时清空全部编辑会话（避免残留旧文档内容/基线）。 */
+  reset() {
+    commit({ sessions: {}, activePath: null, loadSeq: 0, jumpLine: null });
   },
 };
 

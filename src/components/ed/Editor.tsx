@@ -49,12 +49,28 @@ function textToDoc(text: string) {
   };
 }
 
+/** 序列化编辑器当前内容为会话格式：html=docx 编辑链 HTML；md=getMarkdown；其余=纯文本忠实往返。 */
+function serialize(
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+  fmt: "text" | "html",
+  path: string | null,
+): string {
+  if (fmt === "html") return editor.getHTML();
+  if (isMarkdownPath(path)) {
+    const md = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>).markdown;
+    return md.getMarkdown();
+  }
+  return editor.getText({ blockSeparator: "\n" });
+}
+
 export function Editor() {
   const { openPath, tabState, loadSeq, loadedContent, editFormat } = useEdStore();
   const { diffs } = useDeStore(); // GreenReview 同步用（标签状态投影已移至 center TabStrip）
   const hostRef = useRef<HTMLDivElement>(null);
   // 当前辅助操作的目标编辑范围（⌘K=选区，⌘J=光标）。
   const assistRange = useRef<{ from: number; to: number }>({ from: 0, to: 0 });
+  // 上一活动文档路径（切换标签前据此把当前编辑内容序列化回写其会话 → 不丢草稿）。
+  const lastPathRef = useRef<string | null>(null);
 
   const editor = useEditor({
     extensions: buildEditorExtensions(),
@@ -113,10 +129,19 @@ export function Editor() {
     return () => window.clearInterval(id);
   }, [openPath]);
 
-  // 载入真实文档：loadSeq 变更（ws.read_doc 投影）→ setContent（不触发脏态）。
+  // 载入活动会话：loadSeq 变更（loadDoc / 切换活动会话 setActivePath 投影）→ 先把上一文档的当前编辑序列化
+  // 回写其会话（切标签不丢草稿），再 setContent 活动会话内容（不触发脏态）。
   // md/markdown 以 Markdown 解析为富文本（字符串经 tiptap-markdown）；其余按纯文本（doc 对象，绕过 md 解析）。
   useEffect(() => {
-    if (!editor || loadSeq === 0 || loadedContent === null) return;
+    if (!editor || loadSeq === 0) return;
+    // 切换标签前：暂存上一活动文档的当前编辑内容到其会话（按其格式序列化）。
+    const prev = lastPathRef.current;
+    if (prev && prev !== openPath) {
+      const prevSess = edStore.getSnapshot().sessions[prev];
+      if (prevSess) edStore.updateContent(prev, serialize(editor, prevSess.editFormat, prev));
+    }
+    lastPathRef.current = openPath;
+    if (!openPath || loadedContent === null) return;
     if (editFormat === "html") {
       // docx 编辑链：loadedContent 为 HTML（保留样式子集），TipTap 原生解析。
       editor.commands.setContent(loadedContent, { emitUpdate: false });
@@ -131,21 +156,18 @@ export function Editor() {
       jumpToLine(editor, jumpLine);
       edStore.clearJump();
     }
-  }, [editor, loadSeq, loadedContent, openPath, editFormat]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 loadSeq 驱动载入；openPath/loadedContent/editFormat 在 loadSeq 变更时同步刷新，单独入依赖会引发重复 setContent
+  }, [editor, loadSeq]);
 
   // ⌘S 保存：docx 以 getHTML → doc.save_from_edit（编辑链回写）；md 以 getMarkdown、其余纯文本 → ws.save_doc。
   const saveCurrent = async (override: boolean) => {
     if (!editor) return;
     if (editFormat === "html") {
       // docx 编辑链回写：HTML → docx（--reference-doc）→ WS 原子落盘。
-      await saveDocxDocument(editor.getHTML(), override);
+      await saveDocxDocument(serialize(editor, "html", openPath), override);
       return;
     }
-    const mdStorage = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>).markdown;
-    const content = isMarkdownPath(openPath)
-      ? mdStorage.getMarkdown()
-      : editor.getText({ blockSeparator: "\n" });
-    await saveDocument(content, override);
+    await saveDocument(serialize(editor, "text", openPath), override);
   };
 
   // GreenReview 同步：deStore diff 态变更 → 推送 blockId→GreenReviewState 映射到装饰层。

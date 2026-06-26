@@ -407,6 +407,13 @@
 - **A 类债务**：多文档标签各自保留未保存编辑（按路径会话）= PI-B；EditorTab 组件保留（PI-B/复用）。
 - **验收**：开多个图片/媒体 → 多标签共存可切换/关闭；文档标签状态标记正确；vitest 63 全过；scoped 门禁无越界。
 
+### PI-FE-27（PI-B）　edStore 重构为按路径会话（多文档标签各保留未保存编辑）　✅ G4 已实现（2026-06-26，tsc + vitest 67 + build + scoped audit 绿）
+- **承接**：PI-FE-26（PI-A center 多标签）/ ED-EDIT / SM-ED-01 / BR-ED-STATE-001 / X-FORBID-007。收口 PI-A 遗留 A 类债务"多文档标签各自保留未保存编辑（按路径会话）"。
+- **文件范围**：`edStore`（核心：`sessions: Record<path, EditSession{content,baseline,tabState,editFormat}>` + `activePath` + `loadSeq` + `jumpLine`；新增 `setActivePath`/`updateContent`/`closeSession`；保留 `openPath/tabState/loadedContent/baseline/editFormat/pendingDiffCount` 为「活动会话」**派生投影**，既有消费方零改动兼容；+4 covers 多会话测试）、`tabsStore`（openDoc 多文档共存按 path 去重 + 切活动会话；activate/close 同步 edStore.setActivePath/closeSession；测试改多文档）、`Editor`（切标签前序列化上一会话内容回写其会话=不丢草稿；载入 effect 改 loadSeq 单驱动；serialize 复用于 ⌘S）、`TabStrip`（各文档标签按其会话独立投影脏态/pending/external）、`FileTree`（投影全部已打开会话态到节点；点已打开文档仅切活动不重读盘）。
+- **实现要点**：`editFormat`（docx 编辑链 html / 文本 text）随会话保存——切回 docx 标签仍按 HTML 往返；保存链/外部变更轮询/搜索跳行经派生活动会话不变（edService 零改动）；关闭文档标签销毁其会话并切相邻文档活动会话；切 workspace 由 workspaceService.reset 清空全部会话。
+- **A 类债务**：saveDocument/markSaved 作用于"活动会话"——异步保存期间切标签的极端竞态未按 path 锁定（沿用 PI-A 前单会话语义，realistic ⌘S 流程不触发）；EditorTab 组件仍保留（未接线，后续清理）。
+- **验收**：开多个文档 → 各标签独立脏点/状态；A 编辑未存切到 B 再切回 A → A 草稿仍在；docx 草稿与 md 文档混开各按格式往返；vitest 67 全过；scoped 门禁无自有文件越界。
+
 ---
 
 ## §3 实施顺序
