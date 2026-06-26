@@ -9,9 +9,11 @@
 //! dev 级轻量字符串扫描（无 HTML parser 依赖），适配 TipTap 平铺块元素（p/h/li/blockquote 等带 block-id）；
 //! 嵌套同名块、畸形 HTML 不保证——真实 ED blockId 锚定位（对齐 LocateResult）后续。
 
-/// 一个文档块。`inner_span` = HTML 块 inner 在原串中的字节区间（in-place 重建用）；text 块为 None。
+/// 一个文档块。`block_id` = HTML 块的 data-block-id（稳定锚；text 块 None）；
+/// `inner_span` = HTML 块 inner 在原串中的字节区间（in-place 重建用；text 块 None）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocBlock {
+    pub block_id: Option<String>,
     pub text: String,
     pub inner_span: Option<(usize, usize)>,
 }
@@ -30,7 +32,7 @@ pub fn parse_blocks(content: &str, is_html: bool) -> Vec<DocBlock> {
             .split("\n\n")
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-            .map(|s| DocBlock { text: s.to_string(), inner_span: None })
+            .map(|s| DocBlock { block_id: None, text: s.to_string(), inner_span: None })
             .collect()
     }
 }
@@ -110,13 +112,37 @@ fn parse_html_blocks(html: &str) -> Vec<DocBlock> {
         };
         let inner_end = inner_start + rel_close;
         let inner = &html[inner_start..inner_end];
+        // 提取 data-block-id 的值（attr 后第一对引号内）。
+        let block_id = {
+            let after = attr_pos + "data-block-id".len();
+            html[after..inner_start].find('"').and_then(|q1| {
+                let vstart = after + q1 + 1;
+                html[vstart..inner_start]
+                    .find('"')
+                    .map(|q2| html[vstart..vstart + q2].to_string())
+            })
+        };
         blocks.push(DocBlock {
+            block_id,
             text: strip_tags(inner).trim().to_string(),
             inner_span: Some((inner_start, inner_end)),
         });
         search = inner_end + close.len();
     }
     blocks
+}
+
+/// 按 **data-block-id 稳定锚** 替换块 inner（HTML）。id 未找到 → Err（锚失效，文档已变化），
+/// 不产错位 diff（对齐 A-DOC-M-T-01 blockId 锚 / BR-DE-DATA-001 锚失效不误改）。
+pub fn replace_block_by_id(content: &str, block_id: &str, new_text: &str) -> Result<String, String> {
+    let blk = parse_html_blocks(content)
+        .into_iter()
+        .find(|b| b.block_id.as_deref() == Some(block_id))
+        .ok_or_else(|| format!("锚失效：未找到 data-block-id={block_id} 的块（文档可能已变化，请重新获取块列表）"))?;
+    let (s, e) = blk
+        .inner_span
+        .ok_or_else(|| "块缺 inner 区间".to_string())?;
+    Ok(format!("{}{}{}", &content[..s], html_escape(new_text), &content[e..]))
 }
 
 #[cfg(test)]
@@ -162,5 +188,22 @@ mod tests {
     fn out_of_range_errors() {
         assert!(replace_block("a\n\nb", false, 5, "x").is_err());
         assert!(replace_block(r#"<p data-block-id="b1">a</p>"#, true, 3, "x").is_err());
+    }
+
+    #[test]
+    fn block_id_captured_and_anchored_replace() {
+        let html = r#"<p data-block-id="b1">旧</p><h1 data-block-id="b2">标题</h1>"#;
+        let blocks = parse_blocks(html, true);
+        assert_eq!(blocks[0].block_id.as_deref(), Some("b1"));
+        assert_eq!(blocks[1].block_id.as_deref(), Some("b2"));
+        // 按 id 锚定替换（与位置无关）。
+        let out = replace_block_by_id(html, "b2", "新标题").unwrap();
+        assert_eq!(out, r#"<p data-block-id="b1">旧</p><h1 data-block-id="b2">新标题</h1>"#);
+    }
+
+    #[test]
+    fn replace_by_unknown_id_is_anchor_lost() {
+        let r = replace_block_by_id(r#"<p data-block-id="b1">x</p>"#, "gone", "y");
+        assert!(r.unwrap_err().contains("锚失效"));
     }
 }

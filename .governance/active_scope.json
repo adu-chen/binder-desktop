@@ -1,13 +1,12 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08F",
+  "scope_id": "PI-AG-08G",
   "allowed_files": [
     "src-tauri/src/ag/blocks.rs",
-    "src-tauri/src/ag/mod.rs",
     "src-tauri/src/lib.rs",
-    "src/services/agService.ts",
+    "src-tauri/src/ag/tool_registry.rs",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08F.md"
+    ".governance/issues/PI-AG-08G.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -16,9 +15,8 @@
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
     "src-tauri/src/de/generate.rs",
-    "src-tauri/src/doc/block_backfill.rs",
     "src/store/edStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08F docx/html 块编辑：新建 ag/blocks.rs（dev HTML 块解析：扫 data-block-id 元素取 inner 区间+strip 文本；text 段落块）+ replace_block（HTML in-place 非破坏 splice inner、text join）；lib.rs 注入/propose_edit 改用 ag::blocks 且按 active_doc_format（text|html）分流；agService 传 activeDocFormat=edStore.editFormat（只读）。无 HTML parser 依赖（轻量字符串扫描，dev 级，限平铺块元素）。"
+  "scope_reason": "PI-AG-08G 真实 blockId 锚：ag::blocks 捕获每块 data-block-id（DocBlock.block_id）+ replace_block_by_id（按 id 定位 inner 替换，id 未找到→Err 锚失效，不产错位 diff，对齐 A-DOC-M-T-01/BR-DE-DATA-001 锚语义）；注入块列表展示 [id=…]；propose_edit 优先 block_id（HTML 稳定锚）、回退 block_index（段落号）、content（整篇）。text 无持久 id 仍用位置号。tool def 增 block_id。纯后端。"
 }

@@ -730,7 +730,8 @@ fn ag_propose_edit(
 
     // 块模式（block_index+new_text）：基准用注入给模型的当前内容切块、替目标块、重建整篇（块号对齐）。
     // 整篇模式（content）：直接整篇替换。
-    let after_content = if let Some(bi) = params.get("block_index").and_then(|v| v.as_u64()) {
+    let after_content = if params.get("block_id").is_some() || params.get("block_index").is_some() {
+        // 块模式：需 new_text + 基准内容（注入给模型的当前内容，块锚对齐）。
         let new_text = params
             .get("new_text")
             .and_then(|v| v.as_str())
@@ -739,15 +740,25 @@ fn ag_propose_edit(
             .map(|s| s.to_string())
             .or_else(|| std::fs::read_to_string(&abs).ok())
             .ok_or_else(|| IpcError::new("AG_DOC_READ", "无法读取文档内容以做块编辑", false, false))?;
-        // text 段落块 / docx-html 按 data-block-id 块（in-place 非破坏重建），PI-AG-08F。
-        crate::ag::blocks::replace_block(&base, is_html, bi as usize, new_text)
-            .map_err(|m| IpcError::new("AG_TOOL_ARG", &m, false, false))?
+        if let Some(block_id) = params.get("block_id").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+            // 真实 blockId 锚（HTML data-block-id，PI-AG-08G）：按 id 定位；锚失效报错不误改。
+            crate::ag::blocks::replace_block_by_id(&base, block_id, new_text)
+                .map_err(|m| IpcError::new("AG_ANCHOR_LOST", &m, true, false))?
+        } else {
+            // 位置块号（text 或回退）。
+            let bi = params
+                .get("block_index")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "propose_edit 缺 block_id/block_index", false, false))?;
+            crate::ag::blocks::replace_block(&base, is_html, bi as usize, new_text)
+                .map_err(|m| IpcError::new("AG_TOOL_ARG", &m, false, false))?
+        }
     } else {
         params
             .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                IpcError::new("AG_TOOL_ARG", "propose_edit 缺 content 或 block_index 参数", false, false)
+                IpcError::new("AG_TOOL_ARG", "propose_edit 缺 content 或 block_id/block_index 参数", false, false)
             })?
             .to_string()
     };
@@ -825,14 +836,17 @@ async fn ag_start_turn(
         .unwrap_or(false);
     if let Some(content) = active_doc_content.as_deref().filter(|c| !c.trim().is_empty()) {
         let path = active_doc_path.as_deref().unwrap_or("(未命名)");
-        // 编号块列表（PI-AG-08E/08F）：块号供 propose_edit 块模式精确定位（block_texts 与重建同源）。
-        let blocks = crate::ag::blocks::block_texts(content, doc_is_html);
+        // 编号块列表（PI-AG-08E/08F/08G）：HTML 块带稳定 [id=…]（data-block-id）锚，供 propose_edit 精确定位。
+        let blocks = crate::ag::blocks::parse_blocks(content, doc_is_html);
         let mut block_view = String::new();
         for (i, b) in blocks.iter().enumerate() {
-            block_view.push_str(&format!("Block {i}: {b}\n"));
+            match &b.block_id {
+                Some(id) => block_view.push_str(&format!("Block {i} [id={id}]: {}\n", b.text)),
+                None => block_view.push_str(&format!("Block {i}: {}\n", b.text)),
+            }
         }
         let ctx = format!(
-            "[当前编辑器打开的文档] 路径：{path}\n以下按块编号列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{block_view}\n修改某一块用 propose_edit 传 path + block_index（上面的块号）+ new_text（该块新内容）；改写整篇用 path + content（完整内容）。"
+            "[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{block_view}\n修改某一块用 propose_edit + new_text：有 [id=…] 的块**优先传 block_id**（稳定锚），否则传 block_index（块号）；改写整篇用 path + content。"
         );
         messages.push(serde_json::json!({ "role": "system", "content": ctx }));
     }
