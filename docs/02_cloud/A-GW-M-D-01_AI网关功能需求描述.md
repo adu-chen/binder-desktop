@@ -257,7 +257,7 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 
 | 编号 | 分类 | 状态 | 处置 |
 |---|---|---|---|
-| GW-01 | NEEDS_HUMAN_DECISION | 待决策 | 初始支持平台订阅（GW 持平台密钥）还是仅 BYOK？——影响 LIC 设计复杂度与上线节奏；平台密钥方案需确认 provider 账户与合规 |
+| GW-01 | ~~NEEDS_HUMAN_DECISION~~ **RESOLVED** | 已决（2026-06-26） | **平台订阅 + BYOK 双模共存**：用户可选订阅（GW 持平台密钥调用）或 BYOK（自带密钥上送 GW 加密保管）；两模均经服务端 GW（X-FORBID-001 不变），均须经 CLOUD-GATE 订阅裁决（REQ-GW-005）。LIC 需同时支持两类计费口径；平台密钥方案须确认 provider 账户与合规。BYOK 加密仍待 GW-02 决策。 |
 | GW-02 | NEEDS_HUMAN_DECISION | 待决策 | 密钥加密方案（自管 AES 密钥 / KMS / 信封加密）——安全敏感，须人类批准（云 APC §5 禁区）|
 | GW-03 | DESIGN_RISK | 显式延期 | Anthropic SSE 工具调用参数是流式 JSON（input_json_delta 片段），需增量解析；工具参数较大时内存缓冲策略归 L2 |
 | GW-04 | BOUNDARY_OPEN | 显式延期 | provider 故障转移（主/备 provider）/ 限流处理策略归 L2 |
@@ -265,7 +265,9 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 
 ## §7 后续动作
 
-1. 人类决策 **GW-01**（平台订阅 vs 纯 BYOK 首发）与 **GW-02**（加密方案）——PI-GW-02 实现前置
+1. ~~人类决策 **GW-01**~~ **已决（2026-06-26）：平台订阅 + BYOK 双模共存**。仍需 **GW-02**（BYOK 密钥加密方案）——PI-GW-02 实现前置。
+   **代码开发前置（云 APC §1/§3）**：GW 代码不在本客户端仓库开发——「代码开发启动时迁出至独立仓库」。
+   故 PI-GW-01~05 实现须先**建立独立云仓库**（迁出本宪章 + 02_cloud 文档 + 新仓 governance.config.json + 生成云端 ADUS），再在该仓内开发。本仓库仅持云端 REQ/叙述设计。
 2. 建 `A-GW-M-T-01_AI网关技术设计.md`（L2，叙述性，含 DB schema、API 骨架、加密方案、SSE 解析细节）
 3. 客户端挂起项解除：ENT-02（BYOK 上送 API 形状）在 PI-GW-02 完成后回写 `A-ENT-M-T-01`；ENT-03（高频门禁延迟）在 CLOUD-04 完成后回写 `A-SYS-I-P-03`
 4. 独立仓库建立时随云 APC 一并迁出（云 APC §3 流程）
@@ -274,4 +276,5 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-06-26 | v1.1 | 记录 GW-01 裁决：**平台订阅 + BYOK 双模共存**（两模均经服务端 GW，X-FORBID-001 不变，均经 CLOUD-GATE 裁决）；§6 GW-01→RESOLVED、§7 后续动作明确「GW 代码须先建独立云仓库再开发」（云 APC：代码开发启动即迁出）；GW-02 加密方案仍待决 |
 | 2026-06-23 | v1.0 | 初版（GW 模块 L1）：REQ-GW-001~006（供应商适配层/统一流式转发/计量/BYOK/CLOUD-GATE/内容不留存）；三供应商适配器规格（OpenAI/Anthropic/DeepSeek，含 SSE 解析差异）；BYOK 流程叙述；PI-GW-01~05 开发路线图；G1 暴露 GW-01~05；遵守驻留期硬约定（无注册类治理块）|

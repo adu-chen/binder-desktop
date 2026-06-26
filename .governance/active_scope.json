@@ -1,24 +1,16 @@
 {
-  "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-08A",
+  "task_type": "DOC_ONLY",
+  "scope_id": "DOC-GW-01-DECISION",
   "allowed_files": [
-    "src-tauri/src/ag/tool_registry.rs",
-    "src-tauri/src/ag/mod.rs",
-    "docs/01_modules/AG/A-AG-X-L-02_对话代理集成计划.md",
-    ".governance/active_scope.json",
-    ".governance/issues/PI-AG-08A.md"
+    "docs/02_cloud/A-GW-M-D-01_AI网关功能需求描述.md",
+    ".governance/active_scope.json"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
-    "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/lib.rs",
-    "src-tauri/src/ag/tool.rs",
-    "src-tauri/src/ag/context.rs",
-    "src/components/ed/EditorTab.tsx"
+    "docs/00_core/A-CORE-C-P-01_APC.md"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-08A（PI-AG-08 拆分前半）工具注册表：新建 ag/tool_registry.rs（4 工具 read_doc/list_docs/search_text/propose_edit + ReadOnly/WriteIntent 权限分级，喂 SM-AG-02 validate_tool 的注册清单/权限边界，承 BR-AG-STATE-002）；纯数据无外部 API。执行（tool_exec，调 ws/kb/de）拆为 PI-AG-08B 与模型循环 PI-AG-11 配套（避免重复 lib.rs 既有 route_*）。同步 A-AG-X-L-02 记录拆分。文件隔离于并发进程。"
+  "scope_reason": "DOC_ONLY：记录人类对 GW-01 的裁决（平台订阅 + BYOK 双模共存）到 A-GW-M-D-01。仅 REQ/叙述层更新，不放注册类治理块（云 APC 驻留期硬约定）。不写云代码（云 APC：代码开发启动须迁出独立仓库）。"
 }
