@@ -20,3 +20,6 @@ pub mod assist;
 
 /// PI-AG-05 · 记忆写入对接（终态异步触发 AST）。
 pub mod memory_link;
+
+/// PI-AG-07 · 系统提示词正文（三类回合，文本属实现期运营配置）。
+pub mod prompts;
