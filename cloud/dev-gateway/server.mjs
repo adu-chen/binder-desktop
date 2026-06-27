@@ -93,8 +93,49 @@ async function streamOpenAiCompat(provider, { model, messages, apiKey, tools }, 
   });
 }
 
-// Anthropic Messages API：x-api-key + anthropic-version + content_block_delta 解析。
-async function streamAnthropic(provider, { model, messages, apiKey, maxTokens }, res) {
+// OpenAI 格式 messages → Anthropic（system 抽顶层；tool_calls→tool_use；role:tool→user tool_result）。
+function toAnthropicMessages(messages) {
+  let system = '';
+  const out = [];
+  for (const m of messages) {
+    if (m.role === 'system') {
+      system += (system ? '\n\n' : '') + (m.content ?? '');
+    } else if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      const content = [];
+      if (m.content) content.push({ type: 'text', text: m.content });
+      for (const tc of m.tool_calls) {
+        let input = {};
+        try { input = JSON.parse(tc.function?.arguments || '{}'); } catch { input = {}; }
+        content.push({ type: 'tool_use', id: tc.id, name: tc.function?.name, input });
+      }
+      out.push({ role: 'assistant', content });
+    } else if (m.role === 'tool') {
+      out.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: m.content ?? '' }] });
+    } else {
+      out.push({ role: m.role, content: m.content ?? '' });
+    }
+  }
+  return { system, messages: out };
+}
+
+// OpenAI tools → Anthropic tools（input_schema）。
+function toAnthropicTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return undefined;
+  return tools.map((t) => ({
+    name: t.function?.name,
+    description: t.function?.description,
+    input_schema: t.function?.parameters ?? { type: 'object', properties: {} },
+  }));
+}
+
+// Anthropic Messages API：x-api-key + anthropic-version；请求/tools 翻译 + tool_use 流式解析（PI-GW-DEV-02）。
+async function streamAnthropic(provider, { model, messages, apiKey, maxTokens, tools }, res) {
+  const { system, messages: amsgs } = toAnthropicMessages(messages);
+  const body = { model, messages: amsgs, stream: true, max_tokens: maxTokens || 4096 };
+  if (system) body.system = system;
+  const atools = toAnthropicTools(tools);
+  if (atools) body.tools = atools;
+
   const resp = await fetch(provider.url, {
     method: 'POST',
     headers: {
@@ -102,17 +143,31 @@ async function streamAnthropic(provider, { model, messages, apiKey, maxTokens },
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({ model, messages, stream: true, max_tokens: maxTokens || 4096 }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) {
     sse(res, 'error', { code: `HTTP_${resp.status}`, message: await resp.text(), retriable: resp.status >= 500 });
     return;
   }
+  // 累积 tool_use（按 content block index：start 取 id/name，input_json_delta 累积参数）。
+  const toolAcc = {};
   await pumpProviderSse(resp, (json) => {
-    if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
-      sse(res, 'chunk', { text: json.delta.text });
+    if (json.type === 'content_block_start' && json.content_block?.type === 'tool_use') {
+      toolAcc[json.index] = { id: json.content_block.id, name: json.content_block.name, arguments: '' };
+    } else if (json.type === 'content_block_delta') {
+      if (json.delta?.type === 'text_delta') {
+        sse(res, 'chunk', { text: json.delta.text });
+      } else if (json.delta?.type === 'input_json_delta' && toolAcc[json.index]) {
+        toolAcc[json.index].arguments += json.delta.partial_json || '';
+      }
     } else if (json.type === 'message_delta' && json.delta?.stop_reason) {
-      sse(res, 'done', { stop_reason: json.delta.stop_reason });
+      const stop = json.delta.stop_reason;
+      if (stop === 'tool_use') {
+        const arr = Object.values(toolAcc).map((t) => ({ id: t.id, name: t.name, arguments: t.arguments || '{}' }));
+        sse(res, 'tool_calls', { tool_calls: arr }); // 归一化，与 OpenAI 适配器同形
+      } else {
+        sse(res, 'done', { stop_reason: stop });
+      }
     }
   });
 }

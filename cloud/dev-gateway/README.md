@@ -61,7 +61,10 @@ curl -N -XPOST localhost:8787/invoke/stream \
 ## 供应商适配
 
 - `openai` / `deepseek`：OpenAI 兼容（`Authorization: Bearer`，`/chat/completions` 流式，`choices[].delta.content`）。
-- `anthropic`：Messages API（`x-api-key` + `anthropic-version: 2023-06-01`，`content_block_delta` / `message_delta`）。
+- `anthropic`：Messages API（`x-api-key` + `anthropic-version`）。GW 做请求翻译（OpenAI 格式 messages →
+  Anthropic：system 抽顶层、tool_calls→tool_use、tool 结果→tool_result）+ tools 翻译 + tool_use 流式解析
+  （归一化为同一 `tool_calls` 事件）。**可选**：仅 provider=anthropic 且配 `GW_ANTHROPIC_KEY`/BYOK 时走，
+  不配不影响默认 deepseek。
 
 ## 接通客户端（后续）
 
