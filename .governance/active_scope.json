@@ -1,11 +1,17 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-GATE-01",
+  "scope_id": "PI-GW-DEV-04",
   "allowed_files": [
-    "src-tauri/src/ent/gateway.rs",
+    "cloud/dev-gateway/store.mjs",
+    "cloud/dev-gateway/crypto.mjs",
+    "cloud/dev-gateway/usage.mjs",
+    "cloud/dev-gateway/auth.mjs",
+    "cloud/dev-gateway/byok.mjs",
     "cloud/dev-gateway/server.mjs",
+    "cloud/dev-gateway/.gitignore",
+    "cloud/dev-gateway/README.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-GATE-01.md"
+    ".governance/issues/PI-GW-DEV-04.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -17,5 +23,5 @@
     "src-tauri/src/lib.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-GATE-01 客户端登录接线 + 门禁端到端强制（云端真实化②）：客户端 ent::gateway 加会话令牌缓存 + dev auto-login（/auth/login）+ stream_round 随 invoke 上送 token；401 gate_denied 清缓存下轮重登录（X-FORBID-002 不缓存通过、每次经服务端裁决）。GW /invoke/stream 去 dev-anonymous，必经 checkGate（X-SEQ-001 门禁前置强制）。客户端持令牌（auth 凭据，非门禁裁决缓存）。"
+  "scope_reason": "PI-GW-DEV-04 云端真实化③持久化+用量计量：store.mjs（.data/ JSON 文件 + 本地密钥懒生成）；crypto.mjs（AES-256-GCM 加解密，dev GW-02-lite）；usage.mjs（脱敏 JSONL 计量，无正文 REQ-GW-006）；auth 会话持久化（重启不丢登录）；byok **加密**持久化（重启不丢 key 但不落明文，守安全）；server invoke 过门禁后记用量。.data/ gitignore。重启不丢登录/key、有计量；密钥加密非明文。"
 }

@@ -9,6 +9,7 @@ import { PROVIDERS, sse, streamProvider } from './providers.mjs';
 import { login } from './auth.mjs';
 import { checkGate } from './gate.mjs';
 import { setByokKey, getByokKey } from './byok.mjs';
+import { recordUsage } from './usage.mjs';
 
 const PORT = Number(process.env.GW_PORT) || 8787;
 
@@ -89,6 +90,8 @@ const server = createServer(async (req, res) => {
     if (verdict.verdict !== 'passed') {
       return json(res, 401, { error: 'gate_denied', reason: verdict.reason, reauth_required: !!verdict.reauth_required });
     }
+    // 用量计量（PI-GW-DEV-04，REQ-GW-003）：脱敏元数据，**不含正文**（REQ-GW-006）。
+    recordUsage({ userId: verdict.userId, provider: name, model: body.model });
 
     // 密钥优先级：请求体 api_key > BYOK 代持 > 平台 env。不落盘、不记录。
     const apiKey = body.api_key || getByokKey(name) || process.env[`GW_${name.toUpperCase()}_KEY`];

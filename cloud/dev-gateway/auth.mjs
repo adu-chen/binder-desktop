@@ -2,9 +2,16 @@
 // 正式版：持久化用户库 + 真实凭据（magic link/密码）+ JWT 签名（CLOUD-01 决策后），迁独立仓。
 
 import { randomBytes } from 'node:crypto';
+import { loadJson, saveJson } from './store.mjs';
 
 const TTL_MS = 24 * 3600 * 1000;
-const sessions = new Map(); // token -> { userId, exp }
+// 启动载入持久化会话（PI-GW-DEV-04，重启不丢登录），清理过期项。
+const sessions = new Map(Object.entries(loadJson('sessions.json', {})));
+for (const [t, s] of [...sessions]) if (!s || Date.now() > s.exp) sessions.delete(t);
+
+function persist() {
+  saveJson('sessions.json', Object.fromEntries(sessions));
+}
 
 /** 登录（dev：任意 email 即发令牌；无 email 为 dev 用户）。回 { token, userId, expiresAt }。 */
 export function login(email) {
@@ -12,6 +19,7 @@ export function login(email) {
   const token = randomBytes(24).toString('hex');
   const exp = Date.now() + TTL_MS;
   sessions.set(token, { userId, exp });
+  persist();
   return { token, userId, expiresAt: exp };
 }
 
@@ -22,11 +30,15 @@ export function verifyToken(token) {
   if (!s) return null;
   if (Date.now() > s.exp) {
     sessions.delete(token);
+    persist();
     return null;
   }
   return { userId: s.userId };
 }
 
 export function logout(token) {
-  if (token) sessions.delete(token);
+  if (token) {
+    sessions.delete(token);
+    persist();
+  }
 }
