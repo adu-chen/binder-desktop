@@ -808,3 +808,33 @@ button:disabled { opacity: 0.5; cursor: default; }
   border-radius: 6px;
   box-shadow: 0 2px 8px var(--bg-overlay);
 }
+
+.byok-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: var(--sp-2, 4px);
+  padding: var(--sp-2, 4px);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--rule);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.byok-input {
+  flex: 1;
+  min-width: 160px;
+  padding: 3px 6px;
+  background: var(--bg-card);
+  border: 0.5px solid var(--rule);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.byok-provider {
+  padding: 3px 4px;
+  background: var(--bg-card);
+  border: 0.5px solid var(--rule);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.byok-status { color: var(--ink-4); font-size: 11px; }

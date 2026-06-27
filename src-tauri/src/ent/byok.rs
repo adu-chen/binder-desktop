@@ -58,6 +58,35 @@ fn deliver_to_gateway(_key: &str) -> bool {
     true
 }
 
+/// PI-BYOK-DEV-01 · BYOK 一次性上送 dev 网关并**零残留清零**（deliver_to_gateway 的真实 dev 版）。
+///
+/// 守 BR-ENT-DATA-001 / X-FORBID-001：key 仅经网关、客户端不持久化；上送后就地清零原 key（不回显明文、
+/// 不写日志）。dev 门禁桩=Pass（真实订阅裁决归服务端 X-FORBID-002，正式版补）。
+pub async fn upload_to_gateway(provider: &str, mut key: String) -> Result<(), IpcError> {
+    let url = format!("{}/byok/keys", crate::ent::gateway::gw_base_url());
+    // key 借入 body 上送；send 后就地清零原 key（一次性、零残留）。
+    let body = serde_json::json!({ "provider": provider, "api_key": &key });
+    let result = reqwest::Client::new().post(&url).json(&body).send().await;
+    zeroize(&mut key);
+    drop(body); // body 含一份明文拷贝，随作用域 drop（dev best-effort；正式版用安全内存类型最小化拷贝）
+
+    match result {
+        Ok(r) if r.status().is_success() => Ok(()),
+        Ok(r) => Err(IpcError::new(
+            "ENT_BYOK_GW_HTTP",
+            &format!("BYOK 上送失败：网关 HTTP {}", r.status()),
+            true,
+            false,
+        )),
+        Err(e) => Err(IpcError::new(
+            "ENT_BYOK_GW_UNREACHABLE",
+            &format!("BYOK 上送失败：dev 网关不可达（{e}）。请先启动 cloud/dev-gateway。"),
+            true,
+            false,
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

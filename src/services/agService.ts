@@ -46,6 +46,14 @@ export async function listDocBlocks(relPath: string): Promise<DocBlock[]> {
 }
 
 /**
+ * BYOK：把 provider 密钥一次性上送 dev 网关代持（PI-BYOK-DEV-01）。
+ * 客户端不持久化、不回显——密钥经后端 ent::byok 送网关后即清零（X-FORBID-001）。
+ */
+export async function uploadByok(provider: string, key: string): Promise<void> {
+  await invoke("byok_upload", { provider, key });
+}
+
+/**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
  * 需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回 AG_GW_UNREACHABLE 错误终态。
  */

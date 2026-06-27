@@ -150,7 +150,7 @@ use crate::ipc::AgTurnEvent;
 
 const DEFAULT_GW_URL: &str = "http://localhost:8787";
 
-fn gw_base_url() -> String {
+pub(crate) fn gw_base_url() -> String {
     std::env::var("BINDER_GW_URL").unwrap_or_else(|_| DEFAULT_GW_URL.to_string())
 }
 

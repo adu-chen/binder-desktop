@@ -1,20 +1,27 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09I",
+  "scope_id": "PI-BYOK-DEV-01",
   "allowed_files": [
+    "cloud/dev-gateway/server.mjs",
+    "cloud/dev-gateway/README.md",
+    "src-tauri/src/ent/byok.rs",
+    "src-tauri/src/ent/gateway.rs",
+    "src-tauri/src/lib.rs",
     "src/services/agService.ts",
+    "src/components/ag/Composer.tsx",
+    "src/styles.css",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09I.md"
+    ".governance/issues/PI-BYOK-DEV-01.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
+    "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/store/edStore.ts",
-    "src/store/deStore.ts"
+    "src/store/edStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09I diff 卡 after 真预览：agService 从 tool_request(propose_edit) 的 params 捕获 new_text/content（既有事件已带 params，不改契约），diff_proposed 时用作 diff 卡 after 预览（替占位文字），无则回退占位。纯前端投影。"
+  "scope_reason": "PI-BYOK-DEV-01 BYOK 客户端入口（守 X-FORBID-001 零残留）：GW 加 POST /byok/keys（内存存 {provider:key}）+ /invoke/stream 取密钥优先级 body.api_key>BYOK>env；后端 async byok_upload 命令——POST 送 GW 后经 ent::byok 零残留清零（不持久、不上行除 GW）；ent::byok deliver_to_gateway 真实化、gateway gw_base_url 公开；agService.uploadByok；Composer 加最小 BYOK 录入（provider+key→保存即送 GW 清空输入）。客户端不存 key。"
 }

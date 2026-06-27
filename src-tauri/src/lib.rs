@@ -729,6 +729,16 @@ struct BlockRef {
     text: String,
 }
 
+/// PI-BYOK-DEV-01 · BYOK 客户端入口：用户 provider 密钥一次性上送 dev 网关代持（零残留，客户端不持久化，
+/// X-FORBID-001）。key 经 ent::byok 上送后即清零；不回显明文。
+#[tauri::command]
+async fn byok_upload(provider: String, key: String) -> Result<(), IpcError> {
+    if key.trim().is_empty() {
+        return Err(IpcError::new("ENT_BYOK_EMPTY", "密钥为空", false, false));
+    }
+    ent::byok::upload_to_gateway(&provider, key).await
+}
+
 /// PI-AG-08C/08E/08F · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）。
@@ -1100,7 +1110,7 @@ pub fn run() {
             app.manage(AppState { db: Mutex::new(conn), registry: build_registry() });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch, ag_start_turn])
+        .invoke_handler(tauri::generate_handler![dispatch, ag_start_turn, byok_upload])
         .run(tauri::generate_context!())
         .expect("error while running Binder");
 }

@@ -24,6 +24,7 @@ node server.mjs          # 或 npm start
 |---|---|---|
 | GET  | `/health` | `{ ok, providers }` |
 | POST | `/gate/check` | dev 恒 `{ verdict: "passed" }`（真实订阅裁决归正式 GW+AUTH+LIC） |
+| POST | `/byok/keys` | BYOK 代持：`{provider,api_key}` → 内存存（dev），回 `{ok,provider}`（不回显密钥）。客户端经「🔑 key」录入上送 |
 | POST | `/invoke/stream` | 归一化 SSE：`event: chunk {text}` / `done {stop_reason}` / `error {code,message,retriable}` |
 
 `/invoke/stream` 请求体：

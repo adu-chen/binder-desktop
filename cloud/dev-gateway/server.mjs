@@ -17,6 +17,9 @@ const PROVIDERS = {
   anthropic: { kind: 'anthropic', url: 'https://api.anthropic.com/v1/messages' },
 };
 
+// BYOK 内存代持（PI-BYOK-DEV-01，dev 单用户）：{ provider: key }。仅内存，不落盘、不记日志。
+const byokKeys = {};
+
 function sse(res, event, data) {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -195,6 +198,28 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // BYOK 代持（PI-BYOK-DEV-01）：客户端一次性上送 provider 密钥，GW 内存保管（dev）。不回显明文。
+  if (req.method === 'POST' && req.url === '/byok/keys') {
+    let body;
+    try {
+      body = await readJson(req);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'invalid json body' }));
+      return;
+    }
+    const name = body.provider;
+    if (!PROVIDERS[name] || !body.api_key) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'require { provider(openai|deepseek|anthropic), api_key }' }));
+      return;
+    }
+    byokKeys[name] = body.api_key;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, provider: name })); // 不回显密钥
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/invoke/stream') {
     let body;
     try {
@@ -211,8 +236,8 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ error: `unknown provider: ${name}`, providers: Object.keys(PROVIDERS) }));
       return;
     }
-    // 密钥：BYOK(请求体) 优先，否则平台 env GW_<PROVIDER>_KEY。不落盘、不记录。
-    const apiKey = body.api_key || process.env[`GW_${name.toUpperCase()}_KEY`];
+    // 密钥优先级：请求体 api_key > BYOK 代持 > 平台 env GW_<PROVIDER>_KEY。不落盘、不记录。
+    const apiKey = body.api_key || byokKeys[name] || process.env[`GW_${name.toUpperCase()}_KEY`];
     if (!apiKey) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: `no api key for ${name} (传 body.api_key 或设 env GW_${name.toUpperCase()}_KEY)` }));

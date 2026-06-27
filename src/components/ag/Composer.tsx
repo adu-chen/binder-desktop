@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent } from "react";
 import { useAgStore } from "../../store/agStore";
-import { startTurn, listDocBlocks, type DocBlock } from "../../services/agService";
+import { startTurn, listDocBlocks, uploadByok, type DocBlock } from "../../services/agService";
 import { generateSampleDiff } from "../../services/deService";
 import { useEdStore } from "../../store/edStore";
 import { useWsStore } from "../../store/wsStore";
@@ -40,8 +40,25 @@ export function Composer() {
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [blocksByDoc, setBlocksByDoc] = useState<Record<string, DocBlock[]>>({});
   const [atQuery, setAtQuery] = useState<{ query: string; start: number; caret: number } | null>(null);
+  const [byokOpen, setByokOpen] = useState(false);
+  const [byokProvider, setByokProvider] = useState("deepseek");
+  const [byokKey, setByokKey] = useState("");
+  const [byokStatus, setByokStatus] = useState("");
 
   const fileDocs = docs.filter((d) => !d.isDir);
+
+  const saveByok = async () => {
+    if (!byokKey.trim()) return;
+    setByokStatus("上送中…");
+    try {
+      await uploadByok(byokProvider, byokKey);
+      setByokKey(""); // 客户端不保留密钥
+      setByokStatus(`✓ ${byokProvider} 密钥已送网关`);
+    } catch (e) {
+      const err = e as { message?: string };
+      setByokStatus(`✗ ${err?.message ?? "上送失败"}`);
+    }
+  };
   const atMatches = atQuery
     ? fileDocs.filter((d) => d.relPath.toLowerCase().includes(atQuery.query.toLowerCase())).slice(0, 8)
     : [];
@@ -179,6 +196,27 @@ export function Composer() {
         </div>
       )}
 
+      {byokOpen && (
+        <div className="byok-form">
+          <select className="byok-provider" value={byokProvider} onChange={(e) => setByokProvider(e.target.value)}>
+            <option value="deepseek">deepseek</option>
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+          </select>
+          <input
+            className="byok-input"
+            type="password"
+            placeholder="粘贴 provider 密钥（仅送网关，不在本地保存）"
+            value={byokKey}
+            onChange={(e) => setByokKey(e.target.value)}
+          />
+          <button onClick={() => void saveByok()} disabled={!byokKey.trim()}>
+            保存
+          </button>
+          {byokStatus && <span className="byok-status">{byokStatus}</span>}
+        </div>
+      )}
+
       {atQuery && atMatches.length > 0 && (
         <div className="mention-inline">
           {atMatches.map((d) => (
@@ -226,6 +264,13 @@ export function Composer() {
           title={openPath ? "引用编辑器中选中的内容（精确到块）" : "先打开一个文档并选中内容"}
         >
           @引用选区
+        </button>
+        <button
+          className="ghost"
+          onClick={() => setByokOpen((v) => !v)}
+          title="填自己的 provider 密钥（BYOK，仅送网关代持，不在本地保存）"
+        >
+          🔑 key
         </button>
         {/* 示例修改入口：绕过模型，对当前文档生成真实可落盘 diff（PI-FE-11） */}
         <button
