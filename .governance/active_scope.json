@@ -1,12 +1,11 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09B",
+  "scope_id": "PI-AG-09C",
   "allowed_files": [
     "src-tauri/src/ag/context.rs",
     "src-tauri/src/lib.rs",
-    "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09B.md"
+    ".governance/issues/PI-AG-09C.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -14,9 +13,8 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/store/edStore.ts",
-    "src/store/agStore.ts"
+    "src/store/edStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09B（完整 PI-AG-09 第①步）对话历史 + P0–P3 预算截断：ag/context.rs 加 HistTurn/cap_text/select_recent_history（承 BR-AG-DATA-005 分层截断：当前文档 P0 内容可缩、历史 P1 按预算保留最近 drop 最旧，可追溯）；ag_start_turn 接收 history 入参，组装 system→历史(预算内)→当前文档(capped)→当前 user（recency，M-T-02 §3）；agService 传 agStore 历史快照（当前 user 前）。意图沿用判定(②)、REF/AST/KB(③) 后续。assemble_context 的 M-T-02 优先级对齐留 ③。"
+  "scope_reason": "PI-AG-09C（完整 PI-AG-09 第②步）意图沿用判定 BR-AG-DATA-004：ag/context.rs 加 Carryover 枚举 + decide_intent_carryover（dev 启发式：修正追加/显式选择/指代回指/否则 None；识别策略延实现期，机制锁定）；ag_start_turn 据判定在当前轮前注入【本轮意图】系统提示——None=历史仅作背景不凌驾当前、≠None=据相应历史意图继续（M-T-02 §4.3 默认弱化、显式沿用才提权）。纯后端。"
 }

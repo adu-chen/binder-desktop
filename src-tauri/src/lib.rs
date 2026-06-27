@@ -871,6 +871,22 @@ async fn ag_start_turn(
     if let Some(ctx) = &doc_ctx {
         messages.push(serde_json::json!({ "role": "system", "content": ctx }));
     }
+    // 意图沿用判定（BR-AG-DATA-004，PI-AG-09C）：默认弱化历史、显式沿用才提权——当前轮前注入信号。
+    let intent_hint = match crate::ag::context::decide_intent_carryover(&prompt, !kept_history.is_empty()) {
+        crate::ag::context::Carryover::None => {
+            "【本轮意图】这是一个新请求，对话历史仅作背景，不要让历史意图凌驾当前请求。"
+        }
+        crate::ag::context::Carryover::Refine => {
+            "【本轮意图】用户在修正/追加上文的产出，请据最近一轮的相关内容继续。"
+        }
+        crate::ag::context::Carryover::Select => {
+            "【本轮意图】用户在选择/沿用上文给出的方案，请据上文相应选项继续。"
+        }
+        crate::ag::context::Carryover::ReferenceTarget => {
+            "【本轮意图】用户在延续上文的话题/目标，请参考相关历史意图继续。"
+        }
+    };
+    messages.push(serde_json::json!({ "role": "system", "content": intent_hint }));
     messages.push(serde_json::json!({ "role": "user", "content": prompt }));
 
     // 工具定义（PI-AG-08B 只读 3 工具）。

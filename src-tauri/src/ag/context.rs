@@ -157,6 +157,39 @@ pub fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> (Vec<Hi
     (kept_rev, dropped)
 }
 
+/// 意图沿用判定结果（TERM-AG-005 IntentCarryover，BR-AG-DATA-004）。
+/// None = 本轮为新请求，历史仅作背景；其余 = 本轮显式沿用历史意图，应提权参考。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carryover {
+    None,
+    Refine,          // 修正追加（再短一点 / 改成… / 把刚才那段…）
+    Select,          // 显式选择（用第二个 / 按刚才说的）
+    ReferenceTarget, // 指代回指 / 续写（继续 / 接着 / 它 / 那个 / 上面）
+}
+
+/// 意图沿用判定（BR-AG-DATA-004）：默认弱化历史，仅当本轮显式沿用历史意图时提权。
+/// **dev 启发式**（识别策略延实现期：可换小模型/更细规则）；本函数锁「默认 None、显式沿用才非 None」机制。
+pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
+    if !has_history {
+        return Carryover::None;
+    }
+    let p = prompt.trim();
+    let any = |ks: &[&str]| ks.iter().any(|k| p.contains(k));
+    // 修正追加（操作对象=上一轮产出）。
+    if any(&["改成", "换成", "短一点", "长一点", "再写", "再短", "再长", "正式一点", "把刚才", "把上面", "把上一", "重写"]) {
+        return Carryover::Refine;
+    }
+    // 显式选择（沿用上一轮某个产出/方案）。
+    if any(&["第一个", "第二个", "第三个", "按刚才", "按上面", "用刚才", "用上面", "就那个", "就用"]) {
+        return Carryover::Select;
+    }
+    // 指代回指 / 续写（延续上一轮目标）。
+    if any(&["继续", "接着", "接下来", "然后呢", "上面", "刚才", "那个", "这个", "它"]) {
+        return Carryover::ReferenceTarget;
+    }
+    Carryover::None
+}
+
 /// 单文档边界裁决结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetDecision {
@@ -263,5 +296,20 @@ mod tests {
         assert_eq!(kept[1].content, "cc");
         // 预算 0：全丢弃。
         assert_eq!(select_recent_history(&turns, 0).1, 3);
+    }
+
+    // PI-AG-09C：意图沿用判定——无历史/新话题=None；修正/选择/回指=对应类型（默认弱化、显式沿用提权）。
+    #[test]
+    fn intent_carryover_defaults_none_and_detects_carryover() {
+        // 无历史 → None（即便有沿用词）。
+        assert_eq!(decide_intent_carryover("继续写", false), Carryover::None);
+        // 新话题 → None。
+        assert_eq!(decide_intent_carryover("帮我写一首关于春天的诗", true), Carryover::None);
+        // 修正追加 / 显式选择 / 指代回指。
+        assert_eq!(decide_intent_carryover("再短一点", true), Carryover::Refine);
+        assert_eq!(decide_intent_carryover("把刚才那段改成正式语气", true), Carryover::Refine);
+        assert_eq!(decide_intent_carryover("用第二个方案", true), Carryover::Select);
+        assert_eq!(decide_intent_carryover("继续", true), Carryover::ReferenceTarget);
+        assert_eq!(decide_intent_carryover("接着上面写", true), Carryover::ReferenceTarget);
     }
 }
