@@ -1,17 +1,15 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-GW-DEV-04",
+  "scope_id": "PI-GW-DEV-05",
   "allowed_files": [
     "cloud/dev-gateway/store.mjs",
-    "cloud/dev-gateway/crypto.mjs",
     "cloud/dev-gateway/usage.mjs",
-    "cloud/dev-gateway/auth.mjs",
-    "cloud/dev-gateway/byok.mjs",
+    "cloud/dev-gateway/lic.mjs",
+    "cloud/dev-gateway/gate.mjs",
     "cloud/dev-gateway/server.mjs",
-    "cloud/dev-gateway/.gitignore",
     "cloud/dev-gateway/README.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-GW-DEV-04.md"
+    ".governance/issues/PI-GW-DEV-05.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -23,5 +21,5 @@
     "src-tauri/src/lib.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-GW-DEV-04 云端真实化③持久化+用量计量：store.mjs（.data/ JSON 文件 + 本地密钥懒生成）；crypto.mjs（AES-256-GCM 加解密，dev GW-02-lite）；usage.mjs（脱敏 JSONL 计量，无正文 REQ-GW-006）；auth 会话持久化（重启不丢登录）；byok **加密**持久化（重启不丢 key 但不落明文，守安全）；server invoke 过门禁后记用量。.data/ gitignore。重启不丢登录/key、有计量；密钥加密非明文。"
+  "scope_reason": "PI-GW-DEV-05 云端真实化④ LIC 订阅/额度（补门禁最后一桩）：lic.evaluate(userId)=订阅(dev free 恒有效)+额度（当日用量 vs DAILY_QUOTA，用 PI-GW-DEV-04 计量）；usage.countToday + store.readLines；gate 用 evaluate（denied 带 used/limit/reason）；server 门禁拒绝按类返码——令牌问题 401（客户端重登录）、额度/订阅 429（不重登录）。cloud-only，客户端不动（其 401 清令牌逻辑天然只对 token 生效）。"
 }

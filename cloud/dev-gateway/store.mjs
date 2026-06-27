@@ -30,6 +30,25 @@ export function appendLine(name, obj) {
   appendFileSync(join(DATA_DIR, name), JSON.stringify(obj) + '\n');
 }
 
+/** 读 JSONL → 解析行数组（坏行跳过）。文件不存在 → []。 */
+export function readLines(name) {
+  try {
+    return readFileSync(join(DATA_DIR, name), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** 本地加密密钥（懒生成 32B，存 .data/gw.key）。dev GW-02-lite；正式版经 KMS/信封，须人类批准。 */
 export function loadOrCreateKey() {
   const p = join(DATA_DIR, 'gw.key');

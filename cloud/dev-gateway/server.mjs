@@ -85,10 +85,17 @@ const server = createServer(async (req, res) => {
     const provider = PROVIDERS[name];
     if (!provider) return json(res, 400, { error: `unknown provider: ${name}`, providers: Object.keys(PROVIDERS) });
 
-    // 门禁前置（X-SEQ-001，PI-AG-GATE-01）：**必经裁决**（去 dev-anonymous）——无/过期/无效令牌一律 401。
+    // 门禁前置（X-SEQ-001）：必经裁决。令牌问题→401（客户端重登录）；额度/订阅→429（不重登录，PI-GW-DEV-05）。
     const verdict = checkGate(body.token);
     if (verdict.verdict !== 'passed') {
-      return json(res, 401, { error: 'gate_denied', reason: verdict.reason, reauth_required: !!verdict.reauth_required });
+      const code = verdict.reauth_required ? 401 : 429;
+      return json(res, code, {
+        error: 'gate_denied',
+        reason: verdict.reason,
+        reauth_required: !!verdict.reauth_required,
+        used: verdict.used,
+        limit: verdict.limit,
+      });
     }
     // 用量计量（PI-GW-DEV-04，REQ-GW-003）：脱敏元数据，**不含正文**（REQ-GW-006）。
     recordUsage({ userId: verdict.userId, provider: name, model: body.model });
