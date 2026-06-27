@@ -1,8 +1,12 @@
 {
   "task_type": "CODE_CHANGE_MINOR",
-  "scope_id": "PI-AG-DIAG-01",
+  "scope_id": "PI-GW-DEV-07",
   "allowed_files": [
-    "src-tauri/src/ent/gateway.rs",
+    "cloud/dev-gateway/package.json",
+    "cloud/dev-gateway/.env.example",
+    "cloud/dev-gateway/.env",
+    "cloud/dev-gateway/.gitignore",
+    "cloud/dev-gateway/README.md",
     ".governance/active_scope.json"
   ],
   "forbidden_files": [
@@ -10,9 +14,8 @@
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src-tauri/src/lib.rs",
-    "src-tauri/src/ipc/mod.rs"
+    "src-tauri/src/lib.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "CODE_CHANGE_MINOR 诊断日志：定位 AG_GW_HTTP_502。在 ent/gateway.rs 客户端→网关边界加 eprintln! 诊断（项目无 log/tracing 框架，沿用既有 eprintln! 到 stderr/tauri dev 控制台）：(1) ensure_session_token 登录不可达/非 2xx 记 url+状态（原 .ok()? 静默吞）；(2) stream_round 发请求前记 url/provider/model/token 是否存在（不记 token 值）；(3) 非 2xx 路径记 status+content-type+body 截断片段，且空体时把面向 UI 的 message 由空白改为可操作提示（指明 dev-gateway 不产 502、查 BINDER_GW_URL 与网关运行）。不改门禁/流式逻辑与行为，仅加日志+错误信息可读性。"
+  "scope_reason": "CODE_CHANGE_MINOR cloud 便利改动（EXEMPTION-GW-DEV-01 在仓隔离）：npm start 读 .env，让平台 key 设一次长期生效。package.json start → node --env-file-if-exists=.env server.mjs（缺 .env 不报错，仍可用 env 变量）；engines.node 由 >=18 修正为 >=22.5（node:sqlite/env-file-if-exists 真实要求）。新增 .env.example（占位，入仓做文档）；本地 .env（含真实 key，已 gitignore，不入仓）。README 补 npm start 读 .env 说明。不改网关运行逻辑。"
 }

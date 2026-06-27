@@ -44,6 +44,7 @@ node server.mjs          # 或 npm start
 
 - **BYOK**：请求体 `api_key`（经 `/byok/keys` 录入的会**信封加密入库**，重启不丢；调用时解封进内存用）。
 - **平台**：环境变量 `GW_OPENAI_KEY` / `GW_DEEPSEEK_KEY` / `GW_ANTHROPIC_KEY`（仅内存用，不落盘）。
+  - **设一次长期生效**：`cp .env.example .env` 填入 key，之后 `npm start` 会经 `--env-file-if-exists=.env` 自动加载（`.env` 已 gitignore，缺文件也不报错；或仍可 `GW_DEEPSEEK_KEY=… node server.mjs` 临时传）。
 
 平台/请求 key **不落盘、不写日志**；BYOK 落库前信封加密，**磁盘无明文**。`.env`、`.data/` 均已 gitignore——不要把 key 或 DB 提交进仓库。
 

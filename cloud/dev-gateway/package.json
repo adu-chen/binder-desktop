@@ -5,10 +5,10 @@
   "type": "module",
   "description": "临时本地 dev AI 网关（PI-GW-DEV-01）。零依赖。正式版迁独立云仓库、改 TS。",
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node --env-file-if-exists=.env server.mjs",
     "check": "node --check server.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   }
 }
