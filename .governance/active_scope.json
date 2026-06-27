@@ -1,29 +1,18 @@
 {
-  "task_type": "CODE_CHANGE",
-  "scope_id": "PI-GW-DEV-06",
+  "task_type": "CODE_CHANGE_MINOR",
+  "scope_id": "PI-AG-DIAG-01",
   "allowed_files": [
-    "cloud/dev-gateway/kms.mjs",
-    "cloud/dev-gateway/db.mjs",
-    "cloud/dev-gateway/crypto.mjs",
-    "cloud/dev-gateway/byok.mjs",
-    "cloud/dev-gateway/auth.mjs",
-    "cloud/dev-gateway/usage.mjs",
-    "cloud/dev-gateway/store.mjs",
-    "cloud/dev-gateway/server.mjs",
-    "cloud/dev-gateway/README.md",
-    "docs/STAGE-REPORT-AG-Cloud-2026-06-27.md",
-    ".governance/active_scope.json",
-    ".governance/issues/PI-GW-DEV-06.md"
+    "src-tauri/src/ent/gateway.rs",
+    ".governance/active_scope.json"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
-    "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/lib.rs"
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-GW-DEV-06 云端真实化⑤ 基建升级（正式 GW-02 信封加密 + SQLite DB 替 JSON）：(1) kms.mjs KMS 抽象 + 信封加密——KEK 与密文分离，每条密钥独立 DEK，wrap/unwrap 接口与真实云 KMS 同形（local 提供方，aws/gcp 正式仓实现）；crypto.mjs 改信封 v2（保留 encrypt/decrypt 名）。(2) db.mjs node:sqlite DatabaseSync 建表 sessions/byok_keys/usage；auth/byok/usage 改库查询；删 store.mjs（JSON 文件）。cloud-only，客户端不动；.data/ 已 gitignore（gw.db/gw.master.key 不入仓）。EXEMPTION-GW-DEV-01 在仓隔离迭代。"
+  "scope_reason": "CODE_CHANGE_MINOR 诊断日志：定位 AG_GW_HTTP_502。在 ent/gateway.rs 客户端→网关边界加 eprintln! 诊断（项目无 log/tracing 框架，沿用既有 eprintln! 到 stderr/tauri dev 控制台）：(1) ensure_session_token 登录不可达/非 2xx 记 url+状态（原 .ok()? 静默吞）；(2) stream_round 发请求前记 url/provider/model/token 是否存在（不记 token 值）；(3) 非 2xx 路径记 status+content-type+body 截断片段，且空体时把面向 UI 的 message 由空白改为可操作提示（指明 dev-gateway 不产 502、查 BINDER_GW_URL 与网关运行）。不改门禁/流式逻辑与行为，仅加日志+错误信息可读性。"
 }

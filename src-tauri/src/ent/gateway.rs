@@ -163,13 +163,20 @@ async fn ensure_session_token() -> Option<String> {
         return Some(tok);
     }
     let url = format!("{}/auth/login", gw_base_url());
-    let resp = reqwest::Client::new()
+    let resp = match reqwest::Client::new()
         .post(&url)
         .json(&serde_json::json!({ "email": "dev@binder.local" }))
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[ag-gw] ✗ auth/login 不可达 {url}: {e}");
+            return None;
+        }
+    };
     if !resp.status().is_success() {
+        eprintln!("[ag-gw] ✗ auth/login HTTP {} from {url}", resp.status().as_u16());
         return None;
     }
     let v: serde_json::Value = resp.json().await.ok()?;
@@ -217,6 +224,11 @@ pub async fn stream_round(
     let url = format!("{}/invoke/stream", gw_base_url());
     // 门禁前置（X-SEQ-001）：随调用上送会话令牌（dev auto-login）；GW 必裁决（PI-AG-GATE-01）。
     let token = ensure_session_token().await;
+    // 诊断日志：出站请求落点 + 令牌是否取到（不记令牌值，X-FORBID-001 不外泄凭据）。
+    eprintln!(
+        "[ag-gw] → POST {url} provider={provider} model={model} token={}",
+        if token.is_some() { "present" } else { "none" },
+    );
     let body = serde_json::json!({
         "provider": provider, "model": model, "messages": messages, "tools": tools, "token": token
     });
@@ -224,6 +236,7 @@ pub async fn stream_round(
     let resp = match reqwest::Client::new().post(&url).json(&body).send().await {
         Ok(r) => r,
         Err(e) => {
+            eprintln!("[ag-gw] ✗ unreachable {url}: {e}");
             let _ = channel.send(AgTurnEvent::Error {
                 turn_id: turn_id.to_string(),
                 code: "AG_GW_UNREACHABLE".into(),
@@ -240,11 +253,28 @@ pub async fn stream_round(
         if code == 401 {
             clear_session_token();
         }
-        let msg = resp.text().await.unwrap_or_default();
+        let ctype = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = resp.text().await.unwrap_or_default();
+        // 诊断日志：状态 + content-type + 响应体片段（截 300 字符）——定位是谁回的（我方网关回 JSON，反代常回空/HTML）。
+        let snippet: String = body.chars().take(300).collect();
+        eprintln!("[ag-gw] ✗ HTTP {code} from {url} content-type=\"{ctype}\" body=\"{snippet}\"");
+        // 空体（多为中间反代/上游 502）→ 给可操作提示，避免 UI 只见一个空白错误码。
+        let message = if body.trim().is_empty() {
+            format!(
+                "网关返回 HTTP {code}（空响应体）：{url}。本项目 dev-gateway 自身不产生 502，多为中间反向代理或上游未接通——请确认 BINDER_GW_URL 指向正确、且 dev-gateway 正在运行。"
+            )
+        } else {
+            body
+        };
         let _ = channel.send(AgTurnEvent::Error {
             turn_id: turn_id.to_string(),
             code: format!("AG_GW_HTTP_{code}"),
-            message: msg,
+            message,
             retriable: code >= 500 || code == 401, // 401 可重试（重登录）
         });
         return Ok(RoundOutcome::Done);
