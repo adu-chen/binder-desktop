@@ -23,7 +23,8 @@ node server.mjs          # 或 npm start
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET  | `/health` | `{ ok, providers }` |
-| POST | `/gate/check` | dev 恒 `{ verdict: "passed" }`（真实订阅裁决归正式 GW+AUTH+LIC） |
+| POST | `/auth/login` | `{email?}` → `{token,userId,expiresAt}`（dev 最小会话令牌，内存 TTL 24h） |
+| POST | `/gate/check` | `{token}` → `{verdict:passed\|denied,reason,reauth_required}`（真门禁：验令牌+订阅，替桩恒过） |
 | POST | `/byok/keys` | BYOK 代持：`{provider,api_key}` → 内存存（dev），回 `{ok,provider}`（不回显密钥）。客户端经「🔑 key」录入上送 |
 | POST | `/invoke/stream` | 归一化 SSE：`event: chunk {text}` / `done {stop_reason}` / `error {code,message,retriable}` |
 

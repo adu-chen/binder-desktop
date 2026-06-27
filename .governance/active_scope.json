@@ -1,17 +1,16 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-BYOK-DEV-01",
+  "scope_id": "PI-GW-DEV-03",
   "allowed_files": [
     "cloud/dev-gateway/server.mjs",
+    "cloud/dev-gateway/providers.mjs",
+    "cloud/dev-gateway/auth.mjs",
+    "cloud/dev-gateway/gate.mjs",
+    "cloud/dev-gateway/lic.mjs",
+    "cloud/dev-gateway/byok.mjs",
     "cloud/dev-gateway/README.md",
-    "src-tauri/src/ent/byok.rs",
-    "src-tauri/src/ent/gateway.rs",
-    "src-tauri/src/lib.rs",
-    "src/services/agService.ts",
-    "src/components/ag/Composer.tsx",
-    "src/styles.css",
     ".governance/active_scope.json",
-    ".governance/issues/PI-BYOK-DEV-01.md"
+    ".governance/issues/PI-GW-DEV-03.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -20,8 +19,9 @@
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/store/edStore.ts"
+    "src-tauri/src/lib.rs",
+    "src/components/ag/Composer.tsx"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-BYOK-DEV-01 BYOK 客户端入口（守 X-FORBID-001 零残留）：GW 加 POST /byok/keys（内存存 {provider:key}）+ /invoke/stream 取密钥优先级 body.api_key>BYOK>env；后端 async byok_upload 命令——POST 送 GW 后经 ent::byok 零残留清零（不持久、不上行除 GW）；ent::byok deliver_to_gateway 真实化、gateway gw_base_url 公开；agService.uploadByok；Composer 加最小 BYOK 录入（provider+key→保存即送 GW 清空输入）。客户端不存 key。"
+  "scope_reason": "PI-GW-DEV-03 云端真实化①模块骨架+最小AUTH+真门禁（本仓 cloud/ 隔离迭代，扩展 EXEMPTION-GW-DEV-01）：单 server.mjs 拆为模块 providers/auth/gate/lic/byok；auth 内存会话 + /auth/login 签发令牌 + verifyToken；gate /gate/check 真查令牌+订阅（替桩恒过，X-SEQ-001/X-FORBID-002 服务端裁决）；lic dev 占位；/invoke/stream 带 token 则真门禁、无 token dev-anonymous（不破坏现客户端，令牌强制留作后续）。仅 cloud/，对客户端治理隐形（0 治理块/ADUS 引用，已验）。"
 }
