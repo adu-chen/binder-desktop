@@ -84,13 +84,10 @@ const server = createServer(async (req, res) => {
     const provider = PROVIDERS[name];
     if (!provider) return json(res, 400, { error: `unknown provider: ${name}`, providers: Object.keys(PROVIDERS) });
 
-    // 门禁前置（X-SEQ-001）：带 token 则真裁决，deny→拒；无 token → dev-anonymous 放行
-    // （不破坏现客户端；客户端登录接线后去掉 anonymous，令牌强制）。
-    if (body.token) {
-      const verdict = checkGate(body.token);
-      if (verdict.verdict !== 'passed') {
-        return json(res, 401, { error: 'gate_denied', reason: verdict.reason, reauth_required: !!verdict.reauth_required });
-      }
+    // 门禁前置（X-SEQ-001，PI-AG-GATE-01）：**必经裁决**（去 dev-anonymous）——无/过期/无效令牌一律 401。
+    const verdict = checkGate(body.token);
+    if (verdict.verdict !== 'passed') {
+      return json(res, 401, { error: 'gate_denied', reason: verdict.reason, reauth_required: !!verdict.reauth_required });
     }
 
     // 密钥优先级：请求体 api_key > BYOK 代持 > 平台 env。不落盘、不记录。

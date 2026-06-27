@@ -1,16 +1,11 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-GW-DEV-03",
+  "scope_id": "PI-AG-GATE-01",
   "allowed_files": [
+    "src-tauri/src/ent/gateway.rs",
     "cloud/dev-gateway/server.mjs",
-    "cloud/dev-gateway/providers.mjs",
-    "cloud/dev-gateway/auth.mjs",
-    "cloud/dev-gateway/gate.mjs",
-    "cloud/dev-gateway/lic.mjs",
-    "cloud/dev-gateway/byok.mjs",
-    "cloud/dev-gateway/README.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-GW-DEV-03.md"
+    ".governance/issues/PI-AG-GATE-01.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -19,9 +14,8 @@
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/lib.rs",
-    "src/components/ag/Composer.tsx"
+    "src-tauri/src/lib.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-GW-DEV-03 云端真实化①模块骨架+最小AUTH+真门禁（本仓 cloud/ 隔离迭代，扩展 EXEMPTION-GW-DEV-01）：单 server.mjs 拆为模块 providers/auth/gate/lic/byok；auth 内存会话 + /auth/login 签发令牌 + verifyToken；gate /gate/check 真查令牌+订阅（替桩恒过，X-SEQ-001/X-FORBID-002 服务端裁决）；lic dev 占位；/invoke/stream 带 token 则真门禁、无 token dev-anonymous（不破坏现客户端，令牌强制留作后续）。仅 cloud/，对客户端治理隐形（0 治理块/ADUS 引用，已验）。"
+  "scope_reason": "PI-AG-GATE-01 客户端登录接线 + 门禁端到端强制（云端真实化②）：客户端 ent::gateway 加会话令牌缓存 + dev auto-login（/auth/login）+ stream_round 随 invoke 上送 token；401 gate_denied 清缓存下轮重登录（X-FORBID-002 不缓存通过、每次经服务端裁决）。GW /invoke/stream 去 dev-anonymous，必经 checkGate（X-SEQ-001 门禁前置强制）。客户端持令牌（auth 凭据，非门禁裁决缓存）。"
 }

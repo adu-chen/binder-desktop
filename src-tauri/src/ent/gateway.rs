@@ -154,6 +154,39 @@ pub(crate) fn gw_base_url() -> String {
     std::env::var("BINDER_GW_URL").unwrap_or_else(|_| DEFAULT_GW_URL.to_string())
 }
 
+// PI-AG-GATE-01 · 会话令牌缓存（auth 凭据，非门禁裁决缓存——每次调用仍经服务端 checkGate，X-FORBID-002）。
+static SESSION_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 取会话令牌：已有缓存即用，否则 dev auto-login（POST /auth/login）。失败回 None（GW 将以无令牌拒绝）。
+async fn ensure_session_token() -> Option<String> {
+    if let Some(tok) = SESSION_TOKEN.lock().ok().and_then(|g| g.as_ref().cloned()) {
+        return Some(tok);
+    }
+    let url = format!("{}/auth/login", gw_base_url());
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({ "email": "dev@binder.local" }))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    let token = v.get("token").and_then(|t| t.as_str())?.to_string();
+    if let Ok(mut g) = SESSION_TOKEN.lock() {
+        *g = Some(token.clone());
+    }
+    Some(token)
+}
+
+/// 清会话令牌（门禁拒绝/令牌过期 → 下轮重登录）。
+fn clear_session_token() {
+    if let Ok(mut g) = SESSION_TOKEN.lock() {
+        *g = None;
+    }
+}
+
 /// GW 回传的一次工具调用（OpenAI function-calling 累积结果）。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct GwToolCall {
@@ -182,8 +215,10 @@ pub async fn stream_round(
     use futures_util::StreamExt;
 
     let url = format!("{}/invoke/stream", gw_base_url());
+    // 门禁前置（X-SEQ-001）：随调用上送会话令牌（dev auto-login）；GW 必裁决（PI-AG-GATE-01）。
+    let token = ensure_session_token().await;
     let body = serde_json::json!({
-        "provider": provider, "model": model, "messages": messages, "tools": tools
+        "provider": provider, "model": model, "messages": messages, "tools": tools, "token": token
     });
 
     let resp = match reqwest::Client::new().post(&url).json(&body).send().await {
@@ -201,12 +236,16 @@ pub async fn stream_round(
 
     if !resp.status().is_success() {
         let code = resp.status().as_u16();
+        // 401 门禁拒绝/令牌失效 → 清令牌缓存，下轮自动重登录（X-FORBID-002：不缓存通过）。
+        if code == 401 {
+            clear_session_token();
+        }
         let msg = resp.text().await.unwrap_or_default();
         let _ = channel.send(AgTurnEvent::Error {
             turn_id: turn_id.to_string(),
             code: format!("AG_GW_HTTP_{code}"),
             message: msg,
-            retriable: code >= 500,
+            retriable: code >= 500 || code == 401, // 401 可重试（重登录）
         });
         return Ok(RoundOutcome::Done);
     }
