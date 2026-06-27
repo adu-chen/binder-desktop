@@ -797,3 +797,14 @@ button:disabled { opacity: 0.5; cursor: default; }
   white-space: nowrap;
 }
 .mention-block-option:hover { background: var(--bg-elevated); color: var(--ink); }
+
+.mention-inline {
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: var(--sp-2, 4px);
+  padding: var(--sp-2, 4px);
+  background: var(--bg-card);
+  border: 0.5px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px var(--bg-overlay);
+}

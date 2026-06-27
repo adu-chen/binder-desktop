@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import { useAgStore } from "../../store/agStore";
 import { startTurn, listDocBlocks, type DocBlock } from "../../services/agService";
 import { generateSampleDiff } from "../../services/deService";
@@ -10,6 +10,18 @@ interface BlockRef {
   relPath: string;
   blockId: string;
   text: string;
+}
+
+/** 检测光标前的活跃 @ token（@ 前为行首/空白、@ 后到光标无空白）→ { query, start }；否则 null。 */
+function activeMentionQuery(text: string, caret: number): { query: string; start: number } | null {
+  const upto = text.slice(0, caret);
+  const at = upto.lastIndexOf("@");
+  if (at < 0) return null;
+  const before = at === 0 ? "" : upto[at - 1];
+  if (before && !/\s/.test(before)) return null;
+  const query = upto.slice(at + 1);
+  if (/\s/.test(query)) return null;
+  return { query, start: at };
 }
 
 /**
@@ -27,8 +39,27 @@ export function Composer() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [blocksByDoc, setBlocksByDoc] = useState<Record<string, DocBlock[]>>({});
+  const [atQuery, setAtQuery] = useState<{ query: string; start: number; caret: number } | null>(null);
 
   const fileDocs = docs.filter((d) => !d.isDir);
+  const atMatches = atQuery
+    ? fileDocs.filter((d) => d.relPath.toLowerCase().includes(atQuery.query.toLowerCase())).slice(0, 8)
+    : [];
+
+  const onTextChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    const caret = e.target.selectionStart ?? val.length;
+    setText(val);
+    const m = activeMentionQuery(val, caret);
+    setAtQuery(m ? { ...m, caret } : null);
+  };
+
+  const selectAtMention = (relPath: string) => {
+    if (!atQuery) return;
+    setMentions((cur) => (cur.includes(relPath) ? cur : [...cur, relPath]));
+    setText((t) => t.slice(0, atQuery.start) + t.slice(atQuery.caret));
+    setAtQuery(null);
+  };
 
   const expandDocBlocks = async (relPath: string) => {
     if (expandedDoc === relPath) {
@@ -148,12 +179,31 @@ export function Composer() {
         </div>
       )}
 
+      {atQuery && atMatches.length > 0 && (
+        <div className="mention-inline">
+          {atMatches.map((d) => (
+            <button key={d.relPath} className="mention-block-option" onClick={() => selectAtMention(d.relPath)}>
+              @{d.relPath}
+            </button>
+          ))}
+        </div>
+      )}
+
       <textarea
         className="composer-input"
-        placeholder="描述你想要的修改…"
+        placeholder="描述你想要的修改…（输入 @ 引用文档）"
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={onTextChange}
         onKeyDown={(e) => {
+          if (atQuery && e.key === "Escape") {
+            setAtQuery(null);
+            return;
+          }
+          if (atQuery && atMatches.length && e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+            e.preventDefault();
+            selectAtMention(atMatches[0].relPath);
+            return;
+          }
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
             e.preventDefault();
             send();

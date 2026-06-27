@@ -1,21 +1,21 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-GW-DEV-02",
+  "scope_id": "PI-AG-09H",
   "allowed_files": [
-    "cloud/dev-gateway/server.mjs",
-    "cloud/dev-gateway/README.md",
+    "src/components/ag/Composer.tsx",
+    "src/styles.css",
     ".governance/active_scope.json",
-    ".governance/issues/PI-GW-DEV-02.md"
+    ".governance/issues/PI-AG-09H.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "docs/02_cloud/A-CLOUD-C-P-01_云端APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/lib.rs"
+    "src/store/edStore.ts",
+    "src/store/wsStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-GW-DEV-02 dev GW Anthropic function-calling（可选，不强制 key）：streamAnthropic 加请求翻译（OpenAI 格式 messages→Anthropic：system 抽顶层、assistant.tool_calls→tool_use、role:tool→user tool_result）+ tools 翻译（OpenAI→Anthropic input_schema）+ tool_use 流式解析（content_block_start/input_json_delta→归一化 tool_calls）。仅 provider=anthropic 时走（客户端默认 deepseek，Anthropic 全程可选、未配 GW_ANTHROPIC_KEY 不影响其他）。GW-only，客户端/契约不变。"
+  "scope_reason": "PI-AG-09H 内联 @ 自动补全：Composer 输入框打 @ → 实时按 @ 后 query 过滤工作区文档下拉，选中→加整篇 mention + 删除 @token；Esc/失配关闭。复用既有 mentions（chips/传参）路径，按钮选择器（块展开）+ @引用选区保留为高级入口。styles.css 补内联下拉样式（append 自有类）。纯前端。"
 }
