@@ -715,3 +715,85 @@ button:disabled { opacity: 0.5; cursor: default; }
   letter-spacing: 0.04em;
   color: var(--ink-4);
 }
+
+/* ── 对话区文档/块引用（@mention，PI-AG-09E/F/G） ────────────────────────────── */
+.composer-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2, 4px);
+  margin-bottom: var(--sp-2, 4px);
+}
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--rule);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-chip-x {
+  padding: 0;
+  width: 14px;
+  height: 14px;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  color: var(--ink-4);
+  cursor: pointer;
+}
+.mention-chip-x:hover { color: var(--ink); background: transparent; }
+
+.mention-picker {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: var(--sp-2, 4px);
+  padding: var(--sp-2, 4px);
+  background: var(--bg-card);
+  border: 0.5px solid var(--rule);
+  border-radius: 6px;
+}
+.mention-doc-row { display: flex; align-items: center; gap: 4px; }
+.mention-option {
+  flex: 1;
+  text-align: left;
+  padding: 3px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-option:hover { background: var(--bg-elevated); }
+.mention-option.selected { color: var(--ink); font-weight: 600; }
+.mention-blocks-toggle { padding: 2px 6px; font-size: 11px; }
+.mention-blocks {
+  margin: 2px 0 4px var(--sp-3, 8px);
+  padding-left: var(--sp-2, 4px);
+  border-left: 0.5px solid var(--rule);
+}
+.mention-block-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  color: var(--ink-4);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-block-option:hover { background: var(--bg-elevated); color: var(--ink); }

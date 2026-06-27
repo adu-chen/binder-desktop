@@ -23,6 +23,28 @@ export type AgTurnEvent =
 let seq = 0;
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+/** 文档块（供块级 @mention 选择非当前文档的块，PI-AG-09G）。 */
+export interface DocBlock {
+  block_id: string | null;
+  text: string;
+}
+
+let dseq = 0;
+/** 经统一 dispatch 信封调命令（非流式），PI-AG-09G。 */
+async function dispatchCall<T>(command: string, params: Record<string, unknown>): Promise<T> {
+  const request = { command, correlation_id: `agd-${Date.now()}-${(dseq += 1)}`, params };
+  const resp = await invoke<{ result?: T; error?: { code: string; message: string } }>("dispatch", { request });
+  if (resp.error) throw resp.error;
+  if (resp.result === undefined) throw { code: "IPC_EMPTY", message: `${command} 无返回` };
+  return resp.result;
+}
+
+/** 列指定文档的块（ag.list_blocks），供块级引用选择。 */
+export async function listDocBlocks(relPath: string): Promise<DocBlock[]> {
+  const r = await dispatchCall<{ blocks: DocBlock[] }>("ag.list_blocks", { relPath });
+  return r.blocks;
+}
+
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
  * 需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回 AG_GW_UNREACHABLE 错误终态。

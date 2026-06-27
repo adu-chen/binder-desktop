@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAgStore } from "../../store/agStore";
-import { startTurn } from "../../services/agService";
+import { startTurn, listDocBlocks, type DocBlock } from "../../services/agService";
 import { generateSampleDiff } from "../../services/deService";
 import { useEdStore } from "../../store/edStore";
 import { useWsStore } from "../../store/wsStore";
@@ -25,8 +25,30 @@ export function Composer() {
   const [mentions, setMentions] = useState<string[]>([]);
   const [blockRefs, setBlockRefs] = useState<BlockRef[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
+  const [blocksByDoc, setBlocksByDoc] = useState<Record<string, DocBlock[]>>({});
 
   const fileDocs = docs.filter((d) => !d.isDir);
+
+  const expandDocBlocks = async (relPath: string) => {
+    if (expandedDoc === relPath) {
+      setExpandedDoc(null);
+      return;
+    }
+    if (!blocksByDoc[relPath]) {
+      try {
+        const blocks = await listDocBlocks(relPath);
+        setBlocksByDoc((m) => ({ ...m, [relPath]: blocks }));
+      } catch {
+        setBlocksByDoc((m) => ({ ...m, [relPath]: [] }));
+      }
+    }
+    setExpandedDoc(relPath);
+  };
+
+  const addDocBlockRef = (relPath: string, b: DocBlock) => {
+    setBlockRefs((cur) => [...cur, { relPath, blockId: b.block_id ?? "", text: b.text }]);
+  };
 
   const send = () => {
     if (sending || !text.trim()) return;
@@ -89,14 +111,39 @@ export function Composer() {
         <div className="mention-picker">
           {fileDocs.length === 0 && <p className="muted">工作区暂无文档</p>}
           {fileDocs.map((d) => (
-            <button
-              key={d.relPath}
-              className={`mention-option${mentions.includes(d.relPath) ? " selected" : ""}`}
-              onClick={() => toggleMention(d.relPath)}
-            >
-              {mentions.includes(d.relPath) ? "✓ " : ""}
-              {d.relPath}
-            </button>
+            <div key={d.relPath} className="mention-doc">
+              <div className="mention-doc-row">
+                <button
+                  className={`mention-option${mentions.includes(d.relPath) ? " selected" : ""}`}
+                  onClick={() => toggleMention(d.relPath)}
+                >
+                  {mentions.includes(d.relPath) ? "✓ " : ""}
+                  {d.relPath}
+                </button>
+                <button
+                  className="ghost mention-blocks-toggle"
+                  onClick={() => void expandDocBlocks(d.relPath)}
+                  title="引用其中某一块"
+                >
+                  {expandedDoc === d.relPath ? "块▾" : "块▸"}
+                </button>
+              </div>
+              {expandedDoc === d.relPath && (
+                <div className="mention-blocks">
+                  {(blocksByDoc[d.relPath] ?? []).length === 0 && <p className="muted">（无块或读取失败）</p>}
+                  {(blocksByDoc[d.relPath] ?? []).map((b, i) => (
+                    <button
+                      key={i}
+                      className="mention-block-option"
+                      onClick={() => addDocBlockRef(d.relPath, b)}
+                      title={b.text}
+                    >
+                      Block {i}: {b.text.slice(0, 40)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

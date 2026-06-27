@@ -1,13 +1,13 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09F",
+  "scope_id": "PI-AG-09G",
   "allowed_files": [
     "src-tauri/src/lib.rs",
-    "src/services/edLocate.ts",
-    "src/components/ag/Composer.tsx",
     "src/services/agService.ts",
+    "src/components/ag/Composer.tsx",
+    "src/styles.css",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09F.md"
+    ".governance/issues/PI-AG-09G.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -15,10 +15,9 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/ag/context.rs",
     "src/store/edStore.ts",
     "src/store/wsStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09F REF 块级 @mention（选区精确锚）：edLocate 加 captureSelectionRef（window.getSelection→选区文本 + 上溯 data-block-id 块锚）；Composer 加「@引用选区」入口（选区→块引用 chip，rel_path=当前 openPath）；agService 传 blockRefs；后端 ag_start_turn 接 block_refs(BlockRef{relPath,blockId,text})→并入「[用户显式引用]」P1 块（精确到块，封顶，显式优先保留 BR-AG-DATA-001）。复用既有 mention 注入，不改 ipc/context。"
+  "scope_reason": "PI-AG-09G 引用非当前文档的块 + 样式收尾：后端加 ag.list_blocks（relPath→read_doc+ag::blocks::parse_blocks→[{block_id,text}]，限 workspace X-FORBID-004）+ dispatch/registry；agService 加 listDocBlocks（dispatch）；Composer 选择器每文档加「块▸」展开列其块、点块加块引用（复用 PI-AG-09F block_refs 路径，非当前文档亦可）；styles.css 补 mention-chip/picker/option/block 样式（只 append 自有类）。"
 }

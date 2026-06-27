@@ -75,6 +75,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("de.reject_diff");
     reg.register("de.list_diffs");
     reg.register("ag.start_turn");
+    reg.register("ag.list_blocks");
     reg
 }
 
@@ -128,6 +129,7 @@ fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppStat
         "de.reject_diff" => route_reject_diff(&request, &state),
         "de.list_diffs" => route_list_diffs(&request, &state),
         "ag.start_turn" => route_start_turn(&request),
+        "ag.list_blocks" => route_list_blocks(&request, &state),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
             "IPC_ROUTE_MISSING",
@@ -691,6 +693,21 @@ fn route_start_turn(request: &CommandRequest) -> Result<serde_json::Value, IpcEr
 
 fn sm_error() -> IpcError {
     IpcError::new("AG_SM_INVALID", "SM-AG-01 非法转移", false, false)
+}
+
+/// 路由 `ag.list_blocks`：列指定文档的块（供块级 @mention 选择非当前文档的块，PI-AG-09G）。
+/// 限 active workspace（X-FORBID-004）；read_doc 含 docx；is_html 自判 text/html 分块。
+fn route_list_blocks(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let ws = active_ws(state)?;
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+    let read = workspace::save::read_doc(&abs)?;
+    let is_html = ag::blocks::is_html(&read.content, None);
+    let blocks: Vec<serde_json::Value> = ag::blocks::parse_blocks(&read.content, is_html)
+        .into_iter()
+        .map(|b| serde_json::json!({ "block_id": b.block_id, "text": b.text }))
+        .collect();
+    Ok(serde_json::json!({ "blocks": blocks }))
 }
 
 /// 供应商默认模型（dev；清单延实现期运营配置）。
