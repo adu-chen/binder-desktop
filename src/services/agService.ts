@@ -29,7 +29,12 @@ const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
  */
 export async function startTurn(
   prompt: string,
-  opts?: { provider?: string; model?: string; mentions?: string[] },
+  opts?: {
+    provider?: string;
+    model?: string;
+    mentions?: string[];
+    blockRefs?: { relPath: string; blockId: string; text: string }[];
+  },
 ): Promise<void> {
   const trimmed = prompt.trim();
   if (!trimmed) return;
@@ -136,6 +141,7 @@ export async function startTurn(
       activeDocFormat: ed.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
       history, // 对话历史（PI-AG-09B，后端按预算保留最近）
       mentions: opts?.mentions ?? [], // 用户显式引用的文档（PI-AG-09E，P1 高优先注入）
+      blockRefs: opts?.blockRefs ?? [], // 块级引用：选区精确锚（PI-AG-09F）
       onEvent,
     }).catch((e: unknown) => {
       const err = e as { code?: string; message?: string };

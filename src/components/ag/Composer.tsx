@@ -4,6 +4,13 @@ import { startTurn } from "../../services/agService";
 import { generateSampleDiff } from "../../services/deService";
 import { useEdStore } from "../../store/edStore";
 import { useWsStore } from "../../store/wsStore";
+import { captureSelectionRef } from "../../services/edLocate";
+
+interface BlockRef {
+  relPath: string;
+  blockId: string;
+  text: string;
+}
 
 /**
  * Composer（A-SYS-C-T-02 §3 对话区输入 · PI-FE-06）。
@@ -16,16 +23,30 @@ export function Composer() {
   const { docs } = useWsStore();
   const [text, setText] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
+  const [blockRefs, setBlockRefs] = useState<BlockRef[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const fileDocs = docs.filter((d) => !d.isDir);
 
   const send = () => {
     if (sending || !text.trim()) return;
-    void startTurn(text, mentions.length ? { mentions } : undefined);
+    const opts =
+      mentions.length || blockRefs.length ? { mentions, blockRefs } : undefined;
+    void startTurn(text, opts);
     setText("");
     setMentions([]);
+    setBlockRefs([]);
     setPickerOpen(false);
+  };
+
+  const addSelectionRef = () => {
+    const ref = captureSelectionRef();
+    if (!ref || !openPath) return;
+    setBlockRefs((cur) =>
+      cur.some((r) => r.blockId === ref.blockId && r.relPath === openPath)
+        ? cur
+        : [...cur, { relPath: openPath, blockId: ref.blockId, text: ref.text }],
+    );
   };
 
   const toggleMention = (relPath: string) => {
@@ -40,6 +61,23 @@ export function Composer() {
             <span key={p} className="mention-chip">
               @{p}
               <button className="mention-chip-x" onClick={() => toggleMention(p)} aria-label="移除引用">
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {blockRefs.length > 0 && (
+        <div className="composer-mentions">
+          {blockRefs.map((r, i) => (
+            <span key={`${r.blockId}-${i}`} className="mention-chip" title={r.text}>
+              选区@{r.relPath}#{r.blockId.slice(0, 6)}
+              <button
+                className="mention-chip-x"
+                onClick={() => setBlockRefs((c) => c.filter((_, j) => j !== i))}
+                aria-label="移除引用"
+              >
                 ×
               </button>
             </span>
@@ -83,6 +121,14 @@ export function Composer() {
           title="引用工作区文档（随消息高优先提供给 AI）"
         >
           @引用{mentions.length ? `（${mentions.length}）` : ""}
+        </button>
+        <button
+          className="ghost"
+          onClick={addSelectionRef}
+          disabled={!openPath}
+          title={openPath ? "引用编辑器中选中的内容（精确到块）" : "先打开一个文档并选中内容"}
+        >
+          @引用选区
         </button>
         {/* 示例修改入口：绕过模型，对当前文档生成真实可落盘 diff（PI-FE-11） */}
         <button

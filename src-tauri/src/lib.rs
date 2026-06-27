@@ -703,6 +703,15 @@ fn default_model(provider: &str) -> String {
     .to_string()
 }
 
+/// 块级引用（选区精确锚，PI-AG-09F）：用户引用某文档某块的选中内容。serde camelCase 对接前端。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockRef {
+    rel_path: String,
+    block_id: String,
+    text: String,
+}
+
 /// PI-AG-08C/08E/08F · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）。
@@ -808,6 +817,7 @@ async fn ag_start_turn(
     active_doc_format: Option<String>,
     history: Vec<ag::context::HistTurn>,
     mentions: Vec<String>,
+    block_refs: Vec<BlockRef>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), IpcError> {
@@ -871,11 +881,12 @@ async fn ag_start_turn(
         }
     };
 
-    // REF @mention（P1 显式引用，优先保留不静默丢弃，BR-AG-DATA-001，PI-AG-09E）；读各引用文档限 workspace。
+    // REF @mention（P1 显式引用，优先保留不静默丢弃，BR-AG-DATA-001，PI-AG-09E/09F）；限 workspace。
     const MENTION_CAP: usize = 4000;
-    let mention_block: Option<String> = match (mentions.is_empty(), ws_root.as_deref()) {
-        (false, Some(root)) => {
-            let mut parts = Vec::new();
+    let mention_block: Option<String> = {
+        let mut parts = Vec::new();
+        // 整篇引用：读文档（需 ws_root，X-FORBID-004）。
+        if let Some(root) = ws_root.as_deref() {
             for rel in &mentions {
                 if let Ok(abs) = workspace::resolve_in_workspace(std::path::Path::new(root), rel) {
                     if let Ok(read) = workspace::save::read_doc(&abs) {
@@ -888,16 +899,26 @@ async fn ag_start_turn(
                     }
                 }
             }
-            if parts.is_empty() {
-                None
-            } else {
-                Some(format!(
-                    "[用户显式引用] 以下是用户本轮明确引用的文档内容（高优先，请据此回答相关问题）：\n{}",
-                    parts.join("\n\n")
-                ))
-            }
         }
-        _ => None,
+        // 块级引用（选区精确锚，PI-AG-09F）：text 已由前端选区带入，精确到块。
+        for br in &block_refs {
+            if br.text.trim().is_empty() {
+                continue;
+            }
+            let capped = crate::ag::context::cap_text(&br.text, MENTION_CAP, "[引用选区较长，已截取前部]");
+            parts.push(format!(
+                "引用 文档「{}」第 [{}] 块的选中内容：\n{}",
+                br.rel_path, br.block_id, capped
+            ));
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "[用户显式引用] 以下是用户本轮明确引用的内容（高优先，请据此回答相关问题）：\n{}",
+                parts.join("\n\n")
+            ))
+        }
     };
 
     // 文档形态（PI-AG-08F）：editFormat=html 或内容以 < 开头 → 按 docx/html 块；否则 text 段落块。

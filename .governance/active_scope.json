@@ -1,12 +1,13 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09E",
+  "scope_id": "PI-AG-09F",
   "allowed_files": [
     "src-tauri/src/lib.rs",
+    "src/services/edLocate.ts",
     "src/components/ag/Composer.tsx",
     "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09E.md"
+    ".governance/issues/PI-AG-09F.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -19,5 +20,5 @@
     "src/store/wsStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09E REF @mention（完整 PI-AG-09 收尾）：ag_start_turn 接 mentions(rel_paths)→读各 mention 文档(read_doc，限 workspace X-FORBID-004，每篇封顶)→「[用户显式引用]」P1 块（显式优先保留不静默丢弃 BR-AG-DATA-001，置历史后/当前文档前）；历史预算扣除引用。前端 Composer 加文档引用选择器（wsStore.docs 只读，选中 chips，发送传 rel_paths 后清空）；agService 传 mentions。"
+  "scope_reason": "PI-AG-09F REF 块级 @mention（选区精确锚）：edLocate 加 captureSelectionRef（window.getSelection→选区文本 + 上溯 data-block-id 块锚）；Composer 加「@引用选区」入口（选区→块引用 chip，rel_path=当前 openPath）；agService 传 blockRefs；后端 ag_start_turn 接 block_refs(BlockRef{relPath,blockId,text})→并入「[用户显式引用]」P1 块（精确到块，封顶，显式优先保留 BR-AG-DATA-001）。复用既有 mention 注入，不改 ipc/context。"
 }
