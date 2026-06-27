@@ -1,11 +1,10 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09C",
+  "scope_id": "PI-AG-09D",
   "allowed_files": [
-    "src-tauri/src/ag/context.rs",
     "src-tauri/src/lib.rs",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09C.md"
+    ".governance/issues/PI-AG-09D.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -13,8 +12,8 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src/store/edStore.ts"
+    "src-tauri/src/ag/context.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09C（完整 PI-AG-09 第②步）意图沿用判定 BR-AG-DATA-004：ag/context.rs 加 Carryover 枚举 + decide_intent_carryover（dev 启发式：修正追加/显式选择/指代回指/否则 None；识别策略延实现期，机制锁定）；ag_start_turn 据判定在当前轮前注入【本轮意图】系统提示——None=历史仅作背景不凌驾当前、≠None=据相应历史意图继续（M-T-02 §4.3 默认弱化、显式沿用才提权）。纯后端。"
+  "scope_reason": "PI-AG-09D（完整 PI-AG-09 第③步）AST/KB 补强供给：ag_start_turn 解析 workspace 后检索 ast::supply::supply（记忆）+ kb::retrieve::retrieve（知识，query=prompt），构 ContextItem(Memory/Knowledge)→assemble_context(P2 补强预算)→注入「[补强信息]…仅作背景补强不覆盖当前文档/当前轮」（BR-AG-DATA-005 权重声明）；置于历史前（recency 末尾留给当前文档/输入）。复用既有 assemble_context/ContextItem，不改 context.rs。REF @mention 因前端无 mention UI 暂缺源、延后。"
 }

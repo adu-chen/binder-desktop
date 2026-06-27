@@ -826,6 +826,50 @@ async fn ag_start_turn(
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| default_model(&provider));
 
+    // workspace 解析 + AST/KB 补强检索（P2，限当前 workspace X-FORBID-004，PI-AG-09D）。单锁，锁在 await 前释放。
+    const AUG_BUDGET: u32 = 2500; // 补强层字符预算（dev；G5 标定）
+    let mut ws_root: Option<String> = None;
+    let mut aug_items: Vec<crate::ag::context::ContextItem> = Vec::new();
+    if let Ok(conn) = state.db.lock() {
+        if let Ok(Some(ws)) = workspace::lifecycle::active_workspace(&conn) {
+            ws_root = Some(ws.root_path.clone());
+            // AST 记忆供给。
+            if let Ok(mems) = crate::ast::supply::supply(&conn, &ws.workspace_id) {
+                for m in mems {
+                    let cost = m.content.chars().count() as u32;
+                    aug_items.push(crate::ag::context::ContextItem {
+                        source: crate::ag::context::ContextSource::Memory,
+                        content: format!("记忆：{}", m.content),
+                        cost,
+                    });
+                }
+            }
+            // KB 知识检索（query=当前 prompt；本地匹配、无上行）。
+            if let Ok(ks) = crate::kb::retrieve::retrieve(&conn, &ws.workspace_id, &prompt) {
+                for k in ks {
+                    let cost = k.content.chars().count() as u32;
+                    aug_items.push(crate::ag::context::ContextItem {
+                        source: crate::ag::context::ContextSource::Knowledge,
+                        content: format!("知识（{}）：{}", k.source_ref, k.content),
+                        cost,
+                    });
+                }
+            }
+        }
+    }
+    // P2 补强预算保留（assemble_context）+ 权重声明（BR-AG-DATA-005：仅补强，不覆盖当前文档/当前轮）。空集不注入。
+    let aug_block: Option<String> = {
+        let aug = crate::ag::context::assemble_context(aug_items, AUG_BUDGET);
+        if aug.kept.is_empty() {
+            None
+        } else {
+            let body = aug.kept.iter().map(|i| i.content.as_str()).collect::<Vec<_>>().join("\n");
+            Some(format!(
+                "[补强信息] 以下来自记忆库/知识库，仅作背景补强，不覆盖当前文档与当前轮请求：\n{body}"
+            ))
+        }
+    };
+
     // 文档形态（PI-AG-08F）：editFormat=html 或内容以 < 开头 → 按 docx/html 块；否则 text 段落块。
     let doc_is_html = active_doc_content
         .as_deref()
@@ -855,16 +899,20 @@ async fn ag_start_turn(
 
     // P1 历史层：总预算扣除 P0（系统/文档/当前输入）后的余额内保留最近若干轮（drop 最旧，PI-AG-09B）。
     const CTX_BUDGET_CHARS: usize = 16000; // 总预算（~4000 tokens，dev；G5 标定）
+    let aug_chars = aug_block.as_deref().map(|s| s.chars().count()).unwrap_or(0);
     let p0_chars = ag::prompts::SYSTEM_PROMPT_CHAT.chars().count()
         + doc_ctx.as_deref().map(|s| s.chars().count()).unwrap_or(0)
         + prompt.chars().count();
-    let hist_budget = CTX_BUDGET_CHARS.saturating_sub(p0_chars);
+    let hist_budget = CTX_BUDGET_CHARS.saturating_sub(p0_chars + aug_chars);
     let (kept_history, _dropped) = crate::ag::context::select_recent_history(&history, hist_budget);
 
-    // 组装顺序（M-T-02 §3 recency）：系统层 → 历史(预算内) → 当前文档(P0,贴近末尾) → 当前轮输入。
+    // 组装顺序（M-T-02 §3 recency）：系统 → 补强(P2,最弱靠前) → 历史(P1) → 当前文档(P0,贴近末尾) → 意图 → 当前输入。
     let mut messages = vec![serde_json::json!({
         "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
     })];
+    if let Some(aug) = &aug_block {
+        messages.push(serde_json::json!({ "role": "system", "content": aug }));
+    }
     for t in &kept_history {
         messages.push(serde_json::json!({ "role": t.role, "content": t.content }));
     }
@@ -889,15 +937,8 @@ async fn ag_start_turn(
     messages.push(serde_json::json!({ "role": "system", "content": intent_hint }));
     messages.push(serde_json::json!({ "role": "user", "content": prompt }));
 
-    // 工具定义（PI-AG-08B 只读 3 工具）。
+    // 工具定义（PI-AG-08B 只读 3 工具）；ws_root 已在上文 workspace 解析（X-FORBID-004 工具限界，PI-AG-09D）。
     let tools = ag::tool_registry::tool_definitions_json();
-    // active workspace 根（工具执行限界 X-FORBID-004）；无活动 workspace 时工具回报无法执行。
-    let ws_root: Option<String> = state
-        .db
-        .lock()
-        .ok()
-        .and_then(|conn| workspace::lifecycle::active_workspace(&conn).ok().flatten())
-        .map(|w| w.root_path);
 
     // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
     const MAX_ROUNDS: usize = 6;
