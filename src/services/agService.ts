@@ -77,8 +77,9 @@ export async function startTurn(
 
   const turnId = `t-${Date.now()}-${(seq += 1)}`;
   const onEvent = new Channel<AgTurnEvent>();
-  // 本回合最近一次 propose_edit 的目标块锚（从 tool_request.params 捕获，供 diff_proposed 实时校验，PI-AG-08H）。
+  // 本回合最近一次 propose_edit 的目标块锚（PI-AG-08H）+ 提案内容（after 预览，PI-AG-09I），从 tool_request.params 捕获。
   let lastEditBlockId: string | undefined;
+  let lastEditAfter: string | undefined;
 
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -123,17 +124,20 @@ export async function startTurn(
             relPath: ev.rel_path,
             title,
             before: before.slice(-60),
-            after: "（AI 修改建议，接受后应用到文档）",
+            after: lastEditAfter ? lastEditAfter.slice(0, 120) : "（AI 修改建议，接受后应用到文档）",
             state: "pending",
           });
           lastEditBlockId = undefined;
+          lastEditAfter = undefined;
           break;
         }
         case "tool_request": {
           // 捕获 propose_edit 的目标块锚，供 diff_proposed 实时校验（PI-AG-08H）。
           if (ev.tool_name === "propose_edit" && ev.params && typeof ev.params === "object") {
-            const bid = (ev.params as { block_id?: unknown }).block_id;
-            lastEditBlockId = typeof bid === "string" && bid ? bid : undefined;
+            const p = ev.params as { block_id?: unknown; new_text?: unknown; content?: unknown };
+            lastEditBlockId = typeof p.block_id === "string" && p.block_id ? p.block_id : undefined;
+            const after = typeof p.new_text === "string" ? p.new_text : typeof p.content === "string" ? p.content : "";
+            lastEditAfter = after.trim() ? after : undefined;
           }
           // 工具卡 executing（PI-AG-08D）。参数摘要作 detail。
           const p = typeof ev.params === "object" && ev.params ? JSON.stringify(ev.params) : "";

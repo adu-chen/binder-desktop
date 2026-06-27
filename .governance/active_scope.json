@@ -1,11 +1,10 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09H",
+  "scope_id": "PI-AG-09I",
   "allowed_files": [
-    "src/components/ag/Composer.tsx",
-    "src/styles.css",
+    "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09H.md"
+    ".governance/issues/PI-AG-09I.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -14,8 +13,8 @@
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
     "src/store/edStore.ts",
-    "src/store/wsStore.ts"
+    "src/store/deStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09H 内联 @ 自动补全：Composer 输入框打 @ → 实时按 @ 后 query 过滤工作区文档下拉，选中→加整篇 mention + 删除 @token；Esc/失配关闭。复用既有 mentions（chips/传参）路径，按钮选择器（块展开）+ @引用选区保留为高级入口。styles.css 补内联下拉样式（append 自有类）。纯前端。"
+  "scope_reason": "PI-AG-09I diff 卡 after 真预览：agService 从 tool_request(propose_edit) 的 params 捕获 new_text/content（既有事件已带 params，不改契约），diff_proposed 时用作 diff 卡 after 预览（替占位文字），无则回退占位。纯前端投影。"
 }
