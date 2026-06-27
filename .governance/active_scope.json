@@ -1,10 +1,12 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-09D",
+  "scope_id": "PI-AG-09E",
   "allowed_files": [
     "src-tauri/src/lib.rs",
+    "src/components/ag/Composer.tsx",
+    "src/services/agService.ts",
     ".governance/active_scope.json",
-    ".governance/issues/PI-AG-09D.md"
+    ".governance/issues/PI-AG-09E.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -12,8 +14,10 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/ag/context.rs"
+    "src-tauri/src/ag/context.rs",
+    "src/store/edStore.ts",
+    "src/store/wsStore.ts"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-09D（完整 PI-AG-09 第③步）AST/KB 补强供给：ag_start_turn 解析 workspace 后检索 ast::supply::supply（记忆）+ kb::retrieve::retrieve（知识，query=prompt），构 ContextItem(Memory/Knowledge)→assemble_context(P2 补强预算)→注入「[补强信息]…仅作背景补强不覆盖当前文档/当前轮」（BR-AG-DATA-005 权重声明）；置于历史前（recency 末尾留给当前文档/输入）。复用既有 assemble_context/ContextItem，不改 context.rs。REF @mention 因前端无 mention UI 暂缺源、延后。"
+  "scope_reason": "PI-AG-09E REF @mention（完整 PI-AG-09 收尾）：ag_start_turn 接 mentions(rel_paths)→读各 mention 文档(read_doc，限 workspace X-FORBID-004，每篇封顶)→「[用户显式引用]」P1 块（显式优先保留不静默丢弃 BR-AG-DATA-001，置历史后/当前文档前）；历史预算扣除引用。前端 Composer 加文档引用选择器（wsStore.docs 只读，选中 chips，发送传 rel_paths 后清空）；agService 传 mentions。"
 }

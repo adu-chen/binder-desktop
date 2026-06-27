@@ -29,7 +29,7 @@ const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
  */
 export async function startTurn(
   prompt: string,
-  opts?: { provider?: string; model?: string },
+  opts?: { provider?: string; model?: string; mentions?: string[] },
 ): Promise<void> {
   const trimmed = prompt.trim();
   if (!trimmed) return;
@@ -135,6 +135,7 @@ export async function startTurn(
       activeDocContent: ed.loadedContent ?? undefined,
       activeDocFormat: ed.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
       history, // 对话历史（PI-AG-09B，后端按预算保留最近）
+      mentions: opts?.mentions ?? [], // 用户显式引用的文档（PI-AG-09E，P1 高优先注入）
       onEvent,
     }).catch((e: unknown) => {
       const err = e as { code?: string; message?: string };

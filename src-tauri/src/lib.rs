@@ -807,6 +807,7 @@ async fn ag_start_turn(
     active_doc_content: Option<String>,
     active_doc_format: Option<String>,
     history: Vec<ag::context::HistTurn>,
+    mentions: Vec<String>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), IpcError> {
@@ -870,6 +871,35 @@ async fn ag_start_turn(
         }
     };
 
+    // REF @mention（P1 显式引用，优先保留不静默丢弃，BR-AG-DATA-001，PI-AG-09E）；读各引用文档限 workspace。
+    const MENTION_CAP: usize = 4000;
+    let mention_block: Option<String> = match (mentions.is_empty(), ws_root.as_deref()) {
+        (false, Some(root)) => {
+            let mut parts = Vec::new();
+            for rel in &mentions {
+                if let Ok(abs) = workspace::resolve_in_workspace(std::path::Path::new(root), rel) {
+                    if let Ok(read) = workspace::save::read_doc(&abs) {
+                        let capped = crate::ag::context::cap_text(
+                            &read.content,
+                            MENTION_CAP,
+                            "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
+                        );
+                        parts.push(format!("引用文档「{rel}」：\n{capped}"));
+                    }
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "[用户显式引用] 以下是用户本轮明确引用的文档内容（高优先，请据此回答相关问题）：\n{}",
+                    parts.join("\n\n")
+                ))
+            }
+        }
+        _ => None,
+    };
+
     // 文档形态（PI-AG-08F）：editFormat=html 或内容以 < 开头 → 按 docx/html 块；否则 text 段落块。
     let doc_is_html = active_doc_content
         .as_deref()
@@ -900,13 +930,14 @@ async fn ag_start_turn(
     // P1 历史层：总预算扣除 P0（系统/文档/当前输入）后的余额内保留最近若干轮（drop 最旧，PI-AG-09B）。
     const CTX_BUDGET_CHARS: usize = 16000; // 总预算（~4000 tokens，dev；G5 标定）
     let aug_chars = aug_block.as_deref().map(|s| s.chars().count()).unwrap_or(0);
+    let mention_chars = mention_block.as_deref().map(|s| s.chars().count()).unwrap_or(0);
     let p0_chars = ag::prompts::SYSTEM_PROMPT_CHAT.chars().count()
         + doc_ctx.as_deref().map(|s| s.chars().count()).unwrap_or(0)
         + prompt.chars().count();
-    let hist_budget = CTX_BUDGET_CHARS.saturating_sub(p0_chars + aug_chars);
+    let hist_budget = CTX_BUDGET_CHARS.saturating_sub(p0_chars + aug_chars + mention_chars);
     let (kept_history, _dropped) = crate::ag::context::select_recent_history(&history, hist_budget);
 
-    // 组装顺序（M-T-02 §3 recency）：系统 → 补强(P2,最弱靠前) → 历史(P1) → 当前文档(P0,贴近末尾) → 意图 → 当前输入。
+    // 组装顺序（M-T-02 §3 recency）：系统 → 补强(P2) → 历史(P1) → 显式引用(P1) → 当前文档(P0,贴末尾) → 意图 → 当前输入。
     let mut messages = vec![serde_json::json!({
         "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
     })];
@@ -915,6 +946,9 @@ async fn ag_start_turn(
     }
     for t in &kept_history {
         messages.push(serde_json::json!({ "role": t.role, "content": t.content }));
+    }
+    if let Some(m) = &mention_block {
+        messages.push(serde_json::json!({ "role": "system", "content": m }));
     }
     if let Some(ctx) = &doc_ctx {
         messages.push(serde_json::json!({ "role": "system", "content": ctx }));
