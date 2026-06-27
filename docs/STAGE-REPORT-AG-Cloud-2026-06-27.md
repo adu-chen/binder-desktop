@@ -71,6 +71,7 @@
 | `053126b` | PI-AG-GATE-01 云端真实化②：客户端登录接线 + 门禁端到端强制 |
 | `9e3469e` | PI-GW-DEV-04 云端真实化③：持久化 + 用量计量（BYOK 加密存） |
 | `c49cbab` | PI-GW-DEV-05 云端真实化④：LIC 订阅/额度 — 补全 CLOUD-GATE |
+| （本次） | PI-GW-DEV-06 云端真实化⑤：正式 GW-02 信封加密（KMS 同形）+ SQLite DB 替 JSON |
 
 ---
 
@@ -148,10 +149,14 @@ GW_DEEPSEEK_KEY=sk-你的key node server.mjs
 | 项 | 现状（dev） | 正式版需要 |
 |---|---|---|
 | 订阅/计费 | free 档恒有效 | 真实订阅态/档位/计费、额度窗口与重置 |
-| 密钥加密 | AES-256-GCM 本地密钥（GW-02-lite） | KMS/信封加密（正式 GW-02） |
-| 存储 | `.data/` JSON 文件 | 数据库 |
+| 密钥加密 | ✅ 信封加密（KMS 同形，KEK 与密文分离；PI-GW-DEV-06） | KEK 换托管 KMS（KEK 不出 KMS） |
+| 存储 | ✅ SQLite（`node:sqlite`，sessions/byok_keys/usage；PI-GW-DEV-06） | 换托管数据库（Postgres 等）+ 迁移脚本 |
 | 仓库 | 本仓 `cloud/` 隔离（豁免） | 迁独立云仓库、TypeScript 重写 |
 | 审计 | 脱敏元数据计量 | 正式「内容不留存」审计合规 |
+
+> PI-GW-DEV-06（2026-06-27）已把「密钥加密」「存储」两项从 lite/文件推进到与正式版**同形**的 dev 实现：
+> 信封加密（每条独立 DEK、KEK 库外分离、与云 KMS 同一 wrap/unwrap 接口）+ SQLite 持久化。
+> 余下为「换托管 KMS/DB + 迁独立仓」的基建迁移，非功能缺口。详见 `.governance/issues/PI-GW-DEV-06.md`。
 
 ---
 

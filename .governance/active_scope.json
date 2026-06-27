@@ -1,15 +1,19 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-GW-DEV-05",
+  "scope_id": "PI-GW-DEV-06",
   "allowed_files": [
-    "cloud/dev-gateway/store.mjs",
+    "cloud/dev-gateway/kms.mjs",
+    "cloud/dev-gateway/db.mjs",
+    "cloud/dev-gateway/crypto.mjs",
+    "cloud/dev-gateway/byok.mjs",
+    "cloud/dev-gateway/auth.mjs",
     "cloud/dev-gateway/usage.mjs",
-    "cloud/dev-gateway/lic.mjs",
-    "cloud/dev-gateway/gate.mjs",
+    "cloud/dev-gateway/store.mjs",
     "cloud/dev-gateway/server.mjs",
     "cloud/dev-gateway/README.md",
+    "docs/STAGE-REPORT-AG-Cloud-2026-06-27.md",
     ".governance/active_scope.json",
-    ".governance/issues/PI-GW-DEV-05.md"
+    ".governance/issues/PI-GW-DEV-06.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -21,5 +25,5 @@
     "src-tauri/src/lib.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-GW-DEV-05 云端真实化④ LIC 订阅/额度（补门禁最后一桩）：lic.evaluate(userId)=订阅(dev free 恒有效)+额度（当日用量 vs DAILY_QUOTA，用 PI-GW-DEV-04 计量）；usage.countToday + store.readLines；gate 用 evaluate（denied 带 used/limit/reason）；server 门禁拒绝按类返码——令牌问题 401（客户端重登录）、额度/订阅 429（不重登录）。cloud-only，客户端不动（其 401 清令牌逻辑天然只对 token 生效）。"
+  "scope_reason": "PI-GW-DEV-06 云端真实化⑤ 基建升级（正式 GW-02 信封加密 + SQLite DB 替 JSON）：(1) kms.mjs KMS 抽象 + 信封加密——KEK 与密文分离，每条密钥独立 DEK，wrap/unwrap 接口与真实云 KMS 同形（local 提供方，aws/gcp 正式仓实现）；crypto.mjs 改信封 v2（保留 encrypt/decrypt 名）。(2) db.mjs node:sqlite DatabaseSync 建表 sessions/byok_keys/usage；auth/byok/usage 改库查询；删 store.mjs（JSON 文件）。cloud-only，客户端不动；.data/ 已 gitignore（gw.db/gw.master.key 不入仓）。EXEMPTION-GW-DEV-01 在仓隔离迭代。"
 }

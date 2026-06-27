@@ -1,8 +1,8 @@
-// 临时本地 dev AI 网关（PI-GW-DEV-01/02/03）。模块化单体：providers / auth / gate / lic / byok。
+// 临时本地 dev AI 网关（PI-GW-DEV-01/02/03/06）。模块化单体：providers / auth / gate / lic / byok / db(sqlite) / kms(信封)。
 //
 // ⚠️ 人类授权临时偏离云 APC「云代码开发启动迁出独立仓库」约定（EXEMPTION-GW-DEV-01 扩展，云端真实化在仓迭代）。
-// 正式版迁独立仓库、改 TypeScript、补持久化 AUTH/LIC + BYOK 加密(GW-02) + 真实订阅门禁 + 内容不留存审计。
-// 安全：密钥仅取自 BYOK 代持 / env，不落盘、不写日志（REQ-GW-006）。
+// 正式版迁独立仓库、改 TypeScript、托管 DB + 托管 KMS（KEK 不出 KMS）+ 真实订阅门禁 + 内容不留存审计。
+// 安全：BYOK 信封加密入库（kms.mjs，KEK 与密文分离）；平台/请求 key 仅内存用、不落盘、不写日志（REQ-GW-006）。
 
 import { createServer } from 'node:http';
 import { PROVIDERS, sse, streamProvider } from './providers.mjs';
@@ -124,6 +124,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(
-    `[dev-gateway] http://localhost:${PORT} — providers: ${Object.keys(PROVIDERS).join(', ')} | 模块: providers/auth/gate/lic/byok`,
+    `[dev-gateway] http://localhost:${PORT} — providers: ${Object.keys(PROVIDERS).join(', ')} | 模块: providers/auth/gate/lic/byok/db(sqlite)/kms(信封)`,
   );
 });

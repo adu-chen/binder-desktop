@@ -1,27 +1,43 @@
-// 加密（PI-GW-DEV-04，dev GW-02-lite）：AES-256-GCM，本地自管密钥（store.loadOrCreateKey）。
-// BYOK 密钥落盘前加密——磁盘无明文。正式版 GW-02：KMS/信封加密（安全敏感，须人类批准），迁独立仓。
+// 加密（PI-GW-DEV-06，正式 GW-02 信封加密）：每条密文一把独立 DEK，DEK 由 KMS 包裹（kms.mjs）。
+// 替原 GW-02-lite（单密钥直接加密）。保留 encrypt/decrypt 名，上层（byok.mjs）零改动。
+// 输出为自描述信封 JSON 串：{ v, kid, wdek(包裹的DEK), iv, tag, ct }。
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
-import { loadOrCreateKey } from './store.mjs';
+import { kms } from './kms.mjs';
 
-const KEY = loadOrCreateKey();
+const VERSION = 'v2-envelope';
 
-/** 明文 → base64(iv|tag|ciphertext)。 */
+/** 明文 → 信封 JSON 串（含包裹的 DEK + AES-256-GCM 密文）。 */
 export function encrypt(plain) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', KEY, iv);
-  const enc = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, enc]).toString('base64');
+  const { dek, wrappedDek } = kms.generateDataKey();
+  try {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', dek, iv);
+    const ct = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return JSON.stringify({
+      v: VERSION,
+      kid: kms.keyId,
+      wdek: wrappedDek,
+      iv: iv.toString('base64'),
+      tag: tag.toString('base64'),
+      ct: ct.toString('base64'),
+    });
+  } finally {
+    dek.fill(0); // 零化明文 DEK
+  }
 }
 
-/** base64(iv|tag|ciphertext) → 明文；失败抛错（不静默）。 */
-export function decrypt(b64) {
-  const buf = Buffer.from(b64, 'base64');
-  const iv = buf.subarray(0, 12);
-  const tag = buf.subarray(12, 28);
-  const enc = buf.subarray(28);
-  const decipher = createDecipheriv('aes-256-gcm', KEY, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+/** 信封 JSON 串 → 明文；版本不符或验证失败抛错（不静默）。 */
+export function decrypt(envelope) {
+  const e = JSON.parse(envelope);
+  if (e.v !== VERSION) throw new Error(`unknown envelope version: ${e.v}`);
+  const dek = kms.unwrapDataKey(e.wdek);
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', dek, Buffer.from(e.iv, 'base64'));
+    decipher.setAuthTag(Buffer.from(e.tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(e.ct, 'base64')), decipher.final()]).toString('utf8');
+  } finally {
+    dek.fill(0);
+  }
 }
