@@ -131,6 +131,35 @@ rule_id: BR-SYS-STATE-002
 可恢复。本规则只约束流式的**逻辑生命周期语义**，不锁定物理传输机制（Channel<T> 或 event，SY-02
 延实现选型）；A-SYS-M-S-01 状态机的流式终态须与本契约一致。
 
+### §5.1 状态机投影广播契约（STATE，承接 X-FORBID-007）
+
+后端各核心链状态机（A-SYS-M-S-01 登记的 SM-*）每次转移成功并落库后，经统一事件
+`sm:{machine_id}:state_changed` 向前端广播其**权威态**；前端 store 据此投影（X-FORBID-007：
+前端不另立与后端可漂移的并行业务态）。本节锁定该广播的**逻辑契约**（物理事件总线 SY-02 延选型）：
+
+- **事件名**：`sm:{machine_id}:state_changed`（machine_id 为 A-SYS-M-S-01 登记的 SM-* 编号）。
+- **载荷字段**（统一信封 `SmStatePayload`）：
+  - `machine_id`：SM-* 编号（如 "SM-DE-01"）。
+  - `instance_id`：实例标识，区分同机多实例（diff_id / turn_id / rel_path / entry_id …）。
+  - `state`：状态枚举名（后端状态机当前态）。
+  - `terminal`：是否终态。
+  - `segment`（可选）：同机分层承接段（如 SM-SYS-01 的 `session` / `ent_invoke`），无分层时省略。
+- **权威先于广播**：状态以落库为权威，广播是其投影；**广播失败不得中断业务流程**（落库已先行完成）。
+- **不替代流式数据通道**：token 流 / 工具回执等数据分片仍走 §5 流式契约（Channel）；本广播只传**状态转移**，
+  两通道并存、互不替代。
+- 与 §5 一致：经 IPC 流式的状态机终态须同时满足 BR-SYS-STATE-002（完成/中断/错误三类终态）。
+
+<!-- RULE
+rule_id: BR-SYS-STATE-003
+主链路: IPC-CALL
+域: STATE
+-->
+状态机投影广播契约（承接 X-FORBID-007 的传输实现）：后端核心链状态机（SM-*）转移成功并落库后，
+须经统一事件 `sm:{machine_id}:state_changed` 广播权威态，载荷为统一信封 SmStatePayload
+（machine_id / instance_id / state / terminal / 可选 segment）；前端 store 仅投影该广播，不维护与
+后端可漂移的并行业务态。状态以落库为权威、广播为其投影，广播失败不得中断业务流程。本广播只传状态
+转移，不替代 §5 流式数据通道；经 IPC 流式的终态须与 BR-SYS-STATE-002 一致。
+
 ## §6 结构约束（复用，不新增）
 
 本文不新增 CONSTRAINT：前端不得跨层直连 FS/DB/网络、必经 Service→command→Rust 的结构约束已由
@@ -169,6 +198,12 @@ target_type: RULE
 target_id: BR-SYS-STATE-002
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-SYS-001
+target_type: RULE
+target_id: BR-SYS-STATE-003
+status: mapped
+-->
 
 ## §9 测试与验收
 
@@ -178,6 +213,10 @@ status: mapped
   一致（code/message/retriable/reauth_required），上层可统一处理。
 - **流式逻辑契约**（BR-SYS-STATE-002）：流式调用具备完成/中断/错误三类终态，分片经 correlation_id
   关联；中断后无半落盘副作用、控制态可恢复；与 A-SYS-M-S-01 状态机流式终态对齐。
+- **状态机投影广播**（BR-SYS-STATE-003，承接 X-FORBID-007）：SM-* 转移落库后经
+  `sm:{machine_id}:state_changed` 广播 SmStatePayload（machine_id/instance_id/state/terminal/可选 segment）；
+  前端只投影、不另立并行业务态；广播失败不中断业务；emit→listen 回路经 Tauri 事件系统验证（实现期
+  `tests/sm_broadcast.rs` 实跑 + 前端 `smEvents.ts` 字段对齐）。
 - 量化 NFR（IPC 往返延迟、流式首片延迟）延 G5 标定（APC §9）。
 
 ## §10 技术债务与盲区（诚实声明）
@@ -195,9 +234,12 @@ status: mapped
 2. 续 SYS G2 末件 A-SYS-M-S-01（状态机总图）：汇总核心链状态机注册框架，流式终态与本文 §5 对齐，
    会话/门禁状态机引用 A-SYS-I-P-03 的 SM-SYS-01。
 3. 编码实现期解除 SY-02：定 `Channel<T>` / `event` 物理机制并回填 §5、§10。
+4. 本次新增 BR-SYS-STATE-003 随 `npm run governance:generate` 注册进 ADUS；代码侧
+   `sm_events::emit_sm_state` @GOV 追溯之（A-CORE-X-L-04 收口）。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版（SYS G2）：IPC / Tauri command 协议骨架——命名/注册约定、请求-响应信封、统一错误形状（BR-SYS-OBS-002，云错误 BR-SYS-OBS-001 对齐其上）、流式回传逻辑契约（BR-SYS-STATE-002，物理传输 SY-02 延实现）；链路 IPC-CALL（P1）、规则 BR-SYS-DATA-003；复用 X-SEQ-002 不新增约束；REQ_MAP（REQ-SYS-001）；术语归属说明；测试验收与债务盲区 |
+| 2026-06-27 | v1.1 | 收口状态机投影广播的设计 SSOT（A-CORE-X-L-04 §3 缺口）：§5.1 新增「状态机投影广播契约」+ 注册规则 **BR-SYS-STATE-003**（事件名 `sm:{machine_id}:state_changed`、统一信封 SmStatePayload、权威先于广播、不替代流式数据通道、承接 X-FORBID-007）；§8 REQ_MAP 补 BR-SYS-STATE-003（承 REQ-SYS-001）；§9 验收补广播条；§11 后续动作补 generate 注册与代码 @GOV 追溯。此前该广播仅存于 L3 计划，本次落入 L2 设计 SSOT |

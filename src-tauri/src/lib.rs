@@ -8,6 +8,7 @@ use tauri::{Manager, State};
 
 // —— 系统底座（PI-SYS-01~04）——
 pub mod ipc; // PI-SYS-01 IPC 信封/错误/command 注册表
+pub mod sm_events; // A-CORE-X-L-04 §5 状态机运行时广播（sm:{id}:state_changed）
 pub mod types; // PI-SYS-02 跨模块共享数据结构
 pub mod db; // PI-SYS-03 workspace.db schema 与版本化迁移
 pub mod session; // PI-SYS-04 会话与订阅门禁状态机骨架
@@ -106,11 +107,11 @@ fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppStat
         "ws.list_docs" => route_list_docs(&state),
         "ws.search" => route_search(&request, &state),
         "ws.read_doc" => route_read_doc(&request, &state),
-        "ws.save_doc" => route_save_doc(&request, &state),
+        "ws.save_doc" => route_save_doc(&request, &state, &app),
         "ws.persist_diff" => route_persist_diff(&request, &state),
         "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
-        "ws.apply_diff" => route_apply_diff(&request, &state),
-        "ws.discard_diff" => route_discard_diff(&request, &state),
+        "ws.apply_diff" => route_apply_diff(&request, &state, &app),
+        "ws.discard_diff" => route_discard_diff(&request, &state, &app),
         "ws.check_external_change" => route_check_external_change(&request, &state),
         "ws.create_doc" => route_create_doc(&request, &state),
         "ws.rename_doc" => route_rename_doc(&request, &state),
@@ -119,14 +120,14 @@ fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppStat
         "prv.export" => route_export(&request, &state),
         "prv.media_src" => route_media_src(&request, &state, &app),
         "doc.create_draft" => route_create_draft(&request, &state),
-        "doc.open_for_edit" => route_open_for_edit(&request, &state),
-        "doc.save_from_edit" => route_save_from_edit(&request, &state),
+        "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
+        "doc.save_from_edit" => route_save_from_edit(&request, &state, &app),
         "ws.list_timeline" => route_list_timeline(&request, &state),
         "ws.preview_node" => route_preview_node(&request, &state),
-        "ws.restore_node" => route_restore_node(&request, &state),
+        "ws.restore_node" => route_restore_node(&request, &state, &app),
         "de.generate_diff" => route_generate_diff(&request, &state),
-        "de.accept_diff" => route_accept_diff(&request, &state),
-        "de.reject_diff" => route_reject_diff(&request, &state),
+        "de.accept_diff" => route_accept_diff(&request, &state, &app),
+        "de.reject_diff" => route_reject_diff(&request, &state, &app),
         "de.list_diffs" => route_list_diffs(&request, &state),
         "ag.start_turn" => route_start_turn(&request),
         "ag.list_blocks" => route_list_blocks(&request, &state),
@@ -285,7 +286,11 @@ fn route_read_doc(request: &CommandRequest, state: &AppState) -> Result<serde_js
 }
 
 /// 路由 `ws.save_doc`：原子写入（带基线校验 + 显式 override），回新基线（BR-WS-PERSIST-001 / SM-WS-01）。
-fn route_save_doc(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+fn route_save_doc(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let content = request
         .params
@@ -295,7 +300,8 @@ fn route_save_doc(request: &CommandRequest, state: &AppState) -> Result<serde_js
     let baseline = request.params.get("baseline").and_then(|v| v.as_u64());
     let override_external = request.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
     let (_, abs) = resolve_active(state, &rel_path)?;
-    let saved = workspace::save::save_atomic(&abs, content.as_bytes(), baseline, override_external)?;
+    // 经 SM-WS-01 保存机驱动 + 广播（Saving→Saved/SaveError）。
+    let saved = save_atomic_sm(app, &rel_path, &abs, content.as_bytes(), baseline, override_external)?;
     Ok(serde_json::json!({ "baseline": saved.baseline }))
 }
 
@@ -321,7 +327,11 @@ fn route_list_pending_diffs(request: &CommandRequest, state: &AppState) -> Resul
 
 /// 路由 `ws.apply_diff`：accepted 唯一落盘路径——原子写 + 记一个时间轴节点 + 置 accepted（BR-WS-STATE-001）。
 /// afterContent 由 DE 产出方提供（payload_ref→内容解析归 DE）；本路由执行 WS 侧落盘 effect。
-fn route_apply_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+fn route_apply_diff(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let after_content = request
@@ -341,7 +351,8 @@ fn route_apply_diff(request: &CommandRequest, state: &AppState) -> Result<serde_
         rel_path,
     };
     let conn = lock_db(state)?;
-    let entry = workspace::diff_apply::apply_diff(&conn, &diff_id, &doc, &abs, after_content.as_bytes(), baseline)?;
+    // 经 SM-WS-02 落盘机驱动 + 广播（Applying→Applied/ApplyError）。
+    let entry = apply_diff_sm(app, &conn, &diff_id, &doc, &abs, after_content.as_bytes(), baseline)?;
     ws_json(&entry)
 }
 
@@ -454,23 +465,55 @@ fn route_create_draft(request: &CommandRequest, state: &AppState) -> Result<serd
     Ok(serde_json::json!({ "rel_path": draft_rel }))
 }
 
-fn route_open_for_edit(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+/// 广播 SM-DOC-01 docx 开/存机转移（rel_path 为实例，A-CORE-X-L-04 Task 2-DOC）。循环机无终态。
+fn emit_doc01(app: &tauri::AppHandle, rel_path: &str, st: doc::convert::DocConvertState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-DOC-01", rel_path, &format!("{st:?}"), false),
+    );
+}
+
+fn route_open_for_edit(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
+    use doc::convert::{transition, DocConvertEvent, DocConvertState};
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let (_, abs) = resolve_active(state, &rel_path)?;
     // 加载基线：docx 原始字节内容哈希（供 save_from_edit 校验外部变更，BR-WS-OBS-001）。
     let baseline = std::fs::read(&abs)
         .map(|b| workspace::save::content_hash(&b))
         .map_err(|e| IpcError::new("DOC_READ_FAILED", &format!("读 docx 失败: {e}"), true, false))?;
+    // ① 集成：开始打开转换 → OpenConverting（经 SM-DOC-01）。
+    let opening = transition(DocConvertState::Idle, DocConvertEvent::OpenDocx)
+        .expect("SM-DOC-01: Idle+OpenDocx→OpenConverting");
+    emit_doc01(app, &rel_path, opening);
     // 编辑链：docx → HTML；extract-media 工作目录按文档隔离（图片解出供编辑器；缓存策略实现期）。
     let work_dir = std::env::temp_dir().join("binder_edit_media").join(format!("{baseline:x}"));
-    let html = doc::edit_chain::docx_to_html(&abs, &work_dir)?;
-    Ok(serde_json::json!({ "format": "html", "html": html, "baseline": baseline }))
+    match doc::edit_chain::docx_to_html(&abs, &work_dir) {
+        Ok(html) => {
+            let st = transition(opening, DocConvertEvent::ConvertOk).expect("OpenConverting+ConvertOk→Ready");
+            emit_doc01(app, &rel_path, st);
+            Ok(serde_json::json!({ "format": "html", "html": html, "baseline": baseline }))
+        }
+        Err(e) => {
+            // 转换失败：不建编辑会话，OpenError（原文件不受影响）。
+            let st = transition(opening, DocConvertEvent::ConvertFail).expect("OpenConverting+ConvertFail→OpenError");
+            emit_doc01(app, &rel_path, st);
+            Err(e)
+        }
+    }
 }
 
 /// 路由 `doc.save_from_edit`（A-DOC-I-P-01 §2 编辑链）：编辑 HTML → docx（--reference-doc 统一样式）→
 /// 交 WS 原子落盘（SM-WS-01，baseline 校验外部变更、原文件不变保护）。转换失败回 convert_failed
 /// （SM-DOC-01 SaveError，原 docx 不变）。
-fn route_save_from_edit(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+fn route_save_from_edit(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let html = request
         .params
@@ -480,11 +523,35 @@ fn route_save_from_edit(request: &CommandRequest, state: &AppState) -> Result<se
     let baseline = request.params.get("baseline").and_then(|v| v.as_u64());
     let override_external = request.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
     let (_, abs) = resolve_active(state, &rel_path)?;
-    // 编辑链回写：HTML → docx 字节（失败原文件不变）。
-    let docx_bytes = doc::edit_chain::html_to_docx(html)?;
-    // WS 原子落盘 + 外部变更保护（SM-WS-01）。
-    let saved = workspace::save::save_atomic(&abs, &docx_bytes, baseline, override_external)?;
-    Ok(serde_json::json!({ "baseline": saved.baseline }))
+    // ① 集成：开始保存转换 → SaveConverting（经 SM-DOC-01）。
+    let saving = doc::convert::transition(doc::convert::DocConvertState::Ready, doc::convert::DocConvertEvent::SaveDocx)
+        .expect("SM-DOC-01: Ready+SaveDocx→SaveConverting");
+    emit_doc01(app, &rel_path, saving);
+    // 编辑链回写：HTML → docx 字节（失败原文件不变 → SaveError）。
+    let docx_bytes = match doc::edit_chain::html_to_docx(html) {
+        Ok(b) => b,
+        Err(e) => {
+            let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+                .expect("SaveConverting+SaveConvertFail→SaveError");
+            emit_doc01(app, &rel_path, st);
+            return Err(e);
+        }
+    };
+    // 经 SM-WS-01 保存机驱动原子落盘 + 外部变更保护 + 广播（DOC↔WS 跨模块转移，A-DOC-M-S-01 §3）。
+    match save_atomic_sm(app, &rel_path, &abs, &docx_bytes, baseline, override_external) {
+        Ok(saved) => {
+            let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertOk)
+                .expect("SaveConverting+SaveConvertOk→Ready");
+            emit_doc01(app, &rel_path, st);
+            Ok(serde_json::json!({ "baseline": saved.baseline }))
+        }
+        Err(e) => {
+            let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+                .expect("SaveConverting+SaveConvertFail→SaveError");
+            emit_doc01(app, &rel_path, st);
+            Err(e)
+        }
+    }
 }
 
 /// 路由 `ws.list_timeline`：回文档时间轴节点（version_seq 升序，BR-WS-DATA-002）。
@@ -510,42 +577,174 @@ fn route_preview_node(request: &CommandRequest, state: &AppState) -> Result<serd
     Ok(serde_json::json!({ "content": String::from_utf8_lossy(&bytes) }))
 }
 
-/// 路由 `ws.restore_node`：取回快照→原子写回文档（守界）→记一个新时间轴节点（前进式还原，BR-WS-STATE-002）。
-fn route_restore_node(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+/// 广播 SM-WS-03 时间轴还原机转移（entry_id 为实例，A-CORE-X-L-04 Task 2-W3）。
+fn emit_ws03(app: &tauri::AppHandle, entry_id: &str, st: workspace::timeline::RestoreState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-WS-03", entry_id, &format!("{st:?}"), workspace::timeline::is_terminal(st)),
+    );
+}
+
+/// 路由 `ws.restore_node`：经 SM-WS-03 还原机驱动（Previewing→ConfirmRestore→Restoring→RestoreOk/Fail）→
+/// 取回快照→原子写回文档（守界）→记一个新时间轴节点（前进式还原，BR-WS-STATE-002）+ 广播。
+fn route_restore_node(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
+    use workspace::timeline::{transition, RestoreEvent, RestoreState};
     let entry_id = str_param(request, "entryId", "WS_ENTRY_ID_REQUIRED")?;
     let ws = active_ws(state)?;
     let conn = lock_db(state)?;
     let (rel_path, snapshot_ref) = workspace::timeline::node_locator(&conn, &entry_id)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
         .ok_or_else(|| IpcError::new("WS_NODE_NOT_FOUND", "时间轴节点不存在", false, false))?;
-    let content = workspace::timeline::load_snapshot(&conn, &snapshot_ref)
-        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
-        .ok_or_else(|| IpcError::new("WS_SNAPSHOT_UNAVAILABLE", "快照不可取回", false, false))?;
-    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
-    // 原子写回（override：还原即以历史内容覆盖现状，用户显式动作）。
-    workspace::save::save_atomic(&abs, &content, None, true)?;
-    let doc = crate::types::DocRef {
-        workspace_id: ws.workspace_id,
-        doc_type: doc_type_of(&rel_path),
-        rel_path,
+    // ① 集成：用户确认还原 → Restoring（经状态机；前端预览态为 Previewing）。
+    let restoring = transition(RestoreState::Previewing, RestoreEvent::ConfirmRestore)
+        .expect("SM-WS-03: Previewing+ConfirmRestore→Restoring");
+    emit_ws03(app, &entry_id, restoring);
+    // ② 还原副作用：取快照→原子写回→记新节点；任一失败 → RestoreFail→RestoreError 广播并上抛（现状不破坏）。
+    let restore = || -> Result<crate::types::TimelineEntry, IpcError> {
+        let content = workspace::timeline::load_snapshot(&conn, &snapshot_ref)
+            .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
+            .ok_or_else(|| IpcError::new("WS_SNAPSHOT_UNAVAILABLE", "快照不可取回", false, false))?;
+        let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+        // 原子写回（override：还原即以历史内容覆盖现状，用户显式动作）。
+        workspace::save::save_atomic(&abs, &content, None, true)?;
+        let doc = crate::types::DocRef {
+            workspace_id: ws.workspace_id.clone(),
+            doc_type: doc_type_of(&rel_path),
+            rel_path: rel_path.clone(),
+        };
+        // 前进式记新节点（不抹历史；复用同一快照内容，内容寻址去重）。
+        workspace::timeline::append_node(&conn, &doc, "restore", &snapshot_ref, Some("还原"))
+            .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))
     };
-    // 前进式记新节点（不抹历史；复用同一快照内容，内容寻址去重）。
-    let entry = workspace::timeline::append_node(&conn, &doc, "restore", &snapshot_ref, Some("还原"))
-        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
-    ws_json(&entry)
+    match restore() {
+        Ok(entry) => {
+            let st = transition(restoring, RestoreEvent::RestoreOk).expect("Restoring+RestoreOk→Restored");
+            emit_ws03(app, &entry_id, st);
+            ws_json(&entry)
+        }
+        Err(e) => {
+            let st = transition(restoring, RestoreEvent::RestoreFail).expect("Restoring+RestoreFail→RestoreError");
+            emit_ws03(app, &entry_id, st);
+            Err(e)
+        }
+    }
 }
 
 /// 路由 `ws.discard_diff`：rejected/expired 仅置终态，不写文件、不记节点（BR-WS-STATE-001）。
-fn route_discard_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+fn route_discard_diff(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
     let terminal = str_param(request, "terminal", "WS_TERMINAL_REQUIRED")?;
     if terminal != "rejected" && terminal != "expired" {
         return Err(IpcError::new("WS_TERMINAL_INVALID", "terminal 须为 rejected/expired", false, false));
     }
     let conn = lock_db(state)?;
-    workspace::diff_apply::discard_diff(&conn, &diff_id, &terminal)
-        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    // 经 SM-WS-02 驱动 + 广播（AwaitingDecision→Discarded，不写文件）。
+    discard_diff_sm(app, &conn, &diff_id, &terminal)?;
     Ok(serde_json::json!({ "diff_id": diff_id, "status": terminal }))
+}
+
+// —— SM-WS-02 落盘机集成（A-CORE-X-L-04 Task 2-D）——
+
+/// 广播 SM-WS-02 转移（diff_id 为实例）。
+fn emit_ws02(app: &tauri::AppHandle, diff_id: &str, st: workspace::diff_apply::DiffApplyState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-WS-02", diff_id, &format!("{st:?}"), workspace::diff_apply::is_terminal(st)),
+    );
+}
+
+/// 经 SM-WS-02 落盘机驱动 apply：AwaitingDecision→Applying（广播）→ apply_diff effect →
+/// ApplyOk→Applied / ApplyFail→ApplyError（广播）。落盘 effect 本身不变（A-CORE-X-L-04 Task 2-D）。
+fn apply_diff_sm(
+    app: &tauri::AppHandle,
+    conn: &Connection,
+    diff_id: &str,
+    doc: &crate::types::DocRef,
+    abs: &std::path::Path,
+    after: &[u8],
+    baseline: Option<u64>,
+) -> Result<crate::types::TimelineEntry, IpcError> {
+    use workspace::diff_apply::{transition, DiffApplyEvent, DiffApplyState};
+    let applying = transition(DiffApplyState::AwaitingDecision, DiffApplyEvent::Accepted)
+        .expect("SM-WS-02: AwaitingDecision+Accepted→Applying");
+    emit_ws02(app, diff_id, applying);
+    match workspace::diff_apply::apply_diff(conn, diff_id, doc, abs, after, baseline) {
+        Ok(entry) => {
+            let applied = transition(applying, DiffApplyEvent::ApplyOk).expect("Applying+ApplyOk→Applied");
+            emit_ws02(app, diff_id, applied);
+            Ok(entry)
+        }
+        Err(e) => {
+            let errored = transition(applying, DiffApplyEvent::ApplyFail).expect("Applying+ApplyFail→ApplyError");
+            emit_ws02(app, diff_id, errored);
+            Err(e)
+        }
+    }
+}
+
+/// 经 SM-WS-02 驱动 discard：AwaitingDecision→Discarded（rejected/expired，不写文件）→广播。
+fn discard_diff_sm(
+    app: &tauri::AppHandle,
+    conn: &Connection,
+    diff_id: &str,
+    terminal: &str,
+) -> Result<(), IpcError> {
+    use workspace::diff_apply::{transition, DiffApplyEvent, DiffApplyState};
+    let ev = if terminal == "rejected" { DiffApplyEvent::Rejected } else { DiffApplyEvent::Expired };
+    let discarded = transition(DiffApplyState::AwaitingDecision, ev)
+        .expect("SM-WS-02: AwaitingDecision+Rejected/Expired→Discarded");
+    workspace::diff_apply::discard_diff(conn, diff_id, terminal)
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    emit_ws02(app, diff_id, discarded);
+    Ok(())
+}
+
+// —— SM-WS-01 保存机集成（A-CORE-X-L-04 Task 2-C）——
+// 脏态（Idle/Dirty）留前端高频本地标记（人类决策 2026-06-27）；保存**动作**经状态机驱动 +
+// 广播：Dirty→Save→Saving（落盘开始）→SaveOk→Saved / SaveFail→SaveError。
+
+/// 广播 SM-WS-01 转移（rel_path 为实例，区分多文档会话）。保存机为循环机，无终态（terminal=false）。
+fn emit_ws01(app: &tauri::AppHandle, rel_path: &str, st: workspace::save::SaveState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-WS-01", rel_path, &format!("{st:?}"), false),
+    );
+}
+
+/// 经 SM-WS-01 保存机驱动原子落盘：Saving（广播）→ save_atomic effect → Saved / SaveError（广播）。
+/// 落盘 effect（含外部变更保护）本身不变（A-CORE-X-L-04 Task 2-C）。
+fn save_atomic_sm(
+    app: &tauri::AppHandle,
+    rel_path: &str,
+    abs: &std::path::Path,
+    content: &[u8],
+    baseline: Option<u64>,
+    override_external: bool,
+) -> Result<workspace::save::Saved, IpcError> {
+    use workspace::save::{transition, SaveEvent, SaveState};
+    let saving = transition(SaveState::Dirty, SaveEvent::Save).expect("SM-WS-01: Dirty+Save→Saving");
+    emit_ws01(app, rel_path, saving);
+    match workspace::save::save_atomic(abs, content, baseline, override_external) {
+        Ok(saved) => {
+            let st = transition(saving, SaveEvent::SaveOk).expect("Saving+SaveOk→Saved");
+            emit_ws01(app, rel_path, st);
+            Ok(saved)
+        }
+        Err(e) => {
+            // 冲突与 IO 失败均落 SaveError（冲突/失败细分由 IpcError.code 携带，前端据此呈现）。
+            let st = transition(saving, SaveEvent::SaveFail).expect("Saving+SaveFail→SaveError");
+            emit_ws01(app, rel_path, st);
+            Err(e)
+        }
+    }
 }
 
 // —— DE diff 链路（PI-BE-02）：生成→裁决→落盘经 dispatch 接入 ——
@@ -618,11 +817,27 @@ fn route_generate_diff(request: &CommandRequest, state: &AppState) -> Result<ser
     Ok(serde_json::json!({ "diff_id": diff_id, "status": "pending" }))
 }
 
-/// 路由 `de.accept_diff`：取回 DiffPayload→ws.apply_diff 落盘（accepted 唯一触发，X-INTER-001）；回时间轴节点。
-fn route_accept_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+/// 路由 `de.accept_diff`：经 SM-DE-01 守护（仅 Pending 可接受，三终态不可逆）→ ws.apply_diff 落盘
+/// （accepted 唯一触发，X-INTER-001）→ 广播 SM-DE-01 转移；回时间轴节点（A-CORE-X-L-04 §5.4 Task 2-B）。
+fn route_accept_diff(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
     let ws = active_ws(state)?;
     let conn = lock_db(state)?;
+    // ① 集成：取当前持久态经 SM-DE-01 守护——非 Pending（已终态）不得接受，非法转移回错误不静默落盘。
+    let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
+    let next = crate::de::transition(cur, crate::de::DiffEvent::UserAccept).ok_or_else(|| {
+        IpcError::new(
+            "DE_ILLEGAL_TRANSITION",
+            &format!("diff 当前态 {cur:?} 不可接受（SM-DE-01 三终态不可逆）"),
+            false,
+            false,
+        )
+    })?;
+    // ② 落盘：apply_diff 置 status=accepted，与 transition 给出的权威态 next=Accepted 一致。
     let stored = crate::de::store::load_payload_for_diff(&conn, &diff_id)?;
     let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &stored.rel_path)?;
     let doc = crate::types::DocRef {
@@ -630,16 +845,42 @@ fn route_accept_diff(request: &CommandRequest, state: &AppState) -> Result<serde
         doc_type: doc_type_of(&stored.rel_path),
         rel_path: stored.rel_path,
     };
-    let entry = workspace::diff_apply::apply_diff(&conn, &diff_id, &doc, &abs, &stored.after_content, None)?;
+    // 经 SM-WS-02 落盘机驱动 apply（广播 Applying→Applied/ApplyError），与 SM-DE-01 同 diff 实例。
+    let entry = apply_diff_sm(app, &conn, &diff_id, &doc, &abs, &stored.after_content, None)?;
+    // ③ 广播 SM-DE-01 转移（前端 deStore 投影，X-FORBID-007）。
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-DE-01", &diff_id, &format!("{next:?}"), crate::de::is_terminal(next)),
+    );
     ws_json(&entry)
 }
 
-/// 路由 `de.reject_diff`：ws.discard_diff(rejected)，不写文件、不记节点（终态不可逆，SM-DE-01）。
-fn route_reject_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+/// 路由 `de.reject_diff`：经 SM-DE-01 守护（仅 Pending 可拒绝）→ ws.discard_diff(rejected) 不写文件、
+/// 不记节点 → 广播 SM-DE-01 转移（终态不可逆，A-CORE-X-L-04 §5.4 Task 2-B）。
+fn route_reject_diff(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
     let conn = lock_db(state)?;
-    workspace::diff_apply::discard_diff(&conn, &diff_id, "rejected")
-        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    // ① 集成：经 SM-DE-01 守护当前态——已终态不得重复拒绝。
+    let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
+    let next = crate::de::transition(cur, crate::de::DiffEvent::UserReject).ok_or_else(|| {
+        IpcError::new(
+            "DE_ILLEGAL_TRANSITION",
+            &format!("diff 当前态 {cur:?} 不可拒绝（SM-DE-01 三终态不可逆）"),
+            false,
+            false,
+        )
+    })?;
+    // ② 落终态：经 SM-WS-02 驱动 discard（rejected，不写文件、不记节点）+ 广播。
+    discard_diff_sm(app, &conn, &diff_id, "rejected")?;
+    // ③ 广播 SM-DE-01 转移。
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-DE-01", &diff_id, &format!("{next:?}"), crate::de::is_terminal(next)),
+    );
     Ok(serde_json::json!({ "diff_id": diff_id, "status": "rejected" }))
 }
 
@@ -693,6 +934,31 @@ fn route_start_turn(request: &CommandRequest) -> Result<serde_json::Value, IpcEr
 
 fn sm_error() -> IpcError {
     IpcError::new("AG_SM_INVALID", "SM-AG-01 非法转移", false, false)
+}
+
+/// 广播 SM-AG-01 回合机转移（turn_id 为实例，A-CORE-X-L-04 Task 2-E）。
+fn emit_ag01(app: &tauri::AppHandle, turn_id: &str, st: ag::turn::TurnState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-AG-01", turn_id, &format!("{st:?}"), ag::turn::is_terminal(st)),
+    );
+}
+
+/// 广播 SM-AG-02 工具循环机转移（turn_id 为实例，A-CORE-X-L-04 Task 2-AG2）。
+fn emit_ag02(app: &tauri::AppHandle, turn_id: &str, st: ag::tool::ToolLoopState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-AG-02", turn_id, &format!("{st:?}"), ag::tool::is_terminal(st)),
+    );
+}
+
+/// 广播回合完成（Streaming→HandingOff→Completed；无修改建议交接时直接收尾）。
+fn emit_ag01_complete(app: &tauri::AppHandle, turn_id: &str) {
+    use ag::turn::{transition, TurnEvent, TurnState};
+    let st = transition(TurnState::Streaming, TurnEvent::StreamEnd)
+        .and_then(|s| transition(s, TurnEvent::HandoffOk))
+        .unwrap_or(TurnState::Completed);
+    emit_ag01(app, turn_id, st);
 }
 
 /// 路由 `ag.list_blocks`：列指定文档的块（供块级 @mention 选择非当前文档的块，PI-AG-09G）。
@@ -847,6 +1113,7 @@ async fn ag_start_turn(
     block_refs: Vec<BlockRef>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), IpcError> {
     use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
 
@@ -855,10 +1122,14 @@ async fn ag_start_turn(
     }
 
     // 结构性门禁前置：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed（X-SEQ-001）。
+    // 每步转移广播 SM-AG-01（A-CORE-X-L-04 Task 2-E）：sending 等回合视图据此投影（X-FORBID-007）。
     let s = transition(TurnState::Idle, TurnEvent::Send).ok_or_else(sm_error)?; // → Assembling
+    emit_ag01(&app, &turn_id, s);
     let s = transition(s, TurnEvent::Assembled).ok_or_else(sm_error)?; // → AwaitingGate
+    emit_ag01(&app, &turn_id, s);
     ensure_gate_passed(GateState::Passed)?; // dev 桩=Passed；无订阅时此处 Denied 即拒
     let s = transition(s, TurnEvent::GatePassed).ok_or_else(sm_error)?; // → Streaming
+    emit_ag01(&app, &turn_id, s);
     debug_assert_eq!(s, TurnState::Streaming);
 
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
@@ -1023,12 +1294,28 @@ async fn ag_start_turn(
     let tools = ag::tool_registry::tool_definitions_json();
 
     // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
+    // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultInjecting→
+    // 续调 / FinalAnswer→LoopCompleted / 达上限→LoopAborted）。工具卡数据仍由 Channel 投影（互不替代）。
+    use ag::tool::ToolLoopState as TlSt;
     const MAX_ROUNDS: usize = 6;
     for _round in 0..MAX_ROUNDS {
+        emit_ag02(&app, &turn_id, TlSt::ModelStreaming); // 本轮模型流式
         let msgs = serde_json::Value::Array(messages.clone());
-        match ent::gateway::stream_round(&turn_id, &provider, &model, &msgs, &tools, &on_event).await? {
-            ent::gateway::RoundOutcome::Done => return Ok(()),
+        let round = match ent::gateway::stream_round(&turn_id, &provider, &model, &msgs, &tools, &on_event).await {
+            Ok(o) => o,
+            Err(e) => {
+                emit_ag01(&app, &turn_id, ag::turn::TurnState::TurnError); // 流式错误：回合错误态（可重试）
+                return Err(e);
+            }
+        };
+        match round {
+            ent::gateway::RoundOutcome::Done => {
+                emit_ag02(&app, &turn_id, TlSt::LoopCompleted); // ModelStreaming→FinalAnswer→LoopCompleted
+                emit_ag01_complete(&app, &turn_id); // → Completed
+                return Ok(());
+            }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
+                emit_ag02(&app, &turn_id, TlSt::ToolValidating); // ModelStreaming→ToolRequest→ToolValidating
                 // 先把 assistant 的 tool_calls 入历史（OpenAI 要求 tool 结果前有对应 assistant.tool_calls）。
                 let tc_json: Vec<serde_json::Value> = calls
                     .iter()
@@ -1086,7 +1373,9 @@ async fn ag_start_turn(
                     // 结果回注模型（SM-AG-02 ResultInjecting）。
                     messages.push(serde_json::json!({ "role": "tool", "tool_call_id": c.id, "content": result }));
                 }
-                // 继续下一轮：带工具结果再调 GW。
+                emit_ag02(&app, &turn_id, TlSt::ToolExecuting); // ToolValidating→ValidateOk→ToolExecuting
+                emit_ag02(&app, &turn_id, TlSt::ResultInjecting); // ToolExecuting→ExecOk→ResultInjecting
+                // 继续下一轮（ResultInjecting→Injected→ModelStreaming，下轮顶部广播）。
             }
         }
     }
@@ -1096,6 +1385,8 @@ async fn ag_start_turn(
         turn_id: turn_id.clone(),
         stop_reason: "tool_loop_limit".to_string(),
     });
+    emit_ag02(&app, &turn_id, TlSt::LoopAborted); // ResultInjecting→LoopLimit→LoopAborted
+    emit_ag01_complete(&app, &turn_id); // → Completed
     Ok(())
 }
 

@@ -20,6 +20,23 @@ export type TabState =
   | "pending_diff"
   | "external_changed";
 
+/** 后端 SM-WS-01 保存机运行态（Rust SaveState 的 Debug 名，A-WS-M-S-01 §2）。 */
+export type RustSaveState = "Idle" | "Dirty" | "Saving" | "Saved" | "SaveError";
+
+/** Rust SM-WS-01 SaveState → TabState（A-CORE-X-L-04 Task 2-C，人类决策 2026-06-27）。
+ *  仅保存**动作**态经广播投影：Saving→saving、Saved→saved。Idle/Dirty 脏态留前端本地（高频不走 IPC）；
+ *  SaveError 不投影——冲突(external_changed)/失败(dirty) 由前端据错误码细分（edService catch）。 */
+export function mapSaveState(s: RustSaveState): Extract<TabState, "saving" | "saved"> | null {
+  switch (s) {
+    case "Saving":
+      return "saving";
+    case "Saved":
+      return "saved";
+    default:
+      return null;
+  }
+}
+
 /** 单文档编辑会话（按路径独立保存，切换标签不互相覆盖）。 */
 export interface EditSession {
   /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。 */
@@ -180,6 +197,22 @@ export const edStore = {
    *  会话已被关闭则为空操作（文件仍已落盘，无会话可更新）。 */
   markSaved(path: string, baseline: number) {
     patchSession(path, { baseline, tabState: "saved" });
+  },
+  /** 仅刷新会话加载基线（A-CORE-X-L-04 Task 2-C）：保存成功后由后端返回值回填；saved 态由 SM-WS-01 广播驱动。 */
+  setBaseline(path: string, baseline: number) {
+    patchSession(path, { baseline });
+  },
+  /**
+   * 投影后端 SM-WS-01 保存机转移（A-CORE-X-L-04 Task 2-C · X-FORBID-007）：由 smListeners 监听
+   * `sm:SM-WS-01:state_changed` 调用。仅保存动作态：Saving→saving、Saved→saved（按 path 锁定）。
+   * external_changed/pending_diff 为更高优先呈现态，不被保存动作广播覆盖。
+   */
+  applyWsSaveState(relPath: string, saveState: RustSaveState) {
+    const tab = mapSaveState(saveState);
+    if (!tab) return;
+    const cur = state.sessions[relPath];
+    if (!cur || cur.tabState === "external_changed" || cur.tabState === "pending_diff") return;
+    patchSession(relPath, { tabState: tab });
   },
   /** 编辑产生脏态（编辑器 onUpdate 驱动，作用于活动会话）。 */
   markDirty() {

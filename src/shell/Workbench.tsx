@@ -12,6 +12,7 @@ import { Editor } from "../components/ed/Editor";
 import { ChatPanel } from "../components/ag/ChatPanel";
 import { DiffAllActionsBar } from "../components/de/DiffAllActionsBar";
 import { useDeStore } from "../store/deStore";
+import { startSmListeners, stopSmListeners } from "../services/smListeners";
 
 /**
  * 主工作台（A-SYS-C-T-02 §3/§4 界面分区与全局布局）。有活动 workspace 后的主界面。
@@ -34,6 +35,12 @@ export function Workbench() {
   useEffect(() => {
     tabsStore.reset();
   }, [wsKey]);
+
+  // 启动状态机广播监听（A-CORE-X-L-04 §5.5 · X-FORBID-007）：后端 SM-* 转移经 IPC 投影到 store。
+  useEffect(() => {
+    void startSmListeners();
+    return () => stopSmListeners();
+  }, []);
 
   return (
     <div className="workbench">

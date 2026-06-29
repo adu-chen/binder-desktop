@@ -212,6 +212,11 @@ pub fn transition(state: RestoreState, event: RestoreEvent) -> Option<RestoreSta
     Some(next)
 }
 
+/// SM-WS-03 终态判定：Restored 为还原完成终态；RestoreError 可经 Back 回 Browsing（非终态）。
+pub fn is_terminal(state: RestoreState) -> bool {
+    matches!(state, RestoreState::Restored)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +317,8 @@ mod tests {
         assert_eq!(transition(Browsing, ConfirmRestore), None, "未经预览不得直接还原");
         assert_eq!(transition(RestoreError, RestoreOk), None, "失败态不得跳为已还原");
         assert_eq!(transition(Restoring, Back), None);
+        // 终态判定（Task 2-W3 集成用）：仅 Restored 为终态。
+        assert!(is_terminal(Restored));
+        assert!(!is_terminal(Restoring) && !is_terminal(RestoreError) && !is_terminal(Browsing));
     }
 }

@@ -22,6 +22,58 @@ export type DiffCardState =
   | "conflict"
   | "error";
 
+/** 后端 SM-DE-01 运行态（Rust DiffState 的 Debug 名，A-DE-M-S-01 §2）；经广播投影到 8 视觉态。 */
+export type RustDiffState =
+  | "Generating"
+  | "Pending"
+  | "Accepted"
+  | "Rejected"
+  | "Expired"
+  | "GenFailed";
+
+/** Rust SM-DE-01 DiffState → DiffCard 视觉态（A-CORE-X-L-04 §6.2）。applying 落盘往返过渡态
+ *  由 SM-WS-02 广播补充（Task 2-D），不在本映射。 */
+export function mapRustDiffState(s: RustDiffState): DiffCardState {
+  switch (s) {
+    case "Generating":
+      return "pending"; // 生成中暂显 pending
+    case "Pending":
+      return "pending";
+    case "Accepted":
+      return "accepted";
+    case "Rejected":
+      return "rejected";
+    case "Expired":
+      return "expired";
+    case "GenFailed":
+      return "error";
+  }
+}
+
+/** 后端 SM-WS-02 落盘机运行态（Rust DiffApplyState 的 Debug 名，A-WS-M-S-01 §3）。 */
+export type RustDiffApplyState =
+  | "AwaitingDecision"
+  | "Applying"
+  | "Applied"
+  | "Discarded"
+  | "ApplyError";
+
+/** Rust SM-WS-02 DiffApplyState → DiffCard 视觉态（A-CORE-X-L-04 Task 2-D）。
+ *  Applied→accepted（落盘完成）；Discarded/AwaitingDecision 由 SM-DE-01 驱动终态，本机不投影（null）。 */
+export function mapWsApplyState(s: RustDiffApplyState): DiffCardState | null {
+  switch (s) {
+    case "Applying":
+      return "applying";
+    case "Applied":
+      return "accepted";
+    case "ApplyError":
+      return "error";
+    case "Discarded":
+    case "AwaitingDecision":
+      return null; // 终态归 SM-DE-01（rejected/expired）；待裁决态不投影
+  }
+}
+
 /** GreenReview 4 态（参考稿 §6.7）——由 DiffCardState 派生，叠加在编辑器正文。 */
 export type GreenReviewState = "pending" | "applying" | "accepted" | "expired";
 
@@ -122,13 +174,47 @@ export const deStore = {
     setDiffs([...state.diffs, view]);
   },
 
-  /** 设置某条 diff 的视觉态（裁决往返各阶段；deService 编排调用）。终态不回退。 */
-  setDiffState(id: string, next: DiffCardState, patch: Partial<DiffView> = {}) {
+  /**
+   * 投影后端 SM-DE-01 转移（A-CORE-X-L-04 Task 2-B/3-A · X-FORBID-007）：由 smListeners 监听
+   * `sm:SM-DE-01:state_changed` 调用，是 diff **权威业务态**的唯一写入口。Rust DiffState → 8 视觉态；
+   * 三终态互斥——已 accepted/rejected/expired 不被覆盖（与后端 transition 守护一致）。
+   */
+  applyBackendState(diffId: string, rustState: RustDiffState, _terminal: boolean) {
+    mapDiff(diffId, (d) => {
+      if (["accepted", "rejected", "expired"].includes(d.state)) return d;
+      return { ...d, state: mapRustDiffState(rustState) };
+    });
+  },
+
+  /**
+   * 本地呈现态（非后端权威业务态）：裁决往返期间的 validating/applying 过渡态、及 conflict/error
+   * 呈现态，由 deService 在 await 期间设置。已是后端终态者不被覆盖（不与广播相争）。
+   * 注：SM-WS-02 集成后（Task 2-D）validating/applying 改由其落盘机广播驱动。
+   */
+  setLocalView(id: string, next: Extract<DiffCardState, "validating" | "applying" | "conflict" | "error">, patch: Partial<DiffView> = {}) {
     mapDiff(id, (d) => {
-      // 三终态互斥不可逆：已 accepted/rejected/expired 不被覆盖。
       if (["accepted", "rejected", "expired"].includes(d.state)) return d;
       return { ...d, state: next, ...patch };
     });
+  },
+
+  /**
+   * 投影后端 SM-WS-02 落盘机转移（A-CORE-X-L-04 Task 2-D · X-FORBID-007）：由 smListeners 监听
+   * `sm:SM-WS-02:state_changed` 调用。Applying→applying 过渡呈现、Applied→accepted、ApplyError→error；
+   * Discarded/AwaitingDecision 不投影（终态归 SM-DE-01）。已是终态者不被覆盖。
+   */
+  applyWsApplyState(diffId: string, wsState: RustDiffApplyState) {
+    const visual = mapWsApplyState(wsState);
+    if (!visual) return;
+    mapDiff(diffId, (d) => {
+      if (["accepted", "rejected", "expired"].includes(d.state)) return d;
+      return { ...d, state: visual };
+    });
+  },
+
+  /** 合并展示元数据（如 accepted 后的 timelineSeq），不改变状态——供 deService 回填后端调用结果。 */
+  attachMeta(id: string, patch: Partial<DiffView>) {
+    mapDiff(id, (d) => ({ ...d, ...patch }));
   },
 
   setBatch(batchState: DeState["batchState"], expiredCount = 0) {

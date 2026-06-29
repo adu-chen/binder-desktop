@@ -78,7 +78,7 @@ export async function startTurn(
 
   agStore.pushMessage({ id: uid(), role: "user", content: trimmed });
   agStore.clearToolCalls(); // 新回合清空旧工具卡（PI-AG-08D）
-  agStore.setSending(true);
+  agStore.setSending(true); // 乐观置 true 即时门控防双发；活动/释放由 SM-AG-01 广播投影（Task 2-E）
 
   const assistantId = uid();
   agStore.pushMessage({ id: assistantId, role: "assistant", content: "", streaming: true });
@@ -94,7 +94,7 @@ export async function startTurn(
     const finish = () => {
       if (settled) return;
       settled = true;
-      agStore.setSending(false);
+      // sending 的释放由 SM-AG-01 终态广播驱动（Completed/TurnError，Task 2-E）；此处仅结束等待。
       resolve();
     };
 
@@ -186,6 +186,8 @@ export async function startTurn(
         content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),
         error: true,
       });
+      // 命令级 Err（IPC 传输失败等）可能不发广播：兜底释放 sending，避免输入永久禁用。
+      agStore.setSending(false);
       finish();
     });
   });

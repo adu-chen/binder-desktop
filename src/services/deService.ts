@@ -60,31 +60,32 @@ export async function generateSampleDiff(): Promise<void> {
   }
 }
 
-/** 接受单条：validating→applying→de.accept_diff（真落盘）→accepted + 重载编辑器；失败→error。 */
+/**
+ * 接受单条：落盘过渡态（applying）与终态（accepted）均由后端广播投影——SM-WS-02 广播 Applying→Applied、
+ * SM-DE-01 广播 Accepted（smListeners→deStore，X-FORBID-007），前端不再乐观置态；timelineSeq 为后端
+ * 落盘结果元数据，回填展示。IPC 失败（未触达广播）→本地 error 呈现。
+ */
 export async function acceptDiff(diffId: string): Promise<void> {
-  deStore.setDiffState(diffId, "validating");
-  deStore.setDiffState(diffId, "applying");
   try {
     const entry = await callCommand<{ entry_id: string; version_seq: number }>("de.accept_diff", { diffId });
-    deStore.setDiffState(diffId, "accepted", { timelineSeq: entry.version_seq });
-    // 文件已被写入 → 重载编辑器显示落盘后内容（投影后端）。
+    // applying/accepted 经 SM-WS-02 + SM-DE-01 广播到达；此处仅回填展示元数据 + 重载编辑器。
+    deStore.attachMeta(diffId, { timelineSeq: entry.version_seq });
     const { openPath } = edStore.getSnapshot();
     if (openPath) await openDocument(openPath);
   } catch (e) {
     const x = e as { code?: string };
-    deStore.setDiffState(diffId, "error", { errorCode: x?.code ?? "DE_ACCEPT_FAILED" });
+    deStore.setLocalView(diffId, "error", { errorCode: x?.code ?? "DE_ACCEPT_FAILED" });
     console.error(`de.accept_diff failed ${errMsg(e)}`);
   }
 }
 
-/** 拒绝单条：de.reject_diff（不写文件）→rejected。 */
+/** 拒绝单条：de.reject_diff（不写文件）；rejected 终态由后端 SM-DE-01 广播投影（X-FORBID-007）。 */
 export async function rejectDiff(diffId: string): Promise<void> {
   try {
     await callCommand("de.reject_diff", { diffId });
   } catch (e) {
     console.error(`de.reject_diff failed ${errMsg(e)}`);
   }
-  deStore.setDiffState(diffId, "rejected");
 }
 
 /**

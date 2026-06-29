@@ -123,6 +123,10 @@ constraint_id: X-INTER-001
 三类终态）一致。已落地的 SM-SYS-01：`Invoking → InvokeCompleted`（流式完成）/ `Invoking →
 InvokeError`（流式错误，统一错误形状）即对齐本契约；后续各 owner 的流式状态机登记时须同样对齐。
 
+**状态机投影广播**：各 SM-* 转移落库后经 `sm:{machine_id}:state_changed` 广播权威态供前端投影，
+契约与统一信封（SmStatePayload）归 A-SYS-I-P-02 §5.1 / BR-SYS-STATE-003（承接 X-FORBID-007）；
+本总图登记的 owner 状态机实现广播时 instance_id 用各自实例键（diff_id / turn_id / rel_path / entry_id 等）。
+
 ## §7 术语归属说明（为何本文不注册 TERM）
 
 machine_id、状态机、转移、终态等为状态机框架技术词，按 ADU §3.2 不注册 TERM。各核心链涉及的业务

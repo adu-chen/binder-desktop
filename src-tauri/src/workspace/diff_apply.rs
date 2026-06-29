@@ -8,7 +8,7 @@
 use super::{save, timeline};
 use crate::ipc::IpcError;
 use crate::types::{DocRef, PendingDiff};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -64,6 +64,11 @@ pub fn transition(state: DiffApplyState, event: DiffApplyEvent) -> Option<DiffAp
         _ => return None,
     };
     Some(next)
+}
+
+/// SM-WS-02 终态判定：Applied/Discarded 为终态；ApplyError 可 Retry（非终态）。
+pub fn is_terminal(state: DiffApplyState) -> bool {
+    matches!(state, DiffApplyState::Applied | DiffApplyState::Discarded)
 }
 
 /**
@@ -146,7 +151,7 @@ pub fn discard_diff(conn: &Connection, diff_id: &str, terminal: &str) -> rusqlit
 }
 
 /// DB status 文本 → DiffStatus 枚举（与 A-SYS-I-P-01 单一来源对齐；未知按 pending 保守）。
-fn parse_status(s: &str) -> crate::types::DiffStatus {
+pub(crate) fn parse_status(s: &str) -> crate::types::DiffStatus {
     use crate::types::DiffStatus::*;
     match s {
         "accepted" => Accepted,
@@ -154,6 +159,19 @@ fn parse_status(s: &str) -> crate::types::DiffStatus {
         "expired" => Expired,
         _ => Pending,
     }
+}
+
+/// 读取 diff 当前持久态（供 SM-DE-01 转移守护取当前态，A-CORE-X-L-04 §5.4 Task 2-B）；
+/// diff 不存在回统一错误形状（不静默放行）。
+pub fn current_status(conn: &Connection, diff_id: &str) -> Result<crate::types::DiffStatus, IpcError> {
+    let s: Option<String> = conn
+        .query_row("SELECT status FROM pending_diffs WHERE diff_id=?1", [diff_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("diff 状态查询失败: {e}"), true, false))?;
+    let s = s.ok_or_else(|| {
+        IpcError::new("DE_DIFF_NOT_FOUND", &format!("diff 不存在: {diff_id}"), false, false)
+    })?;
+    Ok(parse_status(&s))
 }
 
 /// 由 rel_path 扩展名推断 doc_type（DocRef 需要；与 listing 一致小写无点）。
@@ -259,6 +277,21 @@ mod tests {
         assert_eq!(transition(AwaitingDecision, ApplyOk), None, "未经 Applying 不得 Applied");
         assert_eq!(transition(Discarded, Accepted), None, "丢弃后不得绕过裁决再落盘");
         assert_eq!(transition(Applied, ApplyOk), None);
+    }
+
+    // covers: BR-WS-STATE-001
+    // current_status（A-CORE-X-L-04 Task 2-B 集成入口）：读回当前持久态供 SM-DE-01 守护；
+    // 终态被裁决后正确反映（accepted/rejected）；diff 缺失回 DE_DIFF_NOT_FOUND（不静默放行）。
+    #[test]
+    fn current_status_reads_persisted_state() {
+        let conn = fresh();
+        persist_diff(&conn, &sample_diff("d1")).unwrap();
+        assert_eq!(current_status(&conn, "d1").unwrap(), DiffStatus::Pending);
+        discard_diff(&conn, "d1", "rejected").unwrap();
+        assert_eq!(current_status(&conn, "d1").unwrap(), DiffStatus::Rejected);
+        // 缺失 diff：错误形状（处理器据此拒绝，不静默落盘）
+        let err = current_status(&conn, "missing").unwrap_err();
+        assert_eq!(err.code, "DE_DIFF_NOT_FOUND");
     }
 
     // covers: BR-WS-STATE-001

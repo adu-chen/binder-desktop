@@ -49,6 +49,18 @@ pub fn is_terminal(state: DiffState) -> bool {
     )
 }
 
+/// DB 持久态（DiffStatus，A-SYS-I-P-01 四裁决态）→ SM-DE-01 运行态（DiffState）。
+/// 过程态 Generating/GenFailed 不持久于 status 列，故不在此映射范围。
+pub fn state_from_status(status: crate::types::DiffStatus) -> DiffState {
+    use crate::types::DiffStatus;
+    match status {
+        DiffStatus::Pending => DiffState::Pending,
+        DiffStatus::Accepted => DiffState::Accepted,
+        DiffStatus::Rejected => DiffState::Rejected,
+        DiffStatus::Expired => DiffState::Expired,
+    }
+}
+
 /**
  * @GOV
  * codes:    BR-DE-STATE-001-RB-DE-DE-DIFF-001
@@ -101,6 +113,27 @@ mod tests {
         // 唯一通往 Accepted（落盘）的路径是 Pending+UserAccept
         for from in [Generating, Rejected, Expired, GenFailed] {
             assert_eq!(transition(from, UserAccept), None, "{from:?} 不应可达 Accepted");
+        }
+    }
+
+    // covers: BR-DE-STATE-001
+    // 运行时集成守护（A-CORE-X-L-04 Task 2-B）：DB 持久态映射 SM-DE-01 运行态后，已终态的
+    // diff 经 transition 守护拒绝再次裁决——即 route_accept_diff/route_reject_diff 的 ① 集成保证。
+    #[test]
+    fn status_mapping_drives_terminal_guard() {
+        use crate::types::DiffStatus;
+        // 四裁决态映射
+        assert_eq!(state_from_status(DiffStatus::Pending), Pending);
+        assert_eq!(state_from_status(DiffStatus::Accepted), Accepted);
+        assert_eq!(state_from_status(DiffStatus::Rejected), Rejected);
+        assert_eq!(state_from_status(DiffStatus::Expired), Expired);
+        // Pending 可裁决（守护放行）
+        assert_eq!(transition(state_from_status(DiffStatus::Pending), UserAccept), Some(Accepted));
+        assert_eq!(transition(state_from_status(DiffStatus::Pending), UserReject), Some(Rejected));
+        // 已终态不可再裁决（守护拒绝 → 处理器回 DE_ILLEGAL_TRANSITION）
+        for st in [DiffStatus::Accepted, DiffStatus::Rejected, DiffStatus::Expired] {
+            assert_eq!(transition(state_from_status(st), UserAccept), None, "{st:?} 不应可再接受");
+            assert_eq!(transition(state_from_status(st), UserReject), None, "{st:?} 不应可再拒绝");
         }
     }
 

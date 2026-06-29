@@ -21,6 +21,21 @@ describe("edStore · SM-ED-01 脏态投影 (BR-ED-STATE-001)", () => {
     expect(edStore.getSnapshot().baseline).toBe(42);
   });
 
+  it("SM-WS-01 广播投影（Task 2-C）：applyWsSaveState 驱动 saving/saved；setBaseline 仅刷基线", () => {
+    edStore.openDoc("a.md");
+    edStore.markDirty();
+    edStore.applyWsSaveState("a.md", "Saving");
+    expect(edStore.getSnapshot().tabState).toBe("saving");
+    edStore.setBaseline("a.md", 77);
+    expect(edStore.getSnapshot()).toMatchObject({ baseline: 77, tabState: "saving" }); // 基线刷新，态不变
+    edStore.applyWsSaveState("a.md", "Saved");
+    expect(edStore.getSnapshot().tabState).toBe("saved");
+    // SaveError 不投影（前端据错误码细分）；external_changed 不被保存广播覆盖
+    edStore.setTabState("a.md", "external_changed");
+    edStore.applyWsSaveState("a.md", "Saving");
+    expect(edStore.getSnapshot().tabState).toBe("external_changed");
+  });
+
   it("外部变更/待裁决与 dirty 互斥：markDirty 不覆盖 external_changed / pending_diff", () => {
     edStore.openDoc("a.md");
     edStore.setTabState("a.md", "external_changed");

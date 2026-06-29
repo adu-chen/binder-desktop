@@ -30,6 +30,9 @@ pub enum BuildState {
 }
 
 /// SM-CBT-01 事件。takeoverIn 经 SM-AG-01 移交（PI-CBT-03）；taskOk 携带是否有后续任务。
+/// fallbackOut 是**输出信号**（A-CBT-M-S-01 §3 X-INTER-001）：PlanFail→Idle / Interrupt→Interrupted
+/// 路径发生后由编排层主动发出，驱动 AG 侧 SM-AG-01 的 FallbackIn——CBT 自身不因 fallbackOut 转移
+/// （`transition` 对其返回 None），故不出现在转移表中。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildEvent {
     StartBuild,
@@ -44,6 +47,7 @@ pub enum BuildEvent {
     Resume,
     AdjudicationDone,
     Interrupt,
+    FallbackOut, // 输出信号：回落 chat（X-INTER-001），不驱动 CBT 自身转移
 }
 
 /// 终态判定。
@@ -191,6 +195,20 @@ mod tests {
             assert_eq!(transition(Interrupted, ev), None);
         }
         assert!(is_terminal(Completed) && is_terminal(Interrupted) && !is_terminal(TaskRunning));
+    }
+
+    // covers: BR-CBT-STATE-001
+    // fallbackOut 是输出信号（X-INTER-001）：CBT 自身不因其转移——任何状态对 FallbackOut 均返回 None。
+    // 编排层在 PlanFail→Idle / Interrupt→Interrupted 路径后发出该信号驱动 AG 侧 FallbackIn（本机不消费）。
+    #[test]
+    fn fallback_out_is_output_signal_never_transitions() {
+        // 回落语义所在的两条路径本身仍按既有转移工作（PlanFail→Idle，Interrupt→Interrupted）。
+        assert_eq!(transition(Planning, PlanFail), Some(Idle));
+        assert_eq!(transition(TaskRunning, Interrupt), Some(Interrupted));
+        // FallbackOut 对任意状态都不驱动 CBT 转移（输出信号，非输入事件）。
+        for s in [Idle, Planning, PlanReview, TaskRunning, TaskPaused, Adjudicating, Completed, Interrupted] {
+            assert_eq!(transition(s, FallbackOut), None, "{s:?} 不应因 FallbackOut 转移");
+        }
     }
 
     // covers: BR-CBT-PERSIST-001
