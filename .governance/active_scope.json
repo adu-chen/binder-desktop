@@ -1,12 +1,9 @@
 {
-  "task_type": "CODE_CHANGE_MINOR",
-  "scope_id": "PI-GW-DEV-07",
+  "task_type": "CODE_CHANGE",
+  "scope_id": "PI-AG-GOV-01",
   "allowed_files": [
-    "cloud/dev-gateway/package.json",
-    "cloud/dev-gateway/.env.example",
-    "cloud/dev-gateway/.env",
-    "cloud/dev-gateway/.gitignore",
-    "cloud/dev-gateway/README.md",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/tool.rs",
     ".governance/active_scope.json"
   ],
   "forbidden_files": [
@@ -14,8 +11,10 @@
     "ADP.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src-tauri/src/lib.rs"
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "CODE_CHANGE_MINOR cloud 便利改动（EXEMPTION-GW-DEV-01 在仓隔离）：npm start 读 .env，让平台 key 设一次长期生效。package.json start → node --env-file-if-exists=.env server.mjs（缺 .env 不报错，仍可用 env 变量）；engines.node 由 >=18 修正为 >=22.5（node:sqlite/env-file-if-exists 真实要求）。新增 .env.example（占位，入仓做文档）；本地 .env（含真实 key，已 gitignore，不入仓）。README 补 npm start 读 .env 说明。不改网关运行逻辑。"
+  "scope_reason": "PI-AG-GOV-01 治理标注补齐（仅 @GOV 注释，不改行为）：闭合 audit 对 AG 的硬发现。(1) context.rs decide_intent_carryover 加 @GOV owner 块 rules:BR-AG-DATA-004 + term_ref:TERM-AG-005（清 BR-AG-DATA-004 OWNER_MISSING + TERM-AG-005 ORPHAN）；(2) context.rs select_recent_history 加 @GOV owner 块 rules:BR-AG-DATA-005（清 BR-AG-DATA-005 OWNER_MISSING，分层截断序唯一权威落于此截断点）；(3) tool.rs transition（AG-TOOL 工具回合）@GOV 加 term_ref:TERM-AG-002 ToolCall（清 TERM-AG-002 ORPHAN）。boundary in/out 用具体类型名避免 BOUNDARY_ABSTRACT。改后重跑 governance:audit 确认 AG findings 清零（非 AG 的 OWNER_MISSING 仍在，属其它模块）。"
 }

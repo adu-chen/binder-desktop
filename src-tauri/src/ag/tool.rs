@@ -49,6 +49,7 @@ pub fn is_terminal(state: ToolLoopState) -> bool {
  * type:     RB
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002
+ * term_ref: TERM-AG-002
  * boundary: in=ToolLoopEvent | out=ToolLoopState(validateGatedResultInjectedLoopLimitedCancelTerminal)
  */
 /// SM-AG-02 转移引擎（BR-AG-STATE-002）：toolRequest→校验；validateFail 拒绝原因回注（→ResultInjecting，

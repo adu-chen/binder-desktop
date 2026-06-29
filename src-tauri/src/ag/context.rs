@@ -140,6 +140,14 @@ pub fn cap_text(s: &str, max_chars: usize, note: &str) -> String {
     format!("{head}\n{note}")
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-005-DATA-AG-AG-TURN-004
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-005
+ * boundary: in=HistTurnsAndCharBudget | out=RecentHistory(keepNewestDropOldestDeterministicWithDropCount)
+ */
 /// P1 历史层按预算保留**最近**若干轮（drop 最旧，确定性）。返回 (保留<按时序>, 丢弃数<可追溯>)。
 pub fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> (Vec<HistTurn>, usize) {
     let mut kept_rev = Vec::new();
@@ -167,6 +175,15 @@ pub enum Carryover {
     ReferenceTarget, // 指代回指 / 续写（继续 / 接着 / 它 / 那个 / 上面）
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-004-DATA-AG-AG-TURN-003
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-004
+ * term_ref: TERM-AG-005
+ * boundary: in=currentPromptAndHistoryPresence | out=Carryover(noneUnlessExplicitThenRefineSelectReferenceTarget)
+ */
 /// 意图沿用判定（BR-AG-DATA-004）：默认弱化历史，仅当本轮显式沿用历史意图时提权。
 /// **dev 启发式**（识别策略延实现期：可换小模型/更细规则）；本函数锁「默认 None、显式沿用才非 None」机制。
 pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
