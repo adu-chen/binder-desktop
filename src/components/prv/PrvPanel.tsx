@@ -24,6 +24,17 @@ function modeOf(path: string): Mode {
   return "pdf";
 }
 
+/**
+ * @GOV
+ * codes:    BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003
+ * type:     GUARD
+ * chain:    PRV-VIEW
+ * rules:    BR-PRV-DATA-001
+ * boundary: in=previewablePath | out=readOnlyRender(noInPlaceEditEntryDraftSpawnsSeparateEditSession)
+ */
+/// 预览只读硬边界守则（BR-PRV-DATA-001）：预览面板纯只读呈现（PDF/图片/音视频），不提供任何原地内容
+/// 修改交互、不产生文档模型变更与脏态；Excel/PPT 无编辑入口（v1 冻结）。原生 docx 的「创建草稿进行编辑」
+/// 不改预览源——复制为 *.draft.docx 后另起独立编辑会话（DOC 编辑链），预览与编辑链不黏连（承 BR-DOC-DATA-001）。
 export function PrvPanel({ path }: { path: string }) {
   const mode = modeOf(path);
   const [url, setUrl] = useState<string | null>(null);

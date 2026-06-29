@@ -427,6 +427,13 @@
 - **A 类债务（清零）**：本 PI 收口 PI-FE-27 唯一遗留代码级竞态债务；剩余 A 类债务均为绑定具体 PI 的 G5 联调/实现期项。
 - **验收**：竞态单测验证保存途中切标签只改目标会话；tsc + vitest 64 + build 绿；scoped 门禁无自有文件越界。
 
+### PI-FE-30　前端治理可追溯闭合（补 @GOV owner + covers，登记分页延后）　✅ G4 已实现（2026-06-26，tsc + vitest 73（含并行窗口测试，全绿） + build + scoped audit 绿）
+- **承接**：前端自评发现的 rule→code→test 可追溯断裂；A-ED-M-T-01 / A-PRV-M-T-01 既有规则定义；CLAUDE.md §2（不伪造标注骗审计）。
+- **文件范围**：`edService`（+@GOV：pollExternalChange→BR-ED-STATE-003、openDocument→BR-ED-DATA-002）、`PrvPanel`（+@GOV：BR-PRV-DATA-001 只读硬边界 GUARD）、`edService.test`（+covers BR-ED-STATE-003 + openDocument 路由测试 covers BR-ED-DATA-002）、`prvService.test`（新增：covers BR-PRV-DATA-001 只读命令面 + BR-PRV-DATA-002 mediaSrc）、`A-CORE-X-R-01 台账`（§10 闭合记录 + BR-ED-DATA-003 分页延后登记）。
+- **实现要点**：纯标注+测试+登记，**无功能变更**。referenced_rules 58→64、covered_rules 57→62（4 规则闭合）。**未实现的分页（BR-ED-DATA-003）如实登记延后，不伪造 @GOV**。
+- **闭合后剩余 audit failed 项均非前端可独立闭合**：BR-AG-DATA-004/005（AG 窗口）、BR-SYS-DATA-004（云端）、BR-ED-DATA-003（分页延后，待人类决策是否排 PI）。**前端自有可追溯缺口清零**。
+- **验收**：tsc + vitest 73（含并行窗口测试，全绿） + build 绿；audit referenced/covered 计数如期上升；scoped 门禁无自有文件越界。
+
 ---
 
 ## §3 实施顺序

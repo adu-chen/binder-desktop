@@ -12,6 +12,18 @@ interface IpcLikeError {
   message?: string;
 }
 
+/**
+ * @GOV
+ * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-004
+ * type:     RB
+ * chain:    ED-EDIT
+ * rules:    BR-ED-DATA-002
+ * boundary: in=DocReadDtoOrDocxEditModel | out=edSessionContent(unifiedModelDocxToHtmlViaDocMdToText)
+ */
+/// md/docx 统一编辑模型守则（BR-ED-DATA-002）：可编辑 docx（*.draft.docx）经 **DOC 编辑链**
+/// （doc.open_for_edit）转为统一编辑模型 HTML 后进编辑器（editFormat=html）；md/纯文本经 ws.read_doc
+/// 进文本模型（editFormat=text）。docx 二进制解析/生成全部归 DOC（docService 仅薄客户端），ED/前端
+/// 不含 docx 二进制处理路径——转换归 DOC、编辑归 ED 的分工在打开入口落地。
 /** 打开文档：docx 经 DOC 编辑链（doc.open_for_edit → HTML），其余经 ws.read_doc（文本）→ 载入编辑器
  *  （内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
 export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
@@ -41,15 +53,15 @@ export async function saveDocument(content: string, override = false): Promise<S
   const { openPath, baseline } = edStore.getSnapshot();
   if (!openPath) return { ok: false, conflict: false, message: "无打开的文档" };
   const path = openPath; // 锁定本次保存目标：await 期间用户切标签也只回写该会话（PI-FE-29）。
-  edStore.setTabState(path, "saving");
+  // saving/saved 态由后端 SM-WS-01 广播投影（X-FORBID-007）；此处仅回填基线（后端返回值）+ 错误细分。
   try {
     const newBaseline = await saveDoc(path, content, baseline, override);
-    edStore.markSaved(path, newBaseline);
+    edStore.setBaseline(path, newBaseline);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;
     const conflict = err.code === "WS_SAVE_CONFLICT";
-    // 冲突回脏态等待裁决；其余失败也回脏态（不谎称已存）。
+    // 冲突回 external_changed 等待裁决；其余失败回脏态（不谎称已存）。SaveError 广播不细分，由此处据错误码定。
     edStore.setTabState(path, conflict ? "external_changed" : "dirty");
     return { ok: false, conflict, message: err.message ?? String(e) };
   }
@@ -63,10 +75,10 @@ export async function saveDocxDocument(html: string, override = false): Promise<
   const { openPath, baseline } = edStore.getSnapshot();
   if (!openPath) return { ok: false, conflict: false, message: "无打开的文档" };
   const path = openPath; // 锁定本次保存目标（PI-FE-29）。
-  edStore.setTabState(path, "saving");
+  // saving/saved 态由后端 SM-WS-01 广播投影（X-FORBID-007）；此处仅回填基线 + 错误细分。
   try {
     const newBaseline = await saveDocxFromEdit(path, html, baseline, override);
-    edStore.markSaved(path, newBaseline);
+    edStore.setBaseline(path, newBaseline);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;
@@ -82,6 +94,18 @@ export async function reloadDocument(): Promise<void> {
   if (openPath) await openDocument(openPath);
 }
 
+/**
+ * @GOV
+ * codes:    BR-ED-STATE-003-RB-ED-ED-EDIT-003
+ * type:     RB
+ * chain:    ED-EDIT
+ * rules:    BR-ED-STATE-003, BR-WS-OBS-001
+ * boundary: in=diskBaselineComparison | out=TabState(externalChangedOnDriftAwaitingExplicitOverrideOrReload)
+ */
+/// 编辑会话外部变更处理守则（BR-ED-STATE-003）：订阅 WS 外部变更（比对磁盘哈希 vs 加载基线，BR-WS-OBS-001）
+/// → 漂移置 external_changed（SM-ED-01 Conflicted）→ 编辑器冲突条由用户**显式**选「保留我的编辑（覆盖，
+/// saveDocument override）」或「放弃并重载（reloadDocument）」；两个方向的内容损失都不静默发生（不静默覆盖
+/// 外部修改、不静默重载丢脏态，SM-WS-01）。物理事件订阅延 SY-02，当前以 5s 轮询实现逻辑契约。
 /**
  * 外部变更轮询（实现 external_change 逻辑契约，物理事件延 SY-02）：
  * 比对磁盘哈希与加载基线，磁盘已被外部改动/删除 → 置 external_changed（触发冲突条裁决）。

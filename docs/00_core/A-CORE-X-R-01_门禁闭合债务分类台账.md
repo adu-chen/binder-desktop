@@ -179,6 +179,29 @@
 - **状态**：标记登记（2026-06-22）；运行时与部署设施已就位（`libreoffice_runtime.rs` + `deploy_lo.sh` +
   `tauri.conf.json bundle.resources`），**签名/公证 + CI 前置校验待 G6 发布工程落实**。
 
+## §10 前端治理可追溯闭合（PI-FE-30，2026-06-26 追加）
+
+> 前端自评发现：若干设计文档规则**已实现但缺 @GOV owner / 缺 covers 测试**（rule→code→test 可追溯断裂）。
+> PI-FE-30 纯治理闭合（标注+测试+登记，无功能变更），如实区分「已实现可闭合」与「未实现须延后」。
+
+**已闭合（补 @GOV owner + covers，referenced 58→64 / covered 57→62）：**
+
+| 规则 | owner（@GOV 落点） | covers（测试） |
+|---|---|---|
+| BR-ED-STATE-003 外部变更/冲突显式裁决 | `edService.pollExternalChange`（RB·ED-EDIT） | edService.test 冲突/轮询用例 |
+| BR-ED-DATA-002 md/docx 统一编辑模型（二进制归 DOC） | `edService.openDocument`（RB·ED-EDIT） | edService.test openDocument 路由用例 |
+| BR-PRV-DATA-001 预览只读硬边界 | `PrvPanel`（GUARD·PRV-VIEW） | prvService.test 只读命令面断言 |
+| BR-PRV-DATA-002 媒体 asset 流式（owner 在 prv/mod.rs） | （后端既有） | prvService.test mediaSrc 用例 |
+
+**登记延后（不伪造 @GOV 骗审计，CLAUDE.md §2）：**
+
+| 规则 | 实现状态 | 处置 |
+|---|---|---|
+| **BR-ED-DATA-003** 分页纯呈现 + 媒体经 WS | 分页**未实现**；媒体-via-WS 部分已实现 | 分页承接 §6 A 类「分页光标遮罩」Plan Item；**是否/何时排分页 PI 待人类决策**；在此之前 audit 对本规则 OWNER_MISSING/uncovered **属预期**（同 BR-SYS-DATA-004 口径） |
+
+**闭合后剩余全局 audit failed 项（均非前端可独立闭合）：** BR-AG-DATA-004/005（AG 窗口已补 owner、covers 待其补）、
+BR-SYS-DATA-004（云端，§5 C 类）、BR-ED-DATA-003（分页延后，本节登记）。**前端自有可追溯缺口已清零。**
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
@@ -186,3 +209,4 @@
 | 2026-06-12 | v1.0 | 初版（门禁债务分类盘点，2026-06-12 时点）：全模块 ~70 项 G2 后债务分 A/B/C；总览（A ~52/B 6/C ~12）；B 类专章（B-1 提示词组装架构、B-2 AG↔AST 写入触发、B-3 AG↔CBT 接管 AG 侧建模、B-4 跨文档产出边界——4 真缺口全涉 AG；B-5/B-6 留痕滞后）；C 类（DE-04/DOC-04/ACCT/ENT/CLOUD/多窗，多属云端或不阻断）；A 类代表 + G3 承接；各模块 G2 闭合就绪度（唯 AG 需补 4 项，余模块就绪）；建议动作 |
 | 2026-06-12 | v1.1 | AG 4 项 B 类已补齐（人类授权，门禁例外闭合）：B-1 提示词组装架构（A-AG-M-T-01 §5.1 + BR-AG-DATA-002）/ B-2 记忆写入触发（§5.2 + BR-AG-STATE-004 + 总图 §5 转移登记）/ B-3 接管 AG 侧建模（SM-AG-01 takeover/fallbackIn/HandedOver + 总图 §5）/ B-4 跨文档产出边界（§3 + BR-AG-DATA-003，DE 协同校验落 PI-DE-01）；新增 3 规则已 generate 注册（60→63），AG 计划 §2bis 状态改「已补齐」；AG 全部 PI 的 G4 阻挡解除（B-5/B-6 留痕滞后仍登记未补） |
 | 2026-06-22 | v1.2 | 新增 §9 发布期阻断标记：BLOCK-REL-LO-001 内置 LibreOffice 预览链必须打包在应用内（不调用设备本地 LO）——阻断点 deploy 前置 + 打包路径核对 + 签名/公证，G6 打包不得绕过、不得静默降级到系统 LO；运行时与部署设施已就位，签名/公证 + CI 前置校验待 G6 落实 |
+| 2026-06-26 | v1.3 | 新增 §10 前端治理可追溯闭合（PI-FE-30）：为已实现的 BR-ED-STATE-003/BR-ED-DATA-002/BR-PRV-DATA-001 补 @GOV owner、为该 3 项 + BR-PRV-DATA-002 补 covers（referenced 58→64、covered 57→62）；BR-ED-DATA-003 分页未实现，如实登记延后（承 §6 A 类分页 Plan Item，待人类决策），audit OWNER_MISSING/uncovered 属预期 |
