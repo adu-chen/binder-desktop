@@ -4,7 +4,9 @@
 //! 因 TipTap/ProseMirror 是 HTML 模型、且 markdown 丢失样式子集的「部分支持」层（颜色/字体/字号）。
 //! 处理逻辑：
 //! - **打开（docx→可编辑 HTML）**：`pandoc <docx> --from docx+styles --to
-//!   html+raw_html+native_divs+native_spans --standalone --wrap=none --extract-media=. --preserve-tabs
+//!   html+raw_html+native_divs+native_spans --wrap=none --extract-media=. --preserve-tabs
+//!   （**不加 --standalone**：只输出 <body> 正文片段，不含 <head>/<style> CSS——否则前端会把那坨 CSS
+//!    当文本/代码块渲染。前端再以 generateJSON 按 HTML 解析，绕过 markdown 扩展，渲染为成熟文本块）
 //!   --lua-filter preserve-styles.lua`（`docx+styles` 读取扩展保留样式；`native_divs/spans` 把样式落为
 //!   内联 `style=`/`data-custom-style`；Lua 过滤器强制保留对齐/颜色/字号；`--extract-media` 解出图片）。
 //!   工作目录设为文档父目录使图片可被编辑器找到；HTML 超 15MB 拒绝（编辑模式上限，防崩溃）。
@@ -85,7 +87,7 @@ pub fn docx_to_html(docx_path: &Path, work_dir: &Path) -> Result<String, IpcErro
         .arg(docx_path)
         .args(["--from", "docx+styles"])
         .args(["--to", "html+raw_html+native_divs+native_spans"])
-        .args(["--standalone", "--wrap=none", "--extract-media=.", "--preserve-tabs"])
+        .args(["--wrap=none", "--extract-media=.", "--preserve-tabs"])
         .arg("--lua-filter")
         .arg(&lua)
         .current_dir(work_dir) // --extract-media=. 解压到此，图片可被编辑器找到

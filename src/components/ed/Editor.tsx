@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
+import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
 import { applyGreenReview } from "./extensions/DiffDecorationExtension";
 import { edStore, useEdStore } from "../../store/edStore";
@@ -147,8 +148,10 @@ export function Editor() {
     lastPathRef.current = openPath;
     if (!openPath || loadedContent === null) return;
     if (editFormat === "html") {
-      // docx 编辑链：loadedContent 为 HTML（保留样式子集），TipTap 原生解析。
-      editor.commands.setContent(loadedContent, { emitUpdate: false });
+      // docx 编辑链：loadedContent 为 HTML 正文片段。用 generateJSON 按 HTML 解析为 ProseMirror JSON，
+      // **绕过 tiptap-markdown 对 setContent(string) 的 markdown 劫持**（否则 HTML 标签/CSS 被当文本/
+      // 代码块渲染）；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析为成熟富文本块。
+      editor.commands.setContent(generateJSON(loadedContent, buildEditorExtensions()), { emitUpdate: false });
     } else if (isMarkdownPath(openPath)) {
       editor.commands.setContent(loadedContent, { emitUpdate: false });
     } else {
