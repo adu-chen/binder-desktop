@@ -21,10 +21,10 @@ export interface AssistState {
   selectionText: string;
   selectionFrom: number;
   selectionTo: number;
-  /** ⌘K：生成的预览结果（桩）。 */
+  /** ⌘K：内联改写预览（ag_request_assist 候选）。 */
   inlinePreview: string | null;
   generating: boolean;
-  /** ⌘J：3 条续写建议（桩）。 */
+  /** ⌘J：续写候选（ag_request_assist，门禁/失败时为空）。 */
   suggestions: string[];
 }
 
@@ -73,6 +73,10 @@ export const assistStore = {
   },
   setInlinePreview(inlinePreview: string) {
     setState({ inlinePreview, generating: false });
+  },
+  /** ⌘J：异步填入续写候选（ag_request_assist 返回后）。 */
+  setSuggestions(suggestions: string[]) {
+    setState({ suggestions, generating: false });
   },
   close() {
     state = EMPTY;

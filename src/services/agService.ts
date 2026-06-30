@@ -53,6 +53,35 @@ export async function uploadByok(provider: string, key: string): Promise<void> {
   await invoke("byok_upload", { provider, key });
 }
 
+/** 辅助请求（⌘K 内联改写 / ⌘J 续写补全）。 */
+export interface AssistReq {
+  kind: "inline" | "autocomplete";
+  instruction?: string; // inline：改写指令
+  selection?: string; // inline：选区原文
+  prefix?: string; // autocomplete：光标前文本
+}
+
+let aseq = 0;
+/**
+ * 经 `ag_request_assist`（独立命令；后端门禁前置 + 网关单次产出 + SM-AG-03 驱动/广播，A-AG-I-P-01）取候选。
+ * 前端在 SM-AG-03 节流后调用；门禁不可用/失败/空产出 → 返回 null（静默不提供，不打断编辑，SM-AG-03）。
+ */
+export async function requestAssist(req: AssistReq): Promise<string | null> {
+  const assistId = `as-${Date.now()}-${(aseq += 1)}`;
+  try {
+    const r = await invoke<{ candidate: string | null }>("ag_request_assist", {
+      assistId,
+      kind: req.kind,
+      instruction: req.instruction,
+      selection: req.selection,
+      prefix: req.prefix,
+    });
+    return r.candidate ?? null;
+  } catch {
+    return null; // 辅助失败静默（不弹错误、不打断编辑）
+  }
+}
+
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
  * 需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回 AG_GW_UNREACHABLE 错误终态。

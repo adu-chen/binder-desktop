@@ -371,6 +371,75 @@ pub async fn stream_round(
     Ok(RoundOutcome::Done)
 }
 
+/// 单次辅助产出（SM-AG-03 Requesting · 无工具 · 对外非流式）：POST dev GW `/invoke/stream`，累积 chunk
+/// 文本，流结束返回全文；GW 不可达 / HTTP 错误 / 流错误 / error 事件 → Err（调用方按 SM-AG-03 RequestFail
+/// 静默处理，不打断编辑）。门禁前置同 stream_round（上送会话令牌，GW 裁决，X-SEQ-001 / X-FORBID-001）。
+pub async fn assist_complete(
+    provider: &str,
+    model: &str,
+    messages: &serde_json::Value,
+) -> Result<String, IpcError> {
+    use futures_util::StreamExt;
+
+    let url = format!("{}/invoke/stream", gw_base_url());
+    let token = ensure_session_token().await;
+    let body = serde_json::json!({
+        "provider": provider, "model": model, "messages": messages, "tools": [], "token": token
+    });
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| IpcError::new("AG_GW_UNREACHABLE", &format!("dev 网关不可达（{url}）：{e}"), true, false))?;
+    if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        if code == 401 {
+            clear_session_token();
+        }
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(IpcError::new(&format!("AG_GW_HTTP_{code}"), &msg, code >= 500 || code == 401, code == 401));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut out = String::new();
+    while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|e| IpcError::new("AG_GW_STREAM", &format!("流式中断：{e}"), true, false))?;
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+        while let Some(pos) = buf.find("\n\n") {
+            let raw: String = buf[..pos].to_string();
+            buf = buf[pos + 2..].to_string();
+            let (mut event, mut data) = (String::new(), String::new());
+            for line in raw.lines() {
+                if let Some(r) = line.strip_prefix("event:") {
+                    event = r.trim().to_string();
+                } else if let Some(r) = line.strip_prefix("data:") {
+                    data = r.trim().to_string();
+                }
+            }
+            let json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+            match event.as_str() {
+                "chunk" => {
+                    if let Some(t) = json.get("text").and_then(|t| t.as_str()) {
+                        out.push_str(t);
+                    }
+                }
+                "error" => {
+                    return Err(IpcError::new(
+                        json.get("code").and_then(|c| c.as_str()).unwrap_or("AG_GW_ERR"),
+                        json.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+                        json.get("retriable").and_then(|r| r.as_bool()).unwrap_or(false),
+                        false,
+                    ));
+                }
+                _ => {} // done / tool_calls（辅助不用工具）→ 收尾
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::InvokeEvent::*;

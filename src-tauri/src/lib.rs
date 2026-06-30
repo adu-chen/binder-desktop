@@ -952,6 +952,14 @@ fn emit_ag02(app: &tauri::AppHandle, turn_id: &str, st: ag::tool::ToolLoopState)
     );
 }
 
+/// 广播 SM-AG-03 内联辅助/自动补全机转移（assist_id 为实例，A-CORE-X-L-04 Task 2-AG3）。
+fn emit_ag03(app: &tauri::AppHandle, assist_id: &str, st: ag::assist::AssistState) {
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new("SM-AG-03", assist_id, &format!("{st:?}"), ag::assist::is_terminal(st)),
+    );
+}
+
 /// 广播回合完成（Streaming→HandingOff→Completed；无修改建议交接时直接收尾）。
 fn emit_ag01_complete(app: &tauri::AppHandle, turn_id: &str) {
     use ag::turn::{transition, TurnEvent, TurnState};
@@ -1390,6 +1398,82 @@ async fn ag_start_turn(
     Ok(())
 }
 
+/// 辅助产出（A-AG-I-P-01 `ag.request_assist`）：候选或空。
+#[derive(serde::Serialize)]
+struct AssistResult {
+    /// 候选文本；门禁不可用 / 失败 / 空产出 → None（前端静默不提供，不打断编辑）。
+    candidate: Option<String>,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001
+ * type:     EFFECT
+ * chain:    AG-ASSIST
+ * rules:    BR-AG-STATE-003, BR-AG-VERIFY-001
+ * boundary: in=AssistRequest | out=AssistCandidate(gateGatedSilentOnDenyOrFailNeverInterruptsEditing)
+ */
+/// 命令 `ag_request_assist`（A-AG-I-P-01 request_assist · SM-AG-03 · 独立 async，不走 dispatch 信封）：
+/// 前端经 SM-AG-03 节流（Idle→Throttling）后调本命令承接 throttlePass 之后。**门禁前置**（BR-AG-VERIFY-001）：
+/// 门禁不可用 → ThrottlePass{false}→Idle，静默返回空候选（不报错、不打断编辑）；可用 → Requesting → 经网关
+/// 单次产出 → CandidateOk→Presenting（回候选）/ RequestFail→Idle（静默）。采纳=用户编辑（前端经 ED，非本命令）。
+/// 节流参数/成本策略延实现期标定（AG-03，A-AG-M-S-01 §4）。
+#[tauri::command]
+async fn ag_request_assist(
+    assist_id: String,
+    kind: String,                // "inline"（⌘K 改写）/ "autocomplete"（⌘J 续写）
+    instruction: Option<String>, // inline：改写指令
+    selection: Option<String>,   // inline：选区原文
+    prefix: Option<String>,      // autocomplete：光标前文本
+    provider: Option<String>,
+    model: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<AssistResult, IpcError> {
+    use ag::assist::{transition, AssistEvent, AssistState};
+
+    // 门禁前置（BR-AG-VERIFY-001 / X-SEQ-001）：dev 桩=Passed；真实由服务端裁决（无订阅/断网→不可用）。
+    let gate_ok = ag::turn::ensure_gate_passed(ag::turn::GateState::Passed).is_ok();
+    // 前端已 debounce 至 Throttling；本命令承接 throttlePass{gate_available}。
+    let after_throttle = transition(AssistState::Throttling, AssistEvent::ThrottlePass { gate_available: gate_ok })
+        .unwrap_or(AssistState::Idle);
+    emit_ag03(&app, &assist_id, after_throttle);
+    if after_throttle != AssistState::Requesting {
+        // 门禁不可用：静默不提供（SM-AG-03 ThrottlePass{false}→Idle）。
+        return Ok(AssistResult { candidate: None });
+    }
+
+    // 组装轻量辅助消息（无对话历史；SYSTEM_PROMPT_ASSIST）。
+    let provider = provider.unwrap_or_else(|| "deepseek".to_string());
+    let model = model.unwrap_or_else(|| default_model(&provider));
+    let user = if kind == "inline" {
+        format!(
+            "【改写指令】{}\n【待改写原文】{}",
+            instruction.unwrap_or_default(),
+            selection.unwrap_or_default()
+        )
+    } else {
+        format!("【续写以下文本，只给续写部分】\n{}", prefix.unwrap_or_default())
+    };
+    let messages = serde_json::json!([
+        { "role": "system", "content": ag::prompts::SYSTEM_PROMPT_ASSIST },
+        { "role": "user", "content": user },
+    ]);
+
+    match ent::gateway::assist_complete(&provider, &model, &messages).await {
+        Ok(text) if !text.trim().is_empty() => {
+            let st = transition(AssistState::Requesting, AssistEvent::CandidateOk).expect("Requesting+CandidateOk→Presenting");
+            emit_ag03(&app, &assist_id, st);
+            Ok(AssistResult { candidate: Some(text) })
+        }
+        _ => {
+            // 失败 / 空产出：静默回 Idle（不弹错误、不打断编辑，SM-AG-03 RequestFail）。
+            let st = transition(AssistState::Requesting, AssistEvent::RequestFail).expect("Requesting+RequestFail→Idle");
+            emit_ag03(&app, &assist_id, st);
+            Ok(AssistResult { candidate: None })
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1401,7 +1485,7 @@ pub fn run() {
             app.manage(AppState { db: Mutex::new(conn), registry: build_registry() });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch, ag_start_turn, byok_upload])
+        .invoke_handler(tauri::generate_handler![dispatch, ag_start_turn, byok_upload, ag_request_assist])
         .run(tauri::generate_context!())
         .expect("error while running Binder");
 }

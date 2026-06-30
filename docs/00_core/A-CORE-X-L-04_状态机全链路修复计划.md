@@ -37,7 +37,7 @@
 | SM-DE-01 | `src-tauri/src/de/mod.rs` | ✅ 对齐 | ✅ 对齐 | ❌ 仅测试 | 装饰：handler 直写 status |
 | SM-AG-01 | `src-tauri/src/ag/turn.rs` | ✅ 对齐 | ✅ 对齐 | ✅ 已接线 | lib.rs 驱动 transition |
 | SM-AG-02 | `src-tauri/src/ag/tool.rs` | ✅ 对齐 | ✅ 对齐 | ❌ 仅测试 | 装饰 |
-| SM-AG-03 | `src-tauri/src/ag/assist.rs` | ✅ 对齐 | ✅ 对齐 | ❌ 仅测试 | 装饰 |
+| SM-AG-03 | `src-tauri/src/ag/assist.rs` | ✅ 对齐 | ✅ 对齐 | ✅ 已接线 | `ag_request_assist` 门禁前置+网关+广播 |
 | SM-WS-01 | `src-tauri/src/workspace/save.rs` | ✅ 对齐 | ✅ 对齐 | ❌ 仅测试 | 装饰 |
 | SM-WS-02 | `src-tauri/src/workspace/diff_apply.rs` | ✅ 对齐 | ✅ 对齐 | ❌ 仅测试 | 装饰：apply_diff 直写 |
 | SM-WS-03 | `src-tauri/src/workspace/timeline.rs` | ✅ 对齐 | ✅ 对齐 | ❌ 仅测试 | 装饰 |
@@ -701,7 +701,7 @@ Task 2-N（贯穿 Phase 2，随各模块接入）
 | SM-CBT-01 构建 | 无 `cbt.*` | 无任何调用 | 无 | 纯功能桩，未接线 |
 | SM-TPL-01 工作流 | 无 `tpl.*` | 无任何调用 | 无 | 纯功能桩，未接线 |
 | SM-AST-01 记忆写入 | 无 `ast.*` 写命令 | `ast::supply`（读/注入）在 `ag_start_turn` 已调用；**写入链 `capture::transition` / `memory_link::on_turn_terminal` 未被任何运行时调用** | 无写入入口 | 写入功能桩（读已接，且读属 A-AST-M-S-01 §4 无状态机豁免） |
-| SM-AG-03 内联辅助 | 无 assist 命令 | 无 | `assistStore` + Editor ⌘K/⌘J UI 存在，但生成是**前端本地桩**（Editor.tsx：「实现期经门禁→网关产出」） | 功能桩，前端 UI 占位、后端未接线 |
+| SM-AG-03 内联辅助 | ✅ `ag_request_assist`（2026-06-27 接通） | 命令经门禁前置→网关→SM-AG-03 转移/广播 | Editor ⌘K/⌘J 去桩，调 `requestAssist` | **已接线**（节流参数仍延实现期标定，A-AG-M-S-01 §4） |
 
 **判定**：这 4 台的状态机是**正确的「实现前先建机」状态**（X-SEQ-003：状态化核心链须先建状态机再进入实现）。
 它们不是装饰性绕过——而是对应功能（CBT 构建 / TPL 工作流 / AST 记忆写入 / AG-03 辅助生成）**尚未实现运行时**。
@@ -719,8 +719,9 @@ Task 2-N（贯穿 Phase 2，随各模块接入）
 - G5 集成验证（跨模块联调，属 A-CORE-X-L-02 P3/G5）
 - TypeScript store 以外的 UI 组件层面的 state.matches() 等价改造
   （在 store 降级完成后，UI 层已可直接读 store 字段，不需要等价 XState API）
-- **未接线功能的状态机集成**（SM-CBT-01 / SM-TPL-01 / SM-AST-01 写入 / SM-AG-03）：见 §12，
-  待对应功能落地命令入口后，由各功能开发计划按本计划 §5 模板集成（X-SEQ-003 强制经状态机）
+- **未接线功能的状态机集成**（SM-CBT-01 / SM-TPL-01 / SM-AST-01 写入）：见 §12，
+  待对应功能落地命令入口后，由各功能开发计划按本计划 §5 模板集成（X-SEQ-003 强制经状态机）。
+  （SM-AG-03 已于 2026-06-27 接通，见 §12）
 
 ---
 
@@ -735,6 +736,7 @@ Task 2-N（贯穿 Phase 2，随各模块接入）
 | 2026-06-27 | v1.4 | **SM-DE-01 端到端纵切落地（Task 2-B + 3-A + 2-N 基础层）**：Rust 侧 `route_accept_diff/route_reject_diff` 经 `de::transition` 守护（已终态拒绝再裁决，回 `DE_ILLEGAL_TRANSITION`）+ `diff_apply::current_status`/`de::state_from_status` 读当前态 + `sm_events::emit_sm_state` 广播 `sm:SM-DE-01:state_changed`；新建 `src-tauri/src/sm_events.rs`（统一载荷 + 广播助手）。前端新建 `src/types/smEvents.ts` + `src/services/smListeners.ts`；`deStore` 删 `setDiffState`、加 `applyBackendState`（广播投影，权威态唯一入口）/`setLocalView`（过渡呈现）/`attachMeta`（元数据）；`deService` 接受/拒绝不再乐观置终态（改由广播驱动）；`Workbench` 挂载启停监听。验证：cargo 143 测试通过、vitest 65 通过、tsc 干净、governance:audit 无新增 finding（既有 failed 为预存）。为其余 10 台机的集成模板 |
 | 2026-06-27 | v1.11 | **设计/规则同步缺口收口（人类指示：确认补齐）**——自审发现广播契约此前仅存于本 L3 计划、设计层 SSOT 缺位、emit 层无 @GOV 锚点。补齐四步：①A-SYS-I-P-02 §5.1 新增「状态机投影广播契约」+ 注册规则 **BR-SYS-STATE-003**（承接 X-FORBID-007）+ REQ_MAP(REQ-SYS-001) + §9 验收；②`sm_events::emit_sm_state` 加 @GOV 追溯 BR-SYS-STATE-003（EFFECT/IPC-CALL）；③A-SYS-M-S-01 §6 与本计划 §5.1 加设计 SSOT 交叉引用；④`governance:generate` 注册（@GOV 块 117、BR-SYS-STATE-003 进规则注册表 + @GOV 索引）+ `sm_events` 单测 `// covers: BR-SYS-STATE-003`。复核：cargo 148（140 lib + 4 + 4）、vitest 69、tsc 干净、audit 仅余 2 项预存基线失败（8 条 AG/ED/PRV/SYS 未覆盖规则 + @GOV 结构检查，均非本次），BR-SYS-STATE-003 已不在未覆盖列表。**实现↔设计↔规则现已同步** |
 | 2026-06-27 | v1.10 | **广播原语实跑验证（人类指示：启用并自行验证）**——`sm_events::emit_sm_state` 泛型化（`R: Runtime`，运行期 Wry / 测试期 MockRuntime，路由处理器签名不变）；新增 `Cargo.toml` dev-dep `tauri features=["test"]` + `tests/sm_broadcast.rs`：用 Tauri MockRuntime **实跑** emit→listen 回路，验证事件名 `sm:{id}:state_changed`、载荷 JSON 字段（machine_id/instance_id/state/terminal、segment 省略/携带）与前端 smEvents.ts 对齐（DE-01/WS-01/AG-01/SYS-01 段 4 例）。整体验证：cargo 147（139 lib + 4 core_chain + 4 sm_broadcast）、vitest 69、tsc 干净、`npm run build` 前端生产构建通过、audit 0 新增 finding。**验证边界（诚实）**：emit→listen 广播原语已实跑；transition/守护/投影逻辑单测覆盖；**未做**的是「真实 GUI 窗口里点击→后端→广播→JS listen→React 重渲染」的全 e2e（需人工跑 `npm run tauri dev` 或 computer-use 驱动原生窗口） |
+| 2026-06-27 | v1.12 | **SM-AG-03 接通（人类指示：接通 SM-AG-03，其他后延）**——实现到既有设计契约 A-AG-I-P-01 `ag.request_assist`（无设计缺口，impl 追 design）。新增独立 async 命令 `ag_request_assist`（门禁前置 BR-AG-VERIFY-001 → `ent::gateway::assist_complete` 单次网关产出 → SM-AG-03 ThrottlePass/Requesting/CandidateOk/RequestFail 转移 + 广播 `sm:SM-AG-03`）+ @GOV（BR-AG-STATE-003/VERIFY-001）；`ent/gateway.rs` 加 `assist_complete`（非流式累积）。前端 `agService.requestAssist` + Editor ⌘K/⌘J 去桩（删 AUTOCOMPLETE_STUB / generateInline 桩）、assistStore `setSuggestions`、AutocompleteOverlay 生成中态。门禁不可用/失败静默不提供（不打断编辑）。节流参数仍延实现期（A-AG-M-S-01 §4）。验证：cargo 148 / vitest 73 / tsc 干净 / audit 无新增 finding。**至此 9/12 接线、3 台（CBT/TPL/AST 写入）待功能** |
 | 2026-06-27 | v1.9 | **剩余 4 台只读调研（人类指示：继续调研）**——经命令注册表 + 跨模块调用 + 前端调用核查，确认 SM-CBT-01/SM-TPL-01/SM-AST-01(写入)/SM-AG-03 均为**功能桩**（无命令入口、底层功能未接线；AST 仅读/注入已接且属无状态机豁免；AG-03 前端 UI 为本地桩）。新增 §12 调研结论：判定为「实现前先建机」正确状态（X-SEQ-003），非装饰性绕过；标注「待功能接线后集成」，现在集成将给不存在的运行时加装饰（违反范围纪律）。§11 补充对应不在范围条目。至此 12 台：8 台已集成（核心链全闭合）、4 台待功能接线 |
 | 2026-06-27 | v1.8 | **三台有运行时路径的机器集成（人类决策：继续推进有路径的三台）**——SM-WS-03 时间轴还原：`route_restore_node` 经 `timeline::transition`（Previewing→ConfirmRestore→Restoring→RestoreOk/Fail）+ 广播 `sm:SM-WS-03`，`timeline` 加 `is_terminal`。SM-DOC-01 docx 开/存：`route_open_for_edit`（Idle→OpenConverting→ConvertOk/Fail）、`route_save_from_edit`（Ready→SaveConverting→SaveConvertOk/Fail，内嵌 SM-WS-01 落盘，DOC↔WS 跨模块转移）+ 广播 `sm:SM-DOC-01`。SM-AG-02 工具循环：`ag_start_turn` 循环顶/分支广播 `sm:SM-AG-02`（ModelStreaming/ToolValidating/ToolExecuting/ResultInjecting/LoopCompleted/LoopAborted）。**三台均为后端集成 + 广播**：前端已分别经 await-reload（WS-03/DOC-01）/ Channel（AG-02 工具卡）/ 本地组件 nav 投影，无 X-FORBID-007 并行态违规，故不新增前端 store/listener（广播为标准投影通道 + 观测，供未来状态 UI 消费）。验证：cargo 143、vitest 69、tsc 干净、audit 无新增 finding |
 | 2026-06-27 | v1.7 | **SM-AG-01 回合机广播集成落地（Task 2-E + 3-B 部分）**：人类决策（2026-06-27）AG 在已有 Channel 投影基础上加 `sm:` 广播 + sending 由其驱动。Rust：`ag_start_turn` 加 `app` 参数，每步转移广播 `sm:SM-AG-01:state_changed`（Assembling/AwaitingGate/Streaming）+ 完成/错误终态（`emit_ag01`/`emit_ag01_complete`：Streaming→HandingOff→Completed；流式错误→TurnError）。前端：`agStore` 加 `applyTurnState`（活动态 Assembling/AwaitingGate/Streaming/HandingOff→sending=true，终态/TurnError/Idle→false）+ `RustTurnState`；`smEvents` 加 `SmAg01Payload`、`smListeners` 加监听；`agService` 保留乐观 `setSending(true)` 防双发，`finish()` 去 `setSending(false)`（改广播释放），命令级 Err catch 兜底释放。messages/toolCalls 仍由 Channel 投影（互不替代）。验证：cargo 143、vitest 69（新增 agStore.test.ts）、tsc 干净、audit 无新增 finding |

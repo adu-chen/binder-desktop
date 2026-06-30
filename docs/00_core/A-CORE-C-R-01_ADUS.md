@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-06-29T16:12:00.496Z -->
+<!-- 最后生成时间：2026-06-29T16:57:07.887Z -->
 
 ### 模块编码表
 
@@ -227,10 +227,11 @@
 
 #### AG-ASSIST
 
-| codes                               | type | rules                                              | 文件                           | 行号  |
-| ----------------------------------- | ---- | -------------------------------------------------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 185 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-001 | RB   | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39  |
+| codes                                   | type   | rules                                              | 文件                           | 行号   |
+| --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 189  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1409 |
 
 #### AG-TOOL
 
@@ -245,7 +246,9 @@
 | --------------------------------------- | ------ | ------------------------------------------------------ | ------------------------------- | --- |
 | BR-AG-DATA-001-DATA-AG-AG-TURN-001      | DATA   | BR-AG-DATA-001                                         | src-tauri/src/ag/context.rs     | 45  |
 | BR-AG-DATA-002-DATA-AG-AG-TURN-002      | DATA   | BR-AG-DATA-002                                         | src-tauri/src/ag/context.rs     | 99  |
-| BR-AG-DATA-003-GUARD-AG-AG-TURN-001     | GUARD  | BR-AG-DATA-003                                         | src-tauri/src/ag/context.rs     | 214 |
+| BR-AG-DATA-005-DATA-AG-AG-TURN-004      | DATA   | BR-AG-DATA-005                                         | src-tauri/src/ag/context.rs     | 144 |
+| BR-AG-DATA-004-DATA-AG-AG-TURN-003      | DATA   | BR-AG-DATA-004 term_ref: TERM-AG-005                   | src-tauri/src/ag/context.rs     | 179 |
+| BR-AG-DATA-003-GUARD-AG-AG-TURN-001     | GUARD  | BR-AG-DATA-003                                         | src-tauri/src/ag/context.rs     | 218 |
 | BR-AG-STATE-004-GUARD-AG-AG-TURN-001    | GUARD  | BR-AG-STATE-004                                        | src-tauri/src/ag/memory_link.rs | 22  |
 | BR-AG-STATE-004-EFFECT-AG-AG-TURN-002   | EFFECT | BR-AG-STATE-004                                        | src-tauri/src/ag/memory_link.rs | 49  |
 | BR-AG-STATE-001-RB-AG-AG-TURN-001       | RB     | BR-AG-STATE-001                                        | src-tauri/src/ag/turn.rs        | 71  |
@@ -366,6 +369,8 @@
 | codes                              | type | rules                                | 文件                                               | 行号  |
 | ---------------------------------- | ---- | ------------------------------------ | ------------------------------------------------ | --- |
 | BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | BR-ED-DATA-001 term_ref: TERM-ED-001 | src/components/ed/extensions/BlockIdExtension.ts | 45  |
+| BR-ED-DATA-002-RB-ED-ED-EDIT-004   | RB   | BR-ED-DATA-002                       | src/services/edService.ts                        | 16  |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB   | BR-ED-STATE-003, BR-WS-OBS-001       | src/services/edService.ts                        | 98  |
 | BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 120 |
 
 #### IPC-CALL
@@ -389,10 +394,11 @@
 
 #### PRV-VIEW
 
-| codes                               | type | rules           | 文件                       | 行号 |
-| ----------------------------------- | ---- | --------------- | ------------------------ | -- |
-| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001 | IO   | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs | 23 |
-| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002 | IO   | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs | 48 |
+| codes                                  | type  | rules           | 文件                              | 行号 |
+| -------------------------------------- | ----- | --------------- | ------------------------------- | -- |
+| BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003 | GUARD | BR-PRV-DATA-001 | src/components/prv/PrvPanel.tsx | 28 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001    | IO    | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs        | 23 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002    | IO    | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs        | 48 |
 
 #### REF-INJECT
 
@@ -488,7 +494,19 @@
 
 | codes                               | type  | chain   | 文件                          | 行号  |
 | ----------------------------------- | ----- | ------- | --------------------------- | --- |
-| BR-AG-DATA-003-GUARD-AG-AG-TURN-001 | GUARD | AG-TURN | src-tauri/src/ag/context.rs | 214 |
+| BR-AG-DATA-003-GUARD-AG-AG-TURN-001 | GUARD | AG-TURN | src-tauri/src/ag/context.rs | 218 |
+
+#### BR-AG-DATA-004 term_ref: TERM-AG-005
+
+| codes                              | type | chain   | 文件                          | 行号  |
+| ---------------------------------- | ---- | ------- | --------------------------- | --- |
+| BR-AG-DATA-004-DATA-AG-AG-TURN-003 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 179 |
+
+#### BR-AG-DATA-005
+
+| codes                              | type | chain   | 文件                          | 行号  |
+| ---------------------------------- | ---- | ------- | --------------------------- | --- |
+| BR-AG-DATA-005-DATA-AG-AG-TURN-004 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 144 |
 
 #### BR-AG-PERSIST-001
 
@@ -517,15 +535,16 @@
 
 #### BR-AG-STATE-003
 
-| codes                               | type | chain     | 文件                         | 行号 |
-| ----------------------------------- | ---- | --------- | -------------------------- | -- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-001 | RB   | AG-ASSIST | src-tauri/src/ag/assist.rs | 39 |
+| codes                                   | type   | chain     | 文件                         | 行号   |
+| --------------------------------------- | ------ | --------- | -------------------------- | ---- |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 39   |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1409 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 185 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 189 |
 
 #### BR-AG-STATE-004
 
@@ -536,9 +555,10 @@
 
 #### BR-AG-VERIFY-001
 
-| codes                                 | type  | chain   | 文件                       | 行号  |
-| ------------------------------------- | ----- | ------- | ------------------------ | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001 | GUARD | AG-TURN | src-tauri/src/ag/turn.rs | 105 |
+| codes                                   | type   | chain     | 文件                       | 行号   |
+| --------------------------------------- | ------ | --------- | ------------------------ | ---- |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 105  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1409 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-001
 
@@ -681,6 +701,12 @@
 | ---------------------------------- | ---- | ------- | ------------------------------------------------ | -- |
 | BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | ED-EDIT | src/components/ed/extensions/BlockIdExtension.ts | 45 |
 
+#### BR-ED-DATA-002
+
+| codes                            | type | chain   | 文件                        | 行号 |
+| -------------------------------- | ---- | ------- | ------------------------- | -- |
+| BR-ED-DATA-002-RB-ED-ED-EDIT-004 | RB   | ED-EDIT | src/services/edService.ts | 16 |
+
 #### BR-ED-STATE-001
 
 | codes                             | type | chain   | 文件                   | 行号  |
@@ -692,6 +718,12 @@
 | codes                              | type | chain    | 文件                                                      | 行号 |
 | ---------------------------------- | ---- | -------- | ------------------------------------------------------- | -- |
 | BR-ED-STATE-002-RB-ED-ED-DECOR-001 | RB   | ED-DECOR | src/components/ed/extensions/DiffDecorationExtension.ts | 67 |
+
+#### BR-ED-STATE-003
+
+| codes                             | type | chain   | 文件                        | 行号 |
+| --------------------------------- | ---- | ------- | ------------------------- | -- |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003 | RB   | ED-EDIT | src/services/edService.ts | 98 |
 
 #### BR-ENT-DATA-001
 
@@ -730,6 +762,12 @@
 | codes                                   | type  | chain       | 文件                           | 行号 |
 | --------------------------------------- | ----- | ----------- | ---------------------------- | -- |
 | BR-KB-DATA-002-QUERY-KB-KB-RETRIEVE-001 | QUERY | KB-RETRIEVE | src-tauri/src/kb/retrieve.rs | 12 |
+
+#### BR-PRV-DATA-001
+
+| codes                                  | type  | chain    | 文件                              | 行号 |
+| -------------------------------------- | ----- | -------- | ------------------------------- | -- |
+| BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003 | GUARD | PRV-VIEW | src/components/prv/PrvPanel.tsx | 28 |
 
 #### BR-PRV-DATA-002
 
@@ -865,6 +903,7 @@
 
 | codes                              | type  | chain   | 文件                              | 行号 |
 | ---------------------------------- | ----- | ------- | ------------------------------- | -- |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB    | ED-EDIT | src/services/edService.ts       | 98 |
 | BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 30 |
 | BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 76 |
 | BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 95 |
@@ -907,7 +946,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 185 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 189 |
 
 #### TERM-CLOUD-001
 

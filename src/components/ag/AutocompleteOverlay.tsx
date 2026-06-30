@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function AutocompleteOverlay({ onPick }: Props) {
-  const { kind, anchor, suggestions } = useAssistStore();
+  const { kind, anchor, suggestions, generating } = useAssistStore();
 
   useEffect(() => {
     if (kind !== "autocomplete") return;
@@ -36,6 +36,7 @@ export function AutocompleteOverlay({ onPick }: Props) {
   return (
     <div className="assist-ac" style={{ left: anchor.x, top: anchor.y }}>
       <div className="label assist-ac-head">⌘J 续写 · Tab 选第一条</div>
+      {generating && suggestions.length === 0 && <div className="assist-ac-item">生成中…</div>}
       {suggestions.map((s, i) => (
         <button key={i} className="assist-ac-item" onClick={() => onPick(s)}>
           <span className="assist-ac-num">{i + 1}</span>

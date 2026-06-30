@@ -6,6 +6,7 @@ import { edStore, useEdStore } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type GreenReviewState } from "../../store/deStore";
 import { assistStore } from "../../store/assistStore";
 import { saveDocument, saveDocxDocument, reloadDocument, pollExternalChange } from "../../services/edService";
+import { requestAssist } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 
@@ -16,8 +17,6 @@ import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
  * ⌘K InlineAssist / ⌘J Autocomplete 辅助入口（PI-FE-08）：均经 ED 受控接口编辑，不产 DiffCard。
  */
 const SEED_CONTENT = "开始写作…";
-
-const AUTOCOMPLETE_STUB = ["，山上有座庙。", "，云雾常年缭绕。", "，住着一位老者。"];
 
 /** 是否按 Markdown 处理（.md/.markdown）；其余按纯文本忠实往返。 */
 function isMarkdownPath(path: string | null): boolean {
@@ -106,15 +105,20 @@ export function Editor() {
           );
           return true;
         }
-        // ⌘J Autocomplete：光标处续写补全。
+        // ⌘J Autocomplete：光标处续写补全——经 ag_request_assist（门禁前置 + 网关，SM-AG-03）取候选。
         if (event.key === "j") {
           const coords = view.coordsAtPos(to);
           const rect = host.getBoundingClientRect();
           assistRange.current = { from: to, to };
-          assistStore.openAutocomplete(
-            { x: coords.left - rect.left, y: coords.bottom - rect.top },
-            AUTOCOMPLETE_STUB,
-          );
+          assistStore.openAutocomplete({ x: coords.left - rect.left, y: coords.bottom - rect.top }, []);
+          assistStore.setGenerating(true);
+          const prefix = view.state.doc.textBetween(Math.max(0, to - 400), to, " ");
+          void requestAssist({ kind: "autocomplete", prefix }).then((candidate) => {
+            // 仍停在本次自动补全（用户未切走）才填入；否则忽略（锚已变）。
+            if (assistStore.getSnapshot().kind !== "autocomplete") return;
+            if (candidate) assistStore.setSuggestions([candidate]);
+            else assistStore.close(); // 门禁不可用/失败 → 静默不提供（不打断编辑）
+          });
           return true;
         }
         return false;
@@ -192,7 +196,8 @@ export function Editor() {
    */
   /// AG-ASSIST 落地守则（BR-AG-STATE-003）：⌘K InlineAssist Apply 直接替换选区、⌘J Autocomplete 插入
   /// 光标处，二者均经 ED 受控编辑接口（X-FORBID-005 不绕过），**不产 DiffCard、不进入 SM-DE-01**——
-  /// 与 Chat Diff 链路（deStore）严格隔离。模型输出桩化，门禁拒绝时辅助静默不提供（SM-AG-03）。
+  /// 与 Chat Diff 链路（deStore）严格隔离。产出经 ag_request_assist（门禁前置 + 网关，SM-AG-03），
+  /// 门禁不可用/失败时静默不提供（不打断编辑）。
   const applyInline = (text: string) => {
     if (!editor) return;
     const { from, to } = assistRange.current;
@@ -206,13 +211,15 @@ export function Editor() {
     assistStore.close();
   };
 
-  // ⌘K 生成（桩）：实现期经门禁→网关产出；此处本地桩化预览。
+  // ⌘K 生成：经 ag_request_assist（门禁前置→网关单次产出，SM-AG-03）；失败/门禁不可用静默关闭（不打断编辑）。
   const generateInline = (instruction: string) => {
     assistStore.setGenerating(true);
     const sel = assistStore.getSnapshot().selectionText;
-    setTimeout(() => {
-      assistStore.setInlinePreview(`（桩）按「${instruction}」改写：${sel}`);
-    }, 220);
+    void requestAssist({ kind: "inline", instruction, selection: sel }).then((candidate) => {
+      if (assistStore.getSnapshot().kind !== "inline") return; // 用户已切走，忽略
+      if (candidate) assistStore.setInlinePreview(candidate);
+      else assistStore.close();
+    });
   };
 
   // 未打开真实文档 → 诚实空态（不显示可编辑的假 untitled.md）。
