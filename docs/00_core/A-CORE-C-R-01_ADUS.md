@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-06-29T16:57:07.887Z -->
+<!-- 最后生成时间：2026-06-30T23:38:39.859Z -->
 
 ### 模块编码表
 
@@ -229,7 +229,7 @@
 
 | codes                                   | type   | rules                                              | 文件                           | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 189  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 192  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
 | BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1409 |
 
@@ -347,8 +347,8 @@
 | BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-002 | GUARD | BR-DOC-DATA-003  | src-tauri/src/doc/block_backfill.rs      | 63  |
 | BR-DOC-STATE-001-RB-DOC-DOC-CONVERT-001   | RB    | BR-DOC-STATE-001 | src-tauri/src/doc/convert.rs             | 56  |
 | BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | BR-DOC-DATA-001  | src-tauri/src/doc/convert.rs             | 89  |
-| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 63  |
-| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 110 |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 65  |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 112 |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-003    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 97  |
 | BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-004  | DATA  | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 158 |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 294 |
@@ -544,7 +544,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 189 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 192 |
 
 #### BR-AG-STATE-004
 
@@ -677,8 +677,8 @@
 
 | codes                                    | type | chain       | 文件                                | 行号  |
 | ---------------------------------------- | ---- | ----------- | --------------------------------- | --- |
-| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003   | IO   | DOC-CONVERT | src-tauri/src/doc/edit_chain.rs   | 63  |
-| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004   | IO   | DOC-CONVERT | src-tauri/src/doc/edit_chain.rs   | 110 |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003   | IO   | DOC-CONVERT | src-tauri/src/doc/edit_chain.rs   | 65  |
+| BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004   | IO   | DOC-CONVERT | src-tauri/src/doc/edit_chain.rs   | 112 |
 | BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-001 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 30  |
 | BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-002 | DATA | DOC-CONVERT | src-tauri/src/doc/style_subset.rs | 52  |
 
@@ -946,7 +946,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 189 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 192 |
 
 #### TERM-CLOUD-001
 
