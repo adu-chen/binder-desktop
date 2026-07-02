@@ -434,6 +434,13 @@
 - **闭合后剩余 audit failed 项均非前端可独立闭合**：BR-AG-DATA-004/005（AG 窗口）、BR-SYS-DATA-004（云端）、BR-ED-DATA-003（分页延后，待人类决策是否排 PI）。**前端自有可追溯缺口清零**。
 - **验收**：tsc + vitest 73（含并行窗口测试，全绿） + build 绿；audit referenced/covered 计数如期上升；scoped 门禁无自有文件越界。
 
+### PI-FE-31　编辑器核心优化批（分页 + 图文呈现 + 工具栏 + 三栏拖动布局 + 缩放）　✅ G4 已实现（2026-07-02，tsc + vitest 104 + cargo test 140 + build + scoped audit 绿）
+- **承接**：BR-ED-DATA-003（分页/图文呈现层纯化，解除 PI-FE-30 登记的分页延后——人类 2026-07-02 指令排期）；REQ-ED 编辑工具 + A-SYS-C-T-02 §4 布局（工具栏/拖动布局/缩放为视图层，无新增规则）。
+- **文件范围**：`ed/extensions/Pagination.ts(+test)`（分页缝 Decoration，@GOV BR-ED-DATA-003）、`docService.rewriteMediaSrc(+test)`（图文 asset 改写，@GOV BR-ED-DATA-003）、`src-tauri/lib.rs`（authorize_media_files + media_base）、`ed/EditorToolbar.tsx`（编辑工具全集 + 缩放显示）、`ed/zoom.ts(+test)`、`shell/Splitter.tsx` + `store/layoutStore.ts(+test)`（三栏可拖动自适应，localStorage 持久化）、`Editor.tsx`/`Workbench.tsx`/`extensions/index.ts`/`styles.css` 接线。
+- **实现要点**：分页 = 块边界 Decoration.widget 分页缝（纯呈现、不改模型、不产脏态、块级不切分），仅 docx 编辑默认开（人类决策 2026-07-02）；图文 = extract-media 目录逐文件 asset 授权（最小暴露同 prv.media_src）+ 相对 src 改写；缩放 50–200% CSS zoom + 分页测量按 computed zoom 归一化；布局 side/chat 像素宽 + center 1fr。
+- **A 类残留**：超整页单块独占溢出（块内不切分）；缩放×分页归一化依赖 WKWebView rect 含 zoom（真机确认）；docx 媒体来自后端临时工作目录（既有编辑链设计，治理归属建议后续在 DOC/ED 文档明确）；工具栏 prompt 式链接/图片插入（v1）。
+- **验收**：tsc 0 + vitest 104（+31：分页 8/图文 7/布局 8/缩放 8） + cargo test 140 + build 绿；audit 对 BR-ED-DATA-003 清零（2 @GOV + covers）；**视觉/交互真机验收未做**（登记，待 tauri dev）。
+
 ---
 
 ## §3 实施顺序
@@ -505,3 +512,4 @@ npm run governance:generate
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-06-22 | v1.0 | 初版：8 条前端 Plan Item（PI-FE-00～PI-FE-08），承接 IPC 桥接/DesignToken + 布局/Logo+Rail/欢迎页/文件树/TipTap/Chat 面板/Diff 状态机/三种 AI 辅助入口；对接 A-CORE-X-L-02 P2/P3；注册 TERM-SYS-001/TERM-DE-003/TERM-ED-003；A 类债务 10 项 |
+| 2026-07-02 | v1.1 | 追加登记 PI-FE-31 编辑器核心优化批（G-8，人类授权执行 A-CORE-X-R-03 §7）：分页 + 图文呈现（BR-ED-DATA-003 闭合，解除 PI-FE-30 分页延后）+ 工具栏/编辑工具 + 三栏可拖动布局 + 编辑区缩放（视图层）；验收 tsc/vitest 104/cargo 140/build/audit 绿，真机视觉验收登记待做 |

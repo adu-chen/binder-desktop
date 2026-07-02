@@ -197,10 +197,10 @@
 
 | 规则 | 实现状态 | 处置 |
 |---|---|---|
-| **BR-ED-DATA-003** 分页纯呈现 + 媒体经 WS | 分页**未实现**；媒体-via-WS 部分已实现 | 分页承接 §6 A 类「分页光标遮罩」Plan Item；**是否/何时排分页 PI 待人类决策**；在此之前 audit 对本规则 OWNER_MISSING/uncovered **属预期**（同 BR-SYS-DATA-004 口径） |
+| ~~**BR-ED-DATA-003** 分页纯呈现 + 媒体经 WS~~ | ~~分页未实现~~ → **已实现（2026-07-02，人类指令排期执行）**：分页呈现层（Pagination.ts，Decoration.widget 块边界分页缝，不改模型不产脏态）+ docx 图文呈现（extract-media → asset 协议逐文件授权 + rewriteMediaSrc） | **已闭合**：2 个 @GOV owner（`...RB-ED-ED-EDIT-005/006`）+ covers 测试（Pagination.test / docService.test），audit 对本规则清零 |
 
 **闭合后剩余全局 audit failed 项（均非前端可独立闭合）：** BR-AG-DATA-004/005（AG 窗口已补 owner、covers 待其补）、
-BR-SYS-DATA-004（云端，§5 C 类）、BR-ED-DATA-003（分页延后，本节登记）。**前端自有可追溯缺口已清零。**
+BR-SYS-DATA-004（云端，§5 C 类）。~~BR-ED-DATA-003~~ 已于 2026-07-02 实现闭合（见上表）。**前端自有可追溯缺口已清零。**
 
 ## 变更记录
 
@@ -210,3 +210,4 @@ BR-SYS-DATA-004（云端，§5 C 类）、BR-ED-DATA-003（分页延后，本节
 | 2026-06-12 | v1.1 | AG 4 项 B 类已补齐（人类授权，门禁例外闭合）：B-1 提示词组装架构（A-AG-M-T-01 §5.1 + BR-AG-DATA-002）/ B-2 记忆写入触发（§5.2 + BR-AG-STATE-004 + 总图 §5 转移登记）/ B-3 接管 AG 侧建模（SM-AG-01 takeover/fallbackIn/HandedOver + 总图 §5）/ B-4 跨文档产出边界（§3 + BR-AG-DATA-003，DE 协同校验落 PI-DE-01）；新增 3 规则已 generate 注册（60→63），AG 计划 §2bis 状态改「已补齐」；AG 全部 PI 的 G4 阻挡解除（B-5/B-6 留痕滞后仍登记未补） |
 | 2026-06-22 | v1.2 | 新增 §9 发布期阻断标记：BLOCK-REL-LO-001 内置 LibreOffice 预览链必须打包在应用内（不调用设备本地 LO）——阻断点 deploy 前置 + 打包路径核对 + 签名/公证，G6 打包不得绕过、不得静默降级到系统 LO；运行时与部署设施已就位，签名/公证 + CI 前置校验待 G6 落实 |
 | 2026-06-26 | v1.3 | 新增 §10 前端治理可追溯闭合（PI-FE-30）：为已实现的 BR-ED-STATE-003/BR-ED-DATA-002/BR-PRV-DATA-001 补 @GOV owner、为该 3 项 + BR-PRV-DATA-002 补 covers（referenced 58→64、covered 57→62）；BR-ED-DATA-003 分页未实现，如实登记延后（承 §6 A 类分页 Plan Item，待人类决策），audit OWNER_MISSING/uncovered 属预期 |
+| 2026-07-02 | v1.4 | §10 回填（G-7，人类授权执行 A-CORE-X-R-03 §7 补全计划）：BR-ED-DATA-003 已实现闭合——分页呈现层（块边界分页缝 Decoration，纯呈现不产脏态）+ docx 图文呈现（asset 协议逐文件授权 + 相对 src 改写），2 @GOV owner + covers，audit 清零；剩余 failed 项更新为 BR-AG-DATA-004/005 与 BR-SYS-DATA-004 |

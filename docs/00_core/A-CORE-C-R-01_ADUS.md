@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-06-30T23:38:39.859Z -->
+<!-- 最后生成时间：2026-07-02T16:20:42.164Z -->
 
 ### 模块编码表
 
@@ -229,9 +229,9 @@
 
 | codes                                   | type   | rules                                              | 文件                           | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 192  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 199  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1409 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1434 |
 
 #### AG-TOOL
 
@@ -255,7 +255,7 @@
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | BR-AG-VERIFY-001                                       | src-tauri/src/ag/turn.rs        | 105 |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001 | EFFECT | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 134 |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001  | QUERY  | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 159 |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 898 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 923 |
 
 #### AST-MEMORY
 
@@ -316,11 +316,11 @@
 | ---------------------------------------------- | ------ | ------------------ | ------------------------------------ | --- |
 | BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | BR-SYS-PERSIST-001 | src-tauri/src/db/mod.rs              | 139 |
 | BR-SYS-DATA-002-DATA-SYS-DATA-MIGRATE-001      | DATA   | BR-SYS-DATA-002    | src-tauri/src/types/mod.rs           | 9   |
-| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 38  |
-| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 75  |
-| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-003   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 100 |
-| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-001    | QUERY  | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 117 |
-| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-002    | QUERY  | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 141 |
+| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 34  |
+| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 71  |
+| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-003   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 96  |
+| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-001    | QUERY  | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 113 |
+| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-002    | QUERY  | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 137 |
 
 #### DE-DIFF
 
@@ -368,7 +368,9 @@
 
 | codes                              | type | rules                                | 文件                                               | 行号  |
 | ---------------------------------- | ---- | ------------------------------------ | ------------------------------------------------ | --- |
-| BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | BR-ED-DATA-001 term_ref: TERM-ED-001 | src/components/ed/extensions/BlockIdExtension.ts | 45  |
+| BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | BR-ED-DATA-001 term_ref: TERM-ED-001 | src/components/ed/extensions/BlockIdExtension.ts | 46  |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005   | RB   | BR-ED-DATA-003                       | src/components/ed/extensions/Pagination.ts       | 151 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-006   | RB   | BR-ED-DATA-003                       | src/services/docService.ts                       | 35  |
 | BR-ED-DATA-002-RB-ED-ED-EDIT-004   | RB   | BR-ED-DATA-002                       | src/services/edService.ts                        | 16  |
 | BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB   | BR-ED-STATE-003, BR-WS-OBS-001       | src/services/edService.ts                        | 98  |
 | BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 120 |
@@ -439,16 +441,16 @@
 | BR-WS-DATA-001-QUERY-WS-WS-FS-002  | QUERY  | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/listing.rs | 35  |
 | BR-WS-DATA-001-QUERY-WS-WS-FS-005  | QUERY  | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/listing.rs | 141 |
 | BR-WS-DATA-001-GUARD-WS-WS-FS-001  | GUARD  | BR-WS-DATA-001                       | src-tauri/src/workspace/mod.rs     | 40  |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY  | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 30  |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY  | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 76  |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY  | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 31  |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY  | BR-WS-OBS-001                        | src-tauri/src/workspace/save.rs    | 77  |
 
 #### WS-SAVE
 
 | codes                                   | type   | rules             | 文件                              | 行号  |
 | --------------------------------------- | ------ | ----------------- | ------------------------------- | --- |
-| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001      | GUARD  | BR-WS-OBS-001     | src-tauri/src/workspace/save.rs | 95  |
-| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 128 |
-| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 191 |
+| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001      | GUARD  | BR-WS-OBS-001     | src-tauri/src/workspace/save.rs | 96  |
+| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 129 |
+| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | BR-WS-PERSIST-001 | src-tauri/src/workspace/save.rs | 192 |
 
 #### WS-TIMELINE
 
@@ -538,13 +540,13 @@
 | codes                                   | type   | chain     | 文件                         | 行号   |
 | --------------------------------------- | ------ | --------- | -------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 39   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1409 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1434 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 192 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 199 |
 
 #### BR-AG-STATE-004
 
@@ -558,13 +560,13 @@
 | codes                                   | type   | chain     | 文件                       | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------ | ---- |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 105  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1409 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1434 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-001
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 898 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 923 |
 
 #### BR-AST-DATA-001
 
@@ -699,13 +701,20 @@
 
 | codes                              | type | chain   | 文件                                               | 行号 |
 | ---------------------------------- | ---- | ------- | ------------------------------------------------ | -- |
-| BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | ED-EDIT | src/components/ed/extensions/BlockIdExtension.ts | 45 |
+| BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | ED-EDIT | src/components/ed/extensions/BlockIdExtension.ts | 46 |
 
 #### BR-ED-DATA-002
 
 | codes                            | type | chain   | 文件                        | 行号 |
 | -------------------------------- | ---- | ------- | ------------------------- | -- |
 | BR-ED-DATA-002-RB-ED-ED-EDIT-004 | RB   | ED-EDIT | src/services/edService.ts | 16 |
+
+#### BR-ED-DATA-003
+
+| codes                            | type | chain   | 文件                                         | 行号  |
+| -------------------------------- | ---- | ------- | ------------------------------------------ | --- |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005 | RB   | ED-EDIT | src/components/ed/extensions/Pagination.ts | 151 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-006 | RB   | ED-EDIT | src/services/docService.ts                 | 35  |
 
 #### BR-ED-STATE-001
 
@@ -904,26 +913,26 @@
 | codes                              | type  | chain   | 文件                              | 行号 |
 | ---------------------------------- | ----- | ------- | ------------------------------- | -- |
 | BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB    | ED-EDIT | src/services/edService.ts       | 98 |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 30 |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 76 |
-| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 95 |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 31 |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 77 |
+| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 96 |
 
 #### BR-WS-PERSIST-001
 
 | codes                                   | type   | chain   | 文件                              | 行号  |
 | --------------------------------------- | ------ | ------- | ------------------------------- | --- |
-| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | WS-SAVE | src-tauri/src/workspace/save.rs | 128 |
-| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | WS-SAVE | src-tauri/src/workspace/save.rs | 191 |
+| BR-WS-PERSIST-001-EFFECT-WS-WS-SAVE-001 | EFFECT | WS-SAVE | src-tauri/src/workspace/save.rs | 129 |
+| BR-WS-PERSIST-001-RB-WS-WS-SAVE-002     | RB     | WS-SAVE | src-tauri/src/workspace/save.rs | 192 |
 
 #### BR-WS-PERSIST-002
 
 | codes                                        | type   | chain        | 文件                                   | 行号  |
 | -------------------------------------------- | ------ | ------------ | ------------------------------------ | --- |
-| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 38  |
-| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 75  |
-| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-003 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 100 |
-| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-001  | QUERY  | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 117 |
-| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-002  | QUERY  | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 141 |
+| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 34  |
+| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 71  |
+| BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-003 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 96  |
+| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-001  | QUERY  | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 113 |
+| BR-WS-PERSIST-002-QUERY-WS-DATA-MIGRATE-002  | QUERY  | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 137 |
 
 #### BR-WS-STATE-001
 
@@ -946,13 +955,13 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 192 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 199 |
 
 #### TERM-CLOUD-001
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 898 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 923 |
 
 #### TERM-DE-003
 

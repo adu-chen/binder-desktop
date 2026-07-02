@@ -393,7 +393,15 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
   延 WS G2 末或实现期人类确认（entry_kind=save 的准入），本文标默认值不臆断最终策略。
 - **多 workspace 控制态隔离细节**：workspaces 表支持多注册，但并发多活动/切换时的控制态隔离与缓存
   失效策略延实现期（承 WS L1 WS-04）。
-- 不透明 ID 生成算法（ULID/UUID/自增）、具体标量类型与序列化延实现期；本文以"不透明标识符"语义描述。
+- ~~不透明 ID 生成算法（ULID/UUID/自增）延实现期~~ → **已定档（G-4，2026-07-02，A-CORE-X-R-03 §7）**：
+  选型 = **前缀 + UUIDv4**（`ws_{uuid}` / `diff_{uuid}` / `pl_{uuid}`，Rust `uuid` crate v4；前端 blockId
+  归 ED，选型 `block_` + `crypto.randomUUID()`，见 A-ED-M-T-01 §11.1）。全局唯一、跨进程无碰撞、
+  无时序信息泄漏；具体标量类型与序列化仍延实现期。
+- **内容基线哈希已定档（G-5，2026-07-02，A-CORE-X-R-03 §7）**：选型 = **FNV-1a 64**（save.rs
+  `content_hash`）。定档理由：用途为**非对抗性**外部变更检测（磁盘 vs 加载基线比对）与时间轴快照
+  内容寻址去重（snapshot_ref=`blob_{hash}`），文档级碰撞概率 ~2⁻⁶⁴/对，个人工作台量级下可忽略；
+  零依赖、与 IPC 契约（baseline: u64）及既有持久化基线兼容，换算法将使已存基线失配。**边界声明**：
+  本哈希不承诺抗对抗碰撞，不得挪用为完整性/安全校验；若时间轴去重未来进入对抗场景须另立加密哈希。
 - workspace.db 完整列已在 §7 敲定（解除 SY-03 的列定义部分）；具体 DDL 与索引调优随实现期基准测试微调。
 
 ## §13 后续动作
@@ -411,3 +419,4 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版（WS G2 首件）：WS 规则 SSOT——workspace 模型与生命周期、文件 I/O 与跨文档边界、pending_diffs 持久化与 accepted 后落盘、文档级时间轴存储模型与还原、save 保存链、workspace.db 完整 schema（解除 SY-03 列定义）；注册链路 WS-FS/WS-SAVE/WS-DIFF-APPLY/WS-TIMELINE（均 P1）、规则 BR-WS-DATA-001/002·BR-WS-STATE-001/002·BR-WS-PERSIST-001/002、约束 X-FORBID-004（复用 X-SEQ-002/003·X-SHARED-001·X-INTER-001）、术语 TERM-WS-001 Workspace / TERM-WS-002 DocumentTimeline（解除 A-SYS-I-P-01 §6 延期）；REQ_MAP（REQ-WS-001~005）；债务盲区（快照存储形态/ save 节点准入 / 多 workspace 隔离延实现期） |
 | 2026-06-12 | v1.1 | Q2 缺口补遗（人类确认采纳）：§4 新增 BR-WS-OBS-001 外部变更感知与保存冲突保护——加载基线（内容哈希）、文件监视/惰性校验、外部变更事件供订阅方（ED/DE/REF）、save 前基线校验、冲突不静默覆盖须用户显式裁决、网络盘以保存前校验兜底；REQ_MAP 补 REQ-WS-002→BR-WS-OBS-001 |
+| 2026-07-02 | v1.2 | §12 选型定档回填（人类授权执行 A-CORE-X-R-03 §7 补全计划）：G-4 不透明 ID = 前缀 + UUIDv4（Rust uuid crate；blockId 归 ED §11.1）；G-5 内容基线哈希 = FNV-1a 64 定档（非对抗性变更检测/内容寻址去重的用途边界声明，与既有 IPC 契约及持久化基线兼容） |

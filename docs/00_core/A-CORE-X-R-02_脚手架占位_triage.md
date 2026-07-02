@@ -41,8 +41,15 @@ audit 负空间扫描（`scripts/audit_taskflow_governance.mjs` BLOCK_UNANNOTATE
 - G4 实现某符号的真实逻辑时，在其上方加 `/** @GOV rules: BR-... */` 块，并从 §2 删除该行。
 - §2 清空即本文可废止（状态改 X）。
 
+## §4 复核记录
+
+- **2026-07-02 复核（G-9，人类授权执行 A-CORE-X-R-03 §7）**：§2 全部 6 符号逐一核对——`Workbench`
+  已扩展三栏可拖动布局（PI-FE-31），但属**视图层导航态**（同 activePanel，无 BR-* 规则归属），
+  不满足 §3「补 @GOV 后移除」条件；其余 5 符号仍为外壳/投影骨架。**本轮无可清退项**，全部保留登记。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-22 | v1.0 | 初版：登记 6 个脚手架占位符号（App/Welcome/Workbench/useWorkspaceShell/WorkspaceRefView/openWorkspace）豁免 audit 负空间警告；@GOV 待 G4 各 PI 实现期落入，清退规则 §3 |
+| 2026-07-02 | v1.1 | 新增 §4 复核记录（G-9）：6 符号逐一核对，Workbench 布局扩展属视图层无规则归属，本轮无可清退项 |
