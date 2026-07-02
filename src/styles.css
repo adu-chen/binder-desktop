@@ -461,6 +461,21 @@ button.ed-sb-conflict {
 .ed-sb-conflict-actions { display: flex; gap: var(--sp-2); }
 .ed-sb-conflict-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
 
+/* 大纲面板（PI-ED-12）：标题树，按级别缩进；点击经 blockId 跳转。 */
+.outline { display: flex; flex-direction: column; gap: 1px; }
+.outline-empty { font-size: 12px; padding: var(--sp-2); }
+.outline-item {
+  display: block; width: 100%; text-align: left;
+  padding: 3px var(--sp-2); font-size: 12px; line-height: 1.5;
+  border: none; border-radius: var(--r-1); background: transparent; color: var(--ink-3);
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.outline-item:hover { background: var(--bg-overlay); color: var(--ink); }
+.outline-l1 { font-weight: 600; color: var(--ink-2); }
+.outline-l2 { padding-left: calc(var(--sp-2) + 12px); }
+.outline-l3 { padding-left: calc(var(--sp-2) + 24px); }
+.outline-l4 { padding-left: calc(var(--sp-2) + 36px); }
+
 /* 可交互图片（PI-ED-08）：选中显蓝框 + 右下调宽手柄；block 模式独占行居中。 */
 .ed-img-view { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
 .ed-img-view.ed-img-block { display: block; text-align: center; margin: var(--sp-3) 0; }

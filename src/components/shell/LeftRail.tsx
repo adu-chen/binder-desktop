@@ -9,7 +9,7 @@ import { BinderMark } from "../brand/BinderMark";
  * 各面板的业务内容（文件树/记忆/知识等）才经各自 Store 投影后端（后续 PI）。
  */
 
-export type RailPanelId = "files" | "memory" | "knowledge" | "templates" | "timeline";
+export type RailPanelId = "files" | "outline" | "memory" | "knowledge" | "templates" | "timeline";
 
 interface RailItem {
   id: RailPanelId;
@@ -20,6 +20,7 @@ interface RailItem {
 
 const RAIL_ITEMS: RailItem[] = [
   { id: "files", glyph: "WS", num: "I·A", label: "工作区" },
+  { id: "outline", glyph: "OL", num: "I·O", label: "大纲" },
   { id: "memory", glyph: "ME", num: "I·B", label: "记忆库" },
   { id: "knowledge", glyph: "KN", num: "I·C", label: "知识库" },
   { id: "templates", glyph: "TM", num: "I·D", label: "模板库" },

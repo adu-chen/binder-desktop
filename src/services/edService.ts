@@ -12,18 +12,26 @@ interface IpcLikeError {
   message?: string;
 }
 
+/** 是否 .html/.htm 独立文件（PI-ED-13 / REQ-ED-008：富文本编辑 + HTML 文本往返，不经 DOC）。 */
+export function isHtmlFile(relPath: string): boolean {
+  const ext = relPath.toLowerCase().split(".").pop() ?? "";
+  return ext === "html" || ext === "htm";
+}
+
 /**
  * @GOV
  * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-004
  * type:     RB
  * chain:    ED-EDIT
  * rules:    BR-ED-DATA-002
- * boundary: in=DocReadDtoOrDocxEditModel | out=edSessionContent(unifiedModelDocxToHtmlViaDocMdToText)
+ * boundary: in=DocReadDtoOrDocxEditModel | out=edSessionContent(unifiedModelDocxViaDocHtmlFileAsTextMdToText)
  */
-/// md/docx 统一编辑模型守则（BR-ED-DATA-002）：可编辑 docx（*.draft.docx）经 **DOC 编辑链**
-/// （doc.open_for_edit）转为统一编辑模型 HTML 后进编辑器（editFormat=html）；md/纯文本经 ws.read_doc
-/// 进文本模型（editFormat=text）。docx 二进制解析/生成全部归 DOC（docService 仅薄客户端），ED/前端
-/// 不含 docx 二进制处理路径——转换归 DOC、编辑归 ED 的分工在打开入口落地。
+/// md/docx/html 统一编辑模型守则（BR-ED-DATA-002，2026-07-03 扩展至三格式）：可编辑 docx
+/// （*.draft.docx）经 **DOC 编辑链**（doc.open_for_edit）转为统一编辑模型 HTML 后进编辑器
+/// （editFormat=html）；**.html 独立文件**为文本格式经 ws.read_doc 直接进富文本模型
+/// （editFormat=html_file，HTML 序列化往返，**不经 DOC 二进制管线**）；md/纯文本经 ws.read_doc
+/// 进文本模型（editFormat=text）。docx 二进制解析/生成全部归 DOC（docService 仅薄客户端），
+/// ED/前端不含 docx 二进制处理路径——转换归 DOC、编辑归 ED 的分工在打开入口落地。
 /** 打开文档：docx 经 DOC 编辑链（doc.open_for_edit → HTML），其余经 ws.read_doc（文本）→ 载入编辑器
  *  （内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
 export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
@@ -39,7 +47,8 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
       return;
     }
     const { content, baseline } = await readDoc(relPath);
-    edStore.loadDoc(relPath, content, baseline, jumpLine);
+    // .html 独立文件 → 富文本模型（html_file，HTML 往返）；其余 → 文本模型。
+    edStore.loadDoc(relPath, content, baseline, jumpLine, isHtmlFile(relPath) ? "html_file" : "text");
   } catch (e) {
     const err = e as IpcLikeError;
     // 打开失败：撤销本次新建的占位会话（不留假空文档）；既有会话保留（重载失败不丢草稿）。

@@ -37,6 +37,10 @@ export function mapSaveState(s: RustSaveState): Extract<TabState, "saving" | "sa
   }
 }
 
+/** 编辑模型格式：text=md/纯文本；html=docx 编辑链（doc.save_from_edit 回写）；
+ *  html_file=.html 独立文件（PI-ED-13 / REQ-ED-008：富文本编辑 + HTML 序列化，经 ws.save_doc 文本落盘）。 */
+export type EditFormat = "text" | "html" | "html_file";
+
 /** 单文档编辑会话（按路径独立保存，切换标签不互相覆盖）。 */
 export interface EditSession {
   /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。 */
@@ -44,8 +48,8 @@ export interface EditSession {
   /** 加载基线哈希（后端 ws.read_doc / doc.open_for_edit 回；供保存校验）。 */
   baseline: number | null;
   tabState: TabState;
-  /** 编辑模型格式：text=md/纯文本（ws.read_doc/save_doc）；html=docx 编辑链（doc.open_for_edit/save_from_edit）。 */
-  editFormat: "text" | "html";
+  /** 编辑模型格式（EditFormat）。 */
+  editFormat: EditFormat;
   /** docx 打开转换进行中（SM-DOC-01 OpenConverting 投影，PI-ED-07 #7 加载反馈）。 */
   converting?: boolean;
 }
@@ -67,7 +71,7 @@ interface EdState {
   /** 活动会话内容（编辑器据此 setContent）；null = 未打开真实文档。 */
   loadedContent: string | null;
   baseline: number | null;
-  editFormat: "text" | "html";
+  editFormat: EditFormat;
   /** 活动会话 docx 转换进行中（SM-DOC-01 投影）。 */
   converting: boolean;
 }
@@ -159,7 +163,7 @@ export const edStore = {
     content: string,
     baseline: number,
     jumpLine: number | null = null,
-    editFormat: "text" | "html" = "text",
+    editFormat: EditFormat = "text",
   ) {
     commit({
       sessions: {

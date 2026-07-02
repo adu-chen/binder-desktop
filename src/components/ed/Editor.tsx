@@ -3,11 +3,12 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
 import { applyGreenReview } from "./extensions/DiffDecorationExtension";
-import { edStore, useEdStore } from "../../store/edStore";
+import { edStore, useEdStore, type EditFormat } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type GreenReviewState } from "../../store/deStore";
 import { assistStore } from "../../store/assistStore";
 import { saveDocument, saveDocxDocument, reloadDocument, pollExternalChange } from "../../services/edService";
 import { registerEditor, getSelectionRef, SELECTION_REF_MIME } from "../../services/edLocate";
+import { outlineStore, extractOutline } from "../../store/outlineStore";
 import { requestAssist } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
@@ -54,13 +55,14 @@ function textToDoc(text: string) {
   };
 }
 
-/** 序列化编辑器当前内容为会话格式：html=docx 编辑链 HTML；md=getMarkdown；其余=纯文本忠实往返。 */
+/** 序列化编辑器当前内容为会话格式：html/html_file=HTML（docx 编辑链 / .html 文本往返，PI-ED-13）；
+ *  md=getMarkdown；其余=纯文本忠实往返。 */
 function serialize(
   editor: NonNullable<ReturnType<typeof useEditor>>,
-  fmt: "text" | "html",
+  fmt: EditFormat,
   path: string | null,
 ): string {
-  if (fmt === "html") return editor.getHTML();
+  if (fmt === "html" || fmt === "html_file") return editor.getHTML();
   if (isMarkdownPath(path)) {
     const md = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>).markdown;
     return md.getMarkdown();
@@ -163,6 +165,18 @@ export function Editor() {
     return () => registerEditor(null);
   }, [editor]);
 
+  // 大纲投影（PI-ED-12）：事务后提取标题树发布（store 内相等跳过，不引发无谓重渲染）。
+  useEffect(() => {
+    if (!editor) return;
+    const publish = () => outlineStore.set(extractOutline(editor.state.doc));
+    publish();
+    editor.on("transaction", publish);
+    return () => {
+      editor.off("transaction", publish);
+      outlineStore.reset();
+    };
+  }, [editor]);
+
   // 外部变更监视：打开真实文档时每 5s 轮询磁盘 vs 加载基线（external_change 逻辑契约，物理事件延 SY-02）。
   useEffect(() => {
     if (!openPath) return;
@@ -184,10 +198,11 @@ export function Editor() {
     }
     lastPathRef.current = openPath;
     if (!openPath || loadedContent === null) return;
-    if (editFormat === "html") {
-      // docx 编辑链：loadedContent 为 HTML 正文片段。用 generateJSON 按 HTML 解析为 ProseMirror JSON，
-      // **绕过 tiptap-markdown 对 setContent(string) 的 markdown 劫持**（否则 HTML 标签/CSS 被当文本/
-      // 代码块渲染）；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析为成熟富文本块。
+    if (editFormat === "html" || editFormat === "html_file") {
+      // docx 编辑链 / .html 独立文件（PI-ED-13）：loadedContent 为 HTML。用 generateJSON 按 HTML 解析为
+      // ProseMirror JSON，**绕过 tiptap-markdown 对 setContent(string) 的 markdown 劫持**（否则 HTML
+      // 标签/CSS 被当文本/代码块渲染）；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析。
+      // .html 源含 data-block-id 时经 BlockIdExtension parseHTML 恢复（blockId 跨保存稳定，REQ-ED-008）。
       editor.commands.setContent(generateJSON(loadedContent, buildEditorExtensions()), { emitUpdate: false });
     } else if (isMarkdownPath(openPath)) {
       editor.commands.setContent(loadedContent, { emitUpdate: false });
@@ -218,12 +233,18 @@ export function Editor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 loadSeq 驱动载入；openPath/loadedContent/editFormat 在 loadSeq 变更时同步刷新，单独入依赖会引发重复 setContent
   }, [editor, loadSeq]);
 
-  // ⌘S 保存：docx 以 getHTML → doc.save_from_edit（编辑链回写）；md 以 getMarkdown、其余纯文本 → ws.save_doc。
+  // ⌘S 保存：docx 以 getHTML → doc.save_from_edit（编辑链回写）；.html 以 getHTML → ws.save_doc
+  // 文本落盘（PI-ED-13，不经 DOC）；md 以 getMarkdown、其余纯文本 → ws.save_doc。
   const saveCurrent = async (override: boolean) => {
     if (!editor) return;
     if (editFormat === "html") {
       // docx 编辑链回写：HTML → docx（--reference-doc）→ WS 原子落盘。
       await saveDocxDocument(serialize(editor, "html", openPath), override);
+      return;
+    }
+    if (editFormat === "html_file") {
+      // .html 独立文件：HTML 文本直接经 ws.save_doc（含 data-block-id，blockId 跨保存稳定）。
+      await saveDocument(serialize(editor, "html_file", openPath), override);
       return;
     }
     await saveDocument(serialize(editor, "text", openPath), override);

@@ -118,13 +118,13 @@
 - **@GOV**：BR-ED-DATA-005（ED 侧）；DE/AG 侧各归其规则。
 - **验收**：agent 读到结构化样式；样式 diff 卡可裁决落盘；内联样式操作即改即脏；X-FORBID-006 语义核验（回合产出无直改路径）。
 
-#### PI-ED-12　大纲面板（N1）
+#### PI-ED-12　大纲面板（N1）　✅ G4 已实现（2026-07-03：outlineStore 投影 + OutlinePanel + LeftRail 入口 + blockId 跳转；跳转/呈现真机验收待做）
 - **承接**：视图层；吃 PI-ED-10 定位底座（heading 树 + blockId 跳转）。旧项目 OutlinePanel 参考。
 - **验收**：大纲随文档实时更新、点击精确跳转、长文档可用。
 
 ### 批C　独立/低优批
 
-#### PI-ED-13　.html 富文本编辑接入（D-1 / REQ-ED-008）
+#### PI-ED-13　.html 富文本编辑接入（D-1 / REQ-ED-008）　✅ G4 已实现（2026-07-03：editFormat=html_file 三分支路由 + HTML 往返 + blockId 落盘稳定；head/script 非正文处理策略为实现期债务）
 - **文档先行**：A-ED-M-D-01（REQ-ED-008）+ A-ED-M-T-01（BR-ED-DATA-002 修订至三格式）。
 - **文件范围**：`Editor.tsx`/`edService.ts` 格式路由（.html → 富文本 editFormat，读写仍经 ws.read_doc/save_doc 文本路径，**不经 DOC**——非二进制，X-SEQ-004 不涉及）；序列化 getHTML 往返；blockId 经 data-block-id 落 HTML（.html 源可承载，与 md 不注入策略区分声明）。
 - **验收**：.html 打开为富文本、编辑保存往返保真、blockId 跨保存稳定（.html 可落盘 id，锚定强于 md）。
@@ -165,3 +165,4 @@
 |------|------|---------|
 | 2026-07-03 | v1.0 | 初版：承接 12 项优化需求 + 10 项发掘项 + 三裁定（D-1 .html 入范围 / D-2 会话内字符锚 / D-3 样式写路径 A 默认+B 限内联）；文档路由（L1/L2 全并入既有文档、L3 新建本计划）；注册清单（REQ-ED-006~008、BR-ED-DATA-004/005 + 002 修订、TERM-ED-004~006）；PI-ED-06~13 三批次（批A 视图修复/批B 契约先行/批C 独立），候补 5 项；协调点（AG 并行窗口、lib.rs 冲突点） |
 | 2026-07-03 | v1.1 | 执行状态更新：批A 全完成（PI-ED-06/07/08）+ PI-ED-09 实测完成（0% → 兜底重建）+ PI-ED-10 完成（契约 9ae444f + 实现 9b3801a）+ PI-ED-11 ED 侧完成（后端联动件留 §8 协调）；TERM 编号配对修正（004=CharAnchor/005=SelectionRef） |
+| 2026-07-03 | v1.2 | 执行状态更新：PI-ED-12 大纲面板完成（视图层）+ PI-ED-13 .html 接入完成（html_file 格式路由，blockId 跨保存稳定）；计划内客户端可独立项全部落地，余 PI-ED-11 后端三件（§8 协调）+ 全批真机验收 |

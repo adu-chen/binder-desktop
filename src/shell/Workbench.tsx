@@ -11,6 +11,7 @@ import { PrvPanel } from "../components/prv/PrvPanel";
 import { TabStrip } from "../components/shell/TabStrip";
 import { tabsStore, useTabsStore } from "../store/tabsStore";
 import { Editor } from "../components/ed/Editor";
+import { OutlinePanel } from "../components/ed/OutlinePanel";
 import { ChatPanel } from "../components/ag/ChatPanel";
 import { DiffAllActionsBar } from "../components/de/DiffAllActionsBar";
 import { useDeStore } from "../store/deStore";
@@ -62,6 +63,8 @@ export function Workbench() {
           {activePanel === "files" ? (
             // 按 workspaceId 重挂：切换项目即刷新文件树为新项目内容（PI-FE-10）。
             <FileTree key={wsKey} />
+          ) : activePanel === "outline" ? (
+            <OutlinePanel />
           ) : activePanel === "timeline" ? (
             <TimelinePanel key={wsKey} />
           ) : (

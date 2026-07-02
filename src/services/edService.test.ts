@@ -79,4 +79,23 @@ describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模
     expect(s).toMatchObject({ openPath: "notes/y.draft.docx", editFormat: "html", loadedContent: "<p>h</p>", baseline: 22 });
     expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ request: { command: "doc.open_for_edit" } });
   });
+
+  // covers: BR-ED-DATA-002
+  it(".html 独立文件 → ws.read_doc 富文本模型（editFormat=html_file，不经 DOC，PI-ED-13/REQ-ED-008）", async () => {
+    edStore.reset();
+    invokeMock.mockResolvedValue(ok({ content: '<p data-block-id="b1">页面</p>', baseline: 33 }));
+    await openDocument("site/index.html");
+    const s = edStore.getSnapshot();
+    expect(s).toMatchObject({ openPath: "site/index.html", editFormat: "html_file", baseline: 33 });
+    // 文本读取路径（ws.read_doc）而非 DOC 编辑链——.html 非二进制（X-SEQ-004 无涉）。
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ request: { command: "ws.read_doc" } });
+  });
+
+  it("打开失败 → 撤销占位会话（不留假空文档，PI-ED-07）", async () => {
+    edStore.reset();
+    invokeMock.mockResolvedValue(fail("WS_NOT_FOUND"));
+    await openDocument("gone.md");
+    expect(edStore.getSnapshot().sessions["gone.md"]).toBeUndefined();
+    expect(edStore.getSnapshot().openPath).toBeNull();
+  });
 });
