@@ -21,6 +21,11 @@ export function registerEditor(editor: Editor | null): void {
   activeEditor = editor;
 }
 
+/** 取当前注册的编辑器实例（进程内受控查询共用；样式协议 edStyleOps 消费）。 */
+export function getActiveEditor(): Editor | null {
+  return activeEditor;
+}
+
 /** 叶子内联节点占位符（textBetween leafText）：1 字符对齐 PM pos 中 leaf nodeSize=1。 */
 const LEAF_CHAR = "￼";
 

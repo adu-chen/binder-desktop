@@ -84,35 +84,35 @@
 
 ### 批A　视图与修复批（无契约依赖，可立即开工）
 
-#### PI-ED-06　分页页高修复 + 纸张选择（#8 / #9 / N8）
+#### PI-ED-06　分页页高修复 + 纸张选择（#8 / #9 / N8）　✅ G4 已实现（2026-07-03，b8eb89a；视觉/IME 真机验收待做）
 - **承接**：BR-ED-DATA-003（既有）；根因已确认——分页缝紧跟页末块、未补足页尾留白，页高=内容累计高（≤预算）。
 - **文件范围**：`ed/extensions/Pagination.ts(+test)`（breaks 扩为 `{index,fillPx}[]`，gap widget 加 filler；末页撑满整页）、纸张预设表（A4/A3/A5/Letter × 横竖，取材旧项目 constants）、纸张下拉 UI、`edViewPrefsStore`（per-doc localStorage 视图偏好，纸张项）。
 - **验收**：非末页视觉高度恒等 A4（或所选纸张）比例（纯逻辑不变量单测：used+fill=预算）；纸张/方向切换即时重排、不改模型不产脏态；IME 组合输入期间分页重测量不打断输入（N8，真机验证）。
 
-#### PI-ED-07　编辑器工作区体验批（#4 / #5 / #7 / #10 / #11 / #12 / N7）
+#### PI-ED-07　编辑器工作区体验批（#4 / #5 / #7 / #10 / #11 / #12 / N7）　✅ G4 已实现（2026-07-03，c056348；交互真机验收待做）
 - **承接**：视图层（无规则注册）；BR-ED-STATE-003 呈现位置调整（语义不弱化）。
 - **文件范围**：`EditorStatusBar.tsx`（新：字数/行数/光标位/脏态/保存态；接 @tiptap/extension-character-count）；冲突条重构为状态栏项+弹出双显式按钮；`tabsStore.reorder(+test)` + TabStrip 指针拖拽排序 + 滚动条隐藏 + 纵轮转横滚 + 激活标签 scrollIntoView；工具栏两排固定分组 + 溢出滚动；zoom 迁入 `edViewPrefsStore`（per-doc 持久）+ ctrl/pinch 滚轮缩放；SM-DOC-01 OpenConverting→ 会话 loading 呈现态 + 骨架/不确定进度；每标签滚动位置暂存。
 - **验收**：状态栏各项实时正确；冲突裁决仍双向显式（BR-ED-STATE-003 不弱化）；标签拖动排序/无滚动条；工具栏窄窗口尾部可滚出；缩放跨切换保留；大 docx 打开有即时反馈。
 
-#### PI-ED-08　表格操作 UI + 图片交互（N3 / #3 图片部分）
+#### PI-ED-08　表格操作 UI + 图片交互（N3 / #3 图片部分）　✅ G4 已实现（2026-07-03，320393e；拖宽/嵌入切换真机验收待做）
 - **承接**：视图+用户编辑（改模型 attrs 产脏态，合法，非装饰层）。
 - **文件范围**：表格浮动控件/二级菜单（addRow/Column/delete/toggleHeader，TipTap 命令现成）；图片自定义 NodeView（选中手柄拖拽调宽改 `width` attr、inline/block 嵌入切换）。
 - **验收**：表格行列增删可用；图片可拖宽、可切嵌入样式，改动产生脏态且 ⌘S 往返（宽度经 docx 往返保留度与 DOC 联合实测，不达登记降级）。
 
 ### 批B　契约批（文档修订先行 → 实现；D-1/2/3 为前提）
 
-#### PI-ED-09　blockId 跨 docx 往返实测（N6，批B 地基）
+#### PI-ED-09　blockId 跨 docx 往返实测（N6，批B 地基）　✅ 已完成（2026-07-03，b431a31；保留率 0% → 兜底重建，锚有效期=会话内锁定）
 - **承接**：A-ED-M-T-01 §11.2 既有债务；BR-ED-DATA-001。
 - **动作**：实测 Pandoc 管线对 `data-block-id` 的保留度（含 preserve-styles.lua 是否需扩展）；不达 → 启用转换层兜底注入（旧项目 `inject_missing_data_block_ids` 模式，归 DOC）。结果回填 A-ED-M-T-01 §11.2。
 - **验收**：docx 打开→编辑→保存→重开，既有块 id 保留率实测数据落文档；字符级契约（PI-ED-10）以此为地基。
 
-#### PI-ED-10　字符级锚定与选区引用（#1 / #2 / #6）
+#### PI-ED-10　字符级锚定与选区引用（#1 / #2 / #6）　✅ G4 已实现（2026-07-03，9ae444f 契约 + 9b3801a 实现；BR-ED-DATA-004 owner+covers 闭合）
 - **文档先行**：§3.2 之 A-ED-M-D-01（REQ-ED-006）+ A-ED-M-T-01（BR-ED-DATA-004 + TERM-ED-004/005）+ A-ED-I-P-01 + A-REF-M-T-01 修订，**经人类确认后**进代码。
 - **文件范围**：`edLocate.ts` 升级（SelectionRef 含 `{blockId,start,end,text,path}`；偏移↔PM position 换算；`getCursorRef` 按需查询）；选区 dragstart 携带 `application/x-binder-selection-ref`（拖出编辑器边界才转引用语义，器内保持原生移动）；Composer drop → 位置引用 chip（REF 协议格式）。
 - **@GOV**：BR-ED-DATA-004（锚定纯逻辑 + 换算）。
 - **验收**：agent 经 `{blockId,start,end}` 可精确取址目标字符区间（四格式统一纯文本平面）；锚失效回明确信号；选区拖入 Composer 生成含位置的引用；纯逻辑（偏移换算/失效判定）单测。
 
-#### PI-ED-11　样式协议（#3 协议部分；DE/AG 联动）
+#### PI-ED-11　样式协议（#3 协议部分；DE/AG 联动）　◐ ED 侧已实现（2026-07-03：投影 + StyleOp 规划/应用，BR-ED-DATA-005 owner+covers 闭合；ag.list_blocks 样式字段 / DE style_ops 持久化 / DiffCard 样式呈现**待 AG/DE 后端协调**，§8）
 - **文档先行**：A-ED-M-D-01（REQ-ED-007）+ A-ED-M-T-01（BR-ED-DATA-005 + TERM-ED-006）+ A-ED-I-P-01（op 粒度表）+ A-DE-*（样式载荷/呈现）+ A-AG-*（BR-AG-STATE-003 扩展，**协调 AG 并行窗口**），经人类确认后进代码。
 - **文件范围**：读侧 `ag.list_blocks` 样式投影；写侧样式 op 集（set_mark/unset_mark/set_block_attr per CharAnchor 区间）经 `ed.apply_edit`；D-3 分流——回合产出样式 op 进 DiffPayload（DiffCard 扩样式呈现），内联辅助样式直改。
 - **@GOV**：BR-ED-DATA-005（ED 侧）；DE/AG 侧各归其规则。
@@ -164,3 +164,4 @@
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-07-03 | v1.0 | 初版：承接 12 项优化需求 + 10 项发掘项 + 三裁定（D-1 .html 入范围 / D-2 会话内字符锚 / D-3 样式写路径 A 默认+B 限内联）；文档路由（L1/L2 全并入既有文档、L3 新建本计划）；注册清单（REQ-ED-006~008、BR-ED-DATA-004/005 + 002 修订、TERM-ED-004~006）；PI-ED-06~13 三批次（批A 视图修复/批B 契约先行/批C 独立），候补 5 项；协调点（AG 并行窗口、lib.rs 冲突点） |
+| 2026-07-03 | v1.1 | 执行状态更新：批A 全完成（PI-ED-06/07/08）+ PI-ED-09 实测完成（0% → 兜底重建）+ PI-ED-10 完成（契约 9ae444f + 实现 9b3801a）+ PI-ED-11 ED 侧完成（后端联动件留 §8 协调）；TERM 编号配对修正（004=CharAnchor/005=SelectionRef） |
