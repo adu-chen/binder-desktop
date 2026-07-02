@@ -105,6 +105,16 @@ async fn ag_start_turn(
 > 编辑模型，驱动 SM-ED-01 edit→脏态，非 AI 直写）；忽略经 `ed.dismiss_decoration` 复位。
 > 节流参数（请求频率）延实现期（AG-03），接口侧由前端按 SM-AG-03 节流后再调 request_assist。
 
+### §4.1 文档块读取接口（agent 编辑定位 / 样式投影，PI-ED-10/11 联合承接）
+
+| command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
+|---|---|---|---|---|
+| `ag.list_blocks` | DocRef | 块列表：`{blockId, type, text}`（既有，补登记）；**样式投影扩展**（PI-ED-11）：+`marks:[{type, range:[start,end], attrs}]`、`blockAttrs`（range 在块内纯文本平面，与字符锚同基准） | 文档不存在/越界 → WS 错误透传 | agent 块级引用选择 + 字符级取址基准 + 样式读取（BR-ED-DATA-005 读侧） |
+
+> 投影 schema 的单一来源在 A-ED-M-T-01 §5.1（ED 定义、AG 承载读取面）；写侧（StyleOp）经
+> `ed.apply_edit`（A-ED-I-P-01 §4.1），落盘分流按裁定 D-3（回合产出→DE diff / 显式内联→用户编辑）。
+> 锚有效期 = 编辑会话内（BR-ED-DATA-004）：文档重开后 blockId 重建，agent 须重新 list_blocks。
+
 ## §5 上下文组装对接（AG-TURN / BR-AG-DATA-001，仅索引）
 
 回合上下文来源（组装在 ag.start_turn 内部完成，限界 X-FORBID-004，显式注入优先保留）：
@@ -141,3 +151,4 @@ async fn ag_start_turn(
 | 2026-06-12 | v1.0 | 初版（实现前置件，AI 调用面）：AG 接口协议——chat 回合 4（start/cancel/stream/list，门禁不变量内建）、工具回注 1（tool_result 校验回注）、内联辅助 1（request_assist 静默失败、采纳经 ed.apply_edit）、上下文组装对接索引（WS/REF/AST/KB）；门禁前置 X-SEQ-001 固化为接口不变量、产出唯一经 de.generate_diff；零新增注册项；债务（工具清单/节流/接管接口/供给接口延后） |
 | 2026-06-24 | v1.1 | 新增 §2.1 流式回传契约（AgTurnEvent · PI-AG-10C 冻结点）：AgTurnEvent 六分支（Chunk/ToolRequest/ToolResult/DiffProposed/Done/Error）、ag_start_turn 命令签名（Channel<AgTurnEvent> 传输，承 SY-02 选型）、三终态映射（BR-SYS-STATE-002）、前端消费映射（agStore/deStore）、关联命令形状与冻结约定；§2 表格 start_turn/turn_stream 行改为 Channel<AgTurnEvent> 模型并指向 §2.1。前后端双轨同步真源，零新增注册类治理块 |
 | 2026-06-26 | v1.2 | 命名落地修正：AG 回合流式事件定名 **AgTurnEvent**（避开 src-tauri/src/ipc/mod.rs 既有 SYS `StreamEvent` 重名），§2.1 补「与 SYS StreamEvent 分层不同·非重复」说明（通用 dispatch 传输契约 vs AG 领域 per-call Channel）；PI-AG-10C 落地同步 |
+| 2026-07-03 | v1.3 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，ED 窗口执笔·追加型最小修订）：新增 §4.1 文档块读取接口——补登记既有 ag.list_blocks + 样式投影扩展（marks/blockAttrs，schema 单一来源 A-ED-M-T-01 §5.1）；写侧 StyleOp 经 ed.apply_edit、落盘分流按裁定 D-3；锚有效期=编辑会话内（BR-ED-DATA-004） |

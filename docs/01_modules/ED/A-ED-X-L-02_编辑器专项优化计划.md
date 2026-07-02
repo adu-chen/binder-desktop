@@ -73,8 +73,8 @@
 - DE/AG 侧：BR-AG-STATE-003 修订（AG SSOT）、DE 载荷规则语义扩展（DE SSOT）——各归其主责文档，不在 ED 注册
 
 **TERM（A-ED-M-T-01 Terminology Registry）**：
-- `TERM-ED-004` 选区引用 / **SelectionRef**（禁用：选区信息, 拖拽引用, selection数据）
-- `TERM-ED-005` 字符锚 / **CharAnchor**（禁用：字符偏移锚, 文本锚, 偏移量, inline锚）
+- `TERM-ED-004` 字符锚 / **CharAnchor**（禁用：字符偏移锚, 文本锚, 偏移量锚, inline锚）——基础锚
+- `TERM-ED-005` 选区引用 / **SelectionRef**（禁用：选区信息, 拖拽引用, selection数据）——派生于字符锚
 - `TERM-ED-006` 样式操作 / **StyleOp**（禁用：样式指令, 格式操作, style命令, 样式patch）
 
 **不注册**：视图层批全部（#4/#5/#7/#8/#9/#10/#11/#12、N3/N5/N7/N8）——无新规则语义，

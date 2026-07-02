@@ -158,6 +158,39 @@ acceptance: decoration 可按 blockId 定位呈现 diff 与内联辅助；裁决
 open_issues: decoration 与 DE diff/AG inline-assist 的接口契约归 ED L2 + DE/AG 联合（ED-05）；inline-assist/autocomplete 归属待人类确认（A-SYS-M-S-01 §3）
 -->
 
+<!-- REQ
+req_id: REQ-ED-006
+title: 字符级定位与选区引用
+owner_module: ED
+status: active
+summary: 编辑器提供会话内字符级内容锚（blockId + 块内纯文本偏移）与光标/选区位置的受控查询，供 agent 精确编辑定位与位置引用生成（选区可拖拽携带位置信息入 AG 输入面）；锚失效可感知
+source_doc: REQ-CORE-002、2026-07-03 人类需求 #1/#2/#6 与裁定 D-2（A-ED-X-L-02 §2：会话内锚定，跨会话显式延后）
+acceptance: agent 可经 {blockId,start,end} 精确定位目标字符区间（各格式统一纯文本平面）；光标/选区可按需查询；选区拖入 AG 输入面生成含位置的引用；锚失效回明确信号不静默错位
+open_issues: 跨会话字符锚（内容哈希重建）显式延后（D-2 + PI-ED-09 实测 0% 往返保留）；技术契约归 ED L2（BR-ED-DATA-004）
+-->
+
+<!-- REQ
+req_id: REQ-ED-007
+title: agent 可读可编辑的样式协议
+owner_module: ED
+status: active
+summary: 文档样式（字符 marks / 块属性）以机器可读结构投影供 agent 读取；样式修改以受控样式操作进入编辑模型，agent 落盘路径按裁定 D-3 分流（回合产出经 DE diff 裁决、显式内联辅助视为用户编辑）
+source_doc: REQ-CORE-002、2026-07-03 人类需求 #3 与裁定 D-3（A-ED-X-L-02 §2：A 默认 + B 限内联）
+acceptance: agent 可读到结构化样式投影；样式 diff 经 DiffCard 可裁决落盘；显式内联样式操作即改即脏；不存在绕过裁决的回合直改路径（X-FORBID-006）
+open_issues: 样式 op 集与投影 schema 归 ED L2（BR-ED-DATA-005）+ ED/DE/AG I-P 联合；DiffCard 样式呈现归 DE
+-->
+
+<!-- REQ
+req_id: REQ-ED-008
+title: .html 富文本编辑接入
+owner_module: ED
+status: active
+summary: 独立 .html 文件加入统一编辑模型：富文本编辑 + blockId（.html 源可落盘 data-block-id）+ 序列化往返保真；读写经 WS 文本路径（非二进制，不经 DOC 管线）
+source_doc: REQ-CORE-004、2026-07-03 人类需求 #1 与裁定 D-1（A-ED-X-L-02 §2：.html 富文本入范围）
+acceptance: .html 打开为富文本并可编辑；编辑保存往返保真；blockId 跨保存稳定（.html 可落盘 id，锚定强于 md）
+open_issues: 统一模型扩展归 ED L2（BR-ED-DATA-002 修订）；.html 的 head/script 等非正文内容的处理策略实现期定
+-->
+
 ## §6 模块边界与约束（边界闭合）
 
 - **职责边界**：ED 只承载富文本编辑运行时 / block 与 blockId / 分页 / 媒体 / decoration 呈现面
@@ -214,3 +247,4 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版：ED 编辑器模块级 L1；声明 REQ-ED-001~005（富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层供 diff 呈现），承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009；代表性流程 E1–E3；边界闭合（含与 WS/DE/DOC/AG 边界，TipTap 选型延 ED L2）与 G1 暴露清单（ED-01~06 显式延期/部分关闭；inline-assist/autocomplete 归属待人类确认） |
+| 2026-07-03 | v1.1 | 编辑器专项优化承接（A-ED-X-L-02 批B，人类裁定 D-1/D-2/D-3）：追加 REQ-ED-006 字符级定位与选区引用（会话内锚，跨会话显式延后）、REQ-ED-007 agent 可读可编辑的样式协议（落盘路径 A 默认+B 限内联）、REQ-ED-008 .html 富文本编辑接入；技术契约分别归 ED L2 BR-ED-DATA-004/005 与 BR-ED-DATA-002 修订 |

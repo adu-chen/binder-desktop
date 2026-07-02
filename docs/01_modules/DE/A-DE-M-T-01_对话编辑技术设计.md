@@ -94,9 +94,10 @@ diff 生成必须满足：自修改建议（ChangeProposal）生成待裁决修�
 | 字段 | 语义 | 备注 |
 |---|---|---|
 | payload_version | 载荷形状版本 | 单调递增，支持迁移 |
-| target_blocks | 目标内容块定位（blockId 列表 + DocRef） | 锚集合 |
+| target_blocks | 目标内容块定位（blockId 列表 + DocRef） | 锚集合；可细化至字符锚区间（CharAnchor，A-ED-M-T-01 §4.1，2026-07-03 批B） |
 | before_snapshot | 修改前目标内容快照 | 外部变更检测基准（§6）+ 审阅对比基准 |
-| after_content | 修改后内容 | 落盘执行物（WS 消费） |
+| after_content | 修改后内容 | 落盘执行物（WS 消费）；纯样式 diff 时可空 |
+| style_ops | 样式操作序列（StyleOp，A-ED-M-T-01 §5.1；2026-07-03 裁定 D-3 新增，可空） | 回合产出的样式修改载体，与 after_content 并存或独立 |
 | origin | 来源元数据（origin_module、回合标识） | 可溯源到 AgentTurn |
 
 <!-- RULE
@@ -104,9 +105,11 @@ rule_id: BR-DE-DATA-002
 主链路: DE-DIFF
 域: DATA
 -->
-diff 载荷必须含：载荷版本（payload_version，形状变更须版本递增并兼容迁移）、目标内容块定位、
-修改前内容快照、修改后内容、来源元数据；经 WS 持久化并重启恢复后必须可完整重建审阅呈现
-（对比基准 = before_snapshot）；具体序列化格式延实现期，本规则锁字段语义集合。
+diff 载荷必须含：载荷版本（payload_version，形状变更须版本递增并兼容迁移）、目标内容块定位
+（可细化至字符锚区间）、修改前内容快照、修改后内容（纯样式 diff 可空）、样式操作序列（可空，
+StyleOp 语义归 ED BR-ED-DATA-005，本规则锁其在载荷中的承载与版本化）、来源元数据；经 WS 持久化
+并重启恢复后必须可完整重建审阅呈现（对比基准 = before_snapshot，含样式变更语义的可视对比）；
+具体序列化格式延实现期，本规则锁字段语义集合。
 
 ## §5 终态裁决语义（DE-DIFF）
 
@@ -233,3 +236,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（DE G2 首件）：DE 规则 SSOT——裁决粒度定为内容块级（解除 DE-01）、diff 生成与锚失效回报、payload 载荷形状（版本化 + before_snapshot 基准，解除 REQ-DE-004 占位）、终态裁决语义（三终态互斥不可逆、accepted 唯一触发落盘、ApplyError 不回退）、过期与外部变更（保守语义，解除 DE-03 机制）、多 diff 冲突（重叠重检、无并发落盘，解除 DE-02）；注册链路 DE-DIFF（P1）、规则 5 条、术语 TERM-DE-001 PendingDiff / TERM-DE-002 ChangeProposal（解除 A-SYS-I-P-01 §6 延期）；约束全复用不新增；REQ_MAP（REQ-DE-001~005）；债务（审阅 UI 待人类、数值延实现、CBT 联合） |
+| 2026-07-03 | v1.1 | 批B 样式 diff 承接（A-ED-X-L-02 PI-ED-11 文档先行，人类裁定 D-3 方案A：回合样式修改经 DE 裁决）：§4 载荷表 +style_ops（StyleOp 序列，可空；语义归 ED BR-ED-DATA-005，载荷承载与版本化归本文）、after_content 纯样式 diff 可空、target_blocks 可细化字符锚区间；BR-DE-DATA-002 规则文本同步（含样式变更语义的可视对比重建）；DiffCard 样式呈现形态延实现期（DE-04 审阅 UI 债务口径） |

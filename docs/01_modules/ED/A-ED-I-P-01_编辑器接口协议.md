@@ -49,15 +49,30 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 | `ed.dismiss_decoration` | 装饰句柄 | 复位确认（不残留） | — | 消费终态后复位 |
 | `ed.on_decoration_action` | 装饰句柄（订阅） | 用户交互事件（如接受/拒绝点击）转达消费方 | — | ED 不代裁（转达 DE 裁决 / AG 采纳） |
 
-## §4 blockId 定位接口（ED-EDIT / BR-ED-DATA-001）
+## §4 blockId / 字符锚定位接口（ED-EDIT / BR-ED-DATA-001 / BR-ED-DATA-004）
 
 | 接口 | 参数（语义） | 结果 | 特有错误 | 归属 |
 |---|---|---|---|---|
-| `ed.locate_block` | 会话句柄、blockId | 定位结果（范围/可视位置） | **anchor_lost**（明确失效信号，不静默错位） | DE 定位 / REF 引用锚校验 |
-| `ed.apply_edit` | 会话句柄、编辑操作（用户编辑语义） | 新编辑模型态 + 脏态 | 越权（绕过受控接口）→拒绝 | 采纳内联候选的落点（AG 内联辅助经此，BR-AG-STATE-003）；X-FORBID-005 唯一通道 |
+| `ed.locate_block` | 会话句柄、blockId、可选字符锚 {start,end} | 定位结果（块范围/可视位置；带锚时含区间校验） | **anchor_lost**（块失效或偏移越界，明确失效信号不静默错位） | DE 定位 / REF 引用锚校验 / AG 字符级取址 |
+| `ed.get_cursor_ref` | 会话句柄 | 光标位置（CharAnchor：blockId + 块内偏移） | 无会话/无光标 → null | AG 光标感知（按需查询，非常驻投影） |
+| `ed.get_selection_ref` | 会话句柄 | SelectionRef {path, blockId, start, end, text}；折叠选区 → null | — | AG 选区感知 / 选区拖拽引用（PI-ED-10） |
+| `ed.apply_edit` | 会话句柄、编辑操作序列（op 粒度表 §4.1） | 新编辑模型态 + 脏态 | 越权（绕过受控接口）→拒绝；op 目标 anchor_lost → 拒绝该 op | 采纳内联候选/样式操作的落点（AG 经此，BR-AG-STATE-003）；X-FORBID-005 唯一通道 |
 
-> `ed.apply_edit` 是 inline-assist/autocomplete 采纳「作为用户编辑操作」进入模型的接口——
-> 经此驱动 SM-ED-01 edit→SM-WS-01 脏态，区别于 diff 落盘路径（后者经 DE→WS）。
+> `ed.apply_edit` 是 inline-assist/autocomplete/内联样式操作采纳「作为用户编辑操作」进入模型的
+> 接口——经此驱动 SM-ED-01 edit→SM-WS-01 脏态，区别于 diff 落盘路径（后者经 DE→WS）。
+> 偏移均在**块内纯文本平面**（BR-ED-DATA-004）；锚有效期=编辑会话内（重开须重新取块）。
+
+### §4.1 apply_edit 操作粒度表（PI-ED-10/11，正式承接 §7 既有债务）
+
+| op | 参数 | 语义 | 归属规则 |
+|---|---|---|---|
+| `replace_text` | 字符锚 {blockId,start,end}、text | 区间文本替换（含 start=end 纯插入） | BR-ED-DATA-004 |
+| `insert_block` | blockId（其后）、blockJSON | 块后插入新块（新块得新 id） | BR-ED-DATA-001 |
+| `set_mark` | 字符锚区间、mark {type,attrs} | 区间加字符样式（bold/color/fontSize…） | BR-ED-DATA-005（StyleOp） |
+| `unset_mark` | 字符锚区间、markType | 区间去字符样式 | BR-ED-DATA-005（StyleOp） |
+| `set_block_attr` | blockId、attrs（textAlign…） | 块属性设置 | BR-ED-DATA-005（StyleOp） |
+
+> op 序列原子应用（任一 op 锚失效则整批拒绝回明确错误，不产生半应用状态）。
 
 ## §5 外部变更订阅（承 A-WS-I-P-01 §6）
 
@@ -73,11 +88,15 @@ Conflicted 态待 `ed.resolve_conflict`（BR-ED-STATE-003）。本文不重复�
 ## §7 债务与盲区
 
 - 装饰描述的呈现 schema（diff 高亮样式 / 内联候选样式）延实现期与 DE/AG 联合定。
-- 编辑操作（apply_edit 的 op 语义）的粒度表延实现期（依 TipTap/ProseMirror 事务模型）。
+- ~~编辑操作（apply_edit 的 op 语义）的粒度表延实现期~~ → **已承接（§4.1，2026-07-03，PI-ED-10/11
+  文档先行）**：replace_text / insert_block / set_mark / unset_mark / set_block_attr，批内原子应用。
 - 装饰层接口是否需要跨进程化（如后端驱动呈现）延实现期，当前定为前端进程内契约。
+- 样式投影读接口经 AG 侧承载（ag.list_blocks 扩展，A-AG-I-P-01）；ED 侧只定投影 schema
+  （A-ED-M-T-01 §5.1），避免双仓重复定义。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件）：ED 接口协议——编辑会话 command 5 条（含 resolve_conflict 对接 SM-ED-01 Conflicted）、装饰层接口 4 条（mount/update/dismiss/on_action，X-FORBID-005 唯一通道）、blockId 定位 2 条（locate_block 失效信号 / apply_edit 内联采纳落点）、外部变更订阅承 WS I-P；零新增注册项；债务（呈现 schema/编辑 op 粒度/装饰层进程边界延实现期） |
+| 2026-07-03 | v1.1 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，承 BR-ED-DATA-004/005）：§4 扩字符锚定位（locate_block 带 {start,end} 区间校验）+ 新增 ed.get_cursor_ref / ed.get_selection_ref（按需查询）；新增 §4.1 apply_edit 操作粒度表（replace_text/insert_block/set_mark/unset_mark/set_block_attr，批内原子）解除既有债务；§7 登记样式投影读接口归 AG I-P 承载 |

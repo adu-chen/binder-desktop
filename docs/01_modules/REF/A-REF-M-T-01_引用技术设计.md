@@ -50,6 +50,11 @@ v1 可引用目标 = workspace 内**文档**（路径级锚）、**内容块**�
 **资源文件**（路径级锚）。知识库条目 / 记忆资产是否纳入待 KB/AST G1（REF-01 保持开放，
 本文不预占其解析协议）。候选列举与内容读取一律经 WS（X-FORBID-004 限界）。
 
+**选区级锚（2026-07-03 批B 扩展，A-ED-X-L-02 PI-ED-10）**：块级锚的细化——DocRef + blockId +
+块内字符区间 {start,end}（SelectionRef，TERM-ED-005 / CharAnchor 基准，A-ED-M-T-01 §4.1）。
+产生入口 = 编辑器选区拖拽入 AG 输入面；**有效期 = 编辑会话内**（BR-ED-DATA-004：文档重开后
+blockId 重建、区间锚失效），失效校验同 §5 保守语义（失效不注入、明确提示）。
+
 ## §3 触发与目标解析（REF-INJECT）
 
 <!-- CHAIN
@@ -74,6 +79,10 @@ rule_id: BR-REF-DATA-001
 注入载荷的跨模块共享结构基线已登记 **A-SYS-I-P-01 §3 RefInjection**（X-SHARED-001，解除 REF-02）：
 target（DocRef）、block_ids（可空，块级锚集合）、content（读取时点的目标内容）、origin_label
 （来源标识，可溯源到引用目标）。字段集合归 SYS 单一来源，本文锁组装与一致性语义。
+
+> **选区级锚字段扩展登记（2026-07-03，PI-ED-10 实现时执行）**：选区引用需 RefInjection 增可空
+> 区间字段（如 `block_ranges: [{blockId, start, end}]`）——按 X-SHARED-001 该扩展**须回写
+> A-SYS-I-P-01 落字段后方可进代码**，本文只登记语义需求，不私自扩展跨模块字段。
 
 <!-- RULE
 rule_id: BR-REF-DATA-002
@@ -175,3 +184,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（REF G2，P3 G2 收尾件）：REF 规则 SSOT——v1 引用目标模型（文档/内容块/资源）、触发与解析（无悬空引用、经 ED 扩展点）、注入载荷契约（RefInjection 登记 SYS 契约层解除 REF-02、读取时点一致、来源可溯、裁剪归 AG）、锚失效校验（保守不注入）；状态机豁免复核成立并列失效触发条件（解除 REF-04）；注册链路 REF-INJECT（P1）、规则 BR-REF-DATA-001/002·VERIFY-001、术语 TERM-REF-001 ReferenceAnchor / TERM-REF-002 InjectionPayload；约束全复用不新增；REQ_MAP（REQ-REF-001~004） |
+| 2026-07-03 | v1.1 | 批B 选区级锚承接（A-ED-X-L-02 PI-ED-10 文档先行）：§2 目标模型增选区级锚（块级锚细化 = blockId + 块内字符区间，SelectionRef/CharAnchor 基准归 ED，有效期=编辑会话内，失效同 §5 保守语义）；§4 登记 RefInjection 区间字段扩展意向（block_ranges，按 X-SHARED-001 须回写 A-SYS-I-P-01 后进代码） |

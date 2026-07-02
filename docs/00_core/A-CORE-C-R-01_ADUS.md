@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-02T16:20:42.164Z -->
+<!-- 最后生成时间：2026-07-02T23:34:10.597Z -->
 
 ### 模块编码表
 
@@ -136,7 +136,9 @@
 | BR-ED-STATE-001    | STATE   | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-STATE-003    | STATE   | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-001     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
+| BR-ED-DATA-004     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-002     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
+| BR-ED-DATA-005     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-003     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-STATE-002    | STATE   | ED-DECOR                             | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ENT-VERIFY-001  | VERIFY  | CLOUD-GATE                           | docs/01_modules/ENT/A-ENT-M-T-01_订阅门控技术设计.md   | registered      | MISSING |
@@ -208,6 +210,9 @@
 | TERM-DOC-002   | DOC-CONVERT  | 编辑草稿   | EditDraft        | 草稿副本, draft文件, 临时编辑文件, 编辑副本                       | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
 | TERM-ED-001    | ED-EDIT      | 内容块    | Block            | 内容节点, 段落块, 文本块, 块节点, chunk                        | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-ED-002    | ED-DECOR     | 编辑器装饰层 | EditorDecoration | 高亮层, 标注层, 覆盖层, overlay层, 装饰器层                     | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
+| TERM-ED-004    | ED-EDIT      | 字符锚    | CharAnchor       | 字符偏移锚, 文本锚, 偏移量锚, inline锚, 字符定位符                  | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
+| TERM-ED-005    | ED-EDIT      | 选区引用   | SelectionRef     | 选区信息, 拖拽引用, selection数据, 选区数据                     | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
+| TERM-ED-006    | ED-EDIT      | 样式操作   | StyleOp          | 样式指令, 格式操作, style命令, 样式patch                      | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-KB-001    | KB-RETRIEVE  | 知识条目   | KnowledgeEntry   | 知识点, 资料条目, 知识片段, kb条目                             | docs/01_modules/KB/A-KB-M-T-01_知识库技术设计.md       |
 | TERM-REF-001   | REF-INJECT   | 引用锚    | ReferenceAnchor  | 引用链接, 引用指针, mention锚, 引用定位符                       | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md      |
 | TERM-REF-002   | REF-INJECT   | 注入载荷   | InjectionPayload | 上下文载荷, 注入内容包, 引用载荷, 引用内容体                         | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md      |
@@ -229,7 +234,7 @@
 
 | codes                                   | type   | rules                                              | 文件                           | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 199  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 246  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
 | BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1434 |
 
@@ -369,11 +374,11 @@
 | codes                              | type | rules                                | 文件                                               | 行号  |
 | ---------------------------------- | ---- | ------------------------------------ | ------------------------------------------------ | --- |
 | BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | BR-ED-DATA-001 term_ref: TERM-ED-001 | src/components/ed/extensions/BlockIdExtension.ts | 46  |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-005   | RB   | BR-ED-DATA-003                       | src/components/ed/extensions/Pagination.ts       | 151 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005   | RB   | BR-ED-DATA-003                       | src/components/ed/extensions/Pagination.ts       | 207 |
 | BR-ED-DATA-003-RB-ED-ED-EDIT-006   | RB   | BR-ED-DATA-003                       | src/services/docService.ts                       | 35  |
 | BR-ED-DATA-002-RB-ED-ED-EDIT-004   | RB   | BR-ED-DATA-002                       | src/services/edService.ts                        | 16  |
-| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB   | BR-ED-STATE-003, BR-WS-OBS-001       | src/services/edService.ts                        | 98  |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 120 |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB   | BR-ED-STATE-003, BR-WS-OBS-001       | src/services/edService.ts                        | 104 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 125 |
 
 #### IPC-CALL
 
@@ -546,7 +551,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 199 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 246 |
 
 #### BR-AG-STATE-004
 
@@ -713,14 +718,14 @@
 
 | codes                            | type | chain   | 文件                                         | 行号  |
 | -------------------------------- | ---- | ------- | ------------------------------------------ | --- |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-005 | RB   | ED-EDIT | src/components/ed/extensions/Pagination.ts | 151 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005 | RB   | ED-EDIT | src/components/ed/extensions/Pagination.ts | 207 |
 | BR-ED-DATA-003-RB-ED-ED-EDIT-006 | RB   | ED-EDIT | src/services/docService.ts                 | 35  |
 
 #### BR-ED-STATE-001
 
 | codes                             | type | chain   | 文件                   | 行号  |
 | --------------------------------- | ---- | ------- | -------------------- | --- |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 120 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 125 |
 
 #### BR-ED-STATE-002 term_ref: TERM-ED-002
 
@@ -730,9 +735,9 @@
 
 #### BR-ED-STATE-003
 
-| codes                             | type | chain   | 文件                        | 行号 |
-| --------------------------------- | ---- | ------- | ------------------------- | -- |
-| BR-ED-STATE-003-RB-ED-ED-EDIT-003 | RB   | ED-EDIT | src/services/edService.ts | 98 |
+| codes                             | type | chain   | 文件                        | 行号  |
+| --------------------------------- | ---- | ------- | ------------------------- | --- |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003 | RB   | ED-EDIT | src/services/edService.ts | 104 |
 
 #### BR-ENT-DATA-001
 
@@ -910,12 +915,12 @@
 
 #### BR-WS-OBS-001
 
-| codes                              | type  | chain   | 文件                              | 行号 |
-| ---------------------------------- | ----- | ------- | ------------------------------- | -- |
-| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB    | ED-EDIT | src/services/edService.ts       | 98 |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 31 |
-| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 77 |
-| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 96 |
+| codes                              | type  | chain   | 文件                              | 行号  |
+| ---------------------------------- | ----- | ------- | ------------------------------- | --- |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB    | ED-EDIT | src/services/edService.ts       | 104 |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-003   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 31  |
+| BR-WS-OBS-001-QUERY-WS-WS-FS-004   | QUERY | WS-FS   | src-tauri/src/workspace/save.rs | 77  |
+| BR-WS-OBS-001-GUARD-WS-WS-SAVE-001 | GUARD | WS-SAVE | src-tauri/src/workspace/save.rs | 96  |
 
 #### BR-WS-PERSIST-001
 
@@ -955,7 +960,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 199 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 246 |
 
 #### TERM-CLOUD-001
 
