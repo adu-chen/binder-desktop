@@ -316,8 +316,13 @@ status: mapped
 
 - **decoration 与 AG 内联辅助的业务契约**：归属已确认 AG（2026-06-11），具体接口契约待 AG G2
   联合承接。
-- **blockId 跨 docx 往返的保持**：编辑模型经 `data-block-id` 持久化可往返；Pandoc 管线对自定义
-  属性的保留度需实现期实测（DOC G2 联合），不达则按转换层兜底注入降级（锚跨往返重建）。
+- ~~blockId 跨 docx 往返的保持（待实测）~~ → **已实测（PI-ED-09，2026-07-03）：保留率 0%，不达**——
+  Pandoc `html→docx` 侧不落自定义属性（`data-block-id` 全丢），回读全量重建。**按既定降级执行**：
+  兜底重建（前端 `reconcileBlockIds` appendTransaction 补缺已等效承载，重开后全量重发 id）。
+  **契约语义锁定**：blockId/字符锚**有效期 = 编辑会话内**（保存不打断内存模型、id 持续有效；
+  关闭重开必换锚）——与 2026-07-03 人类裁定 D-2 一致，agent 跨重开须重新取块（ag.list_blocks）。
+  附带实测发现（DOC 侧既有"部分支持"债务佐证，登记不扩范围）：保存侧 color/text-align 内联样式
+  衰减、`data-custom-style` div 包裹残留。
 - 分页光标/遮罩具体实现：移植 `tiptap-pagination-plus` 后按新架构适配，实现期敲定。
 - §11.1 各推荐选型均待实现期验证后转正式锁定；验证不符须回写本文并复核 DE/DOC 依赖方。
 
@@ -338,3 +343,4 @@ status: mapped
 | 2026-06-11 | v1.0 | 初版（ED G2 首件）：ED 规则 SSOT——编辑会话与脏态（经 WS、离线可用、解析失败降级只读）、内容块模型与稳定 blockId（失效可感知）、md/docx 统一编辑模型（二进制归 DOC）、分页与媒体呈现层纯化、编辑器装饰层接口契约（DE/AG 消费）；注册链路 ED-EDIT / ED-DECOR（均 P1）、规则 BR-ED-STATE-001/002·BR-ED-DATA-001/002/003、约束 X-FORBID-005（复用 X-SEQ-002/003·X-FORBID-004·X-SHARED-001·X-INTER-001）、术语 TERM-ED-001 Block / TERM-ED-002 EditorDecoration；REQ_MAP（REQ-ED-001~005）；债务（TipTap 选型/blockId 算法/样式子集/往返保持延后并记明 owner） |
 | 2026-06-11 | v1.1 | 人类决策落地：inline-assist/autocomplete 归属确认 AG（边界表述更新）；§11.1 新增选型记录（人类授权 AI 推荐，旧版仓库实证取材）——TipTap v3 系 + React + StarterKit + 扩展集基线 + tiptap-pagination-plus 移植（解除 ED-01）、blockId = TipTap Extension + block_+UUID + appendTransaction 补缺/分裂去重 + 转换层兜底注入、md 源不注入（解除 ED-02 算法部分）、docx 样式子集三级契约（必需/部分/不处理，执行 SSOT 归 DOC L2）；§11.2 余债收敛（往返保留度/分页适配/验证后转锁定） |
 | 2026-06-12 | v1.2 | Q2 缺口补遗（人类确认采纳）：§3 新增 BR-ED-STATE-003 外部变更会话处理——无脏态自动重载、有脏态/保存冲突进入显式裁决（保留己方→覆盖确认 / 放弃重载），双向内容损失均须用户显式选择；REQ_MAP 补 REQ-ED-001→BR-ED-STATE-003 |
+| 2026-07-03 | v1.3 | §11.2 实测回填（PI-ED-09，A-ED-X-L-02 批B 地基）：blockId 跨 docx 往返保留率 0%（Pandoc 不落自定义属性）→ 按既定降级走兜底重建（reconcileBlockIds 补缺）；契约语义锁定「锚有效期 = 编辑会话内、重开必换锚」（与裁定 D-2 一致）；附带登记保存侧样式衰减与 data-custom-style 残留（DOC 侧既有债务佐证） |
