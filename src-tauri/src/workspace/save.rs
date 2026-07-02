@@ -8,7 +8,8 @@
 use crate::ipc::IpcError;
 use std::path::Path;
 
-/// 内容指纹（基线哈希）。算法为实现期选型（此处 FNV-1a 64 占位，A 类债务）。
+/// 内容指纹（基线哈希）：FNV-1a 64，**已定档**（G-5，A-WS-M-T-01 §12 选型记录）。用途限非对抗性
+/// 外部变更检测与时间轴内容寻址去重；不承诺抗对抗碰撞，不得挪用为完整性/安全校验。
 pub fn content_hash(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in bytes {

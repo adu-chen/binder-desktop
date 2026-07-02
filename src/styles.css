@@ -66,6 +66,7 @@
   --titlebar-h:  32px;
   --statusbar-h: 24px;
   --diffstrip-h: 44px;
+  --gutter-w:    6px;
 
   font-family: var(--font-sans);
   color: var(--ink);
@@ -217,10 +218,36 @@ button:disabled { opacity: 0.5; cursor: default; }
 .work {
   grid-area: work;
   display: grid;
-  grid-template-columns: var(--rail-w) var(--side-w) 1fr var(--chat-w);
-  grid-template-areas: "rail side center chat";
+  /* 三栏可拖动自适应：side/chat 像素宽（--side-w/--chat-w 由 Workbench 内联注入，拖柄更新 layoutStore），
+     其间嵌拖柄 gutter 轨；center 取剩余弹性 minmax(0,1fr)（min 0 防溢出，自适应窗口）。 */
+  grid-template-columns:
+    var(--rail-w) var(--side-w) var(--gutter-w) minmax(0, 1fr) var(--gutter-w) var(--chat-w);
+  grid-template-areas: "rail side gut-l center gut-r chat";
   min-height: 0;
 }
+
+/* 分栏拖柄（视图层）：占据 gutter 轨，col-resize 光标，hover/focus 显中缝。 */
+.pane-splitter {
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 5;
+  touch-action: none;
+}
+.pane-splitter.gut-left { grid-area: gut-l; }
+.pane-splitter.gut-right { grid-area: gut-r; }
+.pane-splitter-grip {
+  position: absolute;
+  top: 0; bottom: 0; left: 50%;
+  width: 1px; transform: translateX(-50%);
+  background: var(--rule);
+}
+.pane-splitter:hover .pane-splitter-grip,
+.pane-splitter:focus-visible .pane-splitter-grip {
+  width: 2px;
+  background: var(--rust);
+}
+.pane-splitter:focus-visible { outline: none; }
 
 .rail {
   grid-area: rail;
@@ -348,8 +375,50 @@ button:disabled { opacity: 0.5; cursor: default; }
    ed-spin 关键帧仍被保存指示等活跃元素复用，保留。 */
 @keyframes ed-spin { to { transform: rotate(360deg); } }
 
+/* 编辑器工具栏（PI-FE-05 编辑工具）：经 TipTap command 触发富文本编辑（X-FORBID-005 受控通道）。 */
+.ed-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg-elevated);
+  border-bottom: 0.5px solid var(--rule);
+  flex-shrink: 0;
+}
+.ed-tb-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  font-size: 13px; line-height: 1;
+  border: 1px solid transparent; border-radius: var(--r-1);
+  background: transparent; color: var(--ink-2); cursor: pointer;
+}
+.ed-tb-btn:hover { background: var(--bg-overlay); color: var(--ink); }
+.ed-tb-btn.active { background: var(--bg-sunken); color: var(--ink); border-color: var(--rule); }
+.ed-tb-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+.ed-tb-select {
+  height: 26px; padding: 0 var(--sp-1); font-size: 12px;
+  border: 1px solid var(--rule); border-radius: var(--r-1);
+  background: var(--bg-card); color: var(--ink-2); cursor: pointer;
+}
+.ed-tb-color {
+  display: inline-flex; align-items: center; justify-content: center;
+  position: relative; width: 26px; height: 26px; border-radius: var(--r-1);
+  color: var(--ink-2); cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.ed-tb-color:hover { background: var(--bg-overlay); }
+.ed-tb-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.ed-tb-sep { width: 1px; height: 18px; background: var(--rule); margin: 0 4px; }
+.ed-tb-spacer { flex: 1 1 auto; } /* 把缩放控件推到工具栏右端 */
+.ed-tb-zoom {
+  min-width: 46px; height: 26px; padding: 0 6px;
+  font-family: var(--font-mono); font-size: 12px; text-align: center;
+  border: 1px solid var(--rule); border-radius: var(--r-1);
+  background: var(--bg-card); color: var(--ink-2); cursor: pointer;
+}
+.ed-tb-zoom:hover { background: var(--bg-overlay); color: var(--ink); }
+
 .editor-paper { flex: 1; overflow: auto; display: flex; justify-content: center; padding: var(--sp-8) var(--sp-6); }
 .editor-paper .ProseMirror {
+  /* 编辑预览区缩放（视图态）：CSS zoom 缩放纸张会重排布局，滚动条自适应；分页测量按 computed zoom 归一化。 */
+  zoom: var(--ed-zoom, 1);
   width: 100%;
   max-width: 720px;
   background: var(--bg-card);
@@ -366,6 +435,45 @@ button:disabled { opacity: 0.5; cursor: default; }
 .editor-paper .ProseMirror h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
 .editor-paper .ProseMirror h2 { font-size: 16px; font-weight: 600; }
 .editor-paper .ProseMirror:focus { outline: none; }
+
+/* 分页呈现（BR-ED-DATA-003）：docx 编辑开 A4 纸张观感；几何变量由 PaginationExtension 写入（TS 常量为源）。
+   分页缝为 Decoration.widget（纯呈现、不改模型不产脏态、不阻挡编辑，X-FORBID-005）。 */
+.editor-paper:has(.ProseMirror.rm-paginated) { background: var(--bg-sunken); align-items: flex-start; }
+.editor-paper .ProseMirror.rm-paginated {
+  width: var(--rm-page-width);
+  max-width: var(--rm-page-width);
+  flex: none;
+  padding: var(--rm-page-margin-y) var(--rm-page-margin-x);
+  background: var(--bg-card);
+  border: none;
+  border-radius: 0;
+  box-shadow: 0 1px 10px rgba(14, 12, 10, 0.14);
+}
+/* 分页缝：白色下页边 + 灰色装订缝（含页码）+ 白色上页边，全宽出血覆盖左右页边距。 */
+.ProseMirror.rm-paginated .rm-page-gap {
+  display: block;
+  height: calc(var(--rm-page-margin-y) * 2 + var(--rm-page-gap));
+  margin: 0 calc(-1 * var(--rm-page-margin-x));
+  background: var(--bg-card);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ProseMirror.rm-paginated .rm-page-gap-gutter {
+  position: relative;
+  height: var(--rm-page-gap);
+  margin-top: var(--rm-page-margin-y);
+  background: var(--bg-sunken);
+  border-top: 0.5px solid var(--rule);
+  border-bottom: 0.5px solid var(--rule);
+}
+.ProseMirror.rm-paginated .rm-page-gap-num {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-4);
+}
 
 .chat {
   grid-area: chat;

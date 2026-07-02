@@ -4,14 +4,15 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 /**
  * BlockIdExtension（ED-EDIT · PI-FE-05）。
  * 为顶层内容块（Block, TERM-ED-001）赋稳定 blockId，是 diff 定位（DE）、@mention 引用锚（REF）
- * 与分页切分的统一定位基准（A-ED-M-T-01 §4）。生成算法（此处时间戳+随机占位）为 ED-02 实现期债务。
+ * 与分页切分的统一定位基准（A-ED-M-T-01 §4）。生成算法：block_ + crypto.randomUUID()（§11.1 选型）。
  */
 
 const BLOCK_TYPES = ["paragraph", "heading", "blockquote", "codeBlock", "listItem"];
 
-/** 不透明 blockId 生成（占位实现，实现期换 ULID；A 类债务 A-ED-M-T-01 §10）。 */
+/** 不透明 blockId 生成：`block_` + crypto.randomUUID()（A-ED-M-T-01 §11.1 选型记录，G-4 定档）。
+ *  既有文档中的旧格式 id 依然有效——reconcile 只补缺/去重，不改既有唯一 id。 */
 function genBlockId(): string {
-  return `b_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return `block_${crypto.randomUUID()}`;
 }
 
 /**

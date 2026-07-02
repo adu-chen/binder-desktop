@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 /**
  * DOC 编辑链 Service（X-SEQ-002 / A-DOC-I-P-01 §2）：docx 打开/保存经 DOC 编辑链 command。
@@ -32,15 +32,48 @@ export interface DocxEditModel {
 }
 
 /**
+ * @GOV
+ * codes:    BR-ED-DATA-003-RB-ED-ED-EDIT-006
+ * type:     RB
+ * chain:    ED-EDIT
+ * rules:    BR-ED-DATA-003
+ * boundary: in=editChainHtmlWithRelativeMediaSrc | out=htmlWithAssetProtocolUrls(backendAuthorizedPerFileReadOnly)
+ */
+/// 图文呈现守则（BR-ED-DATA-003）：docx 编辑链 extract-media 把图片解到后端工作目录，HTML 内为相对
+/// `media/…` 路径，webview 无法直接解析。将相对 <img src> 改写为 asset 协议 URL（convertFileSrc）供只读
+/// 呈现——媒体文件由后端逐文件授权入 asset scope（X-FORBID-004 守界后端把关），前端只改呈现地址、
+/// 不写入媒体文件、不改文档正文模型。绝对/内联(data:)/已处理(asset:/blob:) 的 src 原样保留。
+/** 将编辑链 HTML 的相对媒体路径改写为 asset URL；mediaBase 为后端 extract-media 目录绝对路径。
+ *  converter 依赖注入（默认 convertFileSrc），便于单测不依赖 tauri 运行时。 */
+export function rewriteMediaSrc(
+  html: string,
+  mediaBase: string,
+  converter: (path: string) => string = convertFileSrc,
+): string {
+  const base = mediaBase.replace(/[/\\]+$/, "");
+  return html.replace(
+    /(<img\b[^>]*?\bsrc=)(["'])([^"']+)\2/gi,
+    (match, pre: string, quote: string, src: string) => {
+      // 绝对 URL / 内联 data / 已处理 asset·blob·file / 协议相对 → 不改。
+      if (/^(https?:|data:|asset:|blob:|file:|\/\/)/i.test(src)) return match;
+      const abs = `${base}/${src.replace(/^\.?[/\\]/, "")}`;
+      return `${pre}${quote}${converter(abs)}${quote}`;
+    },
+  );
+}
+
+/**
  * 打开 docx 进入编辑（doc.open_for_edit）：docx → 可编辑 HTML + 加载基线。
+ * media_base 存在时将相对 <img src> 改写为 asset URL（图文呈现，BR-ED-DATA-003）。
  * 失败抛 IpcError（convert_failed/依赖缺失）——调用方据此不建立编辑会话（SM-DOC-01 OpenError）。
  */
 export async function openDocxForEdit(relPath: string): Promise<DocxEditModel> {
-  const res = await callCommand<{ format: string; html: string; baseline: number }>(
+  const res = await callCommand<{ format: string; html: string; baseline: number; media_base?: string }>(
     "doc.open_for_edit",
     { relPath },
   );
-  return { html: res.html, baseline: res.baseline };
+  const html = res.media_base ? rewriteMediaSrc(res.html, res.media_base) : res.html;
+  return { html, baseline: res.baseline };
 }
 
 /**

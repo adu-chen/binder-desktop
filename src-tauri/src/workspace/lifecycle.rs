@@ -6,7 +6,6 @@
 
 use crate::types::WorkspaceRef;
 use rusqlite::{Connection, OptionalExtension};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn now_millis() -> i64 {
@@ -16,12 +15,9 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// 不透明 workspace ID（实现期选型 ULID/UUID；此处时间戳 + 进程内单调计数占位以保证唯一，
-/// A 类债务）。计数器避免同毫秒内多次调用碰撞。
+/// 不透明 workspace ID：`ws_` + UUIDv4（G-4 定档，A-CORE-X-R-03 §7；全局唯一、跨进程无碰撞）。
 fn gen_workspace_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("ws_{}_{}", now_millis(), n)
+    format!("ws_{}", uuid::Uuid::new_v4())
 }
 
 /// 置某 workspace 为唯一活动态（清除其余 is_active）——单活动不变量的执行点。

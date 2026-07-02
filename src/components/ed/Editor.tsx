@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
@@ -10,6 +10,8 @@ import { saveDocument, saveDocxDocument, reloadDocument, pollExternalChange } fr
 import { requestAssist } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
+import { EditorToolbar } from "./EditorToolbar";
+import { ZOOM, stepZoom } from "./zoom";
 
 /**
  * ED 编辑器宿主（A-SYS-C-T-02 §3 编辑区 · PI-FE-05/07/08）。
@@ -71,6 +73,8 @@ export function Editor() {
   const assistRange = useRef<{ from: number; to: number }>({ from: 0, to: 0 });
   // 上一活动文档路径（切换标签前据此把当前编辑内容序列化回写其会话 → 不丢草稿）。
   const lastPathRef = useRef<string | null>(null);
+  // 编辑预览区缩放（视图态，纯呈现层——CSS zoom 施加于编辑纸张，不改文档模型/不产脏态）。
+  const [zoom, setZoom] = useState<number>(ZOOM.default);
 
   const editor = useEditor({
     extensions: buildEditorExtensions(),
@@ -157,6 +161,9 @@ export function Editor() {
     } else {
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
     }
+    // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开 A4 分页，md/纯文本关（人类决策 2026-07-02）。
+    // 纯呈现层——不触发脏态（setPagination 仅 setMeta，docChanged=false）。
+    editor.commands.setPagination(editFormat === "html");
     // 搜索命中跳行：内容设入后定位到目标行（块），随后清除请求。
     const { jumpLine } = edStore.getSnapshot();
     if (jumpLine !== null) {
@@ -260,7 +267,14 @@ export function Editor() {
           </button>
         </div>
       )}
-      <div className="editor-paper">
+      <EditorToolbar
+        editor={editor}
+        zoom={zoom}
+        onZoomIn={() => setZoom((z) => stepZoom(z, ZOOM.step))}
+        onZoomOut={() => setZoom((z) => stepZoom(z, -ZOOM.step))}
+        onZoomReset={() => setZoom(ZOOM.default)}
+      />
+      <div className="editor-paper" style={{ "--ed-zoom": String(zoom) } as CSSProperties}>
         <EditorContent editor={editor} />
       </div>
       <InlineAssistPopover onGenerate={generateInline} onApply={applyInline} />

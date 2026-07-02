@@ -473,6 +473,24 @@ fn emit_doc01(app: &tauri::AppHandle, rel_path: &str, st: doc::convert::DocConve
     );
 }
 
+/// 递归授权 extract-media 工作目录下所有抽取媒体文件进入 asset 协议 scope（编辑链图文呈现）。
+/// 逐文件最小暴露（不开放整目录，同 prv.media_src 纪律）；work_dir 按文档 baseline 隔离，仅本 docx 媒体。
+/// 授权失败不阻断打开（个别图片无法呈现降级为 broken img，不影响文本编辑）。
+fn authorize_media_files(app: &tauri::AppHandle, dir: &std::path::Path) {
+    use tauri::Manager;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            authorize_media_files(app, &p);
+        } else if p.is_file() {
+            let _ = app.asset_protocol_scope().allow_file(&p);
+        }
+    }
+}
+
 fn route_open_for_edit(
     request: &CommandRequest,
     state: &AppState,
@@ -495,7 +513,16 @@ fn route_open_for_edit(
         Ok(html) => {
             let st = transition(opening, DocConvertEvent::ConvertOk).expect("OpenConverting+ConvertOk→Ready");
             emit_doc01(app, &rel_path, st);
-            Ok(serde_json::json!({ "format": "html", "html": html, "baseline": baseline }))
+            // 图文呈现（BR-DOC-DATA-002 嵌入图片必需子集）：extract-media 把图片解到 work_dir（按 baseline
+            // 隔离），HTML 内为相对 `media/…` 路径。逐文件授权入 asset 协议 scope（最小暴露，同 prv.media_src，
+            // X-FORBID-004 守界由后端把关）；回 media_base 供前端将相对 <img src> 改写为 asset URL（只读呈现）。
+            authorize_media_files(app, &work_dir);
+            Ok(serde_json::json!({
+                "format": "html",
+                "html": html,
+                "baseline": baseline,
+                "media_base": work_dir.to_string_lossy(),
+            }))
         }
         Err(e) => {
             // 转换失败：不建编辑会话，OpenError（原文件不受影响）。
@@ -754,11 +781,9 @@ fn now_millis() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-/// 不透明 id（diff_id / payload_ref 占位；与 lifecycle ID 同策略，A 类债务）。
+/// 不透明 id（diff_id / payload_ref）：前缀 + UUIDv4（G-4 定档，A-CORE-X-R-03 §7，与 lifecycle 同策略）。
 fn gen_id(prefix: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!("{prefix}_{}_{}", now_millis(), N.fetch_add(1, Ordering::Relaxed))
+    format!("{prefix}_{}", uuid::Uuid::new_v4())
 }
 
 fn doc_type_of(rel_path: &str) -> String {

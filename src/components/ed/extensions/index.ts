@@ -17,6 +17,7 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { BlockIdExtension } from "./BlockIdExtension";
 import { DiffDecorationExtension } from "./DiffDecorationExtension";
+import { PaginationExtension } from "./Pagination";
 import { FontSize } from "./FontSize";
 
 /**
@@ -57,5 +58,7 @@ export function buildEditorExtensions(): Extensions {
     BlockIdExtension,
     // GreenReview 装饰层（BR-ED-STATE-002 / TERM-ED-003）——依赖 blockId 锚定。
     DiffDecorationExtension,
+    // 分页呈现层（BR-ED-DATA-003）——按块高在块边界叠加分页缝 widget；仅 docx 编辑默认开（Editor 切换）。
+    PaginationExtension,
   ];
 }

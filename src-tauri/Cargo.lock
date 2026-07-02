@@ -119,6 +119,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
