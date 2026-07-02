@@ -4,12 +4,15 @@ import { startTurn, listDocBlocks, uploadByok, type DocBlock } from "../../servi
 import { generateSampleDiff } from "../../services/deService";
 import { useEdStore } from "../../store/edStore";
 import { useWsStore } from "../../store/wsStore";
-import { captureSelectionRef } from "../../services/edLocate";
+import { captureSelectionRef, SELECTION_REF_MIME, type SelectionRef } from "../../services/edLocate";
 
 interface BlockRef {
   relPath: string;
   blockId: string;
   text: string;
+  /** 块内纯文本偏移区间（CharAnchor，PI-ED-10 位置引用）；可空=块级锚（后端 serde 忽略未知/缺省兼容）。 */
+  start?: number;
+  end?: number;
 }
 
 /** 检测光标前的活跃 @ token（@ 前为行首/空白、@ 后到光标无空白）→ { query, start }；否则 null。 */
@@ -112,11 +115,43 @@ export function Composer() {
   const addSelectionRef = () => {
     const ref = captureSelectionRef();
     if (!ref || !openPath) return;
+    pushSelectionRef({ ...ref, path: openPath });
+  };
+
+  // 选区引用去重入列（按钮捕获与拖拽 drop 共用）：含字符锚区间（有偏移时），同块同区间不重复。
+  const pushSelectionRef = (ref: SelectionRef) => {
+    if (!ref.blockId || !ref.path) return;
+    const withRange = ref.end > ref.start; // start=end=0 为块级回落锚
     setBlockRefs((cur) =>
-      cur.some((r) => r.blockId === ref.blockId && r.relPath === openPath)
+      cur.some(
+        (r) => r.blockId === ref.blockId && r.relPath === ref.path && r.start === (withRange ? ref.start : undefined),
+      )
         ? cur
-        : [...cur, { relPath: openPath, blockId: ref.blockId, text: ref.text }],
+        : [
+            ...cur,
+            {
+              relPath: ref.path,
+              blockId: ref.blockId,
+              text: ref.text,
+              ...(withRange ? { start: ref.start, end: ref.end } : {}),
+            },
+          ],
     );
+  };
+
+  // 选区拖拽入 Composer → 位置引用 chip（PI-ED-10 #6：SelectionRef 经自定义 MIME 携带字符锚）。
+  const onDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(SELECTION_REF_MIME)) e.preventDefault();
+  };
+  const onDrop = (e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData(SELECTION_REF_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    try {
+      pushSelectionRef(JSON.parse(raw) as SelectionRef);
+    } catch {
+      /* 载荷损坏 → 忽略本次拖放 */
+    }
   };
 
   const toggleMention = (relPath: string) => {
@@ -124,7 +159,7 @@ export function Composer() {
   };
 
   return (
-    <div className="composer">
+    <div className="composer" onDragOver={onDragOver} onDrop={onDrop}>
       {mentions.length > 0 && (
         <div className="composer-mentions">
           {mentions.map((p) => (
@@ -143,6 +178,7 @@ export function Composer() {
           {blockRefs.map((r, i) => (
             <span key={`${r.blockId}-${i}`} className="mention-chip" title={r.text}>
               选区@{r.relPath}#{r.blockId.slice(0, 6)}
+              {r.start !== undefined && r.end !== undefined ? `[${r.start}–${r.end}]` : ""}
               <button
                 className="mention-chip-x"
                 onClick={() => setBlockRefs((c) => c.filter((_, j) => j !== i))}

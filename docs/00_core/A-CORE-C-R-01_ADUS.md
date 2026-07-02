@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-02T23:34:10.597Z -->
+<!-- 最后生成时间：2026-07-02T23:43:49.681Z -->
 
 ### 模块编码表
 
@@ -234,7 +234,7 @@
 
 | codes                                   | type   | rules                                              | 文件                           | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 246  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 266  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
 | BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1434 |
 
@@ -371,14 +371,15 @@
 
 #### ED-EDIT
 
-| codes                              | type | rules                                | 文件                                               | 行号  |
-| ---------------------------------- | ---- | ------------------------------------ | ------------------------------------------------ | --- |
-| BR-ED-DATA-001-DATA-ED-ED-EDIT-001 | DATA | BR-ED-DATA-001 term_ref: TERM-ED-001 | src/components/ed/extensions/BlockIdExtension.ts | 46  |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-005   | RB   | BR-ED-DATA-003                       | src/components/ed/extensions/Pagination.ts       | 207 |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-006   | RB   | BR-ED-DATA-003                       | src/services/docService.ts                       | 35  |
-| BR-ED-DATA-002-RB-ED-ED-EDIT-004   | RB   | BR-ED-DATA-002                       | src/services/edService.ts                        | 16  |
-| BR-ED-STATE-003-RB-ED-ED-EDIT-003  | RB   | BR-ED-STATE-003, BR-WS-OBS-001       | src/services/edService.ts                        | 104 |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002  | RB   | BR-ED-STATE-001                      | src/store/edStore.ts                             | 125 |
+| codes                               | type  | rules                                             | 文件                                               | 行号  |
+| ----------------------------------- | ----- | ------------------------------------------------- | ------------------------------------------------ | --- |
+| BR-ED-DATA-001-DATA-ED-ED-EDIT-001  | DATA  | BR-ED-DATA-001 term_ref: TERM-ED-001              | src/components/ed/extensions/BlockIdExtension.ts | 46  |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005    | RB    | BR-ED-DATA-003                                    | src/components/ed/extensions/Pagination.ts       | 207 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-006    | RB    | BR-ED-DATA-003                                    | src/services/docService.ts                       | 35  |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | BR-ED-DATA-004 term_ref: TERM-ED-004, TERM-ED-005 | src/services/edLocate.ts                         | 90  |
+| BR-ED-DATA-002-RB-ED-ED-EDIT-004    | RB    | BR-ED-DATA-002                                    | src/services/edService.ts                        | 16  |
+| BR-ED-STATE-003-RB-ED-ED-EDIT-003   | RB    | BR-ED-STATE-003, BR-WS-OBS-001                    | src/services/edService.ts                        | 104 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002   | RB    | BR-ED-STATE-001                                   | src/store/edStore.ts                             | 125 |
 
 #### IPC-CALL
 
@@ -551,7 +552,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 246 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 266 |
 
 #### BR-AG-STATE-004
 
@@ -720,6 +721,12 @@
 | -------------------------------- | ---- | ------- | ------------------------------------------ | --- |
 | BR-ED-DATA-003-RB-ED-ED-EDIT-005 | RB   | ED-EDIT | src/components/ed/extensions/Pagination.ts | 207 |
 | BR-ED-DATA-003-RB-ED-ED-EDIT-006 | RB   | ED-EDIT | src/services/docService.ts                 | 35  |
+
+#### BR-ED-DATA-004 term_ref: TERM-ED-004
+
+| codes                               | type  | chain   | 文件                       | 行号 |
+| ----------------------------------- | ----- | ------- | ------------------------ | -- |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | ED-EDIT | src/services/edLocate.ts | 90 |
 
 #### BR-ED-STATE-001
 
@@ -960,7 +967,7 @@
 
 | codes                               | type | chain     | 文件                           | 行号  |
 | ----------------------------------- | ---- | --------- | ---------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 246 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx | 266 |
 
 #### TERM-CLOUD-001
 
@@ -979,6 +986,12 @@
 | codes                              | type | chain    | 文件                                                      | 行号 |
 | ---------------------------------- | ---- | -------- | ------------------------------------------------------- | -- |
 | BR-ED-STATE-002-RB-ED-ED-DECOR-001 | RB   | ED-DECOR | src/components/ed/extensions/DiffDecorationExtension.ts | 67 |
+
+#### TERM-ED-005
+
+| codes                               | type  | chain   | 文件                       | 行号 |
+| ----------------------------------- | ----- | ------- | ------------------------ | -- |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | ED-EDIT | src/services/edLocate.ts | 90 |
 
 ### triage 汇总
 

@@ -7,6 +7,7 @@ import { edStore, useEdStore } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type GreenReviewState } from "../../store/deStore";
 import { assistStore } from "../../store/assistStore";
 import { saveDocument, saveDocxDocument, reloadDocument, pollExternalChange } from "../../services/edService";
+import { registerEditor, getSelectionRef, SELECTION_REF_MIME } from "../../services/edLocate";
 import { requestAssist } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
@@ -95,6 +96,19 @@ export function Editor() {
       edStore.markDirty();
     },
     editorProps: {
+      // 选区拖拽携带位置引用（PI-ED-10 #6，BR-ED-DATA-004/TERM-ED-005）：dragstart 时把 SelectionRef
+      // （字符锚 + 文本 + 来源路径）写入自定义 MIME——拖入 AG 输入面成为位置引用；编辑器内拖动仍走
+      // ProseMirror 原生移动（不阻止默认，返回 false）。
+      handleDOMEvents: {
+        dragstart: (_view, event) => {
+          const ref = getSelectionRef();
+          if (ref && event.dataTransfer) {
+            const path = edStore.getSnapshot().openPath ?? "";
+            event.dataTransfer.setData(SELECTION_REF_MIME, JSON.stringify({ ...ref, path }));
+          }
+          return false; // 不接管：器内拖动保持原生行为
+        },
+      },
       handleKeyDown: (view, event) => {
         const mod = event.metaKey || event.ctrlKey;
         if (!mod) return false;
@@ -142,6 +156,12 @@ export function Editor() {
       },
     },
   });
+
+  // 注册编辑器实例供按需查询（PI-ED-10：getSelectionRef/getCursorRef/locateBlock 精确计算）。
+  useEffect(() => {
+    registerEditor(editor);
+    return () => registerEditor(null);
+  }, [editor]);
 
   // 外部变更监视：打开真实文档时每 5s 轮询磁盘 vs 加载基线（external_change 逻辑契约，物理事件延 SY-02）。
   useEffect(() => {
