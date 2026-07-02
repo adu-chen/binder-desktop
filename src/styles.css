@@ -325,7 +325,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 .tabstrip {
   display: flex; align-items: stretch; gap: 1px; overflow-x: auto;
   background: var(--bg-sunken); border-bottom: 0.5px solid var(--rule); flex-shrink: 0;
+  scrollbar-width: none; /* PI-ED-07 #12：隐藏横向滚动条（纵轮转横滚 + 激活自动滚入） */
 }
+.tabstrip::-webkit-scrollbar { display: none; }
+/* PI-ED-07 #5 标签拖动排序：拖动中半透明；落点指示（目标前缘/末尾竖线） */
+.tab.dragging { opacity: 0.45; }
+.tab.drop-before { box-shadow: inset 2px 0 0 var(--rust); }
+.tab-drop-end { flex: none; width: 2px; background: var(--rust); }
 .tab {
   display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3); font-size: 12px; color: var(--ink-4);
@@ -375,14 +381,22 @@ button:disabled { opacity: 0.5; cursor: default; }
    ed-spin 关键帧仍被保存指示等活跃元素复用，保留。 */
 @keyframes ed-spin { to { transform: rotate(360deg); } }
 
-/* 编辑器工具栏（PI-FE-05 编辑工具）：经 TipTap command 触发富文本编辑（X-FORBID-005 受控通道）。 */
+/* 编辑器工具栏（PI-FE-05 编辑工具）：经 TipTap command 触发富文本编辑（X-FORBID-005 受控通道）。
+   PI-ED-07 #11：两排固定分组；窄窗口各行尾部溢出横向滚出（滚动条隐藏）。 */
 .ed-toolbar {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  display: flex; flex-direction: column; gap: 1px;
   padding: var(--sp-1) var(--sp-2);
   background: var(--bg-elevated);
   border-bottom: 0.5px solid var(--rule);
   flex-shrink: 0;
 }
+.ed-tb-row {
+  display: flex; align-items: center; gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+}
+.ed-tb-row::-webkit-scrollbar { display: none; }
+.ed-tb-row > * { flex-shrink: 0; }
 .ed-tb-btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 26px; height: 26px; padding: 0 6px;
@@ -414,6 +428,59 @@ button:disabled { opacity: 0.5; cursor: default; }
   background: var(--bg-card); color: var(--ink-2); cursor: pointer;
 }
 .ed-tb-zoom:hover { background: var(--bg-overlay); color: var(--ink); }
+
+/* 编辑器底部状态栏（PI-ED-07 #4）：字数/块数/光标位 + 保存态/外部修改裁决（BR-ED-STATE-003 呈现面）。 */
+.ed-statusbar {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 2px var(--sp-3);
+  background: var(--bg-elevated);
+  border-top: 0.5px solid var(--rule);
+  font-size: 11px; color: var(--ink-4);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.ed-sb-item { white-space: nowrap; }
+.ed-sb-spacer { flex: 1 1 auto; }
+.ed-sb-state.ed-sb-dirty { color: var(--gold); }
+.ed-sb-state.ed-sb-saved { color: var(--ink-4); }
+.ed-sb-state.ed-sb-saving { color: var(--ink-3); }
+.ed-sb-loading { color: var(--ink-3); }
+.ed-sb-conflict-wrap { position: relative; }
+button.ed-sb-conflict {
+  padding: 0 var(--sp-2); border: none; background: var(--gold-bg); color: var(--gold);
+  font-size: 11px; font-family: var(--font-mono); border-radius: var(--r-1); cursor: pointer;
+}
+.ed-sb-conflict-pop {
+  position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 30;
+  width: 280px; padding: var(--sp-3);
+  background: var(--bg-card); border: 0.5px solid var(--rule-strong);
+  border-radius: var(--r-2); box-shadow: 0 6px 20px rgba(14, 12, 10, 0.14);
+  font-family: var(--font-sans); font-size: 13px; color: var(--ink-2);
+}
+.ed-sb-conflict-pop p { margin: 0 0 var(--sp-2); }
+.ed-sb-conflict-actions { display: flex; gap: var(--sp-2); }
+.ed-sb-conflict-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
+
+/* 编辑加载骨架（PI-ED-07 #7）：大 docx 转换期的即时反馈（不确定进度，诚实不显假百分比）。 */
+.editor-loading {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-3); width: 100%; min-height: 40vh;
+}
+.editor-loading-spinner {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--rule); border-top-color: var(--rust);
+  animation: ed-spin 0.8s linear infinite;
+}
+.editor-loading-bar {
+  width: 180px; height: 3px; border-radius: 2px; overflow: hidden;
+  background: var(--bg-sunken); position: relative;
+}
+.editor-loading-bar::after {
+  content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%;
+  background: var(--rust); opacity: 0.6;
+  animation: ed-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes ed-indeterminate { to { left: 100%; } }
 
 .editor-paper { flex: 1; overflow: auto; display: flex; justify-content: center; padding: var(--sp-8) var(--sp-6); }
 .editor-paper .ProseMirror {

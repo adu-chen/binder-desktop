@@ -10,7 +10,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
 import { agStore } from "../store/agStore";
-import type { SmDe01Payload, SmWs02Payload, SmWs01Payload, SmAg01Payload } from "../types/smEvents";
+import type { SmDe01Payload, SmWs02Payload, SmWs01Payload, SmAg01Payload, SmDoc01Payload } from "../types/smEvents";
 
 const unlisteners: UnlistenFn[] = [];
 
@@ -33,6 +33,10 @@ export async function startSmListeners(): Promise<void> {
     // SM-AG-01：chat 回合机（Task 2-E）——instance_id 为 turn_id；驱动 sending 输入门控。
     await listen<SmAg01Payload>("sm:SM-AG-01:state_changed", ({ payload }) => {
       agStore.applyTurnState(payload.instance_id, payload.state);
+    }),
+    // SM-DOC-01：docx 开/存转换机（PI-ED-07 #7）——OpenConverting 投影为会话加载反馈。
+    await listen<SmDoc01Payload>("sm:SM-DOC-01:state_changed", ({ payload }) => {
+      edStore.applyDocConvertState(payload.instance_id, payload.state);
     }),
   );
 }

@@ -33,3 +33,6 @@ export type SmWs01Payload = SmStatePayload<RustSaveState> & { machine_id: "SM-WS
 
 /** SM-AG-01 · chat 回合机（Task 2-E 已集成）；instance_id 为 turn_id。 */
 export type SmAg01Payload = SmStatePayload<RustTurnState> & { machine_id: "SM-AG-01" };
+
+/** SM-DOC-01 · docx 开/存转换机（PI-ED-07 #7 加载反馈）；instance_id 为 rel_path。 */
+export type SmDoc01Payload = SmStatePayload<string> & { machine_id: "SM-DOC-01" };

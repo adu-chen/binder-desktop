@@ -46,6 +46,8 @@ export interface EditSession {
   tabState: TabState;
   /** 编辑模型格式：text=md/纯文本（ws.read_doc/save_doc）；html=docx 编辑链（doc.open_for_edit/save_from_edit）。 */
   editFormat: "text" | "html";
+  /** docx 打开转换进行中（SM-DOC-01 OpenConverting 投影，PI-ED-07 #7 加载反馈）。 */
+  converting?: boolean;
 }
 
 interface EdState {
@@ -66,6 +68,8 @@ interface EdState {
   loadedContent: string | null;
   baseline: number | null;
   editFormat: "text" | "html";
+  /** 活动会话 docx 转换进行中（SM-DOC-01 投影）。 */
+  converting: boolean;
 }
 
 type Core = Pick<EdState, "sessions" | "activePath" | "loadSeq" | "jumpLine">;
@@ -80,6 +84,7 @@ function derive(core: Core): Omit<EdState, keyof Core> {
     loadedContent: sess?.content ?? null,
     baseline: sess?.baseline ?? null,
     editFormat: sess?.editFormat ?? "text",
+    converting: sess?.converting ?? false,
   };
 }
 
@@ -213,6 +218,14 @@ export const edStore = {
     const cur = state.sessions[relPath];
     if (!cur || cur.tabState === "external_changed" || cur.tabState === "pending_diff") return;
     patchSession(relPath, { tabState: tab });
+  },
+  /**
+   * 投影后端 SM-DOC-01 docx 开/存机转移（PI-ED-07 #7 · X-FORBID-007）：OpenConverting → 会话
+   * converting（加载反馈呈现）；Ready/OpenError → 清除。会话不存在时空操作（会话由打开流程建立）。
+   */
+  applyDocConvertState(relPath: string, docState: string) {
+    if (!state.sessions[relPath]) return;
+    patchSession(relPath, { converting: docState === "OpenConverting" });
   },
   /** 编辑产生脏态（编辑器 onUpdate 驱动，作用于活动会话）。 */
   markDirty() {

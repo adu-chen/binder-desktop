@@ -97,6 +97,18 @@ export const tabsStore = {
     }
   },
 
+  /** 拖动排序（PI-ED-07 #5）：把 fromId 标签移到 toId 标签之前（toId=null → 移到末尾）。
+   *  纯数组重排，不改激活态/会话。无效 id / 同位 → 空操作。 */
+  reorder(fromId: string, toId: string | null) {
+    const fromIdx = state.tabs.findIndex((t) => t.id === fromId);
+    if (fromIdx === -1 || fromId === toId) return;
+    const tabs = state.tabs.filter((t) => t.id !== fromId);
+    const insertIdx = toId === null ? tabs.length : tabs.findIndex((t) => t.id === toId);
+    if (insertIdx === -1) return;
+    tabs.splice(insertIdx, 0, state.tabs[fromIdx]);
+    setState({ tabs, activeTabId: state.activeTabId });
+  },
+
   /** 切换/关闭 workspace 时清空全部标签。 */
   reset() {
     setState({ tabs: [], activeTabId: null });

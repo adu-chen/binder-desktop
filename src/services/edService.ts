@@ -27,6 +27,10 @@ interface IpcLikeError {
 /** 打开文档：docx 经 DOC 编辑链（doc.open_for_edit → HTML），其余经 ws.read_doc（文本）→ 载入编辑器
  *  （内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
 export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
+  // 立即建占位会话并置活动（PI-ED-07 #7）：大 docx 转换耗时秒级，先切标签显示加载骨架、
+  // 不阻塞交互；SM-DOC-01 OpenConverting 广播叠加"正在转换"反馈。已有会话（切回标签）不重建。
+  const hadSession = Boolean(edStore.getSnapshot().sessions[relPath]);
+  if (!hadSession) edStore.openDoc(relPath);
   try {
     if (isDocxEditable(relPath)) {
       // docx 编辑链：docx → 可编辑 HTML（保留样式子集），editFormat=html。
@@ -38,6 +42,8 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
     edStore.loadDoc(relPath, content, baseline, jumpLine);
   } catch (e) {
     const err = e as IpcLikeError;
+    // 打开失败：撤销本次新建的占位会话（不留假空文档）；既有会话保留（重载失败不丢草稿）。
+    if (!hadSession) edStore.closeSession(relPath);
     console.error(`open document failed [${err.code ?? "?"}]: ${err.message ?? e}`);
   }
 }

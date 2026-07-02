@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
@@ -11,6 +11,7 @@ import { requestAssist } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 import { EditorToolbar } from "./EditorToolbar";
+import { EditorStatusBar } from "./EditorStatusBar";
 import { ZOOM, stepZoom } from "./zoom";
 import { edViewPrefsStore, getPageGeometry, useEdViewPrefs } from "../../store/edViewPrefsStore";
 
@@ -66,19 +67,26 @@ function serialize(
   return editor.getText({ blockSeparator: "\n" });
 }
 
+/** 每标签滚动位置暂存（PI-ED-07 N7，会话级视图瞬态；组件重挂即清）。 */
+const scrollMemo = new Map<string, number>();
+
 export function Editor() {
-  const { openPath, tabState, loadSeq, loadedContent, editFormat } = useEdStore();
+  const { openPath, tabState, loadSeq, loadedContent, editFormat, converting } = useEdStore();
   const { diffs } = useDeStore(); // GreenReview 同步用（标签状态投影已移至 center TabStrip）
   const hostRef = useRef<HTMLDivElement>(null);
+  const paperRef = useRef<HTMLDivElement>(null);
   // 当前辅助操作的目标编辑范围（⌘K=选区，⌘J=光标）。
   const assistRange = useRef<{ from: number; to: number }>({ from: 0, to: 0 });
   // 上一活动文档路径（切换标签前据此把当前编辑内容序列化回写其会话 → 不丢草稿）。
   const lastPathRef = useRef<string | null>(null);
-  // 编辑预览区缩放（视图态，纯呈现层——CSS zoom 施加于编辑纸张，不改文档模型/不产脏态）。
-  const [zoom, setZoom] = useState<number>(ZOOM.default);
-  // 纸张视图偏好（PI-ED-06：A4/A3/… × 横竖排，per-doc localStorage；不落盘文档）。
+  // 视图偏好（PI-ED-06/07：纸张 + 缩放，per-doc localStorage；不落盘文档）。
   const viewPrefs = useEdViewPrefs();
   const paperPrefs = openPath ? (viewPrefs[openPath] ?? edViewPrefsStore.getPrefs(openPath)) : null;
+  // 缩放（#10 per-doc 持久）：从视图偏好读；无文档回默认。
+  const zoom = paperPrefs?.zoom ?? ZOOM.default;
+  const setZoom = (z: number) => {
+    if (openPath) edViewPrefsStore.setZoom(openPath, z);
+  };
 
   const editor = useEditor({
     extensions: buildEditorExtensions(),
@@ -147,11 +155,12 @@ export function Editor() {
   // md/markdown 以 Markdown 解析为富文本（字符串经 tiptap-markdown）；其余按纯文本（doc 对象，绕过 md 解析）。
   useEffect(() => {
     if (!editor || loadSeq === 0) return;
-    // 切换标签前：暂存上一活动文档的当前编辑内容到其会话（按其格式序列化）。
+    // 切换标签前：暂存上一活动文档的当前编辑内容到其会话（按其格式序列化）+ 滚动位置（N7）。
     const prev = lastPathRef.current;
     if (prev && prev !== openPath) {
       const prevSess = edStore.getSnapshot().sessions[prev];
       if (prevSess) edStore.updateContent(prev, serialize(editor, prevSess.editFormat, prev));
+      if (paperRef.current) scrollMemo.set(prev, paperRef.current.scrollTop);
     }
     lastPathRef.current = openPath;
     if (!openPath || loadedContent === null) return;
@@ -177,6 +186,14 @@ export function Editor() {
     if (jumpLine !== null) {
       jumpToLine(editor, jumpLine);
       edStore.clearJump();
+    } else {
+      // N7：无跳行请求时恢复该标签上次滚动位置（下一帧，待内容布局）。
+      const memo = scrollMemo.get(openPath);
+      if (memo !== undefined) {
+        requestAnimationFrame(() => {
+          if (paperRef.current && lastPathRef.current === openPath) paperRef.current.scrollTop = memo;
+        });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 loadSeq 驱动载入；openPath/loadedContent/editFormat 在 loadSeq 变更时同步刷新，单独入依赖会引发重复 setContent
   }, [editor, loadSeq]);
@@ -197,6 +214,22 @@ export function Editor() {
     if (!editor || editFormat !== "html" || !paperPrefs) return;
     editor.commands.setPageGeometry(getPageGeometry(paperPrefs.paper, paperPrefs.orientation));
   }, [editor, editFormat, paperPrefs?.paper, paperPrefs?.orientation]); // eslint-disable-line react-hooks/exhaustive-deps -- paperPrefs 对象按字段依赖
+
+  // #10 滚轮/触摸板缩放：ctrl+wheel（macOS 捏合手势合成 ctrlKey）→ 步进缩放；passive:false 以阻止页面缩放。
+  useEffect(() => {
+    const el = paperRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const path = edStore.getSnapshot().openPath;
+      if (!path) return;
+      const cur = edViewPrefsStore.getPrefs(path).zoom;
+      edViewPrefsStore.setZoom(path, stepZoom(cur, e.deltaY < 0 ? ZOOM.step : -ZOOM.step));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [openPath === null]); // eslint-disable-line react-hooks/exhaustive-deps -- paper 容器随空态/编辑态切换重挂
 
   // GreenReview 同步：deStore diff 态变更 → 推送 blockId→GreenReviewState 映射到装饰层。
   useEffect(() => {
@@ -255,46 +288,41 @@ export function Editor() {
     );
   }
 
+  // 会话已建但内容未载入（大 docx 转换中）→ 加载骨架，立即反馈不阻塞交互（PI-ED-07 #7）。
+  const loading = loadedContent === null;
+
   return (
     <div className="editor-host" ref={hostRef}>
-      {/* 标签栏由 center TabStrip 统一承载（PI-FE-26）；此处仅编辑纸张 + 冲突条 + 辅助浮层 */}
-      {tabState === "external_changed" && (
-        <div
-          role="alert"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--sp-3)",
-            padding: "var(--sp-2) var(--sp-4)",
-            background: "var(--gold-bg)",
-            borderBottom: "2px solid var(--gold)",
-            fontSize: 13,
-            color: "var(--ink-2)",
-          }}
-        >
-          <span>文件被外部修改或保存冲突。</span>
-          <button style={{ padding: "var(--sp-1) var(--sp-3)", fontSize: 12 }} onClick={() => void saveCurrent(true)}>
-            保留我的编辑（覆盖）
-          </button>
-          <button className="ghost" style={{ padding: "var(--sp-1) var(--sp-3)", fontSize: 12 }} onClick={() => void reloadDocument()}>
-            放弃并重载
-          </button>
-        </div>
-      )}
+      {/* 标签栏由 center TabStrip 统一承载（PI-FE-26）；冲突裁决移入底部状态栏（PI-ED-07 #4） */}
       <EditorToolbar
         editor={editor}
         zoom={zoom}
-        onZoomIn={() => setZoom((z) => stepZoom(z, ZOOM.step))}
-        onZoomOut={() => setZoom((z) => stepZoom(z, -ZOOM.step))}
+        onZoomIn={() => setZoom(stepZoom(zoom, ZOOM.step))}
+        onZoomOut={() => setZoom(stepZoom(zoom, -ZOOM.step))}
         onZoomReset={() => setZoom(ZOOM.default)}
         paper={editFormat === "html" && paperPrefs ? paperPrefs.paper : undefined}
         orientation={editFormat === "html" && paperPrefs ? paperPrefs.orientation : undefined}
         onPaperChange={(p) => openPath && edViewPrefsStore.setPaper(openPath, p)}
         onOrientationChange={(o) => openPath && edViewPrefsStore.setOrientation(openPath, o)}
       />
-      <div className="editor-paper" style={{ "--ed-zoom": String(zoom) } as CSSProperties}>
-        <EditorContent editor={editor} />
+      <div className="editor-paper" ref={paperRef} style={{ "--ed-zoom": String(zoom) } as CSSProperties}>
+        {loading ? (
+          <div className="editor-loading" role="status" aria-live="polite">
+            <span className="editor-loading-spinner" aria-hidden="true" />
+            <p className="muted">{converting ? "正在转换文档…" : "正在打开文档…"}</p>
+            <span className="editor-loading-bar" aria-hidden="true" />
+          </div>
+        ) : (
+          <EditorContent editor={editor} />
+        )}
       </div>
+      <EditorStatusBar
+        editor={editor}
+        tabState={tabState}
+        converting={converting}
+        onKeepMine={() => void saveCurrent(true)}
+        onReload={() => void reloadDocument()}
+      />
       <InlineAssistPopover onGenerate={generateInline} onApply={applyInline} />
       <AutocompleteOverlay onPick={pickAutocomplete} />
     </div>

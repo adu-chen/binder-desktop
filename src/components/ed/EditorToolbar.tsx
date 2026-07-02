@@ -123,7 +123,10 @@ export function EditorToolbar({
   };
 
   return (
+    // 两排固定分组（PI-ED-07 #11）：行1=历史/块型/字号/文本样式，行2=块级/插入/纸张/缩放；
+    // 窄窗口时各行尾部溢出可横向滚出（滚动条隐藏）。
     <div className="ed-toolbar" role="toolbar" aria-label="编辑工具栏">
+      <div className="ed-tb-row">
       <TbBtn title="撤销 ⌘Z" onClick={() => chain().undo().run()} disabled={!editor.can().undo()}>
         ↶
       </TbBtn>
@@ -193,8 +196,9 @@ export function EditorToolbar({
       >
         ✏︎
       </TbBtn>
-      <Sep />
+      </div>
 
+      <div className="ed-tb-row">
       <TbBtn title="无序列表" active={editor.isActive("bulletList")} onClick={() => chain().toggleBulletList().run()}>
         •
       </TbBtn>
@@ -281,6 +285,7 @@ export function EditorToolbar({
       <TbBtn title="放大" onClick={onZoomIn} disabled={zoom >= ZOOM.max}>
         +
       </TbBtn>
+      </div>
     </div>
   );
 }

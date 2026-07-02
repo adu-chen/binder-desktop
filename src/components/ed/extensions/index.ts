@@ -15,6 +15,7 @@ import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
+import { CharacterCount } from "@tiptap/extension-character-count";
 import { BlockIdExtension } from "./BlockIdExtension";
 import { DiffDecorationExtension } from "./DiffDecorationExtension";
 import { PaginationExtension } from "./Pagination";
@@ -60,5 +61,7 @@ export function buildEditorExtensions(): Extensions {
     DiffDecorationExtension,
     // 分页呈现层（BR-ED-DATA-003）——按块高在块边界叠加分页缝 widget；仅 docx 编辑默认开（Editor 切换）。
     PaginationExtension,
+    // 字数统计（PI-ED-07 状态栏：中文按字符计）。
+    CharacterCount,
   ];
 }
