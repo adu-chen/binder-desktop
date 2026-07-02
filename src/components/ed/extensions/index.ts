@@ -1,8 +1,8 @@
 import StarterKit from "@tiptap/starter-kit";
 import type { Extensions } from "@tiptap/core";
 import { Markdown } from "tiptap-markdown";
-import { Image } from "@tiptap/extension-image";
 import { Link } from "@tiptap/extension-link";
+import { ResizableImage } from "./ResizableImage";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { Color } from "@tiptap/extension-color";
 import { FontFamily } from "@tiptap/extension-font-family";
@@ -37,8 +37,8 @@ export function buildEditorExtensions(): Extensions {
     StarterKit.configure({ link: false, underline: false }),
     // Markdown 往返（md 文件）：解析 md 为富文本 + getMarkdown 序列化；docx 走 HTML 不经此。
     Markdown.configure({ html: false, breaks: true, transformPastedText: true }),
-    // 图片（docx 嵌入图，允许 base64/inline）。
-    Image.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: "editor-image" } }),
+    // 图片（docx 嵌入图，允许 base64/inline）；PI-ED-08：拖拽调宽 + inline/block 嵌入切换（NodeView）。
+    ResizableImage.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: "editor-image" } }),
     Link.configure({ openOnClick: false }),
     // 文本样式族（顺序：TextStyle 先于依赖它的 Color/FontFamily/FontSize）。
     TextStyle,

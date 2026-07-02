@@ -240,6 +240,43 @@ export function EditorToolbar({
         ▦
       </TbBtn>
 
+      {/* 表格上下文操作（PI-ED-08 N3，光标在表格内时显示）：行列增删/表头/删表。 */}
+      {editor.isActive("table") && (
+        <>
+          <Sep />
+          <TbBtn title="上方插行" onClick={() => chain().addRowBefore().run()}>⤒行</TbBtn>
+          <TbBtn title="下方插行" onClick={() => chain().addRowAfter().run()}>⤓行</TbBtn>
+          <TbBtn title="左侧插列" onClick={() => chain().addColumnBefore().run()}>⇤列</TbBtn>
+          <TbBtn title="右侧插列" onClick={() => chain().addColumnAfter().run()}>⇥列</TbBtn>
+          <TbBtn title="删除行" onClick={() => chain().deleteRow().run()}>−行</TbBtn>
+          <TbBtn title="删除列" onClick={() => chain().deleteColumn().run()}>−列</TbBtn>
+          <TbBtn title="表头行切换" onClick={() => chain().toggleHeaderRow().run()}>Ⓗ</TbBtn>
+          <TbBtn title="删除表格" onClick={() => chain().deleteTable().run()}>✕表</TbBtn>
+        </>
+      )}
+
+      {/* 图片上下文操作（PI-ED-08 #3，选中图片时显示）：嵌入样式切换（行内↔独占块）。 */}
+      {editor.isActive("image") && (
+        <>
+          <Sep />
+          <TbBtn
+            title={editor.getAttributes("image").display === "block" ? "切换为行内嵌入" : "切换为独占块"}
+            active={editor.getAttributes("image").display === "block"}
+            onClick={() =>
+              editor
+                .chain()
+                .focus()
+                .updateAttributes("image", {
+                  display: editor.getAttributes("image").display === "block" ? "inline" : "block",
+                })
+                .run()
+            }
+          >
+            回
+          </TbBtn>
+        </>
+      )}
+
       <span className="ed-tb-spacer" aria-hidden="true" />
 
       {/* 纸张选择（PI-ED-06，分页文档）：视图偏好，不落盘文档（BR-ED-DATA-003）。 */}

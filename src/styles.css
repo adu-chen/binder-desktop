@@ -461,6 +461,20 @@ button.ed-sb-conflict {
 .ed-sb-conflict-actions { display: flex; gap: var(--sp-2); }
 .ed-sb-conflict-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
 
+/* 可交互图片（PI-ED-08）：选中显蓝框 + 右下调宽手柄；block 模式独占行居中。 */
+.ed-img-view { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.ed-img-view.ed-img-block { display: block; text-align: center; margin: var(--sp-3) 0; }
+.ed-img-view img { max-width: 100%; height: auto; }
+.ed-img-view .ed-img-handle {
+  display: none;
+  position: absolute; right: -5px; bottom: -5px;
+  width: 10px; height: 10px; border-radius: 2px;
+  background: var(--rust); border: 1.5px solid var(--bg-card);
+  cursor: nwse-resize; z-index: 3;
+}
+.ed-img-view.selected { outline: 2px solid var(--rust); outline-offset: 1px; }
+.ed-img-view.selected .ed-img-handle { display: block; }
+
 /* 编辑加载骨架（PI-ED-07 #7）：大 docx 转换期的即时反馈（不确定进度，诚实不显假百分比）。 */
 .editor-loading {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
