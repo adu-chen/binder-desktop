@@ -12,6 +12,7 @@ import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 import { EditorToolbar } from "./EditorToolbar";
 import { ZOOM, stepZoom } from "./zoom";
+import { edViewPrefsStore, getPageGeometry, useEdViewPrefs } from "../../store/edViewPrefsStore";
 
 /**
  * ED 编辑器宿主（A-SYS-C-T-02 §3 编辑区 · PI-FE-05/07/08）。
@@ -75,6 +76,9 @@ export function Editor() {
   const lastPathRef = useRef<string | null>(null);
   // 编辑预览区缩放（视图态，纯呈现层——CSS zoom 施加于编辑纸张，不改文档模型/不产脏态）。
   const [zoom, setZoom] = useState<number>(ZOOM.default);
+  // 纸张视图偏好（PI-ED-06：A4/A3/… × 横竖排，per-doc localStorage；不落盘文档）。
+  const viewPrefs = useEdViewPrefs();
+  const paperPrefs = openPath ? (viewPrefs[openPath] ?? edViewPrefsStore.getPrefs(openPath)) : null;
 
   const editor = useEditor({
     extensions: buildEditorExtensions(),
@@ -161,8 +165,12 @@ export function Editor() {
     } else {
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
     }
-    // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开 A4 分页，md/纯文本关（人类决策 2026-07-02）。
-    // 纯呈现层——不触发脏态（setPagination 仅 setMeta，docChanged=false）。
+    // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开分页，md/纯文本关（人类决策 2026-07-02）。
+    // 纸张几何取该文档视图偏好（PI-ED-06）。纯呈现层——不触发脏态（仅 setMeta，docChanged=false）。
+    if (editFormat === "html" && openPath) {
+      const p = edViewPrefsStore.getPrefs(openPath);
+      editor.commands.setPageGeometry(getPageGeometry(p.paper, p.orientation));
+    }
     editor.commands.setPagination(editFormat === "html");
     // 搜索命中跳行：内容设入后定位到目标行（块），随后清除请求。
     const { jumpLine } = edStore.getSnapshot();
@@ -183,6 +191,12 @@ export function Editor() {
     }
     await saveDocument(serialize(editor, "text", openPath), override);
   };
+
+  // 纸张偏好变化（工具栏切换）→ 实时应用分页几何（PI-ED-06，仅分页文档）。
+  useEffect(() => {
+    if (!editor || editFormat !== "html" || !paperPrefs) return;
+    editor.commands.setPageGeometry(getPageGeometry(paperPrefs.paper, paperPrefs.orientation));
+  }, [editor, editFormat, paperPrefs?.paper, paperPrefs?.orientation]); // eslint-disable-line react-hooks/exhaustive-deps -- paperPrefs 对象按字段依赖
 
   // GreenReview 同步：deStore diff 态变更 → 推送 blockId→GreenReviewState 映射到装饰层。
   useEffect(() => {
@@ -273,6 +287,10 @@ export function Editor() {
         onZoomIn={() => setZoom((z) => stepZoom(z, ZOOM.step))}
         onZoomOut={() => setZoom((z) => stepZoom(z, -ZOOM.step))}
         onZoomReset={() => setZoom(ZOOM.default)}
+        paper={editFormat === "html" && paperPrefs ? paperPrefs.paper : undefined}
+        orientation={editFormat === "html" && paperPrefs ? paperPrefs.orientation : undefined}
+        onPaperChange={(p) => openPath && edViewPrefsStore.setPaper(openPath, p)}
+        onOrientationChange={(o) => openPath && edViewPrefsStore.setOrientation(openPath, o)}
       />
       <div className="editor-paper" style={{ "--ed-zoom": String(zoom) } as CSSProperties}>
         <EditorContent editor={editor} />

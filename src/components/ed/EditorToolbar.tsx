@@ -1,6 +1,9 @@
 import { useEffect, useReducer } from "react";
 import type { Editor } from "@tiptap/react";
 import { ZOOM, formatZoom } from "./zoom";
+import type { PaperKind, PaperOrientation } from "../../store/edViewPrefsStore";
+
+const PAPER_KINDS: PaperKind[] = ["A4", "A3", "A5", "Letter"];
 
 /**
  * 编辑器工具栏（ED · PI-FE-05 编辑工具）。经 ED 声明的 TipTap command 接口触发富文本编辑
@@ -55,6 +58,10 @@ export function EditorToolbar({
   onZoomIn,
   onZoomOut,
   onZoomReset,
+  paper,
+  orientation,
+  onPaperChange,
+  onOrientationChange,
 }: {
   editor: Editor | null;
   /** 编辑预览区当前缩放比例（1 = 100%）。 */
@@ -62,6 +69,11 @@ export function EditorToolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
+  /** 纸张选择（PI-ED-06，仅分页文档显示；undefined = 不显示纸张控件）。 */
+  paper?: PaperKind;
+  orientation?: PaperOrientation;
+  onPaperChange?: (p: PaperKind) => void;
+  onOrientationChange?: (o: PaperOrientation) => void;
 }) {
   // 订阅编辑器事务 → 刷新按钮 active 态（选区/格式变化即时反映）。
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -224,8 +236,35 @@ export function EditorToolbar({
         ▦
       </TbBtn>
 
-      {/* 缩放：编辑预览区视觉缩放，比例显示于中间（点击复位 100%）——纯呈现层，不改文档模型/不产脏态。 */}
       <span className="ed-tb-spacer" aria-hidden="true" />
+
+      {/* 纸张选择（PI-ED-06，分页文档）：视图偏好，不落盘文档（BR-ED-DATA-003）。 */}
+      {paper !== undefined && (
+        <>
+          <select
+            className="ed-tb-select"
+            title="纸张"
+            value={paper}
+            onChange={(e) => onPaperChange?.(e.target.value as PaperKind)}
+          >
+            {PAPER_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+          <TbBtn
+            title={orientation === "landscape" ? "切换为竖排" : "切换为横排"}
+            active={orientation === "landscape"}
+            onClick={() => onOrientationChange?.(orientation === "landscape" ? "portrait" : "landscape")}
+          >
+            {orientation === "landscape" ? "▭" : "▯"}
+          </TbBtn>
+          <Sep />
+        </>
+      )}
+
+      {/* 缩放：编辑预览区视觉缩放，比例显示于中间（点击复位 100%）——纯呈现层，不改文档模型/不产脏态。 */}
       <TbBtn title="缩小" onClick={onZoomOut} disabled={zoom <= ZOOM.min}>
         −
       </TbBtn>

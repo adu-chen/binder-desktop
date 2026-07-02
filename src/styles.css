@@ -449,12 +449,18 @@ button:disabled { opacity: 0.5; cursor: default; }
   border-radius: 0;
   box-shadow: 0 1px 10px rgba(14, 12, 10, 0.14);
 }
-/* 分页缝：白色下页边 + 灰色装订缝（含页码）+ 白色上页边，全宽出血覆盖左右页边距。 */
+/* 分页缝（PI-ED-06）：页尾补足(fill) + 白色下页边 + 灰色装订缝（含页码）+ 白色上页边，
+   全宽出血覆盖左右页边距。fill 使每页视觉高度恒等所选纸张内容区（#8 页高修复）。 */
 .ProseMirror.rm-paginated .rm-page-gap {
-  display: block;
-  height: calc(var(--rm-page-margin-y) * 2 + var(--rm-page-gap));
+  display: flow-root; /* BFC：使 gutter 上下 margin 在缝内部起作用（不塌陷出去） */
   margin: 0 calc(-1 * var(--rm-page-margin-x));
   background: var(--bg-card);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ProseMirror.rm-paginated .rm-page-gap-fill { background: var(--bg-card); }
+.ProseMirror.rm-paginated .rm-page-end-fill {
+  display: block;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -462,6 +468,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   position: relative;
   height: var(--rm-page-gap);
   margin-top: var(--rm-page-margin-y);
+  margin-bottom: var(--rm-page-margin-y);
   background: var(--bg-sunken);
   border-top: 0.5px solid var(--rule);
   border-bottom: 0.5px solid var(--rule);

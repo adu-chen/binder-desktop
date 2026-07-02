@@ -1,45 +1,92 @@
 import { describe, it, expect } from "vitest";
-import { computePageBreaks, PAGE_CONTENT_HEIGHT } from "./Pagination";
+import { computePageBreaks, samePlan, PAGE_CONTENT_HEIGHT, type PageBreakPlan } from "./Pagination";
 
 // covers: BR-ED-DATA-003
-// 切页判定纯逻辑：块级不切分，累计超页高在块前换页；首块不换；单块超整页独占其页；全放得下/空→无缝。
+// 切页判定纯逻辑（PI-ED-06 页高修复版）：块级不切分，累计超页高在块前换页；每页携带页尾补足 fill；
+// 不变量：非溢出页 used + fill = 预算（每页视觉高度恒等所选纸张内容区，#8 修复）；末页 lastFill 撑满。
 // 纯逻辑与 DOM 测量解耦（测量属视觉层，jsdom 无布局不可单测，真机验收）。
-describe("Pagination · computePageBreaks (BR-ED-DATA-003)", () => {
-  it("空序列 → 无分页缝", () => {
-    expect(computePageBreaks([], 1000)).toEqual([]);
+describe("Pagination · computePageBreaks (BR-ED-DATA-003 · PI-ED-06)", () => {
+  it("空序列 → 无缝 + 末页满补", () => {
+    expect(computePageBreaks([], 1000)).toEqual({ breaks: [], lastFill: 1000 });
   });
 
-  it("全部块放得下一页 → 无分页缝", () => {
-    expect(computePageBreaks([300, 300, 300], 1000)).toEqual([]);
+  it("全部块放得下一页 → 无缝，末页补足余量", () => {
+    expect(computePageBreaks([300, 300, 300], 1000)).toEqual({ breaks: [], lastFill: 100 });
   });
 
-  it("累计恰好等于页高不换页（用 > 而非 >=）", () => {
-    // 500+500=1000 = 页高，不溢出；第三块 500 溢出 → 在下标 2 前换页
-    expect(computePageBreaks([500, 500, 500], 1000)).toEqual([2]);
+  it("累计恰好等于页高不换页（用 > 而非 >=），fill=0", () => {
+    // 500+500=1000 = 页高；第三块溢出 → 缝@2，页1 fill=0；末页 500 → lastFill=500
+    expect(computePageBreaks([500, 500, 500], 1000)).toEqual({
+      breaks: [{ index: 2, fill: 0 }],
+      lastFill: 500,
+    });
   });
 
-  it("累计超过页高 → 在导致溢出的块前换页并从该块重新累计", () => {
-    // 600(页1) | 600+600=1200>1000 → break@1；页2:600, +600=1200>1000 → break@2
-    expect(computePageBreaks([600, 600, 600], 1000)).toEqual([1, 2]);
+  it("页高不变量：非溢出页 used + fill = 预算（#8 核心修复断言）", () => {
+    const heights = [600, 600, 600, 400, 300];
+    const budget = 1000;
+    const plan = computePageBreaks(heights, budget);
+    // 重放：按缝切分各页，校验每页 used+fill=budget（末页 used+lastFill=budget）
+    let page: number[] = [];
+    let bi = 0;
+    for (let i = 0; i < heights.length; i++) {
+      if (bi < plan.breaks.length && plan.breaks[bi].index === i) {
+        const used = page.reduce((a, b) => a + b, 0);
+        expect(used + plan.breaks[bi].fill).toBe(budget);
+        page = [];
+        bi += 1;
+      }
+      page.push(heights[i]);
+    }
+    const lastUsed = page.reduce((a, b) => a + b, 0);
+    expect(lastUsed + plan.lastFill).toBe(budget);
   });
 
-  it("首块永不换页（即使首块高于页高也不在其前插缝）", () => {
-    expect(computePageBreaks([1500, 100], 1000)).toEqual([1]); // 首块独占页1，第二块换到页2
-    expect(computePageBreaks([1500], 1000)).toEqual([]); // 仅一超高块 → 无缝
+  it("首块永不换页（首块超页高也不在其前插缝）", () => {
+    const plan = computePageBreaks([1500, 100], 1000);
+    expect(plan.breaks).toEqual([{ index: 1, fill: 0 }]); // 页1 超预算 → fill 钳 0
+    expect(plan.lastFill).toBe(900);
+    expect(computePageBreaks([1500], 1000)).toEqual({ breaks: [], lastFill: 0 }); // 超页末页不补负
   });
 
-  it("单块高于整页 → 在其前换页独占其页（非首块），后续块继续正常换页", () => {
-    // 400(页1) | 2000>页高→break@1 独占 | 400 之后 used=2000+... 实际：break@1后 used=0,+2000=2000；
-    // 下一块 300: 2000+300>1000 → break@2
-    expect(computePageBreaks([400, 2000, 300], 1000)).toEqual([1, 2]);
+  it("单块高于整页 → 独占其页且 fill=0（溢出不补负）", () => {
+    const plan = computePageBreaks([400, 2000, 300], 1000);
+    expect(plan.breaks).toEqual([
+      { index: 1, fill: 600 }, // 页1: 400 → 补 600
+      { index: 2, fill: 0 }, // 页2: 2000 超预算 → 钳 0
+    ]);
+    expect(plan.lastFill).toBe(700); // 末页 300 → 补 700
   });
 
-  it("页高 ≤ 0（异常/未布局）→ 无缝，安全兜底", () => {
-    expect(computePageBreaks([500, 500], 0)).toEqual([]);
-    expect(computePageBreaks([500, 500], -10)).toEqual([]);
+  it("fill 取整（消浮点测量小数）", () => {
+    const plan = computePageBreaks([600.4, 600], 1000);
+    expect(plan.breaks[0].fill).toBe(400); // round(1000-600.4)
+    expect(Number.isInteger(plan.lastFill)).toBe(true);
+  });
+
+  it("页高 ≤ 0（异常/未布局）→ 空方案，安全兜底", () => {
+    expect(computePageBreaks([500, 500], 0)).toEqual({ breaks: [], lastFill: 0 });
+    expect(computePageBreaks([500], -10)).toEqual({ breaks: [], lastFill: 0 });
   });
 
   it("A4 内容高度常量为正（几何自洽）", () => {
     expect(PAGE_CONTENT_HEIGHT).toBeGreaterThan(0);
+  });
+});
+
+// covers: BR-ED-DATA-003
+// 方案近似比较：±1px 容差消测量抖动（防 RAF 重算循环）；结构差异（缝数/位置）精确判不同。
+describe("Pagination · samePlan", () => {
+  const base: PageBreakPlan = { breaks: [{ index: 2, fill: 100 }], lastFill: 50 };
+
+  it("完全相同 → true；±1px 容差内 → true", () => {
+    expect(samePlan(base, { breaks: [{ index: 2, fill: 100 }], lastFill: 50 })).toBe(true);
+    expect(samePlan(base, { breaks: [{ index: 2, fill: 101 }], lastFill: 49 })).toBe(true);
+  });
+
+  it("fill 差超容差 / index 不同 / 缝数不同 → false", () => {
+    expect(samePlan(base, { breaks: [{ index: 2, fill: 103 }], lastFill: 50 })).toBe(false);
+    expect(samePlan(base, { breaks: [{ index: 3, fill: 100 }], lastFill: 50 })).toBe(false);
+    expect(samePlan(base, { breaks: [], lastFill: 50 })).toBe(false);
   });
 });
