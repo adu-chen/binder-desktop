@@ -112,7 +112,7 @@
 - **@GOV**：BR-ED-DATA-004（锚定纯逻辑 + 换算）。
 - **验收**：agent 经 `{blockId,start,end}` 可精确取址目标字符区间（四格式统一纯文本平面）；锚失效回明确信号；选区拖入 Composer 生成含位置的引用；纯逻辑（偏移换算/失效判定）单测。
 
-#### PI-ED-11　样式协议（#3 协议部分；DE/AG 联动）　◐ ED 侧已实现（2026-07-03：投影 + StyleOp 规划/应用，BR-ED-DATA-005 owner+covers 闭合；ag.list_blocks 样式字段 / DE style_ops 持久化 / DiffCard 样式呈现**待 AG/DE 后端协调**，§8）
+#### PI-ED-11　样式协议（#3 协议部分；DE/AG 联动）　✅ G4 已实现（2026-07-03 全件：ED 侧投影+StyleOp 原子写；后端 ag.list_blocks marks/blockAttrs 投影（extract_marks 栈式扫描）+ DiffPayload style_ops 持久化（迁移 v5）+ DiffCard 样式摘要呈现；人类授权后端推进。真实样式 diff 数据待 AG 解桩（G-1/G-2）填充）
 - **文档先行**：A-ED-M-D-01（REQ-ED-007）+ A-ED-M-T-01（BR-ED-DATA-005 + TERM-ED-006）+ A-ED-I-P-01（op 粒度表）+ A-DE-*（样式载荷/呈现）+ A-AG-*（BR-AG-STATE-003 扩展，**协调 AG 并行窗口**），经人类确认后进代码。
 - **文件范围**：读侧 `ag.list_blocks` 样式投影；写侧样式 op 集（set_mark/unset_mark/set_block_attr per CharAnchor 区间）经 `ed.apply_edit`；D-3 分流——回合产出样式 op 进 DiffPayload（DiffCard 扩样式呈现），内联辅助样式直改。
 - **@GOV**：BR-ED-DATA-005（ED 侧）；DE/AG 侧各归其规则。
@@ -166,3 +166,4 @@
 | 2026-07-03 | v1.0 | 初版：承接 12 项优化需求 + 10 项发掘项 + 三裁定（D-1 .html 入范围 / D-2 会话内字符锚 / D-3 样式写路径 A 默认+B 限内联）；文档路由（L1/L2 全并入既有文档、L3 新建本计划）；注册清单（REQ-ED-006~008、BR-ED-DATA-004/005 + 002 修订、TERM-ED-004~006）；PI-ED-06~13 三批次（批A 视图修复/批B 契约先行/批C 独立），候补 5 项；协调点（AG 并行窗口、lib.rs 冲突点） |
 | 2026-07-03 | v1.1 | 执行状态更新：批A 全完成（PI-ED-06/07/08）+ PI-ED-09 实测完成（0% → 兜底重建）+ PI-ED-10 完成（契约 9ae444f + 实现 9b3801a）+ PI-ED-11 ED 侧完成（后端联动件留 §8 协调）；TERM 编号配对修正（004=CharAnchor/005=SelectionRef） |
 | 2026-07-03 | v1.2 | 执行状态更新：PI-ED-12 大纲面板完成（视图层）+ PI-ED-13 .html 接入完成（html_file 格式路由，blockId 跨保存稳定）；计划内客户端可独立项全部落地，余 PI-ED-11 后端三件（§8 协调）+ 全批真机验收 |
+| 2026-07-03 | v1.3 | PI-ED-11 后端三件完成（人类授权「推进后端」）：ag.list_blocks 样式投影（blocks.rs extract_marks/extract_block_attrs，@GOV BR-ED-DATA-005 读侧后端承载）、DiffPayload style_ops 持久化（db 迁移 v5 + generate/store/route 透传，AG/CBT 构造点 None 占位待解桩填充）、DiffCard 样式摘要呈现（DiffView.styleOps）；计划全部 PI 收口 |

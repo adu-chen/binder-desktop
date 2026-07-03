@@ -12,6 +12,18 @@ afterEach(cleanup);
 const base: DiffView = { diffId: "d1", blockId: "", title: "改写开头", before: "旧", after: "新", state: "pending" };
 const renderCard = (p: Partial<DiffView>) => render(<DiffCard diff={{ ...base, ...p }} />);
 
+describe("DiffCard 样式变更摘要（PI-ED-11 · D-3 方案A）", () => {
+  // covers: BR-DE-DATA-002
+  it("styleOps 存在 → 渲染样式标签行；缺省 → 不渲染", () => {
+    renderCard({ styleOps: ["加粗 [2–4]", "颜色 #ff0000 [5–9]"] });
+    expect(screen.getByText("加粗 [2–4]")).toBeTruthy();
+    expect(screen.getByText("颜色 #ff0000 [5–9]")).toBeTruthy();
+    cleanup();
+    renderCard({});
+    expect(screen.queryByText(/加粗/)).toBeNull();
+  });
+});
+
 describe("DiffCard 8 状态渲染（互斥）", () => {
   it("pending：PENDING badge + 接受/拒绝", () => {
     renderCard({ state: "pending" });

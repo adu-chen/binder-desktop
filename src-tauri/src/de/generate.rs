@@ -20,6 +20,9 @@ pub struct ChangeProposal {
     pub after_content: Vec<u8>,
     /// 修改既有文档的内容基准；**None = 新建文档（空基准）**。
     pub before_snapshot: Option<String>,
+    /// 样式操作序列（StyleOp JSON，形状归 ED A-ED-M-T-01 §5.1；PI-ED-11 / 裁定 D-3 方案A）。
+    /// None = 纯文本 diff。样式修改的审阅呈现语义载体，与 after_content 并存。
+    pub style_ops: Option<String>,
 }
 
 /// 统一 diff 载荷形状（BR-DE-DATA-002）。is_new_doc 由 before_snapshot 缺省派生。
@@ -29,6 +32,8 @@ pub struct DiffPayload {
     pub after_content: Vec<u8>,
     pub before_snapshot: Option<String>,
     pub is_new_doc: bool,
+    /// 样式操作序列（可空，A-DE-M-T-01 v1.1：语义归 ED BR-ED-DATA-005，载荷承载归本结构）。
+    pub style_ops: Option<String>,
 }
 
 /**
@@ -47,6 +52,7 @@ pub fn build_payload(proposal: &ChangeProposal) -> DiffPayload {
         after_content: proposal.after_content.clone(),
         before_snapshot: proposal.before_snapshot.clone(),
         is_new_doc: proposal.before_snapshot.is_none(),
+        style_ops: proposal.style_ops.clone(),
     }
 }
 
@@ -107,6 +113,7 @@ mod tests {
             target: doc("a.md"),
             after_content: b"edited".to_vec(),
             before_snapshot: Some("h0".into()),
+            style_ops: None,
         }
     }
     fn new_proposal() -> ChangeProposal {
@@ -115,6 +122,7 @@ mod tests {
             target: doc("new.md"),
             after_content: b"created".to_vec(),
             before_snapshot: None,
+            style_ops: None,
         }
     }
 

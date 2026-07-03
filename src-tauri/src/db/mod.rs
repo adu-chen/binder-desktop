@@ -115,6 +115,14 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        version: 5,
+        // 样式操作载荷（PI-ED-11 后端件，A-DE-M-T-01 v1.1 / 裁定 D-3 方案A）：回合产出的样式修改
+        // （StyleOp 序列 JSON，形状归 ED A-ED-M-T-01 §5.1）随 DiffPayload 持久化，可空（纯文本 diff 无）。
+        sql: r#"
+            ALTER TABLE diff_payloads ADD COLUMN style_ops TEXT;
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

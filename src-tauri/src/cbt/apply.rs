@@ -29,6 +29,7 @@ pub fn build_proposal(
         target,
         after_content,
         before_snapshot,
+        style_ops: None, // CBT 构建产出暂无样式操作（PI-ED-11 载荷字段，AG/CBT 真实产出接线时填）
     }
 }
 

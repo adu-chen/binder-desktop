@@ -461,6 +461,14 @@ button.ed-sb-conflict {
 .ed-sb-conflict-actions { display: flex; gap: var(--sp-2); }
 .ed-sb-conflict-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
 
+/* DiffCard 样式变更摘要（PI-ED-11 · D-3 方案A）：样式 op 人读标签行。 */
+.diffcard-styles { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--sp-1); }
+.diffcard-style-tag {
+  font-family: var(--font-mono); font-size: 10px; padding: 1px 6px;
+  background: var(--bg-sunken); border: 0.5px solid var(--rule); border-radius: var(--r-1);
+  color: var(--ink-3);
+}
+
 /* 大纲面板（PI-ED-12）：标题树，按级别缩进；点击经 blockId 跳转。 */
 .outline { display: flex; flex-direction: column; gap: 1px; }
 .outline-empty { font-size: 12px; padding: var(--sp-2); }

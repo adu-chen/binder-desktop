@@ -16,12 +16,14 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// 取回的落盘载荷（accept 落盘所需：目标相对路径 + 提案后内容）。
+/// 取回的落盘载荷（accept 落盘所需：目标相对路径 + 提案后内容 + 样式操作序列可空）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredPayload {
     pub rel_path: String,
     pub after_content: Vec<u8>,
     pub is_new_doc: bool,
+    /// 样式操作序列（StyleOp JSON，可空；PI-ED-11——审阅呈现与未来样式 apply 语义载体）。
+    pub style_ops: Option<String>,
 }
 
 /**
@@ -34,7 +36,8 @@ pub struct StoredPayload {
  * boundary: in=DiffPayload | out=persistedDiffPayload(byPayloadRefRestartRecoverable)
  */
 /// 持久化 DiffPayload（BR-DE-DATA-002）：按 payload_ref 入 diff_payloads，重启可恢复；
-/// 载荷形状统一（target/after_content/before_snapshot/is_new_doc），供 accepted 落盘取回内容。
+/// 载荷形状统一（target/after_content/before_snapshot/is_new_doc/style_ops 可空——PI-ED-11
+/// 样式操作序列，A-DE-M-T-01 v1.1），供 accepted 落盘取回内容与样式审阅呈现。
 pub fn persist_payload(
     conn: &Connection,
     payload_ref: &str,
@@ -42,8 +45,8 @@ pub fn persist_payload(
 ) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO diff_payloads \
-         (payload_ref, workspace_id, rel_path, after_content, before_snapshot, is_new_doc, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         (payload_ref, workspace_id, rel_path, after_content, before_snapshot, is_new_doc, style_ops, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             payload_ref,
             payload.target.workspace_id,
@@ -51,6 +54,7 @@ pub fn persist_payload(
             payload.after_content,
             payload.before_snapshot,
             payload.is_new_doc as i64,
+            payload.style_ops,
             now_millis(),
         ],
     )?;
@@ -71,7 +75,7 @@ pub fn persist_payload(
 pub fn load_payload_for_diff(conn: &Connection, diff_id: &str) -> Result<StoredPayload, IpcError> {
     let row = conn
         .query_row(
-            "SELECT p.rel_path, p.after_content, p.is_new_doc \
+            "SELECT p.rel_path, p.after_content, p.is_new_doc, p.style_ops \
              FROM pending_diffs d JOIN diff_payloads p ON d.payload_ref = p.payload_ref \
              WHERE d.diff_id = ?1",
             [diff_id],
@@ -80,6 +84,7 @@ pub fn load_payload_for_diff(conn: &Connection, diff_id: &str) -> Result<StoredP
                     rel_path: r.get(0)?,
                     after_content: r.get(1)?,
                     is_new_doc: r.get::<_, i64>(2)? != 0,
+                    style_ops: r.get(3)?,
                 })
             },
         )
@@ -121,6 +126,7 @@ mod tests {
             target: DocRef { workspace_id: "ws1".into(), rel_path: "a.md".into(), doc_type: "md".into() },
             after_content: b"new body".to_vec(),
             before_snapshot: Some("h0".into()),
+            style_ops: Some(r#"[{"op":"set_mark","blockId":"b1","start":0,"end":3,"mark":{"type":"bold"}}]"#.into()),
         };
         let payload = build_payload(&proposal);
         persist_payload(&conn, "pl1", &payload).unwrap();
@@ -141,6 +147,8 @@ mod tests {
         assert_eq!(got.rel_path, "a.md");
         assert_eq!(got.after_content, b"new body");
         assert!(!got.is_new_doc);
+        // PI-ED-11：样式操作序列随载荷持久化并可取回（迁移 v5 style_ops 列，可空字段往返）。
+        assert!(got.style_ops.as_deref().unwrap_or("").contains("set_mark"));
 
         let err = load_payload_for_diff(&conn, "missing").unwrap_err();
         assert_eq!(err.code, "DE_PAYLOAD_MISSING");

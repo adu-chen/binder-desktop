@@ -102,6 +102,9 @@ export interface DiffView {
   before: string;
   after: string;
   state: DiffCardState;
+  /** 样式变更摘要（PI-ED-11 · D-3 方案A：回合产出样式修改经 DiffCard 裁决）。人读描述行，
+   *  由 StyleOp 序列（载荷 style_ops，A-DE-M-T-01 v1.1）投影；空/缺省 = 纯文本 diff。 */
+  styleOps?: string[];
   expiredReason?: ExpiredReason;
   conflictWith?: string; // conflict 态：重叠的另一条 diff id
   errorCode?: string; // error 态：错误码

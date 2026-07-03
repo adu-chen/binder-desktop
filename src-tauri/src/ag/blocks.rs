@@ -145,6 +145,166 @@ pub fn replace_block_by_id(content: &str, block_id: &str, new_text: &str) -> Res
     Ok(format!("{}{}{}", &content[..s], html_escape(new_text), &content[e..]))
 }
 
+// —— 样式投影（PI-ED-11 后端件 · A-AG-I-P-01 §4.1 / schema 单一来源 A-ED-M-T-01 §5.1） ——
+
+/// 字符 mark 段：range 在**块内纯文本平面**（与 ED 字符锚同基准，BR-ED-DATA-004）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkSpan {
+    pub mark_type: String,
+    pub range: (usize, usize),
+    pub attrs: Option<serde_json::Value>,
+}
+
+/// 内联标签 → mark 类型映射（TipTap 序列化 HTML 的规整子集；span 依 style 判 textStyle）。
+fn mark_of_tag(tag: &str, attrs_str: &str) -> Option<(String, Option<serde_json::Value>)> {
+    match tag {
+        "strong" | "b" => Some(("bold".into(), None)),
+        "em" | "i" => Some(("italic".into(), None)),
+        "u" => Some(("underline".into(), None)),
+        "s" | "del" | "strike" => Some(("strike".into(), None)),
+        "mark" => Some(("highlight".into(), None)),
+        "sub" => Some(("subscript".into(), None)),
+        "sup" => Some(("superscript".into(), None)),
+        "code" => Some(("code".into(), None)),
+        "a" => {
+            let href = attr_value(attrs_str, "href");
+            Some(("link".into(), href.map(|h| serde_json::json!({ "href": h }))))
+        }
+        "span" => {
+            let style = attr_value(attrs_str, "style")?;
+            let mut o = serde_json::Map::new();
+            for kv in style.split(';') {
+                let (k, v) = kv.split_once(':')?;
+                match k.trim() {
+                    "color" => { o.insert("color".into(), v.trim().into()); }
+                    "font-size" => { o.insert("fontSize".into(), v.trim().into()); }
+                    "font-family" => { o.insert("fontFamily".into(), v.trim().into()); }
+                    _ => {}
+                }
+            }
+            if o.is_empty() { None } else { Some(("textStyle".into(), Some(serde_json::Value::Object(o)))) }
+        }
+        _ => None,
+    }
+}
+
+/// 取属性串中 `name="…"` 的值（dev 级扫描）。
+fn attr_value(attrs_str: &str, name: &str) -> Option<String> {
+    let pat = format!("{name}=\"");
+    let i = attrs_str.find(&pat)? + pat.len();
+    let j = attrs_str[i..].find('"')?;
+    Some(attrs_str[i..i + j].to_string())
+}
+
+/// 有限实体解码（与 html_escape 逆配 + 常用集）。
+fn decode_entity(ent: &str) -> Option<char> {
+    match ent {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "#39" | "apos" => Some('\''),
+        "nbsp" => Some('\u{a0}'),
+        _ => None,
+    }
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-DATA-005-QUERY-ED-ED-EDIT-009
+ * type:     QUERY
+ * chain:    ED-EDIT
+ * rules:    BR-ED-DATA-005
+ * term_ref: TERM-ED-006, TERM-ED-004
+ * boundary: in=blockInnerHtml | out=plainTextWithMarkSpans(offsetsOnInBlockPlainTextPlane)
+ */
+/// 样式投影提取（BR-ED-DATA-005 读侧后端承载）：块 inner HTML → 纯文本 + mark 段（range 在块内
+/// 纯文本平面，与 ED 字符锚同基准）。栈式扫描 TipTap 规整 HTML（嵌套标签配对、有限实体解码、
+/// void 标签 1 字符占位对齐叶子 pos）；本模块 dev 级定位（畸形 HTML 不保证）已在模块头声明。
+pub fn extract_marks(inner: &str) -> (String, Vec<MarkSpan>) {
+    let mut text = String::new();
+    let mut offset = 0usize; // 字符偏移（非字节）
+    let mut spans: Vec<MarkSpan> = Vec::new();
+    // 开标签栈：(tag, mark_type/attrs 可空, 起始偏移)
+    let mut stack: Vec<(String, Option<(String, Option<serde_json::Value>)>, usize)> = Vec::new();
+    let bytes: Vec<char> = inner.chars().collect();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == '<' {
+            // 收集到 '>'。
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != '>' {
+                j += 1;
+            }
+            let tag_body: String = bytes[start..j.min(bytes.len())].iter().collect();
+            i = (j + 1).min(bytes.len());
+            let closing = tag_body.starts_with('/');
+            let self_closing = tag_body.ends_with('/');
+            let name_src = tag_body.trim_start_matches('/');
+            let name_end = name_src.find(|ch: char| ch.is_whitespace() || ch == '/').unwrap_or(name_src.len());
+            let name = name_src[..name_end].to_ascii_lowercase();
+            if closing {
+                // 弹出最近同名开标签，产出 mark 段（空区间不产）。
+                if let Some(pos) = stack.iter().rposition(|(t, _, _)| *t == name) {
+                    let (_, mark, from) = stack.remove(pos);
+                    if let Some((mt, attrs)) = mark {
+                        if offset > from {
+                            spans.push(MarkSpan { mark_type: mt, range: (from, offset), attrs });
+                        }
+                    }
+                }
+            } else if matches!(name.as_str(), "br" | "img" | "hr") || self_closing {
+                // void/自闭合 → 1 字符占位（对齐 ED 叶子内联 pos 语义）。
+                text.push('\u{fffc}');
+                offset += 1;
+            } else {
+                let attrs_str = &name_src[name_end..];
+                stack.push((name.clone(), mark_of_tag(&name, attrs_str), offset));
+            }
+        } else if c == '&' {
+            // 实体：& 到 ';'（最长 6 字符），解码失败原样输出 '&'。
+            let mut j = i + 1;
+            while j < bytes.len() && j - i <= 6 && bytes[j] != ';' {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == ';' {
+                let ent: String = bytes[i + 1..j].iter().collect();
+                if let Some(ch) = decode_entity(&ent) {
+                    text.push(ch);
+                    offset += 1;
+                    i = j + 1;
+                    continue;
+                }
+            }
+            text.push('&');
+            offset += 1;
+            i += 1;
+        } else {
+            text.push(c);
+            offset += 1;
+            i += 1;
+        }
+    }
+    (text, spans)
+}
+
+/// 块开标签的呈现属性投影（blockAttrs）：style 中 text-align（TipTap TextAlign 序列化形态）。
+pub fn extract_block_attrs(open_tag: &str) -> serde_json::Value {
+    let mut o = serde_json::Map::new();
+    if let Some(style) = attr_value(open_tag, "style") {
+        for kv in style.split(';') {
+            if let Some((k, v)) = kv.split_once(':') {
+                if k.trim() == "text-align" {
+                    o.insert("textAlign".into(), v.trim().into());
+                }
+            }
+        }
+    }
+    serde_json::Value::Object(o)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +342,40 @@ mod tests {
         let html = r#"<p data-block-id="b1">x</p>"#;
         let out = replace_block(html, true, 0, "a<b>&c").unwrap();
         assert_eq!(out, r#"<p data-block-id="b1">a&lt;b&gt;&amp;c</p>"#);
+    }
+
+    // covers: BR-ED-DATA-005
+    // 样式投影提取：range 在块内纯文本平面（与字符锚同基准）；嵌套配对；span style→textStyle attrs；
+    // 实体解码偏移正确；void 标签 1 字符占位。
+    #[test]
+    fn extract_marks_offsets_on_plain_text_plane() {
+        let (text, spans) = extract_marks(r#"普通<strong>加粗</strong><span style="color: #ff0000">红字</span>"#);
+        assert_eq!(text, "普通加粗红字");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].mark_type, "bold");
+        assert_eq!(spans[0].range, (2, 4));
+        assert_eq!(spans[1].mark_type, "textStyle");
+        assert_eq!(spans[1].range, (4, 6));
+        assert_eq!(spans[1].attrs.as_ref().unwrap()["color"], "#ff0000");
+    }
+
+    // covers: BR-ED-DATA-005
+    #[test]
+    fn extract_marks_nested_entities_and_void() {
+        // 嵌套 <strong><em>…</em></strong> + 实体 &amp;（1 字符）+ <br/>（占位 1 字符）
+        let (text, spans) = extract_marks("a<strong>b<em>c</em></strong>&amp;<br/>d");
+        assert_eq!(text, "abc&\u{fffc}d");
+        // em 段 (2,3)、strong 段 (1,3)
+        assert!(spans.contains(&MarkSpan { mark_type: "italic".into(), range: (2, 3), attrs: None }));
+        assert!(spans.contains(&MarkSpan { mark_type: "bold".into(), range: (1, 3), attrs: None }));
+    }
+
+    // covers: BR-ED-DATA-005
+    #[test]
+    fn extract_block_attrs_text_align() {
+        let attrs = extract_block_attrs(r#"<p data-block-id="b1" style="text-align: center">"#);
+        assert_eq!(attrs["textAlign"], "center");
+        assert_eq!(extract_block_attrs("<p>"), serde_json::json!({}));
     }
 
     #[test]

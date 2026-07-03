@@ -49,6 +49,7 @@ fn accepted_proposal_flows_through_de_to_ws_landing() {
         target: target.clone(),
         after_content: b"# A\n\n updated body\n".to_vec(),
         before_snapshot: Some("h0".into()),
+        style_ops: None,
     };
     // 2) DE 生成：锚 Located → PendingDiff（pending）。
     let diff = generate_diff(&proposal, "d1", "AG", "payload_1", 1_000, LocateResult::Located).unwrap();
@@ -80,6 +81,7 @@ fn anchor_lost_blocks_generation() {
         target: doc("a.md"),
         after_content: b"x".to_vec(),
         before_snapshot: Some("h0".into()),
+        style_ops: None,
     };
     let err = generate_diff(&proposal, "d2", "AG", "p", 0, LocateResult::AnchorLost).unwrap_err();
     assert_eq!(err.code, "DE_ANCHOR_LOST");

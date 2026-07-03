@@ -27,6 +27,11 @@ const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 export interface DocBlock {
   block_id: string | null;
   text: string;
+  /** 样式投影（PI-ED-11 · A-AG-I-P-01 §4.1）：mark 段（range 在块内纯文本平面，与字符锚同基准）。
+   *  text 块为空数组；schema 单一来源 A-ED-M-T-01 §5.1。 */
+  marks?: { type: string; range: [number, number]; attrs?: Record<string, unknown> }[];
+  /** 块级呈现属性投影（textAlign 等）。 */
+  block_attrs?: Record<string, unknown>;
 }
 
 let dseq = 0;

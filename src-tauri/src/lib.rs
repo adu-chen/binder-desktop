@@ -822,11 +822,14 @@ fn route_generate_diff(request: &CommandRequest, state: &AppState) -> Result<ser
         doc_type: doc_type_of(&rel_path),
         rel_path,
     };
+    // 样式操作序列（PI-ED-11，可选）：StyleOp JSON（形状归 ED A-ED-M-T-01 §5.1），随载荷持久化。
+    let style_ops = request.params.get("styleOps").filter(|v| !v.is_null()).map(|v| v.to_string());
     let proposal = ChangeProposal {
         origin_task,
         target,
         after_content: after_content.into_bytes(),
         before_snapshot,
+        style_ops,
     };
     let diff_id = gen_id("diff");
     let payload_ref = format!("pl_{diff_id}");
@@ -1002,9 +1005,32 @@ fn route_list_blocks(request: &CommandRequest, state: &AppState) -> Result<serde
     let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
     let read = workspace::save::read_doc(&abs)?;
     let is_html = ag::blocks::is_html(&read.content, None);
+    // 样式投影扩展（PI-ED-11 · A-AG-I-P-01 §4.1 / BR-ED-DATA-005 读侧）：HTML 块附 marks（块内纯文本
+    // 平面偏移，与字符锚同基准）+ blockAttrs（text-align）；text 块回空投影（无样式语义）。
     let blocks: Vec<serde_json::Value> = ag::blocks::parse_blocks(&read.content, is_html)
         .into_iter()
-        .map(|b| serde_json::json!({ "block_id": b.block_id, "text": b.text }))
+        .map(|b| {
+            let (marks, block_attrs) = match b.inner_span {
+                Some((s, e)) => {
+                    let (_, spans) = ag::blocks::extract_marks(&read.content[s..e]);
+                    let marks: Vec<serde_json::Value> = spans
+                        .into_iter()
+                        .map(|m| {
+                            let mut o = serde_json::json!({ "type": m.mark_type, "range": [m.range.0, m.range.1] });
+                            if let Some(a) = m.attrs {
+                                o["attrs"] = a;
+                            }
+                            o
+                        })
+                        .collect();
+                    // 块开标签（inner 前最近的 '<' 起）→ blockAttrs 投影。
+                    let open = read.content[..s].rfind('<').map(|lt| &read.content[lt..s]).unwrap_or("");
+                    (serde_json::Value::Array(marks), ag::blocks::extract_block_attrs(open))
+                }
+                None => (serde_json::json!([]), serde_json::json!({})),
+            };
+            serde_json::json!({ "block_id": b.block_id, "text": b.text, "marks": marks, "block_attrs": block_attrs })
+        })
         .collect();
     Ok(serde_json::json!({ "blocks": blocks }))
 }
@@ -1110,6 +1136,7 @@ fn ag_propose_edit(
         },
         after_content: after_content.into_bytes(),
         before_snapshot,
+        style_ops: None, // AG 回合样式产出接线时填（PI-ED-11 载荷字段；解桩随 G-1/G-2）
     };
     let diff_id = gen_id("diff");
     let payload_ref = format!("pl_{diff_id}");

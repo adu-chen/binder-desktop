@@ -32,6 +32,14 @@ export function DiffCard({ diff }: { diff: DiffView }) {
       <div className="diffcard-body">
         <div className="diffcard-line diffcard-before">- {before}</div>
         <div className="diffcard-line diffcard-after">+ {after}</div>
+        {/* 样式变更摘要（PI-ED-11 · 裁定 D-3 方案A：回合样式修改经本卡裁决呈现） */}
+        {diff.styleOps && diff.styleOps.length > 0 && (
+          <div className="diffcard-styles">
+            {diff.styleOps.map((s, i) => (
+              <span key={i} className="diffcard-style-tag">{s}</span>
+            ))}
+          </div>
+        )}
       </div>
 
       {state === "applying" && <div className="diffcard-progress"><span /></div>}
