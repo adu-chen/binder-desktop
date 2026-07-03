@@ -18,6 +18,14 @@
 #   --disable-ldap                       去 LDAP
 #   --with-macosx-version-min-required=12.0
 #
+# ⚠️ 构建配方还包含 **Binder VCL 字体回退源码补丁**（2026-07-03 确认，pptx 字体随机匹配的根治）：
+#   vcl/source/font/PhysicalFontCollection.cxx（+147：匹配失败的字体统一回退到
+#     BINDER_DEFAULT_CJK_FONT / BINDER_DEFAULT_LATIN_FONT，拦截 LO 原生随缘 fallback；
+#     由 BINDER_FORCE_DEFAULT_FONTS 环境变量门控，运行时经 doc/libreoffice_runtime.rs 激活）
+#   vcl/quartz/salgdi.cxx（+11：CoreText 字形级 fallback 日志）
+#   补丁在旧项目 LO 源码树（libreoffice/core git 工作树未提交改动）。**用 stock LO 或未打补丁的
+#   源码重建都会丢失该补丁 → 字体随机匹配回归**；重建前必须移植这两处 diff。
+#
 # 用法：
 #   ./scripts/deploy_lo.sh                          # 用默认优化版源（旧项目预构建产物）
 #   LO_SOURCE_APP=/path/to/LibreOffice*.app ./scripts/deploy_lo.sh   # 指定已构建的优化版 .app

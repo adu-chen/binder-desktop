@@ -175,6 +175,10 @@
      **一并代码签名 + 公证**，否则其他设备 macOS Gatekeeper 拦截内置 soffice，预览不可用。优化版为自定义
      构建（LibreOfficeDev），尤须确保签名链完整。
 - **性质**：G6 发布工程硬门（承 A-CORE-X-L-02 P5/§5、APC §5.2）。
+- **构建配方补充（2026-07-03）**：优化版 LO 含 **Binder VCL 字体回退源码补丁**（PhysicalFontCollection.cxx
+  +147 / salgdi.cxx +11，BINDER_FORCE_DEFAULT_FONTS 门控，运行时激活见 doc/libreoffice_runtime.rs）——
+  缺失字体统一回退默认字体（pptx 字体随机匹配根治）。**重建 LO 必须移植该补丁**（补丁在旧项目
+  libreoffice/core 源码树未提交改动，deploy_lo.sh 注释有完整说明），否则字体随机匹配回归。
 - **验证（G6 出口）**：在**无系统 LO 的干净设备**安装发布版后，预览 docx→PDF 实际通过（命中内置 LO）。
 - **状态**：标记登记（2026-06-22）；运行时与部署设施已就位（`libreoffice_runtime.rs` + `deploy_lo.sh` +
   `tauri.conf.json bundle.resources`），**签名/公证 + CI 前置校验待 G6 发布工程落实**。
@@ -211,3 +215,4 @@ BR-SYS-DATA-004（云端，§5 C 类）。~~BR-ED-DATA-003~~ 已于 2026-07-02 �
 | 2026-06-22 | v1.2 | 新增 §9 发布期阻断标记：BLOCK-REL-LO-001 内置 LibreOffice 预览链必须打包在应用内（不调用设备本地 LO）——阻断点 deploy 前置 + 打包路径核对 + 签名/公证，G6 打包不得绕过、不得静默降级到系统 LO；运行时与部署设施已就位，签名/公证 + CI 前置校验待 G6 落实 |
 | 2026-06-26 | v1.3 | 新增 §10 前端治理可追溯闭合（PI-FE-30）：为已实现的 BR-ED-STATE-003/BR-ED-DATA-002/BR-PRV-DATA-001 补 @GOV owner、为该 3 项 + BR-PRV-DATA-002 补 covers（referenced 58→64、covered 57→62）；BR-ED-DATA-003 分页未实现，如实登记延后（承 §6 A 类分页 Plan Item，待人类决策），audit OWNER_MISSING/uncovered 属预期 |
 | 2026-07-02 | v1.4 | §10 回填（G-7，人类授权执行 A-CORE-X-R-03 §7 补全计划）：BR-ED-DATA-003 已实现闭合——分页呈现层（块边界分页缝 Decoration，纯呈现不产脏态）+ docx 图文呈现（asset 协议逐文件授权 + 相对 src 改写），2 @GOV owner + covers，audit 清零；剩余 failed 项更新为 BR-AG-DATA-004/005 与 BR-SYS-DATA-004 |
+| 2026-07-03 | v1.5 | §9 BLOCK-REL-LO-001 构建配方补充：Binder VCL 字体回退源码补丁（环境变量门控，运行时已激活）为优化版 LO 必备组成，重建须移植否则字体随机匹配回归 |

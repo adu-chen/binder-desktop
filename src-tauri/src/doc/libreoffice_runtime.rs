@@ -259,6 +259,15 @@ fn build_soffice_command(soffice: &Path, work_dir: &Path) -> Result<Command, Ipc
     let lo_user = write_font_substitution(work_dir)?;
     cmd.env("HOME", lo_user.to_string_lossy().as_ref());
     cmd.arg(format!("-env:UserInstallation={}", path_to_user_installation_url(&lo_user)));
+    // 激活 Binder VCL 字体回退补丁（2026-07-03 #2 根治）：内置优化版 LO 的 vcl/PhysicalFontCollection.cxx
+    // 含源码级补丁——**匹配失败的字体统一回退到指定默认字体**（拦截 LO 原生"随缘 fallback"，字体随机
+    // 匹配的根因）。补丁由 BINDER_FORCE_DEFAULT_FONTS 门控（不设则行为同上游 LO，此前一直休眠）。
+    // fontsubst.xcu 替换表保留为第一道防线（已知字体名显式替换）；本补丁兜住未列出的一切缺失字体。
+    // 注意：系统 PATH 的 stock LO 无此补丁（开发期系统兜底时环境变量被忽略，行为退化为 stock 随机回退）。
+    let (cjk, latin) = default_fonts();
+    cmd.env("BINDER_FORCE_DEFAULT_FONTS", "1");
+    cmd.env("BINDER_DEFAULT_CJK_FONT", cjk);
+    cmd.env("BINDER_DEFAULT_LATIN_FONT", latin);
     Ok(cmd)
 }
 
@@ -331,6 +340,25 @@ pub fn convert_to_pdf(input: &Path, kind: PreviewKind, output_dir: &Path) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-DOC-DATA-001
+    // Binder VCL 字体回退补丁激活（2026-07-03 #2 根治）：soffice 命令必须携带门控环境变量——
+    // 缺失字体统一回退默认字体（补丁在内置 LO 二进制内，不设变量即休眠=随机回退回归）。
+    #[test]
+    fn soffice_command_activates_binder_font_fallback() {
+        let dir = std::env::temp_dir().join(format!("binder_lo_env_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = build_soffice_command(std::path::Path::new("soffice"), &dir).unwrap();
+        let envs: std::collections::HashMap<String, String> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().into_owned(), v?.to_string_lossy().into_owned())))
+            .collect();
+        assert_eq!(envs.get("BINDER_FORCE_DEFAULT_FONTS").map(String::as_str), Some("1"));
+        let (cjk, latin) = default_fonts();
+        assert_eq!(envs.get("BINDER_DEFAULT_CJK_FONT").map(String::as_str), Some(cjk));
+        assert_eq!(envs.get("BINDER_DEFAULT_LATIN_FONT").map(String::as_str), Some(latin));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // covers: BR-DOC-DATA-001
     // 预览 filter：三格式各用 writer/calc/impress，均含文本层(UseTaggedPDF)与嵌字体(Embed*)选项。
