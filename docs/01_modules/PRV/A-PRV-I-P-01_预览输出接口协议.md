@@ -26,6 +26,8 @@ docx/Excel/PPT 预览 → doc.render_preview（DOC 预览链）；音视频 → 
 | `prv.preview` | DocRef、格式 | 只读呈现资源（docx/Excel/PPT→PDF 经 DOC；音视频→播放句柄系统解码） | render_failed/decode_failed→明确失败态（不静默空白）；不支持格式→明确提示 | BR-PRV-DATA-002（管线归属决策）；**只读无编辑交互** |
 | `prv.print` | DocRef 或预览句柄 | 打印任务（系统打印服务） | — | BR-PRV-DATA-001（编辑文档打印分页呈现归 ED） |
 | `prv.export` | DocRef、目标格式、落点（workspace 内） | 导出文件 | 越界落点拒绝（X-FORBID-004）；格式不支持 | BR-PRV-DATA-002 |
+| `prv.media_src` | relPath（音视频） | 单文件 asset 协议授权 + 绝对路径（流式播放不进内存） | PRV_NOT_FOUND / PRV_SCOPE_FAILED | BR-PRV-DATA-002（既有实现补登记，2026-07-03） |
+| `prv.table_data` | relPath（xlsx/xls） | {sheets:[{name,rows}], truncated} 结构化表格数据（值投影，超限截断明示） | PRV_TABLE_PARSE_FAIL / PRV_NOT_FOUND | 表格式预览（2026-07-03 #1，BR-PRV-DATA-001 只读；解析经 DOC calamine，X-SEQ-004；csv/tsv 文本由前端解析不经此） |
 
 > **全产品无 Excel/PPT 编辑入口**（BR-PRV-DATA-001，v1 冻结 G4/G5 强制核验）；preview 不产生
 > 文档模型变更与脏态；预览/打印/导出离线可用（REQ-CORE-009）。
@@ -46,3 +48,4 @@ docx/Excel/PPT 预览 → doc.render_preview（DOC 预览链）；音视频 → 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件）：PRV 接口协议——preview（docx/Excel/PPT 经 DOC、音视频系统解码、失败态明确、只读无编辑）/print/export（落 workspace 内）；全产品无 Excel/PPT 编辑入口断言；零新增注册项；债务（音视频格式/导出清单/缓存策略延后） |
+| 2026-07-03 | v1.1 | §2 补登记 prv.media_src（既有实现文档滞后）+ 新增 prv.table_data（表格式预览，兑现 A-PRV-M-T-01 §9 另议管线：xlsx/xls → 结构化 sheet 数据只读值投影、超限明示；csv/tsv 文本格式前端解析不经 command） |

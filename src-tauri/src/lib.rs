@@ -65,6 +65,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("prv.preview");
     reg.register("prv.export");
     reg.register("prv.media_src");
+    reg.register("prv.table_data");
     reg.register("doc.create_draft");
     reg.register("doc.open_for_edit");
     reg.register("doc.save_from_edit");
@@ -119,6 +120,7 @@ fn dispatch(app: tauri::AppHandle, request: CommandRequest, state: State<AppStat
         "prv.preview" => route_preview(&request, &state),
         "prv.export" => route_export(&request, &state),
         "prv.media_src" => route_media_src(&request, &state, &app),
+        "prv.table_data" => route_table_data(&request, &state),
         "doc.create_draft" => route_create_draft(&request, &state),
         "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
         "doc.save_from_edit" => route_save_from_edit(&request, &state, &app),
@@ -419,6 +421,18 @@ fn route_media_src(request: &CommandRequest, state: &AppState, app: &tauri::AppH
         .allow_file(&abs)
         .map_err(|e| IpcError::new("PRV_SCOPE_FAILED", &format!("授权媒体访问失败: {e}"), false, false))?;
     Ok(serde_json::json!({ "abs_path": abs.to_string_lossy() }))
+}
+
+/// 路由 `prv.table_data`（2026-07-03 #1 表格式预览）：xlsx/xls → 结构化表格数据（DOC calamine 管线，
+/// X-SEQ-004；只读值投影，BR-PRV-DATA-001）。守界（X-FORBID-004）；csv/tsv 为文本格式由前端解析不经此。
+fn route_table_data(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    if !abs.is_file() {
+        return Err(IpcError::new("PRV_NOT_FOUND", "表格文件不存在", false, false));
+    }
+    let (sheets, truncated) = doc::table_preview::xlsx_to_sheets(&abs)?;
+    Ok(serde_json::json!({ "sheets": sheets, "truncated": truncated }))
 }
 
 /// 路由 `prv.export`：源文档导出为目标格式，落点 = 同目录同名换扩展（workspace 内，守界 X-FORBID-004）。

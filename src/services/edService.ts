@@ -123,16 +123,28 @@ export async function reloadDocument(): Promise<void> {
 /// 外部修改、不静默重载丢脏态，SM-WS-01）。物理事件订阅延 SY-02，当前以 5s 轮询实现逻辑契约。
 /**
  * 外部变更轮询（实现 external_change 逻辑契约，物理事件延 SY-02）：
- * 比对磁盘哈希与加载基线，磁盘已被外部改动/删除 → 置 external_changed（触发冲突条裁决）。
- * 已是 external_changed 则不重复置；无打开文档/无基线则跳过。不静默覆盖外部修改（SM-WS-01）。
+ * 比对磁盘哈希与加载基线（磁盘状态 vs 逻辑状态的加载快照）。BR-ED-STATE-003 双分支（2026-07-03
+ * 三态审计修复）：**无脏态**（逻辑状态无独立修改）→ **自动重载**磁盘内容刷新基线（非阻断，不弹
+ * 裁决——外部修改无内容损失方）；**有脏态** → external_changed 显式裁决（双向内容损失须用户选择）。
+ * saving 态跳过（磁盘已写、基线未回填的竞态窗口会误报）；已是 external_changed 不重复置。
  */
 export async function pollExternalChange(): Promise<void> {
   const { openPath, baseline, tabState } = edStore.getSnapshot();
-  if (!openPath || baseline === null || tabState === "external_changed") return;
+  if (!openPath || baseline === null) return;
+  if (tabState === "external_changed" || tabState === "saving") return;
   const path = openPath; // 锁定被检测文档：await 期间切标签也只标记该会话（PI-FE-29）。
+  const wasDirty = tabState === "dirty";
   try {
     const r = await checkExternalChange(path, baseline);
-    if (r.changed) edStore.setTabState(path, "external_changed");
+    if (!r.changed) return;
+    if (wasDirty) {
+      // 有脏态：进冲突裁决（保留我的编辑（覆盖）/ 放弃重载——状态栏弹出，双显式按钮）。
+      edStore.setTabState(path, "external_changed");
+    } else {
+      // 无脏态：自动重载外部修改（逻辑状态无独立修改，无内容损失方；重载后基线刷新）。
+      // 仅当该文档仍是活动文档才重载（切走后由重新激活时的会话内容兜底，避免后台抢 setContent）。
+      if (edStore.getSnapshot().openPath === path) await openDocument(path);
+    }
   } catch {
     /* 检测失败不打断编辑（下次轮询重试） */
   }

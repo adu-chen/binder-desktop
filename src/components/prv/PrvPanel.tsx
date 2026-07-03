@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { tabsStore } from "../../store/tabsStore";
 import { previewDoc, mediaSrc } from "../../services/prvService";
+import { TablePreview } from "./TablePreview";
+import { isTableFile } from "../../services/tableData";
 import { createDocxDraft, isNativeDocxPreview } from "../../services/docService";
 import { openDocument } from "../../services/edService";
 
 /**
- * PRV 预览面板（PRV-VIEW · 只读硬边界 · PI-FE-22/24）。按扩展名分流：
- * - docx/Excel/PPT → prv.preview（DOC 链）出 PDF，字节→blob iframe；
+ * PRV 预览面板（PRV-VIEW · 只读硬边界 · PI-FE-22/24 · 2026-07-03 #1 表格式预览）。按扩展名分流：
+ * - docx/PPT → prv.preview（DOC 链）出 PDF，字节→blob iframe；
+ * - csv/tsv/xlsx/xls → 表格式预览（TablePreview：行列/多 sheet/可选中复制，PDF 保真不达另议管线的兑现）；
  * - 音视频 → prv.media_src（asset 协议）流式喂 <video>/<audio>（不进内存，系统解码）。
  * 加载/失败/不支持各有明确态（不静默空白，BR-PRV-DATA-002）；无任何编辑入口。
  */
@@ -15,12 +18,13 @@ const VIDEO = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
 const AUDIO = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const IMAGE = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "ico"]);
 
-type Mode = "pdf" | "video" | "audio" | "image";
+type Mode = "pdf" | "video" | "audio" | "image" | "table";
 function modeOf(path: string): Mode {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (VIDEO.has(ext)) return "video";
   if (AUDIO.has(ext)) return "audio";
   if (IMAGE.has(ext)) return "image";
+  if (isTableFile(path)) return "table";
   return "pdf";
 }
 
@@ -60,6 +64,7 @@ export function PrvPanel({ path }: { path: string }) {
   useEffect(() => {
     let revoked: string | null = null;
     let alive = true;
+    if (mode === "table") return; // 表格式预览由 TablePreview 自管数据加载
     setStatus("loading");
     setUrl(null);
     const loader = mode === "pdf" ? previewDoc(path) : mediaSrc(path);
@@ -112,7 +117,8 @@ export function PrvPanel({ path }: { path: string }) {
         </span>
       </div>
       <div className="prv-body">
-        {status === "loading" && (
+        {mode === "table" && <TablePreview path={path} />}
+        {mode !== "table" && status === "loading" && (
           <p className="muted">{mode === "pdf" ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载中…"}</p>
         )}
         {status === "error" && (

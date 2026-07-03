@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-03T00:11:30.105Z -->
+<!-- 最后生成时间：2026-07-03T00:49:10.747Z -->
 
 ### 模块编码表
 
@@ -236,7 +236,7 @@
 | --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 287  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1461 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1475 |
 
 #### AG-TOOL
 
@@ -260,7 +260,7 @@
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | BR-AG-VERIFY-001                                       | src-tauri/src/ag/turn.rs        | 105 |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001 | EFFECT | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 134 |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001  | QUERY  | BR-AG-PERSIST-001                                      | src-tauri/src/ag/turn.rs        | 159 |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 926 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002   | GUARD  | BR-AG-VERIFY-001 term_ref: TERM-AG-001, TERM-CLOUD-001 | src-tauri/src/lib.rs            | 940 |
 
 #### AST-MEMORY
 
@@ -356,7 +356,7 @@
 | BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-004    | IO    | BR-DOC-DATA-002  | src-tauri/src/doc/edit_chain.rs          | 112 |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-003    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 97  |
 | BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-004  | DATA  | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 158 |
-| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 294 |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/libreoffice_runtime.rs | 301 |
 | BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-002  | DATA  | BR-DOC-DATA-001  | src-tauri/src/doc/pandoc_runtime.rs      | 35  |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-001    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/pandoc_runtime.rs      | 55  |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-002    | IO    | BR-DOC-DATA-001  | src-tauri/src/doc/pandoc_runtime.rs      | 83  |
@@ -404,11 +404,12 @@
 
 #### PRV-VIEW
 
-| codes                                  | type  | rules           | 文件                              | 行号 |
-| -------------------------------------- | ----- | --------------- | ------------------------------- | -- |
-| BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003 | GUARD | BR-PRV-DATA-001 | src/components/prv/PrvPanel.tsx | 28 |
-| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001    | IO    | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs        | 23 |
-| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002    | IO    | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs        | 48 |
+| codes                                  | type  | rules           | 文件                                 | 行号 |
+| -------------------------------------- | ----- | --------------- | ---------------------------------- | -- |
+| BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003 | GUARD | BR-PRV-DATA-001 | src/components/prv/PrvPanel.tsx    | 32 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002    | IO    | BR-PRV-DATA-002 | src-tauri/src/doc/table_preview.rs | 48 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001    | IO    | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs           | 23 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002    | IO    | BR-PRV-DATA-002 | src-tauri/src/prv/mod.rs           | 48 |
 
 #### REF-INJECT
 
@@ -548,7 +549,7 @@
 | codes                                   | type   | chain     | 文件                         | 行号   |
 | --------------------------------------- | ------ | --------- | -------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 39   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1461 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1475 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
@@ -568,13 +569,13 @@
 | codes                                   | type   | chain     | 文件                       | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------ | ---- |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 105  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1461 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1475 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-001
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 926 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 940 |
 
 #### BR-AST-DATA-001
 
@@ -678,7 +679,7 @@
 | BR-DOC-DATA-001-GUARD-DOC-DOC-CONVERT-001 | GUARD | DOC-CONVERT | src-tauri/src/doc/convert.rs             | 89  |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-003    | IO    | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 97  |
 | BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-004  | DATA  | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 158 |
-| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 294 |
+| BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-005    | IO    | DOC-CONVERT | src-tauri/src/doc/libreoffice_runtime.rs | 301 |
 | BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-002  | DATA  | DOC-CONVERT | src-tauri/src/doc/pandoc_runtime.rs      | 35  |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-001    | IO    | DOC-CONVERT | src-tauri/src/doc/pandoc_runtime.rs      | 55  |
 | BR-DOC-DATA-001-IO-DOC-DOC-CONVERT-002    | IO    | DOC-CONVERT | src-tauri/src/doc/pandoc_runtime.rs      | 83  |
@@ -797,14 +798,15 @@
 
 | codes                                  | type  | chain    | 文件                              | 行号 |
 | -------------------------------------- | ----- | -------- | ------------------------------- | -- |
-| BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003 | GUARD | PRV-VIEW | src/components/prv/PrvPanel.tsx | 28 |
+| BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003 | GUARD | PRV-VIEW | src/components/prv/PrvPanel.tsx | 32 |
 
 #### BR-PRV-DATA-002
 
-| codes                               | type | chain    | 文件                       | 行号 |
-| ----------------------------------- | ---- | -------- | ------------------------ | -- |
-| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001 | IO   | PRV-VIEW | src-tauri/src/prv/mod.rs | 23 |
-| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002 | IO   | PRV-VIEW | src-tauri/src/prv/mod.rs | 48 |
+| codes                               | type | chain    | 文件                                 | 行号 |
+| ----------------------------------- | ---- | -------- | ---------------------------------- | -- |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002 | IO   | PRV-VIEW | src-tauri/src/doc/table_preview.rs | 48 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-001 | IO   | PRV-VIEW | src-tauri/src/prv/mod.rs           | 23 |
+| BR-PRV-DATA-002-IO-PRV-PRV-VIEW-002 | IO   | PRV-VIEW | src-tauri/src/prv/mod.rs           | 48 |
 
 #### BR-REF-DATA-001
 
@@ -982,7 +984,7 @@
 
 | codes                                 | type  | chain   | 文件                   | 行号  |
 | ------------------------------------- | ----- | ------- | -------------------- | --- |
-| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 926 |
+| BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002 | GUARD | AG-TURN | src-tauri/src/lib.rs | 940 |
 
 #### TERM-DE-003
 

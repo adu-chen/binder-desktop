@@ -25,9 +25,10 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
-/** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览）。点击 → PRV 预览。
+/** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；2026-07-03 #1 补 csv/tsv——表格式只读预览，
+ *  修复 csv 误入编辑模式）。点击 → PRV 预览（xlsx/csv 走 TablePreview，pptx 走 PDF）。
  *  注：docx/doc 可编辑——经 DOC 编辑链（doc.open_for_edit/save_from_edit）打开进 TipTap，点击 → 编辑。 */
-const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt"]);
+const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt", "csv", "tsv"]);
 
 /** 音视频/图片类型（asset 协议预览）；可点击预览，视觉不灰显（与 office 区分）。 */
 const MEDIA_TYPES = new Set([
@@ -48,6 +49,9 @@ function typeGlyph(docType?: string): string {
     case "xlsx":
     case "xls":
       return "XLS";
+    case "csv":
+    case "tsv":
+      return "CSV";
     case "pptx":
     case "ppt":
       return "PPT";

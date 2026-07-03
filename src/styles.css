@@ -461,6 +461,38 @@ button.ed-sb-conflict {
 .ed-sb-conflict-actions { display: flex; gap: var(--sp-2); }
 .ed-sb-conflict-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
 
+/* 表格式只读预览（2026-07-03 #1 · BR-PRV-DATA-001）：行列结构 + 多 sheet 标签 + 可选中复制，无编辑面。 */
+.tablepreview { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--bg-card); }
+.tablepreview-hint { padding: var(--sp-4); }
+.tablepreview-tabs {
+  display: flex; gap: 1px; flex-shrink: 0; overflow-x: auto;
+  background: var(--bg-sunken); border-bottom: 0.5px solid var(--rule);
+  scrollbar-width: none;
+}
+.tablepreview-tabs::-webkit-scrollbar { display: none; }
+.tablepreview-tab {
+  padding: var(--sp-1) var(--sp-3); font-size: 12px; border: none; border-radius: 0;
+  background: transparent; color: var(--ink-4); cursor: pointer; white-space: nowrap;
+}
+.tablepreview-tab.active { background: var(--bg-card); color: var(--ink); }
+.tablepreview-scroll { flex: 1; overflow: auto; min-height: 0; }
+.tablepreview-table {
+  border-collapse: collapse; font-size: 12px; font-family: var(--font-mono);
+  user-select: text; -webkit-user-select: text; /* 只读但可选中复制 */
+}
+.tablepreview-table td, .tablepreview-table th {
+  border: 0.5px solid var(--rule); padding: 2px 8px; white-space: nowrap;
+  max-width: 360px; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+.tablepreview-rownum {
+  background: var(--bg-elevated); color: var(--ink-5); font-weight: 400;
+  position: sticky; left: 0; user-select: none; -webkit-user-select: none;
+}
+.tablepreview-truncated {
+  flex-shrink: 0; padding: var(--sp-1) var(--sp-3); font-size: 11px;
+  color: var(--gold); background: var(--gold-bg); border-top: 0.5px solid var(--gold);
+}
+
 /* DiffCard 样式变更摘要（PI-ED-11 · D-3 方案A）：样式 op 人读标签行。 */
 .diffcard-styles { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--sp-1); }
 .diffcard-style-tag {

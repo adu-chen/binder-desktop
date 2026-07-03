@@ -52,36 +52,27 @@ export function EditorStatusBar({
 
   if (!editor) return null;
 
+  // 展示项对齐旧项目 EditorStatusBar（2026-07-03 #5 修正）：字数（选中时 选中/总）/ 行数 / 光标 行:列
+  // ——用户无"块"概念，行列基于文本行（blockSeparator="\n"，纯文本精确、富文本=段落行直觉一致）。
   const chars = (editor.storage as { characterCount?: { characters: () => number; words: () => number } })
     .characterCount;
   const charCount = chars?.characters() ?? editor.state.doc.textContent.length;
-  const lineCount = editor.state.doc.childCount;
-  // 光标位：所在顶层块序号（1 起）+ 块内纯文本偏移。
-  const { head } = editor.state.selection;
-  let blockIdx = 0;
-  let blockStart = 1;
-  {
-    let p = 0;
-    const doc = editor.state.doc;
-    for (let i = 0; i < doc.childCount; i++) {
-      const size = doc.child(i).nodeSize;
-      if (head <= p + size) {
-        blockIdx = i;
-        blockStart = p + 1;
-        break;
-      }
-      p += size;
-      blockIdx = i;
-      blockStart = p + 1;
-    }
-  }
-  const offset = Math.max(0, head - blockStart);
+  const { from, to, head } = editor.state.selection;
+  const selectedCount = from === to ? 0 : editor.state.doc.textBetween(from, to, "\n").replace(/\s/g, "").length;
+  const fullText = editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n");
+  const lineCount = fullText === "" ? 1 : fullText.split("\n").length;
+  // 光标 行:列（光标前文本的换行数 + 1 / 末行长度 + 1）。
+  const beforeCursor = editor.state.doc.textBetween(0, head, "\n");
+  const cursorLine = (beforeCursor.match(/\n/g)?.length ?? 0) + 1;
+  const cursorCol = beforeCursor.length - (beforeCursor.lastIndexOf("\n") + 1) + 1;
 
   return (
     <div className="ed-statusbar" role="status">
-      <span className="ed-sb-item">{charCount} 字</span>
-      <span className="ed-sb-item">{lineCount} 块</span>
-      <span className="ed-sb-item">位置 {blockIdx + 1}:{offset}</span>
+      <span className="ed-sb-item">
+        字数：{selectedCount > 0 ? `${selectedCount}/${charCount}` : charCount}
+      </span>
+      <span className="ed-sb-item">行数：{lineCount}</span>
+      <span className="ed-sb-item">{cursorLine}:{cursorCol}</span>
       <span className="ed-sb-spacer" aria-hidden="true" />
       {converting && <span className="ed-sb-item ed-sb-loading">正在转换文档…</span>}
       {tabState === "external_changed" ? (

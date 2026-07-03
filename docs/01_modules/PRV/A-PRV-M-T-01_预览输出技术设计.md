@@ -28,7 +28,8 @@ REQ-CORE-004/009 + v1 冻结 → REQ-PRV-001~005（PRV L1）→ 本文（SSOT）
 | 内容类型 | 转换/解码 | 归属与理由 |
 |---|---|---|
 | docx | LibreOffice→PDF | **DOC 预览链**（既有，A-DOC-M-T-01 §2） |
-| Excel / PPT | LibreOffice→PDF | **DOC 预览链扩展**——LibreOffice 能力已布点于 DOC，复用避免双布点、统一受 X-SEQ-004（二进制转换唯一通道）约束 |
+| PPT | LibreOffice→PDF | **DOC 预览链扩展**——LibreOffice 能力已布点于 DOC，复用避免双布点、统一受 X-SEQ-004（二进制转换唯一通道）约束 |
+| Excel / csv / tsv | **表格式预览**（2026-07-03 兑现 §9「保真不达另议管线」）：xlsx/xls 经 DOC calamine 解析（X-SEQ-004 通道内）→ 结构化 sheet 数据 → 前端 HTML 表格（行列/多 sheet/可选中复制，只读无编辑面）；csv/tsv 为文本格式前端直接解析（不经 DOC）。值投影不含样式（列宽/颜色/合并），全保真查看走导出 PDF | 原 LibreOffice→PDF 实测丢失表格基础特征（不可选中复制/无行列语义），按 §9 预设通道另议 |
 | 音视频 | 系统解码（macOS AVFoundation） | **PRV 自带呈现**——播放解码非"文档格式转换"职责，不经 DOC；系统解码优先、不自带解码器 |
 
 <!-- CHAIN
@@ -124,7 +125,10 @@ status: mapped
 
 ## §9 技术债务与盲区（诚实声明）
 
-- Excel/PPT 经 LibreOffice 的保真度与超大文件表现需实现期实测（不达另议管线，须回写本文与 DOC）。
+- ~~Excel 经 LibreOffice 的保真度需实测（不达另议管线）~~ → **已兑现（2026-07-03）**：实测 PDF 形态
+  丢失表格基础特征，Excel/csv 另议为表格式预览管线（§2 决策表更新；xlsx 解析经 DOC calamine，
+  X-SEQ-004 合规）。**PPT 维持 LibreOffice→PDF**；其保真度（字体替换表已补全至旧项目全集）与
+  超大文件表现仍待实测。表格式预览的样式保真（列宽/颜色/合并单元格）为值投影边界外，登记 A 类。
 - 音视频支持格式清单随系统解码能力在实现期界定（PRV-02 余项）。
 - 导出格式清单与打印管线细节延实现期（PRV-03 余项）。
 - 预览缓存策略延实现期（引入缓存重建编排则触发 §5 豁免失效条件）。
@@ -140,3 +144,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（PRV G2，P4 G2 收尾件）：预览管线归属决策（Excel/PPT 归 DOC 预览链扩展、音视频系统解码归 PRV，解除 PRV-01/DOC-03，门评供人类复核）；只读硬边界执行规则（全产品无 Excel/PPT 编辑入口为 G4/G5 强制核验项）；状态机豁免复核成立并列失效条件（解除 PRV-04）；注册链路 PRV-VIEW、规则 BR-PRV-DATA-001/002；无 TERM（通用技术词说明）；REQ_MAP（REQ-PRV-001~005） |
+| 2026-07-03 | v1.1 | 兑现 §9 预设通道（人类需求 #1）：Excel/csv/tsv 预览另议为表格式管线（xlsx 经 DOC calamine → 结构化数据 → 前端只读表格；csv/tsv 前端文本解析），§2 决策表拆分 Excel 与 PPT 行；§9 债务更新（PPT 保真待实测、表格样式保真登记 A 类）；接口 prv.table_data 登记于 A-PRV-I-P-01 v1.1 |

@@ -49,13 +49,34 @@ describe("edService 保存契约（SM-WS-01 / BR-WS-OBS-001）", () => {
   });
 
   // covers: BR-ED-STATE-003
-  it("pollExternalChange：磁盘变更 → external_changed", async () => {
+  it("pollExternalChange 有脏态：磁盘变更 → external_changed 显式裁决（不静默覆盖/重载）", async () => {
+    edStore.markDirty(); // 逻辑状态有独立修改 → 双向内容损失须用户显式选择
     invokeMock.mockResolvedValue(ok({ changed: true, deleted: false, current: 999 }));
     await pollExternalChange();
     expect(edStore.getSnapshot().tabState).toBe("external_changed");
     expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
       request: { command: "ws.check_external_change", params: { relPath: "a.md", baseline: 100 } },
     });
+  });
+
+  // covers: BR-ED-STATE-003
+  it("pollExternalChange 无脏态：磁盘变更 → 自动重载刷新基线（2026-07-03 三态审计修复，不弹裁决）", async () => {
+    // saved 态（无独立修改）；第一次调用回 changed，第二次（openDocument→ws.read_doc）回新内容。
+    invokeMock
+      .mockResolvedValueOnce(ok({ changed: true, deleted: false, current: 999 }))
+      .mockResolvedValueOnce(ok({ content: "外部新内容", baseline: 999 }));
+    await pollExternalChange();
+    const s = edStore.getSnapshot();
+    expect(s.tabState).toBe("saved"); // 重载后回 saved，非 external_changed
+    expect(s).toMatchObject({ loadedContent: "外部新内容", baseline: 999 });
+    expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({ request: { command: "ws.read_doc" } });
+  });
+
+  // covers: BR-ED-STATE-003
+  it("pollExternalChange saving 态：跳过检测（磁盘已写基线未回填的竞态窗口防误报）", async () => {
+    edStore.setTabState("a.md", "saving");
+    await pollExternalChange();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });
 

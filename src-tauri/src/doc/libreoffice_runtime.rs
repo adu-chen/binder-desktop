@@ -165,14 +165,21 @@ pub fn libreoffice_available() -> bool {
 /// 生成 fontsubst.xcu（BR-DOC-DATA-001 预览链一致性）：文档常见 CJK/Latin 字体缺失时统一替换为默认字体，
 /// 避免 LO 对缺失字体随机回退（移植旧项目字体列表）。纯函数，可测。
 pub fn generate_fontsubst_content(cjk_font: &str, latin_font: &str) -> String {
+    // 机制（旧项目注释语义）：仅对「可能缺失」的字体配置替换——LO 在字体缺失时用 ReplaceWith，
+    // 已安装字体仍用原字体渲染；**未列出的缺失字体会被 LO 随机回退**（pptx 字体随机匹配根因），
+    // 替换表须尽量覆盖文档常见字体（2026-07-03 #2 修复：补齐旧项目全集，CJK 24→36 / Latin +1）。
     const CJK: &[&str] = &[
         "宋体", "SimSun", "黑体", "SimHei", "楷体", "KaiTi", "微软雅黑", "Microsoft YaHei",
-        "等线", "DengXian", "仿宋", "FangSong", "华文黑体", "华文楷体", "华文宋体", "STHeiti",
-        "STKaiti", "STSong", "Hiragino Sans GB", "苹方", "新宋体", "NSimSun", "思源黑体",
-        "Source Han Sans SC",
+        "等线", "DengXian", "仿宋", "FangSong", "仿宋_GB2312", "楷体_GB2312",
+        "华文黑体", "华文楷体", "华文宋体", "华文仿宋", "华文中宋",
+        "STHeiti", "STKaiti", "STSong", "STFangsong", "STXihei",
+        "Hiragino Sans GB", "冬青黑体", "苹方", "PingFang TC", "PingFang HK",
+        "隶书", "幼圆", "新宋体", "NSimSun", "方正兰亭黑", "思源黑体", "Source Han Sans SC",
     ];
-    const LATIN: &[&str] =
-        &["Times New Roman", "Calibri", "Helvetica", "Cambria", "Georgia", "Verdana", "Tahoma", "Segoe UI"];
+    const LATIN: &[&str] = &[
+        "Times New Roman", "Calibri", "Helvetica", "Arial Narrow", "Cambria", "Georgia",
+        "Verdana", "Tahoma", "Segoe UI",
+    ];
     let mut items = String::new();
     for (list, target) in [(CJK, cjk_font), (LATIN, latin_font)] {
         for name in list {

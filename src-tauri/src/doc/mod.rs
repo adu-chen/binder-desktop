@@ -7,6 +7,7 @@
 
 /// PI-DOC-02 · 样式子集三级执行契约（BR-DOC-DATA-002）。
 pub mod style_subset;
+pub mod table_preview;
 
 /// PI-DOC-01 · 转换生命周期 SM-DOC-01 + 管线边界（BR-DOC-STATE-001 / BR-DOC-DATA-001）。
 pub mod convert;
