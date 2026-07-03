@@ -319,6 +319,12 @@ fn find_generated_pdf(output_dir: &Path, source: &Path) -> Result<PathBuf, IpcEr
 /// 取 PDF 路径。内容不经网络上行；与编辑链分离。output_dir 为工作/输出目录（调用方提供，限本地）。
 pub fn convert_to_pdf(input: &Path, kind: PreviewKind, output_dir: &Path) -> Result<PathBuf, IpcError> {
     let soffice = resolve_soffice_path().ok_or_else(dep_missing)?;
+    // 可观测性（2026-07-03 #2 复测辅助）：预览转换低频，明示实际命中的 soffice 与字体补丁激活状态
+    // ——复测字体问题时据此分流「未走内置 LO」vs「字形级回退（补丁未覆盖，需 LO 二次改造）」。
+    eprintln!(
+        "[binder:lo] soffice={} · BINDER_FORCE_DEFAULT_FONTS=1 已激活（VCL family 级回退补丁；字形级 GlyphFallback 不在补丁范围）",
+        soffice.display()
+    );
     if !input.exists() {
         return Err(convert_fail(&format!("输入文件不存在: {input:?}")));
     }
