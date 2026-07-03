@@ -552,6 +552,9 @@ button.ed-sb-conflict {
 @keyframes ed-indeterminate { to { left: 100%; } }
 
 .editor-paper { flex: 1; overflow: auto; display: flex; justify-content: center; padding: var(--sp-8) var(--sp-6); }
+/* EditorContent 包装 div（2026-07-03 修复：内容极少时 flex item shrink-to-fit 使纸张塌缩成窄条）——
+   占满可用宽、内部再居中；纸张宽度恒由 .ProseMirror 自身规则决定（常规 max-width / 分页固定纸宽）。 */
+.editor-paper > div { width: 100%; display: flex; justify-content: center; align-items: flex-start; }
 .editor-paper .ProseMirror {
   /* 编辑预览区缩放（视图态）：CSS zoom 缩放纸张会重排布局，滚动条自适应；分页测量按 computed zoom 归一化。 */
   zoom: var(--ed-zoom, 1);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computePageBreaks, samePlan, PAGE_CONTENT_HEIGHT, type PageBreakPlan } from "./Pagination";
+import { computePageBreaks, samePlan, diffExtents, PAGE_CONTENT_HEIGHT, type PageBreakPlan } from "./Pagination";
 
 // covers: BR-ED-DATA-003
 // 切页判定纯逻辑（PI-ED-06 页高修复版）：块级不切分，累计超页高在块前换页；每页携带页尾补足 fill；
@@ -88,5 +88,27 @@ describe("Pagination · samePlan", () => {
     expect(samePlan(base, { breaks: [{ index: 2, fill: 103 }], lastFill: 50 })).toBe(false);
     expect(samePlan(base, { breaks: [{ index: 3, fill: 100 }], lastFill: 50 })).toBe(false);
     expect(samePlan(base, { breaks: [], lastFill: 50 })).toBe(false);
+  });
+});
+
+// covers: BR-ED-DATA-003
+// 位置差分法（页高修复二轮）：块高=相邻 top 差（含塌陷后真实间距），Σ=精确渲染跨度；
+// 旧求和法对塌陷 margin 重复计数导致页偏矮的回归防线。
+describe("Pagination · diffExtents（位置差分）", () => {
+  it("相邻 top 差分 + 末块 bottom+marginBottom", () => {
+    // 三块：top=0/100/250，末块 bottom=300、mb=12 → [100,150,62]
+    expect(diffExtents([0, 100, 250], 300, 12)).toEqual([100, 150, 62]);
+  });
+  it("Σ差分 = 总跨度 + 末 margin（塌陷不重复计数的不变量）", () => {
+    const tops = [0, 80, 200, 330];
+    const hs = diffExtents(tops, 400, 10);
+    expect(hs.reduce((a, b) => a + b, 0)).toBe(400 - 0 + 10);
+  });
+  it("空/单块边界", () => {
+    expect(diffExtents([], 0, 0)).toEqual([]);
+    expect(diffExtents([50], 120, 8)).toEqual([78]);
+  });
+  it("乱序防御：负差钳 0", () => {
+    expect(diffExtents([100, 50], 60, 0)).toEqual([0, 10]);
   });
 });

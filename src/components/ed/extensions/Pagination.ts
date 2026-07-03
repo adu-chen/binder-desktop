@@ -154,30 +154,64 @@ function buildDecorations(doc: PMNode, plan: PageBreakPlan): DecorationSet {
   return DecorationSet.create(doc, decos);
 }
 
-/** 测量顶层内容块的高度序列（含上下外边距，近似每块对页高预算的占用）。
- *  编辑预览区缩放（CSS zoom）时 getBoundingClientRect 返回缩放后尺寸，按 view.dom 的 computed zoom
- *  归一化到未缩放 CSS px——使页高预算（未缩放常量）自洽，分页缝随内容一同缩放而不漂移。
- *  分页缝/end-filler 自身是 widget DOM，不在 doc.forEach 顶层块序列内，不会计入测量。 */
-function measureBlockHeights(view: EditorView): number[] {
+/**
+ * 位置差分法块高纯逻辑（2026-07-03 页高修复二轮，供测量与单测共用）：
+ * 块 i 实占高 = tops[i+1] − tops[i]——**天然包含 margin 塌陷后的真实间距**。旧法
+ * （rect.height + marginTop + marginBottom 逐块求和）把每对相邻塌陷 margin 计了两份，
+ * 加上 h1/ul 等 UA 默认 margin 放大，累计导致 fill 补偿不足 → 页偏矮（方形/扁矩形，#8 二轮根因）。
+ * 末块 = lastBottom − tops[last] + lastMarginBottom。Σheights = 精确渲染跨度 → fill 补足后
+ * 页视觉高度精确等于纸张比例。
+ */
+export function diffExtents(tops: number[], lastBottom: number, lastMarginBottom: number): number[] {
+  const n = tops.length;
+  if (n === 0) return [];
   const heights: number[] = [];
+  for (let i = 0; i < n - 1; i++) heights.push(Math.max(0, tops[i + 1] - tops[i]));
+  heights.push(Math.max(0, lastBottom - tops[n - 1] + lastMarginBottom));
+  return heights;
+}
+
+/** 测量顶层内容块的高度序列（位置差分法 + 既有分页缝剔除）。
+ *  缩放（CSS zoom）时坐标按 view.dom 的 computed zoom 归一化到未缩放 CSS px。
+ *  差分会把块间**既有分页缝 widget** 的高度计入其前一块——按缝的实际 DOM 高度从对应前块扣除，
+ *  避免旧缝污染下一轮切页判定（否则重算震荡）。 */
+function measureBlockHeights(view: EditorView): number[] {
   const doc = view.state.doc;
   const zoomRaw = window.getComputedStyle(view.dom).zoom;
   const zoom = parseFloat(zoomRaw) || 1;
+  const tops: number[] = [];
+  let lastBottom = 0;
+  let lastMb = 0;
   let p = 0;
   doc.forEach((_node) => {
     const pos = p;
     p += _node.nodeSize;
     const dom = view.nodeDOM(pos);
     if (!(dom instanceof HTMLElement)) {
-      heights.push(0);
+      tops.push(lastBottom); // 不可测块：锚定上一块底部，占位 0 高（序列对齐）
       return;
     }
     const rect = dom.getBoundingClientRect();
-    const cs = window.getComputedStyle(dom);
-    const mt = parseFloat(cs.marginTop) || 0;
-    const mb = parseFloat(cs.marginBottom) || 0;
-    heights.push(rect.height / zoom + mt + mb);
+    tops.push(rect.top / zoom);
+    lastBottom = rect.bottom / zoom;
+    lastMb = parseFloat(window.getComputedStyle(dom).marginBottom) || 0;
   });
+  const heights = diffExtents(tops, lastBottom, lastMb);
+  // 剔除既有缝高：缝 widget（.rm-page-gap）位于某块前，其高度被差分计入前一块。
+  const gaps = view.dom.querySelectorAll<HTMLElement>(".rm-page-gap");
+  if (gaps.length > 0 && tops.length > 1) {
+    gaps.forEach((g) => {
+      const gr = g.getBoundingClientRect();
+      const gTop = gr.top / zoom;
+      const gH = gr.height / zoom;
+      let idx = -1;
+      for (let i = 0; i < tops.length; i++) {
+        if (tops[i] < gTop) idx = i;
+        else break;
+      }
+      if (idx >= 0 && idx < heights.length) heights[idx] = Math.max(0, heights[idx] - gH);
+    });
+  }
   return heights;
 }
 
@@ -288,7 +322,26 @@ export const PaginationExtension = Extension.create({
             v.dom.classList.toggle("rm-paginated", on);
           };
           syncClass(initialView);
+          // 异步内容尺寸变化（图片加载/字体就绪）不触发 PM update → ResizeObserver 兜底调度重测
+          // （2026-07-03 页高修复二轮：RAF 测量时 img 高度为 0 导致含图页错位）。
+          let roScheduled = false;
+          const ro = typeof ResizeObserver !== "undefined"
+            ? new ResizeObserver(() => {
+                if (roScheduled) return;
+                roScheduled = true;
+                requestAnimationFrame(() => {
+                  roScheduled = false;
+                  // 触发一次空 meta 派发走既有 update 测量路径（幂等：samePlan 收敛不重建）。
+                  const st = paginationKey.getState(initialView.state);
+                  if (st?.enabled) {
+                    initialView.dispatch(initialView.state.tr.setMeta("paginationResize", true));
+                  }
+                });
+              })
+            : null;
+          ro?.observe(initialView.dom);
           return {
+            destroy: () => ro?.disconnect(),
             update: (view: EditorView) => {
               const st = paginationKey.getState(view.state);
               view.dom.classList.toggle("rm-paginated", st?.enabled ?? false);
