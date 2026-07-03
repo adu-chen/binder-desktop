@@ -175,7 +175,13 @@
      **一并代码签名 + 公证**，否则其他设备 macOS Gatekeeper 拦截内置 soffice，预览不可用。优化版为自定义
      构建（LibreOfficeDev），尤须确保签名链完整。
 - **性质**：G6 发布工程硬门（承 A-CORE-X-L-02 P5/§5、APC §5.2）。
-- **⚠️ 债务登记（2026-07-03 复测分流，A 类·候审）**：**字形级回退（GlyphFallback）不在现有补丁覆盖范围**
+- **⚠️ 债务登记（2026-07-03 复测确认，A 类·已生效挂起）**：**pptx 字体随机 = 字形级回退（GlyphFallback），
+  现有补丁不覆盖**。复测实证：命中内置 LO + BINDER_FORCE_DEFAULT_FONTS=1 已激活（[binder:lo] 日志确认）
+  仍随机 → 排除启用问题，确认为字形级。**按人类指示（2026-07-03）停止本项优化、挂起待专项排期**。
+  修复方案指引（专项时执行）：改 vcl/quartz/salgdi.cxx CoreTextGlyphFallbackSubstititution::
+  FindFontSubstitute——字形回退前优先尝试 BINDER_DEFAULT_CJK_FONT（含所需字形时直接采用），
+  仿 PhysicalFontCollection 补丁的门控模式；改后重建优化版 LO（配方见 deploy_lo.sh）并重验签名链。
+  背景（原候审分析）：**字形级回退（GlyphFallback）不在现有补丁覆盖范围**
   ——补丁只拦 family 匹配失败；字体存在但**缺 CJK 字形**时（如替换目标 Arial 无中文），每个缺字走
   CoreText 字形级回退逐字挑字体（随机感来源之二）。旧项目对该链路（vcl/quartz/salgdi.cxx
   CoreTextGlyphFallbackSubstititution）**只加日志未改行为**，即旧补丁本就不覆盖。若激活 family 补丁
@@ -224,3 +230,4 @@ BR-SYS-DATA-004（云端，§5 C 类）。~~BR-ED-DATA-003~~ 已于 2026-07-02 �
 | 2026-07-02 | v1.4 | §10 回填（G-7，人类授权执行 A-CORE-X-R-03 §7 补全计划）：BR-ED-DATA-003 已实现闭合——分页呈现层（块边界分页缝 Decoration，纯呈现不产脏态）+ docx 图文呈现（asset 协议逐文件授权 + 相对 src 改写），2 @GOV owner + covers，audit 清零；剩余 failed 项更新为 BR-AG-DATA-004/005 与 BR-SYS-DATA-004 |
 | 2026-07-03 | v1.5 | §9 BLOCK-REL-LO-001 构建配方补充：Binder VCL 字体回退源码补丁（环境变量门控，运行时已激活）为优化版 LO 必备组成，重建须移植否则字体随机匹配回归 |
 | 2026-07-03 | v1.6 | §9 追加字形级回退债务候审登记（复测分流）：GlyphFallback 不在 family 级补丁范围，若激活后复测仍随机则需 LO 二次改造+重建，按人类指示挂起为债务；运行时加 soffice 命中/激活日志辅助分流 |
+| 2026-07-03 | v1.7 | 字形级回退债务转正（复测实证：内置 LO 命中+激活确认仍随机）：pptx 字体随机根因锁定为 GlyphFallback，按人类指示停止优化挂起，附专项修复方案指引（salgdi.cxx FindFontSubstitute 改造+重建） |
