@@ -513,3 +513,4 @@ npm run governance:generate
 |---|---|---|
 | 2026-06-22 | v1.0 | 初版：8 条前端 Plan Item（PI-FE-00～PI-FE-08），承接 IPC 桥接/DesignToken + 布局/Logo+Rail/欢迎页/文件树/TipTap/Chat 面板/Diff 状态机/三种 AI 辅助入口；对接 A-CORE-X-L-02 P2/P3；注册 TERM-SYS-001/TERM-DE-003/TERM-ED-003；A 类债务 10 项 |
 | 2026-07-02 | v1.1 | 追加登记 PI-FE-31 编辑器核心优化批（G-8，人类授权执行 A-CORE-X-R-03 §7）：分页 + 图文呈现（BR-ED-DATA-003 闭合，解除 PI-FE-30 分页延后）+ 工具栏/编辑工具 + 三栏可拖动布局 + 编辑区缩放（视图层）；验收 tsc/vitest 104/cargo 140/build/audit 绿，真机视觉验收登记待做 |
+| 2026-07-03 | v1.2 | PI-FE-14（富文本 Markdown 往返）行为撤销（人类裁定 B，2026-07-03）：md 回归纯文本忠实编辑（同 txt，textToDoc/getText），tiptap-markdown 移除——实测其解析把中文段首缩进（4空格/Tab）渲染为代码块、序列化向正文注入转义反斜杠污染文件；对齐旧项目形态（md/txt 均纯文本，should_inject_block_ids_for_plain_text 同源实证）。md 富文本可视化如需求再起，按三态模型做显示态预览（不碰逻辑态） |

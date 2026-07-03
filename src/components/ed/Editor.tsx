@@ -25,16 +25,9 @@ import { edViewPrefsStore, getPageGeometry, useEdViewPrefs } from "../../store/e
  */
 const SEED_CONTENT = "开始写作…";
 
-/** 是否按 Markdown 处理（.md/.markdown）；其余按纯文本忠实往返。 */
-function isMarkdownPath(path: string | null): boolean {
-  if (!path) return false;
-  const ext = path.split(".").pop()?.toLowerCase();
-  return ext === "md" || ext === "markdown";
-}
-
 /**
  * 跳转到目标行对应块（搜索命中跳行）：行号 → 顶层块索引（钳制），定位光标 + 滚动到视区。
- * 纯文本精确（行=段落）；md 近似（块索引≈行号，A 类债务）。
+ * md/txt 均按纯文本装载（行=段落，2026-07-03 人类裁定 B）→ 行号精确。
  */
 function jumpToLine(editor: NonNullable<ReturnType<typeof useEditor>>, line: number) {
   const doc = editor.state.doc;
@@ -44,7 +37,8 @@ function jumpToLine(editor: NonNullable<ReturnType<typeof useEditor>>, line: num
   editor.chain().focus().setTextSelection(pos).scrollIntoView().run();
 }
 
-/** 纯文本 → ProseMirror doc（每行一段落，忠实往返；富文本 md 解析序列化为债务）。 */
+/** 纯文本 → ProseMirror doc（每行一段落，忠实往返）。md/txt 共用（2026-07-03 人类裁定 B：
+ *  md 按纯文本忠实编辑，对齐旧项目——不做 markdown 富文本渲染，根除缩进变代码块与保存转义注入）。 */
 function textToDoc(text: string) {
   const lines = text.split("\n");
   return {
@@ -56,17 +50,13 @@ function textToDoc(text: string) {
 }
 
 /** 序列化编辑器当前内容为会话格式：html/html_file=HTML（docx 编辑链 / .html 文本往返，PI-ED-13）；
- *  md=getMarkdown；其余=纯文本忠实往返。 */
+ *  其余（md/txt/纯文本）=getText 忠实往返（裁定 B：不注入转义、不污染文件）。 */
 function serialize(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   fmt: EditFormat,
-  path: string | null,
+  _path: string | null,
 ): string {
   if (fmt === "html" || fmt === "html_file") return editor.getHTML();
-  if (isMarkdownPath(path)) {
-    const md = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>).markdown;
-    return md.getMarkdown();
-  }
   return editor.getText({ blockSeparator: "\n" });
 }
 
@@ -186,7 +176,7 @@ export function Editor() {
 
   // 载入活动会话：loadSeq 变更（loadDoc / 切换活动会话 setActivePath 投影）→ 先把上一文档的当前编辑序列化
   // 回写其会话（切标签不丢草稿），再 setContent 活动会话内容（不触发脏态）。
-  // md/markdown 以 Markdown 解析为富文本（字符串经 tiptap-markdown）；其余按纯文本（doc 对象，绕过 md 解析）。
+  // md/txt 一律按纯文本装载（裁定 B）；docx/html 经 generateJSON 按 HTML 解析。
   useEffect(() => {
     if (!editor || loadSeq === 0) return;
     // 切换标签前：暂存上一活动文档的当前编辑内容到其会话（按其格式序列化）+ 滚动位置（N7）。
@@ -199,14 +189,12 @@ export function Editor() {
     lastPathRef.current = openPath;
     if (!openPath || loadedContent === null) return;
     if (editFormat === "html" || editFormat === "html_file") {
-      // docx 编辑链 / .html 独立文件（PI-ED-13）：loadedContent 为 HTML。用 generateJSON 按 HTML 解析为
-      // ProseMirror JSON，**绕过 tiptap-markdown 对 setContent(string) 的 markdown 劫持**（否则 HTML
-      // 标签/CSS 被当文本/代码块渲染）；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析。
+      // docx 编辑链 / .html 独立文件（PI-ED-13）：loadedContent 为 HTML，用 generateJSON 按 HTML 解析为
+      // ProseMirror JSON；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析。
       // .html 源含 data-block-id 时经 BlockIdExtension parseHTML 恢复（blockId 跨保存稳定，REQ-ED-008）。
       editor.commands.setContent(generateJSON(loadedContent, buildEditorExtensions()), { emitUpdate: false });
-    } else if (isMarkdownPath(openPath)) {
-      editor.commands.setContent(loadedContent, { emitUpdate: false });
     } else {
+      // md/txt/纯文本：按行装载忠实呈现（裁定 B，2026-07-03——不经 markdown 解析，缩进/语法字符原样）。
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
     }
     // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开分页，md/纯文本关（人类决策 2026-07-02）。
@@ -234,7 +222,7 @@ export function Editor() {
   }, [editor, loadSeq]);
 
   // ⌘S 保存：docx 以 getHTML → doc.save_from_edit（编辑链回写）；.html 以 getHTML → ws.save_doc
-  // 文本落盘（PI-ED-13，不经 DOC）；md 以 getMarkdown、其余纯文本 → ws.save_doc。
+  // 文本落盘（PI-ED-13，不经 DOC）；md/txt 纯文本 getText → ws.save_doc（裁定 B，零转义注入）。
   const saveCurrent = async (override: boolean) => {
     if (!editor) return;
     if (editFormat === "html") {

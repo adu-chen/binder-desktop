@@ -1,6 +1,5 @@
 import StarterKit from "@tiptap/starter-kit";
 import type { Extensions } from "@tiptap/core";
-import { Markdown } from "tiptap-markdown";
 import { Link } from "@tiptap/extension-link";
 import { ResizableImage } from "./ResizableImage";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -35,8 +34,8 @@ export function buildEditorExtensions(): Extensions {
   return [
     // 基础富文本；禁用 v3 StarterKit 自带 link/underline，改用下方独立配置（避免重复扩展报错）。
     StarterKit.configure({ link: false, underline: false }),
-    // Markdown 往返（md 文件）：解析 md 为富文本 + getMarkdown 序列化；docx 走 HTML 不经此。
-    Markdown.configure({ html: false, breaks: true, transformPastedText: true }),
+    // tiptap-markdown 已移除（2026-07-03 人类裁定 B）：md 按纯文本忠实编辑（同 txt），不做 markdown
+    // 富文本渲染——根除缩进变代码块与保存转义注入；docx/.html 富文本走 generateJSON HTML 路径。
     // 图片（docx 嵌入图，允许 base64/inline）；PI-ED-08：拖拽调宽 + inline/block 嵌入切换（NodeView）。
     ResizableImage.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: "editor-image" } }),
     Link.configure({ openOnClick: false }),
