@@ -194,7 +194,7 @@ function measureBlockHeights(view: EditorView): number[] {
     const scale = rectScale(view);
     const tops: number[] = [];
     let lastBottom = 0;
-    let lastMb = 0;
+    let lastDom: HTMLElement | null = null;
     let p = 0;
     doc.forEach((_node) => {
       const pos = p;
@@ -207,51 +207,13 @@ function measureBlockHeights(view: EditorView): number[] {
       const rect = dom.getBoundingClientRect();
       tops.push(rect.top / scale);
       lastBottom = rect.bottom / scale;
-      lastMb = parseFloat(window.getComputedStyle(dom).marginBottom) || 0;
+      lastDom = dom;
     });
+    // marginBottom 只有末块需要——大文档（数千块）逐块 getComputedStyle 是主要卡顿源之一（2026-07-04）。
+    const lastMb = lastDom ? parseFloat(window.getComputedStyle(lastDom).marginBottom) || 0 : 0;
     return diffExtents(tops, lastBottom, lastMb);
   } finally {
     view.dom.classList.remove("rm-measuring");
-  }
-}
-
-/** 页高自检诊断（真机排查用，console 输出；每次切页方案变化输出一次）：
- *  纸张目标高 vs DOM 实测页高（paper 内容顶→首缝顶、缝底→次缝顶、末缝底→纸底）。 */
-function diagnosePageHeights(view: EditorView, geo: PageGeometry, heights: number[], plan: PageBreakPlan) {
-  try {
-    const zoom = rectScale(view); // 自校准因子（引擎无关；命名沿用便于对照旧日志）
-    const paper = view.dom.getBoundingClientRect();
-    const cs = window.getComputedStyle(view.dom);
-    const padTop = parseFloat(cs.paddingTop) || 0;
-    const padBottom = parseFloat(cs.paddingBottom) || 0;
-    const gaps = Array.from(view.dom.querySelectorAll<HTMLElement>(".rm-page-gap")).map((g) => {
-      const r = g.getBoundingClientRect();
-      const gutter = g.querySelector<HTMLElement>(".rm-page-gap-gutter")?.getBoundingClientRect();
-      return { top: r.top / zoom, bottom: r.bottom / zoom, h: r.height / zoom, gutterH: (gutter?.height ?? 0) / zoom };
-    });
-    // 每页视觉高：页1 = 纸顶→缝1 的 gutter 顶 + 上页边?（近似口径：相邻缝 gutter 中点差）——
-    // 直接输出原始量供人工判读，不做拟合。
-    const pageSpans: number[] = [];
-    let cursor = paper.top / zoom;
-    for (const g of gaps) {
-      pageSpans.push(g.top + 0 - cursor); // 纸面段：内容顶到缝顶（含 padding/fill）
-      cursor = g.bottom;
-    }
-    pageSpans.push(paper.bottom / zoom - cursor);
-    console.info("[binder:page] 诊断", {
-      geometry: { w: geo.width, h: geo.height, marginY: geo.marginY, gap: geo.gap },
-      budget: pageContentHeight(geo),
-      zoom,
-      paper: { w: paper.width / zoom, h: paper.height / zoom, padTop: padTop / zoom, padBottom: padBottom / zoom },
-      heightsSum: Math.round(heights.reduce((a, b) => a + b, 0)),
-      blocks: heights.length,
-      plan: { breaks: plan.breaks, lastFill: plan.lastFill },
-      gapRects: gaps.map((g) => ({ h: Math.round(g.h), gutterH: Math.round(g.gutterH) })),
-      pageSpans: pageSpans.map((v) => Math.round(v)),
-      expectPageVisual: geo.height,
-    });
-  } catch {
-    /* 诊断失败不影响分页 */
   }
 }
 
@@ -362,16 +324,21 @@ export const PaginationExtension = Extension.create({
             v.dom.classList.toggle("rm-paginated", on);
           };
           syncClass(initialView);
-          // 异步内容尺寸变化（图片加载/字体就绪）不触发 PM update → ResizeObserver 兜底调度重测
-          // （2026-07-03 页高修复二轮：RAF 测量时 img 高度为 0 导致含图页错位）。
+          // 异步内容尺寸变化（图片加载/字体就绪）不触发 PM update → ResizeObserver 兜底调度重测。
+          // 尺寸门槛（2026-07-04 卡顿修复）：仅内容高度真实变化 >1px 才调度——测量隐缝/加缝引起的
+          // 尺寸波动会自触发 RO，无门槛时形成"测量→尺寸变→RO→再测量"每帧空转循环（常驻卡顿源）。
           let roScheduled = false;
+          let lastRoHeight = -1;
+          let measureDebounce: number | null = null;
           const ro = typeof ResizeObserver !== "undefined"
-            ? new ResizeObserver(() => {
+            ? new ResizeObserver((entries) => {
+                const h = entries[entries.length - 1]?.contentRect.height ?? -1;
+                if (Math.abs(h - lastRoHeight) <= 1) return;
+                lastRoHeight = h;
                 if (roScheduled) return;
                 roScheduled = true;
                 requestAnimationFrame(() => {
                   roScheduled = false;
-                  // 触发一次空 meta 派发走既有 update 测量路径（幂等：samePlan 收敛不重建）。
                   const st = paginationKey.getState(initialView.state);
                   if (st?.enabled) {
                     initialView.dispatch(initialView.state.tr.setMeta("paginationResize", true));
@@ -381,14 +348,21 @@ export const PaginationExtension = Extension.create({
             : null;
           ro?.observe(initialView.dom);
           return {
-            destroy: () => ro?.disconnect(),
+            destroy: () => {
+              ro?.disconnect();
+              if (measureDebounce !== null) window.clearTimeout(measureDebounce);
+            },
             update: (view: EditorView) => {
               const st = paginationKey.getState(view.state);
               view.dom.classList.toggle("rm-paginated", st?.enabled ?? false);
               if (!st?.enabled) return;
               // IME 组合输入期间挂起重测量（N8）：避免 setMeta 重排打断中文/日文组合输入。
               if (view.composing) return;
-              // 下一帧测量（避免读取半布局）；仅当切页方案变化超容差才派发（收敛、防循环）。
+              // 防抖（2026-07-04 卡顿修复）：连续输入不逐事务全量测量（大文档数千块每次 keystroke
+              // 测量+隐缝重排开销大）——停顿 150ms 后再重排分页（Word 同款延迟重排策略）。
+              if (measureDebounce !== null) window.clearTimeout(measureDebounce);
+              measureDebounce = window.setTimeout(() => {
+                measureDebounce = null;
               requestAnimationFrame(() => {
                 try {
                   if (view.composing) return;
@@ -403,13 +377,12 @@ export const PaginationExtension = Extension.create({
                         .setMeta(paginationKey, { plan: next } as PaginationMeta)
                         .setMeta("addToHistory", false),
                     );
-                    // 页高自检诊断（2026-07-03 #1 三轮排查）：方案落定下一帧实测每页视觉高度 vs 纸高。
-                    requestAnimationFrame(() => diagnosePageHeights(view, ext.storage.geometry, heights, next));
                   }
                 } catch {
                   // view 可能已卸载/销毁（切文档、关闭）——忽略本次测量。
                 }
               });
+              }, 150);
             },
           };
         },
