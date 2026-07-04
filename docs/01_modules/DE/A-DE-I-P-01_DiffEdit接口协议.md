@@ -2,15 +2,15 @@
 文档编号：DE-I-P-01
 文档状态：A
 负责模块：DE
-文档职责：DE 对话编辑模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 骨架声明 diff 生成接口（承接 AG ChangeProposal）、裁决接口（accept/reject）、过期与冲突重检接口、审阅呈现对接；产品核心交互「对话→diff→裁决→落盘」的 DE 侧 command 面
-上游约束：A-SYS-I-P-02_IPC协议.md（骨架）、A-DE-M-T-01_对话编辑技术设计.md（BR-DE-* 规则、DE-DIFF、payload 形状、TERM-DE-001/002）、A-DE-M-S-01_对话编辑状态机设计.md（SM-DE-01）、A-WS-I-P-01_工作台接口协议.md（persist_diff/apply_diff/discard_diff 复用）、A-ED-I-P-01_编辑器接口协议.md（locate_block/装饰层呈现）、A-SYS-I-P-01_数据结构定义.md（PendingDiff、payload 字段）、ADU.md
+文档职责：DE Diff Edit 模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 骨架声明 diff 生成接口（承接 AG ChangeProposal）、裁决接口（accept/reject）、过期与冲突重检接口、审阅呈现对接；产品核心交互「对话→diff→裁决→落盘」的 DE 侧 command 面
+上游约束：A-SYS-I-P-02_IPC协议.md（骨架）、A-DE-M-T-01_DiffEdit技术设计.md（BR-DE-* 规则、DE-DIFF、payload 形状、TERM-DE-001/002）、A-DE-M-S-01_DiffEdit状态机设计.md（SM-DE-01）、A-WS-I-P-01_工作台接口协议.md（persist_diff/apply_diff/discard_diff 复用）、A-ED-I-P-01_编辑器接口协议.md（locate_block/装饰层呈现）、A-SYS-I-P-01_数据结构定义.md（PendingDiff、payload 字段）、ADU.md
 直接承接：实现期 DE command 注册；AG/CBT 经 `de.generate_diff` 提交 ChangeProposal；前端审阅 UI 经裁决接口；落盘经 WS（apply_diff）、呈现经 ED（装饰层）
 使用边界：本文声明 DE 接口语义级签名；持久化与落盘经 WS（A-WS-I-P-01，不重复）、呈现经 ED（A-ED-I-P-01，不重复）；不新增 RULE/CHAIN/CONSTRAINT/TERM；裁决 UI 形态（DE-04）属实现期，本文只定接口
 变更要求：裁决接口语义变更须复核 SM-DE-01 与 SM-WS-02 双侧；payload 形状变更回写 A-SYS-I-P-01；ChangeProposal 接口变更复核 AG/CBT 调用方
 治理成熟度：draft
 ---
 
-# Binder 对话编辑接口协议（DE · L2 接口层）
+# Binder Diff Edit 接口协议（DE · L2 接口层）
 
 ## §1 文档定位
 
@@ -77,3 +77,4 @@ DE 是「对话→diff→裁决→落盘」链的中枢：接 AG/CBT 的 ChangeP
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件，核心交互链 DE 侧）：DE 接口协议——生成 3 条（generate_diff 接 ChangeProposal+锚校验、get/list）、裁决 2 条（accept 唯一触发落盘不可逆、reject）、过期与重检 2 条（check_expiry 保守过期 / recheck_overlap 冲突）；§5 跨模块对接索引（AG/ED/WS，不重复定义）；零新增注册项；债务（批量裁决接口待 DE-04 决策、序列化/过期触发延实现期） |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

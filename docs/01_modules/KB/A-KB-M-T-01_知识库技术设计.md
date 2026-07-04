@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：KB
 文档职责：KB 知识库模块级 L2 技术设计（规则 SSOT）——知识条目模型与 workspace 级隔离（2026-06-11 人类决策）、主动入库与溯源、本地检索召回硬边界、状态机豁免复核；承接 REQ-KB-001~004
-上游约束：A-KB-M-D-01_知识库功能需求描述.md（REQ-KB-001~004、KB-01 已决策）、A-CORE-C-P-01_APC.md（§4.1/§6/§9）、A-AG-M-T-01_对话代理技术设计.md（BR-AG-DATA-001 消费）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004、控制态持久化）、A-SYS-I-P-01_数据结构定义.md（BR-SYS-PERSIST-001、X-SHARED-001）、A-REF-M-T-01_引用技术设计.md（REF-01 联动）、ADU.md（§3）
+上游约束：A-KB-M-D-01_知识库功能需求描述.md（REQ-KB-001~004、KB-01 已决策）、A-CORE-C-P-01_APC.md（§4.1/§6/§9）、A-AG-M-T-01_代理技术设计.md（BR-AG-DATA-001 消费）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004、控制态持久化）、A-SYS-I-P-01_数据结构定义.md（BR-SYS-PERSIST-001、X-SHARED-001）、A-REF-M-T-01_引用技术设计.md（REF-01 联动）、ADU.md（§3）
 直接承接：本文 RULE/CHAIN/TERM 为 KB 规则 SSOT；供给契约对接 AG；KB 条目纳入 @mention 的解析协议随 REF 联动（KB-03/REF-01）
 使用边界：本文是 KB 规则 SSOT；不组装上下文（AG）、不做记忆（AST）；检索技术选型（关键词/向量/混合）延实现期但受本地化硬边界约束；无状态机（豁免复核 §5）
 变更要求：检索选型不得违反本地化硬边界（违反须先经 APC 授权——实为产品边界变更）；供给结构进入实现前登记 A-SYS-I-P-01；TERM 一经 term_ref 引用其 en 不可更改
@@ -137,3 +137,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（KB G2）：人类决策落规则——workspace 级隔离（BR-KB-DATA-001，含主动入库可溯源/删除即不召回）；本地检索硬边界（BR-KB-DATA-002，禁云端 embedding、违反即产品边界变更）；状态机豁免复核成立并列失效条件（解除 KB-04）；注册链路 KB-RETRIEVE、术语 KnowledgeEntry；REQ_MAP（REQ-KB-001~004） |
+| 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

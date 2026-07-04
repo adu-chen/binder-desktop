@@ -110,8 +110,8 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
  * boundary: in=GateState | out=invocationPermit(deniedOrOfflineRejectedUnifiedError)
  */
 /// 门禁前置守卫（BR-AG-VERIFY-001 / X-SEQ-001）：每次模型调用（chat/工具续调/辅助）须先经 SM-SYS-01
-/// 达 GatePassed。Passed→Ok（许可发起）；Denied/Offline→Err 统一错误形状（chat/工具回合明确拒绝；
-/// 内联辅助由 SM-AG-03 吞此 Err 静默不提供）。本守卫与 SM-AG-01 的结构性门禁路径双重把守，无绕过路径。
+/// 达 GatePassed。Passed→Ok（许可发起）；Denied/Offline→Err 统一错误形状（代理/工具回合明确拒绝；
+/// 局部修改由 SM-AG-03 吞此 Err 静默不提供）。本守卫与 SM-AG-01 的结构性门禁路径双重把守，无绕过路径。
 pub fn ensure_gate_passed(gate: GateState) -> Result<(), IpcError> {
     match gate {
         GateState::Passed => Ok(()),

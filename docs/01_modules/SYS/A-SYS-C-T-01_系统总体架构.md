@@ -67,18 +67,18 @@ description: 编辑器运行时（TipTap，md/docx 富文本编辑）
 -->
 <!-- MODULE
 module_code: DE
-module_name: 对话编辑
+module_name: Diff Edit
 description: diff 生成、审阅、接受/拒绝/过期终态
 -->
 <!-- MODULE
 module_code: AG
-module_name: AI Agent
-description: 单文档 chat/agent 与工具调用回合
+module_name: 代理（Agent）
+description: 代理编辑（AgentEdit）面板：编辑/构建双模式回合、工具调用、辅助续写与局部修改
 -->
 <!-- MODULE
 module_code: CBT
-module_name: 文档构建
-description: agent 文档项目构建（Chat Build）、构建中断、Chat↔Build 接管
+module_name: 构建（Build）
+description: 项目蓝图与多文件文档项目构建、构建中断、构建移交/回落（旧称 Chat Build / Chat↔Build 接管，2026-07-04 更名）
 -->
 <!-- MODULE
 module_code: DOC
@@ -206,3 +206,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版（SYS G2）：分层架构；注册 15 客户端模块编码（MODULE SSOT，承接 REQ-SYS-004）；模块依赖图（无环、SYS 底座）；跨模块结构约束 X-SEQ-002/X-FORBID-003；REQ_MAP；测试验收与债务盲区 |
+| 2026-07-04 | v1.1 | 术语沿革回写（人类裁决）：MODULE 注册块更名——DE=Diff Edit（旧称对话编辑退役）、AG=代理（Agent）、CBT=构建（Build）；AG/CBT description 按代理编辑双模式与构建移交语义更新（module_code 均不变，ADUS 经 generate 刷新） |

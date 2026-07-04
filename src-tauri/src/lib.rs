@@ -17,9 +17,9 @@ pub mod session; // PI-SYS-04 会话与订阅门禁状态机骨架
 pub mod workspace; // PI-WS-* 工作台
 pub mod doc; // PI-DOC-* 文档转换（编辑链/预览链）
 
-// —— P3 对话编辑与 Agent ——
-pub mod de; // PI-DE-* 对话编辑（diff 终态）
-pub mod ag; // PI-AG-* 对话代理（门禁前置/工具/辅助）
+// —— P3 代理与 Diff Edit ——
+pub mod de; // PI-DE-* Diff Edit（diff 终态；旧称对话编辑，2026-07-04 更名）
+pub mod ag; // PI-AG-* 代理（门禁前置/工具/辅助）
 pub mod reference; // PI-REF-* 引用（@mention）
 
 // —— P4 上层能力 ——
@@ -994,7 +994,7 @@ fn emit_ag02(app: &tauri::AppHandle, turn_id: &str, st: ag::tool::ToolLoopState)
     );
 }
 
-/// 广播 SM-AG-03 内联辅助/自动补全机转移（assist_id 为实例，A-CORE-X-L-04 Task 2-AG3）。
+/// 广播 SM-AG-03 局部修改/辅助续写机转移（assist_id 为实例，A-CORE-X-L-04 Task 2-AG3）。
 fn emit_ag03(app: &tauri::AppHandle, assist_id: &str, st: ag::assist::AssistState) {
     sm_events::emit_sm_state(
         app,

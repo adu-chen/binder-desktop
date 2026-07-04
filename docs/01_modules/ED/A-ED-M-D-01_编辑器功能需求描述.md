@@ -4,7 +4,7 @@
 负责模块：ED
 文档职责：ED 编辑器模块级功能需求描述——声明模块级 REQ-ED-*，承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009，界定富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层（供 diff 呈现）
 上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/004/009）、A-CORE-C-P-01_APC.md（§4.1 ED 职责「编辑器运行时 TipTap，md/docx 富文本编辑」、§9 离线边界）、A-SYS-C-T-01_系统总体架构.md（§3 ED 职责、§4 ED→WS 依赖）、A-WS-M-T-01_工作台技术设计.md（文件 I/O 经 WS 物理边界、WS-FS）、A-SYS-M-S-01_状态机总图.md（autocomplete/inline-assist 归属待确认）、A-CORE-X-L-01_总体开发路线图.md（P2）、ADU.md（§3.2 REQ 规范）
-直接承接：ED L2 技术设计（编辑器运行时选型 / block 模型与 blockId / 分页 / 媒体 / decoration 接口）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；decoration 层供 DE（diff 呈现/审阅）与 AG（内联辅助）消费
+直接承接：ED L2 技术设计（编辑器运行时选型 / block 模型与 blockId / 分页 / 媒体 / decoration 接口）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；decoration 层供 DE（diff 呈现/审阅）与 AG（局部修改）消费
 使用边界：本文是 L1 功能需求描述层，仅声明模块级 REQ-ED-*，**不定义技术规则**（RULE/CHAIN/CONSTRAINT/TERM/STATE_MACHINE 见 ED L2）；**代码不得直接映射 REQ**（ADU §3.2）；编辑器框架版本/扩展选型、blockId 生成策略、分页实现、decoration 接口归 ED L2；DOCX/Pandoc 转换归 DOC、diff 生成与终态归 DE、文件 I/O 归 WS、预览导出归 PRV
 变更要求：ED 职责或编辑运行时边界变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2 req_id 规则（序号不复用，废弃改 superseded）
 治理成熟度：draft
@@ -21,9 +21,9 @@
 ```
 
 ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap，md/docx 富文本编辑）：提供编辑核心、
-内容的结构化 block 模型与稳定定位（blockId）、分页布局、图文媒体能力，以及供 diff 呈现/内联辅助的
+内容的结构化 block 模型与稳定定位（blockId）、分页布局、图文媒体能力，以及供 diff 呈现/局部修改的
 **编辑器装饰层（decoration）**。ED 依赖 WS 的文件 I/O（A-SYS-C-T-01 §4：`ED→WS`），其 decoration
-面被 DE（diff 审阅）与 AG（内联辅助）消费。本文只声明 ED 模块级需求，不写技术方案、不定义规则、
+面被 DE（diff 审阅）与 AG（局部修改）消费。本文只声明 ED 模块级需求，不写技术方案、不定义规则、
 代码不得追溯本文；编辑器框架选型、blockId 策略、分页实现、decoration 接口一律归 ED L2。未被 APC /
 产品概述 / SYS·WS 契约支撑的判断一律进 §7 暴露清单，不杜撰。
 
@@ -34,7 +34,7 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 ## §2 模块定位与职责
 
 **定位**：ED 是 Binder 的**富文本编辑运行时与编辑呈现底座**，是用户与 AI 修改在文档上的可视编辑面；
-向上承载写作交互，向下经 WS 进行文件 I/O，横向为 DE/AG 提供 diff 与内联辅助的呈现装饰面。
+向上承载写作交互，向下经 WS 进行文件 I/O，横向为 DE/AG 提供 diff 与局部修改的呈现装饰面。
 
 **职责清单（v1，APC §4.1）**：
 
@@ -44,10 +44,10 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 | E-J2 | block 模型与稳定 blockId 定位（结构化内容锚，供 diff/引用/分页） | APC §4.1、REQ-CORE-002 |
 | E-J3 | 分页系统与布局（分页模式、光标与遮罩、打印友好呈现） | APC §4.1、REQ-CORE-004 |
 | E-J4 | 图文媒体能力（图片等媒体的插入、呈现与处理） | APC §4.1 |
-| E-J5 | 编辑器装饰层（decoration）：承载 diff 呈现/审阅与内联辅助 | REQ-CORE-002 |
+| E-J5 | 编辑器装饰层（decoration）：承载 diff 呈现/审阅与局部修改 | REQ-CORE-002 |
 
 > 边界澄清：ED **提供编辑面与 decoration 承载机制**，但 diff 的**生成与"接受/拒绝/过期"终态语义归
-> DE**、内联辅助（inline-assist）/自动补全（autocomplete）的**业务归属待确认**（A-SYS-M-S-01 §3，
+> DE**、局部修改（inline-assist）/辅助续写（autocomplete）的**业务归属待确认**（A-SYS-M-S-01 §3，
 > ED/AG/DE 之间）；ED 只保证装饰面可承载这些呈现，不抢定其业务语义。DOCX/Pandoc **格式转换归 DOC**，
 > ED 承接转换后内容的富文本编辑呈现。文件读写经 **WS**（A-WS-M-T-01 WS-FS），ED 不直接触达文件系统。
 
@@ -58,13 +58,13 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 - 内容的 block 结构化模型与稳定 blockId 定位（供 diff 定位、@mention 引用锚、分页切分）。
 - 分页系统：分页布局、光标与遮罩、打印友好呈现。
 - 图文媒体：图片等媒体的插入、呈现与处理。
-- 编辑器装饰层（decoration）：为 DE 的 diff 呈现/审阅、AG 的内联辅助提供呈现承载面。
+- 编辑器装饰层（decoration）：为 DE 的 diff 呈现/审阅、AG 的局部修改提供呈现承载面。
 
 **OUT（非 ED）**：
 - DOCX / Pandoc 格式转换——归 DOC；ED 承接转换后内容的编辑呈现。
 - diff 的生成、终态转移语义（accepted/rejected/expired）——归 DE；ED 仅提供 decoration 呈现面。
 - 文件读写、save 落盘、workspace 边界——归 WS（A-WS-M-T-01）；ED 经 WS 进行 I/O。
-- 单文档 chat/agent 回合、工具调用——归 AG；inline-assist/autocomplete 业务归属待确认（§7 ED-05）。
+- 代理编辑（编辑/构建双模式）回合、工具调用——归 AG；inline-assist/autocomplete 业务归属已确认归 AG（2026-06-11，§7 ED-05）。
 - 多格式预览/导出、打印输出管线——归 PRV（ED 提供打印友好的分页呈现，导出管线归 PRV）。
 - 编辑器框架版本/扩展选型、blockId 生成算法、分页与 decoration 的实现——归 ED L2（本文只定边界）。
 - NFR 量化指标（编辑响应延迟、大文档分页性能）——延 G5 标定（APC §9）。
@@ -149,12 +149,12 @@ open_issues: 媒体处理（缩放/存储/引用）实现与格式支持范围�
 
 <!-- REQ
 req_id: REQ-ED-005
-title: 编辑器装饰层（供 diff 呈现与内联辅助）
+title: 编辑器装饰层（供 diff 呈现与局部修改）
 owner_module: ED
 status: active
-summary: 提供编辑器装饰层（decoration），按 blockId 承载 diff 呈现/审阅与内联辅助的可视呈现；diff 终态归 DE、内联辅助业务归属待确认，ED 只保证装饰面可承载
+summary: 提供编辑器装饰层（decoration），按 blockId 承载 diff 呈现/审阅与局部修改的可视呈现；diff 终态归 DE、局部修改业务归属待确认，ED 只保证装饰面可承载
 source_doc: REQ-CORE-002、A-SYS-M-S-01（autocomplete/inline-assist 归属待确认）
-acceptance: decoration 可按 blockId 定位呈现 diff 与内联辅助；裁决终态由 DE 驱动，ED 据信号呈现/复位
+acceptance: decoration 可按 blockId 定位呈现 diff 与局部修改；裁决终态由 DE 驱动，ED 据信号呈现/复位
 open_issues: decoration 与 DE diff/AG inline-assist 的接口契约归 ED L2 + DE/AG 联合（ED-05）；inline-assist/autocomplete 归属待人类确认（A-SYS-M-S-01 §3）
 -->
 
@@ -174,7 +174,7 @@ req_id: REQ-ED-007
 title: agent 可读可编辑的样式协议
 owner_module: ED
 status: active
-summary: 文档样式（字符 marks / 块属性）以机器可读结构投影供 agent 读取；样式修改以受控样式操作进入编辑模型，agent 落盘路径按裁定 D-3 分流（回合产出经 DE diff 裁决、显式内联辅助视为用户编辑）
+summary: 文档样式（字符 marks / 块属性）以机器可读结构投影供 agent 读取；样式修改以受控样式操作进入编辑模型，agent 落盘路径按裁定 D-3 分流（回合产出经 DE diff 裁决、显式局部修改视为用户编辑）
 source_doc: REQ-CORE-002、2026-07-03 人类需求 #3 与裁定 D-3（A-ED-X-L-02 §2：A 默认 + B 限内联）
 acceptance: agent 可读到结构化样式投影；样式 diff 经 DiffCard 可裁决落盘；显式内联样式操作即改即脏；不存在绕过裁决的回合直改路径（X-FORBID-006）
 open_issues: 样式 op 集与投影 schema 归 ED L2（BR-ED-DATA-005）+ ED/DE/AG I-P 联合；DiffCard 样式呈现归 DE
@@ -239,7 +239,7 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
    - 图文媒体能力（承接 REQ-ED-004）；
    - 编辑器装饰层接口契约（承接 REQ-ED-005，与 DE/AG 联合解除 ED-05）。
 2. G2 各文档经 REQ_MAP 把 REQ-ED-* 映射为 RULE/CHAIN/CONSTRAINT/TERM；如有状态化编辑链路（如 docx
-   编辑模式切换），入 ED M-S 并登记 A-SYS-M-S-01 总图。
+   编辑态切换），入 ED M-S 并登记 A-SYS-M-S-01 总图。
 3. ED 职责或编辑运行时边界变更先经 APC 授权再回写本文（APC §13）。
 
 ## 变更记录
@@ -248,3 +248,4 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版：ED 编辑器模块级 L1；声明 REQ-ED-001~005（富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层供 diff 呈现），承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009；代表性流程 E1–E3；边界闭合（含与 WS/DE/DOC/AG 边界，TipTap 选型延 ED L2）与 G1 暴露清单（ED-01~06 显式延期/部分关闭；inline-assist/autocomplete 归属待人类确认） |
 | 2026-07-03 | v1.1 | 编辑器专项优化承接（A-ED-X-L-02 批B，人类裁定 D-1/D-2/D-3）：追加 REQ-ED-006 字符级定位与选区引用（会话内锚，跨会话显式延后）、REQ-ED-007 agent 可读可编辑的样式协议（落盘路径 A 默认+B 限内联）、REQ-ED-008 .html 富文本编辑接入；技术契约分别归 ED L2 BR-ED-DATA-004/005 与 BR-ED-DATA-002 修订 |
+| 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

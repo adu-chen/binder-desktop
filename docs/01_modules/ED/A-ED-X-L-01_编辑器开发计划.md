@@ -60,7 +60,7 @@ ED 是 P2 富文本编辑运行时，依赖 WS（文件 I/O）与 DOC（docx 转
 
 ### PI-ED-05　编辑器装饰层接口
 - **承接**：REQ-ED-005 / CHAIN ED-DECOR / BR-ED-STATE-002 / X-FORBID-005。
-- **文件范围**：`src/components/Editor/decorations/`（装饰层挂载/复位；供 DE diff、AG 内联辅助）；
+- **文件范围**：`src/components/Editor/decorations/`（装饰层挂载/复位；供 DE diff、AG 局部修改）；
   `ed.mount_decoration/update/dismiss/on_decoration_action` + `ed.apply_edit`（内联采纳落点）。
 - **@GOV**：装饰层契约 `BR-ED-STATE-002`；唯一受控通道 `X-FORBID-005`。
 - **A 类债务**：装饰呈现 schema（diff 高亮/内联候选样式，与 DE/AG 联合，实现期）；apply_edit op
@@ -95,3 +95,4 @@ ED 全部规则（6 条，含 BR-ED-STATE-003）有断言；X-FORBID-005 静态�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3）：ED 5 条 Plan Item（运行时与会话含 Conflicted / blockId / md·docx 统一模型 / 分页媒体 / 装饰层），承接 ED-EDIT/ED-DECOR + 6 规则 + X-FORBID-005 + SM-ED-01；承接 A-ED-M-T-01 §11.1 已定选型（TipTap v3/blockId/样式子集）作为 A 类实现期 lock；文件范围/@GOV/验收齐 |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

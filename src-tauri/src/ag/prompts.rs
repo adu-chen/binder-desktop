@@ -48,7 +48,7 @@ pub const SYSTEM_PROMPT_BUILD: &str = "\
 【输出风格】
 纯文本，不使用 markdown 标记符号。";
 
-/// 内联辅助/自动补全系统提示词。轻量续写，无会话历史，仅输出候选正文。
+/// 局部修改/辅助续写系统提示词。轻量续写，无会话历史，仅输出候选正文。
 pub const SYSTEM_PROMPT_ASSIST: &str = "\
 你是 Binder 的内联写作助手，只提供续写或局部改写的候选文本。
 

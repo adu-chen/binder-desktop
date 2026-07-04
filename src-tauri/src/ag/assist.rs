@@ -1,4 +1,4 @@
-//! PI-AG-04 · 内联辅助/自动补全机 SM-AG-03 · AG-ASSIST / BR-AG-STATE-003
+//! PI-AG-04 · 局部修改/辅助续写机 SM-AG-03 · AG-ASSIST / BR-AG-STATE-003
 //!
 //! 承接 A-AG-M-S-01 SM-AG-03（autocomplete 与 inline-assist 同机承载，context 区分）：按**节流策略**触发
 //! （不得每次按键直发调用）；每次调用同样**经门禁与网关**（BR-AG-VERIFY-001，无例外路径）；候选经 ED

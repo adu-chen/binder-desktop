@@ -58,12 +58,12 @@ export const assistStore = {
   getSnapshot(): AssistState {
     return state;
   },
-  /** ⌘K：在选区上方开内联辅助（互斥：覆盖任何已开浮层）。 */
+  /** ⌘K：在选区上方开局部修改（互斥：覆盖任何已开浮层）。 */
   openInline(anchor: AssistAnchor, selectionText: string, from: number, to: number) {
     state = { ...EMPTY, kind: "inline", anchor, selectionText, selectionFrom: from, selectionTo: to };
     emit();
   },
-  /** ⌘J：在光标处开自动补全（互斥）。 */
+  /** ⌘J：在光标处开辅助续写（互斥）。 */
   openAutocomplete(anchor: AssistAnchor, suggestions: string[]) {
     state = { ...EMPTY, kind: "autocomplete", anchor, suggestions };
     emit();

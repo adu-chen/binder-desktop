@@ -2,15 +2,15 @@
 文档编号：DE-M-T-01
 文档状态：A
 负责模块：DE
-文档职责：DE 对话编辑模块级 L2 技术设计（规则 SSOT）——diff 生成与定位、payload 载荷形状、终态裁决语义（accepted/rejected/expired 互斥不可逆）、过期与外部变更检测、多 diff 并存与冲突、裁决粒度；承接 REQ-DE-001~005
-上游约束：A-DE-M-D-01_对话编辑功能需求描述.md（REQ-DE-001~005、DE-01~05）、A-CORE-C-P-01_APC.md（§4.1、§6）、A-SYS-I-P-01_数据结构定义.md（PendingDiff 字段与 status 枚举集合单一来源、payload_ref 形状归 DE、X-SHARED-001）、A-WS-M-T-01_工作台技术设计.md（BR-WS-STATE-001 仅 accepted 落盘）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-02）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId、ED-DECOR、X-FORBID-005）、A-AG-M-T-01_对话代理技术设计.md（X-FORBID-006、修改建议 ChangeProposal 交接）、ADU.md（§3）
+文档职责：DE Diff Edit 模块级 L2 技术设计（规则 SSOT）——diff 生成与定位、payload 载荷形状、终态裁决语义（accepted/rejected/expired 互斥不可逆）、过期与外部变更检测、多 diff 并存与冲突、裁决粒度；承接 REQ-DE-001~005
+上游约束：A-DE-M-D-01_DiffEdit功能需求描述.md（REQ-DE-001~005、DE-01~05）、A-CORE-C-P-01_APC.md（§4.1、§6）、A-SYS-I-P-01_数据结构定义.md（PendingDiff 字段与 status 枚举集合单一来源、payload_ref 形状归 DE、X-SHARED-001）、A-WS-M-T-01_工作台技术设计.md（BR-WS-STATE-001 仅 accepted 落盘）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-02）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId、ED-DECOR、X-FORBID-005）、A-AG-M-T-01_代理技术设计.md（X-FORBID-006、修改建议 ChangeProposal 交接）、ADU.md（§3）
 直接承接：本文 RULE/CHAIN/TERM 为 DE 规则 SSOT，代码经 @GOV 映射；SM-DE-01 在 A-DE-M-S-01 定义并登记总图（闭合 SM-WS-02 / SM-AG-01 单侧转移点）；CBT 构建产物的 diff 化契约在本文规则上承接（联合 CBT G2）
 使用边界：本文是 DE 规则 SSOT；不重定义 PendingDiff 字段与 status 枚举集合（归 SYS A-SYS-I-P-01，本文承接转移语义与 payload 形状）、不做持久化与落盘（归 WS）、不做呈现承载（归 ED 装饰层，DE 为消费方）、不做 AI 产出生成（归 AG）；审阅 UI 形态（DE-04）延实现期人类确认；状态机内部归 A-DE-M-S-01
 变更要求：终态语义变更须先经 APC 授权（产品核心交互）；payload 形状变更须版本化并复核 WS（持久化）/ED（呈现重建）；status 枚举集合变更回写 A-SYS-I-P-01；TERM 一经 term_ref 引用其 en 不可更改
 治理成熟度：draft
 ---
 
-# Binder 对话编辑技术设计（DE · L2 技术设计）
+# Binder Diff Edit 技术设计（DE · L2 技术设计）
 
 ## 0. Terminology Registry
 
@@ -237,3 +237,4 @@ status: mapped
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（DE G2 首件）：DE 规则 SSOT——裁决粒度定为内容块级（解除 DE-01）、diff 生成与锚失效回报、payload 载荷形状（版本化 + before_snapshot 基准，解除 REQ-DE-004 占位）、终态裁决语义（三终态互斥不可逆、accepted 唯一触发落盘、ApplyError 不回退）、过期与外部变更（保守语义，解除 DE-03 机制）、多 diff 冲突（重叠重检、无并发落盘，解除 DE-02）；注册链路 DE-DIFF（P1）、规则 5 条、术语 TERM-DE-001 PendingDiff / TERM-DE-002 ChangeProposal（解除 A-SYS-I-P-01 §6 延期）；约束全复用不新增；REQ_MAP（REQ-DE-001~005）；债务（审阅 UI 待人类、数值延实现、CBT 联合） |
 | 2026-07-03 | v1.1 | 批B 样式 diff 承接（A-ED-X-L-02 PI-ED-11 文档先行，人类裁定 D-3 方案A：回合样式修改经 DE 裁决）：§4 载荷表 +style_ops（StyleOp 序列，可空；语义归 ED BR-ED-DATA-005，载荷承载与版本化归本文）、after_content 纯样式 diff 可空、target_blocks 可细化字符锚区间；BR-DE-DATA-002 规则文本同步（含样式变更语义的可视对比重建）；DiffCard 样式呈现形态延实现期（DE-04 审阅 UI 债务口径） |
+| 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

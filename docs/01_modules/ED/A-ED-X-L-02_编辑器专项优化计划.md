@@ -27,7 +27,7 @@
 |---|---|
 | D-1 需求#1 的 html 范围 | **.html 独立文件富文本编辑入范围**（新格式接入，REQ-ED-008 / PI-ED-13） |
 | D-2 字符级锚定强度 | **本期锁会话内字符级锚定**；跨会话字符锚（内容哈希重建）显式延后登记债务 |
-| D-3 agent 样式写路径 | **A 默认 + B 限内联**：chat/agent 回合样式修改走 DE diff 裁决（DiffPayload 扩样式 op + DiffCard 样式呈现）；用户显式触发的内联辅助样式操作视为用户编辑直改（BR-AG-STATE-003 语义扩展） |
+| D-3 agent 样式写路径 | **A 默认 + B 限内联**：chat/agent 回合样式修改走 DE diff 裁决（DiffPayload 扩样式 op + DiffCard 样式呈现）；用户显式触发的局部修改样式操作视为用户编辑直改（BR-AG-STATE-003 语义扩展） |
 
 ## §3 文档先行路由总表
 
@@ -114,7 +114,7 @@
 
 #### PI-ED-11　样式协议（#3 协议部分；DE/AG 联动）　✅ G4 已实现（2026-07-03 全件：ED 侧投影+StyleOp 原子写；后端 ag.list_blocks marks/blockAttrs 投影（extract_marks 栈式扫描）+ DiffPayload style_ops 持久化（迁移 v5）+ DiffCard 样式摘要呈现；人类授权后端推进。真实样式 diff 数据待 AG 解桩（G-1/G-2）填充）
 - **文档先行**：A-ED-M-D-01（REQ-ED-007）+ A-ED-M-T-01（BR-ED-DATA-005 + TERM-ED-006）+ A-ED-I-P-01（op 粒度表）+ A-DE-*（样式载荷/呈现）+ A-AG-*（BR-AG-STATE-003 扩展，**协调 AG 并行窗口**），经人类确认后进代码。
-- **文件范围**：读侧 `ag.list_blocks` 样式投影；写侧样式 op 集（set_mark/unset_mark/set_block_attr per CharAnchor 区间）经 `ed.apply_edit`；D-3 分流——回合产出样式 op 进 DiffPayload（DiffCard 扩样式呈现），内联辅助样式直改。
+- **文件范围**：读侧 `ag.list_blocks` 样式投影；写侧样式 op 集（set_mark/unset_mark/set_block_attr per CharAnchor 区间）经 `ed.apply_edit`；D-3 分流——回合产出样式 op 进 DiffPayload（DiffCard 扩样式呈现），局部修改样式直改。
 - **@GOV**：BR-ED-DATA-005（ED 侧）；DE/AG 侧各归其规则。
 - **验收**：agent 读到结构化样式；样式 diff 卡可裁决落盘；内联样式操作即改即脏；X-FORBID-006 语义核验（回合产出无直改路径）。
 

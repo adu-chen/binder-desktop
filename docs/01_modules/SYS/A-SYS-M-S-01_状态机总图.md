@@ -4,7 +4,7 @@
 负责模块：SYS
 文档职责：Binder 核心链状态机总图与注册框架技术设计——状态机注册清单、注册前置约束、跨模块状态转移契约框架；承接 REQ-SYS-003
 上游约束：A-SYS-M-D-01_系统底座功能需求描述.md（REQ-SYS-003、SY-04）、A-CORE-C-P-01_APC.md（§6 状态机驱动强制阈值与必备字段）、A-SYS-I-P-02_IPC协议.md（BR-SYS-STATE-002 流式终态）、A-SYS-I-P-03_云接口契约.md（SM-SYS-01）、ADP.md（SC-06/07）、ADU.md（§3.1 CONSTRAINT 格式）
-直接承接：各 owner 模块在其 M-S 定义本模块状态机并向本总图登记 machine_id；跨模块转移点（diff 落盘、Chat↔Build 接管等）以本文框架对接
+直接承接：各 owner 模块在其 M-S 定义本模块状态机并向本总图登记 machine_id；跨模块转移点（diff 落盘、构建移交/回落等）以本文框架对接
 使用边界：本文是状态机总图框架与跨模块转移契约的 SSOT；**不替各 owner 模块定义其状态机内部**（states/transitions/guards 等归各模块 M-S）；不重定义已存在的 SM-SYS-01（归 A-SYS-I-P-03）；总图完整清单依赖各模块 G2 暴露真实链路后回填（SY-04）
 变更要求：核心链强制阈值变更须先经 APC §6 授权；新增状态机由 owner 模块 M-S 定义后登记本总图；跨模块转移契约变更须两侧 owner 共同复核
 治理成熟度：draft
@@ -51,7 +51,7 @@ APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` 
 |---|---|---|---|---|
 | 账号会话与订阅门禁 | SYS（ACCT/ENT 消费） | SM-SYS-01 | active | A-SYS-I-P-03 §6 |
 | diff 终态 | DE | SM-DE-01 | active | A-DE-M-S-01 §2 |
-| chat-agent 回合 | AG | SM-AG-01 | active | A-AG-M-S-01 §2 |
+| 代理回合 | AG | SM-AG-01 | active | A-AG-M-S-01 §2 |
 | tool-call | AG | SM-AG-02 | active | A-AG-M-S-01 §3 |
 | 文档编辑会话 | ED | SM-ED-01 | active | A-ED-M-S-01 §2 |
 | save 保存 | WS | SM-WS-01 | active | A-WS-M-S-01 §2 |
@@ -90,8 +90,10 @@ constraint_id: X-SEQ-003
   WS 的 diff 落盘机（**SM-WS-02**，A-WS-M-S-01 §3）的写入（REQ-CORE-002）；rejected/expired 驱动
   SM-WS-02→Discarded（不落盘）；Applied/ApplyError 回执回传 SM-DE-01（终态不回退）。
   **双侧已就绪**（2026-06-11 DE G2 闭合单侧），一致性在 G5 联调验证。
-- **Chat ↔ Build 接管**：SM-AG-01（takeover→HandedOver 终态 / fallbackIn 起新回合，A-AG-M-S-01 §2
-  B-3 补齐 2026-06-12）与 SM-CBT-01（A-CBT-M-S-01 §3）双向接管——takeover（须用户确认）/fallback +
+- **构建移交/回落（旧称 Chat↔Build 接管；2026-07-04 判据换轴）**：SM-AG-01（takeover→HandedOver
+  终态 / fallbackIn 起新回合，A-AG-M-S-01 §2）与 SM-CBT-01（A-CBT-M-S-01 §3）双向移交——takeover
+  触发=用户显式触发即确认，或项目级构建意图提议经确认（多文件意图不再是判据，BR-CBT-STATE-002）；
+  项目蓝图（BuildBlueprint）随移交传递；构建在原对话窗口呈现，执行期不得发起新代理回合；fallback +
   双向回执（takeoverAck/fallbackAck），无双活双死。**双侧已建机就绪。**
 - **AG 回合 → AST 记忆写入**：SM-AG-01 HandingOff/Completed 终态后异步触发 `ast.capture`
   （传 origin_turn，不阻塞回合，BR-AG-STATE-004），AST 自动落库（SM-AST-01）。
@@ -153,7 +155,7 @@ status: mapped
   随 owner G2 回填 machine_id 后转 active。
 - **注册前置阻断**（X-SEQ-003）：状态化核心链在无状态机定义时，G4 实现验证触发 SC-06/07 阻断
   （集成阶段验证）。
-- **跨模块转移一致**（X-INTER-001）：diff accepted→落盘、Chat↔Build 接管等转移点两侧状态机对接
+- **跨模块转移一致**（X-INTER-001）：diff accepted→落盘、构建移交/回落等转移点两侧状态机对接
   一致，在 G5 跨模块联调验证（APC §5.1）。
 - **流式终态对齐**：经 IPC 流式的状态机终态与 BR-SYS-STATE-002 一致（SM-SYS-01 已对齐）。
 
@@ -185,3 +187,4 @@ status: mapped
 | 2026-06-11 | v1.5 | AG G2 回填（owner 模块登记，§11.3）：§3 四行 planned→active——chat-agent 回合=SM-AG-01、tool-call=SM-AG-02、autocomplete/inline-assist=SM-AG-03（同机承载，A-AG-M-S-01 定义）；§5 X-INTER-001 登记「AG 回合门禁与产出」转移点（AG↔SM-SYS-01 门禁双侧就绪、AG 产出→DE 单侧待 DE G2、SM-AG-03 采纳→SM-ED-01 双侧就绪）；至此总图仅余 CBT 构建 / 记忆写入（AST）/ diff 终态（DE）三行 planned |
 | 2026-06-11 | v1.6 | DE G2 回填（owner 模块登记，§11.3）：§3 diff 终态行 planned→active 回填 machine_id=SM-DE-01（A-DE-M-S-01 定义）；§5「diff accepted→落盘」「AG 回合门禁与产出」两条转移点更新为双侧就绪——「对话生成 diff→人类裁决→落盘」核心交互 AG→DE→WS（→ED）状态机链全链建机完毕；总图仅余 CBT 构建 / 记忆写入（AST）两行 planned |
 | 2026-06-11 | v1.7 | P4 G2 回填（owner 模块登记，§11.3）：§3 CBT 构建行=SM-CBT-01、记忆写入行=SM-AST-01 转 active，新增「工作流执行｜TPL｜SM-TPL-01」行（owner G2 暴露登记）；§5「Chat↔Build 接管」更新为双侧就绪（takeover/fallback+回执），新增「TPL 步骤委托」转移点；**总图全清单无 planned 行，已登记 12 台状态机全部 active**（SY-04 闭合） |
+| 2026-07-04 | v1.8 | 构建移交判据换轴（人类裁决，同步 A-AG-M-S-01 v2.0 / A-CBT-M-S-01 v2.0）：§5 转移点更名「构建移交/回落」，触发=显式触发即确认或项目级构建意图提议经确认（多文件意图废止），蓝图随移交、原窗口呈现、执行期禁新回合 |

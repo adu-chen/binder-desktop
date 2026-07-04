@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：REF
 文档职责：REF 引用模块级功能需求描述——声明模块级 REQ-REF-*，承接产品级 REQ-CORE-001/006，界定 @mention 触发与目标解析 / 引用内容读取与注入载荷 / 引用锚定与失效感知 / 触发与呈现经 ED 表面
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/006）、A-CORE-C-P-01_APC.md（§4.1 REF 职责「引用（@mention）解析与注入」）、A-SYS-C-T-01_系统总体架构.md（§4 REF→WS,AG）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001 读取经 WS、X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId 锚、扩展表面）、A-AG-M-D-01_对话代理功能需求描述.md（REQ-AG-004 注入消费）、ADU.md（§3.2）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/006）、A-CORE-C-P-01_APC.md（§4.1 REF 职责「引用（@mention）解析与注入」）、A-SYS-C-T-01_系统总体架构.md（§4 REF→WS,AG）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001 读取经 WS、X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId 锚、扩展表面）、A-AG-M-D-01_代理功能需求描述.md（REQ-AG-004 注入消费）、ADU.md（§3.2）
 直接承接：REF L2 技术设计（引用目标模型 / 解析规则 / 注入载荷契约）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；注入载荷被 AG（chat/工具回合）与 CBT（构建上下文）消费
 使用边界：本文是 L1 功能需求描述层，仅声明 REQ-REF-*，**不定义技术规则**；**代码不得直接映射 REQ**（ADU §3.2）；上下文组装与预算归 AG（REF 提供注入载荷）；文件读取归 WS；触发输入面与呈现归 ED；知识库条目检索归 KB（可引用范围联合 KB G1/G2 确认）
 变更要求：REF 职责或可引用范围变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2
@@ -149,3 +149,4 @@ open_issues: 具体扩展点契约随 ED 扩展表面细化（REF G2 联合 ED�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（P3 第三件，P3 L1 层齐备）：REF 引用模块级 L1；声明 REQ-REF-001~004（@mention 触发与解析 / 内容读取与注入载荷 / 锚定与失效感知 / 经 ED 表面），承接 REQ-CORE-001/006，对接 AG（REQ-AG-004 消费）与 ED（blockId 锚、扩展表面）；代表性流程 R1/R2；G1 暴露清单 REF-01~05 |
+| 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

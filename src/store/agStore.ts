@@ -6,7 +6,9 @@ import { useSyncExternalStore } from "react";
  * 回合权威态归后端 SM-AG-01，前端只呈现与转达意图，不另立可漂移的并行回合态。
  */
 
-export type ChatMode = "chat" | "agent";
+/** AG 面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=构建（项目级蓝图与整体构建，接 CBT）。
+ *  （原 "chat"/"agent" 命名与实际功能语义不符，2026-07-04 人类澄清后更名；类型名 ChatMode 的更名延后续完整 Scope。） */
+export type ChatMode = "edit" | "build";
 
 export interface ChatMessage {
   id: string;
@@ -62,7 +64,7 @@ interface AgState {
 
 // toolCalls 初始为空：真实工具调用经 SM-AG-01 tool 回合驱动（云端接通后）。ToolCallView 类型保留供其时投影。
 let state: AgState = {
-  mode: "chat",
+  mode: "edit",
   messages: [],
   toolCalls: [],
   sending: false,

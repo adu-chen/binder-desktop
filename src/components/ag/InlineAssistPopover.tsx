@@ -19,7 +19,7 @@ export function InlineAssistPopover({ onGenerate, onApply }: Props) {
   return (
     <div className="assist-pop" style={{ left: anchor.x, top: anchor.y }} role="dialog">
       <div className="assist-pop-head">
-        <span className="label">⌘K 内联辅助</span>
+        <span className="label">⌘K 局部修改</span>
         <span className="assist-pop-sel">“{selectionText.slice(0, 24)}{selectionText.length > 24 ? "…" : ""}”</span>
       </div>
       <input

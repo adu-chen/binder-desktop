@@ -38,7 +38,7 @@ CBT 多文件构建，复用 AG 门禁基建、产物走 DE→WS diff 路径。*
 - **验收**：构建产物在用户接受前不写入文件；部分接受仅 accepted 任务落盘；新建文档空基准 accepted
   后正确创建；无旁路直写（与 DE/WS G5 联合）。
 
-### PI-CBT-03　Chat↔Build 接管（对接 AG PI-AG-06 / B-3）　✅ G4 已实现（2026-06-22，takeover.rs 接管须确认+ack 双向回执/active_owner 结构性无双活双死 + 2 covers + audit 绿；AG 侧对接待 PI-AG-06）
+### PI-CBT-03　构建移交/回落（对接 AG PI-AG-06 / B-3）　✅ G4 已实现（2026-06-22，takeover.rs 接管须确认+ack 双向回执/active_owner 结构性无双活双死 + 2 covers + audit 绿；AG 侧对接待 PI-AG-06）
 - **承接**：REQ-CBT-004 / BR-CBT-STATE-002（接管协议）；X-INTER-001（与 SM-AG-01）。
 - **文件范围**：`cbt.takeover/fallback`（双向回执，对接 SM-AG-01 takeover/fallback）。
 - **@GOV**：接管无双活双死 `BR-CBT-STATE-002`。
@@ -65,3 +65,4 @@ CBT 构建 G5 端到端（含接管，依赖 AG B-3）。
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3，P4）：CBT 3 条 Plan Item（构建回合机与编排 / 产物 diff 化 / 接管对接），承接 CBT-BUILD + 4 规则 + SM-CBT-01；接管依赖 AG B-3 补齐后联调；产物走 DE→WS diff 路径（X-FORBID-006）；文件范围/@GOV/验收齐 |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

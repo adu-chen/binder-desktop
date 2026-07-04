@@ -15,7 +15,7 @@ pub mod context;
 /// PI-AG-02 · 工具调用循环机 SM-AG-02。
 pub mod tool;
 
-/// PI-AG-04 · 内联辅助/自动补全机 SM-AG-03。
+/// PI-AG-04 · 局部修改/辅助续写机 SM-AG-03。
 pub mod assist;
 
 /// PI-AG-05 · 记忆写入对接（终态异步触发 AST）。

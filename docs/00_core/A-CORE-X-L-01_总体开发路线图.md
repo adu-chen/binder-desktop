@@ -53,7 +53,7 @@ REQ(L1) → REQ_MAP → RULE/CHAIN/CONSTRAINT/TERM(L2) → STATE_MACHINE → Pla
 | Excel / PPT 编辑 | **确认不做**（仅预览 + 打印/导出） | PRV |
 
 **v1 IN（能力域）**：本地 workspace 写作；对话生成 diff → 接受/拒绝 → 落盘（核心交互）；
-单文档 chat-agent + 工具调用；CBT 多文件文档构建；DOCX 往返；Excel/PPT/音视频**预览** + 打印导出；
+代理编辑 + 工具调用；CBT 多文件文档构建；DOCX 往返；Excel/PPT/音视频**预览** + 打印导出；
 @mention 引用；本地记忆 / 知识库 / 模板工作流；文档级时间轴/历史回溯；
 账号认证 + 订阅门控 + AI 网关（云薄端）。
 
@@ -99,7 +99,7 @@ G1→G2→G3→G4，跨阶段汇入 G5，最终 G6（门禁语义见 APC §5）�
 | **P0 治理就绪** | CORE | L0 治理 + APC + 台账 + 本路线图 | 已基本完成 |
 | **P1 底座与契约** | SYS、云接口契约(AUTH/GW/LIC)、ACCT/ENT 客户端契约骨架 | IPC/数据结构/状态机总图 + 云三契约（认证/订阅门禁/网关）定义 | 被全体依赖；云契约 greenfield 且在商业化关键路径，必须前置（台账 §8.3） |
 | **P2 workspace 与编辑核心** | WS（含时间轴/历史）、ED、DOC | 本地文件/编辑底座 | DE/AG 依赖 ED+WS |
-| **P3 对话编辑与 Agent** | DE、AG、REF | 产品核心交互（对话→diff→落盘）打通 | 需 P1 的 ENT/GW 契约支撑 AI 调用（开发期可对契约打桩） |
+| **P3 代理与 Diff Edit**（旧称 对话编辑与 Agent，2026-07-04 更名） | DE、AG、REF | 产品核心交互（对话→diff→落盘）打通 | 需 P1 的 ENT/GW 契约支撑 AI 调用（开发期可对契约打桩） |
 | **P4 上层能力** | CBT、AST、KB、TPL、PRV（含音视频） | 构建/记忆/知识库/模板/预览 | 建立在核心之上 |
 | **P5 商业化闭环与发布** | ACCT/ENT 完整、云 AUTH/GW/LIC 实现、订阅门控 E2E | 商业化闭环 + 集成/发布 | G5 跨模块联调 + G6 发布就绪 |
 
@@ -175,8 +175,8 @@ docs/
 | A-WS-X-L-01 | L3 | 工作台开发计划（5 PI，含 save 冲突保护） | 已建（G3，P2 编码起点） |
 | A-ED-X-L-01 | L3 | 编辑器开发计划（5 PI，承接 TipTap/blockId 选型） | 已建（G3） |
 | A-DOC-X-L-01 | L3 | 文档转换开发计划（3 PI，双链/子集≥95%回归） | 已建（G3） |
-| A-DE-X-L-01 | L3 | 对话编辑开发计划（3 PI，核心交互 DE 侧） | 已建（G3） |
-| A-AG-X-L-01 | L3 | 对话代理开发计划（6 PI + 4 项 B 类强制承接门禁例外） | 已建（G3；含门禁例外留痕） |
+| A-DE-X-L-01 | L3 | Diff Edit 开发计划（3 PI，核心交互 DE 侧） | 已建（G3） |
+| A-AG-X-L-01 | L3 | 代理开发计划（6 PI + 4 项 B 类强制承接门禁例外） | 已建（G3；含门禁例外留痕） |
 | A-REF-X-L-01 | L3 | 引用开发计划（2 PI，无状态机豁免） | 已建（G3） |
 | A-CBT-X-L-01 | L3 | 构建开发计划（3 PI，接管依赖 AG B-3） | 已建（G3，P4） |
 | A-AST-X-L-01 | L3 | 记忆协同开发计划（3 PI，写入依赖 AG B-2） | 已建（G3） |
@@ -212,13 +212,13 @@ NN 为两位序号，同模块同类型递增。NFR/测试矩阵归 VAL 体系�
 | A-DOC-M-D-01 | L1 | 文档转换功能需求描述（REQ-DOC-001~005） | 已建（G1 待人类宣布闭合；双链分离方案承旧版实证） |
 | A-DOC-M-T-01 | L2 | 文档转换技术设计（规则 SSOT：双链管线/样式子集/blockId 兜底） | 已建（G2，规则/链路/约束/术语已 generate 注册） |
 | A-DOC-M-S-01 | L2 | 文档转换状态机设计（SM-DOC-01 docx 开/存） | 已建（G2，回填总图 + DOC↔ED/DOC↔WS X-INTER-001 转移点） |
-| A-AG-M-D-01 | L1 | 对话代理功能需求描述（REQ-AG-001~005，含内联辅助/自动补全归 AG） | 已建（P3 首件，G1 待人类宣布闭合） |
-| A-DE-M-D-01 | L1 | 对话编辑功能需求描述（REQ-DE-001~005，diff 生成/审阅/终态） | 已建（G1 待人类宣布闭合；对接 SM-WS-02 X-INTER-001） |
+| A-AG-M-D-01 | L1 | 代理功能需求描述（REQ-AG-001~005，含局部修改/辅助续写归 AG） | 已建（P3 首件，G1 待人类宣布闭合） |
+| A-DE-M-D-01 | L1 | Diff Edit 功能需求描述（REQ-DE-001~005，diff 生成/审阅/终态） | 已建（G1 待人类宣布闭合；对接 SM-WS-02 X-INTER-001） |
 | A-REF-M-D-01 | L1 | 引用功能需求描述（REQ-REF-001~004，@mention 解析与注入） | 已建（G1 待人类宣布闭合；P3 三模块 L1 层齐备） |
-| A-AG-M-T-01 | L2 | 对话代理技术设计（规则 SSOT：回合/门禁承接/工具循环/上下文/辅助） | 已建（G2，规则/链路/约束/术语已 generate 注册） |
-| A-AG-M-S-01 | L2 | 对话代理状态机设计（SM-AG-01/02/03） | 已建（G2，回填总图四行 active；AG 产出→DE 已随 DE G2 双侧闭合） |
-| A-DE-M-T-01 | L2 | 对话编辑技术设计（规则 SSOT：粒度/生成/载荷/终态/过期/冲突） | 已建（G2，规则/链路/术语已 generate 注册；约束全复用不新增） |
-| A-DE-M-S-01 | L2 | 对话编辑状态机设计（SM-DE-01 diff 终态机） | 已建（G2，回填总图；AG→DE→WS 核心交互状态机链全链建机完毕） |
+| A-AG-M-T-01 | L2 | 代理技术设计（规则 SSOT：回合/门禁承接/工具循环/上下文/辅助） | 已建（G2，规则/链路/约束/术语已 generate 注册） |
+| A-AG-M-S-01 | L2 | 代理状态机设计（SM-AG-01/02/03） | 已建（G2，回填总图四行 active；AG 产出→DE 已随 DE G2 双侧闭合） |
+| A-DE-M-T-01 | L2 | Diff Edit 技术设计（规则 SSOT：粒度/生成/载荷/终态/过期/冲突） | 已建（G2，规则/链路/术语已 generate 注册；约束全复用不新增） |
+| A-DE-M-S-01 | L2 | Diff Edit 状态机设计（SM-DE-01 diff 终态机） | 已建（G2，回填总图；AG→DE→WS 核心交互状态机链全链建机完毕） |
 | A-REF-M-T-01 | L2 | 引用技术设计（规则 SSOT：目标模型/解析/注入载荷/锚失效；状态机豁免复核成立） | 已建（G2，规则/链路/术语已 generate 注册；RefInjection 登记 SYS 契约层；**P3 三模块 L1+L2 齐备**） |
 | A-CBT-M-D-01 | L1 | 构建功能需求描述（REQ-CBT-001~004，复用 AG 基建 + diff 路径） | 已建（P4 首件，G1 待人类宣布闭合） |
 | A-AST-M-D-01 | L1 | 记忆协同功能需求描述（REQ-AST-001~004，写入可控不静默） | 已建（G1 前置：AST-01 存储范围 / AST-02 写入策略待人类决策） |
@@ -226,7 +226,7 @@ NN 为两位序号，同模块同类型递增。NFR/测试矩阵归 VAL 体系�
 | A-TPL-M-D-01 | L1 | 模板工作流功能需求描述（REQ-TPL-001~004，执行委托 AG/CBT） | 已建（G1 前置：TPL-03 范围待人类决策；工作流状态机 G2 评估倾向建机） |
 | A-PRV-M-D-01 | L1 | 预览输出功能需求描述（REQ-PRV-001~005，只读硬边界 + v1 冻结承接） | 已建（G1 待人类宣布闭合；**P4 五模块 L1 层齐备**） |
 | A-CBT-M-T-01 | L2 | 构建技术设计（任务分解/产物 diff 化/控制态/接管协议） | 已建（G2，已 generate 注册） |
-| A-CBT-M-S-01 | L2 | 构建状态机设计（SM-CBT-01） | 已建（G2，回填总图 + Chat↔Build 双侧闭合） |
+| A-CBT-M-S-01 | L2 | 构建状态机设计（SM-CBT-01） | 已建（G2，回填总图 + 构建移交 双侧闭合） |
 | A-AST-M-T-01 | L2 | 记忆协同技术设计（workspace 隔离 + 自动写入分级，人类决策落规则） | 已建（G2，已 generate 注册） |
 | A-AST-M-S-01 | L2 | 记忆协同状态机设计（SM-AST-01） | 已建（G2，回填总图记忆写入行） |
 | A-KB-M-T-01 | L2 | 知识库技术设计（workspace 隔离/本地检索硬边界；豁免复核成立） | 已建（G2，已 generate 注册） |
@@ -239,8 +239,8 @@ NN 为两位序号，同模块同类型递增。NFR/测试矩阵归 VAL 体系�
 | A-ENT-M-T-01 | L2 | 订阅门控技术设计（禁缓存通过/无 provider 直连/BYOK 零残留/门户购买） | 已建（G2，规则已 generate 注册；**15 客户端模块文档层全部齐备**） |
 | A-WS-I-P-01 | L2接口 | 工作台接口协议（17 command + 1 事件，save 基线校验/显式覆盖） | 已建（实现前置件首份；零新增注册项） |
 | A-ED-I-P-01 | L2接口 | 编辑器接口协议（会话/装饰层/blockId 定位） | 已建（实现前置件；X-FORBID-005 唯一通道固化） |
-| A-DE-I-P-01 | L2接口 | 对话编辑接口协议（生成/裁决/过期，核心交互 DE 侧） | 已建（实现前置件；accept 唯一触发落盘成链） |
-| A-AG-I-P-01 | L2接口 | 对话代理接口协议（回合/工具/辅助，AI 调用面） | 已建（实现前置件；门禁不变量内建） |
+| A-DE-I-P-01 | L2接口 | Diff Edit 接口协议（生成/裁决/过期，核心交互 DE 侧） | 已建（实现前置件；accept 唯一触发落盘成链） |
+| A-AG-I-P-01 | L2接口 | 代理接口协议（回合/工具/辅助，AI 调用面） | 已建（实现前置件；门禁不变量内建） |
 | A-DOC-I-P-01 | L2接口 | 文档转换接口协议（编辑链/预览链，双链分离） | 已建（实现前置件；X-SEQ-004 唯一入口） |
 | A-REF-I-P-01 | L2接口 | 引用接口协议（候选/锚校验/注入组装） | 已建（实现前置件） |
 | A-CBT-I-P-01 | L2接口 | 构建接口协议（构建回合/接管双向回执） | 已建（实现前置件） |
@@ -265,7 +265,7 @@ NN 为两位序号，同模块同类型递增。NFR/测试矩阵归 VAL 体系�
 
 1. **商业化链路 greenfield**：ACCT/ENT + 云 AUTH/GW/LIC 无 L4 原料，且 AI 端到端依赖订阅门禁。
    契约须在 P1 前置定义，否则 P3 的 AI 链路无法真正联调（开发期需对契约打桩）。
-2. **状态机驱动覆盖**：APC §6 列出的核心链（diff 终态、chat-agent 回合、tool-call、save、docx、
+2. **状态机驱动覆盖**：APC §6 列出的核心链（diff 终态、代理回合、tool-call、save、docx、
    CBT 构建、记忆写入、autocomplete、inline-assist、账号会话与订阅门禁）必须先有状态机设计（L2），
    不得跳过直接实现（ADP SC-06/SC-07）。
 3. **范围回写纪律**：任何范围再调整须先经 APC 授权，再回写本文 §2 与台账 §6（APC §13）。
@@ -398,3 +398,4 @@ UI 稿仅描述界面形态，界面规则的 SSOT 仍在各模块 L2 技术设�
 | 2026-06-22 | v1.57 | G4 续：REF 引用（全 3 闭合）+ DE-01 收尾（DE 模块全 5 闭合）+ 架构归位——types/ 新增共享 LocateResult（ed.locate_block 回执，REF/DE 共用，Undetectable 保守）；DE 单一拥有 ChangeProposal（自 cbt/apply.rs 移入 de/generate.rs，cbt 改 import，单一真源）。de/generate.rs：build_payload 统一 DiffPayload 形状（新建 before_snapshot=None 空基准 DATA-002）+ generate_diff（修改既有须锚 Located，AnchorLost/Undetectable→DE_ANCHOR_LOST GenFailed 回报不产悬空 diff，新建跳过定位 DATA-001）。reference/resolve.rs：resolve_mention @mention→ReferenceAnchor（路径级/块级），经 WS 限 workspace 越界拒绝、不可达 REF_UNREACHABLE 不悬空（DATA-001）。reference/inject.rs：verify_anchor 路径存在/块级 Located 方过、失效及 Undetectable 保守→REF_ANCHOR_INVALID 不静默注入（VERIFY-001）+ build_injection 读取时点内容+origin_label 可溯源 RefInjection 不扩展字段（DATA-002）。12 covers；cargo test 81 passed、OWNER_MISSING 20→15；G4 累计 48 条规则已落（63→15）；**后端 cargo 可验证规则全部落地**，剩 15 条为 ED(6)/DOC(4)/PRV(2)/其余前端·外部工具阶段 |
 | 2026-06-22 | v1.58 | G4 续：AST-03 收尾（AST 全 3 闭合）+ ENT 补 BR-SYS-OBS-001——supply.rs（仅 active+workspace 隔离/类型分级优先 preference·style>其它>session_context/origin_turn 可溯源/空集不注入，QUERY BR-AST-DATA-002）；ent/gateway.rs 新增 cloud_error 统一云错误形状（认证/门禁/网关三类失败统一 码+消息+可重试+需重认证，DATA BR-SYS-OBS-001，submit_for_verdict 错误改经此）；3 covers；cargo test 84 passed、OWNER_MISSING 15→13。**客户端后端可验证规则全部落地 50/63**。剩 13：ED 6（TipTap 前端）/DOC 4（Pandoc·LibreOffice 外部工具）/PRV 2（前端预览+导出）属前端·外部工具阶段；BR-SYS-DATA-004（网关内容不留存）为云端 GW 服务端责任（云端独立 APC owner），客户端无可落 @GOV，OWNER_MISSING 属正确（详见 A-CORE-X-R-01 §C 类） |
 | 2026-06-24 | v1.59 | 实现期：DOC 双链 + docx 编辑全链落地（文档·设计·代码同步，移植旧版 binder-project 跑通链路）。后端：style_subset/convert(SM-DOC-01)/block_backfill + pandoc_runtime(docx↔md) + edit_chain(docx↔HTML：docx+styles+preserve-styles.lua+native_divs/spans / html→docx --reference-doc) + libreoffice_runtime(docx→PDF 预览，优化版 LO 内置打包)；命令 doc.open_for_edit/save_from_edit/create_draft（lib.rs）。前端：docService + Editor/edStore/edService docx HTML 载入保存 + FileTreeNode 路由 + PrvPanel「创建草稿进行编辑」+ 富文本扩展集（TextStyle/Color/TextAlign/FontFamily/FontSize/Underline/Table*/Image/Highlight/Sub·Superscript，解析样式子集为成熟文本块）。成熟流程：原生 docx→预览→建草稿(*.draft.docx)→HTML 编辑→存回 docx；草稿/生成 docx→直编辑。部署：scripts/deploy_lo.sh + bundle.resources（优化版 LO ~687M 减 30%，签名/公证 G6 阻断 BLOCK-REL-LO-001 A-CORE-X-R-01 §9）。文档同步：A-DOC-M-T-01 v1.2（§2.1 编辑链处理逻辑/§2.2 编辑流程草稿/§4.1 扩展↔子集映射/TERM-DOC-002 EditDraft）、A-DOC-I-P-01 v1.1~v1.3。集成测试 tests/core_chain.rs（AG→DE→WS→生命周期端到端）。covers 审计扩展扫描 src-tauri Rust 内联。验证：cargo test 114、tsc 0、vitest 63、build ✓。术语注册表 +TERM-DOC-002、规则链映射经 generate 刷新（规则 65/链路 22，DOC 规则链稳定无新增） |
+| 2026-07-04 | v1.60 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

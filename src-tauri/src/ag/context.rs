@@ -103,7 +103,7 @@ pub struct PromptSkeleton {
  * rules:    BR-AG-DATA-002
  * boundary: in=turnKindAndContext | out=PromptSkeleton(systemToolsContextUserOrderKindVariants)
  */
-/// 提示词骨架组装（BR-AG-DATA-002）：分层恒为 系统→工具→上下文→用户；chat 含对话历史，内联辅助
+/// 提示词骨架组装（BR-AG-DATA-002）：分层恒为 系统→工具→上下文→用户；编辑回合（TurnKind::Chat）含对话历史，辅助回合
 /// 无系统对话历史（轻量），构建任务为单文件产出导向。提示词文本/措辞属实现期，本函数锁分层与差异。
 pub fn assemble_prompt(kind: TurnKind) -> PromptSkeleton {
     PromptSkeleton {
@@ -265,7 +265,7 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-002
-    // 提示词分层恒为 系统→工具→上下文→用户；chat 含历史，内联辅助不含历史（骨架差异）。
+    // 提示词分层恒为 系统→工具→上下文→用户；编辑回合含历史，辅助回合不含历史（骨架差异）。
     #[test]
     fn prompt_skeleton_layer_order_and_kind_variants() {
         let chat = assemble_prompt(TurnKind::Chat);

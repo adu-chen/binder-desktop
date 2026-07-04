@@ -48,7 +48,7 @@ export function PrvPanel({ path }: { path: string }) {
 
   const print = () => frameRef.current?.contentWindow?.print();
 
-  // docx 成熟流程：原生 docx 预览 →"创建草稿进行编辑"→ 复制为 *.draft.docx → 打开草稿进编辑模式（HTML）。
+  // docx 成熟流程：原生 docx 预览 →"创建草稿进行编辑"→ 复制为 *.draft.docx → 打开草稿进编辑态（HTML）。
   const enterEdit = async () => {
     try {
       const draftPath = await createDocxDraft(path);

@@ -4,7 +4,7 @@
 负责模块：ED
 文档职责：ED 编辑器模块级 L2 技术设计（规则 SSOT）——富文本编辑运行时（TipTap）与编辑会话、block 模型与稳定 blockId 定位、md/docx 统一编辑模型、分页与图文媒体的呈现层纯化、编辑器装饰层（decoration）接口契约；承接 REQ-ED-001~005
 上游约束：A-ED-M-D-01_编辑器功能需求描述.md（REQ-ED-001~005、ED-01~06）、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§6 状态机阈值、§9 文件系统/离线边界）、A-SYS-C-T-01_系统总体架构.md（§4 ED→WS、X-SEQ-002）、A-SYS-I-P-01_数据结构定义.md（DocRef、X-SHARED-001）、A-SYS-I-P-02_IPC协议.md（统一错误形状 BR-SYS-OBS-002）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001、BR-WS-PERSIST-001、X-FORBID-004）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01）、ADU.md（§3 RULE/CHAIN/CONSTRAINT/TERM 格式）
-直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 ED 规则 SSOT，代码经 @GOV 映射；文档编辑会话状态机在 A-ED-M-S-01 定义并登记 A-SYS-M-S-01 总图；decoration 接口契约供 DE（diff 呈现）/ AG（内联辅助呈现）G2 承接
+直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 ED 规则 SSOT，代码经 @GOV 映射；文档编辑会话状态机在 A-ED-M-S-01 定义并登记 A-SYS-M-S-01 总图；decoration 接口契约供 DE（diff 呈现）/ AG（局部修改呈现）G2 承接
 使用边界：本文是 ED 规则 SSOT；不定义 diff 生成与终态（归 DE）、不定义 DOCX/Pandoc 二进制转换（归 DOC）、不做文件 I/O 与落盘（归 WS，ED 经 WS）、不锁定 TipTap/ProseMirror 具体版本与扩展集（延实现期选型记录）、状态机内部归 A-ED-M-S-01；inline-assist/autocomplete 业务归 AG（2026-06-11 人类确认），本文只定 decoration 承载面
 变更要求：blockId 稳定性语义变更须与 DE（diff 定位）联合复核；decoration 接口契约变更须复核 DE/AG 消费方；跨模块共享结构变更回写 A-SYS-I-P-01（X-SHARED-001）；TERM 一经被 term_ref 引用其 en 不可更改（ADU §3.0）
 治理成熟度：draft
@@ -34,7 +34,7 @@ zh: 编辑器装饰层
 en: EditorDecoration
 forbidden: 高亮层, 标注层, 覆盖层, overlay层, 装饰器层
 -->
-ED 在编辑视图上承载非正文呈现（diff 高亮/审阅控件、内联辅助提示）的呈现层；按 blockId 定位挂载，
+ED 在编辑视图上承载非正文呈现（diff 高亮/审阅控件、局部修改提示）的呈现层；按 blockId 定位挂载，
 按消费方（DE/AG）信号呈现与复位，自身不修改文档模型与落盘内容（REQ-ED-005）。
 
 <!-- TERM
@@ -78,7 +78,7 @@ agent 样式修改的唯一操作形态（REQ-ED-007，BR-ED-DATA-005）；落�
 REQ-CORE-002/004/009 → REQ-ED-001~005（ED L1）→ 本文 RULE/CHAIN/CONSTRAINT/TERM（SSOT）→ 代码(@GOV)
 本文 ←引用← A-SYS-I-P-01（DocRef）、A-WS-M-T-01（文件 I/O 经 WS）、A-WS-M-S-01（SM-WS-01 save）
 本文 →驱动→ A-ED-M-S-01（文档编辑会话状态机 SM-ED-01）→登记→ A-SYS-M-S-01 总图
-本文 decoration 契约 →供→ DE G2（diff 呈现）/ AG G2（内联辅助呈现）承接
+本文 decoration 契约 →供→ DE G2（diff 呈现）/ AG G2（局部修改呈现）承接
 ```
 
 边界（承 ED L1 §6）：
@@ -105,7 +105,7 @@ ED 编辑运行时（本文 SSOT）
   文件 I/O 路径**；目标路径受 X-FORBID-004 守护。
 - 错误统一走 A-SYS-I-P-02 统一错误形状（BR-SYS-OBS-002）。
 - 编辑功能离线可用（REQ-CORE-009）：编辑/分页/媒体呈现不依赖在线鉴权；AI 相关呈现（decoration 的
-  内联辅助内容）的产生归 AG（须过订阅门禁），ED 只呈现。
+  局部修改内容）的产生归 AG（须过订阅门禁），ED 只呈现。
 
 ## §3 编辑会话与脏态（ED-EDIT）
 
@@ -210,7 +210,7 @@ DOC，ED 仅编辑 DOC 转换后的统一模型，ED 代码不得包含 docx 二
 - **写侧（样式操作，StyleOp，TERM-ED-006）**：set_mark / unset_mark / set_block_attr，目标为
   字符锚区间或 blockId；必经 ED 受控编辑接口（ed.apply_edit op 粒度表，A-ED-I-P-01 §4.1）。
 - **落盘分流（裁定 D-3）**：chat/agent 回合产出的样式修改进 DiffPayload 经 DE diff 裁决落盘
-  （X-FORBID-006 唯一路径）；用户显式触发的内联辅助样式操作视为用户编辑直改（BR-AG-STATE-003
+  （X-FORBID-006 唯一路径）；用户显式触发的局部修改样式操作视为用户编辑直改（BR-AG-STATE-003
   语义，产生脏态经 SM-ED-01→SM-WS-01）。
 
 <!-- RULE
@@ -222,7 +222,7 @@ rule_id: BR-ED-DATA-005
 供 agent 读取；样式修改必须以样式操作（StyleOp：set_mark/unset_mark/set_block_attr，目标为字符锚
 区间或 blockId）经 ED 受控编辑接口进入（X-FORBID-005），不得绕过接口直改编辑器模型。agent 样式
 落盘路径分流（裁定 D-3）：chat/agent 回合产出经 DE diff 裁决落盘（X-FORBID-006），用户显式触发的
-内联辅助样式操作视为用户编辑直改并产生脏态；不得存在绕过裁决的回合直改路径。
+局部修改样式操作视为用户编辑直改并产生脏态；不得存在绕过裁决的回合直改路径。
 
 ## §6 分页与图文媒体（呈现层纯化，ED-EDIT）
 
@@ -244,7 +244,7 @@ ED 不得自行写入媒体文件。打印/导出管线归 PRV，ED 仅提供打
 
 装饰层（EditorDecoration，TERM-ED-002）是 ED 供上层呈现非正文内容的唯一受控表面：
 
-- **挂载**：消费方（DE diff 呈现、AG 内联辅助呈现）以 blockId 定位请求挂载 decoration；锚失效回
+- **挂载**：消费方（DE diff 呈现、AG 局部修改呈现）以 blockId 定位请求挂载 decoration；锚失效回
   定位失败信号（BR-ED-DATA-001）。
 - **呈现/复位**：decoration 按消费方信号呈现与复位（如 DE 终态 accepted/rejected/expired 后复位
   该 diff 的 decoration）；复位不残留视觉痕迹。
@@ -412,7 +412,7 @@ status: mapped
 
 ### §11.2 仍开放的债务
 
-- **decoration 与 AG 内联辅助的业务契约**：归属已确认 AG（2026-06-11），具体接口契约待 AG G2
+- **decoration 与 AG 局部修改的业务契约**：归属已确认 AG（2026-06-11），具体接口契约待 AG G2
   联合承接。
 - ~~blockId 跨 docx 往返的保持（待实测）~~ → **已实测（PI-ED-09，2026-07-03）：保留率 0%，不达**——
   Pandoc `html→docx` 侧不落自定义属性（`data-block-id` 全丢），回读全量重建。**按既定降级执行**：
@@ -443,3 +443,4 @@ status: mapped
 | 2026-06-12 | v1.2 | Q2 缺口补遗（人类确认采纳）：§3 新增 BR-ED-STATE-003 外部变更会话处理——无脏态自动重载、有脏态/保存冲突进入显式裁决（保留己方→覆盖确认 / 放弃重载），双向内容损失均须用户显式选择；REQ_MAP 补 REQ-ED-001→BR-ED-STATE-003 |
 | 2026-07-03 | v1.3 | §11.2 实测回填（PI-ED-09，A-ED-X-L-02 批B 地基）：blockId 跨 docx 往返保留率 0%（Pandoc 不落自定义属性）→ 按既定降级走兜底重建（reconcileBlockIds 补缺）；契约语义锁定「锚有效期 = 编辑会话内、重开必换锚」（与裁定 D-2 一致）；附带登记保存侧样式衰减与 data-custom-style 残留（DOC 侧既有债务佐证） |
 | 2026-07-03 | v1.4 | 批B 契约注册（A-ED-X-L-02 §4，人类裁定 D-1/D-2/D-3）：§0 注册 TERM-ED-004 CharAnchor / TERM-ED-005 SelectionRef / TERM-ED-006 StyleOp；§4.1 字符级锚定与选区引用 + BR-ED-DATA-004（会话内字符锚、纯文本偏移平面、失效可感知）；§5 扩展为 md/docx/html 统一模型 + BR-ED-DATA-002 修订（.html 文本路径不经 DOC）；§5.1 样式投影与操作协议 + BR-ED-DATA-005（可读投影 + StyleOp 受控写 + D-3 落盘分流）；REQ_MAP 补 REQ-ED-006→004 / 007→005 / 008→002 |
+| 2026-07-04 | v1.5 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

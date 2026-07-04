@@ -51,8 +51,8 @@ AI 的所有文档修改以 diff 形式呈现，**用户接受/拒绝后才写�
 |---|---|---|
 | 本地 workspace 写作与文件 I/O、pending_diffs 持久化 | WS | REQ-CORE-001 |
 | 对话生成 diff → 接受/拒绝 → 落盘（核心交互） | DE/AG/WS | REQ-CORE-002 |
-| 单文档 chat-agent + 工具调用 | AG | REQ-CORE-002 |
-| agent 多文件文档项目构建（CBT） | CBT | REQ-CORE-003 |
+| 代理编辑（AgentEdit：编辑/构建双模式）+ 工具调用 | AG | REQ-CORE-002 |
+| 构建：项目蓝图与多文件文档项目构建（CBT） | CBT | REQ-CORE-003 |
 | DOCX 往返、Excel/PPT/音视频**预览** + 打印/导出 | DOC/PRV | REQ-CORE-004 |
 | 本地记忆 / 知识库 / 模板工作流 | AST/KB/TPL | REQ-CORE-005 |
 | @mention 引用解析与注入 | REF | REQ-CORE-006 |
@@ -67,7 +67,7 @@ AI 的所有文档修改以 diff 形式呈现，**用户接受/拒绝后才写�
 
 产品级仅给代表性主流程骨架；功能级详细流程图归各模块 M-D（APC §7）。
 
-**S1 对话编辑落盘（核心交互）** — Flow Table：
+**S1 代理编辑落盘（核心交互；旧称「对话编辑」，2026-07-04 更名）** — Flow Table：
 
 | step | actor | input | action | output | next | exception |
 |---|---|---|---|---|---|---|
@@ -105,7 +105,7 @@ req_id: REQ-CORE-002
 title: 对话生成 diff 并经人类裁决后落盘
 owner_module: CORE
 status: active
-summary: AI 文档修改以 diff 呈现，用户接受/拒绝后才写入文件；含单文档 chat-agent 与工具调用
+summary: AI 文档修改以 diff 呈现，用户接受/拒绝后才写入文件；含代理编辑（AgentEdit，编辑/构建双模式）与工具调用（2026-07-04 术语更名，能力细化经 REQ-AG-* 承接）
 source_doc: APC §1
 acceptance: AI 修改在用户接受前不写入文件，拒绝后文件保持不变
 -->
@@ -115,7 +115,7 @@ req_id: REQ-CORE-003
 title: agent 多文件文档项目构建（CBT）
 owner_module: CORE
 status: active
-summary: 支持 agent 跨多文件构建文档项目，含构建中断与 Chat↔Build 接管
+summary: 支持 agent 跨多文件构建文档项目（对话阶段→项目蓝图→显式触发→计划确认→执行），含构建中断与构建移交/回落（旧称 Chat↔Build 接管，2026-07-04 更名）
 source_doc: APC §1、§4.1
 acceptance: agent 可跨≥2 文件构建产物并写入 workspace，构建过程可中断且可接管
 -->
@@ -216,3 +216,4 @@ acceptance: 断网时编辑/预览/打印/本地功能可用；AI 功能在断�
 |------|------|---------|
 | 2026-06-09 | v1.0 | 初版：产品定位/目标用户、v1 能力范围（含三项范围确认）、核心场景主流程骨架、产品级 REQ-CORE-001~009、产品边界、G1 问题暴露清单 |
 | 2026-06-09 | v1.1 | 处置 §7 G1 暴露清单：PO-01 确定 v1 主用户群、PO-06 BYOK 纳入 v1 GA（§2/§5/§7）；为 REQ-CORE-* 补定性验收（§5）；PO-04 量化延 G5、PO-05 改归 WS-G2、PO-02/PO-03 显式延期；产品级 G1 具备闭合条件 |
+| 2026-07-04 | v1.2 | 术语沿革回写（人类裁决）：REQ-CORE-002 summary「单文档 chat-agent」→「代理编辑（编辑/构建双模式）」；REQ-CORE-003 summary 补构建全流程、「Chat↔Build 接管」→「构建移交/回落」；§3 能力表与 S1 场景名同步（「对话编辑」退役为「代理编辑」禁用别名） |

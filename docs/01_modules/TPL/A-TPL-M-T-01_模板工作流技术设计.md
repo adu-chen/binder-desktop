@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：TPL
 文档职责：TPL 模板/工作流模块级 L2 技术设计（规则 SSOT）——模板模型与 workspace 级隔离（2026-06-11 人类决策）、模板应用实例化、工作流表达模型与执行编排（状态机评估结论：建机）；承接 REQ-TPL-001~004
-上游约束：A-TPL-M-D-01_模板工作流功能需求描述.md（REQ-TPL-001~004、TPL-03 已决策）、A-CORE-C-P-01_APC.md（§4.1/§6/§9）、A-AG-M-T-01_对话代理技术设计.md（回合委托、BR-AG-VERIFY-001）、A-CBT-M-T-01_构建技术设计.md（构建委托、任务计划结构）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004、控制态）、A-SYS-I-P-01_数据结构定义.md（BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003）、ADU.md（§3）
+上游约束：A-TPL-M-D-01_模板工作流功能需求描述.md（REQ-TPL-001~004、TPL-03 已决策）、A-CORE-C-P-01_APC.md（§4.1/§6/§9）、A-AG-M-T-01_代理技术设计.md（回合委托、BR-AG-VERIFY-001）、A-CBT-M-T-01_构建技术设计.md（构建委托、任务计划结构）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004、控制态）、A-SYS-I-P-01_数据结构定义.md（BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003）、ADU.md（§3）
 直接承接：本文 RULE/CHAIN/TERM 为 TPL 规则 SSOT；SM-TPL-01 在 A-TPL-M-S-01 定义并登记总图（新增行）；执行委托契约对接 AG/CBT
 使用边界：本文是 TPL 规则 SSOT；执行通道归 AG/CBT（TPL 仅编排）；落盘归 DE→WS；内置模板集属运营内容（TPL-04）；状态机内部归 A-TPL-M-S-01
 变更要求：工作流表达模型变更须复核 AG/CBT 委托契约；模板/工作流数据结构变更遵守 BR-SYS-PERSIST-001；TERM 一经 term_ref 引用其 en 不可更改
@@ -148,3 +148,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（TPL G2）：人类决策落规则——workspace 级隔离 + 原子实例化（BR-TPL-DATA-001）；工作流表达模型（步骤/通道/人类确认点，顺序基线，解除 TPL-01）与执行规则（不跳步/确认点强制/无悬挂，BR-TPL-STATE-001）；状态机评估结论=建机（解除 TPL-02，SM-TPL-01 归 M-S）；注册链路 TPL-FLOW、术语 Template/WritingWorkflow；REQ_MAP（REQ-TPL-001~004） |
+| 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

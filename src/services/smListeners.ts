@@ -30,7 +30,7 @@ export async function startSmListeners(): Promise<void> {
     await listen<SmWs01Payload>("sm:SM-WS-01:state_changed", ({ payload }) => {
       edStore.applyWsSaveState(payload.instance_id, payload.state);
     }),
-    // SM-AG-01：chat 回合机（Task 2-E）——instance_id 为 turn_id；驱动 sending 输入门控。
+    // SM-AG-01：代理回合机（Task 2-E）——instance_id 为 turn_id；驱动 sending 输入门控。
     await listen<SmAg01Payload>("sm:SM-AG-01:state_changed", ({ payload }) => {
       agStore.applyTurnState(payload.instance_id, payload.state);
     }),

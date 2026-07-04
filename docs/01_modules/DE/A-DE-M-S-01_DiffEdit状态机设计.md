@@ -2,15 +2,15 @@
 文档编号：DE-M-S-01
 文档状态：A
 负责模块：DE
-文档职责：DE 对话编辑模块级状态机设计——diff 终态机（SM-DE-01），含 APC §6 必备字段；回填 A-SYS-M-S-01 总图 diff 终态行（planned→active），闭合 SM-WS-02 accepted 入口与 SM-AG-01 HandingOff 出口两个单侧 X-INTER-001 转移点
-上游约束：A-DE-M-T-01_对话编辑技术设计.md（DE-DIFF 链路、BR-DE-* 规则）、A-CORE-C-P-01_APC.md（§6）、A-SYS-I-P-01_数据结构定义.md（status 枚举集合）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003/X-INTER-001）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-02 accepted/rejected/expired 事件入口）、A-AG-M-S-01_对话代理状态机设计.md（SM-AG-01 HandingOff）、A-ED-M-S-01_编辑器状态机设计.md（装饰呈现依附说明）、ADU.md（§3.1）
+文档职责：DE Diff Edit 模块级状态机设计——diff 终态机（SM-DE-01），含 APC §6 必备字段；回填 A-SYS-M-S-01 总图 diff 终态行（planned→active），闭合 SM-WS-02 accepted 入口与 SM-AG-01 HandingOff 出口两个单侧 X-INTER-001 转移点
+上游约束：A-DE-M-T-01_DiffEdit技术设计.md（DE-DIFF 链路、BR-DE-* 规则）、A-CORE-C-P-01_APC.md（§6）、A-SYS-I-P-01_数据结构定义.md（status 枚举集合）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003/X-INTER-001）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-02 accepted/rejected/expired 事件入口）、A-AG-M-S-01_代理状态机设计.md（SM-AG-01 HandingOff）、A-ED-M-S-01_编辑器状态机设计.md（装饰呈现依附说明）、ADU.md（§3.1）
 直接承接：SM-DE-01 经 rules 字段承载 A-DE-M-T-01 规则；machine_id 登记总图；裁决信号驱动 SM-WS-02、生成入口承接 SM-AG-01
 使用边界：本文定义 DE 状态机内部；不重定义 SM-WS-02/SM-AG-01 内部；DE 机状态多于 status 枚举（含 Generating/GenFailed 过程态），枚举集合语义对齐 A-SYS-I-P-01 不漂移；审阅 UI 形态不在本文（DE-04）
 变更要求：transitions 变更须同步 A-DE-M-T-01 规则并重跑测试矩阵；与 WS/AG/ED 的转移点变更须对侧共同复核；machine_id 一经登记不可更改
 治理成熟度：draft
 ---
 
-# Binder 对话编辑状态机设计（DE · L2 技术设计）
+# Binder Diff Edit 状态机设计（DE · L2 技术设计）
 
 ## §1 文档定位
 
@@ -128,3 +128,4 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（DE G2 状态机件）：定义 SM-DE-01 diff 终态机（Generating/Pending/Accepted/Rejected/Expired/GenFailed，含 APC §6 全部必备字段；三终态互斥不可逆、accepted 唯一触发落盘、ApplyError 不回退终态、保守过期）；闭合 AG 建议交接与 WS 裁决落盘两个单侧 X-INTER-001 转移点——「对话生成 diff→裁决→落盘」核心交互状态机链全链建机完毕；满足 X-SEQ-003；测试矩阵（正路/拒绝过期/生成失败/禁止转移/冲突重检）；债务（批量裁决形态待 CBT G2/DE-04、timeout 驱动源延实现） |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

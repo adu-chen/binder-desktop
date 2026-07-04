@@ -2,7 +2,7 @@
 文档编号：DE-X-L-01
 文档状态：A
 负责模块：DE
-文档职责：DE 对话编辑 G3 开发计划——承接型 Plan Item，承接 DE-DIFF 链路与 BR-DE-* 规则、SM-DE-01（diff 终态机），明确文件范围/@GOV/A 类债务/验收；核心交互「对话→diff→裁决→落盘」的 DE 侧实现
+文档职责：DE Diff Edit G3 开发计划——承接型 Plan Item，承接 DE-DIFF 链路与 BR-DE-* 规则、SM-DE-01（diff 终态机），明确文件范围/@GOV/A 类债务/验收；核心交互「对话→diff→裁决→落盘」的 DE 侧实现
 上游约束：A-CORE-X-L-02（P3）、APC §5/§6/§12、A-DE-M-T-01/A-DE-M-S-01、A-DE-I-P-01、A-WS-X-L-01（apply_diff 落盘）、A-ED-X-L-01（装饰层呈现）、A-AG（产出消费）、A-CORE-X-R-01
 直接承接：本计划驱动 DE 实现；@GOV 追溯 BR-DE-*；SM-DE-01 转移矩阵
 使用边界：L3 承接型 Plan Item；持久化/落盘经 WS、呈现经 ED（不重复）；@GOV 在实现代码；NFR 延 G5
@@ -10,7 +10,7 @@
 治理成熟度：draft
 ---
 
-# Binder 对话编辑开发计划（DE · L3）
+# Binder Diff Edit 开发计划（DE · L3）
 
 ## §1 文档定位
 
@@ -79,3 +79,4 @@ audit 绿；@GOV 追溯 BR-DE-*；SM-DE-01 矩阵全覆盖；`// covers: BR-DE-*
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3，P3 核心交互 DE 侧）：DE 3 条 Plan Item（生成与载荷 / 终态机与裁决 / 过期与冲突重检），承接 DE-DIFF + 5 规则 + SM-DE-01；accept 唯一触发 ws.apply_diff 不可逆、ApplyError 不回退；DE-04 审阅 UI 为 C 类（接口留 batch 扩展位）；文件范围/@GOV/验收齐 |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

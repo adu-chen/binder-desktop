@@ -1,6 +1,6 @@
-//! PI-CBT-03 · Chat↔Build 接管协议 · CBT-BUILD / BR-CBT-STATE-002 / X-INTER-001
+//! PI-CBT-03 · 构建移交/回落协议 · CBT-BUILD / BR-CBT-STATE-002 / X-INTER-001
 //!
-//! 承接 A-CBT-M-T-01 §4：chat 回合（SM-AG-01）识别多文件构建意图后**经用户显式确认**方接管进入构建
+//! 承接 A-CBT-M-T-01 §4：代理回合（SM-AG-01）识别多文件构建意图后**经用户显式确认**方接管进入构建
 //! （SM-CBT-01）；接管/回落均为事件+回执双向确认（takeover/takeoverAck、fallback/fallbackAck），两侧状态
 //! 一致——**不得双活**（chat 与构建同时持有回合）或**双死**（移交中丢失回合）。本机以单值状态枚举结构性
 //! 保证恒有唯一所有者：移交中（HandingTo*）所有权仍归发起方直到 ack 才原子转移，故任一时刻非双活非双死。
@@ -45,7 +45,7 @@ pub fn active_owner(state: HandoffState) -> TurnOwner {
     match state {
         // chat 持有；移交给 build 期间仍由 chat 持有直到 ack（不双死）。
         HandoffState::ChatActive | HandoffState::HandingToBuild => TurnOwner::Chat,
-        // build 持有；回落 chat 期间仍由 build 持有直到 ack（不双死）。
+        // build 持有；回落对话 期间仍由 build 持有直到 ack（不双死）。
         HandoffState::BuildActive | HandoffState::HandingToChat => TurnOwner::Build,
     }
 }

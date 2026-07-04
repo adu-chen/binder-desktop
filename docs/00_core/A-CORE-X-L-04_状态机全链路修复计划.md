@@ -105,7 +105,7 @@ Phase 1 决策已于 2026-06-27 人类确认并落地（见 §4）。
 **文件**：`src-tauri/src/cbt/build.rs`
 
 **问题**：设计文档 A-CBT-M-S-01 §2 events 列出了 `fallbackOut`，用于 `PlanFail→Idle`
-和 `Interrupt→Interrupted` 路径发生后，向 SM-AG-01 发出回落 chat 的协调信号（X-INTER-001）。
+和 `Interrupt→Interrupted` 路径发生后，向 SM-AG-01 发出回落对话 的协调信号（X-INTER-001）。
 当前 `BuildEvent` 枚举中缺少该事件，回落路径静默无信号，AG 侧无法感知。
 
 **决策（2026-06-27 人类确认）**：`FallbackOut` 是 CBT 向 AG 发出的**输出动作信号**，
@@ -119,12 +119,12 @@ Phase 1 决策已于 2026-06-27 人类确认并落地（见 §4）。
 // src-tauri/src/cbt/build.rs — BuildEvent 枚举末尾新增一项
 pub enum BuildEvent {
     // ... 现有 12 项不变 ...
-    FallbackOut,  // 回落 chat 协调信号（X-INTER-001；PlanFail/Interrupted 后由编排层发出）
+    FallbackOut,  // 回落对话 协调信号（X-INTER-001；PlanFail/Interrupted 后由编排层发出）
 }
 ```
 
 **同步新增测试**：验证 `PlanFail` 路径触发 `FallbackOut` 信号意图，与 A-CBT-M-S-01 §3
-`Chat↔Build 接管` X-INTER-001 回执契约对齐。
+`构建移交/回落` X-INTER-001 回执契约对齐。
 
 ---
 
@@ -180,7 +180,7 @@ sm:SM-DE-01:state_changed    # de/mod.rs — diff 终态
 sm:SM-WS-01:state_changed    # workspace/save.rs — 保存
 sm:SM-WS-02:state_changed    # workspace/diff_apply.rs — diff 落盘
 sm:SM-WS-03:state_changed    # workspace/timeline.rs — 时间轴还原
-sm:SM-AG-01:state_changed    # ag/turn.rs — chat-agent 回合
+sm:SM-AG-01:state_changed    # ag/turn.rs — 代理回合
 sm:SM-AG-02:state_changed    # ag/tool.rs — tool-call 循环
 sm:SM-AG-03:state_changed    # ag/assist.rs — autocomplete/inline-assist
 sm:SM-ED-01:state_changed    # ED 编辑会话
@@ -701,7 +701,7 @@ Task 2-N（贯穿 Phase 2，随各模块接入）
 | SM-CBT-01 构建 | 无 `cbt.*` | 无任何调用 | 无 | 纯功能桩，未接线 |
 | SM-TPL-01 工作流 | 无 `tpl.*` | 无任何调用 | 无 | 纯功能桩，未接线 |
 | SM-AST-01 记忆写入 | 无 `ast.*` 写命令 | `ast::supply`（读/注入）在 `ag_start_turn` 已调用；**写入链 `capture::transition` / `memory_link::on_turn_terminal` 未被任何运行时调用** | 无写入入口 | 写入功能桩（读已接，且读属 A-AST-M-S-01 §4 无状态机豁免） |
-| SM-AG-03 内联辅助 | ✅ `ag_request_assist`（2026-06-27 接通） | 命令经门禁前置→网关→SM-AG-03 转移/广播 | Editor ⌘K/⌘J 去桩，调 `requestAssist` | **已接线**（节流参数仍延实现期标定，A-AG-M-S-01 §4） |
+| SM-AG-03 局部修改 | ✅ `ag_request_assist`（2026-06-27 接通） | 命令经门禁前置→网关→SM-AG-03 转移/广播 | Editor ⌘K/⌘J 去桩，调 `requestAssist` | **已接线**（节流参数仍延实现期标定，A-AG-M-S-01 §4） |
 
 **判定**：这 4 台的状态机是**正确的「实现前先建机」状态**（X-SEQ-003：状态化核心链须先建状态机再进入实现）。
 它们不是装饰性绕过——而是对应功能（CBT 构建 / TPL 工作流 / AST 记忆写入 / AG-03 辅助生成）**尚未实现运行时**。
@@ -742,3 +742,4 @@ Task 2-N（贯穿 Phase 2，随各模块接入）
 | 2026-06-27 | v1.7 | **SM-AG-01 回合机广播集成落地（Task 2-E + 3-B 部分）**：人类决策（2026-06-27）AG 在已有 Channel 投影基础上加 `sm:` 广播 + sending 由其驱动。Rust：`ag_start_turn` 加 `app` 参数，每步转移广播 `sm:SM-AG-01:state_changed`（Assembling/AwaitingGate/Streaming）+ 完成/错误终态（`emit_ag01`/`emit_ag01_complete`：Streaming→HandingOff→Completed；流式错误→TurnError）。前端：`agStore` 加 `applyTurnState`（活动态 Assembling/AwaitingGate/Streaming/HandingOff→sending=true，终态/TurnError/Idle→false）+ `RustTurnState`；`smEvents` 加 `SmAg01Payload`、`smListeners` 加监听；`agService` 保留乐观 `setSending(true)` 防双发，`finish()` 去 `setSending(false)`（改广播释放），命令级 Err catch 兜底释放。messages/toolCalls 仍由 Channel 投影（互不替代）。验证：cargo 143、vitest 69（新增 agStore.test.ts）、tsc 干净、audit 无新增 finding |
 | 2026-06-27 | v1.6 | **SM-WS-01 保存机集成落地（Task 2-C）**：人类决策（2026-06-27）脏态（Idle/Dirty）留前端高频本地标记，仅保存**动作**走状态机。Rust：`route_save_doc`/`route_save_from_edit` 经共享助手 `save_atomic_sm` 路由 `save::transition`（Dirty→Saving→Saved/SaveError）并广播 `sm:SM-WS-01:state_changed`（instance=rel_path）。前端：`edStore` 保留 `markDirty`/`setTabState`，加 `applyWsSaveState`（Saving→saving、Saved→saved，不覆盖 external_changed/pending_diff）+ `setBaseline`（仅刷基线）+ `RustSaveState`/`mapSaveState`；`smEvents` 加 `SmWs01Payload`、`smListeners` 加监听；`edService.saveDocument/saveDocxDocument` 去乐观 saving/saved（改广播驱动），基线由后端返回值回填，冲突/失败细分仍由 catch 据错误码定。验证：cargo 143、vitest 67、tsc 干净、audit 无新增 finding |
 | 2026-06-27 | v1.5 | **SM-WS-02 落盘机集成落地（Task 2-D）**：四个落盘入口（`route_accept_diff`/`route_apply_diff`/`route_reject_diff`/`route_discard_diff`）经新增共享助手 `apply_diff_sm`/`discard_diff_sm` 路由 `diff_apply::transition`（AwaitingDecision→Applying→Applied/ApplyError / Discarded）并广播 `sm:SM-WS-02:state_changed`；`diff_apply` 加 `is_terminal`。前端 `deStore` 加 `applyWsApplyState`（Applying→applying 过渡、Applied→accepted、ApplyError→error、Discarded/Awaiting 不投影）+ `RustDiffApplyState`/`mapWsApplyState`；`smEvents.ts` 加 `SmWs02Payload`、`smListeners` 加 SM-WS-02 监听；`deService.acceptDiff` 去掉本地乐观 validating/applying（改由 SM-WS-02 广播驱动）。验证：cargo 143、vitest 66、tsc 干净、audit 无新增 finding。落盘过渡态现真正由后端落盘机驱动（X-FORBID-007 闭合度提升） |
+| 2026-07-04 | v1.6 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

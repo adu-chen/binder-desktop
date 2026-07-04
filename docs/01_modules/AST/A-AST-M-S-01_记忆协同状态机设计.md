@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：AST
 文档职责：AST 记忆协同模块级状态机设计——记忆写入机（SM-AST-01），含 APC §6 必备字段；回填 A-SYS-M-S-01 总图记忆写入行（planned→active）
-上游约束：A-AST-M-T-01_记忆协同技术设计.md（AST-MEMORY、BR-AST-* 规则）、A-CORE-C-P-01_APC.md（§6 记忆写入核心链）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003）、A-AG-M-S-01_对话代理状态机设计.md（SM-AG-01 回合，来源溯源）、ADU.md（§3.1）
+上游约束：A-AST-M-T-01_记忆协同技术设计.md（AST-MEMORY、BR-AST-* 规则）、A-CORE-C-P-01_APC.md（§6 记忆写入核心链）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003）、A-AG-M-S-01_代理状态机设计.md（SM-AG-01 回合，来源溯源）、ADU.md（§3.1）
 直接承接：SM-AST-01 经 rules 字段承载 A-AST-M-T-01 规则；machine_id 登记总图
 使用边界：本文定义 AST 状态机内部；记忆注入供给为请求-响应式不建机（§4 豁免说明）；不重定义 SM-AG-01 内部
 变更要求：transitions 变更须同步 A-AST-M-T-01 并重跑测试矩阵；machine_id 一经登记不可更改
@@ -97,3 +97,4 @@ session_context 自动失效触发延实现期；批量撤销/清空的管理操
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（AST G2 状态机件）：定义 SM-AST-01 记忆写入机（Capturing/Writing/Written/Revoked/Discarded/WriteError，自动写入无确认态——可控性由可见/可溯源/可撤销承载；无类型无来源 guard 拒绝；撤销不可复活），含 APC §6 全部必备字段；注入供给豁免说明；满足 X-SEQ-003 |
+| 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

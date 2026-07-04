@@ -2,15 +2,15 @@
 文档编号：AG-X-L-02
 文档状态：A
 负责模块：AG
-文档职责：AG 对话代理集成计划（L3 第二阶段）——PI-AG-07~11；承接 A-AG-X-L-01（PI-AG-01~06 全部 G4，骨架完成）后的"骨架→真实"集成：系统提示词正文、工具注册与真实执行、上下文供给接入、流式 IPC 协议落地、真实模型调用集成
-上游约束：A-AG-X-L-01（PI-AG-01~06 全部 G4）、A-AG-M-T-01/S-01（AG 规则 SSOT）、A-AG-M-T-02（提示词架构：BR-AG-DATA-004 当前轮次/意图沿用、BR-AG-DATA-005 分层截断序）、A-AG-I-P-01（对话代理接口协议，前后端共享契约锚点）、A-SYS-I-P-03（CLOUD-GATE/INVOKE 契约）、A-ENT-M-T-01（门禁通道）、docs/02_cloud/A-GW-M-D-01（供应商需求，PI-GW-01~05）、PI-BE-02（DE payload 持久化，逻辑前置）
+文档职责：AG 代理集成计划（L3 第二阶段）——PI-AG-07~11；承接 A-AG-X-L-01（PI-AG-01~06 全部 G4，骨架完成）后的"骨架→真实"集成：系统提示词正文、工具注册与真实执行、上下文供给接入、流式 IPC 协议落地、真实模型调用集成
+上游约束：A-AG-X-L-01（PI-AG-01~06 全部 G4）、A-AG-M-T-01/S-01（AG 规则 SSOT）、A-AG-M-T-02（提示词架构：BR-AG-DATA-004 当前轮次/意图沿用、BR-AG-DATA-005 分层截断序）、A-AG-I-P-01（代理接口协议，前后端共享契约锚点）、A-SYS-I-P-03（CLOUD-GATE/INVOKE 契约）、A-ENT-M-T-01（门禁通道）、docs/02_cloud/A-GW-M-D-01（供应商需求，PI-GW-01~05）、PI-BE-02（DE payload 持久化，逻辑前置）
 直接承接：本计划完成后 AG 具备端到端真实对话能力（G5 联调前置）；采用「契约先冻结 → 前后端双轨并行」结构（§2.1）；PI-AG-11 依赖云 GW（PI-GW-01~05）就绪
 使用边界：L3 集成计划；提示词文本/工具清单/预算参数属实现期运营配置不入规则；云 GW 实现归 docs/02_cloud/A-GW-M-D-01；@GOV 标注在实现代码
 变更要求：PI-AG-11 实现依赖 A-SYS-I-P-03 接口，双侧变更须联动 A-SYS-I-P-03；AgTurnEvent / ag_start_turn 等共享契约（PI-AG-10C）一经冻结，变更须前后端同步并回写 A-AG-I-P-01；PI-AG-09 上下文截断序承 BR-AG-DATA-005（当前文档 P0 永不截），不得复用旧「当前文档最低」排序
 治理成熟度：draft
 ---
 
-# Binder 对话代理集成计划（AG · L3 · 第二阶段）
+# Binder 代理集成计划（AG · L3 · 第二阶段）
 
 ## §1 文档定位
 
@@ -100,7 +100,7 @@ PI-AG-10C  共享契约锚点【先冻结】AgTurnEvent + ag_start_turn + ag.*/d
   - 结构化输出要求：内容完整、结构清晰、符合 Markdown 格式
   - 硬约束同 Chat（修改须经 diff、不越出 workspace）
 
-  **SYSTEM_PROMPT_ASSIST**（内联辅助/自动补全）：
+  **SYSTEM_PROMPT_ASSIST**（局部修改/辅助续写）：
   - 轻量角色：仅提供续写或局部改写候选，不提供完整文档操作
   - 无历史：基于当前编辑位置上下文推断，不假设会话历史
   - 输出格式：仅文本内容，不含解释或说明
@@ -411,3 +411,4 @@ npm run governance:audit（无新增 RULE_MISSING / BOUNDARY_ABSTRACT）
 | 2026-06-23 | v1.0 | 初版（AG 集成阶段 L3）：PI-AG-07~11（提示词正文/工具注册执行/上下文供给/流式 IPC/真实调用集成）；SY-02 选型决定 Tauri 2 Channel<T>；AgTurnEvent 定义；PI-GW-01~04 依赖说明；PI-BE-02 前置声明 |
 | 2026-06-26 | v1.2 | PI-AG-10C 落地：AG 回合流式事件定名 **AgTurnEvent**（避开 `ipc/mod.rs` 既有 SYS `StreamEvent` 重名，分层不同·非重复），全文 StreamEvent→AgTurnEvent；AgTurnEvent 枚举 + 测试落 `src-tauri/src/ipc/mod.rs`，契约同步 A-AG-I-P-01 §2.1 v1.2 |
 | 2026-06-24 | v1.1 | 前后端双轨并行重构 + 同步 A-AG-M-T-02：§2 改为「契约先冻结 → BE/FE 双轨」依赖图，新增 §2.1 双轨并行协议（轨分配/可并行起点/桩边界/三条并行纪律）；PI-AG-10 拆为 10C（共享契约·先冻结·回写 I-P-01）/ 10B（后端 Channel 发射，桩阶段推假流）/ 10F（前端流式呈现+diff 卡片，对桩立即可建）；PI-AG-09 承接 BR-AG-DATA-004/005，废止初版「当前文档最低」排序、改 P0–P3 截断序（当前文档 P0 永不截）+ 新增意图沿用判定（decide_intent_carryover）；PI-AG-11 标注聚合尾段（GW 阻塞）；债务表补意图沿用识别/相关性打分/diff 动画三项 |
+| 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

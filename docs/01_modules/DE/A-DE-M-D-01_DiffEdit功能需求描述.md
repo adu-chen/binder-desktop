@@ -2,15 +2,15 @@
 文档编号：DE-M-D-01
 文档状态：A
 负责模块：DE
-文档职责：DE 对话编辑模块级功能需求描述——声明模块级 REQ-DE-*，承接产品级 REQ-CORE-002，界定 diff 生成 / diff 审阅呈现 / diff 终态裁决（接受/拒绝/过期）/ diff 内容载荷形状 / 过期与外部变更处理
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002）、A-CORE-C-P-01_APC.md（§4.1 DE 职责「diff 生成、审阅、接受/拒绝/过期终态」、§6 diff 终态核心链）、A-SYS-C-T-01_系统总体架构.md（§4 DE→ED,WS,AG）、A-SYS-I-P-01_数据结构定义.md（PendingDiff 共享结构、status 枚举集合单一来源、payload_ref 形状归 DE）、A-WS-M-T-01_工作台技术设计.md（BR-WS-STATE-001 仅 accepted 落盘）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-02 X-INTER-001 WS 侧已就绪）、A-ED-M-T-01_编辑器技术设计.md（ED-DECOR 装饰层、BR-ED-DATA-001 blockId 锚定）、A-AG-M-D-01_对话代理功能需求描述.md（REQ-AG-001 产出交 DE）、ADU.md（§3.2）
+文档职责：DE Diff Edit 模块级功能需求描述——声明模块级 REQ-DE-*，承接产品级 REQ-CORE-002，界定 diff 生成 / diff 审阅呈现 / diff 终态裁决（接受/拒绝/过期）/ diff 内容载荷形状 / 过期与外部变更处理
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002）、A-CORE-C-P-01_APC.md（§4.1 DE 职责「diff 生成、审阅、接受/拒绝/过期终态」、§6 diff 终态核心链）、A-SYS-C-T-01_系统总体架构.md（§4 DE→ED,WS,AG）、A-SYS-I-P-01_数据结构定义.md（PendingDiff 共享结构、status 枚举集合单一来源、payload_ref 形状归 DE）、A-WS-M-T-01_工作台技术设计.md（BR-WS-STATE-001 仅 accepted 落盘）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-02 X-INTER-001 WS 侧已就绪）、A-ED-M-T-01_编辑器技术设计.md（ED-DECOR 装饰层、BR-ED-DATA-001 blockId 锚定）、A-AG-M-D-01_代理功能需求描述.md（REQ-AG-001 产出交 DE）、ADU.md（§3.2）
 直接承接：DE L2 技术设计（diff 模型 / 审阅契约 / 终态机）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；DE G2 建 diff 终态机（解除总图 planned 行）并完成 X-INTER-001 与 SM-WS-02 的 DE 侧对接
 使用边界：本文是 L1 功能需求描述层，仅声明 REQ-DE-*，**不定义技术规则**；**代码不得直接映射 REQ**（ADU §3.2）；pending_diff 持久化与 accepted 后落盘归 WS；diff 呈现承载面归 ED（DE 消费装饰层）；AI 产出生成归 AG（DE 消费其产出）；PendingDiff 字段与 status 枚举集合归 SYS（A-SYS-I-P-01，DE 承接转移语义不重定义字段）
 变更要求：DE 职责或 diff 终态语义变更须先经 APC 授权再回写本文；status 枚举集合变更须回写 A-SYS-I-P-01（X-SHARED-001）；REQ 增删按 ADU §3.2
 治理成熟度：draft
 ---
 
-# Binder DE 对话编辑功能需求描述（L1）
+# Binder Diff Edit 功能需求描述（DE · L1）
 
 ## §1 文档定位
 
@@ -45,7 +45,7 @@ WS 落盘的唯一触发（REQ-CORE-002 的「AI 修改在用户接受前不写�
 ## §3 能力范围（DE v1）
 
 **IN（DE 承载）**：
-- 自 AG 产出（chat 回合/工具回合的修改建议）生成 pending_diff，按 blockId 定位目标内容块。
+- 自 AG 产出（代理回合/工具回合的修改建议）生成 pending_diff，按 blockId 定位目标内容块。
 - diff 审阅交互：经 ED 装饰层呈现修改对比与接受/拒绝控件，收集用户裁决。
 - 终态转移语义：pending→accepted / rejected / expired；终态不可逆、互斥；accepted 通知 WS 落盘
   并接收落盘回执（Applied/ApplyError）。
@@ -143,7 +143,7 @@ open_issues: 超时时长与外部变更检测机制（内容哈希/版本序）
 - **呈现边界**：DE 经 ED 装饰层呈现（X-FORBID-005：不绕过 ED 接口直改编辑器状态）。
 - **状态机边界**（APC §6）：diff 终态为状态化核心链（总图 owner=DE，planned），DE G2 建机
   （X-SEQ-003）并登记 X-INTER-001 DE 侧。
-- **L4 原料边界**：取材台账 §4 对话编辑/Decoration 原料（R-ED-M-R-22 等 P2），原料不为权威。
+- **L4 原料边界**：取材台账 §4 Diff Edit/Decoration 原料（R-ED-M-R-22 等 P2），原料不为权威。
 
 ## §7 G1 问题暴露清单
 
@@ -171,3 +171,4 @@ open_issues: 超时时长与外部变更检测机制（内容哈希/版本序）
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（P3 第二件）：DE 对话编辑模块级 L1；声明 REQ-DE-001~005（diff 生成 / 审阅呈现 / 终态裁决 / 载荷形状 / 过期与外部变更），承接 REQ-CORE-002 与 A-SYS-I-P-01 PendingDiff 契约，对接 SM-WS-02（X-INTER-001 WS 侧已就绪）与 ED-DECOR；代表性流程 DE1/DE2；G1 暴露清单 DE-01~05 |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

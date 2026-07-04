@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：TPL
 文档职责：TPL 模板/工作流模块级状态机设计——工作流执行机（SM-TPL-01），含 APC §6 必备字段；登记 A-SYS-M-S-01 总图（新增工作流执行行）
-上游约束：A-TPL-M-T-01_模板工作流技术设计.md（TPL-FLOW、BR-TPL-STATE-001）、A-CORE-C-P-01_APC.md（§6）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003/X-INTER-001）、A-AG-M-S-01_对话代理状态机设计.md（SM-AG-01 委托）、A-CBT-M-S-01_构建状态机设计.md（SM-CBT-01 委托）、ADU.md（§3.1）
+上游约束：A-TPL-M-T-01_模板工作流技术设计.md（TPL-FLOW、BR-TPL-STATE-001）、A-CORE-C-P-01_APC.md（§6）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003/X-INTER-001）、A-AG-M-S-01_代理状态机设计.md（SM-AG-01 委托）、A-CBT-M-S-01_构建状态机设计.md（SM-CBT-01 委托）、ADU.md（§3.1）
 直接承接：SM-TPL-01 经 rules 字段承载 A-TPL-M-T-01 规则；machine_id 登记总图；步骤委托对接 SM-AG-01 / SM-CBT-01
 使用边界：本文定义 TPL 状态机内部；步骤内执行归 SM-AG-01/SM-CBT-01（委托不重定义）；模板单次实例化豁免不建机（A-TPL-M-T-01 §1）
 变更要求：transitions 变更须同步 A-TPL-M-T-01 并重跑测试矩阵；委托转移点变更须与 AG/CBT 复核；machine_id 一经登记不可更改
@@ -96,3 +96,4 @@ Template/WritingWorkflow 已在 A-TPL-M-T-01 §0 注册。债务：条件分支�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（TPL G2 状态机件）：定义 SM-TPL-01 工作流执行机（Idle/AwaitingConfirm/StepRunning/Paused，确认点强制暂停、失败显式处置不静默跳步、中止无半成品、重启无悬挂），含 APC §6 全部必备字段；步骤委托 SM-AG-01/SM-CBT-01 转移点登记；满足 X-SEQ-003 |
+| 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

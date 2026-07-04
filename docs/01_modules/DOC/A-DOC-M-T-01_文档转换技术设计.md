@@ -21,7 +21,7 @@ zh: 样式子集
 en: StyleSubset
 forbidden: 样式白名单, 格式子集, 样式范围, 支持样式表
 -->
-docx 进入编辑模式时编辑模型所承载的样式范围三级契约：必需子集（承诺往返保真）、部分支持（尽力
+docx 进入编辑态（旧称「编辑模式」，2026-07-04 起「模式」一词专属 AG 面板）时编辑模型所承载的样式范围三级契约：必需子集（承诺往返保真）、部分支持（尽力
 保留并明示）、明确不处理（不承诺，预览链全保真补偿）；进入编辑即子集化且对用户可知（REQ-DOC-003）。
 
 <!-- TERM
@@ -32,7 +32,7 @@ en: EditDraft
 forbidden: 草稿副本, draft文件, 临时编辑文件, 编辑副本
 -->
 原生 docx 进入编辑前创建的同目录副本（命名 `{stem}.draft.docx`）：**原生 docx**（非 `*.draft.docx`）
-点击为只读 PDF 预览，经「创建草稿进行编辑」复制为 EditDraft 后进 HTML 编辑模式；**EditDraft 与项目
+点击为只读 PDF 预览，经「创建草稿进行编辑」复制为 EditDraft 后进 HTML 编辑态；**EditDraft 与项目
 生成的 docx**（均以 `*.draft.docx` 标识）点击直接进编辑。编辑作用于草稿、原 docx 不被改动（保护原始
 文档）；草稿落盘经编辑链 HTML→docx 往返（§2.1）。
 
@@ -76,7 +76,7 @@ Lua 过滤器实现延实现期（§9）。
   - **前端解析（关键）**：编辑器装有 `tiptap-markdown`（md 文件用），其会劫持 `setContent(string)` 按
     markdown 解析（HTML 标签变字面、缩进 CSS 变代码块）。docx 路径须用 `generateJSON(html, extensions)`
     **按 HTML 解析为 ProseMirror JSON 后 setContent**，绕过 markdown 劫持，样式经 §4.1 扩展渲染为成熟文本块。
-  - 回 baseline（docx 字节内容哈希）供保存冲突保护（SM-WS-01）；HTML 超 **15MB** 拒绝（编辑模式上限，防崩溃）。
+  - 回 baseline（docx 字节内容哈希）供保存冲突保护（SM-WS-01）；HTML 超 **15MB** 拒绝（编辑态上限，防崩溃）。
 - **保存（HTML → docx，`doc.save_from_edit`）**：
   `pandoc --from html --to docx --reference-doc reference.docx`（参考文档统一样式，往返保真）→ 交 WS
   `save_atomic` 原子落盘 + 外部变更保护（原文件不变）。
@@ -145,7 +145,7 @@ rule_id: BR-DOC-DATA-002
 主链路: DOC-CONVERT
 域: DATA
 -->
-docx 进入编辑模式即按三级样式子集契约子集化：必需子集必须往返保真且回归测试强制覆盖；部分支持
+docx 进入编辑态即按三级样式子集契约子集化：必需子集必须往返保真且回归测试强制覆盖；部分支持
 项尽力保留、其损失必须对用户可知（不静默丢失）；明确不处理项清单公开且由预览链全保真补偿。
 三级清单的变更必须回写本文并同步 ED（编辑模型承载范围）与 PRV（预览补偿）复核，不得在转换代码
 中私自增减子集。
@@ -288,3 +288,4 @@ status: mapped
 | 2026-06-11 | v1.1 | DOC-03 解除（随 PRV G2 联合，A-PRV-M-T-01 §2）：Excel/PPT 预览转换归 DOC 预览链扩展（LibreOffice→PDF，X-SEQ-004 覆盖）、音视频系统解码归 PRV；§9 债务更新；保真度实测留实现期 |
 | 2026-06-24 | v1.2 | 实现期处理逻辑细化（文档·设计·代码同步，移植旧版 binder-project 跑通链路）：新增 §2.1 编辑链处理逻辑（编辑模型为 HTML 非 markdown；打开 `pandoc docx+styles → html+raw_html+native_divs+native_spans + preserve-styles.lua + extract-media`，保存 `html → docx --reference-doc reference.docx`；HTML 15MB 上限；资源 reference.docx/preserve-styles.lua 经 bundle）、§2.2 docx 编辑流程（原生 docx→预览→「创建草稿进行编辑」doc.create_draft→编辑；`*.draft.docx`/生成 docx→直编辑；原文档不改动）、§4.1 样式子集↔TipTap 编辑器扩展映射表（必需/部分/增强 ↔ TextAlign/Underline/Table*/Image/TextStyle+Color/FontFamily/FontSize/Highlight/Sub·Superscript）；新增术语 TERM-DOC-002 编辑草稿 EditDraft；命令 doc.open_for_edit/save_from_edit/create_draft 见 A-DOC-I-P-01 v1.1~v1.3；预览链优化版 LibreOffice 打包阻断见 A-CORE-X-R-01 §9。规则/链路不变（BR-DOC-* + DOC-CONVERT），REQ_MAP 不变 |
 | 2026-06-24 | v1.3 | docx 编辑渲染修复（设计·代码同步）：§2.1 去 `--standalone`（pandoc 只输出 <body> 正文片段，不含 <head>/<style> CSS——否则 CSS 被当代码块渲染）；明确前端须用 `generateJSON(html, extensions)` 按 HTML 解析绕过 tiptap-markdown 对 setContent(string) 的 markdown 劫持（旧项目编辑器无 markdown 扩展故 HTML 原生解析正常，本项目为 md 编辑装了该扩展需显式绕过）。规则/术语/链路不变 |
+| 2026-07-04 | v1.4 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

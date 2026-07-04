@@ -2,15 +2,15 @@
 文档编号：AG-I-P-01
 文档状态：A
 负责模块：AG
-文档职责：AG 对话代理模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 骨架声明 chat 回合 command、工具调用回注接口、内联辅助/自动补全接口、上下文组装与门禁前置对接、流式回传事件；AI 调用面（一切模型调用经门禁→网关）
-上游约束：A-SYS-I-P-02_IPC协议.md（骨架、流式逻辑契约）、A-SYS-I-P-03_云接口契约.md（CLOUD-GATE/INVOKE、SM-SYS-01、X-SEQ-001）、A-AG-M-T-01_对话代理技术设计.md（BR-AG-* 规则、AG-TURN/TOOL/ASSIST、X-FORBID-006）、A-AG-M-S-01_对话代理状态机设计.md（SM-AG-01/02/03）、A-DE-I-P-01_对话编辑接口协议.md（generate_diff 承接产出）、A-ED-I-P-01_编辑器接口协议.md（apply_edit/装饰层）、A-REF-M-T-01（注入载荷）、ADU.md
+文档职责：AG 代理模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 骨架声明 代理回合 command、工具调用回注接口、局部修改/辅助续写接口、上下文组装与门禁前置对接、流式回传事件；AI 调用面（一切模型调用经门禁→网关）
+上游约束：A-SYS-I-P-02_IPC协议.md（骨架、流式逻辑契约）、A-SYS-I-P-03_云接口契约.md（CLOUD-GATE/INVOKE、SM-SYS-01、X-SEQ-001）、A-AG-M-T-01_代理技术设计.md（BR-AG-* 规则、AG-TURN/TOOL/ASSIST、X-FORBID-006）、A-AG-M-S-01_代理状态机设计.md（SM-AG-01/02/03）、A-DE-I-P-01_DiffEdit接口协议.md（generate_diff 承接产出）、A-ED-I-P-01_编辑器接口协议.md（apply_edit/装饰层）、A-REF-M-T-01（注入载荷）、ADU.md
 直接承接：实现期 AG command 注册；门禁/网关经 ENT 客户端通道（A-SYS-I-P-03 契约）；产出交 DE（de.generate_diff）；辅助采纳经 ED（ed.apply_edit）；记忆/知识/引用注入经 AST/KB/REF 供给
 使用边界：本文声明 AG 接口语义级签名；门禁/网关协议字段归 A-SYS-I-P-03（不重定义）；落盘经 DE→WS（不重复）；呈现经 ED（不重复）；不新增 RULE/CHAIN/CONSTRAINT/TERM；工具清单/提示词/模型档延实现期运营配置
 变更要求：门禁前置语义变更涉 APC §13 须先授权；产出接口变更复核 DE；辅助采纳接口变更复核 ED；工具回注接口变更复核 SM-AG-02
 治理成熟度：draft
 ---
 
-# Binder 对话代理接口协议（AG · L2 接口层）
+# Binder 代理接口协议（AG · L2 接口层）
 
 ## §1 文档定位
 
@@ -21,10 +21,10 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 ```
 
 **接口层门禁不变量（X-SEQ-001 / BR-AG-VERIFY-001）**：下列任一发起 command 的实现路径中，
-模型调用前必经门禁；无有效订阅/断网时——chat/工具回合 command 返回 GateDenied 类错误，
+模型调用前必经门禁；无有效订阅/断网时——代理/工具回合 command 返回 GateDenied 类错误，
 辅助类 command 静默返回空候选（不报错、不打断编辑）。接口签名不暴露任何绕过门禁的入口。
 
-## §2 chat 回合接口（AG-TURN / SM-AG-01）
+## §2 代理回合接口（AG-TURN / SM-AG-01）
 
 | command/事件 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
@@ -95,7 +95,7 @@ async fn ag_start_turn(
 > **写意图工具不直写**——产出修改建议走 `de.generate_diff`（X-FORBID-006）；循环上限/中断由
 > SM-AG-02 管理，达上限 LoopAborted。工具清单与权限分级延实现期运营配置（接口不锁清单）。
 
-## §4 内联辅助/自动补全接口（AG-ASSIST / SM-AG-03）
+## §4 局部修改/辅助续写接口（AG-ASSIST / SM-AG-03）
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
@@ -141,7 +141,7 @@ async fn ag_start_turn(
 
 - 工具注册清单/权限分级表、提示词与模型档延实现期运营配置（接口不锁）。
 - request_assist 的节流（前端侧 vs 接口侧）实现期定；候选呈现 schema 联合 ED/DE。
-- Chat↔Build 接管接口（takeover/fallback）随 CBT I-P 联合声明（本文不预定义，AG-04）。
+- 构建移交/回落接口（takeover/fallback）随 CBT I-P 联合声明（本文不预定义，AG-04）。
 - REF/AST/KB 供给接口待其 I-P；本文 §5 仅占消费入口。
 
 ## 变更记录
@@ -152,3 +152,4 @@ async fn ag_start_turn(
 | 2026-06-24 | v1.1 | 新增 §2.1 流式回传契约（AgTurnEvent · PI-AG-10C 冻结点）：AgTurnEvent 六分支（Chunk/ToolRequest/ToolResult/DiffProposed/Done/Error）、ag_start_turn 命令签名（Channel<AgTurnEvent> 传输，承 SY-02 选型）、三终态映射（BR-SYS-STATE-002）、前端消费映射（agStore/deStore）、关联命令形状与冻结约定；§2 表格 start_turn/turn_stream 行改为 Channel<AgTurnEvent> 模型并指向 §2.1。前后端双轨同步真源，零新增注册类治理块 |
 | 2026-06-26 | v1.2 | 命名落地修正：AG 回合流式事件定名 **AgTurnEvent**（避开 src-tauri/src/ipc/mod.rs 既有 SYS `StreamEvent` 重名），§2.1 补「与 SYS StreamEvent 分层不同·非重复」说明（通用 dispatch 传输契约 vs AG 领域 per-call Channel）；PI-AG-10C 落地同步 |
 | 2026-07-03 | v1.3 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，ED 窗口执笔·追加型最小修订）：新增 §4.1 文档块读取接口——补登记既有 ag.list_blocks + 样式投影扩展（marks/blockAttrs，schema 单一来源 A-ED-M-T-01 §5.1）；写侧 StyleOp 经 ed.apply_edit、落盘分流按裁定 D-3；锚有效期=编辑会话内（BR-ED-DATA-004） |
+| 2026-07-04 | v1.4 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

@@ -114,7 +114,7 @@ export function Editor() {
           void saveCurrent(false);
           return true;
         }
-        // ⌘K InlineAssist：有选区时开内联辅助（替换选区）。
+        // ⌘K InlineAssist：有选区时开局部修改（替换选区）。
         if (event.key === "k") {
           if (empty) return false;
           const coords = view.coordsAtPos(from);
@@ -137,7 +137,7 @@ export function Editor() {
           assistStore.setGenerating(true);
           const prefix = view.state.doc.textBetween(Math.max(0, to - 400), to, " ");
           void requestAssist({ kind: "autocomplete", prefix }).then((candidate) => {
-            // 仍停在本次自动补全（用户未切走）才填入；否则忽略（锚已变）。
+            // 仍停在本次辅助续写（用户未切走）才填入；否则忽略（锚已变）。
             if (assistStore.getSnapshot().kind !== "autocomplete") return;
             if (candidate) assistStore.setSuggestions([candidate]);
             else assistStore.close(); // 门禁不可用/失败 → 静默不提供（不打断编辑）

@@ -4,7 +4,7 @@
 负责模块：ED
 文档职责：ED 编辑器模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 骨架声明 ED 的编辑会话 command、装饰层挂载/复位接口、blockId 定位接口、外部变更订阅；前端编辑器运行时与后端/上层模块的契约面
 上游约束：A-SYS-I-P-02_IPC协议.md（命名/信封/错误/流式骨架）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-* 规则、ED-EDIT/ED-DECOR 链路、X-FORBID-005）、A-ED-M-S-01_编辑器状态机设计.md（SM-ED-01 含 Conflicted 态）、A-WS-I-P-01_工作台接口协议.md（read_doc/save_doc/external_change 复用）、A-SYS-I-P-01_数据结构定义.md（DocRef）、ADU.md
-直接承接：实现期前端编辑器（TipTap）与扩展点按本文契约注册；DE（diff 呈现）/AG（内联辅助）/REF（@mention）按装饰层接口挂载（X-FORBID-005：唯一受控通道）
+直接承接：实现期前端编辑器（TipTap）与扩展点按本文契约注册；DE（diff 呈现）/AG（局部修改）/REF（@mention）按装饰层接口挂载（X-FORBID-005：唯一受控通道）
 使用边界：本文声明 ED 接口的**语义级签名**；文件 I/O 经 WS（不在本文重复，ED 经 A-WS-I-P-01）；不新增 RULE/CHAIN/CONSTRAINT/TERM；装饰层接口为进程内前端契约（非 Tauri command）与跨模块 command 混合，分节标注
 变更要求：装饰层接口变更须复核 DE/AG/REF 消费方；编辑会话 command 变更须复核 SM-ED-01 一致性；blockId 契约变更联动 DE 定位
 治理成熟度：draft
@@ -100,3 +100,4 @@ Conflicted 态待 `ed.resolve_conflict`（BR-ED-STATE-003）。本文不重复�
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件）：ED 接口协议——编辑会话 command 5 条（含 resolve_conflict 对接 SM-ED-01 Conflicted）、装饰层接口 4 条（mount/update/dismiss/on_action，X-FORBID-005 唯一通道）、blockId 定位 2 条（locate_block 失效信号 / apply_edit 内联采纳落点）、外部变更订阅承 WS I-P；零新增注册项；债务（呈现 schema/编辑 op 粒度/装饰层进程边界延实现期） |
 | 2026-07-03 | v1.1 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，承 BR-ED-DATA-004/005）：§4 扩字符锚定位（locate_block 带 {start,end} 区间校验）+ 新增 ed.get_cursor_ref / ed.get_selection_ref（按需查询）；新增 §4.1 apply_edit 操作粒度表（replace_text/insert_block/set_mark/unset_mark/set_block_attr，批内原子）解除既有债务；§7 登记样式投影读接口归 AG I-P 承载 |
+| 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

@@ -29,7 +29,7 @@ Binder 是一款 AI 原生的桌面写作应用（AI writing），目标商业�
   纳入 v1；Excel/PPT 仅预览不编辑。
 
 明确不做：多人实时协同、内容云同步、插件市场、脱离写作场景的通用聊天助手、Excel/PPT 编辑。
-（chat-agent 是写作域内能力，保留。）
+（代理编辑〔AgentEdit，旧称 chat-agent/对话编辑〕是写作域内能力，保留。）
 
 ## §2 开发方法论
 
@@ -76,9 +76,9 @@ ADUS 仅由 `npm run governance:generate` 生成，禁止人工编辑自动生�
 | SYS  | 整体架构、IPC 协议、跨模块契约 |
 | WS   | workspace 生命周期、文件 I/O、缓存、pending_diffs 持久化、文档级时间轴/历史回溯 |
 | ED   | 编辑器运行时（TipTap，md/docx 富文本编辑） |
-| DE   | diff 生成、审阅、接受/拒绝/过期终态 |
-| AG   | 单文档 chat/agent、工具调用回合 |
-| CBT  | agent 文档项目构建（Chat Build）、构建中断、Chat↔Build 接管 |
+| DE   | Diff Edit（2026-07-04 定名，无中文名；旧称「对话编辑」退役）：diff 生成、审阅、接受/拒绝/过期终态 |
+| AG   | 代理（Agent）：代理编辑面板（编辑/构建双模式）回合基建、工具调用回合、辅助续写与局部修改 |
+| CBT  | 构建（Build，旧称 Chat Build 弃用）：项目蓝图与多文件文档项目构建、构建中断、构建移交/回落 |
 | DOC  | DOCX/Pandoc 转换 |
 | PRV  | 预览与输出：Excel/PPT 预览、音视频预览 + 打印/导出 |
 | REF  | 引用（@mention）解析与注入 |
@@ -144,8 +144,8 @@ G1–G4 沿用四级门禁语义（需求暴露清单、技术设计 SSOT、计�
 
 本项目为状态机驱动开发。强制阈值（口径 b）：有状态/跨层/多步的链路必须建状态机；
 纯函数/纯展示豁免。以下核心链一律强制建状态机（非穷举）：
-diff 终态、chat-agent 回合、tool-call、save 保存、docx 开/存、CBT 构建、记忆写入、
-autocomplete、inline-assist、账号会话与订阅门禁。
+diff 终态、代理回合（旧称 chat-agent 回合）、tool-call、save 保存、docx 开/存、CBT 构建、
+记忆写入、autocomplete（辅助续写）、inline-assist（局部修改）、账号会话与订阅门禁。
 
 状态机设计必须包含：machine_id / owner_module / scope / context / initial_state / states /
 terminal_states / events / transitions / guards / actions / error_states / recovery_paths /
@@ -183,7 +183,7 @@ REQ 在本项目重新撰写，旧 binder 与调研文档为 L4 原料。每条 
 
 - 单元：纯逻辑与工具函数。
 - 集成：核心链路强制集成测试；状态机强制转移测试矩阵。
-- e2e：关键路径冒烟（对话编辑、CBT 构建、AI 调用门禁、保存恢复）。
+- e2e：关键路径冒烟（代理编辑、构建、AI 调用门禁、保存恢复）。
 - covers：`// covers: BR-*` 覆盖所有已注册 RULE，须有实际断言。
 - CI：`governance:audit` + 测试为合并硬门禁（见 §11、§12）。
 
@@ -232,3 +232,4 @@ APC 被新版取代时旧版改为 X。治理成熟度只能由人类推进。
 |------|------|---------|
 | 2026-06-09 | v1.0 | bootstrap 初版，经多轮人类确认落地（商业 Open Core / 桌面客户端主体 + 云契约 / 六级门禁 / 状态机驱动 / 上线节奏） |
 | 2026-06-09 | v1.1 | 人类确认 v1 范围：纳入文档级时间轴/历史回溯（WS）与音视频预览（PRV），确认 Excel/PPT 仅预览不编辑；同步 §1 范围与"明确不做"、§4.1 WS/PRV 模块职责 |
+| 2026-07-04 | v1.2 | 术语沿革澄清回写（人类三轮陈述+裁决，module_code 均不变）：§4.1 AG=「代理（Agent）」（代理编辑面板双模式）、DE=「Diff Edit」（无中文名，旧称「对话编辑」退役为 TERM-AG-008 禁用别名）、CBT=「构建（Build）」（弃 Chat Build）；§1/§6/§10 措辞同步（chat-agent→代理编辑/代理回合，Chat↔Build 接管→构建移交/回落） |

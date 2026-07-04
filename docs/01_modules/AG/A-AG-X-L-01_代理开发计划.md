@@ -2,7 +2,7 @@
 文档编号：AG-X-L-01
 文档状态：A
 负责模块：AG
-文档职责：AG 对话代理 G3 开发计划——承接型 Plan Item，承接 AG-TURN/TOOL/ASSIST 链路与 BR-AG-* 规则、X-FORBID-006、SM-AG-01/02/03；**含 4 项 B 类设计缺口的强制承接条目（门禁例外，A-CORE-X-R-01）**，G4 实现前补齐
+文档职责：AG 代理 G3 开发计划——承接型 Plan Item，承接 AG-TURN/TOOL/ASSIST 链路与 BR-AG-* 规则、X-FORBID-006、SM-AG-01/02/03；**含 4 项 B 类设计缺口的强制承接条目（门禁例外，A-CORE-X-R-01）**，G4 实现前补齐
 上游约束：A-CORE-X-L-02（P3、AG 门禁例外）、A-CORE-X-R-01（B-1~B-4 强制承接）、APC §5/§6/§12/§13（门禁前置不得绕过）、A-AG-M-T-01/A-AG-M-S-01、A-AG-I-P-01、A-SYS-I-P-03（门禁/网关契约）、A-DE-X-L-01（产出消费）、A-ED-X-L-01（装饰层/apply_edit）、A-CBT/REF/AST/KB（对接）
 直接承接：本计划驱动 AG 实现；@GOV 追溯 BR-AG-*；SM-AG-01/02/03 转移矩阵；**4 项 B 类须先补设计再实现**
 使用边界：L3 承接型 Plan Item；门禁/网关契约归 A-SYS-I-P-03（承接不重定义）；落盘经 DE→WS、呈现经 ED（不重复）；@GOV 在实现代码
@@ -10,7 +10,7 @@
 治理成熟度：draft
 ---
 
-# Binder 对话代理开发计划（AG · L3）
+# Binder 代理开发计划（AG · L3）
 
 ## §1 文档定位
 
@@ -68,7 +68,7 @@ AG 是 AI 链中枢。**门禁例外说明**：本模块 G2 闭合附带 4 项 B
   逐次裁决 + 节流）。
 - **验收**：全部模型调用经 `ent.invoke_model`（门禁→网关）；无 provider 直连（静态核验）。
 
-### PI-AG-04　内联辅助/自动补全机　✅ G4（assist.rs SM-AG-03 节流/门禁/静默/采纳即编辑 BR-AG-STATE-003，audit 绿）
+### PI-AG-04　局部修改/辅助续写机　✅ G4（assist.rs SM-AG-03 节流/门禁/静默/采纳即编辑 BR-AG-STATE-003，audit 绿）
 - **承接**：REQ-AG-005 / CHAIN AG-ASSIST / SM-AG-03 / BR-AG-STATE-003。**强制承接 B-1（assist
   提示词结构）**。
 - **文件范围**：`src/`/`src-tauri/src/ag/assist.rs`（节流→门禁→轻量调用→候选；采纳经
@@ -85,7 +85,7 @@ AG 是 AI 链中枢。**门禁例外说明**：本模块 G2 闭合附带 4 项 B
 - **验收**：B-2 设计补齐（AG↔AST 写入触发 + 总图转移登记）方可实现；回合产生的可沉淀事实经
   `ast.capture` 写入、origin_turn 可溯源、不阻塞回合。
 
-### PI-AG-06　Chat↔Build 接管对接（强制承接 B-3）　✅ G4（turn.rs SM-AG-01 takeover→HandedOver / fallbackIn 承接，对接 cbt.takeover/fallback，audit 绿）
+### PI-AG-06　构建移交/回落对接（强制承接 B-3）　✅ G4（turn.rs SM-AG-01 takeover→HandedOver / fallbackIn 承接，对接 cbt.takeover/fallback，audit 绿）
 - **承接**：REQ-AG-001 ↔ CBT 接管；**B-3 强制条目**。
 - **文件范围**：SM-AG-01 takeover/fallback 转移实现（对接 `cbt.takeover/fallback` 回执）。
 - **@GOV**：随 B-3 设计补齐后定。
@@ -126,3 +126,4 @@ audit 绿；@GOV 追溯 BR-AG-*；SM-AG-01/02/03 矩阵全覆盖；`// covers: B
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3，P3 AI 中枢，**含门禁例外**）：§2bis 单列 4 项 B 类强制承接条目（B-1 提示词组装/B-2 记忆写入触发/B-3 接管 AG 侧建模/B-4 跨文档边界，先补设计后实现、人类授权、B-4 DE 复核）；6 条 Plan Item（回合机与门禁前置/工具循环/门禁通道/内联辅助/记忆对接/接管对接），承接 AG-TURN/TOOL/ASSIST + 6 规则 + X-FORBID-006 + SM-AG-01/02/03；门禁前置无绕过为 G4 强制核验；B 类阻挡对应 PI 的 G4 实施纪律明确 |
+| 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

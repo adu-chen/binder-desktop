@@ -98,7 +98,7 @@ export async function saveDocxFromEdit(
 
 /**
  * 创建草稿（doc.create_draft，旧版成熟流程）：原生 docx → 同目录 `{stem}.draft.docx` 草稿副本。
- * 原生 docx 点击为只读预览，"创建草稿进行编辑"后草稿直接进编辑模式。返回草稿 relPath。
+ * 原生 docx 点击为只读预览，"创建草稿进行编辑"后草稿直接进编辑态。返回草稿 relPath。
  */
 export async function createDocxDraft(relPath: string): Promise<string> {
   const res = await callCommand<{ rel_path: string }>("doc.create_draft", { relPath });
@@ -111,7 +111,7 @@ function isDocxFile(relPath: string): boolean {
   return ext === "docx" || ext === "doc";
 }
 
-/** 是否草稿/可直接编辑的 docx（`*.draft.docx`）：草稿与项目生成的 docx 直接进编辑模式。 */
+/** 是否草稿/可直接编辑的 docx（`*.draft.docx`）：草稿与项目生成的 docx 直接进编辑态。 */
 export function isDocxEditable(relPath: string): boolean {
   return isDocxFile(relPath) && relPath.toLowerCase().includes(".draft.");
 }

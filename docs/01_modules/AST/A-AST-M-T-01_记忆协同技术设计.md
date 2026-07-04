@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：AST
 文档职责：AST 记忆协同模块级 L2 技术设计（规则 SSOT）——记忆条目模型与 workspace 级隔离（2026-06-11 人类决策）、自动写入与类型分级（2026-06-11 人类决策）、可见可溯源可撤销语义、注入供给契约；承接 REQ-AST-001~004
-上游约束：A-AST-M-D-01_记忆协同功能需求描述.md（REQ-AST-001~004、AST-01/02 已决策）、A-CORE-C-P-01_APC.md（§4.1/§6/§9）、A-AG-M-T-01_对话代理技术设计.md（BR-AG-DATA-001 消费、AgentTurn 溯源）、A-WS-M-T-01_工作台技术设计.md（控制态持久化、X-FORBID-004）、A-SYS-I-P-01_数据结构定义.md（BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-M-S-01_状态机总图.md（记忆写入核心链）、ADU.md（§3）
+上游约束：A-AST-M-D-01_记忆协同功能需求描述.md（REQ-AST-001~004、AST-01/02 已决策）、A-CORE-C-P-01_APC.md（§4.1/§6/§9）、A-AG-M-T-01_代理技术设计.md（BR-AG-DATA-001 消费、AgentTurn 溯源）、A-WS-M-T-01_工作台技术设计.md（控制态持久化、X-FORBID-004）、A-SYS-I-P-01_数据结构定义.md（BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-M-S-01_状态机总图.md（记忆写入核心链）、ADU.md（§3）
 直接承接：本文 RULE/CHAIN/TERM 为 AST 规则 SSOT；SM-AST-01 在 A-AST-M-S-01 定义并登记总图；供给契约对接 AG（与 REF/KB 同为上下文来源）
 使用边界：本文是 AST 规则 SSOT；不组装上下文（AG）、不持久化基建（经 WS workspace.db 扩展）、不做知识库（KB）；类型分级的具体参数（注入优先级数值/保留期时长）延实现期；状态机内部归 A-AST-M-S-01
 变更要求：写入策略语义变更须先经 APC/人类授权（产品关键决策）；记忆类型清单变更回写本文；供给结构进入实现前登记 A-SYS-I-P-01（X-SHARED-001）；TERM 一经 term_ref 引用其 en 不可更改
@@ -159,3 +159,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（AST G2）：两项人类决策落规则——workspace 级隔离（BR-AST-DATA-001）、自动写入+类型分级（BR-AST-STATE-001，保持可见/可溯源/可撤销三要素）；v1 记忆类型基线（preference/style/project_fact/session_context）；注入供给契约（BR-AST-DATA-002，MemoryInjection 结构延实现前登记 SYS）；注册链路 AST-MEMORY、术语 MemoryEntry；REQ_MAP（REQ-AST-001~004） |
+| 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

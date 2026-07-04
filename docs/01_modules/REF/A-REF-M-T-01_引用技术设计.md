@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：REF
 文档职责：REF 引用模块级 L2 技术设计（规则 SSOT）——@mention 触发与目标解析、引用锚（路径级/块级）与失效校验、注入载荷组装契约、状态机豁免复核；承接 REQ-REF-001~004
-上游约束：A-REF-M-D-01_引用功能需求描述.md（REQ-REF-001~004、REF-01~05）、A-CORE-C-P-01_APC.md（§4.1、§6 豁免口径）、A-SYS-I-P-01_数据结构定义.md（DocRef、RefInjection 共享结构、X-SHARED-001）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001 读取经 WS、X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId 失效信号、扩展表面、X-FORBID-005）、A-AG-M-T-01_对话代理技术设计.md（BR-AG-DATA-001 注入消费与裁剪优先级）、ADU.md（§3）
+上游约束：A-REF-M-D-01_引用功能需求描述.md（REQ-REF-001~004、REF-01~05）、A-CORE-C-P-01_APC.md（§4.1、§6 豁免口径）、A-SYS-I-P-01_数据结构定义.md（DocRef、RefInjection 共享结构、X-SHARED-001）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001 读取经 WS、X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId 失效信号、扩展表面、X-FORBID-005）、A-AG-M-T-01_代理技术设计.md（BR-AG-DATA-001 注入消费与裁剪优先级）、ADU.md（§3）
 直接承接：本文 RULE/CHAIN/TERM 为 REF 规则 SSOT，代码经 @GOV 映射；注入载荷结构已登记 A-SYS-I-P-01 §3（RefInjection，解除 REF-02）；载荷被 AG（回合组装）与 CBT（构建上下文，随其 G2）消费
 使用边界：本文是 REF 规则 SSOT；不组装回合上下文与预算裁剪（归 AG，BR-AG-DATA-001）、不做文件 I/O（经 WS）、不承载呈现（经 ED 扩展表面）、不检索知识库/记忆（归 KB/AST，可引用范围 REF-01 待其 G1）；本模块无状态机（豁免复核见 §6）
 变更要求：RefInjection 字段集合变更须回写 A-SYS-I-P-01（X-SHARED-001）并复核 AG/CBT 消费方；锚失效语义变更须与 ED（blockId 契约）联合复核；TERM 一经 term_ref 引用其 en 不可更改
@@ -185,3 +185,4 @@ status: mapped
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（REF G2，P3 G2 收尾件）：REF 规则 SSOT——v1 引用目标模型（文档/内容块/资源）、触发与解析（无悬空引用、经 ED 扩展点）、注入载荷契约（RefInjection 登记 SYS 契约层解除 REF-02、读取时点一致、来源可溯、裁剪归 AG）、锚失效校验（保守不注入）；状态机豁免复核成立并列失效触发条件（解除 REF-04）；注册链路 REF-INJECT（P1）、规则 BR-REF-DATA-001/002·VERIFY-001、术语 TERM-REF-001 ReferenceAnchor / TERM-REF-002 InjectionPayload；约束全复用不新增；REQ_MAP（REQ-REF-001~004） |
 | 2026-07-03 | v1.1 | 批B 选区级锚承接（A-ED-X-L-02 PI-ED-10 文档先行）：§2 目标模型增选区级锚（块级锚细化 = blockId + 块内字符区间，SelectionRef/CharAnchor 基准归 ED，有效期=编辑会话内，失效同 §5 保守语义）；§4 登记 RefInjection 区间字段扩展意向（block_ranges，按 X-SHARED-001 须回写 A-SYS-I-P-01 后进代码） |
+| 2026-07-04 | v1.2 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |

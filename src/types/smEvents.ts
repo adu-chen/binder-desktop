@@ -31,7 +31,7 @@ export type SmWs02Payload = SmStatePayload<RustDiffApplyState> & { machine_id: "
 /** SM-WS-01 · 保存机（Task 2-C 已集成）；instance_id 为 rel_path。 */
 export type SmWs01Payload = SmStatePayload<RustSaveState> & { machine_id: "SM-WS-01" };
 
-/** SM-AG-01 · chat 回合机（Task 2-E 已集成）；instance_id 为 turn_id。 */
+/** SM-AG-01 · 代理回合机（Task 2-E 已集成）；instance_id 为 turn_id。 */
 export type SmAg01Payload = SmStatePayload<RustTurnState> & { machine_id: "SM-AG-01" };
 
 /** SM-DOC-01 · docx 开/存转换机（PI-ED-07 #7 加载反馈）；instance_id 为 rel_path。 */
