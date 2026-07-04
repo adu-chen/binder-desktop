@@ -215,6 +215,46 @@ function measureBlockHeights(view: EditorView): number[] {
   return heights;
 }
 
+/** 页高自检诊断（真机排查用，console 输出；每次切页方案变化输出一次）：
+ *  纸张目标高 vs DOM 实测页高（paper 内容顶→首缝顶、缝底→次缝顶、末缝底→纸底）。 */
+function diagnosePageHeights(view: EditorView, geo: PageGeometry, heights: number[], plan: PageBreakPlan) {
+  try {
+    const zoom = parseFloat(window.getComputedStyle(view.dom).zoom) || 1;
+    const paper = view.dom.getBoundingClientRect();
+    const cs = window.getComputedStyle(view.dom);
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const padBottom = parseFloat(cs.paddingBottom) || 0;
+    const gaps = Array.from(view.dom.querySelectorAll<HTMLElement>(".rm-page-gap")).map((g) => {
+      const r = g.getBoundingClientRect();
+      const gutter = g.querySelector<HTMLElement>(".rm-page-gap-gutter")?.getBoundingClientRect();
+      return { top: r.top / zoom, bottom: r.bottom / zoom, h: r.height / zoom, gutterH: (gutter?.height ?? 0) / zoom };
+    });
+    // 每页视觉高：页1 = 纸顶→缝1 的 gutter 顶 + 上页边?（近似口径：相邻缝 gutter 中点差）——
+    // 直接输出原始量供人工判读，不做拟合。
+    const pageSpans: number[] = [];
+    let cursor = paper.top / zoom;
+    for (const g of gaps) {
+      pageSpans.push(g.top + 0 - cursor); // 纸面段：内容顶到缝顶（含 padding/fill）
+      cursor = g.bottom;
+    }
+    pageSpans.push(paper.bottom / zoom - cursor);
+    console.info("[binder:page] 诊断", {
+      geometry: { w: geo.width, h: geo.height, marginY: geo.marginY, gap: geo.gap },
+      budget: pageContentHeight(geo),
+      zoom,
+      paper: { w: paper.width / zoom, h: paper.height / zoom, padTop: padTop / zoom, padBottom: padBottom / zoom },
+      heightsSum: Math.round(heights.reduce((a, b) => a + b, 0)),
+      blocks: heights.length,
+      plan: { breaks: plan.breaks, lastFill: plan.lastFill },
+      gapRects: gaps.map((g) => ({ h: Math.round(g.h), gutterH: Math.round(g.gutterH) })),
+      pageSpans: pageSpans.map((v) => Math.round(v)),
+      expectPageVisual: geo.height,
+    });
+  } catch {
+    /* 诊断失败不影响分页 */
+  }
+}
+
 /** 把几何写为编辑器 CSS 变量（TS 值为单一来源，CSS 消费）。 */
 function applyGeometryVars(dom: HTMLElement, geo: PageGeometry) {
   dom.style.setProperty("--rm-page-width", `${geo.width}px`);
@@ -363,6 +403,8 @@ export const PaginationExtension = Extension.create({
                         .setMeta(paginationKey, { plan: next } as PaginationMeta)
                         .setMeta("addToHistory", false),
                     );
+                    // 页高自检诊断（2026-07-03 #1 三轮排查）：方案落定下一帧实测每页视觉高度 vs 纸高。
+                    requestAnimationFrame(() => diagnosePageHeights(view, ext.storage.geometry, heights, next));
                   }
                 } catch {
                   // view 可能已卸载/销毁（切文档、关闭）——忽略本次测量。
