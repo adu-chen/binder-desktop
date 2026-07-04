@@ -171,55 +171,55 @@ export function diffExtents(tops: number[], lastBottom: number, lastMarginBottom
   return heights;
 }
 
-/** 测量顶层内容块的高度序列（位置差分法 + 既有分页缝剔除）。
- *  缩放（CSS zoom）时坐标按 view.dom 的 computed zoom 归一化到未缩放 CSS px。
- *  差分会把块间**既有分页缝 widget** 的高度计入其前一块——按缝的实际 DOM 高度从对应前块扣除，
- *  避免旧缝污染下一轮切页判定（否则重算震荡）。 */
+/** rect 坐标 → 未缩放 CSS px 的换算因子（2026-07-04 三轮修复·实测定标）：
+ *  真机诊断证实 **WKWebView 的 getBoundingClientRect 不包含 CSS zoom**（rect 即未缩放 CSS px，
+ *  原先 /zoom 归一化属过度校正——zoom 0.5 时全部尺寸被放大 2 倍）。不假设引擎行为，运行时自校准：
+ *  scale = view.dom 的 rect 宽 ÷ computed 宽（computed 恒为未缩放 CSS px）。rect 含 zoom 的引擎
+ *  scale≈zoom、不含的引擎 scale≈1——除以 scale 在两种引擎下都得到正确 CSS px。 */
+function rectScale(view: EditorView): number {
+  const rectW = view.dom.getBoundingClientRect().width;
+  const cssW = parseFloat(window.getComputedStyle(view.dom).width);
+  if (!Number.isFinite(rectW) || !Number.isFinite(cssW) || cssW <= 0 || rectW <= 0) return 1;
+  return rectW / cssW;
+}
+
+/** 测量顶层内容块的高度序列（位置差分法 · 无缝测量，2026-07-04 三轮修复）：
+ *  测量前临时隐藏既有分页缝/end-fill（.rm-measuring，同帧内恢复不产生可见闪烁）——差分测到的
+ *  永远是**纯内容跨度**，彻底消灭"缝高剔除补偿"的误差与测量-重排震荡循环（真机诊断：补偿误差
+ *  ~36px/缝导致 heightsSum 在两组值间交替、fill 永不收敛、控制台日志刷屏）。 */
 function measureBlockHeights(view: EditorView): number[] {
   const doc = view.state.doc;
-  const zoomRaw = window.getComputedStyle(view.dom).zoom;
-  const zoom = parseFloat(zoomRaw) || 1;
-  const tops: number[] = [];
-  let lastBottom = 0;
-  let lastMb = 0;
-  let p = 0;
-  doc.forEach((_node) => {
-    const pos = p;
-    p += _node.nodeSize;
-    const dom = view.nodeDOM(pos);
-    if (!(dom instanceof HTMLElement)) {
-      tops.push(lastBottom); // 不可测块：锚定上一块底部，占位 0 高（序列对齐）
-      return;
-    }
-    const rect = dom.getBoundingClientRect();
-    tops.push(rect.top / zoom);
-    lastBottom = rect.bottom / zoom;
-    lastMb = parseFloat(window.getComputedStyle(dom).marginBottom) || 0;
-  });
-  const heights = diffExtents(tops, lastBottom, lastMb);
-  // 剔除既有缝高：缝 widget（.rm-page-gap）位于某块前，其高度被差分计入前一块。
-  const gaps = view.dom.querySelectorAll<HTMLElement>(".rm-page-gap");
-  if (gaps.length > 0 && tops.length > 1) {
-    gaps.forEach((g) => {
-      const gr = g.getBoundingClientRect();
-      const gTop = gr.top / zoom;
-      const gH = gr.height / zoom;
-      let idx = -1;
-      for (let i = 0; i < tops.length; i++) {
-        if (tops[i] < gTop) idx = i;
-        else break;
+  view.dom.classList.add("rm-measuring"); // 隐藏缝 widget → 强制无缝布局
+  try {
+    const scale = rectScale(view);
+    const tops: number[] = [];
+    let lastBottom = 0;
+    let lastMb = 0;
+    let p = 0;
+    doc.forEach((_node) => {
+      const pos = p;
+      p += _node.nodeSize;
+      const dom = view.nodeDOM(pos);
+      if (!(dom instanceof HTMLElement)) {
+        tops.push(lastBottom); // 不可测块：锚定上一块底部，占位 0 高（序列对齐）
+        return;
       }
-      if (idx >= 0 && idx < heights.length) heights[idx] = Math.max(0, heights[idx] - gH);
+      const rect = dom.getBoundingClientRect();
+      tops.push(rect.top / scale);
+      lastBottom = rect.bottom / scale;
+      lastMb = parseFloat(window.getComputedStyle(dom).marginBottom) || 0;
     });
+    return diffExtents(tops, lastBottom, lastMb);
+  } finally {
+    view.dom.classList.remove("rm-measuring");
   }
-  return heights;
 }
 
 /** 页高自检诊断（真机排查用，console 输出；每次切页方案变化输出一次）：
  *  纸张目标高 vs DOM 实测页高（paper 内容顶→首缝顶、缝底→次缝顶、末缝底→纸底）。 */
 function diagnosePageHeights(view: EditorView, geo: PageGeometry, heights: number[], plan: PageBreakPlan) {
   try {
-    const zoom = parseFloat(window.getComputedStyle(view.dom).zoom) || 1;
+    const zoom = rectScale(view); // 自校准因子（引擎无关；命名沿用便于对照旧日志）
     const paper = view.dom.getBoundingClientRect();
     const cs = window.getComputedStyle(view.dom);
     const padTop = parseFloat(cs.paddingTop) || 0;

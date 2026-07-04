@@ -588,6 +588,10 @@ button.ed-sb-conflict {
   border-radius: 0;
   box-shadow: 0 1px 10px rgba(14, 12, 10, 0.14);
 }
+/* 无缝测量态（2026-07-04 三轮修复）：测量瞬间隐藏缝/end-fill，同帧恢复——差分只测纯内容。 */
+.ProseMirror.rm-measuring .rm-page-gap,
+.ProseMirror.rm-measuring .rm-page-end-fill { display: none !important; }
+
 /* 分页缝（PI-ED-06）：页尾补足(fill) + 白色下页边 + 灰色装订缝（含页码）+ 白色上页边，
    全宽出血覆盖左右页边距。fill 使每页视觉高度恒等所选纸张内容区（#8 页高修复）。 */
 .ProseMirror.rm-paginated .rm-page-gap {
