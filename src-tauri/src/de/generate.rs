@@ -58,6 +58,36 @@ pub fn build_payload(proposal: &ChangeProposal) -> DiffPayload {
 
 /**
  * @GOV
+ * codes:    BR-AG-DATA-003-GUARD-DE-DE-DIFF-001
+ * type:     GUARD
+ * chain:    DE-DIFF
+ * rules:    BR-AG-DATA-003
+ * boundary: in=proposalTargetAndDeclaredTargetSet | out=declaredTargetVerdict(rejectUndeclaredExistingDocBeforeDiffGen)
+ */
+/// DE 侧目标声明校验（BR-AG-DATA-003「DE 侧协同复核」，2026-07-04 版，与 AG `guard_target_set` 双侧
+/// 把守）：模型驱动的 ChangeProposal 在 diff 生成前须校验 target 属回合声明的目标集（当前文档 ∪ 用户
+/// 显式指向集）；不存在的路径视为新建放行（diff 裁决卡为人类闸门）；**未声明的既有文档拒绝**，不产出
+/// 越集 diff。CBT 构建路径不经本函数——其目标由用户已确认的任务计划声明（BR-CBT-DATA-001 绑定）。
+pub fn ensure_target_declared(
+    target_rel: &str,
+    current_rel: Option<&str>,
+    declared_rels: &[String],
+    target_exists: bool,
+) -> Result<(), IpcError> {
+    let declared = current_rel == Some(target_rel) || declared_rels.iter().any(|d| d == target_rel);
+    if declared || !target_exists {
+        return Ok(());
+    }
+    Err(IpcError::new(
+        "DE_TARGET_UNDECLARED",
+        &format!("目标文档 {target_rel} 不在本回合声明的目标集内（当前文档/显式引用），已拒绝生成 diff；请用户显式 @引用该文档后重试"),
+        false,
+        false,
+    ))
+}
+
+/**
+ * @GOV
  * codes:    BR-DE-DATA-001-GUARD-DE-DE-DIFF-001
  * type:     GUARD
  * chain:    DE-DIFF
@@ -159,5 +189,18 @@ mod tests {
         let d = generate_diff(&p, "d2", "CBT", "pl2", 0, LocateResult::AnchorLost).unwrap();
         assert_eq!(d.status, DiffStatus::Pending);
         assert_eq!(d.target.rel_path, "new.md");
+    }
+
+    // covers: BR-AG-DATA-003
+    // DE 侧协同复核（2026-07-04 版双侧把守之 DE 侧）：当前文档/声明集内/新建放行；未声明既有文档拒绝。
+    #[test]
+    fn de_side_rejects_undeclared_existing_target() {
+        let declared = vec!["ref.md".to_string()];
+        assert!(ensure_target_declared("a.md", Some("a.md"), &declared, true).is_ok());
+        assert!(ensure_target_declared("ref.md", Some("a.md"), &declared, true).is_ok());
+        assert!(ensure_target_declared("new.md", Some("a.md"), &declared, false).is_ok()); // 新建放行
+        let err = ensure_target_declared("other.md", Some("a.md"), &declared, true).unwrap_err();
+        assert_eq!(err.code, "DE_TARGET_UNDECLARED"); // 未声明既有 → 拒
+        assert!(ensure_target_declared("other.md", None, &[], true).is_err());
     }
 }

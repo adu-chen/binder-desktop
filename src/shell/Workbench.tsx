@@ -12,7 +12,7 @@ import { TabStrip } from "../components/shell/TabStrip";
 import { tabsStore, useTabsStore } from "../store/tabsStore";
 import { Editor } from "../components/ed/Editor";
 import { OutlinePanel } from "../components/ed/OutlinePanel";
-import { ChatPanel } from "../components/ag/ChatPanel";
+import { AgentPanel } from "../components/ag/AgentPanel";
 import { DiffAllActionsBar } from "../components/de/DiffAllActionsBar";
 import { useDeStore } from "../store/deStore";
 import { startSmListeners, stopSmListeners } from "../services/smListeners";
@@ -34,7 +34,7 @@ export function Workbench() {
   // DiffStrip 显隐投影待裁决修改（PendingDiff）计数 + 批量应用过程。
   const pendingDiffCount = diffs.filter((d) => d.state === "pending").length;
   const showDiffStrip = pendingDiffCount > 0 || batchState !== "idle";
-  // 面板重挂键：workspace 变更即重挂 FileTree/Editor/ChatPanel，载入新项目内容。
+  // 面板重挂键：workspace 变更即重挂 FileTree/Editor/AgentPanel，载入新项目内容。
   const wsKey = activeWorkspace?.workspaceId ?? "none";
   // 切换/打开 workspace 时清空标签（避免残留旧项目标签；tabsStore 是单例，需显式重置）。
   useEffect(() => {
@@ -88,12 +88,12 @@ export function Workbench() {
         </main>
         <Splitter
           className="gut-right"
-          ariaLabel="调整对话栏宽度"
+          ariaLabel="调整代理编辑面板宽度"
           onResize={(dx) => layoutStore.setChatW(layoutStore.getSnapshot().chatW - dx)}
           onReset={() => layoutStore.resetChat()}
         />
         <aside className="chat">
-          <ChatPanel key={wsKey} />
+          <AgentPanel key={wsKey} />
         </aside>
       </div>
 

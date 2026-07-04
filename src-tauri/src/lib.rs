@@ -1078,9 +1078,10 @@ async fn byok_upload(provider: String, key: String) -> Result<(), IpcError> {
     ent::byok::upload_to_gateway(&provider, key).await
 }
 
-/// PI-AG-08C/08E/08F · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
+/// PI-AG-08C/08E/08F + PI-AG-SEM-01 · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
-/// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）。
+/// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）；
+/// target 须属回合声明目标集或为新建路径（BR-AG-DATA-003 2026-07-04 版，AG guard + DE 校验双侧把守）。
 /// 两模式：整篇（content）/ 块级（block_index+new_text，基准用 base_content 切块对齐块号，PI-AG-08E）。
 /// 返回 (diff_id, rel_path)。
 fn ag_propose_edit(
@@ -1088,8 +1089,10 @@ fn ag_propose_edit(
     params: &serde_json::Value,
     base_content: Option<&str>,
     is_html: bool,
+    current_rel: Option<&str>,
+    declared_targets: &[String],
 ) -> Result<(String, String), IpcError> {
-    use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
+    use crate::de::generate::{build_payload, ensure_target_declared, generate_diff, ChangeProposal};
     use crate::types::LocateResult;
 
     let rel_path = params
@@ -1102,6 +1105,21 @@ fn ag_propose_edit(
     let ws = active_ws(state)?;
     // 路径限 workspace 内（X-FORBID-004）。
     let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+
+    // 目标集双守（BR-AG-DATA-003，2026-07-04 版）：当前文档/显式声明集/新建放行，未声明既有文档拒绝
+    // （错误回注模型，模型可提示用户显式 @引用后重试）。AG guard 与 DE 协同校验两侧均须通过。
+    let target_exists = abs.exists();
+    if let crate::ag::context::TargetDecision::RejectUndeclared =
+        crate::ag::context::guard_target_set(current_rel, declared_targets, &rel_path, target_exists)
+    {
+        return Err(IpcError::new(
+            "AG_TARGET_UNDECLARED",
+            &format!("目标文档 {rel_path} 非当前文档且未被用户显式引用，已拒绝；请提示用户 @引用该文档后重试，或改为修改当前文档"),
+            false,
+            false,
+        ));
+    }
+    ensure_target_declared(&rel_path, current_rel, declared_targets, target_exists)?;
 
     // 块模式（block_index+new_text）：基准用注入给模型的当前内容切块、替目标块、重建整篇（块号对齐）。
     // 整篇模式（content）：直接整篇替换。
@@ -1208,6 +1226,15 @@ async fn ag_start_turn(
 
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| default_model(&provider));
+
+    // 回合声明目标集（BR-AG-DATA-003，2026-07-04 版）：用户显式指向的文档 = @mention ∪ 块引用所在文档。
+    // propose_edit 的 target 须属 当前文档 ∪ 本集合，或为新建路径；未声明既有文档拒绝（guard_target_set）。
+    let mut declared_targets: Vec<String> = mentions.clone();
+    for b in &block_refs {
+        if !declared_targets.contains(&b.rel_path) {
+            declared_targets.push(b.rel_path.clone());
+        }
+    }
 
     // workspace 解析 + AST/KB 补强检索（P2，限当前 workspace X-FORBID-004，PI-AG-09D）。单锁，锁在 await 前释放。
     const AUG_BUDGET: u32 = 2500; // 补强层字符预算（dev；G5 标定）
@@ -1415,7 +1442,14 @@ async fn ag_start_turn(
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
                         // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
                         ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
-                            match ag_propose_edit(&state, &params, active_doc_content.as_deref(), doc_is_html) {
+                            match ag_propose_edit(
+                                &state,
+                                &params,
+                                active_doc_content.as_deref(),
+                                doc_is_html,
+                                active_doc_path.as_deref(),
+                                &declared_targets,
+                            ) {
                                 Ok((diff_id, rel_path)) => {
                                     let _ = on_event.send(AgTurnEvent::DiffProposed {
                                         turn_id: turn_id.clone(),

@@ -6,9 +6,8 @@ import { useSyncExternalStore } from "react";
  * 回合权威态归后端 SM-AG-01，前端只呈现与转达意图，不另立可漂移的并行回合态。
  */
 
-/** AG 面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=构建（项目级蓝图与整体构建，接 CBT）。
- *  （原 "chat"/"agent" 命名与实际功能语义不符，2026-07-04 人类澄清后更名；类型名 ChatMode 的更名延后续完整 Scope。） */
-export type ChatMode = "edit" | "build";
+/** 代理编辑（AgentEdit）面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=构建（项目级蓝图与整体构建，接 CBT）。 */
+export type AgMode = "edit" | "build";
 
 export interface ChatMessage {
   id: string;
@@ -56,7 +55,7 @@ const ACTIVE_TURN_STATES: ReadonlySet<RustTurnState> = new Set([
 ]);
 
 interface AgState {
-  mode: ChatMode;
+  mode: AgMode;
   messages: ChatMessage[];
   toolCalls: ToolCallView[];
   sending: boolean;
@@ -87,7 +86,7 @@ export const agStore = {
   getSnapshot(): AgState {
     return state;
   },
-  setMode(mode: ChatMode) {
+  setMode(mode: AgMode) {
     setState({ mode });
   },
   setSending(sending: boolean) {

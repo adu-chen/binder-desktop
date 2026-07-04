@@ -1,12 +1,11 @@
-//! PI-AG-01（B-1/B-4）· 上下文组装 + 提示词骨架 + 单文档边界 · AG-TURN
-//! 规则：BR-AG-DATA-001（来源限定/裁剪优先级）/ BR-AG-DATA-002（提示词组装骨架）/ BR-AG-DATA-003（单文档边界）
+//! PI-AG-01（B-1/B-4）+ PI-AG-SEM-01 · 上下文组装 + 提示词骨架 + 目标边界 · AG-TURN
+//! 规则：BR-AG-DATA-001（来源限定/裁剪优先级）/ BR-AG-DATA-002（提示词组装骨架）/ BR-AG-DATA-003（目标集边界）
 //!
 //! 承接 A-AG-M-T-01：上下文来源限定为 当前文档 / REF @mention / AST-KB 本地资产，限 workspace 内；超预算
 //! 裁剪确定性且**显式 @mention 优先保留、裁剪可追溯**（不静默丢弃显式注入，B-1）；提示词按统一分层骨架
-//! 系统→工具→上下文→用户组装，三类回合骨架差异（chat/构建/内联）；单文档回合 ChangeProposal target 限
-//! 当前文档，跨文档意图**升级 CBT**（B-4，2026-06-12 解除）。预算数值/裁剪算法/提示词文本延实现期。
-
-use crate::types::DocRef;
+//! 系统→工具→上下文→用户组装，三类回合骨架差异（编辑/构建/辅助）；ChangeProposal target 边界按
+//! BR-AG-DATA-003 2026-07-04 版：默认当前文档，显式声明集内可跨，新建经 diff 裁决闸门，未声明既有文档拒绝
+//! （原「单文档铁律/跨文档升级 CBT」已废止）。预算数值/裁剪算法/提示词文本延实现期。
 
 /// 上下文来源（裁剪保留优先级：ExplicitMention > Memory ≈ Knowledge > CurrentDoc）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,11 +206,13 @@ pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
     Carryover::None
 }
 
-/// 单文档边界裁决结果。
+/// 目标边界裁决结果（BR-AG-DATA-003，2026-07-04 版）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetDecision {
-    Accept,        // target 即当前文档，单文档回合内产出
-    EscalateCbt,   // 跨文档/多文件意图，升级 CBT 接管（不旁路产出跨文档 diff）
+    /// 当前文档 / 显式声明集内 / 新建文档（新建的人类闸门=diff 裁决卡，接受方落盘）。
+    Accept,
+    /// 未声明的**既有**文档：拒绝（原因回注模型，提示请用户显式 @引用该文档）。
+    RejectUndeclared,
 }
 
 /**
@@ -220,19 +221,29 @@ pub enum TargetDecision {
  * type:     GUARD
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-003
- * boundary: in=currentDocAndProposalTarget | out=TargetDecision(acceptCurrentOrEscalateCbtNoCrossDoc)
+ * boundary: in=declaredTargetSetAndProposalTarget | out=TargetDecision(acceptCurrentDeclaredOrNewDocRejectUndeclaredExisting)
  */
-/// 单文档回合 target 守卫（BR-AG-DATA-003，解除 B-4）：ChangeProposal target 须为当前文档；指向其他
-/// 文档 → EscalateCbt（升级 CBT 接管，不在单文档回合内旁路产出跨文档 diff）。与 DE 侧 generate_diff
-/// 越界拒绝双侧把守。以 (workspace_id, rel_path) 判定同一文档。
-pub fn guard_single_doc_target(current: &DocRef, proposal_target: &DocRef) -> TargetDecision {
-    if current.workspace_id == proposal_target.workspace_id
-        && current.rel_path == proposal_target.rel_path
-    {
-        TargetDecision::Accept
-    } else {
-        TargetDecision::EscalateCbt
+/// 回合目标集守卫（BR-AG-DATA-003，2026-07-04 人类裁决版，取代单文档铁律）：ChangeProposal target
+/// 须属回合声明的目标集——当前文档 ∪ 用户显式指向集（@mention / 块引用所在文档）；target 为**不存在
+/// 的路径**视为新建文档放行（仍经 DE diff 裁决、人类接受方落盘，X-FORBID-006 闸门即「明确要求」的
+/// 确认点）；指向**未声明的既有文档**一律拒绝，防模型游走改无关文件。workspace 限界（X-FORBID-004）
+/// 由调用方 resolve_in_workspace 前置保证。与 DE 侧 `ensure_target_declared` 双侧把守。
+pub fn guard_target_set(
+    current_rel: Option<&str>,
+    declared_rels: &[String],
+    target_rel: &str,
+    target_exists: bool,
+) -> TargetDecision {
+    if current_rel == Some(target_rel) {
+        return TargetDecision::Accept;
     }
+    if declared_rels.iter().any(|d| d == target_rel) {
+        return TargetDecision::Accept;
+    }
+    if !target_exists {
+        return TargetDecision::Accept; // 新建：diff 裁决卡为人类确认闸门
+    }
+    TargetDecision::RejectUndeclared
 }
 
 #[cfg(test)]
@@ -241,9 +252,6 @@ mod tests {
 
     fn item(s: ContextSource, c: &str, cost: u32) -> ContextItem {
         ContextItem { source: s, content: c.into(), cost }
-    }
-    fn doc(ws: &str, rel: &str) -> DocRef {
-        DocRef { workspace_id: ws.into(), rel_path: rel.into(), doc_type: "md".into() }
     }
 
     // covers: BR-AG-DATA-001
@@ -281,13 +289,24 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-003
-    // 单文档回合：target=当前文档 Accept；指向他文档 EscalateCbt（不旁路跨文档产出）。
+    // 目标集边界（2026-07-04 版）：当前文档/声明集内/新建 → Accept；未声明既有文档 → RejectUndeclared。
     #[test]
-    fn single_doc_target_accepts_current_escalates_cross_doc() {
-        let cur = doc("ws1", "a.md");
-        assert_eq!(guard_single_doc_target(&cur, &doc("ws1", "a.md")), TargetDecision::Accept);
-        assert_eq!(guard_single_doc_target(&cur, &doc("ws1", "b.md")), TargetDecision::EscalateCbt);
-        assert_eq!(guard_single_doc_target(&cur, &doc("ws2", "a.md")), TargetDecision::EscalateCbt);
+    fn target_set_accepts_current_declared_new_rejects_undeclared_existing() {
+        let declared = vec!["ref.md".to_string()];
+        // ① 当前文档。
+        assert_eq!(guard_target_set(Some("a.md"), &declared, "a.md", true), TargetDecision::Accept);
+        // ② 用户显式声明集内（@mention / 块引用）。
+        assert_eq!(guard_target_set(Some("a.md"), &declared, "ref.md", true), TargetDecision::Accept);
+        // ③ 新建文档（不存在的路径，diff 裁决卡为人类闸门）。
+        assert_eq!(guard_target_set(Some("a.md"), &declared, "new.md", false), TargetDecision::Accept);
+        // ④ 未声明的既有文档：拒绝（防模型游走改无关文件）。
+        assert_eq!(
+            guard_target_set(Some("a.md"), &declared, "other.md", true),
+            TargetDecision::RejectUndeclared
+        );
+        // ⑤ 无当前文档（未打开编辑器）时，声明集与新建仍可用，未声明既有仍拒。
+        assert_eq!(guard_target_set(None, &declared, "ref.md", true), TargetDecision::Accept);
+        assert_eq!(guard_target_set(None, &[], "other.md", true), TargetDecision::RejectUndeclared);
     }
 
     // PI-AG-09B：文档层封顶（短不动、长截断 + 注记，不静默）。
@@ -300,7 +319,8 @@ mod tests {
         assert!(!out.contains("四"));
     }
 
-    // PI-AG-09B：历史层按预算保留最近、drop 最旧（确定性、可追溯）。
+    // covers: BR-AG-DATA-005
+    // PI-AG-09B：分层截断序——历史层（P1）按预算保留最近、drop 最旧（确定性、丢弃数可追溯）。
     #[test]
     fn select_recent_history_keeps_newest_drops_oldest() {
         let h = |r: &str, c: &str| HistTurn { role: r.into(), content: c.into() };
@@ -315,6 +335,7 @@ mod tests {
         assert_eq!(select_recent_history(&turns, 0).1, 3);
     }
 
+    // covers: BR-AG-DATA-004
     // PI-AG-09C：意图沿用判定——无历史/新话题=None；修正/选择/回指=对应类型（默认弱化、显式沿用提权）。
     #[test]
     fn intent_carryover_defaults_none_and_detects_carryover() {

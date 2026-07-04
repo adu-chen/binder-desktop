@@ -1,9 +1,14 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-GOV-01",
+  "scope_id": "PI-AG-SEM-01",
   "allowed_files": [
     "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/tool.rs",
+    "src-tauri/src/de/generate.rs",
+    "src-tauri/src/lib.rs",
+    "src/store/agStore.ts",
+    "src/components/ag/ChatPanel.tsx",
+    "src/components/ag/AgentPanel.tsx",
+    "src/shell/Workbench.tsx",
     ".governance/active_scope.json"
   ],
   "forbidden_files": [
@@ -12,9 +17,8 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src-tauri/src/lib.rs",
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-GOV-01 治理标注补齐（仅 @GOV 注释，不改行为）：闭合 audit 对 AG 的硬发现。(1) context.rs decide_intent_carryover 加 @GOV owner 块 rules:BR-AG-DATA-004 + term_ref:TERM-AG-005（清 BR-AG-DATA-004 OWNER_MISSING + TERM-AG-005 ORPHAN）；(2) context.rs select_recent_history 加 @GOV owner 块 rules:BR-AG-DATA-005（清 BR-AG-DATA-005 OWNER_MISSING，分层截断序唯一权威落于此截断点）；(3) tool.rs transition（AG-TOOL 工具回合）@GOV 加 term_ref:TERM-AG-002 ToolCall（清 TERM-AG-002 ORPHAN）。boundary in/out 用具体类型名避免 BOUNDARY_ABSTRACT。改后重跑 governance:audit 确认 AG findings 清零（非 AG 的 OWNER_MISSING 仍在，属其它模块）。"
+  "scope_reason": "PI-AG-SEM-01 新语义接线：实现 2026-07-04 裁决并已回写 SSOT 的 BR-AG-DATA-003 目标集语义（guard 重写+真实接线+DE 侧协同校验双守）+ 补 BR-AG-DATA-004/005 covers 标记（清 audit 项）+ 术语闭环前端标识符更名（ChatMode→AgMode、ChatPanel→AgentPanel）。文件树工具/SM-AG-03 多轮/历史持久化等功能项不入本批（归产品优化轮）。"
 }

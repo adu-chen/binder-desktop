@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-04T06:01:32.300Z -->
+<!-- 最后生成时间：2026-07-04T13:31:15.002Z -->
 
 ### 模块编码表
 
@@ -240,7 +240,7 @@
 | --------------------------------------- | ------ | -------------------------------------------------- | ---------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004 | src/components/ed/Editor.tsx | 275  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                    | src-tauri/src/ag/assist.rs   | 39   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1475 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                  | src-tauri/src/lib.rs         | 1509 |
 
 #### AG-TOOL
 
@@ -253,11 +253,11 @@
 
 | codes                                   | type   | rules                                                  | 文件                              | 行号  |
 | --------------------------------------- | ------ | ------------------------------------------------------ | ------------------------------- | --- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-001      | DATA   | BR-AG-DATA-001                                         | src-tauri/src/ag/context.rs     | 45  |
-| BR-AG-DATA-002-DATA-AG-AG-TURN-002      | DATA   | BR-AG-DATA-002                                         | src-tauri/src/ag/context.rs     | 99  |
-| BR-AG-DATA-005-DATA-AG-AG-TURN-004      | DATA   | BR-AG-DATA-005                                         | src-tauri/src/ag/context.rs     | 144 |
-| BR-AG-DATA-004-DATA-AG-AG-TURN-003      | DATA   | BR-AG-DATA-004 term_ref: TERM-AG-005                   | src-tauri/src/ag/context.rs     | 179 |
-| BR-AG-DATA-003-GUARD-AG-AG-TURN-001     | GUARD  | BR-AG-DATA-003                                         | src-tauri/src/ag/context.rs     | 218 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-001      | DATA   | BR-AG-DATA-001                                         | src-tauri/src/ag/context.rs     | 44  |
+| BR-AG-DATA-002-DATA-AG-AG-TURN-002      | DATA   | BR-AG-DATA-002                                         | src-tauri/src/ag/context.rs     | 98  |
+| BR-AG-DATA-005-DATA-AG-AG-TURN-004      | DATA   | BR-AG-DATA-005                                         | src-tauri/src/ag/context.rs     | 143 |
+| BR-AG-DATA-004-DATA-AG-AG-TURN-003      | DATA   | BR-AG-DATA-004 term_ref: TERM-AG-005                   | src-tauri/src/ag/context.rs     | 178 |
+| BR-AG-DATA-003-GUARD-AG-AG-TURN-001     | GUARD  | BR-AG-DATA-003                                         | src-tauri/src/ag/context.rs     | 219 |
 | BR-AG-STATE-004-GUARD-AG-AG-TURN-001    | GUARD  | BR-AG-STATE-004                                        | src-tauri/src/ag/memory_link.rs | 22  |
 | BR-AG-STATE-004-EFFECT-AG-AG-TURN-002   | EFFECT | BR-AG-STATE-004                                        | src-tauri/src/ag/memory_link.rs | 49  |
 | BR-AG-STATE-001-RB-AG-AG-TURN-001       | RB     | BR-AG-STATE-001                                        | src-tauri/src/ag/turn.rs        | 71  |
@@ -339,7 +339,8 @@
 | BR-DE-STATE-002-GUARD-DE-DE-DIFF-001  | GUARD  | BR-DE-STATE-002                                    | src-tauri/src/de/expiry.rs    | 34  |
 | BR-DE-DATA-003-GUARD-DE-DE-DIFF-001   | GUARD  | BR-DE-DATA-003                                     | src-tauri/src/de/expiry.rs    | 66  |
 | BR-DE-DATA-002-DATA-DE-DE-DIFF-001    | DATA   | BR-DE-DATA-002                                     | src-tauri/src/de/generate.rs  | 40  |
-| BR-DE-DATA-001-GUARD-DE-DE-DIFF-001   | GUARD  | BR-DE-DATA-001                                     | src-tauri/src/de/generate.rs  | 60  |
+| BR-AG-DATA-003-GUARD-DE-DE-DIFF-001   | GUARD  | BR-AG-DATA-003                                     | src-tauri/src/de/generate.rs  | 60  |
+| BR-DE-DATA-001-GUARD-DE-DE-DIFF-001   | GUARD  | BR-DE-DATA-001                                     | src-tauri/src/de/generate.rs  | 90  |
 | BR-DE-STATE-002-QUERY-DE-DE-DIFF-001  | QUERY  | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 31  |
 | BR-DE-STATE-002-GUARD-DE-DE-DIFF-002  | GUARD  | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 51  |
 | BR-DE-DATA-003-GUARD-DE-DE-DIFF-002   | GUARD  | BR-DE-DATA-003                                     | src-tauri/src/de/lifecycle.rs | 79  |
@@ -497,31 +498,32 @@
 
 | codes                              | type | chain   | 文件                          | 行号 |
 | ---------------------------------- | ---- | ------- | --------------------------- | -- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-001 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 45 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-001 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 44 |
 
 #### BR-AG-DATA-002
 
 | codes                              | type | chain   | 文件                          | 行号 |
 | ---------------------------------- | ---- | ------- | --------------------------- | -- |
-| BR-AG-DATA-002-DATA-AG-AG-TURN-002 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 99 |
+| BR-AG-DATA-002-DATA-AG-AG-TURN-002 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 98 |
 
 #### BR-AG-DATA-003
 
-| codes                               | type  | chain   | 文件                          | 行号  |
-| ----------------------------------- | ----- | ------- | --------------------------- | --- |
-| BR-AG-DATA-003-GUARD-AG-AG-TURN-001 | GUARD | AG-TURN | src-tauri/src/ag/context.rs | 218 |
+| codes                               | type  | chain   | 文件                           | 行号  |
+| ----------------------------------- | ----- | ------- | ---------------------------- | --- |
+| BR-AG-DATA-003-GUARD-AG-AG-TURN-001 | GUARD | AG-TURN | src-tauri/src/ag/context.rs  | 219 |
+| BR-AG-DATA-003-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/generate.rs | 60  |
 
 #### BR-AG-DATA-004 term_ref: TERM-AG-005
 
 | codes                              | type | chain   | 文件                          | 行号  |
 | ---------------------------------- | ---- | ------- | --------------------------- | --- |
-| BR-AG-DATA-004-DATA-AG-AG-TURN-003 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 179 |
+| BR-AG-DATA-004-DATA-AG-AG-TURN-003 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 178 |
 
 #### BR-AG-DATA-005
 
 | codes                              | type | chain   | 文件                          | 行号  |
 | ---------------------------------- | ---- | ------- | --------------------------- | --- |
-| BR-AG-DATA-005-DATA-AG-AG-TURN-004 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 144 |
+| BR-AG-DATA-005-DATA-AG-AG-TURN-004 | DATA | AG-TURN | src-tauri/src/ag/context.rs | 143 |
 
 #### BR-AG-PERSIST-001
 
@@ -553,7 +555,7 @@
 | codes                                   | type   | chain     | 文件                         | 行号   |
 | --------------------------------------- | ------ | --------- | -------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 39   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1475 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 1509 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
@@ -573,7 +575,7 @@
 | codes                                   | type   | chain     | 文件                       | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------ | ---- |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 105  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1475 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 1509 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-001
 
@@ -633,7 +635,7 @@
 
 | codes                               | type  | chain   | 文件                           | 行号 |
 | ----------------------------------- | ----- | ------- | ---------------------------- | -- |
-| BR-DE-DATA-001-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/generate.rs | 60 |
+| BR-DE-DATA-001-GUARD-DE-DE-DIFF-001 | GUARD | DE-DIFF | src-tauri/src/de/generate.rs | 90 |
 
 #### BR-DE-DATA-002
 
