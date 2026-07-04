@@ -1,9 +1,13 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * AG 对话状态投影层（AG-TURN · SM-AG-01 · X-FORBID-007）。
+ * AG 会话状态投影层（AG-TURN · SM-AG-01 · X-FORBID-007）。
  * messages 是 AgentTurn（TERM-AG-001）会话视图；toolCalls 是 ToolCall（TERM-AG-002）状态投影。
- * 回合权威态归后端 SM-AG-01，前端只呈现与转达意图，不另立可漂移的并行回合态。
+ * 回合权威态归后端 SM-AG-01（sending 门控投影），前端只呈现与转达意图，不另立可漂移的并行回合态。
+ *
+ * 多标签会话（PI-AG-UI-01）：会话分组是**呈现层组织**（运行期内存态，非后端业务态）；
+ * 关闭标签=归档（本次运行内经「历史会话」可重开），跨重启持久化随 BR-AG-PERSIST-001
+ * （agent_turns 接线批）落地，本结构按可持久化形状设计。
  */
 
 /** 代理编辑（AgentEdit）面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=构建（项目级蓝图与整体构建，接 CBT）。 */
@@ -54,20 +58,41 @@ const ACTIVE_TURN_STATES: ReadonlySet<RustTurnState> = new Set([
   "HandingOff",
 ]);
 
-interface AgState {
+/** 一个标签会话（呈现层组织；持久化形状预留）。 */
+export interface AgSession {
+  id: string;
+  /** 标签标题：新会话为「新对话」，首条用户消息后取其前缀。 */
+  title: string;
   mode: AgMode;
   messages: ChatMessage[];
   toolCalls: ToolCallView[];
+  createdAt: number;
+  /** 标签已关闭（归档）：不显示为标签，可从历史会话重开。 */
+  archived: boolean;
+}
+
+interface AgState {
+  sessions: AgSession[];
+  activeSessionId: string;
+  /** 回合级全局门控（后端 SM-AG-01 单回合投影；一次仅一个活动回合）。 */
   sending: boolean;
 }
 
-// toolCalls 初始为空：真实工具调用经 SM-AG-01 tool 回合驱动（云端接通后）。ToolCallView 类型保留供其时投影。
-let state: AgState = {
-  mode: "edit",
-  messages: [],
-  toolCalls: [],
-  sending: false,
-};
+const sid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+function blankSession(): AgSession {
+  return {
+    id: sid(),
+    title: "新对话",
+    mode: "edit",
+    messages: [],
+    toolCalls: [],
+    createdAt: Date.now(),
+    archived: false,
+  };
+}
+
+const initial = blankSession();
+let state: AgState = { sessions: [initial], activeSessionId: initial.id, sending: false };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -76,6 +101,14 @@ function emit() {
 function setState(patch: Partial<AgState>) {
   state = { ...state, ...patch };
   emit();
+}
+function mapSession(id: string, fn: (s: AgSession) => AgSession) {
+  setState({ sessions: state.sessions.map((s) => (s.id === id ? fn(s) : s)) });
+}
+
+/** 取活动会话（恒存在：关闭最后一个标签会自动新建）。 */
+export function activeSession(s: AgState): AgSession {
+  return s.sessions.find((x) => x.id === s.activeSessionId) ?? s.sessions[0];
 }
 
 export const agStore = {
@@ -86,9 +119,45 @@ export const agStore = {
   getSnapshot(): AgState {
     return state;
   },
-  setMode(mode: AgMode) {
-    setState({ mode });
+
+  // ── 会话（标签）操作 ──────────────────────────────────────────────
+  /** 新建会话并激活；返回会话 id。 */
+  newSession(): string {
+    const s = blankSession();
+    setState({ sessions: [...state.sessions, s], activeSessionId: s.id });
+    return s.id;
   },
+  /** 切换/重开会话（归档的自动取消归档回到标签栏）。 */
+  switchSession(id: string) {
+    if (!state.sessions.some((s) => s.id === id)) return;
+    setState({
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, archived: false } : s)),
+      activeSessionId: id,
+    });
+  },
+  /** 关闭标签=归档（历史可重开）；关闭活动标签切换到最近的打开标签，无剩余则新建。 */
+  closeSession(id: string) {
+    const sessions = state.sessions.map((s) => (s.id === id ? { ...s, archived: true } : s));
+    let activeSessionId = state.activeSessionId;
+    if (activeSessionId === id) {
+      const open = sessions.filter((s) => !s.archived);
+      if (open.length > 0) {
+        activeSessionId = open[open.length - 1].id;
+        setState({ sessions, activeSessionId });
+      } else {
+        const fresh = blankSession();
+        setState({ sessions: [...sessions, fresh], activeSessionId: fresh.id });
+      }
+      return;
+    }
+    setState({ sessions, activeSessionId });
+  },
+  /** 设定活动会话模式（编辑/构建，TERM-AG-006/007）。 */
+  setMode(mode: AgMode) {
+    mapSession(state.activeSessionId, (s) => ({ ...s, mode }));
+  },
+
+  // ── 回合门控（SM-AG-01 投影，全局） ───────────────────────────────
   setSending(sending: boolean) {
     setState({ sending });
   },
@@ -100,45 +169,59 @@ export const agStore = {
   applyTurnState(_turnId: string, turnState: RustTurnState) {
     setState({ sending: ACTIVE_TURN_STATES.has(turnState) });
   },
-  pushMessage(msg: ChatMessage) {
-    setState({ messages: [...state.messages, msg] });
+
+  // ── 消息 / 工具卡（按会话定位：流式期间切标签不串会话） ───────────
+  pushMessage(sessionId: string, msg: ChatMessage) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      messages: [...s.messages, msg],
+      // 首条用户消息作为标签标题（截前 12 字）。
+      title:
+        s.title === "新对话" && msg.role === "user" && msg.content.trim()
+          ? msg.content.trim().slice(0, 12)
+          : s.title,
+    }));
   },
-  /** 追加流式分片到指定消息（模拟 turn_stream 逐字回显）。 */
-  appendToMessage(id: string, chunk: string) {
-    setState({
-      messages: state.messages.map((m) =>
-        m.id === id ? { ...m, content: m.content + chunk } : m,
-      ),
-    });
+  /** 追加流式分片到指定会话的指定消息。 */
+  appendToMessage(sessionId: string, id: string, chunk: string) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) => (m.id === id ? { ...m, content: m.content + chunk } : m)),
+    }));
   },
   /** 标记消息流式结束。 */
-  finishMessage(id: string) {
-    setState({
-      messages: state.messages.map((m) => (m.id === id ? { ...m, streaming: false } : m)),
-    });
+  finishMessage(sessionId: string, id: string) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) => (m.id === id ? { ...m, streaming: false } : m)),
+    }));
   },
   /** 新增一条工具调用卡（executing）；返回卡 id（PI-AG-08D，投影 ToolRequest）。 */
-  addToolCall(name: string, detail?: string): string {
+  addToolCall(sessionId: string, name: string, detail?: string): string {
     const id = `tc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setState({ toolCalls: [...state.toolCalls, { id, name, state: "executing", detail }] });
+    mapSession(sessionId, (s) => ({
+      ...s,
+      toolCalls: [...s.toolCalls, { id, name, state: "executing", detail }],
+    }));
     return id;
   },
   /** 将该 name 最早的 executing 卡置 done/failed（事件无 call id，按 name+executing 先到先配）。 */
-  resolveToolCall(name: string, ok: boolean, detail?: string) {
+  resolveToolCall(sessionId: string, name: string, ok: boolean, detail?: string) {
     let matched = false;
-    setState({
-      toolCalls: state.toolCalls.map((t) => {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      toolCalls: s.toolCalls.map((t) => {
         if (!matched && t.name === name && t.state === "executing") {
           matched = true;
           return { ...t, state: ok ? "done" : "failed", detail: detail ?? t.detail };
         }
         return t;
       }),
-    });
+    }));
   },
-  /** 清空工具卡（新回合起）。 */
-  clearToolCalls() {
-    setState({ toolCalls: [] });
+  /** 清空该会话工具卡（新回合起）。 */
+  clearToolCalls(sessionId: string) {
+    mapSession(sessionId, (s) => ({ ...s, toolCalls: [] }));
   },
 };
 

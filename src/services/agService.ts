@@ -89,7 +89,9 @@ export async function requestAssist(req: AssistReq): Promise<string | null> {
 
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
- * 需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回 AG_GW_UNREACHABLE 错误终态。
+ * 多标签会话（PI-AG-UI-01）：回合归属发起时的活动会话（sessionId 闭包定位），流式期间切换标签
+ * 不串会话。需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回
+ * AG_GW_UNREACHABLE 错误终态。
  */
 export async function startTurn(
   prompt: string,
@@ -103,19 +105,23 @@ export async function startTurn(
   const trimmed = prompt.trim();
   if (!trimmed) return;
 
+  // 回合归属会话：发起时的活动会话（此后用户切标签不影响本回合投影目标）。
+  const snap = agStore.getSnapshot();
+  const sessionId = snap.activeSessionId;
+  const session = snap.sessions.find((s) => s.id === sessionId);
+
   // 本轮之前的对话历史（PI-AG-09B）：传后端按预算保留最近（drop 最旧）。取本轮 user 入栈前的快照。
-  const history = agStore
-    .getSnapshot()
-    .messages.filter((m) => !m.error && m.content.trim())
+  const history = (session?.messages ?? [])
+    .filter((m) => !m.error && m.content.trim())
     .slice(-30)
     .map((m) => ({ role: m.role, content: m.content }));
 
-  agStore.pushMessage({ id: uid(), role: "user", content: trimmed });
-  agStore.clearToolCalls(); // 新回合清空旧工具卡（PI-AG-08D）
+  agStore.pushMessage(sessionId, { id: uid(), role: "user", content: trimmed });
+  agStore.clearToolCalls(sessionId); // 新回合清空旧工具卡（PI-AG-08D）
   agStore.setSending(true); // 乐观置 true 即时门控防双发；活动/释放由 SM-AG-01 广播投影（Task 2-E）
 
   const assistantId = uid();
-  agStore.pushMessage({ id: assistantId, role: "assistant", content: "", streaming: true });
+  agStore.pushMessage(sessionId, { id: assistantId, role: "assistant", content: "", streaming: true });
 
   const turnId = `t-${Date.now()}-${(seq += 1)}`;
   const onEvent = new Channel<AgTurnEvent>();
@@ -135,15 +141,15 @@ export async function startTurn(
     onEvent.onmessage = (ev) => {
       switch (ev.type) {
         case "chunk":
-          agStore.appendToMessage(assistantId, ev.text);
+          agStore.appendToMessage(sessionId, assistantId, ev.text);
           break;
         case "done":
-          agStore.finishMessage(assistantId);
+          agStore.finishMessage(sessionId, assistantId);
           finish();
           break;
         case "error":
-          agStore.finishMessage(assistantId);
-          agStore.pushMessage({
+          agStore.finishMessage(sessionId, assistantId);
+          agStore.pushMessage(sessionId, {
             id: uid(),
             role: "assistant",
             content: `[${ev.code}] ${ev.message}`,
@@ -183,13 +189,13 @@ export async function startTurn(
           }
           // 工具卡 executing（PI-AG-08D）。参数摘要作 detail。
           const p = typeof ev.params === "object" && ev.params ? JSON.stringify(ev.params) : "";
-          agStore.addToolCall(ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined);
+          agStore.addToolCall(sessionId, ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined);
           break;
         }
         case "tool_result": {
           // 工具卡 done/failed（PI-AG-08D）。结果摘要作 detail。
           const r = (ev.result ?? "").toString();
-          agStore.resolveToolCall(ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined);
+          agStore.resolveToolCall(sessionId, ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined);
           break;
         }
         default:
@@ -213,8 +219,8 @@ export async function startTurn(
       onEvent,
     }).catch((e: unknown) => {
       const err = e as { code?: string; message?: string };
-      agStore.finishMessage(assistantId);
-      agStore.pushMessage({
+      agStore.finishMessage(sessionId, assistantId);
+      agStore.pushMessage(sessionId, {
         id: uid(),
         role: "assistant",
         content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),

@@ -1,14 +1,18 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-SEM-01",
+  "scope_id": "PI-AG-UI-01",
   "allowed_files": [
-    "src-tauri/src/ag/context.rs",
-    "src-tauri/src/de/generate.rs",
-    "src-tauri/src/lib.rs",
     "src/store/agStore.ts",
-    "src/components/ag/ChatPanel.tsx",
+    "src/store/agStore.test.ts",
+    "src/store/modelStore.ts",
     "src/components/ag/AgentPanel.tsx",
+    "src/components/ag/MessageList.tsx",
+    "src/components/ag/Composer.tsx",
+    "src/components/ag/ModelConfig.tsx",
+    "src/components/de/DiffAllActionsBar.tsx",
     "src/shell/Workbench.tsx",
+    "src/services/agService.ts",
+    "src/styles.css",
     ".governance/active_scope.json"
   ],
   "forbidden_files": [
@@ -20,5 +24,5 @@
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-SEM-01 新语义接线：实现 2026-07-04 裁决并已回写 SSOT 的 BR-AG-DATA-003 目标集语义（guard 重写+真实接线+DE 侧协同校验双守）+ 补 BR-AG-DATA-004/005 covers 标记（清 audit 项）+ 术语闭环前端标识符更名（ChatMode→AgMode、ChatPanel→AgentPanel）。文件树工具/SM-AG-03 多轮/历史持久化等功能项不入本批（归产品优化轮）。"
+  "scope_reason": "PI-AG-UI-01 代理编辑面板 UI 优化（人类 2026-07-05 预授权「如无异议直接优化」）：①多标签会话（运行期内存态+归档/历史，持久化留接口）②人类消息右对齐③全部接受/拒绝条移入面板输入框上方自隐藏④输入框重构（去四显性按钮；框内底部 edit/build 模式按钮+模型选择+添加模型最小配置界面含 BYOK；发送按钮三态）⑤Enter 发送/Shift+Enter 换行/IME 合成保护。纯前端视图层，不触后端与 IPC 契约。"
 }

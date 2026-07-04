@@ -1,10 +1,10 @@
-import { useState, type ChangeEvent } from "react";
-import { useAgStore } from "../../store/agStore";
-import { startTurn, listDocBlocks, uploadByok, type DocBlock } from "../../services/agService";
-import { generateSampleDiff } from "../../services/deService";
-import { useEdStore } from "../../store/edStore";
+import { useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { activeSession, agStore, useAgStore, type AgMode } from "../../store/agStore";
+import { modelKey, modelStore, useModelStore } from "../../store/modelStore";
+import { startTurn } from "../../services/agService";
 import { useWsStore } from "../../store/wsStore";
-import { captureSelectionRef, SELECTION_REF_MIME, type SelectionRef } from "../../services/edLocate";
+import { SELECTION_REF_MIME, type SelectionRef } from "../../services/edLocate";
+import { ModelConfig } from "./ModelConfig";
 
 interface BlockRef {
   relPath: string;
@@ -27,41 +27,36 @@ function activeMentionQuery(text: string, caret: number): { query: string; start
   return { query, start: at };
 }
 
+const MODES: { id: AgMode; label: string; hint: string }[] = [
+  { id: "edit", label: "edit", hint: "编辑 · 精确修改当前内容（diff 裁决）" },
+  { id: "build", label: "build", hint: "构建 · 项目蓝图与整体构建" },
+];
+
 /**
- * Composer（A-SYS-C-T-02 §3 对话区输入 · PI-FE-06）。
- * 输入 + 发送；⌘/Ctrl+Enter 发送。发送中禁用（投影 sending 态）。
- * 文档引用（@mention，PI-AG-09E）：选工作区文档作显式引用，随消息高优先注入。
+ * Composer（A-SYS-C-T-02 §3 输入区 · PI-FE-06 / PI-AG-UI-01 重构）。
+ * 框内底部左：模式按钮（edit/build，取代原顶部切换，同源 session.mode）+ 模型选择（含「添加模型」
+ * 进配置界面）；右：发送按钮三态（空内容禁用 / 待发送 / AI 回复中）。
+ * 发送：Enter 直接发送、Shift+Enter 换行；IME（中文输入法）合成中的回车仅确认候选不发送（需求5）。
+ * 引用：输入 @ 触发文档下拉（原「引用」按钮移除）；编辑器选区拖拽入框成为位置引用（原按钮移除）。
+ * BYOK 入口移入模型配置界面（原 🔑 按钮移除）；「示例修改」开发入口移除。
  */
 export function Composer() {
-  const { sending } = useAgStore();
-  const { openPath } = useEdStore();
+  const agState = useAgStore();
+  const { sending } = agState;
+  const mode = activeSession(agState).mode;
+  const { models, selectedKey } = useModelStore();
+  const currentModel = modelStore.current();
   const { docs } = useWsStore();
+
   const [text, setText] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
   const [blockRefs, setBlockRefs] = useState<BlockRef[]>([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
-  const [blocksByDoc, setBlocksByDoc] = useState<Record<string, DocBlock[]>>({});
   const [atQuery, setAtQuery] = useState<{ query: string; start: number; caret: number } | null>(null);
-  const [byokOpen, setByokOpen] = useState(false);
-  const [byokProvider, setByokProvider] = useState("deepseek");
-  const [byokKey, setByokKey] = useState("");
-  const [byokStatus, setByokStatus] = useState("");
+  const [modePop, setModePop] = useState(false);
+  const [modelPop, setModelPop] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
 
   const fileDocs = docs.filter((d) => !d.isDir);
-
-  const saveByok = async () => {
-    if (!byokKey.trim()) return;
-    setByokStatus("上送中…");
-    try {
-      await uploadByok(byokProvider, byokKey);
-      setByokKey(""); // 客户端不保留密钥
-      setByokStatus(`✓ ${byokProvider} 密钥已送网关`);
-    } catch (e) {
-      const err = e as { message?: string };
-      setByokStatus(`✗ ${err?.message ?? "上送失败"}`);
-    }
-  };
   const atMatches = atQuery
     ? fileDocs.filter((d) => d.relPath.toLowerCase().includes(atQuery.query.toLowerCase())).slice(0, 8)
     : [];
@@ -81,44 +76,45 @@ export function Composer() {
     setAtQuery(null);
   };
 
-  const expandDocBlocks = async (relPath: string) => {
-    if (expandedDoc === relPath) {
-      setExpandedDoc(null);
-      return;
-    }
-    if (!blocksByDoc[relPath]) {
-      try {
-        const blocks = await listDocBlocks(relPath);
-        setBlocksByDoc((m) => ({ ...m, [relPath]: blocks }));
-      } catch {
-        setBlocksByDoc((m) => ({ ...m, [relPath]: [] }));
-      }
-    }
-    setExpandedDoc(relPath);
-  };
-
-  const addDocBlockRef = (relPath: string, b: DocBlock) => {
-    setBlockRefs((cur) => [...cur, { relPath, blockId: b.block_id ?? "", text: b.text }]);
-  };
-
   const send = () => {
     if (sending || !text.trim()) return;
-    const opts =
-      mentions.length || blockRefs.length ? { mentions, blockRefs } : undefined;
-    void startTurn(text, opts);
+    void startTurn(text, {
+      ...(mentions.length ? { mentions } : {}),
+      ...(blockRefs.length ? { blockRefs } : {}),
+      provider: currentModel.provider,
+      model: currentModel.model,
+    });
     setText("");
     setMentions([]);
     setBlockRefs([]);
-    setPickerOpen(false);
+    setAtQuery(null);
   };
 
-  const addSelectionRef = () => {
-    const ref = captureSelectionRef();
-    if (!ref || !openPath) return;
-    pushSelectionRef({ ...ref, path: openPath });
+  /**
+   * 键盘协议（PI-AG-UI-01 需求5）：
+   * - IME 合成中（中文输入法候选未确认）：Enter 仅确认输入法内容，不发送（isComposing / keyCode 229）。
+   * - @ 下拉活跃：Enter 选中第一项。
+   * - Shift+Enter：换行（textarea 默认行为）。
+   * - Enter：发送。
+   */
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape" && atQuery) {
+      setAtQuery(null);
+      return;
+    }
+    if (e.key !== "Enter") return;
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return; // IME 合成确认，不发送
+    if (atQuery && atMatches.length && !e.shiftKey) {
+      e.preventDefault();
+      selectAtMention(atMatches[0].relPath);
+      return;
+    }
+    if (e.shiftKey) return; // Shift+Enter 换行
+    e.preventDefault();
+    send();
   };
 
-  // 选区引用去重入列（按钮捕获与拖拽 drop 共用）：含字符锚区间（有偏移时），同块同区间不重复。
+  // 选区引用去重入列（拖拽 drop）：含字符锚区间（有偏移时），同块同区间不重复。
   const pushSelectionRef = (ref: SelectionRef) => {
     if (!ref.blockId || !ref.path) return;
     const withRange = ref.end > ref.start; // start=end=0 为块级回落锚
@@ -154,9 +150,9 @@ export function Composer() {
     }
   };
 
-  const toggleMention = (relPath: string) => {
-    setMentions((cur) => (cur.includes(relPath) ? cur.filter((p) => p !== relPath) : [...cur, relPath]));
-  };
+  const removeMention = (relPath: string) => setMentions((cur) => cur.filter((p) => p !== relPath));
+
+  const sendCls = sending ? "is-busy" : text.trim() ? "is-ready" : "is-disabled";
 
   return (
     <div className="composer" onDragOver={onDragOver} onDrop={onDrop}>
@@ -165,7 +161,7 @@ export function Composer() {
           {mentions.map((p) => (
             <span key={p} className="mention-chip">
               @{p}
-              <button className="mention-chip-x" onClick={() => toggleMention(p)} aria-label="移除引用">
+              <button className="mention-chip-x" onClick={() => removeMention(p)} aria-label="移除引用">
                 ×
               </button>
             </span>
@@ -191,68 +187,6 @@ export function Composer() {
         </div>
       )}
 
-      {pickerOpen && (
-        <div className="mention-picker">
-          {fileDocs.length === 0 && <p className="muted">工作区暂无文档</p>}
-          {fileDocs.map((d) => (
-            <div key={d.relPath} className="mention-doc">
-              <div className="mention-doc-row">
-                <button
-                  className={`mention-option${mentions.includes(d.relPath) ? " selected" : ""}`}
-                  onClick={() => toggleMention(d.relPath)}
-                >
-                  {mentions.includes(d.relPath) ? "✓ " : ""}
-                  {d.relPath}
-                </button>
-                <button
-                  className="ghost mention-blocks-toggle"
-                  onClick={() => void expandDocBlocks(d.relPath)}
-                  title="引用其中某一块"
-                >
-                  {expandedDoc === d.relPath ? "块▾" : "块▸"}
-                </button>
-              </div>
-              {expandedDoc === d.relPath && (
-                <div className="mention-blocks">
-                  {(blocksByDoc[d.relPath] ?? []).length === 0 && <p className="muted">（无块或读取失败）</p>}
-                  {(blocksByDoc[d.relPath] ?? []).map((b, i) => (
-                    <button
-                      key={i}
-                      className="mention-block-option"
-                      onClick={() => addDocBlockRef(d.relPath, b)}
-                      title={b.text}
-                    >
-                      Block {i}: {b.text.slice(0, 40)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {byokOpen && (
-        <div className="byok-form">
-          <select className="byok-provider" value={byokProvider} onChange={(e) => setByokProvider(e.target.value)}>
-            <option value="deepseek">deepseek</option>
-            <option value="openai">openai</option>
-            <option value="anthropic">anthropic</option>
-          </select>
-          <input
-            className="byok-input"
-            type="password"
-            placeholder="粘贴 provider 密钥（仅送网关，不在本地保存）"
-            value={byokKey}
-            onChange={(e) => setByokKey(e.target.value)}
-          />
-          <button onClick={() => void saveByok()} disabled={!byokKey.trim()}>
-            保存
-          </button>
-          {byokStatus && <span className="byok-status">{byokStatus}</span>}
-        </div>
-      )}
-
       {atQuery && atMatches.length > 0 && (
         <div className="mention-inline">
           {atMatches.map((d) => (
@@ -263,64 +197,106 @@ export function Composer() {
         </div>
       )}
 
-      <textarea
-        className="composer-input"
-        placeholder="描述你想要的修改…（输入 @ 引用文档）"
-        value={text}
-        onChange={onTextChange}
-        onKeyDown={(e) => {
-          if (atQuery && e.key === "Escape") {
-            setAtQuery(null);
-            return;
-          }
-          if (atQuery && atMatches.length && e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
-            e.preventDefault();
-            selectAtMention(atMatches[0].relPath);
-            return;
-          }
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-            e.preventDefault();
-            send();
-          }
-        }}
-        rows={3}
-      />
-      <div className="composer-actions">
-        <button
-          className="ghost composer-mention-toggle"
-          onClick={() => setPickerOpen((v) => !v)}
-          title="引用工作区文档（随消息高优先提供给 AI）"
-        >
-          @引用{mentions.length ? `（${mentions.length}）` : ""}
-        </button>
-        <button
-          className="ghost"
-          onClick={addSelectionRef}
-          disabled={!openPath}
-          title={openPath ? "引用编辑器中选中的内容（精确到块）" : "先打开一个文档并选中内容"}
-        >
-          @引用选区
-        </button>
-        <button
-          className="ghost"
-          onClick={() => setByokOpen((v) => !v)}
-          title="填自己的 provider 密钥（BYOK，仅送网关代持，不在本地保存）"
-        >
-          🔑 key
-        </button>
-        {/* 示例修改入口：绕过模型，对当前文档生成真实可落盘 diff（PI-FE-11） */}
-        <button
-          className="ghost composer-sample"
-          onClick={() => void generateSampleDiff()}
-          disabled={!openPath}
-          title={openPath ? "对当前文档生成可落盘的示例修改" : "先打开一个文档"}
-        >
-          示例修改
-        </button>
-        <button onClick={send} disabled={sending || !text.trim()}>
-          {sending ? "生成中…" : "发送"}
-        </button>
+      <div className="composer-box">
+        <textarea
+          className="composer-input"
+          placeholder="描述你想要的修改…（@ 引用文档 · Enter 发送 · Shift+Enter 换行）"
+          value={text}
+          onChange={onTextChange}
+          onKeyDown={onKeyDown}
+          rows={3}
+        />
+        <div className="composer-bar">
+          <div className="composer-bar-left">
+            <div className="cbar-wrap">
+              <button
+                className="cbar-btn"
+                title="模式：edit 编辑 / build 构建"
+                aria-haspopup="menu"
+                onClick={() => {
+                  setModePop((v) => !v);
+                  setModelPop(false);
+                }}
+              >
+                {mode} <span className="cbar-caret">▾</span>
+              </button>
+              {modePop && (
+                <div className="cbar-pop" role="menu">
+                  {MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      className={`cbar-pop-item${mode === m.id ? " selected" : ""}`}
+                      onClick={() => {
+                        agStore.setMode(m.id);
+                        setModePop(false);
+                      }}
+                    >
+                      {mode === m.id ? "✓ " : ""}
+                      {m.label}
+                      <span className="label cbar-pop-hint">{m.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="cbar-wrap">
+              <button
+                className="cbar-btn"
+                title="模型选择"
+                aria-haspopup="menu"
+                onClick={() => {
+                  setModelPop((v) => !v);
+                  setModePop(false);
+                }}
+              >
+                {currentModel.label} <span className="cbar-caret">▾</span>
+              </button>
+              {modelPop && (
+                <div className="cbar-pop" role="menu">
+                  {models.map((m) => {
+                    const key = modelKey(m);
+                    return (
+                      <button
+                        key={key}
+                        className={`cbar-pop-item${selectedKey === key ? " selected" : ""}`}
+                        onClick={() => {
+                          modelStore.select(key);
+                          setModelPop(false);
+                        }}
+                      >
+                        {selectedKey === key ? "✓ " : ""}
+                        {m.label}
+                        <span className="label cbar-pop-hint">{key}</span>
+                      </button>
+                    );
+                  })}
+                  <button
+                    className="cbar-pop-item cbar-pop-add"
+                    onClick={() => {
+                      setModelPop(false);
+                      setConfigOpen(true);
+                    }}
+                  >
+                    ＋ 添加模型
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <button
+            className={`composer-send ${sendCls}`}
+            onClick={send}
+            disabled={sending || !text.trim()}
+            title={sending ? "AI 回复中…" : text.trim() ? "发送（Enter）" : "输入内容后可发送"}
+          >
+            {sending ? "生成中" : "发送"}
+          </button>
+        </div>
       </div>
+
+      {configOpen && <ModelConfig onClose={() => setConfigOpen(false)} />}
     </div>
   );
 }

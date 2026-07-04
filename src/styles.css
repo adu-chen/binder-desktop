@@ -65,7 +65,6 @@
   --chat-w:      372px;
   --titlebar-h:  32px;
   --statusbar-h: 24px;
-  --diffstrip-h: 44px;
   --gutter-w:    6px;
 
   font-family: var(--font-sans);
@@ -154,16 +153,15 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 /* ——————————————————————————————————————————————
  * 主工作台（A-SYS-C-T-02 §4 全局布局）
- * 行：[titlebar 32] [work 1fr] [diffstrip auto] [statusbar 24]
+ * 行：[titlebar 32] [work 1fr] [statusbar 24]（批量裁决条移入代理编辑面板，PI-AG-UI-01）
  * work 列：[rail 44] [side 272] [center 1fr] [chat 372]
  * —————————————————————————————————————————————— */
 .workbench {
   display: grid;
-  grid-template-rows: var(--titlebar-h) 1fr auto var(--statusbar-h);
+  grid-template-rows: var(--titlebar-h) 1fr var(--statusbar-h);
   grid-template-areas:
     "titlebar"
     "work"
-    "diffstrip"
     "statusbar";
   height: 100vh;
   background: var(--bg-page);
@@ -637,25 +635,54 @@ button.ed-sb-conflict {
 
 /* 对话面板（PI-FE-06） */
 .chatpanel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.chatpanel-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--bg-sunken);
-  border-bottom: 0.5px solid var(--rule);
+.agtabs {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-1);
+  padding: 4px var(--sp-2) 0; border-bottom: 0.5px solid var(--rule); background: var(--bg-elevated);
+  min-height: 34px;
 }
-.chatpanel-modes { display: flex; gap: 2px; }
-.chatmode {
-  padding: var(--sp-1) var(--sp-3); font-size: 12px;
-  background: transparent; border: 0.5px solid transparent; color: var(--ink-4);
-  border-radius: var(--r-1);
+.agtabs-list { display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; flex: 1; min-width: 0; }
+.agtab {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 148px; cursor: pointer;
+  padding: 4px 6px 4px 10px; font-size: 12px; color: var(--ink-5);
+  border: 0.5px solid transparent; border-bottom: none; border-radius: var(--r-1) var(--r-1) 0 0;
+  white-space: nowrap; user-select: none;
 }
-.chatmode.active { color: var(--ink); background: var(--bg-card); border-color: var(--rule); }
+.agtab:hover { color: var(--ink); background: var(--bg-card); }
+.agtab.active { color: var(--ink); background: var(--bg-card); border-color: var(--rule); font-weight: 600; }
+.agtab-title { overflow: hidden; text-overflow: ellipsis; max-width: 108px; }
+.agtab-x {
+  border: none; background: transparent; color: var(--ink-5); font-size: 13px; line-height: 1;
+  padding: 0 2px; border-radius: 3px; cursor: pointer;
+}
+.agtab-x:hover { color: var(--rust); background: var(--rust-bg); }
+.agtabs-ops { display: flex; align-items: center; gap: 2px; position: relative; }
+.agtabs-op {
+  border: none; background: transparent; color: var(--ink-5); font-size: 13px; cursor: pointer;
+  padding: 2px 6px; border-radius: var(--r-1);
+}
+.agtabs-op:hover, .agtabs-op.active { color: var(--ink); background: var(--bg-card); }
+.agtabs-hist-wrap { position: relative; }
+.agtabs-history {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 40; min-width: 220px; max-height: 280px;
+  overflow: auto; background: var(--bg-elevated); border: 0.5px solid var(--rule-strong);
+  border-radius: var(--r-1); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12); padding: 4px;
+}
+.agtabs-history-item {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); width: 100%;
+  border: none; background: transparent; text-align: left; padding: 6px 8px; font-size: 12px;
+  color: var(--ink); border-radius: 4px; cursor: pointer;
+}
+.agtabs-history-item:hover { background: var(--bg-card); }
+.agtabs-history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.agtabs-history-note { font-size: 11px; padding: 4px 8px; margin: 0; }
 
-.msglist { flex: 1; overflow: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
-.msglist-empty { font-size: 13px; }
 .msg { display: flex; flex-direction: column; gap: var(--sp-1); }
 .msg-role { color: var(--ink-5); }
-.msg-user .msg-body { background: var(--bg-card); }
+/* 人类消息靠右、AI 靠左（PI-AG-UI-01 需求2）。 */
+.msg-user { align-items: flex-end; }
+.msg-user .msg-role { text-align: right; }
+.msg-user .msg-body { background: var(--rust-bg); border-color: var(--rust-tint); max-width: 86%; }
+.msg-assistant .msg-body { max-width: 92%; }
 .msg-body {
   font-size: 13px; line-height: 1.6; color: var(--ink-2);
   background: var(--bg-card); border: 0.5px solid var(--rule);
@@ -695,13 +722,79 @@ button.ed-sb-conflict {
 .toolcard-executing { border-color: var(--gold); }
 
 .composer { border-top: 0.5px solid var(--rule); padding: var(--sp-2) var(--sp-3); background: var(--bg-elevated); }
-.composer-input {
-  width: 100%; resize: none; border: 0.5px solid var(--rule-strong); border-radius: var(--r-1);
-  padding: var(--sp-2); font-family: var(--font-sans); font-size: 13px; background: var(--bg-card); color: var(--ink);
+/* 输入框体（PI-AG-UI-01 需求4）：textarea 与底部功能条同框。 */
+.composer-box {
+  border: 0.5px solid var(--rule-strong); border-radius: var(--r-1); background: var(--bg-card);
 }
-.composer-input:focus { outline: none; border-color: var(--rust-tint); }
-.composer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: var(--sp-2); }
-.composer-sample { font-size: 12px; padding: var(--sp-1) var(--sp-2); }
+.composer-box:focus-within { border-color: var(--rust-tint); }
+.composer-input {
+  width: 100%; resize: none; border: none; border-radius: var(--r-1) var(--r-1) 0 0;
+  padding: var(--sp-2); font-family: var(--font-sans); font-size: 13px; background: transparent; color: var(--ink);
+}
+.composer-input:focus { outline: none; }
+.composer-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: 4px 6px 6px; border-top: 0.5px dashed var(--rule);
+}
+.composer-bar-left { display: flex; align-items: center; gap: 4px; }
+.cbar-wrap { position: relative; }
+.cbar-btn {
+  border: 0.5px solid transparent; background: transparent; color: var(--ink-5); font-size: 12px;
+  font-family: var(--font-mono); padding: 2px 8px; border-radius: var(--r-1); cursor: pointer;
+}
+.cbar-btn:hover { color: var(--ink); background: var(--bg-elevated); border-color: var(--rule); }
+.cbar-caret { font-size: 9px; opacity: 0.7; }
+.cbar-pop {
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 40; min-width: 220px;
+  background: var(--bg-elevated); border: 0.5px solid var(--rule-strong); border-radius: var(--r-1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12); padding: 4px;
+}
+.cbar-pop-item {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); width: 100%;
+  border: none; background: transparent; text-align: left; padding: 6px 8px; font-size: 12px;
+  color: var(--ink); border-radius: 4px; cursor: pointer;
+}
+.cbar-pop-item:hover { background: var(--bg-card); }
+.cbar-pop-item.selected { font-weight: 600; }
+.cbar-pop-hint { font-size: 11px; white-space: nowrap; }
+.cbar-pop-add { border-top: 0.5px dashed var(--rule); border-radius: 0 0 4px 4px; color: var(--rust); }
+/* 发送按钮三态（需求4）：空内容禁用 / 待发送 / AI 回复中。 */
+.composer-send {
+  min-width: 64px; padding: 4px 14px; font-size: 12px; font-weight: 600; border-radius: var(--r-1);
+  border: 0.5px solid var(--rule-strong); cursor: pointer; transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.composer-send.is-disabled { opacity: 0.45; cursor: not-allowed; background: var(--bg-elevated); color: var(--ink-5); }
+.composer-send.is-ready { background: var(--rust); border-color: var(--rust); color: #fff; }
+.composer-send.is-ready:hover { opacity: 0.9; }
+.composer-send.is-busy { background: var(--gold-bg); border-color: var(--gold); color: var(--ink); cursor: progress; }
+.composer-send.is-busy::after { content: "…"; animation: sendbusy 1.2s steps(4, end) infinite; }
+@keyframes sendbusy { 0% { opacity: 0.2; } 50% { opacity: 1; } 100% { opacity: 0.2; } }
+/* 模型配置界面（最小可用版，含 BYOK 迁入） */
+.modelcfg-overlay {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+}
+.modelcfg {
+  width: 420px; max-width: 92vw; max-height: 80vh; overflow: auto; background: var(--bg-elevated);
+  border: 0.5px solid var(--rule-strong); border-radius: var(--r-2, 8px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2); padding: var(--sp-3);
+}
+.modelcfg-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-2); }
+.modelcfg-title { font-weight: 700; font-size: 14px; }
+.modelcfg-close { font-size: 16px; padding: 0 6px; }
+.modelcfg-sec { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-2) 0; border-top: 0.5px dashed var(--rule); }
+.modelcfg-row { display: flex; align-items: center; gap: 6px; }
+.modelcfg-pick {
+  flex: 1; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  border: 0.5px solid var(--rule); background: var(--bg-card); text-align: left; padding: 6px 8px;
+  font-size: 12px; color: var(--ink); border-radius: var(--r-1); cursor: pointer;
+}
+.modelcfg-pick.selected { border-color: var(--rust); font-weight: 600; }
+.modelcfg-key { font-family: var(--font-mono); font-size: 11px; }
+.modelcfg-del { font-size: 11px; }
+.modelcfg-form { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.modelcfg-label-input { max-width: 120px; }
+.modelcfg-note { font-size: 11px; margin: 0; }
 
 /* 对话区滚动容器（消息 + diff 卡同滚，PI-FE-07） */
 .chatpanel-scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
@@ -807,16 +900,9 @@ button.ed-sb-conflict {
 .green-review-accepted { box-shadow: inset 2px 0 0 var(--forest); background: var(--forest-bg); }
 .green-review-expired { box-shadow: inset 2px 0 0 var(--ink-5); opacity: 0.6; }
 
-/* DiffStrip：无待裁决修改时隐藏（PendingDiff 计数为 0 → hidden，A-SYS-C-T-02 §4） */
-.diffstrip {
-  grid-area: diffstrip;
-  min-height: var(--diffstrip-h);
-  display: flex;
-  align-items: stretch;
-}
-.diffstrip[hidden] { display: none; }
+/* 批量裁决条（PI-AG-UI-01：呈现于代理编辑面板输入框上方，组件内自隐藏） */
 .diffbar {
-  flex: 1;
+  min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -828,6 +914,7 @@ button.ed-sb-conflict {
 .diffbar-done { background: var(--forest-bg); border-top: 2px solid var(--forest); }
 .diffbar-count { font-family: var(--font-mono); font-size: 12px; color: var(--rust); font-weight: 600; }
 .diffbar-actions { display: flex; gap: var(--sp-2); }
+.diffbar-x { font-size: 14px; padding: 0 6px; }
 
 /* 文件树（PI-FE-04 / 刷新 PI-FE-15） */
 .filetree-hd {

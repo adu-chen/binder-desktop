@@ -1,13 +1,16 @@
 import { useEffect, useRef } from "react";
-import { useAgStore } from "../../store/agStore";
+import { activeSession, useAgStore } from "../../store/agStore";
 import { ToolCallCard } from "./ToolCallCard";
 
 /**
- * 消息流（A-SYS-C-T-02 §3 对话区 · PI-FE-06）。
- * 渲染 AgentTurn 会话消息（含流式回显光标）+ ToolCall 占位演示卡（6 态）。
+ * 消息流（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01）。
+ * 渲染活动会话的 AgentTurn 消息（含流式回显光标）+ ToolCall 状态卡。
+ * 人类消息靠右、AI 消息靠左（需求2，CSS .msg-user 对齐控制）。
  */
 export function MessageList() {
-  const { messages, toolCalls } = useAgStore();
+  const state = useAgStore();
+  const session = activeSession(state);
+  const { messages, toolCalls } = session;
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
