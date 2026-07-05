@@ -799,6 +799,8 @@ button.ed-sb-conflict {
 /* 对话区滚动容器（消息 + diff 卡同滚，PI-FE-07） */
 .chatpanel-scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
 .chatpanel-scroll .msglist { flex: none; overflow: visible; }
+/* 消息列表内边距（PI-AG-UI-01 修正）：与左右边缘保持安全距离，右对齐的人类气泡不贴边。 */
+.msglist { padding: var(--sp-3) var(--sp-3) var(--sp-2); }
 
 /* Diff 卡（DiffCard 8 状态，PI-FE-07） */
 .difflist { display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 var(--sp-3) var(--sp-3); }
