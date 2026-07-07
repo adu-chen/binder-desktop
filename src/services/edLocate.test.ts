@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Schema } from "@tiptap/pm/model";
-import { charOffsetInBlock, blockTextLength, resolveSelectionAnchor } from "./edLocate";
+import { charOffsetInBlock, blockTextLength, getTopBlockIdByIndex, resolveSelectionAnchor } from "./edLocate";
 
 // covers: BR-ED-DATA-004
 // 字符锚纯逻辑：偏移定义在块内纯文本平面（textBetween 语义，叶子内联 1 字符占位对齐 PM pos）；
@@ -75,5 +75,20 @@ describe("edLocate · resolveSelectionAnchor", () => {
   it("第二块内选区 → 正确归属 b2 且偏移按块内计", () => {
     // p2 内容 pos 从 7 开始；选 "二段"（p2 偏移 1..3）→ doc pos 8..10
     expect(resolveSelectionAnchor(doc, 8, 10)).toEqual({ blockId: "b2", start: 1, end: 3 });
+  });
+});
+
+describe("edLocate · block_index → blockId", () => {
+  const doc = schema.node("doc", null, [p("b1", "第一段落"), p("b2", "第二段"), p(null, "无锚段")]);
+
+  it("按 0 起块号返回对应稳定 blockId", () => {
+    expect(getTopBlockIdByIndex(doc, 0)).toBe("b1");
+    expect(getTopBlockIdByIndex(doc, 1)).toBe("b2");
+  });
+
+  it("越界、负数、无 blockId 块不产生错位锚", () => {
+    expect(getTopBlockIdByIndex(doc, -1)).toBeNull();
+    expect(getTopBlockIdByIndex(doc, 3)).toBeNull();
+    expect(getTopBlockIdByIndex(doc, 2)).toBeNull();
   });
 });

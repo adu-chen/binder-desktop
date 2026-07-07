@@ -29,10 +29,22 @@ pub struct ToolDef {
 /// propose_edit 标记 WriteIntent 表示其**执行**走 DE 修改建议路径，但它本身不直写盘
 /// （`direct_write_intent=false`）——试图绕过 DE 直写的工具才会被 validate_tool 以写盘禁令拒绝。
 pub const TOOLS: &[ToolDef] = &[
-    ToolDef { name: "read_doc", permission: ToolPermission::ReadOnly },
-    ToolDef { name: "list_docs", permission: ToolPermission::ReadOnly },
-    ToolDef { name: "search_text", permission: ToolPermission::ReadOnly },
-    ToolDef { name: "propose_edit", permission: ToolPermission::WriteIntent },
+    ToolDef {
+        name: "read_doc",
+        permission: ToolPermission::ReadOnly,
+    },
+    ToolDef {
+        name: "list_docs",
+        permission: ToolPermission::ReadOnly,
+    },
+    ToolDef {
+        name: "search_text",
+        permission: ToolPermission::ReadOnly,
+    },
+    ToolDef {
+        name: "propose_edit",
+        permission: ToolPermission::WriteIntent,
+    },
 ];
 
 /// 按名查注册项。
@@ -56,7 +68,7 @@ pub fn validate_requested_tool(name: &str) -> ToolDecision {
 }
 
 /// 发送给模型的工具定义（OpenAI function-calling 格式）。
-/// dev：仅 3 个只读工具（PI-AG-08B）；propose_edit 写/diff 路径（ChangeProposal→DE）后续接入再补。
+/// dev：3 个只读工具 + propose_edit 写意图工具；propose_edit 走 ChangeProposal→DE，不直接写盘。
 pub fn tool_definitions_json() -> serde_json::Value {
     serde_json::json!([
         {
@@ -124,8 +136,14 @@ mod tests {
         assert!(is_registered("search_text"));
         assert!(is_registered("propose_edit"));
         assert!(!is_registered("delete_file"));
-        assert_eq!(lookup("read_doc").unwrap().permission, ToolPermission::ReadOnly);
-        assert_eq!(lookup("search_text").unwrap().permission, ToolPermission::ReadOnly);
+        assert_eq!(
+            lookup("read_doc").unwrap().permission,
+            ToolPermission::ReadOnly
+        );
+        assert_eq!(
+            lookup("search_text").unwrap().permission,
+            ToolPermission::ReadOnly
+        );
         assert_eq!(
             lookup("propose_edit").unwrap().permission,
             ToolPermission::WriteIntent
@@ -144,7 +162,11 @@ mod tests {
     fn all_four_registered_tools_pass_validation_including_propose_edit() {
         // 4 工具均合法放行：只读 3 个 + propose_edit（产出修改建议，非直写，合法）。
         for t in ["read_doc", "list_docs", "search_text", "propose_edit"] {
-            assert_eq!(validate_requested_tool(t), ToolDecision::Allow, "{t} 应放行");
+            assert_eq!(
+                validate_requested_tool(t),
+                ToolDecision::Allow,
+                "{t} 应放行"
+            );
         }
     }
 }

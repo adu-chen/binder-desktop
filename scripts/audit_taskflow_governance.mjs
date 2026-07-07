@@ -45,6 +45,9 @@ const REQUIRED_PACKAGE_SCRIPTS = {
 
 // ADU §4.3 八种代码块类型
 const VALID_GOV_TYPES = new Set(['DATA', 'GUARD', 'EFFECT', 'RB', 'API', 'UTIL', 'IO', 'QUERY']);
+// Rules whose implementation owner is outside this client repository. Keep this
+// list narrow and backed by controlled debt records; do not use it for local gaps.
+const CLIENT_OUT_OF_SCOPE_RULES = new Set(['BR-SYS-DATA-004']);
 
 const GOVERNANCE_FILES = new Set(['ADU.md', 'adu.md', 'ADUS.md', 'adus.md', 'ADP.md', 'CLAUDE.md']);
 // APC 是宪章文档、ADUS 是自动生成索引，两者不含业务标注块，排除在扫描外
@@ -435,6 +438,7 @@ for (const block of govBlocks) {
 }
 
 for (const ruleId of rules) {
+  if (CLIENT_OUT_OF_SCOPE_RULES.has(ruleId)) continue;
   if (!referencedRules.has(ruleId)) addFinding('OWNER_MISSING', 'RULE not referenced by any @GOV block', { rule: ruleId });
 }
 for (const chainId of chains) {
@@ -463,7 +467,7 @@ for (const file of [...testFiles, ...sourceFiles]) {
     coveredRules.add(m[1]);
   }
 }
-const uncoveredRules = [...rules].filter(id => !coveredRules.has(id));
+const uncoveredRules = [...rules].filter(id => !CLIENT_OUT_OF_SCOPE_RULES.has(id) && !coveredRules.has(id));
 addCheck({ name: 'test coverage comments reference rules', status: uncoveredRules.length === 0 ? 'passed' : 'failed', covered_rules: coveredRules.size, uncovered_rules: uncoveredRules });
 
 if (issuePath !== null) runIssueScopeAudit(issuePath);

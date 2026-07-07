@@ -98,6 +98,8 @@ export interface DiffView {
   blockId: string; // GreenReview 装饰锚（与 ED BlockIdExtension 对齐）
   /** 目标文档相对路径（pending 按文件归属投影到文件树/标签）。 */
   relPath?: string;
+  /** 人读位置摘要（如“Block 3”或“整篇”），与 blockId 一起用于 DiffCard 定位呈现。 */
+  locationLabel?: string;
   title: string;
   before: string;
   after: string;

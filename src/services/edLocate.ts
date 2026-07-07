@@ -66,6 +66,19 @@ function topBlockAt(doc: PMNode, pos: number): { node: PMNode; blockPos: number 
   return null;
 }
 
+function findBlockById(doc: PMNode, blockId: string): { node: PMNode; pos: number } | null {
+  let hit: { node: PMNode; pos: number } | null = null;
+  doc.descendants((node, pos) => {
+    if (hit) return false;
+    if (node.attrs.blockId === blockId) {
+      hit = { node, pos };
+      return false;
+    }
+    return true;
+  });
+  return hit;
+}
+
 /**
  * 选区 → 字符锚纯逻辑（BR-ED-DATA-004 核心，供查询接口与单测共用）。
  * 单块选区：{blockId, start, end}（块内纯文本偏移）；**跨块选区锚定首块**（start..首块文本尾，
@@ -89,6 +102,20 @@ export function resolveSelectionAnchor(
       ? charOffsetInBlock(hit.node, to - contentStart)
       : blockTextLength(hit.node); // 跨块：截首块文本尾
   return { blockId, start, end };
+}
+
+/** 按当前块列表的 0 起块号解析稳定 blockId；用于 text/md 的 propose_edit block_index 回连编辑器锚。 */
+export function getTopBlockIdByIndex(doc: PMNode, index: number): string | null {
+  if (!Number.isInteger(index) || index < 0 || index >= doc.childCount) return null;
+  const blockId = (doc.child(index).attrs.blockId as string | null) ?? "";
+  return blockId || null;
+}
+
+/** 从当前注册编辑器解析 0 起块号对应的稳定 blockId；无活动编辑器或越界时返回 null。 */
+export function getActiveBlockIdByIndex(index: number): string | null {
+  const ed = activeEditor;
+  if (!ed) return null;
+  return getTopBlockIdByIndex(ed.state.doc, index);
 }
 
 /**
@@ -162,12 +189,9 @@ export function locateBlock(
   if (!blockId) return "anchor_lost";
   const ed = activeEditor;
   if (ed) {
-    let found: PMNode | null = null;
-    ed.state.doc.forEach((node) => {
-      if (!found && node.attrs.blockId === blockId) found = node;
-    });
+    const found = findBlockById(ed.state.doc, blockId);
     if (!found) return "anchor_lost";
-    if (range && (range.start < 0 || range.end < range.start || range.end > blockTextLength(found))) {
+    if (range && (range.start < 0 || range.end < range.start || range.end > blockTextLength(found.node))) {
       return "anchor_lost";
     }
     return "located";
@@ -179,6 +203,28 @@ export function locateBlock(
       ? `[data-block-id="${CSS.escape(blockId)}"]`
       : `[data-block-id="${blockId.replace(/"/g, '\\"')}"]`;
   return document.querySelector(sel) ? "located" : "anchor_lost";
+}
+
+/** 定位并滚动到当前编辑器中的块；只移动视图/光标，不改文档内容。 */
+export function revealBlock(blockId: string | undefined | null): LocateResult {
+  if (!blockId) return "anchor_lost";
+  const ed = activeEditor;
+  if (ed) {
+    const found = findBlockById(ed.state.doc, blockId);
+    if (!found) return "anchor_lost";
+    const selectionPos = Math.min(found.pos + 1, ed.state.doc.content.size);
+    ed.chain().focus().setTextSelection(selectionPos).scrollIntoView().run();
+    return "located";
+  }
+  if (typeof document === "undefined") return "anchor_lost";
+  const sel =
+    typeof CSS !== "undefined" && CSS.escape
+      ? `[data-block-id="${CSS.escape(blockId)}"]`
+      : `[data-block-id="${blockId.replace(/"/g, '\\"')}"]`;
+  const el = document.querySelector(sel);
+  if (!el) return "anchor_lost";
+  el.scrollIntoView({ block: "center" });
+  return "located";
 }
 
 /** 选区拖拽引用的自定义 MIME（PI-ED-10 #6：拖出编辑器 → AG 输入面位置引用）。 */

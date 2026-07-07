@@ -72,8 +72,8 @@ pub fn assemble_context(mut items: Vec<ContextItem>, budget: u32) -> AssembledCo
 /// 回合类型（骨架差异）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnKind {
-    Chat,        // 对话历史 + 修改建议导向 diff
-    BuildTask,   // 任务计划上下文 + 单文件产出导向
+    Chat,         // 对话历史 + 修改建议导向 diff
+    BuildTask,    // 任务计划上下文 + 单文件产出导向
     InlineAssist, // 轻量、无系统对话历史、续写/局部改写
 }
 
@@ -192,15 +192,38 @@ pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
     let p = prompt.trim();
     let any = |ks: &[&str]| ks.iter().any(|k| p.contains(k));
     // 修正追加（操作对象=上一轮产出）。
-    if any(&["改成", "换成", "短一点", "长一点", "再写", "再短", "再长", "正式一点", "把刚才", "把上面", "把上一", "重写"]) {
+    if any(&[
+        "改成",
+        "换成",
+        "短一点",
+        "长一点",
+        "再写",
+        "再短",
+        "再长",
+        "正式一点",
+        "把刚才",
+        "把上面",
+        "把上一",
+        "重写",
+    ]) {
         return Carryover::Refine;
     }
     // 显式选择（沿用上一轮某个产出/方案）。
-    if any(&["第一个", "第二个", "第三个", "按刚才", "按上面", "用刚才", "用上面", "就那个", "就用"]) {
+    if any(&[
+        "第一个",
+        "第二个",
+        "第三个",
+        "按刚才",
+        "按上面",
+        "用刚才",
+        "用上面",
+        "就那个",
+        "就用",
+    ]) {
         return Carryover::Select;
     }
     // 指代回指 / 续写（延续上一轮目标）。
-    if any(&["继续", "接着", "接下来", "然后呢", "上面", "刚才", "那个", "这个", "它"]) {
+    if any(&["继续", "接着", "然后呢", "上面", "刚才", "那个"]) {
         return Carryover::ReferenceTarget;
     }
     Carryover::None
@@ -251,7 +274,11 @@ mod tests {
     use super::*;
 
     fn item(s: ContextSource, c: &str, cost: u32) -> ContextItem {
-        ContextItem { source: s, content: c.into(), cost }
+        ContextItem {
+            source: s,
+            content: c.into(),
+            cost,
+        }
     }
 
     // covers: BR-AG-DATA-001
@@ -265,7 +292,7 @@ mod tests {
             item(ExplicitMention, "@ref", 80),
         ];
         let r = assemble_context(items, 60); // 预算 60
-        // @mention 必在 kept（即便 cost 80 > 60）
+                                             // @mention 必在 kept（即便 cost 80 > 60）
         assert!(r.kept.iter().any(|i| i.source == ExplicitMention));
         // CurrentDoc(100) 超预算被裁剪，进入 trimmed（可追溯）
         assert!(r.trimmed.iter().any(|i| i.source == CurrentDoc));
@@ -279,13 +306,21 @@ mod tests {
         let chat = assemble_prompt(TurnKind::Chat);
         assert_eq!(
             chat.layers,
-            vec![PromptLayer::System, PromptLayer::Tools, PromptLayer::Context, PromptLayer::User]
+            vec![
+                PromptLayer::System,
+                PromptLayer::Tools,
+                PromptLayer::Context,
+                PromptLayer::User
+            ]
         );
         assert!(chat.include_history);
         assert!(!assemble_prompt(TurnKind::InlineAssist).include_history); // 轻量无历史
         assert!(!assemble_prompt(TurnKind::BuildTask).include_history);
         // 所有回合分层顺序一致
-        assert_eq!(assemble_prompt(TurnKind::BuildTask).layers[0], PromptLayer::System);
+        assert_eq!(
+            assemble_prompt(TurnKind::BuildTask).layers[0],
+            PromptLayer::System
+        );
     }
 
     // covers: BR-AG-DATA-003
@@ -294,19 +329,34 @@ mod tests {
     fn target_set_accepts_current_declared_new_rejects_undeclared_existing() {
         let declared = vec!["ref.md".to_string()];
         // ① 当前文档。
-        assert_eq!(guard_target_set(Some("a.md"), &declared, "a.md", true), TargetDecision::Accept);
+        assert_eq!(
+            guard_target_set(Some("a.md"), &declared, "a.md", true),
+            TargetDecision::Accept
+        );
         // ② 用户显式声明集内（@mention / 块引用）。
-        assert_eq!(guard_target_set(Some("a.md"), &declared, "ref.md", true), TargetDecision::Accept);
+        assert_eq!(
+            guard_target_set(Some("a.md"), &declared, "ref.md", true),
+            TargetDecision::Accept
+        );
         // ③ 新建文档（不存在的路径，diff 裁决卡为人类闸门）。
-        assert_eq!(guard_target_set(Some("a.md"), &declared, "new.md", false), TargetDecision::Accept);
+        assert_eq!(
+            guard_target_set(Some("a.md"), &declared, "new.md", false),
+            TargetDecision::Accept
+        );
         // ④ 未声明的既有文档：拒绝（防模型游走改无关文件）。
         assert_eq!(
             guard_target_set(Some("a.md"), &declared, "other.md", true),
             TargetDecision::RejectUndeclared
         );
         // ⑤ 无当前文档（未打开编辑器）时，声明集与新建仍可用，未声明既有仍拒。
-        assert_eq!(guard_target_set(None, &declared, "ref.md", true), TargetDecision::Accept);
-        assert_eq!(guard_target_set(None, &[], "other.md", true), TargetDecision::RejectUndeclared);
+        assert_eq!(
+            guard_target_set(None, &declared, "ref.md", true),
+            TargetDecision::Accept
+        );
+        assert_eq!(
+            guard_target_set(None, &[], "other.md", true),
+            TargetDecision::RejectUndeclared
+        );
     }
 
     // PI-AG-09B：文档层封顶（短不动、长截断 + 注记，不静默）。
@@ -323,7 +373,10 @@ mod tests {
     // PI-AG-09B：分层截断序——历史层（P1）按预算保留最近、drop 最旧（确定性、丢弃数可追溯）。
     #[test]
     fn select_recent_history_keeps_newest_drops_oldest() {
-        let h = |r: &str, c: &str| HistTurn { role: r.into(), content: c.into() };
+        let h = |r: &str, c: &str| HistTurn {
+            role: r.into(),
+            content: c.into(),
+        };
         let turns = vec![h("user", "aaaa"), h("assistant", "bbbb"), h("user", "cc")];
         // 预算 6 字：从最近往前 "cc"(2)+"bbbb"(4)=6 放下，"aaaa" 丢弃。
         let (kept, dropped) = select_recent_history(&turns, 6);
@@ -342,12 +395,30 @@ mod tests {
         // 无历史 → None（即便有沿用词）。
         assert_eq!(decide_intent_carryover("继续写", false), Carryover::None);
         // 新话题 → None。
-        assert_eq!(decide_intent_carryover("帮我写一首关于春天的诗", true), Carryover::None);
+        assert_eq!(
+            decide_intent_carryover("帮我写一首关于春天的诗", true),
+            Carryover::None
+        );
         // 修正追加 / 显式选择 / 指代回指。
         assert_eq!(decide_intent_carryover("再短一点", true), Carryover::Refine);
-        assert_eq!(decide_intent_carryover("把刚才那段改成正式语气", true), Carryover::Refine);
-        assert_eq!(decide_intent_carryover("用第二个方案", true), Carryover::Select);
-        assert_eq!(decide_intent_carryover("继续", true), Carryover::ReferenceTarget);
-        assert_eq!(decide_intent_carryover("接着上面写", true), Carryover::ReferenceTarget);
+        assert_eq!(
+            decide_intent_carryover("把刚才那段改成正式语气", true),
+            Carryover::Refine
+        );
+        assert_eq!(
+            decide_intent_carryover("用第二个方案", true),
+            Carryover::Select
+        );
+        assert_eq!(
+            decide_intent_carryover("继续", true),
+            Carryover::ReferenceTarget
+        );
+        assert_eq!(
+            decide_intent_carryover("接着上面写", true),
+            Carryover::ReferenceTarget
+        );
+        // 泛指当前任务/当前文档的词不应单独提权历史意图。
+        assert_eq!(decide_intent_carryover("接下来优化这个文档", true), Carryover::None);
+        assert_eq!(decide_intent_carryover("把它整理成三段", true), Carryover::None);
     }
 }

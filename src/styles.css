@@ -817,10 +817,16 @@ button.ed-sb-conflict {
   font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.06em;
   padding: 1px 5px; border-radius: var(--r-1); color: var(--ink-4); background: var(--bg-sunken);
 }
+.diffcard-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  margin-top: 4px; color: var(--ink-4); font-size: 11px;
+}
 .diffcard-body { margin: var(--sp-2) 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
 .diffcard-line { white-space: pre-wrap; }
 .diffcard-before { color: var(--rust-2); text-decoration: line-through; opacity: 0.8; }
 .diffcard-after { color: var(--forest-2); }
+.diffcard-locate, .diffcard-expand { padding: 1px 6px; font-size: 11px; }
+.diffcard-expand { margin-top: calc(-1 * var(--sp-1)); margin-bottom: var(--sp-1); }
 .diffcard-hint { font-size: 11px; color: var(--ink-4); margin-bottom: var(--sp-1); }
 .diffcard-ok { color: var(--forest); }
 .diffcard-warn { color: var(--gold); }

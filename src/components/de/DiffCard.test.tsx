@@ -1,15 +1,20 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 
 // DiffCard 经 deService→wsService 引入 invoke；渲染不触发调用，mock 以隔离。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({ revealBlock: vi.fn(() => "located") }));
+vi.mock("../../services/edLocate", () => ({ revealBlock: mocks.revealBlock }));
 import { DiffCard } from "./DiffCard";
 import type { DiffView } from "../../store/deStore";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mocks.revealBlock.mockClear();
+});
 
-const base: DiffView = { diffId: "d1", blockId: "", title: "改写开头", before: "旧", after: "新", state: "pending" };
+const base: DiffView = { diffId: "d1", blockId: "", relPath: "demo.md", title: "改写开头", before: "旧", after: "新", state: "pending" };
 const renderCard = (p: Partial<DiffView>) => render(<DiffCard diff={{ ...base, ...p }} />);
 
 describe("DiffCard 样式变更摘要（PI-ED-11 · D-3 方案A）", () => {
@@ -75,5 +80,21 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     renderCard({ state: "pending", before: "原文X", after: "新文Y" });
     expect(screen.getByText(/原文X/)).toBeTruthy();
     expect(screen.getByText(/新文Y/)).toBeTruthy();
+  });
+
+  it("长 before/after 默认短预览，可展开查看完整内容", () => {
+    const long = `第一行\n${"长文本".repeat(90)}`;
+    const { container } = renderCard({ state: "pending", before: long, after: "新文" });
+    const beforeLine = container.querySelector(".diffcard-before");
+    expect(beforeLine?.textContent).not.toContain(long);
+    fireEvent.click(screen.getByRole("button", { name: /展开预览/ }));
+    expect(beforeLine?.textContent).toContain(long);
+  });
+
+  it("有 blockId 时显示定位按钮并调用编辑器锚定位", () => {
+    renderCard({ blockId: "b1", locationLabel: "Block 1" });
+    expect(screen.getByText(/demo.md · Block 1/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "定位" }));
+    expect(mocks.revealBlock).toHaveBeenCalledWith("b1");
   });
 });

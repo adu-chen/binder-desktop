@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore } from "../store/agStore";
 import { edStore } from "../store/edStore";
 import { deStore } from "../store/deStore";
-import { locateBlock } from "./edLocate";
+import { getActiveBlockIdByIndex, locateBlock } from "./edLocate";
 
 /**
  * AG 模块 Service 层。
@@ -22,6 +22,12 @@ export type AgTurnEvent =
 
 let seq = 0;
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+function parseBlockIndex(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) return null;
+  return Number.parseInt(value.trim(), 10);
+}
 
 /** 文档块（供块级 @mention 选择非当前文档的块，PI-AG-09G）。 */
 export interface DocBlock {
@@ -128,6 +134,8 @@ export async function startTurn(
   // 本回合最近一次 propose_edit 的目标块锚（PI-AG-08H）+ 提案内容（after 预览，PI-AG-09I），从 tool_request.params 捕获。
   let lastEditBlockId: string | undefined;
   let lastEditAfter: string | undefined;
+  let lastEditAnchorMissing = false;
+  let lastEditLocationLabel: string | undefined;
 
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -165,11 +173,14 @@ export async function startTurn(
           let title = `AI 建议修改 ${ev.rel_path}`;
           if (lastEditBlockId && locateBlock(lastEditBlockId) === "anchor_lost") {
             title = `⚠ 文档已变动，请复核 · ${ev.rel_path}`;
+          } else if (lastEditAnchorMissing) {
+            title = `⚠ 未找到目标块，请复核 · ${ev.rel_path}`;
           }
           deStore.addDiff({
             diffId: ev.diff_id,
             blockId: lastEditBlockId ?? "",
             relPath: ev.rel_path,
+            locationLabel: lastEditLocationLabel ?? (lastEditBlockId ? "目标块" : "整篇"),
             title,
             before: before.slice(-60),
             after: lastEditAfter ? lastEditAfter.slice(0, 120) : "（AI 修改建议，接受后应用到文档）",
@@ -177,13 +188,20 @@ export async function startTurn(
           });
           lastEditBlockId = undefined;
           lastEditAfter = undefined;
+          lastEditAnchorMissing = false;
+          lastEditLocationLabel = undefined;
           break;
         }
         case "tool_request": {
           // 捕获 propose_edit 的目标块锚，供 diff_proposed 实时校验（PI-AG-08H）。
           if (ev.tool_name === "propose_edit" && ev.params && typeof ev.params === "object") {
-            const p = ev.params as { block_id?: unknown; new_text?: unknown; content?: unknown };
-            lastEditBlockId = typeof p.block_id === "string" && p.block_id ? p.block_id : undefined;
+            const p = ev.params as { block_id?: unknown; block_index?: unknown; new_text?: unknown; content?: unknown };
+            const explicitBlockId = typeof p.block_id === "string" && p.block_id ? p.block_id : undefined;
+            const blockIndex = parseBlockIndex(p.block_index);
+            lastEditBlockId = explicitBlockId ?? (blockIndex !== null ? getActiveBlockIdByIndex(blockIndex) ?? undefined : undefined);
+            lastEditAnchorMissing = Boolean(explicitBlockId || blockIndex !== null) && !lastEditBlockId;
+            lastEditLocationLabel =
+              blockIndex !== null ? `Block ${blockIndex}` : explicitBlockId ? "目标块" : undefined;
             const after = typeof p.new_text === "string" ? p.new_text : typeof p.content === "string" ? p.content : "";
             lastEditAfter = after.trim() ? after : undefined;
           }

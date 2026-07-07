@@ -2,13 +2,17 @@
 //!
 //! 经 WS 在 **active workspace** 内执行（X-FORBID-004 边界守卫），结果回注模型（SM-AG-02 ResultInjecting）。
 //! 复用 lib.rs route_* 同款 workspace 访问；权限/注册校验归 tool_registry::validate_requested_tool（BR-AG-STATE-002）。
-//! 写意图工具 propose_edit（ChangeProposal→DE diff，X-FORBID-006）后续接入，本模块仅只读三工具。
+//! 写意图工具 propose_edit 由 AG 回合专用路径生成 ChangeProposal→DE diff（X-FORBID-006），不进入本只读执行器。
 
 use crate::ipc::IpcError;
 use std::path::Path;
 
 /// 执行只读工具，返回回注模型的结果文本（JSON 序列化）。`root` 为 active workspace 根（X-FORBID-004）。
-pub fn exec_read_only(root: &Path, name: &str, args: &serde_json::Value) -> Result<String, IpcError> {
+pub fn exec_read_only(
+    root: &Path,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<String, IpcError> {
     match name {
         "list_docs" => {
             let docs = crate::workspace::listing::list_docs(root)?;
@@ -20,10 +24,9 @@ pub fn exec_read_only(root: &Path, name: &str, args: &serde_json::Value) -> Resu
             Ok(serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into()))
         }
         "read_doc" => {
-            let rel = args
-                .get("path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "read_doc 缺 path 参数", false, false))?;
+            let rel = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                IpcError::new("AG_TOOL_ARG", "read_doc 缺 path 参数", false, false)
+            })?;
             // 路径限 workspace 内（X-FORBID-004）。
             let abs = crate::workspace::resolve_in_workspace(root, rel)?;
             let read = crate::workspace::save::read_doc(&abs)?;
@@ -31,7 +34,7 @@ pub fn exec_read_only(root: &Path, name: &str, args: &serde_json::Value) -> Resu
         }
         other => Err(IpcError::new(
             "AG_TOOL_UNKNOWN",
-            &format!("未接线工具: {other}（只读 v1 仅 list_docs/read_doc/search_text）"),
+            &format!("只读工具执行器不支持: {other}（propose_edit 由 ChangeProposal→DE 专用路径处理）"),
             false,
             false,
         )),
@@ -44,7 +47,11 @@ mod tests {
 
     #[test]
     fn unknown_tool_errors() {
-        let r = exec_read_only(Path::new("/tmp"), "delete_everything", &serde_json::Value::Null);
+        let r = exec_read_only(
+            Path::new("/tmp"),
+            "delete_everything",
+            &serde_json::Value::Null,
+        );
         assert_eq!(r.unwrap_err().code, "AG_TOOL_UNKNOWN");
     }
 

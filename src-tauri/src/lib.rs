@@ -808,6 +808,10 @@ fn doc_type_of(rel_path: &str) -> String {
         .unwrap_or_else(|| "bin".to_string())
 }
 
+fn is_docx_rel_path(rel_path: &str) -> bool {
+    matches!(doc_type_of(rel_path).as_str(), "docx" | "doc")
+}
+
 /// 路由 `de.generate_diff`：组装 ChangeProposal→锚校验生成 PendingDiff（BR-DE-DATA-001）→持久化
 /// DiffPayload + pending_diff（重启恢复）；修改既有须锚 Located，否则 DE_ANCHOR_LOST（不产悬空 diff）。
 fn route_generate_diff(request: &CommandRequest, state: &AppState) -> Result<serde_json::Value, IpcError> {
@@ -881,14 +885,64 @@ fn route_accept_diff(
     })?;
     // ② 落盘：apply_diff 置 status=accepted，与 transition 给出的权威态 next=Accepted 一致。
     let stored = crate::de::store::load_payload_for_diff(&conn, &diff_id)?;
-    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &stored.rel_path)?;
+    let rel_path = stored.rel_path.clone();
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
     let doc = crate::types::DocRef {
         workspace_id: ws.workspace_id,
-        doc_type: doc_type_of(&stored.rel_path),
-        rel_path: stored.rel_path,
+        doc_type: doc_type_of(&rel_path),
+        rel_path: rel_path.clone(),
+    };
+    let mut docx_saving = None;
+    let apply_content = if is_docx_rel_path(&rel_path) {
+        let saving = doc::convert::transition(
+            doc::convert::DocConvertState::Ready,
+            doc::convert::DocConvertEvent::SaveDocx,
+        )
+        .expect("SM-DOC-01: Ready+SaveDocx→SaveConverting");
+        emit_doc01(app, &rel_path, saving);
+        docx_saving = Some(saving);
+        let html = std::str::from_utf8(&stored.after_content).map_err(|e| {
+            let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+                .expect("SaveConverting+SaveConvertFail→SaveError");
+            emit_doc01(app, &rel_path, st);
+            IpcError::new(
+                "DOC_HTML_INVALID",
+                &format!("docx 修改载荷必须是 UTF-8 HTML: {e}"),
+                false,
+                false,
+            )
+        })?;
+        match doc::edit_chain::html_to_docx(html) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+                    .expect("SaveConverting+SaveConvertFail→SaveError");
+                emit_doc01(app, &rel_path, st);
+                return Err(e);
+            }
+        }
+    } else {
+        stored.after_content
     };
     // 经 SM-WS-02 落盘机驱动 apply（广播 Applying→Applied/ApplyError），与 SM-DE-01 同 diff 实例。
-    let entry = apply_diff_sm(app, &conn, &diff_id, &doc, &abs, &stored.after_content, None)?;
+    let entry = match apply_diff_sm(app, &conn, &diff_id, &doc, &abs, &apply_content, None) {
+        Ok(entry) => {
+            if let Some(saving) = docx_saving {
+                let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertOk)
+                    .expect("SaveConverting+SaveConvertOk→Ready");
+                emit_doc01(app, &rel_path, st);
+            }
+            entry
+        }
+        Err(e) => {
+            if let Some(saving) = docx_saving {
+                let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+                    .expect("SaveConverting+SaveConvertFail→SaveError");
+                emit_doc01(app, &rel_path, st);
+            }
+            return Err(e);
+        }
+    };
     // ③ 广播 SM-DE-01 转移（前端 deStore 投影，X-FORBID-007）。
     sm_events::emit_sm_state(
         app,
@@ -938,40 +992,21 @@ fn route_list_diffs(request: &CommandRequest, state: &AppState) -> Result<serde_
 
 /**
  * @GOV
- * codes:    BR-AG-VERIFY-001-GUARD-AG-AG-TURN-002
+ * codes:    BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004
  * type:     GUARD
- * chain:    AG-TURN
- * rules:    BR-AG-VERIFY-001
- * term_ref: TERM-AG-001, TERM-CLOUD-001
- * boundary: in=turnPrompt | out=AgentTurnReply(gateGatedBeforeModelStubbed)
+ * chain:    IPC-CALL
+ * rules:    BR-SYS-DATA-003
+ * boundary: in=legacyDispatchAgentTurn | out=IpcError(useAgStartTurnChannelNoStubReply)
  */
-/// 路由 `ag.start_turn`（桩）：驱动 SM-AG-01（Idle→Assembling→AwaitingGate），经 ensure_gate_passed
-/// （SubscriptionGate 桩=Passed，X-SEQ-001 门禁前置结构保留；真实门禁服务端权威 A-SYS-I-P-03）→Streaming，
-/// 回桩化助手回复。模型实际调用与流式分片落实现期（云网关接通）；本桩保留"门禁先于模型"不变量。
-fn route_start_turn(request: &CommandRequest) -> Result<serde_json::Value, IpcError> {
-    use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
-
-    let prompt = request
-        .params
-        .get("prompt")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| IpcError::new("AG_PROMPT_REQUIRED", "缺少 prompt 参数", false, false))?;
-
-    // 结构性走 SM-AG-01：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed。
-    let s = TurnState::Idle;
-    let s = transition(s, TurnEvent::Send).ok_or_else(sm_error)?; // → Assembling
-    let s = transition(s, TurnEvent::Assembled).ok_or_else(sm_error)?; // → AwaitingGate
-    // 门禁前置硬门（X-SEQ-001 / BR-AG-VERIFY-001）：桩 gate=Passed；无有效订阅时此处 Denied 即拒。
-    ensure_gate_passed(GateState::Passed)?;
-    let s = transition(s, TurnEvent::GatePassed).ok_or_else(sm_error)?; // → Streaming
-    debug_assert_eq!(s, TurnState::Streaming);
-
-    let reply = format!(
-        "（桩回复）已收到：{}。模型网关将在实现期接通（A-SYS-I-P-03），届时此处为真实流式产出。",
-        prompt.trim()
-    );
-    Ok(serde_json::json!({ "reply": reply, "turn_state": "streaming" }))
+/// 旧 dispatch `ag.start_turn` 已停用：Chat 回合唯一真实入口是 async `ag_start_turn` + Channel。
+/// 继续保留注册是为了让残留调用得到明确错误，而不是落入未注册 command 或伪造助手回复。
+fn route_start_turn(_request: &CommandRequest) -> Result<serde_json::Value, IpcError> {
+    Err(IpcError::new(
+        "AG_START_TURN_DEPRECATED",
+        "dispatch ag.start_turn 已停用，请使用 ag_start_turn Channel 命令",
+        false,
+        false,
+    ))
 }
 
 fn sm_error() -> IpcError {
@@ -1287,16 +1322,32 @@ async fn ag_start_turn(
         // 整篇引用：读文档（需 ws_root，X-FORBID-004）。
         if let Some(root) = ws_root.as_deref() {
             for rel in &mentions {
-                if let Ok(abs) = workspace::resolve_in_workspace(std::path::Path::new(root), rel) {
-                    if let Ok(read) = workspace::save::read_doc(&abs) {
-                        let capped = crate::ag::context::cap_text(
-                            &read.content,
-                            MENTION_CAP,
-                            "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
-                        );
-                        parts.push(format!("引用文档「{rel}」：\n{capped}"));
-                    }
+                match workspace::resolve_in_workspace(std::path::Path::new(root), rel) {
+                    Ok(abs) => match workspace::save::read_doc(&abs) {
+                        Ok(read) => {
+                            let capped = crate::ag::context::cap_text(
+                                &read.content,
+                                MENTION_CAP,
+                                "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
+                            );
+                            parts.push(format!("引用文档「{rel}」：\n{capped}"));
+                        }
+                        Err(e) => parts.push(format!(
+                            "引用文档「{rel}」读取失败（{}）：{}",
+                            e.code, e.message
+                        )),
+                    },
+                    Err(e) => parts.push(format!(
+                        "引用文档「{rel}」路径无效或超出 workspace（{}）：{}",
+                        e.code, e.message
+                    )),
                 }
+            }
+        } else {
+            for rel in &mentions {
+                parts.push(format!(
+                    "引用文档「{rel}」未读取：当前没有 active workspace"
+                ));
             }
         }
         // 块级引用（选区精确锚，PI-AG-09F）：text 已由前端选区带入，精确到块。

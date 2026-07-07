@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
 import { acceptDiff, rejectDiff, generateSampleDiff } from "../../services/deService";
+import { revealBlock } from "../../services/edLocate";
 
 /**
  * DiffCard（DiffCard / TERM-DE-003 · 参考稿 §6.1）· PI-FE-07。
@@ -18,9 +20,26 @@ const STATE_BADGE: Record<DiffView["state"], string> = {
   error: "错误",
 };
 
+const PREVIEW_LIMIT = 140;
+function previewText(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return "（空）";
+  return compact.length > PREVIEW_LIMIT ? `${compact.slice(0, PREVIEW_LIMIT)}…` : compact;
+}
+
 export function DiffCard({ diff }: { diff: DiffView }) {
   const { diffId, title, before, after, state } = diff;
   const busy = state === "validating" || state === "applying";
+  const [expanded, setExpanded] = useState(false);
+  const [locateFailed, setLocateFailed] = useState(false);
+  const longPreview = before.length > PREVIEW_LIMIT || after.length > PREVIEW_LIMIT || /\n/.test(before + after);
+  const location = diff.locationLabel ?? (diff.blockId ? "目标块" : "整篇");
+  const beforeView = expanded ? before || "（空）" : previewText(before);
+  const afterView = expanded ? after || "（空）" : previewText(after);
+
+  const onLocate = () => {
+    setLocateFailed(revealBlock(diff.blockId) === "anchor_lost");
+  };
 
   return (
     <div className={`diffcard diffcard-${state}`}>
@@ -28,10 +47,18 @@ export function DiffCard({ diff }: { diff: DiffView }) {
         <span className="diffcard-title">{title}</span>
         <span className="diffcard-badge">{STATE_BADGE[state]}</span>
       </div>
+      <div className="diffcard-meta">
+        <span>{diff.relPath ? `${diff.relPath} · ${location}` : location}</span>
+        {diff.blockId && (
+          <button type="button" className="ghost diffcard-locate" onClick={onLocate}>
+            定位
+          </button>
+        )}
+      </div>
 
       <div className="diffcard-body">
-        <div className="diffcard-line diffcard-before">- {before}</div>
-        <div className="diffcard-line diffcard-after">+ {after}</div>
+        <div className="diffcard-line diffcard-before">- {beforeView}</div>
+        <div className="diffcard-line diffcard-after">+ {afterView}</div>
         {/* 样式变更摘要（PI-ED-11 · 裁定 D-3 方案A：回合样式修改经本卡裁决呈现） */}
         {diff.styleOps && diff.styleOps.length > 0 && (
           <div className="diffcard-styles">
@@ -41,9 +68,15 @@ export function DiffCard({ diff }: { diff: DiffView }) {
           </div>
         )}
       </div>
+      {longPreview && (
+        <button type="button" className="ghost diffcard-expand" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "收起预览" : "展开预览"}
+        </button>
+      )}
 
       {state === "applying" && <div className="diffcard-progress"><span /></div>}
       {state === "validating" && <div className="diffcard-hint">校验原文匹配中…</div>}
+      {locateFailed && <div className="diffcard-hint diffcard-warn">目标块已不可定位，建议重新生成</div>}
       {state === "accepted" && (
         <div className="diffcard-hint diffcard-ok">✓ 已写入 · 时间轴 #{diff.timelineSeq}</div>
       )}
