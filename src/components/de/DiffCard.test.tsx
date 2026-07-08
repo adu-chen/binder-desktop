@@ -16,11 +16,15 @@ afterEach(() => {
 
 const base: DiffView = { diffId: "d1", blockId: "", relPath: "demo.md", title: "改写开头", before: "旧", after: "新", state: "pending" };
 const renderCard = (p: Partial<DiffView>) => render(<DiffCard diff={{ ...base, ...p }} />);
+const card = (p: Partial<DiffView>): DiffView => ({ ...base, ...p });
 
 describe("DiffCard 样式变更摘要（PI-ED-11 · D-3 方案A）", () => {
   // covers: BR-DE-DATA-002
-  it("styleOps 存在 → 渲染样式标签行；缺省 → 不渲染", () => {
+  it("styleOps 存在 → 默认仅显示摘要，展开后渲染样式标签", () => {
     renderCard({ styleOps: ["加粗 [2–4]", "颜色 #ff0000 [5–9]"] });
+    expect(screen.getByText("样式 2 项")).toBeTruthy();
+    expect(screen.queryByText("加粗 [2–4]")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展开" }));
     expect(screen.getByText("加粗 [2–4]")).toBeTruthy();
     expect(screen.getByText("颜色 #ff0000 [5–9]")).toBeTruthy();
     cleanup();
@@ -30,6 +34,17 @@ describe("DiffCard 样式变更摘要（PI-ED-11 · D-3 方案A）", () => {
 });
 
 describe("DiffCard 8 状态渲染（互斥）", () => {
+  // covers: BR-DE-DATA-002
+  it("默认紧凑态按标题、位置、红删、绿增、操作五行渲染", () => {
+    const { container } = renderCard({ state: "pending" });
+    expect(container.querySelector(".diffcard-row-title")).not.toBeNull();
+    expect(container.querySelector(".diffcard-row-location")).not.toBeNull();
+    expect(container.querySelector(".diffcard-row-before")).not.toBeNull();
+    expect(container.querySelector(".diffcard-row-after")).not.toBeNull();
+    expect(container.querySelector(".diffcard-row-actions")).not.toBeNull();
+    expect(container.querySelector(".diffcard-detail")).toBeNull();
+  });
+
   it("pending：PENDING badge + 接受/拒绝", () => {
     renderCard({ state: "pending" });
     expect(screen.getByText("PENDING")).toBeTruthy();
@@ -87,8 +102,9 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     const { container } = renderCard({ state: "pending", before: long, after: "新文" });
     const beforeLine = container.querySelector(".diffcard-before");
     expect(beforeLine?.textContent).not.toContain(long);
-    fireEvent.click(screen.getByRole("button", { name: /展开预览/ }));
-    expect(beforeLine?.textContent).toContain(long);
+    fireEvent.click(screen.getByRole("button", { name: "展开" }));
+    expect(container.querySelector(".diffcard-detail")?.textContent).toContain(long);
+    expect(beforeLine?.textContent).not.toContain(long);
   });
 
   it("有 blockId 时显示定位按钮并调用编辑器锚定位", () => {
@@ -96,5 +112,23 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     expect(screen.getByText(/demo.md · Block 1/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "定位" }));
     expect(mocks.revealBlock).toHaveBeenCalledWith("b1");
+  });
+
+  it("定位失败显示锚失效提示，后续成功定位会清除提示", () => {
+    mocks.revealBlock.mockReturnValueOnce("anchor_lost").mockReturnValueOnce("located");
+    renderCard({ blockId: "b1" });
+    fireEvent.click(screen.getByRole("button", { name: "定位" }));
+    expect(screen.getByText(/目标块已不可定位/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "定位" }));
+    expect(screen.queryByText(/目标块已不可定位/)).toBeNull();
+  });
+
+  it("blockId 变化时清除上一锚的定位失败提示", () => {
+    mocks.revealBlock.mockReturnValueOnce("anchor_lost");
+    const { rerender } = render(<DiffCard diff={card({ blockId: "b1" })} />);
+    fireEvent.click(screen.getByRole("button", { name: "定位" }));
+    expect(screen.getByText(/目标块已不可定位/)).toBeTruthy();
+    rerender(<DiffCard diff={card({ blockId: "b2" })} />);
+    expect(screen.queryByText(/目标块已不可定位/)).toBeNull();
   });
 });

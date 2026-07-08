@@ -1,28 +1,22 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-AG-UI-01",
+  "scope_id": "PI-DE-DIFFCARD-COMPACT-01",
   "allowed_files": [
-    "src/store/agStore.ts",
-    "src/store/agStore.test.ts",
-    "src/store/modelStore.ts",
-    "src/components/ag/AgentPanel.tsx",
-    "src/components/ag/MessageList.tsx",
-    "src/components/ag/Composer.tsx",
-    "src/components/ag/ModelConfig.tsx",
-    "src/components/de/DiffAllActionsBar.tsx",
-    "src/shell/Workbench.tsx",
-    "src/services/agService.ts",
+    "docs/01_modules/DE/A-DE-M-T-01_DiffEdit技术设计.md",
+    "docs/01_modules/DE/A-DE-X-L-01_DiffEdit开发计划.md",
+    "src/components/de/DiffCard.tsx",
+    "src/components/de/DiffCard.test.tsx",
     "src/styles.css",
     ".governance/active_scope.json"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
-    "CLAUDE.md",
+    "AGENTS.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-AG-UI-01 代理编辑面板 UI 优化（人类 2026-07-05 预授权「如无异议直接优化」）：①多标签会话（运行期内存态+归档/历史，持久化留接口）②人类消息右对齐③全部接受/拒绝条移入面板输入框上方自隐藏④输入框重构（去四显性按钮；框内底部 edit/build 模式按钮+模型选择+添加模型最小配置界面含 BYOK；发送按钮三态）⑤Enter 发送/Shift+Enter 换行/IME 合成保护。纯前端视图层，不触后端与 IPC 契约。"
+  "scope_reason": "PI-DE-DIFFCARD-COMPACT-01 DiffCard 紧凑审阅卡修复（人类明确要求执行并提交）：将默认卡片收敛为标题行、位置行、红删行、绿增行、操作按钮行；长内容和状态详情进入受控展开区；同步 DE 文档、组件结构、样式与组件测试。"
 }
