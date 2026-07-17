@@ -76,7 +76,10 @@ pub fn open_workspace(conn: &mut Connection, root_path: &str) -> rusqlite::Resul
  * boundary: in=workspaceId | out=activeWorkspaceRef(enforcerSingleActive)
  */
 /// 切换活动 workspace（BR-WS-PERSIST-002：维持单活动不变量）。
-pub fn switch_workspace(conn: &mut Connection, workspace_id: &str) -> rusqlite::Result<WorkspaceRef> {
+pub fn switch_workspace(
+    conn: &mut Connection,
+    workspace_id: &str,
+) -> rusqlite::Result<WorkspaceRef> {
     let root: String = conn.query_row(
         "SELECT root_path FROM workspaces WHERE workspace_id = ?1",
         [workspace_id],
@@ -143,8 +146,8 @@ pub fn active_workspace(conn: &Connection) -> rusqlite::Result<Option<WorkspaceR
  */
 /// 列出已注册 workspace（BR-WS-PERSIST-002：控制态可见可恢复）。
 pub fn list_workspaces(conn: &Connection) -> rusqlite::Result<Vec<WorkspaceRef>> {
-    let mut stmt =
-        conn.prepare("SELECT workspace_id, root_path, is_active FROM workspaces ORDER BY opened_at")?;
+    let mut stmt = conn
+        .prepare("SELECT workspace_id, root_path, is_active FROM workspaces ORDER BY opened_at")?;
     let rows = stmt.query_map([], |r| {
         Ok(WorkspaceRef {
             workspace_id: r.get(0)?,
@@ -186,7 +189,10 @@ mod tests {
 
         // 切回 A
         switch_workspace(&mut conn, &a.workspace_id).unwrap();
-        assert_eq!(active_workspace(&conn).unwrap().unwrap().workspace_id, a.workspace_id);
+        assert_eq!(
+            active_workspace(&conn).unwrap().unwrap().workspace_id,
+            a.workspace_id
+        );
 
         // 关闭活动 → 无活动，但两个 workspace 仍在册（控制态保留）
         close_workspace(&conn, &a.workspace_id).unwrap();

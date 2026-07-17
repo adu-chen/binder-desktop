@@ -43,7 +43,7 @@ terminal_states: Closed
 - **scope**：单个 workspace 内文档一次编辑会话（打开→编辑→保存协同→关闭）的完整生命周期
 - **context**：目标 DocRef（A-SYS-I-P-01）、编辑模型（内容块树）、脏态标记、加载/解析结果
 - **states**：Closed、Loading、Ready、Editing、ReadOnly、Conflicted
-- **events**：open、loadOk、parseFail、loadFail、edit、saved、close、confirmDiscard、retry、
+- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、saved、close、confirmDiscard、retry、
   externalChange、saveConflict、conflictKeepMine、conflictReload
 - **transitions（主表）**：
 
@@ -54,9 +54,11 @@ terminal_states: Closed
 | Loading | parseFail | — | ReadOnly | 降级只读呈现，不静默丢内容 |
 | Loading | loadFail | — | Closed | 统一错误形状，会话不建立 |
 | Ready | edit | — | Editing | 更新编辑模型；驱动 SM-WS-01 Idle→Dirty（X-INTER-001） |
+| Ready | draftDiffApplied | DE pending diff 命中当前编辑器块 | Editing | after 替换进目标 Block，GreenReview 标绿，驱动 SM-WS-01 Dirty |
 | Ready | externalChange | 无脏态（BR-ED-STATE-003） | Loading | 自动重载磁盘内容 + 非阻断提示 |
 | Editing | edit | — | Editing | 持续编辑，脏态保持 |
-| Editing | saved | SM-WS-01 达 Saved（X-INTER-001 回执） | Ready | 脏态清除 |
+| Editing | draftDiffApplied | — | Editing | 持续草稿编辑，脏态保持；重叠 diff 由 DE 冲突规则约束 |
+| Editing | saved | SM-WS-01 达 Saved（X-INTER-001 回执） | Ready | 脏态清除；已 accepted 的 GreenReview 复位 |
 | Editing | externalChange / saveConflict | 有脏态（WS 事件/SM-WS-01 冲突回执） | Conflicted | 冲突提示，等待用户显式裁决 |
 | Conflicted | conflictKeepMine | 用户显式选择保留己方编辑 | Editing | 脏态保留；后续 save 经 overrideConfirmed 覆盖确认 |
 | Conflicted | conflictReload | 用户显式选择放弃并重载 | Loading | 丢弃脏态（显式）+ 重载磁盘内容 |
@@ -86,7 +88,7 @@ terminal_states: Closed
 
 | 转移点 | 方向 | 契约 |
 |---|---|---|
-| 脏态产生 | SM-ED-01（Ready→Editing 的 edit）→ SM-WS-01（Idle→Dirty） | ED 的 edit 事件是 SM-WS-01 Dirty 的唯一业务驱动源；语义为"编辑模型已偏离落盘内容" |
+| 脏态产生 | SM-ED-01（Ready→Editing 的 edit/draftDiffApplied）→ SM-WS-01（Idle→Dirty） | 用户编辑与 DE 草稿 diff 应用都是 Dirty 驱动源；语义为"编辑模型已偏离落盘内容" |
 | 保存回执 | SM-WS-01（Saving→Saved）→ SM-ED-01（Editing→Ready 的 saved） | WS 落盘成功回执驱动 ED 清脏态；SaveError 不发 saved，ED 停留 Editing 可重试 |
 
 两侧对接一致性（事件语义、回执时机）登记 A-SYS-M-S-01 §5，在 G5 跨模块联调验证。
@@ -104,7 +106,7 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 
 ## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
 
-- **SM-ED-01 正路**：Closed→open→Loading→loadOk→Ready→edit→Editing→saved→Ready→close→Closed。
+- **SM-ED-01 正路**：Closed→open→Loading→loadOk→Ready→edit/draftDiffApplied→Editing→saved→Ready→close→Closed。
 - **降级与错误路**：parseFail→ReadOnly（内容可见）→retry→Loading；loadFail→Closed 会话不建立；
   save 失败停留 Editing 可重试（SM-WS-01 SaveError 侧验证归 WS）。
 - **禁止转移**：Closed/Loading/ReadOnly→Editing 不可达；Editing 无 saved/confirmDiscard 时 close
@@ -152,3 +154,4 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 | 2026-06-11 | v1.0 | 初版（ED G2 状态机件）：定义 SM-ED-01 文档编辑会话机（Closed/Loading/Ready/Editing/ReadOnly，含 APC §6 全部必备字段）；ED↔WS 脏态/保存 X-INTER-001 转移契约（edit→Dirty 唯一驱动、Saved 回执清脏态）；decoration/分页/未归属辅助链不建机的豁免说明；满足 X-SEQ-003 注册前置；测试矩阵（正路/降级/禁止转移/离线验收）；债务（多会话并发、docx 失败细分、confirmDiscard 形态延后） |
 | 2026-06-11 | v1.1 | 人类决策同步：inline-assist/autocomplete 归属确认为 AG（§4/§6 表述更新，状态机由 AG G2 定义，ED 仅承载呈现） |
 | 2026-06-12 | v1.2 | Q2 缺口补遗：SM-ED-01 新增 Conflicted 态与 externalChange/saveConflict/conflictKeepMine/conflictReload 事件；forbidden 增「有脏态不得静默重载」「冲突不得自动消解」；acceptance 同步（承载 BR-ED-STATE-003，对接 SM-WS-01 冲突路径与 BR-WS-OBS-001 事件） |
+| 2026-07-08 | v1.3 | 增加 draftDiffApplied 事件：DE pending diff 命中当前编辑器块时由 ED 受控接口替换 after、进入 Editing 并驱动保存链；Saved 后清除已 accepted 的 GreenReview |

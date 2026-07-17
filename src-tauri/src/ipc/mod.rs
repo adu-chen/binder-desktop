@@ -137,7 +137,10 @@ pub enum AgTurnEvent {
         rel_path: String,
     },
     /// 回合正常完成（含 stop_reason:"cancelled" 中断终态）。
-    Done { turn_id: String, stop_reason: String },
+    Done {
+        turn_id: String,
+        stop_reason: String,
+    },
     /// 回合错误（含可重试标记）。
     Error {
         turn_id: String,
@@ -207,8 +210,12 @@ mod tests {
     #[test]
     fn stream_event_has_three_terminal_states_and_correlated_chunks() {
         let terminals = [
-            StreamEvent::Completed { correlation_id: "c".into() },
-            StreamEvent::Interrupted { correlation_id: "c".into() },
+            StreamEvent::Completed {
+                correlation_id: "c".into(),
+            },
+            StreamEvent::Interrupted {
+                correlation_id: "c".into(),
+            },
             StreamEvent::Error {
                 correlation_id: "c".into(),
                 error: IpcError::new("E", "m", false, false),
@@ -244,7 +251,9 @@ mod tests {
             diff_id: "d1".into(),
             rel_path: "a.md".into(),
         };
-        assert!(serde_json::to_string(&diff).unwrap().contains("\"type\":\"diff_proposed\""));
+        assert!(serde_json::to_string(&diff)
+            .unwrap()
+            .contains("\"type\":\"diff_proposed\""));
 
         // 三终态：完成 / 中断（done+cancelled）/ 错误
         let terminals = [

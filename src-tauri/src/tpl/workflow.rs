@@ -61,13 +61,33 @@ pub fn transition(state: WorkflowState, event: WorkflowEvent) -> Option<Workflow
     use WorkflowState::*;
     let next = match (state, event) {
         // 启动：首步有确认点→等待确认；否则直接执行。
-        (Idle, Start { first_has_confirm: true }) => AwaitingConfirm,
-        (Idle, Start { first_has_confirm: false }) => StepRunning,
+        (
+            Idle,
+            Start {
+                first_has_confirm: true,
+            },
+        ) => AwaitingConfirm,
+        (
+            Idle,
+            Start {
+                first_has_confirm: false,
+            },
+        ) => StepRunning,
         // 确认点：用户确认后执行。
         (AwaitingConfirm, ConfirmStep) => StepRunning,
         // 步成功且有后续：后续有确认点→等待确认；否则续行。
-        (StepRunning, StepOk { next_has_confirm: true }) => AwaitingConfirm,
-        (StepRunning, StepOk { next_has_confirm: false }) => StepRunning,
+        (
+            StepRunning,
+            StepOk {
+                next_has_confirm: true,
+            },
+        ) => AwaitingConfirm,
+        (
+            StepRunning,
+            StepOk {
+                next_has_confirm: false,
+            },
+        ) => StepRunning,
         // 末步完成 → 闭合。
         (StepRunning, AllDone) => Completed,
         // 失败 → 暂停（不静默跳步）；用户暂停 → 暂停。
@@ -155,17 +175,49 @@ mod tests {
     #[test]
     fn confirm_gated_lifecycle_and_abort() {
         // 首步有确认点：Idle→AwaitingConfirm，须 confirm 才执行
-        assert_eq!(transition(Idle, Start { first_has_confirm: true }), Some(AwaitingConfirm));
+        assert_eq!(
+            transition(
+                Idle,
+                Start {
+                    first_has_confirm: true
+                }
+            ),
+            Some(AwaitingConfirm)
+        );
         assert_eq!(transition(AwaitingConfirm, ConfirmStep), Some(StepRunning));
         // 不得绕过确认点直接在 StepRunning confirm
         assert_eq!(transition(StepRunning, ConfirmStep), None, "不得绕过确认点");
         // 后续步有确认点 → 回到 AwaitingConfirm（强制）
-        assert_eq!(transition(StepRunning, StepOk { next_has_confirm: true }), Some(AwaitingConfirm));
+        assert_eq!(
+            transition(
+                StepRunning,
+                StepOk {
+                    next_has_confirm: true
+                }
+            ),
+            Some(AwaitingConfirm)
+        );
         // 无确认点续行 / 末步完成
-        assert_eq!(transition(StepRunning, StepOk { next_has_confirm: false }), Some(StepRunning));
+        assert_eq!(
+            transition(
+                StepRunning,
+                StepOk {
+                    next_has_confirm: false
+                }
+            ),
+            Some(StepRunning)
+        );
         assert_eq!(transition(StepRunning, AllDone), Some(Completed));
         // 首步无确认点直接执行
-        assert_eq!(transition(Idle, Start { first_has_confirm: false }), Some(StepRunning));
+        assert_eq!(
+            transition(
+                Idle,
+                Start {
+                    first_has_confirm: false
+                }
+            ),
+            Some(StepRunning)
+        );
         // 中止 → Aborted（无半成品）
         assert_eq!(transition(StepRunning, Abort), Some(Aborted));
         assert_eq!(transition(AwaitingConfirm, Abort), Some(Aborted));
@@ -178,11 +230,20 @@ mod tests {
         // 失败只到 Paused，不自动前进
         assert_eq!(transition(StepRunning, StepFail), Some(Paused));
         // StepRunning 不得绕过 Paused 直接跳步
-        assert_eq!(transition(StepRunning, SkipConfirmed { has_more: true }), None);
+        assert_eq!(
+            transition(StepRunning, SkipConfirmed { has_more: true }),
+            None
+        );
         // 暂停后：重试 / 显式跳过（留痕）
         assert_eq!(transition(Paused, Resume), Some(StepRunning));
-        assert_eq!(transition(Paused, SkipConfirmed { has_more: true }), Some(StepRunning));
-        assert_eq!(transition(Paused, SkipConfirmed { has_more: false }), Some(Completed));
+        assert_eq!(
+            transition(Paused, SkipConfirmed { has_more: true }),
+            Some(StepRunning)
+        );
+        assert_eq!(
+            transition(Paused, SkipConfirmed { has_more: false }),
+            Some(Completed)
+        );
         // 终态不再转移
         for ev in [ConfirmStep, AllDone, StepFail, Resume, Abort] {
             assert_eq!(transition(Completed, ev), None);
@@ -209,7 +270,11 @@ mod tests {
         assert!(!ids.contains(&"r4"), "跨 workspace 不返回");
         // 更新中断点（恢复后续行）
         save_run(&conn, "r1", "ws1", "wf1", 3, "StepRunning").unwrap();
-        let r1 = recover_runs(&conn, "ws1").unwrap().into_iter().find(|(id, _, _)| id == "r1").unwrap();
+        let r1 = recover_runs(&conn, "ws1")
+            .unwrap()
+            .into_iter()
+            .find(|(id, _, _)| id == "r1")
+            .unwrap();
         assert_eq!(r1.1, 3); // current_step 已更新
     }
 }

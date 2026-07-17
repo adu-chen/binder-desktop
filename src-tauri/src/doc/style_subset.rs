@@ -17,13 +17,24 @@ pub enum StyleTier {
 
 // 三级清单（A-DOC-M-T-01 §4 SSOT，与文档逐项对应）。
 const REQUIRED: &[&str] = &[
-    "heading", "paragraph_align", "bold", "italic", "underline",
-    "ordered_list", "unordered_list", "basic_table", "image",
+    "heading",
+    "paragraph_align",
+    "bold",
+    "italic",
+    "underline",
+    "ordered_list",
+    "unordered_list",
+    "basic_table",
+    "image",
 ];
 const PARTIAL: &[&str] = &["text_color", "font_family", "font_size"];
 const UNSUPPORTED: &[&str] = &[
-    "header_footer", "text_box", "smartart", "vba_macro",
-    "complex_style_inheritance", "merged_cells",
+    "header_footer",
+    "text_box",
+    "smartart",
+    "vba_macro",
+    "complex_style_inheritance",
+    "merged_cells",
 ];
 
 /**
@@ -87,14 +98,25 @@ mod tests {
     // 损失告知：Partial/Unsupported 必入清单（不静默丢失）；Required 不入（往返保真）。
     #[test]
     fn loss_report_surfaces_all_non_required() {
-        let present = ["heading", "bold", "font_size", "text_color", "smartart", "header_footer"];
+        let present = [
+            "heading",
+            "bold",
+            "font_size",
+            "text_color",
+            "smartart",
+            "header_footer",
+        ];
         let report = loss_report(&present);
         // Required（heading/bold）不入清单
         assert!(!report.iter().any(|(f, _)| f == "heading" || f == "bold"));
         // Partial（font_size/text_color）+ Unsupported（smartart/header_footer）全部告知
         assert_eq!(report.len(), 4);
-        assert!(report.iter().any(|(f, t)| f == "font_size" && *t == StyleTier::Partial));
-        assert!(report.iter().any(|(f, t)| f == "smartart" && *t == StyleTier::Unsupported));
+        assert!(report
+            .iter()
+            .any(|(f, t)| f == "font_size" && *t == StyleTier::Partial));
+        assert!(report
+            .iter()
+            .any(|(f, t)| f == "smartart" && *t == StyleTier::Unsupported));
         // 纯必需子集 → 无损失告知（往返保真）
         assert!(loss_report(&["heading", "bold", "image"]).is_empty());
     }

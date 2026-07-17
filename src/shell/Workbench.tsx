@@ -3,8 +3,7 @@ import { useWorkspaceShell } from "../store/workspaceShell";
 import { LeftRail, type RailPanelId } from "../components/shell/LeftRail";
 import { Splitter } from "../components/shell/Splitter";
 import { layoutStore, useLayoutStore } from "../store/layoutStore";
-import { BinderWordmark } from "../components/brand/BinderWordmark";
-import { WorkspaceMenu } from "../components/shell/WorkspaceMenu";
+import { AppTitleBar } from "../components/shell/AppTitleBar";
 import { FileTree } from "../components/ws/FileTree";
 import { TimelinePanel } from "../components/ws/TimelinePanel";
 import { PrvPanel } from "../components/prv/PrvPanel";
@@ -22,6 +21,8 @@ import { startSmListeners, stopSmListeners } from "../services/smListeners";
  * Left Rail（PI-FE-02）已接入；side/center/chat 内容由后续 PI 填充。
  * activePanel 是视图层导航态（本地持有，非 X-FORBID-007 限制的权威业务态）。
  */
+const basename = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
+
 export function Workbench() {
   const { activeWorkspace } = useWorkspaceShell();
   const [activePanel, setActivePanel] = useState<RailPanelId>("files");
@@ -29,6 +30,11 @@ export function Workbench() {
   const { sideW, chatW } = useLayoutStore();
   const { tabs, activeTabId } = useTabsStore();
   const activeTab = tabs.find((t) => t.id === activeTabId);
+  const title = activeTab?.path
+    ? basename(activeTab.path)
+    : activeWorkspace?.rootPath
+      ? basename(activeWorkspace.rootPath)
+      : "Binder";
   // 面板重挂键：workspace 变更即重挂 FileTree/Editor/AgentPanel，载入新项目内容。
   const wsKey = activeWorkspace?.workspaceId ?? "none";
   // 切换/打开 workspace 时清空标签（避免残留旧项目标签；tabsStore 是单例，需显式重置）。
@@ -44,10 +50,7 @@ export function Workbench() {
 
   return (
     <div className="workbench">
-      <header className="titlebar">
-        <BinderWordmark size={16} />
-        <WorkspaceMenu />
-      </header>
+      <AppTitleBar title={title} />
 
       <div
         className="work"
@@ -95,7 +98,6 @@ export function Workbench() {
       <footer className="statusbar">
         <span>就绪</span>
         <span>{activeWorkspace?.rootPath ?? "无 workspace"}</span>
-        <span>账户/订阅 · ACCT/ENT</span>
       </footer>
     </div>
   );

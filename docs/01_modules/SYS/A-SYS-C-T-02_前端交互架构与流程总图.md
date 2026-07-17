@@ -37,7 +37,8 @@ forbidden: diff卡片, AI建议卡, 修改面板, 修改组件, 变更卡, 审�
 -->
 PendingDiff（TERM-DE-001）在对话面板（Chat Panel）中的视图投影组件，具备 8 个互斥可辨状态
 （pending / validating / applying / accepted / rejected / expired / conflict / error）；
-与编辑器绿色审阅层（GreenReview，TERM-ED-003）一一对应，任意一侧裁决另一侧同步。
+与编辑器绿色审阅层（GreenReview，TERM-ED-003）一一对应，任意一侧裁决另一侧同步。DiffCard
+归属触发它的 AgentTurn 信息流，默认渲染在对应 assistant 消息后方；批量裁决条是独立全局操作控件。
 状态机来源：SM-DE-01；视觉规范：docs/binder_ui/binder-showcase.jsx §02。
 
 <!-- TERM
@@ -96,16 +97,18 @@ UI 组件（界面分区，§3）
 
 | 区域 | 归属模块 | 承载 |
 |---|---|---|
-| 侧边栏 | WS | 文件树 / 搜索 / workspace 切换（ws.list_docs/search/switch） |
-| 编辑区 | ED | md/docx 富文本编辑、分页、装饰层（diff/局部修改呈现挂载点） |
-| 对话区（代理编辑面板） | AG | 代理编辑（AgentEdit）：编辑/构建双模式切换、回合输入与流式回显（ag.start_turn/turn_stream）；构建过程同窗口呈现 |
+| 窗口标题栏 | SYS | Tauri macOS overlay 标题栏；保留系统 traffic lights，只显示当前标题（当前标签名 / workspace 名 / Binder），通过 `data-tauri-drag-region="deep"` 承载窗口拖拽区，不承载 Logo、路径、账号或订阅入口 |
+| 模块栏 | SYS（导航）+ WS/AST/KB/TPL | WS/OL/ME/KN/TM/TL 模块入口；顶部 Binder Logo 承载 workspace 菜单（切换最近 / 打开其他文件夹 / 返回欢迎页），具体动作仍走 WS command 与脏态守卫 |
+| 侧边栏 | WS | 文件树 / 搜索（ws.list_docs/search）；只读预览文件保持正常可点击文件行，叠加轻量 `VIEW` 模式标记，不以灰禁用表达 |
+| 编辑区 | ED | md / b-docx / .html 富文本编辑、分页、装饰层（diff/局部修改呈现挂载点）；原生 docx 只读预览 |
+| 对话区（代理编辑面板） | AG | 代理编辑（AgentEdit）：编辑/构建双模式切换、回合输入与流式回显（ag.start_turn/turn_stream）；每轮产出的 DiffCard 插入对应 assistant 消息后；构建过程同窗口呈现 |
 | diff 审阅 | DE（+ED 装饰层） | diff 高亮（编辑区内联）+ 裁决控件（接受/拒绝） |
 | 时间轴面板 | WS | 文档历史节点浏览/预览/还原（ws.list_timeline/restore） |
 | 预览面板 | PRV | docx 全保真/Excel/PPT/音视频（prv.preview，独立面板/标签，与编辑分离） |
 | 构建视图 | CBT | 任务计划/进度/接管（cbt.start_build；构建移交 切换） |
 | 资产面板 | AST/KB/TPL | 记忆/知识库/模板管理 |
 | @mention 触发 | REF | 编辑/对话输入内的引用候选浮层（前端进程内，经 ED 扩展点） |
-| 账户/订阅状态栏 | ACCT/ENT | 登录态 + 用量/订阅展示 + 门户跳转（ent.open_portal，购买在浏览器） |
+| 状态栏 | SYS/WS | 基础就绪态与当前 workspace 路径展示；不承载账户、订阅或 ACCT/ENT 入口 |
 
 ## §4 核心交互流程总图
 
@@ -123,11 +126,16 @@ flowchart TD
   W2 --> O
   O --> WB[主工作台 Workbench]
   C -- 是 --> WB
-  WB -. 关闭/切换 workspace .-> C
+  WB --> LM[模块栏 Logo workspace 菜单]
+  LM --> S[ws.switch_workspace / ws.open_workspace]
+  LM --> CL[ws.close_workspace]
+  S --> WB
+  CL --> C
 ```
 
 > 欢迎页↔工作台的切换 = `workspace.is_active` 的投影（X-FORBID-007 范例）；登录非进入工作台的
-> 前置（本地编辑离线可用，REQ-CORE-009），仅 AI 功能要求会话+订阅。
+> 前置（本地编辑离线可用，REQ-CORE-009），仅 AI 功能要求会话+订阅。Workbench 内关闭/切换
+> workspace 的入口统一在模块栏顶部 Logo，标题栏仅承担标题显示与窗口拖拽。
 
 ### 4.2 写作与保存（投影 SM-ED-01 + SM-WS-01，含外部修改冲突）
 
@@ -145,7 +153,7 @@ flowchart TD
   SV --> E
 ```
 
-### 4.3 对话→diff→裁决→落盘（投影 SM-AG-01 + SM-DE-01 + SM-WS-02）
+### 4.3 对话→diff→草稿裁决→保存落盘（投影 SM-AG-01 + SM-DE-01 + SM-ED-01 + SM-WS-01）
 
 ```mermaid
 flowchart TD
@@ -154,34 +162,52 @@ flowchart TD
   G -- 是 --> ST[网关流式回显 turn_stream]
   ST --> PR{含修改建议?}
   PR -- 否 --> EN[回复完成]
-  PR -- 是 --> GD[de.generate_diff 按 blockId 定位]
-  GD --> DEC[编辑区装饰层呈现 diff + 裁决控件]
-  DEC --> AC[接受 de.accept_diff]
+  PR -- 是 --> PJ[propose_edit 读取 AgentEditableSnapshot + 返回 DiffProjection]
+  PJ --> OK{投影可应用到当前编辑器?}
+  OK -- 是 --> DR[ED 受控接口把 after 应用为草稿 + GreenReview 标绿]
+  OK -- 否 --> ER[DiffCard error 不进草稿]
+  DR --> DEC[DiffCard 插入本轮 assistant 消息后]
+  ER --> DEC
+  DEC --> AC[接受 de.accept_draft_diff]
   DEC --> RJ[拒绝 de.reject_diff]
-  AC --> AP[ws.apply_diff 落盘 + 记时间轴节点]
-  RJ --> CL[装饰复位 文件不变]
-  AP --> CL
+  AC --> SV[用户保存 / ws.save_doc]
+  RJ --> RB[ED 回滚 before + GreenReview 复位]
+  SV --> CL[保存成功 清脏态 + GreenReview 复位]
+  RB --> CL
 ```
+
+> AgentEdit 的唯一链路是 `AgentEditableSnapshot → DiffProjection → DiffCard/ED 草稿`：前端不得从
+> tool_request 或整篇当前内容推断 before/after。后台文本/.html diff 无法应用到当前编辑器草稿时，可保留
+> `de.accept_diff → ws.apply_diff` 路径；既有 BDocx 必须先应用到当前编辑器 HTML 草稿，未应用时不得后台 raw
+> apply 写入 `.docx`。当前编辑器命中的块级 diff 以草稿编辑为主路径，accept 不再直接写文件。
+> DiffCard 是 AgentTurn 信息流内容，不得沉底汇总为会话级全局列表；无历史锚点的 legacy diff 可显示
+> 在“未归属修改建议”fallback 区。批量裁决条仍可作为全局操作控件显示在输入框上方。
 
 > 局部修改/辅助续写（SM-AG-03）走旁路：编辑区触发→候选装饰呈现→**采纳=用户编辑**
 > （ed.apply_edit 进 §4.2 写作流），不经 diff 裁决。
 
-### 4.4 docx 开 / 编 / 预览 / 存（投影 SM-DOC-01 + SM-ED-01）
+### 4.4 原生 docx 预览 / b-docx 编辑 / 存（投影 SM-DOC-01 + SM-ED-01）
 
 ```mermaid
 flowchart TD
-  OP[打开 docx] --> MD{编辑 or 预览?}
-  MD -- 编辑 --> CE[doc.open_for_edit Pandoc→编辑模型 + 子集告知]
+  OP[打开 docx 类文件] --> KIND{原生 docx?}
+  KIND -- 是 --> CV[doc.render_preview LibreOffice→PDF 全保真]
+  CV --> PV[预览面板只读呈现]
+  PV --> MK{创建 b-docx 进行编辑?}
+  MK -- 是 --> DR[doc.create_draft → *.draft.docx / BDocx]
+  DR --> CE[doc.open_for_edit Pandoc→HTML 编辑模型 + 子集告知]
+  KIND -- 否（b-docx） --> CE
   CE --> ED2[编辑区编辑 同 md 交互]
   ED2 --> SVD[doc.save_from_edit Pandoc→docx → ws.save_doc]
-  MD -- 预览 --> CV[doc.render_preview LibreOffice→PDF 全保真]
-  CV --> PV[预览面板只读呈现]
   CE -. 转换失败 .-> ER[失败态 会话不建立]
   CV -. 转换失败 .-> ER2[预览失败态 不空白]
 ```
 
 > 编辑链（Pandoc，子集化可改）与预览链（LibreOffice→PDF，全保真只读）**完全分离**
-> （BR-DOC-DATA-001）；用户可在同一 docx 间切换两种模式。
+> （BR-DOC-DATA-001）；原生 docx 不直接进入编辑区，b-docx 才进入 ED 编辑态。b-docx 来源包括
+> EditDraft、文件树新建和 Agent 创建。前端文件树不得只靠文件名猜测 docx 路由，必须消费
+> `ws.list_docs.is_bdocx`：`true` 进入 ED/DOC 编辑链，`false` 进入 PRV 只读预览链；`*.draft.docx`
+> 仅作为兼容识别来源。
 
 ## §4bis 次级交互流程（主干之外，贴各模块 G4 再细化）
 
@@ -189,39 +215,73 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  T[编辑触发 / 键入] --> TH{节流通过?}
-  TH -- 否 --> ID[静默丢弃]
+  T[快捷键手动触发 捕获触发锚和前后文指纹] --> TH{450ms 防抖/latest-wins 通过?}
+  TH -- 否 --> ID[静默忽略 不发起模型调用]
   TH -- 是 --> GT{门禁可用?}
   GT -- 无订阅/断网 --> SI[静默不提供 不打断编辑]
   GT -- 是 --> RQ[ag.request_assist 轻量调用]
-  RQ --> CA[ED 装饰层呈现内联候选]
+  RQ --> VC{锚点有效且候选满足契约?}
+  VC -- 候选不足 --> EMP[保留轻量空态 不展示半候选]
+  VC -- 锚失效 --> AL[静默关闭 ag.finish_assist anchor_lost/dismiss]
+  VC -- 是 --> CA[ED 装饰层/overlay 呈现候选]
   CA --> AK[采纳 → ed.apply_edit 作为用户编辑]
-  CA --> DM[忽略/继续键入 → 装饰复位]
+  CA --> TC[点击浮层外/光标或选区离开触发锚]
+  CA --> DM[忽略/继续键入/交互锚失效 → 装饰复位 ag.finish_assist dismiss]
+  TC --> DM
+  AK --> FA[ag.finish_assist accept]
   AK --> EF[进 §4.2 写作流 脏态/保存]
 ```
 
 > 关键区分：辅助采纳是**用户编辑操作**（经 ed.apply_edit 走写作流），不经 diff 裁决；失败一律
-> 静默（不报错、不弹窗）。这是 AI 编辑三层中「辅助续写/局部修改」（①②，轻量直改）与「代理编辑」
+> 静默（不报错）。辅助续写严格呈现 3 个候选，候选不足 3 条不展示半候选、不允许采纳，但保留轻量空态；
+> 空态不得吞没内部 failure_reason：service、assistStore 与 overlay 诊断点必须保留 gate/网关/解析/旧请求等原因，
+> 普通用户界面仍可只显示轻量空态；
+> 采纳位置固定为触发瞬间
+> 捕获的字符锚，不跟随采纳时光标；局部修改无选区时为光标插入，多轮只传上一轮候选结果与新指令；
+> 新请求覆盖旧请求，旧结果返回后不得展示或应用。这是 AI 编辑三层中「辅助续写/局部修改」（①②，轻量直改）与「代理编辑」
 > （③，面板级、diff 裁决、会话持久化）在交互层的分界（TERM-AG-003/004/008，2026-07-04 正式定名；
 > 「对话编辑」为已退役旧称）。
 
-### 4.6 @mention 引用注入（投影 REF-INJECT，编辑/对话输入内浮层）
+> 前端实现约束：快捷键监听不得只依赖编辑器内部冒泡事件，须在编辑器宿主焦点范围内捕获
+> `Cmd/Ctrl+J` 与 `Cmd/Ctrl+K` 并读取当前 ED 文档上下文；候选 overlay 坐标须区分逻辑锚点与视觉锚点：
+> 逻辑锚点用于采纳写入，视觉锚点用于浮层放置。辅助续写按光标矩形优先下方贴近展示，局部修改按
+> 选区矩形优先上方居中展示（无选区按光标点），空间不足时上下翻转，横向只做内容区内最小偏移，
+> 不得把浮层推到与插入点无关的编辑器窗口边缘；右侧边界必须以 editor-host/center 可见区为硬边界，
+> 右侧 gutter 与代理编辑面板不得覆盖或裁掉浮层；
+> 编辑器缩放只影响光标/选区视觉锚点，不影响浮层控件尺寸；浮层布局边界使用 editor-paper 可视区与
+> editor-host 的交集，不得使用缩放后的 ProseMirror 正文矩形压缩浮层。滚动、缩放或窗口 resize 后，
+> 前端应在逻辑锚仍有效时重算浮层位置，结构锚失效才关闭。浮层放置使用稳定静态尺寸模型，
+> 不通过运行时 DOM 测量反向驱动状态；局部修改初始态避免过大高度预估，辅助续写触发后必须稳定显示生成中浮层。
+> overlay 的 Tab/1/2/3 只在焦点仍处于编辑器宿主或 overlay 内时采纳，输入法 composition 中不得采纳。
+> 局部修改弹窗已激活时再次触发 `Cmd/Ctrl+K`，视为放弃本次修改并关闭弹窗，不重开目标、不发起新请求。
+> 辅助续写和局部修改浮层打开后，用户点击浮层外、移动光标或改变选区，均视为当前交互目标离开触发锚；
+> 前端必须关闭浮层并丢弃已返回/后续返回内容，不展示、不应用、不入历史。该用户放弃路径回写
+> `ag.finish_assist dismiss`；只有结构性定位失败才回写 `anchor_lost`。
+
+### 4.6 输入引用注入（投影 REF-INJECT，编辑/对话输入内浮层）
 
 ```mermaid
 flowchart TD
-  AT["输入 @ 触发"] --> LC[ref.list_candidates 限 workspace 内候选]
+  SRC["输入 @ / 拖拽 / 粘贴"] --> TY{来源类型}
+  TY -- "@mention" --> LC[ref.list_candidates 限 workspace 内候选]
   LC --> SEL{选定目标?}
   SEL -- 无候选 --> EM[空浮层 非错误]
   SEL -- 是 --> RA[ref.resolve_anchor 解析引用锚]
-  RA --> MK[输入内渲染引用标记]
-  MK --> ON{回合发起}
-  ON --> BI[ref.build_injection 读取时点内容]
-  BI --> AG2[注入 AG 回合上下文 显式注入优先保留]
+  TY -- "选区/文件/标签/会话/资产/URL/长文本" --> RP[生成 ReferencePayload]
+  RA --> RP
+  RP --> MK[输入流插入 ReferenceToken + 草稿 chip/tray]
+  MK --> CP{草稿引用 > 5?}
+  CP -- 是 --> CO[chip/tray 折叠]
+  CP -- 否 --> ON{回合发起}
+  CO --> ON
+  ON --> AG2[references 传入 AG 回合上下文 显式注入优先保留]
+  AG2 --> CL[草稿 chip 生命周期终止 已发送消息保留 ReferenceToken]
   RA -. 目标不可达 .-> EF2[明确失败 无悬空引用]
 ```
 
-> 候选/标记经 ED 扩展点呈现（X-FORBID-005）；注入是**只读参考**（RefInjection 内容副本，无写句柄），
-> 与「编辑对象」路径（diff 落盘）由数据结构区分（A-SYS-I-P-01）。
+> 候选/标记经 ED 扩展点呈现（X-FORBID-005）；注入是**只读参考**（ReferencePayload/RefInjection，
+> 无写句柄），与「编辑对象」路径（diff 落盘）由数据结构区分（A-SYS-I-P-01）。短普通文本粘贴仍进
+> 输入正文；外部纯文本超过阈值才生成 `long_text` ReferencePayload。
 
 ### 4.7 时间轴回溯与还原（投影 SM-WS-03）
 
@@ -361,4 +421,23 @@ status: mapped
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（视图层 SSOT，补 Q3 暴露的前端交互收口空白）：应用外壳两阶段（欢迎页/主工作台，投影 workspace 活动态）；主工作台界面分区→归属模块映射（含欢迎页/侧边栏/编辑/对话/diff/时间轴/预览/构建/资产/@mention/账户栏）；四条核心交互流程总图（启动欢迎页 / 写作保存含冲突 / 对话→diff→裁决→落盘 / docx 开编预览存，mermaid）；跨模块界面协作点 5 项；核心约束 X-FORBID-007（前端状态投影、不另立权威）；REQ_MAP（REQ-SYS-006，新增于 A-SYS-M-D-01）；债务（细粒度交互/布局/多窗形态贴 G4 与 §9 原料） |
 | 2026-06-12 | v1.1 | 补次级交互流程（人类指示）：§4bis 新增 6 条——内联辅助/自动补全（4.5，旁路非 diff）、@mention 引用注入（4.6，只读参考）、时间轴回溯还原（4.7）、Chat↔Build 接管与多文件构建（4.8）、本地资产管理（4.9，workspace 隔离）、账号/订阅/门户（4.10，门户在浏览器）；§5 协作点表补 3 项（Chat↔Build 接管/资产注入/外部变更冲突）；§9 债务更新（骨架含主干+次级，控件级细化贴 G4）；无新增注册项，ADUS 计数不变 |
+| 2026-07-08 | v1.2 | 修正对话→diff 主流程：当前编辑器命中的块级 diff 先应用为 ED 草稿并置脏态，accept 仅确认，reject 回滚，save 成功后复位 GreenReview；后台/整篇 diff 可保留旧 apply 路径 |
 | 2026-07-04 | v1.2 | 术语沿革回写（人类三轮裁决）：§3 对话区更名「代理编辑面板」（AgentEdit，编辑/构建双模式）；4.5 分界句改用 AI 编辑三层正式名（辅助续写/局部修改/代理编辑，「对话编辑」退役）；4.8 更名「构建移交/回落」并按新判据重绘（对话阶段→蓝图→显式触发即确认/提议经确认→原窗口呈现→执行期禁对话→回落编辑） |
+| 2026-07-09 | v1.3 | 修正 DiffCard 视图归属：每轮 DiffCard 渲染到对应 assistant 消息后，legacy 未归属卡进入 fallback 区；批量裁决条保留输入框上方全局操作定位 |
+| 2026-07-08 | v1.3 | §4.6 从 @mention 单一路径扩为输入引用注入流程：覆盖 @mention、拖拽、粘贴；引入 ReferencePayload→ReferenceToken→AG references→发送后保留令牌的前端状态表现；补草稿 chip/tray 超过 5 条折叠与长文本阈值行为 |
+| 2026-07-09 | v1.4 | 同步 TERM-DOC-003 b-docx/BDocx：§3 编辑区承载改为 md / b-docx / .html；§4.4 改为原生 docx 只读预览、创建 b-docx 后进入编辑链，并标明 b-docx 来源 |
+| 2026-07-09 | v1.5 | 补充 BDocx 前端投影约定：文件树必须消费 `ws.list_docs.is_bdocx` 区分 b-docx 编辑链与原生 docx 预览链，禁止仅用扩展名或文件名推断普通 `.docx` 是否可编辑 |
+| 2026-07-09 | v1.6 | 修正 AgentEdit 前端主链：对话修改经 `AgentEditableSnapshot → DiffProjection → DiffCard/ED 草稿`，前端禁止预测 before/after；既有 BDocx 未进当前编辑器 HTML 草稿时不得后台 raw apply |
+| 2026-07-16 | v1.7 | 细化 §4.5 AG-ASSIST 交互：快捷键手动触发、防抖/latest-wins、辅助续写 3 候选、局部修改光标插入与 refine 上轮基底，采纳仍经 ed.apply_edit 进入写作流 |
+| 2026-07-16 | v1.8 | 同步窗口壳 overlay 改造：§3 增加窗口标题栏与模块栏职责，标题栏只显示当前标题并作为拖拽区；workspace 切换/打开/关闭入口从标题栏路径迁移到模块栏顶部 Binder Logo；§4.1 更新欢迎页/工作台切换流程 |
+| 2026-07-16 | v1.9 | 补充 §4.5 AG-ASSIST 前端触发与定位约束：编辑器宿主内 capture 快捷键兜底、读取当前 ED 上下文，候选 overlay 按编辑纸张可视区钳制 |
+| 2026-07-16 | v1.10 | 修正 §4.5 局部修改弹窗激活态快捷键语义：再次触发 `Cmd/Ctrl+K` 为放弃并关闭，不重开目标、不发起新请求 |
+| 2026-07-16 | v1.11 | 同步文件树只读预览视觉：只读预览文件不再作为灰禁用状态呈现，改为正常可点击文件行叠加轻量 `VIEW` 模式标记，open/dirty/pending 等会话状态仍保持互斥投影 |
+| 2026-07-16 | v1.12 | 续修 §4.5 AG-ASSIST：补触发锚前后文指纹、严格 3 候选、终态回写 `ag.finish_assist`、overlay 键盘焦点与输入法保护 |
+| 2026-07-16 | v1.13 | 修正 §4.5 AG-ASSIST 浮层定位：逻辑锚点用于写入，视觉锚点用于放置；辅助续写贴近光标、局部修改贴近选区/光标并支持上下翻转，避免边缘钳制脱离插入点 |
+| 2026-07-16 | v1.14 | 修正 §4.5 右侧遮挡边界：AG-ASSIST 浮层放置必须叠加 center/editor-host 可见右边界，靠右时 end 对齐，避免被代理编辑面板遮挡或裁切 |
+| 2026-07-16 | v1.15 | 补充 §4.5 AG-ASSIST 交互锚生命周期：点击浮层外、光标移动或选区变化即关闭辅助浮层并丢弃候选，用户放弃回写 dismiss，结构锚丢失回写 anchor_lost |
+| 2026-07-16 | v1.16 | 补充 §4.5 AG-ASSIST 缩放定位：浮层尺寸不随正文缩放；边界改用 editor-paper/editor-host 可视区；滚动、缩放、窗口 resize 后重算位置 |
+| 2026-07-16 | v1.17 | 修正 §4.5 AG-ASSIST 稳定定位：撤销运行时 DOM 测量反向驱动状态，改为静态尺寸模型，避免预估高度过大与测量链导致浮层消失 |
+| 2026-07-16 | v1.18 | 修正 §4.5 AG-ASSIST 辅助续写失败态：候选不足 3 条时保留空态，不展示半候选、不允许采纳，避免浮层瞬间关闭 |
+| 2026-07-17 | v1.19 | 收敛 §4.5 AG-ASSIST 空态诊断：普通 UI 保持轻量空态，但 service/store/overlay 必须保留内部 failure_reason |

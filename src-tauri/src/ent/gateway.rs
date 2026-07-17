@@ -81,7 +81,10 @@ pub fn cloud_error(
 pub fn is_terminal(state: InvokeState) -> bool {
     matches!(
         state,
-        InvokeState::GateDenied | InvokeState::Completed | InvokeState::Interrupted | InvokeState::Errored
+        InvokeState::GateDenied
+            | InvokeState::Completed
+            | InvokeState::Interrupted
+            | InvokeState::Errored
     )
 }
 
@@ -126,10 +129,19 @@ pub fn transition(state: InvokeState, event: InvokeEvent) -> Option<InvokeState>
 /// 门禁裁决守卫（BR-ENT-VERIFY-001 / X-FORBID-002）：每次调用须提交令牌经**服务端**裁决——本函数
 /// **无产生 Pass 的本地路径**（Pass 仅源于 ServerVerdict::Passed，不缓存复用、不本地假通过）；无令牌
 /// 或 Denied/Unreachable（断网）一律 Deny（明确拒绝，不静默重试）。返回 GateOutcome 供调用通道发起。
-pub fn submit_for_verdict(token: Option<&str>, verdict: ServerVerdict) -> Result<GateOutcome, IpcError> {
+pub fn submit_for_verdict(
+    token: Option<&str>,
+    verdict: ServerVerdict,
+) -> Result<GateOutcome, IpcError> {
     // 无令牌不得提交（无本地假通过路径）；错误经统一云错误形状（BR-SYS-OBS-001）。
     let token = token.filter(|t| !t.trim().is_empty()).ok_or_else(|| {
-        cloud_error(CloudFailure::Auth, "ENT_NO_TOKEN", "缺令牌：模型调用须提交令牌经服务端裁决", false, true)
+        cloud_error(
+            CloudFailure::Auth,
+            "ENT_NO_TOKEN",
+            "缺令牌：模型调用须提交令牌经服务端裁决",
+            false,
+            true,
+        )
     })?;
     let _ = token; // 令牌仅用于上送服务端裁决，本函数不据其本地判断
     match verdict {
@@ -176,7 +188,10 @@ async fn ensure_session_token() -> Option<String> {
         }
     };
     if !resp.status().is_success() {
-        eprintln!("[ag-gw] ✗ auth/login HTTP {} from {url}", resp.status().as_u16());
+        eprintln!(
+            "[ag-gw] ✗ auth/login HTTP {} from {url}",
+            resp.status().as_u16()
+        );
         return None;
     }
     let v: serde_json::Value = resp.json().await.ok()?;
@@ -191,6 +206,80 @@ async fn ensure_session_token() -> Option<String> {
 fn clear_session_token() {
     if let Ok(mut g) = SESSION_TOKEN.lock() {
         *g = None;
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GateCheckBody {
+    verdict: String,
+    #[allow(dead_code)]
+    reason: Option<String>,
+    reauth_required: Option<bool>,
+}
+
+fn verdict_from_gate_body(body: &GateCheckBody) -> ServerVerdict {
+    if body.verdict == "passed" {
+        ServerVerdict::Passed
+    } else {
+        ServerVerdict::Denied
+    }
+}
+
+/// 单次模型调用前提交令牌到 dev GW `/gate/check` 获取服务端裁决。
+/// 这是 auth token 复用，不是 gate pass 缓存；每次调用仍由服务端判定。
+pub async fn check_gate() -> Result<GateOutcome, IpcError> {
+    let url = format!("{}/gate/check", gw_base_url());
+    let client = reqwest::Client::new();
+    let mut retried_reauth = false;
+    loop {
+        let token = ensure_session_token().await;
+        let token_ref = token.as_deref();
+        if token_ref.is_none() {
+            return submit_for_verdict(None, ServerVerdict::Unreachable);
+        }
+        let resp = match client
+            .post(&url)
+            .json(&serde_json::json!({ "token": token_ref }))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[ag-gw] ✗ gate/check 不可达 {url}: {e}");
+                return submit_for_verdict(token_ref, ServerVerdict::Unreachable);
+            }
+        };
+        if !resp.status().is_success() {
+            if resp.status().as_u16() == 401 && !retried_reauth {
+                clear_session_token();
+                retried_reauth = true;
+                eprintln!("[ag-gw] gate/check 401，已清令牌并重试一次");
+                continue;
+            }
+            if resp.status().as_u16() == 401 {
+                clear_session_token();
+            }
+            return submit_for_verdict(token_ref, ServerVerdict::Denied);
+        }
+        let body = resp.json::<GateCheckBody>().await.map_err(|e| {
+            cloud_error(
+                CloudFailure::Gate,
+                "ENT_GATE_BAD_RESPONSE",
+                &format!("门禁响应无法解析：{e}"),
+                true,
+                false,
+            )
+        })?;
+        if body.reauth_required.unwrap_or(false) && !retried_reauth {
+            clear_session_token();
+            retried_reauth = true;
+            eprintln!("[ag-gw] gate/check 要求重新认证，已清令牌并重试一次");
+            continue;
+        }
+        if body.reauth_required.unwrap_or(false) {
+            clear_session_token();
+        }
+        return submit_for_verdict(token_ref, verdict_from_gate_body(&body));
     }
 }
 
@@ -312,7 +401,8 @@ pub async fn stream_round(
                     data = r.trim().to_string();
                 }
             }
-            let json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+            let json: serde_json::Value =
+                serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
             match event.as_str() {
                 "chunk" => {
                     if let Some(text) = json.get("text").and_then(|t| t.as_str()) {
@@ -336,7 +426,11 @@ pub async fn stream_round(
                 "done" => {
                     // 仅当本轮无工具请求时，done 才是真正完成终态。
                     if tool_calls.is_empty() {
-                        let stop = json.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("stop").to_string();
+                        let stop = json
+                            .get("stop_reason")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("stop")
+                            .to_string();
                         let _ = channel.send(AgTurnEvent::Done {
                             turn_id: turn_id.to_string(),
                             stop_reason: stop,
@@ -347,9 +441,20 @@ pub async fn stream_round(
                 "error" => {
                     let _ = channel.send(AgTurnEvent::Error {
                         turn_id: turn_id.to_string(),
-                        code: json.get("code").and_then(|c| c.as_str()).unwrap_or("AG_GW_ERR").to_string(),
-                        message: json.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string(),
-                        retriable: json.get("retriable").and_then(|r| r.as_bool()).unwrap_or(false),
+                        code: json
+                            .get("code")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("AG_GW_ERR")
+                            .to_string(),
+                        message: json
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        retriable: json
+                            .get("retriable")
+                            .and_then(|r| r.as_bool())
+                            .unwrap_or(false),
                     });
                     return Ok(RoundOutcome::Done);
                 }
@@ -391,21 +496,34 @@ pub async fn assist_complete(
         .json(&body)
         .send()
         .await
-        .map_err(|e| IpcError::new("AG_GW_UNREACHABLE", &format!("dev 网关不可达（{url}）：{e}"), true, false))?;
+        .map_err(|e| {
+            IpcError::new(
+                "AG_GW_UNREACHABLE",
+                &format!("dev 网关不可达（{url}）：{e}"),
+                true,
+                false,
+            )
+        })?;
     if !resp.status().is_success() {
         let code = resp.status().as_u16();
         if code == 401 {
             clear_session_token();
         }
         let msg = resp.text().await.unwrap_or_default();
-        return Err(IpcError::new(&format!("AG_GW_HTTP_{code}"), &msg, code >= 500 || code == 401, code == 401));
+        return Err(IpcError::new(
+            &format!("AG_GW_HTTP_{code}"),
+            &msg,
+            code >= 500 || code == 401,
+            code == 401,
+        ));
     }
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let mut out = String::new();
     while let Some(item) = stream.next().await {
-        let bytes = item.map_err(|e| IpcError::new("AG_GW_STREAM", &format!("流式中断：{e}"), true, false))?;
+        let bytes = item
+            .map_err(|e| IpcError::new("AG_GW_STREAM", &format!("流式中断：{e}"), true, false))?;
         buf.push_str(&String::from_utf8_lossy(&bytes));
         while let Some(pos) = buf.find("\n\n") {
             let raw: String = buf[..pos].to_string();
@@ -418,7 +536,8 @@ pub async fn assist_complete(
                     data = r.trim().to_string();
                 }
             }
-            let json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+            let json: serde_json::Value =
+                serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
             match event.as_str() {
                 "chunk" => {
                     if let Some(t) = json.get("text").and_then(|t| t.as_str()) {
@@ -427,9 +546,13 @@ pub async fn assist_complete(
                 }
                 "error" => {
                     return Err(IpcError::new(
-                        json.get("code").and_then(|c| c.as_str()).unwrap_or("AG_GW_ERR"),
+                        json.get("code")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("AG_GW_ERR"),
                         json.get("message").and_then(|m| m.as_str()).unwrap_or(""),
-                        json.get("retriable").and_then(|r| r.as_bool()).unwrap_or(false),
+                        json.get("retriable")
+                            .and_then(|r| r.as_bool())
+                            .unwrap_or(false),
                         false,
                     ));
                 }
@@ -457,11 +580,29 @@ mod tests {
         assert_eq!(transition(Streaming, Cancel), Some(Interrupted));
         assert_eq!(transition(Streaming, StreamError), Some(Errored));
         // 门禁拒绝 / 断网 → GateDenied 终态
-        assert_eq!(transition(GateSubmitting, InvokeEvent::GateDenied), Some(InvokeState::GateDenied));
-        assert_eq!(transition(GateSubmitting, Offline), Some(InvokeState::GateDenied), "断网等同拒绝");
+        assert_eq!(
+            transition(GateSubmitting, InvokeEvent::GateDenied),
+            Some(InvokeState::GateDenied)
+        );
+        assert_eq!(
+            transition(GateSubmitting, Offline),
+            Some(InvokeState::GateDenied),
+            "断网等同拒绝"
+        );
         // 结构性门禁前置：除 GateSubmitting+gatePassed 外无路径达 Streaming
-        for from in [Idle, Streaming, Completed, InvokeState::GateDenied, Interrupted, Errored] {
-            assert_eq!(transition(from, GatePassed), None, "{from:?} 不应可达 Streaming");
+        for from in [
+            Idle,
+            Streaming,
+            Completed,
+            InvokeState::GateDenied,
+            Interrupted,
+            Errored,
+        ] {
+            assert_eq!(
+                transition(from, GatePassed),
+                None,
+                "{from:?} 不应可达 Streaming"
+            );
         }
         // 终态冻结
         for ev in [Submit, GatePassed, StreamDone, Cancel] {
@@ -474,21 +615,56 @@ mod tests {
     // 裁决唯一源服务端：Pass 仅来自 Passed；Denied/断网→Deny；无令牌拒绝（无本地假通过路径）。
     #[test]
     fn verdict_is_server_decided_never_local_pass() {
-        assert_eq!(submit_for_verdict(Some("tok"), ServerVerdict::Passed).unwrap(), GateOutcome::Pass);
-        assert_eq!(submit_for_verdict(Some("tok"), ServerVerdict::Denied).unwrap(), GateOutcome::Deny);
+        assert_eq!(
+            submit_for_verdict(Some("tok"), ServerVerdict::Passed).unwrap(),
+            GateOutcome::Pass
+        );
+        assert_eq!(
+            submit_for_verdict(Some("tok"), ServerVerdict::Denied).unwrap(),
+            GateOutcome::Deny
+        );
         // 断网等同拒绝（不静默重试、不本地放行）
-        assert_eq!(submit_for_verdict(Some("tok"), ServerVerdict::Unreachable).unwrap(), GateOutcome::Deny);
+        assert_eq!(
+            submit_for_verdict(Some("tok"), ServerVerdict::Unreachable).unwrap(),
+            GateOutcome::Deny
+        );
         // 无令牌拒绝（须提交令牌经服务端裁决）
         let err = submit_for_verdict(None, ServerVerdict::Passed).unwrap_err();
         assert_eq!(err.code, "ENT_NO_TOKEN");
         assert!(submit_for_verdict(Some("  "), ServerVerdict::Passed).is_err());
     }
 
+    // covers: BR-ENT-VERIFY-001
+    // `/gate/check` JSON verdict 只把服务端 passed 映射为 Passed，其余均 Denied。
+    #[test]
+    fn gate_check_body_maps_only_passed_to_server_passed() {
+        assert_eq!(
+            verdict_from_gate_body(&GateCheckBody {
+                verdict: "passed".into(),
+                reason: None,
+                reauth_required: None,
+            }),
+            ServerVerdict::Passed
+        );
+        assert_eq!(
+            verdict_from_gate_body(&GateCheckBody {
+                verdict: "denied".into(),
+                reason: Some("quota".into()),
+                reauth_required: None,
+            }),
+            ServerVerdict::Denied
+        );
+    }
+
     // covers: BR-SYS-OBS-001
     // 云调用三类失败统一错误形状：错误码 + 消息 + 可重试 + 需重认证 四字段齐备且一致可读。
     #[test]
     fn cloud_errors_share_unified_shape() {
-        for kind in [CloudFailure::Auth, CloudFailure::Gate, CloudFailure::Gateway] {
+        for kind in [
+            CloudFailure::Auth,
+            CloudFailure::Gate,
+            CloudFailure::Gateway,
+        ] {
             let e = cloud_error(kind, "CLOUD_X", "失败", true, true);
             assert_eq!(e.code, "CLOUD_X");
             assert!(!e.message.is_empty());

@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { Schema } from "@tiptap/pm/model";
-import { charOffsetInBlock, blockTextLength, getTopBlockIdByIndex, resolveSelectionAnchor } from "./edLocate";
+import {
+  DOC_REF_MIME,
+  SELECTION_REF_MIME,
+  blockTextLength,
+  charOffsetInBlock,
+  findTopBlockSnapshotById,
+  getTopBlockIdByIndex,
+  getTopBlockSnapshotByIndex,
+  readDocRefData,
+  readSelectionRefData,
+  resolveSelectionAnchor,
+  writeDocRefData,
+  writeSelectionRefData,
+} from "./edLocate";
+import { REFERENCE_MIME } from "./referencePayload";
 
 // covers: BR-ED-DATA-004
 // 字符锚纯逻辑：偏移定义在块内纯文本平面（textBetween 语义，叶子内联 1 字符占位对齐 PM pos）；
@@ -24,6 +38,19 @@ const schema = new Schema({
 function p(blockId: string | null, ...parts: (string | "BR")[]) {
   const content = parts.map((x) => (x === "BR" ? schema.node("hardBreak") : schema.text(x)));
   return schema.node("paragraph", { blockId }, content);
+}
+
+function transfer() {
+  const values = new Map<string, string>();
+  return {
+    values,
+    getData(type: string) {
+      return values.get(type) ?? "";
+    },
+    setData(type: string, data: string) {
+      values.set(type, data);
+    },
+  };
 }
 
 describe("edLocate · 块内纯文本偏移（BR-ED-DATA-004 偏移平面）", () => {
@@ -90,5 +117,72 @@ describe("edLocate · block_index → blockId", () => {
     expect(getTopBlockIdByIndex(doc, -1)).toBeNull();
     expect(getTopBlockIdByIndex(doc, 3)).toBeNull();
     expect(getTopBlockIdByIndex(doc, 2)).toBeNull();
+  });
+
+  it("按 block_index / blockId 返回同一目标块快照，before 文本来自该块", () => {
+    const byIndex = getTopBlockSnapshotByIndex(doc, 1);
+    expect(byIndex).toMatchObject({ blockId: "b2", index: 1, text: "第二段" });
+    expect(byIndex?.contentFrom).toBeGreaterThan(byIndex?.pos ?? -1);
+    expect(byIndex?.contentTo).toBeGreaterThan(byIndex?.contentFrom ?? -1);
+
+    expect(findTopBlockSnapshotById(doc, "b2")).toEqual(byIndex);
+    expect(getTopBlockSnapshotByIndex(doc, 3)).toBeNull();
+    expect(findTopBlockSnapshotById(doc, "missing")).toBeNull();
+  });
+});
+
+describe("edLocate · 引用拖拽/粘贴数据契约", () => {
+  it("写入并读取文档引用 MIME，同时提供 text/plain 兜底文本", () => {
+    const dt = transfer();
+
+    writeDocRefData(dt, "notes/a.md");
+
+    expect(dt.values.get(DOC_REF_MIME)).toBe(JSON.stringify({ relPath: "notes/a.md" }));
+    expect(JSON.parse(dt.values.get(REFERENCE_MIME) ?? "{}")).toEqual({ kind: "doc", relPath: "notes/a.md" });
+    expect(dt.values.get("text/plain")).toBe("notes/a.md");
+    expect(readDocRefData(dt)).toEqual({ relPath: "notes/a.md" });
+  });
+
+  it("忽略空路径或损坏的文档引用 payload", () => {
+    const dt = transfer();
+    dt.setData(DOC_REF_MIME, JSON.stringify({ relPath: "" }));
+    expect(readDocRefData(dt)).toBeNull();
+
+    dt.setData(DOC_REF_MIME, "{");
+    expect(readDocRefData(dt)).toBeNull();
+  });
+
+  it("写入并读取 SelectionRef MIME，同时提供选区文本兜底", () => {
+    const dt = transfer();
+    const ref = {
+      path: "notes/a.md",
+      blockId: "block-1",
+      start: 2,
+      end: 5,
+      text: "选中的内容",
+    };
+
+    writeSelectionRefData(dt, ref);
+
+    expect(dt.values.get(SELECTION_REF_MIME)).toBe(JSON.stringify(ref));
+    expect(JSON.parse(dt.values.get(REFERENCE_MIME) ?? "{}")).toEqual({
+      kind: "selection",
+      relPath: "notes/a.md",
+      blockId: "block-1",
+      start: 2,
+      end: 5,
+      text: "选中的内容",
+    });
+    expect(dt.values.get("text/plain")).toBe("选中的内容");
+    expect(readSelectionRefData(dt)).toEqual(ref);
+  });
+
+  it("忽略字段不完整或损坏的 SelectionRef payload", () => {
+    const dt = transfer();
+    dt.setData(SELECTION_REF_MIME, JSON.stringify({ path: "notes/a.md", blockId: "b1" }));
+    expect(readSelectionRefData(dt)).toBeNull();
+
+    dt.setData(SELECTION_REF_MIME, "{");
+    expect(readSelectionRefData(dt)).toBeNull();
   });
 });

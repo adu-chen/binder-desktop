@@ -66,7 +66,12 @@ pub fn transition(state: HandoffState, event: HandoffEvent) -> Option<HandoffSta
     use HandoffState::*;
     let next = match (state, event) {
         // chat→build：须用户确认方发起移交（仍 chat 持有）。
-        (ChatActive, TakeoverInit { user_confirmed: true }) => HandingToBuild,
+        (
+            ChatActive,
+            TakeoverInit {
+                user_confirmed: true,
+            },
+        ) => HandingToBuild,
         // 收到 build 侧 ack：原子转移所有权给 build。
         (HandingToBuild, TakeoverAck) => BuildActive,
         // build→chat：回落发起（仍 build 持有）。
@@ -90,16 +95,44 @@ mod tests {
     #[test]
     fn handoff_requires_confirm_and_ack() {
         // 未确认不得接管
-        assert_eq!(transition(ChatActive, TakeoverInit { user_confirmed: false }), None);
+        assert_eq!(
+            transition(
+                ChatActive,
+                TakeoverInit {
+                    user_confirmed: false
+                }
+            ),
+            None
+        );
         // 确认后发起移交（仍 chat 持有），ack 后转 build
-        assert_eq!(transition(ChatActive, TakeoverInit { user_confirmed: true }), Some(HandingToBuild));
+        assert_eq!(
+            transition(
+                ChatActive,
+                TakeoverInit {
+                    user_confirmed: true
+                }
+            ),
+            Some(HandingToBuild)
+        );
         assert_eq!(transition(HandingToBuild, TakeoverAck), Some(BuildActive));
         // 回落：发起（仍 build 持有），ack 后回 chat
         assert_eq!(transition(BuildActive, FallbackInit), Some(HandingToChat));
         assert_eq!(transition(HandingToChat, FallbackAck), Some(ChatActive));
         // forbidden：无待移交时收 ack、移交中重复发起
-        assert_eq!(transition(ChatActive, TakeoverAck), None, "无待移交不得 ack");
-        assert_eq!(transition(HandingToBuild, TakeoverInit { user_confirmed: true }), None);
+        assert_eq!(
+            transition(ChatActive, TakeoverAck),
+            None,
+            "无待移交不得 ack"
+        );
+        assert_eq!(
+            transition(
+                HandingToBuild,
+                TakeoverInit {
+                    user_confirmed: true
+                }
+            ),
+            None
+        );
         assert_eq!(transition(BuildActive, TakeoverAck), None);
     }
 
@@ -112,10 +145,12 @@ mod tests {
         assert_eq!(active_owner(HandingToBuild), TurnOwner::Chat); // 移交中仍 chat（不双死）
         assert_eq!(active_owner(BuildActive), TurnOwner::Build);
         assert_eq!(active_owner(HandingToChat), TurnOwner::Build); // 回落中仍 build（不双死）
-        // 沿合法路径走一圈，每一步都恰有一个所有者（不双活）
+                                                                   // 沿合法路径走一圈，每一步都恰有一个所有者（不双活）
         let mut s = ChatActive;
         for ev in [
-            TakeoverInit { user_confirmed: true },
+            TakeoverInit {
+                user_confirmed: true,
+            },
             TakeoverAck,
             FallbackInit,
             FallbackAck,

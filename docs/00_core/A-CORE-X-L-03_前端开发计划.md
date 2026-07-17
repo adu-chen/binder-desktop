@@ -41,13 +41,16 @@
 
 ---
 
-### PI-FE-01　DesignToken 体系与 Workbench 布局骨架　✅ G4 已实现（2026-06-22，tsc 绿；styles.css token 体系 + Workbench 四栏 Grid，DiffStrip 依计数显隐）
+### PI-FE-01　DesignToken 体系与 Workbench 布局骨架　✅ G4 已实现（2026-06-22，2026-07-16 同步窗口壳 overlay；styles.css token 体系 + Workbench 四栏 Grid + 纯标题栏）
 
 - **承接**：REQ-SYS-006 / A-SYS-C-T-02 §3 界面骨架 / TERM-SYS-001（DesignToken）/ X-FORBID-007。
 - **文件范围**：
   - `src/styles.css`：CSS 自定义属性体系（DesignToken）——参考源 `docs/binder_ui/app-styles.css`
   - `src/shell/Workbench.tsx`：CSS Grid 四栏布局骨架替换现有占位 div
-- **DesignToken 精确值**（参考稿 §8，直接照搬）：
+  - `src-tauri/tauri.conf.json`：macOS `titleBarStyle=Overlay`，保留系统 traffic lights，隐藏原生标题文本
+  - `src-tauri/capabilities/default.json`：授予 `core:window:allow-start-dragging`，允许 Tauri drag-region 脚本触发窗口拖动
+  - `src/components/shell/AppTitleBar.tsx`：Binder 自有标题栏；只显示当前标题，并以 `data-tauri-drag-region="deep"` 承载窗口拖拽区
+- **DesignToken 参考取值**（参考稿 §8，经生产样式收敛后落地）：
 
   | Token 类别 | 关键值 |
   |---|---|
@@ -59,36 +62,38 @@
 
 - **布局结构**（参考稿 §4）：
   ```
-  grid-template-rows: 32px 1fr auto 24px
-                      [TitleBar][Work][DiffStrip][StatusBar]
+  grid-template-rows: 32px 1fr 24px
+                      [TitleBar][Work][StatusBar]
 
   Work 区 grid-template-columns: 44px 272px 1fr 372px
                                  [Rail][Side][Center][Chat]
   ```
-  `DiffStrip` 无待裁决 PendingDiff（TERM-DE-001）时隐藏（`display:none`）。
+  全局 `DiffStrip` 已被代理编辑面板输入框上方的批量裁决条取代；标题栏不承载 Logo、路径、账号或订阅入口。
+  当前标题取活动标签 basename，无活动标签时取 workspace basename，欢迎页显示 `Binder`。
 
 - **@GOV**：布局骨架追溯 `REQ-SYS-006`（经 A-SYS-C-T-02 §3 承接）；Store 投影追溯 `X-FORBID-007`。
-- **term_ref**：`TERM-SYS-001`（DesignToken 变量体系）；`TERM-DE-001`（DiffStrip 显隐条件）。
+- **term_ref**：`TERM-SYS-001`（DesignToken 变量体系）。
 - **A 类债务**：深色主题切换（`app-styles.css` `.theme-dark` 已有规范，实现期叠加，不阻塞 G4）。
 - **验收**：`governance:audit` 绿；CSS Grid 四栏骨架渲染正确；DesignToken 变量全部生效（无硬编码原始色值残留）。
 
 ---
 
-### PI-FE-02　Logo 与 Left Rail　✅ G4 已实现（2026-06-23，tsc 绿 + scoped audit 无越界；BinderMark/Wordmark SVG + LeftRail 5 模块导航）
+### PI-FE-02　Logo 与 Left Rail　✅ G4 已实现（2026-06-23，2026-07-16 同步 Logo 菜单入口；BinderMark/Wordmark SVG + LeftRail 6 模块导航）
 
 - **承接**：A-SYS-C-T-02 §3 Left Rail 界面分区 / 路线图 §9 UI 就位 / VI 参考 `docs/binder-vi/project/`。
 - **文件范围**：
   - `src/components/brand/BinderMark.tsx`：段落条堆叠 Logo SVG（移植自 `binder-parts.jsx` `BinderMark`）
   - `src/components/brand/BinderWordmark.tsx`：文字标 SVG（移植自 `binder-parts.jsx` `BinderWordmark`）
-  - `src/components/shell/LeftRail.tsx`：44px 图标导航栏，5 导航项（WS/AST/KB/TPL/时间轴，带罗马编号 I·A～I·E）
-  - `src/shell/Workbench.tsx`：挂载 LeftRail
-- **Logo 规格**（参考稿 §9，直接照搬）：
+  - `src/components/shell/LeftRail.tsx`：44px 图标导航栏，6 导航项（WS/OL/ME/KN/TM/TL，带罗马编号）
+  - `src/components/shell/WorkspaceMenu.tsx`：模块栏顶部 Binder Logo 触发 workspace 菜单
+  - `src/shell/Workbench.tsx`：挂载 LeftRail，workspace 交互不再挂标题栏路径
+- **Logo 参考规格**（参考稿 §9，经生产组件收敛后落地）：
   - 8 条横条，宽度节奏 `100/64/82/100/72/100/56/100`（%），第 4 条（索引 3）用 `--rust` 锈红，其余 `--ink`；padding 14，barH 8
   - 紧凑形态（≤22px）：4 条 `100/56/100/72`，barH 16，保留锈红点
   - 文字标：`binder` + 锈红句点，IBM Plex Sans 500，字距 −0.04em
 - **@GOV**：LeftRail 导航状态投影追溯 `X-FORBID-007`（当前激活面板为后端状态投影，不在前端独立维护）。
-- **A 类债务**：LeftRail 徽标（badge）数量（如 PendingDiff 计数）在对应模块 PI 完成后叠加，本 PI 只建立导航切换骨架。
-- **验收**：Logo 与参考稿像素级一致（含锈红强调条）；点击 5 导航项切换 Side Panel 内容区；`governance:audit` 绿。
+- **A 类债务**：LeftRail 徽标（badge）数量（如 PendingDiff 计数）在对应模块 PI 完成后叠加。
+- **验收**：Logo 与参考稿像素级一致（含锈红强调条）；点击 6 导航项切换 Side Panel 内容区；点击 Logo 打开 workspace 菜单；`governance:audit` 绿。
 
 ---
 
@@ -111,27 +116,26 @@
 
 ---
 
-### PI-FE-04　侧边栏文件树（WS 模块前端）　✅ G4 已实现（2026-06-23，tsc + cargo test 86 + build + scoped audit 绿；ws.list_docs 枚举守界 + 文件树 6 状态接通 normal/not_supported）
+### PI-FE-04　侧边栏文件树（WS 模块前端）　✅ G4 已实现（2026-06-23，2026-07-16 同步只读预览标记；ws.list_docs 枚举守界 + 文件树状态/模式分离）
 
 - **承接**：A-SYS-C-T-02 §3 Side Panel WS / BR-WS-DATA-001（DocRef 定位）/ WS-FS chain / X-FORBID-004（不越界） / TERM-WS-001（Workspace）。
 - **文件范围**：
   - `src/components/ws/FileTree.tsx`：文件树组件（递归目录结构）
-  - `src/components/ws/FileTreeNode.tsx`：单节点组件，含 6 状态
+  - `src/components/ws/FileTreeNode.tsx`：单节点组件，含会话状态与只读预览模式标记
   - `src/services/wsService.ts`：封装 `ws.list_docs` / `ws.search` / `ws.create_doc` 等
   - `src/store/wsStore.ts`：文件树状态投影（承 `WS-FS` command 回调）
-- **FileTreeNode 6 状态**（参考稿 §6.4，视觉互斥）：
-  | 状态 | 视觉 |
+- **FileTreeNode 状态与模式标记**（参考稿 §6.4，状态互斥；模式标记可叠加）：
+  | 项 | 视觉 |
   |---|---|
   | `normal` | 默认 |
   | `open` | 锈红左条 |
   | `dirty_open` | 红点（未保存） |
   | `pending_diff` | 数字 badge（DiffCard 数量） |
-  | `external_changed` | 金色 `!` |
-  | `not_supported` | 灰色禁用（如 xlsx/pptx 不可编辑） |
+  | `preview_only` | 非互斥模式标记：文件名保持正常可点击视觉，行尾显示轻量 `VIEW` 标记；原生 `.docx`、Excel/PPT/CSV、媒体与图片点击进入 PRV 只读预览 |
 - **@GOV**：文件树状态追溯 `BR-WS-DATA-001`；search 路径追溯 `X-FORBID-004`（路径守护由后端执行，前端只转发）；Store 投影追溯 `X-FORBID-007`。
 - **term_ref**：`TERM-WS-001`（Workspace）。
 - **A 类债务**：全文搜索面板挂载（A-SYS-C-T-02 §3 注：当前左侧用文件树过滤搜索，全文搜索面板延后）；文件树大目录虚拟滚动（NFR，G5 标定）。
-- **验收**：文件树从 `ws.list_docs` 真实加载；6 状态视觉互斥可辨；`external_changed` 状态由后端事件驱动触发；`governance:audit` 绿。
+- **验收**：文件树从 `ws.list_docs` 真实加载；会话状态视觉互斥可辨；只读预览文件不灰禁用，使用 `VIEW` 标记表达打开模式；`governance:audit` 绿。
 
 ---
 
@@ -243,12 +247,12 @@
 
 ---
 
-### PI-FE-10　workspace 切换 / 返回欢迎页　✅ G4 已实现（2026-06-23，tsc + cargo test + build + scoped audit 绿；标题栏 workspace 菜单 + ws.close_workspace 接线 + 切换重置下游 store + 脏态守卫）
+### PI-FE-10　workspace 切换 / 返回欢迎页　✅ G4 已实现（2026-06-23，2026-07-16 入口迁移到模块栏 Logo；ws.close_workspace 接线 + 切换重置下游 store + 脏态守卫）
 - **承接**：A-SYS-C-T-02 §4.1（WB→关闭/切换→C）/ A-WS-I-P-01（ws.switch_workspace/close_workspace）/ BR-WS-PERSIST-002 / X-FORBID-007 / X-SEQ-002 / TERM-WS-001。补实现既有设计，不改 SSOT。
-- **文件范围**：`lib.rs`（注册+路由 ws.close_workspace）、`workspaceService`（closeWorkspace + 切换/打开重置下游 store）、`wsStore/edStore/deStore`（reset）、`WorkspaceMenu`（标题栏菜单 + 脏态守卫）、`Workbench`（挂菜单 + 按 workspaceId 重挂面板）。
-- **实现要点**：返回欢迎页 = ws.close_workspace（置非活动可恢复）+ 投影 null；切换/打开后重置 wsStore/edStore/deStore 并按 workspaceId 重挂 FileTree/Editor/ChatPanel，杜绝旧项目内容残留/按旧基线误存；破坏性操作前脏态守卫（编辑器 dirty 或 pending diff → 确认，参考稿链路 G）。
+- **文件范围**：`lib.rs`（注册+路由 ws.close_workspace）、`workspaceService`（closeWorkspace + 切换/打开重置下游 store）、`wsStore/edStore/deStore`（reset）、`WorkspaceMenu`（workspace 菜单 + 脏态守卫）、`LeftRail`（顶部 Logo 挂菜单）、`Workbench`（按 workspaceId 重挂面板）。
+- **实现要点**：返回欢迎页 = ws.close_workspace（置非活动可恢复）+ 投影 null；切换/打开后重置 wsStore/edStore/deStore 并按 workspaceId 重挂 FileTree/Editor/ChatPanel，杜绝旧项目内容残留/按旧基线误存；破坏性操作前脏态守卫（编辑器 dirty 或 pending diff → 确认，参考稿链路 G）。该交互入口统一在模块栏顶部 Binder Logo，标题栏仅显示当前标题并作为窗口拖拽区。
 - **A 类债务**：启动恢复 root 存在性探测（死项目回退欢迎页）延后；脏态守卫为通用确认，未细分「先处理/放弃」逐条处置。
-- **验收**：从 Workbench 可切换/返回欢迎页；切换后文件树与编辑器为新项目内容；脏态守卫生效；`governance:audit` scoped 无越界。
+- **验收**：从 Workbench 点击模块栏 Logo 可切换/返回欢迎页；切换后文件树与编辑器为新项目内容；脏态守卫生效；`governance:audit` scoped 无越界。
 
 ---
 
@@ -344,8 +348,8 @@
 ### PI-FE-19　状态投影接线（文件树/编辑器标签反映真实态）　✅ G4 已实现（2026-06-23，tsc + vitest 56 + build + scoped audit 绿）
 - **承接**：A-SYS-C-T-02（前端态投影后端）/ 参考稿 §6.3/6.4 / X-FORBID-007 / BR-ED-STATE-001 / BR-DE-STATE-001。
 - **文件范围**：`deStore`（DiffView 补 relPath）、`deService`（generateSampleDiff 填 relPath）、`FileTree`（投影打开文档节点态）、`Editor`（EditorTab 有效态）。
-- **实现要点**：把已建的 6 态文件节点 / 6 态编辑标签接到**真实 edStore/deStore 投影**（此前仅测试 override）；优先级 external_changed > pending_diff（按文件归属计数）> dirty_open > open > normal，各态互斥。
-- **验收**：编辑脏态→文件树红点+标签红点；生成 diff→该文件 pending badge；外部变更→金!；vitest 56 全过；scoped 门禁无越界。
+- **实现要点**：把文件树会话状态节点 / 6 态编辑标签接到**真实 edStore/deStore 投影**（此前仅测试 override）；文件树优先级 pending_diff（按文件归属计数）> dirty_open > open > normal，各态互斥；只读预览用 `preview_only` 非互斥模式标记。
+- **验收**：编辑脏态→文件树红点+标签红点；生成 diff→该文件 pending badge；只读预览文件保持正常可点击行并显示 `VIEW` 标记；vitest 56 全过；scoped 门禁无越界。
 
 ---
 
@@ -514,3 +518,4 @@ npm run governance:generate
 | 2026-06-22 | v1.0 | 初版：8 条前端 Plan Item（PI-FE-00～PI-FE-08），承接 IPC 桥接/DesignToken + 布局/Logo+Rail/欢迎页/文件树/TipTap/Chat 面板/Diff 状态机/三种 AI 辅助入口；对接 A-CORE-X-L-02 P2/P3；注册 TERM-SYS-001/TERM-DE-003/TERM-ED-003；A 类债务 10 项 |
 | 2026-07-02 | v1.1 | 追加登记 PI-FE-31 编辑器核心优化批（G-8，人类授权执行 A-CORE-X-R-03 §7）：分页 + 图文呈现（BR-ED-DATA-003 闭合，解除 PI-FE-30 分页延后）+ 工具栏/编辑工具 + 三栏可拖动布局 + 编辑区缩放（视图层）；验收 tsc/vitest 104/cargo 140/build/audit 绿，真机视觉验收登记待做 |
 | 2026-07-03 | v1.2 | PI-FE-14（富文本 Markdown 往返）行为撤销（人类裁定 B，2026-07-03）：md 回归纯文本忠实编辑（同 txt，textToDoc/getText），tiptap-markdown 移除——实测其解析把中文段首缩进（4空格/Tab）渲染为代码块、序列化向正文注入转义反斜杠污染文件；对齐旧项目形态（md/txt 均纯文本，should_inject_block_ids_for_plain_text 同源实证）。md 富文本可视化如需求再起，按三态模型做显示态预览（不碰逻辑态） |
+| 2026-07-16 | v1.3 | 同步 PI-FE-04 文件树只读预览视觉优化：移除 `not_supported` 灰禁用语义，将只读预览改为可叠加 `preview_only` 模式标记，保留 open/dirty/pending 等会话状态的互斥视觉 |

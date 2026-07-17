@@ -112,7 +112,11 @@ mod tests {
         assert_eq!(transition(Accepted, ApplyFail), Some(Accepted));
         // 唯一通往 Accepted（落盘）的路径是 Pending+UserAccept
         for from in [Generating, Rejected, Expired, GenFailed] {
-            assert_eq!(transition(from, UserAccept), None, "{from:?} 不应可达 Accepted");
+            assert_eq!(
+                transition(from, UserAccept),
+                None,
+                "{from:?} 不应可达 Accepted"
+            );
         }
     }
 
@@ -128,12 +132,30 @@ mod tests {
         assert_eq!(state_from_status(DiffStatus::Rejected), Rejected);
         assert_eq!(state_from_status(DiffStatus::Expired), Expired);
         // Pending 可裁决（守护放行）
-        assert_eq!(transition(state_from_status(DiffStatus::Pending), UserAccept), Some(Accepted));
-        assert_eq!(transition(state_from_status(DiffStatus::Pending), UserReject), Some(Rejected));
+        assert_eq!(
+            transition(state_from_status(DiffStatus::Pending), UserAccept),
+            Some(Accepted)
+        );
+        assert_eq!(
+            transition(state_from_status(DiffStatus::Pending), UserReject),
+            Some(Rejected)
+        );
         // 已终态不可再裁决（守护拒绝 → 处理器回 DE_ILLEGAL_TRANSITION）
-        for st in [DiffStatus::Accepted, DiffStatus::Rejected, DiffStatus::Expired] {
-            assert_eq!(transition(state_from_status(st), UserAccept), None, "{st:?} 不应可再接受");
-            assert_eq!(transition(state_from_status(st), UserReject), None, "{st:?} 不应可再拒绝");
+        for st in [
+            DiffStatus::Accepted,
+            DiffStatus::Rejected,
+            DiffStatus::Expired,
+        ] {
+            assert_eq!(
+                transition(state_from_status(st), UserAccept),
+                None,
+                "{st:?} 不应可再接受"
+            );
+            assert_eq!(
+                transition(state_from_status(st), UserReject),
+                None,
+                "{st:?} 不应可再拒绝"
+            );
         }
     }
 
@@ -149,13 +171,22 @@ mod tests {
         }
         // Accepted 不可转其他终态、不回退 Pending
         for ev in [UserReject, Timeout, ExternalChange, GenOk] {
-            assert_eq!(transition(Accepted, ev), None, "Accepted 不可逆/不可转其他终态");
+            assert_eq!(
+                transition(Accepted, ev),
+                None,
+                "Accepted 不可逆/不可转其他终态"
+            );
         }
         // 未呈现态不得裁决
         assert_eq!(transition(Generating, UserAccept), None);
         assert_eq!(transition(Generating, UserReject), None);
         // 终态判定
-        assert!(is_terminal(Accepted) && is_terminal(Rejected) && is_terminal(Expired) && is_terminal(GenFailed));
+        assert!(
+            is_terminal(Accepted)
+                && is_terminal(Rejected)
+                && is_terminal(Expired)
+                && is_terminal(GenFailed)
+        );
         assert!(!is_terminal(Generating) && !is_terminal(Pending));
     }
 }

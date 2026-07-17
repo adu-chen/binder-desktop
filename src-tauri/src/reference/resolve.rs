@@ -14,7 +14,10 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReferenceAnchor {
     Path(DocRef),
-    Block { target: DocRef, block_ids: Vec<String> },
+    Block {
+        target: DocRef,
+        block_ids: Vec<String>,
+    },
 }
 
 /**
@@ -50,7 +53,10 @@ pub fn resolve_mention(
         doc_type: "md".into(),
     };
     match block_ids {
-        Some(ids) if !ids.is_empty() => Ok(ReferenceAnchor::Block { target, block_ids: ids }),
+        Some(ids) if !ids.is_empty() => Ok(ReferenceAnchor::Block {
+            target,
+            block_ids: ids,
+        }),
         _ => Ok(ReferenceAnchor::Path(target)),
     }
 }
@@ -60,7 +66,11 @@ mod tests {
     use super::*;
 
     fn ws() -> WorkspaceRef {
-        WorkspaceRef { workspace_id: "ws1".into(), root_path: "/home/u/ws".into(), is_active: true }
+        WorkspaceRef {
+            workspace_id: "ws1".into(),
+            root_path: "/home/u/ws".into(),
+            is_active: true,
+        }
     }
 
     // covers: BR-REF-DATA-001
@@ -84,10 +94,17 @@ mod tests {
         }
         // 越界拒绝
         assert_eq!(
-            resolve_mention(&ws, "../../etc/passwd", None, true).unwrap_err().code,
+            resolve_mention(&ws, "../../etc/passwd", None, true)
+                .unwrap_err()
+                .code,
             "WS_PATH_ESCAPE"
         );
         // 不可达失败（不悬空）
-        assert_eq!(resolve_mention(&ws, "gone.md", None, false).unwrap_err().code, "REF_UNREACHABLE");
+        assert_eq!(
+            resolve_mention(&ws, "gone.md", None, false)
+                .unwrap_err()
+                .code,
+            "REF_UNREACHABLE"
+        );
     }
 }

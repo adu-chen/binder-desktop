@@ -78,6 +78,10 @@ PI-AG-10C  共享契约锚点【先冻结】AgTurnEvent + ag_start_turn + ag.*/d
 
 **GW 阻塞说明**：PI-AG-11 端到端真模型跑通卡在云 GW（PI-GW-01~04 未建）；到桩边界为止的 BE/FE 全部可并行做完，GW 就绪后只接 PI-AG-11 一段。
 
+**1.0 EP 模型目标（2026-07-17）**：PI-AG-11 在 1.0 Experience Preview 的目标不是自部署
+Binder 预设模型，而是经 AiGateway 接入 DeepSeek 托管模型与 BYOK。自部署预设模型、多模态模型矩阵、
+复杂 ModelRouter 后置，不阻断本计划到 1.0 EP 的真实模型调用闭环。
+
 ## §3 Plan Item 清单
 
 ### PI-AG-07　系统提示词正文（三类回合）
@@ -100,14 +104,19 @@ PI-AG-10C  共享契约锚点【先冻结】AgTurnEvent + ag_start_turn + ag.*/d
   - 结构化输出要求：内容完整、结构清晰、符合 Markdown 格式
   - 硬约束同 Chat（修改须经 diff、不越出 workspace）
 
-  **SYSTEM_PROMPT_ASSIST**（局部修改/辅助续写）：
-  - 轻量角色：仅提供续写或局部改写候选，不提供完整文档操作
+  **SYSTEM_PROMPT_AUTOCOMPLETE**（辅助续写）：
+  - 轻量角色：仅提供当前光标后的续写候选，不提供完整文档操作，不改写、复述或替换既有内容
   - 无历史：基于当前编辑位置上下文推断，不假设会话历史
-  - 输出格式：仅文本内容，不含解释或说明
+  - 输出格式：只输出 JSON 字符串数组，且数组必须正好包含 3 个候选；候选只包含续写部分，不含解释或说明
+
+  **SYSTEM_PROMPT_INLINE_ASSIST**（局部修改）：
+  - 轻量角色：仅根据用户指令改写选区或在光标处生成插入文本，不提供完整文档操作
+  - 无历史：基于当前编辑位置上下文推断，不假设会话历史
+  - 输出格式：只输出单一候选正文，不得输出 JSON、编号列表、解释、前缀或后缀
 
 - **@GOV**：无（提示词文本属实现期运营配置，不引用规则）
 - **A 类债务**：具体措辞、角色强度、防注入技巧延运营迭代；多语言版本延后
-- **验收**：三函数可编译加载且非空；Chat 提示词静态检查含「修改须经」「不直接写」「workspace 内」三关键声明；InlineAssist 不含「对话历史」字样
+- **验收**：四类提示词可编译加载且非空；Chat 提示词静态检查含「修改须经」「不直接写」「workspace 内」三关键声明；辅助续写提示词静态检查含 JSON 字符串数组与正好 3 个候选；局部修改提示词静态检查含单一候选正文且不得输出 JSON
 
 ---
 
@@ -118,36 +127,41 @@ PI-AG-10C  共享契约锚点【先冻结】AgTurnEvent + ag_start_turn + ag.*/d
 > **PI-AG-08A 工具注册表**（`tool_registry.rs`，纯数据，**已交付**）+ **PI-AG-08B 工具执行**（`tool_exec.rs`，
 > ws/kb/de 真实执行，与模型循环 PI-AG-11 配套）。下列原 PI-AG-08 内容中「注册/权限」归 08A、「执行路径」归 08B。
 
-- **承接**：BR-AG-STATE-002（`validate_tool` 校验机制已锁，清单/执行延实现期）；X-FORBID-006（写意图→ChangeProposal，不直写）；X-FORBID-004（只读工具限 workspace 内）
-- **文件范围**：`src-tauri/src/ag/tool_registry.rs`（新建，工具注册表 + 权限分级）；`src-tauri/src/ag/tool_exec.rs`（新建，4 工具执行实现）
-- **v1 工具集（4 个）**：
+- **承接**：BR-AG-STATE-002（`validate_tool` 校验机制已锁，清单/执行延实现期）；X-FORBID-006（内容写意图→ChangeProposal，不直写）；X-FORBID-004（读/结构工具限 workspace 内）
+- **文件范围**：`src-tauri/src/ag/tool_registry.rs`（工具注册表 + 权限分级）；`src-tauri/src/ag/tool_exec.rs`（只读与结构工具执行实现）
+- **v1 工具集**：
 
   | 工具名 | 权限类型 | 执行路径 | 回注内容 |
   |---|---|---|---|
-  | `read_doc` | 只读 | `workspace::save::read_doc`（X-FORBID-004） | 文档 Markdown 文本 |
+  | `read_doc` | ReadOnly | `AgentEditableSnapshot`（X-FORBID-004，BDocx 走 DOC 编辑模型） | 文档快照 JSON |
   | `list_docs` | 只读 | `workspace::listing::list_docs`（限 active workspace） | DocRef 列表（rel_path + doc_type） |
-  | `search_text` | 只读 | `kb::retrieve::retrieve(query, workspace_id)` | 匹配条目摘要列表 |
-  | `propose_edit` | 写意图 | 产出 ChangeProposal → `de::generate::generate_diff`（锚校验）→ `workspace::diff_apply::persist_diff` | diff_id + 修改摘要（非文件内容） |
+  | `search_text` | ReadOnly | `AgentEditableSnapshot` 块文本搜索 | 匹配条目摘要列表 |
+  | `list_blocks` | ReadOnly | `AgentEditableSnapshot.blocks` | block_id/block_index/text/marks/block_attrs |
+  | `move_doc` | StructureWrite | `workspace::fileops::rename_doc`（两端守界） | 移动/重命名结果 |
+  | `create_folder` | StructureWrite | `workspace::fileops::create_folder`（守界） | 建目录结果 |
+  | `propose_edit` | WriteIntent | 产出 ChangeProposal → `de::generate::generate_diff`（锚校验）→ `workspace::diff_apply::persist_diff` | diff_id + 修改摘要（非文件内容） |
 
 - **权限分级**：
 
   ```rust
-  pub enum ToolPermission { ReadOnly, WriteIntent }
+  pub enum ToolPermission { ReadOnly, StructureWrite, WriteIntent }
   pub struct ToolDef { pub name: &'static str, pub permission: ToolPermission }
   ```
 
   只读工具：`validate_tool(registered=true, within_permission=true, direct_write_intent=false)` → Allow → 执行
+  结构工具：`direct_write_intent=false` → Allow → 经 WS 边界执行，改变文件树结构，不修改文档内容、不走 DE
   写意图工具：`direct_write_intent=true` → validate_tool 拒绝直写 → 走 propose_edit 专用路径（不经 validate_tool 的写盘判断，而是走 ChangeProposal 流程）
 
   > 注：`propose_edit` 不是"直接写盘"工具，而是"产出修改建议"工具；validate_tool 的 `direct_write_intent=true` 拒绝的是试图绕过 DE 直写的工具，propose_edit 本身合法，但必须走 ChangeProposal→DE 流程。工具注册时 `direct_write_intent=false`、permission=WriteIntent，执行时由 tool_exec.rs 路由到 propose_edit 专用路径。
+  > 删除工具不在本次工具集内；须等待用户确认 UI/协议落地后再注册，不能用模型参数替代确认。
 
 - **@GOV**：
   - `tool_registry.rs`：BR-AG-STATE-002（工具校验）
   - `tool_exec.rs`：X-FORBID-006（propose_edit 产出 ChangeProposal 不直写）、X-FORBID-004（只读工具 workspace 限界）
 
-- **A 类债务**：工具清单延运营扩展（v1 仅 4 个）；tool call JSON schema 定义延实现迭代；`search_text` 的向量检索能力延 KB G5
+- **A 类债务**：删除类工具的人类确认 UI/协议；tool call JSON schema 继续随实现迭代；`search_text` 的向量检索能力延 KB G5
 
-- **验收**：4 工具注册且 `validate_tool` 对未注册名称返回 Reject；`read_doc`/`list_docs`/`search_text` 测试不产生文件写入；`propose_edit` 产出 diff_id（`Pending` 状态）且文件未被改动；未注册工具拒绝原因字符串含工具名
+- **验收**：注册工具均经 `validate_tool` 校验；未注册名称返回 Reject；`read_doc`/`list_docs`/`search_text`/`list_blocks` 不产生文件写入；`move_doc`/`create_folder` 限 workspace 且不覆盖；`propose_edit` 产出 diff_id（`Pending` 状态）且文件未被直接改动；未注册工具拒绝原因字符串含工具名
 
 ---
 
@@ -396,7 +410,7 @@ npm run governance:audit（无新增 RULE_MISSING / BOUNDARY_ABSTRACT）
 | 债务 | 类 | PI | 处置 |
 |---|---|---|---|
 | 提示词文本/措辞迭代 | A | PI-AG-07 | 运营配置，随产品迭代 |
-| 工具清单扩展（v1 仅 4 个）| A | PI-AG-08 | 实现期按需增加 |
+| 删除类工具确认 UI/协议 | A | PI-AG-08 | G5 联调前补；未落地前不得注册给模型 |
 | budget 数值标定 | A | PI-AG-09 | G5 性能测试后标定 |
 | Channel 序列化 + 反压 | A | PI-AG-10B | G5 联调标定 |
 | 意图沿用识别策略 + 补强层相关性打分 | A | PI-AG-09 | 实现期（R-AG-X-R-01 §4.3/§2.2），打分缺位则 P2 TopK 失效 |
@@ -412,3 +426,6 @@ npm run governance:audit（无新增 RULE_MISSING / BOUNDARY_ABSTRACT）
 | 2026-06-26 | v1.2 | PI-AG-10C 落地：AG 回合流式事件定名 **AgTurnEvent**（避开 `ipc/mod.rs` 既有 SYS `StreamEvent` 重名，分层不同·非重复），全文 StreamEvent→AgTurnEvent；AgTurnEvent 枚举 + 测试落 `src-tauri/src/ipc/mod.rs`，契约同步 A-AG-I-P-01 §2.1 v1.2 |
 | 2026-06-24 | v1.1 | 前后端双轨并行重构 + 同步 A-AG-M-T-02：§2 改为「契约先冻结 → BE/FE 双轨」依赖图，新增 §2.1 双轨并行协议（轨分配/可并行起点/桩边界/三条并行纪律）；PI-AG-10 拆为 10C（共享契约·先冻结·回写 I-P-01）/ 10B（后端 Channel 发射，桩阶段推假流）/ 10F（前端流式呈现+diff 卡片，对桩立即可建）；PI-AG-09 承接 BR-AG-DATA-004/005，废止初版「当前文档最低」排序、改 P0–P3 截断序（当前文档 P0 永不截）+ 新增意图沿用判定（decide_intent_carryover）；PI-AG-11 标注聚合尾段（GW 阻塞）；债务表补意图沿用识别/相关性打分/diff 动画三项 |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-16 | v1.3 | 更新 PI-AG-08 工具集：加入 `list_blocks`、`move_doc`、`create_folder` 与 `StructureWrite` 权限；移除“v1 仅 4 个工具”的过期债务描述；删除类工具改为确认 UI/协议债务，未落地前不得注册 |
+| 2026-07-16 | v1.4 | 拆分 Assist 提示词：辅助续写使用 `SYSTEM_PROMPT_AUTOCOMPLETE`，局部修改使用 `SYSTEM_PROMPT_INLINE_ASSIST`，避免 JSON 三候选契约与单正文契约混用 |
+| 2026-07-17 | v1.5 | 对齐 1.0 Experience Preview：PI-AG-11 的真实模型调用目标明确为 AiGateway → DeepSeek 托管模型/BYOK；自部署 Binder 预设模型、多模态模型矩阵、复杂 ModelRouter 后置，不阻断 1.0 EP 的 AG 真实调用闭环 |

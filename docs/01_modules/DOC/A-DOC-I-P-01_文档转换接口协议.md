@@ -27,7 +27,7 @@ X-SEQ-004 接口落实：docx 等二进制格式的转换唯一经本文 command
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
 | `doc.open_for_edit` | DocRef（docx） | 统一编辑模型（HTML）+ 注入 data-block-id + 样式子集告知 | **convert_failed**（→SM-DOC-01 OpenError，会话不建立，对接 ed loadFail/parseFail）；依赖缺失 | BR-DOC-DATA-001/003、BR-DOC-STATE-001 |
-| `doc.save_from_edit` | DocRef、编辑模型（HTML） | docx 字节流（交 WS 原子落盘 `ws.save_doc`） | convert_failed（→SaveError，原文件不变） | SM-DOC-01 SaveConverting；BR-DOC-STATE-001 |
+| `doc.save_from_edit` | DocRef、编辑模型（HTML）、加载基线、override（默认 false） | 新基线哈希（docx 字节内容哈希，IPC 十进制字符串） | convert_failed（→SaveError，原文件不变）；**WS_SAVE_CONFLICT**（磁盘≠基线且未 override，原文件不变） | SM-DOC-01 SaveConverting；BR-DOC-STATE-001；BR-WS-OBS-001 |
 | `doc.get_style_report` | DocRef 或转换句柄 | 样式子集告知（必需保真/部分支持损失/不处理清单，BR-DOC-DATA-002） | — | TERM-DOC-001 StyleSubset；用户可知 |
 
 > md 不经 DOC（编辑模型原生格式，ED 直载）；docx 往返中 blockId 经 data-block-id 兜底注入与
@@ -47,7 +47,7 @@ X-SEQ-004 接口落实：docx 等二进制格式的转换唯一经本文 command
 | 环节 | 调用 | 文档 |
 |---|---|---|
 | docx 装载 | `ed.open_session(docx)` → `doc.open_for_edit` → ED 装载 | A-ED-I-P-01 §2 / SM-DOC-01 §3 |
-| docx 落盘 | `doc.save_from_edit` → `ws.save_doc` 原子落盘 | A-WS-I-P-01 §3 / SM-DOC-01 §3 |
+| docx 落盘 | `doc.save_from_edit`（HTML→docx）→ WS 保存机 baseline guard + 原子落盘 | A-WS-I-P-01 §3 / SM-DOC-01 §3 |
 | 预览 | PRV → `doc.render_preview` → PDF | A-PRV-M-T-01 §2 |
 
 ## §5 测试与验收
@@ -71,3 +71,4 @@ X-SEQ-004 接口落实：docx 等二进制格式的转换唯一经本文 command
 | 2026-06-24 | v1.1 | 编辑链 command 实现接线（代码同步）：`doc.open_for_edit`（docx → 可编辑 HTML，经 doc/edit_chain.rs docx+styles + preserve-styles.lua，回 baseline 供冲突保护）、`doc.save_from_edit`（编辑 HTML → docx --reference-doc reference.docx → WS save_atomic 原子落盘 + 外部变更保护）已注册 lib.rs 并路由；处理逻辑对齐旧项目 binder-project（HTML 而非 markdown，承载样式子集「部分支持」层）；资源 reference.docx/preserve-styles.lua 入 bundle.resources。data-block-id 注入兜底（BR-DOC-DATA-003）与样式子集告知（get_style_report）+ extract-media 图片接入为实现期续接（A 类）；前端 docx→TipTap 编辑流接 doc.* command |
 | 2026-06-24 | v1.2 | 编辑器扩展集对齐（格式修复，代码同步）：docx→HTML 的样式子集需编辑器对应 TipTap 扩展解析为「成熟文本块」，否则内联 style/颜色/字号/表格在编辑器显示为生标记。按旧项目补齐扩展集 ↔ 三级子集映射：必需子集（对齐 TextAlign / 下划线 Underline / 基础表格 Table* / 嵌入图片 Image）、部分支持（颜色 TextStyle+Color / 字体 FontFamily / 字号 FontSize 自定义扩展）、增强（高亮 Highlight / 上下标 Sub·Superscript）；StarterKit 禁 v3 自带 link/underline 避重复；前端 src/components/ed/extensions（index.ts + FontSize.ts）。待续：原生 docx「预览→编辑建草稿」流程与 草稿/生成docx 直编辑流程（旧版成熟链路） |
 | 2026-06-24 | v1.3 | docx 成熟编辑流程接线（旧版链路，代码同步）：新增 `doc.create_draft`（原生 docx → 同目录 `{stem}.draft.docx` 副本，守界）。流程区分按文件名——**原生 docx（非 *.draft.docx）点击 → 只读 PDF 预览**（PrvPanel「创建草稿进行编辑」按钮 → create_draft → openDoc 进编辑模式）；**草稿/生成 docx（*.draft.docx）点击 → 直接编辑**（FileTreeNode 路由 + isDocxEditable 草稿专属）。对齐旧项目 create_draft_docx + DocxPdfPreview 成熟逻辑。前端：docService.createDocxDraft/isNativeDocxPreview、FileTreeNode 原生预览·草稿编辑、PrvPanel 编辑按钮 |
+| 2026-07-12 | v1.4 | 三态实现回写：`doc.save_from_edit` 签名补加载基线与 override；保存结果回新基线哈希字符串；转换成功后仍经 WS 保存前 baseline guard 与原子落盘，冲突返回 `WS_SAVE_CONFLICT` 且原 docx 不变 |

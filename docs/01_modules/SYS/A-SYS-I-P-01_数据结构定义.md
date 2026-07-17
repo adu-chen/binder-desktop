@@ -106,6 +106,23 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 > 边界：本文只给 RefInjection 跨模块共享**字段基线**（REF→AG/CBT 传递）；解析、锚失效校验与
 > 组装语义归 REF（A-REF-M-T-01）；上下文预算与裁剪归 AG（BR-AG-DATA-001）。
 
+**ReferencePayload · 引用输入载荷（基线）**（REQ-CORE-006，主责 REF，2026-07-08 随引用令牌修复登记）
+
+| kind | 字段 | 语义 |
+|---|---|---|
+| doc | relPath, label? | workspace 内文档或资源文件路径级引用 |
+| selection | relPath, blockId, start?, end?, text, label? | 编辑器选区引用；text 为用户选中快照，start/end 为块内纯文本偏移 |
+| session | sessionId, title, messages[] | 用户显式拖入的代理会话快照 |
+| memory | entryId?, title?, content | AST 记忆条目快照 |
+| knowledge | entryId?, title?, content, sourceRef? | KB 知识条目快照 |
+| template | templateId?, name, content | TPL 模板条目快照 |
+| url | url, title? | 外部链接引用，不包含抓取内容 |
+| long_text | text, charCount | 外部长文本粘贴快照 |
+
+> 边界：ReferencePayload 是输入侧显式引用结构（Composer→AG）；它不等同于 RefInjection。workspace
+> 文档内容读取、锚校验与发送时组装归 REF/AG；AST/KB/TPL 条目的生成、筛选、管理归各 owner。
+> 输入流展示形态为 ReferenceToken（A-REF-M-T-01 TERM-REF-004），视觉生命周期不在本文定义。
+
 **MemoryInjection · 记忆注入载荷（基线）**（主责 AST，2026-06-12 随实现前置批量登记）
 
 | 字段 | 语义 | 备注 |
@@ -133,7 +150,7 @@ rule_id: BR-SYS-DATA-002
 主链路: DATA-MIGRATE
 域: DATA
 -->
-跨模块传递的共享实体（WorkspaceRef / DocRef / PendingDiff / TimelineEntry 等）及其枚举值集合
+跨模块传递的共享实体（WorkspaceRef / DocRef / PendingDiff / TimelineEntry / ReferencePayload 等）及其枚举值集合
 （如 PendingDiff.status 的 pending/accepted/rejected/expired）以本文为唯一契约来源；任何模块不得
 在本文之外私自重定义跨模块共享结构的字段或枚举集合。状态转移语义、guard 与终态不可逆性不属本规则，
 归各 owner 模块状态机（A-SYS-M-S-01 及各模块 M-S）。
@@ -266,3 +283,4 @@ status: mapped
 | 2026-06-11 | v1.1 | 随 REF G2 登记（X-SHARED-001 回写）：§3 新增 RefInjection 引用注入载荷共享结构基线（target/block_ids/content/origin_label，主责 REF，REF→AG/CBT 跨模块传递）；解析/校验/组装语义归 A-REF-M-T-01，裁剪归 AG；受 BR-SYS-DATA-002 单一来源约束覆盖，无新增规则 |
 | 2026-06-12 | v1.2 | 进入实现前批量登记（X-SHARED-001/BR-SYS-PERSIST-001 回写，解除 AG/CBT/TPL/AST/KB 五模块"实现前登记"承诺）：§3 新增 MemoryInjection（memory_kind/content/origin_turn，主责 AST）与 KnowledgeInjection（content/source_ref/organization，主责 KB）注入共享结构基线；§4 新增七张 workspace.db 控制态扩展表基线——agent_turns（AG 回合历史）/build_runs（CBT 构建控制态）/workflow_runs（TPL 执行控制态）/templates·workflows（TPL 定义）/memory_entries（AST）/knowledge_entries（KB），均 workspace 级隔离（2026-06-11 人类决策）、payload/定义形状归各 owner、迁移受 BR-SYS-PERSIST-001 约束；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-03 | v1.3 | 随 ED 批B PI-ED-10 登记（X-SHARED-001 回写，承 A-REF-M-T-01 v1.1 扩展意向）：§3 RefInjection 增可空 block_ranges 选区级锚集合（{blockId,start,end} 块内纯文本偏移区间；CharAnchor 契约归 ED BR-ED-DATA-004、有效期=编辑会话内、失效校验归 REF §5 保守语义）；无新增规则（受 BR-SYS-DATA-002 覆盖） |
+| 2026-07-08 | v1.4 | 随引用令牌修复登记 ReferencePayload 共享结构基线：新增 doc/selection/session/memory/knowledge/template/url/long_text 八类输入侧显式引用字段集合；声明其为 Composer→AG 主通道，与 RefInjection 分层不同；无新增规则（受 BR-SYS-DATA-002 覆盖） |

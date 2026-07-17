@@ -53,7 +53,11 @@ mod tests {
     use super::*;
 
     fn snap(src: UsageSource) -> UsageSnapshot {
-        UsageSnapshot { source: src, used: 10, quota: 100 }
+        UsageSnapshot {
+            source: src,
+            used: 10,
+            quota: 100,
+        }
     }
 
     // covers: BR-ENT-DATA-002
@@ -61,11 +65,23 @@ mod tests {
     #[test]
     fn usage_is_display_only_never_for_gating() {
         // 展示可用（含本地缓存）
-        assert!(usage_admissible_for(&snap(UsageSource::Server), UsagePurpose::Display));
-        assert!(usage_admissible_for(&snap(UsageSource::LocalCache), UsagePurpose::Display));
+        assert!(usage_admissible_for(
+            &snap(UsageSource::Server),
+            UsagePurpose::Display
+        ));
+        assert!(usage_admissible_for(
+            &snap(UsageSource::LocalCache),
+            UsagePurpose::Display
+        ));
         // 门禁决策一律不可——即便服务端来源也不得据用量数字自行放行（须 verdict）
-        assert!(!usage_admissible_for(&snap(UsageSource::Server), UsagePurpose::GateDecision));
-        assert!(!usage_admissible_for(&snap(UsageSource::LocalCache), UsagePurpose::GateDecision));
+        assert!(!usage_admissible_for(
+            &snap(UsageSource::Server),
+            UsagePurpose::GateDecision
+        ));
+        assert!(!usage_admissible_for(
+            &snap(UsageSource::LocalCache),
+            UsagePurpose::GateDecision
+        ));
         // 桌面端不内置支付流程（购买跳官网门户）
         assert!(!DESKTOP_INLINE_PAYMENT);
     }

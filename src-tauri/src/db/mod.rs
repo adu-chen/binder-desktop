@@ -134,11 +134,9 @@ fn now_millis() -> i64 {
 
 /// 当前 schema 版本：schema_meta 不存在或为空记为 0。
 fn current_version(conn: &Connection) -> i64 {
-    conn.query_row(
-        "SELECT MAX(schema_version) FROM schema_meta",
-        [],
-        |r| r.get::<_, Option<i64>>(0),
-    )
+    conn.query_row("SELECT MAX(schema_version) FROM schema_meta", [], |r| {
+        r.get::<_, Option<i64>>(0)
+    })
     .map(|v| v.unwrap_or(0))
     .unwrap_or(0)
 }

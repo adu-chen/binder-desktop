@@ -32,14 +32,25 @@ fn preview_kind(ext: &str) -> Option<PreviewKind> {
 /// 只读硬边界——本模块不产生编辑入口（A-PRV-M-T-01）。
 pub fn render_preview(abs_path: &Path, ext: &str) -> Result<Vec<u8>, IpcError> {
     let kind = preview_kind(ext).ok_or_else(|| {
-        IpcError::new("PRV_UNSUPPORTED", &format!("不支持预览的格式: {ext}"), false, false)
+        IpcError::new(
+            "PRV_UNSUPPORTED",
+            &format!("不支持预览的格式: {ext}"),
+            false,
+            false,
+        )
     })?;
     let out_dir = std::env::temp_dir().join(format!("binder_prv_{}", std::process::id()));
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| IpcError::new("PRV_IO_ERROR", &format!("建预览目录失败: {e}"), true, false))?;
     let pdf = convert_to_pdf(abs_path, kind, &out_dir)?; // 失败态（含 LibreOffice 缺失）由 DOC 运行时回报
-    let bytes = std::fs::read(&pdf)
-        .map_err(|e| IpcError::new("PRV_IO_ERROR", &format!("读取预览 PDF 失败: {e}"), true, false))?;
+    let bytes = std::fs::read(&pdf).map_err(|e| {
+        IpcError::new(
+            "PRV_IO_ERROR",
+            &format!("读取预览 PDF 失败: {e}"),
+            true,
+            false,
+        )
+    })?;
     let _ = std::fs::remove_file(&pdf); // 预览产物即用即清（字节已回传）
     Ok(bytes)
 }
@@ -55,9 +66,16 @@ pub fn render_preview(abs_path: &Path, ext: &str) -> Result<Vec<u8>, IpcError> {
 /// 导出管线归属编排（BR-PRV-DATA-002）：md/txt→docx（pandoc）、docx→md（pandoc）、office→pdf（libreoffice）；
 /// 转换运行时归 DOC，本模块只做格式编排 + 落点写入（落点守界由调用方 resolve_in_workspace 保证，
 /// X-FORBID-004）。不支持的源→目标组合明确拒绝（不静默产出空文件）。
-pub fn export(abs_src: &Path, src_ext: &str, target_format: &str, abs_dest: &Path) -> Result<(), IpcError> {
-    let read_err = |e: std::io::Error| IpcError::new("PRV_IO_ERROR", &format!("读源失败: {e}"), true, false);
-    let write_err = |e: std::io::Error| IpcError::new("PRV_IO_ERROR", &format!("写导出失败: {e}"), true, false);
+pub fn export(
+    abs_src: &Path,
+    src_ext: &str,
+    target_format: &str,
+    abs_dest: &Path,
+) -> Result<(), IpcError> {
+    let read_err =
+        |e: std::io::Error| IpcError::new("PRV_IO_ERROR", &format!("读源失败: {e}"), true, false);
+    let write_err =
+        |e: std::io::Error| IpcError::new("PRV_IO_ERROR", &format!("写导出失败: {e}"), true, false);
     let src = src_ext.to_ascii_lowercase();
     match target_format {
         // 文本（md/txt）→ docx
@@ -73,7 +91,12 @@ pub fn export(abs_src: &Path, src_ext: &str, target_format: &str, abs_dest: &Pat
             std::fs::write(abs_dest, md).map_err(write_err)?;
         }
         // office（docx/xls/ppt）→ pdf（复用预览链字节）
-        "pdf" if matches!(src.as_str(), "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt") => {
+        "pdf"
+            if matches!(
+                src.as_str(),
+                "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt"
+            ) =>
+        {
             let bytes = render_preview(abs_src, src_ext)?;
             std::fs::write(abs_dest, bytes).map_err(write_err)?;
         }

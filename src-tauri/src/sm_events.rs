@@ -22,7 +22,12 @@ pub struct SmStatePayload {
 
 impl SmStatePayload {
     /// 构造一条无分层段的载荷。
-    pub fn new(machine_id: &str, instance_id: impl Into<String>, state: &str, terminal: bool) -> Self {
+    pub fn new(
+        machine_id: &str,
+        instance_id: impl Into<String>,
+        state: &str,
+        terminal: bool,
+    ) -> Self {
         SmStatePayload {
             machine_id: machine_id.to_string(),
             segment: None,
@@ -65,7 +70,8 @@ mod tests {
     #[test]
     fn payload_contract_fields_and_segment_skip() {
         // 无分层段：segment 省略（skip_serializing_if），其余字段齐备。
-        let v = serde_json::to_value(SmStatePayload::new("SM-DE-01", "d1", "Accepted", true)).unwrap();
+        let v =
+            serde_json::to_value(SmStatePayload::new("SM-DE-01", "d1", "Accepted", true)).unwrap();
         assert_eq!(v["machine_id"], "SM-DE-01");
         assert_eq!(v["instance_id"], "d1");
         assert_eq!(v["state"], "Accepted");
@@ -73,7 +79,8 @@ mod tests {
         assert!(v.get("segment").is_none(), "无分层段应省略 segment");
         // 有分层段（SM-SYS-01 ENT 承接段）：segment 携带。
         let v2 = serde_json::to_value(
-            SmStatePayload::new("SM-SYS-01", "sess-1", "Streaming", false).with_segment("ent_invoke"),
+            SmStatePayload::new("SM-SYS-01", "sess-1", "Streaming", false)
+                .with_segment("ent_invoke"),
         )
         .unwrap();
         assert_eq!(v2["segment"], "ent_invoke");

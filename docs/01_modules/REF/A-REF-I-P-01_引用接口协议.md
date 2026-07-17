@@ -31,10 +31,31 @@ A-SYS-I-P-02（骨架）→ 本文（REF 解析/校验/组装接口）→ 实现
 > 候选列举/标记渲染依托 ED 扩展点（X-FORBID-005，前端进程内，不在本 command 表）；REF 不直接
 > 操纵编辑器状态。KB 条目/AST 记忆是否纳入候选待 REF-01（联动 KB/AST，本文 v1 仅 workspace 目标）。
 
+## §2.1 前端进程内 ReferencePayload 协议（REF-INJECT）
+
+前端拖拽/粘贴引用不经 Tauri command，使用进程内 `DataTransfer` / clipboard MIME 协议与 Composer
+输入面交互：
+
+| payload kind | 必要字段 | 来源入口 | 消费 |
+|---|---|---|---|
+| `doc` | `relPath`, `label?` | 文件树拖拽、编辑器标签拖拽、@mention 文档候选 | 发送时可经 WS 读取当前内容 |
+| `selection` | `relPath`, `blockId`, `start?`, `end?`, `text`, `label?` | 编辑器选区复制/拖拽 | 发送时优先消费选区文本快照，并保留锚供校验 |
+| `session` | `sessionId`, `title`, `messages[]` | 代理会话标签拖拽 | 发送时作为显式会话上下文快照 |
+| `memory` | `entryId?`, `title?`, `content` | AST 记忆条目拖拽 | 发送时作为显式记忆快照 |
+| `knowledge` | `entryId?`, `title?`, `content`, `sourceRef?` | KB 知识条目拖拽 | 发送时作为显式知识快照 |
+| `template` | `templateId?`, `name`, `content` | TPL 模板条目拖拽 | 发送时作为显式模板快照 |
+| `url` | `url`, `title?` | 外部 URL 粘贴/拖拽 | 仅注入链接，不自动抓取外部内容 |
+| `long_text` | `text`, `charCount` | 外部纯文本粘贴超过阈值 | 作为长文本快照注入，避免直接撑大输入正文 |
+
+`ReferencePayload` 在 Composer 内插入 `ReferenceToken`，发送时作为 `ag.start_turn.references` 传给 AG；
+旧 `mentions`/`block_refs` 参数仅保留兼容，不再作为新前端路径的主通道。
+
 ## §3 测试与验收
 
 - 候选限界 workspace、目标不可达不入候选；resolve 悬空失败；verify 失效信号（含检测不可得保守）；
   build_injection 内容读取时点一致、来源可溯、失效剔除不注入；与 AG（消费）/ED（锚）G5 联调。
+- 前端进程内协议：每类 ReferencePayload 可从对应入口进入 Composer 并生成 ReferenceToken；超过阈值的
+  外部纯文本生成 `long_text`；发送时传 `references`，发送后草稿 chip/tray 清空。
 
 ## §4 债务
 
@@ -46,3 +67,4 @@ A-SYS-I-P-02（骨架）→ 本文（REF 解析/校验/组装接口）→ 实现
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件）：REF 接口协议——list_candidates/resolve_anchor/verify_anchor/build_injection 四接口，限界+无悬空+失效保守+读取时点一致；零新增注册项；债务（KB/AST 纳入候选待联合） |
+| 2026-07-08 | v1.1 | 新增前端进程内 ReferencePayload 协议：声明 doc/selection/session/memory/knowledge/template/url/long_text 八类 payload 字段、来源入口和 AG 消费路径；明确新路径通过 `ag.start_turn.references`，旧 mentions/block_refs 仅兼容 |

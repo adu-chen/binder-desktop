@@ -11,21 +11,20 @@ import { useSyncExternalStore } from "react";
  * 保既有消费方（edService/Editor/WorkspaceMenu/Composer/deService）零改动兼容。
  */
 
-/** 编辑标签 6 状态（参考稿 §6.3，视觉互斥；由 center TabStrip 渲染）。 */
+/** 编辑标签 5 状态（视觉互斥；由 center TabStrip 渲染）。 */
 export type TabState =
   | "normal"
   | "dirty"
   | "saving"
   | "saved"
-  | "pending_diff"
-  | "external_changed";
+  | "pending_diff";
 
 /** 后端 SM-WS-01 保存机运行态（Rust SaveState 的 Debug 名，A-WS-M-S-01 §2）。 */
 export type RustSaveState = "Idle" | "Dirty" | "Saving" | "Saved" | "SaveError";
 
 /** Rust SM-WS-01 SaveState → TabState（A-CORE-X-L-04 Task 2-C，人类决策 2026-06-27）。
  *  仅保存**动作**态经广播投影：Saving→saving、Saved→saved。Idle/Dirty 脏态留前端本地（高频不走 IPC）；
- *  SaveError 不投影——冲突(external_changed)/失败(dirty) 由前端据错误码细分（edService catch）。 */
+ *  SaveError 不投影——失败(dirty) 由前端据错误码细分（edService catch）。 */
 export function mapSaveState(s: RustSaveState): Extract<TabState, "saving" | "saved"> | null {
   switch (s) {
     case "Saving":
@@ -41,12 +40,17 @@ export function mapSaveState(s: RustSaveState): Extract<TabState, "saving" | "sa
  *  html_file=.html 独立文件（PI-ED-13 / REQ-ED-008：富文本编辑 + HTML 序列化，经 ws.save_doc 文本落盘）。 */
 export type EditFormat = "text" | "html" | "html_file";
 
-/** 单文档编辑会话（按路径独立保存，切换标签不互相覆盖）。 */
+/** 单文档编辑会话（按路径独立保存，切换标签不互相覆盖）。
+ *  三态归属（A-CORE-C-T-01 §1.2/§4）：content 是 LogicalState 的派生缓存（序列化副本），
+ *  非权威源。权威逻辑态是 TipTap ProseMirror doc（editor.state.doc）。
+ *  serialize() 是只读导出，setContent() 是外部数据加载人逻辑态。
+ *  需要真值时必须从 editor.state.doc 取。 */
 export interface EditSession {
-  /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。 */
+  /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。
+   *  归属：LogicalState 派生缓存（非权威源）。 */
   content: string | null;
   /** 加载基线哈希（后端 ws.read_doc / doc.open_for_edit 回；供保存校验）。 */
-  baseline: number | null;
+  baseline: number | string | null;
   tabState: TabState;
   /** 编辑模型格式（EditFormat）。 */
   editFormat: EditFormat;
@@ -70,7 +74,7 @@ interface EdState {
   pendingDiffCount: number;
   /** 活动会话内容（编辑器据此 setContent）；null = 未打开真实文档。 */
   loadedContent: string | null;
-  baseline: number | null;
+  baseline: number | string | null;
   editFormat: EditFormat;
   /** 活动会话 docx 转换进行中（SM-DOC-01 投影）。 */
   converting: boolean;
@@ -134,7 +138,7 @@ function patchActive(patch: Partial<EditSession>) {
  * boundary: in=editSessionEvent | out=TabState(dirtyOnEditSavedOnPersistExternalOnConflict)
  */
 /// 编辑会话脏态守则（BR-ED-STATE-001 投影）：打开文档为 normal/saved；编辑即转 dirty；
-/// 落盘转 saving→saved；外部变更转 external_changed；待裁决转 pending_diff。状态互斥，权威落盘归 WS。
+/// 落盘转 saving→saved；待裁决转 pending_diff。状态互斥，权威落盘归 WS。
 /// 多文档会话按路径独立保存（PI-FE-27）：脏态/格式/基线均属各自会话，切换活动会话不互相覆盖。
 export const edStore = {
   subscribe(cb: () => void) {
@@ -161,7 +165,7 @@ export const edStore = {
   loadDoc(
     path: string,
     content: string,
-    baseline: number,
+    baseline: number | string,
     jumpLine: number | null = null,
     editFormat: EditFormat = "text",
   ) {
@@ -204,23 +208,23 @@ export const edStore = {
   },
   /** 保存成功：刷新指定会话基线，回 saved 态。按 path 锁定 → 异步保存期间切标签不误改他会话（PI-FE-29）。
    *  会话已被关闭则为空操作（文件仍已落盘，无会话可更新）。 */
-  markSaved(path: string, baseline: number) {
+  markSaved(path: string, baseline: number | string) {
     patchSession(path, { baseline, tabState: "saved" });
   },
   /** 仅刷新会话加载基线（A-CORE-X-L-04 Task 2-C）：保存成功后由后端返回值回填；saved 态由 SM-WS-01 广播驱动。 */
-  setBaseline(path: string, baseline: number) {
+  setBaseline(path: string, baseline: number | string) {
     patchSession(path, { baseline });
   },
   /**
    * 投影后端 SM-WS-01 保存机转移（A-CORE-X-L-04 Task 2-C · X-FORBID-007）：由 smListeners 监听
    * `sm:SM-WS-01:state_changed` 调用。仅保存动作态：Saving→saving、Saved→saved（按 path 锁定）。
-   * external_changed/pending_diff 为更高优先呈现态，不被保存动作广播覆盖。
+   * pending_diff 为更高优先呈现态，不被保存动作广播覆盖。
    */
   applyWsSaveState(relPath: string, saveState: RustSaveState) {
     const tab = mapSaveState(saveState);
     if (!tab) return;
     const cur = state.sessions[relPath];
-    if (!cur || cur.tabState === "external_changed" || cur.tabState === "pending_diff") return;
+    if (!cur || cur.tabState === "pending_diff") return;
     patchSession(relPath, { tabState: tab });
   },
   /**
@@ -234,7 +238,7 @@ export const edStore = {
   /** 编辑产生脏态（编辑器 onUpdate 驱动，作用于活动会话）。 */
   markDirty() {
     const sess = state.activePath ? state.sessions[state.activePath] : undefined;
-    if (sess && sess.tabState !== "external_changed" && sess.tabState !== "pending_diff") {
+    if (sess && sess.tabState !== "pending_diff") {
       patchActive({ tabState: "dirty" });
     }
   },

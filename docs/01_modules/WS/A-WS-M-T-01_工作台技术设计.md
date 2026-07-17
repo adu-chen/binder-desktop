@@ -98,7 +98,7 @@ rule_id: BR-WS-DATA-001
 主链路: WS-FS
 域: DATA
 -->
-workspace 内文档/资源的读、写、列举与跨文档操作必经 WS 物理边界层，统一以 WorkspaceRef/DocRef
+workspace 内文档/资源的读、写、列举、建目录与跨文档操作必经 WS 物理边界层，统一以 WorkspaceRef/DocRef
 （A-SYS-I-P-01）定位目标；调用方不得旁路 WS 直接触达文件系统（X-SEQ-002 / APC §9）。跨模块传递的
 WorkspaceRef/DocRef 字段集合引用 A-SYS-I-P-01 共享结构，WS 不私自重定义（X-SHARED-001）。
 
@@ -126,6 +126,12 @@ WS 必须感知 workspace 内文档的外部变更：对处于打开会话中的
 静默覆盖外部修改，以统一错误形状（冲突类错误码）回 ED 会话提示用户裁决（确认覆盖 / 放弃重载）；
 用户确认覆盖后以重置基线重试落盘。监视不可得场景（如网络盘）以"保存前校验"为兜底下限。
 监视机制选型（FSEvents/轮询）与防抖参数延实现期。
+
+> **实现回写（2026-07-12）**：已落地的下限能力是保存前 guard：`ws.read_doc` /
+> `doc.open_for_edit` 返回加载基线，`ws.save_doc` / `doc.save_from_edit` 在写盘前读取磁盘当前内容并
+> 与基线比对，冲突返回 `WS_SAVE_CONFLICT` 且不进入 `save_atomic()`；用户显式确认后以
+> `override=true` 重试。文件监视、`ws.external_change` 事件推送、独立 `check_external_change`
+> command 尚未注册，仍属 SY-02 后续实现。
 
 ## §5 pending_diffs 持久化与裁决后落盘（WS-DIFF-APPLY）
 
@@ -400,7 +406,8 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 - **内容基线哈希已定档（G-5，2026-07-02，A-CORE-X-R-03 §7）**：选型 = **FNV-1a 64**（save.rs
   `content_hash`）。定档理由：用途为**非对抗性**外部变更检测（磁盘 vs 加载基线比对）与时间轴快照
   内容寻址去重（snapshot_ref=`blob_{hash}`），文档级碰撞概率 ~2⁻⁶⁴/对，个人工作台量级下可忽略；
-  零依赖、与 IPC 契约（baseline: u64）及既有持久化基线兼容，换算法将使已存基线失配。**边界声明**：
+  零依赖、与内核契约（baseline: u64）及既有持久化基线兼容，换算法将使已存基线失配。IPC 层以
+  十进制字符串承载该 u64，避免 JS `number` 精度丢失。**边界声明**：
   本哈希不承诺抗对抗碰撞，不得挪用为完整性/安全校验；若时间轴去重未来进入对抗场景须另立加密哈希。
 - workspace.db 完整列已在 §7 敲定（解除 SY-03 的列定义部分）；具体 DDL 与索引调优随实现期基准测试微调。
 
@@ -420,3 +427,5 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-06-10 | v1.0 | 初版（WS G2 首件）：WS 规则 SSOT——workspace 模型与生命周期、文件 I/O 与跨文档边界、pending_diffs 持久化与 accepted 后落盘、文档级时间轴存储模型与还原、save 保存链、workspace.db 完整 schema（解除 SY-03 列定义）；注册链路 WS-FS/WS-SAVE/WS-DIFF-APPLY/WS-TIMELINE（均 P1）、规则 BR-WS-DATA-001/002·BR-WS-STATE-001/002·BR-WS-PERSIST-001/002、约束 X-FORBID-004（复用 X-SEQ-002/003·X-SHARED-001·X-INTER-001）、术语 TERM-WS-001 Workspace / TERM-WS-002 DocumentTimeline（解除 A-SYS-I-P-01 §6 延期）；REQ_MAP（REQ-WS-001~005）；债务盲区（快照存储形态/ save 节点准入 / 多 workspace 隔离延实现期） |
 | 2026-06-12 | v1.1 | Q2 缺口补遗（人类确认采纳）：§4 新增 BR-WS-OBS-001 外部变更感知与保存冲突保护——加载基线（内容哈希）、文件监视/惰性校验、外部变更事件供订阅方（ED/DE/REF）、save 前基线校验、冲突不静默覆盖须用户显式裁决、网络盘以保存前校验兜底；REQ_MAP 补 REQ-WS-002→BR-WS-OBS-001 |
 | 2026-07-02 | v1.2 | §12 选型定档回填（人类授权执行 A-CORE-X-R-03 §7 补全计划）：G-4 不透明 ID = 前缀 + UUIDv4（Rust uuid crate；blockId 归 ED §11.1）；G-5 内容基线哈希 = FNV-1a 64 定档（非对抗性变更检测/内容寻址去重的用途边界声明，与既有 IPC 契约及持久化基线兼容） |
+| 2026-07-12 | v1.3 | 三态实现回写：保存前 baseline guard 已落地到 `ws.save_doc` / `doc.save_from_edit`，冲突返回 `WS_SAVE_CONFLICT` 且不写文件，`override=true` 仅源自用户显式确认；声明 baseline IPC 字符串化；文件监视、`ws.external_change` 推送与独立检测 command 仍延后 |
+| 2026-07-16 | v1.4 | 补齐 WS-FS 建目录语义：建目录属于 workspace 内文件树结构操作，必经 WS 物理边界层，供 Agent `create_folder` 结构工具复用；目标为目录幂等成功，目标为文件拒绝 |

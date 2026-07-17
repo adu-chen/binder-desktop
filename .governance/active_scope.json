@@ -1,22 +1,41 @@
 {
   "task_type": "CODE_CHANGE",
-  "scope_id": "PI-DE-DIFFCARD-COMPACT-01",
+  "scope_id": "AG-ASSIST-COMPLETE-01",
   "allowed_files": [
-    "docs/01_modules/DE/A-DE-M-T-01_DiffEdit技术设计.md",
-    "docs/01_modules/DE/A-DE-X-L-01_DiffEdit开发计划.md",
-    "src/components/de/DiffCard.tsx",
-    "src/components/de/DiffCard.test.tsx",
+    ".governance/active_scope.json",
+    ".governance/issues/AG-ASSIST-COMPLETE-01.md",
+    "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
+    "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
+    "docs/01_modules/AG/A-AG-X-L-01_代理开发计划.md",
+    "docs/01_modules/AG/A-AG-X-L-02_代理集成计划.md",
+    "src/store/assistStore.ts",
+    "src/store/assistStore.test.ts",
+    "src/components/ag/AutocompleteOverlay.tsx",
+    "src/components/ag/AutocompleteOverlay.test.tsx",
+    "src/components/ag/InlineAssistPopover.tsx",
+    "src/components/ed/assistPlacement.ts",
+    "src/components/ed/assistPlacement.test.ts",
+    "src/components/ed/Editor.tsx",
     "src/styles.css",
-    ".governance/active_scope.json"
+    "src/services/agService.ts",
+    "src/services/agService.test.ts",
+    "src-tauri/src/ag/assist.rs",
+    "src-tauri/src/ag/prompts.rs",
+    "src-tauri/src/ent/gateway.rs",
+    "src-tauri/src/lib.rs",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
     "src-tauri/src/ipc/mod.rs"
   ],
   "confirmation": "YES",
-  "scope_reason": "PI-DE-DIFFCARD-COMPACT-01 DiffCard 紧凑审阅卡修复（人类明确要求执行并提交）：将默认卡片收敛为标题行、位置行、红删行、绿增行、操作按钮行；长内容和状态详情进入受控展开区；同步 DE 文档、组件结构、样式与组件测试。"
+  "scope_reason": "AG-ASSIST-COMPLETE-01（人类确认续修）：闭合辅助续写/局部修改 AG-ASSIST 链路，先同步文档，再修防抖、防重、锚点指纹、严格 3 候选、终态回写与 overlay 键盘范围。"
 }

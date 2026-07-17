@@ -96,12 +96,18 @@ mod tests {
         // 登出 → 未认证 + 须清令牌
         let after_logout = apply(SessionState::Authenticated, SessionEvent::Logout).unwrap();
         assert_eq!(after_logout, SessionState::Unauthenticated);
-        assert!(must_clear_token(SessionState::Authenticated, after_logout), "登出须清令牌");
+        assert!(
+            must_clear_token(SessionState::Authenticated, after_logout),
+            "登出须清令牌"
+        );
         // sessionExpire → 未认证 + 须清令牌
         let exp = apply(SessionState::Authenticated, SessionEvent::SessionExpire).unwrap();
         assert!(must_clear_token(SessionState::Authenticated, exp));
         // 未认证→未认证（LoginFail）不重复清
-        assert!(!must_clear_token(SessionState::Unauthenticated, SessionState::Unauthenticated));
+        assert!(!must_clear_token(
+            SessionState::Unauthenticated,
+            SessionState::Unauthenticated
+        ));
     }
 
     // covers: BR-ACCT-STATE-001
@@ -109,7 +115,11 @@ mod tests {
     #[test]
     fn reauth_required_triggers_reliably() {
         let reauth = IpcError::new("X", "需重认证", true, true); // retriable 且 reauth
-        assert_eq!(reauth_action(&reauth), ReauthAction::Trigger, "reauth 优先，不静默重试");
+        assert_eq!(
+            reauth_action(&reauth),
+            ReauthAction::Trigger,
+            "reauth 优先，不静默重试"
+        );
         let plain = IpcError::new("Y", "普通错误", true, false);
         assert_eq!(reauth_action(&plain), ReauthAction::Propagate);
     }

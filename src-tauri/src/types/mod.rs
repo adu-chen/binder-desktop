@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
  * type:     DATA
  * chain:    DATA-MIGRATE
  * rules:    BR-SYS-DATA-002
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,TimelineEntry,RefInjection,MemoryInjection,KnowledgeInjection
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,TimelineEntry,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -81,6 +81,75 @@ pub struct RefInjection {
     pub content: String,
     /// 来源标识，消费方可溯源到引用目标。
     pub origin_label: String,
+}
+
+/// 引用输入载荷基线（REQ-CORE-006，主责 REF；Composer→AG 显式引用主通道）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReferencePayload {
+    Doc {
+        #[serde(rename = "relPath")]
+        rel_path: String,
+        label: Option<String>,
+    },
+    Selection {
+        #[serde(rename = "relPath")]
+        rel_path: String,
+        #[serde(rename = "blockId")]
+        block_id: String,
+        start: Option<usize>,
+        end: Option<usize>,
+        text: String,
+        label: Option<String>,
+    },
+    Session {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        title: String,
+        messages: Vec<ReferenceSessionMessage>,
+        label: Option<String>,
+    },
+    Memory {
+        #[serde(rename = "entryId")]
+        entry_id: Option<String>,
+        title: Option<String>,
+        content: String,
+        label: Option<String>,
+    },
+    Knowledge {
+        #[serde(rename = "entryId")]
+        entry_id: Option<String>,
+        title: Option<String>,
+        content: String,
+        #[serde(rename = "sourceRef")]
+        source_ref: Option<String>,
+        label: Option<String>,
+    },
+    Template {
+        #[serde(rename = "templateId")]
+        template_id: Option<String>,
+        name: String,
+        content: String,
+        label: Option<String>,
+    },
+    Url {
+        url: String,
+        title: Option<String>,
+        label: Option<String>,
+    },
+    LongText {
+        text: String,
+        #[serde(rename = "charCount")]
+        char_count: usize,
+        label: Option<String>,
+    },
+}
+
+/// 代理会话引用中的消息快照。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReferenceSessionMessage {
+    pub role: String,
+    pub content: String,
 }
 
 /// 记忆注入载荷基线（主责 AST；AST→AG 传递）。
@@ -153,5 +222,25 @@ mod tests {
         let back: PendingDiff = serde_json::from_str(&json).unwrap();
         assert_eq!(back, diff);
         assert_eq!(back.target, doc);
+    }
+
+    // covers: BR-SYS-DATA-002
+    // ReferencePayload 字段集合按 A-SYS-I-P-01 v1.4 使用 camelCase 与 tag=kind 跨端稳定。
+    #[test]
+    fn reference_payload_serde_roundtrip() {
+        let payload = ReferencePayload::Selection {
+            rel_path: "notes/a.md".into(),
+            block_id: "block_1".into(),
+            start: Some(2),
+            end: Some(8),
+            text: "引用文本".into(),
+            label: None,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"kind\":\"selection\""));
+        assert!(json.contains("\"relPath\":\"notes/a.md\""));
+        assert!(json.contains("\"blockId\":\"block_1\""));
+        let back: ReferencePayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, payload);
     }
 }

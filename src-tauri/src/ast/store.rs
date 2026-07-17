@@ -18,7 +18,10 @@ use rusqlite::Connection;
  */
 /// 列举当前 workspace 的 active 记忆条目（BR-AST-DATA-001）：查询**恒以 workspace_id 作用域**，
 /// 跨 workspace 条目不可见（隔离）；仅取 active（revoked 不供给）；纯本地读取无网络出口（不上云）。
-pub fn list_active(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<MemoryInjection>> {
+pub fn list_active(
+    conn: &Connection,
+    workspace_id: &str,
+) -> rusqlite::Result<Vec<MemoryInjection>> {
     let mut stmt = conn.prepare(
         "SELECT entry_id, memory_kind, content, origin_turn FROM memory_entries \
          WHERE workspace_id=?1 AND status='active' ORDER BY created_at ASC",

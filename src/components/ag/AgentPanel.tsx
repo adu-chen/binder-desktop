@@ -2,13 +2,13 @@ import { useState } from "react";
 import { useAgStore, agStore } from "../../store/agStore";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
-import { DiffList } from "../de/DiffList";
 import { DiffAllActionsBar } from "../de/DiffAllActionsBar";
+import { writeReferencePayloadData } from "../../services/referencePayload";
 
 /**
  * 代理编辑面板 AgentPanel（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01）。
  * 顶部=多会话标签栏（新建/关闭/历史重开，运行期内存态，持久化随 BR-AG-PERSIST-001 接线批）；
- * 中部=消息流 + diff 卡；输入框上方=批量裁决条（无待裁决自隐藏）；底部=Composer。
+ * 中部=消息流（DiffCard 嵌入对应回合消息内）；输入框上方=批量裁决条（无待裁决自隐藏）；底部=Composer。
  * 编辑/构建模式切换已移入 Composer 框内（原顶部切换移除，逻辑同源 agStore session.mode）。
  * AI 调用前经订阅门禁硬门（X-SEQ-001，后端 ensure_gate_passed）；客户端不持密钥（X-FORBID-001）。
  */
@@ -28,6 +28,17 @@ export function AgentPanel() {
               role="tab"
               aria-selected={s.id === activeSessionId}
               className={`agtab${s.id === activeSessionId ? " active" : ""}`}
+              draggable
+              onDragStart={(e) =>
+                writeReferencePayloadData(e.dataTransfer, {
+                  kind: "session",
+                  sessionId: s.id,
+                  title: s.title,
+                  messages: s.messages
+                    .filter((m) => !m.error && m.content.trim())
+                    .map((m) => ({ role: m.role, content: m.content })),
+                })
+              }
               onClick={() => agStore.switchSession(s.id)}
               title={s.title}
             >
@@ -85,7 +96,6 @@ export function AgentPanel() {
 
       <div className="chatpanel-scroll">
         <MessageList />
-        <DiffList />
       </div>
 
       {/* diffedit 批量裁决条（PI-AG-UI-01 需求3）：仅在有待裁决/应用中呈现，组件内自隐藏。 */}

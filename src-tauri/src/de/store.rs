@@ -91,7 +91,12 @@ pub fn load_payload_for_diff(conn: &Connection, diff_id: &str) -> Result<StoredP
         .optional()
         .map_err(|e| IpcError::new("DE_DB_ERROR", &format!("载荷查询失败: {e}"), true, false))?;
     row.ok_or_else(|| {
-        IpcError::new("DE_PAYLOAD_MISSING", &format!("diff 载荷不存在: {diff_id}"), false, false)
+        IpcError::new(
+            "DE_PAYLOAD_MISSING",
+            &format!("diff 载荷不存在: {diff_id}"),
+            false,
+            false,
+        )
     })
 }
 
@@ -101,8 +106,8 @@ mod tests {
     use crate::db;
     use crate::de::generate::{build_payload, ChangeProposal};
     use crate::types::DocRef;
-    use crate::workspace::diff_apply::persist_diff;
     use crate::types::{DiffStatus, PendingDiff};
+    use crate::workspace::diff_apply::persist_diff;
 
     fn fresh() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -123,10 +128,17 @@ mod tests {
         let conn = fresh();
         let proposal = ChangeProposal {
             origin_task: "turn1".into(),
-            target: DocRef { workspace_id: "ws1".into(), rel_path: "a.md".into(), doc_type: "md".into() },
+            target: DocRef {
+                workspace_id: "ws1".into(),
+                rel_path: "a.md".into(),
+                doc_type: "md".into(),
+            },
             after_content: b"new body".to_vec(),
             before_snapshot: Some("h0".into()),
-            style_ops: Some(r#"[{"op":"set_mark","blockId":"b1","start":0,"end":3,"mark":{"type":"bold"}}]"#.into()),
+            style_ops: Some(
+                r#"[{"op":"set_mark","blockId":"b1","start":0,"end":3,"mark":{"type":"bold"}}]"#
+                    .into(),
+            ),
         };
         let payload = build_payload(&proposal);
         persist_payload(&conn, "pl1", &payload).unwrap();

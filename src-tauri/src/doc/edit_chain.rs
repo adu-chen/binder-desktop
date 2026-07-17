@@ -25,10 +25,20 @@ use std::process::{Command, Stdio};
 const MAX_EDIT_HTML_BYTES: usize = 15 * 1024 * 1024;
 
 fn dep_missing(detail: &str) -> IpcError {
-    IpcError::new("DOC_EDIT_DEP_MISSING", &format!("编辑链依赖缺失: {detail}（不静默降级）"), true, false)
+    IpcError::new(
+        "DOC_EDIT_DEP_MISSING",
+        &format!("编辑链依赖缺失: {detail}（不静默降级）"),
+        true,
+        false,
+    )
 }
 fn convert_fail(detail: &str) -> IpcError {
-    IpcError::new("DOC_EDIT_CONVERT_FAIL", &format!("编辑链转换失败: {detail}"), true, false)
+    IpcError::new(
+        "DOC_EDIT_CONVERT_FAIL",
+        &format!("编辑链转换失败: {detail}"),
+        true,
+        false,
+    )
 }
 
 /// 解析打包资源（reference.docx / preserve-styles.lua）路径：内置优先（TAURI_RESOURCE_DIR → 打包
@@ -66,13 +76,13 @@ pub fn resolve_resource(filename: &str) -> Option<PathBuf> {
  * codes:    BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003
  * type:     IO
  * chain:    DOC-CONVERT
- * rules:    BR-DOC-DATA-002
- * boundary: in=docxFileAndWorkdir | out=editableHtml(stylesPreservedViaStylesExtAndLuaFilterCapped)
+ * rules:    BR-DOC-DATA-002, BR-DOC-DATA-003
+ * boundary: in=docxFileAndWorkdir | out=editableHtml(stylesPreservedBlockIdBackfilledViaStylesExtAndLuaFilterCapped)
  */
 /// 打开 docx 为可编辑 HTML（BR-DOC-DATA-002 样式子集保留 / BR-DOC-DATA-001 本地不上行）：经 pandoc
 /// `docx+styles → html+raw_html+native_divs+native_spans` + preserve-styles.lua 过滤器，必需子集往返、
 /// 部分支持（颜色/字体/字号）保留为内联样式供 TipTap 编辑；`--extract-media` 至 work_dir 使图片可见；
-/// HTML 超 15MB 拒绝。依赖/资源缺失回统一错误不静默降级。
+/// 转换后补齐块级 data-block-id（BR-DOC-DATA-003）；HTML 超 15MB 拒绝。依赖/资源缺失回统一错误不静默降级。
 pub fn docx_to_html(docx_path: &Path, work_dir: &Path) -> Result<String, IpcError> {
     if !pandoc_available() {
         return Err(dep_missing("pandoc"));
@@ -97,10 +107,14 @@ pub fn docx_to_html(docx_path: &Path, work_dir: &Path) -> Result<String, IpcErro
         return Err(convert_fail(&String::from_utf8_lossy(&out.stderr)));
     }
     let html = String::from_utf8(out.stdout).map_err(|e| convert_fail(&e.to_string()))?;
+    let html = crate::doc::block_backfill::inject_missing_data_block_ids(&html);
     if html.len() > MAX_EDIT_HTML_BYTES {
         return Err(IpcError::new(
             "DOC_EDIT_TOO_LARGE",
-            &format!("文档转换后 HTML 过大（{} MB），超编辑模式上限 15MB", html.len() / 1024 / 1024),
+            &format!(
+                "文档转换后 HTML 过大（{} MB），超编辑模式上限 15MB",
+                html.len() / 1024 / 1024
+            ),
             false,
             false,
         ));
@@ -166,7 +180,10 @@ mod tests {
             resolve_resource("preserve-styles.lua").is_some(),
             "preserve-styles.lua 应可解析（已拷入 resources）"
         );
-        assert!(resolve_resource("reference.docx").is_some(), "reference.docx 应可解析");
+        assert!(
+            resolve_resource("reference.docx").is_some(),
+            "reference.docx 应可解析"
+        );
         assert!(resolve_resource("不存在的资源.xyz").is_none());
     }
 

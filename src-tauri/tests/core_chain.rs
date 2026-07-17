@@ -9,9 +9,9 @@
 //! 仅依赖 binder_lib 公共 API，不触前端/命令层，与并发进程零冲突。
 
 use binder_lib::db;
+use binder_lib::de::expiry::ExternalCheck;
 use binder_lib::de::generate::{generate_diff, ChangeProposal};
 use binder_lib::de::lifecycle::{expire_diffs, list_pending, sweep_expiry, PendingDiffRow};
-use binder_lib::de::expiry::ExternalCheck;
 use binder_lib::de::{transition, DiffEvent, DiffState};
 use binder_lib::types::{DiffStatus, DocRef, LocateResult, PendingDiff};
 use binder_lib::workspace::diff_apply::{apply_diff, discard_diff, persist_diff};
@@ -30,11 +30,20 @@ fn fresh_ws_db() -> Connection {
 }
 
 fn doc(rel: &str) -> DocRef {
-    DocRef { workspace_id: "ws1".into(), rel_path: rel.into(), doc_type: "md".into() }
+    DocRef {
+        workspace_id: "ws1".into(),
+        rel_path: rel.into(),
+        doc_type: "md".into(),
+    }
 }
 
 fn status_of(conn: &Connection, id: &str) -> String {
-    conn.query_row("SELECT status FROM pending_diffs WHERE diff_id=?1", [id], |r| r.get(0)).unwrap()
+    conn.query_row(
+        "SELECT status FROM pending_diffs WHERE diff_id=?1",
+        [id],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 // 核心链正路：AG 产出 → DE 生成 → accept → WS 落盘（文件 + 恰好一个时间轴节点 + accepted）。
@@ -52,13 +61,24 @@ fn accepted_proposal_flows_through_de_to_ws_landing() {
         style_ops: None,
     };
     // 2) DE 生成：锚 Located → PendingDiff（pending）。
-    let diff = generate_diff(&proposal, "d1", "AG", "payload_1", 1_000, LocateResult::Located).unwrap();
+    let diff = generate_diff(
+        &proposal,
+        "d1",
+        "AG",
+        "payload_1",
+        1_000,
+        LocateResult::Located,
+    )
+    .unwrap();
     assert_eq!(diff.status, DiffStatus::Pending);
     persist_diff(&conn, &diff).unwrap();
     assert_eq!(status_of(&conn, "d1"), "pending");
 
     // 3) SM-DE-01：accept 是唯一通往落盘的裁决。
-    assert_eq!(transition(DiffState::Pending, DiffEvent::UserAccept), Some(DiffState::Accepted));
+    assert_eq!(
+        transition(DiffState::Pending, DiffEvent::UserAccept),
+        Some(DiffState::Accepted)
+    );
 
     // 4) WS 落盘（仅 accepted 触发）：原子写文件 + 记节点 + 置 accepted。
     let tmp = std::env::temp_dir().join(format!("binder_itest_{}.md", std::process::id()));
@@ -101,7 +121,10 @@ fn rejected_proposal_does_not_land() {
         payload_ref: "p".into(),
     };
     persist_diff(&conn, &diff).unwrap();
-    assert_eq!(transition(DiffState::Pending, DiffEvent::UserReject), Some(DiffState::Rejected));
+    assert_eq!(
+        transition(DiffState::Pending, DiffEvent::UserReject),
+        Some(DiffState::Rejected)
+    );
     discard_diff(&conn, "d3", "rejected").unwrap();
     assert_eq!(status_of(&conn, "d3"), "rejected");
     assert_eq!(list_timeline(&conn, &target).unwrap().len(), 0); // 未落盘无节点

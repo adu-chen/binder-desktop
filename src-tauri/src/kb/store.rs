@@ -20,7 +20,11 @@ fn now_millis() -> i64 {
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn gen_entry_id() -> String {
-    format!("kb_{}_{}", now_millis(), SEQ.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "kb_{}_{}",
+        now_millis(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /**
@@ -50,7 +54,12 @@ pub fn ingest(
         ));
     }
     if content.trim().is_empty() {
-        return Err(IpcError::new("KB_INGEST_REJECTED", "入库被拒：内容为空", false, false));
+        return Err(IpcError::new(
+            "KB_INGEST_REJECTED",
+            "入库被拒：内容为空",
+            false,
+            false,
+        ));
     }
     let entry_id = gen_entry_id();
     let now = now_millis();
@@ -58,7 +67,14 @@ pub fn ingest(
         "INSERT INTO knowledge_entries \
          (entry_id, workspace_id, content, organization, source_ref, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        (&entry_id, workspace_id, content, organization, source_ref, now),
+        (
+            &entry_id,
+            workspace_id,
+            content,
+            organization,
+            source_ref,
+            now,
+        ),
     )
     .map_err(|e| IpcError::new("KB_DB_ERROR", &format!("知识入库失败: {e}"), true, false))?;
     Ok(entry_id)
@@ -96,7 +112,11 @@ pub fn list_for_management(
  */
 /// 删除（BR-KB-DATA-001）：物理删除条目，**删除即生效**（配合 PI-KB-02 检索即不再召回）。以
 /// (entry_id, workspace_id) 双键作用域，不跨 workspace 误删。返回是否命中（不存在 → false，幂等）。
-pub fn delete_entry(conn: &Connection, workspace_id: &str, entry_id: &str) -> rusqlite::Result<bool> {
+pub fn delete_entry(
+    conn: &Connection,
+    workspace_id: &str,
+    entry_id: &str,
+) -> rusqlite::Result<bool> {
     let n = conn.execute(
         "DELETE FROM knowledge_entries WHERE entry_id=?1 AND workspace_id=?2",
         (entry_id, workspace_id),
@@ -122,13 +142,23 @@ mod tests {
         let conn = fresh();
         let id = ingest(&conn, "ws1", "知识A", "doc:notes.md#1", Some("章节1")).unwrap();
         let src: String = conn
-            .query_row("SELECT source_ref FROM knowledge_entries WHERE entry_id=?1", [&id], |r| r.get(0))
+            .query_row(
+                "SELECT source_ref FROM knowledge_entries WHERE entry_id=?1",
+                [&id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(src, "doc:notes.md#1"); // 可溯源
 
         // 无来源 / 空内容 → 拒绝
-        assert_eq!(ingest(&conn, "ws1", "x", "  ", None).unwrap_err().code, "KB_INGEST_REJECTED");
-        assert_eq!(ingest(&conn, "ws1", "  ", "src", None).unwrap_err().code, "KB_INGEST_REJECTED");
+        assert_eq!(
+            ingest(&conn, "ws1", "x", "  ", None).unwrap_err().code,
+            "KB_INGEST_REJECTED"
+        );
+        assert_eq!(
+            ingest(&conn, "ws1", "  ", "src", None).unwrap_err().code,
+            "KB_INGEST_REJECTED"
+        );
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM knowledge_entries", [], |r| r.get(0))
             .unwrap();

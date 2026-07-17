@@ -115,20 +115,51 @@ pub fn apply_diff(
     after_content: &[u8],
     loaded_baseline: Option<u64>,
 ) -> Result<crate::types::TimelineEntry, IpcError> {
+    if let Some(expected) = loaded_baseline {
+        let current = std::fs::read(abs_path).map_err(|e| {
+            IpcError::new(
+                "WS_READ_FAILED",
+                &format!("apply 前读取当前磁盘内容失败: {e}"),
+                true,
+                false,
+            )
+        })?;
+        if save::content_hash(&current) != expected {
+            return Err(IpcError::new(
+                "WS_SAVE_CONFLICT",
+                "磁盘内容已在 diff 生成后变化，请重新校验后再应用",
+                false,
+                false,
+            ));
+        }
+    }
     // 1) 原子落盘（失败则不记节点、原文件保持，BR-WS-PERSIST-001）。
-    let saved = save::save_atomic(abs_path, after_content, loaded_baseline, true)?;
+    let saved = save::save_atomic(abs_path, after_content)?;
     // 2) save 成功后存全量快照（内容寻址去重，解除 WS-03）+ 记恰好一个节点指向之。
     let snapshot_ref = format!("blob_{}", saved.baseline);
     timeline::store_snapshot(conn, &snapshot_ref, after_content)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("存快照失败: {e}"), true, false))?;
-    let entry = timeline::append_node(conn, doc, "apply", &snapshot_ref, None)
-        .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("记时间轴节点失败: {e}"), true, false))?;
+    let entry = timeline::append_node(conn, doc, "apply", &snapshot_ref, None).map_err(|e| {
+        IpcError::new(
+            "WS_DB_ERROR",
+            &format!("记时间轴节点失败: {e}"),
+            true,
+            false,
+        )
+    })?;
     // 3) 置 diff 终态 accepted。
     conn.execute(
         "UPDATE pending_diffs SET status = 'accepted', decided_at = ?2 WHERE diff_id = ?1",
         (diff_id, now_millis()),
     )
-    .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("更新 diff 状态失败: {e}"), true, false))?;
+    .map_err(|e| {
+        IpcError::new(
+            "WS_DB_ERROR",
+            &format!("更新 diff 状态失败: {e}"),
+            true,
+            false,
+        )
+    })?;
     Ok(entry)
 }
 
@@ -163,13 +194,32 @@ pub(crate) fn parse_status(s: &str) -> crate::types::DiffStatus {
 
 /// 读取 diff 当前持久态（供 SM-DE-01 转移守护取当前态，A-CORE-X-L-04 §5.4 Task 2-B）；
 /// diff 不存在回统一错误形状（不静默放行）。
-pub fn current_status(conn: &Connection, diff_id: &str) -> Result<crate::types::DiffStatus, IpcError> {
+pub fn current_status(
+    conn: &Connection,
+    diff_id: &str,
+) -> Result<crate::types::DiffStatus, IpcError> {
     let s: Option<String> = conn
-        .query_row("SELECT status FROM pending_diffs WHERE diff_id=?1", [diff_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM pending_diffs WHERE diff_id=?1",
+            [diff_id],
+            |r| r.get(0),
+        )
         .optional()
-        .map_err(|e| IpcError::new("WS_DB_ERROR", &format!("diff 状态查询失败: {e}"), true, false))?;
+        .map_err(|e| {
+            IpcError::new(
+                "WS_DB_ERROR",
+                &format!("diff 状态查询失败: {e}"),
+                true,
+                false,
+            )
+        })?;
     let s = s.ok_or_else(|| {
-        IpcError::new("DE_DIFF_NOT_FOUND", &format!("diff 不存在: {diff_id}"), false, false)
+        IpcError::new(
+            "DE_DIFF_NOT_FOUND",
+            &format!("diff 不存在: {diff_id}"),
+            false,
+            false,
+        )
     })?;
     Ok(parse_status(&s))
 }
@@ -256,8 +306,12 @@ mod tests {
     }
 
     fn status_of(conn: &Connection, id: &str) -> String {
-        conn.query_row("SELECT status FROM pending_diffs WHERE diff_id=?1", [id], |r| r.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT status FROM pending_diffs WHERE diff_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     // covers: BR-WS-STATE-001
@@ -274,8 +328,16 @@ mod tests {
         assert_eq!(transition(Applying, ApplyFail), Some(ApplyError));
         assert_eq!(transition(ApplyError, Retry), Some(Applying));
         // forbidden
-        assert_eq!(transition(AwaitingDecision, ApplyOk), None, "未经 Applying 不得 Applied");
-        assert_eq!(transition(Discarded, Accepted), None, "丢弃后不得绕过裁决再落盘");
+        assert_eq!(
+            transition(AwaitingDecision, ApplyOk),
+            None,
+            "未经 Applying 不得 Applied"
+        );
+        assert_eq!(
+            transition(Discarded, Accepted),
+            None,
+            "丢弃后不得绕过裁决再落盘"
+        );
         assert_eq!(transition(Applied, ApplyOk), None);
     }
 
@@ -309,8 +371,15 @@ mod tests {
 
         // 全部：按 created_at 升序（d2 先于 d1）。
         let all = list_pending_diffs(&conn, "ws1", None).unwrap();
-        assert_eq!(all.iter().map(|d| d.diff_id.as_str()).collect::<Vec<_>>(), vec!["d2", "d1"]);
-        assert_eq!(all[1].status, DiffStatus::Rejected, "状态从 DB 文本正确解析");
+        assert_eq!(
+            all.iter().map(|d| d.diff_id.as_str()).collect::<Vec<_>>(),
+            vec!["d2", "d1"]
+        );
+        assert_eq!(
+            all[1].status,
+            DiffStatus::Rejected,
+            "状态从 DB 文本正确解析"
+        );
         assert_eq!(all[0].target.doc_type, "md", "doc_type 由 rel_path 推断");
 
         // status 过滤：仅 pending → d2。
@@ -338,7 +407,10 @@ mod tests {
         let entry = apply_diff(&conn, "d1", &diff.target, &path, b"new content", None).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new content");
         assert_eq!(entry.version_seq, 1); // 恰好一个节点
-        assert_eq!(timeline::list_timeline(&conn, &diff.target).unwrap().len(), 1);
+        assert_eq!(
+            timeline::list_timeline(&conn, &diff.target).unwrap().len(),
+            1
+        );
         assert_eq!(status_of(&conn, "d1"), "accepted");
         let _ = std::fs::remove_file(&path);
     }
@@ -356,7 +428,9 @@ mod tests {
         }
         // 无任何时间轴节点（rejected/expired 不记节点）
         assert_eq!(
-            timeline::list_timeline(&conn, &sample_diff("d2").target).unwrap().len(),
+            timeline::list_timeline(&conn, &sample_diff("d2").target)
+                .unwrap()
+                .len(),
             0
         );
     }

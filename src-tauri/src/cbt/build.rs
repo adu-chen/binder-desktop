@@ -186,11 +186,28 @@ mod tests {
         assert_eq!(transition(TaskRunning, TaskFail), Some(TaskPaused));
         assert_eq!(transition(TaskPaused, Resume), Some(TaskRunning));
         // 任意非终态中断 → Interrupted
-        for s in [Idle, Planning, PlanReview, TaskRunning, TaskPaused, Adjudicating] {
-            assert_eq!(transition(s, Interrupt), Some(Interrupted), "{s:?} 应可中断");
+        for s in [
+            Idle,
+            Planning,
+            PlanReview,
+            TaskRunning,
+            TaskPaused,
+            Adjudicating,
+        ] {
+            assert_eq!(
+                transition(s, Interrupt),
+                Some(Interrupted),
+                "{s:?} 应可中断"
+            );
         }
         // 终态冻结（含 interrupt 不再生效）
-        for ev in [StartBuild, PlanConfirmed, AdjudicationDone, Resume, Interrupt] {
+        for ev in [
+            StartBuild,
+            PlanConfirmed,
+            AdjudicationDone,
+            Resume,
+            Interrupt,
+        ] {
             assert_eq!(transition(Completed, ev), None);
             assert_eq!(transition(Interrupted, ev), None);
         }
@@ -206,8 +223,21 @@ mod tests {
         assert_eq!(transition(Planning, PlanFail), Some(Idle));
         assert_eq!(transition(TaskRunning, Interrupt), Some(Interrupted));
         // FallbackOut 对任意状态都不驱动 CBT 转移（输出信号，非输入事件）。
-        for s in [Idle, Planning, PlanReview, TaskRunning, TaskPaused, Adjudicating, Completed, Interrupted] {
-            assert_eq!(transition(s, FallbackOut), None, "{s:?} 不应因 FallbackOut 转移");
+        for s in [
+            Idle,
+            Planning,
+            PlanReview,
+            TaskRunning,
+            TaskPaused,
+            Adjudicating,
+            Completed,
+            Interrupted,
+        ] {
+            assert_eq!(
+                transition(s, FallbackOut),
+                None,
+                "{s:?} 不应因 FallbackOut 转移"
+            );
         }
     }
 
@@ -219,7 +249,15 @@ mod tests {
         save_run(&conn, "b1", "ws1", "TaskRunning", "plan_1", None).unwrap();
         save_run(&conn, "b2", "ws1", "TaskPaused", "plan_2", None).unwrap();
         save_run(&conn, "b3", "ws1", "Completed", "plan_3", None).unwrap();
-        save_run(&conn, "b4", "ws1", "Interrupted", "plan_4", Some(now_millis())).unwrap();
+        save_run(
+            &conn,
+            "b4",
+            "ws1",
+            "Interrupted",
+            "plan_4",
+            Some(now_millis()),
+        )
+        .unwrap();
         save_run(&conn, "b5", "ws2", "TaskRunning", "plan_5", None).unwrap();
 
         let runs = recover_runs(&conn, "ws1").unwrap();
@@ -228,7 +266,18 @@ mod tests {
         assert!(!ids.contains(&"b3") && !ids.contains(&"b4"), "终态不悬挂");
         assert!(!ids.contains(&"b5"), "跨 workspace 不返回");
         // 中断点更新可恢复
-        save_run(&conn, "b1", "ws1", "Interrupted", "plan_1", Some(now_millis())).unwrap();
-        assert!(!recover_runs(&conn, "ws1").unwrap().iter().any(|(id, _)| id == "b1"));
+        save_run(
+            &conn,
+            "b1",
+            "ws1",
+            "Interrupted",
+            "plan_1",
+            Some(now_millis()),
+        )
+        .unwrap();
+        assert!(!recover_runs(&conn, "ws1")
+            .unwrap()
+            .iter()
+            .any(|(id, _)| id == "b1"));
     }
 }

@@ -57,7 +57,14 @@ pub fn on_turn_terminal(
 /// 而非传播错误（记忆为增益，失败不影响回合终态）。调用方在回合终态后异步触发，不阻塞回合。
 pub fn try_capture(conn: &Connection, workspace_id: &str, req: &CaptureRequest) -> bool {
     // 失败隔离：ast.capture 的 Err（如无类型/无来源、落库失败）不向回合传播。
-    capture::capture_memory(conn, workspace_id, &req.memory_kind, &req.content, &req.origin_turn).is_ok()
+    capture::capture_memory(
+        conn,
+        workspace_id,
+        &req.memory_kind,
+        &req.content,
+        &req.origin_turn,
+    )
+    .is_ok()
 }
 
 #[cfg(test)]
@@ -76,7 +83,12 @@ mod tests {
     // 仅合格终态（Completed/HandedOver）+ 有候选触发，带 origin_turn；其余不触发。
     #[test]
     fn triggers_only_on_eligible_terminal_with_candidate() {
-        let req = on_turn_terminal(TurnState::Completed, "turn_9", Some(("fact", "用户用 Rust"))).unwrap();
+        let req = on_turn_terminal(
+            TurnState::Completed,
+            "turn_9",
+            Some(("fact", "用户用 Rust")),
+        )
+        .unwrap();
         assert_eq!(req.origin_turn, "turn_9"); // 传 origin_turn 可溯源
         assert!(on_turn_terminal(TurnState::HandedOver, "t", Some(("fact", "x"))).is_some());
         // 取消/拒绝终态不触发
@@ -101,10 +113,16 @@ mod tests {
         assert!(try_capture(&conn, "ws1", &ok)); // 成功落库
 
         // AST 会拒绝无类型候选；try_capture 隔离为 false（不 panic、不传播 Err）
-        let bad = CaptureRequest { origin_turn: "t2".into(), memory_kind: "".into(), content: "x".into() };
+        let bad = CaptureRequest {
+            origin_turn: "t2".into(),
+            memory_kind: "".into(),
+            content: "x".into(),
+        };
         assert!(!try_capture(&conn, "ws1", &bad), "失败应被隔离为 false");
         // 回合不受影响：库中仅有成功的一条
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM memory_entries", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_entries", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
     }
 }

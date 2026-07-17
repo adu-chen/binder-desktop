@@ -11,6 +11,8 @@ export interface DocRefView {
   relPath: string;
   docType: string;
   isDir: boolean;
+  /** 后端登记的 BDocx 身份；true 时 doc/docx 走 DOC 编辑链，false 原生 docx 只预览。 */
+  isBDocx?: boolean;
 }
 
 export type DocsStatus = "idle" | "loading" | "ready" | "error";

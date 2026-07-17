@@ -33,10 +33,10 @@ req_id: REQ-GW-001
 title: 供应商适配层
 owner_module: GW
 status: active
-summary: GW 统一适配初始三个 AI 供应商（OpenAI / Anthropic / DeepSeek），对外暴露统一调用接口（A-SYS-I-P-03 CLOUD-INVOKE）；每个供应商对应独立适配器，负责 provider 特定认证、请求构造、响应解析；新增供应商通过增加适配器实现，不影响统一接口
+summary: GW 统一适配初始三个 AI 供应商（OpenAI / Anthropic / DeepSeek），对外暴露统一调用接口（A-SYS-I-P-03 CLOUD-INVOKE）；1.0 EP 默认托管模型优先经 DeepSeek 适配器接入 DeepSeek 官方 API；每个供应商对应独立适配器，负责 provider 特定认证、请求构造、响应解析；新增供应商通过增加适配器实现，不影响统一接口
 source_doc: REQ-CLOUD-003、A-SYS-I-P-03（CLOUD-INVOKE）
 acceptance: 三供应商适配器可独立启用/禁用；调用方无需感知 provider 差异（统一接口）；新增第四家供应商不修改统一接口；provider 密钥仅在适配器层使用且不写日志/持久化
-open_issues: provider 故障转移策略（主/备）归 GW L2；模型档位与 provider 映射规则归 L2
+open_issues: 1.0 EP DeepSeek 当前推荐模型线、价格、限流与弃用节奏在 GW L2/实现前核对；provider 故障转移策略（主/备）归 GW L2；模型档位与 provider 映射规则归 L2
 -->
 
 <!-- REQ
@@ -163,7 +163,25 @@ Content-Type: application/json
 **认证**：`Authorization: Bearer {deepseek_key}`（与 OpenAI 同格式）
 **请求/响应格式**：与 OpenAI Chat Completions 完全兼容，**复用 OpenAI 适配器**，仅替换 base URL 与 key
 
-**初始支持模型**：`deepseek-chat`、`deepseek-reasoner`
+**1.0 EP 初始模型策略**：
+- 托管默认模型优先使用 DeepSeek 当前推荐的 V4 系列模型线（当前计划：`deepseek-v4-flash` / `deepseek-v4-pro`）。
+- `deepseek-chat`、`deepseek-reasoner` 不作为 1.0 EP 固化目标；实现前必须核对 DeepSeek 官方模型列表、弃用节奏、价格和限流。
+- DeepSeek 适配器承担 1.0 EP 的托管模型主路径；OpenAI/Anthropic 初期主要服务 BYOK 与后续 fallback/扩展。
+
+### 3.5 Binder 预设模型演进边界
+
+1.0 EP 的“Binder 托管模型”是产品体验名称，不等同于自部署 Binder 预设模型 checkpoint。1.0 EP
+经 AiGateway 接入 DeepSeek 官方 API，目标是验证核心工作流和收集体验数据。自部署 Binder 预设模型、
+多模态模型矩阵、复杂 ModelRouter、领域微调均后置，不阻断 1.0 EP。
+
+后续演进须满足：
+
+| 阶段 | 目标 |
+|---|---|
+| 1.0 EP | DeepSeek 托管模型 + BYOK；记录脱敏体验指标 |
+| 1.1+ | 开源多模态模型评测，验证截图/文档页面理解 |
+| 1.2+ | Binder 专项评测集，评估专业文本、风格保持、Diff 稳定性 |
+| 1.3+ | 自部署 Binder 预设模型 Beta，小流量接入 ModelRegistry/ModelRouter |
 
 ---
 
@@ -221,7 +239,7 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 **PI-GW-01　供应商适配层（三适配器 + 统一接口）**
 - OpenAI 适配器：Chat Completions 请求构造 + SSE 解析 + StreamEvent 映射
 - Anthropic 适配器：Messages API 请求构造 + 复杂 SSE 解析（多事件类型）+ StreamEvent 映射
-- DeepSeek 适配器：复用 OpenAI 适配器，替换 base URL
+- DeepSeek 适配器：复用 OpenAI 适配器，替换 base URL；1.0 EP 作为托管默认模型主路径，优先接入 DeepSeek 当前推荐 V4 模型线
 - 统一调用函数：`invoke_stream(provider, model, messages, tools, key) → SSE<StreamEvent>`
 - 验收：三适配器单测覆盖（mock SSE 响应）；统一输出格式与 §3.4 一致；provider 密钥不写任何日志
 
@@ -247,11 +265,11 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 - 验收：客户端 SM-SYS-01 认证段可通过（login/refresh/logout 三个端点）；token 过期后 gate/check 返回 denied+reauth
 
 **PI-GW-05　端到端联调（与 PI-AG-11 配合）**
-- 本地 dev 环境：GW（Node.js）+ 三供应商 BYOK 配置 + 客户端（Tauri）联调
+- 本地/预发环境：GW（Node.js）+ DeepSeek 托管模型配置 + BYOK 配置 + 客户端（Tauri）联调
 - 验证：完整流程 `ag.start_turn → gate → invoke → SSE → channel → agStore`
 - 验证：ChangeProposal → de.generate_diff → DiffProposed → 用户 accept → ws.apply_diff 落盘
 - 验证：cancel 中断 → HTTP 连接关闭 → 无半落盘
-- 性能：流式首字延迟 < 1s（BYOK OpenAI gpt-4o-mini 基准），NFR 在 G5 标定
+- 性能：流式首字延迟以 DeepSeek 托管模型主路径和 BYOK 快速模型分别标定，NFR 在 G5 标定
 
 ## §6 G1 问题暴露清单（GW 模块）
 
@@ -262,19 +280,23 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 | GW-03 | DESIGN_RISK | 显式延期 | Anthropic SSE 工具调用参数是流式 JSON（input_json_delta 片段），需增量解析；工具参数较大时内存缓冲策略归 L2 |
 | GW-04 | BOUNDARY_OPEN | 显式延期 | provider 故障转移（主/备 provider）/ 限流处理策略归 L2 |
 | GW-05 | ACCEPTANCE_MISSING | 显式延期 | 量化 NFR（网关首字延迟 / 可用性 / 计量准确率）延 G5 标定 |
+| GW-06 | DESIGN_RISK | 显式延期 | 自部署 Binder 预设模型、多模态模型矩阵、复杂 ModelRouter 不作为 1.0 EP 阻断项；须先基于 DeepSeek 托管模型/BYOK 真实体验数据建立 Binder 专项评测集 |
 
 ## §7 后续动作
 
 1. ~~人类决策 **GW-01**~~ **已决（2026-06-26）：平台订阅 + BYOK 双模共存**。仍需 **GW-02**（BYOK 密钥加密方案）——PI-GW-02 实现前置。
    **代码开发前置（云 APC §1/§3）**：GW 代码不在本客户端仓库开发——「代码开发启动时迁出至独立仓库」。
    故 PI-GW-01~05 实现须先**建立独立云仓库**（迁出本宪章 + 02_cloud 文档 + 新仓 governance.config.json + 生成云端 ADUS），再在该仓内开发。本仓库仅持云端 REQ/叙述设计。
-2. 建 `A-GW-M-T-01_AI网关技术设计.md`（L2，叙述性，含 DB schema、API 骨架、加密方案、SSE 解析细节）
+2. 建 `A-GW-M-T-01_AI网关技术设计.md`（L2，叙述性，含 DB schema、API 骨架、加密方案、SSE 解析细节、
+   DeepSeek 1.0 EP 模型档位映射、BYOK provider 映射、脱敏 telemetry schema）
 3. 客户端挂起项解除：ENT-02（BYOK 上送 API 形状）在 PI-GW-02 完成后回写 `A-ENT-M-T-01`；ENT-03（高频门禁延迟）在 CLOUD-04 完成后回写 `A-SYS-I-P-03`
-4. 独立仓库建立时随云 APC 一并迁出（云 APC §3 流程）
+4. 自部署 Binder 预设模型进入独立评测轨：不得在 1.0 EP 前置为阻断项；需先形成 Binder 专项评测集与模型版本登记策略。
+5. 独立仓库建立时随云 APC 一并迁出（云 APC §3 流程）
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-07-17 | v1.2 | 接入 1.0 Experience Preview 模型策略：REQ-GW-001 明确 DeepSeek 适配器为 1.0 EP 托管模型主路径；DeepSeek 初始模型从旧 chat/reasoner 固化目标调整为实现前核对官方当前推荐 V4 模型线（计划 v4-flash/v4-pro）；新增 §3.5 Binder 预设模型演进边界；PI-GW-01/05 与 §7 后续动作同步 DeepSeek 托管模型 + BYOK + telemetry 路线；新增 GW-06 标记自部署预设模型/多模态矩阵/复杂 ModelRouter 后置 |
 | 2026-06-26 | v1.1 | 记录 GW-01 裁决：**平台订阅 + BYOK 双模共存**（两模均经服务端 GW，X-FORBID-001 不变，均经 CLOUD-GATE 裁决）；§6 GW-01→RESOLVED、§7 后续动作明确「GW 代码须先建独立云仓库再开发」（云 APC：代码开发启动即迁出）；GW-02 加密方案仍待决 |
 | 2026-06-23 | v1.0 | 初版（GW 模块 L1）：REQ-GW-001~006（供应商适配层/统一流式转发/计量/BYOK/CLOUD-GATE/内容不留存）；三供应商适配器规格（OpenAI/Anthropic/DeepSeek，含 SSE 解析差异）；BYOK 流程叙述；PI-GW-01~05 开发路线图；G1 暴露 GW-01~05；遵守驻留期硬约定（无注册类治理块）|

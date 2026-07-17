@@ -115,7 +115,12 @@ mod tests {
     #[test]
     fn escaping_paths_rejected_with_unified_error() {
         let root = Path::new("/home/u/workspace");
-        for bad in ["../secret", "../../etc/passwd", "a/../../out", "/etc/passwd"] {
+        for bad in [
+            "../secret",
+            "../../etc/passwd",
+            "a/../../out",
+            "/etc/passwd",
+        ] {
             let err = resolve_in_workspace(root, bad).unwrap_err();
             assert_eq!(err.code, "WS_PATH_ESCAPE", "应拒绝越界路径: {bad}");
             assert!(!err.retriable);

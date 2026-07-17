@@ -89,7 +89,12 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
         (AwaitingGate, GatePassed) => Streaming,
         (AwaitingGate, GateDenied) => Denied,
         (Streaming, StreamEnd) => HandingOff,
-        (Streaming, Takeover { user_confirmed: true }) => HandedOver,
+        (
+            Streaming,
+            Takeover {
+                user_confirmed: true,
+            },
+        ) => HandedOver,
         (Streaming, StreamFail) => TurnError,
         (Streaming, Cancel) => Cancelled,
         (HandingOff, HandoffOk) => Completed,
@@ -201,8 +206,14 @@ mod tests {
         // 门禁拒绝 → Denied 终态不可绕过
         assert_eq!(transition(AwaitingGate, GateDenied), Some(Denied));
         // 结构性门禁前置：除 AwaitingGate+gatePassed 外无任何状态可达 Streaming
-        for from in [Idle, Assembling, Streaming, HandingOff, TurnError, Completed, Denied] {
-            assert_eq!(transition(from, GatePassed), None, "{from:?} 不应可达 Streaming");
+        for from in [
+            Idle, Assembling, Streaming, HandingOff, TurnError, Completed, Denied,
+        ] {
+            assert_eq!(
+                transition(from, GatePassed),
+                None,
+                "{from:?} 不应可达 Streaming"
+            );
         }
         // fallbackIn 自 CBT 回落起新回合（无双死）
         assert_eq!(transition(Idle, FallbackIn), Some(Assembling));
@@ -213,8 +224,25 @@ mod tests {
     #[test]
     fn cancel_takeover_retry_and_terminals_frozen() {
         assert_eq!(transition(Streaming, Cancel), Some(Cancelled));
-        assert_eq!(transition(Streaming, Takeover { user_confirmed: true }), Some(HandedOver));
-        assert_eq!(transition(Streaming, Takeover { user_confirmed: false }), None, "未确认不移交");
+        assert_eq!(
+            transition(
+                Streaming,
+                Takeover {
+                    user_confirmed: true
+                }
+            ),
+            Some(HandedOver)
+        );
+        assert_eq!(
+            transition(
+                Streaming,
+                Takeover {
+                    user_confirmed: false
+                }
+            ),
+            None,
+            "未确认不移交"
+        );
         assert_eq!(transition(Streaming, StreamFail), Some(TurnError));
         assert_eq!(transition(TurnError, Retry), Some(Assembling));
         for ev in [Send, GatePassed, StreamEnd, HandoffOk, Cancel] {
@@ -248,7 +276,10 @@ mod tests {
         persist_turn(&conn, "t2", "ws1", None, "p2").unwrap();
         persist_turn(&conn, "t3", "ws2", None, "p3").unwrap();
         let h = recover_turns(&conn, "ws1").unwrap();
-        assert_eq!(h.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["t1", "t2"]);
+        assert_eq!(
+            h.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["t1", "t2"]
+        );
         assert_eq!(recover_turns(&conn, "ws2").unwrap().len(), 1); // 隔离
     }
 }

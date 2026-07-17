@@ -26,7 +26,14 @@ pub fn verify_anchor(
     path_exists: bool,
     block_locate: LocateResult,
 ) -> Result<(), IpcError> {
-    let fail = || IpcError::new("REF_ANCHOR_INVALID", "引用锚失效，须重选（不静默注入）", false, false);
+    let fail = || {
+        IpcError::new(
+            "REF_ANCHOR_INVALID",
+            "引用锚失效，须重选（不静默注入）",
+            false,
+            false,
+        )
+    };
     match anchor {
         ReferenceAnchor::Path(_) => {
             if path_exists {
@@ -81,11 +88,19 @@ mod tests {
     use crate::types::DocRef;
 
     fn path_anchor() -> ReferenceAnchor {
-        ReferenceAnchor::Path(DocRef { workspace_id: "ws1".into(), rel_path: "a.md".into(), doc_type: "md".into() })
+        ReferenceAnchor::Path(DocRef {
+            workspace_id: "ws1".into(),
+            rel_path: "a.md".into(),
+            doc_type: "md".into(),
+        })
     }
     fn block_anchor() -> ReferenceAnchor {
         ReferenceAnchor::Block {
-            target: DocRef { workspace_id: "ws1".into(), rel_path: "a.md".into(), doc_type: "md".into() },
+            target: DocRef {
+                workspace_id: "ws1".into(),
+                rel_path: "a.md".into(),
+                doc_type: "md".into(),
+            },
             block_ids: vec!["b1".into()],
         }
     }
@@ -96,12 +111,17 @@ mod tests {
     fn verify_fails_closed_on_invalid_anchor() {
         assert!(verify_anchor(&path_anchor(), true, LocateResult::Located).is_ok());
         assert_eq!(
-            verify_anchor(&path_anchor(), false, LocateResult::Located).unwrap_err().code,
+            verify_anchor(&path_anchor(), false, LocateResult::Located)
+                .unwrap_err()
+                .code,
             "REF_ANCHOR_INVALID"
         );
         assert!(verify_anchor(&block_anchor(), true, LocateResult::Located).is_ok());
         for lost in [LocateResult::AnchorLost, LocateResult::Undetectable] {
-            assert!(verify_anchor(&block_anchor(), true, lost).is_err(), "块级失效须不注入");
+            assert!(
+                verify_anchor(&block_anchor(), true, lost).is_err(),
+                "块级失效须不注入"
+            );
         }
     }
 
@@ -114,6 +134,8 @@ mod tests {
         assert_eq!(inj.origin_label, "@a.md#b1"); // 可溯源
         assert_eq!(inj.block_ids.as_deref(), Some(&["b1".to_string()][..]));
         // 路径级 block_ids 为 None
-        assert!(build_injection(&path_anchor(), "x".into(), "@a.md".into()).block_ids.is_none());
+        assert!(build_injection(&path_anchor(), "x".into(), "@a.md".into())
+            .block_ids
+            .is_none());
     }
 }

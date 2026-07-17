@@ -20,15 +20,16 @@
 产品概述(REQ-CORE-006) → 本文(REQ-REF-*) → REQ_MAP → REF L2 规则(SSOT) → 代码(@GOV)
 ```
 
-REF 是 **@mention 引用解析与注入模块**：用户在对话/构建输入中以 @mention 指向 workspace 内
-目标（文档/内容块/资源），REF 解析目标、经 WS 限界读取内容、组装为注入载荷供 AG/CBT 消费
-（REQ-CORE-006）。REF 依赖 WS（读取限界）与 AG（消费方）；触发输入面与渲染依托 ED 表面。
+REF 是**输入引用解析与注入模块**：用户在对话/构建输入中以 @mention、拖拽、粘贴等动作指向
+workspace 内目标（文档/内容块/资源）或已选定的会话/记忆/知识/模板/外部链接/长文本内容，REF
+归一为引用载荷、经 WS 限界读取需要读取的目标、组装为注入载荷供 AG/CBT 消费（REQ-CORE-006）。
+REF 依赖 WS（读取限界）与 AG（消费方）；触发输入面与渲染依托 ED 表面。
 
 ## §2 模块定位与职责
 
 | # | 职责 | 锚定 |
 |---|---|---|
-| R-J1 | @mention 触发与目标解析：候选列举、目标确定（workspace 内文档/内容块/资源） | REQ-CORE-006 |
+| R-J1 | 引用触发与目标解析：@mention 候选列举、拖拽/粘贴目标确定（workspace 文档/内容块/资源、会话、记忆、知识、模板、外部链接、长文本） | REQ-CORE-006 |
 | R-J2 | 引用内容读取与注入载荷：经 WS 读取目标内容，组装注入载荷交 AG/CBT | REQ-CORE-006/001 |
 | R-J3 | 引用锚定与失效感知：文档级（路径）与块级（blockId）锚，失效可感知不静默断链 | A-ED-M-T-01（BR-ED-DATA-001） |
 | R-J4 | 触发与呈现经 ED 表面：@ 触发输入面、候选面板、引用标记渲染依托 ED 扩展点 | A-ED-M-T-01（X-FORBID-005） |
@@ -41,15 +42,17 @@ REF 是 **@mention 引用解析与注入模块**：用户在对话/构建输入�
 
 **IN（REF 承载）**：
 - @mention 触发协议与候选解析（workspace 内文档、内容块、资源）。
+- 拖拽/粘贴引用协议：编辑器选区、文件树、编辑器标签、会话标签、记忆/知识/模板条目、外部 URL、外部长文本。
 - 引用目标的内容读取（经 WS）与注入载荷组装（含来源标识，供 AG/CBT 消费与溯源）。
 - 引用锚：文档级（workspace 相对路径）+ 块级（blockId）；锚失效检测与明确失效信号。
-- 引用标记在编辑器/对话输入中的渲染数据（呈现承载依托 ED）。
+- 引用标记在编辑器/对话输入中的渲染数据（输入流内 ReferenceToken + 草稿 chip/tray；呈现承载依托 ED）。
 
 **OUT（非 REF）**：
 - 上下文预算、裁剪与组装进回合——归 AG；构建上下文消费——归 CBT。
 - 文件 I/O 与路径守护——归 WS；blockId 稳定性——归 ED；候选 UI 呈现——归 ED 表面。
-- 知识库条目检索与召回——归 KB（知识库条目是否纳入可引用范围联合 KB G1 确认，§7 REF-01）。
-- 记忆资产注入——归 AST（其注入通道与 REF 的关系联合 AST G1 确认）。
+- 知识库条目检索与召回排序——归 KB；REF 仅接收用户已选中的知识条目快照。
+- 记忆资产生成、撤销与筛选——归 AST；REF 仅接收用户已选中的记忆条目快照。
+- 模板定义与工作流执行——归 TPL；REF 仅接收用户已选中的模板条目快照。
 
 ## §4 代表性流程（契约级，APC §7）
 
@@ -67,6 +70,14 @@ REF 是 **@mention 引用解析与注入模块**：用户在对话/构建输入�
 |---|---|---|---|---|---|---|
 | 1 | REF | 既有引用 + 目标变更 | 检测锚有效性（路径存在/blockId 可定位） | 有效/失效判定 | 2 | 检测不可得→按失效保守处理，不注入过期内容 |
 | 2 | REF | 失效判定 | 发明确失效信号（不静默注入空/错位内容） | 失效提示 | 终态 | 用户可重新选定目标 |
+
+**R3 · 多来源输入引用令牌**（R-J1~J4，承接 REQ-CORE-006）
+
+| step | actor | input | action | output | next | exception |
+|---|---|---|---|---|---|---|
+| 1 | 用户 | 拖拽/粘贴引用来源 | REF 将来源归一为 ReferencePayload | 引用载荷 | 2 | 无可识别引用→按普通文本/输入处理 |
+| 2 | ED/AG 输入面 | ReferencePayload | 在输入流插入 ReferenceToken，并在草稿引用区展示 chip/tray | 可见引用标记 | 3 | 超过 5 条→草稿区折叠，输入流令牌不折叠 |
+| 3 | 用户 | 发起代理回合 | AG 消费 ReferencePayload；草稿 chip 生命周期终止，已发送消息保留同形态输入流令牌 | 回合上下文 + 已发送消息 | 终态 | 引用读取/校验失败→明确失败，不静默丢弃 |
 
 ## §5 模块级需求声明（REQ-REF-*）
 
@@ -114,6 +125,28 @@ acceptance: 触发/候选/标记均经 ED 声明的扩展点；无绕过 ED 直�
 open_issues: 具体扩展点契约随 ED 扩展表面细化（REF G2 联合 ED）
 -->
 
+<!-- REQ
+req_id: REQ-REF-005
+title: 多来源引用归一化
+owner_module: REF
+status: active
+summary: 编辑器选区、文件树、编辑器标签、会话标签、记忆条目、知识条目、模板条目、外部 URL 与外部长文本必须归一为 ReferencePayload；REF 不接管 AST/KB/TPL 的检索或管理，只接收已选中条目快照
+source_doc: REQ-CORE-006、APC §4.1
+acceptance: 每类来源可生成可溯源 ReferencePayload；不可识别粘贴内容按普通输入处理；外部纯文本超过阈值生成长文本引用而非直接塞入 prompt
+open_issues: 长文本阈值先按实现常量标定，后续可进入 NFR 调整；拖拽入口真实链路未闭合，见 REF-06
+-->
+
+<!-- REQ
+req_id: REQ-REF-006
+title: 输入流引用令牌一致性
+owner_module: REF
+status: active
+summary: 引用在发送前必须同时具备输入流内 ReferenceToken 与草稿引用 chip/tray；超过 5 条时草稿区折叠；发送后草稿 chip 生命周期终止，但已发送消息中的引用令牌保持与发送前一致的可读表现
+source_doc: REQ-CORE-006、A-SYS-C-T-02 对话区流程
+acceptance: 引用不只出现在输入框上方；纯引用可发送；发送前/发送后令牌标签一致；发送后 composer 清空且草稿 chip 不残留
+open_issues: 引用令牌视觉细节随前端 G4 可继续优化
+-->
+
 ## §6 模块边界与约束（边界闭合）
 
 - **职责边界**：REF 只做解析与供给（§2 R-J1–R-J4）；不组装回合上下文（AG）、不读盘（经 WS）、
@@ -129,11 +162,12 @@ open_issues: 具体扩展点契约随 ED 扩展表面细化（REF G2 联合 ED�
 
 | 编号 | 分类 | 状态 | 处置 |
 |---|---|---|---|
-| REF-01 | BOUNDARY_OPEN | 显式延期 | 可引用目标范围（KB 条目/AST 记忆是否纳入 @mention）联合 KB/AST G1 确认 |
+| REF-01 | BOUNDARY_OPEN | 本轮关闭 | 可引用目标范围纳入会话、AST 记忆、KB 知识、TPL 模板、外部 URL 与长文本；REF 仅接收已选中快照，不接管各 owner 的检索/管理 |
 | REF-02 | BOUNDARY_OPEN | 显式延期 | 注入载荷结构是否入 SYS 共享契约层归 REF G2 联合 SYS/AG |
 | REF-03 | BOUNDARY_OPEN | 显式延期 | 锚失效修复交互（重选/自动重定位）归 REF G2/实现期 |
 | REF-04 | FLOW_INCOMPLETE | 显式延期 | 状态机豁免预判须在 REF G2 复核（若暴露状态化链路则建机登记总图） |
 | REF-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5；量化指标（候选列举/解析延迟）延 G5 NFR 标定 |
+| REF-06 | IMPLEMENTATION_DEBT | 暂停优化 | 拖拽引用入口真实链路未闭合：复制/粘贴引用可用，拖拽路径在 Tauri/WebKit 真实事件链中仍未稳定生成 ReferenceToken；尝试、预计根因与重启条件见 A-REF-M-T-01 §9 |
 
 > 术语：引用、注入载荷等 REF 主责核心概念在 REF L2 评估注册 TERM。
 
@@ -141,8 +175,8 @@ open_issues: 具体扩展点契约随 ED 扩展表面细化（REF G2 联合 ED�
 
 1. 待人类宣布 REF 模块级 G1 闭合后进入 REF G2：引用目标模型与候选解析规则、注入载荷契约
   （解除 REF-02）、锚失效语义细则、与 ED 扩展点/AG 消费的对接契约；复核状态机豁免（REF-04）。
-2. G2 经 REQ_MAP 把 REQ-REF-001~004 映射为 RULE/CHAIN/CONSTRAINT/TERM。
-3. KB/AST G1 时联合解除 REF-01。
+2. G2 经 REQ_MAP 把 REQ-REF-001~006 映射为 RULE/CHAIN/CONSTRAINT/TERM。
+3. KB/AST/TPL 后续若提供资产面板条目，只需输出 ReferencePayload，不改变 REF 输入令牌协议。
 
 ## 变更记录
 
@@ -150,3 +184,5 @@ open_issues: 具体扩展点契约随 ED 扩展表面细化（REF G2 联合 ED�
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（P3 第三件，P3 L1 层齐备）：REF 引用模块级 L1；声明 REQ-REF-001~004（@mention 触发与解析 / 内容读取与注入载荷 / 锚定与失效感知 / 经 ED 表面），承接 REQ-CORE-001/006，对接 AG（REQ-AG-004 消费）与 ED（blockId 锚、扩展表面）；代表性流程 R1/R2；G1 暴露清单 REF-01~05 |
 | 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |
+| 2026-07-08 | v1.2 | 引用输入扩展：新增多来源引用归一化与输入流 ReferenceToken 一致性需求（REQ-REF-005/006）；代表性流程增 R3；REF-01 关闭为“接收已选中快照、不接管 AST/KB/TPL 检索管理” |
+| 2026-07-08 | v1.3 | 登记 REF-06 拖拽引用入口真实链路未闭合：复制/粘贴路径可用，拖拽路径暂停优化，技术侧详见 A-REF-M-T-01 §9 |

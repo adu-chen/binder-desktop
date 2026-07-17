@@ -42,4 +42,9 @@ describe("buildTree 扁平 FsEntry → 嵌套树", () => {
   it("空列表 → 空树", () => {
     expect(buildTree([])).toEqual([]);
   });
+
+  it("保留文件节点的 BDocx 身份标记", () => {
+    const tree = buildTree([{ relPath: "generated.docx", docType: "docx", isDir: false, isBDocx: true }]);
+    expect(tree[0]).toMatchObject({ kind: "file", path: "generated.docx", isBDocx: true });
+  });
 });

@@ -1,44 +1,216 @@
-import { useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { Node, mergeAttributes, type JSONContent } from "@tiptap/core";
+import { EditorContent, useEditor, type Editor as TipTapEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
 import { activeSession, agStore, useAgStore, type AgMode } from "../../store/agStore";
 import { modelKey, modelStore, useModelStore } from "../../store/modelStore";
 import { startTurn } from "../../services/agService";
 import { useWsStore } from "../../store/wsStore";
-import { SELECTION_REF_MIME, type SelectionRef } from "../../services/edLocate";
+import {
+  DOC_REF_MIME,
+  SELECTION_REF_MIME,
+  readDocRefData,
+  readSelectionRefData,
+} from "../../services/edLocate";
+import {
+  REFERENCE_MIME,
+  coerceReferencePayload,
+  dataTransferHasAnyType,
+  makeDocReference,
+  makeReferenceToken,
+  makeSelectionReference,
+  promptTextFromParts,
+  readReferencePayloadData,
+  referenceFromPlainTextPaste,
+  referenceKey,
+  type MessageContentPart,
+  type ReferencePayload,
+  type ReferenceTokenAttrs,
+} from "../../services/referencePayload";
 import { ModelConfig } from "./ModelConfig";
 
-interface BlockRef {
-  relPath: string;
-  blockId: string;
-  text: string;
-  /** 块内纯文本偏移区间（CharAnchor，PI-ED-10 位置引用）；可空=块级锚（后端 serde 忽略未知/缺省兼容）。 */
-  start?: number;
-  end?: number;
-}
+/**
+ * @GOV
+ * codes:    BR-REF-DATA-004-AG-REF-INJECT-001
+ * type:     DATA
+ * chain:    REF-INJECT
+ * rules:    BR-REF-DATA-004
+ * term_ref: TERM-REF-004, TERM-REF-003
+ * boundary: in=ReferencePayload | out=ReferenceTokenInlineAtom
+ */
+const ReferenceTokenNode = Node.create({
+  name: "referenceToken",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: false,
+  draggable: true,
 
-/** 检测光标前的活跃 @ token（@ 前为行首/空白、@ 后到光标无空白）→ { query, start }；否则 null。 */
-function activeMentionQuery(text: string, caret: number): { query: string; start: number } | null {
-  const upto = text.slice(0, caret);
-  const at = upto.lastIndexOf("@");
-  if (at < 0) return null;
-  const before = at === 0 ? "" : upto[at - 1];
-  if (before && !/\s/.test(before)) return null;
-  const query = upto.slice(at + 1);
-  if (/\s/.test(query)) return null;
-  return { query, start: at };
+  addAttributes() {
+    return {
+      refId: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute("data-ref-id"),
+        renderHTML: (attrs: Record<string, unknown>) => ({ "data-ref-id": String(attrs.refId ?? "") }),
+      },
+      kind: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute("data-ref-kind"),
+        renderHTML: (attrs: Record<string, unknown>) => ({ "data-ref-kind": String(attrs.kind ?? "") }),
+      },
+      label: {
+        default: "引用",
+        parseHTML: (element: HTMLElement) => element.getAttribute("data-ref-label") ?? "引用",
+        renderHTML: (attrs: Record<string, unknown>) => ({ "data-ref-label": String(attrs.label ?? "引用") }),
+      },
+      payload: {
+        default: null,
+        parseHTML: (element: HTMLElement) => {
+          const raw = element.getAttribute("data-ref-payload");
+          if (!raw) return null;
+          try {
+            return JSON.parse(decodeURIComponent(raw));
+          } catch {
+            return null;
+          }
+        },
+        renderHTML: (attrs: Record<string, unknown>) => ({
+          "data-ref-payload": encodeURIComponent(JSON.stringify(attrs.payload ?? null)),
+        }),
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "span[data-reference-token]" }];
+  },
+
+  renderHTML({ HTMLAttributes, node }) {
+    const label = String(node.attrs.label ?? "引用");
+    const kind = String(node.attrs.kind ?? "unknown");
+    return [
+      "span",
+      mergeAttributes(HTMLAttributes, {
+        "data-reference-token": "true",
+        class: `ref-token ref-token-${kind}`,
+      }),
+      label,
+    ];
+  },
+});
+
+interface MentionQuery {
+  query: string;
+  from: number;
+  to: number;
 }
 
 const MODES: { id: AgMode; label: string; hint: string }[] = [
   { id: "edit", label: "edit", hint: "编辑 · 精确修改当前内容（diff 裁决）" },
   { id: "build", label: "build", hint: "构建 · 项目蓝图与整体构建" },
 ];
+const REFERENCE_DRAG_TYPES = [REFERENCE_MIME, SELECTION_REF_MIME, DOC_REF_MIME, "text/uri-list", "text/plain"] as const;
+
+function activeMentionQuery(editor: TipTapEditor): MentionQuery | null {
+  const { $from } = editor.state.selection;
+  const before = $from.parent.textBetween(0, $from.parentOffset, undefined, " ");
+  const at = before.lastIndexOf("@");
+  if (at < 0) return null;
+  const prev = at === 0 ? "" : before[at - 1];
+  if (prev && !/\s/.test(prev)) return null;
+  const query = before.slice(at + 1);
+  if (/\s/.test(query)) return null;
+  return { query, from: $from.start() + at, to: $from.pos };
+}
+
+function attrsFromNode(node: JSONContent): ReferenceTokenAttrs | null {
+  const attrs = node.attrs as Partial<ReferenceTokenAttrs> | undefined;
+  if (!attrs || typeof attrs.refId !== "string" || typeof attrs.label !== "string") return null;
+  const payload = coerceReferencePayload(attrs.payload);
+  if (!payload || attrs.kind !== payload.kind) return null;
+  return { refId: attrs.refId, kind: payload.kind, label: attrs.label, payload };
+}
+
+function appendText(parts: MessageContentPart[], text: string) {
+  if (!text) return;
+  const last = parts[parts.length - 1];
+  if (last?.type === "text") last.text += text;
+  else parts.push({ type: "text", text });
+}
+
+function serializeEditor(editor: TipTapEditor): {
+  parts: MessageContentPart[];
+  references: ReferencePayload[];
+  tokens: ReferenceTokenAttrs[];
+  prompt: string;
+} {
+  const parts: MessageContentPart[] = [];
+  const tokens: ReferenceTokenAttrs[] = [];
+  const references: ReferencePayload[] = [];
+  const seen = new Set<string>();
+  const doc = editor.getJSON();
+
+  const visitInline = (node: JSONContent) => {
+    if (node.type === "text") {
+      appendText(parts, node.text ?? "");
+      return;
+    }
+    if (node.type === "referenceToken") {
+      const token = attrsFromNode(node);
+      if (!token) return;
+      parts.push({ type: "reference", ...token });
+      tokens.push(token);
+      const key = referenceKey(token.payload);
+      if (!seen.has(key)) {
+        references.push(token.payload);
+        seen.add(key);
+      }
+      return;
+    }
+    node.content?.forEach(visitInline);
+  };
+
+  doc.content?.forEach((block, index) => {
+    if (index > 0) appendText(parts, "\n");
+    block.content?.forEach(visitInline);
+  });
+
+  return { parts, references, tokens, prompt: promptTextFromParts(parts) };
+}
+
+function tokenNode(token: ReferenceTokenAttrs): JSONContent {
+  return { type: "referenceToken", attrs: token };
+}
+
+function safeFocusEditor(editor: TipTapEditor) {
+  try {
+    editor.view.focus();
+  } catch {
+    // Focus is best-effort for drag/drop and paste; insertion still uses the current selection.
+  }
+}
+
+function payloadFromTransfer(dataTransfer: DataTransfer): ReferencePayload | null {
+  const generic = readReferencePayloadData(dataTransfer);
+  if (generic) return generic;
+  const selection = readSelectionRefData(dataTransfer);
+  if (selection) return makeSelectionReference(selection);
+  const doc = readDocRefData(dataTransfer);
+  if (doc) return makeDocReference(doc.relPath);
+  const uri = dataTransfer.getData("text/uri-list");
+  const plain = dataTransfer.getData("text/plain");
+  return referenceFromPlainTextPaste(uri || plain);
+}
+
+interface DraftState {
+  tokens: ReferenceTokenAttrs[];
+  prompt: string;
+}
 
 /**
- * Composer（A-SYS-C-T-02 §3 输入区 · PI-FE-06 / PI-AG-UI-01 重构）。
- * 框内底部左：模式按钮（edit/build，取代原顶部切换，同源 session.mode）+ 模型选择（含「添加模型」
- * 进配置界面）；右：发送按钮三态（空内容禁用 / 待发送 / AI 回复中）。
- * 发送：Enter 直接发送、Shift+Enter 换行；IME（中文输入法）合成中的回车仅确认候选不发送（需求5）。
- * 引用：输入 @ 触发文档下拉（原「引用」按钮移除）；编辑器选区拖拽入框成为位置引用（原按钮移除）。
- * BYOK 入口移入模型配置界面（原 🔑 按钮移除）；「示例修改」开发入口移除。
+ * Composer（A-SYS-C-T-02 §4.6 · PI-AG-REF-TOKEN-01）。
+ * 输入区使用 TipTap inline atom 承载 ReferenceToken：拖拽/粘贴/@mention 都进入正文流；草稿 chip/tray
+ * 只是引用摘要，发送后清空，已发送消息用同一 MessageContentPart 渲染。
  */
 export function Composer() {
   const agState = useAgStore();
@@ -48,142 +220,163 @@ export function Composer() {
   const currentModel = modelStore.current();
   const { docs } = useWsStore();
 
-  const [text, setText] = useState("");
-  const [mentions, setMentions] = useState<string[]>([]);
-  const [blockRefs, setBlockRefs] = useState<BlockRef[]>([]);
-  const [atQuery, setAtQuery] = useState<{ query: string; start: number; caret: number } | null>(null);
+  const [draft, setDraft] = useState<DraftState>({ tokens: [], prompt: "" });
+  const [atQuery, setAtQuery] = useState<MentionQuery | null>(null);
   const [modePop, setModePop] = useState(false);
   const [modelPop, setModelPop] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+
+  const refreshDraft = (editor: TipTapEditor) => {
+    const next = serializeEditor(editor);
+    setDraft({ tokens: next.tokens, prompt: next.prompt });
+    setAtQuery(activeMentionQuery(editor));
+  };
+
+  const editor = useEditor({
+    extensions: [StarterKit, ReferenceTokenNode],
+    content: { type: "doc", content: [{ type: "paragraph" }] },
+    editorProps: {
+      attributes: {
+        class: "composer-prosemirror",
+        role: "textbox",
+        "aria-label": "Agent 输入",
+        "data-placeholder": "描述你想要的修改…（@ 引用文档 · Enter 发送 · Shift+Enter 换行）",
+      },
+    },
+    onCreate: ({ editor }) => refreshDraft(editor),
+    onUpdate: ({ editor }) => refreshDraft(editor),
+    onSelectionUpdate: ({ editor }) => setAtQuery(activeMentionQuery(editor)),
+  });
 
   const fileDocs = docs.filter((d) => !d.isDir);
   const atMatches = atQuery
     ? fileDocs.filter((d) => d.relPath.toLowerCase().includes(atQuery.query.toLowerCase())).slice(0, 8)
     : [];
 
-  const onTextChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    const caret = e.target.selectionStart ?? val.length;
-    setText(val);
-    const m = activeMentionQuery(val, caret);
-    setAtQuery(m ? { ...m, caret } : null);
+  const insertReferencePayload = (payload: ReferencePayload, range?: { from: number; to: number }, pos?: number) => {
+    if (!editor) return;
+    const token = makeReferenceToken(payload);
+    safeFocusEditor(editor);
+    const chain = editor.chain();
+    if (pos !== undefined) chain.setTextSelection(pos);
+    if (range) chain.deleteRange(range);
+    chain.insertContent([tokenNode(token), { type: "text", text: " " }]).run();
+    setAtQuery(null);
   };
 
   const selectAtMention = (relPath: string) => {
     if (!atQuery) return;
-    setMentions((cur) => (cur.includes(relPath) ? cur : [...cur, relPath]));
-    setText((t) => t.slice(0, atQuery.start) + t.slice(atQuery.caret));
-    setAtQuery(null);
+    insertReferencePayload(makeDocReference(relPath), { from: atQuery.from, to: atQuery.to });
+  };
+
+  const removeReferenceToken = (refId: string) => {
+    if (!editor) return;
+    let range: { from: number; to: number } | null = null;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "referenceToken" && node.attrs.refId === refId) {
+        range = { from: pos, to: pos + node.nodeSize };
+        return false;
+      }
+      return true;
+    });
+    if (range) {
+      safeFocusEditor(editor);
+      editor.chain().deleteRange(range).run();
+    }
   };
 
   const send = () => {
-    if (sending || !text.trim()) return;
-    void startTurn(text, {
-      ...(mentions.length ? { mentions } : {}),
-      ...(blockRefs.length ? { blockRefs } : {}),
+    if (!editor || sending) return;
+    const snapshot = serializeEditor(editor);
+    if (!snapshot.prompt.trim() && snapshot.references.length === 0) return;
+    void startTurn(snapshot.prompt, {
+      references: snapshot.references,
+      displayParts: snapshot.parts,
       provider: currentModel.provider,
       model: currentModel.model,
     });
-    setText("");
-    setMentions([]);
-    setBlockRefs([]);
+    editor.commands.clearContent(true);
+    setDraft({ tokens: [], prompt: "" });
     setAtQuery(null);
   };
 
-  /**
-   * 键盘协议（PI-AG-UI-01 需求5）：
-   * - IME 合成中（中文输入法候选未确认）：Enter 仅确认输入法内容，不发送（isComposing / keyCode 229）。
-   * - @ 下拉活跃：Enter 选中第一项。
-   * - Shift+Enter：换行（textarea 默认行为）。
-   * - Enter：发送。
-   */
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!editor) return;
     if (e.key === "Escape" && atQuery) {
       setAtQuery(null);
       return;
     }
     if (e.key !== "Enter") return;
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return; // IME 合成确认，不发送
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (atQuery && atMatches.length && !e.shiftKey) {
       e.preventDefault();
       selectAtMention(atMatches[0].relPath);
       return;
     }
-    if (e.shiftKey) return; // Shift+Enter 换行
+    if (e.shiftKey) return;
     e.preventDefault();
     send();
   };
 
-  // 选区引用去重入列（拖拽 drop）：含字符锚区间（有偏移时），同块同区间不重复。
-  const pushSelectionRef = (ref: SelectionRef) => {
-    if (!ref.blockId || !ref.path) return;
-    const withRange = ref.end > ref.start; // start=end=0 为块级回落锚
-    setBlockRefs((cur) =>
-      cur.some(
-        (r) => r.blockId === ref.blockId && r.relPath === ref.path && r.start === (withRange ? ref.start : undefined),
-      )
-        ? cur
-        : [
-            ...cur,
-            {
-              relPath: ref.path,
-              blockId: ref.blockId,
-              text: ref.text,
-              ...(withRange ? { start: ref.start, end: ref.end } : {}),
-            },
-          ],
-    );
+  const onPaste = (e: ClipboardEvent<HTMLDivElement>) => {
+    const payload = payloadFromTransfer(e.clipboardData);
+    if (!payload) return;
+    e.preventDefault();
+    e.stopPropagation();
+    insertReferencePayload(payload);
   };
 
-  // 选区拖拽入 Composer → 位置引用 chip（PI-ED-10 #6：SelectionRef 经自定义 MIME 携带字符锚）。
   const onDragOver = (e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes(SELECTION_REF_MIME)) e.preventDefault();
-  };
-  const onDrop = (e: React.DragEvent) => {
-    const raw = e.dataTransfer.getData(SELECTION_REF_MIME);
-    if (!raw) return;
-    e.preventDefault();
-    try {
-      pushSelectionRef(JSON.parse(raw) as SelectionRef);
-    } catch {
-      /* 载荷损坏 → 忽略本次拖放 */
+    if (dataTransferHasAnyType(e.dataTransfer, REFERENCE_DRAG_TYPES)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
     }
   };
 
-  const removeMention = (relPath: string) => setMentions((cur) => cur.filter((p) => p !== relPath));
+  const onDrop = (e: React.DragEvent) => {
+    if (!editor) return;
+    const payload = payloadFromTransfer(e.dataTransfer);
+    if (!payload) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let pos: number | undefined;
+    if (typeof document.elementFromPoint === "function") {
+      try {
+        pos = editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos;
+      } catch {
+        pos = undefined;
+      }
+    }
+    insertReferencePayload(payload, undefined, pos);
+  };
 
-  const sendCls = sending ? "is-busy" : text.trim() ? "is-ready" : "is-disabled";
+  const visibleTokens = draft.tokens.slice(0, 5);
+  const hiddenTokenCount = Math.max(0, draft.tokens.length - visibleTokens.length);
+  const canSend = Boolean(draft.prompt.trim()) && !sending;
+  const sendCls = sending ? "is-busy" : canSend ? "is-ready" : "is-disabled";
 
   return (
-    <div className="composer" onDragOver={onDragOver} onDrop={onDrop}>
-      {mentions.length > 0 && (
-        <div className="composer-mentions">
-          {mentions.map((p) => (
-            <span key={p} className="mention-chip">
-              @{p}
-              <button className="mention-chip-x" onClick={() => removeMention(p)} aria-label="移除引用">
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {blockRefs.length > 0 && (
-        <div className="composer-mentions">
-          {blockRefs.map((r, i) => (
-            <span key={`${r.blockId}-${i}`} className="mention-chip" title={r.text}>
-              选区@{r.relPath}#{r.blockId.slice(0, 6)}
-              {r.start !== undefined && r.end !== undefined ? `[${r.start}–${r.end}]` : ""}
+    <div className="composer" onDragOverCapture={onDragOver} onDropCapture={onDrop}>
+      {draft.tokens.length > 0 && (
+        <div className="composer-mentions" aria-label="草稿引用">
+          {visibleTokens.map((token) => (
+            <span key={token.refId} className={`mention-chip mention-chip-${token.kind}`} title={token.label}>
+              {token.label}
               <button
                 className="mention-chip-x"
-                onClick={() => setBlockRefs((c) => c.filter((_, j) => j !== i))}
+                onClick={() => removeReferenceToken(token.refId)}
                 aria-label="移除引用"
               >
                 ×
               </button>
             </span>
           ))}
+          {hiddenTokenCount > 0 && (
+            <span className="mention-chip mention-chip-more" title={draft.tokens.slice(5).map((t) => t.label).join("\n")}>
+              +{hiddenTokenCount} 引用
+            </span>
+          )}
         </div>
       )}
 
@@ -197,15 +390,10 @@ export function Composer() {
         </div>
       )}
 
-      <div className="composer-box">
-        <textarea
-          className="composer-input"
-          placeholder="描述你想要的修改…（@ 引用文档 · Enter 发送 · Shift+Enter 换行）"
-          value={text}
-          onChange={onTextChange}
-          onKeyDown={onKeyDown}
-          rows={3}
-        />
+      <div className="composer-box" onKeyDownCapture={onKeyDown} onPasteCapture={onPaste}>
+        <div className={`composer-editor${editor?.isEmpty ? " is-empty" : ""}`}>
+          <EditorContent editor={editor} />
+        </div>
         <div className="composer-bar">
           <div className="composer-bar-left">
             <div className="cbar-wrap">
@@ -288,8 +476,8 @@ export function Composer() {
           <button
             className={`composer-send ${sendCls}`}
             onClick={send}
-            disabled={sending || !text.trim()}
-            title={sending ? "AI 回复中…" : text.trim() ? "发送（Enter）" : "输入内容后可发送"}
+            disabled={!canSend}
+            title={sending ? "AI 回复中…" : canSend ? "发送（Enter）" : "输入内容或引用后可发送"}
           >
             {sending ? "生成中" : "发送"}
           </button>

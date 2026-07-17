@@ -61,12 +61,18 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 > `ed.apply_edit` 是 inline-assist/autocomplete/内联样式操作采纳「作为用户编辑操作」进入模型的
 > 接口——经此驱动 SM-ED-01 edit→SM-WS-01 脏态，区别于 diff 落盘路径（后者经 DE→WS）。
 > 偏移均在**块内纯文本平面**（BR-ED-DATA-004）；锚有效期=编辑会话内（重开须重新取块）。
+> **实现回写（2026-07-12）**：当前前端进程内落地为 `applyEditOps()`（内容类 op）与
+> `applyStyleOps()`（StyleOp 批处理）。`applyEditOps()` 已覆盖 `replace_text`、`replace_block`、
+> `replace_document`；StyleOp 的 `set_mark` / `unset_mark` / `set_block_attr` 由 `applyStyleOps()`
+> 单事务批内原子应用。`insert_block` 仍是接口预留，未在本轮实现。
 
 ### §4.1 apply_edit 操作粒度表（PI-ED-10/11，正式承接 §7 既有债务）
 
 | op | 参数 | 语义 | 归属规则 |
 |---|---|---|---|
 | `replace_text` | 字符锚 {blockId,start,end}、text | 区间文本替换（含 start=end 纯插入） | BR-ED-DATA-004 |
+| `replace_block` | blockId、text | 替换目标块内容，blockId 保持 | BR-ED-DATA-001 / BR-ED-STATE-001 |
+| `replace_document` | content、format(text/html/html_file) | 整篇替换为指定编辑模型内容；仅用于显式整篇 diff 或回滚 | BR-ED-STATE-001 / BR-ED-DATA-002 |
 | `insert_block` | blockId（其后）、blockJSON | 块后插入新块（新块得新 id） | BR-ED-DATA-001 |
 | `set_mark` | 字符锚区间、mark {type,attrs} | 区间加字符样式（bold/color/fontSize…） | BR-ED-DATA-005（StyleOp） |
 | `unset_mark` | 字符锚区间、markType | 区间去字符样式 | BR-ED-DATA-005（StyleOp） |
@@ -76,8 +82,12 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 
 ## §5 外部变更订阅（承 A-WS-I-P-01 §6）
 
-ED 会话订阅 `ws.external_change` 事件：无脏态自动重载（经 `ws.read_doc` 刷新基线），有脏态进
-Conflicted 态待 `ed.resolve_conflict`（BR-ED-STATE-003）。本文不重复事件定义（归 WS I-P）。
+ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重载（经 `ws.read_doc` 刷新基线），
+有脏态进 Conflicted 态待 `ed.resolve_conflict`（BR-ED-STATE-003）。本文不重复事件定义（归 WS I-P）。
+
+**当前实现边界（2026-07-12）**：`ws.external_change` 物理推送/轮询 command 尚未注册；已落地的是
+保存时由 WS 基线 guard 返回 `WS_SAVE_CONFLICT`，ED 将其映射为 `SaveOutcome.conflict=true` 并等待
+用户显式覆盖确认或重载。后续接入事件推送时不得绕过该保存前 guard。
 
 ## §6 测试与验收
 
@@ -101,3 +111,4 @@ Conflicted 态待 `ed.resolve_conflict`（BR-ED-STATE-003）。本文不重复�
 | 2026-06-12 | v1.0 | 初版（实现前置件）：ED 接口协议——编辑会话 command 5 条（含 resolve_conflict 对接 SM-ED-01 Conflicted）、装饰层接口 4 条（mount/update/dismiss/on_action，X-FORBID-005 唯一通道）、blockId 定位 2 条（locate_block 失效信号 / apply_edit 内联采纳落点）、外部变更订阅承 WS I-P；零新增注册项；债务（呈现 schema/编辑 op 粒度/装饰层进程边界延实现期） |
 | 2026-07-03 | v1.1 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，承 BR-ED-DATA-004/005）：§4 扩字符锚定位（locate_block 带 {start,end} 区间校验）+ 新增 ed.get_cursor_ref / ed.get_selection_ref（按需查询）；新增 §4.1 apply_edit 操作粒度表（replace_text/insert_block/set_mark/unset_mark/set_block_attr，批内原子）解除既有债务；§7 登记样式投影读接口归 AG I-P 承载 |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-12 | v1.3 | 三态实现回写：补 `replace_block` / `replace_document` 为当前 `applyEditOps()` 已实现内容 op；声明 StyleOp 由 `applyStyleOps()` 批内原子承载；标注 `ws.external_change` 推送/轮询尚未注册，当前已落地能力为保存时 `WS_SAVE_CONFLICT` 冲突映射与显式覆盖确认 |

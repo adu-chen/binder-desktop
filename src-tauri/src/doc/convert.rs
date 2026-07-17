@@ -95,7 +95,10 @@ pub fn transition(state: DocConvertState, event: DocConvertEvent) -> Option<DocC
  */
 /// 转换依赖守卫（BR-DOC-DATA-001）：编辑链必经 Pandoc、预览链必经 LibreOffice（**双链分离**，工具唯一
 /// 对应）；依赖不可用时回**统一错误形状、不静默降级**（不回退到其他链或纯文本）。available 由调用方探测。
-pub fn ensure_chain_dependency(chain: ConvertChain, available: bool) -> Result<ConvertTool, IpcError> {
+pub fn ensure_chain_dependency(
+    chain: ConvertChain,
+    available: bool,
+) -> Result<ConvertTool, IpcError> {
     let tool = tool_for(chain); // 双链分离：编辑→Pandoc，预览→LibreOffice
     if !available {
         return Err(IpcError::new(
@@ -160,9 +163,15 @@ mod tests {
         assert_eq!(tool_for(ConvertChain::Edit), ConvertTool::Pandoc);
         assert_eq!(tool_for(ConvertChain::Preview), ConvertTool::LibreOffice);
         // 双链工具互不相同（分离）
-        assert_ne!(tool_for(ConvertChain::Edit), tool_for(ConvertChain::Preview));
+        assert_ne!(
+            tool_for(ConvertChain::Edit),
+            tool_for(ConvertChain::Preview)
+        );
         // 可用 → 放行对应工具
-        assert_eq!(ensure_chain_dependency(ConvertChain::Edit, true).unwrap(), ConvertTool::Pandoc);
+        assert_eq!(
+            ensure_chain_dependency(ConvertChain::Edit, true).unwrap(),
+            ConvertTool::Pandoc
+        );
         // 缺失 → 统一错误形状，不静默降级
         let err = ensure_chain_dependency(ConvertChain::Preview, false).unwrap_err();
         assert_eq!(err.code, "DOC_DEP_MISSING");

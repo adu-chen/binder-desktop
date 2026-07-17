@@ -31,6 +31,9 @@ function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone
   if (locateFailed) return { text: "目标块已不可定位，建议重新生成", tone: "warn" };
   if (diff.state === "validating") return { text: "校验原文匹配中…", tone: "muted" };
   if (diff.state === "applying") return { text: "写入中…", tone: "warn" };
+  if (diff.state === "accepted" && diff.draftApplied) {
+    return { text: diff.draftSaved ? "已保存" : "已接受 · 待保存", tone: "ok" };
+  }
   if (diff.state === "accepted") return { text: `已写入 · 时间轴 #${diff.timelineSeq ?? "-"}`, tone: "ok" };
   if (diff.state === "rejected") return { text: "已拒绝，文件未改动", tone: "muted" };
   if (diff.state === "conflict") return { text: `与 ${diff.conflictWith ?? "其他修改"} 范围重叠，接受已禁用`, tone: "warn" };

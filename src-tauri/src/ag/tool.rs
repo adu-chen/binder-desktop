@@ -40,7 +40,10 @@ pub enum ToolDecision {
 
 /// 终态判定。
 pub fn is_terminal(state: ToolLoopState) -> bool {
-    matches!(state, ToolLoopState::LoopCompleted | ToolLoopState::LoopAborted)
+    matches!(
+        state,
+        ToolLoopState::LoopCompleted | ToolLoopState::LoopAborted
+    )
 }
 
 /**
@@ -88,7 +91,11 @@ pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoop
 /// 工具校验守卫（BR-AG-STATE-002 / X-FORBID-006）：未注册 → 拒绝；越权（不在权限边界）→ 拒绝；
 /// **写入意图工具不得直接落盘** → 拒绝直写（须产出修改建议走 DE diff）。拒绝均带原因（回注模型）。
 /// 注册清单与权限分级具体内容为实现期运营配置，本守卫锁校验机制与写盘禁令。
-pub fn validate_tool(registered: bool, within_permission: bool, direct_write_intent: bool) -> ToolDecision {
+pub fn validate_tool(
+    registered: bool,
+    within_permission: bool,
+    direct_write_intent: bool,
+) -> ToolDecision {
     if !registered {
         return ToolDecision::Reject("工具未在注册清单内".into());
     }
@@ -112,12 +119,18 @@ mod tests {
     // 循环：请求→校验→执行→回注→续调；校验失败回注不中断；上限中止；终答完成；终态冻结。
     #[test]
     fn loop_validate_inject_limit_and_terminals() {
-        assert_eq!(transition(ModelStreaming, ToolRequest), Some(ToolValidating));
+        assert_eq!(
+            transition(ModelStreaming, ToolRequest),
+            Some(ToolValidating)
+        );
         assert_eq!(transition(ToolValidating, ValidateOk), Some(ToolExecuting));
         assert_eq!(transition(ToolExecuting, ExecOk), Some(ResultInjecting));
         assert_eq!(transition(ResultInjecting, Injected), Some(ModelStreaming));
         // 校验失败/执行失败均回注，不中断循环
-        assert_eq!(transition(ToolValidating, ValidateFail), Some(ResultInjecting));
+        assert_eq!(
+            transition(ToolValidating, ValidateFail),
+            Some(ResultInjecting)
+        );
         assert_eq!(transition(ToolExecuting, ExecFail), Some(ResultInjecting));
         // 终答 / 上限
         assert_eq!(transition(ModelStreaming, FinalAnswer), Some(LoopCompleted));
@@ -135,7 +148,12 @@ mod tests {
     // 任意非终态可中断 → LoopAborted（无半落盘）。
     #[test]
     fn cancel_aborts_from_any_active_state() {
-        for s in [ModelStreaming, ToolValidating, ToolExecuting, ResultInjecting] {
+        for s in [
+            ModelStreaming,
+            ToolValidating,
+            ToolExecuting,
+            ResultInjecting,
+        ] {
             assert_eq!(transition(s, Cancel), Some(LoopAborted));
         }
     }
@@ -145,8 +163,14 @@ mod tests {
     #[test]
     fn validate_rejects_unregistered_overreach_and_direct_write() {
         assert_eq!(validate_tool(true, true, false), ToolDecision::Allow);
-        assert!(matches!(validate_tool(false, true, false), ToolDecision::Reject(_)));
-        assert!(matches!(validate_tool(true, false, false), ToolDecision::Reject(_)));
+        assert!(matches!(
+            validate_tool(false, true, false),
+            ToolDecision::Reject(_)
+        ));
+        assert!(matches!(
+            validate_tool(true, false, false),
+            ToolDecision::Reject(_)
+        ));
         // 写入意图不得直写
         match validate_tool(true, true, true) {
             ToolDecision::Reject(r) => assert!(r.contains("DE diff")),

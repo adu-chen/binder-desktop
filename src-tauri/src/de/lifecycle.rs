@@ -36,13 +36,20 @@ pub struct ConflictInput {
  * boundary: in=workspaceId | out=pendingDiffRows(statusPendingScoped)
  */
 /// 列举当前 workspace 待裁决（status='pending'）diff（BR-DE-STATE-002）：供生命周期扫描；按创建时序。
-pub fn list_pending(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<PendingDiffRow>> {
+pub fn list_pending(
+    conn: &Connection,
+    workspace_id: &str,
+) -> rusqlite::Result<Vec<PendingDiffRow>> {
     let mut stmt = conn.prepare(
         "SELECT diff_id, rel_path, created_at FROM pending_diffs \
          WHERE workspace_id=?1 AND status='pending' ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([workspace_id], |r| {
-        Ok(PendingDiffRow { diff_id: r.get(0)?, rel_path: r.get(1)?, created_at: r.get(2)? })
+        Ok(PendingDiffRow {
+            diff_id: r.get(0)?,
+            rel_path: r.get(1)?,
+            created_at: r.get(2)?,
+        })
     })?;
     rows.collect()
 }
@@ -88,9 +95,11 @@ pub fn sweep_expiry(
 pub fn sweep_conflicts(applied_blocks: &[String], pendings: &[ConflictInput]) -> Vec<String> {
     pendings
         .iter()
-        .filter_map(|p| match recheck_overlap(applied_blocks, &p.blocks, p.before_hash, p.current_hash) {
-            ExpiryDecision::Expire(_) => Some(p.diff_id.clone()),
-            ExpiryDecision::KeepPending => None,
+        .filter_map(|p| {
+            match recheck_overlap(applied_blocks, &p.blocks, p.before_hash, p.current_hash) {
+                ExpiryDecision::Expire(_) => Some(p.diff_id.clone()),
+                ExpiryDecision::KeepPending => None,
+            }
         })
         .collect()
 }
@@ -135,7 +144,11 @@ mod tests {
     fn seed_diff(conn: &Connection, id: &str, rel: &str, created_at: i64) {
         let d = PendingDiff {
             diff_id: id.into(),
-            target: DocRef { workspace_id: "ws1".into(), rel_path: rel.into(), doc_type: "md".into() },
+            target: DocRef {
+                workspace_id: "ws1".into(),
+                rel_path: rel.into(),
+                doc_type: "md".into(),
+            },
             origin_module: "AG".into(),
             status: DiffStatus::Pending,
             created_at,
@@ -145,7 +158,12 @@ mod tests {
     }
 
     fn status_of(conn: &Connection, id: &str) -> String {
-        conn.query_row("SELECT status FROM pending_diffs WHERE diff_id=?1", [id], |r| r.get(0)).unwrap()
+        conn.query_row(
+            "SELECT status FROM pending_diffs WHERE diff_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     // covers: BR-DE-STATE-002
@@ -153,10 +171,26 @@ mod tests {
     #[test]
     fn sweep_expiry_timeout_external_and_conservative() {
         let rows = vec![
-            PendingDiffRow { diff_id: "d_old".into(), rel_path: "a.md".into(), created_at: 0 },
-            PendingDiffRow { diff_id: "d_new".into(), rel_path: "b.md".into(), created_at: 9_000 },
-            PendingDiffRow { diff_id: "d_undet".into(), rel_path: "c.md".into(), created_at: 9_000 },
-            PendingDiffRow { diff_id: "d_changed".into(), rel_path: "d.md".into(), created_at: 9_000 },
+            PendingDiffRow {
+                diff_id: "d_old".into(),
+                rel_path: "a.md".into(),
+                created_at: 0,
+            },
+            PendingDiffRow {
+                diff_id: "d_new".into(),
+                rel_path: "b.md".into(),
+                created_at: 9_000,
+            },
+            PendingDiffRow {
+                diff_id: "d_undet".into(),
+                rel_path: "c.md".into(),
+                created_at: 9_000,
+            },
+            PendingDiffRow {
+                diff_id: "d_changed".into(),
+                rel_path: "d.md".into(),
+                created_at: 9_000,
+            },
         ];
         // now=10_000, timeout=5_000：d_old 超时；其余未超时。外部：d_changed 已变；c.md 检测不可得。
         let expired = sweep_expiry(&rows, 10_000, 5_000, |rel| match rel {
@@ -166,7 +200,10 @@ mod tests {
         });
         assert!(expired.contains(&"d_old".to_string()), "超时应过期");
         assert!(expired.contains(&"d_changed".to_string()), "外部已变应过期");
-        assert!(!expired.contains(&"d_undet".to_string()), "检测不可得+未超时不误杀");
+        assert!(
+            !expired.contains(&"d_undet".to_string()),
+            "检测不可得+未超时不误杀"
+        );
         assert!(!expired.contains(&"d_new".to_string()), "未超时未变保持");
     }
 
@@ -176,9 +213,24 @@ mod tests {
     fn sweep_conflicts_overlap_stale_only() {
         let applied = vec!["b1".to_string(), "b2".to_string()];
         let pendings = vec![
-            ConflictInput { diff_id: "stale".into(), blocks: vec!["b2".into()], before_hash: 1, current_hash: 2 },
-            ConflictInput { diff_id: "unchanged".into(), blocks: vec!["b2".into()], before_hash: 1, current_hash: 1 },
-            ConflictInput { diff_id: "disjoint".into(), blocks: vec!["b9".into()], before_hash: 1, current_hash: 2 },
+            ConflictInput {
+                diff_id: "stale".into(),
+                blocks: vec!["b2".into()],
+                before_hash: 1,
+                current_hash: 2,
+            },
+            ConflictInput {
+                diff_id: "unchanged".into(),
+                blocks: vec!["b2".into()],
+                before_hash: 1,
+                current_hash: 1,
+            },
+            ConflictInput {
+                diff_id: "disjoint".into(),
+                blocks: vec!["b9".into()],
+                before_hash: 1,
+                current_hash: 2,
+            },
         ];
         let expired = sweep_conflicts(&applied, &pendings);
         assert_eq!(expired, vec!["stale".to_string()]); // 仅重叠且内容变者
@@ -198,7 +250,7 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(status_of(&conn, "d_old"), "expired"); // 过期落终态
         assert_eq!(status_of(&conn, "d_new"), "pending"); // 未过期保持
-        // 过期后不再出现在 pending 列举
+                                                          // 过期后不再出现在 pending 列举
         assert_eq!(list_pending(&conn, "ws1").unwrap().len(), 1);
     }
 }

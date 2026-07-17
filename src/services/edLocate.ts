@@ -1,5 +1,8 @@
 import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
+import { generateJSON } from "@tiptap/core";
+import { buildEditorExtensions } from "../components/ed/extensions";
+import { makeDocReference, makeSelectionReference, writeReferencePayloadData } from "./referencePayload";
 
 /**
  * ed.locate_block / ed.get_cursor_ref / ed.get_selection_ref（PI-AG-08H · PI-ED-10 · A-ED-I-P-01 §4）。
@@ -53,6 +56,16 @@ export interface SelectionRef {
 export interface CursorRef {
   blockId: string;
   offset: number;
+}
+
+export interface BlockSnapshot {
+  blockId: string | null;
+  index: number;
+  text: string;
+  pos: number;
+  size: number;
+  contentFrom: number;
+  contentTo: number;
 }
 
 /** 文档顶层块定位辅助：返回 pos 所在顶层块 {node, blockPos}；不在任何块内 → null。 */
@@ -111,11 +124,175 @@ export function getTopBlockIdByIndex(doc: PMNode, index: number): string | null 
   return blockId || null;
 }
 
+function snapshotTopBlock(node: PMNode, pos: number, index: number): BlockSnapshot {
+  const blockId = (node.attrs.blockId as string | null) ?? null;
+  return {
+    blockId,
+    index,
+    text: node.textBetween(0, node.content.size, "\n", LEAF_CHAR),
+    pos,
+    size: node.nodeSize,
+    contentFrom: pos + 1,
+    contentTo: pos + node.nodeSize - 1,
+  };
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-DATA-004-QUERY-ED-ED-EDIT-010
+ * type:     QUERY
+ * chain:    ED-EDIT
+ * rules:    BR-ED-DATA-004
+ * term_ref: TERM-ED-004, TERM-ED-005
+ * boundary: in=editorDocumentTree | out=BlockSnapshot(blockIdTextAndCurrentSessionPosition)
+ */
+/// 当前编辑器块快照查询守则（BR-ED-DATA-004）：按会话内 blockId 或 0 起 block_index 读取目标块
+/// 的当前纯文本与 ProseMirror 位置，用于 AG 修改建议和 DE 草稿回滚；查询只读，不修正文档。
+export function getTopBlockSnapshotByIndex(doc: PMNode, index: number): BlockSnapshot | null {
+  if (!Number.isInteger(index) || index < 0 || index >= doc.childCount) return null;
+  let pos = 0;
+  for (let i = 0; i < index; i++) pos += doc.child(i).nodeSize;
+  return snapshotTopBlock(doc.child(index), pos, index);
+}
+
+export function findTopBlockSnapshotById(doc: PMNode, blockId: string): BlockSnapshot | null {
+  if (!blockId) return null;
+  let pos = 0;
+  for (let index = 0; index < doc.childCount; index++) {
+    const node = doc.child(index);
+    if (node.attrs.blockId === blockId) return snapshotTopBlock(node, pos, index);
+    pos += node.nodeSize;
+  }
+  return null;
+}
+
 /** 从当前注册编辑器解析 0 起块号对应的稳定 blockId；无活动编辑器或越界时返回 null。 */
 export function getActiveBlockIdByIndex(index: number): string | null {
   const ed = activeEditor;
   if (!ed) return null;
   return getTopBlockIdByIndex(ed.state.doc, index);
+}
+
+export function getActiveBlockSnapshotByIndex(index: number): BlockSnapshot | null {
+  const ed = activeEditor;
+  if (!ed) return null;
+  return getTopBlockSnapshotByIndex(ed.state.doc, index);
+}
+
+export function getActiveBlockSnapshotById(blockId: string): BlockSnapshot | null {
+  const ed = activeEditor;
+  if (!ed) return null;
+  return findTopBlockSnapshotById(ed.state.doc, blockId);
+}
+
+export function getActiveDocumentContent(format: "text" | "html" | "html_file"): string | null {
+  const ed = activeEditor;
+  if (!ed) return null;
+  if (format === "html" || format === "html_file") return ed.getHTML();
+  return ed.getText({ blockSeparator: "\n" });
+}
+
+function textToDoc(text: string) {
+  return {
+    type: "doc",
+    content: text.split("\n").map((line) =>
+      line ? { type: "paragraph", content: [{ type: "text", text: line }] } : { type: "paragraph" },
+    ),
+  };
+}
+
+export type ApplyEditOp =
+  | { op: "replace_text"; blockId: string; start: number; end: number; text: string }
+  | { op: "replace_block"; blockId: string; text: string }
+  | { op: "replace_document"; content: string; format: "text" | "html" | "html_file" };
+
+export type ApplyEditResult = { ok: true } | { ok: false; reason: string };
+
+function posFromCharOffsetInBlock(block: PMNode, offset: number): number {
+  let remaining = Math.max(0, offset);
+  let pos = 0;
+  let done = false;
+  block.content.forEach((child) => {
+    if (done) return;
+    const len = child.isText ? (child.text?.length ?? 0) : child.isLeaf ? 1 : 0;
+    if (remaining <= len) {
+      pos += child.isText ? remaining : remaining > 0 ? child.nodeSize : 0;
+      done = true;
+      return;
+    }
+    remaining -= len;
+    pos += child.nodeSize;
+  });
+  return pos;
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012
+ * type:     EFFECT
+ * chain:    ED-EDIT
+ * rules:    BR-ED-STATE-001
+ * term_ref: TERM-ED-001, TERM-ED-004
+ * boundary: in=applyEditOps(blockOrDocumentScopedEditorMutation) | out=editorDocumentTree(dirtyViaOnUpdateOrAnchorLost)
+ */
+/// ED 统一编辑入口守则（BR-ED-STATE-001）：上游候选、回滚与显式辅助写入都经当前编辑器实例修改
+/// LogicalState；定位失败返回 anchor_lost，不直接写磁盘，不由 DisplayState 反写 LogicalState。
+export function applyEditOps(ops: ApplyEditOp[]): ApplyEditResult {
+  const ed = activeEditor;
+  if (!ed) return { ok: false, reason: "no_active_editor" };
+  for (const op of ops) {
+    if (op.op === "replace_document") {
+      const located = setActiveDocumentContent(op.content, op.format);
+      if (located !== "located") return { ok: false, reason: "replace_document_failed" };
+      continue;
+    }
+    const found = findBlockById(ed.state.doc, op.blockId);
+    if (!found) return { ok: false, reason: "anchor_lost" };
+    const contentFrom = found.pos + 1;
+    const contentTo = found.pos + found.node.nodeSize - 1;
+    if (op.op === "replace_block") {
+      ed.chain().focus().insertContentAt({ from: contentFrom, to: contentTo }, op.text).run();
+      continue;
+    }
+    const textLen = blockTextLength(found.node);
+    if (op.start < 0 || op.end < op.start || op.end > textLen) {
+      return { ok: false, reason: "invalid_range" };
+    }
+    const from = contentFrom + posFromCharOffsetInBlock(found.node, op.start);
+    const to = contentFrom + posFromCharOffsetInBlock(found.node, op.end);
+    ed.chain().focus().insertContentAt({ from, to }, op.text).run();
+  }
+  return { ok: true };
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-STATE-001-EFFECT-ED-ED-EDIT-011
+ * type:     EFFECT
+ * chain:    ED-EDIT
+ * rules:    BR-ED-STATE-001
+ * term_ref: TERM-ED-001
+ * boundary: in=blockScopedEditorMutation | out=editorDocumentTree(blockContentReplacedDirtyViaOnUpdate)
+ */
+/// ED 受控块替换守则（BR-ED-STATE-001）：DE 草稿裁决只能经当前编辑器实例替换目标 Block 内容，
+/// 普通事务触发 onUpdate 脏态；不直接写文件、不绕过 WS save。
+export function replaceActiveBlockText(blockId: string, text: string): LocateResult {
+  return applyEditOps([{ op: "replace_block", blockId, text }]).ok ? "located" : "anchor_lost";
+}
+
+export function setActiveDocumentContent(content: string, format: "text" | "html" | "html_file"): LocateResult {
+  const ed = activeEditor;
+  if (!ed) return "anchor_lost";
+  try {
+    if (format === "html" || format === "html_file") {
+      ed.commands.setContent(generateJSON(content, buildEditorExtensions()), { emitUpdate: true });
+    } else {
+      ed.commands.setContent(textToDoc(content), { emitUpdate: true });
+    }
+    return "located";
+  } catch {
+    return "anchor_lost";
+  }
 }
 
 /**
@@ -229,3 +406,68 @@ export function revealBlock(blockId: string | undefined | null): LocateResult {
 
 /** 选区拖拽引用的自定义 MIME（PI-ED-10 #6：拖出编辑器 → AG 输入面位置引用）。 */
 export const SELECTION_REF_MIME = "application/x-binder-selection-ref";
+
+/** 文档引用拖拽的自定义 MIME（文件树/标签栏 → AG 输入面整文档引用）。 */
+export const DOC_REF_MIME = "application/x-binder-doc-ref";
+
+export interface DocRefPayload {
+  relPath: string;
+}
+
+interface TransferLike {
+  getData(type: string): string;
+}
+
+interface WritableTransferLike extends TransferLike {
+  setData(type: string, data: string): void;
+}
+
+export function writeDocRefData(dataTransfer: WritableTransferLike, relPath: string): void {
+  const payload: DocRefPayload = { relPath };
+  writeReferencePayloadData(dataTransfer, makeDocReference(relPath));
+  dataTransfer.setData(DOC_REF_MIME, JSON.stringify(payload));
+  dataTransfer.setData("text/plain", relPath);
+}
+
+export function readDocRefData(dataTransfer: TransferLike): DocRefPayload | null {
+  const raw = dataTransfer.getData(DOC_REF_MIME);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<DocRefPayload>;
+    return typeof parsed.relPath === "string" && parsed.relPath.trim() ? { relPath: parsed.relPath } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSelectionRefData(dataTransfer: WritableTransferLike, ref: SelectionRef): void {
+  writeReferencePayloadData(dataTransfer, makeSelectionReference(ref));
+  dataTransfer.setData(SELECTION_REF_MIME, JSON.stringify(ref));
+  dataTransfer.setData("text/plain", ref.text);
+}
+
+export function readSelectionRefData(dataTransfer: TransferLike): SelectionRef | null {
+  const raw = dataTransfer.getData(SELECTION_REF_MIME);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SelectionRef>;
+    if (
+      typeof parsed.path !== "string" ||
+      typeof parsed.blockId !== "string" ||
+      typeof parsed.start !== "number" ||
+      typeof parsed.end !== "number" ||
+      typeof parsed.text !== "string"
+    ) {
+      return null;
+    }
+    return {
+      path: parsed.path,
+      blockId: parsed.blockId,
+      start: parsed.start,
+      end: parsed.end,
+      text: parsed.text,
+    };
+  } catch {
+    return null;
+  }
+}

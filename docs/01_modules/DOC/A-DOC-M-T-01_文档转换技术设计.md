@@ -21,7 +21,7 @@ zh: 样式子集
 en: StyleSubset
 forbidden: 样式白名单, 格式子集, 样式范围, 支持样式表
 -->
-docx 进入编辑态（旧称「编辑模式」，2026-07-04 起「模式」一词专属 AG 面板）时编辑模型所承载的样式范围三级契约：必需子集（承诺往返保真）、部分支持（尽力
+b-docx 进入编辑态（旧称「编辑模式」，2026-07-04 起「模式」一词专属 AG 面板）时编辑模型所承载的样式范围三级契约：必需子集（承诺往返保真）、部分支持（尽力
 保留并明示）、明确不处理（不承诺，预览链全保真补偿）；进入编辑即子集化且对用户可知（REQ-DOC-003）。
 
 <!-- TERM
@@ -31,10 +31,23 @@ zh: 编辑草稿
 en: EditDraft
 forbidden: 草稿副本, draft文件, 临时编辑文件, 编辑副本
 -->
-原生 docx 进入编辑前创建的同目录副本（命名 `{stem}.draft.docx`）：**原生 docx**（非 `*.draft.docx`）
-点击为只读 PDF 预览，经「创建草稿进行编辑」复制为 EditDraft 后进 HTML 编辑态；**EditDraft 与项目
-生成的 docx**（均以 `*.draft.docx` 标识）点击直接进编辑。编辑作用于草稿、原 docx 不被改动（保护原始
-文档）；草稿落盘经编辑链 HTML→docx 往返（§2.1）。
+EditDraft 是 b-docx 的一种来源形态：原生 docx 进入编辑前创建的同目录副本（命名
+`{stem}.draft.docx`）。**原生 docx**（非 `*.draft.docx`）点击为只读 PDF 预览，经「创建 b-docx
+进行编辑」复制为 EditDraft 后进 HTML 编辑态；EditDraft 点击直接进编辑。编辑作用于 EditDraft、
+原 docx 不被改动（保护原始文档）；落盘经编辑链 HTML→docx 往返（§2.1）。
+
+<!-- TERM
+term_id: TERM-DOC-003
+chains: DOC-CONVERT, ED-EDIT
+zh: b-docx
+en: BDocx
+forbidden: 模拟docx, HTML模拟docx, 可编辑docx, 项目docx, 生成docx, docx编辑稿
+-->
+b-docx 是 Binder 内可编辑的 docx 类文档，区别于原生 `.docx`。它的编辑态由 DOC 编辑链将 docx
+字节转换为 HTML / ProseMirror 统一编辑模型，ED 只编辑该 HTML 模型，保存时再由 DOC 转回 docx
+字节并经 WS 落盘。来源包括：原生 docx 经 `doc.create_draft` 生成的 EditDraft（`*.draft.docx`）、
+文件树新建的 docx 文档、Agent 创建的 docx 文档。原生 `.docx` 不是 b-docx，在当前项目中只走
+LibreOffice→PDF 预览路径；必须先转成 b-docx 后才能进入编辑链。
 
 ## §1 文档定位
 
@@ -52,7 +65,7 @@ Lua 过滤器实现延实现期（§9）。
 ## §2 转换管线架构（双链分离）
 
 ```
-打开编辑   docx ──Pandoc(+Lua 过滤器)──→ HTML/统一编辑模型 ──注入缺失 data-block-id──→ ED 装载
+打开编辑   b-docx ──Pandoc(+Lua 过滤器)──→ HTML/统一编辑模型 ──注入缺失 data-block-id──→ ED 装载
 保存往返   ED 编辑模型(HTML) ──Pandoc──→ docx 字节流 ──经 WS 原子落盘──→ 文件
 只读预览   docx ──LibreOffice──→ PDF（全保真）──→ PRV 呈现
 ```
@@ -66,7 +79,7 @@ Lua 过滤器实现延实现期（§9）。
 **编辑模型为 HTML**（非 markdown）：编辑器 TipTap/ProseMirror 是 HTML 模型，且 markdown 丢失样式子集
 「部分支持」层（颜色/字体/字号）；HTML+styles 才能承载三级子集。
 
-- **打开（docx → 可编辑 HTML，`doc.open_for_edit`）**：
+- **打开（b-docx → 可编辑 HTML，`doc.open_for_edit`）**：
   `pandoc <docx> --from docx+styles --to html+raw_html+native_divs+native_spans --wrap=none
   --extract-media=. --preserve-tabs --lua-filter preserve-styles.lua`
   - `docx+styles` 读取扩展保留 DOCX 样式；`native_divs/spans` 把样式落为内联 `style=`/`data-custom-style`；
@@ -79,26 +92,39 @@ Lua 过滤器实现延实现期（§9）。
   - 回 baseline（docx 字节内容哈希）供保存冲突保护（SM-WS-01）；HTML 超 **15MB** 拒绝（编辑态上限，防崩溃）。
 - **保存（HTML → docx，`doc.save_from_edit`）**：
   `pandoc --from html --to docx --reference-doc reference.docx`（参考文档统一样式，往返保真）→ 交 WS
-  `save_atomic` 原子落盘 + 外部变更保护（原文件不变）。
+  保存机执行 baseline guard + `save_atomic` 原子落盘。调用方必须传入打开时加载基线；磁盘内容偏离基线且
+  未 `override=true` 时返回 `WS_SAVE_CONFLICT`，原 docx 不变；`override=true` 只能来自用户显式确认。
 - **样式子集 ↔ 编辑器扩展**：HTML 的样式需编辑器对应 TipTap 扩展解析为「成熟文本块」，否则显示为生标记
   （映射见 §4 表）。编辑器扩展集为 DOC 编辑链可用性的前置（前端 ED 承载，A-ED-M-T-01）。
 - **资源（经 bundle.resources 打包）**：`reference.docx`（样式模板）、`preserve-styles.lua`（样式保留过滤器）；
   预览链 LibreOffice 为优化版（自定义构建精简约 30%，发布期打包不得绕过，A-CORE-X-R-01 §9 BLOCK-REL-LO-001）。
 
-### §2.2 docx 编辑流程（预览/草稿/直编辑，移植旧版成熟链路）
+### §2.2 原生 docx / b-docx 编辑流程（预览/转换/直编辑，移植旧版成熟链路）
 
-按文件名 `*.draft.docx`（TERM-DOC-002 EditDraft）区分两条入口：
+按 TERM-DOC-003 BDocx 区分两条入口：原生 docx 只走预览链；b-docx 才能进入编辑链。
 
 ```
-原生 docx（foo.docx）       点击 → 只读 PDF 预览（预览链）
-                            └「创建草稿进行编辑」→ doc.create_draft → foo.draft.docx（同目录副本）
-                                                  → doc.open_for_edit → HTML 编辑（编辑链）
-                                                  → ⌘S → doc.save_from_edit → docx 落盘
-草稿/生成 docx（*.draft.docx）点击 → 直接进 HTML 编辑（编辑链，同上保存）
+原生 docx（foo.docx） 点击 → 只读 PDF 预览（预览链）
+                       └「创建 b-docx 进行编辑」→ doc.create_draft → foo.draft.docx（EditDraft / b-docx）
+                                             → doc.open_for_edit → HTML 编辑（编辑链）
+                                             → ⌘S → doc.save_from_edit → docx 落盘
+b-docx（EditDraft / 文件树新建 / Agent 创建）点击 → 直接进 HTML 编辑（编辑链，同上保存）
 ```
 
-- **原生 docx 不直接编辑**：保护原始文档，编辑作用于草稿副本（EditDraft）。
-- `doc.create_draft`：原生 docx → `{stem}.draft.docx` 同目录副本（守界 X-FORBID-004，已存在先覆盖）。
+- **原生 docx 不直接编辑**：保护原始文档，b-docx 是唯一可进入 DOC 编辑链的 docx 类文档。
+- `doc.create_draft`：原生 docx → `{stem}.draft.docx`（EditDraft / b-docx）同目录副本
+  （守界 X-FORBID-004，已存在先覆盖）。
+- 文件树新建与 Agent 创建的 docx 文档直接落入 b-docx 分类，点击即进入 HTML 编辑链。
+- b-docx 身份必须可持久恢复：`*.draft.docx` 可由命名兼容识别；文件树新建与 Agent 创建的 `.docx`
+  由 workspace 内隐藏身份清单（`.binder/bdocx_manifest.json`）登记，`ws.list_docs` 回 `is_bdocx` 供前端
+  路由。隐藏清单只记录身份，不参与内容权威；文件内容仍为 docx 字节，打开/保存仍走 DOC 编辑链。
+- AgentEdit / REF / DE 读取 BDocx 时必须消费 DOC 编辑链产出的 HTML 编辑模型快照（AG 侧命名为
+  `AgentEditableSnapshot`），不得经 WS 文本读取把 `.docx` 字节当 UTF-8 内容处理。对非当前编辑器的
+  BDocx，读取路径为 `docx_to_html` → canonical blockId HTML → 统一 Block 投影；对当前已打开的 BDocx，
+  以 ED 实时 HTML 序列化内容为准。
+- 既有 BDocx 的 diff 接受不得走后台 raw apply：DiffPayload/AgentEditableSnapshot 中的 HTML 是编辑模型，
+  不是 `.docx` 磁盘字节。只有当前编辑器 HTML 草稿成功应用后，accepted 才确认裁决；真正写回 `.docx`
+  仍由用户 save 触发 `doc.save_from_edit` 完成 HTML→docx 转换并经 WS 原子落盘。
 - 流程对偶旧版 `create_draft_docx` + `DocxPdfPreview.handleCreateDraft`；Excel/PPT 无编辑入口（恒只读预览，BR-PRV-DATA-001）。
 
 ## §3 转换通道与生命周期（DOC-CONVERT）
@@ -186,6 +212,11 @@ docx→编辑模型转换必须为缺失 data-block-id 的块级元素注入 blo
 data-block-id；往返保留度不达标时必须显式采用"重建锚"降级契约并回写本文与 A-ED-M-T-01，
 不得静默让锚漂移。
 
+实现约定（2026-07-09 修复）：`docx_to_html` 的返回值必须是已完成 blockId canonical 化的 HTML；
+`p/h1-h6/blockquote/li/pre/div/table` 等块级元素缺失 `data-block-id` 时注入新 id，已有唯一 id
+保持，重复 id 重新分配。AG/DE/ED 不再对 b-docx 的磁盘转换结果另行补锚，避免同一文档在不同入口
+出现不同锚模型。
+
 ## §6 跨模块约束（CONSTRAINT）
 
 <!-- CONSTRAINT
@@ -254,7 +285,7 @@ status: mapped
 - **唯一通道与双链分离**（BR-DOC-DATA-001 / X-SEQ-004）：除 DOC 外无二进制文档处理代码（静态可查）；
   预览链失败不影响编辑链；断网时开/存/预览转换可用；无文档内容网络上行（可经网络核验）。
 - **必需子集往返保真**（BR-DOC-DATA-002，REQ-DOC-003 验收）：标题/对齐/粗斜下/列表/基础表格/图片
-  的 docx→编辑→docx 往返回归测试强制覆盖；部分支持项损失有用户可见明示。
+  的 b-docx→编辑→docx 往返回归测试强制覆盖；部分支持项损失有用户可见明示。
 - **转换原子性**（BR-DOC-STATE-001 / SM-DOC-01）：注入打开/保存转换失败，会话不建立/原文件不变、
   无半成品、可重试。
 - **blockId 兜底**（BR-DOC-DATA-003）：转换后所有块级元素有 blockId；往返保留度实测并记录
@@ -275,7 +306,7 @@ status: mapped
 ## §10 后续动作
 
 1. 落地后随 `npm run governance:generate` 注册：DOC-CONVERT 链路、BR-DOC-DATA-001/002/003、
-   BR-DOC-STATE-001 规则、X-SEQ-004 约束、TERM-DOC-001、REQ_MAP 进 ADUS。
+   BR-DOC-STATE-001 规则、X-SEQ-004 约束、TERM-DOC-001~003、REQ_MAP 进 ADUS。
 2. 续 A-DOC-M-S-01（SM-DOC-01 docx 开/存机），登记总图（docx 行 planned→active）与
    X-INTER-001 转移点（DOC↔ED 装载、DOC↔WS 落盘）。
 3. 待人类宣布 DOC G2 闭合；PRV G1 时联合解除 DOC-03。
@@ -289,3 +320,8 @@ status: mapped
 | 2026-06-24 | v1.2 | 实现期处理逻辑细化（文档·设计·代码同步，移植旧版 binder-project 跑通链路）：新增 §2.1 编辑链处理逻辑（编辑模型为 HTML 非 markdown；打开 `pandoc docx+styles → html+raw_html+native_divs+native_spans + preserve-styles.lua + extract-media`，保存 `html → docx --reference-doc reference.docx`；HTML 15MB 上限；资源 reference.docx/preserve-styles.lua 经 bundle）、§2.2 docx 编辑流程（原生 docx→预览→「创建草稿进行编辑」doc.create_draft→编辑；`*.draft.docx`/生成 docx→直编辑；原文档不改动）、§4.1 样式子集↔TipTap 编辑器扩展映射表（必需/部分/增强 ↔ TextAlign/Underline/Table*/Image/TextStyle+Color/FontFamily/FontSize/Highlight/Sub·Superscript）；新增术语 TERM-DOC-002 编辑草稿 EditDraft；命令 doc.open_for_edit/save_from_edit/create_draft 见 A-DOC-I-P-01 v1.1~v1.3；预览链优化版 LibreOffice 打包阻断见 A-CORE-X-R-01 §9。规则/链路不变（BR-DOC-* + DOC-CONVERT），REQ_MAP 不变 |
 | 2026-06-24 | v1.3 | docx 编辑渲染修复（设计·代码同步）：§2.1 去 `--standalone`（pandoc 只输出 <body> 正文片段，不含 <head>/<style> CSS——否则 CSS 被当代码块渲染）；明确前端须用 `generateJSON(html, extensions)` 按 HTML 解析绕过 tiptap-markdown 对 setContent(string) 的 markdown 劫持（旧项目编辑器无 markdown 扩展故 HTML 原生解析正常，本项目为 md 编辑装了该扩展需显式绕过）。规则/术语/链路不变 |
 | 2026-07-04 | v1.4 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-09 | v1.5 | 注册 TERM-DOC-003 b-docx/BDocx：明确原生 `.docx` 只走 LibreOffice→PDF 预览路径，b-docx 才进入 HTML / ProseMirror 编辑链；同步 EditDraft 为 b-docx 来源形态，补充文件树新建与 Agent 创建 docx 文档的编辑分类 |
+| 2026-07-09 | v1.6 | 补充 BDocx 身份持久化实现约定：`*.draft.docx` 命名兼容识别，文件树新建/Agent 创建 `.docx` 通过 `.binder/bdocx_manifest.json` 登记并由 `ws.list_docs.is_bdocx` 投影；身份清单不替代 docx 字节内容权威 |
+| 2026-07-09 | v1.7 | 接线 blockId 转换层兜底实现约定：`docx_to_html` 返回前必须为块级元素注入/去重 `data-block-id`，AG/DE/ED 共用该 canonical HTML 作为 b-docx 编辑锚模型 |
+| 2026-07-09 | v1.8 | 补齐 AgentEdit 消费 BDocx 的转换契约：AG/REF/DE 读取统一走 DOC HTML 编辑模型快照，禁止 WS 文本读取 `.docx` 字节；既有 BDocx diff 未进入当前编辑器 HTML 草稿时禁止后台 raw apply，保存仍由 `doc.save_from_edit` 转换落盘 |
+| 2026-07-12 | v1.9 | 三态实现回写：`doc.save_from_edit` 保存链补加载基线与 `override` 语义，转换成功后经 WS baseline guard + `save_atomic` 落盘；磁盘偏离基线时返回 `WS_SAVE_CONFLICT` 且原 docx 不变 |

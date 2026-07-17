@@ -1,8 +1,9 @@
 import { BinderMark } from "../brand/BinderMark";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 
 /**
  * Left Rail（44px）· A-SYS-C-T-02 §3 界面分区（PI-FE-02）。
- * 5 大模块导航 + 顶部 Logo + 底部设置。视觉移植自 docs/binder-vi/binder_ui/binder-parts.jsx。
+ * 6 大模块导航 + 顶部 Logo workspace 菜单 + 底部设置。
  *
  * 激活面板（activePanel）是**视图层导航态**，由上层 Workbench 本地持有——
  * 不属 X-FORBID-007 限制的"权威业务状态"（导航选择不是后端可漂移的业务态），故不投影后端。
@@ -36,7 +37,12 @@ export function LeftRail({ active, onChange }: LeftRailProps) {
   return (
     <nav className="rail" aria-label="模块导航">
       <div className="rail-logo">
-        <BinderMark size={28} variant="accented" />
+        <WorkspaceMenu
+          placement="rail"
+          trigger={<BinderMark size={28} variant="accented" />}
+          triggerClassName="rail-logo-trigger"
+          triggerTitle="workspace 菜单"
+        />
       </div>
       {RAIL_ITEMS.map((it) => (
         <button

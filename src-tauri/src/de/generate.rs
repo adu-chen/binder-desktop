@@ -135,7 +135,11 @@ mod tests {
     use crate::types::{DocRef, LocateResult};
 
     fn doc(rel: &str) -> DocRef {
-        DocRef { workspace_id: "ws1".into(), rel_path: rel.into(), doc_type: "md".into() }
+        DocRef {
+            workspace_id: "ws1".into(),
+            rel_path: rel.into(),
+            doc_type: "md".into(),
+        }
     }
     fn modify_proposal() -> ChangeProposal {
         ChangeProposal {

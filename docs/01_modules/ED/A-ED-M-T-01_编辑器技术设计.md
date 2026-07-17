@@ -5,7 +5,7 @@
 文档职责：ED 编辑器模块级 L2 技术设计（规则 SSOT）——富文本编辑运行时（TipTap）与编辑会话、block 模型与稳定 blockId 定位、md/docx 统一编辑模型、分页与图文媒体的呈现层纯化、编辑器装饰层（decoration）接口契约；承接 REQ-ED-001~005
 上游约束：A-ED-M-D-01_编辑器功能需求描述.md（REQ-ED-001~005、ED-01~06）、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§6 状态机阈值、§9 文件系统/离线边界）、A-SYS-C-T-01_系统总体架构.md（§4 ED→WS、X-SEQ-002）、A-SYS-I-P-01_数据结构定义.md（DocRef、X-SHARED-001）、A-SYS-I-P-02_IPC协议.md（统一错误形状 BR-SYS-OBS-002）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001、BR-WS-PERSIST-001、X-FORBID-004）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01）、ADU.md（§3 RULE/CHAIN/CONSTRAINT/TERM 格式）
 直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 ED 规则 SSOT，代码经 @GOV 映射；文档编辑会话状态机在 A-ED-M-S-01 定义并登记 A-SYS-M-S-01 总图；decoration 接口契约供 DE（diff 呈现）/ AG（局部修改呈现）G2 承接
-使用边界：本文是 ED 规则 SSOT；不定义 diff 生成与终态（归 DE）、不定义 DOCX/Pandoc 二进制转换（归 DOC）、不做文件 I/O 与落盘（归 WS，ED 经 WS）、不锁定 TipTap/ProseMirror 具体版本与扩展集（延实现期选型记录）、状态机内部归 A-ED-M-S-01；inline-assist/autocomplete 业务归 AG（2026-06-11 人类确认），本文只定 decoration 承载面
+使用边界：本文是 ED 规则 SSOT；不定义 diff 生成与终态（归 DE）、不定义 DOCX/Pandoc 二进制转换（归 DOC）、不做文件 I/O 与落盘（归 WS，ED 经 WS）、不锁定 TipTap/ProseMirror 具体版本与扩展集（延实现期选型记录）、状态机内部归 A-ED-M-S-01；inline-assist/autocomplete 业务归 AG（2026-06-11 人类确认），本文定义草稿编辑接口与 decoration 承载面
 变更要求：blockId 稳定性语义变更须与 DE（diff 定位）联合复核；decoration 接口契约变更须复核 DE/AG 消费方；跨模块共享结构变更回写 A-SYS-I-P-01（X-SHARED-001）；TERM 一经被 term_ref 引用其 en 不可更改（ADU §3.0）
 治理成熟度：draft
 ---
@@ -126,7 +126,7 @@ rule_id: BR-ED-STATE-001
 域: STATE
 -->
 文档编辑会话必须经完整生命周期管理：内容加载与 save 落盘全部经 WS（ED 无直接文件 I/O 路径，
-X-SEQ-002/X-FORBID-004）；编辑操作产生脏态并驱动 WS save 保存机（SM-WS-01 Idle→Dirty，X-INTER-001
+X-SEQ-002/X-FORBID-004）；用户编辑或 DE 草稿 diff 应用都属于编辑操作，必须产生脏态并驱动 WS save 保存机（SM-WS-01 Idle→Dirty，X-INTER-001
 转移点）；有脏态的会话不得静默关闭或丢失，关闭前须保存或经用户显式确认丢弃；内容解析失败降级只读
 而非静默丢内容；编辑功能离线可用，不依赖在线鉴权。状态转移归 SM-ED-01（A-ED-M-S-01）。
 
@@ -141,6 +141,11 @@ rule_id: BR-ED-STATE-003
 提示，由用户**显式**选择「保留我的编辑（后续保存须经覆盖确认，对接 overrideConfirmed）」或
 「放弃我的编辑并重载」——不得静默覆盖外部修改、不得静默重载丢弃脏态，两个方向的内容损失都必须
 经用户显式选择。状态转移归 SM-ED-01 的 Conflicted 态（A-ED-M-S-01）。
+
+> **实现回写（2026-07-12）**：已落地保存冲突下限保护——`saveDocument` / `saveDocxDocument`
+> 携带加载基线调用 WS/DOC 保存，收到 `WS_SAVE_CONFLICT` 后保持当前会话 dirty 并返回 `conflict`
+> 信号；编辑器只在用户显式确认覆盖后以 `override=true` 重试保存。文件监视/`ws.external_change`
+> 推送与无脏态自动重载仍按 WS SY-02 延后，不属于本轮已落地能力。
 
 ## §4 block 模型与稳定 blockId（ED-EDIT）
 
@@ -181,21 +186,24 @@ rule_id: BR-ED-DATA-004
 失效信号，不得静默错位；跨会话字符锚（内容哈希重建）为显式延后债务（§11.2）。字符锚/选区引用
 跨模块传递结构经 SYS 契约层定义（X-SHARED-001）。
 
-## §5 md / docx / html 统一编辑模型（ED-EDIT）
+## §5 md / b-docx / html 统一编辑模型（ED-EDIT）
 
-md、docx 与 **.html**（裁定 D-1，REQ-ED-008）在 ED 内共用**同一编辑模型与交互**：md 直接解析装载；
-docx 由 DOC 转换为统一编辑模型后进入编辑，存盘时经 DOC 转换回 docx（DOCX 往返，REQ-CORE-004）；
-.html 为文本格式直接解析装载、序列化 HTML 往返（读写经 WS 文本路径，**不经 DOC 二进制管线**，
-X-SEQ-004 无涉），且 .html 源可落盘 `data-block-id`（blockId 跨保存稳定，锚定强于 md 不注入策略）。
-ED 不含 docx 二进制解析/生成代码。
+md、b-docx 与 **.html**（裁定 D-1，REQ-ED-008）在 ED 内共用**同一编辑模型与交互**：md 直接解析
+装载；原生 `.docx` 不进入 ED 编辑态，只走 DOC/PRV 预览链；b-docx 由 DOC 转换为统一编辑模型后进入
+编辑，存盘时经 DOC 转换回 docx（DOCX 往返，REQ-CORE-004）；.html 为文本格式直接解析装载、
+序列化 HTML 往返（读写经 WS 文本路径，**不经 DOC 二进制管线**，X-SEQ-004 无涉），且 .html 源可
+落盘 `data-block-id`（blockId 跨保存稳定，锚定强于 md 不注入策略）。ED 不含 docx 二进制解析/生成代码。
+
+> **序列化往返风险分级**（三态模型 A-CORE-C-T-01 §1.2）：`serialize(editor)`→`setContent(loadedContent)` 的双向转换存在信息丢失风险——text/md 格式（`getText()`→`textToDoc()`）为低风险，html/html_file 格式（`editor.getHTML()`→`generateJSON()`）为中等风险，属于**已知技术债务**（详见 docx 样式子集三级契约 §11.1），非待修复缺陷。
 
 <!-- RULE
 rule_id: BR-ED-DATA-002
 主链路: ED-EDIT
 域: DATA
 -->
-md、docx 与 .html 必须共用同一结构化编辑模型（内容块模型，§4）：docx 的二进制解析与生成全部归
-DOC，ED 仅编辑 DOC 转换后的统一模型，ED 代码不得包含 docx 二进制处理路径；.html 为文本格式经 WS
+md、b-docx 与 .html 必须共用同一结构化编辑模型（内容块模型，§4）：b-docx 的 docx 字节解析与
+生成全部归 DOC，ED 仅编辑 DOC 转换后的统一模型，ED 代码不得包含 docx 二进制处理路径；原生 docx
+不得直接进入 ED 统一编辑模型，必须先由 DOC 转成 b-docx 或走 PRV 只读预览；.html 为文本格式经 WS
 文本读写路径直接解析/序列化往返，不引入独立转换管线；docx 往返中编辑模型与样式子集的承载范围以
 本文与 DOC L2 的联合契约为准（ED-04/ED-05 延 DOC G2 联合敲定，本规则先锁分工：转换归 DOC、
 编辑归 ED）。
@@ -209,9 +217,16 @@ DOC，ED 仅编辑 DOC 转换后的统一模型，ED 代码不得包含 docx 二
   （ag.list_blocks 扩展，A-AG-I-P-01）供 agent 消费。
 - **写侧（样式操作，StyleOp，TERM-ED-006）**：set_mark / unset_mark / set_block_attr，目标为
   字符锚区间或 blockId；必经 ED 受控编辑接口（ed.apply_edit op 粒度表，A-ED-I-P-01 §4.1）。
-- **落盘分流（裁定 D-3）**：chat/agent 回合产出的样式修改进 DiffPayload 经 DE diff 裁决落盘
-  （X-FORBID-006 唯一路径）；用户显式触发的局部修改样式操作视为用户编辑直改（BR-AG-STATE-003
+- **当前实现入口（2026-07-12）**：文本/块/整篇内容修改统一经 `applyEditOps()` 进入 ProseMirror
+  doc（`replace_text` / `replace_block` / `replace_document`）；样式批量修改经 `applyStyleOps()`
+  规划并应用单事务。DE 草稿应用、reject 回滚、示例 diff 生成均以当前编辑器 LogicalState 为准，
+  不以 `edStore.EditSession.content` 派生缓存作为真值。
+- **落盘分流（裁定 D-3）**：chat/agent 回合产出的样式修改进 DiffPayload 经 DE diff 裁决；当前
+  编辑器草稿路径在 pending 时先经 ED 受控编辑接口应用为草稿，accepted 只确认，save 经
+  SM-ED-01→SM-WS-01 落盘；用户显式触发的局部修改样式操作视为用户编辑直改（BR-AG-STATE-003
   语义，产生脏态经 SM-ED-01→SM-WS-01）。
+- **草稿恢复**：包含 StyleOp 的 pending diff 被拒绝时，ED 必须用草稿应用前的完整编辑器内容恢复，
+  不得只回滚单块纯文本；恢复仍经当前编辑器受控接口触发普通脏态/标签态投影。
 
 <!-- RULE
 rule_id: BR-ED-DATA-005
@@ -221,8 +236,10 @@ rule_id: BR-ED-DATA-005
 文档样式必须以机器可读结构投影（块级 marks/blockAttrs，range 在块内纯文本平面与字符锚同基准）
 供 agent 读取；样式修改必须以样式操作（StyleOp：set_mark/unset_mark/set_block_attr，目标为字符锚
 区间或 blockId）经 ED 受控编辑接口进入（X-FORBID-005），不得绕过接口直改编辑器模型。agent 样式
-落盘路径分流（裁定 D-3）：chat/agent 回合产出经 DE diff 裁决落盘（X-FORBID-006），用户显式触发的
-局部修改样式操作视为用户编辑直改并产生脏态；不得存在绕过裁决的回合直改路径。
+落盘路径分流（裁定 D-3）：chat/agent 回合产出经 DE diff 裁决；当前编辑器草稿路径由 ED 受控接口
+先应用为草稿，accepted 后仍由普通 save 落盘（X-FORBID-006 不允许 AG 直接写文件），用户显式触发的
+局部修改样式操作视为用户编辑直改并产生脏态；拒绝含 StyleOp 的草稿 diff 必须恢复草稿前完整内容，
+不得存在绕过裁决的回合直写文件路径。
 
 ## §6 分页与图文媒体（呈现层纯化，ED-EDIT）
 
@@ -248,6 +265,17 @@ ED 不得自行写入媒体文件。打印/导出管线归 PRV，ED 仅提供打
   定位失败信号（BR-ED-DATA-001）。
 - **呈现/复位**：decoration 按消费方信号呈现与复位（如 DE 终态 accepted/rejected/expired 后复位
   该 diff 的 decoration）；复位不残留视觉痕迹。
+- **GreenReview 草稿语义**：对当前编辑器命中的块级 diff，ED 先把 after 内容替换进目标 Block；
+  对显式 `replace_document` 整篇 diff，ED 先把 after 全文替换为编辑器草稿。未携带 blockId 且
+  不是显式 `replace_document` / StyleOp 的 diff 必须投影为 error，不得自动整篇替换。decoration
+  只在当前 after 内容上显示 GreenReview（绿色背景/绿增预览），不在正文中额外渲染红删预览；
+  红删对比保留在 DiffCard。只有已成功应用为 ED 草稿的 diff 才能挂载 GreenReview；锚失效或
+  error 卡不得残留绿色装饰。
+- **DiffProjection 消费边界**：AG 产生的草稿 diff 必须先携带后端权威 `DiffProjection`，ED 只消费
+  其中的 `patch_kind/block_id/block_index/before_text/after_text/style_ops`。前端不得从工具请求参数、
+  当前整篇内容或 DiffCard 文案反向推断编辑器草稿。文本/md 文档缺 blockId 时可在当前编辑会话内用
+  `block_index` 映射到实时 Block；BDocx 必须使用 DOC canonical HTML 中的 `data-block-id`，缺失或失效
+  即 error，不得用整篇替换或重建锚作为隐式降级。
 - **纯呈现**：decoration 不修改文档模型与落盘内容；用户在 decoration 上的交互（接受/拒绝按钮等）
   转达给消费方裁决，ED 不代裁。
 - **唯一通道**：上层不得绕过装饰层与编辑接口直接操纵编辑器内部文档状态（X-FORBID-005）。
@@ -264,9 +292,10 @@ rule_id: BR-ED-STATE-002
 主链路: ED-DECOR
 域: STATE
 -->
-编辑器装饰层必须满足：按 blockId 定位挂载且锚失效回明确失败信号；按消费方（DE/AG）信号呈现与
-复位，消费终态后不残留；decoration 自身不修改文档模型与落盘内容，用户在 decoration 上的裁决交互
-转达消费方处理，ED 不代行裁决（diff 终态归 DE 终态机）。inline-assist/autocomplete 的业务语义
+编辑器装饰层必须满足：按 blockId 定位挂载且锚失效回明确失败信号；整篇 content diff 可在草稿替换
+完成后按当前编辑器块集合批量挂载 GreenReview；按消费方（DE/AG）信号呈现与复位，消费终态或保存后
+不残留；decoration 自身不修改文档模型与落盘内容，当前编辑器草稿 diff 的正文替换必须走 ED-EDIT
+受控接口，用户在 decoration 上的裁决交互转达消费方处理，ED 不代行裁决（diff 终态归 DE 终态机）。inline-assist/autocomplete 的业务语义
 归 AG（2026-06-11 人类确认，A-SYS-M-S-01 §3），本规则只约束其呈现承载面。
 
 ## §8 跨模块约束（CONSTRAINT）
@@ -443,4 +472,12 @@ status: mapped
 | 2026-06-12 | v1.2 | Q2 缺口补遗（人类确认采纳）：§3 新增 BR-ED-STATE-003 外部变更会话处理——无脏态自动重载、有脏态/保存冲突进入显式裁决（保留己方→覆盖确认 / 放弃重载），双向内容损失均须用户显式选择；REQ_MAP 补 REQ-ED-001→BR-ED-STATE-003 |
 | 2026-07-03 | v1.3 | §11.2 实测回填（PI-ED-09，A-ED-X-L-02 批B 地基）：blockId 跨 docx 往返保留率 0%（Pandoc 不落自定义属性）→ 按既定降级走兜底重建（reconcileBlockIds 补缺）；契约语义锁定「锚有效期 = 编辑会话内、重开必换锚」（与裁定 D-2 一致）；附带登记保存侧样式衰减与 data-custom-style 残留（DOC 侧既有债务佐证） |
 | 2026-07-03 | v1.4 | 批B 契约注册（A-ED-X-L-02 §4，人类裁定 D-1/D-2/D-3）：§0 注册 TERM-ED-004 CharAnchor / TERM-ED-005 SelectionRef / TERM-ED-006 StyleOp；§4.1 字符级锚定与选区引用 + BR-ED-DATA-004（会话内字符锚、纯文本偏移平面、失效可感知）；§5 扩展为 md/docx/html 统一模型 + BR-ED-DATA-002 修订（.html 文本路径不经 DOC）；§5.1 样式投影与操作协议 + BR-ED-DATA-005（可读投影 + StyleOp 受控写 + D-3 落盘分流）；REQ_MAP 补 REQ-ED-006→004 / 007→005 / 008→002 |
+| 2026-07-08 | v1.5 | 修正当前编辑器草稿 diff 语义：pending 时经 ED 受控接口把 after 替换进目标 Block 并置脏态，GreenReview 只给 after 内容加绿色背景；accepted 不再改正文，rejected 回滚 before，save 成功后复位 GreenReview |
 | 2026-07-04 | v1.5 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-09 | v1.6 | 同步 TERM-DOC-003 b-docx/BDocx：§5 与 BR-ED-DATA-002 将 ED 可编辑 docx 类输入收敛为 b-docx，明确原生 `.docx` 不进入 ED 编辑态，只走 DOC/PRV 预览链或先由 DOC 转为 b-docx |
+| 2026-07-09 | v1.7 | 补齐 StyleOp 草稿应用与拒绝恢复约定：Agent 回合 `style_ops` 经 DE 裁决后由 ED 受控接口应用为草稿；拒绝含 StyleOp 的草稿 diff 必须恢复草稿前完整内容 |
+| 2026-07-09 | v1.8 | 补齐整篇 content diff 与 GreenReview 绿增呈现约定：整篇 diff 在 pending 时经 ED 受控接口替换为草稿并按当前块集合挂载 GreenReview；正文内只显示 after 绿增效果，红删留在 DiffCard |
+| 2026-07-09 | v1.9 | 收紧 GreenReview 挂载条件：只有已成功应用为 ED 草稿的 diff 才能挂载绿色审阅层；锚失效或 error 卡不得残留绿色装饰 |
+| 2026-07-09 | v1.10 | 收紧整篇草稿替换入口：ED 仅对 `patchKind=replace_document` 的显式整篇 diff 执行全文替换；无 blockId 且非 StyleOp 的局部 diff 进入 error，避免 BDocx 精准编辑失败时误走整篇替换 |
+| 2026-07-09 | v1.11 | 补齐 DiffProjection 消费边界：ED 草稿/GreenReview 只消费后端权威投影；文本/md 可在当前会话用 block_index 映射实时 Block，BDocx 必须使用 canonical `data-block-id`，缺失即 error 不降级 |
+| 2026-07-12 | v1.12 | 三态实现回写：保存冲突路径已以 `WS_SAVE_CONFLICT` + `override=true` 显式覆盖确认落地；文件监视/`ws.external_change` 推送仍延后；补 `applyEditOps`/`applyStyleOps` 当前实现入口，明确 DE 草稿与回滚读取当前 ProseMirror LogicalState 而非派生缓存 |

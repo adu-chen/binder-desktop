@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { useWorkspaceShell } from "../../store/workspaceShell";
 import {
   openWorkspace,
@@ -10,7 +11,7 @@ import { edStore } from "../../store/edStore";
 import { deStore } from "../../store/deStore";
 
 /**
- * 标题栏 workspace 菜单（A-SYS-C-T-02 §3 WS 切换 / §4.1 WB→关闭/切换→C · PI-FE-10）。
+ * workspace 菜单（A-SYS-C-T-02 §3 WS 切换 / §4.1 WB→关闭/切换→C · PI-FE-10）。
  * 切换最近 / 打开其他文件夹 / 返回欢迎页；破坏性操作前脏态守卫（编辑器 dirty 或有 pending diff）。
  * 活动态以后端为准（X-FORBID-007）；服务层负责重置下游 store + 投影。
  */
@@ -22,7 +23,19 @@ function hasUnsaved(): boolean {
   return dirty || pending;
 }
 
-export function WorkspaceMenu() {
+interface WorkspaceMenuProps {
+  trigger?: ReactNode;
+  triggerClassName?: string;
+  triggerTitle?: string;
+  placement?: "titlebar" | "rail";
+}
+
+export function WorkspaceMenu({
+  trigger,
+  triggerClassName = "",
+  triggerTitle = "workspace 菜单",
+  placement = "titlebar",
+}: WorkspaceMenuProps) {
   const { activeWorkspace, recent, recentStatus } = useWorkspaceShell();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | (() => void)>(null);
@@ -49,12 +62,24 @@ export function WorkspaceMenu() {
   const doClose = () => guarded(() => void closeWorkspace());
 
   const others = recent.filter((w) => w.workspaceId !== activeWorkspace?.workspaceId);
+  const triggerContent = trigger ?? (
+    <>
+      <span className="wsmenu-path">{activeWorkspace?.rootPath ?? "—"}</span>
+      <span className="wsmenu-caret">▾</span>
+    </>
+  );
 
   return (
-    <div className="wsmenu">
-      <button className="wsmenu-trigger" onClick={toggle} title="workspace 菜单">
-        <span className="wsmenu-path">{activeWorkspace?.rootPath ?? "—"}</span>
-        <span className="wsmenu-caret">▾</span>
+    <div className={`wsmenu wsmenu-${placement}`}>
+      <button
+        type="button"
+        className={`wsmenu-trigger ${triggerClassName}`.trim()}
+        onClick={toggle}
+        title={triggerTitle}
+        aria-label={triggerTitle}
+        aria-expanded={open}
+      >
+        {triggerContent}
       </button>
 
       {open && (

@@ -60,6 +60,31 @@ REQ(L1) → REQ_MAP → RULE/CHAIN/CONSTRAINT/TERM(L2) → STATE_MACHINE → Pla
 **v1 OUT**（APC §1 + 本次确认）：多人实时协同、内容云同步、插件市场、脱离写作场景的通用聊天助手、
 Excel/PPT 编辑。
 
+### 2.1 1.0 Experience Preview 发布切片
+
+2026-07-17 人类确认：完整功能地图不变、开发计划与节奏大体不变，但需要提前发布
+**1.0 Experience Preview** 作为核心工作流体验版。该发布切片不改变 §2 的完整 v1 IN/OUT，
+只改变"哪些能力是 1.0 上线阻断项"。
+
+1.0 EP 发布阻断项：
+
+| 能力 | 归属模块 |
+|---|---|
+| workspace 生命周期、文件边界、基础搜索与保存 | WS / SYS |
+| 编辑器核心编辑、脏状态、基础文档打开/保存 | ED / DOC / WS |
+| 文档预览与 DOCX 基础编辑链路 | DOC / PRV / ED |
+| Agent 对话式编辑与真实模型调用 | AG / ENT / GW |
+| Diff Edit 审阅、接受/拒绝、落盘 | DE / WS / ED |
+| 账号、SessionToken、SubscriptionGate、用量展示 | ACCT / ENT / AUTH / LIC |
+| AiGateway 接入 DeepSeek 托管模型与 BYOK | GW / ENT / AG |
+| 管理员端最小运营能力与体验反馈闭环 | PORTAL / CLOUD / CORE |
+| macOS DMG、签名/公证策略、发布说明 | CORE / SYS |
+
+1.0 EP 非阻断项：CBT、AST、KB、TPL、自部署 Binder 预设模型、多模态模型矩阵、复杂 ModelRouter、
+深度专业领域适配与企业级组织权限。上述能力继续按完整路线推进，不因非阻断而取消或停止开发。
+
+详细发布切片、验收线与后续演进见 `A-CORE-X-L-06_1.0体验版发布范围与验收计划.md`。
+
 ## §3 模块清单与依赖关系
 
 模块定义见 APC §4。客户端 15：CORE SYS WS ED DE AG CBT DOC PRV REF AST KB TPL ACCT ENT；
@@ -112,6 +137,7 @@ G1→G2→G3→G4，跨阶段汇入 G5，最终 G6（门禁语义见 APC §5）�
 | M0 治理就绪 | P0 | — | draft（现状） |
 | M1 架构与契约基线 | P1 过 G2/G3 | — | draft |
 | M2 编辑核心可用 | P2 + P3 核心过 G4 | alpha（内测） | draft |
+| M2.5 1.0 Experience Preview | 1.0 EP 发布切片过核心 G4 + 必要 G5 冒烟，DeepSeek 托管模型/BYOK/账号订阅闭环可用 | 体验版 | draft |
 | M3 全功能集成 | P4 过 G4 + 跨模块 G5 | beta | draft |
 | M4 商业化闭环 | P5 + 订阅门控 E2E，过 G5 | RC | baseline（需人类批准） |
 | M5 正式发布 | 过 G6（DMG 签名/公证/updater） | GA | controlled（需人类批准） |
@@ -164,6 +190,7 @@ docs/
 | A-CORE-C-R-01 | L0 | ADUS（派生索引） | 已建 |
 | A-CORE-C-R-02 | L4路由 | 文档去重分层台账 | 已建 |
 | A-CORE-X-L-01 | L3 | 本路线图 | 已建 |
+| A-CORE-X-L-06 | L3发布切片 | 1.0 Experience Preview 发布范围与验收计划 | 已建（1.0 EP 阻断项/非阻断项/验收线） |
 | A-CORE-C-D-01 | L1 | 产品概述（产品级 REQ 根） | 已建（G1 闭合条件具备） |
 | A-SYS-M-D-01 | L1 | 系统底座功能需求描述（REQ-SYS-*） | 已建（G1 待人类宣布闭合） |
 | A-SYS-I-P-03 | L2 | 云接口契约（认证/订阅门禁/网关） | 已建（G2，规则已 generate 注册进 ADUS） |
@@ -330,8 +357,9 @@ UI 稿仅描述界面形态，界面规则的 SSOT 仍在各模块 L2 技术设�
 1. 进入 **P1**：先建 `A-CORE-C-D-01_产品概述`（L1 根）与 SYS 底座设计 + 云接口契约（L2），各走 G1→G2。
 2. 各模块按 §6.3 三件套产出，严守 L1→L2→L3 顺序与 SSOT。
 3. 每里程碑声明承接的 REQ/CHAIN、门禁状态、NFR 达标（APC §11）。
-4. 本路线图随 P1/P2 暴露的真实依赖回写调整。
-5. UI 板块按 §9：先固化设计系统种子，其余线框/交互贴模块 G1/L2 随取随做；
+4. 1.0 EP 以 `A-CORE-X-L-06` 为发布切片入口；模块规则仍回到各模块 L1/L2/L3，不另立规则源。
+5. 本路线图随 P1/P2 暴露的真实依赖回写调整。
+6. UI 板块按 §9：先固化设计系统种子，其余线框/交互贴模块 G1/L2 随取随做；
    沿用参考稿处须逐条过 §9.3 架构对齐改写清单。
 
 ## 变更记录
@@ -399,3 +427,4 @@ UI 稿仅描述界面形态，界面规则的 SSOT 仍在各模块 L2 技术设�
 | 2026-06-22 | v1.58 | G4 续：AST-03 收尾（AST 全 3 闭合）+ ENT 补 BR-SYS-OBS-001——supply.rs（仅 active+workspace 隔离/类型分级优先 preference·style>其它>session_context/origin_turn 可溯源/空集不注入，QUERY BR-AST-DATA-002）；ent/gateway.rs 新增 cloud_error 统一云错误形状（认证/门禁/网关三类失败统一 码+消息+可重试+需重认证，DATA BR-SYS-OBS-001，submit_for_verdict 错误改经此）；3 covers；cargo test 84 passed、OWNER_MISSING 15→13。**客户端后端可验证规则全部落地 50/63**。剩 13：ED 6（TipTap 前端）/DOC 4（Pandoc·LibreOffice 外部工具）/PRV 2（前端预览+导出）属前端·外部工具阶段；BR-SYS-DATA-004（网关内容不留存）为云端 GW 服务端责任（云端独立 APC owner），客户端无可落 @GOV，OWNER_MISSING 属正确（详见 A-CORE-X-R-01 §C 类） |
 | 2026-06-24 | v1.59 | 实现期：DOC 双链 + docx 编辑全链落地（文档·设计·代码同步，移植旧版 binder-project 跑通链路）。后端：style_subset/convert(SM-DOC-01)/block_backfill + pandoc_runtime(docx↔md) + edit_chain(docx↔HTML：docx+styles+preserve-styles.lua+native_divs/spans / html→docx --reference-doc) + libreoffice_runtime(docx→PDF 预览，优化版 LO 内置打包)；命令 doc.open_for_edit/save_from_edit/create_draft（lib.rs）。前端：docService + Editor/edStore/edService docx HTML 载入保存 + FileTreeNode 路由 + PrvPanel「创建草稿进行编辑」+ 富文本扩展集（TextStyle/Color/TextAlign/FontFamily/FontSize/Underline/Table*/Image/Highlight/Sub·Superscript，解析样式子集为成熟文本块）。成熟流程：原生 docx→预览→建草稿(*.draft.docx)→HTML 编辑→存回 docx；草稿/生成 docx→直编辑。部署：scripts/deploy_lo.sh + bundle.resources（优化版 LO ~687M 减 30%，签名/公证 G6 阻断 BLOCK-REL-LO-001 A-CORE-X-R-01 §9）。文档同步：A-DOC-M-T-01 v1.2（§2.1 编辑链处理逻辑/§2.2 编辑流程草稿/§4.1 扩展↔子集映射/TERM-DOC-002 EditDraft）、A-DOC-I-P-01 v1.1~v1.3。集成测试 tests/core_chain.rs（AG→DE→WS→生命周期端到端）。covers 审计扩展扫描 src-tauri Rust 内联。验证：cargo test 114、tsc 0、vitest 63、build ✓。术语注册表 +TERM-DOC-002、规则链映射经 generate 刷新（规则 65/链路 22，DOC 规则链稳定无新增） |
 | 2026-07-04 | v1.60 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-17 | v1.61 | 新增 1.0 Experience Preview 发布切片：完整 v1 IN/OUT 不变，全功能开发不暂停；§2.1 定义 1.0 EP 发布阻断项与非阻断项；§5 插入 M2.5 体验版里程碑；§6.2 登记 A-CORE-X-L-06；§10 后续动作明确 1.0 EP 只作为发布切片入口，不作为模块规则源 |

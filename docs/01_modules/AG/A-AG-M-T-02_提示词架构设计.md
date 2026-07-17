@@ -191,14 +191,23 @@ messages[]: 任务计划上下文 → [当前对话] 本步指令
 
 **Assist 回合（辅助续写/局部修改，2026-07-04 澄清定义）**（轻量、无系统对话历史）：
 ```
-[系统层] 续写/局部改写角色(极简)
+[系统层] 按 assist_kind 选择专用系统提示词：Autocomplete / InlineAssist
 （无工具层 / 无历史对话层）
 [当前文档] 光标上下文 ±N 块 + 选区
 [当前对话] 触发上下文(无显式 user 消息或极简指令)
 ```
-两形态差异（BR-AG-STATE-003）：**辅助续写**（Autocomplete）单候选、产出 50–100 字量级续写
-（数值属运营配置）、零交互；**局部修改**（InlineAssist）支持弹窗内多轮——refine 轮携上轮产出为
-基底 + 新指令续调（仍无系统对话历史层，不持久化，每轮过门禁）。
+两形态差异（BR-AG-STATE-003）：**辅助续写**（Autocomplete）一次产出严格 3 个 50–100 字量级续写候选
+（数值属运营配置），请求提示要求只返回 JSON 字符串数组，不解释、不包裹 markdown；运行时解析器需兼容
+纯 JSON 数组、fenced/多行 JSON、`{ candidates: [...] }` 包装和编号/项目符号文本，并在收敛后仍不足 3 条时
+返回空候选 + 内部 `failure_reason=parse_underflow`，前端保留轻量空态但不展示半候选，且 service/store/overlay
+诊断点必须保留该 failure_reason；**局部修改**（InlineAssist）支持弹窗内多轮——refine 轮仅携上轮
+候选产出为基底 + 新指令续调（仍无系统对话历史层，不持久化，每轮过门禁）。
+
+实现承接（提示词入口不得混用）：
+
+- `SYSTEM_PROMPT_CHAT`：Agent 编辑回合，允许工具调用，文档内容修改必须经 `propose_edit` → DiffCard。
+- `SYSTEM_PROMPT_AUTOCOMPLETE`：辅助续写，禁止改写既有内容，禁止解释，唯一合法输出为正好 3 项 JSON 字符串数组；提示词需明确不要 markdown fenced block、不要对象包装、不要解释文字，降低模型偏航概率。
+- `SYSTEM_PROMPT_INLINE_ASSIST`：局部修改，禁止 JSON 数组，唯一合法输出为单一候选正文。
 
 ## §7 需求到规则映射（REQ_MAP）
 
@@ -246,3 +255,8 @@ status: mapped
 |------|------|---------|
 | 2026-06-24 | v1.0 | 初版（M-T-01 §5.1 的 L3 专项细化）：提示词分层总览（13 层映射至来源模块与已有规则）、装配顺序与缓存边界布局、当前轮次原则与意图沿用判定、补强层污染隔离与分层截断序、三类回合结构示例（非规范）；新增规则 BR-AG-DATA-004（当前轮次原则/意图沿用）、BR-AG-DATA-005（补强层隔离/分层截断序）；新增 TERM-AG-005（IntentCarryover）；REQ_MAP（REQ-AG-004）；承接 BR-AG-DATA-001/002 不重定义骨架；调研依据 R-AG-X-R-01；作为提示词设计迭代版本，明确 BR-AG-DATA-005 为分层截断序唯一权威，废止 M-T-01 早期「@mention > 记忆/知识 > 当前文档」裁剪排序（同步 M-T-01 v1.2 去重，冲突以本文为准） |
 | 2026-07-04 | v1.1 | Assist 回合承接术语澄清（人类裁决）：更名「辅助续写/局部修改」，补两形态提示词差异——续写单候选 50–100 字量级；局部修改多轮 refine（上轮产出为基底，无历史层、不持久化、每轮过门禁） |
+| 2026-07-16 | v1.2 | 细化 Assist 提示词形态：辅助续写一次产出 3 个候选；局部修改 refine 仅携上轮候选结果与新指令，不保留完整对话历史 |
+| 2026-07-16 | v1.3 | 续修辅助续写提示词契约：autocomplete 必须返回 JSON 字符串数组且严格 3 项，候选不足由 AG-ASSIST 静默失败 |
+| 2026-07-16 | v1.4 | 拆分 Assist system prompt：辅助续写使用 `SYSTEM_PROMPT_AUTOCOMPLETE`，局部修改使用 `SYSTEM_PROMPT_INLINE_ASSIST`，Agent 编辑继续使用 `SYSTEM_PROMPT_CHAT` |
+| 2026-07-17 | v1.5 | 加固辅助续写提示词与解析契约：提示词继续要求严格 JSON 三候选，运行时兼容常见模型格式偏差并通过 failure_reason 诊断解析不足 |
+| 2026-07-17 | v1.6 | 收敛 Assist failure_reason 承接：解析不足等内部原因必须传递到前端诊断点，不得被统一空态吞掉 |

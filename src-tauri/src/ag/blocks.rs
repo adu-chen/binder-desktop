@@ -1,13 +1,16 @@
 //! PI-AG-08F · 文档分块（块列表注入 + 块级 propose_edit 重建）。
 //!
 //! 两种文档形态：
-//! - **text/markdown**：按段（`\n\n`）切块；重建 = 替块后 join。
+//! - **text/markdown**：按行（`\n`）切块；与 ED textToDoc 的“每行一个 Block”一致，重建 = 替块后 join。
 //! - **docx/html**（editFormat=html）：按 `data-block-id` 块级元素切块（与 ED blockId / DOC 兜底同源思路，
 //!   A-DOC-M-T-01 BR-DOC-DATA-003），展示 strip 后文本；重建 = **原串 in-place 替换该块 inner（非破坏，
 //!   保留其余 HTML 与未捕获内容）**。
 //!
 //! dev 级轻量字符串扫描（无 HTML parser 依赖），适配 TipTap 平铺块元素（p/h/li/blockquote 等带 block-id）；
 //! 嵌套同名块、畸形 HTML 不保证——真实 ED blockId 锚定位（对齐 LocateResult）后续。
+
+use crate::ipc::IpcError;
+use std::path::Path;
 
 /// 一个文档块。`block_id` = HTML 块的 data-block-id（稳定锚；text 块 None）；
 /// `inner_span` = HTML 块 inner 在原串中的字节区间（in-place 重建用；text 块 None）。
@@ -16,6 +19,51 @@ pub struct DocBlock {
     pub block_id: Option<String>,
     pub text: String,
     pub inner_span: Option<(usize, usize)>,
+}
+
+/// AgentEdit 统一可消费块投影：`block_index` 是当前快照内 0 起块号；`block_id` 是 HTML/BDocx
+/// 的稳定锚，text 文档可为空。marks/block_attrs 仅 HTML 快照有语义。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct AgentEditableBlock {
+    pub block_id: Option<String>,
+    pub block_index: usize,
+    pub text: String,
+    pub marks: Vec<serde_json::Value>,
+    pub block_attrs: serde_json::Value,
+}
+
+/// AgentEdit 统一内容快照。BDocx 下游一律消费此编辑模型快照，不直接读取 docx 二进制。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct AgentEditableSnapshot {
+    pub rel_path: String,
+    pub editable_kind: String,
+    pub source: String,
+    pub content_format: String,
+    pub content: String,
+    pub baseline: Option<u64>,
+    pub blocks: Vec<AgentEditableBlock>,
+}
+
+fn doc_type_of_rel(rel_path: &str) -> String {
+    Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_else(|| "bin".to_string())
+}
+
+fn is_docx_rel_path(rel_path: &str) -> bool {
+    matches!(doc_type_of_rel(rel_path).as_str(), "docx" | "doc")
+}
+
+fn editable_kind(rel_path: &str, content_is_html: bool) -> String {
+    if is_docx_rel_path(rel_path) {
+        "bdocx".to_string()
+    } else if content_is_html {
+        "html".to_string()
+    } else {
+        "text".to_string()
+    }
 }
 
 /// 是否按 HTML 处理（editFormat=html 或内容以 `<` 开头）。
@@ -29,35 +77,170 @@ pub fn parse_blocks(content: &str, is_html: bool) -> Vec<DocBlock> {
         parse_html_blocks(content)
     } else {
         content
-            .split("\n\n")
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| DocBlock { block_id: None, text: s.to_string(), inner_span: None })
+            .split('\n')
+            .map(|s| DocBlock {
+                block_id: None,
+                text: s.to_string(),
+                inner_span: None,
+            })
             .collect()
     }
 }
 
+/// 构建统一块投影。当前编辑器上下文、`ag.list_blocks`、只读 tool 与 `propose_edit`
+/// 必须复用该函数，避免同一 BDocx 在不同入口形成不同块列表。
+pub fn project_blocks(content: &str, is_html: bool) -> Vec<AgentEditableBlock> {
+    parse_blocks(content, is_html)
+        .into_iter()
+        .enumerate()
+        .map(|(block_index, b)| {
+            let (marks, block_attrs) = match b.inner_span {
+                Some((s, e)) => {
+                    let (_, spans) = extract_marks(&content[s..e]);
+                    let marks = spans
+                        .into_iter()
+                        .map(|m| {
+                            let mut o = serde_json::json!({
+                                "type": m.mark_type,
+                                "range": [m.range.0, m.range.1],
+                            });
+                            if let Some(attrs) = m.attrs {
+                                o["attrs"] = attrs;
+                            }
+                            o
+                        })
+                        .collect();
+                    let open = content[..s]
+                        .rfind('<')
+                        .map(|lt| &content[lt..s])
+                        .unwrap_or("");
+                    (marks, extract_block_attrs(open))
+                }
+                None => (Vec::new(), serde_json::json!({})),
+            };
+            AgentEditableBlock {
+                block_id: b.block_id,
+                block_index,
+                text: b.text,
+                marks,
+                block_attrs,
+            }
+        })
+        .collect()
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-001-QUERY-AG-AG-TURN-010, BR-DOC-DATA-003-QUERY-AG-AG-TURN-010
+ * type:     QUERY
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-001, BR-DOC-DATA-003
+ * term_ref: TERM-DOC-003, TERM-ED-001
+ * boundary: in=workspaceDocOrActiveEditorSnapshot | out=AgentEditableSnapshot(singleBDocxReadModelWithBlocks)
+ */
+/// AgentEdit 统一快照读取：当前编辑器实时内容优先；非当前 BDocx 只经 DOC 转换链读取 HTML 编辑模型；
+/// 普通文本文件走 WS 文本读取。AG/REF/DE 下游不得绕过该快照另读 BDocx 二进制。
+pub fn read_editable_snapshot(
+    root: &Path,
+    rel_path: &str,
+    abs: &Path,
+    active_content: Option<&str>,
+    active_format: Option<&str>,
+) -> Result<AgentEditableSnapshot, IpcError> {
+    let (content, source, baseline, format_hint) = if let Some(content) = active_content {
+        (
+            content.to_string(),
+            "active_editor".to_string(),
+            None,
+            active_format.map(str::to_string),
+        )
+    } else if is_docx_rel_path(rel_path) {
+        if !crate::workspace::listing::is_bdocx(root, rel_path) {
+            return Err(IpcError::new(
+                "DOC_NOT_BDOCX",
+                "原生 docx 不能作为 AgentEdit 编辑模型读取，请先创建 b-docx",
+                false,
+                false,
+            ));
+        }
+        let bytes = std::fs::read(abs).map_err(|e| {
+            IpcError::new(
+                "DOC_READ_FAILED",
+                &format!("读 b-docx 失败: {e}"),
+                true,
+                false,
+            )
+        })?;
+        let baseline = crate::workspace::save::content_hash(&bytes);
+        let work_dir = std::env::temp_dir()
+            .join("binder_ag_snapshot")
+            .join(format!("{baseline:x}"));
+        (
+            crate::doc::edit_chain::docx_to_html(abs, &work_dir)?,
+            "doc_convert".to_string(),
+            Some(baseline),
+            Some("html".to_string()),
+        )
+    } else {
+        let read = crate::workspace::save::read_doc(abs)?;
+        (
+            read.content,
+            "text_file".to_string(),
+            Some(read.baseline),
+            None,
+        )
+    };
+    let content_is_html = is_html(&content, format_hint.as_deref());
+    let content_format = if content_is_html { "html" } else { "text" }.to_string();
+    let blocks = project_blocks(&content, content_is_html);
+    Ok(AgentEditableSnapshot {
+        rel_path: rel_path.to_string(),
+        editable_kind: editable_kind(rel_path, content_is_html),
+        source,
+        content_format,
+        content,
+        baseline,
+        blocks,
+    })
+}
+
 /// 仅取各块展示文本（块列表注入用）。
 pub fn block_texts(content: &str, is_html: bool) -> Vec<String> {
-    parse_blocks(content, is_html).into_iter().map(|b| b.text).collect()
+    parse_blocks(content, is_html)
+        .into_iter()
+        .map(|b| b.text)
+        .collect()
 }
 
 /// 把第 `index` 块替换为 `new_text`，返回整篇新内容。
-/// HTML：原串 in-place 替换该块 inner（非破坏）；text：替块后 join("\n\n")。越界返回 Err。
-pub fn replace_block(content: &str, is_html: bool, index: usize, new_text: &str) -> Result<String, String> {
+/// HTML：原串 in-place 替换该块 inner（非破坏）；text：替块后 join("\n")。越界返回 Err。
+pub fn replace_block(
+    content: &str,
+    is_html: bool,
+    index: usize,
+    new_text: &str,
+) -> Result<String, String> {
     let blocks = parse_blocks(content, is_html);
     if index >= blocks.len() {
-        return Err(format!("block_index {index} 越界（当前共 {} 块）", blocks.len()));
+        return Err(format!(
+            "block_index {index} 越界（当前共 {} 块）",
+            blocks.len()
+        ));
     }
     if is_html {
         let (s, e) = blocks[index]
             .inner_span
             .ok_or_else(|| "HTML 块缺 inner 区间".to_string())?;
-        Ok(format!("{}{}{}", &content[..s], html_escape(new_text), &content[e..]))
+        Ok(format!(
+            "{}{}{}",
+            &content[..s],
+            html_escape(new_text),
+            &content[e..]
+        ))
     } else {
         let mut texts: Vec<String> = blocks.into_iter().map(|b| b.text).collect();
         texts[index] = new_text.to_string();
-        Ok(texts.join("\n\n"))
+        Ok(texts.join("\n"))
     }
 }
 
@@ -76,7 +259,9 @@ fn strip_tags(s: &str) -> String {
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// 扫描带 data-block-id 的块级元素，记录 inner 字节区间 + strip 文本。
@@ -102,7 +287,9 @@ fn parse_html_blocks(html: &str) -> Vec<DocBlock> {
             continue;
         }
         // open tag 结束 '>'。
-        let Some(rel_gt) = html[attr_pos..].find('>') else { break };
+        let Some(rel_gt) = html[attr_pos..].find('>') else {
+            break;
+        };
         let inner_start = attr_pos + rel_gt + 1;
         // 匹配最近的 </tag>。
         let close = format!("</{tag}>");
@@ -134,15 +321,28 @@ fn parse_html_blocks(html: &str) -> Vec<DocBlock> {
 
 /// 按 **data-block-id 稳定锚** 替换块 inner（HTML）。id 未找到 → Err（锚失效，文档已变化），
 /// 不产错位 diff（对齐 A-DOC-M-T-01 blockId 锚 / BR-DE-DATA-001 锚失效不误改）。
-pub fn replace_block_by_id(content: &str, block_id: &str, new_text: &str) -> Result<String, String> {
+pub fn replace_block_by_id(
+    content: &str,
+    block_id: &str,
+    new_text: &str,
+) -> Result<String, String> {
     let blk = parse_html_blocks(content)
         .into_iter()
         .find(|b| b.block_id.as_deref() == Some(block_id))
-        .ok_or_else(|| format!("锚失效：未找到 data-block-id={block_id} 的块（文档可能已变化，请重新获取块列表）"))?;
+        .ok_or_else(|| {
+            format!(
+                "锚失效：未找到 data-block-id={block_id} 的块（文档可能已变化，请重新获取块列表）"
+            )
+        })?;
     let (s, e) = blk
         .inner_span
         .ok_or_else(|| "块缺 inner 区间".to_string())?;
-    Ok(format!("{}{}{}", &content[..s], html_escape(new_text), &content[e..]))
+    Ok(format!(
+        "{}{}{}",
+        &content[..s],
+        html_escape(new_text),
+        &content[e..]
+    ))
 }
 
 // —— 样式投影（PI-ED-11 后端件 · A-AG-I-P-01 §4.1 / schema 单一来源 A-ED-M-T-01 §5.1） ——
@@ -168,7 +368,10 @@ fn mark_of_tag(tag: &str, attrs_str: &str) -> Option<(String, Option<serde_json:
         "code" => Some(("code".into(), None)),
         "a" => {
             let href = attr_value(attrs_str, "href");
-            Some(("link".into(), href.map(|h| serde_json::json!({ "href": h }))))
+            Some((
+                "link".into(),
+                href.map(|h| serde_json::json!({ "href": h })),
+            ))
         }
         "span" => {
             let style = attr_value(attrs_str, "style")?;
@@ -176,13 +379,23 @@ fn mark_of_tag(tag: &str, attrs_str: &str) -> Option<(String, Option<serde_json:
             for kv in style.split(';') {
                 let (k, v) = kv.split_once(':')?;
                 match k.trim() {
-                    "color" => { o.insert("color".into(), v.trim().into()); }
-                    "font-size" => { o.insert("fontSize".into(), v.trim().into()); }
-                    "font-family" => { o.insert("fontFamily".into(), v.trim().into()); }
+                    "color" => {
+                        o.insert("color".into(), v.trim().into());
+                    }
+                    "font-size" => {
+                        o.insert("fontSize".into(), v.trim().into());
+                    }
+                    "font-family" => {
+                        o.insert("fontFamily".into(), v.trim().into());
+                    }
                     _ => {}
                 }
             }
-            if o.is_empty() { None } else { Some(("textStyle".into(), Some(serde_json::Value::Object(o)))) }
+            if o.is_empty() {
+                None
+            } else {
+                Some(("textStyle".into(), Some(serde_json::Value::Object(o))))
+            }
         }
         _ => None,
     }
@@ -243,7 +456,9 @@ pub fn extract_marks(inner: &str) -> (String, Vec<MarkSpan>) {
             let closing = tag_body.starts_with('/');
             let self_closing = tag_body.ends_with('/');
             let name_src = tag_body.trim_start_matches('/');
-            let name_end = name_src.find(|ch: char| ch.is_whitespace() || ch == '/').unwrap_or(name_src.len());
+            let name_end = name_src
+                .find(|ch: char| ch.is_whitespace() || ch == '/')
+                .unwrap_or(name_src.len());
             let name = name_src[..name_end].to_ascii_lowercase();
             if closing {
                 // 弹出最近同名开标签，产出 mark 段（空区间不产）。
@@ -251,7 +466,11 @@ pub fn extract_marks(inner: &str) -> (String, Vec<MarkSpan>) {
                     let (_, mark, from) = stack.remove(pos);
                     if let Some((mt, attrs)) = mark {
                         if offset > from {
-                            spans.push(MarkSpan { mark_type: mt, range: (from, offset), attrs });
+                            spans.push(MarkSpan {
+                                mark_type: mt,
+                                range: (from, offset),
+                                attrs,
+                            });
                         }
                     }
                 }
@@ -310,15 +529,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn text_blocks_split_by_paragraph() {
-        let b = block_texts("第一段\n\n第二段\n\n第三段", false);
-        assert_eq!(b, vec!["第一段", "第二段", "第三段"]);
+    fn text_blocks_split_by_editor_lines_including_empty_blocks() {
+        let b = block_texts("第一行\n\n第三行", false);
+        assert_eq!(b, vec!["第一行", "", "第三行"]);
     }
 
     #[test]
-    fn text_replace_block_joins() {
-        let out = replace_block("a\n\nb\n\nc", false, 1, "B").unwrap();
-        assert_eq!(out, "a\n\nB\n\nc");
+    fn text_replace_block_preserves_editor_line_granularity() {
+        let out = replace_block("a\n\nc", false, 2, "C").unwrap();
+        assert_eq!(out, "a\n\nC");
     }
 
     #[test]
@@ -330,11 +549,27 @@ mod tests {
     }
 
     #[test]
+    fn project_blocks_uses_single_block_shape_with_marks() {
+        let html =
+            r#"<p data-block-id="b1" style="text-align: center">你好<strong>世界</strong></p>"#;
+        let blocks = project_blocks(html, true);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].block_id.as_deref(), Some("b1"));
+        assert_eq!(blocks[0].block_index, 0);
+        assert_eq!(blocks[0].text, "你好世界");
+        assert_eq!(blocks[0].marks[0]["type"], "bold");
+        assert_eq!(blocks[0].block_attrs["textAlign"], "center");
+    }
+
+    #[test]
     fn html_replace_block_is_inplace_nonlossy() {
         let html = r#"<p data-block-id="b1">旧</p><h1 data-block-id="b2">标题</h1>"#;
         let out = replace_block(html, true, 0, "新内容").unwrap();
         // 仅 b1 inner 被替换，b2 与标签结构原样保留。
-        assert_eq!(out, r#"<p data-block-id="b1">新内容</p><h1 data-block-id="b2">标题</h1>"#);
+        assert_eq!(
+            out,
+            r#"<p data-block-id="b1">新内容</p><h1 data-block-id="b2">标题</h1>"#
+        );
     }
 
     #[test]
@@ -349,7 +584,8 @@ mod tests {
     // 实体解码偏移正确；void 标签 1 字符占位。
     #[test]
     fn extract_marks_offsets_on_plain_text_plane() {
-        let (text, spans) = extract_marks(r#"普通<strong>加粗</strong><span style="color: #ff0000">红字</span>"#);
+        let (text, spans) =
+            extract_marks(r#"普通<strong>加粗</strong><span style="color: #ff0000">红字</span>"#);
         assert_eq!(text, "普通加粗红字");
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].mark_type, "bold");
@@ -366,8 +602,16 @@ mod tests {
         let (text, spans) = extract_marks("a<strong>b<em>c</em></strong>&amp;<br/>d");
         assert_eq!(text, "abc&\u{fffc}d");
         // em 段 (2,3)、strong 段 (1,3)
-        assert!(spans.contains(&MarkSpan { mark_type: "italic".into(), range: (2, 3), attrs: None }));
-        assert!(spans.contains(&MarkSpan { mark_type: "bold".into(), range: (1, 3), attrs: None }));
+        assert!(spans.contains(&MarkSpan {
+            mark_type: "italic".into(),
+            range: (2, 3),
+            attrs: None
+        }));
+        assert!(spans.contains(&MarkSpan {
+            mark_type: "bold".into(),
+            range: (1, 3),
+            attrs: None
+        }));
     }
 
     // covers: BR-ED-DATA-005
@@ -392,7 +636,10 @@ mod tests {
         assert_eq!(blocks[1].block_id.as_deref(), Some("b2"));
         // 按 id 锚定替换（与位置无关）。
         let out = replace_block_by_id(html, "b2", "新标题").unwrap();
-        assert_eq!(out, r#"<p data-block-id="b1">旧</p><h1 data-block-id="b2">新标题</h1>"#);
+        assert_eq!(
+            out,
+            r#"<p data-block-id="b1">旧</p><h1 data-block-id="b2">新标题</h1>"#
+        );
     }
 
     #[test]

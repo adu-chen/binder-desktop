@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { wsStore } from "../store/wsStore";
 
 /**
  * DOC 编辑链 Service（X-SEQ-002 / A-DOC-I-P-01 §2）：docx 打开/保存经 DOC 编辑链 command。
@@ -28,7 +29,7 @@ export interface DocxEditModel {
   /** 可编辑 HTML（含内联样式/data-custom-style，供 TipTap setContent(html)）。 */
   html: string;
   /** 加载基线（docx 字节内容哈希），保存时回传供外部变更冲突保护（SM-WS-01）。 */
-  baseline: number;
+  baseline: number | string;
 }
 
 /**
@@ -68,7 +69,7 @@ export function rewriteMediaSrc(
  * 失败抛 IpcError（convert_failed/依赖缺失）——调用方据此不建立编辑会话（SM-DOC-01 OpenError）。
  */
 export async function openDocxForEdit(relPath: string): Promise<DocxEditModel> {
-  const res = await callCommand<{ format: string; html: string; baseline: number; media_base?: string }>(
+  const res = await callCommand<{ format: string; html: string; baseline: number | string; media_base?: string }>(
     "doc.open_for_edit",
     { relPath },
   );
@@ -77,17 +78,16 @@ export async function openDocxForEdit(relPath: string): Promise<DocxEditModel> {
 }
 
 /**
- * 保存编辑回 docx（doc.save_from_edit）：编辑 HTML → docx（--reference-doc 统一样式）→ WS 原子落盘。
- * baseline = 打开时的加载基线；磁盘≠基线且未 override → WS_SAVE_CONFLICT（SM-WS-01，原文件不变）。
- * 返回新基线（保存后 docx 字节哈希）。
+ * 保存编辑回 docx（doc.save_from_edit）：编辑 HTML → docx → WS 原子落盘。
+ * 返回新内容哈希。
  */
 export async function saveDocxFromEdit(
   relPath: string,
   html: string,
-  baseline: number | null,
+  baseline: number | string | null,
   override = false,
-): Promise<number> {
-  const res = await callCommand<{ baseline: number }>("doc.save_from_edit", {
+): Promise<number | string> {
+  const res = await callCommand<{ baseline: number | string }>("doc.save_from_edit", {
     relPath,
     html,
     baseline,
@@ -111,12 +111,17 @@ function isDocxFile(relPath: string): boolean {
   return ext === "docx" || ext === "doc";
 }
 
-/** 是否草稿/可直接编辑的 docx（`*.draft.docx`）：草稿与项目生成的 docx 直接进编辑态。 */
+function isKnownBDocx(relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, "/");
+  return Boolean(wsStore.getSnapshot().docs.find((doc) => doc.relPath === normalized)?.isBDocx);
+}
+
+/** 是否 BDocx（草稿/文件树新建/Agent 创建）：直接进 DOC 编辑链；原生 docx 保持预览。 */
 export function isDocxEditable(relPath: string): boolean {
-  return isDocxFile(relPath) && relPath.toLowerCase().includes(".draft.");
+  return isDocxFile(relPath) && (relPath.toLowerCase().includes(".draft.") || isKnownBDocx(relPath));
 }
 
 /** 是否原生 docx（docx/doc 但非草稿）：点击走只读预览，经"创建草稿"进编辑（旧版成熟流程）。 */
 export function isNativeDocxPreview(relPath: string): boolean {
-  return isDocxFile(relPath) && !relPath.toLowerCase().includes(".draft.");
+  return isDocxFile(relPath) && !isDocxEditable(relPath);
 }

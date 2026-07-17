@@ -19,7 +19,11 @@ fn now_millis() -> i64 {
 
 fn gen_entry_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!("e_{}_{}", now_millis(), COUNTER.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "e_{}_{}",
+        now_millis(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn doc_type_of(rel_path: &str) -> String {
@@ -115,7 +119,11 @@ pub fn list_timeline(conn: &Connection, doc: &DocRef) -> rusqlite::Result<Vec<Ti
 }
 
 /// 存储时间轴快照内容（解除 WS-03）：内容寻址（snapshot_ref=blob_{hash}）去重，多节点共享同一内容只存一份。
-pub fn store_snapshot(conn: &Connection, snapshot_ref: &str, content: &[u8]) -> rusqlite::Result<()> {
+pub fn store_snapshot(
+    conn: &Connection,
+    snapshot_ref: &str,
+    content: &[u8],
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO timeline_snapshots (snapshot_ref, content, created_at) VALUES (?1, ?2, ?3)",
         (snapshot_ref, content, now_millis()),
@@ -134,7 +142,10 @@ pub fn load_snapshot(conn: &Connection, snapshot_ref: &str) -> rusqlite::Result<
 }
 
 /// 节点定位信息（preview/restore 用）：rel_path + snapshot_ref。
-pub fn node_locator(conn: &Connection, entry_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+pub fn node_locator(
+    conn: &Connection,
+    entry_id: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
     conn.query_row(
         "SELECT rel_path, snapshot_ref FROM timeline WHERE entry_id = ?1",
         [entry_id],
@@ -198,8 +209,18 @@ pub fn transition(state: RestoreState, event: RestoreEvent) -> Option<RestoreSta
     use RestoreEvent::*;
     use RestoreState::*;
     let next = match (state, event) {
-        (Browsing, SelectNode { snapshot_available: true }) => Previewing,
-        (Previewing, SelectNode { snapshot_available: true }) => Previewing,
+        (
+            Browsing,
+            SelectNode {
+                snapshot_available: true,
+            },
+        ) => Previewing,
+        (
+            Previewing,
+            SelectNode {
+                snapshot_available: true,
+            },
+        ) => Previewing,
         (Previewing, ConfirmRestore) => Restoring,
         (Restoring, RestoreOk) => Restored,
         (Restoring, RestoreFail) => RestoreError,
@@ -258,10 +279,16 @@ mod tests {
             .unwrap();
         assert_eq!(cnt, 1);
         // 节点不存在 → guard
-        assert_eq!(preview_node(&conn, "nope").unwrap_err().code, "WS_NODE_NOT_FOUND");
+        assert_eq!(
+            preview_node(&conn, "nope").unwrap_err().code,
+            "WS_NODE_NOT_FOUND"
+        );
         // 节点存在但快照缺失 → guard
         let orphan = append_node(&conn, &d, "apply", "missing_blob", None).unwrap();
-        assert_eq!(preview_node(&conn, &orphan.entry_id).unwrap_err().code, "WS_SNAPSHOT_UNAVAILABLE");
+        assert_eq!(
+            preview_node(&conn, &orphan.entry_id).unwrap_err().code,
+            "WS_SNAPSHOT_UNAVAILABLE"
+        );
     }
 
     // covers: BR-WS-DATA-002
@@ -281,7 +308,10 @@ mod tests {
         assert_eq!(n1.version_seq, 1);
         assert_eq!(n2.version_seq, 2);
         let list = list_timeline(&conn, &d).unwrap();
-        assert_eq!(list.iter().map(|e| e.version_seq).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            list.iter().map(|e| e.version_seq).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
 
         // 手动插入复用 version_seq=1 → UNIQUE 拒绝（不可伪造历史连续性）
         let dup = conn.execute(
@@ -300,7 +330,12 @@ mod tests {
         use RestoreState::*;
         // 正路
         assert_eq!(
-            transition(Browsing, SelectNode { snapshot_available: true }),
+            transition(
+                Browsing,
+                SelectNode {
+                    snapshot_available: true
+                }
+            ),
             Some(Previewing)
         );
         assert_eq!(transition(Previewing, ConfirmRestore), Some(Restoring));
@@ -310,12 +345,25 @@ mod tests {
         assert_eq!(transition(RestoreError, Back), Some(Browsing));
         // forbidden
         assert_eq!(
-            transition(Browsing, SelectNode { snapshot_available: false }),
+            transition(
+                Browsing,
+                SelectNode {
+                    snapshot_available: false
+                }
+            ),
             None,
             "快照缺失不得进入预览"
         );
-        assert_eq!(transition(Browsing, ConfirmRestore), None, "未经预览不得直接还原");
-        assert_eq!(transition(RestoreError, RestoreOk), None, "失败态不得跳为已还原");
+        assert_eq!(
+            transition(Browsing, ConfirmRestore),
+            None,
+            "未经预览不得直接还原"
+        );
+        assert_eq!(
+            transition(RestoreError, RestoreOk),
+            None,
+            "失败态不得跳为已还原"
+        );
         assert_eq!(transition(Restoring, Back), None);
         // 终态判定（Task 2-W3 集成用）：仅 Restored 为终态。
         assert!(is_terminal(Restored));

@@ -108,7 +108,10 @@ mod tests {
         v.clear();
         assert!(!v.is_held(), "登出/过期后无令牌残留");
         // 不回显明文（脱敏 Debug）
-        assert_eq!(format!("{:?}", SessionToken::new("secret")), "SessionToken(***)");
+        assert_eq!(
+            format!("{:?}", SessionToken::new("secret")),
+            "SessionToken(***)"
+        );
     }
 
     // covers: BR-ACCT-DATA-001

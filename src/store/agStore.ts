@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { MessageContentPart } from "../services/referencePayload";
 
 /**
  * AG 会话状态投影层（AG-TURN · SM-AG-01 · X-FORBID-007）。
@@ -17,6 +18,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  parts?: MessageContentPart[];
   streaming?: boolean;
   error?: boolean;
 }

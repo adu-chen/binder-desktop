@@ -23,7 +23,11 @@ fn now_millis() -> i64 {
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn gen_template_id() -> String {
-    format!("tpl_{}_{}", now_millis(), SEQ.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "tpl_{}_{}",
+        now_millis(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// `{{key}}` 占位替换（未提供的占位保持原样，由调用方校验完整性）。
@@ -116,8 +120,7 @@ pub fn instantiate_to_path(
             )
         })?;
     let rendered = render(&body, vars);
-    // 原子写入：失败（如父目录不存在）经 save_atomic 返回 Err，目标不留半成品。
-    save::save_atomic(abs_path, rendered.as_bytes(), None, true)?;
+    save::save_atomic(abs_path, rendered.as_bytes())?;
     Ok(())
 }
 
@@ -133,7 +136,10 @@ mod tests {
     }
 
     fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // covers: BR-TPL-DATA-001
@@ -159,13 +165,20 @@ mod tests {
     #[test]
     fn instantiation_renders_and_writes_atomically() {
         let conn = fresh();
-        let t = create_template(&conn, "ws1", "doc", "# {{title}}\n作者：{{author}}", None).unwrap();
+        let t =
+            create_template(&conn, "ws1", "doc", "# {{title}}\n作者：{{author}}", None).unwrap();
         let mut path = std::env::temp_dir();
         path.push(format!("binder_tpl_ok_{}.md", now_millis()));
         let _ = std::fs::remove_file(&path);
 
-        instantiate_to_path(&conn, "ws1", &t, &vars(&[("title", "周报"), ("author", "Z")]), &path)
-            .unwrap();
+        instantiate_to_path(
+            &conn,
+            "ws1",
+            &t,
+            &vars(&[("title", "周报"), ("author", "Z")]),
+            &path,
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# 周报\n作者：Z");
         let _ = std::fs::remove_file(&path);
     }

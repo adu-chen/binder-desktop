@@ -134,7 +134,7 @@ terminal_states: LoopCompleted, LoopAborted
 machine_id: SM-AG-03
 owner_module: AG
 status: active
-summary: 辅助续写/局部修改回合（快捷键手动触发→防抖→门禁→轻量调用→装饰层呈现→采纳即编辑；局部修改可多轮；失败静默）
+summary: 辅助续写/局部修改回合（快捷键手动触发→防抖/latest-wins→门禁→轻量调用→装饰层呈现→采纳即编辑；辅助续写 3 候选；局部修改可多轮；失败静默）
 source_type: design
 chain: AG-ASSIST
 rules: BR-AG-STATE-003, BR-AG-VERIFY-001
@@ -145,34 +145,49 @@ terminal_states: Accepted, Dismissed
 - **machine_id**：SM-AG-03　**owner_module**：AG
 - **scope**：一次局部修改或辅助续写回合（触发→候选处置）；触发源与候选形态归 context
   （assist_kind: autocomplete / inline-assist），生命周期同构
-- **context**：assist_kind、触发上下文（编辑位置/选区）、防抖窗口、门禁结果、候选、目标 blockId、
-  多轮基底（局部修改：上轮产出）
+- **context**：assist_kind、requestId（latest-wins）、触发上下文（DocRef、编辑位置/选区、目标
+  blockId、字符锚、原文本/前缀文本、前后文指纹）、防抖窗口（默认 450ms）、门禁结果、候选（autocomplete=3 candidates；
+  inline-assist=preview）、多轮基底（局部修改：上轮候选产出）
 - **states**：Idle、Throttling、Requesting、Presenting、Accepted、Dismissed
-- **events**：trigger、throttlePass、throttleDrop、candidateOk、requestFail、accept、dismiss、anchorLost、**refine**
+- **events**：trigger、throttlePass、throttleDrop、candidateOk、candidateUnderflow、requestFail、accept、dismiss、anchorLost、reposition、**refine**
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
-| Idle | trigger | 用户快捷键手动触发（2026-07-04 澄清：非键入自动触发） | Throttling | 进入防抖/防重判定（BR-AG-STATE-003） |
-| Throttling | throttleDrop | 防抖窗口内重复触发/请求进行中 | Idle | 丢弃本次触发（静默） |
+| Idle | trigger | 用户快捷键手动触发（2026-07-04 澄清：非键入自动触发） | Throttling | 进入防抖/防重判定（BR-AG-STATE-003），捕获 DocRef/blockId/字符锚/前后文指纹 |
+| Throttling | trigger | 新请求到达 | Throttling | 更新 requestId 与锚点，旧请求标记 superseded |
+| Requesting | trigger | 新请求到达 | Throttling | 更新 requestId 与锚点，旧响应返回后丢弃 |
+| Presenting | trigger | 新请求到达/继续输入 | Throttling | 复位旧装饰，更新 requestId 与锚点 |
+| Throttling | throttleDrop | 防抖窗口内重复触发且不替换最新请求 | Idle | 丢弃本次触发（静默） |
 | Throttling | throttlePass | 防抖通过 且 门禁可用（SM-SYS-01 GatePassed） | Requesting | 经网关轻量调用 |
 | Throttling | throttlePass | 防抖通过 但 无订阅/断网 | Idle | 静默不提供，不打断编辑 |
-| Requesting | candidateOk | 目标锚仍有效 | Presenting | 候选经 ED 装饰层呈现（ED-DECOR） |
+| Requesting | candidateOk | requestId 为最新 且 文档/blockId/字符锚/前后文指纹仍有效；autocomplete 候选数=3 | Presenting | 候选经 ED 装饰层/overlay 语义呈现（ED-DECOR） |
+| Requesting | candidateOk | requestId 已过期 或 锚失效 | Dismissed | 丢弃候选，不展示不应用 |
+| Requesting | dismiss | 用户点击浮层外、移动光标或改变选区 | Dismissed | 关闭浮层；后续响应按旧 requestId 丢弃，不展示不应用 |
+| Requesting | candidateUnderflow | autocomplete 经容错解析后候选不足 3 条（failure_reason=parse_underflow） | Presenting | 不展示半候选、不允许采纳；保留轻量空态，等待用户 dismiss 或移动锚点关闭 |
 | Requesting | requestFail | — | Idle | 静默（不弹错误、不打断编辑） |
-| Presenting | **refine** | assist_kind=inline-assist（局部修改多轮，2026-07-04 澄清） | Requesting | 以上轮产出为基底携新指令续调（每轮逐次过门禁；对话不持久化） |
+| Presenting | **refine** | assist_kind=inline-assist（局部修改多轮，2026-07-04 澄清） | Requesting | 以上轮候选产出为基底携新指令续调（仅传上一轮结果；每轮逐次过门禁；对话不持久化） |
+| Presenting | reposition | 滚动/缩放/窗口 resize 且逻辑锚仍有效 | Presenting | 基于当前缩放后的视觉锚点与静态浮层尺寸重算浮层位置；浮层 UI 尺寸不随正文缩放 |
+| Presenting | reposition | 逻辑锚结构失效 | Dismissed | 关闭浮层并回写 anchorLost |
 | Presenting | accept | — | Accepted | 采纳=用户编辑操作：经 ED 受控接口进入编辑模型，驱动 SM-ED-01 edit（X-INTER-001） |
-| Presenting | dismiss | 用户忽略/关闭弹窗 | Dismissed | 装饰复位不残留 |
+| Presenting | dismiss | 用户忽略/关闭弹窗、点击浮层外、移动光标或改变选区 | Dismissed | 装饰复位不残留；已返回内容丢弃，不入历史 |
 | Presenting | anchorLost | blockId 失效 | Dismissed | 放弃呈现，装饰复位 |
 
-- **error_states**：无显式错误终态——辅助回合一切失败静默回 Idle（产品语义：辅助不打扰）
+- **error_states**：无显式错误终态——辅助回合失败不弹错、不打断；gate_denied/gate_offline/gateway_error/empty_output 静默回 Idle，parse_underflow 经 candidateUnderflow 进入轻量空态 Presenting 以避免触发后瞬间消失
 - **recovery_paths**：失败静默回 Idle，下次触发自然重试
 - **forbidden_transitions**：
   - Idle / Throttling → Requesting 无门禁可用（不经门禁不得调用，BR-AG-VERIFY-001）
   - Requesting / Presenting → 直接修改文档模型（必经 accept 走 ED 受控接口，X-FORBID-005）
   - Idle → Presenting（未经调用不得呈现）
-- **acceptance_criteria**：重复触发被防抖（单次操作不产生多次调用）；无订阅/断网/失败均静默且
-  编辑不受影响；局部修改 refine 每轮均过门禁且回合不入历史（不持久化）；accept 产生的变更走
-  SM-ED-01→SM-WS-01 正常脏态/保存路径；终态后装饰复位不残留
+  - 过期 requestId 的 candidateOk → Presenting（旧请求不得覆盖新请求）
+- **acceptance_criteria**：重复触发被防抖（默认 450ms 内不产生多次调用）；无订阅/断网/失败均静默且
+  编辑不受影响；辅助续写严格呈现 3 候选并按 Tab/1/2/3 采纳，候选不足不展示半候选且保留空态；新请求覆盖旧请求，旧响应不得展示或应用；
+  局部修改选区态替换、光标态插入；refine 每轮均过门禁且只传上一轮候选结果，回合不入历史（不持久化）；
+  编辑器缩放、滚动、窗口 resize 不改变逻辑锚，只重算浮层视觉锚；浮层 UI 尺寸不随正文缩放；
+  浮层使用静态尺寸模型，避免运行时测量反向驱动状态；局部修改初始态尺寸不得过大导致远离锚点；
+  用户点击浮层外、移动光标或改变选区时，Requesting/Presenting 均关闭并丢弃已返回/后续返回内容，不展示、不应用、不入历史；
+  accept 产生的变更走 SM-ED-01→SM-WS-01 正常脏态/保存路径；accept/dismiss/anchorLost 均回写终态；
+  终态后装饰复位不残留
 - **test_matrix**：见 §5
 
 ## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
@@ -182,9 +197,10 @@ terminal_states: Accepted, Dismissed
   streamFail→TurnError→retry；禁止 Idle/Assembling→Streaming 旁路。
 - **SM-AG-02**：toolRequest→校验→执行→回注→续调循环；validateFail 回注拒绝；loopLimit 强制
   中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）。
-- **SM-AG-03**：重复 trigger 下 throttleDrop（防抖）生效；无订阅/断网 throttlePass 后静默回 Idle；
-  candidateOk→Presenting→accept→Accepted 驱动 SM-ED-01 edit；Presenting→refine→Requesting 多轮
-  循环（每轮过门禁、不持久化）；anchorLost/dismiss 复位不残留；禁止未经门禁到 Requesting。
+- **SM-AG-03**：重复 trigger 下 throttleDrop 或 latest-wins 覆盖生效；无订阅/断网 throttlePass 后静默回
+  Idle；过期 requestId 的 candidateOk 被丢弃；候选不足 3 条 candidateUnderflow 且记录 parse_underflow；candidateOk→Presenting→accept→Accepted
+  驱动 SM-ED-01 edit；辅助续写 3 候选采纳；局部修改光标插入；Presenting→refine→Requesting 多轮循环（只传上一轮
+  候选结果，每轮过门禁、不持久化）；anchorLost/dismiss 回写终态且复位不残留；禁止未经门禁到 Requesting。
 - **跨模块（G5 联调）**：AG↔SM-SYS-01 门禁转移、HandingOff↔DE（待 DE G2 双侧）、
   SM-AG-03 accept↔SM-ED-01 edit（双侧就绪）。
 - 量化 NFR（节流参数、延迟）延 G5 标定。
@@ -228,3 +244,11 @@ terminal_states: Accepted, Dismissed
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（AG G2 状态机件）：定义 SM-AG-01 代理回合机（组装/门禁/流式/HandingOff 交 DE，Denied 终态不可绕过）、SM-AG-02 工具调用循环机（校验/执行/回注/上限/写盘禁令，嵌套于回合 Streaming 段）、SM-AG-03 辅助回合机（autocomplete 与 inline-assist 同机承载：节流/门禁/装饰层/采纳即编辑/失败静默），均含 APC §6 必备字段；满足 X-SEQ-003；转移点登记（门禁/交 DE 单侧/采纳→SM-ED-01 双侧）；债务（DE 侧待 G2、CBT 接管未建模、嵌套调度与参数延实现期） |
 | 2026-07-04 | v2.0 | 双模式定义回写（人类裁决）：①SM-AG-01 takeover guard 判据换轴——「识别多文件构建意图」废止，改「构建触发：显式触发（指令/构建按钮，触发即确认）或项目级构建意图提议经确认」，移交携项目蓝图、构建在原对话窗口呈现；「Chat↔Build 接管」更名「构建移交/回落」；新增构建执行期禁发起新回合（前端 X-FORBID-007 投影门控）；②SM-AG-03：触发语义改快捷键手动+防抖/防重（原「节流」为自动触发遗留），新增 Presenting→refine→Requesting 多轮转移（局部修改，每轮过门禁、不持久化），test_matrix 同步 |
+| 2026-07-16 | v2.1 | 细化 SM-AG-03：引入 requestId latest-wins、新请求覆盖旧请求、过期响应丢弃；辅助续写 3 候选；局部修改光标态插入，多轮只传上一轮候选结果；candidateOk 与 accept 前均以文档/block/字符锚有效为守卫 |
+| 2026-07-16 | v2.2 | 续修 SM-AG-03：补默认 450ms 防抖、触发锚前后文指纹、候选不足 3 条静默失败、accept/dismiss/anchorLost 前端终态回写 |
+| 2026-07-16 | v2.3 | 补充 SM-AG-03 交互锚失效投影：Requesting/Presenting 状态下点击浮层外、移动光标或改变选区均走 dismiss 终态，关闭浮层并丢弃已返回/后续返回内容 |
+| 2026-07-16 | v2.4 | 补充 SM-AG-03 reposition 转移：滚动、缩放、窗口 resize 时逻辑锚不变，按当前视觉锚重算浮层位置，结构失效才关闭 |
+| 2026-07-16 | v2.5 | 修正 SM-AG-03 稳定定位：撤销浮层 DOM 尺寸变化触发 reposition，改为静态尺寸模型，避免测量链影响浮层显示 |
+| 2026-07-16 | v2.6 | 修正 SM-AG-03 辅助续写失败态：候选不足 3 条转为空态 Presenting，不展示半候选、不允许采纳，用户 dismiss 后关闭 |
+| 2026-07-17 | v2.7 | 加固 SM-AG-03 失败分型：gate/网关/空输出静默回 Idle，parse_underflow 进入轻量空态；failure_reason 仅用于内部诊断 |
+| 2026-07-17 | v2.8 | 清理 SM-AG-03 状态分叉：候选不足改用 candidateUnderflow 独立事件进入 Presenting，普通 requestFail 仅表示静默回 Idle |

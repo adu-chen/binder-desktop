@@ -19,6 +19,10 @@ PI-SYS-04 骨架）。**云端依赖（C 类）**：裁决/计量/计费/BYOK �
 客户端按 A-SYS-I-P-03 契约**打桩实现**，真联调延 P5。**APC §13 禁区**：门禁绕过、密钥落地为
 AI 不得自主决定项，本计划在禁区内收紧。
 
+**1.0 EP 优先级（2026-07-17）**：1.0 Experience Preview 将真实 SubscriptionGate、AiGateway
+DeepSeek 托管模型通道、BYOK 代持和用量/订阅展示提升为上线阻断项；自部署 Binder 预设模型、
+多模态模型矩阵与复杂 ModelRouter 后置，不改变 ENT 的客户端边界。
+
 ## §2 Plan Item 清单
 
 ### PI-ENT-01　门禁前置与网关调用通道　✅ G4（gateway.rs 调用通道 SM：Streaming 仅 GatePassed 后可达/流式三终态/断网拒绝 BR-ENT-STATE-001 + submit_for_verdict 服务端唯一裁决无本地假通过 BR-ENT-VERIFY-001，audit 绿）
@@ -60,9 +64,11 @@ AI 调用→门禁→网关→流式 G5 端到端（与 AG/云端联调）。
 | BYOK 上送 API（ENT-02/CLOUD-04） | C | PI-ENT-02 | 云端 GW 打桩 |
 | 用量粒度（ENT-01/CLOUD-02） | C | PI-ENT-02 | 云端 LIC 打桩 |
 | 门禁延迟 NFR | A | 全 PI | G5 标定 |
+| 1.0 EP 云端最小闭环 | C | 全 PI | DeepSeek 托管模型通道、SubscriptionGate、BYOK、用量展示和管理员端最小能力形成生产链路 |
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-07-17 | v1.1 | 对齐 1.0 Experience Preview：真实 SubscriptionGate、AiGateway DeepSeek 托管模型通道、BYOK 代持和用量/订阅展示提升为上线阻断项；自部署 Binder 预设模型、多模态模型矩阵与复杂 ModelRouter 后置，不改变 ENT 客户端边界 |
 | 2026-06-12 | v1.0 | 初版（G3，P1 尾/商业化关键路径收尾，**G3 末件**）：ENT 2 条 Plan Item（门禁前置与网关通道 / BYOK 代持与用量呈现），承接 SM-SYS-01 门禁+网关段 + 4 规则 + X-SEQ-001/X-FORBID-001/002；云端依赖打桩实现真联调 P5；门禁不可绕过/BYOK 零残留/无 provider 直连为 G4/G5 强制安全核验（APC §13 禁区）；高频门禁延迟 G4 前逐次裁决锚 X-FORBID-002；文件范围/@GOV/验收齐 |

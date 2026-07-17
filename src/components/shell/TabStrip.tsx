@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { tabsStore, useTabsStore, type OpenTab } from "../../store/tabsStore";
 import { useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
+import { writeDocRefData } from "../../services/edLocate";
 
 /**
  * center 标签栏（A-SYS-C-T-02 §3 单窗多 tab · 参考稿 §4 · PI-FE-26 · PI-ED-07）。
@@ -50,11 +51,9 @@ export function TabStrip() {
     const sess = sessions[tab.path];
     if (!sess) return null;
     const pending = diffs.filter((d) => d.state === "pending" && d.relPath === tab.path).length;
-    const st =
-      sess.tabState === "external_changed" ? "external_changed" : pending > 0 ? "pending_diff" : sess.tabState;
+    const st = pending > 0 ? "pending_diff" : sess.tabState;
     if (st === "dirty") return <span className="tab-dot" aria-label="未保存" />;
     if (st === "saving") return <span className="tab-spinner" aria-label="保存中" />;
-    if (st === "external_changed") return <span className="tab-ext" title="外部修改">!</span>;
     if (st === "pending_diff" && pending > 0) return <span className="tab-badge">{pending}</span>;
     return null;
   };
@@ -107,6 +106,8 @@ export function TabStrip() {
           }`}
           role="tab"
           aria-selected={tab.id === activeTabId}
+          draggable
+          onDragStart={(e) => writeDocRefData(e.dataTransfer, tab.path)}
           onClick={() => dragId === null && tabsStore.activate(tab.id)}
           onPointerDown={(e) => onPointerDown(e, tab.id)}
           onPointerMove={onPointerMove}

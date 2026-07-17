@@ -15,7 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn temp_path(ext: &str) -> std::path::PathBuf {
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("binder_pandoc_{t}_{n}.{ext}"))
 }
@@ -45,10 +48,20 @@ pub fn pandoc_args(from: &str, to: &str) -> Vec<String> {
 }
 
 fn dep_missing() -> IpcError {
-    IpcError::new("DOC_PANDOC_MISSING", "Pandoc 依赖缺失，明确报错不静默降级", true, false)
+    IpcError::new(
+        "DOC_PANDOC_MISSING",
+        "Pandoc 依赖缺失，明确报错不静默降级",
+        true,
+        false,
+    )
 }
 fn convert_fail(detail: &str) -> IpcError {
-    IpcError::new("DOC_CONVERT_FAIL", &format!("Pandoc 转换失败: {detail}"), true, false)
+    IpcError::new(
+        "DOC_CONVERT_FAIL",
+        &format!("Pandoc 转换失败: {detail}"),
+        true,
+        false,
+    )
 }
 
 /**
@@ -125,9 +138,15 @@ mod tests {
     // pandoc 参数为本地管线（-f/-t），无网络/上行参数。
     #[test]
     fn pandoc_args_are_local_pipeline() {
-        assert_eq!(pandoc_args("docx", "markdown"), vec!["-f", "docx", "-t", "markdown"]);
+        assert_eq!(
+            pandoc_args("docx", "markdown"),
+            vec!["-f", "docx", "-t", "markdown"]
+        );
         let a = pandoc_args("markdown", "docx");
-        assert!(!a.iter().any(|x| x.contains("http") || x.contains("://")), "无网络参数");
+        assert!(
+            !a.iter().any(|x| x.contains("http") || x.contains("://")),
+            "无网络参数"
+        );
     }
 
     // covers: BR-DOC-DATA-002

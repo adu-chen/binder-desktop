@@ -56,8 +56,14 @@ fn cell_to_string(c: &Data) -> String {
 /// （含公式结果），多 sheet；超限截断（行 5000 / 列 256）随 truncated 标记明示不静默；
 /// 解析失败回统一错误形状（不静默空表）。本地解析不上行。
 pub fn xlsx_to_sheets(abs_path: &Path) -> Result<(Vec<SheetData>, bool), IpcError> {
-    let mut wb = open_workbook_auto(abs_path)
-        .map_err(|e| IpcError::new("PRV_TABLE_PARSE_FAIL", &format!("表格解析失败: {e}"), false, false))?;
+    let mut wb = open_workbook_auto(abs_path).map_err(|e| {
+        IpcError::new(
+            "PRV_TABLE_PARSE_FAIL",
+            &format!("表格解析失败: {e}"),
+            false,
+            false,
+        )
+    })?;
     let names: Vec<String> = wb.sheet_names().to_vec();
     let mut sheets = Vec::new();
     let mut truncated = false;
@@ -87,7 +93,12 @@ pub fn xlsx_to_sheets(abs_path: &Path) -> Result<(Vec<SheetData>, bool), IpcErro
         sheets.push(SheetData { name, rows });
     }
     if sheets.is_empty() {
-        return Err(IpcError::new("PRV_TABLE_EMPTY", "工作簿无工作表", false, false));
+        return Err(IpcError::new(
+            "PRV_TABLE_EMPTY",
+            "工作簿无工作表",
+            false,
+            false,
+        ));
     }
     Ok((sheets, truncated))
 }

@@ -1,7 +1,7 @@
 //! PI-BE-04 · workspace 内文件 CRUD（create/rename/delete）· WS-FS / BR-WS-DATA-001 / X-FORBID-004
 //!
-//! 承接 A-WS-I-P-01 §3（ws.create_doc）与 §8（move/copy 签名随实现补充）：workspace 内文档新建/重命名/
-//! 删除。所有目标路径由调用方 resolve_in_workspace 守界（越界拒绝，X-FORBID-004）；本模块只做边界内
+//! 承接 A-WS-I-P-01 §3（ws.create_doc/create_folder）与 §8（move/copy 签名随实现补充）：workspace 内文档新建/重命名/
+//! 建目录/删除。所有目标路径由调用方 resolve_in_workspace 守界（越界拒绝，X-FORBID-004）；本模块只做边界内
 //! 文件系统操作，已存在/不存在等冲突回统一错误形状（不静默覆盖、不静默成功）。
 
 use super::save::content_hash;
@@ -25,13 +25,45 @@ fn io_err(action: &str, e: std::io::Error) -> IpcError {
 /// 路径守界由调用方保证（X-FORBID-004）。
 pub fn create_doc(abs_path: &Path, content: &[u8]) -> Result<u64, IpcError> {
     if abs_path.exists() {
-        return Err(IpcError::new("WS_EXISTS", "目标已存在，不覆盖", false, false));
+        return Err(IpcError::new(
+            "WS_EXISTS",
+            "目标已存在，不覆盖",
+            false,
+            false,
+        ));
     }
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_err("建目录", e))?;
     }
     std::fs::write(abs_path, content).map_err(|e| io_err("新建", e))?;
     Ok(content_hash(content))
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-DATA-001-EFFECT-WS-WS-FS-004
+ * type:     EFFECT
+ * chain:    WS-FS
+ * rules:    BR-WS-DATA-001
+ * term_ref: TERM-WS-001
+ * boundary: in=folderAbsolutePath | out=createdOrExistingFolder(rejectedWhenFileExists)
+ */
+/// 新建目录（BR-WS-DATA-001）：目标若已是目录则幂等成功；目标若为文件则拒（WS_EXISTS）。
+/// 路径守界由调用方保证（X-FORBID-004）。
+pub fn create_folder(abs_path: &Path) -> Result<(), IpcError> {
+    if abs_path.is_dir() {
+        return Ok(());
+    }
+    if abs_path.exists() {
+        return Err(IpcError::new(
+            "WS_EXISTS",
+            "目标已存在且不是目录",
+            false,
+            false,
+        ));
+    }
+    std::fs::create_dir_all(abs_path).map_err(|e| io_err("建目录", e))?;
+    Ok(())
 }
 
 /**
@@ -50,7 +82,12 @@ pub fn rename_doc(from_abs: &Path, to_abs: &Path) -> Result<(), IpcError> {
         return Err(IpcError::new("WS_NOT_FOUND", "源文件不存在", false, false));
     }
     if to_abs.exists() {
-        return Err(IpcError::new("WS_EXISTS", "目标已存在，不覆盖", false, false));
+        return Err(IpcError::new(
+            "WS_EXISTS",
+            "目标已存在，不覆盖",
+            false,
+            false,
+        ));
     }
     if let Some(parent) = to_abs.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_err("建目录", e))?;
@@ -104,6 +141,21 @@ mod tests {
     }
 
     // covers: BR-WS-DATA-001
+    // 建目录幂等；目标为文件时拒绝，不覆盖。
+    #[test]
+    fn create_folder_is_idempotent_and_rejects_file_conflict() {
+        let d = tmp_dir("folder");
+        let folder = d.join("a/b");
+        create_folder(&folder).unwrap();
+        assert!(folder.is_dir());
+        create_folder(&folder).unwrap();
+        let file = d.join("file.txt");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(create_folder(&file).unwrap_err().code, "WS_EXISTS");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // covers: BR-WS-DATA-001
     // 重命名移动文件；源缺失/目标已存在均拒。
     #[test]
     fn rename_moves_and_rejects_conflicts() {
@@ -114,7 +166,10 @@ mod tests {
         rename_doc(&from, &to).unwrap();
         assert!(!from.exists() && std::fs::read(&to).unwrap() == b"body");
         // 源缺失
-        assert_eq!(rename_doc(&from, &d.join("c.md")).unwrap_err().code, "WS_NOT_FOUND");
+        assert_eq!(
+            rename_doc(&from, &d.join("c.md")).unwrap_err().code,
+            "WS_NOT_FOUND"
+        );
         // 目标已存在
         std::fs::write(&from, b"x").unwrap();
         assert_eq!(rename_doc(&from, &to).unwrap_err().code, "WS_EXISTS");

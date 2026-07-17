@@ -5,6 +5,7 @@ import {
   loadRecentWorkspaces,
   switchWorkspace,
 } from "../services/workspaceService";
+import { AppTitleBar } from "../components/shell/AppTitleBar";
 import { BinderWordmark } from "../components/brand/BinderWordmark";
 
 /**
@@ -21,47 +22,50 @@ export function Welcome() {
   }, []);
 
   return (
-    <main className="welcome">
-      <BinderWordmark size={44} />
-      <p className="muted">本地优先的 AI 原生写作工作台</p>
+    <div className="welcome-shell">
+      <AppTitleBar title="Binder" />
+      <main className="welcome">
+        <BinderWordmark size={44} />
+        <p className="muted">本地优先的 AI 原生写作工作台</p>
 
-      {notice && <p className="welcome-notice">{notice}</p>}
+        {notice && <p className="welcome-notice">{notice}</p>}
 
-      <div className="actions">
-        <button onClick={() => void openWorkspace()}>打开 / 新建 workspace</button>
-        <button className="ghost" disabled>
-          登录（AI 功能）
-        </button>
-      </div>
+        <div className="actions">
+          <button onClick={() => void openWorkspace()}>打开 / 新建 workspace</button>
+          <button className="ghost" disabled>
+            登录（AI 功能）
+          </button>
+        </div>
 
-      <section className="recent">
-        <div className="label">最近的 workspace</div>
-        {recentStatus === "loading" && <p className="muted recent-hint">加载中…</p>}
-        {recentStatus === "error" && (
-          <p className="recent-error">
-            加载失败：{recentError}
-            <button className="ghost recent-retry" onClick={() => void loadRecentWorkspaces()}>
-              重试
-            </button>
-          </p>
-        )}
-        {recentStatus === "ready" && recent.length === 0 && (
-          <p className="muted recent-hint">还没有打开过 workspace</p>
-        )}
-        {recentStatus === "ready" && recent.length > 0 && (
-          <ul className="recent-list">
-            {recent.map((ws) => (
-              <li key={ws.workspaceId}>
-                <button className="recent-item" onClick={() => void switchWorkspace(ws.workspaceId)}>
-                  {ws.rootPath}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        <section className="recent">
+          <div className="label">最近的 workspace</div>
+          {recentStatus === "loading" && <p className="muted recent-hint">加载中…</p>}
+          {recentStatus === "error" && (
+            <p className="recent-error">
+              加载失败：{recentError}
+              <button className="ghost recent-retry" onClick={() => void loadRecentWorkspaces()}>
+                重试
+              </button>
+            </p>
+          )}
+          {recentStatus === "ready" && recent.length === 0 && (
+            <p className="muted recent-hint">还没有打开过 workspace</p>
+          )}
+          {recentStatus === "ready" && recent.length > 0 && (
+            <ul className="recent-list">
+              {recent.map((ws) => (
+                <li key={ws.workspaceId}>
+                  <button className="recent-item" onClick={() => void switchWorkspace(ws.workspaceId)}>
+                    {ws.rootPath}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <p className="hint">脚手架骨架 · 欢迎页（PI-FE-03）</p>
-    </main>
+        <p className="hint">脚手架骨架 · 欢迎页（PI-FE-03）</p>
+      </main>
+    </div>
   );
 }

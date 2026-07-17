@@ -32,7 +32,7 @@ fn kind_priority(kind: &str) -> u8 {
 /// **无记忆 → 空集**（不注入噪声）。不做预算裁剪（归 AG）。
 pub fn supply(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<MemoryInjection>> {
     let mut items = store::list_active(conn, workspace_id)?; // active + workspace 隔离
-    // 稳定排序：同优先级保持入库序（确定性）。
+                                                             // 稳定排序：同优先级保持入库序（确定性）。
     items.sort_by_key(|m| kind_priority(&m.memory_kind));
     Ok(items) // 空集即不注入
 }

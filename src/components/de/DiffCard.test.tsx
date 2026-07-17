@@ -72,11 +72,18 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     expect(screen.getByRole("button", { name: /重试/ })).toBeTruthy();
   });
 
-  it("accepted：森林绿终态 + 时间轴号", () => {
+  it("accepted：旧落盘路径显示时间轴号", () => {
     const { container } = renderCard({ state: "accepted", timelineSeq: 101 });
     expect(screen.getByText("ACCEPTED")).toBeTruthy();
     expect(screen.getByText(/时间轴 #101/)).toBeTruthy();
     expect(container.querySelector(".diffcard-accepted")).not.toBeNull();
+  });
+
+  it("accepted：编辑器草稿路径显示待保存或已保存", () => {
+    const { rerender } = render(<DiffCard diff={card({ state: "accepted", draftApplied: true })} />);
+    expect(screen.getByText(/已接受 · 待保存/)).toBeTruthy();
+    rerender(<DiffCard diff={card({ state: "accepted", draftApplied: true, draftSaved: true })} />);
+    expect(screen.getByText("已保存")).toBeTruthy();
   });
 
   it("validating/applying：过渡态显示处理中（按钮禁用）", () => {

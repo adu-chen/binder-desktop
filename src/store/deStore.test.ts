@@ -66,14 +66,46 @@ describe("deStore 状态投影（SM-DE-01）", () => {
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({ state: "applying", timelineSeq: 7 });
   });
 
-  it("toGreenReview 映射：rejected→null，过渡态→applying，pending/conflict/error→pending", () => {
+  // covers: A-CORE-C-T-01 §5.4（D4 缺陷修复）
+  it("D4 修复：markDraftApplied 记录 draftBaseDirty 和 draftAfterContent", () => {
+    deStore.addDiff({ ...mk("d", "pending"), relPath: "a.md", blockId: "b1" });
+    deStore.markDraftApplied("d", "base", "dirty", "afterContent");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      draftApplied: true,
+      draftBaseContent: "base",
+      draftBaseTabState: "dirty",
+      draftBaseDirty: true,
+      draftAfterContent: "afterContent",
+    });
+    deStore.reset();
+    deStore.addDiff({ ...mk("d2", "pending"), relPath: "b.md", blockId: "b2" });
+    deStore.markDraftApplied("d2", "clean", "normal", "cleanAfter");
+    expect(deStore.getSnapshot().diffs[0].draftBaseDirty).toBe(false);
+    expect(deStore.getSnapshot().diffs[0].draftAfterContent).toBe("cleanAfter");
+  });
+
+  it("草稿 diff：应用到编辑器后保留标记，accepted 保存后清理 GreenReview 标记", () => {
+    deStore.addDiff({ ...mk("d", "pending"), relPath: "a.md", blockId: "b1" });
+    deStore.markDraftApplied("d", "base", "saved");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      draftApplied: true,
+      draftBaseContent: "base",
+      draftBaseTabState: "saved",
+      draftSaved: false,
+    });
+    deStore.applyBackendState("d", "Accepted", true);
+    deStore.markDraftSaved("a.md");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({ state: "accepted", draftSaved: true });
+  });
+
+  it("toGreenReview 映射：rejected/error→null，过渡态→applying，pending/conflict→pending", () => {
     expect(toGreenReview("rejected")).toBeNull();
     expect(toGreenReview("validating")).toBe("applying");
     expect(toGreenReview("applying")).toBe("applying");
     expect(toGreenReview("accepted")).toBe("accepted");
     expect(toGreenReview("expired")).toBe("expired");
     expect(toGreenReview("conflict")).toBe("pending");
-    expect(toGreenReview("error")).toBe("pending");
+    expect(toGreenReview("error")).toBeNull();
   });
 
   it("expired 5 种细分原因均有引导文案", () => {

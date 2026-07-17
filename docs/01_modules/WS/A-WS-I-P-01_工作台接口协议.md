@@ -37,12 +37,12 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
 |---|---|---|---|---|
 | `ws.list_docs` | workspace_id、过滤条件（可空） | FsEntry 列表（rel_path+doc_type+is_dir，**含空目录**；WS 本地结构非 SYS 共享 DocRef，PI-BE-07 补） | — | BR-WS-DATA-001 |
-| `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
-| `ws.check_external_change` | DocRef、**加载基线哈希** | { changed, deleted, current } | 检测失败（可重试） | BR-WS-OBS-001；§6 external_change 逻辑契约的轮询实现（物理事件延 SY-02） |
+| `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001；IPC 为十进制字符串） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
 | `ws.create_doc` | DocRef、初始内容（可空） | DocRef + 基线哈希 | 已存在/越界 | BR-WS-DATA-001 |
+| `ws.create_folder` | DocRef（目录 rel_path） | rel_path + created/existed | 目标为文件/越界 | BR-WS-DATA-001 |
 | `ws.rename_doc` | DocRef、新 rel_path | 新 rel_path | **WS_EXISTS**（目标已存在）/源不存在/越界 | BR-WS-DATA-001（§8 move 签名，PI-BE-04 补） |
 | `ws.delete_doc` | DocRef | 删除确认 | 不存在/越界 | BR-WS-DATA-001 |
-| `ws.save_doc` | DocRef、内容、**基线哈希**、override（默认 false） | 新基线哈希 | **save_conflict**（磁盘≠基线且未 override，SM-WS-01 saveConflict）；写入失败 | SM-WS-01 / BR-WS-PERSIST-001 / BR-WS-OBS-001；override=true 即 overrideConfirmed 语义，必须源自用户显式确认 |
+| `ws.save_doc` | DocRef、内容、**基线哈希**（十进制字符串或兼容数字）、override（默认 false） | 新基线哈希（十进制字符串） | **WS_SAVE_CONFLICT / save_conflict 语义**（磁盘≠基线且未 override，SM-WS-01 saveConflict）；写入失败 | SM-WS-01 / BR-WS-PERSIST-001 / BR-WS-OBS-001；override=true 即 overrideConfirmed 语义，必须源自用户显式确认 |
 | `ws.search` | workspace_id、查询 | 命中列表（DocRef + 定位） | — | 限界 X-FORBID-004 |
 
 ## §4 pending_diffs（WS-DIFF-APPLY）
@@ -69,9 +69,9 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.external_change` | DocRef + 变更类型（modified/deleted/moved）+ 当前哈希 | ED（SM-ED-01 externalChange）、DE（过期重检）、REF（锚校验） | BR-WS-OBS-001 |
 
 > 物理传输（Channel/event）维持 SY-02 延实现期选型；本表按 I-P-02 流式逻辑契约声明。
-> **实现选择（PI-BE-03+FE-12，2026-06-23）**：`ws.external_change` 的 ED 侧消费本阶段以前端 5s 轮询
-> `ws.check_external_change`（§3）实现——比对磁盘哈希 vs 加载基线，changed→ED external_changed 冲突裁决。
-> 物理事件推送（Channel/event）转 ED/DE/REF 仍延 SY-02；DE 过期重检与 REF 锚校验待事件传输接通后接入。
+> **当前实现（2026-07-12）**：独立 `ws.check_external_change` command 未注册；本阶段已落地的外部变更
+> 保护下限是 `ws.save_doc` / `doc.save_from_edit` 保存前 baseline guard，冲突以 `WS_SAVE_CONFLICT`
+> 返回 ED。后续若实现轮询或推送，需要在本文新增/恢复 command 并同步实现注册表。
 
 ## §7 测试与验收
 
@@ -83,11 +83,17 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 
 - 错误码表（code 枚举值）、序列化与标量类型延实现期统一定义（全模块一张表，归 SYS 实现期补遗）。
 - ~~跨文档资源操作（move/copy）签名随实现需求补充本文~~ → **move 已补（PI-BE-04，2026-06-23）**：
-  §3 `ws.rename_doc`（同 workspace 内移动/改名，目标已存在拒绝）+ `ws.delete_doc`。copy 仍延后（按需补）。
+  §3 `ws.rename_doc`（同 workspace 内移动/改名，目标已存在拒绝）+ `ws.delete_doc`；**建目录已补**
+  （AG-STRUCTURE-FILE-TOOLS-01，2026-07-16）：`ws.create_folder` 目标为目录时幂等成功、目标为文件拒绝。
+  copy 仍延后（按需补）。
 - 媒体/二进制读写（ED 媒体、DOC 字节流）是否独立 command 或复用 read/save 延实现期定。
+- `ws.external_change` 物理事件和独立外部变更检测 command 延 SY-02；当前不得在调用方假设
+  `ws.check_external_change` 已注册。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（首份模块接口协议，实现前置件）：按 I-P-02 骨架声明 WS 全部 command 语义签名——workspace 生命周期 4 条、文件 I/O 与 save 5 条（read 返回加载基线、save 带基线校验与 override 显式覆盖语义）、pending_diffs 4 条、时间轴 3 条、外部变更事件 1 条；零新增注册项（契约细化非规则源）；债务（错误码表/序列化/跨文档操作签名延实现期） |
+| 2026-07-12 | v1.1 | 三态实现回写：`ws.read_doc`/`ws.save_doc` baseline IPC 字符串化；保存冲突错误码对齐 `WS_SAVE_CONFLICT`；移除当前 command 清单中的未注册 `ws.check_external_change`，将外部变更推送/轮询登记为 SY-02 后续能力；明确当前已落地保护为保存前 baseline guard |
+| 2026-07-16 | v1.2 | 新增 `ws.create_folder` command：Workspace 内建目录，目标为目录时幂等成功并返回 existed，目标为文件/越界拒绝；供 Agent 文件整理结构工具复用 |

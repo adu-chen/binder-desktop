@@ -40,11 +40,7 @@ pub enum ExpiryDecision {
  */
 /// 过期判定（BR-DE-STATE-002）：外部已变 → Expire(ExternalChange)；否则超时 → Expire(Timeout)；
 /// 外部变更**检测不可得（Undetectable）不因此过期**（保守保持 Pending），但超时仍独立生效。
-pub fn check_expiry(
-    elapsed_ms: i64,
-    timeout_ms: i64,
-    external: ExternalCheck,
-) -> ExpiryDecision {
+pub fn check_expiry(elapsed_ms: i64, timeout_ms: i64, external: ExternalCheck) -> ExpiryDecision {
     match external {
         ExternalCheck::Changed => ExpiryDecision::Expire(ExpiryReason::ExternalChange),
         ExternalCheck::Unchanged | ExternalCheck::Undetectable => {
@@ -79,7 +75,8 @@ pub fn recheck_overlap(
     pending_before_hash: u64,
     current_target_hash: u64,
 ) -> ExpiryDecision {
-    if blocks_overlap(applied_blocks, pending_blocks) && pending_before_hash != current_target_hash {
+    if blocks_overlap(applied_blocks, pending_blocks) && pending_before_hash != current_target_hash
+    {
         ExpiryDecision::Expire(ExpiryReason::ExternalChange)
     } else {
         ExpiryDecision::KeepPending
@@ -97,15 +94,30 @@ mod tests {
     #[test]
     fn expiry_is_conservative_when_undetectable() {
         // 外部已变 → 过期
-        assert_eq!(check_expiry(10, 1000, ExternalCheck::Changed), Expire(ExternalChange));
+        assert_eq!(
+            check_expiry(10, 1000, ExternalCheck::Changed),
+            Expire(ExternalChange)
+        );
         // 超时 → 过期
-        assert_eq!(check_expiry(2000, 1000, ExternalCheck::Unchanged), Expire(Timeout));
+        assert_eq!(
+            check_expiry(2000, 1000, ExternalCheck::Unchanged),
+            Expire(Timeout)
+        );
         // 未变且未超时 → 保持
-        assert_eq!(check_expiry(10, 1000, ExternalCheck::Unchanged), KeepPending);
+        assert_eq!(
+            check_expiry(10, 1000, ExternalCheck::Unchanged),
+            KeepPending
+        );
         // 检测不可得 + 未超时 → 保守保持（不误杀）
-        assert_eq!(check_expiry(10, 1000, ExternalCheck::Undetectable), KeepPending);
+        assert_eq!(
+            check_expiry(10, 1000, ExternalCheck::Undetectable),
+            KeepPending
+        );
         // 检测不可得 + 已超时 → 超时仍独立过期
-        assert_eq!(check_expiry(2000, 1000, ExternalCheck::Undetectable), Expire(Timeout));
+        assert_eq!(
+            check_expiry(2000, 1000, ExternalCheck::Undetectable),
+            Expire(Timeout)
+        );
     }
 
     // covers: BR-DE-DATA-003

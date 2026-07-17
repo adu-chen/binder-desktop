@@ -418,7 +418,13 @@ mod tests {
             Carryover::ReferenceTarget
         );
         // 泛指当前任务/当前文档的词不应单独提权历史意图。
-        assert_eq!(decide_intent_carryover("接下来优化这个文档", true), Carryover::None);
-        assert_eq!(decide_intent_carryover("把它整理成三段", true), Carryover::None);
+        assert_eq!(
+            decide_intent_carryover("接下来优化这个文档", true),
+            Carryover::None
+        );
+        assert_eq!(
+            decide_intent_carryover("把它整理成三段", true),
+            Carryover::None
+        );
     }
 }

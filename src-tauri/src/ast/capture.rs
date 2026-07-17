@@ -20,7 +20,11 @@ fn now_millis() -> i64 {
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn gen_entry_id() -> String {
-    format!("mem_{}_{}", now_millis(), SEQ.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "mem_{}_{}",
+        now_millis(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// SM-AST-01 状态（A-AST-M-S-01 §2）。Written/Revoked/Discarded 为终态；WriteError 可重试。
@@ -168,8 +172,12 @@ mod tests {
     }
 
     fn status_of(conn: &Connection, id: &str) -> String {
-        conn.query_row("SELECT status FROM memory_entries WHERE entry_id=?1", [id], |r| r.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT status FROM memory_entries WHERE entry_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     // covers: BR-AST-STATE-001
@@ -183,8 +191,16 @@ mod tests {
         // 非可沉淀 → Discarded（无残留）
         assert_eq!(transition(Capturing, CaptureMiss), Some(Discarded));
         // 缺类型 / 缺来源 → 无合法转移（不写入，等同不沉淀）
-        assert_eq!(transition(Capturing, hit(false, true)), None, "缺类型不得写入");
-        assert_eq!(transition(Capturing, hit(true, false)), None, "缺来源不得写入");
+        assert_eq!(
+            transition(Capturing, hit(false, true)),
+            None,
+            "缺类型不得写入"
+        );
+        assert_eq!(
+            transition(Capturing, hit(true, false)),
+            None,
+            "缺来源不得写入"
+        );
         // 写失败可重试
         assert_eq!(transition(Writing, WriteFail), Some(WriteError));
         assert_eq!(transition(WriteError, Retry), Some(Writing));
@@ -195,7 +211,11 @@ mod tests {
         }
         // 终态 Discarded/Written 不再转移；未经 Writing 不得 Written
         assert_eq!(transition(Discarded, hit(true, true)), None);
-        assert_eq!(transition(Capturing, WriteOk), None, "未经 Writing 不得 Written");
+        assert_eq!(
+            transition(Capturing, WriteOk),
+            None,
+            "未经 Writing 不得 Written"
+        );
         assert_eq!(transition(Written, WriteOk), None);
     }
 
@@ -218,11 +238,15 @@ mod tests {
 
         // 无类型 / 无来源 → 拒绝，不落库
         assert_eq!(
-            capture_memory(&conn, "ws1", "  ", "x", "turn_8").unwrap_err().code,
+            capture_memory(&conn, "ws1", "  ", "x", "turn_8")
+                .unwrap_err()
+                .code,
             "AST_CAPTURE_REJECTED"
         );
         assert_eq!(
-            capture_memory(&conn, "ws1", "fact", "x", "").unwrap_err().code,
+            capture_memory(&conn, "ws1", "fact", "x", "")
+                .unwrap_err()
+                .code,
             "AST_CAPTURE_REJECTED"
         );
         let count: i64 = conn

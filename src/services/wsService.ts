@@ -17,6 +17,7 @@ interface FsEntryDto {
   rel_path: string;
   doc_type: string;
   is_dir: boolean;
+  is_bdocx?: boolean;
 }
 
 let seq = 0;
@@ -32,7 +33,7 @@ async function callCommand<T>(command: string, params: Record<string, unknown>):
 
 export interface DocReadDto {
   content: string;
-  baseline: number;
+  baseline: number | string;
 }
 
 /** 读文档内容 + 加载基线（ws.read_doc，守界后端执行）。 */
@@ -41,33 +42,22 @@ export async function readDoc(relPath: string): Promise<DocReadDto> {
 }
 
 /**
- * 原子保存（ws.save_doc，带基线/override）。冲突时抛 WS_SAVE_CONFLICT（SM-WS-01）。
- * 返回新基线哈希。
+ * 原子保存（ws.save_doc）。返回内容哈希。
+ * baseline 是读取时点的磁盘内容哈希；override 必须来自用户显式覆盖确认。
  */
 export async function saveDoc(
   relPath: string,
   content: string,
-  baseline: number | null,
+  baseline: number | string | null,
   override = false,
-): Promise<number> {
-  const res = await callCommand<{ baseline: number }>("ws.save_doc", {
+): Promise<number | string> {
+  const res = await callCommand<{ baseline: number | string }>("ws.save_doc", {
     relPath,
     content,
     baseline,
     override,
   });
   return res.baseline;
-}
-
-export interface ExternalCheckDto {
-  changed: boolean;
-  deleted: boolean;
-  current: number | null;
-}
-
-/** 外部变更检测（ws.check_external_change）：比对磁盘哈希与加载基线（BR-WS-OBS-001）。 */
-export async function checkExternalChange(relPath: string, baseline: number): Promise<ExternalCheckDto> {
-  return callCommand<ExternalCheckDto>("ws.check_external_change", { relPath, baseline });
 }
 
 /** 新建文档（ws.create_doc，守界，已存在拒绝 WS_EXISTS）。回新文件 rel_path。 */
@@ -126,7 +116,12 @@ export async function restoreNode(entryId: string): Promise<void> {
 /** 拉取当前活动 workspace 文件列表（裸调用，不投影）；供 loadDocs 与启动探测复用。 */
 export async function fetchDocs(): Promise<DocRefView[]> {
   const entries = await callCommand<FsEntryDto[]>("ws.list_docs", {});
-  return entries.map((e) => ({ relPath: e.rel_path, docType: e.doc_type, isDir: e.is_dir }));
+  return entries.map((e) => ({
+    relPath: e.rel_path,
+    docType: e.doc_type,
+    isDir: e.is_dir,
+    isBDocx: Boolean(e.is_bdocx),
+  }));
 }
 
 /** 加载当前活动 workspace 的文件列表（投影 loading → ready/error）。 */

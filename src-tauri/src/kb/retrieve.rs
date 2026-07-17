@@ -70,7 +70,14 @@ mod tests {
     #[test]
     fn local_retrieve_scoped_traceable_and_empty_on_no_match() {
         let conn = fresh();
-        store::ingest(&conn, "ws1", "TipTap 编辑器集成笔记", "doc:a.md", Some("编辑")).unwrap();
+        store::ingest(
+            &conn,
+            "ws1",
+            "TipTap 编辑器集成笔记",
+            "doc:a.md",
+            Some("编辑"),
+        )
+        .unwrap();
         store::ingest(&conn, "ws1", "Tauri IPC 设计", "doc:b.md", None).unwrap();
         store::ingest(&conn, "ws2", "TipTap 其它 workspace", "doc:c.md", None).unwrap();
 

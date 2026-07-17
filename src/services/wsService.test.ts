@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // mock 跨进程入口：服务层不真触后端，只验信封构造与 result/error 互斥。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
-import { createDoc, renameDoc, deleteDoc, checkExternalChange } from "./wsService";
+import { createDoc, renameDoc, deleteDoc, fetchDocs, saveDoc } from "./wsService";
 
 const invokeMock = vi.mocked(invoke);
 const ok = <T>(result: T) => ({ correlation_id: "c", result });
@@ -38,8 +38,22 @@ describe("wsService dispatch 信封契约（X-SEQ-002）", () => {
     await expect(createDoc("a.md")).rejects.toMatchObject({ code: "WS_EXISTS" });
   });
 
-  it("checkExternalChange 回 {changed,deleted,current}", async () => {
-    invokeMock.mockResolvedValue(ok({ changed: true, deleted: false, current: 42 }));
-    await expect(checkExternalChange("a.md", 1)).resolves.toEqual({ changed: true, deleted: false, current: 42 });
+  // covers: BR-WS-OBS-001
+  it("saveDoc 传递加载基线与显式覆盖标志，供后端保存前冲突保护", async () => {
+    invokeMock.mockResolvedValue(ok({ baseline: "456" }));
+    await expect(saveDoc("a.md", "new", "123", true)).resolves.toBe("456");
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      request: {
+        command: "ws.save_doc",
+        params: { relPath: "a.md", content: "new", baseline: "123", override: true },
+      },
+    });
+  });
+
+  it("fetchDocs 映射后端 is_bdocx 身份", async () => {
+    invokeMock.mockResolvedValue(ok([{ rel_path: "generated.docx", doc_type: "docx", is_dir: false, is_bdocx: true }]));
+    await expect(fetchDocs()).resolves.toEqual([
+      { relPath: "generated.docx", docType: "docx", isDir: false, isBDocx: true },
+    ]);
   });
 });

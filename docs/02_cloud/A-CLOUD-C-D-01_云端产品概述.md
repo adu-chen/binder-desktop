@@ -51,10 +51,10 @@ req_id: REQ-CLOUD-003
 title: AI 网关转发与计量
 owner_module: CLOUD
 status: active
-summary: GW 持有 provider 密钥（客户端永不持有，X-FORBID-001 服务端对偶），统一代理模型调用并流式转发；调用正文仅瞬时过境不持久化（BR-SYS-DATA-004 落实：日志/监控/错误上报均不留正文），仅产生脱敏计量元数据（用量/时间/模型档）上报 LIC
+summary: GW 持有 provider 密钥（客户端永不持有，X-FORBID-001 服务端对偶），统一代理模型调用并流式转发；1.0 EP 默认经 AiGateway 接入 DeepSeek 官方 API，后续自部署 Binder 预设模型作为演进项；调用正文仅瞬时过境不持久化（BR-SYS-DATA-004 落实：日志/监控/错误上报均不留正文），仅产生脱敏计量元数据（用量/时间/模型档）上报 LIC
 source_doc: A-SYS-I-P-03（CLOUD-INVOKE、BR-SYS-DATA-001/004）、云 APC §1/§5
 acceptance: 全部调用经网关流式转发且终态语义与客户端契约一致；服务端任何持久化介质（含日志）无调用正文（审计核验项）；计量元数据不含正文
-open_issues: provider 池与模型档位映射、故障转移策略归 GW G2；流式转发的背压与超时归 GW G2
+open_issues: 1.0 EP DeepSeek 具体模型名/价格/限流与合规条款在 GW L2/实现前核对；provider 池与模型档位映射、故障转移策略归 GW G2；流式转发的背压与超时归 GW G2；自部署 Binder 预设模型与多模态模型矩阵不作为 1.0 EP 阻断项
 -->
 
 <!-- REQ
@@ -122,6 +122,18 @@ open_issues: 版本声明机制（握手/响应头）归 GW G2
 | BR-SYS-DATA-004（内容不留存） | 全持久化介质（含日志/监控/错误上报）无调用正文，审计核验（REQ-CLOUD-003/007） |
 | BR-ENT-DATA-002（展示数据源唯一） | 客户端/门户查询与裁决依据同源于 LIC（REQ-CLOUD-005） |
 
+### 3.1 1.0 Experience Preview 托管模型策略
+
+1.0 EP 为早期体验版，云端模型策略采用“DeepSeek 托管模型 + BYOK”：
+
+| 项 | 1.0 EP 处置 |
+|---|---|
+| 托管模型 | AiGateway 接入 DeepSeek 官方 API，优先跟随 DeepSeek 当前推荐模型线；具体模型名、价格、限流与合规条款在 GW L2/实现前核对 |
+| 自部署 Binder 预设模型 | 不作为 1.0 EP 阻断项；后续在真实体验数据、Binder 专项评测集和开源多模态模型评测后进入 Beta |
+| 多模态模型矩阵 | 不作为 1.0 EP 阻断项；1.0 仅保留接口和 telemetry 基础，后续按文档页面/截图等真实场景引入 |
+| BYOK | 保留为用户自带 provider 通道，但密钥仍由 AiGateway 加密代持，调用仍经 SubscriptionGate |
+| 数据边界 | 不因调用第三方托管模型而弱化 BR-SYS-DATA-004；云端默认不保存调用正文，体验反馈只记录脱敏元数据 |
+
 ## §4 G1 问题暴露清单（域级）
 
 | 编号 | 分类 | 状态 | 处置 |
@@ -147,4 +159,5 @@ open_issues: 版本声明机制（握手/响应头）归 GW G2
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-07-17 | v1.1 | 接入 1.0 Experience Preview 云端模型策略：REQ-CLOUD-003 明确 1.0 EP 默认经 AiGateway 接入 DeepSeek 官方 API，自部署 Binder 预设模型与多模态模型矩阵后置；新增 §3.1 说明 DeepSeek 托管模型 + BYOK 边界，强调不弱化 SubscriptionGate、AiGateway、BYOK 代持和内容不留存承诺 |
 | 2026-06-12 | v1.0 | 初版（云端域 L1 根）：声明 REQ-CLOUD-001~008（认证会话 / 门禁裁决含短时凭证方向 / 网关转发与计量 / BYOK 代持 / 订阅计费用量 / 个人账户门户 / 数据边界与合规 / 契约兼容）；§3 客户端约束的服务端对偶表；G1 暴露 CLOUD-01~06（认证方式、档位定价、合规三项待人类）；客户端五个挂起项的解除路径分配完毕；遵守驻留期硬约定（仅 REQ + 叙述） |

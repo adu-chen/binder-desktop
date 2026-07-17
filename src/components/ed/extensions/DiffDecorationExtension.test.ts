@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectDecorations, type BlockRef } from "./DiffDecorationExtension";
+import { selectDecorations, selectPreviewWidgets, type BlockRef, type GreenReviewValue } from "./DiffDecorationExtension";
 import type { GreenReviewState } from "../../../store/deStore";
 
 function blocks(): BlockRef[] {
@@ -38,5 +38,52 @@ describe("DiffDecorationExtension · selectDecorations (BR-ED-STATE-002)", () =>
     const decos = selectDecorations(blocks(), map);
     expect(decos).toHaveLength(1);
     expect(decos[0].pos).toBe(5); // 仅 b2
+  });
+
+  it("对象映射仍按 state 生成块态装饰", () => {
+    const map = new Map<string, GreenReviewValue>([
+      ["b1", { state: "pending", before: "旧", after: "新" }],
+    ]);
+    const decos = selectDecorations(blocks(), map);
+    expect(decos).toHaveLength(1);
+    expect(decos[0]).toMatchObject({ pos: 0, size: 5, className: "green-review green-review-pending" });
+  });
+});
+
+describe("DiffDecorationExtension · selectPreviewWidgets", () => {
+  it("before/after 对象映射 → 在目标块之后生成只读预览 widget 规格", () => {
+    const map = new Map<string, GreenReviewValue>([
+      ["b1", { state: "pending", before: "旧文本", after: "新文本" }],
+    ]);
+    const widgets = selectPreviewWidgets(blocks(), map);
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0]).toMatchObject({
+      pos: 5,
+      state: "pending",
+      before: "旧文本",
+      after: "新文本",
+    });
+    expect(widgets[0].key).toContain("green-review-preview-b1-pending-");
+  });
+
+  it("after-only 对象映射 → 只产生绿增预览数据，不强制红删行", () => {
+    const map = new Map<string, GreenReviewValue>([
+      ["b1", { state: "pending", after: "新文本" }],
+    ]);
+    const widgets = selectPreviewWidgets(blocks(), map);
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0]).toMatchObject({
+      pos: 5,
+      state: "pending",
+      after: "新文本",
+    });
+    expect(widgets[0].before).toBeUndefined();
+  });
+
+  it("状态-only 映射与 accepted 态不生成预览 widget", () => {
+    expect(selectPreviewWidgets(blocks(), new Map<string, GreenReviewValue>([["b1", "pending"]]))).toEqual([]);
+    expect(selectPreviewWidgets(blocks(), new Map<string, GreenReviewValue>([
+      ["b1", { state: "accepted", before: "旧", after: "新" }],
+    ]))).toEqual([]);
   });
 });

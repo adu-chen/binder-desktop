@@ -46,7 +46,12 @@ fn dep_missing() -> IpcError {
     )
 }
 fn convert_fail(detail: &str) -> IpcError {
-    IpcError::new("DOC_PREVIEW_FAIL", &format!("LibreOffice 预览转换失败: {detail}"), true, false)
+    IpcError::new(
+        "DOC_PREVIEW_FAIL",
+        &format!("LibreOffice 预览转换失败: {detail}"),
+        true,
+        false,
+    )
 }
 
 /// PDF 导出 filter（BR-DOC-DATA-001 预览链）：按格式选 writer/calc/impress，附公共导出选项。
@@ -143,7 +148,12 @@ pub fn resolve_soffice_path() -> Option<PathBuf> {
         }
     }
     // 5) 系统：PATH 中的 soffice（--version 探测）
-    if Command::new("soffice").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+    if Command::new("soffice")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         return Some(PathBuf::from("soffice"));
     }
     None
@@ -169,16 +179,53 @@ pub fn generate_fontsubst_content(cjk_font: &str, latin_font: &str) -> String {
     // 已安装字体仍用原字体渲染；**未列出的缺失字体会被 LO 随机回退**（pptx 字体随机匹配根因），
     // 替换表须尽量覆盖文档常见字体（2026-07-03 #2 修复：补齐旧项目全集，CJK 24→36 / Latin +1）。
     const CJK: &[&str] = &[
-        "宋体", "SimSun", "黑体", "SimHei", "楷体", "KaiTi", "微软雅黑", "Microsoft YaHei",
-        "等线", "DengXian", "仿宋", "FangSong", "仿宋_GB2312", "楷体_GB2312",
-        "华文黑体", "华文楷体", "华文宋体", "华文仿宋", "华文中宋",
-        "STHeiti", "STKaiti", "STSong", "STFangsong", "STXihei",
-        "Hiragino Sans GB", "冬青黑体", "苹方", "PingFang TC", "PingFang HK",
-        "隶书", "幼圆", "新宋体", "NSimSun", "方正兰亭黑", "思源黑体", "Source Han Sans SC",
+        "宋体",
+        "SimSun",
+        "黑体",
+        "SimHei",
+        "楷体",
+        "KaiTi",
+        "微软雅黑",
+        "Microsoft YaHei",
+        "等线",
+        "DengXian",
+        "仿宋",
+        "FangSong",
+        "仿宋_GB2312",
+        "楷体_GB2312",
+        "华文黑体",
+        "华文楷体",
+        "华文宋体",
+        "华文仿宋",
+        "华文中宋",
+        "STHeiti",
+        "STKaiti",
+        "STSong",
+        "STFangsong",
+        "STXihei",
+        "Hiragino Sans GB",
+        "冬青黑体",
+        "苹方",
+        "PingFang TC",
+        "PingFang HK",
+        "隶书",
+        "幼圆",
+        "新宋体",
+        "NSimSun",
+        "方正兰亭黑",
+        "思源黑体",
+        "Source Han Sans SC",
     ];
     const LATIN: &[&str] = &[
-        "Times New Roman", "Calibri", "Helvetica", "Arial Narrow", "Cambria", "Georgia",
-        "Verdana", "Tahoma", "Segoe UI",
+        "Times New Roman",
+        "Calibri",
+        "Helvetica",
+        "Arial Narrow",
+        "Cambria",
+        "Georgia",
+        "Verdana",
+        "Tahoma",
+        "Segoe UI",
     ];
     let mut items = String::new();
     for (list, target) in [(CJK, cjk_font), (LATIN, latin_font)] {
@@ -223,7 +270,8 @@ fn write_font_substitution(work_dir: &Path) -> Result<PathBuf, IpcError> {
     for sub in ["user/config", "4/user/config"] {
         let dir = lo_user.join(sub);
         std::fs::create_dir_all(&dir).map_err(|e| convert_fail(&e.to_string()))?;
-        std::fs::write(dir.join("fontsubst.xcu"), &content).map_err(|e| convert_fail(&e.to_string()))?;
+        std::fs::write(dir.join("fontsubst.xcu"), &content)
+            .map_err(|e| convert_fail(&e.to_string()))?;
     }
     Ok(lo_user)
 }
@@ -258,7 +306,10 @@ fn build_soffice_command(soffice: &Path, work_dir: &Path) -> Result<Command, Ipc
     }
     let lo_user = write_font_substitution(work_dir)?;
     cmd.env("HOME", lo_user.to_string_lossy().as_ref());
-    cmd.arg(format!("-env:UserInstallation={}", path_to_user_installation_url(&lo_user)));
+    cmd.arg(format!(
+        "-env:UserInstallation={}",
+        path_to_user_installation_url(&lo_user)
+    ));
     // 激活 Binder VCL 字体回退补丁（2026-07-03 #2 根治）：内置优化版 LO 的 vcl/PhysicalFontCollection.cxx
     // 含源码级补丁——**匹配失败的字体统一回退到指定默认字体**（拦截 LO 原生"随缘 fallback"，字体随机
     // 匹配的根因）。补丁由 BINDER_FORCE_DEFAULT_FONTS 门控（不设则行为同上游 LO，此前一直休眠）。
@@ -273,7 +324,10 @@ fn build_soffice_command(soffice: &Path, work_dir: &Path) -> Result<Command, Ipc
 
 /// 重试扫描输出目录找生成的 PDF（移植旧项目：精确名优先，否则最新；>100 字节）。
 fn find_generated_pdf(output_dir: &Path, source: &Path) -> Result<PathBuf, IpcError> {
-    let expected = source.file_stem().and_then(|s| s.to_str()).map(|s| format!("{s}.pdf"));
+    let expected = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| format!("{s}.pdf"));
     const MAX_RETRIES: u32 = 10;
     for attempt in 0..=MAX_RETRIES {
         let mut pdfs: Vec<(PathBuf, String, std::time::SystemTime)> = Vec::new();
@@ -283,7 +337,11 @@ fn find_generated_pdf(output_dir: &Path, source: &Path) -> Result<PathBuf, IpcEr
                 if p.extension().and_then(|x| x.to_str()) == Some("pdf") {
                     if let Ok(m) = std::fs::metadata(&p) {
                         if m.len() > 100 {
-                            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                            let name = p
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string();
                             pdfs.push((p, name, m.modified().unwrap_or(std::time::UNIX_EPOCH)));
                         }
                     }
@@ -303,7 +361,9 @@ fn find_generated_pdf(output_dir: &Path, source: &Path) -> Result<PathBuf, IpcEr
             std::thread::sleep(Duration::from_millis(500));
         }
     }
-    Err(convert_fail(&format!("PDF 未生成于输出目录: {output_dir:?}")))
+    Err(convert_fail(&format!(
+        "PDF 未生成于输出目录: {output_dir:?}"
+    )))
 }
 
 /**
@@ -317,7 +377,11 @@ fn find_generated_pdf(output_dir: &Path, source: &Path) -> Result<PathBuf, IpcEr
 /// 预览转换 docx/xlsx/pptx → PDF（BR-DOC-DATA-001 预览链）：解析 soffice（**缺失→DOC_LIBREOFFICE_MISSING
 /// 统一错误，不静默降级**）；配置 macOS 环境 + 字体替换；headless `--convert-to` 至临时输出目录；重试扫描
 /// 取 PDF 路径。内容不经网络上行；与编辑链分离。output_dir 为工作/输出目录（调用方提供，限本地）。
-pub fn convert_to_pdf(input: &Path, kind: PreviewKind, output_dir: &Path) -> Result<PathBuf, IpcError> {
+pub fn convert_to_pdf(
+    input: &Path,
+    kind: PreviewKind,
+    output_dir: &Path,
+) -> Result<PathBuf, IpcError> {
     let soffice = resolve_soffice_path().ok_or_else(dep_missing)?;
     // 可观测性（2026-07-03 #2 复测辅助）：预览转换低频，明示实际命中的 soffice 与字体补丁激活状态
     // ——复测字体问题时据此分流「未走内置 LO」vs「字形级回退（补丁未覆盖，需 LO 二次改造）」。
@@ -357,12 +421,26 @@ mod tests {
         let cmd = build_soffice_command(std::path::Path::new("soffice"), &dir).unwrap();
         let envs: std::collections::HashMap<String, String> = cmd
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().into_owned(), v?.to_string_lossy().into_owned())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
             .collect();
-        assert_eq!(envs.get("BINDER_FORCE_DEFAULT_FONTS").map(String::as_str), Some("1"));
+        assert_eq!(
+            envs.get("BINDER_FORCE_DEFAULT_FONTS").map(String::as_str),
+            Some("1")
+        );
         let (cjk, latin) = default_fonts();
-        assert_eq!(envs.get("BINDER_DEFAULT_CJK_FONT").map(String::as_str), Some(cjk));
-        assert_eq!(envs.get("BINDER_DEFAULT_LATIN_FONT").map(String::as_str), Some(latin));
+        assert_eq!(
+            envs.get("BINDER_DEFAULT_CJK_FONT").map(String::as_str),
+            Some(cjk)
+        );
+        assert_eq!(
+            envs.get("BINDER_DEFAULT_LATIN_FONT").map(String::as_str),
+            Some(latin)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -397,7 +475,8 @@ mod tests {
             return; // 环境装有 LO：跳过缺失分支断言（缺失路径在无 LO 环境验证）
         }
         let out = std::env::temp_dir().join("binder_lo_test_out");
-        let err = convert_to_pdf(Path::new("/nonexistent/x.docx"), PreviewKind::Docx, &out).unwrap_err();
+        let err =
+            convert_to_pdf(Path::new("/nonexistent/x.docx"), PreviewKind::Docx, &out).unwrap_err();
         assert_eq!(err.code, "DOC_LIBREOFFICE_MISSING");
         assert!(err.retriable); // 安装后可重试
     }

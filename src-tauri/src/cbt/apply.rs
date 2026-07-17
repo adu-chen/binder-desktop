@@ -74,7 +74,12 @@ mod tests {
         let p_new = build_proposal("task1", doc("new.md"), b"hello".to_vec(), None);
         assert!(p_new.before_snapshot.is_none(), "新建文档应空基准");
         // 修改既有：带 before_snapshot
-        let p_mod = build_proposal("task2", doc("exist.md"), b"edited".to_vec(), Some("h0".into()));
+        let p_mod = build_proposal(
+            "task2",
+            doc("exist.md"),
+            b"edited".to_vec(),
+            Some("h0".into()),
+        );
         assert_eq!(p_mod.before_snapshot.as_deref(), Some("h0"));
         // 构造提案不产生任何文件（旁路写盘结构不可达）
         assert!(!new_path.exists(), "build_proposal 不得写盘");

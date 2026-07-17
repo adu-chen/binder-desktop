@@ -40,7 +40,7 @@ export function buildTree(docs: DocRefView[]): TreeNode[] {
       // 文件条目的末段为叶子；其余段（及目录条目的所有段）均为目录。
       if (isLeaf && !doc.isDir) {
         if (!cursor.children!.some((c) => c.kind === "file" && c.name === part)) {
-          cursor.children!.push({ name: part, path, kind: "file", docType: doc.docType });
+          cursor.children!.push({ name: part, path, kind: "file", docType: doc.docType, isBDocx: doc.isBDocx });
         }
       } else {
         cursor = ensureDir(cursor, part, path);
@@ -74,8 +74,7 @@ export function FileTree() {
     const counts: Record<string, number> = {};
     for (const [path, sess] of Object.entries(sessions)) {
       const pending = diffs.filter((d) => d.state === "pending" && d.relPath === path).length;
-      if (sess.tabState === "external_changed") override[path] = "external_changed";
-      else if (pending > 0) {
+      if (pending > 0) {
         override[path] = "pending_diff";
         counts[path] = pending;
       } else if (sess.tabState === "dirty") override[path] = "dirty_open";

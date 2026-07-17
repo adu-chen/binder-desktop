@@ -24,7 +24,11 @@ fn roundtrip(event: &str, payload: SmStatePayload) -> serde_json::Value {
         *sink.lock().unwrap() = Some(ev.payload().to_string());
     });
     emit_sm_state(app.handle(), payload);
-    let raw = got.lock().unwrap().clone().unwrap_or_else(|| panic!("未收到事件: {event}"));
+    let raw = got
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| panic!("未收到事件: {event}"));
     serde_json::from_str(&raw).unwrap()
 }
 
