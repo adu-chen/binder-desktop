@@ -63,7 +63,7 @@ export function isActiveEditorBoundTo(
     activeEditorBinding.relPath === relPath &&
     activeEditorBinding.loadSeq === loadSeq &&
     activeEditorBinding.editFormat === editFormat &&
-    (contentFormat === undefined || activeEditorBinding.contentFormat === contentFormat),
+    (contentFormat === undefined || (activeEditorBinding.contentFormat ?? "text") === contentFormat),
   );
 }
 

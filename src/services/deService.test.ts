@@ -280,7 +280,7 @@ describe("deService 草稿 diff 裁决", () => {
 
     await rejectDiff("d5");
 
-    expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{ op: "replace_document", content: "<p>旧</p>", format: "html" }]);
+    expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{ op: "replace_document", content: "<p>旧</p>", format: "html", contentFormat: "html" }]);
     expect(edStore.getSnapshot()).toMatchObject({ loadedContent: "<p>旧</p>", tabState: "saved" });
   });
 
@@ -303,7 +303,7 @@ describe("deService 草稿 diff 裁决", () => {
 
     await rejectDiff("d6");
 
-    expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{ op: "replace_document", content: "<p>旧</p>", format: "html" }]);
+    expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{ op: "replace_document", content: "<p>旧</p>", format: "html", contentFormat: "html" }]);
     expect(edStore.getSnapshot()).toMatchObject({ loadedContent: "<p>旧</p>", tabState: "saved" });
   });
 

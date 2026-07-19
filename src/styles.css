@@ -608,8 +608,62 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--ink);
 }
 .editor-paper .ProseMirror p { margin: 0 0 var(--sp-3); }
-.editor-paper .ProseMirror h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
-.editor-paper .ProseMirror h2 { font-size: 16px; font-weight: 600; }
+.editor-paper .ProseMirror h1,
+.editor-paper .ProseMirror h2,
+.editor-paper .ProseMirror h3,
+.editor-paper .ProseMirror h4,
+.editor-paper .ProseMirror h5,
+.editor-paper .ProseMirror h6 {
+  margin: 1.35em 0 .55em;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.editor-paper .ProseMirror h1 { font-size: 28px; }
+.editor-paper .ProseMirror h2 { font-size: 23px; }
+.editor-paper .ProseMirror h3 { font-size: 19px; }
+.editor-paper .ProseMirror h4 { font-size: 17px; }
+.editor-paper .ProseMirror h5 { font-size: 15px; }
+.editor-paper .ProseMirror h6 { font-size: 14px; color: var(--ink-2); }
+.editor-paper .ProseMirror ul,
+.editor-paper .ProseMirror ol { margin: 0 0 var(--sp-3); padding-left: 1.6em; }
+.editor-paper .ProseMirror li > p { margin: 0; }
+.editor-paper .ProseMirror blockquote {
+  margin: var(--sp-4) 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-left: 3px solid var(--gold);
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+.editor-paper .ProseMirror pre {
+  margin: var(--sp-4) 0;
+  padding: var(--sp-3) var(--sp-4);
+  overflow-x: auto;
+  border: 0.5px solid var(--rule);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.editor-paper .ProseMirror code {
+  padding: 0.12em 0.3em;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: .9em;
+}
+.editor-paper .ProseMirror pre code { padding: 0; background: transparent; }
+.editor-paper .ProseMirror hr { margin: var(--sp-6) 0; border: 0; border-top: 1px solid var(--rule); }
+.editor-paper .ProseMirror a { color: var(--blue, #2563eb); text-decoration: underline; text-underline-offset: 2px; }
+.editor-paper .ProseMirror img { max-width: 100%; height: auto; border-radius: var(--r-1); }
+.editor-paper .ProseMirror table { width: 100%; margin: var(--sp-4) 0; border-collapse: collapse; table-layout: fixed; }
+.editor-paper .ProseMirror th,
+.editor-paper .ProseMirror td { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--rule); vertical-align: top; text-align: left; }
+.editor-paper .ProseMirror th { background: var(--bg-sunken); font-weight: 650; }
+.editor-paper .ProseMirror ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.editor-paper .ProseMirror ul[data-type="taskList"] li { display: flex; gap: var(--sp-2); align-items: flex-start; }
+.editor-paper .ProseMirror ul[data-type="taskList"] li > label { margin-top: .35em; }
 .editor-paper .ProseMirror:focus { outline: none; }
 
 /* 分页呈现（BR-ED-DATA-003）：docx 编辑开 A4 纸张观感；几何变量由 PaginationExtension 写入（TS 常量为源）。

@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView } from "../store/agStore";
-import { edStore, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
+import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
 import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditorBinding } from "./edLocate";
 import { loadDocs } from "./wsService";
@@ -170,20 +170,22 @@ function bindingMatches(
   relPath: string | null,
   loadSeq: number,
   editFormat: EditFormat,
+  contentFormat: ContentFormat,
 ): boolean {
   return Boolean(
     relPath &&
     binding &&
     binding.relPath === relPath &&
     binding.loadSeq === loadSeq &&
-    binding.editFormat === editFormat,
+    binding.editFormat === editFormat &&
+    (binding.contentFormat ?? "text") === contentFormat,
   );
 }
 
 function flushBoundActiveEditor(ed = edStore.getSnapshot()): void {
   const binding = getActiveEditorBinding();
-  if (!binding || bindingMatches(binding, ed.openPath, ed.loadSeq, ed.editFormat)) return;
-  const boundContent = getActiveDocumentContent(binding.editFormat);
+  if (!binding || bindingMatches(binding, ed.openPath, ed.loadSeq, ed.editFormat, ed.contentFormat)) return;
+  const boundContent = getActiveDocumentContent(binding.editFormat, binding.contentFormat);
   if (boundContent !== null) edStore.updateContent(binding.relPath, boundContent);
 }
 
@@ -191,19 +193,25 @@ interface ActiveDocTarget {
   relPath: string | null;
   loadSeq: number;
   editFormat: EditFormat;
+  contentFormat: ContentFormat;
 }
 
 export function collectOpenDocSnapshots(target?: ActiveDocTarget): OpenDocSnapshot[] {
   const ed = edStore.getSnapshot();
-  const activeTarget = target ?? { relPath: ed.openPath, loadSeq: ed.loadSeq, editFormat: ed.editFormat };
+  const activeTarget = target ?? {
+    relPath: ed.openPath,
+    loadSeq: ed.loadSeq,
+    editFormat: ed.editFormat,
+    contentFormat: ed.contentFormat,
+  };
   if (!activeTarget.relPath) return edStore.getOpenSnapshots("active_editor_session");
 
   flushBoundActiveEditor(ed);
 
   let latest = edStore.getSnapshot();
   const binding = getActiveEditorBinding();
-  if (bindingMatches(binding, activeTarget.relPath, activeTarget.loadSeq, activeTarget.editFormat)) {
-    const activeContent = getActiveDocumentContent(activeTarget.editFormat);
+  if (bindingMatches(binding, activeTarget.relPath, activeTarget.loadSeq, activeTarget.editFormat, activeTarget.contentFormat)) {
+    const activeContent = getActiveDocumentContent(activeTarget.editFormat, activeTarget.contentFormat);
     if (activeContent === null) {
       throw snapshotError("AG_ACTIVE_SNAPSHOT_REQUIRED", "当前打开文档无法序列化，已阻断代理回合");
     }
@@ -774,6 +782,7 @@ export async function startTurn(
     relPath: turnEd.openPath,
     loadSeq: turnEd.loadSeq,
     editFormat: turnEd.editFormat,
+    contentFormat: turnEd.contentFormat,
   };
   const turnActiveDocPath = turnActiveDocTarget.relPath ?? undefined;
 

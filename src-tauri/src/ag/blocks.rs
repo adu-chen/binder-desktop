@@ -1,7 +1,8 @@
 //! PI-AG-08F · 文档分块（块列表注入 + 块级 propose_edit 重建）。
 //!
 //! 两种文档形态：
-//! - **text/markdown**：按行（`\n`）切块；与 ED textToDoc 的“每行一个 Block”一致，重建 = 替块后 join。
+//! - **text/source-protected Markdown**：按行（`\n`）切块；结构化 Markdown 的 LogicalState 以 HTML
+//!   contentFormat 投影，复用 HTML 块解析，避免 Markdown 源行与编辑器块错位。
 //! - **docx/html**（editFormat=html）：按 `data-block-id` 块级元素切块（与 ED blockId / DOC 兜底同源思路，
 //!   A-DOC-M-T-01 BR-DOC-DATA-003），展示 strip 后文本；重建 = **原串 in-place 替换该块 inner（非破坏，
 //!   保留其余 HTML 与未捕获内容）**。
@@ -56,6 +57,7 @@ pub struct OpenDocSnapshot {
     pub rel_path: String,
     pub content: String,
     pub edit_format: String,
+    pub content_format: String,
     pub source: String,
     pub dirty: bool,
     pub session_version: u64,
@@ -106,6 +108,7 @@ impl AgentReadContext {
                 &open.content,
                 &open.source,
                 Some(open.edit_format.as_str()),
+                Some(open.content_format.as_str()),
                 None,
                 Some(open.session_version),
                 Some(open.content_hash.clone()),
@@ -143,11 +146,14 @@ fn snapshot_from_content(
     content: &str,
     source: &str,
     format_hint: Option<&str>,
+    content_format_hint: Option<&str>,
     baseline: Option<u64>,
     session_version: Option<u64>,
     content_hash: Option<String>,
 ) -> AgentEditableSnapshot {
-    let content_is_html = is_html(content, format_hint);
+    let content_is_html = content_format_hint
+        .map(|format| format == "html")
+        .unwrap_or_else(|| is_html(content, format_hint));
     let content_format = if content_is_html { "html" } else { "text" }.to_string();
     let blocks = project_blocks(content, content_is_html);
     AgentEditableSnapshot {
@@ -292,6 +298,7 @@ pub fn read_editable_snapshot(
         &content,
         &source,
         format_hint.as_deref(),
+        None,
         baseline,
         None,
         None,
@@ -784,6 +791,32 @@ mod tests {
         assert!(is_html(html, Some("html")));
         let texts = block_texts(html, true);
         assert_eq!(texts, vec!["你好世界", "标题"]);
+    }
+
+    #[test]
+    fn markdown_open_snapshot_uses_explicit_html_content_format() {
+        let root = std::env::temp_dir().join(format!("ag-markdown-html-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let ctx = AgentReadContext::new(
+            &root,
+            vec![OpenDocSnapshot {
+                rel_path: "notes.md".to_string(),
+                content: "<h1>标题</h1><p>正文</p>".to_string(),
+                edit_format: "markdown".to_string(),
+                content_format: "html".to_string(),
+                source: "open_editor_session".to_string(),
+                dirty: true,
+                session_version: 2,
+                content_hash: "h2".to_string(),
+                captured_at: 1,
+            }],
+        )
+        .unwrap();
+        let snapshot = ctx.snapshot("notes.md").unwrap();
+        assert_eq!(snapshot.content_format, "html");
+        assert_eq!(snapshot.blocks.len(), 2);
+        assert_eq!(snapshot.blocks[0].text, "标题");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

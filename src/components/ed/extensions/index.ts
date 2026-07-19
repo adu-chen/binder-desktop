@@ -15,6 +15,8 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { CharacterCount } from "@tiptap/extension-character-count";
+import { TaskItem, TaskList } from "@tiptap/extension-list";
+import { Markdown } from "@tiptap/markdown";
 import { BlockIdExtension } from "./BlockIdExtension";
 import { DiffDecorationExtension } from "./DiffDecorationExtension";
 import { PaginationExtension } from "./Pagination";
@@ -34,8 +36,11 @@ export function buildEditorExtensions(): Extensions {
   return [
     // 基础富文本；禁用 v3 StarterKit 自带 link/underline，改用下方独立配置（避免重复扩展报错）。
     StarterKit.configure({ link: false, underline: false }),
-    // tiptap-markdown 已移除（2026-07-03 人类裁定 B）：md 按纯文本忠实编辑（同 txt），不做 markdown
-    // 富文本渲染——根除缩进变代码块与保存转义注入；docx/.html 富文本走 generateJSON HTML 路径。
+    // 官方 TipTap Markdown 与当前 3.27.1 扩展栈对齐；缩进遵循 CommonMark（四空格/Tab 为代码块）。
+    // Markdown 保存前仍须经过 markdownCodec 的能力与语义往返校验，不能直接把 getMarkdown() 写盘。
+    Markdown.configure({ indentation: { style: "space", size: 2 }, markedOptions: { gfm: true } }),
+    TaskList,
+    TaskItem.configure({ nested: true }),
     // 图片（docx 嵌入图，允许 base64/inline）；PI-ED-08：拖拽调宽 + inline/block 嵌入切换（NodeView）。
     ResizableImage.configure({ inline: true, allowBase64: true, HTMLAttributes: { class: "editor-image" } }),
     Link.configure({ openOnClick: false }),

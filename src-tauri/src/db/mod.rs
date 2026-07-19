@@ -199,6 +199,14 @@ const MIGRATIONS: &[Migration] = &[
                 ON ed_open_tabs(workspace_id, open_index);
         "#,
     },
+    Migration {
+        version: 9,
+        // Markdown 终态编辑：会话 LogicalState 的编码与磁盘 edit_format 分离，旧快照默认为 text。
+        sql: r#"
+            ALTER TABLE ed_session_snapshots
+                ADD COLUMN content_format TEXT NOT NULL DEFAULT 'text';
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

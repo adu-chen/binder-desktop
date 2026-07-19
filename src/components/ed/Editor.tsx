@@ -5,10 +5,17 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
 import { applyGreenReview, type GreenReviewValue } from "./extensions/DiffDecorationExtension";
-import { edStore, useEdStore, type EditFormat } from "../../store/edStore";
+import { edStore, useEdStore, type ContentFormat, type EditFormat } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore } from "../../store/deStore";
 import { assistStore, type AssistTarget } from "../../store/assistStore";
-import { makePersistedSnapshot, persistSessionSnapshot, saveDocument, saveDocxDocument } from "../../services/edService";
+import {
+  makePersistedSnapshot,
+  persistSessionSnapshot,
+  saveDocument,
+  saveDocxDocument,
+  saveMarkdownDocument,
+} from "../../services/edService";
+import { serializeMarkdownDocument } from "./markdown/markdownCodec";
 import {
   registerEditor,
   bindActiveEditorDocument,
@@ -50,7 +57,7 @@ const SEED_CONTENT = "开始写作…";
 
 /**
  * 跳转到目标行对应块（搜索命中跳行）：行号 → 顶层块索引（钳制），定位光标 + 滚动到视区。
- * md/txt 均按纯文本装载（行=段落，2026-07-03 人类裁定 B）→ 行号精确。
+ * text/source-protected Markdown 按行装载；结构化 Markdown 按顶层块定位。
  */
 function jumpToLine(editor: NonNullable<ReturnType<typeof useEditor>>, line: number) {
   const doc = editor.state.doc;
@@ -60,8 +67,7 @@ function jumpToLine(editor: NonNullable<ReturnType<typeof useEditor>>, line: num
   editor.chain().focus().setTextSelection(pos).scrollIntoView().run();
 }
 
-/** 纯文本 → ProseMirror doc（每行一段落，忠实往返）。md/txt 共用（2026-07-03 人类裁定 B：
- *  md 按纯文本忠实编辑，对齐旧项目——不做 markdown 富文本渲染，根除缩进变代码块与保存转义注入）。 */
+/** 纯文本或源码保护 Markdown → ProseMirror doc（每行一段落，原文可编辑）。 */
 function textToDoc(text: string) {
   const lines = text.split("\n");
   return {
@@ -72,14 +78,16 @@ function textToDoc(text: string) {
   };
 }
 
-/** 序列化编辑器当前内容为会话格式：html/html_file=HTML（docx 编辑链 / .html 文本往返，PI-ED-13）；
- *  其余（md/txt/纯文本）=getText 忠实往返（裁定 B：不注入转义、不污染文件）。 */
+/** 序列化编辑器当前内容为 LogicalState：HTML 与结构化 Markdown 使用 HTML，纯文本/源码保护使用文本。 */
 function serialize(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   fmt: EditFormat,
+  contentFormat: ContentFormat,
   _path: string | null,
 ): string {
-  if (fmt === "html" || fmt === "html_file") return editor.getHTML();
+  if (fmt === "html" || fmt === "html_file" || (fmt === "markdown" && contentFormat === "html")) {
+    return editor.getHTML();
+  }
   return editor.getText({ blockSeparator: "\n" });
 }
 
@@ -93,7 +101,14 @@ function persistEditorSessionSnapshot(path: string): void {
   const sess = edStore.getSnapshot().sessions[path];
   if (!sess || sess.content === null) return;
   void persistSessionSnapshot(
-    makePersistedSnapshot(path, sess.content, sess.editFormat, isDirtySessionState(sess.tabState), sess.sessionVersion),
+    makePersistedSnapshot(
+      path,
+      sess.content,
+      sess.editFormat,
+      isDirtySessionState(sess.tabState),
+      sess.sessionVersion,
+      sess.contentFormat,
+    ),
   ).catch((e) => {
     console.error(`ed session snapshot persist failed ${String(e)}`);
   });
@@ -125,7 +140,7 @@ const scrollMemo = new Map<string, number>();
 const ASSIST_ANCHOR_CONTEXT_CHARS = 80;
 
 export function Editor() {
-  const { openPath, tabState, loadSeq, loadedContent, editFormat, converting } = useEdStore();
+  const { openPath, tabState, loadSeq, loadedContent, editFormat, contentFormat, converting } = useEdStore();
   const { diffs } = useDeStore(); // GreenReview 同步用（标签状态投影已移至 center TabStrip）
   const hostRef = useRef<HTMLDivElement>(null);
   const paperRef = useRef<HTMLDivElement>(null);
@@ -448,7 +463,7 @@ export function Editor() {
     onUpdate: ({ editor: activeEditor }) => {
       const ed = edStore.getSnapshot();
       if (ed.openPath) {
-        edStore.updateContent(ed.openPath, serialize(activeEditor, ed.editFormat, ed.openPath));
+        edStore.updateContent(ed.openPath, serialize(activeEditor, ed.editFormat, ed.contentFormat, ed.openPath));
       }
       edStore.markDirty();
       if (ed.openPath) scheduleEditorSessionSnapshotPersist(ed.openPath);
@@ -613,14 +628,14 @@ export function Editor() {
 
   // 载入活动会话：loadSeq 变更（loadDoc / 切换活动会话 setActivePath 投影）→ 先把上一文档的当前编辑序列化
   // 回写其会话（切标签不丢草稿），再 setContent 活动会话内容（不触发脏态）。
-  // md/txt 一律按纯文本装载（裁定 B）；docx/html 经 generateJSON 按 HTML 解析。
+  // text/source-protected Markdown 按纯文本装载；结构化 Markdown、docx/html 按 HTML LogicalState 解析。
   useEffect(() => {
     if (!editor || loadSeq === 0) return;
     // 切换标签前：暂存上一活动文档的当前编辑内容到其会话（按其格式序列化）+ 滚动位置（N7）。
     const prev = lastPathRef.current;
     if (prev && prev !== openPath) {
       const prevSess = edStore.getSnapshot().sessions[prev];
-      if (prevSess) edStore.updateContent(prev, serialize(editor, prevSess.editFormat, prev));
+      if (prevSess) edStore.updateContent(prev, serialize(editor, prevSess.editFormat, prevSess.contentFormat, prev));
       persistEditorSessionSnapshot(prev);
       if (paperRef.current) scrollMemo.set(prev, paperRef.current.scrollTop);
     }
@@ -629,16 +644,16 @@ export function Editor() {
       clearActiveEditorBinding();
       return;
     }
-    if (editFormat === "html" || editFormat === "html_file") {
+    if (editFormat === "html" || editFormat === "html_file" || (editFormat === "markdown" && contentFormat === "html")) {
       // docx 编辑链 / .html 独立文件（PI-ED-13）：loadedContent 为 HTML，用 generateJSON 按 HTML 解析为
       // ProseMirror JSON；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析。
       // .html 源含 data-block-id 时经 BlockIdExtension parseHTML 恢复（blockId 跨保存稳定，REQ-ED-008）。
       editor.commands.setContent(generateJSON(loadedContent, buildEditorExtensions()), { emitUpdate: false });
     } else {
-      // md/txt/纯文本：按行装载忠实呈现（裁定 B，2026-07-03——不经 markdown 解析，缩进/语法字符原样）。
+      // 纯文本或无法无损处理的 Markdown：源码保护，按行装载，不丢失原始语句。
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
     }
-    bindActiveEditorDocument({ relPath: openPath, loadSeq, editFormat });
+    bindActiveEditorDocument({ relPath: openPath, loadSeq, editFormat, contentFormat });
     // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开分页，md/纯文本关（人类决策 2026-07-02）。
     // 纸张几何取该文档视图偏好（PI-ED-06）。纯呈现层——不触发脏态（仅 setMeta，docChanged=false）。
     if (editFormat === "html" && openPath) {
@@ -665,15 +680,21 @@ export function Editor() {
 
   const saveCurrent = async () => {
     if (!editor) return;
-    if (!isActiveEditorBoundTo(openPath, loadSeq, editFormat)) return;
+    if (!isActiveEditorBoundTo(openPath, loadSeq, editFormat, contentFormat)) return;
+    if (tabState !== "dirty" && tabState !== "pending_diff" && tabState !== "saving") return;
     const saveSerialized = async (override = false) => {
       if (editFormat === "html") {
-        return saveDocxDocument(serialize(editor, "html", openPath), override);
+        return saveDocxDocument(serialize(editor, "html", "html", openPath), override);
       }
       if (editFormat === "html_file") {
-        return saveDocument(serialize(editor, "html_file", openPath), override);
+        return saveDocument(serialize(editor, "html_file", "html", openPath), override);
       }
-      return saveDocument(serialize(editor, "text", openPath), override);
+      if (editFormat === "markdown" && contentFormat === "html") {
+        const candidate = serializeMarkdownDocument(editor.getJSON());
+        if (!candidate.ok) return { ok: false as const, message: candidate.message };
+        return saveMarkdownDocument(candidate.markdown, editor.getHTML(), "html", override);
+      }
+      return saveDocument(serialize(editor, editFormat, contentFormat, openPath), override);
     };
 
     const result = await saveSerialized(false);
@@ -717,11 +738,11 @@ export function Editor() {
     if (!editor) return;
     const ed = edStore.getSnapshot();
     const open = ed.openPath;
-    if (!isActiveEditorBoundTo(open, ed.loadSeq, ed.editFormat)) return;
+    if (!isActiveEditorBoundTo(open, ed.loadSeq, ed.editFormat, ed.contentFormat)) return;
     for (const d of deStore.getSnapshot().diffs) {
       const hasStyleOps = Boolean(d.styleOpsPayload?.length);
       if (d.relPath !== open || d.state !== "pending" || d.draftApplied || d.draftSaved) continue;
-      const baseContent = serialize(editor, editFormat, open);
+      const baseContent = serialize(editor, editFormat, contentFormat, open);
       const syntheticAfter = isSyntheticAfter(d.after);
       if (!d.blockId && !hasStyleOps && syntheticAfter) {
         deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_CONTENT_MISSING" });
@@ -734,7 +755,7 @@ export function Editor() {
           continue;
         }
       } else if (!d.blockId && !hasStyleOps && d.patchKind === "replace_document" && !syntheticAfter) {
-        const applied = applyEditOps([{ op: "replace_document", content: d.after, format: editFormat }]);
+        const applied = applyEditOps([{ op: "replace_document", content: d.after, format: editFormat, contentFormat }]);
         if (!applied.ok) {
           deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_REPLACE_FAILED" });
           continue;
@@ -750,7 +771,7 @@ export function Editor() {
           continue;
         }
       }
-      deStore.markDraftApplied(d.diffId, baseContent, tabState, serialize(editor, editFormat, open));
+      deStore.markDraftApplied(d.diffId, baseContent, tabState, serialize(editor, editFormat, contentFormat, open));
     }
 
     const map = new Map<string, GreenReviewValue>();
@@ -766,7 +787,7 @@ export function Editor() {
       }
     }
     applyGreenReview(editor.view, map);
-  }, [editor, diffs, editFormat, tabState, openPath, loadSeq]);
+  }, [editor, diffs, editFormat, contentFormat, tabState, openPath, loadSeq]);
 
   /**
    * @GOV

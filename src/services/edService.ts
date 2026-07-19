@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readDoc, saveDoc } from "./wsService";
 import { openDocxForEdit, saveDocxFromEdit, isDocxEditable } from "./docService";
-import { edStore, hashLogicalContent, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
+import { edStore, hashLogicalContent, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import type { PersistedOpenDocTab } from "../store/tabsStore";
 import { deStore } from "../store/deStore";
+import { parseMarkdownForEditing } from "../components/ed/markdown/markdownCodec";
 
 /**
  * ED 编排 Service（X-SEQ-002）：打开/保存真实文档。
@@ -43,6 +44,10 @@ export function isHtmlFile(relPath: string): boolean {
   return ext === "html" || ext === "htm";
 }
 
+export function isMarkdownFile(relPath: string): boolean {
+  return relPath.toLowerCase().endsWith(".md") || relPath.toLowerCase().endsWith(".markdown");
+}
+
 export async function persistSessionSnapshot(snapshot: OpenDocSnapshot): Promise<void> {
   await callCommand("ed.persist_session_snapshot", { snapshot });
 }
@@ -67,11 +72,14 @@ export function makePersistedSnapshot(
   editFormat: EditFormat,
   dirty: boolean,
   sessionVersion?: number,
+  contentFormat?: ContentFormat,
 ): OpenDocSnapshot {
+  const session = edStore.getSnapshot().sessions[relPath];
   return {
     relPath,
     content,
     editFormat,
+    contentFormat: contentFormat ?? session?.contentFormat ?? (editFormat === "html" || editFormat === "html_file" ? "html" : "text"),
     source: "open_editor_session",
     dirty,
     sessionVersion: sessionVersion ?? edStore.getSnapshot().sessions[relPath]?.sessionVersion ?? 1,
@@ -82,13 +90,13 @@ export function makePersistedSnapshot(
 
 /**
  * @GOV
- * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-012
+ * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016
  * type:     RB
  * chain:    ED-EDIT
- * rules:    BR-ED-DATA-002
- * boundary: in=workspaceDocumentPath | out=editSessionContentModel(textOrHtmlViaCorrectPipeline)
+ * rules:    BR-ED-DATA-002, BR-ED-DATA-006
+ * boundary: in=workspaceDocumentPath | out=editSessionLogicalState(editFormatAndContentFormatExplicit)
  */
-/// md/BDocx/html 统一编辑模型守则（BR-ED-DATA-002）。
+/// Markdown/BDocx/html 统一编辑模型守则（BR-ED-DATA-002/006）。
 /** 打开文档：docx 经 DOC 编辑链（doc.open_for_edit → HTML），其余经 ws.read_doc（文本）→ 载入编辑器
  *  （内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
 export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
@@ -100,16 +108,24 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
       edStore.loadDoc(relPath, html, baseline, jumpLine, "html");
       const sess = edStore.getSnapshot().sessions[relPath];
       if (sess) {
-        await persistSessionSnapshot(makePersistedSnapshot(relPath, html, "html", false, sess.sessionVersion));
+        await persistSessionSnapshot(makePersistedSnapshot(relPath, html, "html", false, sess.sessionVersion, "html"));
       }
       return;
     }
     const { content, baseline } = await readDoc(relPath);
-    const editFormat = isHtmlFile(relPath) ? "html_file" : "text";
-    edStore.loadDoc(relPath, content, baseline, jumpLine, editFormat);
+    let logicalContent = content;
+    let editFormat: EditFormat = isHtmlFile(relPath) ? "html_file" : "text";
+    let contentFormat: ContentFormat = isHtmlFile(relPath) ? "html" : "text";
+    if (isMarkdownFile(relPath)) {
+      editFormat = "markdown";
+      const parsed = parseMarkdownForEditing(content);
+      logicalContent = parsed.ok ? parsed.html : parsed.source;
+      contentFormat = parsed.contentFormat;
+    }
+    edStore.loadDoc(relPath, logicalContent, baseline, jumpLine, editFormat, contentFormat);
     const sess = edStore.getSnapshot().sessions[relPath];
     if (sess) {
-      await persistSessionSnapshot(makePersistedSnapshot(relPath, content, editFormat, false, sess.sessionVersion));
+      await persistSessionSnapshot(makePersistedSnapshot(relPath, logicalContent, editFormat, false, sess.sessionVersion, contentFormat));
     }
   } catch (e) {
     const err = e as IpcLikeError;
@@ -145,6 +161,44 @@ export async function saveDocument(content: string, override = false): Promise<S
     const sess = edStore.getSnapshot().sessions[path];
     if (sess) {
       await persistSessionSnapshot(makePersistedSnapshot(path, content, sess.editFormat, false, sess.sessionVersion));
+    }
+    deStore.markDraftSaved(path);
+    return { ok: true };
+  } catch (e) {
+    const err = e as IpcLikeError;
+    edStore.setTabState(path, "dirty");
+    return { ok: false, message: err.message ?? String(e), conflict: isSaveConflict(err) };
+  }
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016
+ * type:     GUARD
+ * chain:    ED-EDIT
+ * rules:    BR-ED-VERIFY-001, BR-ED-DATA-006
+ * boundary: in=validatedMarkdownDiskCandidateAndLogicalState | out=WorkspaceSaveAndPersistedLogicalSnapshot(noFormatConflation)
+ */
+/// Markdown 写盘只接收已经过 Codec 能力/语义校验的 DiskState 候选；保存成功后 session 仍持有
+/// LogicalState（HTML 或源码保护 text），不得把 Markdown 源码误写回 HTML LogicalState 槽位。
+export async function saveMarkdownDocument(
+  markdown: string,
+  logicalContent: string,
+  contentFormat: ContentFormat,
+  override = false,
+): Promise<SaveOutcome> {
+  const { openPath, baseline } = edStore.getSnapshot();
+  if (!openPath) return { ok: false, message: "无打开的文档" };
+  const path = openPath;
+  try {
+    const newBaseline = await saveDoc(path, markdown, baseline, override);
+    edStore.updateContent(path, logicalContent);
+    edStore.setBaseline(path, newBaseline);
+    const sess = edStore.getSnapshot().sessions[path];
+    if (sess) {
+      await persistSessionSnapshot(
+        makePersistedSnapshot(path, logicalContent, "markdown", false, sess.sessionVersion, contentFormat),
+      );
     }
     deStore.markDraftSaved(path);
     return { ok: true };

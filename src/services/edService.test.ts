@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -34,6 +35,19 @@ describe("edService 保存契约", () => {
         params: { relPath: "a.md", content: "new content", baseline: 100, override: false },
       },
     });
+    expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({
+      request: {
+        command: "ed.persist_session_snapshot",
+        params: {
+          snapshot: {
+            relPath: "a.md",
+            content: "new content",
+            editFormat: "text",
+            dirty: false,
+          },
+        },
+      },
+    });
   });
 
   // covers: BR-ED-STATE-003
@@ -61,13 +75,19 @@ describe("edService 保存契约", () => {
 
 describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模型）", () => {
   // covers: BR-ED-DATA-002
-  it("md → ws.read_doc 文本模型（editFormat=text）", async () => {
+  it("md → Markdown Codec 终态模型（editFormat=markdown/contentFormat=html）", async () => {
     edStore.reset();
     invokeMock.mockResolvedValue(ok({ content: "# md", baseline: 11 }));
     await openDocument("notes/x.md");
     const s = edStore.getSnapshot();
-    expect(s).toMatchObject({ openPath: "notes/x.md", editFormat: "text", loadedContent: "# md", baseline: 11 });
+    expect(s).toMatchObject({ openPath: "notes/x.md", editFormat: "markdown", contentFormat: "html", baseline: 11 });
     expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ request: { command: "ws.read_doc" } });
+    expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({
+      request: {
+        command: "ed.persist_session_snapshot",
+        params: { snapshot: { relPath: "notes/x.md", editFormat: "markdown", contentFormat: "html", dirty: false } },
+      },
+    });
   });
 
   it("*.draft.docx → doc.open_for_edit HTML 模型（editFormat=html）", async () => {
@@ -77,6 +97,12 @@ describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模
     const s = edStore.getSnapshot();
     expect(s).toMatchObject({ openPath: "notes/y.draft.docx", editFormat: "html", loadedContent: "<p>h</p>", baseline: 22 });
     expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ request: { command: "doc.open_for_edit" } });
+    expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({
+      request: {
+        command: "ed.persist_session_snapshot",
+        params: { snapshot: { relPath: "notes/y.draft.docx", content: "<p>h</p>", editFormat: "html", dirty: false } },
+      },
+    });
   });
 
   it("后端登记的 BDocx 普通 .docx → doc.open_for_edit HTML 模型", async () => {
@@ -91,6 +117,12 @@ describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模
       baseline: 23,
     });
     expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ request: { command: "doc.open_for_edit" } });
+    expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({
+      request: {
+        command: "ed.persist_session_snapshot",
+        params: { snapshot: { relPath: "notes/generated.docx", content: "<p>h</p>", editFormat: "html", dirty: false } },
+      },
+    });
   });
 
   it(".html 独立文件 → ws.read_doc 富文本模型（editFormat=html_file）", async () => {
@@ -100,6 +132,19 @@ describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模
     const s = edStore.getSnapshot();
     expect(s).toMatchObject({ openPath: "site/index.html", editFormat: "html_file", baseline: 33 });
     expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ request: { command: "ws.read_doc" } });
+    expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({
+      request: {
+        command: "ed.persist_session_snapshot",
+        params: {
+          snapshot: {
+            relPath: "site/index.html",
+            content: '<p data-block-id="b1">页面</p>',
+            editFormat: "html_file",
+            dirty: false,
+          },
+        },
+      },
+    });
   });
 
   it("打开失败 → 撤销占位会话（不留假空文档）", async () => {

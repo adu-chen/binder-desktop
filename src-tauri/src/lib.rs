@@ -1723,13 +1723,14 @@ fn route_persist_session_snapshot(
     let conn = lock_db(state)?;
     conn.execute(
         "INSERT OR REPLACE INTO ed_session_snapshots \
-         (workspace_id, rel_path, content, edit_format, dirty, session_version, content_hash, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         (workspace_id, rel_path, content, edit_format, content_format, dirty, session_version, content_hash, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             ws.workspace_id,
             snapshot.rel_path,
             snapshot.content,
             snapshot.edit_format,
+            snapshot.content_format,
             if snapshot.dirty { 1 } else { 0 },
             session_version,
             snapshot.content_hash,
@@ -1745,23 +1746,24 @@ fn route_list_session_snapshots(state: &AppState) -> Result<serde_json::Value, I
     let conn = lock_db(state)?;
     let mut stmt = conn
         .prepare(
-            "SELECT rel_path, content, edit_format, dirty, session_version, content_hash, updated_at \
+            "SELECT rel_path, content, edit_format, content_format, dirty, session_version, content_hash, updated_at \
              FROM ed_session_snapshots WHERE workspace_id = ?1 ORDER BY updated_at ASC",
         )
         .map_err(|e| IpcError::new("ED_SESSION_DB_ERROR", &e.to_string(), true, false))?;
     let rows = stmt
         .query_map([ws.workspace_id], |r| {
-            let dirty: i64 = r.get(3)?;
-            let session_version: i64 = r.get(4)?;
-            let updated_at: i64 = r.get(6)?;
+            let dirty: i64 = r.get(4)?;
+            let session_version: i64 = r.get(5)?;
+            let updated_at: i64 = r.get(7)?;
             Ok(serde_json::json!({
                 "relPath": r.get::<_, String>(0)?,
                 "content": r.get::<_, String>(1)?,
                 "editFormat": r.get::<_, String>(2)?,
+                "contentFormat": r.get::<_, String>(3)?,
                 "source": "open_editor_session",
                 "dirty": dirty != 0,
                 "sessionVersion": session_version.max(0),
-                "contentHash": r.get::<_, String>(5)?,
+                "contentHash": r.get::<_, String>(6)?,
                 "capturedAt": updated_at,
             }))
         })
@@ -2560,6 +2562,7 @@ mod ag_reference_context_tests {
                 rel_path: "notes/a.md".to_string(),
                 content: "打开后的最新内容".to_string(),
                 edit_format: "text".to_string(),
+                content_format: "text".to_string(),
                 source: "open_editor_session".to_string(),
                 dirty: true,
                 session_version: 2,
@@ -2619,6 +2622,7 @@ mod ag_reference_context_tests {
                 rel_path: "a.html".to_string(),
                 content: "<p data-block-id=\"b1\">0123456789</p>".to_string(),
                 edit_format: "html".to_string(),
+                content_format: "html".to_string(),
                 source: "active_editor".to_string(),
                 dirty: true,
                 session_version: 4,

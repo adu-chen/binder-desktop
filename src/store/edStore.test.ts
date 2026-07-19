@@ -71,6 +71,12 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
     expect(edStore.getSnapshot().editFormat).toBe("text");
   });
 
+  it("Markdown 终态会话显式保存 contentFormat=html", () => {
+    edStore.loadDoc("notes.md", "<h1>标题</h1>", 3, null, "markdown", "html");
+    const snapshot = edStore.getOpenSnapshots()[0];
+    expect(snapshot).toMatchObject({ editFormat: "markdown", contentFormat: "html", content: "<h1>标题</h1>" });
+  });
+
   it("getOpenSnapshots 可显式标识 active_editor_session source", () => {
     edStore.loadDoc("a.md", "A", 1);
     edStore.loadDoc("b.md", "B", 2);
@@ -88,6 +94,7 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
         relPath: "a.md",
         content: "A",
         editFormat: "text",
+        contentFormat: "text",
         source: "open_editor_session",
         dirty: false,
         sessionVersion: 1,
@@ -98,6 +105,7 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
         relPath: "b.md",
         content: "B",
         editFormat: "text",
+        contentFormat: "text",
         source: "open_editor_session",
         dirty: true,
         sessionVersion: 3,

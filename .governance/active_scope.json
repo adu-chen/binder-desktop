@@ -22,9 +22,7 @@
     "src/components/ed/Editor.tsx",
     "src/components/ed/Editor.test.tsx",
     "src/components/ed/extensions/index.ts",
-    "src/components/ed/markdown/markdownCodec.ts",
-    "src/components/ed/markdown/markdownCodec.test.ts",
-    "src/components/ed/markdown/markdownFixtures.ts",
+    "src/components/ed/markdown/**",
     "src/styles.css",
     "src/store/edStore.ts",
     "src/store/edStore.test.ts",
@@ -39,6 +37,7 @@
     "src/services/workspaceService.ts",
     "src/services/workspaceService.test.ts",
     "src-tauri/src/ag/blocks.rs",
+    "src-tauri/src/ag/tool_exec.rs",
     "src-tauri/src/db/mod.rs",
     "src-tauri/src/lib.rs"
   ],
@@ -49,5 +48,5 @@
     "docs/00_core/A-CORE-C-P-01_APC.md"
   ],
   "confirmation": "YES",
-  "scope_reason": "ED-MARKDOWN-RICH-ROUNDTRIP-01（人类确认）：在既有 ED-EDIT 链内增加 Markdown 解析、终态富文本展示、安全序列化及 AG/DE/会话投影适配；保留纯文本路径且禁止静默数据丢失。"
+  "scope_reason": "ED-MARKDOWN-RICH-ROUNDTRIP-01（人类确认）：在既有 ED-EDIT 链内实现 Markdown 终态富文本往返，并同步 ED/SYS/AG/DE 契约与验证。"
 }

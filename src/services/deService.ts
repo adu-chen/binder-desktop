@@ -100,12 +100,12 @@ function replaceHtmlBlock(content: string, blockId: string | undefined, blockInd
   return `${content.slice(0, target.start)}${escaped}${content.slice(target.end)}`;
 }
 
-function applyOpenSessionPatch(diff: DiffView, content: string, editFormat: string): string | null {
+function applyOpenSessionPatch(diff: DiffView, content: string, editFormat: string, contentFormat: string): string | null {
   if (diff.patchKind === "style_ops") return null;
   if (diff.patchKind === "replace_document") return diff.after;
   if (diff.patchKind === "replace_block") {
     const index = typeof diff.blockIndex === "number" ? diff.blockIndex : undefined;
-    if (editFormat === "html" || editFormat === "html_file") {
+    if (contentFormat === "html" || editFormat === "html" || editFormat === "html_file") {
       return replaceHtmlBlock(content, diff.blockId || undefined, index, diff.after);
     }
     return replaceTextBlock(content, index, diff.after);
@@ -175,7 +175,7 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
     await expireDiff(diffId, "apply_replace_failed", "ED_OPEN_SESSION_STYLE_OPS_UNSUPPORTED");
     return;
   }
-  const nextContent = applyOpenSessionPatch(diff, session.content, session.editFormat);
+  const nextContent = applyOpenSessionPatch(diff, session.content, session.editFormat, session.contentFormat);
   if (nextContent === null) {
     await expireDiff(diffId, "block_resolve_failed", "ED_OPEN_SESSION_APPLY_FAILED");
     return;
@@ -210,9 +210,9 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
  * 无打开文档则忽略。before/after 预览本地保留（DiffCard 展示），真实内容已持久化为 DiffPayload。
  */
 export async function generateSampleDiff(): Promise<void> {
-  const { openPath, loadedContent, editFormat } = edStore.getSnapshot();
+  const { openPath, loadedContent, editFormat, contentFormat } = edStore.getSnapshot();
   if (!openPath) return;
-  const baseContent = getActiveDocumentContent(editFormat) ?? loadedContent;
+  const baseContent = getActiveDocumentContent(editFormat, contentFormat) ?? loadedContent;
   if (baseContent === null) return;
   const after = `${baseContent}\n\n> （示例修改）AI 追加的一段说明文字。`;
   try {
@@ -282,7 +282,7 @@ export async function rejectDiff(diffId: string): Promise<void> {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
     if (diff?.draftMode === "open_session" || diff?.readonly) return;
     await callCommand("de.reject_diff", { diffId });
-    const { openPath, editFormat } = edStore.getSnapshot();
+    const { openPath, editFormat, contentFormat } = edStore.getSnapshot();
     if (
       diff?.draftApplied &&
       diff.relPath === openPath &&
@@ -291,11 +291,11 @@ export async function rejectDiff(diffId: string): Promise<void> {
     ) {
       // D4 后置编辑检测（A-CORE-C-T-01 §5.4）：比较当前内容与 draftAfterContent。
       // 相等 = diff 生效后无用户编辑，不等 = 用户又编辑过内容。
-      const preRollbackContent = getActiveDocumentContent(editFormat);
+      const preRollbackContent = getActiveDocumentContent(editFormat, contentFormat);
       const hasPostDraftEdit = diff.draftAfterContent !== undefined
         && preRollbackContent !== null
         && preRollbackContent !== diff.draftAfterContent;
-      const restored = applyEditOps([{ op: "replace_document", content: diff.draftBaseContent, format: editFormat }]);
+      const restored = applyEditOps([{ op: "replace_document", content: diff.draftBaseContent, format: editFormat, contentFormat }]);
       if (!restored.ok) {
         deStore.setLocalView(diffId, "error", { errorCode: "ED_DRAFT_ROLLBACK_RESTORE_FAILED" });
         return;
@@ -312,7 +312,7 @@ export async function rejectDiff(diffId: string): Promise<void> {
     if (diff?.draftApplied && diff.blockId && diff.relPath === openPath) {
       const located = applyEditOps([{ op: "replace_block", blockId: diff.blockId, text: diff.before }]);
       if (!located.ok) deStore.setLocalView(diffId, "error", { errorCode: "ED_DRAFT_ROLLBACK_ANCHOR_LOST" });
-      const currentContent = getActiveDocumentContent(editFormat);
+      const currentContent = getActiveDocumentContent(editFormat, contentFormat);
       if (located.ok && currentContent !== null) {
         edStore.updateContent(openPath, currentContent);
         // 块级路径：如果 currentContent !== draftBaseContent，其他块可能有未保存编辑，

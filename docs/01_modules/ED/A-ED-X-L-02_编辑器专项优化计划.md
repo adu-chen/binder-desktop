@@ -129,6 +129,13 @@
 - **文件范围**：`Editor.tsx`/`edService.ts` 格式路由（.html → 富文本 editFormat，读写仍经 ws.read_doc/save_doc 文本路径，**不经 DOC**——非二进制，X-SEQ-004 不涉及）；序列化 getHTML 往返；blockId 经 data-block-id 落 HTML（.html 源可承载，与 md 不注入策略区分声明）。
 - **验收**：.html 打开为富文本、编辑保存往返保真、blockId 跨保存稳定（.html 可落盘 id，锚定强于 md）。
 
+### PI-ED-14 · Markdown 终态富文本安全往返（ED-MARKDOWN-RICH-ROUNDTRIP-01）
+
+- **状态**：in_progress（2026-07-18 人类确认，替代 2026-07-03 的 Markdown 纯文本裁决）。
+- **规则来源**：REQ-ED-001 → BR-ED-DATA-002 / BR-ED-DATA-006 / BR-ED-VERIFY-001；复用 ED-EDIT 与 SM-ED-01。
+- **范围**：官方 TipTap Markdown Codec、`editFormat=markdown` / `contentFormat`、终态样式、格式能力限制、AG/DE block projection、会话持久化迁移。
+- **验收**：CommonMark+GFM 支持子集终态呈现；未编辑不改写；编辑后语义往返；非支持结构不静默丢失；`.txt`、b-docx、html 路径不回归。
+
 **候补清单（不开 PI，待人类排期）**：N2 编辑器内查找/替换；N4 本地图片插入（需 A-WS-I-P-01 增
 `ws.import_media`）；N5 链接编辑弹层（随 #11 顺手）；N9 编辑器分页 vs PRV 打印分页差异说明（文档
 动作）；N10 自动保存（产品决策，与基线冲突模型有张力，默认不做）。
@@ -138,7 +145,7 @@
 ```
 批A：PI-ED-06（bug 优先）→ PI-ED-07 → PI-ED-08          ——无契约依赖，可即刻推进
 批B：PI-ED-09（地基实测）→ 文档修订（§3.2，人类确认）→ PI-ED-10 → PI-ED-11 → PI-ED-12
-批C：PI-ED-13 → 候补项按人类排期
+批C：PI-ED-13 → PI-ED-14（Markdown Codec 与跨模块投影）→ 候补项按人类排期
 ```
 
 排序逻辑：批A 含已上线功能缺陷（#8）与纯视图快赢；批B 是「agent 精确编辑」主线，**契约先行**
@@ -170,3 +177,4 @@
 | 2026-07-03 | v1.2 | 执行状态更新：PI-ED-12 大纲面板完成（视图层）+ PI-ED-13 .html 接入完成（html_file 格式路由，blockId 跨保存稳定）；计划内客户端可独立项全部落地，余 PI-ED-11 后端三件（§8 协调）+ 全批真机验收 |
 | 2026-07-03 | v1.3 | PI-ED-11 后端三件完成（人类授权「推进后端」）：ag.list_blocks 样式投影（blocks.rs extract_marks/extract_block_attrs，@GOV BR-ED-DATA-005 读侧后端承载）、DiffPayload style_ops 持久化（db 迁移 v5 + generate/store/route 透传，AG/CBT 构造点 None 占位待解桩填充）、DiffCard 样式摘要呈现（DiffView.styleOps）；计划全部 PI 收口 |
 | 2026-07-04 | v1.4 | 分页页高三轮收敛结案（位置差分+无缝测量+zoom 自校准+fill 补足，真机 123 页确认）；§7 登记两条 A 类债务：大文档增量测量（卡顿残余）、**重排滚动锚定+光标保持（较严重，含根治方案指引，按人类 10 行阈值纪律记债）** |
+| 2026-07-18 | v1.5 | 新增 PI-ED-14 Markdown 终态富文本安全往返：复用 ED-EDIT/SM-ED-01，接 BR-ED-DATA-006/BR-ED-VERIFY-001，覆盖 Codec、contentFormat、样式能力、AG/DE 与会话迁移；显式替代 2026-07-03 纯文本实现裁决但保留历史记录 |

@@ -212,6 +212,7 @@ mod tests {
                 rel_path: "a.md".to_string(),
                 content: "最新 LogicalState".to_string(),
                 edit_format: "text".to_string(),
+                content_format: "text".to_string(),
                 source: "open_editor_session".to_string(),
                 dirty: true,
                 session_version: 3,

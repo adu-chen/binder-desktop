@@ -75,7 +75,7 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 
 | step | actor | input | action | output | next | exception |
 |---|---|---|---|---|---|---|
-| 1 | WS | workspace 内文档内容 | ED 加载为富文本编辑模型（md/docx） | 可编辑文档 | 2 | 内容无法解析→提示并降级只读 |
+| 1 | WS | workspace 内文档内容 | ED 按磁盘格式解析为富文本编辑模型（Markdown 经 Markdown Codec，b-docx 经 DOC） | 可编辑文档 | 2 | 内容无法无损解析→提示并进入源码保护/只读降级，不静默丢失 |
 | 2 | 用户 | 编辑操作 | ED 更新编辑模型并标记脏 | 脏编辑态 | 3 | 离线时编辑照常可用（REQ-CORE-009） |
 | 3 | 用户/ED | save 触发 | ED 交 WS 落盘（A-WS-M-T-01 SM-WS-01） | 已保存 | 终态 | 落盘失败由 WS 回报，ED 保持脏态可重试 |
 
@@ -108,10 +108,10 @@ req_id: REQ-ED-001
 title: 富文本编辑运行时（md/docx）
 owner_module: ED
 status: active
-summary: 提供基于 TipTap 的富文本编辑运行时，支持 workspace 内 md/docx 内容的加载、编辑与脏态管理，编辑能力离线可用；落盘经 WS
+summary: 提供基于 TipTap 的富文本编辑运行时，支持 workspace 内 Markdown/b-docx 内容按格式解析为结构化 LogicalState、以终态样式编辑并安全序列化，编辑能力离线可用；落盘经 WS
 source_doc: APC §4.1、REQ-CORE-004、REQ-CORE-009
-acceptance: md/docx 内容可加载为富文本并编辑；离线时编辑可用；save 经 WS 可靠落盘（A-WS-M-T-01）
-open_issues: TipTap/ProseMirror 版本与扩展集、自定义 schema 选型归 ED L2（ED-01）；docx 富文本编辑与 DOC 转换边界归 ED/DOC L2（ED-04）
+acceptance: Markdown 的 H1-H6、强调、列表、引用、代码、链接、图片、表格、分隔线等受支持语法加载后以终态富文本呈现且源码标记不作为正文显示；未编辑 Markdown 不改写，编辑后保存保持支持子集语义等价，无法无损处理时不得静默保存；b-docx 可加载为富文本并编辑；纯文本行为不变；离线编辑可用；save 经 WS 可靠落盘（A-WS-M-T-01）
+open_issues: Markdown 扩展仍为 Beta，具体兼容范围与非标准语法降级由 ED L2 及 fixtures 门禁锁定；docx 富文本编辑与 DOC 转换边界归 ED/DOC L2（ED-04）
 -->
 
 <!-- REQ
@@ -249,3 +249,4 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 2026-06-10 | v1.0 | 初版：ED 编辑器模块级 L1；声明 REQ-ED-001~005（富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层供 diff 呈现），承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009；代表性流程 E1–E3；边界闭合（含与 WS/DE/DOC/AG 边界，TipTap 选型延 ED L2）与 G1 暴露清单（ED-01~06 显式延期/部分关闭；inline-assist/autocomplete 归属待人类确认） |
 | 2026-07-03 | v1.1 | 编辑器专项优化承接（A-ED-X-L-02 批B，人类裁定 D-1/D-2/D-3）：追加 REQ-ED-006 字符级定位与选区引用（会话内锚，跨会话显式延后）、REQ-ED-007 agent 可读可编辑的样式协议（落盘路径 A 默认+B 限内联）、REQ-ED-008 .html 富文本编辑接入；技术契约分别归 ED L2 BR-ED-DATA-004/005 与 BR-ED-DATA-002 修订 |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-18 | v1.3 | 人类裁决替代 2026-07-03 Markdown 纯文本路径：修订 REQ-ED-001，要求 Markdown 经格式 Codec 进入结构化 LogicalState、默认终态富文本呈现、未编辑不改写、编辑后语义往返且非支持结构不得静默丢失；纯文本路径保持不变 |
