@@ -153,3 +153,24 @@ scope_reason: 人类确认在既有 ED-EDIT 链内实现 Markdown 终态富文�
 - 默认采用 CommonMark + GFM；第一阶段对无法无损表达的非标准语法采取源码保护/阻止富文本保存策略。
 - 不新增 TERM；`MarkdownCodec`、`contentFormat` 为技术实现词汇，代码不新增 `term_ref`。
 - 官方 `@tiptap/markdown` 仅在实际扩展栈与 fixtures 验证通过后纳入正式依赖。
+
+## 实施结果
+
+- `.md` / `.markdown` 路由改为 `editFormat=markdown`；受支持 CommonMark + GFM 子集经官方 TipTap Markdown Codec 进入结构化 HTML LogicalState，编辑器显示标题、列表、引用、代码、表格、图片和分隔线等终态样式。
+- 新增 `BR-ED-DATA-006` 与 `BR-ED-VERIFY-001`，复用 `ED-EDIT` 和 `SM-ED-01`，未新增规则链、状态机或 TERM。
+- Markdown 保存前执行能力检查及 `parse → serialize → parse` 语义往返校验；源码保护、非支持结构和序列化失败均禁止静默写盘。
+- `contentFormat` 已贯通 ED、AG、DE、OpenDocSnapshot、Rust block projection、会话快照和 workspace.db v9 迁移。
+- Markdown 专用样式和 Codec fixtures 已加入；`.txt`、HTML、b-docx 路径保留原有分流。
+
+## 验证结果
+
+- `npm test`：36 个测试文件、266 个测试通过。
+- `npm run build`：通过。
+- `cargo test --manifest-path src-tauri/Cargo.toml`：191/192 通过；唯一失败为既有 LibreOffice DOCX 预览环境测试 `doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available`，非 Markdown 链路。
+- `npm run governance:generate`：通过，已刷新 ADUS。
+- 治理规则、TERM 完整性及新增规则测试覆盖：通过。
+- `npm run governance:audit -- --issue .governance/issues/ED-MARKDOWN-RICH-ROUNDTRIP-01.md`：Scope 检查仍被工作区既有 AG Scope 的未提交文件及 `AGENTS.md` 阻断；本 Scope 文件未越界。
+
+## 收口状态
+
+代码修复与本 Scope 专属验证已完成；整体 READY 仍待工作区中其他 Scope 收口后重新运行治理审计。未授权修改其他 Scope 文件。
