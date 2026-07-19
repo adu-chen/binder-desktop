@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { tabsStore } from "./tabsStore";
+import { edStore } from "./edStore";
 
-beforeEach(() => tabsStore.reset());
+beforeEach(() => {
+  tabsStore.reset();
+  edStore.reset();
+});
 
 describe("tabsStore 标签模型（视图层）", () => {
   it("openDoc 多文档标签共存：不同路径各开标签，同路径去重 + 激活（PI-FE-27）", () => {
@@ -46,6 +50,35 @@ describe("tabsStore 标签模型（视图层）", () => {
     tabsStore.openPreview("x.png");
     tabsStore.reset();
     expect(tabsStore.getSnapshot()).toEqual({ tabs: [], activeTabId: null });
+  });
+
+  it("getPersistedOpenDocTabs：只持久化文档标签，保留顺序和当前文档", () => {
+    tabsStore.openDoc("a.md");
+    tabsStore.openPreview("x.png");
+    edStore.loadDoc("a.md", "A", 1);
+    tabsStore.openDoc("b.md");
+    edStore.loadDoc("b.md", "B", 2);
+
+    expect(tabsStore.getPersistedOpenDocTabs()).toEqual([
+      { relPath: "a.md", kind: "doc", openIndex: 0, isActive: false },
+      { relPath: "b.md", kind: "doc", openIndex: 2, isActive: true },
+    ]);
+  });
+
+  it("restoreDocTabs：恢复标签集合并同步 edStore 当前文档", () => {
+    edStore.loadDoc("a.md", "A", 1);
+    edStore.loadDoc("b.md", "B", 2);
+    edStore.setActivePath("a.md");
+
+    tabsStore.restoreDocTabs([
+      { relPath: "a.md", kind: "doc", openIndex: 0, isActive: false },
+      { relPath: "b.md", kind: "doc", openIndex: 1, isActive: true },
+    ]);
+
+    const tabs = tabsStore.getSnapshot();
+    expect(tabs.tabs.map((tab) => tab.path)).toEqual(["a.md", "b.md"]);
+    expect(tabs.tabs.find((tab) => tab.id === tabs.activeTabId)?.path).toBe("b.md");
+    expect(edStore.getSnapshot().openPath).toBe("b.md");
   });
 
   // PI-ED-07 #5 标签拖动排序

@@ -8,7 +8,7 @@ import { FileTree } from "../components/ws/FileTree";
 import { TimelinePanel } from "../components/ws/TimelinePanel";
 import { PrvPanel } from "../components/prv/PrvPanel";
 import { TabStrip } from "../components/shell/TabStrip";
-import { tabsStore, useTabsStore } from "../store/tabsStore";
+import { useTabsStore } from "../store/tabsStore";
 import { Editor } from "../components/ed/Editor";
 import { OutlinePanel } from "../components/ed/OutlinePanel";
 import { AgentPanel } from "../components/ag/AgentPanel";
@@ -37,11 +37,6 @@ export function Workbench() {
       : "Binder";
   // 面板重挂键：workspace 变更即重挂 FileTree/Editor/AgentPanel，载入新项目内容。
   const wsKey = activeWorkspace?.workspaceId ?? "none";
-  // 切换/打开 workspace 时清空标签（避免残留旧项目标签；tabsStore 是单例，需显式重置）。
-  useEffect(() => {
-    tabsStore.reset();
-  }, [wsKey]);
-
   // 启动状态机广播监听（A-CORE-X-L-04 §5.5 · X-FORBID-007）：后端 SM-* 转移经 IPC 投影到 store。
   useEffect(() => {
     void startSmListeners();

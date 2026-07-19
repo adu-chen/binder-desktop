@@ -124,10 +124,15 @@ pub fn assemble_prompt(kind: TurnKind) -> PromptSkeleton {
 // 内容源预算（assemble_context 处理 REF/AST/KB 补强源，③）。
 
 /// 对话历史轮（前端 agStore 消息投影）。
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistTurn {
     pub role: String,
     pub content: String,
+    #[serde(default)]
+    pub rel_path: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
 }
 
 /// P0 文档层内容封顶（层保留、内容可缩）：超 `max_chars` 截断 + 显式注记（不静默丢弃，可追溯）。
@@ -169,9 +174,62 @@ pub fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> (Vec<Hi
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Carryover {
     None,
-    Refine,          // 修正追加（再短一点 / 改成… / 把刚才那段…）
+    Refine,          // 修正追加（把刚才那段改成…）
     Select,          // 显式选择（用第二个 / 按刚才说的）
     ReferenceTarget, // 指代回指 / 续写（继续 / 接着 / 它 / 那个 / 上面）
+}
+
+/// 按当前文档归属分流后的历史。same_doc 可作为同文档 P1 背景；other_doc 只能在显式沿用时弱注入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedHistory {
+    pub same_doc: Vec<HistTurn>,
+    pub other_doc: Vec<HistTurn>,
+    pub dropped_cross_doc: usize,
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn mentions_ordinal_choice(text: &str) -> bool {
+    [
+        "第一个方案",
+        "第二个方案",
+        "第三个方案",
+        "第一个版本",
+        "第二个版本",
+        "第三个版本",
+        "第一个回答",
+        "第二个回答",
+        "第三个回答",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+pub fn prompt_has_explicit_history_reference(prompt: &str) -> bool {
+    let p = prompt.trim();
+    contains_any(
+        p,
+        &[
+            "刚才",
+            "刚刚",
+            "上面",
+            "上一轮",
+            "上轮",
+            "前面",
+            "之前那",
+            "你刚写",
+            "你刚才",
+            "你上面",
+            "按刚才",
+            "按上面",
+            "用刚才",
+            "用上面",
+            "继续刚才",
+            "接着上面",
+        ],
+    ) || mentions_ordinal_choice(p)
 }
 
 /**
@@ -190,43 +248,97 @@ pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
         return Carryover::None;
     }
     let p = prompt.trim();
-    let any = |ks: &[&str]| ks.iter().any(|k| p.contains(k));
-    // 修正追加（操作对象=上一轮产出）。
-    if any(&[
-        "改成",
-        "换成",
-        "短一点",
-        "长一点",
-        "再写",
-        "再短",
-        "再长",
-        "正式一点",
-        "把刚才",
-        "把上面",
-        "把上一",
-        "重写",
-    ]) {
-        return Carryover::Refine;
+    if !prompt_has_explicit_history_reference(p) {
+        return Carryover::None;
     }
     // 显式选择（沿用上一轮某个产出/方案）。
-    if any(&[
-        "第一个",
-        "第二个",
-        "第三个",
-        "按刚才",
-        "按上面",
-        "用刚才",
-        "用上面",
-        "就那个",
-        "就用",
-    ]) {
+    if contains_any(p, &["按刚才", "按上面", "用刚才", "用上面", "就用"])
+        || mentions_ordinal_choice(p)
+    {
         return Carryover::Select;
     }
-    // 指代回指 / 续写（延续上一轮目标）。
-    if any(&["继续", "接着", "然后呢", "上面", "刚才", "那个"]) {
-        return Carryover::ReferenceTarget;
+    // 修正追加（操作对象必须被显式锚定为历史产出）。
+    if contains_any(
+        p,
+        &[
+            "把刚才",
+            "把刚刚",
+            "把上面",
+            "把上一",
+            "刚才那",
+            "刚刚那",
+            "上面那",
+            "上一轮",
+        ],
+    ) && contains_any(
+        p,
+        &[
+            "改成",
+            "换成",
+            "短一点",
+            "长一点",
+            "再写",
+            "再短",
+            "再长",
+            "正式一点",
+            "重写",
+            "润色",
+            "优化",
+        ],
+    ) {
+        return Carryover::Refine;
     }
-    Carryover::None
+    // 指代回指 / 续写（延续上一轮目标）。
+    Carryover::ReferenceTarget
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-004-DATA-AG-AG-TURN-005
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-004
+ * term_ref: TERM-AG-005
+ * boundary: in=currentDocPathAndHistTurns | out=ScopedHistory(sameDocHistorySeparateCrossDocWeakOnlyWhenExplicit)
+ */
+/// 历史归属分流（BR-AG-DATA-004）：有当前文档时，只有同 relPath 历史可作为同文档 P1 背景；
+/// 跨文档或无 relPath 的历史默认丢弃，只有显式沿用历史时才进入 other_doc，且调用方必须弱注入。
+pub fn scope_history_for_current_doc(
+    turns: &[HistTurn],
+    current_rel: Option<&str>,
+    carryover: Carryover,
+) -> ScopedHistory {
+    let Some(current) = current_rel.filter(|p| !p.trim().is_empty()) else {
+        return ScopedHistory {
+            same_doc: turns.to_vec(),
+            other_doc: Vec::new(),
+            dropped_cross_doc: 0,
+        };
+    };
+    let mut same_doc = Vec::new();
+    let mut other_doc_all = Vec::new();
+    for turn in turns {
+        if turn.rel_path.as_deref() == Some(current) {
+            same_doc.push(turn.clone());
+        } else {
+            other_doc_all.push(turn.clone());
+        }
+    }
+    let dropped_cross_doc = if carryover == Carryover::None {
+        other_doc_all.len()
+    } else {
+        0
+    };
+    let other_doc = if carryover == Carryover::None {
+        Vec::new()
+    } else {
+        other_doc_all
+    };
+    ScopedHistory {
+        same_doc,
+        other_doc,
+        dropped_cross_doc,
+    }
 }
 
 /// 目标边界裁决结果（BR-AG-DATA-003，2026-07-04 版）。
@@ -376,6 +488,8 @@ mod tests {
         let h = |r: &str, c: &str| HistTurn {
             role: r.into(),
             content: c.into(),
+            rel_path: None,
+            turn_id: None,
         };
         let turns = vec![h("user", "aaaa"), h("assistant", "bbbb"), h("user", "cc")];
         // 预算 6 字：从最近往前 "cc"(2)+"bbbb"(4)=6 放下，"aaaa" 丢弃。
@@ -399,8 +513,17 @@ mod tests {
             decide_intent_carryover("帮我写一首关于春天的诗", true),
             Carryover::None
         );
+        // 泛编辑词没有显式历史回指时，不提权历史。
+        assert_eq!(decide_intent_carryover("再短一点", true), Carryover::None);
+        assert_eq!(
+            decide_intent_carryover("重写当前文档", true),
+            Carryover::None
+        );
+        assert_eq!(
+            decide_intent_carryover("把这篇优化一下", true),
+            Carryover::None
+        );
         // 修正追加 / 显式选择 / 指代回指。
-        assert_eq!(decide_intent_carryover("再短一点", true), Carryover::Refine);
         assert_eq!(
             decide_intent_carryover("把刚才那段改成正式语气", true),
             Carryover::Refine
@@ -410,7 +533,7 @@ mod tests {
             Carryover::Select
         );
         assert_eq!(
-            decide_intent_carryover("继续", true),
+            decide_intent_carryover("继续刚才的方向", true),
             Carryover::ReferenceTarget
         );
         assert_eq!(
@@ -426,5 +549,37 @@ mod tests {
             decide_intent_carryover("把它整理成三段", true),
             Carryover::None
         );
+    }
+
+    // covers: BR-AG-DATA-004
+    // 历史归属：当前文档只接收同 relPath 历史；跨文档历史默认丢弃，显式沿用时仅弱注入。
+    #[test]
+    fn scope_history_separates_same_doc_from_cross_doc() {
+        let h = |rel: Option<&str>, c: &str| HistTurn {
+            role: "user".into(),
+            content: c.into(),
+            rel_path: rel.map(str::to_string),
+            turn_id: None,
+        };
+        let turns = vec![
+            h(Some("a.md"), "A 历史"),
+            h(Some("b.md"), "B 历史"),
+            h(None, "旧版本无归属"),
+        ];
+
+        let none = scope_history_for_current_doc(&turns, Some("b.md"), Carryover::None);
+        assert_eq!(none.same_doc.len(), 1);
+        assert_eq!(none.same_doc[0].content, "B 历史");
+        assert!(none.other_doc.is_empty());
+        assert_eq!(none.dropped_cross_doc, 2);
+
+        let explicit = scope_history_for_current_doc(&turns, Some("b.md"), Carryover::Refine);
+        assert_eq!(explicit.same_doc.len(), 1);
+        assert_eq!(explicit.other_doc.len(), 2);
+        assert_eq!(explicit.dropped_cross_doc, 0);
+
+        let no_current = scope_history_for_current_doc(&turns, None, Carryover::None);
+        assert_eq!(no_current.same_doc.len(), 3);
+        assert!(no_current.other_doc.is_empty());
     }
 }

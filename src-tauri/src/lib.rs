@@ -77,11 +77,22 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.preview_node");
     reg.register("ws.restore_node");
     reg.register("de.generate_diff");
+    reg.register("de.accept_draft_diff");
     reg.register("de.accept_diff");
     reg.register("de.reject_diff");
+    reg.register("de.expire_diff");
     reg.register("de.list_diffs");
+    reg.register("ed.persist_session_snapshot");
+    reg.register("ed.list_session_snapshots");
+    reg.register("ed.persist_open_tabs");
+    reg.register("ed.list_open_tabs");
     reg.register("ag.start_turn");
     reg.register("ag.list_blocks");
+    reg.register("ag.list_sessions");
+    reg.register("ag.save_session");
+    reg.register("ag.save_turn");
+    reg.register("ag.list_turns");
+    reg.register("ag.delete_session");
     reg
 }
 
@@ -143,9 +154,19 @@ fn dispatch(
         "de.accept_draft_diff" => route_accept_draft_diff(&request, &state, &app),
         "de.accept_diff" => route_accept_diff(&request, &state, &app),
         "de.reject_diff" => route_reject_diff(&request, &state, &app),
+        "de.expire_diff" => route_expire_diff(&request, &state, &app),
         "de.list_diffs" => route_list_diffs(&request, &state),
+        "ed.persist_session_snapshot" => route_persist_session_snapshot(&request, &state),
+        "ed.list_session_snapshots" => route_list_session_snapshots(&state),
+        "ed.persist_open_tabs" => route_persist_open_tabs(&request, &state),
+        "ed.list_open_tabs" => route_list_open_tabs(&state),
         "ag.start_turn" => route_start_turn(&request),
         "ag.list_blocks" => route_list_blocks(&request, &state),
+        "ag.list_sessions" => route_list_agent_sessions(&state),
+        "ag.save_session" => route_save_agent_session(&request, &state),
+        "ag.save_turn" => route_save_agent_turn(&request, &state),
+        "ag.list_turns" => route_list_agent_turns(&request, &state),
+        "ag.delete_session" => route_delete_agent_session(&request, &state),
         // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
         other => Err(IpcError::new(
             "IPC_ROUTE_MISSING",
@@ -1151,6 +1172,7 @@ fn initial_bdocx_html(content: &str) -> String {
         .join("")
 }
 
+#[cfg(test)]
 fn live_agent_edit_base<'a>(
     target_rel: &str,
     current_rel: Option<&str>,
@@ -1202,6 +1224,9 @@ struct AgentDiffProjection {
     after_text: String,
     location_label: String,
     draft_mode: String,
+    snapshot_source: String,
+    base_session_version: Option<u64>,
+    base_content_hash: Option<String>,
     style_ops: Option<serde_json::Value>,
 }
 
@@ -1210,6 +1235,10 @@ struct AgentProposeEditResult {
     diff_id: String,
     rel_path: String,
     projection: AgentDiffProjection,
+}
+
+fn is_active_editor_snapshot_source(source: &str) -> bool {
+    matches!(source, "active_editor" | "active_editor_session")
 }
 
 fn resolve_agent_edit_operation(
@@ -1404,6 +1433,32 @@ fn route_accept_draft_diff(
     app: &tauri::AppHandle,
 ) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let apply_context = request
+        .params
+        .get("applyContext")
+        .and_then(|v| v.as_str())
+        .unwrap_or("current_editor");
+    if apply_context == "open_session" {
+        let has_base_version = request
+            .params
+            .get("baseSessionVersion")
+            .and_then(|v| v.as_u64())
+            .is_some();
+        let has_base_hash = request
+            .params
+            .get("baseContentHash")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if !has_base_version || !has_base_hash {
+            return Err(IpcError::new(
+                "DE_OPEN_SESSION_BASE_REQUIRED",
+                "open_session diff 确认必须携带 baseSessionVersion/baseContentHash",
+                false,
+                false,
+            ));
+        }
+    }
     let conn = lock_db(state)?;
     let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
     let next = crate::de::transition(cur, crate::de::DiffEvent::UserAccept).ok_or_else(|| {
@@ -1588,17 +1643,370 @@ fn route_reject_diff(
     Ok(serde_json::json!({ "diff_id": diff_id, "status": "rejected" }))
 }
 
+/// 路由 `de.expire_diff`：自动应用失败、锚失效或会话基线推进时结束 PendingDiff。
+/// 该路径不写用户文档、不记时间轴节点，只经 SM-DE-01 / SM-WS-02 落 Expired。
+fn route_expire_diff(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
+    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let reason = request
+        .params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("expired")
+        .to_string();
+    let conn = lock_db(state)?;
+    let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
+    let next =
+        crate::de::transition(cur, crate::de::DiffEvent::ExternalChange).ok_or_else(|| {
+            IpcError::new(
+                "DE_ILLEGAL_TRANSITION",
+                &format!("diff 当前态 {cur:?} 不可过期（SM-DE-01 三终态不可逆）"),
+                false,
+                false,
+            )
+        })?;
+    discard_diff_sm(app, &conn, &diff_id, "expired")?;
+    sm_events::emit_sm_state(
+        app,
+        sm_events::SmStatePayload::new(
+            "SM-DE-01",
+            &diff_id,
+            &format!("{next:?}"),
+            crate::de::is_terminal(next),
+        ),
+    );
+    Ok(serde_json::json!({ "diff_id": diff_id, "status": "expired", "reason": reason }))
+}
+
+fn route_persist_session_snapshot(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let snapshot_value = request.params.get("snapshot").cloned().ok_or_else(|| {
+        IpcError::new(
+            "ED_SESSION_SNAPSHOT_REQUIRED",
+            "缺少 snapshot 参数",
+            false,
+            false,
+        )
+    })?;
+    let snapshot: ag::blocks::OpenDocSnapshot =
+        serde_json::from_value(snapshot_value).map_err(|e| {
+            IpcError::new(
+                "ED_SESSION_SNAPSHOT_INVALID",
+                &format!("OpenDocSnapshot 解析失败: {e}"),
+                false,
+                false,
+            )
+        })?;
+    if snapshot.content_hash.trim().is_empty() {
+        return Err(IpcError::new(
+            "ED_SESSION_SNAPSHOT_INVALID",
+            "OpenDocSnapshot 缺少 content_hash",
+            false,
+            false,
+        ));
+    }
+    workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &snapshot.rel_path)?;
+    let session_version = i64::try_from(snapshot.session_version).map_err(|_| {
+        IpcError::new(
+            "ED_SESSION_SNAPSHOT_INVALID",
+            "session_version 超出持久化范围",
+            false,
+            false,
+        )
+    })?;
+    let conn = lock_db(state)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO ed_session_snapshots \
+         (workspace_id, rel_path, content, edit_format, dirty, session_version, content_hash, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            ws.workspace_id,
+            snapshot.rel_path,
+            snapshot.content,
+            snapshot.edit_format,
+            if snapshot.dirty { 1 } else { 0 },
+            session_version,
+            snapshot.content_hash,
+            now_millis(),
+        ],
+    )
+    .map_err(|e| IpcError::new("ED_SESSION_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn route_list_session_snapshots(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT rel_path, content, edit_format, dirty, session_version, content_hash, updated_at \
+             FROM ed_session_snapshots WHERE workspace_id = ?1 ORDER BY updated_at ASC",
+        )
+        .map_err(|e| IpcError::new("ED_SESSION_DB_ERROR", &e.to_string(), true, false))?;
+    let rows = stmt
+        .query_map([ws.workspace_id], |r| {
+            let dirty: i64 = r.get(3)?;
+            let session_version: i64 = r.get(4)?;
+            let updated_at: i64 = r.get(6)?;
+            Ok(serde_json::json!({
+                "relPath": r.get::<_, String>(0)?,
+                "content": r.get::<_, String>(1)?,
+                "editFormat": r.get::<_, String>(2)?,
+                "source": "open_editor_session",
+                "dirty": dirty != 0,
+                "sessionVersion": session_version.max(0),
+                "contentHash": r.get::<_, String>(5)?,
+                "capturedAt": updated_at,
+            }))
+        })
+        .map_err(|e| IpcError::new("ED_SESSION_DB_ERROR", &e.to_string(), true, false))?;
+    let snapshots = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| IpcError::new("ED_SESSION_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "snapshots": snapshots }))
+}
+
+fn route_persist_open_tabs(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let tabs = request
+        .params
+        .get("tabs")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| IpcError::new("ED_OPEN_TABS_REQUIRED", "tabs 必须是数组", false, false))?;
+    let mut rows: Vec<(String, String, i64, bool)> = Vec::with_capacity(tabs.len());
+    let mut active_count = 0usize;
+    for (idx, tab) in tabs.iter().enumerate() {
+        let rel_path = tab
+            .get("relPath")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| IpcError::new("ED_OPEN_TAB_INVALID", "打开标签缺少 relPath", false, false))?
+            .to_string();
+        workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+        let kind = tab
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("doc")
+            .to_string();
+        if kind != "doc" {
+            return Err(IpcError::new(
+                "ED_OPEN_TAB_INVALID",
+                "当前仅支持持久化 doc 类型编辑标签",
+                false,
+                false,
+            ));
+        }
+        let open_index = tab
+            .get("openIndex")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(idx as i64);
+        if open_index < 0 {
+            return Err(IpcError::new(
+                "ED_OPEN_TAB_INVALID",
+                "openIndex 不能为负数",
+                false,
+                false,
+            ));
+        }
+        let is_active = tab
+            .get("isActive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if is_active {
+            active_count += 1;
+        }
+        rows.push((rel_path, kind, open_index, is_active));
+    }
+    if rows.len() > 1 && active_count != 1 {
+        return Err(IpcError::new(
+            "ED_OPEN_TABS_ACTIVE_INVALID",
+            "多个打开文档必须且只能有一个当前文档",
+            false,
+            false,
+        ));
+    }
+    if rows.len() == 1 && active_count == 0 {
+        rows[0].3 = true;
+    }
+
+    let mut conn = lock_db(state)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    tx.execute(
+        "DELETE FROM ed_open_tabs WHERE workspace_id = ?1",
+        [ws.workspace_id.as_str()],
+    )
+    .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    let updated_at = now_millis();
+    for (rel_path, kind, open_index, is_active) in rows {
+        tx.execute(
+            "INSERT INTO ed_open_tabs \
+             (workspace_id, rel_path, kind, open_index, is_active, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                ws.workspace_id.as_str(),
+                rel_path,
+                kind,
+                open_index,
+                if is_active { 1 } else { 0 },
+                updated_at,
+            ],
+        )
+        .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    }
+    tx.commit()
+        .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn route_list_open_tabs(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT rel_path, kind, open_index, is_active, updated_at \
+             FROM ed_open_tabs WHERE workspace_id = ?1 ORDER BY open_index ASC",
+        )
+        .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    let rows = stmt
+        .query_map([ws.workspace_id], |r| {
+            let is_active: i64 = r.get(3)?;
+            Ok(serde_json::json!({
+                "relPath": r.get::<_, String>(0)?,
+                "kind": r.get::<_, String>(1)?,
+                "openIndex": r.get::<_, i64>(2)?,
+                "isActive": is_active != 0,
+                "updatedAt": r.get::<_, i64>(4)?,
+            }))
+        })
+        .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    let tabs = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| IpcError::new("ED_OPEN_TABS_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "tabs": tabs }))
+}
+
 /// 路由 `de.list_diffs`：活动 workspace 未裁决 diff 列表（重启恢复，复用 WS 持久化查询）。
 fn route_list_diffs(
     request: &CommandRequest,
     state: &AppState,
 ) -> Result<serde_json::Value, IpcError> {
+    if request.params.get("diffIds").is_some() {
+        return route_list_diff_details(request, state);
+    }
     let status = request.params.get("status").and_then(|v| v.as_str());
     let ws = active_ws(state)?;
     let conn = lock_db(state)?;
     let list = workspace::diff_apply::list_pending_diffs(&conn, &ws.workspace_id, status)
         .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
     ws_json(&list)
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004
+ * type:     QUERY
+ * chain:    AG-TURN
+ * rules:    BR-AG-PERSIST-001
+ * term_ref: TERM-AG-001
+ * boundary: in=agentHistoryDiffIds | out=diffDetailsForHistoryRestore(allStatusesNoPendingRevival)
+ */
+/// 历史 DiffCard 恢复查询：按 diff_id 返回 DE/WS 当前状态与展示投影，覆盖 pending/accepted/rejected/expired；
+/// 找不到的 diff 由前端投只读不可用，不得默认复活为 pending。
+fn route_list_diff_details(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let diff_ids = request
+        .params
+        .get("diffIds")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| IpcError::new("DE_DIFF_IDS_REQUIRED", "diffIds 必须是数组", false, false))?
+        .iter()
+        .filter_map(|v| v.as_str().map(str::trim))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if diff_ids.is_empty() {
+        return Ok(serde_json::Value::Array(Vec::new()));
+    }
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let placeholders = (0..diff_ids.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT d.diff_id, d.workspace_id, d.rel_path, d.status, d.created_at, \
+                p.before_snapshot, p.after_content, p.style_ops \
+         FROM pending_diffs d LEFT JOIN diff_payloads p ON p.payload_ref = d.payload_ref \
+         WHERE d.workspace_id = ? AND d.diff_id IN ({placeholders}) \
+         ORDER BY d.created_at ASC"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    let mut bind_values: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(diff_ids.len() + 1);
+    bind_values.push(&ws.workspace_id);
+    for id in &diff_ids {
+        bind_values.push(id);
+    }
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(bind_values), |r| {
+            let diff_id: String = r.get(0)?;
+            let workspace_id: String = r.get(1)?;
+            let rel_path: String = r.get(2)?;
+            let status: String = r.get(3)?;
+            let created_at: i64 = r.get(4)?;
+            let before_snapshot: Option<String> = r.get(5)?;
+            let after_content: Option<Vec<u8>> = r.get(6)?;
+            let style_ops_json: Option<String> = r.get(7)?;
+            let style_ops = style_ops_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let after_text = after_content
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+            Ok(serde_json::json!({
+                "diff_id": diff_id,
+                "target": {
+                    "workspace_id": workspace_id,
+                    "doc_type": doc_type_of(&rel_path),
+                    "rel_path": rel_path,
+                },
+                "status": status,
+                "created_at": created_at,
+                "projection": {
+                    "patch_kind": "replace_document",
+                    "block_id": null,
+                    "block_index": null,
+                    "before_text": before_snapshot.unwrap_or_default(),
+                    "after_text": after_text,
+                    "location_label": "历史修改建议",
+                    "draft_mode": "background",
+                    "snapshot_source": "disk_snapshot",
+                    "base_session_version": null,
+                    "base_content_hash": null,
+                    "style_ops": style_ops,
+                }
+            }))
+        })
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    let values = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::Value::Array(values))
 }
 
 /**
@@ -1618,6 +2026,120 @@ fn route_start_turn(_request: &CommandRequest) -> Result<serde_json::Value, IpcE
         false,
         false,
     ))
+}
+
+fn route_list_agent_sessions(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let sessions = ag::history::list_sessions(&conn, &ws.workspace_id)
+        .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&sessions)
+}
+
+fn route_save_agent_session(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let input = ag::history::AgentSessionInput {
+        session_id: str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?,
+        title: request
+            .params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("新对话")
+            .to_string(),
+        mode: request
+            .params
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("edit")
+            .to_string(),
+        archived: request
+            .params
+            .get("archived")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        open_index: request
+            .params
+            .get("openIndex")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        is_active: request
+            .params
+            .get("isActive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    };
+    let conn = lock_db(state)?;
+    ag::history::upsert_session(&conn, &ws.workspace_id, &input)
+        .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn route_save_agent_turn(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let session_id = str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?;
+    let turn_id = str_param(request, "turnId", "AG_TURN_ID_REQUIRED")?;
+    let status = str_param(request, "status", "AG_TURN_STATUS_REQUIRED")?;
+    if !ag::history::is_valid_status(&status) {
+        return Err(IpcError::new(
+            "AG_TURN_STATUS_INVALID",
+            "未知代理回合历史状态",
+            false,
+            false,
+        ));
+    }
+    let payload_value = request.params.get("payload").cloned().ok_or_else(|| {
+        IpcError::new(
+            "AG_TURN_PAYLOAD_REQUIRED",
+            "缺少 payload 参数",
+            false,
+            false,
+        )
+    })?;
+    let payload = serde_json::from_value::<ag::history::AgentTurnPayload>(payload_value)
+        .map_err(|e| IpcError::new("AG_TURN_PAYLOAD_INVALID", &e.to_string(), false, false))?;
+    let rel_path = request.params.get("relPath").and_then(|v| v.as_str());
+    let conn = lock_db(state)?;
+    ag::history::save_turn(
+        &conn,
+        &ws.workspace_id,
+        &session_id,
+        &turn_id,
+        rel_path,
+        &status,
+        &payload,
+    )
+    .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn route_list_agent_turns(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let session_id = str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    let turns = ag::history::list_turns(&conn, &ws.workspace_id, &session_id)
+        .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&turns)
+}
+
+fn route_delete_agent_session(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let session_id = str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?;
+    let mut conn = lock_db(state)?;
+    let result = ag::history::delete_session(&mut conn, &ws.workspace_id, &session_id)
+        .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+    ws_json(&result)
 }
 
 fn sm_error() -> IpcError {
@@ -1696,14 +2218,24 @@ fn route_list_blocks(
 ) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let ws = active_ws(state)?;
-    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
-    let snapshot = ag::blocks::read_editable_snapshot(
-        std::path::Path::new(&ws.root_path),
-        &rel_path,
-        &abs,
-        None,
-        None,
-    )?;
+    let open_doc_snapshots: Vec<ag::blocks::OpenDocSnapshot> = request
+        .params
+        .get("openDocSnapshots")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| {
+            IpcError::new(
+                "AG_OPEN_DOC_SNAPSHOT_INVALID",
+                &format!("openDocSnapshots 解析失败: {e}"),
+                false,
+                false,
+            )
+        })?
+        .unwrap_or_default();
+    let read_ctx =
+        ag::blocks::AgentReadContext::new(std::path::Path::new(&ws.root_path), open_doc_snapshots)?;
+    let snapshot = read_ctx.snapshot(&rel_path)?;
     Ok(serde_json::json!({
         "rel_path": snapshot.rel_path,
         "editable_kind": snapshot.editable_kind,
@@ -1734,6 +2266,7 @@ struct BlockRef {
     text: String,
 }
 
+#[cfg(test)]
 fn block_ref_range_label(br: &BlockRef) -> String {
     match (br.start, br.end) {
         (Some(start), Some(end)) if end > start => format!("字符区间 [{start}..{end}]"),
@@ -1741,6 +2274,7 @@ fn block_ref_range_label(br: &BlockRef) -> String {
     }
 }
 
+#[cfg(test)]
 fn format_block_ref_context(br: &BlockRef, capped_text: &str) -> String {
     format!(
         "引用文档「{}」块 [{}] 的选中内容，{}：\n{}",
@@ -1767,43 +2301,29 @@ fn reference_target_path(payload: &ReferencePayload) -> Option<&str> {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001, BR-REF-DATA-003
  * term_ref: TERM-REF-003
- * boundary: in=ReferencePayloadAndWorkspaceRoot | out=explicitReferenceContextBlock(readOnlySnapshot)
+ * boundary: in=ReferencePayloadAndAgentReadContext | out=explicitReferenceContextBlock(validatedReadSnapshot)
  */
 fn format_reference_payload_context(
     payload: &ReferencePayload,
-    ws_root: Option<&str>,
+    read_ctx: Option<&ag::blocks::AgentReadContext>,
     cap: usize,
 ) -> String {
     match payload {
-        ReferencePayload::Doc { rel_path, .. } => match ws_root {
-            Some(root) => {
-                match workspace::resolve_in_workspace(std::path::Path::new(root), rel_path) {
-                    Ok(abs) => match crate::ag::blocks::read_editable_snapshot(
-                        std::path::Path::new(root),
-                        rel_path,
-                        &abs,
-                        None,
-                        None,
-                    ) {
-                        Ok(snapshot) => {
-                            let capped = crate::ag::context::cap_text(
-                                &snapshot.content,
-                                cap,
-                                "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
-                            );
-                            format!("引用文档「{rel_path}」：\n{capped}")
-                        }
-                        Err(e) => format!(
-                            "引用文档「{rel_path}」读取失败（{}）：{}",
-                            e.code, e.message
-                        ),
-                    },
-                    Err(e) => format!(
-                        "引用文档「{rel_path}」路径无效或超出 workspace（{}）：{}",
-                        e.code, e.message
-                    ),
+        ReferencePayload::Doc { rel_path, .. } => match read_ctx {
+            Some(ctx) => match ctx.snapshot(rel_path) {
+                Ok(snapshot) => {
+                    let capped = crate::ag::context::cap_text(
+                        &snapshot.content,
+                        cap,
+                        "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
+                    );
+                    format!("引用文档「{rel_path}」：\n{capped}")
                 }
-            }
+                Err(e) => format!(
+                    "引用文档「{rel_path}」读取失败（{}）：{}",
+                    e.code, e.message
+                ),
+            },
             None => format!("引用文档「{rel_path}」未读取：当前没有 active workspace"),
         },
         ReferencePayload::Selection {
@@ -1814,15 +2334,56 @@ fn format_reference_payload_context(
             text,
             ..
         } => {
-            let br = BlockRef {
-                rel_path: rel_path.clone(),
-                block_id: block_id.clone(),
-                start: *start,
-                end: *end,
-                text: text.clone(),
+            let stale = || {
+                let capped = crate::ag::context::cap_text(text, cap, "[引用选区较长，已截取前部]");
+                format!(
+                    "引用选区「{rel_path}」块 [{block_id}] 锚未校验或已失效，以下仅为用户原始选区快照（不得作为当前文档事实）：\n{capped}"
+                )
             };
-            let capped = crate::ag::context::cap_text(text, cap, "[引用选区较长，已截取前部]");
-            format_block_ref_context(&br, &capped)
+            let Some(ctx) = read_ctx else {
+                return stale();
+            };
+            let snapshot = match ctx.snapshot(rel_path) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    let capped =
+                        crate::ag::context::cap_text(text, cap, "[引用选区较长，已截取前部]");
+                    return format!(
+                        "引用选区「{rel_path}」读取失败（{}）：{}。以下仅为用户原始选区快照（不得作为当前文档事实）：\n{capped}",
+                        e.code, e.message
+                    );
+                }
+            };
+            let Some(block) = snapshot
+                .blocks
+                .iter()
+                .find(|b| b.block_id.as_deref() == Some(block_id.as_str()))
+            else {
+                return stale();
+            };
+            let (Some(start), Some(end)) = (*start, *end) else {
+                return stale();
+            };
+            if end <= start {
+                return stale();
+            }
+            let chars: Vec<char> = block.text.chars().collect();
+            if end > chars.len() {
+                return stale();
+            }
+            let current: String = chars[start..end].iter().collect();
+            let capped = crate::ag::context::cap_text(&current, cap, "[引用选区较长，已截取前部]");
+            if current == *text {
+                format!(
+                    "引用选区（已校验）「{rel_path}」块 [{block_id}] 字符区间 [{start}..{end}]：\n{capped}"
+                )
+            } else {
+                let original =
+                    crate::ag::context::cap_text(text, cap, "[原始选区较长，已截取前部]");
+                format!(
+                    "引用选区「{rel_path}」块 [{block_id}] 字符区间 [{start}..{end}] 已按当前 LogicalState 重新校验，当前内容：\n{capped}\n\n原始选区快照仅作背景（不得作为当前文档事实）：\n{original}"
+                )
+            }
         }
         ReferencePayload::Session {
             title, messages, ..
@@ -1974,10 +2535,48 @@ mod ag_reference_context_tests {
             label: None,
         };
 
-        let out = format_reference_payload_context(&payload, root.to_str(), 1000);
+        let ctx = ag::blocks::AgentReadContext::new(&root, Vec::new()).unwrap();
+        let out = format_reference_payload_context(&payload, Some(&ctx), 1000);
 
         assert!(out.contains("引用文档「notes/a.md」"));
         assert!(out.contains("文档引用内容"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reference_payload_context_reads_doc_from_open_logical_state() {
+        let root = std::env::temp_dir().join(format!(
+            "binder-ref-open-doc-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "磁盘旧内容").unwrap();
+        let ctx = ag::blocks::AgentReadContext::new(
+            &root,
+            vec![ag::blocks::OpenDocSnapshot {
+                rel_path: "notes/a.md".to_string(),
+                content: "打开后的最新内容".to_string(),
+                edit_format: "text".to_string(),
+                source: "open_editor_session".to_string(),
+                dirty: true,
+                session_version: 2,
+                content_hash: "h2".to_string(),
+                captured_at: 1,
+            }],
+        )
+        .unwrap();
+        let payload = ReferencePayload::Doc {
+            rel_path: "notes/a.md".to_string(),
+            label: None,
+        };
+
+        let out = format_reference_payload_context(&payload, Some(&ctx), 1000);
+
+        assert!(out.contains("打开后的最新内容"));
+        assert!(!out.contains("磁盘旧内容"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1994,9 +2593,54 @@ mod ag_reference_context_tests {
 
         let out = format_reference_payload_context(&payload, None, 1000);
 
-        assert!(out.contains("引用文档「notes/a.md」块 [block-1]"));
-        assert!(out.contains("字符区间 [2..6]"));
+        assert!(out.contains("锚未校验或已失效"));
+        assert!(out.contains("不得作为当前文档事实"));
         assert!(out.ends_with("选区引用内容"));
+    }
+
+    #[test]
+    fn reference_payload_context_validates_selection_against_open_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "binder-ref-selection-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("a.html"),
+            "<p data-block-id=\"b1\">0123456789</p>",
+        )
+        .unwrap();
+        let ctx = ag::blocks::AgentReadContext::new(
+            &root,
+            vec![ag::blocks::OpenDocSnapshot {
+                rel_path: "a.html".to_string(),
+                content: "<p data-block-id=\"b1\">0123456789</p>".to_string(),
+                edit_format: "html".to_string(),
+                source: "active_editor".to_string(),
+                dirty: true,
+                session_version: 4,
+                content_hash: "h4".to_string(),
+                captured_at: 1,
+            }],
+        )
+        .unwrap();
+        let payload = ReferencePayload::Selection {
+            rel_path: "a.html".to_string(),
+            block_id: "b1".to_string(),
+            start: Some(2),
+            end: Some(6),
+            text: "2345".to_string(),
+            label: None,
+        };
+
+        let out = format_reference_payload_context(&payload, Some(&ctx), 1000);
+
+        assert!(out.contains("引用选区（已校验）"));
+        assert!(out.contains("2345"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2155,6 +2799,153 @@ mod ag_edit_base_tests {
     }
 }
 
+#[cfg(test)]
+mod ag_turn_prompt_tests {
+    use super::*;
+
+    fn hist(rel_path: Option<&str>, role: &str, content: &str) -> ag::context::HistTurn {
+        ag::context::HistTurn {
+            role: role.to_string(),
+            content: content.to_string(),
+            rel_path: rel_path.map(str::to_string),
+            turn_id: Some(format!("turn-{role}")),
+        }
+    }
+
+    fn snapshot(path: &str, content: &str) -> ag::blocks::AgentEditableSnapshot {
+        ag::blocks::AgentEditableSnapshot {
+            rel_path: path.to_string(),
+            editable_kind: "text".to_string(),
+            source: "active_editor".to_string(),
+            content_format: "text".to_string(),
+            content: content.to_string(),
+            baseline: None,
+            session_version: Some(1),
+            content_hash: Some("h1".to_string()),
+            blocks: content
+                .lines()
+                .enumerate()
+                .map(|(block_index, text)| ag::blocks::AgentEditableBlock {
+                    block_id: None,
+                    block_index,
+                    text: text.to_string(),
+                    marks: Vec::new(),
+                    block_attrs: serde_json::json!({}),
+                })
+                .collect(),
+        }
+    }
+
+    fn message_text(messages: &[serde_json::Value]) -> String {
+        messages
+            .iter()
+            .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    // covers: BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005
+    #[test]
+    fn current_doc_turn_drops_cross_doc_history_without_explicit_carryover() {
+        let doc_ctx = "[当前编辑器打开的文档] 路径：b.md\n农夫与蛇当前正文";
+        let history = vec![
+            hist(Some("a.md"), "user", "把小马过河改短"),
+            hist(Some("a.md"), "assistant", "小马过河改写结果"),
+            hist(Some("b.md"), "user", "农夫与蛇上一轮同文档问题"),
+        ];
+
+        let assembled = assemble_agent_turn_messages(
+            "system",
+            None,
+            &history,
+            Some("b.md"),
+            10_000,
+            None,
+            Some(doc_ctx),
+            "整理当前文档",
+        );
+        let text = message_text(&assembled.messages);
+
+        assert_eq!(assembled.carryover, ag::context::Carryover::None);
+        assert!(text.contains("农夫与蛇当前正文"));
+        assert!(text.contains("农夫与蛇上一轮同文档问题"));
+        assert!(!text.contains("小马过河"));
+        assert!(text.contains("已忽略 2 条非当前文档历史"));
+    }
+
+    // covers: BR-AG-DATA-004
+    #[test]
+    fn explicit_carryover_injects_cross_doc_history_only_as_weak_labeled_block() {
+        let history = vec![hist(Some("a.md"), "assistant", "小马过河上一轮方案")];
+
+        let assembled = assemble_agent_turn_messages(
+            "system",
+            None,
+            &history,
+            Some("b.md"),
+            10_000,
+            None,
+            Some("[当前编辑器打开的文档] 路径：b.md\n农夫与蛇当前正文"),
+            "把刚才那段再短一点",
+        );
+        let text = message_text(&assembled.messages);
+
+        assert_eq!(assembled.carryover, ag::context::Carryover::Refine);
+        assert!(text.contains("[其他文档历史]"));
+        assert!(text.contains("doc=a.md"));
+        assert!(text.contains("小马过河上一轮方案"));
+        assert!(text.contains("农夫与蛇当前正文"));
+        assert!(text.contains("不得把其中正文当作当前文档事实"));
+    }
+
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn long_current_doc_uses_manifest_and_requires_tool_read_before_edit() {
+        let snapshot = snapshot(
+            "long.md",
+            &format!("第一段\n{}\n最后一段", "正文".repeat(4000)),
+        );
+
+        let ctx = build_current_doc_prompt_context("long.md", &snapshot, 900);
+
+        let text = ctx.text.expect("long doc context");
+        assert!(ctx.requires_read_before_edit);
+        assert!(text.contains("当前文档较长"));
+        assert!(text.contains("块目录"));
+        assert!(text.contains("必须先调用 read_doc 或 list_blocks"));
+        assert!(!text.contains("已截取前部"));
+    }
+
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn long_current_doc_edit_guard_allows_after_read_tool() {
+        let params = serde_json::json!({ "path": "long.md" });
+
+        assert!(current_doc_edit_requires_prior_read(
+            &params,
+            Some("long.md"),
+            true,
+            false
+        ));
+        assert!(!current_doc_edit_requires_prior_read(
+            &params,
+            Some("long.md"),
+            true,
+            true
+        ));
+        assert!(is_current_doc_read_tool(
+            "read_doc",
+            &params,
+            Some("long.md")
+        ));
+        assert!(is_current_doc_read_tool(
+            "list_blocks",
+            &params,
+            Some("long.md")
+        ));
+    }
+}
+
 /// PI-BYOK-DEV-01 · BYOK 客户端入口：用户 provider 密钥一次性上送 dev 网关代持（零残留，客户端不持久化，
 /// X-FORBID-001）。key 经 ent::byok 上送后即清零；不回显明文。
 #[tauri::command]
@@ -2174,8 +2965,7 @@ async fn byok_upload(provider: String, key: String) -> Result<(), IpcError> {
 fn ag_propose_edit(
     state: &AppState,
     params: &serde_json::Value,
-    base_content: Option<&str>,
-    is_html: bool,
+    read_ctx: &ag::blocks::AgentReadContext,
     current_rel: Option<&str>,
     declared_targets: &[String],
 ) -> Result<AgentProposeEditResult, IpcError> {
@@ -2217,39 +3007,44 @@ fn ag_propose_edit(
     let edit_operation = resolve_agent_edit_operation(params, target_exists)?;
 
     let target_is_current_editor = current_rel == Some(rel_path.as_str());
-    let live_base_content = live_agent_edit_base(&rel_path, current_rel, base_content);
-    let live_is_html = target_is_current_editor && is_html;
-    if target_is_current_editor && target_exists && live_base_content.is_none() {
+
+    let style_ops_json = style_ops_param(params).cloned();
+    let style_ops = style_ops_json.as_ref().map(|v| v.to_string());
+    let snapshot = if target_exists {
+        Some(read_ctx.snapshot(&rel_path)?)
+    } else {
+        None
+    };
+    let target_is_open_session = snapshot
+        .as_ref()
+        .map(|s| s.source == "open_editor_session")
+        .unwrap_or(false);
+    if target_is_current_editor
+        && target_exists
+        && snapshot
+            .as_ref()
+            .map(|s| is_active_editor_snapshot_source(&s.source))
+            != Some(true)
+    {
         return Err(IpcError::new(
             "AG_EDITOR_SNAPSHOT_REQUIRED",
-            "当前打开文档缺少编辑器实时快照，已拒绝生成可能错位的修改建议；请重新打开文档或重试。",
+            "当前打开文档缺少 active editor LogicalState 快照，已拒绝生成可能错位的修改建议。",
             true,
             false,
         ));
     }
-    if target_exists && is_docx_rel_path(&rel_path) && !target_is_current_editor {
+    if target_exists
+        && is_docx_rel_path(&rel_path)
+        && !target_is_current_editor
+        && !target_is_open_session
+    {
         return Err(IpcError::new(
             "AG_BDOCX_EDIT_REQUIRES_OPEN_EDITOR",
-            "b-docx 修改必须先打开为当前编辑器草稿后生成，避免后台裁决把 HTML 当 docx 字节写入。",
+            "b-docx 修改必须先打开为编辑器会话后生成，避免后台裁决把 HTML 当 docx 字节写入。",
             false,
             false,
         ));
     }
-
-    let style_ops_json = style_ops_param(params).cloned();
-    let style_ops = style_ops_json.as_ref().map(|v| v.to_string());
-    let workspace_root = std::path::Path::new(&ws.root_path);
-    let snapshot = if target_exists {
-        Some(crate::ag::blocks::read_editable_snapshot(
-            workspace_root,
-            &rel_path,
-            &abs,
-            live_base_content,
-            if live_is_html { Some("html") } else { None },
-        )?)
-    } else {
-        None
-    };
     let base_content_for_diff = snapshot.as_ref().map(|s| s.content.as_str()).unwrap_or("");
     let base_is_html = snapshot
         .as_ref()
@@ -2361,6 +3156,19 @@ fn ag_propose_edit(
                         false,
                     )
                 })?;
+            if target_exists
+                && !crate::ag::blocks::rewrite_preserves_document_identity(
+                    base_content_for_diff,
+                    content,
+                )
+            {
+                return Err(IpcError::new(
+                    "AG_REPLACE_DOCUMENT_IDENTITY_DRIFT",
+                    "整篇替换内容与原文主题/实体重合过低，疑似错文档或历史上下文污染，已拒绝生成修改建议。请先重新读取当前文档并优先按块修改；若用户明确要求改成全新主题，需要重新确认后再执行。",
+                    true,
+                    false,
+                ));
+            }
             projection_block_id = None;
             projection_block_index = None;
             projection_before = base_content_for_diff.to_string();
@@ -2461,10 +3269,24 @@ fn ag_propose_edit(
         location_label: projection_location,
         draft_mode: if target_is_current_editor {
             "current_editor"
+        } else if target_is_open_session {
+            "open_session"
         } else {
             "background"
         }
         .to_string(),
+        snapshot_source: snapshot
+            .as_ref()
+            .map(|s| match s.source.as_str() {
+                "active_editor" => "active_editor",
+                "active_editor_session" => "active_editor_session",
+                "open_editor_session" => "open_editor_session",
+                _ => "disk_snapshot",
+            })
+            .unwrap_or("disk_snapshot")
+            .to_string(),
+        base_session_version: snapshot.as_ref().and_then(|s| s.session_version),
+        base_content_hash: snapshot.as_ref().and_then(|s| s.content_hash.clone()),
         style_ops: style_ops_json,
     };
     Ok(AgentProposeEditResult {
@@ -2472,6 +3294,234 @@ fn ag_propose_edit(
         rel_path,
         projection,
     })
+}
+
+#[derive(Debug)]
+struct CurrentDocPromptContext {
+    text: Option<String>,
+    requires_read_before_edit: bool,
+}
+
+fn block_line_for_prompt(block: &ag::blocks::AgentEditableBlock, full_text: bool) -> String {
+    let text = if full_text {
+        block.text.clone()
+    } else {
+        let preview: String = block.text.chars().take(180).collect();
+        if block.text.chars().count() > 180 {
+            format!("{preview}...")
+        } else {
+            preview
+        }
+    };
+    let char_count = block.text.chars().count();
+    match &block.block_id {
+        Some(id) => format!(
+            "Block {} [id={id}] chars={char_count}: {text}\n",
+            block.block_index
+        ),
+        None => format!("Block {} chars={char_count}: {text}\n", block.block_index),
+    }
+}
+
+fn build_current_doc_prompt_context(
+    path: &str,
+    snapshot: &ag::blocks::AgentEditableSnapshot,
+    inline_cap: usize,
+) -> CurrentDocPromptContext {
+    if snapshot.content.trim().is_empty() {
+        return CurrentDocPromptContext {
+            text: None,
+            requires_read_before_edit: false,
+        };
+    }
+    let mut full_block_view = String::new();
+    if snapshot.blocks.is_empty() {
+        full_block_view.push_str(&format!("完整内容：\n{}\n", snapshot.content));
+    } else {
+        for block in &snapshot.blocks {
+            full_block_view.push_str(&block_line_for_prompt(block, true));
+        }
+    }
+    let full_ctx = format!(
+        "[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{full_block_view}\n修改某一块必须用 propose_edit operation=replace_block + new_text：有 [id=…] 的块**优先传 block_id**（只能传方括号内完整 id，不要把数字块号填入 block_id），否则传 block_index（Block N 中的 0 起块号）；只有用户明确要求整篇重写时，才用 operation=replace_document + content。"
+    );
+    if full_ctx.chars().count() <= inline_cap {
+        return CurrentDocPromptContext {
+            text: Some(full_ctx),
+            requires_read_before_edit: false,
+        };
+    }
+
+    let mut manifest = String::new();
+    if snapshot.blocks.is_empty() {
+        let char_count = snapshot.content.chars().count();
+        let preview: String = snapshot.content.chars().take(500).collect();
+        manifest.push_str(&format!("全文 chars={char_count} preview={preview}...\n"));
+    } else {
+        for block in &snapshot.blocks {
+            manifest.push_str(&block_line_for_prompt(block, false));
+        }
+    }
+    let text = format!(
+        "[当前编辑器打开的文档] 路径：{path}\n当前文档较长，本轮不注入截断正文，改注入可追踪块目录（本轮主事实的索引）：\n\n{manifest}\n编辑前必须先调用 read_doc 或 list_blocks 读取当前文档的目标内容；不得根据历史对话或前部截断片段直接 propose_edit。块级修改优先使用 replace_block + block_id/block_index；整篇替换必须在读取当前文档后才能提出。"
+    );
+    CurrentDocPromptContext {
+        text: Some(text),
+        requires_read_before_edit: true,
+    }
+}
+
+#[derive(Debug)]
+struct AgentTurnMessages {
+    messages: Vec<serde_json::Value>,
+    carryover: ag::context::Carryover,
+    dropped_cross_doc_history: usize,
+}
+
+fn weak_cross_doc_history_block(history: &[ag::context::HistTurn]) -> Option<String> {
+    if history.is_empty() {
+        return None;
+    }
+    let mut lines = Vec::new();
+    for turn in history {
+        let doc = turn.rel_path.as_deref().unwrap_or("(未记录文档)");
+        let turn_id = turn.turn_id.as_deref().unwrap_or("-");
+        lines.push(format!(
+            "- doc={doc} turn={turn_id} role={}: {}",
+            turn.role, turn.content
+        ));
+    }
+    Some(format!(
+        "[其他文档历史] 以下历史来自非当前文档或旧版本无归属消息，仅用于理解用户显式回指；不得把其中正文当作当前文档事实，不得据此覆盖当前文档：\n{}",
+        lines.join("\n")
+    ))
+}
+
+fn tool_path_arg<'a>(params: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn tool_targets_current_doc(
+    params: &serde_json::Value,
+    current_rel: Option<&str>,
+    key: &str,
+) -> bool {
+    let Some(current) = current_rel else {
+        return false;
+    };
+    tool_path_arg(params, key) == Some(current)
+}
+
+fn is_current_doc_read_tool(
+    tool_name: &str,
+    params: &serde_json::Value,
+    current_rel: Option<&str>,
+) -> bool {
+    matches!(tool_name, "read_doc" | "list_blocks")
+        && tool_targets_current_doc(params, current_rel, "path")
+}
+
+fn current_doc_edit_requires_prior_read(
+    params: &serde_json::Value,
+    current_rel: Option<&str>,
+    requires_read: bool,
+    already_read: bool,
+) -> bool {
+    requires_read && !already_read && tool_targets_current_doc(params, current_rel, "path")
+}
+
+fn intent_hint_for_prompt(carryover: ag::context::Carryover, dropped_cross_doc: usize) -> String {
+    match carryover {
+        ag::context::Carryover::None => {
+            if dropped_cross_doc > 0 {
+                format!(
+                    "【本轮意图】这是一个新请求，对话历史仅作同文档背景；已忽略 {dropped_cross_doc} 条非当前文档历史，不要让历史意图凌驾当前请求。"
+                )
+            } else {
+                "【本轮意图】这是一个新请求，对话历史仅作背景，不要让历史意图凌驾当前请求。"
+                    .to_string()
+            }
+        }
+        ag::context::Carryover::Refine => {
+            "【本轮意图】用户显式修正/追加上文产出；若历史来自其他文档，只能用于理解回指，当前文档事实仍以当前 LogicalState 为准。".to_string()
+        }
+        ag::context::Carryover::Select => {
+            "【本轮意图】用户显式选择/沿用上文方案；被选历史不能替代当前文档事实，修改必须落在当前/声明目标的最新 LogicalState 上。".to_string()
+        }
+        ag::context::Carryover::ReferenceTarget => {
+            "【本轮意图】用户显式延续上文话题/目标；历史只辅助解析回指，当前文档内容以当前 LogicalState 为唯一事实。".to_string()
+        }
+    }
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005
+ * term_ref: TERM-AG-005
+ * boundary: in=currentDocPromptAndDocScopedHistory | out=AgentTurnMessages(currentDocP0AfterHistoryCrossDocHistoryWeak)
+ */
+/// 真实模型消息装配：系统 → 补强(P2) → 同文档历史(P1) → 跨文档弱历史(仅显式沿用) →
+/// 显式引用(P1) → 当前文档(P0，贴近末尾) → 意图 → 当前输入。当前文档永远晚于历史注入。
+fn assemble_agent_turn_messages(
+    system_prompt: &str,
+    aug_block: Option<&str>,
+    history: &[ag::context::HistTurn],
+    active_doc_path: Option<&str>,
+    history_budget_chars: usize,
+    mention_block: Option<&str>,
+    doc_ctx: Option<&str>,
+    prompt: &str,
+) -> AgentTurnMessages {
+    let carryover = crate::ag::context::decide_intent_carryover(prompt, !history.is_empty());
+    let scoped =
+        crate::ag::context::scope_history_for_current_doc(history, active_doc_path, carryover);
+    let (kept_same_history, dropped_same_history) =
+        crate::ag::context::select_recent_history(&scoped.same_doc, history_budget_chars);
+    let used_same: usize = kept_same_history
+        .iter()
+        .map(|turn| turn.content.chars().count())
+        .sum();
+    let other_budget = history_budget_chars.saturating_sub(used_same).min(2500);
+    let (kept_other_history, dropped_other_history) =
+        crate::ag::context::select_recent_history(&scoped.other_doc, other_budget);
+    let dropped_cross_doc_history =
+        scoped.dropped_cross_doc + dropped_same_history + dropped_other_history;
+
+    let mut messages = vec![serde_json::json!({
+        "role": "system", "content": system_prompt
+    })];
+    if let Some(aug) = aug_block {
+        messages.push(serde_json::json!({ "role": "system", "content": aug }));
+    }
+    for turn in &kept_same_history {
+        messages.push(serde_json::json!({ "role": turn.role, "content": turn.content }));
+    }
+    if let Some(other_history) = weak_cross_doc_history_block(&kept_other_history) {
+        messages.push(serde_json::json!({ "role": "system", "content": other_history }));
+    }
+    if let Some(mention) = mention_block {
+        messages.push(serde_json::json!({ "role": "system", "content": mention }));
+    }
+    if let Some(ctx) = doc_ctx {
+        messages.push(serde_json::json!({ "role": "system", "content": ctx }));
+    }
+    messages.push(serde_json::json!({
+        "role": "system",
+        "content": intent_hint_for_prompt(carryover, dropped_cross_doc_history),
+    }));
+    messages.push(serde_json::json!({ "role": "user", "content": prompt }));
+    AgentTurnMessages {
+        messages,
+        carryover,
+        dropped_cross_doc_history,
+    }
 }
 
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
@@ -2484,12 +3534,14 @@ fn ag_propose_edit(
 #[tauri::command]
 async fn ag_start_turn(
     turn_id: String,
+    session_id: String,
     prompt: String,
     provider: Option<String>,
     model: Option<String>,
     active_doc_path: Option<String>,
     active_doc_content: Option<String>,
     active_doc_format: Option<String>,
+    open_doc_snapshots: Vec<ag::blocks::OpenDocSnapshot>,
     history: Vec<ag::context::HistTurn>,
     mentions: Vec<String>,
     block_refs: Vec<BlockRef>,
@@ -2508,6 +3560,92 @@ async fn ag_start_turn(
             false,
         ));
     }
+
+    let (workspace_id_for_turn, workspace_root_path) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+        let ws = workspace::lifecycle::active_workspace(&conn)
+            .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?
+            .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
+        ag::history::ensure_session_exists(&conn, &ws.workspace_id, &session_id)
+            .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+        let draft_payload = ag::history::AgentTurnPayload {
+            version: 1,
+            user_message: ag::history::PersistedChatMessage {
+                id: format!("u-{turn_id}"),
+                role: "user".to_string(),
+                content: prompt.trim().to_string(),
+                parts: None,
+                streaming: None,
+                error: None,
+            },
+            assistant_message: None,
+            tool_summaries: Vec::new(),
+            diff_refs: Vec::new(),
+            failure: None,
+            incomplete_reason: Some("stream_interrupted".to_string()),
+        };
+        ag::history::save_turn(
+            &conn,
+            &ws.workspace_id,
+            &session_id,
+            &turn_id,
+            active_doc_path.as_deref(),
+            "draft",
+            &draft_payload,
+        )
+        .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+        (ws.workspace_id.clone(), ws.root_path.clone())
+    };
+
+    let read_ctx = ag::blocks::AgentReadContext::new(
+        std::path::Path::new(&workspace_root_path),
+        open_doc_snapshots,
+    )?;
+    let active_snapshot = match active_doc_path.as_deref() {
+        Some(path) => {
+            let open = read_ctx.open_snapshot(path).ok_or_else(|| {
+                IpcError::new(
+                    "AG_OPEN_DOC_SNAPSHOT_REQUIRED",
+                    "当前打开文档缺少 LogicalState 快照，已阻断代理回合",
+                    true,
+                    false,
+                )
+            })?;
+            if !is_active_editor_snapshot_source(&open.source) {
+                return Err(IpcError::new(
+                    "AG_ACTIVE_SNAPSHOT_REQUIRED",
+                    "当前打开文档必须来自 active editor LogicalState 快照",
+                    true,
+                    false,
+                ));
+            }
+            if let Some(format) = active_doc_format.as_deref() {
+                if !format.is_empty() && format != open.edit_format {
+                    return Err(IpcError::new(
+                        "AG_ACTIVE_FORMAT_MISMATCH",
+                        "active_doc_format 与 OpenDocSnapshot.editFormat 不一致，已阻断代理回合",
+                        true,
+                        false,
+                    ));
+                }
+            }
+            if let Some(legacy_content) = active_doc_content.as_deref() {
+                if legacy_content != open.content {
+                    return Err(IpcError::new(
+                        "AG_ACTIVE_SNAPSHOT_MISMATCH",
+                        "active_doc_content 与 OpenDocSnapshot 不一致，已阻断代理回合",
+                        true,
+                        false,
+                    ));
+                }
+            }
+            Some(read_ctx.snapshot(path)?)
+        }
+        None => None,
+    };
 
     // 结构性门禁前置：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed（X-SEQ-001）。
     // 每步转移广播 SM-AG-01（A-CORE-X-L-04 Task 2-E）：sending 等回合视图据此投影（X-FORBID-007）。
@@ -2541,32 +3679,29 @@ async fn ag_start_turn(
 
     // workspace 解析 + AST/KB 补强检索（P2，限当前 workspace X-FORBID-004，PI-AG-09D）。单锁，锁在 await 前释放。
     const AUG_BUDGET: u32 = 2500; // 补强层字符预算（dev；G5 标定）
-    let mut ws_root: Option<String> = None;
+    let ws_root: Option<String> = Some(workspace_root_path.clone());
     let mut aug_items: Vec<crate::ag::context::ContextItem> = Vec::new();
     if let Ok(conn) = state.db.lock() {
-        if let Ok(Some(ws)) = workspace::lifecycle::active_workspace(&conn) {
-            ws_root = Some(ws.root_path.clone());
-            // AST 记忆供给。
-            if let Ok(mems) = crate::ast::supply::supply(&conn, &ws.workspace_id) {
-                for m in mems {
-                    let cost = m.content.chars().count() as u32;
-                    aug_items.push(crate::ag::context::ContextItem {
-                        source: crate::ag::context::ContextSource::Memory,
-                        content: format!("记忆：{}", m.content),
-                        cost,
-                    });
-                }
+        // AST 记忆供给。
+        if let Ok(mems) = crate::ast::supply::supply(&conn, &workspace_id_for_turn) {
+            for m in mems {
+                let cost = m.content.chars().count() as u32;
+                aug_items.push(crate::ag::context::ContextItem {
+                    source: crate::ag::context::ContextSource::Memory,
+                    content: format!("记忆：{}", m.content),
+                    cost,
+                });
             }
-            // KB 知识检索（query=当前 prompt；本地匹配、无上行）。
-            if let Ok(ks) = crate::kb::retrieve::retrieve(&conn, &ws.workspace_id, &prompt) {
-                for k in ks {
-                    let cost = k.content.chars().count() as u32;
-                    aug_items.push(crate::ag::context::ContextItem {
-                        source: crate::ag::context::ContextSource::Knowledge,
-                        content: format!("知识（{}）：{}", k.source_ref, k.content),
-                        cost,
-                    });
-                }
+        }
+        // KB 知识检索（query=当前 prompt；本地匹配、无上行）。
+        if let Ok(ks) = crate::kb::retrieve::retrieve(&conn, &workspace_id_for_turn, &prompt) {
+            for k in ks {
+                let cost = k.content.chars().count() as u32;
+                aug_items.push(crate::ag::context::ContextItem {
+                    source: crate::ag::context::ContextSource::Knowledge,
+                    content: format!("知识（{}）：{}", k.source_ref, k.content),
+                    cost,
+                });
             }
         }
     }
@@ -2592,57 +3727,47 @@ async fn ag_start_turn(
     const MENTION_CAP: usize = 4000;
     let mention_block: Option<String> = {
         let mut parts = Vec::new();
-        // 整篇引用：读文档（需 ws_root，X-FORBID-004）。
-        if let Some(root) = ws_root.as_deref() {
-            for rel in &mentions {
-                match workspace::resolve_in_workspace(std::path::Path::new(root), rel) {
-                    Ok(abs) => match crate::ag::blocks::read_editable_snapshot(
-                        std::path::Path::new(root),
-                        rel,
-                        &abs,
-                        None,
-                        None,
-                    ) {
-                        Ok(snapshot) => {
-                            let capped = crate::ag::context::cap_text(
-                                &snapshot.content,
-                                MENTION_CAP,
-                                "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
-                            );
-                            parts.push(format!("引用文档「{rel}」：\n{capped}"));
-                        }
-                        Err(e) => parts.push(format!(
-                            "引用文档「{rel}」读取失败（{}）：{}",
-                            e.code, e.message
-                        )),
-                    },
-                    Err(e) => parts.push(format!(
-                        "引用文档「{rel}」路径无效或超出 workspace（{}）：{}",
-                        e.code, e.message
-                    )),
+        // 整篇引用：经 AgentReadContext 读取，已打开文档优先 LogicalState。
+        for rel in &mentions {
+            match read_ctx.snapshot(rel) {
+                Ok(snapshot) => {
+                    let capped = crate::ag::context::cap_text(
+                        &snapshot.content,
+                        MENTION_CAP,
+                        "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
+                    );
+                    parts.push(format!("引用文档「{rel}」：\n{capped}"));
                 }
-            }
-        } else {
-            for rel in &mentions {
-                parts.push(format!(
-                    "引用文档「{rel}」未读取：当前没有 active workspace"
-                ));
+                Err(e) => parts.push(format!(
+                    "引用文档「{rel}」读取失败（{}）：{}",
+                    e.code, e.message
+                )),
             }
         }
-        // 块级引用（选区精确锚，PI-AG-09F）：text 与 start/end 已由前端 SelectionRef 带入。
+        // 块级引用（选区精确锚，PI-AG-09F）：text 与 start/end 已由前端 SelectionRef 带入；消费前重新校验。
         for br in &block_refs {
             if br.text.trim().is_empty() {
                 continue;
             }
-            let capped =
-                crate::ag::context::cap_text(&br.text, MENTION_CAP, "[引用选区较长，已截取前部]");
-            parts.push(format_block_ref_context(br, &capped));
+            let payload = ReferencePayload::Selection {
+                rel_path: br.rel_path.clone(),
+                block_id: br.block_id.clone(),
+                start: br.start,
+                end: br.end,
+                text: br.text.clone(),
+                label: None,
+            };
+            parts.push(format_reference_payload_context(
+                &payload,
+                Some(&read_ctx),
+                MENTION_CAP,
+            ));
         }
         // 新主通道：ReferencePayload 覆盖 doc / selection / session / memory / knowledge / template / url / long_text。
         for reference in &references {
             parts.push(format_reference_payload_context(
                 reference,
-                ws_root.as_deref(),
+                Some(&read_ctx),
                 MENTION_CAP,
             ));
         }
@@ -2656,35 +3781,40 @@ async fn ag_start_turn(
         }
     };
 
-    // 文档形态（PI-AG-08F）：editFormat=html 或内容以 < 开头 → 按 docx/html 块；否则 text 段落块。
-    let doc_is_html = active_doc_content
-        .as_deref()
-        .map(|c| crate::ag::blocks::is_html(c, active_doc_format.as_deref()))
-        .unwrap_or(false);
     let requires_edit_tool =
         active_doc_path.as_deref().is_some() && looks_like_edit_intent(&prompt);
+    if requires_edit_tool {
+        if let Some(snapshot) = &active_snapshot {
+            if !snapshot.content.trim().is_empty() && snapshot.blocks.is_empty() {
+                let _ = on_event.send(AgTurnEvent::Error {
+                    turn_id: turn_id.clone(),
+                    code: "AG_ACTIVE_BLOCKS_REQUIRED".to_string(),
+                    message: "当前文档块投影为空，已阻断编辑请求，请重新加载文档后重试。"
+                        .to_string(),
+                    retriable: true,
+                });
+                emit_ag02(&app, &turn_id, ag::tool::ToolLoopState::LoopAborted);
+                emit_ag01(&app, &turn_id, TurnState::TurnError);
+                return Ok(());
+            }
+        }
+    }
     let mut proposed_diff = false;
 
-    // P0 当前文档块视图（PI-AG-08E/08F/08G）；超长封顶（层保留、内容可缩，BR-AG-DATA-005，PI-AG-09B）。
+    // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     const DOC_CTX_CAP: usize = 9000; // 字符（dev；G5 标定）
-    let doc_ctx: Option<String> = active_doc_content
-        .as_deref()
-        .filter(|c| !c.trim().is_empty())
-        .map(|content| {
-            let path = active_doc_path.as_deref().unwrap_or("(未命名)");
-            let blocks = crate::ag::blocks::project_blocks(content, doc_is_html);
-            let mut block_view = String::new();
-            for b in blocks.iter() {
-                match &b.block_id {
-                    Some(id) => block_view.push_str(&format!("Block {} [id={id}]: {}\n", b.block_index, b.text)),
-                    None => block_view.push_str(&format!("Block {}: {}\n", b.block_index, b.text)),
-                }
-            }
-            let ctx = format!(
-                "[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{block_view}\n修改某一块必须用 propose_edit operation=replace_block + new_text：有 [id=…] 的块**优先传 block_id**（只能传方括号内完整 id，不要把数字块号填入 block_id），否则传 block_index（Block N 中的 0 起块号）；只有用户明确要求整篇重写时，才用 operation=replace_document + content。"
-            );
-            crate::ag::context::cap_text(&ctx, DOC_CTX_CAP, "[文档较长，已截取前部；其余内容可用 read_doc 分块读取]")
-        });
+    let current_doc_prompt_context = match (active_doc_path.as_deref(), active_snapshot.as_ref()) {
+        (Some(path), Some(snapshot)) => {
+            build_current_doc_prompt_context(path, snapshot, DOC_CTX_CAP)
+        }
+        _ => CurrentDocPromptContext {
+            text: None,
+            requires_read_before_edit: false,
+        },
+    };
+    let current_doc_requires_tool_read =
+        requires_edit_tool && current_doc_prompt_context.requires_read_before_edit;
+    let doc_ctx = current_doc_prompt_context.text;
 
     // P1 历史层：总预算扣除 P0（系统/文档/当前输入）后的余额内保留最近若干轮（drop 最旧，PI-AG-09B）。
     const CTX_BUDGET_CHARS: usize = 16000; // 总预算（~4000 tokens，dev；G5 标定）
@@ -2697,42 +3827,19 @@ async fn ag_start_turn(
         + doc_ctx.as_deref().map(|s| s.chars().count()).unwrap_or(0)
         + prompt.chars().count();
     let hist_budget = CTX_BUDGET_CHARS.saturating_sub(p0_chars + aug_chars + mention_chars);
-    let (kept_history, _dropped) = crate::ag::context::select_recent_history(&history, hist_budget);
-
-    // 组装顺序（M-T-02 §3 recency）：系统 → 补强(P2) → 历史(P1) → 显式引用(P1) → 当前文档(P0,贴末尾) → 意图 → 当前输入。
-    let mut messages = vec![serde_json::json!({
-        "role": "system", "content": ag::prompts::SYSTEM_PROMPT_CHAT
-    })];
-    if let Some(aug) = &aug_block {
-        messages.push(serde_json::json!({ "role": "system", "content": aug }));
-    }
-    for t in &kept_history {
-        messages.push(serde_json::json!({ "role": t.role, "content": t.content }));
-    }
-    if let Some(m) = &mention_block {
-        messages.push(serde_json::json!({ "role": "system", "content": m }));
-    }
-    if let Some(ctx) = &doc_ctx {
-        messages.push(serde_json::json!({ "role": "system", "content": ctx }));
-    }
-    // 意图沿用判定（BR-AG-DATA-004，PI-AG-09C）：默认弱化历史、显式沿用才提权——当前轮前注入信号。
-    let intent_hint =
-        match crate::ag::context::decide_intent_carryover(&prompt, !kept_history.is_empty()) {
-            crate::ag::context::Carryover::None => {
-                "【本轮意图】这是一个新请求，对话历史仅作背景，不要让历史意图凌驾当前请求。"
-            }
-            crate::ag::context::Carryover::Refine => {
-                "【本轮意图】用户在修正/追加上文的产出，请据最近一轮的相关内容继续。"
-            }
-            crate::ag::context::Carryover::Select => {
-                "【本轮意图】用户在选择/沿用上文给出的方案，请据上文相应选项继续。"
-            }
-            crate::ag::context::Carryover::ReferenceTarget => {
-                "【本轮意图】用户在延续上文的话题/目标，请参考相关历史意图继续。"
-            }
-        };
-    messages.push(serde_json::json!({ "role": "system", "content": intent_hint }));
-    messages.push(serde_json::json!({ "role": "user", "content": prompt }));
+    let assembled_messages = assemble_agent_turn_messages(
+        ag::prompts::SYSTEM_PROMPT_CHAT,
+        aug_block.as_deref(),
+        &history,
+        active_doc_path.as_deref(),
+        hist_budget,
+        mention_block.as_deref(),
+        doc_ctx.as_deref(),
+        &prompt,
+    );
+    let mut messages = assembled_messages.messages;
+    let _carryover = assembled_messages.carryover;
+    let _dropped_cross_doc_history = assembled_messages.dropped_cross_doc_history;
 
     // 工具定义（PI-AG-08B 只读 3 工具）；ws_root 已在上文 workspace 解析（X-FORBID-004 工具限界，PI-AG-09D）。
     let tools = ag::tool_registry::tool_definitions_json();
@@ -2742,6 +3849,7 @@ async fn ag_start_turn(
     // 续调 / FinalAnswer→LoopCompleted / 达上限→LoopAborted）。工具卡数据仍由 Channel 投影（互不替代）。
     use ag::tool::ToolLoopState as TlSt;
     const MAX_ROUNDS: usize = 6;
+    let mut current_doc_read_confirmed = !current_doc_requires_tool_read;
     for _round in 0..MAX_ROUNDS {
         emit_ag02(&app, &turn_id, TlSt::ModelStreaming); // 本轮模型流式
         let msgs = serde_json::Value::Array(messages.clone());
@@ -2803,33 +3911,49 @@ async fn ag_start_turn(
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
                         // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
                         ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
-                            match ag_propose_edit(
-                                &state,
+                            if current_doc_edit_requires_prior_read(
                                 &params,
-                                active_doc_content.as_deref(),
-                                doc_is_html,
                                 active_doc_path.as_deref(),
-                                &declared_targets,
+                                current_doc_requires_tool_read,
+                                current_doc_read_confirmed,
                             ) {
-                                Ok(edit_result) => {
-                                    proposed_diff = true;
-                                    diff_event_after_tool = Some((
-                                        edit_result.diff_id.clone(),
-                                        edit_result.rel_path.clone(),
-                                    ));
-                                    let result = serde_json::json!({
-                                        "summary": format!("已生成修改建议（diff_id={}），界面已显示待确认卡片，等待用户接受后应用；请勿重复提交。", edit_result.diff_id),
-                                        "diff_id": edit_result.diff_id,
-                                        "rel_path": edit_result.rel_path,
-                                        "projection": edit_result.projection,
-                                    });
-                                    (
-                                        serde_json::to_string(&result)
-                                            .unwrap_or_else(|_| "已生成修改建议".to_string()),
-                                        true,
-                                    )
+                                (
+                                    serde_json::json!({
+                                        "code": "AG_CURRENT_DOC_READ_REQUIRED",
+                                        "message": "当前文档较长，本轮只注入了块目录；请先调用 read_doc 或 list_blocks 读取当前文档目标内容，再重新调用 propose_edit。",
+                                        "retriable": true,
+                                    })
+                                    .to_string(),
+                                    false,
+                                )
+                            } else {
+                                match ag_propose_edit(
+                                    &state,
+                                    &params,
+                                    &read_ctx,
+                                    active_doc_path.as_deref(),
+                                    &declared_targets,
+                                ) {
+                                    Ok(edit_result) => {
+                                        proposed_diff = true;
+                                        diff_event_after_tool = Some((
+                                            edit_result.diff_id.clone(),
+                                            edit_result.rel_path.clone(),
+                                        ));
+                                        let result = serde_json::json!({
+                                            "summary": format!("已生成修改建议（diff_id={}），界面已显示待确认卡片，等待用户接受后应用；请勿重复提交。", edit_result.diff_id),
+                                            "diff_id": edit_result.diff_id,
+                                            "rel_path": edit_result.rel_path,
+                                            "projection": edit_result.projection,
+                                        });
+                                        (
+                                            serde_json::to_string(&result)
+                                                .unwrap_or_else(|_| "已生成修改建议".to_string()),
+                                            true,
+                                        )
+                                    }
+                                    Err(e) => (format!("生成修改建议失败：{}", e.message), false),
                                 }
-                                Err(e) => (format!("生成修改建议失败：{}", e.message), false),
                             }
                         }
                         // 结构工具：经 WS 边界执行，只改变文件树，不修改文档内容。
@@ -2858,18 +3982,19 @@ async fn ag_start_turn(
                         // 只读工具：经 WS/KB 执行（限 active workspace）。
                         ag::tool::ToolDecision::Allow => match ws_root.as_deref() {
                             None => ("无活动 workspace，无法执行工具".to_string(), false),
-                            Some(root) => {
-                                match ag::tool_exec::exec_read_only(
-                                    std::path::Path::new(root),
-                                    &c.name,
-                                    &params,
-                                ) {
+                            Some(_) => {
+                                match ag::tool_exec::exec_read_only(&read_ctx, &c.name, &params) {
                                     Ok(r) => (r, true),
                                     Err(e) => (format!("工具执行失败：{}", e.message), false),
                                 }
                             }
                         },
                     };
+                    if success
+                        && is_current_doc_read_tool(&c.name, &params, active_doc_path.as_deref())
+                    {
+                        current_doc_read_confirmed = true;
+                    }
                     let _ = on_event.send(AgTurnEvent::ToolResult {
                         turn_id: turn_id.clone(),
                         tool_name: c.name.clone(),

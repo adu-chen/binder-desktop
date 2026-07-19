@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { deStore } from "../store/deStore";
+import { deStore, type DiffView, type ExpiredReason } from "../store/deStore";
 import { edStore } from "../store/edStore";
-import { openDocument } from "./edService";
+import { openDocument, persistSessionSnapshot } from "./edService";
 import { applyEditOps, getActiveDocumentContent } from "./edLocate";
 
 /**
@@ -33,6 +33,177 @@ const errMsg = (e: unknown) => {
   const x = e as { code?: string; message?: string };
   return x?.code ? `[${x.code}] ${x.message ?? ""}` : String(e);
 };
+
+interface PendingDiffDto {
+  diff_id: string;
+  target: { rel_path: string };
+  status: "pending" | "accepted" | "rejected" | "expired";
+  created_at: number;
+}
+
+export interface DiffDetailDto extends PendingDiffDto {
+  projection?: {
+    patch_kind?: "replace_block" | "replace_document" | "style_ops";
+    block_id?: string | null;
+    block_index?: number | null;
+    before_text?: string;
+    after_text?: string;
+    location_label?: string;
+    draft_mode?: "current_editor" | "open_session" | "background";
+    snapshot_source?: "active_editor" | "active_editor_session" | "open_editor_session" | "disk_snapshot";
+    base_session_version?: number | null;
+    base_content_hash?: string | null;
+    style_ops?: unknown;
+  };
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function replaceTextBlock(content: string, blockIndex: number | undefined, nextText: string): string | null {
+  if (blockIndex === undefined || blockIndex < 0) return null;
+  const blocks = content.split("\n");
+  if (blockIndex >= blocks.length) return null;
+  blocks[blockIndex] = nextText;
+  return blocks.join("\n");
+}
+
+function findTagClose(content: string, tag: string, from: number): number {
+  return content.toLowerCase().indexOf(`</${tag.toLowerCase()}>`, from);
+}
+
+function replaceHtmlBlock(content: string, blockId: string | undefined, blockIndex: number | undefined, nextText: string): string | null {
+  const escaped = escapeHtml(nextText);
+  const blocks: { id?: string; start: number; end: number }[] = [];
+  const re = /<([a-zA-Z][\w:-]*)\b[^>]*>/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    const openTag = match[0];
+    if (!/\bdata-block-id\s*=/.test(openTag) && !/^(p|h[1-6]|li|blockquote|pre|div|td|th)$/i.test(match[1])) {
+      continue;
+    }
+    const innerStart = match.index + openTag.length;
+    const closeStart = findTagClose(content, match[1], innerStart);
+    if (closeStart === -1) continue;
+    const idMatch = openTag.match(/\bdata-block-id\s*=\s*["']([^"']+)["']/i);
+    blocks.push({ id: idMatch?.[1], start: innerStart, end: closeStart });
+  }
+  const target = blockId
+    ? blocks.find((b) => b.id === blockId)
+    : blockIndex === undefined ? undefined : blocks[blockIndex];
+  if (!target) return null;
+  return `${content.slice(0, target.start)}${escaped}${content.slice(target.end)}`;
+}
+
+function applyOpenSessionPatch(diff: DiffView, content: string, editFormat: string): string | null {
+  if (diff.patchKind === "style_ops") return null;
+  if (diff.patchKind === "replace_document") return diff.after;
+  if (diff.patchKind === "replace_block") {
+    const index = typeof diff.blockIndex === "number" ? diff.blockIndex : undefined;
+    if (editFormat === "html" || editFormat === "html_file") {
+      return replaceHtmlBlock(content, diff.blockId || undefined, index, diff.after);
+    }
+    return replaceTextBlock(content, index, diff.after);
+  }
+  return null;
+}
+
+async function expireDiff(diffId: string, reason: ExpiredReason, errorCode: string): Promise<void> {
+  try {
+    await callCommand("de.expire_diff", { diffId, reason: errorCode });
+  } catch (e) {
+    console.error(`de.expire_diff failed ${errMsg(e)}`);
+  }
+  deStore.expireLocal(diffId, { expiredReason: reason, errorCode });
+}
+
+export async function loadDiffDetails(diffIds: string[]): Promise<DiffDetailDto[]> {
+  const ids = Array.from(new Set(diffIds.filter(Boolean)));
+  if (!ids.length) return [];
+  return callCommand<DiffDetailDto[]>("de.list_diffs", { diffIds: ids });
+}
+
+export async function loadPersistedDiffs(): Promise<void> {
+  try {
+    const list = await callCommand<PendingDiffDto[]>("de.list_diffs", { status: "pending" });
+    const existing = new Set(deStore.getSnapshot().diffs.map((d) => d.diffId));
+    for (const d of list) {
+      if (existing.has(d.diff_id)) continue;
+      existing.add(d.diff_id);
+      deStore.addDiff({
+        diffId: d.diff_id,
+        blockId: "",
+        relPath: d.target.rel_path,
+        title: `待裁决修改 ${d.target.rel_path}`,
+        before: "",
+        after: "",
+        state: "pending",
+        createdAt: d.created_at,
+      });
+    }
+  } catch (e) {
+    console.error(`de.list_diffs failed ${errMsg(e)}`);
+  }
+}
+
+export async function applyOpenSessionDiff(diffId: string): Promise<void> {
+  const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
+  if (!diff || diff.draftMode !== "open_session" || diff.state !== "pending") return;
+  if (!diff.relPath) {
+    await expireDiff(diffId, "block_resolve_failed", "DE_OPEN_SESSION_REL_PATH_MISSING");
+    return;
+  }
+  if (diff.relPath === edStore.getSnapshot().openPath) {
+    await expireDiff(diffId, "document_revision_advanced", "DE_OPEN_SESSION_ACTIVE_PATH");
+    return;
+  }
+  if (typeof diff.baseSessionVersion !== "number" || !diff.baseContentHash) {
+    await expireDiff(diffId, "document_revision_advanced", "DE_OPEN_SESSION_BASE_MISSING");
+    return;
+  }
+  const session = edStore.getSnapshot().sessions[diff.relPath];
+  if (!session || session.content === null) {
+    await expireDiff(diffId, "block_resolve_failed", "ED_OPEN_SESSION_REQUIRED");
+    return;
+  }
+  if (diff.patchKind === "style_ops") {
+    await expireDiff(diffId, "apply_replace_failed", "ED_OPEN_SESSION_STYLE_OPS_UNSUPPORTED");
+    return;
+  }
+  const nextContent = applyOpenSessionPatch(diff, session.content, session.editFormat);
+  if (nextContent === null) {
+    await expireDiff(diffId, "block_resolve_failed", "ED_OPEN_SESSION_APPLY_FAILED");
+    return;
+  }
+  const applied = edStore.applySessionContent(
+    diff.relPath,
+    nextContent,
+    diff.baseSessionVersion,
+    diff.baseContentHash,
+  );
+  if (!applied.ok) {
+    await expireDiff(diffId, "document_revision_advanced", applied.code);
+    return;
+  }
+  try {
+    await persistSessionSnapshot(applied.snapshot);
+    await callCommand<{ accepted: boolean }>("de.accept_draft_diff", {
+      diffId,
+      applyContext: "open_session",
+      baseSessionVersion: diff.baseSessionVersion,
+      baseContentHash: diff.baseContentHash,
+    });
+    deStore.markOpenSessionApplied(diffId, session.content, nextContent);
+  } catch (e) {
+    deStore.setLocalView(diffId, "error", { errorCode: (e as { code?: string })?.code ?? "DE_OPEN_SESSION_CONFIRM_FAILED" });
+    console.error(`open session diff confirm failed ${errMsg(e)}`);
+  }
+}
 
 /**
  * 对当前打开文档生成示例修改（绕过桩模型）：确定性变换 → de.generate_diff 持久化 → deStore 投影。
@@ -77,8 +248,16 @@ export async function acceptDiff(diffId: string): Promise<void> {
   try {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
     const { openPath } = edStore.getSnapshot();
+    if (diff?.draftMode === "open_session") {
+      await applyOpenSessionDiff(diffId);
+      return;
+    }
     if (diff?.draftApplied && diff.relPath === openPath) {
       await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId });
+      return;
+    }
+    if (diff?.relPath && edStore.getSnapshot().sessions[diff.relPath]) {
+      deStore.setLocalView(diffId, "error", { errorCode: "DE_OPEN_DOC_REQUIRES_LOGICAL_STATE" });
       return;
     }
     if (diff && isDocxPath(diff.relPath)) {
@@ -101,6 +280,7 @@ export async function acceptDiff(diffId: string): Promise<void> {
 export async function rejectDiff(diffId: string): Promise<void> {
   try {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
+    if (diff?.draftMode === "open_session" || diff?.readonly) return;
     await callCommand("de.reject_diff", { diffId });
     const { openPath, editFormat } = edStore.getSnapshot();
     if (
@@ -157,7 +337,7 @@ export async function rejectDiff(diffId: string): Promise<void> {
  */
 export async function acceptAllDiffs(): Promise<void> {
   const { diffs } = deStore.getSnapshot();
-  const appliable = diffs.filter((d) => d.state === "pending");
+  const appliable = diffs.filter((d) => d.state === "pending" && !d.readonly);
   const expired = diffs.filter((d) => ["expired", "conflict", "error"].includes(d.state));
   if (appliable.length === 0) return;
   deStore.setBatch("applying", expired.length);
@@ -169,7 +349,7 @@ export async function acceptAllDiffs(): Promise<void> {
 
 export async function rejectAllDiffs(): Promise<void> {
   const { diffs } = deStore.getSnapshot();
-  for (const d of diffs.filter((x) => x.state === "pending")) {
+  for (const d of diffs.filter((x) => x.state === "pending" && !x.readonly)) {
     await rejectDiff(d.diffId);
   }
   deStore.setBatch("idle");

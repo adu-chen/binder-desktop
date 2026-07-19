@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMock = vi.hoisted(() => ({ invoke: vi.fn() }));
-const edServiceMock = vi.hoisted(() => ({ openDocument: vi.fn() }));
+const edServiceMock = vi.hoisted(() => ({ openDocument: vi.fn(), persistSessionSnapshot: vi.fn() }));
 const edLocateMock = vi.hoisted(() => ({
   applyEditOps: vi.fn(),
   getActiveDocumentContent: vi.fn(),
@@ -14,13 +14,15 @@ vi.mock("./edLocate", () => edLocateMock);
 import { invoke } from "@tauri-apps/api/core";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
-import { acceptDiff, generateSampleDiff, rejectDiff } from "./deService";
+import { acceptDiff, applyOpenSessionDiff, generateSampleDiff, rejectDiff } from "./deService";
 
 const invokeMock = vi.mocked(invoke);
 
 beforeEach(() => {
   invokeMock.mockReset();
   edServiceMock.openDocument.mockReset();
+  edServiceMock.persistSessionSnapshot.mockReset();
+  edServiceMock.persistSessionSnapshot.mockResolvedValue(undefined);
   edLocateMock.applyEditOps.mockReset();
   edLocateMock.applyEditOps.mockReturnValue({ ok: true });
   edLocateMock.getActiveDocumentContent.mockReset();
@@ -93,8 +95,7 @@ describe("deService 草稿 diff 裁决", () => {
     expect(edServiceMock.openDocument).not.toHaveBeenCalled();
   });
 
-  it("acceptDiff：非草稿路径保留 de.accept_diff 后重开文档", async () => {
-    edStore.loadDoc("a.md", "旧", 1);
+  it("acceptDiff：未打开文档保留 de.accept_diff 后台路径", async () => {
     deStore.addDiff({
       diffId: "d2",
       blockId: "",
@@ -109,10 +110,10 @@ describe("deService 草稿 diff 裁决", () => {
     await acceptDiff("d2");
 
     expect(lastCommand()).toBe("de.accept_diff");
-    expect(edServiceMock.openDocument).toHaveBeenCalledWith("a.md");
+    expect(edServiceMock.openDocument).not.toHaveBeenCalled();
   });
 
-  it("acceptDiff：BDocx 非草稿路径不走后台 accept_diff，避免 HTML 直写 docx", async () => {
+  it("acceptDiff：已打开文档非草稿路径不走后台 accept_diff", async () => {
     edStore.loadDoc("a.docx", "<p>旧</p>", 1, null, "html");
     deStore.addDiff({
       diffId: "d-bdocx-bg",
@@ -129,7 +130,84 @@ describe("deService 草稿 diff 裁决", () => {
     expect(invokeMock).not.toHaveBeenCalled();
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({
       state: "error",
-      errorCode: "DE_BDOCX_DRAFT_REQUIRED",
+      errorCode: "DE_OPEN_DOC_REQUIRES_LOGICAL_STATE",
+    });
+  });
+
+  it("applyOpenSessionDiff：已打开非激活文档直接应用 LogicalState 并确认 accepted", async () => {
+    edStore.loadDoc("target.md", "一\n旧", 1);
+    edStore.loadDoc("active.md", "当前", 2);
+    const target = edStore.getSnapshot().sessions["target.md"];
+    deStore.addDiff({
+      diffId: "d-open",
+      blockId: "",
+      blockIndex: 1,
+      relPath: "target.md",
+      title: "修改非激活文档",
+      before: "旧",
+      after: "新",
+      state: "pending",
+      patchKind: "replace_block",
+      draftMode: "open_session",
+      snapshotSource: "open_editor_session",
+      baseSessionVersion: target.sessionVersion,
+      baseContentHash: target.contentHash,
+      readonly: true,
+    });
+    invokeMock.mockResolvedValue({ result: { accepted: true } });
+
+    await applyOpenSessionDiff("d-open");
+
+    expect(edStore.getSnapshot().sessions["target.md"]).toMatchObject({
+      content: "一\n新",
+      tabState: "dirty",
+      sessionVersion: target.sessionVersion + 1,
+    });
+    expect(edServiceMock.persistSessionSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      relPath: "target.md",
+      content: "一\n新",
+      source: "open_editor_session",
+      dirty: true,
+    }));
+    expect(lastCommand()).toBe("de.accept_draft_diff");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "accepted",
+      readonly: true,
+      openSessionApplied: true,
+    });
+  });
+
+  it("applyOpenSessionDiff：目标 LogicalState 已推进时过期，不覆盖新内容", async () => {
+    edStore.loadDoc("target.md", "一\n旧", 1);
+    edStore.loadDoc("active.md", "当前", 2);
+    const target = edStore.getSnapshot().sessions["target.md"];
+    edStore.updateContent("target.md", "一\n用户新改");
+    deStore.addDiff({
+      diffId: "d-open-stale",
+      blockId: "",
+      blockIndex: 1,
+      relPath: "target.md",
+      title: "修改非激活文档",
+      before: "旧",
+      after: "新",
+      state: "pending",
+      patchKind: "replace_block",
+      draftMode: "open_session",
+      snapshotSource: "open_editor_session",
+      baseSessionVersion: target.sessionVersion,
+      baseContentHash: target.contentHash,
+      readonly: true,
+    });
+    invokeMock.mockResolvedValue({ result: { diff_id: "d-open-stale", status: "expired" } });
+
+    await applyOpenSessionDiff("d-open-stale");
+
+    expect(edStore.getSnapshot().sessions["target.md"]?.content).toBe("一\n用户新改");
+    expect(edServiceMock.persistSessionSnapshot).not.toHaveBeenCalled();
+    expect(lastCommand()).toBe("de.expire_diff");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "expired",
+      errorCode: "ED_OPEN_SESSION_BASE_MISMATCH",
     });
   });
 

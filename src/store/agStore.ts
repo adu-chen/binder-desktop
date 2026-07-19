@@ -19,9 +19,15 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   parts?: MessageContentPart[];
+  toolCalls?: ToolCallView[];
   streaming?: boolean;
   error?: boolean;
+  turnId?: string;
+  relPath?: string | null;
+  turnStatus?: AgentTurnStatus;
 }
+
+export type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft";
 
 /** ToolCall 6 状态（参考稿 §6.2，视觉互斥）。 */
 export type ToolState =
@@ -37,6 +43,9 @@ export interface ToolCallView {
   name: string;
   state: ToolState;
   detail?: string;
+  readonly?: boolean;
+  turnId?: string;
+  anchorMessageId?: string;
 }
 
 /** 后端 SM-AG-01 回合机运行态（Rust TurnState 的 Debug 名，A-AG-M-S-01 §2）。 */
@@ -71,6 +80,8 @@ export interface AgSession {
   createdAt: number;
   /** 标签已关闭（归档）：不显示为标签，可从历史会话重开。 */
   archived: boolean;
+  /** 回合内容是否已经加载；历史恢复时仅活动会话 eager-load，其余点击懒加载。 */
+  turnsLoaded: boolean;
 }
 
 interface AgState {
@@ -90,6 +101,7 @@ function blankSession(): AgSession {
     toolCalls: [],
     createdAt: Date.now(),
     archived: false,
+    turnsLoaded: true,
   };
 }
 
@@ -122,6 +134,24 @@ export const agStore = {
     return state;
   },
 
+  reset() {
+    const fresh = blankSession();
+    setState({ sessions: [fresh], activeSessionId: fresh.id, sending: false });
+  },
+
+  hydrateSessions(sessions: AgSession[], activeSessionId?: string) {
+    const next = sessions.length ? sessions : [blankSession()];
+    const active =
+      (activeSessionId && next.some((s) => s.id === activeSessionId) && activeSessionId) ||
+      next.find((s) => !s.archived)?.id ||
+      next[0].id;
+    setState({ sessions: next, activeSessionId: active, sending: false });
+  },
+
+  hydrateSessionTurns(sessionId: string, messages: ChatMessage[], toolCalls: ToolCallView[]) {
+    mapSession(sessionId, (s) => ({ ...s, messages, toolCalls, turnsLoaded: true }));
+  },
+
   // ── 会话（标签）操作 ──────────────────────────────────────────────
   /** 新建会话并激活；返回会话 id。 */
   newSession(): string {
@@ -152,6 +182,20 @@ export const agStore = {
       }
       return;
     }
+    setState({ sessions, activeSessionId });
+  },
+  /** 删除会话=移除会话及其历史投影；用于用户确认删除已持久化会话记录。 */
+  deleteSession(id: string) {
+    const sessions = state.sessions.filter((s) => s.id !== id);
+    if (!sessions.length) {
+      const fresh = blankSession();
+      setState({ sessions: [fresh], activeSessionId: fresh.id, sending: false });
+      return;
+    }
+    const activeSessionId =
+      state.activeSessionId === id
+        ? sessions.find((s) => !s.archived)?.id ?? sessions[0].id
+        : state.activeSessionId;
     setState({ sessions, activeSessionId });
   },
   /** 设定活动会话模式（编辑/构建，TERM-AG-006/007）。 */
@@ -198,22 +242,29 @@ export const agStore = {
       messages: s.messages.map((m) => (m.id === id ? { ...m, streaming: false } : m)),
     }));
   },
+  /** 标记某个代理回合在当前会话内的持久化状态投影。 */
+  setTurnStatus(sessionId: string, turnId: string, status: AgentTurnStatus) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) => (m.turnId === turnId ? { ...m, turnStatus: status } : m)),
+    }));
+  },
   /** 新增一条工具调用卡（executing）；返回卡 id（PI-AG-08D，投影 ToolRequest）。 */
-  addToolCall(sessionId: string, name: string, detail?: string): string {
+  addToolCall(sessionId: string, name: string, detail?: string, meta: Pick<ToolCallView, "turnId" | "anchorMessageId"> = {}): string {
     const id = `tc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     mapSession(sessionId, (s) => ({
       ...s,
-      toolCalls: [...s.toolCalls, { id, name, state: "executing", detail }],
+      toolCalls: [...s.toolCalls, { id, name, state: "executing", detail, ...meta }],
     }));
     return id;
   },
   /** 将该 name 最早的 executing 卡置 done/failed（事件无 call id，按 name+executing 先到先配）。 */
-  resolveToolCall(sessionId: string, name: string, ok: boolean, detail?: string) {
+  resolveToolCall(sessionId: string, name: string, ok: boolean, detail?: string, turnId?: string) {
     let matched = false;
     mapSession(sessionId, (s) => ({
       ...s,
       toolCalls: s.toolCalls.map((t) => {
-        if (!matched && t.name === name && t.state === "executing") {
+        if (!matched && t.name === name && t.state === "executing" && (!turnId || t.turnId === turnId)) {
           matched = true;
           return { ...t, state: ok ? "done" : "failed", detail: detail ?? t.detail };
         }

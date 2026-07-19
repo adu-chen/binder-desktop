@@ -2,6 +2,7 @@ import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "../components/ed/extensions";
+import type { EditFormat } from "../store/edStore";
 import { makeDocReference, makeSelectionReference, writeReferencePayloadData } from "./referencePayload";
 
 /**
@@ -18,15 +19,45 @@ export type LocateResult = "located" | "anchor_lost";
 
 // 编辑器实例注册点（Editor 挂载时注册、卸载置空）；查询函数按需读取。
 let activeEditor: Editor | null = null;
+let activeEditorBinding: ActiveEditorBinding | null = null;
+
+export interface ActiveEditorBinding {
+  relPath: string;
+  loadSeq: number;
+  editFormat: EditFormat;
+}
 
 /** 注册当前活动编辑器实例（Editor.tsx onCreate/卸载调用）。 */
 export function registerEditor(editor: Editor | null): void {
   activeEditor = editor;
+  activeEditorBinding = null;
 }
 
 /** 取当前注册的编辑器实例（进程内受控查询共用；样式协议 edStyleOps 消费）。 */
 export function getActiveEditor(): Editor | null {
   return activeEditor;
+}
+
+export function bindActiveEditorDocument(binding: ActiveEditorBinding): void {
+  activeEditorBinding = binding;
+}
+
+export function clearActiveEditorBinding(): void {
+  activeEditorBinding = null;
+}
+
+export function getActiveEditorBinding(): ActiveEditorBinding | null {
+  return activeEditorBinding;
+}
+
+export function isActiveEditorBoundTo(relPath: string | null, loadSeq: number, editFormat: EditFormat): boolean {
+  return Boolean(
+    relPath &&
+    activeEditorBinding &&
+    activeEditorBinding.relPath === relPath &&
+    activeEditorBinding.loadSeq === loadSeq &&
+    activeEditorBinding.editFormat === editFormat,
+  );
 }
 
 /** 叶子内联节点占位符（textBetween leafText）：1 字符对齐 PM pos 中 leaf nodeSize=1。 */

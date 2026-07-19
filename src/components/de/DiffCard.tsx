@@ -45,6 +45,7 @@ function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone
 export function DiffCard({ diff }: { diff: DiffView }) {
   const { diffId, title, before, after, state } = diff;
   const busy = state === "validating" || state === "applying";
+  const readonly = Boolean(diff.readonly);
   const [expanded, setExpanded] = useState(false);
   const [locateFailed, setLocateFailed] = useState(false);
   const longPreview = before.length > PREVIEW_LIMIT || after.length > PREVIEW_LIMIT || /\n/.test(before + after);
@@ -92,25 +93,25 @@ export function DiffCard({ diff }: { diff: DiffView }) {
 
       <div className="diffcard-row diffcard-row-actions">
         <div className="diffcard-actions">
-          {state === "pending" && (
+          {state === "pending" && !readonly && (
             <>
               <button className="diffcard-accept" onClick={() => void acceptDiff(diffId)}>接受 ⏎</button>
               <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝 ⌫</button>
             </>
           )}
-          {state === "conflict" && (
+          {state === "conflict" && !readonly && (
             <>
               <button className="diffcard-accept" disabled>接受 ⏎</button>
               <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝 ⌫</button>
             </>
           )}
-          {state === "expired" && (
+          {state === "expired" && !readonly && (
             <>
               <button onClick={() => void generateSampleDiff()}>重新生成</button>
               <button className="ghost" onClick={() => void rejectDiff(diffId)}>关闭</button>
             </>
           )}
-          {state === "error" && (
+          {state === "error" && !readonly && (
             <>
               <button onClick={() => void acceptDiff(diffId)}>重试 ↻</button>
               <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝</button>

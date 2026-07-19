@@ -1,6 +1,8 @@
+import { invoke } from "@tauri-apps/api/core";
 import { readDoc, saveDoc } from "./wsService";
 import { openDocxForEdit, saveDocxFromEdit, isDocxEditable } from "./docService";
-import { edStore } from "../store/edStore";
+import { edStore, hashLogicalContent, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
+import type { PersistedOpenDocTab } from "../store/tabsStore";
 import { deStore } from "../store/deStore";
 
 /**
@@ -12,7 +14,24 @@ interface IpcLikeError {
   message?: string;
 }
 
+interface CommandResponse<T> {
+  correlation_id: string;
+  result?: T;
+  error?: { code: string; message: string; retriable: boolean; reauth_required: boolean };
+}
+
 const SAVE_CONFLICT_CODES = new Set(["WS_SAVE_CONFLICT", "save_conflict"]);
+let seq = 0;
+
+async function callCommand<T>(command: string, params: Record<string, unknown>): Promise<T> {
+  const request = { command, correlation_id: `ed-${Date.now()}-${(seq += 1)}`, params };
+  const response = await invoke<CommandResponse<T>>("dispatch", { request });
+  if (response.error) throw response.error;
+  if (response.result === undefined) {
+    throw { code: "IPC_EMPTY_RESULT", message: `${command} 无返回`, retriable: false, reauth_required: false };
+  }
+  return response.result;
+}
 
 function isSaveConflict(e: IpcLikeError): boolean {
   return Boolean(e.code && SAVE_CONFLICT_CODES.has(e.code));
@@ -22,6 +41,43 @@ function isSaveConflict(e: IpcLikeError): boolean {
 export function isHtmlFile(relPath: string): boolean {
   const ext = relPath.toLowerCase().split(".").pop() ?? "";
   return ext === "html" || ext === "htm";
+}
+
+export async function persistSessionSnapshot(snapshot: OpenDocSnapshot): Promise<void> {
+  await callCommand("ed.persist_session_snapshot", { snapshot });
+}
+
+export async function restoreSessionSnapshots(): Promise<OpenDocSnapshot[]> {
+  const res = await callCommand<{ snapshots: OpenDocSnapshot[] }>("ed.list_session_snapshots", {});
+  return res.snapshots;
+}
+
+export async function persistOpenTabs(tabs: PersistedOpenDocTab[]): Promise<void> {
+  await callCommand("ed.persist_open_tabs", { tabs });
+}
+
+export async function restoreOpenTabs(): Promise<PersistedOpenDocTab[]> {
+  const res = await callCommand<{ tabs: PersistedOpenDocTab[] }>("ed.list_open_tabs", {});
+  return res.tabs;
+}
+
+export function makePersistedSnapshot(
+  relPath: string,
+  content: string,
+  editFormat: EditFormat,
+  dirty: boolean,
+  sessionVersion?: number,
+): OpenDocSnapshot {
+  return {
+    relPath,
+    content,
+    editFormat,
+    source: "open_editor_session",
+    dirty,
+    sessionVersion: sessionVersion ?? edStore.getSnapshot().sessions[relPath]?.sessionVersion ?? 1,
+    contentHash: hashLogicalContent(content),
+    capturedAt: Date.now(),
+  };
 }
 
 /**
@@ -42,10 +98,19 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
     if (isDocxEditable(relPath)) {
       const { html, baseline } = await openDocxForEdit(relPath);
       edStore.loadDoc(relPath, html, baseline, jumpLine, "html");
+      const sess = edStore.getSnapshot().sessions[relPath];
+      if (sess) {
+        await persistSessionSnapshot(makePersistedSnapshot(relPath, html, "html", false, sess.sessionVersion));
+      }
       return;
     }
     const { content, baseline } = await readDoc(relPath);
-    edStore.loadDoc(relPath, content, baseline, jumpLine, isHtmlFile(relPath) ? "html_file" : "text");
+    const editFormat = isHtmlFile(relPath) ? "html_file" : "text";
+    edStore.loadDoc(relPath, content, baseline, jumpLine, editFormat);
+    const sess = edStore.getSnapshot().sessions[relPath];
+    if (sess) {
+      await persistSessionSnapshot(makePersistedSnapshot(relPath, content, editFormat, false, sess.sessionVersion));
+    }
   } catch (e) {
     const err = e as IpcLikeError;
     if (!hadSession) edStore.closeSession(relPath);
@@ -75,7 +140,12 @@ export async function saveDocument(content: string, override = false): Promise<S
   const path = openPath;
   try {
     const newBaseline = await saveDoc(path, content, baseline, override);
+    edStore.updateContent(path, content);
     edStore.setBaseline(path, newBaseline);
+    const sess = edStore.getSnapshot().sessions[path];
+    if (sess) {
+      await persistSessionSnapshot(makePersistedSnapshot(path, content, sess.editFormat, false, sess.sessionVersion));
+    }
     deStore.markDraftSaved(path);
     return { ok: true };
   } catch (e) {
@@ -94,7 +164,12 @@ export async function saveDocxDocument(html: string, override = false): Promise<
   const path = openPath;
   try {
     const newBaseline = await saveDocxFromEdit(path, html, baseline, override);
+    edStore.updateContent(path, html);
     edStore.setBaseline(path, newBaseline);
+    const sess = edStore.getSnapshot().sessions[path];
+    if (sess) {
+      await persistSessionSnapshot(makePersistedSnapshot(path, html, sess.editFormat, false, sess.sessionVersion));
+    }
     deStore.markDraftSaved(path);
     return { ok: true };
   } catch (e) {

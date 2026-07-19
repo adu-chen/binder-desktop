@@ -16,6 +16,14 @@ export interface OpenTab {
   kind: TabKind;
 }
 
+export interface PersistedOpenDocTab {
+  relPath: string;
+  kind: "doc";
+  openIndex: number;
+  isActive: boolean;
+  updatedAt?: number;
+}
+
 interface TabsState {
   tabs: OpenTab[];
   activeTabId: string | null;
@@ -40,6 +48,12 @@ function neighborId(tabs: OpenTab[], removedIdx: number): string | null {
   return (tabs[removedIdx] ?? tabs[removedIdx - 1] ?? tabs[0]).id;
 }
 
+function activeDocPath(): string | null {
+  const active = state.tabs.find((t) => t.id === state.activeTabId);
+  if (active?.kind === "doc") return active.path;
+  return edStore.getSnapshot().openPath;
+}
+
 export const tabsStore = {
   subscribe(cb: () => void) {
     listeners.add(cb);
@@ -59,6 +73,9 @@ export const tabsStore = {
     } else {
       const tab: OpenTab = { id: genId(), path, kind: "doc" };
       setState({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+      if (edStore.getSnapshot().sessions[path]) {
+        edStore.setActivePath(path);
+      }
     }
   },
 
@@ -107,6 +124,31 @@ export const tabsStore = {
     if (insertIdx === -1) return;
     tabs.splice(insertIdx, 0, state.tabs[fromIdx]);
     setState({ tabs, activeTabId: state.activeTabId });
+  },
+
+  getPersistedOpenDocTabs(): PersistedOpenDocTab[] {
+    const activePath = activeDocPath();
+    return state.tabs.flatMap((tab, index) => {
+      if (tab.kind !== "doc") return [];
+      return [{
+        relPath: tab.path,
+        kind: "doc",
+        openIndex: index,
+        isActive: tab.path === activePath,
+      } satisfies PersistedOpenDocTab];
+    });
+  },
+
+  restoreDocTabs(openTabs: PersistedOpenDocTab[]) {
+    const sorted = [...openTabs]
+      .filter((tab) => tab.kind === "doc")
+      .sort((a, b) => a.openIndex - b.openIndex);
+    const tabs = sorted.map((tab) => ({ id: genId(), path: tab.relPath, kind: "doc" as const }));
+    const activeIdx = Math.max(0, sorted.findIndex((tab) => tab.isActive));
+    const activeTabId = tabs[activeIdx]?.id ?? null;
+    setState({ tabs, activeTabId });
+    const active = tabs[activeIdx];
+    if (active) edStore.setActivePath(active.path);
   },
 
   /** 切换/关闭 workspace 时清空全部标签。 */

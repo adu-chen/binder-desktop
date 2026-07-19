@@ -35,9 +35,10 @@ zh: 修改卡
 en: DiffCard
 forbidden: diff卡片, AI建议卡, 修改面板, 修改组件, 变更卡, 审阅卡
 -->
-PendingDiff（TERM-DE-001）在对话面板（Chat Panel）中的视图投影组件，具备 8 个互斥可辨状态
+PendingDiff（TERM-DE-001）在对话面板（Chat Panel）中的视图投影组件，具备互斥可辨状态
 （pending / validating / applying / accepted / rejected / expired / conflict / error）；
-与编辑器绿色审阅层（GreenReview，TERM-ED-003）一一对应，任意一侧裁决另一侧同步。DiffCard
+当前编辑器草稿路径与编辑器绿色审阅层（GreenReview，TERM-ED-003）同步；已打开非激活文档自动应用路径
+成功后显示为已应用且禁用接受/拒绝，不要求 GreenReview 一一对应。DiffCard
 归属触发它的 AgentTurn 信息流，默认渲染在对应 assistant 消息后方；批量裁决条是独立全局操作控件。
 状态机来源：SM-DE-01；视觉规范：docs/binder_ui/binder-showcase.jsx §02。
 
@@ -153,33 +154,48 @@ flowchart TD
   SV --> E
 ```
 
-### 4.3 对话→diff→草稿裁决→保存落盘（投影 SM-AG-01 + SM-DE-01 + SM-ED-01 + SM-WS-01）
+### 4.3 对话→diff→LogicalState/保存或未打开后台落盘（投影 SM-AG-01 + SM-DE-01 + SM-ED-01 + SM-WS-01）
 
 ```mermaid
 flowchart TD
-  P[对话区发起 ag.start_turn] --> G{订阅门禁 GatePassed?}
+  P[对话区发起 ag.start_turn + open_doc_snapshots] --> OS{已打开文档快照完整?}
+  OS -- 否 --> SE[阻断回合 / error 卡 不读 DiskState]
+  OS -- 是 --> G{订阅门禁 GatePassed?}
   G -- 否 --> DN[明确拒绝 + 订阅引导]
   G -- 是 --> ST[网关流式回显 turn_stream]
   ST --> PR{含修改建议?}
   PR -- 否 --> EN[回复完成]
-  PR -- 是 --> PJ[propose_edit 读取 AgentEditableSnapshot + 返回 DiffProjection]
-  PJ --> OK{投影可应用到当前编辑器?}
-  OK -- 是 --> DR[ED 受控接口把 after 应用为草稿 + GreenReview 标绿]
-  OK -- 否 --> ER[DiffCard error 不进草稿]
+  PR -- 是 --> PJ[propose_edit 读取 AgentReadContext + 返回 DiffProjection]
+  PJ --> DM{draft_mode?}
+  DM -- current_editor --> DR[ED applyEditOps/applyStyleOps 应用为草稿 + GreenReview]
+  DM -- open_session --> OA{session 基线匹配?}
+  DM -- background --> BG{目标文档未打开?}
+  OA -- 是 --> OSAP[ed.apply_session_diff 修改 LogicalState + 置脏 + 持久化镜像]
+  OA -- 否 --> EX[de.expire_diff / error 卡 禁用裁决]
+  BG -- 是 --> DEC2[DiffCard 等待用户接受]
+  BG -- 否 --> ER[error 卡 禁止后台写已打开文档]
   DR --> DEC[DiffCard 插入本轮 assistant 消息后]
-  ER --> DEC
+  OSAP --> DONE[de.accept_draft_diff(open_session) + DiffCard 禁用裁决]
+  EX --> DONE
+  ER --> DONE
+  DEC2 --> AC2[接受 de.accept_diff]
   DEC --> AC[接受 de.accept_draft_diff]
   DEC --> RJ[拒绝 de.reject_diff]
   AC --> SV[用户保存 / ws.save_doc]
+  DONE --> SV2[用户稍后保存目标文档]
+  AC2 --> APPLY[ws.apply_diff 未打开后台落盘]
   RJ --> RB[ED 回滚 before + GreenReview 复位]
   SV --> CL[保存成功 清脏态 + GreenReview 复位]
+  SV2 --> CL2[保存成功 清脏态]
+  APPLY --> CL3[Applied / ApplyError 归 WS]
   RB --> CL
 ```
 
-> AgentEdit 的唯一链路是 `AgentEditableSnapshot → DiffProjection → DiffCard/ED 草稿`：前端不得从
-> tool_request 或整篇当前内容推断 before/after。后台文本/.html diff 无法应用到当前编辑器草稿时，可保留
-> `de.accept_diff → ws.apply_diff` 路径；既有 BDocx 必须先应用到当前编辑器 HTML 草稿，未应用时不得后台 raw
-> apply 写入 `.docx`。当前编辑器命中的块级 diff 以草稿编辑为主路径，accept 不再直接写文件。
+> AgentEdit 的唯一链路是 `OpenDocSnapshot/AgentReadContext → DiffProjection → DiffCard/ED LogicalState`：
+> 前端不得从 tool_request 或整篇当前内容推断 before/after。已打开文档必须读取 LogicalState，未打开文档才读取
+> DiskState；后台文本/.html diff 仅适用于未打开文档。既有 BDocx 必须进入打开文档 LogicalState，
+> 未应用时不得后台 raw apply 写入 `.docx`。当前编辑器命中的块级 diff 以草稿编辑为主路径，accept 不再直接写文件；
+> 已打开非激活文档的 open_session diff 在模型回传后自动应用到 session LogicalState，DiffCard 禁用接受/拒绝。
 > DiffCard 是 AgentTurn 信息流内容，不得沉底汇总为会话级全局列表；无历史锚点的 legacy diff 可显示
 > 在“未归属修改建议”fallback 区。批量裁决条仍可作为全局操作控件显示在输入框上方。
 
@@ -356,7 +372,7 @@ flowchart TD
 
 | 协作点 | 参与模块 | 协作语义 |
 |---|---|---|
-| diff 呈现 | DE（逻辑/裁决）+ ED（装饰层挂载）+ 用户（裁决） | DE 生成→ED 按 blockId 挂装饰→用户点接受/拒绝→ED 转达 DE 裁决（ED 不代裁，X-FORBID-005） |
+| diff 呈现 | DE（逻辑/裁决）+ ED（LogicalState/装饰层）+ 用户（仅可裁决允许路径） | DE 生成→current_editor 按 blockId 挂装饰并等待用户裁决；open_session 自动应用到 ED session 后禁用裁决；background 仅未打开文档可由用户接受后落盘（ED 不代裁，X-FORBID-005） |
 | 局部修改呈现 | AG（候选）+ ED（装饰层）+ 用户（采纳） | AG 候选→ED 装饰呈现→采纳经 ed.apply_edit 进编辑模型 |
 | @mention | REF（解析）+ ED（触发浮层）+ AG（消费注入） | ED 触发面→REF 候选/锚→注入 AG 回合上下文 |
 | 时间轴还原 | WS（节点/还原）+ ED（重载呈现） | WS 列节点→预览→还原→ED 重载编辑模型 |
@@ -441,3 +457,4 @@ status: mapped
 | 2026-07-16 | v1.17 | 修正 §4.5 AG-ASSIST 稳定定位：撤销运行时 DOM 测量反向驱动状态，改为静态尺寸模型，避免预估高度过大与测量链导致浮层消失 |
 | 2026-07-16 | v1.18 | 修正 §4.5 AG-ASSIST 辅助续写失败态：候选不足 3 条时保留空态，不展示半候选、不允许采纳，避免浮层瞬间关闭 |
 | 2026-07-17 | v1.19 | 收敛 §4.5 AG-ASSIST 空态诊断：普通 UI 保持轻量空态，但 service/store/overlay 必须保留内部 failure_reason |
+| 2026-07-18 | v1.20 | 修正 §4.3 AgentEdit 主链：发起回合必须携 open_doc_snapshots；DiffProjection 按 current_editor/open_session/background 三路径分流，已打开非激活文档自动应用 LogicalState 并禁用 DiffCard 裁决，未打开文档才允许后台落盘 |

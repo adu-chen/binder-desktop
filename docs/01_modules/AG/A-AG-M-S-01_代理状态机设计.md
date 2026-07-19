@@ -41,25 +41,25 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
 
 - **machine_id**：SM-AG-01　**owner_module**：AG
 - **scope**：一次代理回合（用户发起→产出处置完成/中断/拒绝/移交构建；目标边界按 BR-AG-DATA-003 2026-07-04 版）
-- **context**：回合输入（prompt + 注入载荷）、组装后上下文、门禁结果、流式缓冲、产出（回复/修改建议）、移交上下文
+- **context**：回合输入（session_id + prompt + 注入载荷 + open_doc_snapshots）、AgentReadContext、组装后上下文、门禁结果、流式缓冲、产出（回复/修改建议）、移交上下文、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
 - **states**：Idle、Assembling、AwaitingGate、Streaming、HandingOff、Completed、Cancelled、Denied、TurnError、**HandedOver**
 - **events**：send、assembled、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail、retry、**takeover、fallbackIn**
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
-| Idle | send | — | Assembling | 组装上下文（BR-AG-DATA-001：限界/裁剪优先级） |
+| Idle | send | open_doc_snapshots 覆盖全部已打开文档且每项含 session_version/content_hash；active live 序列化成功 | Assembling | 写入/更新 AgentSession；创建 AgentTurn `draft` payload，记录 userMessage（BR-AG-PERSIST-001）；构建 AgentReadContext；组装上下文（BR-AG-DATA-001：限界/裁剪优先级） |
 | Idle | fallbackIn | CBT 构建完成/中断回落（cbt.fallback，X-INTER-001） | Assembling | 以回落上下文起新 代理回合；回 fallbackAck（无双死） |
-| Assembling | assembled | — | AwaitingGate | 提交 SM-SYS-01 门禁（X-INTER-001 转移点） |
-| Assembling | assembleFail | — | TurnError | 统一错误形状（如注入锚失效） |
+| Assembling | assembled | 已打开文档引用和 selection 均基于 AgentReadContext 校验通过 | AwaitingGate | 提交 SM-SYS-01 门禁（X-INTER-001 转移点） |
+| Assembling | assembleFail | OpenDocSnapshot 缺失/版本缺失/active live 序列化失败/注入锚失效 | TurnError | 统一错误形状；不得用 DiskState 或 loadedContent 旧快照兜底 |
 | AwaitingGate | gatePassed | SM-SYS-01 达 GatePassed | Streaming | 经 AiGateway 发起流式调用 |
-| AwaitingGate | gateDenied | SM-SYS-01 GateDenied / 断网 | Denied | 明确拒绝（终态，不可绕过） |
+| AwaitingGate | gateDenied | SM-SYS-01 GateDenied / 断网 | Denied | 明确拒绝（终态，不可绕过）；AgentTurn status=`gate_rejected` |
 | Streaming | streamEnd | — | HandingOff | 产出处置：修改建议交 DE，纯回复直接完成 |
 | Streaming | takeover | 构建触发（2026-07-04 判据换轴，BR-CBT-STATE-002）：用户显式触发（明确指令/构建按钮，触发即视为确认）或 AI 识别**项目级构建意图**提议经用户确认；多文件修改本身不再是判据 | HandedOver | 移交 CBT（cbt.takeover，上下文含项目蓝图随移交）；回 takeoverAck；本回合移交终结（无双活）；构建在原对话窗口呈现 |
-| Streaming | streamFail | — | TurnError | 统一错误形状（含可重试标记） |
-| Streaming | cancel | — | Cancelled | 中断终态；无半落盘副作用（BR-SYS-STATE-002） |
-| HandingOff | handoffOk | 修改建议已交 DE 生成 pending_diff / 无修改建议 | Completed | 回合落历史（BR-AG-PERSIST-001）；异步触发记忆写入（BR-AG-STATE-004） |
-| HandingOff | handoffFail | — | TurnError | DE 生成失败（如锚失效）回报，可重试 |
+| Streaming | streamFail | — | TurnError | 统一错误形状（含可重试标记）；AgentTurn status=`error` |
+| Streaming | cancel | — | Cancelled | 中断终态；无半落盘副作用（BR-SYS-STATE-002）；AgentTurn status=`cancelled` |
+| HandingOff | handoffOk | 修改建议已交 DE 生成 pending_diff / 无修改建议 | Completed | AgentTurn status=`completed`；异步触发记忆写入（BR-AG-STATE-004） |
+| HandingOff | handoffFail | — | TurnError | DE 生成失败（如锚失效）回报，可重试；AgentTurn status=`error` |
 | TurnError | retry | — | Assembling | 重试回合 |
 
 - **error_states**：TurnError（recovery：retry→Assembling）
@@ -68,12 +68,17 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
   - Idle / Assembling → Streaming（未过门禁不得调用，对齐 SM-SYS-01 forbidden）
   - Denied → Streaming（被拒不得绕过门禁，终态）
   - Streaming → Completed（产出含修改建议时必经 HandingOff 交 DE，不得跳过）
+  - Assembling → AwaitingGate 当已打开文档缺少 OpenDocSnapshot 或引用锚无法校验（不得以 DiskState 兜底进入模型）
   - 任意态 → 直接写盘（本机无写盘动作，X-FORBID-006）
   - takeover 无显式触发/确认（构建移交须用户显式触发或确认提议，BR-CBT-STATE-002）
   - HandedOver → 任意活动态（移交终结后本回合不得继续，无双活）
+- **persistence_projection**：`send` 后先持久化 `draft`；`handoffOk`→`completed`；
+  `streamFail/handoffFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
+  应用崩溃/关闭/流式中断未收到终态时保持 `draft`，重启后只能显示未完成/可重试。
 - **acceptance_criteria**：不存在不经 gatePassed 通往 Streaming 的路径；Denied 为终态且不可达
   Streaming；修改建议唯一出口经 HandingOff 交 DE；cancel 后无半落盘副作用；takeover 须显式触发
   或经确认且移交后本回合终结（HandedOver 终态，无双活）；fallbackIn 起新回合时回 fallbackAck（无双死）
+  ；completed/error/cancelled/gate_rejected/draft 五类历史状态均可重启恢复。
 - **test_matrix**：见 §5
 - **构建移交/回落（旧称 Chat↔Build 接管；B-3 补齐 2026-06-12，判据 2026-07-04 换轴）**：takeover
   （显式触发或项目级构建意图经确认→HandedOver 终态，移交 CBT，蓝图随移交）/ fallbackIn（CBT 构建
@@ -100,7 +105,7 @@ terminal_states: LoopCompleted, LoopAborted
 
 - **machine_id**：SM-AG-02　**owner_module**：AG
 - **scope**：一次代理回合内的工具调用循环（首个工具请求出现→终轮答复/中止）
-- **context**：工具注册清单、权限边界、循环计数与上限、当前工具请求/结果、取消信号
+- **context**：工具注册清单、权限边界、AgentReadContext、循环计数与上限、当前工具请求/结果、取消信号
 - **states**：ModelStreaming、ToolValidating、ToolExecuting、ResultInjecting、LoopCompleted、LoopAborted
 - **events**：toolRequest、validateOk、validateFail、execOk、execFail、injected、finalAnswer、loopLimit、cancel
 - **transitions（主表）**：
@@ -109,7 +114,7 @@ terminal_states: LoopCompleted, LoopAborted
 |---|---|---|---|---|
 | ModelStreaming | toolRequest | — | ToolValidating | 校验注册清单与权限边界 |
 | ModelStreaming | finalAnswer | — | LoopCompleted | 终轮答复，回归 SM-AG-01 streamEnd |
-| ToolValidating | validateOk | 工具已注册且在权限边界内 | ToolExecuting | 执行（只读经 WS 限界；写意图产出 diff 建议不直写） |
+| ToolValidating | validateOk | 工具已注册且在权限边界内 | ToolExecuting | 执行（只读经 AgentReadContext：已打开文档读 LogicalState，未打开文档才读 DiskState；写意图产出 diff 建议不直写） |
 | ToolValidating | validateFail | 未注册/越权 | ResultInjecting | 拒绝原因回注模型 |
 | ToolExecuting | execOk | — | ResultInjecting | 结果回注 |
 | ToolExecuting | execFail | — | ResultInjecting | 失败信息回注（不中断循环） |
@@ -123,9 +128,11 @@ terminal_states: LoopCompleted, LoopAborted
 - **forbidden_transitions**：
   - ToolValidating → ToolExecuting 无 validateOk（未注册/越权不得执行）
   - ToolExecuting → 直接文件写入（写意图必须产出 diff 建议，X-FORBID-006）
+  - ToolExecuting → DiskState 读取，当目标文档已打开且 AgentReadContext 中应存在 OpenDocSnapshot
   - ResultInjecting → ModelStreaming 当循环已达上限（不得无限循环）
 - **acceptance_criteria**：未注册/越权工具不可达 ToolExecuting；循环上限强制生效；任何工具执行
-  不产生直接文件写入；cancel 随时可达 LoopAborted
+  不产生直接文件写入；read_doc/search_text/list_blocks 对已打开文档命中 OpenDocSnapshot，缺失时拒绝；
+  cancel 随时可达 LoopAborted
 - **test_matrix**：见 §5
 
 ## §4 SM-AG-03 · 辅助回合机（autocomplete + inline-assist 同机承载）
@@ -194,9 +201,12 @@ terminal_states: Accepted, Dismissed
 
 - **SM-AG-01**：send→Assembling→AwaitingGate→gatePassed→Streaming→streamEnd→HandingOff→Completed
   正路；gateDenied→Denied 终态且不可达 Streaming；cancel→Cancelled 无半落盘；handoffFail/
-  streamFail→TurnError→retry；禁止 Idle/Assembling→Streaming 旁路。
+  streamFail→TurnError→retry；禁止 Idle/Assembling→Streaming 旁路；持久化投影覆盖
+  completed/error/cancelled/gate_rejected/draft，draft 重启后不得显示为完成态；已打开文档缺
+  OpenDocSnapshot 或 selection 校验失败时 assembleFail，不得进入 AwaitingGate。
 - **SM-AG-02**：toolRequest→校验→执行→回注→续调循环；validateFail 回注拒绝；loopLimit 强制
-  中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）。
+  中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）；
+  read_doc/search_text/list_blocks 已打开文档覆盖 LogicalState，未打开文档读取 DiskState。
 - **SM-AG-03**：重复 trigger 下 throttleDrop 或 latest-wins 覆盖生效；无订阅/断网 throttlePass 后静默回
   Idle；过期 requestId 的 candidateOk 被丢弃；候选不足 3 条 candidateUnderflow 且记录 parse_underflow；candidateOk→Presenting→accept→Accepted
   驱动 SM-ED-01 edit；辅助续写 3 候选采纳；局部修改光标插入；Presenting→refine→Requesting 多轮循环（只传上一轮
@@ -252,3 +262,5 @@ terminal_states: Accepted, Dismissed
 | 2026-07-16 | v2.6 | 修正 SM-AG-03 辅助续写失败态：候选不足 3 条转为空态 Presenting，不展示半候选、不允许采纳，用户 dismiss 后关闭 |
 | 2026-07-17 | v2.7 | 加固 SM-AG-03 失败分型：gate/网关/空输出静默回 Idle，parse_underflow 进入轻量空态；failure_reason 仅用于内部诊断 |
 | 2026-07-17 | v2.8 | 清理 SM-AG-03 状态分叉：候选不足改用 candidateUnderflow 独立事件进入 Presenting，普通 requestFail 仅表示静默回 Idle |
+| 2026-07-17 | v2.9 | 补齐 SM-AG-01 历史持久化投影：send 先写 draft，handoffOk→completed，streamFail/handoffFail→error，cancel→cancelled，gateDenied→gate_rejected；崩溃/关闭遗留 draft 重启后不得伪装完成 |
+| 2026-07-18 | v2.10 | 加固 SM-AG-01/02 已打开文档门禁：send 阶段必须携 open_doc_snapshots 并构建 AgentReadContext；只读工具对已打开文档禁止 DiskState 兜底 |

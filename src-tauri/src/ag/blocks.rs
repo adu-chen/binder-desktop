@@ -10,6 +10,8 @@
 //! 嵌套同名块、畸形 HTML 不保证——真实 ED blockId 锚定位（对齐 LocateResult）后续。
 
 use crate::ipc::IpcError;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 /// 一个文档块。`block_id` = HTML 块的 data-block-id（稳定锚；text 块 None）；
@@ -23,7 +25,7 @@ pub struct DocBlock {
 
 /// AgentEdit 统一可消费块投影：`block_index` 是当前快照内 0 起块号；`block_id` 是 HTML/BDocx
 /// 的稳定锚，text 文档可为空。marks/block_attrs 仅 HTML 快照有语义。
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AgentEditableBlock {
     pub block_id: Option<String>,
     pub block_index: usize,
@@ -33,7 +35,7 @@ pub struct AgentEditableBlock {
 }
 
 /// AgentEdit 统一内容快照。BDocx 下游一律消费此编辑模型快照，不直接读取 docx 二进制。
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AgentEditableSnapshot {
     pub rel_path: String,
     pub editable_kind: String,
@@ -41,7 +43,77 @@ pub struct AgentEditableSnapshot {
     pub content_format: String,
     pub content: String,
     pub baseline: Option<u64>,
+    pub session_version: Option<u64>,
+    pub content_hash: Option<String>,
     pub blocks: Vec<AgentEditableBlock>,
+}
+
+/// 前端打开文档的 LogicalState 快照。active 文档来自实时编辑器序列化，非 active 打开文档来自
+/// EditSession.content。AG 读取层必须优先使用该集合，未打开文档才读取 DiskState。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenDocSnapshot {
+    pub rel_path: String,
+    pub content: String,
+    pub edit_format: String,
+    pub source: String,
+    pub dirty: bool,
+    pub session_version: u64,
+    pub content_hash: String,
+    pub captured_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentReadContext {
+    root: std::path::PathBuf,
+    open_docs: HashMap<String, OpenDocSnapshot>,
+}
+
+impl AgentReadContext {
+    pub fn new(root: &Path, open_docs: Vec<OpenDocSnapshot>) -> Result<Self, IpcError> {
+        let mut indexed = HashMap::new();
+        for snapshot in open_docs {
+            let rel_path = snapshot.rel_path.trim();
+            if rel_path.is_empty() {
+                return Err(IpcError::new(
+                    "AG_OPEN_DOC_SNAPSHOT_INVALID",
+                    "已打开文档快照缺少 rel_path",
+                    false,
+                    false,
+                ));
+            }
+            crate::workspace::resolve_in_workspace(root, rel_path)?;
+            indexed.insert(rel_path.to_string(), snapshot);
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            open_docs: indexed,
+        })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn open_snapshot(&self, rel_path: &str) -> Option<&OpenDocSnapshot> {
+        self.open_docs.get(rel_path)
+    }
+
+    pub fn snapshot(&self, rel_path: &str) -> Result<AgentEditableSnapshot, IpcError> {
+        if let Some(open) = self.open_snapshot(rel_path) {
+            return Ok(snapshot_from_content(
+                rel_path,
+                &open.content,
+                &open.source,
+                Some(open.edit_format.as_str()),
+                None,
+                Some(open.session_version),
+                Some(open.content_hash.clone()),
+            ));
+        }
+        let abs = crate::workspace::resolve_in_workspace(&self.root, rel_path)?;
+        read_editable_snapshot(&self.root, rel_path, &abs, None, None)
+    }
 }
 
 fn doc_type_of_rel(rel_path: &str) -> String {
@@ -66,9 +138,34 @@ fn editable_kind(rel_path: &str, content_is_html: bool) -> String {
     }
 }
 
+fn snapshot_from_content(
+    rel_path: &str,
+    content: &str,
+    source: &str,
+    format_hint: Option<&str>,
+    baseline: Option<u64>,
+    session_version: Option<u64>,
+    content_hash: Option<String>,
+) -> AgentEditableSnapshot {
+    let content_is_html = is_html(content, format_hint);
+    let content_format = if content_is_html { "html" } else { "text" }.to_string();
+    let blocks = project_blocks(content, content_is_html);
+    AgentEditableSnapshot {
+        rel_path: rel_path.to_string(),
+        editable_kind: editable_kind(rel_path, content_is_html),
+        source: source.to_string(),
+        content_format,
+        content: content.to_string(),
+        baseline,
+        session_version,
+        content_hash,
+        blocks,
+    }
+}
+
 /// 是否按 HTML 处理（editFormat=html 或内容以 `<` 开头）。
 pub fn is_html(content: &str, edit_format: Option<&str>) -> bool {
-    edit_format == Some("html") || content.trim_start().starts_with('<')
+    matches!(edit_format, Some("html" | "html_file")) || content.trim_start().starts_with('<')
 }
 
 /// 解析文档块。
@@ -190,18 +287,15 @@ pub fn read_editable_snapshot(
             None,
         )
     };
-    let content_is_html = is_html(&content, format_hint.as_deref());
-    let content_format = if content_is_html { "html" } else { "text" }.to_string();
-    let blocks = project_blocks(&content, content_is_html);
-    Ok(AgentEditableSnapshot {
-        rel_path: rel_path.to_string(),
-        editable_kind: editable_kind(rel_path, content_is_html),
-        source,
-        content_format,
-        content,
+    Ok(snapshot_from_content(
+        rel_path,
+        &content,
+        &source,
+        format_hint.as_deref(),
         baseline,
-        blocks,
-    })
+        None,
+        None,
+    ))
 }
 
 /// 仅取各块展示文本（块列表注入用）。
@@ -264,53 +358,70 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// 扫描带 data-block-id 的块级元素，记录 inner 字节区间 + strip 文本。
+fn is_html_block_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "p" | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "li"
+            | "blockquote"
+            | "pre"
+            | "div"
+            | "td"
+            | "th"
+    )
+}
+
+/// 扫描 HTML 块级元素，记录 inner 字节区间 + strip 文本。
+///
+/// `data-block-id` 是稳定锚，有则保留；普通 `<p>/<h1>/...` 没有稳定锚时仍投影为 block_index，
+/// 避免 HTML 编辑模型在 AG 侧变成空块，进而让模型只依赖历史上下文。
 fn parse_html_blocks(html: &str) -> Vec<DocBlock> {
     let mut blocks = Vec::new();
     let mut search = 0usize;
-    while let Some(rel) = html[search..].find("data-block-id") {
-        let attr_pos = search + rel;
-        // 元素 open tag 起点 = attr 前最近的 '<'。
-        let Some(open_lt) = html[..attr_pos].rfind('<') else {
-            search = attr_pos + "data-block-id".len();
-            continue;
-        };
-        // tag 名（'<' 后到空白/'>'/'/' 之前）。
+    let lower = html.to_ascii_lowercase();
+    while let Some(rel_lt) = lower[search..].find('<') {
+        let open_lt = search + rel_lt;
         let name_start = open_lt + 1;
-        let name_end = html[name_start..]
-            .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
-            .map(|p| name_start + p)
-            .unwrap_or(name_start);
-        let tag = &html[name_start..name_end];
-        if tag.is_empty() {
-            search = attr_pos + "data-block-id".len();
-            continue;
-        }
-        // open tag 结束 '>'。
-        let Some(rel_gt) = html[attr_pos..].find('>') else {
+        let Some(first) = lower[name_start..].chars().next() else {
             break;
         };
-        let inner_start = attr_pos + rel_gt + 1;
-        // 匹配最近的 </tag>。
+        if matches!(first, '/' | '!' | '?') {
+            search = name_start + first.len_utf8();
+            continue;
+        }
+        let Some(rel_gt) = lower[open_lt..].find('>') else {
+            break;
+        };
+        let open_gt = open_lt + rel_gt;
+        let name_end = lower[name_start..open_gt]
+            .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+            .map(|p| name_start + p)
+            .unwrap_or(open_gt);
+        let tag = lower[name_start..name_end].trim();
+        if !is_html_block_tag(tag) {
+            search = open_gt + 1;
+            continue;
+        }
+        let open_tag = &html[open_lt..=open_gt];
+        if open_tag.trim_end().ends_with("/>") {
+            search = open_gt + 1;
+            continue;
+        }
+        let inner_start = open_gt + 1;
         let close = format!("</{tag}>");
-        let Some(rel_close) = html[inner_start..].find(&close) else {
+        let Some(rel_close) = lower[inner_start..].find(&close) else {
             search = inner_start;
             continue;
         };
         let inner_end = inner_start + rel_close;
         let inner = &html[inner_start..inner_end];
-        // 提取 data-block-id 的值（attr 后第一对引号内）。
-        let block_id = {
-            let after = attr_pos + "data-block-id".len();
-            html[after..inner_start].find('"').and_then(|q1| {
-                let vstart = after + q1 + 1;
-                html[vstart..inner_start]
-                    .find('"')
-                    .map(|q2| html[vstart..vstart + q2].to_string())
-            })
-        };
         blocks.push(DocBlock {
-            block_id,
+            block_id: attr_value(open_tag, "data-block-id"),
             text: strip_tags(inner).trim().to_string(),
             inner_span: Some((inner_start, inner_end)),
         });
@@ -401,12 +512,38 @@ fn mark_of_tag(tag: &str, attrs_str: &str) -> Option<(String, Option<serde_json:
     }
 }
 
-/// 取属性串中 `name="…"` 的值（dev 级扫描）。
+/// 取属性串中 `name="…"` / `name='…'` 的值（dev 级扫描，属性名大小写不敏感）。
 fn attr_value(attrs_str: &str, name: &str) -> Option<String> {
-    let pat = format!("{name}=\"");
-    let i = attrs_str.find(&pat)? + pat.len();
-    let j = attrs_str[i..].find('"')?;
-    Some(attrs_str[i..i + j].to_string())
+    let lower = attrs_str.to_ascii_lowercase();
+    let pat = name.to_ascii_lowercase();
+    let mut search = 0usize;
+    while let Some(rel) = lower[search..].find(&pat) {
+        let name_start = search + rel;
+        let name_end = name_start + pat.len();
+        let before_ok = lower[..name_start]
+            .chars()
+            .next_back()
+            .map(|c| c.is_whitespace() || c == '<')
+            .unwrap_or(true);
+        let after = lower[name_end..].trim_start();
+        if before_ok && after.starts_with('=') {
+            let eq = name_end + lower[name_end..].find('=')? + 1;
+            let value_start = eq
+                + lower[eq..]
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+            let quote = attrs_str[value_start..].chars().next()?;
+            if quote == '"' || quote == '\'' {
+                let start = value_start + quote.len_utf8();
+                let end_rel = attrs_str[start..].find(quote)?;
+                return Some(attrs_str[start..start + end_rel].to_string());
+            }
+        }
+        search = name_end;
+    }
+    None
 }
 
 /// 有限实体解码（与 html_escape 逆配 + 常用集）。
@@ -524,6 +661,107 @@ pub fn extract_block_attrs(open_tag: &str) -> serde_json::Value {
     serde_json::Value::Object(o)
 }
 
+fn is_cjk(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
+    )
+}
+
+fn is_common_identity_term(term: &str) -> bool {
+    matches!(
+        term,
+        "一个"
+            | "这个"
+            | "那个"
+            | "他们"
+            | "我们"
+            | "自己"
+            | "故事"
+            | "内容"
+            | "标题"
+            | "当前"
+            | "文档"
+            | "于是"
+            | "然后"
+            | "开始"
+            | "回来"
+            | "看着"
+            | "觉得"
+            | "知道"
+            | "没有"
+            | "说道"
+            | "起来"
+    )
+}
+
+fn push_cjk_bigrams(terms: &mut BTreeSet<String>, run: &str) {
+    let chars: Vec<char> = run.chars().collect();
+    for pair in chars.windows(2) {
+        let term: String = pair.iter().collect();
+        if !is_common_identity_term(&term) {
+            terms.insert(term);
+        }
+    }
+}
+
+fn identity_terms(content: &str) -> BTreeSet<String> {
+    let plain = strip_tags(content);
+    let mut terms = BTreeSet::new();
+    let mut cjk_run = String::new();
+    let mut ascii_run = String::new();
+
+    let flush_cjk = |terms: &mut BTreeSet<String>, run: &mut String| {
+        if !run.is_empty() {
+            push_cjk_bigrams(terms, run);
+            run.clear();
+        }
+    };
+    let flush_ascii = |terms: &mut BTreeSet<String>, run: &mut String| {
+        if run.len() >= 3 {
+            terms.insert(run.to_ascii_lowercase());
+        }
+        run.clear();
+    };
+
+    for c in plain.chars() {
+        if is_cjk(c) {
+            flush_ascii(&mut terms, &mut ascii_run);
+            cjk_run.push(c);
+        } else if c.is_ascii_alphanumeric() {
+            flush_cjk(&mut terms, &mut cjk_run);
+            ascii_run.push(c);
+        } else {
+            flush_cjk(&mut terms, &mut cjk_run);
+            flush_ascii(&mut terms, &mut ascii_run);
+        }
+    }
+    flush_cjk(&mut terms, &mut cjk_run);
+    flush_ascii(&mut terms, &mut ascii_run);
+    terms
+}
+
+/// 整篇替换的主题/实体守卫。
+///
+/// 只拦截“长文档 → 长文档”且新旧身份词重合极低的情况；短文、空文、新建文档不在这里拦截，
+/// 仍由 operation/目标集/基线校验负责。该守卫不是语义审核器，只是防历史上下文污染导致的错文档整篇替换。
+pub fn rewrite_preserves_document_identity(before: &str, after: &str) -> bool {
+    if before.trim().chars().count() < 60 || after.trim().chars().count() < 60 {
+        return true;
+    }
+    let before_terms = identity_terms(before);
+    let after_terms = identity_terms(after);
+    let denominator = before_terms.len().min(after_terms.len());
+    if denominator < 12 {
+        return true;
+    }
+    let overlap = before_terms
+        .iter()
+        .filter(|term| after_terms.contains(*term))
+        .count();
+    overlap * 100 >= denominator * 12
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +787,18 @@ mod tests {
     }
 
     #[test]
+    fn html_blocks_without_block_id_fall_back_to_block_index() {
+        let html = r#"<p>农夫发现了一条冻僵的蛇。</p><h2>蛇<strong>苏醒</strong></h2>"#;
+        let blocks = parse_blocks(html, true);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].block_id, None);
+        assert_eq!(blocks[0].text, "农夫发现了一条冻僵的蛇。");
+        assert_eq!(blocks[1].block_id, None);
+        assert_eq!(blocks[1].text, "蛇苏醒");
+    }
+
+    #[test]
     fn project_blocks_uses_single_block_shape_with_marks() {
         let html =
             r#"<p data-block-id="b1" style="text-align: center">你好<strong>世界</strong></p>"#;
@@ -570,6 +820,14 @@ mod tests {
             out,
             r#"<p data-block-id="b1">新内容</p><h1 data-block-id="b2">标题</h1>"#
         );
+    }
+
+    #[test]
+    fn html_replace_block_without_block_id_uses_index_and_preserves_tags() {
+        let html = r#"<p>旧段落</p><p>保留段落</p>"#;
+        let out = replace_block(html, true, 0, "新段落").unwrap();
+
+        assert_eq!(out, r#"<p>新段落</p><p>保留段落</p>"#);
     }
 
     #[test]
@@ -646,5 +904,21 @@ mod tests {
     fn replace_by_unknown_id_is_anchor_lost() {
         let r = replace_block_by_id(r#"<p data-block-id="b1">x</p>"#, "gone", "y");
         assert!(r.unwrap_err().contains("锚失效"));
+    }
+
+    #[test]
+    fn rewrite_identity_guard_rejects_unrelated_story_replacement() {
+        let before = "农夫在寒冷的冬天回家，路上看见一条冻僵的蛇。他心生怜悯，把蛇放进怀里，用体温温暖它。蛇渐渐苏醒，却露出了冷酷的本性，猛地咬了农夫一口。农夫临死前明白，对恶人施恩不会改变恶人的本性。";
+        let after = "小马驮着一袋麦子去磨坊，来到河边时不敢过河。老牛说水很浅，松鼠却说水很深。小马拿不定主意，只好回家问妈妈。妈妈告诉他要自己试一试，小马终于鼓起勇气过了河。";
+
+        assert!(!rewrite_preserves_document_identity(before, after));
+    }
+
+    #[test]
+    fn rewrite_identity_guard_allows_same_story_cleanup() {
+        let before = "农夫在寒冷的冬天回家，路上看见一条冻僵的蛇。他心生怜悯，把蛇放进怀里，用体温温暖它。蛇渐渐苏醒，却露出了冷酷的本性，猛地咬了农夫一口。农夫临死前明白，对恶人施恩不会改变恶人的本性。";
+        let after = "寒冷的冬日，农夫在回家途中发现一条冻僵的蛇。他怜悯蛇的遭遇，把它放在怀里，用自己的体温让蛇苏醒。可是蛇恢复后仍保持冷酷本性，狠狠咬了农夫。农夫临终才明白，不能指望恶人的本性因施恩而改变。";
+
+        assert!(rewrite_preserves_document_identity(before, after));
     }
 }

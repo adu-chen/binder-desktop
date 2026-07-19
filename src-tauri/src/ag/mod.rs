@@ -9,6 +9,9 @@
 /// PI-AG-01/03/06 · 代理回合机 SM-AG-01 + 门禁前置 + 回合持久化。
 pub mod turn;
 
+/// PI-AG-12 · 代理编辑历史持久化（会话标签 + 回合内容）。
+pub mod history;
+
 /// PI-AG-01（B-1/B-4）· 上下文组装 / 提示词骨架 / 单文档边界。
 pub mod context;
 

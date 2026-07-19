@@ -33,14 +33,6 @@ fn string_arg(args: &serde_json::Value, key: &str, tool: &str) -> Result<String,
         })
 }
 
-fn editable_snapshot(
-    root: &Path,
-    rel: &str,
-) -> Result<crate::ag::blocks::AgentEditableSnapshot, IpcError> {
-    let abs = crate::workspace::resolve_in_workspace(root, rel)?;
-    crate::ag::blocks::read_editable_snapshot(root, rel, &abs, None, None)
-}
-
 /// 执行非破坏性文件树结构工具。此类工具只改变 workspace 内文件树结构，不修改文档内容，不走 DE diff。
 pub fn exec_structure_tool(
     root: &Path,
@@ -85,15 +77,16 @@ pub fn exec_structure_tool(
     }
 }
 
-/// 执行只读工具，返回回注模型的结果文本（JSON 序列化）。`root` 为 active workspace 根（X-FORBID-004）。
+/// 执行只读工具，返回回注模型的结果文本（JSON 序列化）。`ctx` 持有 active workspace 根与打开文档
+/// LogicalState 覆盖层（X-FORBID-004）。
 pub fn exec_read_only(
-    root: &Path,
+    ctx: &crate::ag::blocks::AgentReadContext,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, IpcError> {
     match name {
         "list_docs" => {
-            let docs = crate::workspace::listing::list_docs(root)?;
+            let docs = crate::workspace::listing::list_docs(ctx.root())?;
             Ok(serde_json::to_string(&docs).unwrap_or_else(|_| "[]".into()))
         }
         "search_text" => {
@@ -101,11 +94,11 @@ pub fn exec_read_only(
             let needle = query.trim().to_lowercase();
             let mut hits: Vec<serde_json::Value> = Vec::new();
             if !needle.is_empty() {
-                for entry in crate::workspace::listing::list_docs(root)? {
+                for entry in crate::workspace::listing::list_docs(ctx.root())? {
                     if entry.is_dir {
                         continue;
                     }
-                    let Ok(snapshot) = editable_snapshot(root, &entry.rel_path) else {
+                    let Ok(snapshot) = ctx.snapshot(&entry.rel_path) else {
                         continue;
                     };
                     for block in snapshot.blocks {
@@ -132,12 +125,12 @@ pub fn exec_read_only(
         }
         "read_doc" => {
             let rel = path_arg(args, "read_doc")?;
-            let snapshot = editable_snapshot(root, &rel)?;
+            let snapshot = ctx.snapshot(&rel)?;
             Ok(serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".into()))
         }
         "list_blocks" => {
             let rel = path_arg(args, "list_blocks")?;
-            let snapshot = editable_snapshot(root, &rel)?;
+            let snapshot = ctx.snapshot(&rel)?;
             Ok(serde_json::to_string(&serde_json::json!({
                 "rel_path": snapshot.rel_path,
                 "editable_kind": snapshot.editable_kind,
@@ -162,19 +155,21 @@ pub fn exec_read_only(
 mod tests {
     use super::*;
 
+    fn ctx(root: &Path) -> crate::ag::blocks::AgentReadContext {
+        crate::ag::blocks::AgentReadContext::new(root, Vec::new()).unwrap()
+    }
+
     #[test]
     fn unknown_tool_errors() {
-        let r = exec_read_only(
-            Path::new("/tmp"),
-            "delete_everything",
-            &serde_json::Value::Null,
-        );
+        let root = Path::new("/tmp");
+        let r = exec_read_only(&ctx(root), "delete_everything", &serde_json::Value::Null);
         assert_eq!(r.unwrap_err().code, "AG_TOOL_UNKNOWN");
     }
 
     #[test]
     fn read_doc_missing_path_errors() {
-        let r = exec_read_only(Path::new("/tmp"), "read_doc", &serde_json::json!({}));
+        let root = Path::new("/tmp");
+        let r = exec_read_only(&ctx(root), "read_doc", &serde_json::json!({}));
         assert_eq!(r.unwrap_err().code, "AG_TOOL_ARG");
     }
 
@@ -184,8 +179,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.md"), "一\n二").unwrap();
-        let out =
-            exec_read_only(&dir, "list_blocks", &serde_json::json!({ "path": "a.md" })).unwrap();
+        let out = exec_read_only(
+            &ctx(&dir),
+            "list_blocks",
+            &serde_json::json!({ "path": "a.md" }),
+        )
+        .unwrap();
         assert!(out.contains("\"block_index\":0"));
         assert!(out.contains("\"text\":\"一\""));
         let _ = std::fs::remove_dir_all(&dir);
@@ -196,8 +195,35 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ag-toolexec-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.md"), "# hi").unwrap();
-        let out = exec_read_only(&dir, "list_docs", &serde_json::Value::Null).unwrap();
+        let out = exec_read_only(&ctx(&dir), "list_docs", &serde_json::Value::Null).unwrap();
         assert!(out.contains("a.md"), "list_docs 应含 a.md: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_text_prefers_open_logical_state() {
+        let dir = std::env::temp_dir().join(format!("ag-toolexec-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.md"), "旧内容").unwrap();
+        let ctx = crate::ag::blocks::AgentReadContext::new(
+            &dir,
+            vec![crate::ag::blocks::OpenDocSnapshot {
+                rel_path: "a.md".to_string(),
+                content: "最新 LogicalState".to_string(),
+                edit_format: "text".to_string(),
+                source: "open_editor_session".to_string(),
+                dirty: true,
+                session_version: 3,
+                content_hash: "h3".to_string(),
+                captured_at: 1,
+            }],
+        )
+        .unwrap();
+        let out =
+            exec_read_only(&ctx, "search_text", &serde_json::json!({ "query": "最新" })).unwrap();
+        assert!(out.contains("最新 LogicalState"));
+        assert!(!out.contains("旧内容"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

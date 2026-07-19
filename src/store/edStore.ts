@@ -40,20 +40,72 @@ export function mapSaveState(s: RustSaveState): Extract<TabState, "saving" | "sa
  *  html_file=.html 独立文件（PI-ED-13 / REQ-ED-008：富文本编辑 + HTML 序列化，经 ws.save_doc 文本落盘）。 */
 export type EditFormat = "text" | "html" | "html_file";
 
+export type OpenDocSnapshotSource = "active_editor" | "active_editor_session" | "open_editor_session";
+
+export interface OpenDocSnapshot {
+  relPath: string;
+  content: string;
+  editFormat: EditFormat;
+  source: OpenDocSnapshotSource;
+  dirty: boolean;
+  sessionVersion: number;
+  contentHash: string;
+  capturedAt: number;
+}
+
+export type SessionApplyResult =
+  | { ok: true; snapshot: OpenDocSnapshot }
+  | { ok: false; code: string; message: string };
+
+export function hashLogicalContent(content: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < content.length; i += 1) {
+    hash ^= content.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function isDirtyTabState(tabState: TabState): boolean {
+  return tabState === "dirty" || tabState === "pending_diff" || tabState === "saving";
+}
+
+function makeSession(
+  content: string | null,
+  baseline: number | string | null,
+  tabState: TabState,
+  editFormat: EditFormat,
+  version = content === null ? 0 : 1,
+  converting = false,
+): EditSession {
+  return {
+    content,
+    baseline,
+    tabState,
+    editFormat,
+    converting,
+    sessionVersion: version,
+    contentHash: content === null ? "" : hashLogicalContent(content),
+  };
+}
+
 /** 单文档编辑会话（按路径独立保存，切换标签不互相覆盖）。
- *  三态归属（A-CORE-C-T-01 §1.2/§4）：content 是 LogicalState 的派生缓存（序列化副本），
- *  非权威源。权威逻辑态是 TipTap ProseMirror doc（editor.state.doc）。
- *  serialize() 是只读导出，setContent() 是外部数据加载人逻辑态。
- *  需要真值时必须从 editor.state.doc 取。 */
+ *  三态归属（A-CORE-C-T-01 §1.2/§4）：激活文档的权威 LogicalState 是 TipTap ProseMirror doc；
+ *  非激活打开文档的 content 是该 session 当前 LogicalState 的序列化持有者。
+ *  sessionVersion/contentHash 用于 AG/DE 基线校验，禁止已打开文档退回 DiskState。 */
 export interface EditSession {
   /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。
-   *  归属：LogicalState 派生缓存（非权威源）。 */
+   *  归属：激活文档为 LogicalState 派生缓存；非激活打开文档为序列化 LogicalState。 */
   content: string | null;
   /** 加载基线哈希（后端 ws.read_doc / doc.open_for_edit 回；供保存校验）。 */
   baseline: number | string | null;
   tabState: TabState;
   /** 编辑模型格式（EditFormat）。 */
   editFormat: EditFormat;
+  /** ED session 版本；每次受控内容回写递增，用于 open session diff 防基线偏移。 */
+  sessionVersion: number;
+  /** content 的稳定哈希；与 sessionVersion 共同构成 DiffProjection 基线。 */
+  contentHash: string;
   /** docx 打开转换进行中（SM-DOC-01 OpenConverting 投影，PI-ED-07 #7 加载反馈）。 */
   converting?: boolean;
 }
@@ -153,7 +205,7 @@ export const edStore = {
     commit({
       sessions: {
         ...state.sessions,
-        [path]: { content: null, baseline: null, tabState: "saved", editFormat: "text" },
+        [path]: makeSession(null, null, "saved", "text"),
       },
       activePath: path,
       loadSeq: state.loadSeq,
@@ -172,7 +224,7 @@ export const edStore = {
     commit({
       sessions: {
         ...state.sessions,
-        [path]: { content, baseline, tabState: "saved", editFormat },
+        [path]: makeSession(content, baseline, "saved", editFormat),
       },
       activePath: path,
       loadSeq: state.loadSeq + 1,
@@ -193,12 +245,114 @@ export const edStore = {
   updateContent(path: string, content: string) {
     const cur = state.sessions[path];
     if (!cur) return;
+    if (cur.content === content) return;
     commit({
-      sessions: { ...state.sessions, [path]: { ...cur, content } },
+      sessions: {
+        ...state.sessions,
+        [path]: {
+          ...cur,
+          content,
+          sessionVersion: cur.sessionVersion + 1,
+          contentHash: hashLogicalContent(content),
+        },
+      },
       activePath: state.activePath,
       loadSeq: state.loadSeq,
       jumpLine: state.jumpLine,
     });
+  },
+  getOpenSnapshots(activeSource: Extract<OpenDocSnapshotSource, "active_editor" | "active_editor_session"> = "active_editor"): OpenDocSnapshot[] {
+    const capturedAt = Date.now();
+    return Object.entries(state.sessions)
+      .flatMap(([path, sess]) => {
+        if (sess.content === null) return [];
+        return [{
+          relPath: path,
+          content: sess.content,
+          editFormat: sess.editFormat,
+          source: path === state.activePath ? activeSource : "open_editor_session",
+          dirty: isDirtyTabState(sess.tabState),
+          sessionVersion: sess.sessionVersion,
+          contentHash: sess.contentHash,
+          capturedAt,
+        } satisfies OpenDocSnapshot];
+      });
+  },
+  restoreSnapshots(snapshots: OpenDocSnapshot[], activePath: string | null = null) {
+    if (!snapshots.length) {
+      commit({
+        sessions: state.sessions,
+        activePath: null,
+        loadSeq: state.loadSeq,
+        jumpLine: state.jumpLine,
+      });
+      return;
+    }
+    const sessions = { ...state.sessions };
+    for (const snap of snapshots) {
+      sessions[snap.relPath] = {
+        content: snap.content,
+        baseline: sessions[snap.relPath]?.baseline ?? null,
+        tabState: snap.dirty ? "dirty" : "saved",
+        editFormat: snap.editFormat,
+        sessionVersion: snap.sessionVersion,
+        contentHash: snap.contentHash || hashLogicalContent(snap.content),
+      };
+    }
+    const nextActivePath = activePath && sessions[activePath]?.content !== null
+      ? activePath
+      : null;
+    commit({
+      sessions,
+      activePath: nextActivePath,
+      loadSeq: nextActivePath ? state.loadSeq + 1 : state.loadSeq,
+      jumpLine: state.jumpLine,
+    });
+  },
+  applySessionContent(
+    path: string,
+    nextContent: string,
+    baseSessionVersion: number,
+    baseContentHash: string,
+  ): SessionApplyResult {
+    const cur = state.sessions[path];
+    if (!cur || cur.content === null) {
+      return { ok: false, code: "ED_OPEN_SESSION_REQUIRED", message: "目标文档未打开，不能应用 open session diff" };
+    }
+    if (path === state.activePath) {
+      return { ok: false, code: "ED_OPEN_SESSION_ACTIVE", message: "激活文档必须走 current editor 草稿路径" };
+    }
+    if (cur.sessionVersion !== baseSessionVersion || cur.contentHash !== baseContentHash) {
+      return { ok: false, code: "ED_OPEN_SESSION_BASE_MISMATCH", message: "目标文档 LogicalState 已变化，diff 已失效" };
+    }
+    const nextVersion = cur.sessionVersion + 1;
+    const nextHash = hashLogicalContent(nextContent);
+    const next: EditSession = {
+      ...cur,
+      content: nextContent,
+      tabState: "dirty",
+      sessionVersion: nextVersion,
+      contentHash: nextHash,
+    };
+    commit({
+      sessions: { ...state.sessions, [path]: next },
+      activePath: state.activePath,
+      loadSeq: state.loadSeq,
+      jumpLine: state.jumpLine,
+    });
+    return {
+      ok: true,
+      snapshot: {
+        relPath: path,
+        content: nextContent,
+        editFormat: next.editFormat,
+        source: "open_editor_session",
+        dirty: true,
+        sessionVersion: nextVersion,
+        contentHash: nextHash,
+        capturedAt: Date.now(),
+      },
+    };
   },
   /** 跳转完成后清除目标行（避免后续重渲染重复跳）。 */
   clearJump() {

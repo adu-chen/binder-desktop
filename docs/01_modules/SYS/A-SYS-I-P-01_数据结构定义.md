@@ -46,7 +46,7 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 - 共享实体以**语言无关字段语义**描述：列出字段名、语义、是否标识符/枚举，不锁定具体标量类型与序列化。
 - 持久化基线只给**基线列 + 迁移契约**，标注"完整列与索引归 WS G2 联合"，避免制造虚假精度。
 - 本地优先（REQ-CORE-001）：用户内容文件在 workspace 内，workspace.db 持久化的是**控制态**
-  （pending_diffs、时间轴等），不是用户文档正文（正文以文件形式落 workspace）。
+  （ed_session_snapshots、pending_diffs、时间轴等），不是用户文档正文（正文以文件形式落 workspace）。
 
 ## §3 跨模块共享实体契约（DATA）
 
@@ -81,7 +81,9 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 
 > 边界：本文锁定 `status` 的**枚举值集合**为单一来源（防跨 session 漂移），但
 > "pending→accepted/rejected、超时/外部变更→expired" 的**转移、guard、终态不可逆语义**归 DE
-> 状态机（A-SYS-M-S-01 / DE M-S）。仅 accepted 触发落盘的写入语义亦归 DE/WS，不在本文。
+> 状态机（A-SYS-M-S-01 / DE M-S）。已打开非激活文档可由 DE/ED 受控自动应用事务把 `pending`
+> 转为 `accepted`，但该转移只修改 LogicalState 与控制态，不触发 DiskState 写入；未打开文档 accepted
+> 后触发落盘的写入语义归 DE/WS，不在本文。
 
 **TimelineEntry · 文档级时间轴条目（基线）**（REQ-CORE-007，主责 WS）
 
@@ -120,8 +122,72 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | long_text | text, charCount | 外部长文本粘贴快照 |
 
 > 边界：ReferencePayload 是输入侧显式引用结构（Composer→AG）；它不等同于 RefInjection。workspace
-> 文档内容读取、锚校验与发送时组装归 REF/AG；AST/KB/TPL 条目的生成、筛选、管理归各 owner。
+> 文档内容读取、锚校验与发送时组装归 REF/AG；若引用目标是已打开文档，校验必须基于 OpenDocSnapshot
+> 中的 LogicalState，不得回退 DiskState。AST/KB/TPL 条目的生成、筛选、管理归各 owner。
 > 输入流展示形态为 ReferenceToken（A-REF-M-T-01 TERM-REF-004），视觉生命周期不在本文定义。
+
+**OpenDocSnapshot · 已打开文档 LogicalState 快照（基线）**（主责 ED，AG/DE 消费，2026-07-18 登记）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| rel_path | workspace 内文档路径 | DocRef 的路径部分；必须规范化后传输 |
+| content | 当前 LogicalState 的序列化内容 | 激活文档优先来自 ProseMirror `doc` 实时序列化；active binding 未就绪时可来自当前文档 `EditSession.content`；非激活打开文档来自 `EditSession.content` |
+| edit_format | 编辑格式 | text / html / html_file；与 ED session 格式一致 |
+| source | 快照来源 | active_editor / active_editor_session / open_editor_session |
+| dirty | 当前 session 是否偏离 DiskState | 仅描述 LogicalState 与加载基线关系，不代表已保存 |
+| session_version | ED session 版本 | 每次受控修改递增；用于防多重编辑与基线偏移 |
+| content_hash | content 的稳定哈希 | 与 `session_version` 共同构成自动应用基线 |
+| captured_at | 采集时间 | 仅用于诊断，不作为一致性判定主键 |
+
+> 边界：OpenDocSnapshot 是已打开文档进入 AG/DE 链路的唯一读取门禁。AG 轮次、只读工具、
+> ReferencePayload.selection 校验、DiffProjection 生成必须优先使用它。未打开文档没有
+> OpenDocSnapshot 时，AG 才允许读取 DiskState 快照。
+
+**EditorOpenTab · 编辑器打开标签持久态（基线）**（主责 ED，2026-07-18 登记）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| rel_path | workspace 内文档路径 | 仅文档标签；预览标签不进入该控制态 |
+| kind | 标签类型 | 当前固定为 doc，保留扩展位 |
+| open_index | 关闭应用时的标签顺序 | 用于重启恢复打开集合与顺序 |
+| is_active | 是否当前文档 | 每个 workspace 最多一个 active；恢复后驱动 `openPath` |
+| updated_at | 写入时间 | 诊断字段，不作为一致性主键 |
+
+> 边界：EditorOpenTab 是“哪些文档处于打开状态”的控制态真源；OpenDocSnapshot / `ed_session_snapshots`
+> 是“这些打开文档的 LogicalState 内容镜像”。启动恢复必须先以 EditorOpenTab 限定打开集合，再恢复对应
+> session 镜像；孤立 session 镜像不得把文档重新打开。
+
+**DiffProjection · Diff 投影共享载荷（基线）**（主责 DE，AG 生产/ED 消费，2026-07-18 登记）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| diff_id | diff 不透明标识 | 与 PendingDiff 关联 |
+| rel_path | 目标文档路径 | DocRef 路径部分 |
+| patch_kind | 修改形态 | replace_block / replace_document / style_ops 等枚举完整语义归 DE |
+| before_text / after_text | 候选变更文本 | 内容在转正前属于 LogicalCandidate |
+| block_id / block_index | 块定位信息 | 块级替换至少应提供一种；锚语义归 ED |
+| draft_mode | 应用路径 | current_editor / open_session / background |
+| snapshot_source | 生成基线来源 | active_editor / active_editor_session / open_editor_session / disk_snapshot |
+| base_session_version | 生成时 ED session 版本 | 已打开文档必填；未打开文档为空 |
+| base_content_hash | 生成时内容哈希 | 已打开文档必填；未打开文档可使用 DiskState baseline |
+
+> 边界：DiffProjection 是跨 AG/DE/ED 的最小互操作载荷。`draft_mode=open_session` 时，
+> ED 必须以 `base_session_version` 与 `base_content_hash` 校验当前 LogicalState；校验失败不得应用，
+> DiffCard 进入不可裁决的失效/冲突状态。`draft_mode=background` 只允许目标文档未打开。
+
+**AgentSession / AgentTurnHistory · 代理编辑历史控制态（基线）**（主责 AG，2026-07-17 随
+`BR-AG-PERSIST-001` 具体化登记）
+
+| 结构 | 字段 | 语义 |
+|---|---|---|
+| AgentSession | session_id、workspace_id、title、mode、archived、open_index、is_active、created_at、updated_at、last_active_at | 代理编辑会话标签元数据；恢复存在状态、顺序、标题、模式、归档/打开与激活态 |
+| AgentTurnHistory | turn_id、session_id、workspace_id、rel_path、status、payload_ref、created_at、updated_at | 一个持久化代理回合；`status` 枚举值为 completed / error / cancelled / gate_rejected / draft |
+| HistTurn | role、content、rel_path?、turn_id? | 发送给 AG 回合的历史消息投影；`rel_path` 用于按当前文档分流历史，缺失或跨文档历史不得作为当前文档事实 |
+| AgentTurnPayload | payload_ref、workspace_id、payload_json、payload_size、created_at | AG 私有回合内容载荷；只保存消息、工具摘要与 Diff 引用，不保存 diff 内容快照 |
+
+> 边界：AgentTurnPayload 的 JSON 形状归 AG；本文锁跨模块共享字段与状态枚举。`draft` 表示流式中断/
+> 应用关闭留下的半成品，重启后不得投影为 completed。DiffCard 历史只保存 `diff_id`/`rel_path` 引用，
+> 实际 diff 内容与当前状态仍以 DE/WS 持久化表为准。
 
 **MemoryInjection · 记忆注入载荷（基线）**（主责 AST，2026-06-12 随实现前置批量登记）
 
@@ -150,14 +216,14 @@ rule_id: BR-SYS-DATA-002
 主链路: DATA-MIGRATE
 域: DATA
 -->
-跨模块传递的共享实体（WorkspaceRef / DocRef / PendingDiff / TimelineEntry / ReferencePayload 等）及其枚举值集合
+跨模块传递的共享实体（WorkspaceRef / DocRef / PendingDiff / TimelineEntry / ReferencePayload / OpenDocSnapshot / DiffProjection 等）及其枚举值集合
 （如 PendingDiff.status 的 pending/accepted/rejected/expired）以本文为唯一契约来源；任何模块不得
 在本文之外私自重定义跨模块共享结构的字段或枚举集合。状态转移语义、guard 与终态不可逆性不属本规则，
 归各 owner 模块状态机（A-SYS-M-S-01 及各模块 M-S）。
 
 ## §4 workspace.db 持久化 schema 基线（PERSIST）
 
-> 持久化的是控制态（pending_diffs、时间轴），不是用户文档正文。以下为**基线**，完整列、约束与
+> 持久化的是控制态（ed_session_snapshots、pending_diffs、时间轴），不是用户文档正文。以下为**基线**，完整列、约束与
 > 索引随 WS G2 联合确定（SY-03），本文锁定基线列集合与版本化迁移契约框架。
 
 **基线表（baseline，非最终）**
@@ -165,7 +231,7 @@ rule_id: BR-SYS-DATA-002
 | 表 | 基线列 | 职责 | 完整定义归属 |
 |---|---|---|---|
 | schema_meta | schema_version（整数，单调递增）、applied_at | 记录当前 schema 版本，驱动迁移 | SYS（本文） |
-| pending_diffs | diff_id(PK)、workspace_id、rel_path、origin_module、status、created_at、payload_ref | 持久化待裁决 diff（重启可恢复） | 基线 SYS / 完整列 WS·DE G2 |
+| pending_diffs | diff_id(PK)、workspace_id、rel_path、origin_module、status、created_at、payload_ref | 持久化待裁决或已自动应用 diff（重启可恢复） | 基线 SYS / 完整列 WS·DE G2 |
 | timeline | entry_id(PK)、workspace_id、rel_path、version_seq、label、created_at | 持久化文档级时间轴 | 基线 SYS / 完整列 WS G2 |
 
 **控制态扩展表（基线，2026-06-12 实现前置批量登记；均含 workspace_id 外键——workspace 级隔离，
@@ -174,7 +240,11 @@ BR-SYS-PERSIST-001 约束）**
 
 | 表 | 基线列 | 职责 | owner |
 |---|---|---|---|
-| agent_turns | turn_id(PK)、workspace_id、rel_path(可空)、payload_ref（回合内容载荷）、created_at | 回合/对话历史（BR-AG-PERSIST-001：本地可恢复不上云） | AG |
+| agent_sessions | session_id(PK)、workspace_id、title、mode、archived、open_index、is_active、created_at、updated_at、last_active_at | 代理编辑会话标签元数据（重启恢复打开/归档顺序与激活态） | AG |
+| agent_turns | turn_id(PK)、session_id、workspace_id、rel_path(可空)、status(completed/error/cancelled/gate_rejected/draft)、payload_ref、created_at、updated_at | 回合/对话历史（BR-AG-PERSIST-001：全状态本地可恢复不上云） | AG |
+| agent_turn_payloads | payload_ref(PK)、workspace_id、payload_json、payload_size、created_at | 回合内容载荷（AG 私有 v1 JSON；工具摘要只读、Diff 仅引用） | AG |
+| ed_open_tabs | workspace_id、rel_path、kind、open_index、is_active、updated_at | 编辑器打开文档标签元数据；重启恢复打开集合、顺序与当前文档，正文不在此表 | ED |
+| ed_session_snapshots | workspace_id、rel_path、content、edit_format、dirty、session_version、content_hash、updated_at | 已打开文档 LogicalState 的持久化镜像；只对 `ed_open_tabs` 中仍打开的文档参与恢复和自动应用基线校验 | ED |
 | build_runs | run_id(PK)、workspace_id、status、plan_ref（任务计划载荷）、interrupted_at(可空)、created_at、updated_at | 构建控制态（BR-CBT-PERSIST-001：重启恢复至中断点或明确关闭，无悬挂） | CBT |
 | workflow_runs | run_id(PK)、workspace_id、workflow_id、current_step、status、created_at、updated_at | 工作流执行控制态（BR-TPL-STATE-001：可恢复无悬挂） | TPL |
 | templates | template_id(PK)、workspace_id、template_kind、body、organization、created_at、updated_at | 模板定义（BR-TPL-DATA-001） | TPL |
@@ -185,8 +255,8 @@ BR-SYS-PERSIST-001 约束）**
 **版本化迁移契约框架**
 
 - `schema_version` 单调递增，是迁移的唯一驱动；每次结构变更必须配一次版本递增 + 迁移步骤。
-- 迁移必须保持既有 `pending_diffs` / `timeline` 持久化态不被破坏（向前迁移不丢数据）。
-- 应用重启后，已持久化的控制态（含未裁决的 pending_diffs、时间轴）必须可恢复（REQ-SYS-002 验收）。
+- 迁移必须保持既有 `ed_open_tabs` / `ed_session_snapshots` / `pending_diffs` / `timeline` 持久化态不被破坏（向前迁移不丢数据）。
+- 应用重启后，已持久化的控制态（含已打开文档 LogicalState 镜像、未裁决 pending_diffs、时间轴）必须可恢复（REQ-SYS-002 验收）。
 
 <!-- CHAIN
 chain_id: DATA-MIGRATE
@@ -201,7 +271,7 @@ rule_id: BR-SYS-PERSIST-001
 域: PERSIST
 -->
 workspace.db 的 schema 必须版本化：以 `schema_meta.schema_version` 单调递增为唯一迁移驱动，每次结构
-变更配套版本递增与迁移步骤；迁移不得破坏既有 `pending_diffs` / `timeline` 持久化态（不丢数据）；
+变更配套版本递增与迁移步骤；迁移不得破坏既有 `ed_open_tabs` / `ed_session_snapshots` / `pending_diffs` / `timeline` 持久化态（不丢数据）；
 应用重启后已持久化的控制态必须可恢复。本规则只约束 schema 版本化与迁移/恢复契约，不约束业务写入时机
 （diff 落盘时机归 DE/WS）。
 
@@ -253,18 +323,22 @@ status: mapped
 
 - **共享结构单一来源**（BR-SYS-DATA-002 / X-SHARED-001）：跨模块共享实体与枚举集合仅本文定义一处；
   代码阶段以 @GOV 引用 BR-SYS-DATA-002，audit 无重复定义。
-- **持久化可恢复**（BR-SYS-PERSIST-001，REQ-SYS-002 验收）：构造含未裁决 pending_diffs 与时间轴的
-  workspace.db，经一次 schema 版本递增迁移后重启，控制态完整可恢复、无数据丢失。
+- **持久化可恢复**（BR-SYS-PERSIST-001，REQ-SYS-002 验收）：构造含 ed_open_tabs、ed_session_snapshots、未裁决 pending_diffs 与时间轴的
+  workspace.db，经一次 schema 版本递增迁移后重启，控制态完整可恢复、无数据丢失；孤立 ed_session_snapshots 不得恢复为打开标签。
 - **枚举集合一致**：PendingDiff.status 枚举集合（pending/accepted/rejected/expired）与 DE 状态机
-  （A-SYS-M-S-01）的状态集合对齐，无第三处定义。
+  （A-SYS-M-S-01）的状态集合对齐，无第三处定义；AgentTurnHistory.status 枚举集合
+  （completed/error/cancelled/gate_rejected/draft）与 AG 历史恢复契约对齐。
 - 量化 NFR（迁移耗时、db 体量）延 G5 标定（APC §9）。
 
 ## §9 技术债务与盲区
 
 - workspace.db **完整列、约束、索引**与 WS 持久化实现联合确定（SY-03，WS G2），本文为基线骨架。
 - 不透明 ID 生成算法（ULID/UUID/自增等）属实现选型，延 L2 实现/G5，本文只约定"不透明标识符"语义。
-- 具体序列化格式（payload_ref 指向的 diff 内容编码）归 DE；本文只占位。
+- 具体序列化格式（payload_ref 指向的 diff 内容编码）归 DE；AgentTurnPayload 的 JSON 形状归 AG；本文只占位共享字段。
+  AG 历史恢复不得把缺失的 diff 当前状态默认视为 pending：状态查询归 DE/WS，缺失只可投影为只读不可用。
 - diff / timeline 的状态机与转移归 A-SYS-M-S-01 与 DE/WS M-S，本文只锁字段与枚举集合。
+- `DiffProjection.patch_kind=style_ops` 在已打开非激活文档上的自动应用需要 ED 提供无 ProseMirror runtime 的
+  StyleOp 事务；若实现阶段未具备该能力，必须让对应 DiffCard 失效并记录债务，不能降级为 DiskState 应用。
 
 ## §10 后续动作
 
@@ -284,3 +358,7 @@ status: mapped
 | 2026-06-12 | v1.2 | 进入实现前批量登记（X-SHARED-001/BR-SYS-PERSIST-001 回写，解除 AG/CBT/TPL/AST/KB 五模块"实现前登记"承诺）：§3 新增 MemoryInjection（memory_kind/content/origin_turn，主责 AST）与 KnowledgeInjection（content/source_ref/organization，主责 KB）注入共享结构基线；§4 新增七张 workspace.db 控制态扩展表基线——agent_turns（AG 回合历史）/build_runs（CBT 构建控制态）/workflow_runs（TPL 执行控制态）/templates·workflows（TPL 定义）/memory_entries（AST）/knowledge_entries（KB），均 workspace 级隔离（2026-06-11 人类决策）、payload/定义形状归各 owner、迁移受 BR-SYS-PERSIST-001 约束；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-03 | v1.3 | 随 ED 批B PI-ED-10 登记（X-SHARED-001 回写，承 A-REF-M-T-01 v1.1 扩展意向）：§3 RefInjection 增可空 block_ranges 选区级锚集合（{blockId,start,end} 块内纯文本偏移区间；CharAnchor 契约归 ED BR-ED-DATA-004、有效期=编辑会话内、失效校验归 REF §5 保守语义）；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-08 | v1.4 | 随引用令牌修复登记 ReferencePayload 共享结构基线：新增 doc/selection/session/memory/knowledge/template/url/long_text 八类输入侧显式引用字段集合；声明其为 Composer→AG 主通道，与 RefInjection 分层不同；无新增规则（受 BR-SYS-DATA-002 覆盖） |
+| 2026-07-17 | v1.5 | 随 AG 历史持久化具体化登记 AgentSession / AgentTurnHistory / AgentTurnPayload 基线；`agent_sessions`、增强 `agent_turns`、`agent_turn_payloads` 入 workspace.db 控制态扩展表；锁定 AgentTurnHistory.status 枚举 completed/error/cancelled/gate_rejected/draft 与 Diff 仅引用不快照边界 |
+| 2026-07-18 | v1.6 | 登记 OpenDocSnapshot、DiffProjection 基线与 `ed_session_snapshots` 表：已打开文档 AG/DE/ED 链路必须以 LogicalState 快照为唯一读取门禁，未打开文档才允许读取 DiskState |
+| 2026-07-18 | v1.7 | 登记 HistTurn 历史消息投影字段：`rel_path/turn_id` 用于 AG 按当前文档分流历史，防跨文档历史作为当前文档事实 |
+| 2026-07-18 | v1.8 | 登记 EditorOpenTab 与 `ed_open_tabs` 表：打开集合、顺序和当前文档由独立控制态恢复；`ed_session_snapshots` 只作为打开文档 LogicalState 内容镜像，孤立镜像不得打开文档 |

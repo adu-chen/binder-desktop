@@ -18,7 +18,7 @@
 A-SYS-I-P-02（骨架）+ A-WS-I-P-01（文件 I/O 复用）→ 本文（ED 会话/装饰层/定位接口）→ 实现 + @GOV(追溯 A-ED-M-T-01)
 ```
 
-ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 后端协同，经 WS 落盘）；
+ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 后端协同，经 WS 落盘，含 OpenDocSnapshot 与 session 持久化镜像）；
 **（b）装饰层与定位接口**（前端进程内契约，供 DE/AG/REF 在编辑器上挂载呈现，X-FORBID-005
 唯一受控通道）。后者非跨进程 Tauri command，但作为模块间契约在此声明。
 
@@ -32,11 +32,21 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 | `ed.open_session` | DocRef | 会话句柄 + 编辑模型（md 直载 / docx 经 DOC） | 解析失败→只读降级（SM-ED-01 ReadOnly）；读取失败→会话不建立 | BR-ED-STATE-001 |
 | `ed.close_session` | 会话句柄 | 确认 | 有脏态未处置→拒绝（须先 save 或 confirmDiscard） | BR-ED-STATE-001 |
 | `ed.get_dirty_state` | 会话句柄 | 是否脏 + 当前状态（SM-ED-01 态） | — | X-INTER-001（驱动 SM-WS-01） |
+| `ed.get_open_snapshots` | — | OpenDocSnapshot[]（全部已打开文档 LogicalState 快照） | active live 序列化失败/缺 session 版本 → 错误 | AG/DE 读门禁（A-SYS-I-P-01 OpenDocSnapshot） |
+| `ed.persist_open_tabs` | EditorOpenTab[] | ok | 无 workspace / active 数量非法 / open_index 冲突 → 错误 | `ed_open_tabs` 打开集合控制态 |
+| `ed.list_open_tabs` | workspace_id | EditorOpenTab[] | 无打开标签 → 空列表 | 重启恢复打开集合、顺序与当前文档 |
+| `ed.persist_session_snapshot` | OpenDocSnapshot | ok | 无 workspace / session 缺失 → 错误 | `ed_session_snapshots` 内部镜像 |
+| `ed.list_session_snapshots` | workspace_id | OpenDocSnapshot[] | 无镜像 → 空列表 | 重启恢复已打开文档 LogicalState 镜像 |
 | `ed.confirm_discard` | 会话句柄 | 确认丢弃脏态并关闭 | — | 显式确认语义 |
 | `ed.resolve_conflict` | 会话句柄、选择（keep_mine / reload） | 重置态（Editing/Loading） | 非 Conflicted 态调用→协议错误 | SM-ED-01 Conflicted（BR-ED-STATE-003，对接 ws.save_doc override / external_change） |
 
 > `ed.resolve_conflict(keep_mine)` 后续 `ws.save_doc` 须带 override=true（用户显式覆盖语义链）；
 > `reload` 经 `ws.read_doc` 重载并刷新基线。
+> `ed.get_open_snapshots` 是 AG/DE 读取已打开文档的唯一门禁：激活文档必须从 ProseMirror `doc`
+> 实时序列化，非激活打开文档必须从 `EditSession.content` 读取并附带 sessionVersion/contentHash。
+> 失败时调用方必须阻断，不得读取 DiskState。
+> 重启恢复必须先调用 `ed.list_open_tabs` 得到打开集合、顺序与当前文档，再只恢复这些路径对应的
+> `ed.list_session_snapshots` 镜像；不在 `ed_open_tabs` 中的孤立 session 镜像不得打开文档。
 
 ## §3 装饰层接口（ED-DECOR / BR-ED-STATE-002 / X-FORBID-005）
 
@@ -57,6 +67,7 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 | `ed.get_cursor_ref` | 会话句柄 | 光标位置（CharAnchor：blockId + 块内偏移） | 无会话/无光标 → null | AG 光标感知（按需查询，非常驻投影） |
 | `ed.get_selection_ref` | 会话句柄 | SelectionRef {path, blockId, start, end, text}；折叠选区 → null | — | AG 选区感知 / 选区拖拽引用（PI-ED-10） |
 | `ed.apply_edit` | 会话句柄、编辑操作序列（op 粒度表 §4.1） | 新编辑模型态 + 脏态 | 越权（绕过受控接口）→拒绝；op 目标 anchor_lost → 拒绝该 op | 采纳内联候选/样式操作的落点（AG 经此，BR-AG-STATE-003）；X-FORBID-005 唯一通道 |
+| `ed.apply_session_diff` | relPath、DiffProjection、base_session_version、base_content_hash | 更新目标 open session content/version/hash + 脏态；返回新 OpenDocSnapshot | 目标未打开/基线不匹配/锚失效/StyleOp 无头事务不支持 → 拒绝且不修改 | `draft_mode=open_session` 自动应用事务；DE autoApplyOk/autoApplyFail |
 
 > `ed.apply_edit` 是 inline-assist/autocomplete/内联样式操作采纳「作为用户编辑操作」进入模型的
 > 接口——经此驱动 SM-ED-01 edit→SM-WS-01 脏态，区别于 diff 落盘路径（后者经 DE→WS）。
@@ -65,6 +76,9 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 > `applyStyleOps()`（StyleOp 批处理）。`applyEditOps()` 已覆盖 `replace_text`、`replace_block`、
 > `replace_document`；StyleOp 的 `set_mark` / `unset_mark` / `set_block_attr` 由 `applyStyleOps()`
 > 单事务批内原子应用。`insert_block` 仍是接口预留，未在本轮实现。
+> `ed.apply_session_diff` 是 `draft_mode=open_session` 的唯一入口。它不依赖用户切换到目标窗口，
+> 但必须只作用于已打开非激活文档的 `EditSession.content`；成功后调用 `ed.persist_session_snapshot`，
+> 并由 DE 调用 `de.accept_draft_diff(open_session)`。失败时必须保持原 LogicalState 不变。
 
 ### §4.1 apply_edit 操作粒度表（PI-ED-10/11，正式承接 §7 既有债务）
 
@@ -80,6 +94,19 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 
 > op 序列原子应用（任一 op 锚失效则整批拒绝回明确错误，不产生半应用状态）。
 
+### §4.2 open session 自动应用操作（2026-07-18）
+
+`ed.apply_session_diff` 支持的最小安全集：
+
+| patch_kind | 支持条件 | 应用语义 |
+|---|---|---|
+| `replace_block` | `block_id` 或 `block_index` 可定位到当前 session 内容块；基线匹配 | 替换目标块文本/HTML 内容，保持其他块不变 |
+| `replace_document` | 基线匹配；after_text/after_content 为整篇内容 | 整篇替换 session content |
+| `style_ops` | 存在不依赖当前 ProseMirror editor instance 的 StyleOp 事务实现 | 批内原子应用；未具备时拒绝，不降级 |
+
+该接口必须先比对 `base_session_version` 与 `base_content_hash`，再执行内容事务；成功后递增版本、刷新哈希、
+置脏并持久化 `ed_session_snapshots`。任何失败都不得产生半应用状态。
+
 ## §5 外部变更订阅（承 A-WS-I-P-01 §6）
 
 ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重载（经 `ws.read_doc` 刷新基线），
@@ -93,7 +120,10 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
 
 - 会话生命周期 command 覆盖 SM-ED-01 全转移（含 Conflicted 路：external_change/saveConflict→
   resolve_conflict 两分支）；装饰层 mount→update→dismiss 复位不残留 + anchor_lost 失效信号；
-  `ed.apply_edit` 越过受控接口的调用被拒（X-FORBID-005 静态+集成核验）；与 DE/AG/REF G5 联调。
+  `ed.apply_edit` 越过受控接口的调用被拒（X-FORBID-005 静态+集成核验）；`ed.get_open_snapshots`
+  覆盖 active/open session 且失败阻断；`ed.apply_session_diff` 基线匹配成功、基线不匹配拒绝且不修改；
+  `ed.persist_open_tabs` / `ed.list_open_tabs` 覆盖多标签顺序、当前文档唯一性、孤立 session 镜像不恢复；
+  与 DE/AG/REF G5 联调。
 
 ## §7 债务与盲区
 
@@ -103,6 +133,8 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
 - 装饰层接口是否需要跨进程化（如后端驱动呈现）延实现期，当前定为前端进程内契约。
 - 样式投影读接口经 AG 侧承载（ag.list_blocks 扩展，A-AG-I-P-01）；ED 侧只定投影 schema
   （A-ED-M-T-01 §5.1），避免双仓重复定义。
+- `ed.apply_session_diff(style_ops)` 依赖无头 StyleOp 事务；若本轮代码只覆盖文本/块/整篇替换，样式类
+  自动应用必须明确失败并让 DiffCard 失效。
 
 ## 变更记录
 
@@ -112,3 +144,5 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
 | 2026-07-03 | v1.1 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，承 BR-ED-DATA-004/005）：§4 扩字符锚定位（locate_block 带 {start,end} 区间校验）+ 新增 ed.get_cursor_ref / ed.get_selection_ref（按需查询）；新增 §4.1 apply_edit 操作粒度表（replace_text/insert_block/set_mark/unset_mark/set_block_attr，批内原子）解除既有债务；§7 登记样式投影读接口归 AG I-P 承载 |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
 | 2026-07-12 | v1.3 | 三态实现回写：补 `replace_block` / `replace_document` 为当前 `applyEditOps()` 已实现内容 op；声明 StyleOp 由 `applyStyleOps()` 批内原子承载；标注 `ws.external_change` 推送/轮询尚未注册，当前已落地能力为保存时 `WS_SAVE_CONFLICT` 冲突映射与显式覆盖确认 |
+| 2026-07-18 | v1.4 | 新增已打开文档接口：`ed.get_open_snapshots`、`ed.persist_session_snapshot`、`ed.list_session_snapshots` 与 `ed.apply_session_diff`；`draft_mode=open_session` 必须基线校验后自动应用 LogicalState，不得后台写盘 |
+| 2026-07-18 | v1.5 | 新增编辑器打开标签持久化接口：`ed.persist_open_tabs` / `ed.list_open_tabs`；启动恢复以打开集合为门禁，只恢复对应 session 镜像并同步当前文档 |

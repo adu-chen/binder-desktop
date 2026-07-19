@@ -1,15 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { Schema } from "@tiptap/pm/model";
 import {
   DOC_REF_MIME,
   SELECTION_REF_MIME,
+  bindActiveEditorDocument,
   blockTextLength,
   charOffsetInBlock,
+  getActiveEditorBinding,
   findTopBlockSnapshotById,
   getTopBlockIdByIndex,
   getTopBlockSnapshotByIndex,
+  isActiveEditorBoundTo,
   readDocRefData,
   readSelectionRefData,
+  registerEditor,
   resolveSelectionAnchor,
   writeDocRefData,
   writeSelectionRefData,
@@ -33,6 +37,8 @@ const schema = new Schema({
     text: { group: "inline" },
   },
 });
+
+beforeEach(() => registerEditor(null));
 
 /** 构造段落（可含 hardBreak 叶子）。 */
 function p(blockId: string | null, ...parts: (string | "BR")[]) {
@@ -128,6 +134,27 @@ describe("edLocate · block_index → blockId", () => {
     expect(findTopBlockSnapshotById(doc, "b2")).toEqual(byIndex);
     expect(getTopBlockSnapshotByIndex(doc, 3)).toBeNull();
     expect(findTopBlockSnapshotById(doc, "missing")).toBeNull();
+  });
+});
+
+describe("edLocate · active editor binding", () => {
+  it("记录并校验 ProseMirror 当前承载的文档身份", () => {
+    registerEditor(null);
+    bindActiveEditorDocument({ relPath: "notes/a.md", loadSeq: 3, editFormat: "text" });
+
+    expect(getActiveEditorBinding()).toEqual({ relPath: "notes/a.md", loadSeq: 3, editFormat: "text" });
+    expect(isActiveEditorBoundTo("notes/a.md", 3, "text")).toBe(true);
+    expect(isActiveEditorBoundTo("notes/b.md", 3, "text")).toBe(false);
+    expect(isActiveEditorBoundTo("notes/a.md", 4, "text")).toBe(false);
+    expect(isActiveEditorBoundTo("notes/a.md", 3, "html")).toBe(false);
+  });
+
+  it("registerEditor(null) 清空旧绑定，避免卸载后继续信任旧正文", () => {
+    bindActiveEditorDocument({ relPath: "notes/a.md", loadSeq: 1, editFormat: "text" });
+    registerEditor(null);
+
+    expect(getActiveEditorBinding()).toBeNull();
+    expect(isActiveEditorBoundTo("notes/a.md", 1, "text")).toBe(false);
   });
 });
 

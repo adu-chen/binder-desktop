@@ -2,7 +2,7 @@
 //!
 //! 承接 A-SYS-I-P-01 §4：持久化控制态（非用户正文）。schema_meta.schema_version 单调递增
 //! 为迁移唯一驱动；迁移不破坏既有持久化态；应用重启后控制态可恢复。
-//! 完整列/索引调优为实现期 A 类债务（本框架落基线表 + 七张控制态扩展表）。
+//! 完整列/索引调优为实现期 A 类债务（本框架落基线表 + 八张控制态扩展表）。
 
 use rusqlite::Connection;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -123,6 +123,82 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE diff_payloads ADD COLUMN style_ops TEXT;
         "#,
     },
+    Migration {
+        version: 6,
+        // AG 历史持久化（PI-AG-12）：代理编辑会话标签元数据、全状态回合、payload JSON。
+        // 兼容 v2 已存在的薄 agent_turns 表，按追加列迁移；旧记录 session_id 可空，不参与新恢复查询。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                session_id     TEXT PRIMARY KEY,
+                workspace_id   TEXT NOT NULL,
+                title          TEXT NOT NULL,
+                mode           TEXT NOT NULL,
+                archived       INTEGER NOT NULL,
+                open_index     INTEGER NOT NULL,
+                is_active      INTEGER NOT NULL,
+                created_at     INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL,
+                last_active_at INTEGER
+            );
+            ALTER TABLE agent_turns ADD COLUMN session_id TEXT;
+            ALTER TABLE agent_turns ADD COLUMN status TEXT NOT NULL DEFAULT 'completed';
+            ALTER TABLE agent_turns ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+            UPDATE agent_turns SET updated_at = created_at WHERE updated_at = 0;
+            CREATE TABLE IF NOT EXISTS agent_turn_payloads (
+                payload_ref  TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                payload_size INTEGER NOT NULL,
+                created_at   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_ws
+                ON agent_sessions(workspace_id, archived, open_index);
+            CREATE INDEX IF NOT EXISTS idx_agent_turns_session
+                ON agent_turns(workspace_id, session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_agent_turn_payloads_ws
+                ON agent_turn_payloads(workspace_id);
+        "#,
+    },
+    Migration {
+        version: 7,
+        // 打开文档 LogicalState 持久镜像：只保存编辑会话内容与基线元数据，不能视为用户文档落盘。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS ed_session_snapshots (
+                workspace_id     TEXT NOT NULL,
+                rel_path         TEXT NOT NULL,
+                content          TEXT NOT NULL,
+                edit_format      TEXT NOT NULL,
+                dirty            INTEGER NOT NULL,
+                session_version  INTEGER NOT NULL,
+                content_hash     TEXT NOT NULL,
+                updated_at       INTEGER NOT NULL,
+                PRIMARY KEY(workspace_id, rel_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ed_session_snapshots_ws
+                ON ed_session_snapshots(workspace_id, updated_at);
+        "#,
+    },
+    Migration {
+        version: 8,
+        // 编辑器打开标签持久态：只保存“哪些文档打开、顺序、当前文档”，不保存正文内容。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS ed_open_tabs (
+                workspace_id TEXT NOT NULL,
+                rel_path     TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                open_index   INTEGER NOT NULL,
+                is_active    INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                PRIMARY KEY(workspace_id, rel_path)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ed_open_tabs_ws_index
+                ON ed_open_tabs(workspace_id, open_index);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ed_open_tabs_ws_active
+                ON ed_open_tabs(workspace_id) WHERE is_active = 1;
+            CREATE INDEX IF NOT EXISTS idx_ed_open_tabs_ws_order
+                ON ed_open_tabs(workspace_id, open_index);
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {
@@ -228,6 +304,20 @@ mod tests {
                 (now_millis(),),
             )
             .unwrap();
+            conn.execute(
+                "INSERT INTO ed_session_snapshots \
+                 (workspace_id, rel_path, content, edit_format, dirty, session_version, content_hash, updated_at) \
+                 VALUES ('ws1','a.md','逻辑镜像','text',1,2,'h2',?1)",
+                (now_millis(),),
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO ed_open_tabs \
+                 (workspace_id, rel_path, kind, open_index, is_active, updated_at) \
+                 VALUES ('ws1','a.md','doc',0,1,?1)",
+                (now_millis(),),
+            )
+            .unwrap();
         } // 关闭连接（模拟应用退出）
 
         let conn = open_and_migrate(&path).unwrap();
@@ -247,6 +337,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(seq, 1);
+        let session_content: String = conn
+            .query_row(
+                "SELECT content FROM ed_session_snapshots WHERE workspace_id='ws1' AND rel_path='a.md'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(session_content, "逻辑镜像");
+        let active_open_tab: i64 = conn
+            .query_row(
+                "SELECT is_active FROM ed_open_tabs WHERE workspace_id='ws1' AND rel_path='a.md'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_open_tab, 1);
 
         drop(conn);
         let _ = std::fs::remove_file(&path);

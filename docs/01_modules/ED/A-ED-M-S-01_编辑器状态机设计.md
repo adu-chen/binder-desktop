@@ -31,7 +31,7 @@ SM-ED-01 edit/saved 转移点 ──对接──→ WS SM-WS-01（X-INTER-001 �
 machine_id: SM-ED-01
 owner_module: ED
 status: active
-summary: 单文档编辑会话生命周期（加载经 WS / 编辑脏态驱动 SM-WS-01 / 解析失败降级只读 / 脏态不静默关闭）
+summary: 单文档编辑会话生命周期（加载经 WS / 编辑或 open session diff 脏态驱动 SM-WS-01 / 解析失败降级只读 / 脏态不静默关闭）
 source_type: design
 chain: ED-EDIT
 rules: BR-ED-STATE-001, BR-ED-DATA-001, BR-ED-DATA-002
@@ -41,9 +41,9 @@ terminal_states: Closed
 
 - **machine_id**：SM-ED-01　**owner_module**：ED
 - **scope**：单个 workspace 内文档一次编辑会话（打开→编辑→保存协同→关闭）的完整生命周期
-- **context**：目标 DocRef（A-SYS-I-P-01）、编辑模型（内容块树）、脏态标记、加载/解析结果
+- **context**：目标 DocRef（A-SYS-I-P-01）、编辑模型（内容块树或非激活 session 序列化 LogicalState）、脏态标记、sessionVersion、contentHash、加载/解析结果
 - **states**：Closed、Loading、Ready、Editing、ReadOnly、Conflicted
-- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、saved、close、confirmDiscard、retry、
+- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、sessionDiffApplied、sessionApplyFail、saved、close、confirmDiscard、retry、
   externalChange、saveConflict、conflictKeepMine、conflictReload
 - **transitions（主表）**：
 
@@ -55,9 +55,13 @@ terminal_states: Closed
 | Loading | loadFail | — | Closed | 统一错误形状，会话不建立 |
 | Ready | edit | — | Editing | 更新编辑模型；驱动 SM-WS-01 Idle→Dirty（X-INTER-001） |
 | Ready | draftDiffApplied | DE pending diff 命中当前编辑器块 | Editing | after 替换进目标 Block，GreenReview 标绿，驱动 SM-WS-01 Dirty |
+| Ready | sessionDiffApplied | `draft_mode=open_session` 且 base_session_version/base_content_hash 匹配 | Editing | 更新非激活 session LogicalState，递增版本、刷新哈希、持久化 `ed_session_snapshots`，驱动 SM-WS-01 Dirty；不挂载当前编辑器 GreenReview |
+| Ready | sessionApplyFail | 基线不匹配/锚失效/事务不支持 | Ready | 不修改 LogicalState；回 DE autoApplyFail |
 | Ready | externalChange | 无脏态（BR-ED-STATE-003） | Loading | 自动重载磁盘内容 + 非阻断提示 |
 | Editing | edit | — | Editing | 持续编辑，脏态保持 |
 | Editing | draftDiffApplied | — | Editing | 持续草稿编辑，脏态保持；重叠 diff 由 DE 冲突规则约束 |
+| Editing | sessionDiffApplied | `draft_mode=open_session` 且 base_session_version/base_content_hash 匹配 | Editing | 更新非激活 session LogicalState，递增版本、刷新哈希、持久化 `ed_session_snapshots`；重叠 diff 由 DE 冲突规则约束 |
+| Editing | sessionApplyFail | 基线不匹配/锚失效/事务不支持 | Editing | 不修改 LogicalState；回 DE autoApplyFail |
 | Editing | saved | SM-WS-01 达 Saved（X-INTER-001 回执） | Ready | 脏态清除；已 accepted 的 GreenReview 复位 |
 | Editing | externalChange / saveConflict | 有脏态（WS 事件/SM-WS-01 冲突回执） | Conflicted | 冲突提示，等待用户显式裁决 |
 | Conflicted | conflictKeepMine | 用户显式选择保留己方编辑 | Editing | 脏态保留；后续 save 经 overrideConfirmed 覆盖确认 |
@@ -76,10 +80,13 @@ terminal_states: Closed
   - Loading → Editing（加载未完成不得编辑）
   - ReadOnly → Editing（只读降级态不得编辑，须 retry 重载成功后方可）
   - Editing → Closed 且无 saved/confirmDiscard（脏态不得静默关闭，BR-ED-STATE-001）
+  - Ready/Editing → sessionDiffApplied 无 session 基线匹配（不得应用陈旧 DiffProjection）
+  - sessionApplyFail → 任何内容修改（失败必须无半应用状态）
   - Editing（收到 externalChange）→ Loading 直达（**有脏态不得静默重载**，必经 Conflicted 显式裁决）
   - Conflicted → Ready/Editing/Loading 无用户显式选择（冲突不得自动消解，BR-ED-STATE-003）
 - **acceptance_criteria**：唯一进入 Editing 的路径经 Ready；脏态会话关闭必经 saved 或显式
-  confirmDiscard；parseFail 不丢内容（ReadOnly 可见）；loadFail 不建立会话；离线时 open/edit/close
+  confirmDiscard；parseFail 不丢内容（ReadOnly 可见）；loadFail 不建立会话；`sessionDiffApplied`
+  在基线匹配时修改 LogicalState 并持久化镜像，基线不匹配时不修改；离线时 open/edit/close
   全链可用（不依赖在线鉴权）；外部变更下两个方向的内容损失（覆盖外部修改/丢弃己方脏态）均必经
   用户显式选择
 - **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions）
@@ -88,7 +95,7 @@ terminal_states: Closed
 
 | 转移点 | 方向 | 契约 |
 |---|---|---|
-| 脏态产生 | SM-ED-01（Ready→Editing 的 edit/draftDiffApplied）→ SM-WS-01（Idle→Dirty） | 用户编辑与 DE 草稿 diff 应用都是 Dirty 驱动源；语义为"编辑模型已偏离落盘内容" |
+| 脏态产生 | SM-ED-01（Ready→Editing 的 edit/draftDiffApplied/sessionDiffApplied）→ SM-WS-01（Idle→Dirty） | 用户编辑、DE 当前编辑器草稿应用、已打开非激活文档自动应用都是 Dirty 驱动源；语义为"LogicalState 已偏离落盘内容" |
 | 保存回执 | SM-WS-01（Saving→Saved）→ SM-ED-01（Editing→Ready 的 saved） | WS 落盘成功回执驱动 ED 清脏态；SaveError 不发 saved，ED 停留 Editing 可重试 |
 
 两侧对接一致性（事件语义、回执时机）登记 A-SYS-M-S-01 §5，在 G5 跨模块联调验证。
@@ -106,16 +113,18 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 
 ## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
 
-- **SM-ED-01 正路**：Closed→open→Loading→loadOk→Ready→edit/draftDiffApplied→Editing→saved→Ready→close→Closed。
+- **SM-ED-01 正路**：Closed→open→Loading→loadOk→Ready→edit/draftDiffApplied/sessionDiffApplied→Editing→saved→Ready→close→Closed。
 - **降级与错误路**：parseFail→ReadOnly（内容可见）→retry→Loading；loadFail→Closed 会话不建立；
   save 失败停留 Editing 可重试（SM-WS-01 SaveError 侧验证归 WS）。
 - **禁止转移**：Closed/Loading/ReadOnly→Editing 不可达；Editing 无 saved/confirmDiscard 时 close
-  被拒（脏态不静默丢失）。
+  被拒（脏态不静默丢失）；sessionApplyFail 不改变 LogicalState。
 - **跨模块转移（X-INTER-001，G5 联调）**：edit→SM-WS-01 Dirty 唯一驱动；Saved 回执→ED 清脏态；
   SaveError 不清脏态。
 - **离线验收**（REQ-CORE-009）：断网下 open/edit/save（本地落盘）/close 全链可用。
 - decoration 挂载/复位（非状态机项）：按 blockId 挂载、终态复位不残留，入 ED-DECOR 集成测试
   （BR-ED-STATE-002）。
+- **open session 自动应用**：基线匹配时 `sessionDiffApplied` 更新 content/version/hash 并持久化；
+  基线不匹配、锚失效、StyleOp 不支持时 `sessionApplyFail`，原 LogicalState 不变。
 
 ## §6 总图登记（A-SYS-M-S-01）
 
@@ -139,6 +148,8 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
   DOC G2 后如需细分（转换错误 vs 模型不兼容）回填本文。
 - **confirmDiscard 的 UI 交互形态**（确认弹层/自动暂存草稿等）属实现期产品决策，本文只锁
   "脏态不得静默丢失"语义。
+- **open session 的撤销呈现**：`sessionDiffApplied` 当前只保证 LogicalState 正确与脏态保存链；
+  非激活文档撤销、GreenReview 补挂载和红删视觉由 DE/ED 后续 UI 债务承接。
 
 ## §9 后续动作
 
@@ -155,3 +166,4 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 | 2026-06-11 | v1.1 | 人类决策同步：inline-assist/autocomplete 归属确认为 AG（§4/§6 表述更新，状态机由 AG G2 定义，ED 仅承载呈现） |
 | 2026-06-12 | v1.2 | Q2 缺口补遗：SM-ED-01 新增 Conflicted 态与 externalChange/saveConflict/conflictKeepMine/conflictReload 事件；forbidden 增「有脏态不得静默重载」「冲突不得自动消解」；acceptance 同步（承载 BR-ED-STATE-003，对接 SM-WS-01 冲突路径与 BR-WS-OBS-001 事件） |
 | 2026-07-08 | v1.3 | 增加 draftDiffApplied 事件：DE pending diff 命中当前编辑器块时由 ED 受控接口替换 after、进入 Editing 并驱动保存链；Saved 后清除已 accepted 的 GreenReview |
+| 2026-07-18 | v1.4 | 增加 sessionDiffApplied/sessionApplyFail：已打开非激活文档 diff 基线匹配后修改 session LogicalState、递增版本/哈希并持久化，失败不得半应用；脏态转移接入 SM-WS-01 |

@@ -102,6 +102,17 @@ AI 编辑三层：①辅助续写（TERM-AG-004，光标级）②局部修改（
 ③代理编辑（本条，面板级）；①②采纳即用户编辑直改不经 diff，③产出经 DE 裁决——轻重分界
 （BR-AG-STATE-003 / X-FORBID-006）。
 
+<!-- TERM
+term_id: TERM-AG-009
+chains: AG-TURN
+zh: 代理编辑会话
+en: AgentSession
+forbidden: 聊天标签, 对话标签, 会话标签, agent标签, chat tab, session tab
+-->
+代理编辑（TERM-AG-008）面板中的可重开会话标签：承载一组按时间排序的代理回合、标题、模式、
+归档/打开顺序与激活态。它是 workspace 控制态的一部分，重启后恢复标签存在状态与顺序；回合内容按
+懒加载策略恢复。代理编辑会话不同于文档标签（SYS/ED 视图导航态）和账号会话（云认证），不得混用。
+
 ## §1 文档定位
 
 ```
@@ -126,7 +137,9 @@ AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模�
 
 - 模型调用唯一路径：`AG → SM-SYS-01 GatePassed → AiGateway`（X-SEQ-001）；失败/拒绝走统一
   错误形状；流式遵守 BR-SYS-STATE-002（完成/中断/错误三类终态，中断无半落盘副作用）。
-- AI 修改落盘唯一路径：`AG 产出 → DE 生成 pending_diff → 人类裁决 → WS 落盘`（X-FORBID-006）。
+- AI 内容修改唯一路径：`AG 产出 → DE 生成 pending_diff → ED/DE 受控转正`；激活文档由人类裁决转入
+  LogicalState，已打开非激活文档由基线校验通过后的自动应用事务转入 LogicalState，未打开文档才在
+  人类接受后经 WS 落盘。AG 不得直接写 LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。
 
 ## §3 代理回合（AG-TURN）
 
@@ -156,7 +169,9 @@ rule_id: BR-AG-DATA-003
 代理回合修改建议产出（ChangeProposal）的目标边界（2026-07-04 人类裁决，**取代原「单文档铁律」**）：
 target 一律限 active workspace 内（X-FORBID-004）；**默认目标为当前文档**；用户**显式指向**其他
 文档（@mention 引用/明示路径）或明确要求创建新文档时，可产出指向该文档/新文档的 ChangeProposal
-（新建以空基准表达，承 BR-DE-DATA-002）；一切内容产出仍经 DE 裁决落盘（X-FORBID-006）。识别到
+（新建以空基准表达，承 BR-DE-DATA-002）；一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
+LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot
+中的 LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。识别到
 **项目级整体构建意图**（从蓝图构建完整项目——多文件修改本身不再是升级判据）时提议触发构建
 （判据归 BR-CBT-STATE-002），构建在**原对话窗口**内实现、不强制切换模式；编辑/构建两模式互相
 复用彼此能力。**DE 侧协同复核**同步调整：`de.generate_diff` 校验 target 在 workspace 内且属回合
@@ -181,8 +196,43 @@ rule_id: BR-AG-PERSIST-001
 -->
 回合与对话历史属 workspace 控制态：本地持久化（workspace.db 扩展表，遵守 BR-SYS-PERSIST-001
 版本化迁移），重启后会话历史可恢复；对话内容不因历史持久化上行云端（本地优先，REQ-CORE-001）。
-扩展表具体列定义在进入实现前与 WS/SYS 联合敲定并回写 A-SYS-I-P-01（X-SHARED-001），本规则先锁
-「本地持久化 + 可恢复 + 不上云」原则。
+恢复范围覆盖 `completed / error / cancelled / gate_rejected / draft` 五类状态；不得只保存成功回合。
+流式中断、应用关闭或崩溃留下的半成品必须保持 `draft`，重启后展示为未完成/可重试，不得伪装为
+正常完成态。代理编辑会话（TERM-AG-009）的元数据（存在状态、顺序、标题、模式、归档/打开态、
+激活态）全部恢复；仅 eager-load 当前激活会话的回合内容，其他会话点击时懒加载。工具卡只保存
+结构化摘要（工具名、入参摘要、结果状态/摘要），历史卡片为折叠只读，不重新绑定实时状态、不得从
+	历史里重新触发工具；工具摘要必须带回合内消息锚点，恢复后插入对应 assistant 消息后方，不能堆到会话底部。
+	DiffCard 只保存引用（`diff_id`、关联文件路径、锚点消息），新写入的 `diffRefs[]` 必须能定位到本轮
+	assistant 消息；legacy 记录缺锚点时可按同 turn 的 assistant message 派生，仍无法派生才进入“未归属修改建议”
+	fallback 区。真实内容与当前状态仍通过 DE/WS 的 diff 列表恢复合并；**不得把 diff 内容快照写入 AG payload**。
+	存储位置固定为 app data
+下的 `workspace.db`，不随 workspace 目录移动；迁移/共享字段回写 A-SYS-I-P-01（X-SHARED-001）。
+保留策略按 workspace 软上限 200MB：超限时先把最老代理编辑会话标记 `archived=true`，不做无限保留。
+历史列表每个代理编辑会话行提供删除按钮；删除只作用于该会话对应的 `agent_sessions`、`agent_turns`
+与 `agent_turn_payloads` 记录；不得删除 DE `pending_diffs` / `diff_payloads` 等待裁决修改本体。
+删除按钮在代理回合进行中禁用，避免流式回合的异步保存把旧记录写回。
+
+### §3.1 历史持久化数据模型（AG-TURN / AgentSession）
+
+- **`agent_sessions`**：`session_id(PK)`、`workspace_id`、`title`、`mode(edit/build)`、
+  `archived`、`open_index`、`is_active`、`created_at`、`updated_at`、`last_active_at`。
+  该表恢复代理编辑会话标签存在状态、顺序、标题、模式与激活态。
+- **`agent_turns`**：`turn_id(PK)`、`session_id`、`workspace_id`、`rel_path(可空)`、
+  `status(completed/error/cancelled/gate_rejected/draft)`、`payload_ref`、`created_at`、`updated_at`。
+  同一用户消息重试时必须新建 `turn_id`，旧 draft/error 记录保留审计。
+- **`agent_turn_payloads`**：`payload_ref(PK)`、`workspace_id`、`payload_json`、`payload_size`、
+  `created_at`。`payload_json` 为 AG 私有 v1 载荷，不上传云端。
+
+	`payload_json` v1 至少包含：`userMessage`、可空 `assistantMessage`、`toolSummaries[]`、
+	`diffRefs[]`、可空 `failure`、可空 `incompleteReason`。`toolSummaries[]` 只保存名称、入参摘要、
+	结果摘要、状态和 `anchorMessageId`；`diffRefs[]` 只保存 `diffId`、`relPath`、`anchorMessageId`，
+	不保存 before/after/styleOps 等 diff 快照。前端恢复时先拉 `agent_sessions` 元数据，再拉当前激活会话的
+	turns；其他会话点击后按 `session_id` 懒加载。恢复 `diffRefs[]` 时必须按 `diffId` 查询 DE 当前状态：
+	`pending` 可继续裁决，`accepted/rejected/expired` 只读展示，DE 找不到的 diff 只读标记为不可用，不得默认
+	复活为 `pending`。
+	`ag.delete_session(session_id)` 以当前 workspace + 指定会话为边界删除该会话历史记录；成功后前端从
+	历史/标签列表移除该会话，若删除的是活动会话则切换到剩余会话，没有剩余会话时新建空会话并持久化。
+	该命令不触碰 DE/WS 的修改建议状态。
 
 ## §4 工具调用循环（AG-TOOL）
 
@@ -201,7 +251,10 @@ rule_id: BR-AG-STATE-002
 工具调用循环必须满足：模型请求的工具必须在注册清单内且通过权限边界校验方可执行（未注册/越权
 一律拒绝并将拒绝原因回注模型）；执行结果（含失败）回注后继续回合；循环有上限，达上限中止；
 用户可随时中断，中断为终态；**任何文件内容写入意图不得由工具直接落盘，必须产出修改建议走 DE
-diff 路径**（X-FORBID-006）；只读类工具（读文档/搜索）经 WS 且限定 workspace 内（X-FORBID-004）；
+diff 路径**（X-FORBID-006）；只读类工具（读文档/搜索/列块）必须经 AgentReadContext 并限定
+workspace 内（X-FORBID-004）：已打开文档优先读取 OpenDocSnapshot 的 LogicalState，未打开文档才经
+WS/DOC 读取 DiskState；已打开文档快照缺失、版本缺失或锚校验失败时必须拒绝工具结果或阻断回合，
+不得用 DiskState 兜底；
 **文件树结构类工具**（移动/重命名/新建文件夹）不属内容写入，经 WS 命令直接执行、不经 diff，
 **删除类工具须经用户确认后执行**（2026-07-04 人类裁决：整理直接执行，删除有风险须确认）。
 已接线非破坏性结构工具为 `move_doc`（移动/重命名文件）与 `create_folder`（建目录）；二者均限
@@ -216,10 +269,14 @@ rule_id: BR-AG-DATA-001
 主链路: AG-TURN
 域: DATA
 -->
-回合上下文的来源限定为：当前文档内容（经 WS 读取）、REF 注入载荷（@mention 与 ReferencePayload，
-含来源标识）、AST/KB/TPL 本地资产快照（经 REF 显式引用进入；其生成/筛选/管理归各 owner）；
+回合上下文的来源限定为：已打开文档 OpenDocSnapshot（LogicalState）、未打开文档 DiskState 读取结果、
+REF 注入载荷（@mention 与 ReferencePayload，含来源标识）、AST/KB/TPL 本地资产快照（经 REF 显式引用进入；其生成/筛选/管理归各 owner）；
 一切 workspace 内容读取限定 workspace 内（X-FORBID-004）；超出上下文预算时裁剪策略必须确定性且用户显式选定的注入优先保留，裁剪发生时对调用
 可追溯（不静默丢弃显式注入）。预算数值与裁剪算法延实现期标定，本规则锁来源限定与裁剪优先级语义。
+已打开文档读取存在硬优先级：`source=active_editor/active_editor_session/open_editor_session` 的 LogicalState > 未打开文档
+DiskState；任何已打开文档不得从 DiskState 或 loadedContent 旧快照取上下文主事实。ReferencePayload.selection
+必须在发送时按当前 AgentReadContext 校验；无法校验的 selection 只能作为用户原始选区快照呈现，不得作为当前
+文档事实。
 
 ## §5.1 提示词 / 上下文组装架构（AG-TURN，2026-06-12 补 B-1）
 
@@ -238,7 +295,7 @@ rule_id: BR-AG-DATA-001
 |---|---|---|
 | 系统提示词层 | 产品角色定位 + 硬约束边界声明（修改须经 diff 裁决、不得越权落盘、workspace 限界） | 设计锁边界，文本实现期 |
 | 工具/能力定义层 | 可用工具清单与契约（AG-TOOL 注册项投影） | 清单实现期运营 |
-| 上下文注入层 | 来源限定承 BR-AG-DATA-001（显式 @mention 不被静默丢弃）；当前文档为当前轮主事实、记忆/知识为补强层——完整分层与**截断序**见 M-T-02 §2/§5（BR-AG-DATA-005，**当前文档 P0 永不截**） | 顺序设计锁；截断序细化归 M-T-02 |
+| 上下文注入层 | 来源限定承 BR-AG-DATA-001（显式 @mention 不被静默丢弃）；已打开文档以 OpenDocSnapshot LogicalState 为当前轮主事实，记忆/知识为补强层——完整分层与**截断序**见 M-T-02 §2/§5（BR-AG-DATA-005，**当前文档 P0 永不截**） | 顺序设计锁；截断序细化归 M-T-02 |
 | 用户输入层 | 本轮 prompt / 编辑触发上下文 | — |
 
 <!-- RULE
@@ -437,18 +494,23 @@ status: mapped
 - **工具循环**（BR-AG-STATE-002 / SM-AG-02）：未注册/越权工具被拒并回注；循环上限生效；注入写盘
   意图的工具调用不产生直接文件写入（产出 diff 经 DE，G4/G5 与 DE/WS 联合验证）。
 - **上下文限界与裁剪**（BR-AG-DATA-001）：越界读取被拒；裁剪确定性且显式注入优先保留、可追溯。
+  已打开文档覆盖测试必须包含：active live 内容覆盖 `loadedContent`、非激活 open session 内容覆盖 DiskState、
+  标签切换过渡期 active binding 未对齐时读取目标 session LogicalState 且回写旧绑定文档、session 尚未载入时短暂等待、
+  `search_text` 命中未保存 LogicalState、ReferencePayload.selection 失效时不作为当前事实。
 - **辅助回合**（BR-AG-STATE-003 / SM-AG-03）：latest-wins 生效（新请求覆盖旧请求）；辅助续写
   返回 3 候选且 Tab/1/2/3 采纳正确；局部修改支持选区替换与光标插入，多轮仅以上轮候选为基底；
   采纳走 ED 受控接口产生正常脏态；无订阅/断网静默。
 - **历史持久化**（BR-AG-PERSIST-001）：重启后会话历史可恢复；无历史内容网络上行（可经网络核验）。
+  错误、取消、门禁拒绝和 draft 均可见；draft 显示“未完成，可重试”，重试复用同一 user message 新建回合。
 - 量化 NFR（首 token 延迟、补全延迟、节流参数）延 G5 标定（AG-05）。
 
 ## §10 技术债务与盲区（诚实声明）
 
 - **工具注册清单与权限分级的具体内容**（AG-02 余项）：校验机制与写盘禁令已锁，清单/分级延实现期
   运营配置，写盘类工具的 diff 化适配与 DE G2 联合。
-- **回合历史扩展表列定义**（AG-01 余项）：原则已锁（本地/可恢复/不上云），列定义进入实现前与
-  WS/SYS 联合敲定并回写 A-SYS-I-P-01。
+- **历史后台压缩策略**：200MB 软上限、软归档与单会话删除已锁；后台压缩策略后续按数据库体积表现再定。
+- **已打开非激活文档样式类自动应用**：文本/块替换由 ED session 事务承接；StyleOp 若缺少无 ProseMirror
+  runtime 的可逆事务实现，必须让 DiffCard 失效并记录债务，不能降级为 DiskState 应用。
 - **节流与成本参数**（AG-03 余项）：机制已锁，数值延 G5 标定。
 - **构建移交/回落**（AG-04）：与 CBT 的状态机对接联合 CBT G2，本文不预定义接管协议。
 - ~~单文档回合的跨文档产出边界待裁定~~ **已补（B-4，2026-06-12）→ 2026-07-04 再裁：单文档铁律废止，现行边界见 BR-AG-DATA-003**。原 B-4 结论（限当前文档、
@@ -481,6 +543,7 @@ status: mapped
 | 2026-07-16 | v2.3 | 细化 AG-ASSIST：辅助续写改为 3 候选，latest-wins 覆盖旧请求；局部修改光标态为插入，多轮只传上一轮候选结果与新指令；候选呈现归 ED 装饰层/overlay 语义，结果返回与采纳前校验文档/block/字符锚，每次真实模型调用前均经服务端或网关 gate |
 | 2026-07-16 | v2.4 | 补充 AG-ASSIST 前端触发与定位约束：快捷键需在编辑器宿主/窗口 capture 阶段兜底拦截并读取当前 ED 上下文；候选 overlay 锚点按编辑纸张可视区钳制，避免快捷键被外层事件路径吞掉或弹窗错位 |
 | 2026-07-16 | v2.5 | 修正局部修改弹窗激活态快捷键语义：再次触发 `Cmd/Ctrl+K` 为放弃本次修改并关闭弹窗，不重开目标、不发起新请求 |
+| 2026-07-18 | v2.17 | 加固已打开文档读取门禁：AG 回合与只读工具统一使用 AgentReadContext；OpenDocSnapshot LogicalState 覆盖 active/open session，未打开文档才读取 DiskState；ReferencePayload.selection 发送时校验 |
 | 2026-07-16 | v2.6 | 补齐 Agent 文件整理结构工具契约：`move_doc`/`create_folder` 作为 StructureWrite 工具经 WS 边界直接执行并回注；内容修改继续唯一走 `propose_edit`→DE；删除类工具等待用户确认链路，不注册给模型 |
 | 2026-07-16 | v2.7 | 续修 AG-ASSIST 技术约束：默认 450ms 防抖、严格 3 候选、触发锚前后文指纹校验、overlay 键盘焦点/输入法保护，以及前端终态回写 SM-AG-03 |
 | 2026-07-16 | v2.8 | 明确 Assist 提示词分离：辅助续写与局部修改必须按 assist_kind 使用不同 system prompt，Agent 编辑继续使用 `SYSTEM_PROMPT_CHAT` |
@@ -488,6 +551,8 @@ status: mapped
 | 2026-07-16 | v2.10 | 修正 AG-ASSIST 右侧边界：视觉边界叠加 editor-host/center 可见右边界，辅助续写靠右时提前切换 end 对齐，避免被右侧代理编辑面板遮挡 |
 | 2026-07-16 | v2.11 | 补充 AG-ASSIST 交互锚生命周期：浮层打开后点击外部、移动光标或改变选区即视为用户放弃，关闭浮层并丢弃已返回/后续返回内容；用户放弃回写 dismiss，结构定位失效回写 anchor_lost |
 | 2026-07-16 | v2.12 | 修正 AG-ASSIST 缩放定位模型：视觉锚跟随缩放后的光标/选区，浮层布局边界改为未缩放的 editor-paper/editor-host 可视区，滚动/缩放/resize 后重算位置 |
+| 2026-07-17 | v2.13 | 闭合 BR-AG-PERSIST-001 具体模型：新增 TERM-AG-009 代理编辑会话；锁定 completed/error/cancelled/gate_rejected/draft 全状态保留、激活会话 eager-load 其余懒加载、工具摘要只读、Diff 引用不存快照、app data workspace.db 存储与 200MB 软归档 |
+| 2026-07-18 | v2.16 | 补齐用户删除历史会话约束：历史列表每个会话行提供删除按钮，`ag.delete_session(session_id)` 仅删除当前 workspace 指定会话的 AG 会话/回合/payload 持久化记录，不删除 DE pending diff 本体；代理回合进行中禁用删除以避免异步保存回写 |
 | 2026-07-16 | v2.13 | 修正 AG-ASSIST 稳定定位模型：撤销运行时 DOM 测量反向驱动状态，改为静态尺寸估算 + 滚动/缩放/resize 简单重定位，优先保证浮层稳定显示 |
 | 2026-07-16 | v2.14 | 修正 AG-ASSIST 辅助续写失败态：候选不足 3 条不展示半候选、不允许采纳，但保留轻量空态，避免生成失败被误认为快捷键无效 |
 | 2026-07-17 | v2.15 | 收敛 AG-ASSIST 唯一实现映射链：Editor、assistStore、agService、后端 request_assist、overlay 均须承接规则；failure_reason 不得在前端链路被吞掉 |

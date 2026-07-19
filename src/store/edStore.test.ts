@@ -71,6 +71,48 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
     expect(edStore.getSnapshot().editFormat).toBe("text");
   });
 
+  it("getOpenSnapshots 可显式标识 active_editor_session source", () => {
+    edStore.loadDoc("a.md", "A", 1);
+    edStore.loadDoc("b.md", "B", 2);
+    edStore.setActivePath("a.md");
+
+    expect(edStore.getOpenSnapshots("active_editor_session")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relPath: "a.md", source: "active_editor_session" }),
+      expect.objectContaining({ relPath: "b.md", source: "open_editor_session" }),
+    ]));
+  });
+
+  it("restoreSnapshots：按打开标签当前路径恢复 activePath 并推进 loadSeq", () => {
+    edStore.restoreSnapshots([
+      {
+        relPath: "a.md",
+        content: "A",
+        editFormat: "text",
+        source: "open_editor_session",
+        dirty: false,
+        sessionVersion: 1,
+        contentHash: "ha",
+        capturedAt: 1,
+      },
+      {
+        relPath: "b.md",
+        content: "B",
+        editFormat: "text",
+        source: "open_editor_session",
+        dirty: true,
+        sessionVersion: 3,
+        contentHash: "hb",
+        capturedAt: 2,
+      },
+    ], "b.md");
+
+    const s = edStore.getSnapshot();
+    expect(s.openPath).toBe("b.md");
+    expect(s.loadedContent).toBe("B");
+    expect(s.loadSeq).toBe(1);
+    expect(s.sessions["b.md"]).toMatchObject({ tabState: "dirty", sessionVersion: 3, contentHash: "hb" });
+  });
+
   it("closeSession 销毁会话；关活动会话则置空活动", () => {
     edStore.loadDoc("a.md", "A", 1);
     edStore.loadDoc("b.md", "B", 2);

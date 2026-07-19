@@ -8,14 +8,17 @@ import { applyGreenReview, type GreenReviewValue } from "./extensions/DiffDecora
 import { edStore, useEdStore, type EditFormat } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore } from "../../store/deStore";
 import { assistStore, type AssistTarget } from "../../store/assistStore";
-import { saveDocument, saveDocxDocument } from "../../services/edService";
+import { makePersistedSnapshot, persistSessionSnapshot, saveDocument, saveDocxDocument } from "../../services/edService";
 import {
   registerEditor,
+  bindActiveEditorDocument,
+  clearActiveEditorBinding,
   getSelectionRef,
   getCursorRef,
   getActiveBlockSnapshotById,
   locateBlock,
   applyEditOps,
+  isActiveEditorBoundTo,
   writeSelectionRefData,
 } from "../../services/edLocate";
 import { applyStyleOps } from "../../services/edStyleOps";
@@ -78,6 +81,30 @@ function serialize(
 ): string {
   if (fmt === "html" || fmt === "html_file") return editor.getHTML();
   return editor.getText({ blockSeparator: "\n" });
+}
+
+let sessionSnapshotPersistTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+function isDirtySessionState(tabState: string): boolean {
+  return tabState === "dirty" || tabState === "pending_diff" || tabState === "saving";
+}
+
+function persistEditorSessionSnapshot(path: string): void {
+  const sess = edStore.getSnapshot().sessions[path];
+  if (!sess || sess.content === null) return;
+  void persistSessionSnapshot(
+    makePersistedSnapshot(path, sess.content, sess.editFormat, isDirtySessionState(sess.tabState), sess.sessionVersion),
+  ).catch((e) => {
+    console.error(`ed session snapshot persist failed ${String(e)}`);
+  });
+}
+
+function scheduleEditorSessionSnapshotPersist(path: string): void {
+  if (sessionSnapshotPersistTimer) globalThis.clearTimeout(sessionSnapshotPersistTimer);
+  sessionSnapshotPersistTimer = globalThis.setTimeout(() => {
+    sessionSnapshotPersistTimer = null;
+    persistEditorSessionSnapshot(path);
+  }, 500);
 }
 
 function currentBlockIds(editor: NonNullable<ReturnType<typeof useEditor>>): string[] {
@@ -418,8 +445,13 @@ export function Editor() {
   const editor = useEditor({
     extensions: buildEditorExtensions(),
     content: SEED_CONTENT,
-    onUpdate: () => {
+    onUpdate: ({ editor: activeEditor }) => {
+      const ed = edStore.getSnapshot();
+      if (ed.openPath) {
+        edStore.updateContent(ed.openPath, serialize(activeEditor, ed.editFormat, ed.openPath));
+      }
       edStore.markDirty();
+      if (ed.openPath) scheduleEditorSessionSnapshotPersist(ed.openPath);
       if (assistStore.getSnapshot().kind !== "none") finishCurrentAssist("dismiss");
     },
     editorProps: {
@@ -589,10 +621,14 @@ export function Editor() {
     if (prev && prev !== openPath) {
       const prevSess = edStore.getSnapshot().sessions[prev];
       if (prevSess) edStore.updateContent(prev, serialize(editor, prevSess.editFormat, prev));
+      persistEditorSessionSnapshot(prev);
       if (paperRef.current) scrollMemo.set(prev, paperRef.current.scrollTop);
     }
     lastPathRef.current = openPath;
-    if (!openPath || loadedContent === null) return;
+    if (!openPath || loadedContent === null) {
+      clearActiveEditorBinding();
+      return;
+    }
     if (editFormat === "html" || editFormat === "html_file") {
       // docx 编辑链 / .html 独立文件（PI-ED-13）：loadedContent 为 HTML，用 generateJSON 按 HTML 解析为
       // ProseMirror JSON；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析。
@@ -602,6 +638,7 @@ export function Editor() {
       // md/txt/纯文本：按行装载忠实呈现（裁定 B，2026-07-03——不经 markdown 解析，缩进/语法字符原样）。
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
     }
+    bindActiveEditorDocument({ relPath: openPath, loadSeq, editFormat });
     // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开分页，md/纯文本关（人类决策 2026-07-02）。
     // 纸张几何取该文档视图偏好（PI-ED-06）。纯呈现层——不触发脏态（仅 setMeta，docChanged=false）。
     if (editFormat === "html" && openPath) {
@@ -628,6 +665,7 @@ export function Editor() {
 
   const saveCurrent = async () => {
     if (!editor) return;
+    if (!isActiveEditorBoundTo(openPath, loadSeq, editFormat)) return;
     const saveSerialized = async (override = false) => {
       if (editFormat === "html") {
         return saveDocxDocument(serialize(editor, "html", openPath), override);
@@ -677,7 +715,9 @@ export function Editor() {
   // 不是"DisplayState 变化触发 LogicalState"。
   useEffect(() => {
     if (!editor) return;
-    const open = edStore.getSnapshot().openPath;
+    const ed = edStore.getSnapshot();
+    const open = ed.openPath;
+    if (!isActiveEditorBoundTo(open, ed.loadSeq, ed.editFormat)) return;
     for (const d of deStore.getSnapshot().diffs) {
       const hasStyleOps = Boolean(d.styleOpsPayload?.length);
       if (d.relPath !== open || d.state !== "pending" || d.draftApplied || d.draftSaved) continue;
@@ -718,7 +758,7 @@ export function Editor() {
       const gr = toGreenReview(d.state);
       if (!gr || d.relPath !== open || d.draftSaved) continue;
       if (d.blockId && d.draftApplied) {
-        map.set(d.blockId, isSyntheticAfter(d.after) ? gr : { state: gr, after: d.after });
+        map.set(d.blockId, gr);
         continue;
       }
       if (d.draftApplied) {
@@ -726,7 +766,7 @@ export function Editor() {
       }
     }
     applyGreenReview(editor.view, map);
-  }, [editor, diffs, editFormat, tabState]);
+  }, [editor, diffs, editFormat, tabState, openPath, loadSeq]);
 
   /**
    * @GOV

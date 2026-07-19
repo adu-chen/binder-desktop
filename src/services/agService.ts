@@ -1,9 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { agStore } from "../store/agStore";
-import { edStore } from "../store/edStore";
-import { deStore } from "../store/deStore";
-import { getActiveBlockSnapshotByIndex, getActiveDocumentContent } from "./edLocate";
+import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView } from "../store/agStore";
+import { edStore, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
+import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
+import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditorBinding } from "./edLocate";
 import { loadDocs } from "./wsService";
+import { applyOpenSessionDiff, loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
 import type { StyleOp } from "./edStyleOps";
 
@@ -34,7 +35,10 @@ interface AgentDiffProjection {
   before_text: string;
   after_text: string;
   location_label: string;
-  draft_mode: "current_editor" | "background";
+  draft_mode: "current_editor" | "open_session" | "background";
+  snapshot_source: "active_editor" | "active_editor_session" | "open_editor_session" | "disk_snapshot";
+  base_session_version?: number | null;
+  base_content_hash?: string | null;
   style_ops?: unknown;
 }
 
@@ -69,7 +73,16 @@ function parseDiffProjectionResult(result: string): AgentDiffProjection | null {
       before_text: p.before_text,
       after_text: p.after_text,
       location_label: p.location_label,
-      draft_mode: p.draft_mode === "background" ? "background" : "current_editor",
+      draft_mode: p.draft_mode === "open_session" ? "open_session" : p.draft_mode === "background" ? "background" : "current_editor",
+      snapshot_source: p.snapshot_source === "active_editor_session"
+        ? "active_editor_session"
+        : p.snapshot_source === "open_editor_session"
+          ? "open_editor_session"
+          : p.snapshot_source === "disk_snapshot"
+            ? "disk_snapshot"
+            : "active_editor",
+      base_session_version: typeof p.base_session_version === "number" ? p.base_session_version : null,
+      base_content_hash: typeof p.base_content_hash === "string" ? p.base_content_hash : null,
       style_ops: p.style_ops,
     };
   } catch {
@@ -120,6 +133,9 @@ export interface DocBlock {
 }
 
 let dseq = 0;
+const ACTIVE_SNAPSHOT_WAIT_MS = 800;
+const ACTIVE_SNAPSHOT_POLL_MS = 25;
+
 /** 经统一 dispatch 信封调命令（非流式），PI-AG-09G。 */
 async function dispatchCall<T>(command: string, params: Record<string, unknown>): Promise<T> {
   const request = { command, correlation_id: `agd-${Date.now()}-${(dseq += 1)}`, params };
@@ -131,8 +147,502 @@ async function dispatchCall<T>(command: string, params: Record<string, unknown>)
 
 /** 列指定文档的块（ag.list_blocks），供块级引用选择。 */
 export async function listDocBlocks(relPath: string): Promise<DocBlock[]> {
-  const r = await dispatchCall<{ blocks: DocBlock[] }>("ag.list_blocks", { relPath });
+  const openDocSnapshots = await collectOpenDocSnapshotsReady();
+  const r = await dispatchCall<{ blocks: DocBlock[] }>("ag.list_blocks", { relPath, openDocSnapshots });
   return r.blocks;
+}
+
+function snapshotError(code: string, message: string) {
+  return { code, message, retriable: true };
+}
+
+function isActiveSessionLoading(e: unknown): boolean {
+  const code = (e as { code?: string })?.code;
+  return code === "AG_ACTIVE_SESSION_LOADING";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+function bindingMatches(
+  binding: ReturnType<typeof getActiveEditorBinding>,
+  relPath: string | null,
+  loadSeq: number,
+  editFormat: EditFormat,
+): boolean {
+  return Boolean(
+    relPath &&
+    binding &&
+    binding.relPath === relPath &&
+    binding.loadSeq === loadSeq &&
+    binding.editFormat === editFormat,
+  );
+}
+
+function flushBoundActiveEditor(ed = edStore.getSnapshot()): void {
+  const binding = getActiveEditorBinding();
+  if (!binding || bindingMatches(binding, ed.openPath, ed.loadSeq, ed.editFormat)) return;
+  const boundContent = getActiveDocumentContent(binding.editFormat);
+  if (boundContent !== null) edStore.updateContent(binding.relPath, boundContent);
+}
+
+interface ActiveDocTarget {
+  relPath: string | null;
+  loadSeq: number;
+  editFormat: EditFormat;
+}
+
+export function collectOpenDocSnapshots(target?: ActiveDocTarget): OpenDocSnapshot[] {
+  const ed = edStore.getSnapshot();
+  const activeTarget = target ?? { relPath: ed.openPath, loadSeq: ed.loadSeq, editFormat: ed.editFormat };
+  if (!activeTarget.relPath) return edStore.getOpenSnapshots("active_editor_session");
+
+  flushBoundActiveEditor(ed);
+
+  let latest = edStore.getSnapshot();
+  const binding = getActiveEditorBinding();
+  if (bindingMatches(binding, activeTarget.relPath, activeTarget.loadSeq, activeTarget.editFormat)) {
+    const activeContent = getActiveDocumentContent(activeTarget.editFormat);
+    if (activeContent === null) {
+      throw snapshotError("AG_ACTIVE_SNAPSHOT_REQUIRED", "当前打开文档无法序列化，已阻断代理回合");
+    }
+    edStore.updateContent(activeTarget.relPath, activeContent);
+    return edStore.getOpenSnapshots();
+  }
+
+  latest = edStore.getSnapshot();
+  const activeSession = latest.sessions[activeTarget.relPath];
+  if (!activeSession || activeSession.content === null) {
+    throw snapshotError("AG_ACTIVE_SESSION_LOADING", "当前文档 LogicalState 正在载入，请稍候");
+  }
+
+  // 切换/启动恢复期间，目标文档的 LogicalState 可能已经在 EditSession 中就绪，
+  // 但 TipTap 显示绑定尚未完成。AG 读取逻辑态，不以显示态渲染完成作为前提。
+  return edStore.getOpenSnapshots("active_editor_session");
+}
+
+async function collectOpenDocSnapshotsReady(target?: ActiveDocTarget): Promise<OpenDocSnapshot[]> {
+  const startedAt = Date.now();
+  for (;;) {
+    try {
+      return collectOpenDocSnapshots(target);
+    } catch (e) {
+      if (!isActiveSessionLoading(e) || Date.now() - startedAt >= ACTIVE_SNAPSHOT_WAIT_MS) throw e;
+      await delay(ACTIVE_SNAPSHOT_POLL_MS);
+    }
+  }
+}
+
+interface AgentSessionDto {
+  session_id: string;
+  title: string;
+  mode: AgMode;
+  archived: boolean;
+  open_index: number;
+  is_active: boolean;
+  created_at: number;
+  updated_at: number;
+  last_active_at?: number | null;
+}
+
+interface AgentSessionsResponse {
+  sessions: AgentSessionDto[];
+  active_session_id?: string | null;
+}
+
+interface PersistedChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  parts?: MessageContentPart[];
+  streaming?: boolean;
+  error?: boolean;
+}
+
+interface AgentTurnPayloadV1 {
+  version: 1;
+  userMessage: PersistedChatMessage;
+  assistantMessage?: PersistedChatMessage;
+  toolSummaries: { id: string; name: string; inputSummary?: string; resultSummary?: string; state: string; anchorMessageId?: string }[];
+  diffRefs: { diffId: string; relPath: string; anchorMessageId?: string }[];
+  failure?: { code: string; message: string; retriable: boolean };
+  incompleteReason?: "stream_interrupted" | "app_closed";
+}
+
+interface AgentTurnDto {
+  turn_id: string;
+  session_id: string;
+  rel_path?: string | null;
+  status: AgentTurnStatus;
+  payload: AgentTurnPayloadV1;
+  created_at: number;
+  updated_at: number;
+}
+
+function toSession(dto: AgentSessionDto): AgSession {
+  return {
+    id: dto.session_id,
+    title: dto.title || "新对话",
+    mode: dto.mode === "build" ? "build" : "edit",
+    messages: [],
+    toolCalls: [],
+    createdAt: dto.created_at,
+    archived: dto.archived,
+    turnsLoaded: false,
+  };
+}
+
+function serializeMessage(message: ChatMessage | PersistedChatMessage): PersistedChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    parts: message.parts,
+    streaming: false,
+    error: message.error,
+  };
+}
+
+function messageFromPersisted(message: PersistedChatMessage, turn: AgentTurnDto): ChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    parts: message.parts,
+    streaming: false,
+    error: message.error,
+    turnId: turn.turn_id,
+    relPath: turn.rel_path ?? null,
+    turnStatus: turn.status,
+  };
+}
+
+function turnFailureMessage(turn: AgentTurnDto): ChatMessage | null {
+  const failure = turn.payload.failure;
+  if (!failure && turn.status === "draft") return null;
+  const content =
+    failure?.message ??
+    (turn.status === "gate_rejected"
+      ? "门禁拒绝：本次调用未执行。"
+      : turn.status === "cancelled"
+        ? "本回合已取消。"
+        : "本回合未正常完成。");
+  return {
+    id: `hist-${turn.turn_id}-${turn.status}`,
+    role: "assistant",
+    content,
+    error: turn.status === "error" || turn.status === "gate_rejected",
+    turnId: turn.turn_id,
+    relPath: turn.rel_path ?? null,
+    turnStatus: turn.status,
+  };
+}
+
+function normalizeToolState(state: string): ToolCallView["state"] {
+  if (
+    state === "pending" ||
+    state === "executing" ||
+    state === "done" ||
+    state === "awaiting_confirmation" ||
+    state === "failed" ||
+    state === "skipped"
+  ) {
+    return state;
+  }
+  return "skipped";
+}
+
+function appendToolToMessage(messages: ChatMessage[], anchorMessageId: string, tool: ToolCallView): boolean {
+  const index = messages.findIndex((m) => m.id === anchorMessageId);
+  if (index < 0) return false;
+  const message = messages[index];
+  messages[index] = { ...message, toolCalls: [...(message.toolCalls ?? []), tool] };
+  return true;
+}
+
+function projectTurns(turns: AgentTurnDto[]): { messages: ChatMessage[]; toolCalls: ToolCallView[] } {
+  const messages: ChatMessage[] = [];
+  const toolCalls: ToolCallView[] = [];
+  for (const turn of turns) {
+    messages.push(messageFromPersisted(turn.payload.userMessage, turn));
+    let assistantAnchor: string | undefined;
+    if (turn.payload.assistantMessage) {
+      const assistant = messageFromPersisted(turn.payload.assistantMessage, turn);
+      assistantAnchor = assistant.id;
+      messages.push(assistant);
+    } else {
+      const fallback = turnFailureMessage(turn);
+      if (fallback) {
+        assistantAnchor = fallback.id;
+        messages.push(fallback);
+      }
+    }
+    for (const t of turn.payload.toolSummaries ?? []) {
+      const anchorMessageId = t.anchorMessageId ?? assistantAnchor;
+      const tool: ToolCallView = {
+        id: `${turn.turn_id}-${t.id}`,
+        name: t.name,
+        state: normalizeToolState(t.state),
+        detail: t.resultSummary ?? t.inputSummary,
+        readonly: true,
+        turnId: turn.turn_id,
+        anchorMessageId,
+      };
+      if (!anchorMessageId || !appendToolToMessage(messages, anchorMessageId, tool)) {
+        toolCalls.push(tool);
+      }
+    }
+  }
+  return { messages, toolCalls };
+}
+
+interface TurnDiffRef {
+  diffId: string;
+  relPath: string;
+  sessionId: string;
+  turnId: string;
+  anchorMessageId?: string;
+  createdAt: number;
+}
+
+function collectTurnDiffRefs(turns: AgentTurnDto[]): TurnDiffRef[] {
+  const refs: TurnDiffRef[] = [];
+  for (const turn of turns) {
+    const fallbackAnchor = turn.payload.assistantMessage?.id;
+    for (const d of turn.payload.diffRefs ?? []) {
+      refs.push({
+        diffId: d.diffId,
+        relPath: d.relPath,
+        sessionId: turn.session_id,
+        turnId: turn.turn_id,
+        anchorMessageId: d.anchorMessageId ?? fallbackAnchor,
+        createdAt: turn.created_at,
+      });
+    }
+  }
+  return refs;
+}
+
+function diffStateFromStatus(status: DiffDetailDto["status"]): DiffCardState {
+  switch (status) {
+    case "accepted":
+      return "accepted";
+    case "rejected":
+      return "rejected";
+    case "expired":
+      return "expired";
+    case "pending":
+      return "pending";
+  }
+}
+
+function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<DiffView> {
+  const projection = detail.projection;
+  const styleOpsPayload = parseStyleOps(projection?.style_ops);
+  return {
+    sessionId: ref.sessionId,
+    turnId: ref.turnId,
+    anchorMessageId: ref.anchorMessageId,
+    createdAt: detail.created_at ?? ref.createdAt,
+    blockId: projection?.block_id ?? "",
+    blockIndex: projection?.block_index ?? null,
+    relPath: detail.target?.rel_path ?? ref.relPath,
+    locationLabel: projection?.location_label ?? "历史修改建议",
+    patchKind: projection?.patch_kind,
+    draftMode: projection?.draft_mode,
+    snapshotSource: projection?.snapshot_source,
+    baseSessionVersion: projection?.base_session_version ?? undefined,
+    baseContentHash: projection?.base_content_hash ?? undefined,
+    title: `历史修改建议 ${detail.target?.rel_path ?? ref.relPath}`,
+    before: projection?.before_text ?? "",
+    after: projection?.after_text ?? "",
+    state: diffStateFromStatus(detail.status),
+    readonly: detail.status !== "pending",
+    styleOps: styleOpsPayload.length ? styleOpsPayload.map(summarizeStyleOp) : undefined,
+    styleOpsPayload: styleOpsPayload.length ? styleOpsPayload : undefined,
+  };
+}
+
+function unavailableDiff(ref: TurnDiffRef): DiffView {
+  return {
+    diffId: ref.diffId,
+    sessionId: ref.sessionId,
+    turnId: ref.turnId,
+    anchorMessageId: ref.anchorMessageId,
+    createdAt: ref.createdAt,
+    blockId: "",
+    relPath: ref.relPath,
+    title: `历史修改建议不可用 ${ref.relPath}`,
+    before: "",
+    after: "",
+    state: "error",
+    errorCode: "DE_DIFF_UNAVAILABLE",
+    readonly: true,
+  };
+}
+
+async function hydrateDiffRefsForTurns(turns: AgentTurnDto[]): Promise<void> {
+  const refs = collectTurnDiffRefs(turns);
+  if (!refs.length) return;
+  const details = await loadDiffDetails(refs.map((r) => r.diffId)).catch((e) => {
+    console.error(`de.list_diffs by ids failed ${JSON.stringify(e)}`);
+    return [] as DiffDetailDto[];
+  });
+  const detailById = new Map(details.map((d) => [d.diff_id, d]));
+  const existing = new Set(deStore.getSnapshot().diffs.map((d) => d.diffId));
+  for (const ref of refs) {
+    const detail = detailById.get(ref.diffId);
+    if (!detail) {
+      if (existing.has(ref.diffId)) {
+        deStore.attachMeta(ref.diffId, {
+          sessionId: ref.sessionId,
+          turnId: ref.turnId,
+          anchorMessageId: ref.anchorMessageId,
+          createdAt: ref.createdAt,
+        });
+      } else {
+        existing.add(ref.diffId);
+        deStore.addDiff(unavailableDiff(ref));
+      }
+      continue;
+    }
+    const patch = hydratedDiffPatch(ref, detail);
+    if (existing.has(ref.diffId)) {
+      deStore.attachMeta(ref.diffId, patch);
+    } else {
+      existing.add(ref.diffId);
+      deStore.addDiff({ diffId: ref.diffId, ...patch } as DiffView);
+    }
+  }
+}
+
+export async function persistAgentSessionsMetadata(): Promise<void> {
+  const { sessions, activeSessionId } = agStore.getSnapshot();
+  await Promise.all(
+    sessions.map((s, index) =>
+      dispatchCall("ag.save_session", {
+        sessionId: s.id,
+        title: s.title,
+        mode: s.mode,
+        archived: s.archived,
+        openIndex: index,
+        isActive: s.id === activeSessionId,
+      }).catch((e) => console.error(`ag.save_session failed ${JSON.stringify(e)}`)),
+    ),
+  );
+}
+
+export async function ensureAgentSessionTurns(sessionId: string): Promise<void> {
+  const session = agStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (!session || session.turnsLoaded) return;
+  const turns = await dispatchCall<AgentTurnDto[]>("ag.list_turns", { sessionId });
+  const projected = projectTurns(turns);
+  await hydrateDiffRefsForTurns(turns);
+  agStore.hydrateSessionTurns(sessionId, projected.messages, projected.toolCalls);
+}
+
+export async function hydrateAgentHistory(): Promise<void> {
+  try {
+    const res = await dispatchCall<AgentSessionsResponse>("ag.list_sessions", {});
+    if (!res.sessions.length) {
+      agStore.reset();
+      await persistAgentSessionsMetadata();
+      return;
+    }
+    await loadPersistedDiffs();
+    agStore.hydrateSessions(res.sessions.map(toSession), res.active_session_id ?? undefined);
+    await ensureAgentSessionTurns(agStore.getSnapshot().activeSessionId);
+  } catch (e) {
+    console.error(`ag.list_sessions failed ${JSON.stringify(e)}`);
+    agStore.reset();
+  }
+}
+
+export function newAgentSession(): string {
+  const id = agStore.newSession();
+  void persistAgentSessionsMetadata();
+  return id;
+}
+
+export function switchAgentSession(id: string): void {
+  agStore.switchSession(id);
+  void ensureAgentSessionTurns(id);
+  void persistAgentSessionsMetadata();
+}
+
+export function closeAgentSession(id: string): void {
+  agStore.closeSession(id);
+  void persistAgentSessionsMetadata();
+}
+
+export function setAgentMode(mode: AgMode): void {
+  agStore.setMode(mode);
+  void persistAgentSessionsMetadata();
+}
+
+const turnSaveChain = new Map<string, Promise<void>>();
+
+export async function deleteAgentSession(sessionId: string): Promise<void> {
+  if (agStore.getSnapshot().sending) {
+    throw { code: "AG_TURN_ACTIVE", message: "代理回合进行中，暂不能删除会话" };
+  }
+  await Promise.allSettled([...turnSaveChain.values()]);
+  await dispatchCall("ag.delete_session", { sessionId });
+  turnSaveChain.clear();
+  agStore.deleteSession(sessionId);
+  await persistAgentSessionsMetadata();
+}
+
+function enqueueTurnSave(
+  sessionId: string,
+  turnId: string,
+  status: AgentTurnStatus,
+  relPath?: string | null,
+  failure?: { code: string; message: string; retriable: boolean },
+): Promise<void> {
+  const prev = turnSaveChain.get(turnId) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const session = agStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const turnMessages = session.messages.filter((m) => m.turnId === turnId);
+      const user = turnMessages.find((m) => m.role === "user");
+      if (!user) return;
+      const assistants = turnMessages.filter((m) => m.role === "assistant");
+      const assistant =
+        [...assistants].reverse().find((m) => m.content.trim() || m.error) ?? assistants[0];
+      const diffRefs = deStore
+        .getSnapshot()
+        .diffs.filter((d) => d.turnId === turnId)
+        .map((d) => ({
+          diffId: d.diffId,
+          relPath: d.relPath ?? "",
+          anchorMessageId: d.anchorMessageId ?? assistant?.id,
+        }))
+        .filter((d) => d.relPath);
+      const payload: AgentTurnPayloadV1 = {
+        version: 1,
+        userMessage: serializeMessage(user),
+        assistantMessage: assistant ? serializeMessage(assistant) : undefined,
+        toolSummaries: session.toolCalls.filter((t) => t.turnId === turnId).map((t) => ({
+          id: t.id,
+          name: t.name,
+          inputSummary: t.detail,
+          resultSummary: t.state === "done" || t.state === "failed" ? t.detail : undefined,
+          state: t.state,
+          anchorMessageId: t.anchorMessageId ?? assistant?.id,
+        })),
+        diffRefs,
+        failure,
+        incompleteReason: status === "draft" ? "stream_interrupted" : undefined,
+      };
+      await dispatchCall("ag.save_turn", { sessionId, turnId, status, relPath, payload });
+    })
+    .catch((e) => console.error(`ag.save_turn failed ${JSON.stringify(e)}`));
+  turnSaveChain.set(turnId, next);
+  return next;
 }
 
 /**
@@ -258,21 +768,51 @@ export async function startTurn(
   const snap = agStore.getSnapshot();
   const sessionId = snap.activeSessionId;
   const session = snap.sessions.find((s) => s.id === sessionId);
+  const turnId = `t-${Date.now()}-${(seq += 1)}`;
+  const turnEd = edStore.getSnapshot();
+  const turnActiveDocTarget: ActiveDocTarget = {
+    relPath: turnEd.openPath,
+    loadSeq: turnEd.loadSeq,
+    editFormat: turnEd.editFormat,
+  };
+  const turnActiveDocPath = turnActiveDocTarget.relPath ?? undefined;
 
   // 本轮之前的对话历史（PI-AG-09B）：传后端按预算保留最近（drop 最旧）。取本轮 user 入栈前的快照。
   const history = (session?.messages ?? [])
-    .filter((m) => !m.error && m.content.trim())
+    .filter((m) => !m.error && m.turnStatus !== "draft" && m.content.trim())
     .slice(-30)
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      relPath: m.relPath ?? null,
+      turnId: m.turnId ?? null,
+    }));
 
-  agStore.pushMessage(sessionId, { id: uid(), role: "user", content: trimmed, parts: opts?.displayParts });
+  agStore.pushMessage(sessionId, {
+    id: uid(),
+    role: "user",
+    content: trimmed,
+    parts: opts?.displayParts,
+    turnId,
+    relPath: turnActiveDocPath ?? null,
+    turnStatus: "draft",
+  });
   agStore.clearToolCalls(sessionId); // 新回合清空旧工具卡（PI-AG-08D）
   agStore.setSending(true); // 乐观置 true 即时门控防双发；活动/释放由 SM-AG-01 广播投影（Task 2-E）
 
   const assistantId = uid();
-  agStore.pushMessage(sessionId, { id: assistantId, role: "assistant", content: "", streaming: true });
+  agStore.pushMessage(sessionId, {
+    id: assistantId,
+    role: "assistant",
+    content: "",
+    streaming: true,
+    turnId,
+    relPath: turnActiveDocPath ?? null,
+    turnStatus: "draft",
+  });
+  void persistAgentSessionsMetadata();
+  void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
 
-  const turnId = `t-${Date.now()}-${(seq += 1)}`;
   const onEvent = new Channel<AgTurnEvent>();
   // propose_edit 的权威投影来自后端 tool_result.projection；diff_proposed 只负责通知展示。
   const pendingDiffProjections = new Map<string, AgentDiffProjection>();
@@ -285,6 +825,33 @@ export async function startTurn(
       // sending 的释放由 SM-AG-01 终态广播驱动（Completed/TurnError，Task 2-E）；此处仅结束等待。
       resolve();
     };
+    const failStart = (e: unknown) => {
+      const err = e as { code?: string; message?: string };
+      agStore.finishMessage(sessionId, assistantId);
+      agStore.setTurnStatus(sessionId, turnId, err?.code?.includes("GATE") ? "gate_rejected" : "error");
+      agStore.pushMessage(sessionId, {
+        id: uid(),
+        role: "assistant",
+        content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),
+        error: true,
+        turnId,
+        relPath: turnActiveDocPath ?? null,
+        turnStatus: err?.code?.includes("GATE") ? "gate_rejected" : "error",
+      });
+      void enqueueTurnSave(
+        sessionId,
+        turnId,
+        err?.code?.includes("GATE") ? "gate_rejected" : "error",
+        turnActiveDocPath,
+        {
+          code: err?.code ?? "AG_INVOKE_ERROR",
+          message: err?.message ?? String(e),
+          retriable: true,
+        },
+      );
+      agStore.setSending(false);
+      finish();
+    };
 
     onEvent.onmessage = (ev) => {
       switch (ev.type) {
@@ -293,16 +860,34 @@ export async function startTurn(
           break;
         case "done":
           agStore.finishMessage(sessionId, assistantId);
+          agStore.setTurnStatus(sessionId, turnId, ev.stop_reason === "cancelled" ? "cancelled" : "completed");
+          void enqueueTurnSave(
+            sessionId,
+            turnId,
+            ev.stop_reason === "cancelled" ? "cancelled" : "completed",
+            turnActiveDocPath,
+          );
           finish();
           break;
         case "error":
           agStore.finishMessage(sessionId, assistantId);
+          agStore.setTurnStatus(sessionId, turnId, ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error");
           agStore.pushMessage(sessionId, {
             id: uid(),
             role: "assistant",
             content: `[${ev.code}] ${ev.message}`,
             error: true,
+            turnId,
+            relPath: turnActiveDocPath ?? null,
+            turnStatus: ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error",
           });
+          void enqueueTurnSave(
+            sessionId,
+            turnId,
+            ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error",
+            turnActiveDocPath,
+            { code: ev.code, message: ev.message, retriable: ev.retriable },
+          );
           finish();
           break;
         case "diff_proposed": {
@@ -325,7 +910,11 @@ export async function startTurn(
             title = `⚠ 缺少修改载荷，请重试 · ${ev.rel_path}`;
             state = "error";
             errorCode = "DE_DIFF_PROJECTION_MISSING";
-          } else if (projection.patch_kind === "replace_block" && !mappedBlockId) {
+          } else if (
+            projection.patch_kind === "replace_block" &&
+            !mappedBlockId &&
+            typeof projection.block_index !== "number"
+          ) {
             title = `⚠ 缺少精准编辑目标，请复核 · ${ev.rel_path}`;
             state = "error";
             errorCode = "ED_DRAFT_TARGET_MISSING";
@@ -338,23 +927,37 @@ export async function startTurn(
             anchorMessageId: assistantId,
             createdAt: Date.now(),
             blockId: mappedBlockId,
+            blockIndex: projection?.block_index ?? null,
             relPath: ev.rel_path,
             locationLabel: projection?.location_label ?? "未知位置",
             patchKind: projection?.patch_kind,
+            draftMode: projection?.draft_mode,
+            snapshotSource: projection?.snapshot_source,
+            baseSessionVersion: projection?.base_session_version ?? undefined,
+            baseContentHash: projection?.base_content_hash ?? undefined,
             title,
             before: projection?.before_text ?? "",
             after: projection?.after_text ?? "",
             state,
             errorCode,
+            readonly: projection?.draft_mode === "open_session",
             styleOps: styleOpsPayload.length ? styleOpsPayload.map(summarizeStyleOp) : undefined,
             styleOpsPayload: styleOpsPayload.length ? styleOpsPayload : undefined,
           });
+          if (state === "pending" && projection?.draft_mode === "open_session") {
+            void applyOpenSessionDiff(ev.diff_id);
+          }
+          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
         case "tool_request": {
           // 工具卡 executing（PI-AG-08D）。参数摘要作 detail。
           const p = typeof ev.params === "object" && ev.params ? JSON.stringify(ev.params) : "";
-          agStore.addToolCall(sessionId, ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined);
+          agStore.addToolCall(sessionId, ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined, {
+            turnId,
+            anchorMessageId: assistantId,
+          });
+          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
         case "tool_result": {
@@ -367,7 +970,8 @@ export async function startTurn(
           if ((ev.tool_name === "move_doc" || ev.tool_name === "create_folder") && ev.success) {
             void loadDocs();
           }
-          agStore.resolveToolCall(sessionId, ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined);
+          agStore.resolveToolCall(sessionId, ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined, turnId);
+          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
         default:
@@ -375,36 +979,34 @@ export async function startTurn(
       }
     };
 
-    // 当前编辑器打开的文档（P0 主事实，PI-AG-09A）：只读 edStore，不改其状态。
-    const ed = edStore.getSnapshot();
-    const activeDocContent = ed.openPath
-      ? (getActiveDocumentContent(ed.editFormat) ?? ed.loadedContent ?? undefined)
-      : undefined;
-    invoke("ag_start_turn", {
-      turnId,
-      prompt: trimmed,
-      provider: opts?.provider,
-      model: opts?.model,
-      activeDocPath: ed.openPath ?? undefined,
-      activeDocContent,
-      activeDocFormat: ed.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
-      history, // 对话历史（PI-AG-09B，后端按预算保留最近）
-      mentions: references.length ? [] : (opts?.mentions ?? []), // 兼容旧路径；新路径走 references 防重复注入
-      blockRefs: references.length ? [] : (opts?.blockRefs ?? []), // 兼容旧路径；新路径走 references 防重复注入
-      references, // 用户显式 ReferencePayload（A-AG-I-P-01 v1.6）
-      onEvent,
-    }).catch((e: unknown) => {
-      const err = e as { code?: string; message?: string };
-      agStore.finishMessage(sessionId, assistantId);
-      agStore.pushMessage(sessionId, {
-        id: uid(),
-        role: "assistant",
-        content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),
-        error: true,
-      });
-      // 命令级 Err（IPC 传输失败等）可能不发广播：兜底释放 sending，避免输入永久禁用。
-      agStore.setSending(false);
-      finish();
-    });
+    void (async () => {
+      let openDocSnapshots: OpenDocSnapshot[];
+      try {
+        openDocSnapshots = await collectOpenDocSnapshotsReady(turnActiveDocTarget);
+      } catch (e) {
+        failStart(e);
+        return;
+      }
+      const activeSnapshot = turnActiveDocPath
+        ? openDocSnapshots.find((s) => s.relPath === turnActiveDocPath)
+        : undefined;
+      const activeDocContent = activeSnapshot?.content;
+      invoke("ag_start_turn", {
+        turnId,
+        sessionId,
+        prompt: trimmed,
+        provider: opts?.provider,
+        model: opts?.model,
+        activeDocPath: turnActiveDocPath,
+        activeDocContent,
+        activeDocFormat: activeSnapshot?.editFormat ?? turnActiveDocTarget.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
+        openDocSnapshots,
+        history, // 对话历史（PI-AG-09B，后端按预算保留最近）
+        mentions: references.length ? [] : (opts?.mentions ?? []), // 兼容旧路径；新路径走 references 防重复注入
+        blockRefs: references.length ? [] : (opts?.blockRefs ?? []), // 兼容旧路径；新路径走 references 防重复注入
+        references, // 用户显式 ReferencePayload（A-AG-I-P-01 v1.6）
+        onEvent,
+      }).catch(failStart);
+    })();
   });
 }

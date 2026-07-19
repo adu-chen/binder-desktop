@@ -2,8 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { activeSession, agStore } from "./agStore";
 
 beforeEach(() => {
-  // 复位 sending（无 reset API；经投影回到静止态）。
-  agStore.applyTurnState("t", "Completed");
+  agStore.reset();
 });
 
 describe("agStore SM-AG-01 回合投影（Task 2-E · X-FORBID-007）", () => {
@@ -74,6 +73,23 @@ describe("agStore 多标签会话（PI-AG-UI-01，呈现层组织）", () => {
     expect(re.sessions.find((s) => s.id === archived.id)!.archived).toBe(false);
   });
 
+  it("deleteSession 直接移除会话；删除最后一个会自动新建空会话", () => {
+    const first = agStore.getSnapshot().activeSessionId;
+    const second = agStore.newSession();
+    agStore.pushMessage(second, { id: "u2", role: "user", content: "待删除" });
+
+    agStore.deleteSession(first);
+    let snap = agStore.getSnapshot();
+    expect(snap.sessions.map((s) => s.id)).toEqual([second]);
+    expect(snap.activeSessionId).toBe(second);
+
+    agStore.deleteSession(second);
+    snap = agStore.getSnapshot();
+    expect(snap.sessions).toHaveLength(1);
+    expect(snap.sessions[0].messages).toEqual([]);
+    expect(snap.activeSessionId).toBe(snap.sessions[0].id);
+  });
+
   it("setMode 作用于活动会话（编辑/构建互不影响其他会话）", () => {
     const a = agStore.newSession();
     agStore.setMode("build");
@@ -91,5 +107,39 @@ describe("agStore 多标签会话（PI-AG-UI-01，呈现层组织）", () => {
     expect(sa().toolCalls[0].state).toBe("done");
     agStore.clearToolCalls(a);
     expect(sa().toolCalls.length).toBe(0);
+  });
+
+  it("hydrateSessions + hydrateSessionTurns 支持历史元数据先恢复、内容后加载", () => {
+    agStore.hydrateSessions(
+      [
+        { id: "s1", title: "历史", mode: "edit", messages: [], toolCalls: [], createdAt: 1, archived: false, turnsLoaded: false },
+        { id: "s2", title: "归档", mode: "build", messages: [], toolCalls: [], createdAt: 2, archived: true, turnsLoaded: false },
+      ],
+      "s1",
+    );
+    expect(agStore.getSnapshot().activeSessionId).toBe("s1");
+    expect(agStore.getSnapshot().sessions[0].turnsLoaded).toBe(false);
+    agStore.hydrateSessionTurns("s1", [{ id: "u", role: "user", content: "继续", turnId: "t", turnStatus: "draft" }], []);
+    const s1 = agStore.getSnapshot().sessions[0];
+    expect(s1.turnsLoaded).toBe(true);
+    expect(s1.messages[0].turnStatus).toBe("draft");
+  });
+
+  it("消息保留 relPath 供后端历史按文档归属分流", () => {
+    const sessionId = agStore.getSnapshot().activeSessionId;
+
+    agStore.pushMessage(sessionId, {
+      id: "u-doc",
+      role: "user",
+      content: "整理当前文档",
+      turnId: "t-doc",
+      relPath: "notes/current.md",
+      turnStatus: "completed",
+    });
+    agStore.setTurnStatus(sessionId, "t-doc", "completed");
+
+    const message = agStore.getSnapshot().sessions[0].messages[0];
+    expect(message.relPath).toBe("notes/current.md");
+    expect(message.turnStatus).toBe("completed");
   });
 });

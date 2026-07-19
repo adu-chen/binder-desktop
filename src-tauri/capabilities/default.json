@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Binder 默认窗口能力（脚手架基线，实现期按模块 command 收紧）",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "dialog:allow-open"
+  ]
 }

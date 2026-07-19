@@ -28,10 +28,14 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 
 | command/事件 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ag.start_turn` | DocRef、prompt、注入引用集（`references` 主通道；旧 `mentions/block_refs` 兼容，可空）、`Channel<AgTurnEvent>` 句柄 | turn_id（SM-AG-01 启动）；流式经 channel 回推（§2.1） | **gate_denied**（无订阅/断网，不可绕过）；组装失败（注入锚失效） | 经门禁→网关；BR-AG-STATE-001/VERIFY-001 |
+| `ag.start_turn` | session_id、DocRef、prompt、已打开文档 `open_doc_snapshots`、注入引用集（`references` 主通道；旧 `mentions/block_refs` 兼容，可空）、`Channel<AgTurnEvent>` 句柄 | turn_id（SM-AG-01 启动）；流式经 channel 回推（§2.1）；后端先落 `draft`，终态更新 status | **gate_denied**（无订阅/断网，不可绕过）；组装失败（注入锚失效）；已打开文档 LogicalState 快照缺失/失效 | 经门禁→网关；BR-AG-STATE-001/VERIFY-001/PERSIST-001 |
 | `ag.cancel_turn` | turn_id | 中断确认（Cancelled 终态，无半落盘）；前端关闭 channel | — | SM-AG-01 cancel |
 | `ag.turn_stream`（`Channel<AgTurnEvent>`） | turn_id、channel（随 start_turn 传入） | AgTurnEvent 六分支回推（§2.1） | 流式错误→Error 分支（统一错误形状） | BR-SYS-STATE-002 三类终态 |
-| `ag.list_turns` | DocRef（可空） | 回合历史列表（agent_turns，A-SYS-I-P-01） | — | BR-AG-PERSIST-001（重启可恢复、不上云） |
+| `ag.list_sessions` | — | 当前 workspace 的代理编辑会话元数据列表；含 activeSessionId | 无 active workspace → 空列表 | BR-AG-PERSIST-001（标签元数据全恢复） |
+| `ag.save_session` | session_id、title、mode、archived、open_index、is_active | ok | 无 active workspace → 错误 | BR-AG-PERSIST-001（标签元数据持久化） |
+| `ag.save_turn` | session_id、turn_id、status、rel_path、AgentTurnPayloadV1 | ok；upsert payload 与 turn 记录 | status 非五枚举值 → 拒绝 | BR-AG-PERSIST-001（完整 payload 由前端 UI 投影回写） |
+| `ag.list_turns` | session_id | 指定代理编辑会话的回合历史列表（按 created_at 升序） | session 不属当前 workspace → 拒绝 | BR-AG-PERSIST-001（内容懒加载） |
+| `ag.delete_session` | session_id | 删除当前 workspace 指定代理编辑会话及其回合 payload 记录；返回删除计数 | 无 active workspace → 错误；代理回合进行中前端禁用 | BR-AG-PERSIST-001（用户删除历史会话） |
 
 > 含修改建议的回合产出：回合内部经 `de.generate_diff` 交 DE（AG 无直接写盘，X-FORBID-006）；
 > 流式仅回显，落盘必经 diff 裁决链。
@@ -69,12 +73,14 @@ pub enum AgTurnEvent {
 #[tauri::command]
 async fn ag_start_turn(
     turn_id: String,
+    session_id: String,
     prompt: String,
     provider: Option<String>,
     model: Option<String>,
     active_doc_path: Option<String>,
     active_doc_content: Option<String>,
     active_doc_format: Option<String>,
+    open_doc_snapshots: Vec<OpenDocSnapshot>,
     history: Vec<HistTurn>,
     mentions: Vec<String>,
     block_refs: Vec<BlockRef>,
@@ -84,6 +90,105 @@ async fn ag_start_turn(
     app: AppHandle,
 ) -> Result<(), IpcError>
 ```
+
+`OpenDocSnapshot` 语义与字段以 A-SYS-I-P-01 §3 为唯一来源，serde 使用 camelCase：
+
+```rust
+struct OpenDocSnapshot {
+    rel_path: String,
+    content: String,
+    edit_format: String,
+    source: String, // active_editor / active_editor_session / open_editor_session
+    dirty: bool,
+    session_version: u64,
+    content_hash: String,
+    captured_at: i64,
+}
+```
+
+`HistTurn` 为历史对话投影，serde 使用 camelCase：
+
+```rust
+struct HistTurn {
+    role: String,
+    content: String,
+    rel_path: Option<String>, // 本历史消息所属文档；缺失时不得当作当前文档事实
+    turn_id: Option<String>,
+}
+```
+
+边界：`history` 不再允许作为裸 `role/content` 事实层输入。AG 后端必须按当前 `active_doc_path`
+分流历史：同 `rel_path` 历史可作为同文档 P1 背景；不同 `rel_path` 或缺失 `rel_path` 的历史默认丢弃，
+仅当本轮用户显式回指历史时，以“其他文档历史”弱提示注入，且不得覆盖当前 `OpenDocSnapshot`
+形成的当前文档事实。
+
+### §2.2 历史恢复接口（BR-AG-PERSIST-001）
+
+历史恢复走 dispatch 信封，属于 workspace 控制态查询/更新：
+
+```typescript
+type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft";
+
+interface AgentSessionDto {
+  session_id: string;
+  title: string;
+  mode: "edit" | "build";
+  archived: boolean;
+  open_index: number;
+  is_active: boolean;
+  created_at: number;
+  updated_at: number;
+  last_active_at?: number | null;
+}
+
+interface AgentTurnDto {
+  turn_id: string;
+  session_id: string;
+  status: AgentTurnStatus;
+  rel_path?: string | null;
+  payload: AgentTurnPayloadV1;
+  created_at: number;
+  updated_at: number;
+}
+
+interface AgentSessionDeleteResult {
+  deleted_sessions: number;
+  deleted_turns: number;
+  deleted_payloads: number;
+}
+```
+
+`ag.list_sessions` 必须返回全部代理编辑会话元数据；前端打开/切换 workspace 后仅 eager-load
+`is_active=true` 的会话 turns，其余会话点击时调用 `ag.list_turns(session_id)` 懒加载。
+`ag.save_session` 用于新建、切换、关闭/归档、标题或模式变更后的元数据持久化。
+`ag.save_turn` 是前端 UI 投影到后端历史 payload 的唯一写入口；原因是完整助手文本、工具摘要与
+Diff 引用在前端流式消费后最完整。`ag_start_turn` 可先创建保底 `draft`，随后前端用同一 `turn_id`
+多次 upsert，终态时写最终 status。
+`ag.delete_session` 只删除当前 workspace 内指定代理编辑会话的 AG 历史记录，不删除 DE `pending_diffs` /
+`diff_payloads`；前端必须在无活动代理回合时调用，成功后从历史/标签列表移除该会话。若删除的是活动
+会话则切换到剩余会话，没有剩余会话时新建空会话并重新持久化元数据。
+
+`AgentTurnPayloadV1` 至少包含：
+
+```typescript
+{
+  version: 1;
+  userMessage: { id: string; role: "user"; content: string; parts?: unknown[] };
+  assistantMessage?: { id: string; role: "assistant"; content: string; error?: boolean; streaming: false };
+  toolSummaries: { id: string; name: string; inputSummary?: string; resultSummary?: string; state: string; anchorMessageId?: string }[];
+  diffRefs: { diffId: string; relPath: string; anchorMessageId?: string }[];
+  failure?: { code: string; message: string; retriable: boolean };
+  incompleteReason?: "app_closed" | "stream_interrupted";
+}
+```
+
+	工具摘要恢复为折叠只读卡，不绑定实时执行态、不允许从历史重新触发；新写入摘要必须携带
+	`anchorMessageId`，恢复时渲染到对应 assistant 消息后方，legacy 缺锚点才进入 fallback。
+	DiffCard 只以 `diffRefs` 与 DE/WS 当前 diff 状态/投影合并展示；新写入 `diffRefs.anchorMessageId`
+	必须指向本轮 assistant 消息，legacy 缺锚点可按 turn 的 assistant message 派生。payload 不得保存
+	diff before/after/styleOps 快照；DE 找不到或已清理的 diff 不得默认恢复为 `pending`，只能只读展示为
+	不可用。
+`draft` 只表示未完成回合；重试时前端复用同一 `userMessage` 内容新建 `turn_id`，不得覆盖旧记录。
 
 `block_refs` 与前端 `SelectionRef` 对齐，serde camelCase：
 
@@ -105,22 +210,40 @@ struct BlockRef {
 当 `references` 非空时，前端不得再把同一引用重复塞入 `mentions/block_refs`；后端保留旧参数仅为兼容
 历史调用。
 
-`active_doc_content` 必须优先取当前 ED 编辑器实时序列化内容；不得用打开时的 `loadedContent` 旧快照作为
-代理回合主事实。该实时快照只可作为 `path == active_doc_path` 的编辑基准；`propose_edit` 指向其他文档时
-必须读取该目标文档自身内容，不得复用当前编辑器快照。当前打开文档缺少实时快照或当前编辑器锚无法定位时，
-不得发出正常 pending `DiffProposed`；前端应投影为 error 卡并阻止进入 ED 草稿链。
+`active_doc_content` 是兼容字段，必须与 `open_doc_snapshots` 中 `source=active_editor` 的同一路径内容一致。
+前端发起代理回合前必须采集全部已打开文档的 OpenDocSnapshot：激活文档取当前 ED 编辑器实时序列化内容；
+已打开非激活文档取 `EditSession.content`、`sessionVersion` 与 `contentHash`。不得用打开时的
+`loadedContent` 旧快照作为代理回合主事实。active 文档读取有两种合法 source：`active_editor`
+表示 ProseMirror 当前绑定已与 `relPath/loadSeq/editFormat` 对齐并完成实时序列化；`active_editor_session`
+表示当前文档的 ED session LogicalState 已存在，但 ProseMirror binding 尚未就绪。后者仍是 LogicalState，
+不是 DisplayState 反向定义。若已打开文档缺少 LogicalState、active live 序列化失败、
+session 版本缺失、内容哈希缺失或当前编辑器锚无法定位，必须阻断本轮代理回合或投 error 卡；
+active binding 尚未完成但目标 session LogicalState 已存在时，不得因此回退 DiskState，也不得阻断本轮；
+应使用 `active_editor_session` 快照进入 AG 读取链。
+不得退回 DiskState 读取。
+
+AG 内部必须建立 `AgentReadContext`：先按 `open_doc_snapshots.rel_path` 命中已打开文档 LogicalState，
+未命中时才读取 DiskState。`ReferencePayload.doc`、`ReferencePayload.selection`、`read_doc`、
+`search_text`、`ag.list_blocks`、`propose_edit` 的目标内容读取全部使用该上下文。`propose_edit`
+指向其他已打开文档时，必须读取该目标文档自身的 OpenDocSnapshot，不得复用当前激活文档快照；指向未打开文档时
+才允许读取目标文档 DiskState。
 
 AgentEdit 对文档内容的读取只有一个运行时投影：`AgentEditableSnapshot`。该投影由 AG 读取层统一产出，
 字段包括 `{rel_path, editable_kind, source, content_format, content, baseline?, blocks[]}`；`blocks[]`
 统一为 `{block_id, block_index, text, marks, block_attrs}`。当前编辑器实时内容、`read_doc`、`search_text`、
 `ag.list_blocks`、`propose_edit`、ReferencePayload.doc 消费 BDocx 时必须复用该投影。BDocx 必须先经
 DOC 编辑链转为 canonical HTML 后投影；原生 `.docx` 不得进入该投影，应返回 `DOC_NOT_BDOCX`。
+HTML 编辑模型不得只识别 `data-block-id`；常见块级标签（如 `p/h1..h6/li/blockquote/pre/div/td/th`）
+即使没有稳定 id，也必须投影为 `block_index`，避免非空 HTML 文档在 AG 侧变成空块。编辑请求中若当前文档非空但
+`blocks[]` 为空，后端必须在模型调用前返回 `AG_ACTIVE_BLOCKS_REQUIRED` 并终止本轮。
 `propose_edit` 的 `block_id` 只能传块列表中 `[id=...]` 的完整不透明 id；纯数字块号必须
 传 `block_index`。后端对数字型 `block_id` 做 `block_index` 兜底，但该兜底只用于防错，不作为推荐协议。
 `propose_edit` 必须声明 `operation`：已有文档局部编辑使用 `replace_block`，并提供
 `block_id/block_index` 与 `new_text`；只有用户明确要求整篇重写时才允许 `replace_document` + `content`；新建文档可兼容旧式
 `content` 创建路径。已有文档若只传裸 `content`，后端必须拒绝并返回 `AG_PRECISE_TARGET_REQUIRED`，
 不得静默生成整篇替换 diff。
+既有文档的 `replace_document` 还必须通过主题/实体身份守卫；若新旧全文重合度极低，返回
+`AG_REPLACE_DOCUMENT_IDENTITY_DRIFT`，视为疑似错文档或历史上下文污染，不生成 diff。
 `propose_edit` 可携带 `style_ops`（StyleOp 数组，schema 见 A-ED-M-T-01 §5.1）：样式类修改必须经该字段
 进入 DE 裁决，不得只用自然语言声明“已加粗/已改样式”。若本轮是编辑意图且当前文档存在，后端必须在
 回合结束前收到成功的 `propose_edit` 并发出 `DiffProposed`；否则回 `Error { code: AG_EDIT_TOOL_REQUIRED }`，
@@ -129,15 +252,21 @@ DOC 编辑链转为 canonical HTML 后投影；原生 `.docx` 不得进入该投
 成功的 `propose_edit` 必须先通过 `ToolResult { tool_name: "propose_edit" }` 返回后端权威
 `DiffProjection` JSON，再发送 `DiffProposed` 通知。`DiffProjection` 至少包含
 `{diff_id, rel_path, patch_kind, block_id?, block_index?, before_text, after_text, location_label,
-draft_mode, style_ops?}`，其中 before/after 必须来自同一 `AgentEditableSnapshot` 的目标块或显式
-`replace_document` 全文基准。前端不得再从 `tool_request.params` 或当前编辑器尾部内容推测 before/after；
+draft_mode, snapshot_source, base_session_version?, base_content_hash?, style_ops?}`，其中 before/after
+必须来自同一 `AgentEditableSnapshot` 的目标块或显式 `replace_document` 全文基准。`draft_mode`
+枚举为 `current_editor / open_session / background`：目标是激活文档时为 `current_editor`；目标是已打开非激活文档时为
+`open_session` 且必须携带 session 基线；目标未打开时为 `background`。前端不得再从 `tool_request.params`
+或当前编辑器尾部内容推测 before/after；
 缺少 `DiffProjection` 时必须投 error 卡（`DE_DIFF_PROJECTION_MISSING`），不进入 ED 草稿链。
 
 **三终态映射**（BR-SYS-STATE-002）：完成 → `Done`；用户中断 → `Done { stop_reason: "cancelled" }`（无半落盘）；错误 → `Error`。
+AG 历史持久化投影：完成→`completed`；`Done(cancelled)`→`cancelled`；门禁拒绝→`gate_rejected`；
+`Error`/模型或工具链错误→`error`；命令发起后未到任一终态即退出/崩溃→保留 `draft`。
 
 **前端消费映射**（PI-AG-10F，`agStore`/`deStore`）：`Chunk`→`appendToMessage`、`ToolRequest`/`ToolResult`→工具卡片；
 成功 `ToolResult(propose_edit).projection`→缓存权威 DiffProjection，随后 `DiffProposed`→`deStore.addDiff`
-（按 projection 建卡并进入 ED 草稿链或 error 卡）；`Done`→`finishMessage`、`Error`→`pushError`。
+（按 projection 建卡并分流：`current_editor` 进入 ED 草稿链，`open_session` 立即执行 ED session
+自动应用事务并禁用卡片裁决，`background` 等待人类接受后落盘，异常则投 error/expired 卡）；`Done`→`finishMessage`、`Error`→`pushError`。
 
 **关联命令形状**（同属契约，前后端对齐）：`ag.cancel_turn(turn_id)`（前端关闭 channel）；产出落
 `de.generate_diff`→`DiffProposed`；当前编辑器草稿路径裁决经 `de.accept_draft_diff`/`de.reject_diff`，
@@ -185,11 +314,11 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ag.list_blocks` | DocRef | 块列表：`{block_id, block_index, text, marks, block_attrs}`；前端边界可映射为 camelCase。`marks` 为 `{type, range:[start,end], attrs}`，range 在块内纯文本平面，与字符锚同基准 | 文档不存在/越界 → WS/DOC 错误透传；原生 docx → `DOC_NOT_BDOCX` | agent 块级引用选择 + 字符级取址基准 + 样式读取（BR-ED-DATA-005 读侧） |
+| `ag.list_blocks` | DocRef、open_doc_snapshots? | 块列表：`{block_id, block_index, text, marks, block_attrs}`；前端边界可映射为 camelCase。`marks` 为 `{type, range:[start,end], attrs}`，range 在块内纯文本平面，与字符锚同基准 | 文档不存在/越界 → WS/DOC 错误透传；已打开文档缺快照 → `AG_OPEN_DOC_SNAPSHOT_REQUIRED`；原生 docx → `DOC_NOT_BDOCX` | agent 块级引用选择 + 字符级取址基准 + 样式读取（BR-ED-DATA-005 读侧） |
 
 > 投影 schema 的单一来源在 A-ED-M-T-01 §5.1（ED 定义、AG 承载读取面）；写侧（StyleOp）经
 > `ed.apply_edit`（A-ED-I-P-01 §4.1），落盘分流按裁定 D-3（回合产出→DE diff / 显式内联→用户编辑）。
-> BDocx 的非当前文档读取必须先经 DOC 编辑链转为 HTML 后再分块；原生 `.docx` 不支持 `ag.list_blocks`，
+> BDocx 的非当前文档读取必须先经 AgentReadContext：已打开时使用 OpenDocSnapshot，未打开时经 DOC 编辑链转为 HTML 后再分块；原生 `.docx` 不支持 `ag.list_blocks`，
 > 应回 `DOC_NOT_BDOCX`，避免把二进制 docx 当 UTF-8 文本或可编辑块列表处理。
 > 锚有效期 = 编辑会话内（BR-ED-DATA-004）：文档重开后 blockId 重建，agent 须重新 list_blocks。
 
@@ -199,7 +328,8 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 
 | 来源 | 供给 | 文档 |
 |---|---|---|
-| 当前文档 | `active_doc_content` / `AgentEditableSnapshot` | 本文 §2.1、A-WS-I-P-01 §3、A-DOC-M-T-01 §2 |
+| 已打开文档 | `open_doc_snapshots` / `AgentReadContext` / `AgentEditableSnapshot` | 本文 §2.1、A-SYS-I-P-01 §3、A-ED-I-P-01 §4 |
+| 未打开文档 | DiskState 读取结果 / `AgentEditableSnapshot` | 本文 §2.1、A-WS-I-P-01 §3、A-DOC-M-T-01 §2 |
 | 输入引用 | REF ReferencePayload / 注入载荷 | A-REF-M-T-01 §4、A-REF-I-P-01 §2.1 |
 | 记忆 | AST 供给（MemoryInjection） | A-AST-M-T-01 §4 |
 | 知识库 | KB 召回（KnowledgeInjection） | A-KB-M-T-01 §3 |
@@ -211,9 +341,12 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 - **门禁不变量**（BR-AG-VERIFY-001，强制）：静态可查 start_turn/tool 执行/request_assist 三条
   发起路径均无不经门禁的模型调用入口；无订阅时 chat 返回 gate_denied、assist 静默空候选。
 - **产出唯一出口**：含修改建议回合经 `de.generate_diff`，无直接写盘（X-FORBID-006 静态+联调）。
+- **已打开文档读取门禁**：打开文档的 read_doc/search_text/list_blocks/propose_edit/ReferencePayload 均命中
+  OpenDocSnapshot；active live 序列化失败或非激活 session 基线缺失时阻断，不允许 DiskState 兜底。
 - **工具循环**：未注册/越权工具拒绝回注；上限生效；写意图工具不直写。
 - **辅助采纳路径**：request_assist→mount_decoration→apply_edit 走正常脏态（非 diff），与 ED G5 联调。
 - 流式三终态、回合历史恢复、与 DE/ED/WS/REF/AST/KB G5 全链联调。
+  历史恢复须覆盖 completed/error/cancelled/gate_rejected/draft；只 eager-load 激活会话，其余懒加载。
 
 ## §7 债务与盲区
 
@@ -221,6 +354,7 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 - request_assist 的节流（前端侧 vs 接口侧）实现期定；候选呈现 schema 联合 ED/DE。
 - 构建移交/回落接口（takeover/fallback）随 CBT I-P 联合声明（本文不预定义，AG-04）。
 - REF/AST/KB 供给接口待其 I-P；本文 §5 仅占消费入口。
+- 历史保留策略覆盖 200MB 软上限、软归档与用户删除单个历史会话。
 
 ## 变更记录
 
@@ -243,3 +377,9 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 | 2026-07-16 | v1.14 | 续修 `ag.request_assist`/`ag.finish_assist`：严格 3 候选、触发前后文指纹、默认 450ms 前端防抖，以及采纳/忽略/锚失效终态回写 |
 | 2026-07-17 | v1.15 | 加固 `ag.request_assist` 失败诊断：返回内部 `failure_reason`，autocomplete 解析兼容常见模型格式偏差但仍以 3 candidates 为展示硬门 |
 | 2026-07-17 | v1.16 | 收敛前端诊断传递契约：failure_reason 必须经 requestAssist、assistStore、overlay 诊断点保留，invoke 异常映射为 invoke_error |
+| 2026-07-17 | v1.17 | 补齐 AG 历史恢复接口：`ag_start_turn` 增 `session_id`，新增 `ag.list_sessions` / `ag.save_session` / `ag.save_turn` / `ag.list_turns`；锁定 AgentTurnPayloadV1、completed/error/cancelled/gate_rejected/draft 状态映射、激活会话 eager-load 其余懒加载、工具摘要只读与 Diff 仅引用 |
+| 2026-07-18 | v1.18 | 补齐 `ag.delete_session`：当前 workspace 级删除指定 AG 会话/回合/payload 历史记录，保留 DE 修改建议本体；前端无活动代理回合时从历史会话行删除指定会话 |
+| 2026-07-18 | v1.19 | `ag_start_turn` 增 `open_doc_snapshots` 与 AgentReadContext 契约：已打开文档 read_doc/search_text/list_blocks/propose_edit/ReferencePayload 必须读取 LogicalState；DiffProjection 增 source 与基线元数据，支持 `draft_mode=open_session` 自动应用 |
+| 2026-07-18 | v1.20 | 细化 active 文档 source：新增 `active_editor_session`，补 binding 过渡期以 session LogicalState 读取、HTML 无 block id 投影和整篇替换身份漂移守卫 |
+| 2026-07-18 | v1.21 | 补齐 `HistTurn.rel_path/turn_id` 协议：历史消息必须带文档归属；AG 后端按当前文档分流历史，同文档可作背景，跨文档/无归属历史默认不得进入当前文档事实层 |
+| 2026-07-18 | v1.22 | 同步启动恢复决议：恢复后的当前文档若已有 ED session LogicalState，即使 ProseMirror binding 尚未完成，也必须进入 AG 工作序列 |

@@ -91,6 +91,9 @@ export type ExpiredReason =
   | "external_file_changed"
   | "apply_replace_failed";
 
+export type DiffDraftMode = "current_editor" | "open_session" | "background";
+export type DiffSnapshotSource = "active_editor" | "active_editor_session" | "open_editor_session" | "disk_snapshot";
+
 export const EXPIRED_REASON_TEXT: Record<ExpiredReason, string> = {
   document_revision_advanced: "原文已被手动编辑，建议重新生成",
   block_resolve_failed: "原始块已不可定位，建议重新生成",
@@ -110,12 +113,22 @@ export interface DiffView {
   /** 前端生成顺序；同一消息下多张卡按此稳定排序。 */
   createdAt?: number;
   blockId: string; // GreenReview 装饰锚（与 ED BlockIdExtension 对齐）
+  /** 目标块 0 起序号；text 文档/open session 无 blockId 时使用。 */
+  blockIndex?: number | null;
   /** 目标文档相对路径（pending 按文件归属投影到文件树/标签）。 */
   relPath?: string;
   /** 人读位置摘要（如“Block 3”或“整篇”），与 blockId 一起用于 DiffCard 定位呈现。 */
   locationLabel?: string;
   /** AgentEdit 修改类型；Editor 只允许显式 replace_document 执行整篇草稿替换。 */
   patchKind?: "replace_block" | "replace_document" | "style_ops";
+  /** DiffProjection 分流路径：active 草稿 / open session 自动应用 / 未打开后台路径。 */
+  draftMode?: DiffDraftMode;
+  /** DiffProjection 生成基线来源。 */
+  snapshotSource?: DiffSnapshotSource;
+  /** 生成时 ED session 版本；open session 必填。 */
+  baseSessionVersion?: number;
+  /** 生成时内容哈希；open session 必填。 */
+  baseContentHash?: string;
   title: string;
   before: string;
   after: string;
@@ -127,6 +140,8 @@ export interface DiffView {
   styleOpsPayload?: StyleOp[];
   /** 已将 after 应用到当前编辑器草稿；accept 只确认，save 才落盘。 */
   draftApplied?: boolean;
+  /** 已自动应用到已打开非激活文档 LogicalState；DiffCard 禁用裁决。 */
+  openSessionApplied?: boolean;
   /** 草稿应用前的完整编辑器内容，用于 reject 后判断是否可恢复原标签态。 */
   draftBaseContent?: string;
   /** 草稿应用后（刚应用完那一刻）的编辑器内容快照，用于 D4 后置编辑检测：
@@ -144,6 +159,8 @@ export interface DiffView {
   conflictWith?: string; // conflict 态：重叠的另一条 diff id
   errorCode?: string; // error 态：错误码
   timelineSeq?: number; // accepted 后的时间轴号
+  /** 历史恢复卡或不可用卡：只展示，不允许从历史重新触发裁决/重试。 */
+  readonly?: boolean;
 }
 
 interface DeState {
@@ -237,6 +254,13 @@ export const deStore = {
     });
   },
 
+  expireLocal(id: string, patch: Partial<DiffView> = {}) {
+    mapDiff(id, (d) => {
+      if (["accepted", "rejected", "expired"].includes(d.state)) return d;
+      return { ...d, state: "expired", readonly: true, ...patch };
+    });
+  },
+
   /**
    * 投影后端 SM-WS-02 落盘机转移（A-CORE-X-L-04 Task 2-D · X-FORBID-007）：由 smListeners 监听
    * `sm:SM-WS-02:state_changed` 调用。Applying→applying 过渡呈现、Applied→accepted、ApplyError→error；
@@ -268,6 +292,19 @@ export const deStore = {
       draftBaseContent: baseContent,
       draftBaseTabState: baseTabState,
       draftBaseDirty: baseDirty,
+      draftAfterContent: afterContent,
+      draftSaved: false,
+    }));
+  },
+
+  markOpenSessionApplied(id: string, baseContent?: string, afterContent?: string) {
+    mapDiff(id, (d) => ({
+      ...d,
+      state: "accepted",
+      readonly: true,
+      draftApplied: true,
+      openSessionApplied: true,
+      draftBaseContent: baseContent,
       draftAfterContent: afterContent,
       draftSaved: false,
     }));

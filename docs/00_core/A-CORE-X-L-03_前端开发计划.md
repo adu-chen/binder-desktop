@@ -48,7 +48,7 @@
   - `src/styles.css`：CSS 自定义属性体系（DesignToken）——参考源 `docs/binder_ui/app-styles.css`
   - `src/shell/Workbench.tsx`：CSS Grid 四栏布局骨架替换现有占位 div
   - `src-tauri/tauri.conf.json`：macOS `titleBarStyle=Overlay`，保留系统 traffic lights，隐藏原生标题文本
-  - `src-tauri/capabilities/default.json`：授予 `core:window:allow-start-dragging`，允许 Tauri drag-region 脚本触发窗口拖动
+  - `src-tauri/capabilities/default.json`：授予 `core:window:allow-start-dragging` 以支持 Tauri drag-region 窗口拖动；授予 `core:window:allow-close` / `core:window:allow-destroy` 以支持应用窗口关闭前 flush 编辑器打开标签与 session 镜像后退出
   - `src/components/shell/AppTitleBar.tsx`：Binder 自有标题栏；只显示当前标题，并以 `data-tauri-drag-region="deep"` 承载窗口拖拽区
 - **DesignToken 参考取值**（参考稿 §8，经生产样式收敛后落地）：
 

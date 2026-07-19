@@ -127,7 +127,8 @@ rule_id: BR-ED-STATE-001
 -->
 文档编辑会话必须经完整生命周期管理：内容加载与 save 落盘全部经 WS（ED 无直接文件 I/O 路径，
 X-SEQ-002/X-FORBID-004）；用户编辑或 DE 草稿 diff 应用都属于编辑操作，必须产生脏态并驱动 WS save 保存机（SM-WS-01 Idle→Dirty，X-INTER-001
-转移点）；有脏态的会话不得静默关闭或丢失，关闭前须保存或经用户显式确认丢弃；内容解析失败降级只读
+转移点）；已打开但非激活文档的 DE 自动应用属于同等编辑操作，必须经 ED session 受控事务修改
+`EditSession.content`、递增 session 版本、刷新内容哈希并持久化 `ed_session_snapshots`；有脏态的会话不得静默关闭或丢失，关闭前须保存或经用户显式确认丢弃；内容解析失败降级只读
 而非静默丢内容；编辑功能离线可用，不依赖在线鉴权。状态转移归 SM-ED-01（A-ED-M-S-01）。
 
 <!-- RULE
@@ -146,6 +147,19 @@ rule_id: BR-ED-STATE-003
 > 携带加载基线调用 WS/DOC 保存，收到 `WS_SAVE_CONFLICT` 后保持当前会话 dirty 并返回 `conflict`
 > 信号；编辑器只在用户显式确认覆盖后以 `override=true` 重试保存。文件监视/`ws.external_change`
 > 推送与无脏态自动重载仍按 WS SY-02 延后，不属于本轮已落地能力。
+
+> **已打开文档 LogicalState 门禁（2026-07-18）**：激活文档正常态的唯一真源是已绑定
+> `activePath/loadSeq/editFormat` 的 ProseMirror `doc` 实时序列化；标签切换过渡期若目标活动文档
+> 的 `EditSession.content` 已存在，则该 session content 是待装载的活动 LogicalState，可供 AG
+> 读取，不等待显示渲染；若目标 session 尚未载入则短暂等待，超时阻断。已打开非激活文档的唯一真源是
+> `EditSession.content` 加 `sessionVersion/contentHash`。AG/DE 读取已打开文档时，ED 必须提供
+> OpenDocSnapshot；已绑定 ProseMirror 无法序列化或缺少版本/哈希时阻断上游，不允许读取 DiskState 或
+> `loadedContent` 旧快照。`ed_session_snapshots` 是该 LogicalState 的内部持久化镜像，不是用户文档写盘。
+> `ed_open_tabs` 是编辑器打开集合、顺序与当前文档的控制态真源；启动恢复先以 `ed_open_tabs` 恢复标签集合，
+> 再只对这些路径恢复 `ed_session_snapshots`。不存在 `ed_open_tabs` 的孤立 session 镜像不得恢复为打开文档；
+> 恢复完成后当前文档必须同步为 ED active session，使 AG 轮次可直接读取其 LogicalState。
+> workspace 切换/关闭和应用窗口关闭前必须先 flush 当前 `ed_open_tabs` 与 `ed_session_snapshots`；
+> 正常编辑过程可做短防抖持久化，但退出/切换边界不得只依赖防抖。
 
 ## §4 block 模型与稳定 blockId（ED-EDIT）
 
@@ -221,6 +235,10 @@ md、b-docx 与 .html 必须共用同一结构化编辑模型（内容块模型�
   doc（`replace_text` / `replace_block` / `replace_document`）；样式批量修改经 `applyStyleOps()`
   规划并应用单事务。DE 草稿应用、reject 回滚、示例 diff 生成均以当前编辑器 LogicalState 为准，
   不以 `edStore.EditSession.content` 派生缓存作为真值。
+- **已打开非激活文档入口（2026-07-18）**：`draft_mode=open_session` 的文本/块/整篇 diff 不要求用户切换窗口；
+  ED 必须在 `EditSession.content` 上执行 session apply 事务，先校验 `base_session_version` 与
+  `base_content_hash`，成功后写回 content、递增版本、刷新哈希、置脏并持久化 `ed_session_snapshots`。
+  失败时不得修改 LogicalState，不得改走后台 DiskState apply。
 - **落盘分流（裁定 D-3）**：chat/agent 回合产出的样式修改进 DiffPayload 经 DE diff 裁决；当前
   编辑器草稿路径在 pending 时先经 ED 受控编辑接口应用为草稿，accepted 只确认，save 经
   SM-ED-01→SM-WS-01 落盘；用户显式触发的局部修改样式操作视为用户编辑直改（BR-AG-STATE-003
@@ -239,7 +257,8 @@ rule_id: BR-ED-DATA-005
 落盘路径分流（裁定 D-3）：chat/agent 回合产出经 DE diff 裁决；当前编辑器草稿路径由 ED 受控接口
 先应用为草稿，accepted 后仍由普通 save 落盘（X-FORBID-006 不允许 AG 直接写文件），用户显式触发的
 局部修改样式操作视为用户编辑直改并产生脏态；拒绝含 StyleOp 的草稿 diff 必须恢复草稿前完整内容，
-不得存在绕过裁决的回合直写文件路径。
+不得存在绕过裁决的回合直写文件路径。已打开非激活文档的 StyleOp 自动应用需要无 ProseMirror runtime
+事务；未具备时必须返回明确不支持并让 DiffCard 失效，不得降级为 DiskState 写入。
 
 ## §6 分页与图文媒体（呈现层纯化，ED-EDIT）
 
@@ -272,10 +291,13 @@ ED 不得自行写入媒体文件。打印/导出管线归 PRV，ED 仅提供打
   红删对比保留在 DiffCard。只有已成功应用为 ED 草稿的 diff 才能挂载 GreenReview；锚失效或
   error 卡不得残留绿色装饰。
 - **DiffProjection 消费边界**：AG 产生的草稿 diff 必须先携带后端权威 `DiffProjection`，ED 只消费
-  其中的 `patch_kind/block_id/block_index/before_text/after_text/style_ops`。前端不得从工具请求参数、
+  其中的 `patch_kind/block_id/block_index/before_text/after_text/style_ops/draft_mode/snapshot_source/base_session_version/base_content_hash`。前端不得从工具请求参数、
   当前整篇内容或 DiffCard 文案反向推断编辑器草稿。文本/md 文档缺 blockId 时可在当前编辑会话内用
   `block_index` 映射到实时 Block；BDocx 必须使用 DOC canonical HTML 中的 `data-block-id`，缺失或失效
   即 error，不得用整篇替换或重建锚作为隐式降级。
+- **非激活打开文档呈现边界**：`draft_mode=open_session` 成功后内容已进入目标 session LogicalState；
+  DiffCard 只显示已应用/不可裁决状态。目标文档被激活时，ED 不得再次应用该 diff，只能按当前
+  LogicalState 渲染；GreenReview 是否补挂载属于呈现增强，不得影响内容状态。
 - **纯呈现**：decoration 不修改文档模型与落盘内容；用户在 decoration 上的交互（接受/拒绝按钮等）
   转达给消费方裁决，ED 不代裁。
 - **唯一通道**：上层不得绕过装饰层与编辑接口直接操纵编辑器内部文档状态（X-FORBID-005）。
@@ -400,6 +422,8 @@ status: mapped
 
 - **会话生命周期**（BR-ED-STATE-001 / SM-ED-01，REQ-ED-001 验收）：md/docx 可打开/编辑/关闭；
   脏态关闭须保存或确认丢弃；解析失败降级只读；断网时编辑可用；ED 无直接文件 I/O 调用路径（静态可查）。
+  已打开非激活文档自动应用 diff 后 session content/version/hash 更新、置脏并持久化，切回该文档时不重复应用；
+  重启恢复继承关闭前打开的文档标签、顺序和当前文档，孤立 `ed_session_snapshots` 不恢复为打开文档，恢复后的当前文档可进入 AG 工作序列。
 - **blockId 稳定**（BR-ED-DATA-001，REQ-ED-002 验收）：普通编辑后既有 blockId 不变；删除块后定位
   该 blockId 收到失效信号；不存在静默错位。
 - **md/docx 统一模型**（BR-ED-DATA-002，REQ-ED-003 联合 DOC 验收）：docx 进入编辑与往返保存经 DOC
@@ -408,7 +432,7 @@ status: mapped
   媒体资源越界路径被拒（X-FORBID-004）。
 - **装饰层契约**（BR-ED-STATE-002 / X-FORBID-005，REQ-ED-005 验收）：decoration 按 blockId 挂载、
   按信号呈现/复位且终态不残留；decoration 不改文档模型；不存在绕过 ED 接口直改编辑器状态的调用
-  路径（与 DE/AG G4 集成验证）。
+  路径（与 DE/AG G4 集成验证）；`open_session` 已应用卡切换到目标文档时不触发二次内容变更。
 - 量化 NFR（编辑响应延迟、大文档分页性能）延 G5 标定（APC §9，ED-06）。
 
 ## §11 技术债务与盲区（诚实声明）
@@ -451,6 +475,10 @@ status: mapped
   附带实测发现（DOC 侧既有"部分支持"债务佐证，登记不扩范围）：保存侧 color/text-align 内联样式
   衰减、`data-custom-style` div 包裹残留。
 - 分页光标/遮罩具体实现：移植 `tiptap-pagination-plus` 后按新架构适配，实现期敲定。
+- **open_session StyleOp 无头事务**：文本/块/整篇替换可在 `EditSession.content` 上执行；StyleOp 需要不依赖
+  当前 ProseMirror editor instance 的事务实现。未落地前应返回不支持并让 DiffCard 失效，不能后台写 DiskState。
+- **孤立 ED session 镜像清理**：本轮恢复链路只保证孤立 `ed_session_snapshots` 不会打开文档；历史镜像的
+  GC/清理策略暂不实现，后续可在 workspace 维护任务中按 `ed_open_tabs` 差集清理。
 - §11.1 各推荐选型均待实现期验证后转正式锁定；验证不符须回写本文并复核 DE/DOC 依赖方。
 
 ## §12 后续动作
@@ -481,3 +509,5 @@ status: mapped
 | 2026-07-09 | v1.10 | 收紧整篇草稿替换入口：ED 仅对 `patchKind=replace_document` 的显式整篇 diff 执行全文替换；无 blockId 且非 StyleOp 的局部 diff 进入 error，避免 BDocx 精准编辑失败时误走整篇替换 |
 | 2026-07-09 | v1.11 | 补齐 DiffProjection 消费边界：ED 草稿/GreenReview 只消费后端权威投影；文本/md 可在当前会话用 block_index 映射实时 Block，BDocx 必须使用 canonical `data-block-id`，缺失即 error 不降级 |
 | 2026-07-12 | v1.12 | 三态实现回写：保存冲突路径已以 `WS_SAVE_CONFLICT` + `override=true` 显式覆盖确认落地；文件监视/`ws.external_change` 推送仍延后；补 `applyEditOps`/`applyStyleOps` 当前实现入口，明确 DE 草稿与回滚读取当前 ProseMirror LogicalState 而非派生缓存 |
+| 2026-07-18 | v1.13 | 补齐已打开文档 LogicalState 门禁：active 取 ProseMirror 实时序列化，非 active open session 取 `EditSession.content + sessionVersion/contentHash`；`draft_mode=open_session` 经 ED session 事务自动应用并持久化 `ed_session_snapshots` |
+| 2026-07-18 | v1.14 | 补齐启动恢复打开标签协议：`ed_open_tabs` 作为打开集合、顺序和当前文档真源；恢复只对打开集合取 session 镜像，恢复后当前文档直接进入 AG LogicalState 读取链 |

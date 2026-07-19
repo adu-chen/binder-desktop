@@ -86,9 +86,11 @@ constraint_id: X-SEQ-003
 部分核心链的状态转移跨模块发生，转移两侧的 owner 状态机必须在对接点保持一致，不得各自假设。
 代表性跨模块转移点（随各模块 G2 回填）：
 
-- **diff accepted → 落盘**：DE 的 diff 终态机（**SM-DE-01**，A-DE-M-S-01 §2）的 accepted 触发
-  WS 的 diff 落盘机（**SM-WS-02**，A-WS-M-S-01 §3）的写入（REQ-CORE-002）；rejected/expired 驱动
-  SM-WS-02→Discarded（不落盘）；Applied/ApplyError 回执回传 SM-DE-01（终态不回退）。
+- **diff accepted → LogicalState / 未打开文档落盘**：DE 的 diff 终态机（**SM-DE-01**，A-DE-M-S-01 §2）
+  按 `draft_mode` 分流：`current_editor` 与 `open_session` 触发 ED 文档编辑会话（**SM-ED-01**）进入
+  Editing/Dirty，等待用户保存；`background` 仅在目标文档未打开时触发 WS 的 diff 落盘机（**SM-WS-02**，
+  A-WS-M-S-01 §3）写入（REQ-CORE-002）。rejected/expired 驱动 SM-WS-02→Discarded（不落盘）或
+  ED 装饰/卡片复位；Applied/ApplyError 回执回传 SM-DE-01（终态不回退）。
   **双侧已就绪**（2026-06-11 DE G2 闭合单侧），一致性在 G5 联调验证。
 - **构建移交/回落（旧称 Chat↔Build 接管；2026-07-04 判据换轴）**：SM-AG-01（takeover→HandedOver
   终态 / fallbackIn 起新回合，A-AG-M-S-01 §2）与 SM-CBT-01（A-CBT-M-S-01 §3）双向移交——takeover
@@ -101,7 +103,7 @@ constraint_id: X-SEQ-003
 - **TPL 步骤委托**：SM-TPL-01 逐步委托 SM-AG-01 / SM-CBT-01 执行（发起+回执；abort 取消传播
   延实现期细化）（A-TPL-M-S-01 §4）。
 - **模型调用前门禁**：业务模块发起模型调用前必经 SM-SYS-01 的 GatePassed（X-SEQ-001，A-SYS-I-P-03）。
-- **ED 脏态 ↔ WS 保存**：SM-ED-01 的 edit 事件是 SM-WS-01 Idle→Dirty 的唯一业务驱动源；SM-WS-01
+- **ED 脏态 ↔ WS 保存**：SM-ED-01 的 edit/draftDiffApplied/sessionDiffApplied 事件是 SM-WS-01 Idle→Dirty 的业务驱动源；SM-WS-01
   Saved 回执驱动 SM-ED-01 Editing→Ready 清脏态，SaveError 不清脏态（A-ED-M-S-01 §3，双侧已就绪）。
 - **docx 装载与落盘**：SM-DOC-01 convertOk 对接 SM-ED-01 装载（convertFail 对接 loadFail/parseFail，
   失败语义两侧一致）；SM-DOC-01 SaveConverting 经 SM-WS-01 原子落盘（Saved/SaveError 回执驱动
@@ -110,12 +112,14 @@ constraint_id: X-SEQ-003
   Denied 不可绕过）；SM-AG-01 HandingOff 将修改建议（ChangeProposal）交 SM-DE-01 Generating
   （genOk/genFail 回执 handoffOk/Fail，**双侧已就绪**，A-DE-M-S-01 §3）；SM-AG-03 accept 驱动
   SM-ED-01 edit（采纳即用户编辑，双侧已就绪）（A-AG-M-S-01 §6）。
-  至此「对话生成 diff→人类裁决→落盘」核心交互 AG→DE→WS（→ED 呈现）状态机链全链建机完毕。
+  AG 发起回合前必须携带 OpenDocSnapshot 构建 AgentReadContext；已打开文档 diff 经 DE 分流到
+  SM-ED-01 current/open session LogicalState，未打开文档才可经 SM-WS-02 后台落盘。
+  至此「代理回合生成 diff→裁决或自动应用→LogicalState/未打开后台落盘」核心交互 AG→DE→ED/WS 状态机链全链建机完毕。
 
 <!-- CONSTRAINT
 constraint_id: X-INTER-001
 摘要: 跨模块状态转移必须在总图登记转移契约，转移两侧 owner 状态机对接点须一致，不得各自假设状态/事件
-涉及模块: SYS, WS, DE, AG, CBT
+涉及模块: SYS, WS, ED, DE, AG, CBT
 链路影响: CLOUD-GATE, CLOUD-INVOKE
 -->
 
@@ -155,7 +159,7 @@ status: mapped
   随 owner G2 回填 machine_id 后转 active。
 - **注册前置阻断**（X-SEQ-003）：状态化核心链在无状态机定义时，G4 实现验证触发 SC-06/07 阻断
   （集成阶段验证）。
-- **跨模块转移一致**（X-INTER-001）：diff accepted→落盘、构建移交/回落等转移点两侧状态机对接
+- **跨模块转移一致**（X-INTER-001）：diff accepted→LogicalState/未打开文档落盘、构建移交/回落等转移点两侧状态机对接
   一致，在 G5 跨模块联调验证（APC §5.1）。
 - **流式终态对齐**：经 IPC 流式的状态机终态与 BR-SYS-STATE-002 一致（SM-SYS-01 已对齐）。
 
@@ -188,3 +192,4 @@ status: mapped
 | 2026-06-11 | v1.6 | DE G2 回填（owner 模块登记，§11.3）：§3 diff 终态行 planned→active 回填 machine_id=SM-DE-01（A-DE-M-S-01 定义）；§5「diff accepted→落盘」「AG 回合门禁与产出」两条转移点更新为双侧就绪——「对话生成 diff→人类裁决→落盘」核心交互 AG→DE→WS（→ED）状态机链全链建机完毕；总图仅余 CBT 构建 / 记忆写入（AST）两行 planned |
 | 2026-06-11 | v1.7 | P4 G2 回填（owner 模块登记，§11.3）：§3 CBT 构建行=SM-CBT-01、记忆写入行=SM-AST-01 转 active，新增「工作流执行｜TPL｜SM-TPL-01」行（owner G2 暴露登记）；§5「Chat↔Build 接管」更新为双侧就绪（takeover/fallback+回执），新增「TPL 步骤委托」转移点；**总图全清单无 planned 行，已登记 12 台状态机全部 active**（SY-04 闭合） |
 | 2026-07-04 | v1.8 | 构建移交判据换轴（人类裁决，同步 A-AG-M-S-01 v2.0 / A-CBT-M-S-01 v2.0）：§5 转移点更名「构建移交/回落」，触发=显式触发即确认或项目级构建意图提议经确认（多文件意图废止），蓝图随移交、原窗口呈现、执行期禁新回合 |
+| 2026-07-18 | v1.9 | 修正 diff 跨模块转移：accepted 不再等同落盘；current/open session 进入 SM-ED-01 LogicalState/Dirty，background 仅未打开文档进入 SM-WS-02；AG 回合前必须用 OpenDocSnapshot 建 AgentReadContext |

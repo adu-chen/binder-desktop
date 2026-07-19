@@ -15,6 +15,7 @@ const edLocateMock = vi.hoisted(() => ({
   getActiveBlockSnapshotById: vi.fn(),
   getActiveBlockSnapshotByIndex: vi.fn(),
   getActiveDocumentContent: vi.fn(),
+  getActiveEditorBinding: vi.fn(),
   locateBlock: vi.fn(),
 }));
 
@@ -30,13 +31,32 @@ import { agStore, activeSession } from "../store/agStore";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
-import { finishAssist, requestAssist, startTurn, type AgTurnEvent } from "./agService";
+import { deleteAgentSession, finishAssist, hydrateAgentHistory, requestAssist, startTurn, type AgTurnEvent } from "./agService";
 
 const invokeMock = vi.mocked(invoke);
 
 function completeTurn(arg: unknown) {
   const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
   onEvent.onmessage?.({ type: "done", turn_id: "t", stop_reason: "stop" });
+}
+
+function dispatchOk(arg: unknown) {
+  const command = (arg as { request?: { command?: string } }).request?.command;
+  return { correlation_id: "ag-test", result: command === "ws.list_docs" ? [] : { ok: true } };
+}
+
+function mockTurnInvoke(handler: (arg: unknown) => void) {
+  invokeMock.mockImplementation(async (command, arg) => {
+    if (command === "dispatch") return dispatchOk(arg);
+    handler(arg);
+    return undefined;
+  });
+}
+
+function agStartArg(): Record<string, unknown> {
+  const found = invokeMock.mock.calls.find(([command]) => command === "ag_start_turn");
+  if (!found) throw new Error("ag_start_turn was not called");
+  return found[1] as Record<string, unknown>;
 }
 
 function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
@@ -55,6 +75,7 @@ function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
       after_text: patch.after_text ?? "第二段改写",
       location_label: patch.location_label ?? "Block 1",
       draft_mode: patch.draft_mode ?? "current_editor",
+      snapshot_source: patch.snapshot_source ?? "active_editor",
       style_ops: patch.style_ops ?? null,
     },
   });
@@ -65,13 +86,17 @@ beforeEach(() => {
   edLocateMock.getActiveBlockSnapshotById.mockReset();
   edLocateMock.getActiveBlockSnapshotByIndex.mockReset();
   edLocateMock.getActiveDocumentContent.mockReset();
+  edLocateMock.getActiveEditorBinding.mockReset();
   edLocateMock.locateBlock.mockReset();
-  edLocateMock.getActiveDocumentContent.mockReturnValue(null);
+  edLocateMock.getActiveDocumentContent.mockImplementation(() => edStore.getSnapshot().loadedContent);
+  edLocateMock.getActiveEditorBinding.mockImplementation(() => {
+    const ed = edStore.getSnapshot();
+    return ed.openPath ? { relPath: ed.openPath, loadSeq: ed.loadSeq, editFormat: ed.editFormat } : null;
+  });
   edLocateMock.locateBlock.mockReturnValue("located");
   edStore.reset();
   deStore.reset();
-  agStore.applyTurnState("test-turn", "Completed");
-  agStore.newSession();
+  agStore.reset();
 });
 
 describe("requestAssist 契约", () => {
@@ -186,6 +211,171 @@ describe("requestAssist 契约", () => {
   });
 });
 
+describe("agService 历史恢复", () => {
+  // covers: BR-AG-PERSIST-001
+  // 历史 diffRefs 必须经 DE all-status 查询恢复真实状态并锚回对应 assistant 消息；缺失 diff 不得复活为 pending。
+  it("hydrates turn messages, inline tool summaries, and diff refs without reviving missing diffs", async () => {
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const request = (arg as { request: { command: string; params: Record<string, unknown> } }).request;
+      if (request.command === "ag.list_sessions") {
+        return {
+          correlation_id: "hist",
+          result: {
+            sessions: [
+              {
+                session_id: "s1",
+                title: "历史会话",
+                mode: "edit",
+                archived: false,
+                open_index: 0,
+                is_active: true,
+                created_at: 1,
+                updated_at: 2,
+                last_active_at: 2,
+              },
+            ],
+            active_session_id: "s1",
+          },
+        };
+      }
+      if (request.command === "de.list_diffs" && Array.isArray(request.params.diffIds)) {
+        return {
+          correlation_id: "hist",
+          result: [
+            {
+              diff_id: "d-accepted",
+              target: { rel_path: "notes/a.md" },
+              status: "accepted",
+              created_at: 4,
+              projection: {
+                patch_kind: "replace_document",
+                before_text: "旧内容",
+                after_text: "新内容",
+                location_label: "历史修改建议",
+              },
+            },
+          ],
+        };
+      }
+      if (request.command === "de.list_diffs") {
+        return { correlation_id: "hist", result: [] };
+      }
+      if (request.command === "ag.list_turns") {
+        return {
+          correlation_id: "hist",
+          result: [
+            {
+              turn_id: "t1",
+              session_id: "s1",
+              rel_path: "notes/a.md",
+              status: "completed",
+              created_at: 3,
+              updated_at: 5,
+              payload: {
+                version: 1,
+                userMessage: { id: "u1", role: "user", content: "修改" },
+                assistantMessage: { id: "a1", role: "assistant", content: "已生成建议", streaming: false },
+                toolSummaries: [
+                  {
+                    id: "tc1",
+                    name: "read_doc",
+                    inputSummary: "notes/a.md",
+                    resultSummary: "done",
+                    state: "done",
+                    anchorMessageId: "a1",
+                  },
+                ],
+                diffRefs: [
+                  { diffId: "d-accepted", relPath: "notes/a.md", anchorMessageId: "a1" },
+                  { diffId: "d-missing", relPath: "notes/missing.md", anchorMessageId: "a1" },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      return { correlation_id: "hist", result: { ok: true } };
+    });
+
+    await hydrateAgentHistory();
+
+    const session = agStore.getSnapshot().sessions.find((s) => s.id === "s1");
+    expect(session?.messages[0]).toMatchObject({
+      id: "u1",
+      relPath: "notes/a.md",
+      turnId: "t1",
+    });
+    expect(session?.messages[1]).toMatchObject({
+      id: "a1",
+      relPath: "notes/a.md",
+      toolCalls: [expect.objectContaining({ name: "read_doc", readonly: true, anchorMessageId: "a1" })],
+    });
+    expect(deStore.getSnapshot().diffs).toEqual([
+      expect.objectContaining({
+        diffId: "d-accepted",
+        sessionId: "s1",
+        turnId: "t1",
+        anchorMessageId: "a1",
+        state: "accepted",
+        readonly: true,
+        before: "旧内容",
+        after: "新内容",
+      }),
+      expect.objectContaining({
+        diffId: "d-missing",
+        sessionId: "s1",
+        turnId: "t1",
+        anchorMessageId: "a1",
+        state: "error",
+        readonly: true,
+        errorCode: "DE_DIFF_UNAVAILABLE",
+      }),
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "dispatch",
+      expect.objectContaining({
+        request: expect.objectContaining({
+          command: "de.list_diffs",
+          params: { diffIds: ["d-accepted", "d-missing"] },
+        }),
+      }),
+    );
+  });
+
+  // covers: BR-AG-PERSIST-001
+  it("deletes one persisted agent session and persists remaining metadata", async () => {
+    const first = agStore.getSnapshot().activeSessionId;
+    const second = agStore.newSession();
+    agStore.pushMessage(first, { id: "u-old", role: "user", content: "旧问题" });
+    agStore.pushMessage(second, { id: "u-new", role: "user", content: "保留问题" });
+    const calls: { command: string; params: Record<string, unknown> }[] = [];
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const request = (arg as { request: { command: string; params: Record<string, unknown> } }).request;
+      calls.push({ command: request.command, params: request.params });
+      return { correlation_id: "delete", result: { ok: true } };
+    });
+
+    await deleteAgentSession(first);
+
+    expect(calls[0]).toMatchObject({ command: "ag.delete_session", params: { sessionId: first } });
+    expect(calls.map((c) => c.command)).toContain("ag.save_session");
+    const snap = agStore.getSnapshot();
+    expect(snap.sessions).toHaveLength(1);
+    expect(snap.sessions[0].id).toBe(second);
+    expect(snap.sessions[0].messages.map((m) => m.id)).toEqual(["u-new"]);
+  });
+
+  it("rejects deleting a session while an agent turn is active", async () => {
+    agStore.setSending(true);
+    invokeMock.mockResolvedValue({ correlation_id: "delete", result: { ok: true } });
+
+    await expect(deleteAgentSession(agStore.getSnapshot().activeSessionId)).rejects.toMatchObject({ code: "AG_TURN_ACTIVE" });
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("agService ReferencePayload 发送契约", () => {
   // covers: BR-AG-DATA-001, BR-REF-DATA-003, BR-REF-DATA-004
   // 非拖拽引用入口必须从 Composer 发送层进入 ag_start_turn.references，并保留 displayParts 供消息回放。
@@ -224,9 +414,8 @@ describe("agService ReferencePayload 发送契约", () => {
       { type: "text", text: " 修改。" },
     ];
 
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("请结合 [引用:记忆 偏好] 修改。", {
@@ -238,10 +427,9 @@ describe("agService ReferencePayload 发送契约", () => {
       blockRefs: [{ relPath: "legacy.md", blockId: "b", text: "legacy" }],
     });
 
-    expect(invokeMock).toHaveBeenCalledTimes(1);
-    const [command, arg] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(command).toBe("ag_start_turn");
+    const arg = agStartArg();
     expect(arg).toMatchObject({
+      sessionId: agStore.getSnapshot().activeSessionId,
       prompt: "请结合 [引用:记忆 偏好] 修改。",
       provider: "openai",
       model: "gpt-test",
@@ -264,20 +452,170 @@ describe("agService ReferencePayload 发送契约", () => {
   it("activeDocContent 优先取当前编辑器实时正文，而不是 edStore 载入快照", async () => {
     edStore.loadDoc("notes/current.md", "旧快照", 101);
     edLocateMock.getActiveDocumentContent.mockReturnValue("实时编辑器正文");
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("继续修改");
 
-    const [, arg] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
+    const arg = agStartArg();
     expect(arg.activeDocContent).toBe("实时编辑器正文");
+    expect(arg.openDocSnapshots).toEqual([
+      expect.objectContaining({
+        relPath: "notes/current.md",
+        content: "实时编辑器正文",
+        source: "active_editor",
+      }),
+    ]);
+  });
+
+  it("active editor 绑定未切到新文档时，使用新文档 session LogicalState 且先回写旧绑定文档", async () => {
+    edStore.loadDoc("notes/a.md", "A 旧缓存", 1);
+    const aLoadSeq = edStore.getSnapshot().loadSeq;
+    edStore.loadDoc("notes/b.md", "B 当前 session", 2);
+    edLocateMock.getActiveEditorBinding.mockReturnValue({ relPath: "notes/a.md", loadSeq: aLoadSeq, editFormat: "text" });
+    edLocateMock.getActiveDocumentContent.mockReturnValue("A 实时未保存");
+    mockTurnInvoke((arg) => {
+      completeTurn(arg);
+    });
+
+    await startTurn("整理当前文档");
+
+    const arg = agStartArg();
+    expect(arg.activeDocPath).toBe("notes/b.md");
+    expect(arg.activeDocContent).toBe("B 当前 session");
+    expect(arg.openDocSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relPath: "notes/a.md",
+        content: "A 实时未保存",
+        source: "open_editor_session",
+      }),
+      expect.objectContaining({
+        relPath: "notes/b.md",
+        content: "B 当前 session",
+        source: "active_editor_session",
+      }),
+    ]));
+    expect(edStore.getSnapshot().sessions["notes/b.md"].content).toBe("B 当前 session");
+  });
+
+  it("active editor binding 缺失但 session 已就绪时，使用当前文档 session LogicalState", async () => {
+    edStore.loadDoc("notes/current.md", "session 当前内容", 101);
+    edLocateMock.getActiveEditorBinding.mockReturnValue(null);
+    edLocateMock.getActiveDocumentContent.mockReturnValue("不可归属的编辑器内容");
+    mockTurnInvoke((arg) => {
+      completeTurn(arg);
+    });
+
+    await startTurn("整理当前文档");
+
+    const arg = agStartArg();
+    expect(arg.activeDocPath).toBe("notes/current.md");
+    expect(arg.activeDocContent).toBe("session 当前内容");
+    expect(arg.openDocSnapshots).toEqual([
+      expect.objectContaining({
+        relPath: "notes/current.md",
+        content: "session 当前内容",
+        source: "active_editor_session",
+      }),
+    ]);
+  });
+
+  it("新活动文档 session 尚未载入时短暂等待，载入后自动继续本轮发送", async () => {
+    vi.useFakeTimers();
+    try {
+      edStore.loadDoc("notes/a.md", "A 缓存", 1);
+      const aLoadSeq = edStore.getSnapshot().loadSeq;
+      edStore.openDoc("notes/b.md");
+      edLocateMock.getActiveEditorBinding.mockReturnValue({ relPath: "notes/a.md", loadSeq: aLoadSeq, editFormat: "text" });
+      edLocateMock.getActiveDocumentContent.mockReturnValue("A 实时未保存");
+      mockTurnInvoke((arg) => {
+        completeTurn(arg);
+      });
+
+      const sending = startTurn("整理当前文档");
+      await Promise.resolve();
+      expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
+
+      edStore.loadDoc("notes/b.md", "B 载入完成", 2);
+      await vi.advanceTimersByTimeAsync(25);
+      await sending;
+
+      const arg = agStartArg();
+      expect(arg.activeDocPath).toBe("notes/b.md");
+      expect(arg.activeDocContent).toBe("B 载入完成");
+      expect(arg.openDocSnapshots).toEqual(expect.arrayContaining([
+        expect.objectContaining({ relPath: "notes/b.md", source: "active_editor_session" }),
+      ]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("回合 relPath 在发送时冻结，异步期间切换文档不污染历史保存", async () => {
+    edStore.loadDoc("notes/a.md", "A 文档", 1);
+    edStore.loadDoc("notes/b.md", "B 文档", 2);
+    edStore.setActivePath("notes/a.md");
+    mockTurnInvoke((arg) => {
+      edStore.setActivePath("notes/b.md");
+      completeTurn(arg);
+    });
+
+    await startTurn("总结当前文档");
+    await Promise.resolve();
+
+    const saveTurnRelPaths = invokeMock.mock.calls
+      .filter(([command, arg]) =>
+        command === "dispatch" &&
+        (arg as { request?: { command?: string } }).request?.command === "ag.save_turn",
+      )
+      .map(([, arg]) => (arg as { request: { params: { relPath?: string } } }).request.params.relPath);
+    expect(saveTurnRelPaths.length).toBeGreaterThan(0);
+    expect(new Set(saveTurnRelPaths)).toEqual(new Set(["notes/a.md"]));
+  });
+
+  it("发送给后端的 history 保留每条消息的冻结 relPath，供后端按文档降权", async () => {
+    edStore.loadDoc("notes/a.md", "A 文档", 1);
+    mockTurnInvoke((arg) => {
+      completeTurn(arg);
+    });
+    await startTurn("先总结 A");
+
+    edStore.loadDoc("notes/b.md", "B 文档", 2);
+    await startTurn("整理当前文档");
+
+    const starts = invokeMock.mock.calls
+      .filter(([command]) => command === "ag_start_turn")
+      .map(([, arg]) => arg as Record<string, unknown>);
+    expect(starts).toHaveLength(2);
+    expect(starts[1]).toMatchObject({
+      activeDocPath: "notes/b.md",
+      history: [
+        expect.objectContaining({
+          role: "user",
+          content: "先总结 A",
+          relPath: "notes/a.md",
+          turnId: expect.stringMatching(/^t-/),
+        }),
+      ],
+    });
+  });
+
+  it("active 编辑器无法序列化时阻断 AgentTurn，不调用后端模型入口", async () => {
+    edStore.loadDoc("notes/current.md", "旧快照", 101);
+    edLocateMock.getActiveDocumentContent.mockReturnValue(null);
+    invokeMock.mockResolvedValue({ correlation_id: "ag-test", result: { ok: true } });
+
+    await startTurn("继续修改");
+
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
+    const session = activeSession(agStore.getSnapshot());
+    expect(session.messages.some((m) => m.error && m.content.includes("AG_ACTIVE_SNAPSHOT_REQUIRED"))).toBe(true);
   });
 
   it("diff_proposed 的 before/after 来自后端 projection，不取整篇 fallback", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段原文\n最后一段", 101);
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_request",
@@ -294,7 +632,6 @@ describe("agService ReferencePayload 发送契约", () => {
       });
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-1", rel_path: "notes/current.md" });
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("把第二段改写");
@@ -317,7 +654,7 @@ describe("agService ReferencePayload 发送契约", () => {
 
   it("前端不再根据数字型 block_id 自行解析目标块", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段原文", 101);
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_request",
@@ -334,7 +671,6 @@ describe("agService ReferencePayload 发送契约", () => {
       });
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-2", rel_path: "notes/current.md" });
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("把第二段改写");
@@ -346,11 +682,10 @@ describe("agService ReferencePayload 发送契约", () => {
 
   it("缺少后端 projection 时，diff_proposed 投影为 error 卡", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段", 101);
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-missing", rel_path: "notes/current.md" });
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("改写这一段");
@@ -365,7 +700,7 @@ describe("agService ReferencePayload 发送契约", () => {
 
   it("块级 projection 缺少 block_id 时投影为精准目标缺失错误", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段", 101);
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
@@ -376,7 +711,6 @@ describe("agService ReferencePayload 发送契约", () => {
       });
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-target-missing", rel_path: "notes/current.md" });
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("把第二段改写");
@@ -402,7 +736,7 @@ describe("agService ReferencePayload 发送契约", () => {
       contentTo: 3,
     });
     const styleOps = [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "bold" } }];
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
@@ -423,7 +757,6 @@ describe("agService ReferencePayload 发送契约", () => {
       });
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-style", rel_path: "notes/current.docx" });
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("把正文加粗");
@@ -443,7 +776,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("显式 replace_document 投影为整篇 diff，供 Editor 执行整篇草稿替换", async () => {
     edStore.loadDoc("notes/current.md", "旧全文", 101);
     edLocateMock.getActiveDocumentContent.mockReturnValue("实时旧全文");
-    invokeMock.mockImplementation(async (_command, arg) => {
+    mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
@@ -462,7 +795,6 @@ describe("agService ReferencePayload 发送契约", () => {
       });
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-doc", rel_path: "notes/current.md" });
       completeTurn(arg);
-      return undefined;
     });
 
     await startTurn("整篇重写");
@@ -475,6 +807,29 @@ describe("agService ReferencePayload 发送契约", () => {
       locationLabel: "整篇",
       patchKind: "replace_document",
       state: "pending",
+    });
+  });
+
+  it("DiffProjection 保留 active_editor_session source，不降级为 active_editor", async () => {
+    edStore.loadDoc("notes/current.md", "旧全文", 101);
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "tool_result",
+        turn_id: "t",
+        tool_name: "propose_edit",
+        result: projectionResult({ diff_id: "diff-session", snapshot_source: "active_editor_session" }),
+        success: true,
+      });
+      onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-session", rel_path: "notes/current.md" });
+      completeTurn(arg);
+    });
+
+    await startTurn("改写当前文档");
+
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      diffId: "diff-session",
+      snapshotSource: "active_editor_session",
     });
   });
 
