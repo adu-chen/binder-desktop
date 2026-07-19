@@ -36,9 +36,12 @@ export function mapSaveState(s: RustSaveState): Extract<TabState, "saving" | "sa
   }
 }
 
-/** 编辑模型格式：text=md/纯文本；html=docx 编辑链（doc.save_from_edit 回写）；
+/** 磁盘编辑格式：text=纯文本；markdown=.md Codec；html=docx 编辑链（doc.save_from_edit 回写）；
  *  html_file=.html 独立文件（PI-ED-13 / REQ-ED-008：富文本编辑 + HTML 序列化，经 ws.save_doc 文本落盘）。 */
-export type EditFormat = "text" | "html" | "html_file";
+export type EditFormat = "text" | "markdown" | "html" | "html_file";
+
+/** EditSession/OpenDocSnapshot.content 的编码；与磁盘 editFormat 分离。 */
+export type ContentFormat = "text" | "html";
 
 export type OpenDocSnapshotSource = "active_editor" | "active_editor_session" | "open_editor_session";
 
@@ -46,6 +49,7 @@ export interface OpenDocSnapshot {
   relPath: string;
   content: string;
   editFormat: EditFormat;
+  contentFormat: ContentFormat;
   source: OpenDocSnapshotSource;
   dirty: boolean;
   sessionVersion: number;
@@ -75,6 +79,7 @@ function makeSession(
   baseline: number | string | null,
   tabState: TabState,
   editFormat: EditFormat,
+  contentFormat: ContentFormat = editFormat === "html" || editFormat === "html_file" ? "html" : "text",
   version = content === null ? 0 : 1,
   converting = false,
 ): EditSession {
@@ -83,6 +88,7 @@ function makeSession(
     baseline,
     tabState,
     editFormat,
+    contentFormat,
     converting,
     sessionVersion: version,
     contentHash: content === null ? "" : hashLogicalContent(content),
@@ -94,7 +100,7 @@ function makeSession(
  *  非激活打开文档的 content 是该 session 当前 LogicalState 的序列化持有者。
  *  sessionVersion/contentHash 用于 AG/DE 基线校验，禁止已打开文档退回 DiskState。 */
 export interface EditSession {
-  /** 文档内容；text=纯文本/md，html=docx 编辑链 HTML。null=已建会话但未载入内容（占位）。
+  /** 文档 LogicalState 序列化内容；编码由 contentFormat 声明。null=已建会话但未载入内容（占位）。
    *  归属：激活文档为 LogicalState 派生缓存；非激活打开文档为序列化 LogicalState。 */
   content: string | null;
   /** 加载基线哈希（后端 ws.read_doc / doc.open_for_edit 回；供保存校验）。 */
@@ -102,6 +108,8 @@ export interface EditSession {
   tabState: TabState;
   /** 编辑模型格式（EditFormat）。 */
   editFormat: EditFormat;
+  /** content 编码；Markdown 终态模型为 html，源码保护路径为 text。 */
+  contentFormat: ContentFormat;
   /** ED session 版本；每次受控内容回写递增，用于 open session diff 防基线偏移。 */
   sessionVersion: number;
   /** content 的稳定哈希；与 sessionVersion 共同构成 DiffProjection 基线。 */
@@ -128,6 +136,7 @@ interface EdState {
   loadedContent: string | null;
   baseline: number | string | null;
   editFormat: EditFormat;
+  contentFormat: ContentFormat;
   /** 活动会话 docx 转换进行中（SM-DOC-01 投影）。 */
   converting: boolean;
 }
@@ -144,6 +153,7 @@ function derive(core: Core): Omit<EdState, keyof Core> {
     loadedContent: sess?.content ?? null,
     baseline: sess?.baseline ?? null,
     editFormat: sess?.editFormat ?? "text",
+    contentFormat: sess?.contentFormat ?? "text",
     converting: sess?.converting ?? false,
   };
 }
@@ -220,11 +230,12 @@ export const edStore = {
     baseline: number | string,
     jumpLine: number | null = null,
     editFormat: EditFormat = "text",
+    contentFormat: ContentFormat = editFormat === "html" || editFormat === "html_file" ? "html" : "text",
   ) {
     commit({
       sessions: {
         ...state.sessions,
-        [path]: makeSession(content, baseline, "saved", editFormat),
+        [path]: makeSession(content, baseline, "saved", editFormat, contentFormat),
       },
       activePath: path,
       loadSeq: state.loadSeq + 1,
@@ -270,6 +281,7 @@ export const edStore = {
           relPath: path,
           content: sess.content,
           editFormat: sess.editFormat,
+          contentFormat: sess.contentFormat,
           source: path === state.activePath ? activeSource : "open_editor_session",
           dirty: isDirtyTabState(sess.tabState),
           sessionVersion: sess.sessionVersion,
@@ -295,6 +307,7 @@ export const edStore = {
         baseline: sessions[snap.relPath]?.baseline ?? null,
         tabState: snap.dirty ? "dirty" : "saved",
         editFormat: snap.editFormat,
+        contentFormat: snap.contentFormat ?? (snap.editFormat === "html" || snap.editFormat === "html_file" ? "html" : "text"),
         sessionVersion: snap.sessionVersion,
         contentHash: snap.contentHash || hashLogicalContent(snap.content),
       };
@@ -346,6 +359,7 @@ export const edStore = {
         relPath: path,
         content: nextContent,
         editFormat: next.editFormat,
+        contentFormat: next.contentFormat,
         source: "open_editor_session",
         dirty: true,
         sessionVersion: nextVersion,

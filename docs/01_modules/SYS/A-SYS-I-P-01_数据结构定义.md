@@ -132,7 +132,8 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 |---|---|---|
 | rel_path | workspace 内文档路径 | DocRef 的路径部分；必须规范化后传输 |
 | content | 当前 LogicalState 的序列化内容 | 激活文档优先来自 ProseMirror `doc` 实时序列化；active binding 未就绪时可来自当前文档 `EditSession.content`；非激活打开文档来自 `EditSession.content` |
-| edit_format | 编辑格式 | text / html / html_file；与 ED session 格式一致 |
+| edit_format | 磁盘解析/保存格式 | text / markdown / html / html_file；与 ED session 格式一致，不能用于推断 content 编码 |
+| content_format | content 的编码格式 | text / html；受支持 Markdown 的 LogicalState 为 html，源码保护 Markdown 为 text |
 | source | 快照来源 | active_editor / active_editor_session / open_editor_session |
 | dirty | 当前 session 是否偏离 DiskState | 仅描述 LogicalState 与加载基线关系，不代表已保存 |
 | session_version | ED session 版本 | 每次受控修改递增；用于防多重编辑与基线偏移 |
@@ -244,7 +245,7 @@ BR-SYS-PERSIST-001 约束）**
 | agent_turns | turn_id(PK)、session_id、workspace_id、rel_path(可空)、status(completed/error/cancelled/gate_rejected/draft)、payload_ref、created_at、updated_at | 回合/对话历史（BR-AG-PERSIST-001：全状态本地可恢复不上云） | AG |
 | agent_turn_payloads | payload_ref(PK)、workspace_id、payload_json、payload_size、created_at | 回合内容载荷（AG 私有 v1 JSON；工具摘要只读、Diff 仅引用） | AG |
 | ed_open_tabs | workspace_id、rel_path、kind、open_index、is_active、updated_at | 编辑器打开文档标签元数据；重启恢复打开集合、顺序与当前文档，正文不在此表 | ED |
-| ed_session_snapshots | workspace_id、rel_path、content、edit_format、dirty、session_version、content_hash、updated_at | 已打开文档 LogicalState 的持久化镜像；只对 `ed_open_tabs` 中仍打开的文档参与恢复和自动应用基线校验 | ED |
+| ed_session_snapshots | workspace_id、rel_path、content、edit_format、content_format、dirty、session_version、content_hash、updated_at | 已打开文档 LogicalState 的持久化镜像；只对 `ed_open_tabs` 中仍打开的文档参与恢复和自动应用基线校验；旧记录迁移时 content_format 按 edit_format 安全回填 | ED |
 | build_runs | run_id(PK)、workspace_id、status、plan_ref（任务计划载荷）、interrupted_at(可空)、created_at、updated_at | 构建控制态（BR-CBT-PERSIST-001：重启恢复至中断点或明确关闭，无悬挂） | CBT |
 | workflow_runs | run_id(PK)、workspace_id、workflow_id、current_step、status、created_at、updated_at | 工作流执行控制态（BR-TPL-STATE-001：可恢复无悬挂） | TPL |
 | templates | template_id(PK)、workspace_id、template_kind、body、organization、created_at、updated_at | 模板定义（BR-TPL-DATA-001） | TPL |
@@ -362,3 +363,4 @@ status: mapped
 | 2026-07-18 | v1.6 | 登记 OpenDocSnapshot、DiffProjection 基线与 `ed_session_snapshots` 表：已打开文档 AG/DE/ED 链路必须以 LogicalState 快照为唯一读取门禁，未打开文档才允许读取 DiskState |
 | 2026-07-18 | v1.7 | 登记 HistTurn 历史消息投影字段：`rel_path/turn_id` 用于 AG 按当前文档分流历史，防跨文档历史作为当前文档事实 |
 | 2026-07-18 | v1.8 | 登记 EditorOpenTab 与 `ed_open_tabs` 表：打开集合、顺序和当前文档由独立控制态恢复；`ed_session_snapshots` 只作为打开文档 LogicalState 内容镜像，孤立镜像不得打开文档 |
+| 2026-07-18 | v1.9 | ED-MARKDOWN-RICH-ROUNDTRIP-01：OpenDocSnapshot/edit session 增 content_format，edit_format 墄 markdown；`ed_session_snapshots` 墠 content_format 迁移列，使 Markdown DiskState 格式与 LogicalState HTML 编码不再混淆 |

@@ -34,7 +34,7 @@ status: active
 summary: 单文档编辑会话生命周期（加载经 WS / 编辑或 open session diff 脏态驱动 SM-WS-01 / 解析失败降级只读 / 脏态不静默关闭）
 source_type: design
 chain: ED-EDIT
-rules: BR-ED-STATE-001, BR-ED-DATA-001, BR-ED-DATA-002
+rules: BR-ED-STATE-001, BR-ED-DATA-001, BR-ED-DATA-002, BR-ED-DATA-006, BR-ED-VERIFY-001
 initial_state: Closed
 terminal_states: Closed
 -->
@@ -43,15 +43,15 @@ terminal_states: Closed
 - **scope**：单个 workspace 内文档一次编辑会话（打开→编辑→保存协同→关闭）的完整生命周期
 - **context**：目标 DocRef（A-SYS-I-P-01）、编辑模型（内容块树或非激活 session 序列化 LogicalState）、脏态标记、sessionVersion、contentHash、加载/解析结果
 - **states**：Closed、Loading、Ready、Editing、ReadOnly、Conflicted
-- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、sessionDiffApplied、sessionApplyFail、saved、close、confirmDiscard、retry、
+- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、sessionDiffApplied、sessionApplyFail、serializeFail、saved、close、confirmDiscard、retry、
   externalChange、saveConflict、conflictKeepMine、conflictReload
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
 | Closed | open | 路径在 workspace root 内（X-FORBID-004，WS 侧守护） | Loading | 经 WS 读取内容 |
-| Loading | loadOk | 内容解析为编辑模型成功 | Ready | 装载编辑模型（md 直载 / docx 经 DOC 转换） |
-| Loading | parseFail | — | ReadOnly | 降级只读呈现，不静默丢内容 |
+| Loading | loadOk | 内容按 editFormat 解析成功且 LogicalState 编码已声明 | Ready | Markdown 经 Codec 装载为终态模型；b-docx/.html 经 HTML 模型；text 逐行装载 |
+| Loading | parseFail | 解析失败或命中无法无损承载结构 | ReadOnly | 保留原始源码并进入源码保护/只读呈现，不构造部分富文本后继续保存 |
 | Loading | loadFail | — | Closed | 统一错误形状，会话不建立 |
 | Ready | edit | — | Editing | 更新编辑模型；驱动 SM-WS-01 Idle→Dirty（X-INTER-001） |
 | Ready | draftDiffApplied | DE pending diff 命中当前编辑器块 | Editing | after 替换进目标 Block，GreenReview 标绿，驱动 SM-WS-01 Dirty |
@@ -63,6 +63,7 @@ terminal_states: Closed
 | Editing | sessionDiffApplied | `draft_mode=open_session` 且 base_session_version/base_content_hash 匹配 | Editing | 更新非激活 session LogicalState，递增版本、刷新哈希、持久化 `ed_session_snapshots`；重叠 diff 由 DE 冲突规则约束 |
 | Editing | sessionApplyFail | 基线不匹配/锚失效/事务不支持 | Editing | 不修改 LogicalState；回 DE autoApplyFail |
 | Editing | saved | SM-WS-01 达 Saved（X-INTER-001 回执） | Ready | 脏态清除；已 accepted 的 GreenReview 复位 |
+| Editing | serializeFail | Markdown 序列化、语义校验或能力检查失败 | Editing | 禁止写盘、保持 dirty 与原 DiskState，提示可恢复错误 |
 | Editing | externalChange / saveConflict | 有脏态（WS 事件/SM-WS-01 冲突回执） | Conflicted | 冲突提示，等待用户显式裁决 |
 | Conflicted | conflictKeepMine | 用户显式选择保留己方编辑 | Editing | 脏态保留；后续 save 经 overrideConfirmed 覆盖确认 |
 | Conflicted | conflictReload | 用户显式选择放弃并重载 | Loading | 丢弃脏态（显式）+ 重载磁盘内容 |
@@ -82,11 +83,13 @@ terminal_states: Closed
   - Editing → Closed 且无 saved/confirmDiscard（脏态不得静默关闭，BR-ED-STATE-001）
   - Ready/Editing → sessionDiffApplied 无 session 基线匹配（不得应用陈旧 DiffProjection）
   - sessionApplyFail → 任何内容修改（失败必须无半应用状态）
+  - serializeFail → Ready/Closed（未保存成功不得清脏或关闭；必须修复内容、切换源码保护或显式丢弃）
+  - Markdown 非支持节点/样式 → saved（未经能力检查和语义往返校验不得写盘）
   - Editing（收到 externalChange）→ Loading 直达（**有脏态不得静默重载**，必经 Conflicted 显式裁决）
   - Conflicted → Ready/Editing/Loading 无用户显式选择（冲突不得自动消解，BR-ED-STATE-003）
 - **acceptance_criteria**：唯一进入 Editing 的路径经 Ready；脏态会话关闭必经 saved 或显式
   confirmDiscard；parseFail 不丢内容（ReadOnly 可见）；loadFail 不建立会话；`sessionDiffApplied`
-  在基线匹配时修改 LogicalState 并持久化镜像，基线不匹配时不修改；离线时 open/edit/close
+  在基线匹配时修改 LogicalState 并持久化镜像，基线不匹配时不修改；Markdown serializeFail 保持 Editing/dirty 且 DiskState 不变；离线时 open/edit/close
   全链可用（不依赖在线鉴权）；外部变更下两个方向的内容损失（覆盖外部修改/丢弃己方脏态）均必经
   用户显式选择
 - **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions）
@@ -115,7 +118,7 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 
 - **SM-ED-01 正路**：Closed→open→Loading→loadOk→Ready→edit/draftDiffApplied/sessionDiffApplied→Editing→saved→Ready→close→Closed。
 - **降级与错误路**：parseFail→ReadOnly（内容可见）→retry→Loading；loadFail→Closed 会话不建立；
-  save 失败停留 Editing 可重试（SM-WS-01 SaveError 侧验证归 WS）。
+  save/serializeFail 停留 Editing 可重试，且 Markdown 原 DiskState 不变（SM-WS-01 SaveError 侧验证归 WS）。
 - **禁止转移**：Closed/Loading/ReadOnly→Editing 不可达；Editing 无 saved/confirmDiscard 时 close
   被拒（脏态不静默丢失）；sessionApplyFail 不改变 LogicalState。
 - **跨模块转移（X-INTER-001，G5 联调）**：edit→SM-WS-01 Dirty 唯一驱动；Saved 回执→ED 清脏态；
@@ -167,3 +170,4 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 | 2026-06-12 | v1.2 | Q2 缺口补遗：SM-ED-01 新增 Conflicted 态与 externalChange/saveConflict/conflictKeepMine/conflictReload 事件；forbidden 增「有脏态不得静默重载」「冲突不得自动消解」；acceptance 同步（承载 BR-ED-STATE-003，对接 SM-WS-01 冲突路径与 BR-WS-OBS-001 事件） |
 | 2026-07-08 | v1.3 | 增加 draftDiffApplied 事件：DE pending diff 命中当前编辑器块时由 ED 受控接口替换 after、进入 Editing 并驱动保存链；Saved 后清除已 accepted 的 GreenReview |
 | 2026-07-18 | v1.4 | 增加 sessionDiffApplied/sessionApplyFail：已打开非激活文档 diff 基线匹配后修改 session LogicalState、递增版本/哈希并持久化，失败不得半应用；脏态转移接入 SM-WS-01 |
+| 2026-07-18 | v1.5 | ED-MARKDOWN-RICH-ROUNDTRIP-01：SM-ED-01 复用既有状态，增加 BR-ED-DATA-006/BR-ED-VERIFY-001、serializeFail 事件、Markdown 解析/源码保护 Guard 与禁止有损保存转移；不新建规则链或状态机 |

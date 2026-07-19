@@ -519,3 +519,4 @@ npm run governance:generate
 | 2026-07-02 | v1.1 | 追加登记 PI-FE-31 编辑器核心优化批（G-8，人类授权执行 A-CORE-X-R-03 §7）：分页 + 图文呈现（BR-ED-DATA-003 闭合，解除 PI-FE-30 分页延后）+ 工具栏/编辑工具 + 三栏可拖动布局 + 编辑区缩放（视图层）；验收 tsc/vitest 104/cargo 140/build/audit 绿，真机视觉验收登记待做 |
 | 2026-07-03 | v1.2 | PI-FE-14（富文本 Markdown 往返）行为撤销（人类裁定 B，2026-07-03）：md 回归纯文本忠实编辑（同 txt，textToDoc/getText），tiptap-markdown 移除——实测其解析把中文段首缩进（4空格/Tab）渲染为代码块、序列化向正文注入转义反斜杠污染文件；对齐旧项目形态（md/txt 均纯文本，should_inject_block_ids_for_plain_text 同源实证）。md 富文本可视化如需求再起，按三态模型做显示态预览（不碰逻辑态） |
 | 2026-07-16 | v1.3 | 同步 PI-FE-04 文件树只读预览视觉优化：移除 `not_supported` 灰禁用语义，将只读预览改为可叠加 `preview_only` 模式标记，保留 open/dirty/pending 等会话状态的互斥视觉 |
+| 2026-07-18 | v1.4 | 人类新裁决启动 ED-MARKDOWN-RICH-ROUNDTRIP-01 / PI-ED-14，正式替代 v1.2 的 Markdown 纯文本实现结论：采用官方 TipTap Markdown Codec + 终态富文本 + 无静默丢失门禁；v1.2 的缩进/转义失败原因保留为回归 fixtures，不删除历史 |

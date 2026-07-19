@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-18T18:12:25.868Z -->
+<!-- 最后生成时间：2026-07-19T01:45:46.507Z -->
 
 ### 模块编码表
 
@@ -138,6 +138,8 @@
 | BR-ED-DATA-001     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-004     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-002     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
+| BR-ED-DATA-006     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
+| BR-ED-VERIFY-001   | VERIFY  | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-005     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-DATA-003     | DATA    | ED-EDIT                              | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |
 | BR-ED-STATE-002    | STATE   | ED-DECOR                             | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md      | registered      | MISSING |

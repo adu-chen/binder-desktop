@@ -29,7 +29,8 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 
 | 接口 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ed.open_session` | DocRef | 会话句柄 + 编辑模型（md 直载 / docx 经 DOC） | 解析失败→只读降级（SM-ED-01 ReadOnly）；读取失败→会话不建立 | BR-ED-STATE-001 |
+| `ed.open_session` | DocRef | 会话句柄 + `{editFormat, contentFormat, content}` 编辑模型（Markdown 经 Codec / b-docx 经 DOC / text 原文） | Markdown 解析失败或非支持结构→源码保护/只读降级（SM-ED-01 ReadOnly）；读取失败→会话不建立 | BR-ED-STATE-001 / BR-ED-DATA-006 |
+| `ed.serialize_session` | 会话句柄 | 与 editFormat 对应的 DiskState 内容；Markdown 返回规范化源码 | 非支持节点/样式、序列化失败、语义往返失败→`ED_MARKDOWN_SERIALIZE_FAILED`，保持 dirty 且不写盘 | BR-ED-VERIFY-001 |
 | `ed.close_session` | 会话句柄 | 确认 | 有脏态未处置→拒绝（须先 save 或 confirmDiscard） | BR-ED-STATE-001 |
 | `ed.get_dirty_state` | 会话句柄 | 是否脏 + 当前状态（SM-ED-01 态） | — | X-INTER-001（驱动 SM-WS-01） |
 | `ed.get_open_snapshots` | — | OpenDocSnapshot[]（全部已打开文档 LogicalState 快照） | active live 序列化失败/缺 session 版本 → 错误 | AG/DE 读门禁（A-SYS-I-P-01 OpenDocSnapshot） |
@@ -42,7 +43,9 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 
 > `ed.resolve_conflict(keep_mine)` 后续 `ws.save_doc` 须带 override=true（用户显式覆盖语义链）；
 > `reload` 经 `ws.read_doc` 重载并刷新基线。
-> `ed.get_open_snapshots` 是 AG/DE 读取已打开文档的唯一门禁：激活文档必须从 ProseMirror `doc`
+> `editFormat` 枚举为 `text / markdown / html / html_file`；`contentFormat` 枚举为 `text / html`。
+> 受支持 Markdown 的 LogicalState 快照必须是 `editFormat=markdown, contentFormat=html`，源码保护路径为
+> `editFormat=markdown, contentFormat=text`。`ed.get_open_snapshots` 是 AG/DE 读取已打开文档的唯一门禁：激活文档必须从 ProseMirror `doc`
 > 实时序列化，非激活打开文档必须从 `EditSession.content` 读取并附带 sessionVersion/contentHash。
 > 失败时调用方必须阻断，不得读取 DiskState。
 > 重启恢复必须先调用 `ed.list_open_tabs` 得到打开集合、顺序与当前文档，再只恢复这些路径对应的
@@ -86,7 +89,7 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 |---|---|---|---|
 | `replace_text` | 字符锚 {blockId,start,end}、text | 区间文本替换（含 start=end 纯插入） | BR-ED-DATA-004 |
 | `replace_block` | blockId、text | 替换目标块内容，blockId 保持 | BR-ED-DATA-001 / BR-ED-STATE-001 |
-| `replace_document` | content、format(text/html/html_file) | 整篇替换为指定编辑模型内容；仅用于显式整篇 diff 或回滚 | BR-ED-STATE-001 / BR-ED-DATA-002 |
+| `replace_document` | content、format(text/markdown/html/html_file)、contentFormat(text/html) | 整篇替换为指定 LogicalState 内容；Markdown HTML 快照不得当作 Markdown 源码重复解析 | BR-ED-STATE-001 / BR-ED-DATA-002 / BR-ED-DATA-006 |
 | `insert_block` | blockId（其后）、blockJSON | 块后插入新块（新块得新 id） | BR-ED-DATA-001 |
 | `set_mark` | 字符锚区间、mark {type,attrs} | 区间加字符样式（bold/color/fontSize…） | BR-ED-DATA-005（StyleOp） |
 | `unset_mark` | 字符锚区间、markType | 区间去字符样式 | BR-ED-DATA-005（StyleOp） |
@@ -146,3 +149,4 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
 | 2026-07-12 | v1.3 | 三态实现回写：补 `replace_block` / `replace_document` 为当前 `applyEditOps()` 已实现内容 op；声明 StyleOp 由 `applyStyleOps()` 批内原子承载；标注 `ws.external_change` 推送/轮询尚未注册，当前已落地能力为保存时 `WS_SAVE_CONFLICT` 冲突映射与显式覆盖确认 |
 | 2026-07-18 | v1.4 | 新增已打开文档接口：`ed.get_open_snapshots`、`ed.persist_session_snapshot`、`ed.list_session_snapshots` 与 `ed.apply_session_diff`；`draft_mode=open_session` 必须基线校验后自动应用 LogicalState，不得后台写盘 |
 | 2026-07-18 | v1.5 | 新增编辑器打开标签持久化接口：`ed.persist_open_tabs` / `ed.list_open_tabs`；启动恢复以打开集合为门禁，只恢复对应 session 镜像并同步当前文档 |
+| 2026-07-18 | v1.6 | ED-MARKDOWN-RICH-ROUNDTRIP-01：接口增加 editFormat=markdown 与 contentFormat；open/serialize/replace_document 明确 Markdown Codec、源码保护、语义校验失败不写盘契约 |

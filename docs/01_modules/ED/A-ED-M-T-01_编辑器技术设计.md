@@ -202,27 +202,57 @@ rule_id: BR-ED-DATA-004
 
 ## §5 md / b-docx / html 统一编辑模型（ED-EDIT）
 
-md、b-docx 与 **.html**（裁定 D-1，REQ-ED-008）在 ED 内共用**同一编辑模型与交互**：md 直接解析
+Markdown、b-docx 与 **.html**（裁定 D-1，REQ-ED-008）在 ED 内共用**同一结构化编辑模型与交互**：Markdown 经统一 Markdown Codec 解析
 装载；原生 `.docx` 不进入 ED 编辑态，只走 DOC/PRV 预览链；b-docx 由 DOC 转换为统一编辑模型后进入
 编辑，存盘时经 DOC 转换回 docx（DOCX 往返，REQ-CORE-004）；.html 为文本格式直接解析装载、
 序列化 HTML 往返（读写经 WS 文本路径，**不经 DOC 二进制管线**，X-SEQ-004 无涉），且 .html 源可
 落盘 `data-block-id`（blockId 跨保存稳定，锚定强于 md 不注入策略）。ED 不含 docx 二进制解析/生成代码。
 
-> **序列化往返风险分级**（三态模型 A-CORE-C-T-01 §1.2）：`serialize(editor)`→`setContent(loadedContent)` 的双向转换存在信息丢失风险——text/md 格式（`getText()`→`textToDoc()`）为低风险，html/html_file 格式（`editor.getHTML()`→`generateJSON()`）为中等风险，属于**已知技术债务**（详见 docx 样式子集三级契约 §11.1），非待修复缺陷。
+> **格式与内容编码分离**：`editFormat` 决定 DiskState 的解析/保存管线（text/markdown/html/html_file）；
+> `contentFormat` 决定 EditSession/OpenDocSnapshot 中 LogicalState 的序列化编码（text/html）。受支持
+> Markdown 打开后以 `editFormat=markdown + contentFormat=html` 持有 ProseMirror 兼容 LogicalState；
+> 非支持结构进入 `contentFormat=text` 源码保护路径。DiskState 原文不得与 LogicalState HTML 混用。
 
 <!-- RULE
 rule_id: BR-ED-DATA-002
 主链路: ED-EDIT
 域: DATA
 -->
-md、b-docx 与 .html 必须共用同一结构化编辑模型（内容块模型，§4）：b-docx 的 docx 字节解析与
+Markdown、b-docx 与 .html 必须共用同一结构化编辑模型（内容块模型，§4），纯文本继续使用 text 模型：Markdown 的 DiskState 必须经 Markdown Codec 进入 ProseMirror LogicalState，保存时从 LogicalState 经同一 Codec 序列化为 Markdown；b-docx 的 docx 字节解析与
 生成全部归 DOC，ED 仅编辑 DOC 转换后的统一模型，ED 代码不得包含 docx 二进制处理路径；原生 docx
 不得直接进入 ED 统一编辑模型，必须先由 DOC 转成 b-docx 或走 PRV 只读预览；.html 为文本格式经 WS
 文本读写路径直接解析/序列化往返，不引入独立转换管线；docx 往返中编辑模型与样式子集的承载范围以
 本文与 DOC L2 的联合契约为准（ED-04/ED-05 延 DOC G2 联合敲定，本规则先锁分工：转换归 DOC、
-编辑归 ED）。
+编辑归 ED）。`editFormat` 与 `contentFormat` 必须分离并经 SYS OpenDocSnapshot 契约共享，AG/DE/会话恢复不得按文件扩展名猜测 LogicalState 编码。
 
-### §5.1 样式投影与样式操作协议（PI-ED-11，承 REQ-ED-007）
+### §5.1 Markdown Codec 与安全往返（ED-MARKDOWN-RICH-ROUNDTRIP-01）
+
+- 默认方言为 CommonMark + GFM 项目子集：H1-H6、粗体/斜体/删除线、有序/无序/任务列表、嵌套列表、引用、行内/围栏代码、链接、图片、表格、分隔线与转义。
+- Front Matter、脚注、数学公式、Admonition、Markdown 注释及无法由当前 schema 表达的任意 HTML 不在 v1 无损承诺内；命中后进入源码保护路径。
+- 未编辑会话不得触发写盘或规范化；编辑后允许规范化 Markdown，但必须通过支持子集的语义往返校验。
+- 四空格或 Tab 按 CommonMark 代码块语义处理，不用改写解析规则掩盖合法语法。
+
+<!-- RULE
+rule_id: BR-ED-DATA-006
+主链路: ED-EDIT
+域: DATA
+-->
+Markdown 文档必须走独立 `markdown` 格式管线：DiskState 经统一 Markdown Codec 解析为 ProseMirror
+LogicalState，DisplayState 以标题、列表、引用、代码、表格等终态样式呈现，保存时从 LogicalState 经
+同一 Codec 序列化回 Markdown；`.txt` 不得进入该管线。受支持 Markdown 的 session/OpenDocSnapshot
+必须声明 `contentFormat=html`，源码保护路径声明 `contentFormat=text`；调用方不得按扩展名或内容前缀
+猜测编码。解析失败或命中非支持结构时必须保留原始源码并降级，不得构造部分文档后继续保存。
+
+<!-- RULE
+rule_id: BR-ED-VERIFY-001
+主链路: ED-EDIT
+域: VERIFY
+-->
+Markdown 保存必须满足无静默丢失：支持子集执行 parse→serialize→parse 语义等价验证；未编辑文档不得
+写盘或因打开/关闭产生规范化差异；序列化、校验或能力检查失败时必须停止写盘、保持 dirty 与原 DiskState，
+并返回可诊断错误。任何非支持节点、mark 或块属性不得被静默删除、转为普通文本后假报保存成功。
+
+### §5.2 样式投影与样式操作协议（PI-ED-11，承 REQ-ED-007）
 
 文档样式对 agent **可读可编辑**：
 
@@ -257,7 +287,9 @@ rule_id: BR-ED-DATA-005
 落盘路径分流（裁定 D-3）：chat/agent 回合产出经 DE diff 裁决；当前编辑器草稿路径由 ED 受控接口
 先应用为草稿，accepted 后仍由普通 save 落盘（X-FORBID-006 不允许 AG 直接写文件），用户显式触发的
 局部修改样式操作视为用户编辑直改并产生脏态；拒绝含 StyleOp 的草稿 diff 必须恢复草稿前完整内容，
-不得存在绕过裁决的回合直写文件路径。已打开非激活文档的 StyleOp 自动应用需要无 ProseMirror runtime
+不得存在绕过裁决的回合直写文件路径。样式操作必须经过格式能力检查：Markdown 仅允许目标方言可稳定
+表达的 marks/blockAttrs；字体、字号、颜色、下划线、上下标、高亮、文本对齐等非标准能力在 Markdown
+模式下必须禁用或返回明确不支持，不得允许编辑后保存静默丢失。已打开非激活文档的 StyleOp 自动应用需要无 ProseMirror runtime
 事务；未具备时必须返回明确不支持并让 DiffCard 失效，不得降级为 DiskState 写入。
 
 ## §6 分页与图文媒体（呈现层纯化，ED-EDIT）
@@ -364,6 +396,18 @@ target_id: BR-ED-STATE-003
 status: mapped
 -->
 <!-- REQ_MAP
+req_id: REQ-ED-001
+target_type: RULE
+target_id: BR-ED-DATA-006
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-001
+target_type: RULE
+target_id: BR-ED-VERIFY-001
+status: mapped
+-->
+<!-- REQ_MAP
 req_id: REQ-ED-002
 target_type: RULE
 target_id: BR-ED-DATA-001
@@ -426,7 +470,7 @@ status: mapped
   重启恢复继承关闭前打开的文档标签、顺序和当前文档，孤立 `ed_session_snapshots` 不恢复为打开文档，恢复后的当前文档可进入 AG 工作序列。
 - **blockId 稳定**（BR-ED-DATA-001，REQ-ED-002 验收）：普通编辑后既有 blockId 不变；删除块后定位
   该 blockId 收到失效信号；不存在静默错位。
-- **md/docx 统一模型**（BR-ED-DATA-002，REQ-ED-003 联合 DOC 验收）：docx 进入编辑与往返保存经 DOC
+- **Markdown/b-docx 统一模型**（BR-ED-DATA-002/006、BR-ED-VERIFY-001）：Markdown 受支持语法渲染为结构化节点，支持子集语义往返；未编辑不改写、非支持结构不静默保存；docx 进入编辑与往返保存经 DOC
   转换；ED 代码无 docx 二进制处理（静态可查）。
 - **呈现层纯化**（BR-ED-DATA-003，REQ-ED-003/004 验收）：分页开/关与重排不改文档模型、不产生脏态；
   媒体资源越界路径被拒（X-FORBID-004）。
@@ -511,3 +555,4 @@ status: mapped
 | 2026-07-12 | v1.12 | 三态实现回写：保存冲突路径已以 `WS_SAVE_CONFLICT` + `override=true` 显式覆盖确认落地；文件监视/`ws.external_change` 推送仍延后；补 `applyEditOps`/`applyStyleOps` 当前实现入口，明确 DE 草稿与回滚读取当前 ProseMirror LogicalState 而非派生缓存 |
 | 2026-07-18 | v1.13 | 补齐已打开文档 LogicalState 门禁：active 取 ProseMirror 实时序列化，非 active open session 取 `EditSession.content + sessionVersion/contentHash`；`draft_mode=open_session` 经 ED session 事务自动应用并持久化 `ed_session_snapshots` |
 | 2026-07-18 | v1.14 | 补齐启动恢复打开标签协议：`ed_open_tabs` 作为打开集合、顺序和当前文档真源；恢复只对打开集合取 session 镜像，恢复后当前文档直接进入 AG LogicalState 读取链 |
+| 2026-07-18 | v1.15 | ED-MARKDOWN-RICH-ROUNDTRIP-01：替代 Markdown 纯文本实现裁决，修订 BR-ED-DATA-002/005；新增 BR-ED-DATA-006 Markdown Codec 与 BR-ED-VERIFY-001 无静默丢失规则；区分 editFormat/contentFormat，补 CommonMark+GFM 支持矩阵、源码保护与 REQ-ED-001 映射 |

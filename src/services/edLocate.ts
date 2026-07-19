@@ -2,7 +2,7 @@ import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "../components/ed/extensions";
-import type { EditFormat } from "../store/edStore";
+import type { ContentFormat, EditFormat } from "../store/edStore";
 import { makeDocReference, makeSelectionReference, writeReferencePayloadData } from "./referencePayload";
 
 /**
@@ -25,6 +25,7 @@ export interface ActiveEditorBinding {
   relPath: string;
   loadSeq: number;
   editFormat: EditFormat;
+  contentFormat?: ContentFormat;
 }
 
 /** 注册当前活动编辑器实例（Editor.tsx onCreate/卸载调用）。 */
@@ -50,13 +51,19 @@ export function getActiveEditorBinding(): ActiveEditorBinding | null {
   return activeEditorBinding;
 }
 
-export function isActiveEditorBoundTo(relPath: string | null, loadSeq: number, editFormat: EditFormat): boolean {
+export function isActiveEditorBoundTo(
+  relPath: string | null,
+  loadSeq: number,
+  editFormat: EditFormat,
+  contentFormat?: ContentFormat,
+): boolean {
   return Boolean(
     relPath &&
     activeEditorBinding &&
     activeEditorBinding.relPath === relPath &&
     activeEditorBinding.loadSeq === loadSeq &&
-    activeEditorBinding.editFormat === editFormat,
+    activeEditorBinding.editFormat === editFormat &&
+    (contentFormat === undefined || activeEditorBinding.contentFormat === contentFormat),
   );
 }
 
@@ -216,10 +223,12 @@ export function getActiveBlockSnapshotById(blockId: string): BlockSnapshot | nul
   return findTopBlockSnapshotById(ed.state.doc, blockId);
 }
 
-export function getActiveDocumentContent(format: "text" | "html" | "html_file"): string | null {
+export function getActiveDocumentContent(format: EditFormat, contentFormat?: ContentFormat): string | null {
   const ed = activeEditor;
   if (!ed) return null;
-  if (format === "html" || format === "html_file") return ed.getHTML();
+  if (contentFormat === "html" || format === "html" || format === "html_file" || (format === "markdown" && contentFormat !== "text")) {
+    return ed.getHTML();
+  }
   return ed.getText({ blockSeparator: "\n" });
 }
 
@@ -235,7 +244,7 @@ function textToDoc(text: string) {
 export type ApplyEditOp =
   | { op: "replace_text"; blockId: string; start: number; end: number; text: string }
   | { op: "replace_block"; blockId: string; text: string }
-  | { op: "replace_document"; content: string; format: "text" | "html" | "html_file" };
+  | { op: "replace_document"; content: string; format: EditFormat; contentFormat?: ContentFormat };
 
 export type ApplyEditResult = { ok: true } | { ok: false; reason: string };
 
@@ -273,7 +282,7 @@ export function applyEditOps(ops: ApplyEditOp[]): ApplyEditResult {
   if (!ed) return { ok: false, reason: "no_active_editor" };
   for (const op of ops) {
     if (op.op === "replace_document") {
-      const located = setActiveDocumentContent(op.content, op.format);
+      const located = setActiveDocumentContent(op.content, op.format, op.contentFormat);
       if (located !== "located") return { ok: false, reason: "replace_document_failed" };
       continue;
     }
@@ -311,11 +320,11 @@ export function replaceActiveBlockText(blockId: string, text: string): LocateRes
   return applyEditOps([{ op: "replace_block", blockId, text }]).ok ? "located" : "anchor_lost";
 }
 
-export function setActiveDocumentContent(content: string, format: "text" | "html" | "html_file"): LocateResult {
+export function setActiveDocumentContent(content: string, format: EditFormat, contentFormat?: ContentFormat): LocateResult {
   const ed = activeEditor;
   if (!ed) return "anchor_lost";
   try {
-    if (format === "html" || format === "html_file") {
+    if (contentFormat === "html" || format === "html" || format === "html_file" || (format === "markdown" && contentFormat !== "text")) {
       ed.commands.setContent(generateJSON(content, buildEditorExtensions()), { emitUpdate: true });
     } else {
       ed.commands.setContent(textToDoc(content), { emitUpdate: true });
