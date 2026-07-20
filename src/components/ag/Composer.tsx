@@ -1,8 +1,15 @@
-import { useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { Node, mergeAttributes, type JSONContent } from "@tiptap/core";
 import { EditorContent, useEditor, type Editor as TipTapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { activeSession, agStore, useAgStore, type AgMode } from "../../store/agStore";
+import {
+  activeSession,
+  agStore,
+  emptyComposerDraft,
+  useAgStore,
+  type AgMode,
+  type AgentComposerDraft,
+} from "../../store/agStore";
 import { modelKey, modelStore, useModelStore } from "../../store/modelStore";
 import { startTurn } from "../../services/agService";
 import { useWsStore } from "../../store/wsStore";
@@ -139,6 +146,7 @@ function appendText(parts: MessageContentPart[], text: string) {
 }
 
 function serializeEditor(editor: TipTapEditor): {
+  doc: JSONContent;
   parts: MessageContentPart[];
   references: ReferencePayload[];
   tokens: ReferenceTokenAttrs[];
@@ -175,7 +183,7 @@ function serializeEditor(editor: TipTapEditor): {
     block.content?.forEach(visitInline);
   });
 
-  return { parts, references, tokens, prompt: promptTextFromParts(parts) };
+  return { doc, parts, references, tokens, prompt: promptTextFromParts(parts) };
 }
 
 function tokenNode(token: ReferenceTokenAttrs): JSONContent {
@@ -202,11 +210,6 @@ function payloadFromTransfer(dataTransfer: DataTransfer): ReferencePayload | nul
   return referenceFromPlainTextPaste(uri || plain);
 }
 
-interface DraftState {
-  tokens: ReferenceTokenAttrs[];
-  prompt: string;
-}
-
 /**
  * Composer（A-SYS-C-T-02 §4.6 · PI-AG-REF-TOKEN-01）。
  * 输入区使用 TipTap inline atom 承载 ReferenceToken：拖拽/粘贴/@mention 都进入正文流；草稿 chip/tray
@@ -215,26 +218,32 @@ interface DraftState {
 export function Composer() {
   const agState = useAgStore();
   const { sending } = agState;
-  const mode = activeSession(agState).mode;
+  const session = activeSession(agState);
+  const mode = session.mode;
   const { models, selectedKey } = useModelStore();
   const currentModel = modelStore.current();
   const { docs } = useWsStore();
 
-  const [draft, setDraft] = useState<DraftState>({ tokens: [], prompt: "" });
+  const [draft, setDraft] = useState<AgentComposerDraft>(() => session.composerDraft ?? emptyComposerDraft());
   const [atQuery, setAtQuery] = useState<MentionQuery | null>(null);
   const [modePop, setModePop] = useState(false);
   const [modelPop, setModelPop] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+  const draftSessionIdRef = useRef(session.id);
+  const applyingSessionDraftRef = useRef(false);
 
   const refreshDraft = (editor: TipTapEditor) => {
+    if (applyingSessionDraftRef.current) return;
     const next = serializeEditor(editor);
-    setDraft({ tokens: next.tokens, prompt: next.prompt });
+    const nextDraft: AgentComposerDraft = { doc: next.doc, tokens: next.tokens, prompt: next.prompt };
+    setDraft(nextDraft);
+    agStore.setComposerDraft(draftSessionIdRef.current, nextDraft);
     setAtQuery(activeMentionQuery(editor));
   };
 
   const editor = useEditor({
     extensions: [StarterKit, ReferenceTokenNode],
-    content: { type: "doc", content: [{ type: "paragraph" }] },
+    content: draft.doc,
     editorProps: {
       attributes: {
         class: "composer-prosemirror",
@@ -247,6 +256,20 @@ export function Composer() {
     onUpdate: ({ editor }) => refreshDraft(editor),
     onSelectionUpdate: ({ editor }) => setAtQuery(activeMentionQuery(editor)),
   });
+
+  useEffect(() => {
+    if (!editor || draftSessionIdRef.current === session.id) return;
+    const latestSession = agStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    const nextDraft = latestSession?.composerDraft ?? emptyComposerDraft();
+    applyingSessionDraftRef.current = true;
+    editor.commands.setContent(nextDraft.doc, { emitUpdate: false });
+    applyingSessionDraftRef.current = false;
+    draftSessionIdRef.current = session.id;
+    setDraft(nextDraft);
+    setAtQuery(activeMentionQuery(editor));
+    setModePop(false);
+    setModelPop(false);
+  }, [editor, session.id]);
 
   const fileDocs = docs.filter((d) => !d.isDir);
   const atMatches = atQuery
@@ -296,7 +319,9 @@ export function Composer() {
       model: currentModel.model,
     });
     editor.commands.clearContent(true);
-    setDraft({ tokens: [], prompt: "" });
+    const emptyDraft = emptyComposerDraft();
+    setDraft(emptyDraft);
+    agStore.setComposerDraft(draftSessionIdRef.current, emptyDraft);
     setAtQuery(null);
   };
 

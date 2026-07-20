@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import type { MessageContentPart } from "../services/referencePayload";
+import type { JSONContent } from "@tiptap/core";
+import type { MessageContentPart, ReferenceTokenAttrs } from "../services/referencePayload";
 
 /**
  * AG 会话状态投影层（AG-TURN · SM-AG-01 · X-FORBID-007）。
@@ -28,6 +29,12 @@ export interface ChatMessage {
 }
 
 export type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft";
+
+export interface AgentComposerDraft {
+  doc: JSONContent;
+  tokens: ReferenceTokenAttrs[];
+  prompt: string;
+}
 
 /** ToolCall 6 状态（参考稿 §6.2，视觉互斥）。 */
 export type ToolState =
@@ -82,6 +89,8 @@ export interface AgSession {
   archived: boolean;
   /** 回合内容是否已经加载；历史恢复时仅活动会话 eager-load，其余点击懒加载。 */
   turnsLoaded: boolean;
+  /** 输入框草稿是标签级运行时状态，不随历史元数据持久化。 */
+  composerDraft?: AgentComposerDraft;
 }
 
 interface AgState {
@@ -92,6 +101,19 @@ interface AgState {
 }
 
 const sid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+export function emptyComposerDraft(): AgentComposerDraft {
+  return {
+    doc: { type: "doc", content: [{ type: "paragraph" }] },
+    tokens: [],
+    prompt: "",
+  };
+}
+
+function withComposerDraft(s: AgSession): AgSession {
+  return { ...s, composerDraft: s.composerDraft ?? emptyComposerDraft() };
+}
+
 function blankSession(): AgSession {
   return {
     id: sid(),
@@ -102,6 +124,7 @@ function blankSession(): AgSession {
     createdAt: Date.now(),
     archived: false,
     turnsLoaded: true,
+    composerDraft: emptyComposerDraft(),
   };
 }
 
@@ -140,7 +163,7 @@ export const agStore = {
   },
 
   hydrateSessions(sessions: AgSession[], activeSessionId?: string) {
-    const next = sessions.length ? sessions : [blankSession()];
+    const next = sessions.length ? sessions.map(withComposerDraft) : [blankSession()];
     const active =
       (activeSessionId && next.some((s) => s.id === activeSessionId) && activeSessionId) ||
       next.find((s) => !s.archived)?.id ||
@@ -201,6 +224,13 @@ export const agStore = {
   /** 设定活动会话模式（编辑/构建，TERM-AG-006/007）。 */
   setMode(mode: AgMode) {
     mapSession(state.activeSessionId, (s) => ({ ...s, mode }));
+  },
+  /** 保存指定会话的输入框草稿；仅运行时使用，不触发历史持久化。 */
+  setComposerDraft(sessionId: string, draft: AgentComposerDraft) {
+    mapSession(sessionId, (s) => ({ ...s, composerDraft: draft }));
+  },
+  clearComposerDraft(sessionId: string) {
+    mapSession(sessionId, (s) => ({ ...s, composerDraft: emptyComposerDraft() }));
   },
 
   // ── 回合门控（SM-AG-01 投影，全局） ───────────────────────────────

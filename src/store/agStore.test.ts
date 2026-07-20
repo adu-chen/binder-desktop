@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { activeSession, agStore } from "./agStore";
+import { activeSession, agStore, emptyComposerDraft } from "./agStore";
 
 beforeEach(() => {
   agStore.reset();
@@ -97,6 +97,28 @@ describe("agStore 多标签会话（PI-AG-UI-01，呈现层组织）", () => {
     const snap = agStore.getSnapshot();
     expect(snap.sessions.find((s) => s.id === a)!.mode).toBe("build");
     expect(snap.sessions.find((s) => s.id === b)!.mode).toBe("edit");
+  });
+
+  it("输入框草稿按会话隔离保存和恢复", () => {
+    const first = agStore.getSnapshot().activeSessionId;
+    agStore.setComposerDraft(first, {
+      ...emptyComposerDraft(),
+      doc: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "A 草稿" }] }] },
+      prompt: "A 草稿",
+    });
+
+    const second = agStore.newSession();
+    expect(activeSession(agStore.getSnapshot()).composerDraft?.prompt).toBe("");
+    agStore.setComposerDraft(second, {
+      ...emptyComposerDraft(),
+      doc: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "B 草稿" }] }] },
+      prompt: "B 草稿",
+    });
+
+    agStore.switchSession(first);
+    expect(activeSession(agStore.getSnapshot()).composerDraft?.prompt).toBe("A 草稿");
+    agStore.switchSession(second);
+    expect(activeSession(agStore.getSnapshot()).composerDraft?.prompt).toBe("B 草稿");
   });
 
   it("工具卡按会话隔离：addToolCall/resolveToolCall/clearToolCalls", () => {

@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { agStore } from "../../store/agStore";
 import { wsStore } from "../../store/wsStore";
 import { DOC_REF_MIME, SELECTION_REF_MIME, type SelectionRef } from "../../services/edLocate";
@@ -74,6 +74,7 @@ function renderComposer() {
 beforeEach(() => {
   agServiceMock.startTurn.mockReset();
   agServiceMock.uploadByok.mockReset();
+  agStore.reset();
   agStore.applyTurnState("test-turn", "Completed");
   wsStore.reset();
 });
@@ -221,5 +222,54 @@ describe("Composer · 引用令牌", () => {
         ],
       }),
     );
+  });
+
+  it("切换会话时输入框草稿和引用跟随会话恢复", async () => {
+    const first = agStore.getSnapshot().activeSessionId;
+    const { dropTarget, editor } = renderComposer();
+
+    fireEvent.drop(dropTarget, {
+      dataTransfer: dataTransfer({ [DOC_REF_MIME]: JSON.stringify({ relPath: "notes/a.md" }) }),
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain("notes/a.md");
+    });
+
+    let second = "";
+    act(() => {
+      second = agStore.newSession();
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).not.toContain("notes/a.md");
+    });
+    expect(screen.queryByLabelText("草稿引用")).toBeNull();
+
+    fireEvent.drop(dropTarget, {
+      dataTransfer: dataTransfer({ [DOC_REF_MIME]: JSON.stringify({ relPath: "notes/b.md" }) }),
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain("notes/b.md");
+    });
+
+    act(() => {
+      agStore.switchSession(first);
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain("notes/a.md");
+      expect(editor.textContent).not.toContain("notes/b.md");
+    });
+
+    act(() => {
+      agStore.switchSession(second);
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain("notes/b.md");
+      expect(editor.textContent).not.toContain("notes/a.md");
+    });
   });
 });
