@@ -138,8 +138,8 @@
 - 非本范围环境项：完整 `cargo test --manifest-path src-tauri/Cargo.toml --lib` 为 196 通过、1 失败；失败项
   `doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available` 返回既有
   `DOC_PREVIEW_FAIL`（LibreOffice 转换无消息），与 APP-CLOSE 链路无共享代码。
-- 未完成的人工验证：最新原生 macOS 构建仍需手工执行 Cmd+Q 和 Dock 退出，确认弹窗出现且取消后进程
-  未退出；本轮无法直接控制本机 GUI 完成该项。
+- 人工验证已通过（人类于 2026-07-21 确认）：最新原生 macOS 构建的 Cmd+Q 与 Dock 退出均进入统一
+  关闭决策框；取消后应用不退出。APP-CLOSE 的原生退出入口验证闭合。
 
 ## Scope Lock
 
