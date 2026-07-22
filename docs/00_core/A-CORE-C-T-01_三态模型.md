@@ -72,6 +72,13 @@ X-SEQ-002（前端不跨层直连 FS）  →  本文件（三态单向数据流�
 reject 回滚、示例 diff 取当前内容，都必须读取当前 ProseMirror doc 或经该受控入口修改，不再以
 `edStore.EditSession.content` 派生缓存作为逻辑真值。
 
+**异常退出后的可信度边界（2026-07-20，APP-CLOSE-DIFF-LIFECYCLE-01）**：`ed_session_snapshots`/
+`pending_diffs`（status=pending）等持久化控制态，只在"上次为正常关闭"的前提下可信任为可恢复的
+LogicalState/待裁决态。若上次退出为异常退出（崩溃/强杀/断电，未经 `BR-SYS-STATE-004` 关闭护栏），
+应用启动必须先执行异常退出清算（`BR-SYS-STATE-005`，A-SYS-M-T-02 §4）：dirty 的 LogicalState
+持久化镜像一律丢弃、改从 DiskState 重建；残留 pending diff 一律转 expired 只读终态。清算完成前，
+不得把这些持久化行当作权威 LogicalState 或可裁决 LogicalCandidate 加载。
+
 **已打开文档决议（2026-07-18）**：只要文档已经打开，AG/DE/ED 链路必须以该文档的
 LogicalState 为唯一真源。激活文档在 ProseMirror `doc` 与 `activePath/loadSeq/editFormat`
 绑定一致时读取实时序列化结果；标签切换过渡期若目标文档 `EditSession.content` 已存在，则该
@@ -304,3 +311,4 @@ AI 产出在转正前的内容分类。不属于逻辑态本身，是"等待裁�
 | 2026-07-18 | v1.2 | 补充已打开文档 LogicalState 门禁：AG/DE/ED 必须使用 open doc snapshots，已打开非激活文档 diff 走基线校验后的自动应用事务，禁止退回 DiskState 或旧快照 |
 | 2026-07-18 | v1.3 | 细化 active 文档读取协议：`active_editor` 为实时 ProseMirror 快照，`active_editor_session` 为当前文档 ED session LogicalState 快照；二者均属 LogicalState，不依赖 DisplayState 反向定义 |
 | 2026-07-18 | v1.4 | 补充 `ed_open_tabs` 三态归属：打开集合、顺序和当前文档属于 LogicalState 控制态元数据；启动恢复以其限定打开文档集合 |
+| 2026-07-20 | v1.5 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：补充异常退出后的可信度边界——持久化 LogicalState/pending diff 只在上次为正常关闭时可信，异常退出必须先经启动清算（BR-SYS-STATE-005）才能进入恢复 |

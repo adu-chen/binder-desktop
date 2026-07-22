@@ -125,7 +125,7 @@ fn rejected_proposal_does_not_land() {
         transition(DiffState::Pending, DiffEvent::UserReject),
         Some(DiffState::Rejected)
     );
-    discard_diff(&conn, "d3", "rejected").unwrap();
+    discard_diff(&conn, "d3", "rejected", None).unwrap();
     assert_eq!(status_of(&conn, "d3"), "rejected");
     assert_eq!(list_timeline(&conn, &target).unwrap().len(), 0); // 未落盘无节点
 }
@@ -149,7 +149,7 @@ fn lifecycle_sweep_expires_stale_pending() {
     assert_eq!(rows.len(), 2);
     // now=10_000, timeout=5_000：d_old 超时过期，d_new 保持。
     let expired = sweep_expiry(&rows, 10_000, 5_000, |_| ExternalCheck::Unchanged);
-    let n = expire_diffs(&conn, &expired).unwrap();
+    let n = expire_diffs(&conn, &expired, None).unwrap();
     assert_eq!(n, 1);
     assert_eq!(status_of(&conn, "d_old"), "expired");
     assert_eq!(status_of(&conn, "d_new"), "pending");

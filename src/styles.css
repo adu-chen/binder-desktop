@@ -936,6 +936,53 @@ button:disabled { opacity: 0.5; cursor: default; }
 .modelcfg-label-input { max-width: 120px; }
 .modelcfg-note { font-size: 11px; margin: 0; }
 
+/* 关闭前处理弹窗（BR-SYS-STATE-004，APP-CLOSE-DIFF-LIFECYCLE-01） */
+.close-dialog-overlay {
+  position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.32);
+  display: flex; align-items: center; justify-content: center;
+}
+.close-dialog {
+  width: 440px; max-width: 92vw; max-height: 84vh; overflow: auto; background: var(--bg-elevated);
+  border: 0.5px solid var(--rule-strong); border-radius: var(--r-2, 8px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.24); display: flex; flex-direction: column;
+}
+.close-dialog-head { padding: var(--sp-3) var(--sp-3) var(--sp-2); border-bottom: 0.5px solid var(--rule); }
+.close-dialog-title { font-weight: 700; font-size: 14px; color: var(--ink); }
+.close-dialog-subtitle { font-size: 12px; color: var(--ink-5); margin-top: 2px; }
+.close-dialog-body { padding: var(--sp-2) var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+.close-dialog-section { display: flex; flex-direction: column; gap: 6px; }
+.close-dialog-section-label { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.close-dialog-choices { display: flex; gap: var(--sp-2); }
+.close-dialog-choice {
+  flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  border: 0.5px solid var(--rule); background: var(--bg-card); text-align: left; padding: 8px 10px;
+  border-radius: var(--r-1); cursor: pointer;
+}
+.close-dialog-choice.selected { border-color: var(--rust); background: color-mix(in srgb, var(--rust) 8%, var(--bg-card)); }
+.close-dialog-choice:disabled { opacity: 0.5; cursor: not-allowed; }
+.close-dialog-choice-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+.close-dialog-choice-hint { font-size: 11px; color: var(--ink-5); }
+.close-dialog-radio { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.close-dialog-radio.disabled { opacity: 0.5; }
+.close-dialog-details { font-size: 12px; }
+.close-dialog-details-toggle {
+  background: none; border: none; color: var(--ink-5); font-size: 12px; cursor: pointer; padding: 2px 0;
+}
+.close-dialog-details-list { margin: 4px 0 0; padding-left: 16px; color: var(--ink-3); font-size: 12px; }
+.close-dialog-error { font-size: 12px; color: var(--rust); background: color-mix(in srgb, var(--rust) 10%, transparent); padding: 6px 8px; border-radius: var(--r-1); }
+.close-dialog-foot {
+  padding: var(--sp-2) var(--sp-3) var(--sp-3); border-top: 0.5px solid var(--rule);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.close-dialog-summary { font-size: 12px; color: var(--ink-5); }
+.close-dialog-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); align-items: center; }
+.close-dialog-force { font-size: 11px; color: var(--rust); background: none; border: none; cursor: pointer; margin-right: auto; text-decoration: underline; }
+.close-dialog-confirm {
+  background: var(--rust); border-color: var(--rust); color: #fff; padding: 6px 14px; border-radius: var(--r-1);
+  border: 1px solid var(--rust); cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.close-dialog-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* 对话区滚动容器（消息 + diff 卡同滚，PI-FE-07） */
 .chatpanel-scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
 .chatpanel-scroll .msglist { flex: none; overflow: visible; }

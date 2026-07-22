@@ -7,21 +7,15 @@ import {
   closeWorkspace,
   loadRecentWorkspaces,
 } from "../../services/workspaceService";
-import { edStore } from "../../store/edStore";
-import { deStore } from "../../store/deStore";
+import { hasUnsavedOrPendingWork } from "../../services/closeService";
 
 /**
  * workspace 菜单（A-SYS-C-T-02 §3 WS 切换 / §4.1 WB→关闭/切换→C · PI-FE-10）。
  * 切换最近 / 打开其他文件夹 / 返回欢迎页；破坏性操作前脏态守卫（编辑器 dirty 或有 pending diff）。
  * 活动态以后端为准（X-FORBID-007）；服务层负责重置下游 store + 投影。
+ * 脏态守卫复用 closeService.hasUnsavedOrPendingWork()（聚合全部已打开文档，非仅激活文档，
+ * APP-CLOSE-DIFF-LIFECYCLE-01 修复原仅查 edStore.tabState 的漏检）。
  */
-
-/** 是否有未保存改动或待裁决修改（守卫依据，参考稿链路 G）。 */
-function hasUnsaved(): boolean {
-  const dirty = edStore.getSnapshot().tabState === "dirty";
-  const pending = deStore.getSnapshot().diffs.some((d) => d.state === "pending");
-  return dirty || pending;
-}
 
 interface WorkspaceMenuProps {
   trigger?: ReactNode;
@@ -49,7 +43,7 @@ export function WorkspaceMenu({
 
   // 破坏性操作经守卫：有未保存改动则先确认，否则直接执行。
   const guarded = (action: () => void) => {
-    if (hasUnsaved()) {
+    if (hasUnsavedOrPendingWork()) {
       setConfirm(() => action);
     } else {
       action();

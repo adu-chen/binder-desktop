@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
+import { closeStore } from "../store/closeStore";
 import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditorBinding } from "./edLocate";
 import { loadDocs } from "./wsService";
 import { applyOpenSessionDiff, loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
@@ -466,7 +467,13 @@ function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<Dif
     before: projection?.before_text ?? "",
     after: projection?.after_text ?? "",
     state: diffStateFromStatus(detail.status),
-    readonly: detail.status !== "pending",
+    effectStatus: detail.effect_status,
+    terminalReason: detail.terminal_reason,
+    // 历史回合恢复的 diff 一律只读（BR-SYS-STATE-004/005，APP-CLOSE-DIFF-LIFECYCLE-01）：正常关闭
+    // 保证退出前 pending=0，异常退出后启动清算把残留 pending 转 expired；本路径只服务于持久化历史
+    // 回合恢复（ensureAgentSessionTurns），不服务于本次会话内实时生成的 diff（走 deStore.addDiff
+    // 直接投影），因此不依赖 detail.status 判断——即使后端因故仍返回 pending 也不得当作可裁决态复活。
+    readonly: true,
     styleOps: styleOpsPayload.length ? styleOpsPayload.map(summarizeStyleOp) : undefined,
     styleOpsPayload: styleOpsPayload.length ? styleOpsPayload : undefined,
   };
@@ -771,6 +778,13 @@ export async function startTurn(
   const trimmed = prompt.trim();
   const references = opts?.references ?? [];
   if (!trimmed && references.length === 0) return;
+
+  // 关闭屏障（BR-SYS-STATE-004，APP-CLOSE-DIFF-LIFECYCLE-01）：关闭请求建立后拒绝新回合，
+  // 避免清点后又产生新的待裁决 diff。
+  if (closeStore.getSnapshot().phase !== "idle") {
+    console.error("ag_start_turn blocked: application close in progress");
+    return;
+  }
 
   // 回合归属会话：发起时的活动会话（此后用户切标签不影响本回合投影目标）。
   const snap = agStore.getSnapshot();

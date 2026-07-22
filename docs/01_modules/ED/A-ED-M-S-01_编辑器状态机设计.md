@@ -100,9 +100,17 @@ terminal_states: Closed
 |---|---|---|
 | 脏态产生 | SM-ED-01（Ready→Editing 的 edit/draftDiffApplied/sessionDiffApplied）→ SM-WS-01（Idle→Dirty） | 用户编辑、DE 当前编辑器草稿应用、已打开非激活文档自动应用都是 Dirty 驱动源；语义为"LogicalState 已偏离落盘内容" |
 | 保存回执 | SM-WS-01（Saving→Saved）→ SM-ED-01（Editing→Ready 的 saved） | WS 落盘成功回执驱动 ED 清脏态；SaveError 不发 saved，ED 停留 Editing 可重试 |
+| 关闭前批量保存 | SM-SYS-02 Resolving → SM-ED-01（edit 会话触发 save） | 应用关闭决策入口"保存全部脏文档"逐个驱动既有保存链，不新增 ED 事件（BR-SYS-STATE-004，2026-07-20 新增） |
+| 启动异常退出清算 | SM-SYS-02（启动期）→ ed_session_snapshots dirty=1 行 | 先于任何会话恢复执行：清算发现的 dirty 持久化镜像一律删除，不作为可信 LogicalState 装载源；对应文档改走 SM-ED-01 正常 `open`（Closed→Loading→loadOk，从磁盘态重建），不使用 `restoreSessionSnapshots` 路径（BR-SYS-STATE-005，2026-07-20 新增） |
 
 两侧对接一致性（事件语义、回执时机）登记 A-SYS-M-S-01 §5，在 G5 跨模块联调验证。
 SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文不重定义。
+
+**恢复顺序边界（2026-07-20 新增，APP-CLOSE-DIFF-LIFECYCLE-01）**：`ed_session_snapshots` 持久化
+镜像只在"上次为正常关闭"时可信；应用启动时异常退出清算（BR-SYS-STATE-005）必须先于本机会话恢复
+执行。清算移除的 dirty 快照不得被当作可信 LogicalState 来源——对应文档改为经 `open` 事件从磁盘态
+（DiskState）重新建立会话，不使用持久化快照。清算之后仍保留的快照（非 dirty，或本次运行期内正常
+持久化的中间态）才进入既有恢复路径。
 
 ## §4 不独立建机的呈现链（豁免说明，APC §6）
 
@@ -171,3 +179,4 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 | 2026-07-08 | v1.3 | 增加 draftDiffApplied 事件：DE pending diff 命中当前编辑器块时由 ED 受控接口替换 after、进入 Editing 并驱动保存链；Saved 后清除已 accepted 的 GreenReview |
 | 2026-07-18 | v1.4 | 增加 sessionDiffApplied/sessionApplyFail：已打开非激活文档 diff 基线匹配后修改 session LogicalState、递增版本/哈希并持久化，失败不得半应用；脏态转移接入 SM-WS-01 |
 | 2026-07-18 | v1.5 | ED-MARKDOWN-RICH-ROUNDTRIP-01：SM-ED-01 复用既有状态，增加 BR-ED-DATA-006/BR-ED-VERIFY-001、serializeFail 事件、Markdown 解析/源码保护 Guard 与禁止有损保存转移；不新建规则链或状态机 |
+| 2026-07-20 | v1.6 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：§3 新增「关闭前批量保存」「启动异常退出清算」两条 SYS→ED 跨模块转移点（均双侧就绪）；补充恢复顺序边界——异常退出清算先于会话恢复，dirty 持久化镜像不可信时改走磁盘态重建 |

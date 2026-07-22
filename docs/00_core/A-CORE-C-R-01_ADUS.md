@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-19T02:03:08.613Z -->
+<!-- 最后生成时间：2026-07-22T03:36:58.345Z -->
 
 ### 模块编码表
 
@@ -94,6 +94,7 @@
 | CLOUD-AUTH    | SYS  | active |      |
 | CLOUD-GATE    | SYS  | active |      |
 | CLOUD-INVOKE  | SYS  | active |      |
+| APP-CLOSE     | SYS  | active |      |
 | TPL-FLOW      | TPL  | active |      |
 | WS-FS         | WS   | active |      |
 | WS-DIFF-APPLY | WS   | active |      |
@@ -167,6 +168,10 @@
 | BR-SYS-DATA-001    | DATA    | CLOUD-INVOKE                         | docs/01_modules/SYS/A-SYS-I-P-03_云接口契约.md      | registered      | MISSING |
 | BR-SYS-DATA-004    | DATA    | CLOUD-INVOKE                         | docs/01_modules/SYS/A-SYS-I-P-03_云接口契约.md      | registered      | MISSING |
 | BR-SYS-OBS-001     | OBS     | CLOUD-AUTH, CLOUD-GATE, CLOUD-INVOKE | docs/01_modules/SYS/A-SYS-I-P-03_云接口契约.md      | registered      | MISSING |
+| BR-SYS-STATE-004   | STATE   | APP-CLOSE                            | docs/01_modules/SYS/A-SYS-M-T-02_应用关闭技术设计.md   | registered      | MISSING |
+| BR-SYS-STATE-006   | STATE   | APP-CLOSE                            | docs/01_modules/SYS/A-SYS-M-T-02_应用关闭技术设计.md   | registered      | MISSING |
+| BR-SYS-STATE-005   | STATE   | APP-CLOSE                            | docs/01_modules/SYS/A-SYS-M-T-02_应用关闭技术设计.md   | registered      | MISSING |
+| BR-SYS-DATA-005    | DATA    | APP-CLOSE                            | docs/01_modules/SYS/A-SYS-M-T-02_应用关闭技术设计.md   | registered      | MISSING |
 | BR-TPL-DATA-001    | DATA    | TPL-FLOW                             | docs/01_modules/TPL/A-TPL-M-T-01_模板工作流技术设计.md  | registered      | MISSING |
 | BR-TPL-STATE-001   | STATE   | TPL-FLOW                             | docs/01_modules/TPL/A-TPL-M-T-01_模板工作流技术设计.md  | registered      | MISSING |
 | BR-WS-DATA-001     | DATA    | WS-FS                                | docs/01_modules/WS/A-WS-M-T-01_工作台技术设计.md      | registered      | MISSING |
@@ -195,6 +200,8 @@
 | X-FORBID-002  | 订阅门禁不得存在客户端绕过路径，裁决以服务端为准，客户端不得本地缓存通过结论跳过校验                                                                                                                                                                                                        | ENT, SYS                                                              | CLOUD-GATE                                                                                                                            | docs/01_modules/SYS/A-SYS-I-P-03_云接口契约.md       |
 | X-SEQ-003     | 状态化核心链（APC §6 强制阈值）必须先建状态机并在总图登记 machine_id 方可进入实现，未注册者阻断进入代码                                                                                                                                                                                     | SYS, WS, ED, DE, AG, CBT, DOC, AST                                    | CLOUD-AUTH, CLOUD-GATE, CLOUD-INVOKE                                                                                                  | docs/01_modules/SYS/A-SYS-M-S-01_状态机总图.md       |
 | X-INTER-001   | 跨模块状态转移必须在总图登记转移契约，转移两侧 owner 状态机对接点须一致，不得各自假设状态/事件                                                                                                                                                                                               | SYS, WS, ED, DE, AG, CBT                                              | CLOUD-GATE, CLOUD-INVOKE                                                                                                              | docs/01_modules/SYS/A-SYS-M-S-01_状态机总图.md       |
+| X-FORBID-010  | 应用正常退出（非崩溃）完成前，当前 workspace 不得残留 status=pending 的 diff、effect_status=awaiting_save 的效果或 dirty=1 的未保存文档；不满足时必须阻断退出并呈现统一决策入口，不得静默继续退出或静默丢弃                                                                                                          | SYS, DE, ED, WS, AG                                                   | APP-CLOSE, DE-DIFF, ED-EDIT, WS-SAVE, AG-TURN                                                                                         | docs/01_modules/SYS/A-SYS-M-T-02_应用关闭技术设计.md    |
+| X-FORBID-011  | 应用启动时，任何跨会话残留的 pending diff、awaiting_save 效果或未保存 LogicalState 快照不得被当作可信权威态直接恢复为可裁决/可编辑态；必须先经异常退出清算转终态/丢弃，只能以只读历史形态呈现                                                                                                                              | SYS, DE, ED, WS                                                       | APP-CLOSE, DE-DIFF, ED-EDIT, DATA-MIGRATE                                                                                             | docs/01_modules/SYS/A-SYS-M-T-02_应用关闭技术设计.md    |
 | X-FORBID-004  | 文件操作/搜索/diff/上下文读取的目标路径不得越出活动 workspace root；任一越界路径一律拒绝，不静默截断或回退到 workspace 外                                                                                                                                                                     | WS, ED, DE, AG, CBT, REF, AST, KB, TPL, DOC, PRV                      | WS-FS, WS-SAVE, WS-DIFF-APPLY, WS-TIMELINE                                                                                            | docs/01_modules/WS/A-WS-M-T-01_工作台技术设计.md       |
 
 ### 术语注册表
@@ -253,17 +260,17 @@
 | codes                                   | type   | rules                                                                | 文件                                        | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------------------------- | ----------------------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 194  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 390  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 793  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 195  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 391  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 808  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-003     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 96   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001 term_ref: TERM-AG-003, TERM-AG-004 | src/services/agService.ts                 | 693  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001 term_ref: TERM-AG-003, TERM-AG-004 | src/services/agService.ts                 | 700  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-008     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/store/assistStore.ts                  | 94   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                                      | src-tauri/src/ag/assist.rs                | 40   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                                    | src-tauri/src/lib.rs                      | 4095 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                                    | src-tauri/src/lib.rs                      | 4342 |
 
 #### AG-TOOL
 
@@ -294,9 +301,19 @@
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001                                                                                                          | GUARD  | BR-AG-VERIFY-001                                                                     | src-tauri/src/ag/turn.rs        | 110  |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001                                                                                                        | EFFECT | BR-AG-PERSIST-001                                                                    | src-tauri/src/ag/turn.rs        | 139  |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001                                                                                                         | QUERY  | BR-AG-PERSIST-001                                                                    | src-tauri/src/ag/turn.rs        | 164  |
-| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004                                                                                                         | QUERY  | BR-AG-PERSIST-001 term_ref: TERM-AG-001                                              | src-tauri/src/lib.rs            | 1918 |
-| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA   | BR-AG-DATA-001, BR-REF-DATA-003 term_ref: TERM-REF-003                               | src-tauri/src/lib.rs            | 2300 |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA   | BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005 term_ref: TERM-AG-005 | src-tauri/src/lib.rs            | 3466 |
+| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004                                                                                                         | QUERY  | BR-AG-PERSIST-001 term_ref: TERM-AG-001                                              | src-tauri/src/lib.rs            | 2161 |
+| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA   | BR-AG-DATA-001, BR-REF-DATA-003 term_ref: TERM-REF-003                               | src-tauri/src/lib.rs            | 2547 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA   | BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005 term_ref: TERM-AG-005 | src-tauri/src/lib.rs            | 3713 |
+
+#### APP-CLOSE
+
+| codes                                     | type   | rules            | 文件                           | 行号   |
+| ----------------------------------------- | ------ | ---------------- | ---------------------------- | ---- |
+| BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | BR-SYS-STATE-006 | src/services/closeService.ts | 229  |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | BR-SYS-STATE-004 | src/shell/App.tsx            | 30   |
+| BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1091 |
+| BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1155 |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 4614 |
 
 #### AST-MEMORY
 
@@ -355,7 +372,9 @@
 
 | codes                                          | type   | rules              | 文件                                   | 行号  |
 | ---------------------------------------------- | ------ | ------------------ | ------------------------------------ | --- |
-| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | BR-SYS-PERSIST-001 | src-tauri/src/db/mod.rs              | 229 |
+| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | BR-SYS-PERSIST-001 | src-tauri/src/db/mod.rs              | 241 |
+| BR-SYS-STATE-005-EFFECT-SYS-DATA-MIGRATE-002   | EFFECT | BR-SYS-STATE-005   | src-tauri/src/de/lifecycle.rs        | 199 |
+| BR-SYS-STATE-005-EFFECT-SYS-DATA-MIGRATE-003   | EFFECT | BR-SYS-STATE-005   | src-tauri/src/de/lifecycle.rs        | 237 |
 | BR-SYS-DATA-002-DATA-SYS-DATA-MIGRATE-001      | DATA   | BR-SYS-DATA-002    | src-tauri/src/types/mod.rs           | 9   |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 34  |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002   | EFFECT | BR-WS-PERSIST-002  | src-tauri/src/workspace/lifecycle.rs | 71  |
@@ -367,7 +386,7 @@
 
 | codes                                 | type   | rules                                              | 文件                            | 行号  |
 | ------------------------------------- | ------ | -------------------------------------------------- | ----------------------------- | --- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-002     | RB     | BR-DE-STATE-001 term_ref: TERM-DE-001, TERM-DE-003 | src/store/deStore.ts          | 208 |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-002     | RB     | BR-DE-STATE-001 term_ref: TERM-DE-001, TERM-DE-003 | src/store/deStore.ts          | 215 |
 | BR-DE-STATE-002-GUARD-DE-DE-DIFF-001  | GUARD  | BR-DE-STATE-002                                    | src-tauri/src/de/expiry.rs    | 34  |
 | BR-DE-DATA-003-GUARD-DE-DE-DIFF-001   | GUARD  | BR-DE-DATA-003                                     | src-tauri/src/de/expiry.rs    | 62  |
 | BR-DE-DATA-002-DATA-DE-DE-DIFF-001    | DATA   | BR-DE-DATA-002                                     | src-tauri/src/de/generate.rs  | 40  |
@@ -377,6 +396,8 @@
 | BR-DE-STATE-002-GUARD-DE-DE-DIFF-002  | GUARD  | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 58  |
 | BR-DE-DATA-003-GUARD-DE-DE-DIFF-002   | GUARD  | BR-DE-DATA-003                                     | src-tauri/src/de/lifecycle.rs | 86  |
 | BR-DE-STATE-002-EFFECT-DE-DE-DIFF-001 | EFFECT | BR-DE-STATE-002                                    | src-tauri/src/de/lifecycle.rs | 108 |
+| BR-SYS-DATA-005-EFFECT-DE-DE-DIFF-003 | EFFECT | BR-SYS-DATA-005                                    | src-tauri/src/de/lifecycle.rs | 132 |
+| BR-SYS-DATA-005-EFFECT-DE-DE-DIFF-004 | EFFECT | BR-SYS-DATA-005                                    | src-tauri/src/de/lifecycle.rs | 155 |
 | BR-DE-STATE-001-RB-DE-DE-DIFF-001     | RB     | BR-DE-STATE-001                                    | src-tauri/src/de/mod.rs       | 65  |
 | BR-DE-DATA-002-IO-DE-DE-DIFF-002      | IO     | BR-DE-DATA-002 term_ref: TERM-DE-004               | src-tauri/src/de/store.rs     | 30  |
 | BR-DE-DATA-002-QUERY-DE-DE-DIFF-001   | QUERY  | BR-DE-DATA-002 term_ref: TERM-DE-004               | src-tauri/src/de/store.rs     | 65  |
@@ -416,16 +437,15 @@
 | BR-ED-DATA-006-DATA-ED-ED-EDIT-014                                   | DATA   | BR-ED-DATA-006                                     | src/components/ed/markdown/markdownCodec.ts      | 75  |
 | BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-015                                | GUARD  | BR-ED-VERIFY-001, BR-ED-DATA-005                   | src/components/ed/markdown/markdownCodec.ts      | 155 |
 | BR-ED-DATA-003-RB-ED-ED-EDIT-006                                     | RB     | BR-ED-DATA-003                                     | src/services/docService.ts                       | 36  |
-| BR-ED-DATA-004-QUERY-ED-ED-EDIT-010                                  | QUERY  | BR-ED-DATA-004 term_ref: TERM-ED-004, TERM-ED-005  | src/services/edLocate.ts                         | 179 |
-| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012                                | EFFECT | BR-ED-STATE-001 term_ref: TERM-ED-001, TERM-ED-004 | src/services/edLocate.ts                         | 270 |
-| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-011                                | EFFECT | BR-ED-STATE-001 term_ref: TERM-ED-001              | src/services/edLocate.ts                         | 309 |
-| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007                                  | QUERY  | BR-ED-DATA-004 term_ref: TERM-ED-004, TERM-ED-005  | src/services/edLocate.ts                         | 339 |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-010                                  | QUERY  | BR-ED-DATA-004 term_ref: TERM-ED-004, TERM-ED-005  | src/services/edLocate.ts                         | 204 |
+| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012                                | EFFECT | BR-ED-STATE-001 term_ref: TERM-ED-001, TERM-ED-004 | src/services/edLocate.ts                         | 295 |
+| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-011                                | EFFECT | BR-ED-STATE-001 term_ref: TERM-ED-001              | src/services/edLocate.ts                         | 334 |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007                                  | QUERY  | BR-ED-DATA-004 term_ref: TERM-ED-004, TERM-ED-005  | src/services/edLocate.ts                         | 364 |
 | BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB     | BR-ED-DATA-002, BR-ED-DATA-006                     | src/services/edService.ts                        | 92  |
 | BR-ED-STATE-003-EFFECT-ED-ED-EDIT-013                                | EFFECT | BR-ED-STATE-003                                    | src/services/edService.ts                        | 141 |
 | BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016                                | GUARD  | BR-ED-VERIFY-001, BR-ED-DATA-006                   | src/services/edService.ts                        | 175 |
 | BR-ED-DATA-005-RB-ED-ED-EDIT-008                                     | RB     | BR-ED-DATA-005 term_ref: TERM-ED-006, TERM-ED-004  | src/services/edStyleOps.ts                       | 125 |
-| BR-ED-STATE-001-GUARD-ED-ED-EDIT-013                                 | GUARD  | BR-ED-STATE-001                                    | src/shell/App.tsx                                | 26  |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002                                    | RB     | BR-ED-STATE-001                                    | src/store/edStore.ts                             | 195 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002                                    | RB     | BR-ED-STATE-001                                    | src/store/edStore.ts                             | 196 |
 | BR-ED-DATA-005-QUERY-ED-ED-EDIT-009                                  | QUERY  | BR-ED-DATA-005 term_ref: TERM-ED-006, TERM-ED-004  | src-tauri/src/ag/blocks.rs                       | 570 |
 
 #### IPC-CALL
@@ -436,7 +456,7 @@
 | BR-SYS-STATE-002-DATA-SYS-IPC-CALL-003   | DATA   | BR-SYS-STATE-002                      | src-tauri/src/ipc/mod.rs   | 73   |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-001     | API    | BR-SYS-DATA-003                       | src-tauri/src/ipc/mod.rs   | 154  |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-002     | API    | BR-SYS-DATA-003 term_ref: TERM-WS-001 | src-tauri/src/lib.rs       | 3    |
-| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004   | GUARD  | BR-SYS-DATA-003                       | src-tauri/src/lib.rs       | 2015 |
+| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004   | GUARD  | BR-SYS-DATA-003                       | src-tauri/src/lib.rs       | 2262 |
 | BR-SYS-STATE-003-EFFECT-SYS-IPC-CALL-001 | EFFECT | BR-SYS-STATE-003                      | src-tauri/src/sm_events.rs | 48   |
 
 #### KB-RETRIEVE
@@ -461,7 +481,7 @@
 
 | codes                                      | type  | rules                                                   | 文件                                 | 行号  |
 | ------------------------------------------ | ----- | ------------------------------------------------------- | ---------------------------------- | --- |
-| BR-REF-DATA-004-AG-REF-INJECT-001          | DATA  | BR-REF-DATA-004 term_ref: TERM-REF-004, TERM-REF-003    | src/components/ag/Composer.tsx     | 33  |
+| BR-REF-DATA-004-AG-REF-INJECT-001          | DATA  | BR-REF-DATA-004 term_ref: TERM-REF-004, TERM-REF-003    | src/components/ag/Composer.tsx     | 40  |
 | BR-REF-DATA-003-REF-REF-INJECT-001         | DATA  | BR-REF-DATA-003, BR-SYS-DATA-002 term_ref: TERM-REF-003 | src/services/referencePayload.ts   | 2   |
 | BR-REF-DATA-003-REF-REF-INJECT-004         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                  | src/services/referencePayload.ts   | 112 |
 | BR-REF-DATA-003-REF-REF-INJECT-002         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                  | src/services/referencePayload.ts   | 173 |
@@ -485,17 +505,17 @@
 
 | codes                                       | type   | rules           | 文件                                    | 行号  |
 | ------------------------------------------- | ------ | --------------- | ------------------------------------- | --- |
-| BR-WS-STATE-001-RB-WS-WS-DIFF-APPLY-001     | RB     | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 44  |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-001 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 75  |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 101 |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 167 |
-| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 238 |
+| BR-WS-STATE-001-RB-WS-WS-DIFF-APPLY-001     | RB     | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 45  |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-001 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 76  |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 103 |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 171 |
+| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | BR-WS-STATE-001 | src-tauri/src/workspace/diff_apply.rs | 250 |
 
 #### WS-FS
 
 | codes                              | type   | rules                                | 文件                                 | 行号   |
 | ---------------------------------- | ------ | ------------------------------------ | ---------------------------------- | ---- |
-| BR-WS-OBS-001-RB-WS-WS-FS-001      | RB     | BR-WS-OBS-001                        | src-tauri/src/lib.rs               | 1022 |
+| BR-WS-OBS-001-RB-WS-WS-FS-001      | RB     | BR-WS-OBS-001                        | src-tauri/src/lib.rs               | 1260 |
 | BR-WS-DATA-001-EFFECT-WS-WS-FS-001 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 16   |
 | BR-WS-DATA-001-EFFECT-WS-WS-FS-004 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 43   |
 | BR-WS-DATA-001-EFFECT-WS-WS-FS-002 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 70   |
@@ -545,15 +565,15 @@
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------- | --------------------------- | ---- |
 | BR-AG-DATA-001-QUERY-AG-AG-TURN-010, BR-DOC-DATA-003-QUERY-AG-AG-TURN-010                                                                      | QUERY | AG-TURN | src-tauri/src/ag/blocks.rs  | 236  |
 | BR-AG-DATA-001-DATA-AG-AG-TURN-001                                                                                                             | DATA  | AG-TURN | src-tauri/src/ag/context.rs | 44   |
-| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA  | AG-TURN | src-tauri/src/lib.rs        | 2300 |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA  | AG-TURN | src-tauri/src/lib.rs        | 3466 |
+| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA  | AG-TURN | src-tauri/src/lib.rs        | 2547 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA  | AG-TURN | src-tauri/src/lib.rs        | 3713 |
 
 #### BR-AG-DATA-002
 
 | codes                                                                                                                                          | type | chain   | 文件                          | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | --------------------------- | ---- |
 | BR-AG-DATA-002-DATA-AG-AG-TURN-002                                                                                                             | DATA | AG-TURN | src-tauri/src/ag/context.rs | 98   |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs        | 3466 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs        | 3713 |
 
 #### BR-AG-DATA-003
 
@@ -566,7 +586,7 @@
 
 | codes                                                                                                                                          | type | chain   | 文件                   | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------- | ---- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 3466 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 3713 |
 
 #### BR-AG-DATA-004 term_ref: TERM-AG-005
 
@@ -585,7 +605,7 @@
 
 | codes                                                                                                                                          | type | chain   | 文件                   | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------- | ---- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 3466 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 3713 |
 
 #### BR-AG-PERSIST-001
 
@@ -601,7 +621,7 @@
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-003 | EFFECT | AG-TURN | src-tauri/src/ag/history.rs | 275  |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-003  | QUERY  | AG-TURN | src-tauri/src/ag/history.rs | 337  |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-004 | EFFECT | AG-TURN | src-tauri/src/ag/history.rs | 376  |
-| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004  | QUERY  | AG-TURN | src-tauri/src/lib.rs        | 1918 |
+| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004  | QUERY  | AG-TURN | src-tauri/src/lib.rs        | 2161 |
 
 #### BR-AG-PERSIST-001 term_ref: TERM-AG-009
 
@@ -632,16 +652,16 @@
 
 | codes                                   | type   | chain     | 文件                         | 行号   |
 | --------------------------------------- | ------ | --------- | -------------------------- | ---- |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts  | 693  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts  | 700  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 40   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 4095 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 4342 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
 | codes                               | type | chain     | 文件                                   | 行号  |
 | ----------------------------------- | ---- | --------- | ------------------------------------ | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 194 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 793 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 195 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 808 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78  |
@@ -653,7 +673,7 @@
 | codes                                   | type   | chain     | 文件                                        | 行号  |
 | --------------------------------------- | ------ | --------- | ----------------------------------------- | --- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | AG-ASSIST | src/components/ag/AutocompleteOverlay.tsx | 16  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 390 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 391 |
 
 #### BR-AG-STATE-004
 
@@ -667,13 +687,13 @@
 | codes                                   | type   | chain     | 文件                       | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------ | ---- |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 110  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 4095 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 4342 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-003
 
 | codes                                   | type   | chain     | 文件                        | 行号  |
 | --------------------------------------- | ------ | --------- | ------------------------- | --- |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts | 693 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts | 700 |
 
 #### BR-AST-DATA-001
 
@@ -759,7 +779,7 @@
 
 | codes                             | type | chain   | 文件                   | 行号  |
 | --------------------------------- | ---- | ------- | -------------------- | --- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 208 |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 215 |
 
 #### BR-DE-STATE-002
 
@@ -835,8 +855,8 @@
 
 | codes                               | type  | chain   | 文件                       | 行号  |
 | ----------------------------------- | ----- | ------- | ------------------------ | --- |
-| BR-ED-DATA-004-QUERY-ED-ED-EDIT-010 | QUERY | ED-EDIT | src/services/edLocate.ts | 179 |
-| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | ED-EDIT | src/services/edLocate.ts | 339 |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-010 | QUERY | ED-EDIT | src/services/edLocate.ts | 204 |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | ED-EDIT | src/services/edLocate.ts | 364 |
 
 #### BR-ED-DATA-005
 
@@ -861,17 +881,16 @@
 
 #### BR-ED-STATE-001
 
-| codes                                | type  | chain   | 文件                   | 行号  |
-| ------------------------------------ | ----- | ------- | -------------------- | --- |
-| BR-ED-STATE-001-GUARD-ED-ED-EDIT-013 | GUARD | ED-EDIT | src/shell/App.tsx    | 26  |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002    | RB    | ED-EDIT | src/store/edStore.ts | 195 |
+| codes                             | type | chain   | 文件                   | 行号  |
+| --------------------------------- | ---- | ------- | -------------------- | --- |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 196 |
 
 #### BR-ED-STATE-001 term_ref: TERM-ED-001
 
 | codes                                 | type   | chain   | 文件                       | 行号  |
 | ------------------------------------- | ------ | ------- | ------------------------ | --- |
-| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012 | EFFECT | ED-EDIT | src/services/edLocate.ts | 270 |
-| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-011 | EFFECT | ED-EDIT | src/services/edLocate.ts | 309 |
+| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012 | EFFECT | ED-EDIT | src/services/edLocate.ts | 295 |
+| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-011 | EFFECT | ED-EDIT | src/services/edLocate.ts | 334 |
 
 #### BR-ED-STATE-002 term_ref: TERM-ED-002
 
@@ -968,13 +987,13 @@
 | ---------------------------------- | ----- | ---------- | -------------------------------- | ---- |
 | BR-REF-DATA-003-REF-REF-INJECT-004 | GUARD | REF-INJECT | src/services/referencePayload.ts | 112  |
 | BR-REF-DATA-003-REF-REF-INJECT-002 | GUARD | REF-INJECT | src/services/referencePayload.ts | 173  |
-| BR-AG-DATA-001-AG-AG-TURN-009      | DATA  | AG-TURN    | src-tauri/src/lib.rs             | 2300 |
+| BR-AG-DATA-001-AG-AG-TURN-009      | DATA  | AG-TURN    | src-tauri/src/lib.rs             | 2547 |
 
 #### BR-REF-DATA-004 term_ref: TERM-REF-004
 
 | codes                              | type | chain      | 文件                               | 行号  |
 | ---------------------------------- | ---- | ---------- | -------------------------------- | --- |
-| BR-REF-DATA-004-AG-REF-INJECT-001  | DATA | REF-INJECT | src/components/ag/Composer.tsx   | 33  |
+| BR-REF-DATA-004-AG-REF-INJECT-001  | DATA | REF-INJECT | src/components/ag/Composer.tsx   | 40  |
 | BR-REF-DATA-004-REF-REF-INJECT-003 | DATA | REF-INJECT | src/services/referencePayload.ts | 374 |
 
 #### BR-REF-VERIFY-001
@@ -1006,13 +1025,20 @@
 | codes                                  | type  | chain    | 文件                       | 行号   |
 | -------------------------------------- | ----- | -------- | ------------------------ | ---- |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-001   | API   | IPC-CALL | src-tauri/src/ipc/mod.rs | 154  |
-| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004 | GUARD | IPC-CALL | src-tauri/src/lib.rs     | 2015 |
+| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004 | GUARD | IPC-CALL | src-tauri/src/lib.rs     | 2262 |
 
 #### BR-SYS-DATA-003 term_ref: TERM-WS-001
 
 | codes                                | type | chain    | 文件                   | 行号 |
 | ------------------------------------ | ---- | -------- | -------------------- | -- |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-002 | API  | IPC-CALL | src-tauri/src/lib.rs | 3  |
+
+#### BR-SYS-DATA-005
+
+| codes                                 | type   | chain   | 文件                            | 行号  |
+| ------------------------------------- | ------ | ------- | ----------------------------- | --- |
+| BR-SYS-DATA-005-EFFECT-DE-DE-DIFF-003 | EFFECT | DE-DIFF | src-tauri/src/de/lifecycle.rs | 132 |
+| BR-SYS-DATA-005-EFFECT-DE-DE-DIFF-004 | EFFECT | DE-DIFF | src-tauri/src/de/lifecycle.rs | 155 |
 
 #### BR-SYS-OBS-001
 
@@ -1030,7 +1056,7 @@
 
 | codes                                          | type   | chain        | 文件                      | 行号  |
 | ---------------------------------------------- | ------ | ------------ | ----------------------- | --- |
-| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/db/mod.rs | 229 |
+| BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/db/mod.rs | 241 |
 
 #### BR-SYS-STATE-001
 
@@ -1049,6 +1075,28 @@
 | codes                                    | type   | chain    | 文件                         | 行号 |
 | ---------------------------------------- | ------ | -------- | -------------------------- | -- |
 | BR-SYS-STATE-003-EFFECT-SYS-IPC-CALL-001 | EFFECT | IPC-CALL | src-tauri/src/sm_events.rs | 48 |
+
+#### BR-SYS-STATE-004
+
+| codes                                     | type   | chain     | 文件                   | 行号   |
+| ----------------------------------------- | ------ | --------- | -------------------- | ---- |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | APP-CLOSE | src/shell/App.tsx    | 30   |
+| BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | APP-CLOSE | src-tauri/src/lib.rs | 1091 |
+| BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | APP-CLOSE | src-tauri/src/lib.rs | 1155 |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | APP-CLOSE | src-tauri/src/lib.rs | 4614 |
+
+#### BR-SYS-STATE-005
+
+| codes                                        | type   | chain        | 文件                            | 行号  |
+| -------------------------------------------- | ------ | ------------ | ----------------------------- | --- |
+| BR-SYS-STATE-005-EFFECT-SYS-DATA-MIGRATE-002 | EFFECT | DATA-MIGRATE | src-tauri/src/de/lifecycle.rs | 199 |
+| BR-SYS-STATE-005-EFFECT-SYS-DATA-MIGRATE-003 | EFFECT | DATA-MIGRATE | src-tauri/src/de/lifecycle.rs | 237 |
+
+#### BR-SYS-STATE-006
+
+| codes                                     | type   | chain     | 文件                           | 行号  |
+| ----------------------------------------- | ------ | --------- | ---------------------------- | --- |
+| BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | APP-CLOSE | src/services/closeService.ts | 229 |
 
 #### BR-SYS-VERIFY-001
 
@@ -1100,7 +1148,7 @@
 
 | codes                         | type | chain | 文件                   | 行号   |
 | ----------------------------- | ---- | ----- | -------------------- | ---- |
-| BR-WS-OBS-001-RB-WS-WS-FS-001 | RB   | WS-FS | src-tauri/src/lib.rs | 1022 |
+| BR-WS-OBS-001-RB-WS-WS-FS-001 | RB   | WS-FS | src-tauri/src/lib.rs | 1260 |
 
 #### BR-WS-PERSIST-001
 
@@ -1123,11 +1171,11 @@
 
 | codes                                       | type   | chain         | 文件                                    | 行号  |
 | ------------------------------------------- | ------ | ------------- | ------------------------------------- | --- |
-| BR-WS-STATE-001-RB-WS-WS-DIFF-APPLY-001     | RB     | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 44  |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-001 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 75  |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 101 |
-| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 167 |
-| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 238 |
+| BR-WS-STATE-001-RB-WS-WS-DIFF-APPLY-001     | RB     | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 45  |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-001 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 76  |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 103 |
+| BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-003 | EFFECT | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 171 |
+| BR-WS-STATE-001-QUERY-WS-WS-DIFF-APPLY-001  | QUERY  | WS-DIFF-APPLY | src-tauri/src/workspace/diff_apply.rs | 250 |
 
 #### BR-WS-STATE-002
 
@@ -1140,13 +1188,13 @@
 
 | codes                                   | type   | chain     | 文件                                   | 行号  |
 | --------------------------------------- | ------ | --------- | ------------------------------------ | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 194 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 793 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 195 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 808 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-003     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 96  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts            | 693 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts            | 700 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-008     | RB     | AG-ASSIST | src/store/assistStore.ts             | 94  |
 
 #### TERM-AG-009
@@ -1161,7 +1209,7 @@
 
 | codes                             | type | chain   | 文件                   | 行号  |
 | --------------------------------- | ---- | ------- | -------------------- | --- |
-| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 208 |
+| BR-DE-STATE-001-RB-DE-DE-DIFF-002 | RB   | DE-DIFF | src/store/deStore.ts | 215 |
 
 #### TERM-ED-001
 
@@ -1179,7 +1227,7 @@
 
 | codes                                 | type   | chain   | 文件                         | 行号  |
 | ------------------------------------- | ------ | ------- | -------------------------- | --- |
-| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012 | EFFECT | ED-EDIT | src/services/edLocate.ts   | 270 |
+| BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012 | EFFECT | ED-EDIT | src/services/edLocate.ts   | 295 |
 | BR-ED-DATA-005-RB-ED-ED-EDIT-008      | RB     | ED-EDIT | src/services/edStyleOps.ts | 125 |
 | BR-ED-DATA-005-QUERY-ED-ED-EDIT-009   | QUERY  | ED-EDIT | src-tauri/src/ag/blocks.rs | 570 |
 
@@ -1187,14 +1235,14 @@
 
 | codes                               | type  | chain   | 文件                       | 行号  |
 | ----------------------------------- | ----- | ------- | ------------------------ | --- |
-| BR-ED-DATA-004-QUERY-ED-ED-EDIT-010 | QUERY | ED-EDIT | src/services/edLocate.ts | 179 |
-| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | ED-EDIT | src/services/edLocate.ts | 339 |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-010 | QUERY | ED-EDIT | src/services/edLocate.ts | 204 |
+| BR-ED-DATA-004-QUERY-ED-ED-EDIT-007 | QUERY | ED-EDIT | src/services/edLocate.ts | 364 |
 
 #### TERM-REF-003
 
 | codes                              | type | chain      | 文件                               | 行号  |
 | ---------------------------------- | ---- | ---------- | -------------------------------- | --- |
-| BR-REF-DATA-004-AG-REF-INJECT-001  | DATA | REF-INJECT | src/components/ag/Composer.tsx   | 33  |
+| BR-REF-DATA-004-AG-REF-INJECT-001  | DATA | REF-INJECT | src/components/ag/Composer.tsx   | 40  |
 | BR-REF-DATA-004-REF-REF-INJECT-003 | DATA | REF-INJECT | src/services/referencePayload.ts | 374 |
 
 ### triage 汇总

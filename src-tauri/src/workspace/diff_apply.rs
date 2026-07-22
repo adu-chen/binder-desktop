@@ -1,6 +1,7 @@
 //! PI-WS-03 · pending_diffs 持久化与裁决后落盘 · WS-DIFF-APPLY / BR-WS-STATE-001 / SM-WS-02
 //!
-//! 承接 A-WS-M-T-01 §5 / A-WS-M-S-01 SM-WS-02：WS 持久化 pending_diff（重启可恢复），仅在 DE 终态机
+//! 承接 A-WS-M-T-01 §5 / A-WS-M-S-01 SM-WS-02：WS 持久化 pending_diff（当前会话可恢复）；跨会话前
+//! 必须由 SYS 启动清算转终态，仅在 DE 终态机
 //! `accepted` 信号触发时落盘——写入目标文档并记恰好一个时间轴节点；`rejected`/`expired` 不写文件；
 //! 写盘失败不记节点、控制态可重试且原文件不被破坏。diff 终态转移语义归 DE（本模块只执行 WS 侧落盘）。
 //! accepted 信号来自 DE（X-INTER-001），covers 中以事件模拟。
@@ -77,9 +78,10 @@ pub fn is_terminal(state: DiffApplyState) -> bool {
  * type:     EFFECT
  * chain:    WS-DIFF-APPLY
  * rules:    BR-WS-STATE-001
- * boundary: in=PendingDiff | out=persistedPendingDiff(restartRecoverable)
+ * boundary: in=PendingDiff | out=persistedPendingDiff(currentSessionRecoverable)
  */
-/// 持久化 pending_diff（BR-WS-STATE-001：未裁决 diff 入库，重启可恢复）。
+/// 持久化 pending_diff（BR-WS-STATE-001：未裁决 diff 入库，供当前进程会话审阅与裁决）。跨会话残留
+/// 必须由 BR-SYS-STATE-005 在任何恢复前转 expired，不得恢复为可执行 diff。
 pub fn persist_diff(conn: &Connection, diff: &PendingDiff) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO pending_diffs \
@@ -147,9 +149,11 @@ pub fn apply_diff(
             false,
         )
     })?;
-    // 3) 置 diff 终态 accepted。
+    // 3) 置 diff 终态 accepted；后台路径落盘与裁决同一调用原子完成，effect_status 直接 saved
+    //    （BR-SYS-DATA-005，A-SYS-M-T-02 §4：区分裁决态与落盘效果两个维度）。
     conn.execute(
-        "UPDATE pending_diffs SET status = 'accepted', decided_at = ?2 WHERE diff_id = ?1",
+        "UPDATE pending_diffs SET status = 'accepted', effect_status = 'saved', decided_at = ?2 \
+         WHERE diff_id = ?1",
         (diff_id, now_millis()),
     )
     .map_err(|e| {
@@ -172,11 +176,19 @@ pub fn apply_diff(
  * boundary: in=diffIdAndTerminal | out=discardedDiff(noFileWriteNoNode)
  */
 /// rejected/expired 丢弃（BR-WS-STATE-001）：仅置 diff 终态，不写文件、不记时间轴节点。
-pub fn discard_diff(conn: &Connection, diff_id: &str, terminal: &str) -> rusqlite::Result<()> {
+/// `terminal_reason` 可空（2026-07-20 新增，BR-SYS-DATA-005）：过期/异常退出清算等场景标注原因，
+/// 供历史只读展示区分（如 `abnormal_exit`）；rejected 通常不带原因。
+pub fn discard_diff(
+    conn: &Connection,
+    diff_id: &str,
+    terminal: &str,
+    terminal_reason: Option<&str>,
+) -> rusqlite::Result<()> {
     debug_assert!(terminal == "rejected" || terminal == "expired");
     conn.execute(
-        "UPDATE pending_diffs SET status = ?2, decided_at = ?3 WHERE diff_id = ?1",
-        (diff_id, terminal, now_millis()),
+        "UPDATE pending_diffs SET status = ?2, terminal_reason = ?3, decided_at = ?4 \
+         WHERE diff_id = ?1",
+        (diff_id, terminal, terminal_reason, now_millis()),
     )?;
     Ok(())
 }
@@ -240,10 +252,10 @@ fn doc_type_of(rel_path: &str) -> String {
  * type:     QUERY
  * chain:    WS-DIFF-APPLY
  * rules:    BR-WS-STATE-001
- * boundary: in=workspaceIdAndStatusFilter | out=pendingDiffList(restartRecoverable)
+ * boundary: in=workspaceIdAndStatusFilter | out=pendingDiffList(currentSessionOrReadonlyHistory)
  */
-/// 列举 workspace 的 pending_diff（BR-WS-STATE-001 重启恢复入口）：按 workspace_id 过滤，可选 status
-/// 过滤（None=全部）；按 created_at 升序，使重启后裁决顺序稳定。
+/// 列举 workspace 的 pending_diff（BR-WS-STATE-001 当前会话查询/终态历史读取入口）：按 workspace_id
+/// 过滤，可选 status 过滤（None=全部）；启动清算完成后不得以本函数恢复 pending 的裁决权。
 pub fn list_pending_diffs(
     conn: &Connection,
     workspace_id: &str,
@@ -349,7 +361,7 @@ mod tests {
         let conn = fresh();
         persist_diff(&conn, &sample_diff("d1")).unwrap();
         assert_eq!(current_status(&conn, "d1").unwrap(), DiffStatus::Pending);
-        discard_diff(&conn, "d1", "rejected").unwrap();
+        discard_diff(&conn, "d1", "rejected", None).unwrap();
         assert_eq!(current_status(&conn, "d1").unwrap(), DiffStatus::Rejected);
         // 缺失 diff：错误形状（处理器据此拒绝，不静默落盘）
         let err = current_status(&conn, "missing").unwrap_err();
@@ -367,7 +379,7 @@ mod tests {
         d2.created_at = 100;
         persist_diff(&conn, &d1).unwrap();
         persist_diff(&conn, &d2).unwrap();
-        discard_diff(&conn, "d1", "rejected").unwrap();
+        discard_diff(&conn, "d1", "rejected", None).unwrap();
 
         // 全部：按 created_at 升序（d2 先于 d1）。
         let all = list_pending_diffs(&conn, "ws1", None).unwrap();
@@ -423,7 +435,7 @@ mod tests {
         for (id, terminal) in [("d2", "rejected"), ("d3", "expired")] {
             let diff = sample_diff(id);
             persist_diff(&conn, &diff).unwrap();
-            discard_diff(&conn, id, terminal).unwrap();
+            discard_diff(&conn, id, terminal, None).unwrap();
             assert_eq!(status_of(&conn, id), terminal);
         }
         // 无任何时间轴节点（rejected/expired 不记节点）

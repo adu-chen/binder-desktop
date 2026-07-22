@@ -39,6 +39,31 @@ export function getActiveEditor(): Editor | null {
   return activeEditor;
 }
 
+/** 保存结果（结构对齐 edService.SaveOutcome，本文件不反向依赖 edService 避免循环引用）。 */
+export interface ActiveSaveOutcome {
+  ok: boolean;
+  message?: string;
+  conflict?: boolean;
+}
+
+// 活动编辑器保存处理器注册点（Editor.tsx 挂载时注册其 saveCurrent，卸载置空）。
+// 关闭前处理（APP-CLOSE-DIFF-LIFECYCLE-01）复用同一保存入口逐个保存脏文档，不重复实现各格式的
+// 保存分支（docx/html_file/markdown/text），避免重复维护同一份格式路由逻辑。
+let activeSaveHandler: (() => Promise<ActiveSaveOutcome>) | null = null;
+
+/** 注册当前活动编辑器的保存处理器（Editor.tsx 调用；卸载时传 null 解除注册）。 */
+export function registerActiveSaveHandler(fn: (() => Promise<ActiveSaveOutcome>) | null): void {
+  activeSaveHandler = fn;
+}
+
+/** 触发当前活动编辑器保存（无注册处理器时返回失败，不静默成功）。 */
+export async function triggerActiveSave(): Promise<ActiveSaveOutcome> {
+  if (!activeSaveHandler) {
+    return { ok: false, message: "无活动可保存的编辑器" };
+  }
+  return activeSaveHandler();
+}
+
 export function bindActiveEditorDocument(binding: ActiveEditorBinding): void {
   activeEditorBinding = binding;
 }

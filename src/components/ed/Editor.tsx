@@ -27,6 +27,7 @@ import {
   applyEditOps,
   isActiveEditorBoundTo,
   writeSelectionRefData,
+  registerActiveSaveHandler,
 } from "../../services/edLocate";
 import { applyStyleOps } from "../../services/edStyleOps";
 import { outlineStore, extractOutline } from "../../store/outlineStore";
@@ -678,10 +679,14 @@ export function Editor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 loadSeq 驱动载入；openPath/loadedContent/editFormat 在 loadSeq 变更时同步刷新，单独入依赖会引发重复 setContent
   }, [editor, loadSeq]);
 
-  const saveCurrent = async () => {
-    if (!editor) return;
-    if (!isActiveEditorBoundTo(openPath, loadSeq, editFormat, contentFormat)) return;
-    if (tabState !== "dirty" && tabState !== "pending_diff" && tabState !== "saving") return;
+  const saveCurrent = async (): Promise<{ ok: boolean; message?: string; conflict?: boolean }> => {
+    if (!editor) return { ok: false, message: "编辑器未就绪" };
+    if (!isActiveEditorBoundTo(openPath, loadSeq, editFormat, contentFormat)) {
+      return { ok: false, message: "编辑器未绑定到当前文档" };
+    }
+    if (tabState !== "dirty" && tabState !== "pending_diff" && tabState !== "saving") {
+      return { ok: true }; // 无脏态，视为已是保存后状态（关闭前批量保存的空操作分支）
+    }
     const saveSerialized = async (override = false) => {
       if (editFormat === "html") {
         return saveDocxDocument(serialize(editor, "html", "html", openPath), override);
@@ -700,9 +705,19 @@ export function Editor() {
     const result = await saveSerialized(false);
     if (!result.ok && result.conflict) {
       const confirmed = window.confirm("磁盘内容已在打开后变化。确定覆盖磁盘版本并保留当前编辑吗？");
-      if (confirmed) await saveSerialized(true);
+      if (confirmed) return saveSerialized(true);
     }
+    return result;
   };
+
+  // 关闭前处理（APP-CLOSE-DIFF-LIFECYCLE-01）复用本编辑器的保存路由：注册当前 saveCurrent，
+  // 卸载时解除注册（避免已卸载编辑器的处理器被误触发）。经 ref 保证始终调用最新闭包。
+  const saveCurrentRef = useRef(saveCurrent);
+  saveCurrentRef.current = saveCurrent;
+  useEffect(() => {
+    registerActiveSaveHandler(() => saveCurrentRef.current());
+    return () => registerActiveSaveHandler(null);
+  }, []);
 
 
   // 纸张偏好变化（工具栏切换）→ 实时应用分页几何（PI-ED-06，仅分页文档）。

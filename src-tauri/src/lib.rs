@@ -4,7 +4,126 @@
 //! 分层约束 X-SEQ-002：前端经 command 触达，后端经领域逻辑触达 FS/db。
 
 use std::{collections::HashMap, sync::Mutex};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
+
+/// macOS 的 Cmd+Q 不会在当前 Tao 运行时版本中转换为 Tauri `RunEvent::ExitRequested`：
+/// Tao 直接在 `applicationWillTerminate:` 才结束 event loop，届时已无法取消。这里在 Tauri
+/// 已安装的 app delegate 外再包一层无状态子类，为 `applicationShouldTerminate:` 提供可取消
+/// 的原生入口，并复用前端的 `sys:exit-requested` 关闭编排。
+///
+/// 不添加 ivar、只覆写一个 ABI 兼容的方法；因此 `object_setClass` 满足 Objective-C 运行时
+/// 的对象布局要求。非 macOS 平台不会编译此模块。
+#[cfg(target_os = "macos")]
+mod macos_exit_guard {
+    use std::{
+        ffi::{c_char, c_void},
+        sync::OnceLock,
+    };
+    use tauri::{AppHandle, Emitter, Manager};
+
+    type ObjcId = *mut c_void;
+
+    static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> ObjcId;
+        fn object_getClass(object: ObjcId) -> ObjcId;
+        fn objc_allocateClassPair(
+            superclass: ObjcId,
+            name: *const c_char,
+            extra_bytes: usize,
+        ) -> ObjcId;
+        fn objc_registerClassPair(class: ObjcId);
+        fn class_addMethod(
+            class: ObjcId,
+            selector: ObjcId,
+            implementation: unsafe extern "C" fn(ObjcId, ObjcId, ObjcId) -> usize,
+            types: *const c_char,
+        ) -> bool;
+        fn object_setClass(object: ObjcId, class: ObjcId) -> ObjcId;
+        #[link_name = "objc_msgSend"]
+        fn objc_msg_send_id(receiver: ObjcId, selector: ObjcId) -> ObjcId;
+        fn sel_registerName(name: *const c_char) -> ObjcId;
+    }
+
+    /// `NSApplicationTerminateReply`: `NSTerminateCancel = 0`, `NSTerminateNow = 1`.
+    /// 有主窗口时必须取消原生终止并进入可交互的决策流；窗口已销毁时让 Tauri 正常收束
+    /// event loop，避免留下无窗口后台进程。
+    unsafe extern "C" fn application_should_terminate(
+        _delegate: ObjcId,
+        _selector: ObjcId,
+        _sender: ObjcId,
+    ) -> usize {
+        let Some(app_handle) = APP_HANDLE.get() else {
+            return 1;
+        };
+        if app_handle.get_webview_window("main").is_none() {
+            return 1;
+        }
+
+        match app_handle.emit("sys:exit-requested", ()) {
+            Ok(()) => eprintln!(
+                "[app-close] macOS Cmd+Q 已在 applicationShouldTerminate 拦截，已向前端广播 sys:exit-requested"
+            ),
+            Err(error) => eprintln!(
+                "[app-close] macOS Cmd+Q 已拦截，但广播 sys:exit-requested 失败: {error}"
+            ),
+        }
+        0
+    }
+
+    /// 将 Tao 的 app delegate 运行时替换为零 ivar 的子类，保留其余所有 delegate 方法的
+    /// superclass 分派。此操作只在 Tauri setup 后执行一次，此时 delegate 已创建且仍在主线程。
+    pub fn install(app_handle: &AppHandle) -> Result<(), String> {
+        APP_HANDLE
+            .set(app_handle.clone())
+            .map_err(|_| "macOS exit guard 重复安装".to_string())?;
+
+        // SAFETY: setup 在 macOS 主线程执行；新类不新增 ivar，并且仅覆写与 AppKit 约定一致的
+        // `applicationShouldTerminate:` 签名。Tao 创建的 delegate 在应用生命周期内保持有效。
+        unsafe {
+            let app_class = objc_getClass(c"NSApplication".as_ptr());
+            if app_class.is_null() {
+                return Err("无法找到 NSApplication 类".to_string());
+            }
+            let shared_application =
+                objc_msg_send_id(app_class, sel_registerName(c"sharedApplication".as_ptr()));
+            if shared_application.is_null() {
+                return Err("无法获取 NSApplication 实例".to_string());
+            }
+            let delegate =
+                objc_msg_send_id(shared_application, sel_registerName(c"delegate".as_ptr()));
+            if delegate.is_null() {
+                return Err("Tauri app delegate 尚未就绪".to_string());
+            }
+            let superclass = object_getClass(delegate);
+            if superclass.is_null() {
+                return Err("无法读取 Tauri app delegate 类".to_string());
+            }
+
+            let guard_class =
+                objc_allocateClassPair(superclass, c"BinderMacExitGuardDelegate".as_ptr(), 0);
+            if guard_class.is_null() {
+                return Err("无法创建 macOS 退出守卫 delegate 类".to_string());
+            }
+            if !class_addMethod(
+                guard_class,
+                sel_registerName(c"applicationShouldTerminate:".as_ptr()),
+                application_should_terminate,
+                c"Q@:@".as_ptr(),
+            ) {
+                return Err("无法安装 applicationShouldTerminate: 拦截器".to_string());
+            }
+            objc_registerClassPair(guard_class);
+            let previous_class = object_setClass(delegate, guard_class);
+            if previous_class != superclass {
+                return Err("Tauri app delegate 在安装退出守卫时发生并发变化".to_string());
+            }
+        }
+        Ok(())
+    }
+}
 
 // —— 系统底座（PI-SYS-01~04）——
 pub mod db; // PI-SYS-03 workspace.db schema 与版本化迁移
@@ -62,6 +181,8 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.list_pending_diffs");
     reg.register("ws.apply_diff");
     reg.register("ws.discard_diff");
+    reg.register("ws.discard_unsaved_sessions");
+    reg.register("sys.inspect_close");
     reg.register("ws.create_doc");
     reg.register("ws.create_folder");
     reg.register("ws.rename_doc");
@@ -136,6 +257,8 @@ fn dispatch(
         "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
         "ws.apply_diff" => route_apply_diff(&request, &state, &app),
         "ws.discard_diff" => route_discard_diff(&request, &state, &app),
+        "ws.discard_unsaved_sessions" => route_discard_unsaved_sessions(&state),
+        "sys.inspect_close" => route_inspect_close(&state),
         "ws.create_doc" => route_create_doc(&request, &state),
         "ws.create_folder" => route_create_folder(&request, &state),
         "ws.rename_doc" => route_rename_doc(&request, &state),
@@ -398,7 +521,7 @@ fn route_save_doc(
         .ok_or_else(|| IpcError::new("WS_CONTENT_REQUIRED", "缺少 content 参数", false, false))?;
     let baseline = optional_u64_param(request, "baseline", "WS_BASELINE_INVALID")?;
     let override_confirmed = bool_param(request, "override", false);
-    let (_, abs) = resolve_active(state, &rel_path)?;
+    let (ws, abs) = resolve_active(state, &rel_path)?;
     let saved = save_atomic_sm(
         app,
         &rel_path,
@@ -406,6 +529,19 @@ fn route_save_doc(
         content.as_bytes(),
         baseline,
         override_confirmed,
+    )?;
+    // 文件已落盘后，必须同步确认对应 accepted diff 的效果态。这里不能吞错：否则调用方会把
+    // "已保存但历史效果态仍 awaiting_save" 当作完整成功，后续异常清算会产生错误的历史结论。
+    let conn = lock_db(state)?;
+    de::lifecycle::flip_awaiting_save_to_saved(&conn, &ws.workspace_id, &rel_path).map_err(
+        |e| {
+            IpcError::new(
+                "DE_EFFECT_STATUS_SYNC_FAILED",
+                &format!("文件已保存，但 diff 效果状态同步失败: {e}"),
+                true,
+                false,
+            )
+        },
     )?;
     Ok(serde_json::json!({ "baseline": saved.baseline.to_string() }))
 }
@@ -782,7 +918,7 @@ fn route_save_from_edit(
         .ok_or_else(|| IpcError::new("DOC_HTML_REQUIRED", "缺少 html 参数", false, false))?;
     let baseline = optional_u64_param(request, "baseline", "DOC_BASELINE_INVALID")?;
     let override_confirmed = bool_param(request, "override", false);
-    let (_, abs) = resolve_active(state, &rel_path)?;
+    let (ws, abs) = resolve_active(state, &rel_path)?;
     let saving = doc::convert::transition(
         doc::convert::DocConvertState::Ready,
         doc::convert::DocConvertEvent::SaveDocx,
@@ -811,6 +947,18 @@ fn route_save_from_edit(
             let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertOk)
                 .expect("SaveConverting+SaveConvertOk→Ready");
             emit_doc01(app, &rel_path, st);
+            // 与文本保存路径相同：文件成功转换并写入后，效果态同步失败必须向调用方暴露，不能
+            // 静默把历史留在 awaiting_save。
+            let conn = lock_db(state)?;
+            de::lifecycle::flip_awaiting_save_to_saved(&conn, &ws.workspace_id, &rel_path)
+                .map_err(|e| {
+                    IpcError::new(
+                        "DE_EFFECT_STATUS_SYNC_FAILED",
+                        &format!("文件已保存，但 diff 效果状态同步失败: {e}"),
+                        true,
+                        false,
+                    )
+                })?;
             Ok(serde_json::json!({ "baseline": saved.baseline.to_string() }))
         }
         Err(e) => {
@@ -935,8 +1083,96 @@ fn route_discard_diff(
     }
     let conn = lock_db(state)?;
     // 经 SM-WS-02 驱动 + 广播（AwaitingDecision→Discarded，不写文件）。
-    discard_diff_sm(app, &conn, &diff_id, &terminal)?;
+    discard_diff_sm(app, &conn, &diff_id, &terminal, None)?;
     Ok(serde_json::json!({ "diff_id": diff_id, "status": terminal }))
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001
+ * type:     QUERY
+ * chain:    APP-CLOSE
+ * rules:    BR-SYS-STATE-004
+ * boundary: in=activeWorkspace | out=pendingDiffCountAwaitingSaveCountAndDirtyDocuments(dbTruthNotCachedCount)
+ */
+/// 路由 `sys.inspect_close`：SM-SYS-02 Inspecting/Verifying 态复用的只读清点——当前活动 workspace 的
+/// 待裁决 diff 数、未确认写盘的 effect 数与未保存文档列表（含各自是否存在 accepted+awaiting_save 的 diff，
+/// 供弹窗详情展示）。
+/// 直接查库，不信任调用方传入的缓存计数（BR-SYS-STATE-004：复核必须基于真值）。
+fn route_inspect_close(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let pending_diff_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pending_diffs WHERE workspace_id=?1 AND status='pending'",
+            [&ws.workspace_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    let awaiting_save_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pending_diffs \
+             WHERE workspace_id=?1 AND status='accepted' AND effect_status='awaiting_save'",
+            [&ws.workspace_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+
+    let mut stmt = conn
+        .prepare("SELECT rel_path FROM ed_session_snapshots WHERE workspace_id=?1 AND dirty=1")
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    let dirty_rel_paths: Vec<String> = stmt
+        .query_map([&ws.workspace_id], |r| r.get::<_, String>(0))
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    drop(stmt);
+
+    let dirty_documents: Vec<serde_json::Value> = dirty_rel_paths
+        .iter()
+        .map(|rel_path| -> Result<serde_json::Value, IpcError> {
+            let has_awaiting: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pending_diffs \
+                     WHERE workspace_id=?1 AND rel_path=?2 AND status='accepted' AND effect_status='awaiting_save'",
+                    rusqlite::params![&ws.workspace_id, rel_path],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
+                > 0;
+            Ok(serde_json::json!({ "relPath": rel_path, "hasAcceptedAwaitingSave": has_awaiting }))
+        })
+        .collect::<Result<Vec<_>, IpcError>>()?;
+
+    Ok(serde_json::json!({
+        "pendingDiffCount": pending_diff_count,
+        "awaitingSaveCount": awaiting_save_count,
+        "dirtyDocuments": dirty_documents,
+    }))
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002
+ * type:     EFFECT
+ * chain:    APP-CLOSE
+ * rules:    BR-SYS-STATE-004
+ * boundary: in=activeWorkspace | out=dirtySnapshotsAndAwaitingSaveEffectsDiscarded(explicitUserChoiceNotAutomatic)
+ */
+/// 路由 `ws.discard_unsaved_sessions`：关闭前决策入口"放弃未保存修改"分支——用户显式选择后，清空
+/// 当前活动 workspace 全部 `ed_session_snapshots.dirty=1` 行，不落盘；并把该 workspace 全部
+/// accepted+awaiting_save diff 同步标记效果丢失（BR-SYS-DATA-005）。与异常退出清算共享同一丢弃步骤（`terminal_reason`
+/// 标注为 `user_discarded_on_close` 以区分触发源），但本命令由正常关闭流程内的用户显式动作触发。
+fn route_discard_unsaved_sessions(state: &AppState) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    let (discarded_dirty_snapshots, discarded_awaiting_save_diffs) =
+        de::lifecycle::discard_dirty_sessions(&conn, &ws.workspace_id, "user_discarded_on_close")
+            .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+    Ok(serde_json::json!({
+        "discardedDirtySnapshots": discarded_dirty_snapshots,
+        "discardedAwaitingSaveDiffs": discarded_awaiting_save_diffs,
+    }))
 }
 
 // —— SM-WS-02 落盘机集成（A-CORE-X-L-04 Task 2-D）——
@@ -986,11 +1222,13 @@ fn apply_diff_sm(
 }
 
 /// 经 SM-WS-02 驱动 discard：AwaitingDecision→Discarded（rejected/expired，不写文件）→广播。
+/// `terminal_reason` 可空（BR-SYS-DATA-005）：过期原因/异常退出清算标注，供历史只读展示区分。
 fn discard_diff_sm(
     app: &tauri::AppHandle,
     conn: &Connection,
     diff_id: &str,
     terminal: &str,
+    terminal_reason: Option<&str>,
 ) -> Result<(), IpcError> {
     use workspace::diff_apply::{transition, DiffApplyEvent, DiffApplyState};
     let ev = if terminal == "rejected" {
@@ -1000,7 +1238,7 @@ fn discard_diff_sm(
     };
     let discarded = transition(DiffApplyState::AwaitingDecision, ev)
         .expect("SM-WS-02: AwaitingDecision+Rejected/Expired→Discarded");
-    workspace::diff_apply::discard_diff(conn, diff_id, terminal)
+    workspace::diff_apply::discard_diff(conn, diff_id, terminal, terminal_reason)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
     emit_ws02(app, diff_id, discarded);
     Ok(())
@@ -1469,8 +1707,11 @@ fn route_accept_draft_diff(
             false,
         )
     })?;
+    // effect_status=awaiting_save（BR-SYS-DATA-005）：草稿/open_session 路径接受时内容尚未落盘，
+    // 待用户实际保存成功后才由保存回调翻转为 saved；异常退出清算据此识别效果是否已丢失。
     conn.execute(
-        "UPDATE pending_diffs SET status = 'accepted', decided_at = ?2 WHERE diff_id = ?1",
+        "UPDATE pending_diffs SET status = 'accepted', effect_status = 'awaiting_save', decided_at = ?2 \
+         WHERE diff_id = ?1",
         (&diff_id, now_millis()),
     )
     .map_err(|e| {
@@ -1629,7 +1870,7 @@ fn route_reject_diff(
         )
     })?;
     // ② 落终态：经 SM-WS-02 驱动 discard（rejected，不写文件、不记节点）+ 广播。
-    discard_diff_sm(app, &conn, &diff_id, "rejected")?;
+    discard_diff_sm(app, &conn, &diff_id, "rejected", None)?;
     // ③ 广播 SM-DE-01 转移。
     sm_events::emit_sm_state(
         app,
@@ -1668,7 +1909,7 @@ fn route_expire_diff(
                 false,
             )
         })?;
-    discard_diff_sm(app, &conn, &diff_id, "expired")?;
+    discard_diff_sm(app, &conn, &diff_id, "expired", Some(&reason))?;
     sm_events::emit_sm_state(
         app,
         sm_events::SmStatePayload::new(
@@ -1791,7 +2032,9 @@ fn route_persist_open_tabs(
             .get("relPath")
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| IpcError::new("ED_OPEN_TAB_INVALID", "打开标签缺少 relPath", false, false))?
+            .ok_or_else(|| {
+                IpcError::new("ED_OPEN_TAB_INVALID", "打开标签缺少 relPath", false, false)
+            })?
             .to_string();
         workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
         let kind = tab
@@ -1949,7 +2192,7 @@ fn route_list_diff_details(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT d.diff_id, d.workspace_id, d.rel_path, d.status, d.created_at, \
+        "SELECT d.diff_id, d.workspace_id, d.rel_path, d.status, d.effect_status, d.terminal_reason, d.created_at, \
                 p.before_snapshot, p.after_content, p.style_ops \
          FROM pending_diffs d LEFT JOIN diff_payloads p ON p.payload_ref = d.payload_ref \
          WHERE d.workspace_id = ? AND d.diff_id IN ({placeholders}) \
@@ -1969,10 +2212,12 @@ fn route_list_diff_details(
             let workspace_id: String = r.get(1)?;
             let rel_path: String = r.get(2)?;
             let status: String = r.get(3)?;
-            let created_at: i64 = r.get(4)?;
-            let before_snapshot: Option<String> = r.get(5)?;
-            let after_content: Option<Vec<u8>> = r.get(6)?;
-            let style_ops_json: Option<String> = r.get(7)?;
+            let effect_status: String = r.get(4)?;
+            let terminal_reason: Option<String> = r.get(5)?;
+            let created_at: i64 = r.get(6)?;
+            let before_snapshot: Option<String> = r.get(7)?;
+            let after_content: Option<Vec<u8>> = r.get(8)?;
+            let style_ops_json: Option<String> = r.get(9)?;
             let style_ops = style_ops_json
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
@@ -1988,6 +2233,8 @@ fn route_list_diff_details(
                     "rel_path": rel_path,
                 },
                 "status": status,
+                "effect_status": effect_status,
+                "terminal_reason": terminal_reason,
                 "created_at": created_at,
                 "projection": {
                     "patch_kind": "replace_document",
@@ -4323,10 +4570,29 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            macos_exit_guard::install(&app.handle())
+                .map_err(std::io::Error::other)?;
             // workspace.db 落应用数据目录（控制态，非用户正文；承 BR-SYS-PERSIST-001 迁移框架）。
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let conn = db::open_and_migrate(&data_dir.join("workspace.db"))?;
+            // 异常退出清算（BR-SYS-STATE-005）：必须先于任何 workspace/会话/历史恢复执行——残留
+            // pending diff 一律过期，残留未保存内容一律丢弃，不得被当作可信态复活（APP-CLOSE-DIFF-LIFECYCLE-01）。
+            for (workspace_id, report) in de::lifecycle::sweep_all_workspaces_on_startup(&conn)?
+            {
+                if report.expired_pending > 0
+                    || report.discarded_dirty_snapshots > 0
+                    || report.discarded_awaiting_save_diffs > 0
+                {
+                    eprintln!(
+                        "[app-close] workspace_id={workspace_id} 异常退出清算：expired_pending={} discarded_dirty_snapshots={} discarded_awaiting_save_diffs={}",
+                        report.expired_pending,
+                        report.discarded_dirty_snapshots,
+                        report.discarded_awaiting_save_diffs
+                    );
+                }
+            }
             app.manage(AppState {
                 db: Mutex::new(conn),
                 registry: build_registry(),
@@ -4341,6 +4607,40 @@ pub fn run() {
             ag_request_assist,
             ag_finish_assist
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Binder");
+        .build(tauri::generate_context!())
+        .expect("error while building Binder")
+        .run(|app_handle, event| {
+            /*
+             * @GOV
+             * codes:    BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004
+             * type:     GUARD
+             * chain:    APP-CLOSE
+             * rules:    BR-SYS-STATE-004
+             * boundary: in=ExitRequestedAndMainWindowPresence | out=frontendCloseRequestEmittedOrRuntimeExitAllowed(noHeadlessProcessResidue)
+             */
+            // BR-SYS-STATE-004（APP-CLOSE-DIFF-LIFECYCLE-01）：Cmd+Q / Dock 退出 / 系统关机到达的是
+            // 应用级 RunEvent::ExitRequested，不经过窗口的 WindowEvent::CloseRequested。此前只有
+            // App.tsx 的 onCloseRequested 拦截窗口关闭按钮一条路径，Cmd+Q 完全绕过关闭前清点/弹窗。
+            // 主窗口仍存在时拦截默认退出，并显式广播给 React 进入 requestClose()。不能在此直接
+            // window.close()：实测该路径不会可靠触发 WebView 的 onCloseRequested，因此会绕过弹窗。
+            // 窗口已经销毁时不能再 prevent_exit：Tauri 会因最后一个窗口销毁再次派发 ExitRequested；
+            // 若仍拦截，会留下无窗口的后台进程。
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if app_handle.get_webview_window("main").is_some() {
+                    api.prevent_exit();
+                    match app_handle.emit("sys:exit-requested", ()) {
+                        Ok(()) => eprintln!(
+                            "[app-close] 原生退出已拦截，已向前端广播 sys:exit-requested"
+                        ),
+                        Err(error) => eprintln!(
+                            "[app-close] 原生退出已拦截，但广播 sys:exit-requested 失败: {error}"
+                        ),
+                    }
+                } else {
+                    eprintln!(
+                        "[app-close] 原生退出未拦截：main 窗口已不存在，允许运行时退出"
+                    );
+                }
+            }
+        });
 }

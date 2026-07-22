@@ -45,7 +45,7 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
   DiffProjection（draft_mode/snapshot_source/base_session_version/base_content_hash）、裁决输入、
   外部变更检测结果、编辑器草稿应用状态、已打开非激活文档自动应用状态、后台 apply 回执
 - **states**：Generating、Pending、Accepted、Rejected、Expired、GenFailed
-- **events**：genOk、genFail、autoApplyOk、autoApplyFail、userAccept、userReject、timeout、externalChange、appliedOk、applyFail
+- **events**：genOk、genFail、autoApplyOk、autoApplyFail、userAccept、userReject、timeout、externalChange、appliedOk、applyFail、startupAbnormalExitSweep
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
@@ -62,6 +62,7 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
 | Accepted | saved | ED/WS save 成功（草稿路径） | Accepted | 落盘闭合：ED GreenReview 复位（终态保持） |
 | Accepted | appliedOk | SM-WS-02 Applied 回执（后台路径） | Accepted | 落盘闭合：ED 装饰复位（终态保持） |
 | Accepted | applyFail | SM-WS-02 ApplyError 回执 | Accepted | 终态不回退；落盘重试归 WS 侧（SM-WS-02 retry） |
+| Pending | startupAbnormalExitSweep | 应用启动清算发现该 diff 所属 workspace 存在未清零残留（BR-SYS-STATE-005，SM-SYS-02 驱动） | Expired | status=expired，terminal_reason=abnormal_exit；先于会话/历史恢复执行，不进入裁决投影 |
 
 - **error_states**：GenFailed（终态，回报 AG 可发起新回合重试，不复用本条 diff）
 - **recovery_paths**：GenFailed→AG 侧重新产出（新 diff 新实例）；草稿路径 saveFail→ED 保持脏态可重试；
@@ -91,9 +92,12 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
 | 已打开非激活文档自动应用 | SM-DE-01 Pending → SM-ED-01 Editing → Accepted | `draft_mode=open_session` 基线校验通过后直接改对应 ED session LogicalState；不要求用户切换窗口，不触发 SM-WS-02；失败转 Expired/不可裁决投影 | **双侧就绪**（ED 侧待本文后续代码承接） |
 | 不落盘关闭 | SM-DE-01 Rejected/Expired → SM-WS-02 rejected/expired | 驱动 SM-WS-02 → Discarded（不写文件） | **双侧就绪** |
 | 审阅呈现 | SM-DE-01 ↔ ED 装饰层 | Pending 呈现/终态复位；裁决交互经 ED 转达（X-FORBID-005）；装饰为本机投影不独立建机（A-ED-M-S-01 §4 豁免成立） | 双侧就绪 |
+| 关闭前批量裁决 | SM-SYS-02 Resolving → SM-DE-01（userAccept/userReject 批量） | 应用关闭决策入口批量调用既有 `de.accept_diff`/`de.reject_diff`/`de.accept_draft_diff`，本机不新增事件，仅为既有转移的批量调用方（BR-SYS-STATE-004） | **双侧就绪**（SYS 侧 A-SYS-M-S-02 §3，2026-07-20 新增） |
+| 启动异常退出清算 | SM-SYS-02（启动期）→ SM-DE-01 Pending → Expired | 应用启动、先于会话/历史恢复执行；workspace 内残留 `status=pending` 一律转 `expired`，`terminal_reason=abnormal_exit`，不进入裁决投影（BR-SYS-STATE-005） | **双侧就绪**（SYS 侧 A-SYS-M-S-02 §4，2026-07-20 新增） |
 
 至此「对话生成 diff→裁决或自动应用→LogicalState/保存或未打开后台 apply」核心交互的状态机链 **AG→DE→ED/WS**，
-两侧一致性在 G5 跨模块联调验证（APC §5.1）。
+两侧一致性在 G5 跨模块联调验证（APC §5.1）。应用关闭前后的批量裁决与异常退出清算属应用级编排，
+两个新增转移点归 **SYS→DE**（A-SYS-M-S-02，2026-07-20 新增），一致性同样在 G5 验证。
 
 ## §4 三路径选择规则（A-CORE-C-T-01 §5 · D5 与 2026-07-18 决议落地）
 
@@ -164,3 +168,4 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
 | 2026-07-08 | v1.2 | 修正 SM-DE-01 accepted 副作用：当前编辑器草稿路径 accepted 不触发 SM-WS-02，后续由 ED/WS save 落盘并复位 GreenReview；后台/整篇路径仍可 accepted→SM-WS-02 apply；rejected 对已应用草稿必须回滚 before |
 | 2026-07-10 | v1.3 | 三态模型落地（A-CORE-C-T-01）：新增 §4 草稿路径 vs 后台路径选择规则（D5 决议）；后续各节编号顺移 |
 | 2026-07-18 | v1.4 | 新增已打开非激活文档 `open_session` 自动应用路径：Pending 后基线校验通过即修改 ED session LogicalState 并转 accepted；失败转 expired/error 投影；禁止用户裁决和后台落盘 |
+| 2026-07-20 | v1.5 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01（SYS 应用关闭协调机 SM-SYS-02）：新增 `startupAbnormalExitSweep` 事件与 Pending→Expired(terminal_reason=abnormal_exit) 启动清算转移；§3 新增「关闭前批量裁决」「启动异常退出清算」两条 SYS→DE 跨模块转移点，均双侧就绪 |

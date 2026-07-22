@@ -70,7 +70,8 @@ export function hashLogicalContent(content: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function isDirtyTabState(tabState: TabState): boolean {
+/** 该 tabState 是否代表内容偏离磁盘态、尚未安全落盘（供 tab-dot 视觉与关闭前聚合脏态复用同一判断）。 */
+export function isDirtyTabState(tabState: TabState): boolean {
   return tabState === "dirty" || tabState === "pending_diff" || tabState === "saving";
 }
 

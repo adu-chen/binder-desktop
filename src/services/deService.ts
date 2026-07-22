@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { deStore, type DiffView, type ExpiredReason } from "../store/deStore";
 import { edStore } from "../store/edStore";
+import { closeStore } from "../store/closeStore";
 import { openDocument, persistSessionSnapshot } from "./edService";
 import { applyEditOps, getActiveDocumentContent } from "./edLocate";
 
@@ -38,6 +39,8 @@ interface PendingDiffDto {
   diff_id: string;
   target: { rel_path: string };
   status: "pending" | "accepted" | "rejected" | "expired";
+  effect_status?: "not_applicable" | "awaiting_save" | "saved" | "discarded_on_abnormal_exit";
+  terminal_reason?: string | null;
   created_at: number;
 }
 
@@ -210,6 +213,11 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
  * 无打开文档则忽略。before/after 预览本地保留（DiffCard 展示），真实内容已持久化为 DiffPayload。
  */
 export async function generateSampleDiff(): Promise<void> {
+  // 关闭屏障（BR-SYS-STATE-004，APP-CLOSE-DIFF-LIFECYCLE-01）：关闭请求建立后拒绝新 diff 生成。
+  if (closeStore.getSnapshot().phase !== "idle") {
+    console.error("de.generate_diff blocked: application close in progress");
+    return;
+  }
   const { openPath, loadedContent, editFormat, contentFormat } = edStore.getSnapshot();
   if (!openPath) return;
   const baseContent = getActiveDocumentContent(editFormat, contentFormat) ?? loadedContent;

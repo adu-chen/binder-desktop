@@ -78,12 +78,17 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | status | diff 状态 | **枚举值集合：pending / accepted / rejected / expired** |
 | created_at | 创建时间 | — |
 | payload_ref | diff 内容载荷引用 | 内容**形状归 DE**，本文只定其在共享结构中的占位 |
+| effect_status | diff 效果态（2026-07-20 新增，APP-CLOSE-DIFF-LIFECYCLE-01） | **枚举值集合：not_applicable / awaiting_save / saved / discarded_on_abnormal_exit**；`awaiting_save` 仅限当前进程会话，启动清算必须转终态；语义与转移规则 SSOT 归 `BR-SYS-DATA-005`（A-SYS-M-T-02 §4） |
+| terminal_reason | 终态原因（可空，2026-07-20 新增） | expired 沿用 DE 既有过期原因集合，新增 `abnormal_exit` 一值，标识"应用启动异常退出清算所致" |
 
-> 边界：本文锁定 `status` 的**枚举值集合**为单一来源（防跨 session 漂移），但
-> "pending→accepted/rejected、超时/外部变更→expired" 的**转移、guard、终态不可逆语义**归 DE
-> 状态机（A-SYS-M-S-01 / DE M-S）。已打开非激活文档可由 DE/ED 受控自动应用事务把 `pending`
-> 转为 `accepted`，但该转移只修改 LogicalState 与控制态，不触发 DiskState 写入；未打开文档 accepted
-> 后触发落盘的写入语义归 DE/WS，不在本文。
+> 边界：本文锁定 `status`/`effect_status`/`terminal_reason` 的**枚举值集合**为单一来源（防跨
+> session 漂移），但 "pending→accepted/rejected、超时/外部变更→expired" 的**转移、guard、终态
+> 不可逆语义**归 DE 状态机（A-SYS-M-S-01 / DE M-S）；`effect_status` 的转移语义归
+> `BR-SYS-DATA-005`（SYS，A-SYS-M-T-02 §4）。已打开非激活文档可由 DE/ED 受控自动应用事务把
+> `pending` 转为 `accepted`，但该转移只修改 LogicalState 与控制态，不触发 DiskState 写入；未打开
+> 文档 accepted 后触发落盘的写入语义归 DE/WS，不在本文。`status=accepted` 不代表内容已落盘——
+> `effect_status` 才是"内容是否已生效"的权威字段，区分裁决态与落盘效果两个维度（解除历史审计
+> 发现的"accepted 即完成"歧义）。
 
 **TimelineEntry · 文档级时间轴条目（基线）**（REQ-CORE-007，主责 WS）
 
@@ -232,7 +237,7 @@ rule_id: BR-SYS-DATA-002
 | 表 | 基线列 | 职责 | 完整定义归属 |
 |---|---|---|---|
 | schema_meta | schema_version（整数，单调递增）、applied_at | 记录当前 schema 版本，驱动迁移 | SYS（本文） |
-| pending_diffs | diff_id(PK)、workspace_id、rel_path、origin_module、status、created_at、payload_ref | 持久化待裁决或已自动应用 diff（重启可恢复） | 基线 SYS / 完整列 WS·DE G2 |
+| pending_diffs | diff_id(PK)、workspace_id、rel_path、origin_module、status、created_at、payload_ref、effect_status（2026-07-20 新增）、terminal_reason（2026-07-20 新增，可空） | 持久化待裁决或已自动应用 diff；重启仅可恢复只读终态审阅：pending 必须 expired，awaiting_save 必须 discarded_on_abnormal_exit，裁决权与未确认效果均不得跨会话 | 基线 SYS / 完整列 WS·DE G2 |
 | timeline | entry_id(PK)、workspace_id、rel_path、version_seq、label、created_at | 持久化文档级时间轴 | 基线 SYS / 完整列 WS G2 |
 
 **控制态扩展表（基线，2026-06-12 实现前置批量登记；均含 workspace_id 外键——workspace 级隔离，
@@ -355,6 +360,8 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版（SYS G2）：跨模块共享实体契约（WorkspaceRef/DocRef/PendingDiff/TimelineEntry，字段语义级）；workspace.db schema 基线与版本化迁移契约框架；规则 BR-SYS-DATA-002（共享结构单一来源）/ BR-SYS-PERSIST-001（schema 版本化迁移与重启可恢复）；链路 DATA-MIGRATE（P1）；约束 X-SHARED-001；REQ_MAP（REQ-SYS-002）；术语归属说明（不抢注 WS/DE 的 TERM）；测试验收与债务盲区 |
+| 2026-07-20 | v1.1 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：PendingDiff 新增 `effect_status`（not_applicable/awaiting_save/saved/discarded_on_abnormal_exit）与 `terminal_reason`（新增 abnormal_exit 取值）两列，语义 SSOT 归 `BR-SYS-DATA-005`（A-SYS-M-T-02 §4）；明确 `status=accepted` 不等于内容已落盘，区分裁决态与落盘效果两个维度；workspace.db 基线表同步 |
+| 2026-07-21 | v1.2 | 收紧跨会话边界：`awaiting_save` 仅为当前进程会话态，启动清算必须转 `discarded_on_abnormal_exit`，不得依赖 dirty 快照残留；`pending_diffs` 重启只恢复终态只读审阅。 |
 | 2026-06-11 | v1.1 | 随 REF G2 登记（X-SHARED-001 回写）：§3 新增 RefInjection 引用注入载荷共享结构基线（target/block_ids/content/origin_label，主责 REF，REF→AG/CBT 跨模块传递）；解析/校验/组装语义归 A-REF-M-T-01，裁剪归 AG；受 BR-SYS-DATA-002 单一来源约束覆盖，无新增规则 |
 | 2026-06-12 | v1.2 | 进入实现前批量登记（X-SHARED-001/BR-SYS-PERSIST-001 回写，解除 AG/CBT/TPL/AST/KB 五模块"实现前登记"承诺）：§3 新增 MemoryInjection（memory_kind/content/origin_turn，主责 AST）与 KnowledgeInjection（content/source_ref/organization，主责 KB）注入共享结构基线；§4 新增七张 workspace.db 控制态扩展表基线——agent_turns（AG 回合历史）/build_runs（CBT 构建控制态）/workflow_runs（TPL 执行控制态）/templates·workflows（TPL 定义）/memory_entries（AST）/knowledge_entries（KB），均 workspace 级隔离（2026-06-11 人类决策）、payload/定义形状归各 owner、迁移受 BR-SYS-PERSIST-001 约束；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-03 | v1.3 | 随 ED 批B PI-ED-10 登记（X-SHARED-001 回写，承 A-REF-M-T-01 v1.1 扩展意向）：§3 RefInjection 增可空 block_ranges 选区级锚集合（{blockId,start,end} 块内纯文本偏移区间；CharAnchor 契约归 ED BR-ED-DATA-004、有效期=编辑会话内、失效校验归 REF §5 保守语义）；无新增规则（受 BR-SYS-DATA-002 覆盖） |

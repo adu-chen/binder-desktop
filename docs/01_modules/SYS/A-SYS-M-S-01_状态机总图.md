@@ -63,6 +63,7 @@ APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` 
 | 工作流执行 | TPL | SM-TPL-01 | active | A-TPL-M-S-01 §2（owner G2 暴露新增） |
 | autocomplete | AG（2026-06-11 人类确认） | SM-AG-03 | active | A-AG-M-S-01 §4（与 inline-assist 同机承载） |
 | inline-assist | AG（2026-06-11 人类确认） | SM-AG-03 | active | A-AG-M-S-01 §4（与 autocomplete 同机承载） |
+| 应用关闭 | SYS | SM-SYS-02 | active | A-SYS-M-S-02 §2 |
 
 > machine_id 由各 owner 模块在其 M-S 自行分配（格式 SM-[MODULE]-[SEQ]，ADU §3），本文不预占，
 > 避免跨模块 ID 归属漂移。2026-06-11 起总图全清单 active（12 台机，SY-04 闭合）；后续新模块/
@@ -115,6 +116,11 @@ constraint_id: X-SEQ-003
   AG 发起回合前必须携带 OpenDocSnapshot 构建 AgentReadContext；已打开文档 diff 经 DE 分流到
   SM-ED-01 current/open session LogicalState，未打开文档才可经 SM-WS-02 后台落盘。
   至此「代理回合生成 diff→裁决或自动应用→LogicalState/未打开后台落盘」核心交互 AG→DE→ED/WS 状态机链全链建机完毕。
+- **应用关闭协调**（2026-07-20 新增）：SM-SYS-02（A-SYS-M-S-02 §2）在关闭请求（窗口关闭/Cmd+Q/
+  Dock 退出/系统关机）建立屏障后对 Streaming 中的代理回合发 `cancel`（驱动 SM-AG-01）；
+  `AwaitingDecision` 态的批量决策复用既有 `de.accept_diff`/`de.reject_diff` 驱动 SM-DE-01，复用
+  既有保存链驱动 SM-ED-01/SM-WS-01 清脏态；`Verifying` 态只读复核 pending_diffs/ed_session_snapshots
+  当前真值。**四个转移点双侧已就绪**（AG/DE/ED/WS 侧均复用既有事件，无需对侧改动，A-SYS-M-S-02 §3）。
 
 <!-- CONSTRAINT
 constraint_id: X-INTER-001
@@ -193,3 +199,4 @@ status: mapped
 | 2026-06-11 | v1.7 | P4 G2 回填（owner 模块登记，§11.3）：§3 CBT 构建行=SM-CBT-01、记忆写入行=SM-AST-01 转 active，新增「工作流执行｜TPL｜SM-TPL-01」行（owner G2 暴露登记）；§5「Chat↔Build 接管」更新为双侧就绪（takeover/fallback+回执），新增「TPL 步骤委托」转移点；**总图全清单无 planned 行，已登记 12 台状态机全部 active**（SY-04 闭合） |
 | 2026-07-04 | v1.8 | 构建移交判据换轴（人类裁决，同步 A-AG-M-S-01 v2.0 / A-CBT-M-S-01 v2.0）：§5 转移点更名「构建移交/回落」，触发=显式触发即确认或项目级构建意图提议经确认（多文件意图废止），蓝图随移交、原窗口呈现、执行期禁新回合 |
 | 2026-07-18 | v1.9 | 修正 diff 跨模块转移：accepted 不再等同落盘；current/open session 进入 SM-ED-01 LogicalState/Dirty，background 仅未打开文档进入 SM-WS-02；AG 回合前必须用 OpenDocSnapshot 建 AgentReadContext |
+| 2026-07-20 | v1.10 | 新增「应用关闭｜SYS｜SM-SYS-02」行（A-SYS-M-S-02 定义，APP-CLOSE-DIFF-LIFECYCLE-01）：承接三轮人类确认——正常关闭前 pending diff/未保存文档必须清零，异常退出后启动清算不复活 pending/dirty 为可信态；§5 新增四条跨模块转移契约（关闭屏障→AG cancel、批量裁决→DE、保存驱动→ED/WS、复核查询），均双侧就绪 |

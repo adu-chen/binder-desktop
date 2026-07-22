@@ -207,6 +207,18 @@ const MIGRATIONS: &[Migration] = &[
                 ADD COLUMN content_format TEXT NOT NULL DEFAULT 'text';
         "#,
     },
+    Migration {
+        version: 10,
+        // 应用关闭生命周期（APP-CLOSE-DIFF-LIFECYCLE-01 / BR-SYS-DATA-005）：diff 效果态与终态原因，
+        // 区分"裁决结果"（status）与"内容是否已生效"（effect_status）两个维度；异常退出清算据此
+        // 识别 accepted 但未落盘的行。存量数据一次性回填（2026-07-20 人类决策 4）：accepted 行保守
+        // 回填为 saved（历史数据无法逐行区分是否仍 awaiting_save）；其余状态回填为 not_applicable。
+        sql: r#"
+            ALTER TABLE pending_diffs ADD COLUMN effect_status TEXT NOT NULL DEFAULT 'not_applicable';
+            ALTER TABLE pending_diffs ADD COLUMN terminal_reason TEXT;
+            UPDATE pending_diffs SET effect_status = 'saved' WHERE status = 'accepted';
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {
@@ -364,5 +376,76 @@ mod tests {
 
         drop(conn);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// 测试专用：只迁移到指定版本（用于构造"迁移前"状态）。
+    fn migrate_to(conn: &mut Connection, target: i64) {
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        let from = current_version(conn);
+        for m in MIGRATIONS
+            .iter()
+            .filter(|m| m.version > from && m.version <= target)
+        {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(m.sql).unwrap();
+            tx.execute(
+                "INSERT INTO schema_meta (schema_version, applied_at) VALUES (?1, ?2)",
+                (m.version, now_millis()),
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+    }
+
+    // covers: BR-SYS-DATA-005
+    // v10 存量回填（2026-07-20 人类决策 4）：迁移前 accepted 行回填 saved，其余状态回填 not_applicable；
+    // 新增两列在迁移前不存在，验证回填基于迁移前的 status 快照而非默认值巧合。
+    #[test]
+    fn migration_v10_backfills_effect_status_from_legacy_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 9);
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)",
+            [],
+        )
+        .unwrap();
+        for (id, status) in [
+            ("d_pending", "pending"),
+            ("d_accepted", "accepted"),
+            ("d_rejected", "rejected"),
+            ("d_expired", "expired"),
+        ] {
+            conn.execute(
+                "INSERT INTO pending_diffs \
+                 (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at) \
+                 VALUES (?1,'ws1','a.md','AG',?2,'p1',0)",
+                rusqlite::params![id, status],
+            )
+            .unwrap();
+        }
+
+        migrate(&mut conn).unwrap(); // 应用 v10
+
+        let effect_status_of = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT effect_status FROM pending_diffs WHERE diff_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(effect_status_of(&conn, "d_accepted"), "saved");
+        assert_eq!(effect_status_of(&conn, "d_pending"), "not_applicable");
+        assert_eq!(effect_status_of(&conn, "d_rejected"), "not_applicable");
+        assert_eq!(effect_status_of(&conn, "d_expired"), "not_applicable");
+
+        let terminal_reason: Option<String> = conn
+            .query_row(
+                "SELECT terminal_reason FROM pending_diffs WHERE diff_id='d_pending'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(terminal_reason, None);
     }
 }

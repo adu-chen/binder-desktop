@@ -31,6 +31,18 @@ function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone
   if (locateFailed) return { text: "目标块已不可定位，建议重新生成", tone: "warn" };
   if (diff.state === "validating") return { text: "校验原文匹配中…", tone: "muted" };
   if (diff.state === "applying") return { text: "写入中…", tone: "warn" };
+  if (diff.effectStatus === "discarded_on_abnormal_exit") {
+    return { text: "已接受，但未保存内容已丢弃", tone: "warn" };
+  }
+  if (diff.state === "expired" && diff.terminalReason === "abnormal_exit") {
+    return { text: "因上次异常退出已失效", tone: "warn" };
+  }
+  if (diff.state === "accepted" && diff.effectStatus === "saved") {
+    return { text: "已接受并保存", tone: "ok" };
+  }
+  if (diff.state === "accepted" && diff.effectStatus === "awaiting_save") {
+    return { text: "已接受 · 待保存", tone: "warn" };
+  }
   if (diff.state === "accepted" && diff.draftApplied) {
     return { text: diff.draftSaved ? "已保存" : "已接受 · 待保存", tone: "ok" };
   }

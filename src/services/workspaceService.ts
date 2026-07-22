@@ -38,7 +38,7 @@ async function persistCurrentEditorSessionSnapshots(): Promise<void> {
   }
 }
 
-async function flushEditorOpenTabs(): Promise<void> {
+async function flushEditorOpenTabs(throwOnFailure = false): Promise<void> {
   if (editorOpenTabsPersistTimer) {
     globalThis.clearTimeout(editorOpenTabsPersistTimer);
     editorOpenTabsPersistTimer = null;
@@ -48,12 +48,14 @@ async function flushEditorOpenTabs(): Promise<void> {
     await persistCurrentEditorOpenTabs();
   } catch (e) {
     console.error(`ed open tabs persist failed ${ipcMessage(e)}`);
+    if (throwOnFailure) throw e;
   }
 }
 
 export async function flushEditorStateBeforeExit(): Promise<void> {
   bindEditorOpenTabsPersistence();
-  await flushEditorOpenTabs();
+  // 关闭检查以数据库快照为真值；此处不能吞掉持久化失败，否则刚刚编辑的内容可能不在检查范围内。
+  await flushEditorOpenTabs(true);
 }
 
 function bindEditorOpenTabsPersistence() {

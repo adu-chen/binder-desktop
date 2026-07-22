@@ -87,8 +87,14 @@ rule_id: BR-DE-DATA-001
 -->
 diff 生成必须满足：自修改建议（ChangeProposal）生成待裁决修改（PendingDiff），以 blockId 锚定
 目标内容块；锚失效时生成失败并回报来源（AG handoffFail），不得产生错位或无锚 diff；生成后交 WS
-持久化（重启可恢复），持久化失败回统一错误形状且不进入裁决；PendingDiff 字段与 status 枚举集合
+持久化，持久化失败回统一错误形状且不进入裁决；PendingDiff 字段与 status 枚举集合
 引用 A-SYS-I-P-01 单一来源（X-SHARED-001），DE 不重定义。
+
+**跨会话边界（2026-07-21 收紧，APP-CLOSE-DIFF-LIFECYCLE-01）**：持久化保证的是当前运行期内
+审阅呈现可完整重建，**不保证裁决权或未确认写盘效果跨会话存活**。任一新会话启动时，清算
+（BR-SYS-STATE-005，A-SYS-M-T-02 §4）先于任何恢复执行：残留 `pending` 行统一转 `expired`
+（`terminal_reason=abnormal_exit`），残留 `awaiting_save` 效果统一转 `discarded_on_abnormal_exit`；
+之后仅终态记录进入只读历史呈现。pending 态只在产生它的连续运行期内可被裁决。
 
 ## §4 payload 载荷形状（解除 REQ-DE-004 占位）
 
@@ -148,6 +154,23 @@ HTML 草稿中成功应用的 BDocx diff 必须进入 error（如 `DE_BDOCX_DRAF
 BDocx 后重新生成。
 rejected/expired 不写文件；若草稿已应用，rejected 必须经 ED 受控接口按 before 回滚。用户裁决交互经
 ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。状态转移归 SM-DE-01。
+
+### §5.1 效果态（解除审计发现：accepted 不等于已落盘的历史不一致，2026-07-20 新增）
+
+`pending_diffs` 新增 `effect_status`（`not_applicable`/`awaiting_save`/`saved`/
+`discarded_on_abnormal_exit`）与 `terminal_reason`（可空）两列，字段形状单一来源为 A-SYS-I-P-01，
+语义规则 SSOT 为 `BR-SYS-DATA-005`（A-SYS-M-T-02 §4，APP-CLOSE-DIFF-LIFECYCLE-01）。核心动机：
+`status=accepted` 只代表裁决结果，`current_editor`/`open_session` 路径的 accepted 在用户实际保存
+成功前不代表内容已落盘（本文 §5 已锁定该语义），历史展示必须能区分"裁决同意"与"内容生效"两个
+维度，不得笼统显示为完成态。
+
+DE 侧责任：`de.accept_diff`/`de.accept_draft_diff` 成功时按路径写入 `effect_status`——`background`
+路径与 `ws.apply_diff` 同一事务原子完成，写 `saved`；`current_editor`/`open_session` 路径写
+`awaiting_save`。真实保存成功（SM-ED-01 saved 事件）时由 ED/WS 侧按 `rel_path` 批量把该文档下
+`awaiting_save` 的 accepted 行翻转为 `saved`（DE 不直接监听保存事件，由调用方在保存成功回调中
+调用 DE 提供的批量翻转接口，避免 DE 反向依赖 ED/WS 内部状态机）。`awaiting_save` 的另一去向是
+关闭流程内用户显式放弃或 `BR-SYS-STATE-005` 启动清算转 `discarded_on_abnormal_exit`（归 SYS 侧编排，
+DE 侧不主动触发）；无论是否留下 dirty 快照，它都不得跨会话保留。
 
 ## §6 过期与外部变更（解除 DE-03 机制）
 
@@ -291,6 +314,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-07-21 | v1.12 | 收紧跨会话边界：pending 仅在产生它的连续运行期内可裁决；任一启动清算均把残留 pending 转 expired、残留 awaiting_save 转 discarded_on_abnormal_exit，之后只恢复终态只读历史。 |
 | 2026-06-11 | v1.0 | 初版（DE G2 首件）：DE 规则 SSOT——裁决粒度定为内容块级（解除 DE-01）、diff 生成与锚失效回报、payload 载荷形状（版本化 + before_snapshot 基准，解除 REQ-DE-004 占位）、终态裁决语义（三终态互斥不可逆、accepted 唯一触发落盘、ApplyError 不回退）、过期与外部变更（保守语义，解除 DE-03 机制）、多 diff 冲突（重叠重检、无并发落盘，解除 DE-02）；注册链路 DE-DIFF（P1）、规则 5 条、术语 TERM-DE-001 PendingDiff / TERM-DE-002 ChangeProposal（解除 A-SYS-I-P-01 §6 延期）；约束全复用不新增；REQ_MAP（REQ-DE-001~005）；债务（审阅 UI 待人类、数值延实现、CBT 联合） |
 | 2026-07-03 | v1.1 | 批B 样式 diff 承接（A-ED-X-L-02 PI-ED-11 文档先行，人类裁定 D-3 方案A：回合样式修改经 DE 裁决）：§4 载荷表 +style_ops（StyleOp 序列，可空；语义归 ED BR-ED-DATA-005，载荷承载与版本化归本文）、after_content 纯样式 diff 可空、target_blocks 可细化字符锚区间；BR-DE-DATA-002 规则文本同步（含样式变更语义的可视对比重建）；DiffCard 样式呈现形态延实现期（DE-04 审阅 UI 债务口径） |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
@@ -302,3 +326,4 @@ status: mapped
 | 2026-07-09 | v1.8 | 收紧整篇 diff 语义：只有 `propose_edit.operation=replace_document` 产生的整篇 diff 可进入 ED 全文草稿替换；已有文档裸 `content` 不再生成正常 PendingDiff，避免 BDocx 局部编辑定位失败时退化为全文替换 |
 | 2026-07-09 | v1.9 | 补齐 DiffProjection 与 BDocx 裁决路径：DiffCard/ED 草稿只消费后端权威投影，禁止前端预测 before/after；既有 BDocx 未应用到当前编辑器 HTML 草稿时不得走后台 raw apply 写入 docx 字节 |
 | 2026-07-18 | v1.10 | 新增 `draft_mode=open_session` 技术契约：已打开非激活文档 diff 基线校验通过后直接应用到 ED session LogicalState 并禁用裁决；DiffProjection 增 source/session/hash 基线字段；记录视觉与撤销债务 |
+| 2026-07-20 | v1.11 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：§3 精确化"重启可恢复"边界（只保证正常运行期审阅呈现，不保证裁决权跨异常退出存活，异常退出清算先于恢复执行）；新增 §5.1 效果态（`effect_status`/`terminal_reason`，语义 SSOT 归 `BR-SYS-DATA-005`，A-SYS-M-T-02 §4）解决"accepted 不等于已落盘"历史不一致 |

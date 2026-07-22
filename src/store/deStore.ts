@@ -28,6 +28,9 @@ export type DiffCardState =
   | "conflict"
   | "error";
 
+/** 裁决状态之外的内容效果态：供历史只读卡区分已保存与已接受但内容已丢失。 */
+export type DiffEffectStatus = "not_applicable" | "awaiting_save" | "saved" | "discarded_on_abnormal_exit";
+
 /** 后端 SM-DE-01 运行态（Rust DiffState 的 Debug 名，A-DE-M-S-01 §2）；经广播投影到 8 视觉态。 */
 export type RustDiffState =
   | "Generating"
@@ -161,6 +164,10 @@ export interface DiffView {
   timelineSeq?: number; // accepted 后的时间轴号
   /** 历史恢复卡或不可用卡：只展示，不允许从历史重新触发裁决/重试。 */
   readonly?: boolean;
+  /** 后端 pending_diffs.effect_status 的历史投影；实时新卡尚未持久化时可为空。 */
+  effectStatus?: DiffEffectStatus;
+  /** 后端 terminal_reason 的历史投影，如 abnormal_exit。 */
+  terminalReason?: string | null;
 }
 
 interface DeState {

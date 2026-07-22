@@ -86,6 +86,18 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     expect(screen.getByText("已保存")).toBeTruthy();
   });
 
+  // covers: BR-SYS-DATA-005, BR-SYS-STATE-005
+  it("历史终态：明确区分已保存、异常退出失效与已接受但内容丢弃", () => {
+    const { rerender } = render(<DiffCard diff={card({ state: "accepted", readonly: true, effectStatus: "saved" })} />);
+    expect(screen.getByText("已接受并保存")).toBeTruthy();
+
+    rerender(<DiffCard diff={card({ state: "expired", readonly: true, terminalReason: "abnormal_exit" })} />);
+    expect(screen.getByText("因上次异常退出已失效")).toBeTruthy();
+
+    rerender(<DiffCard diff={card({ state: "accepted", readonly: true, effectStatus: "discarded_on_abnormal_exit" })} />);
+    expect(screen.getByText("已接受，但未保存内容已丢弃")).toBeTruthy();
+  });
+
   it("validating/applying：过渡态显示处理中（按钮禁用）", () => {
     const { container } = renderCard({ state: "applying" });
     expect(screen.getByText("写入中")).toBeTruthy();
