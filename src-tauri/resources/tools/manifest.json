@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "platform": "darwin",
+  "pandoc": {
+    "version": "3.10",
+    "architecture": "arm64",
+    "path": "tools/pandoc/arm64/pandoc",
+    "sha256": "d0a20cc85a03ec30f602c6acb568158982240431e5589e0e7c01ce80e0253493",
+    "release_archive_sha256": "d9cad01d96ae774a0dc8c8c45bb1ad3e4c5ff2cc2e24f45958f5f9b7974aee34",
+    "source_url": "https://github.com/jgm/pandoc/releases/download/3.10/pandoc-3.10-arm64-macOS.zip",
+    "license": "GPL-2.0-or-later"
+  },
+  "libreoffice": {
+    "version": "LibreOffice 25.8.7.3 30742500f2d3eb4366ac312fa33d3dcabdb3eba5",
+    "architecture": "arm64",
+    "path": "libreoffice/LibreOffice.app/Contents/MacOS/soffice",
+    "sha256": "6ae8ac6aa5e06329aa2638fc1e6050d1473ceb1db5a1be3205a438d541b010a4",
+    "release_status": "s4_runtime_integrated"
+  },
+  "font_plan": {
+    "version": "1",
+    "path": "libreoffice/font-plan.json",
+    "sha256": "ba7e267281d643697bf8c070fdfbc4432150cab7bfc2cc90234ea087abd2c758"
+  }
+}

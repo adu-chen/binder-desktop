@@ -1,0 +1,237 @@
+diff --git a/vcl/inc/quartz/SystemFontList.hxx b/vcl/inc/quartz/SystemFontList.hxx
+index 4f6238047..03ab8784d 100644
+--- a/vcl/inc/quartz/SystemFontList.hxx
++++ b/vcl/inc/quartz/SystemFontList.hxx
+@@ -51,6 +51,8 @@ public:
+ 
+     bool Init();
+     void AddFont(CoreTextFontFace*);
++    void AddEnglishAlias(CoreTextFontFace*);
++
+ 
+     void AnnounceFonts(vcl::font::PhysicalFontCollection&) const;
+     CoreTextFontFace* GetFontDataFromId(sal_IntPtr nFontId) const;
+@@ -62,6 +64,10 @@ private:
+     CFArrayRef mpCTFontArray;
+ 
+     std::unordered_map<sal_IntPtr, rtl::Reference<CoreTextFontFace>> maFontContainer;
++    // Binder: English-name aliases registered alongside localized names.
++    // Iterated in AnnounceFonts() so FindFontFamily("PingFang SC") works.
++    std::vector<rtl::Reference<CoreTextFontFace>> maEnglishAliases;
++
+ };
+ 
+ FontAttributes DevFontFromCTFontDescriptor(CTFontDescriptorRef, bool*);
+diff --git a/vcl/quartz/SystemFontList.cxx b/vcl/quartz/SystemFontList.cxx
+index d39327c4c..ed4538b28 100644
+--- a/vcl/quartz/SystemFontList.cxx
++++ b/vcl/quartz/SystemFontList.cxx
+@@ -269,6 +269,136 @@ static void fontEnumCallBack( const void* pValue, void* pContext )
+         rtl::Reference<CoreTextFontFace> pFontData = new CoreTextFontFace( rDFA, pFD );
+         SystemFontList* pFontList = static_cast<SystemFontList*>(pContext);
+         pFontList->AddFont( pFontData.get() );
++
++        // -----------------------------------------------------------------
++        // Binder layer 1: register English family name for every font.
++        // CoreText returns localized names (e.g. 璧方-簡 for PingFang SC);
++        // we also register the ASCII English name so that FindFontFamily()
++        // can match OOXML font names like "PingFang SC".
++        // -----------------------------------------------------------------
++        {
++            CFStringRef pEnglishFamily = (CFStringRef)CTFontDescriptorCopyAttribute(
++                pFD, kCTFontFamilyNameAttribute);
++            if (pEnglishFamily) {
++                OUString aEnglishName = GetOUString(pEnglishFamily);
++                CFRelease(pEnglishFamily);
++                OUString aLocalName = rDFA.GetFamilyName();
++                if (aEnglishName.getLength() > 0 && aEnglishName != aLocalName) {
++                    FontAttributes aEnglishDFA = rDFA;
++                    aEnglishDFA.SetFamilyName(aEnglishName);
++                    rtl::Reference<CoreTextFontFace> pEnglishFace =
++                        new CoreTextFontFace(aEnglishDFA, pFD);
++                    pFontList->AddEnglishAlias(pEnglishFace.get());
++
++                    // -----------------------------------------------------
++                    // Binder layer 2: static Office-font -> system-font alias.
++                    // Each block maps common Office-ecosystem fonts that are
++                    // missing on macOS to a system font whose English name
++                    // we just registered above.
++                    // -----------------------------------------------------
++                    struct FontAlias { const char* pFrom; const char* pTo; };
++                    if (aEnglishName.equalsIgnoreAsciiCase("PingFang SC")) {
++                        static const FontAlias kSC[] = {
++                            {"Microsoft YaHei", "PingFang SC"},
++                            {"DengXian", "PingFang SC"},
++                            {"SimSun", "Songti SC"},
++                            {"NSimSun", "Songti SC"},
++                            {"FangSong", "STFangsong"},
++                            {"KaiTi", "STKaiti"},
++                        };
++                        for (auto const& e : kSC) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase("PingFang TC")) {
++                        static const FontAlias kTC[] = {
++                            {"PMingLiU", "PingFang TC"},
++                            {"MingLiU", "PingFang TC"},
++                        };
++                        for (auto const& e : kTC) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase("PingFang HK")) {
++                        static const FontAlias kHK[] = {
++                            {"PMingLiU", "PingFang HK"},
++                        };
++                        for (auto const& e : kHK) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase("Hiragino Sans")) {
++                        static const FontAlias kJa[] = {
++                            {"MS Gothic", "Hiragino Sans"},
++                            {"MS PGothic", "Hiragino Sans"},
++                        };
++                        for (auto const& e : kJa) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase(
++                                   "Hiragino Mincho ProN")) {
++                        static const FontAlias kJaM[] = {
++                            {"MS Mincho", "Hiragino Mincho ProN"},
++                            {"MS PMincho", "Hiragino Mincho ProN"},
++                        };
++                        for (auto const& e : kJaM) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase(
++                                   "Apple SD Gothic Neo")) {
++                        static const FontAlias kKo[] = {
++                            {"Malgun Gothic", "Apple SD Gothic Neo"},
++                            {"Gulim", "Apple SD Gothic Neo"},
++                            {"Batang", "Apple SD Gothic Neo"},
++                        };
++                        for (auto const& e : kKo) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase("Arial")) {
++                        static const FontAlias kLatin[] = {
++                            {"Aptos", "Arial"},
++                            {"Aptos Display", "Arial"},
++                            {"Calibri", "Arial"},
++                            {"Segoe UI", "Arial"},
++                            {"Candara", "Arial"},
++                            {"Corbel", "Arial"},
++                            {"Constantia", "Arial"},
++                        };
++                        for (auto const& e : kLatin) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    } else if (aEnglishName.equalsIgnoreAsciiCase("Courier New")) {
++                        static const FontAlias kMono[] = {
++                            {"Consolas", "Courier New"},
++                        };
++                        for (auto const& e : kMono) {
++                            FontAttributes a = rDFA;
++                            a.SetFamilyName(OUString::createFromAscii(e.pFrom));
++                            pFontList->AddEnglishAlias(
++                                new CoreTextFontFace(a, pFD));
++                        }
++                    }
++                }
++            }
++        }
+     }
+ }
+ 
+@@ -297,12 +427,22 @@ void SystemFontList::AddFont( CoreTextFontFace* pFontData )
+     maFontContainer[ nFontId ] = pFontData;
+ }
+ 
++void SystemFontList::AddEnglishAlias( CoreTextFontFace* pFontData )
++{
++    maEnglishAliases.push_back( pFontData );
++}
++
+ void SystemFontList::AnnounceFonts( vcl::font::PhysicalFontCollection& rFontCollection ) const
+ {
+     for(const auto& rEntry : maFontContainer )
+     {
+         rFontCollection.Add( rEntry.second.get() );
+     }
++    // Register English-name aliases so FindFontFamily("PingFang SC") works
++    for(const auto& rFace : maEnglishAliases )
++    {
++        rFontCollection.Add( rFace.get() );
++    }
+ }
+ 
+ CoreTextFontFace* SystemFontList::GetFontDataFromId( sal_IntPtr nFontId ) const
+diff --git a/vcl/source/font/PhysicalFontCollection.cxx b/vcl/source/font/PhysicalFontCollection.cxx
+index 6c3838772..bc199b1a0 100644
+--- a/vcl/source/font/PhysicalFontCollection.cxx
++++ b/vcl/source/font/PhysicalFontCollection.cxx
+@@ -308,8 +308,19 @@ PhysicalFontFamily* PhysicalFontCollection::ImplFindFontFamilyBySearchName(const
+     assert( GetEnglishSearchFontName( rSearchName ) == rSearchName );
+ 
+     PhysicalFontFamilies::const_iterator it = maPhysicalFontFamilies.find( rSearchName );
+-    if( it == maPhysicalFontFamilies.end() )
++    if( it == maPhysicalFontFamilies.end() ) {
++        // Binder layer 3: deterministic fallback chain
++        static const char* kFB[] = {"PingFang SC","PingFang TC","PingFang HK",
++            "Hiragino Sans","Apple SD Gothic Neo","Arial",nullptr};
++        for (int i=0; kFB[i]; i++) {
++            OUString sNorm = GetEnglishSearchFontName(
++                OUString::createFromAscii(kFB[i]));
++            it = maPhysicalFontFamilies.find(sNorm);
++            if (it != maPhysicalFontFamilies.end())
++                return (*it).second.get();
++        }
+         return nullptr;
++    }
+ 
+     PhysicalFontFamily* pFoundData = (*it).second.get();
+     return pFoundData;
+@@ -1237,6 +1248,23 @@ PhysicalFontFamily* PhysicalFontCollection::FindFontFamily(FontSelectPattern& rF
+             nSearchType |= ImplFontAttrs::Symbol;
+     }
+ 
++    // Binder layer 3: before falling into the non-deterministic
++    // FindFontFamilyByAttributes (which iterates unordered_map), try a
++    // deterministic fallback chain of system CJK/Latin fonts.
++    {
++        static const char* kFallback[] = {
++            "PingFang SC", "PingFang TC", "PingFang HK",
++            "Hiragino Sans", "Apple SD Gothic Neo",
++            "Arial", nullptr
++        };
++        for (int i = 0; kFallback[i]; i++) {
++            PhysicalFontFamily* pFB = ImplFindFontFamilyBySearchName(
++                OUString::createFromAscii(kFallback[i]));
++            if (pFB)
++                return pFB;
++        }
++    }
++
+     PhysicalFontFamily::CalcType(nSearchType, eSearchWeight, eSearchWidth, rFSD.GetFamilyType(), pFontAttr);
+     PhysicalFontFamily* pFoundData = FindFontFamilyByAttributes(nSearchType,
+         eSearchWeight, eSearchWidth, rFSD.GetItalic(), aSearchFamilyName);

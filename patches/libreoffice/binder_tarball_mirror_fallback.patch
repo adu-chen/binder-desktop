@@ -1,0 +1,26 @@
+diff --git a/Makefile.fetch b/Makefile.fetch
+index 332a73fb5..e0ccedba6 100644
+--- a/Makefile.fetch
++++ b/Makefile.fetch
+@@ -9,6 +9,12 @@
+ 
+ fetch_LOGFILE := $(TARFILE_LOCATION)/fetch.log
+ 
++# Binder S1 build transport policy: use the OpenBSD LibreOffice distfiles
++# archive first, then fall back to the upstream URL passed by the existing
++# build rule. Integrity remains governed by download.lst SHA-256 checks.
++# This is a build-time transport override only, not a runtime dependency.
++BINDER_LO_TARBALL_MIRROR ?= https://ftp.ec-m.fr/pub/OpenBSD/distfiles/libreoffice
++
+ ifneq (,$(WGET))
+ define fetch_Download__wget_command
+ && bash -c '$(WGET) --progress=dot:mega -Q 0 -P "." -l 0 -nd -nH -N --no-use-server-timestamps $1/$2 2>&1 | tee -a $(fetch_LOGFILE) && [ $$PIPESTATUS -eq 0 ]'
+@@ -16,7 +22,7 @@ endef
+ 
+ else
+ define fetch_Download__wget_command
+-&& echo fetching $2 && bash -c '$(CURL) -f -L -O $1/$2 2>&1 | tee -a $(fetch_LOGFILE) && [ $$PIPESTATUS -eq 0 ]'
++&& echo fetching $2 && bash -c 'set -o pipefail; { $(CURL) -f -L --connect-timeout 15 --speed-limit 1024 --speed-time 90 -O $(BINDER_LO_TARBALL_MIRROR)/$2 || $(CURL) -f -L --connect-timeout 15 --speed-limit 1024 --speed-time 90 -O $1/$2; } 2>&1 | tee -a $(fetch_LOGFILE) && [ $$PIPESTATUS -eq 0 ]'
+ endef
+ 
+ endif
