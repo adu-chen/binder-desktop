@@ -147,3 +147,10 @@ fi
 popd >/dev/null
 
 echo "[binder:lo-build] build completed; run the dedicated no-GUI conversion verification before packaging"
+
+# Binder post-process: strip non-macOS components
+POSTPROCESS_SCRIPT="$REPO_ROOT/scripts/postprocess_lo_macos.sh"
+if [ -x "$POSTPROCESS_SCRIPT" ]; then
+    echo "[binder:lo-build] running macOS slim-down postprocessor..."
+    "$POSTPROCESS_SCRIPT" "$INSTDIR/LibreOfficeDev.app" || true
+fi
