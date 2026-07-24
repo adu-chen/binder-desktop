@@ -11,6 +11,16 @@ RESOURCES="$APP/Contents/Resources"
 
 TARGET_LOCALES="en-US zh-CN zh-TW ja ko"
 
+# ============================================================
+# 0. Suppress Dock icon for headless operation
+# ============================================================
+PLIST="$APP/Contents/Info.plist"
+if [ -f "$PLIST" ]; then
+    /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PLIST" 2>/dev/null ||     /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$PLIST" 2>/dev/null || true
+    echo "[binder:lo-slim] LSUIElement=true (no Dock icon)"
+fi
+
+"en-US zh-CN zh-TW ja ko"
 echo "[binder:lo-slim] target: $APP"
 
 # ============================================================
