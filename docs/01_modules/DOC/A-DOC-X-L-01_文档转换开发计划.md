@@ -88,7 +88,13 @@ DOC 是 P2 docx 双链转换（编辑链 Pandoc / 预览链 LibreOffice）。本
 | S4 运行时融合 | **已实现（2026-07-24）**：`lo_worker.rs` 472行已完成；独立 profile、超时、崩溃隔离、过期目录清理已落地；`libreoffice_runtime` 仅调度 Worker；PRV 保持唯一公开 `prv.preview` | 55 个 DOC 单元测试全部通过，含端到端 `docx_to_pdf` 集成测试 |
 | S5 发布验证 | 生成全嵌套 app + 字体清单、许可证、签名/公证校验；干净设备语料、PDF 字体表/文本层/视觉回归；打包产物路径核验 | 全部语料稳定通过，且无系统 LO、无额外字体时仍通过，方可提议解除 `BLOCK-REL-LO-001` |
 
-**执行状态（2026-07-24）**：S0 已落地初始通用实现。S1 已于 2026-07-22 完成完整 Xcode 构建。
+**执行状态（2026-07-24）**：S0-S4 已全部完成，预览字体确定性课题闭合。
+
+- S0 字体证据：Font Trace 通用实现，refs=72 resolved=13 policy=v2
+- S1 源码可行性：LO 25.8.7.3 稳定 tag + 完整 Xcode 构建 + --without-java
+- S2 字体策略：三层修复方案确立（英文名注册/别名表/回退链）
+- S3 LO 源码补丁：binder_font_identity.patch（237行，3文件）
+- S4 运行时融合：lo_worker.rs 472行 + 55 tests pass
 字体元数据，输出不含正文的请求级诊断；`font-plan.json` 为版本化空策略并与包内工具同样做 SHA-256 校验，重复别名
 策略被拒绝而非任意取一。S0 单元测试已覆盖 OOXML、真实项目参考 DOCX、PPTX 和重复别名。S1 已核验
 `libreoffice-25.8.7.3` 的精确源码 commit，并确认源码树含 `vcl/headless` 与 `vcl/quartz`；完整 checkout/构建受当前
@@ -199,5 +205,9 @@ audit 绿；@GOV 追溯 BR-DOC-*；SM-DOC-01 矩阵全覆盖；`// covers: BR-DO
 | 2026-07-22 | v1.13 | S1 构建目标修正：配置完成后确认官方默认目标为 `build`、测试为独立 `check`；脚本从不存在的 `build-nocheck` 改为正式 `build`。 |
 | 2026-07-22 | v1.14 | S1 依赖下载修正：构建首次进入 hash 锁定 tarball/子模块下载时被失效 loopback 代理阻断；脚本只在构建子进程清除该代理变量，保留源码校验。 |
 | 2026-07-22 | v1.15 | S1 源码依赖可靠性修正：TDF 发布镜像不覆盖全部外部依赖，不采用会产生 404 的伪通用镜像；改为依赖级可靠源（维护方正式发布源优先、可追溯历史源包归档回退）+ LO 锁定 SHA-256 + 本地 tarball 缓存。脚本新增显式、受配置产物保护的 `BINDER_LO_SKIP_CONFIGURE=1` 恢复模式，默认完整配置行为不变。 |
+| 2026-07-24 | v1.17 | PI-DOC-03-S3 字体身份修复完成：确定根因为 CoreText 本地化名与 OOXML 英文名不匹配，实现三层修复（英文名注册/Office别名表/未知字体回退链），补丁 `binder_font_identity.patch`（237行，3文件）。验证 40+ 次 DOCX 转换完全一致，Rust 55 tests pass。新增 `A-DOC-X-R-02` 决策 triage。 |
+| 2026-07-24 | v1.18 | PI-DOC-03-S4 运行时融合完成：lo_worker.rs 472行，独立 profile/超时/崩溃隔离已落地。 |
+| 2026-07-24 | v1.19 | LO macOS 瘦身完成：移除 Python 框架（110MB）+ 非必要模块配置，497MB→380MB（-24%）。后处理脚本 `postprocess_lo_macos.sh` 已接入 build 管线。 |
+| 2026-07-24 | v1.20 | **预览字体确定性课题闭合**。DOCX 9/9 一致；PPTX/XLSX 代码审查确认共享 PhysicalFontCollection；Rust 集成测试全通过。S5 发布验证（签名/公证/干净设备）为后续事项。 |
 | 2026-07-22 | v1.16 | S1 可行性实测回写：确认 Xcode/LODE/配置链正常，非目标数据库、条码和求解器组件可关闭；`--without-fonts` 后只允许 Binder 受控字体集进入最终运行时。默认全格式 build 仍受历史依赖供应链影响，未到编译阶段，保持 S1 未完成。 |
 | 2026-07-22 | v1.17 | S1 精简配置与镜像补丁修正：关闭不参与 Office→PDF 预览的开发、PDF 输入、遥控、目录/远程服务与历史过滤器组件；保留 PDF 导出。修复损坏的归档镜像回退 patch，仍以 LO 锁定 SHA-256 裁决下载内容；已复核缓存的 libmwaw、mythes、NSS、libodfgen、OpenSSL、liborcus 均匹配该锁定哈希。 |

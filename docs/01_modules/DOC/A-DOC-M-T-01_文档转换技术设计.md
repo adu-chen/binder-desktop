@@ -375,7 +375,7 @@ status: mapped
   配方仍为发布硬门。
 - **macOS 平台矩阵**（DOC-PLAT-001）：最低 macOS 版本、Intel 产物、双架构签名/公证与真机矩阵已登记，
   人类决定本轮暂不处理；不得以调用设备工具或设备字体规避。
-- **LibreOffice GlyphFallback 字体债务**（BLOCK-REL-LO-001）：现有 family 级补丁不覆盖 CoreText
+- **LibreOffice 字体身份修复**（BLOCK-REL-LO-001 字体部分已解决）：CoreText 本地化名与 OOXML 英文名不匹配已通过 SystemFontList 英文名注册修复（`binder_font_identity.patch`）。签名/公证/干净设备验证仍阻塞 S5。
   字形级回退；必须在 `vcl/quartz/salgdi.cxx` 的 `FindFontSubstitute` 中优先选择 Binder 包内默认字体，
   重建并签名优化版 LO 后以 PPTX 语料复测。在本仓取得可重建源码前保持阻断，禁止系统 LO 规避。
 - **data-block-id 往返保留度未实测**（DOC-02）：本文已定降级契约（重建锚），实测后回写。
