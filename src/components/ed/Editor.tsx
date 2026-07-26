@@ -1,9 +1,21 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { EditorView } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
+import { TextSelection, type Transaction } from "@tiptap/pm/state";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
+import {
+  isPaginationSettledTransaction,
+  PAGINATION_VIEWPORT_CORRECTION_EVENT,
+} from "./extensions/Pagination";
+import {
+  computeClientViewportRect,
+  shouldArmPointerActivatedInputScroll,
+  shouldSuppressPaginatedSelectionScroll,
+  shouldSuppressPointerActivatedInputScroll,
+  type ViewportRect,
+} from "./extensions/paginationViewportAnchor";
 import { applyGreenReview, type GreenReviewValue } from "./extensions/DiffDecorationExtension";
 import { edStore, useEdStore, type ContentFormat, type EditFormat } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore } from "../../store/deStore";
@@ -56,6 +68,36 @@ import {
  */
 const SEED_CONTENT = "开始写作…";
 
+interface PointerActivatedInputScrollGuard {
+  documentAtLastDecision: PMNode;
+  scrollTopAtPointer: number;
+  activationPoint: { x: number; y: number };
+  activationRenderedRect: ViewportRect | null;
+}
+
+interface PointerActivationEventSnapshot {
+  button: number;
+  clickCount: number;
+  clientX: number;
+  clientY: number;
+}
+
+const pointerActivatedInputScrollGuards = new WeakMap<EditorView, PointerActivatedInputScrollGuard>();
+const pendingPointerActivatedInputScrollFrames = new WeakMap<EditorView, number>();
+
+function dropPointerActivatedInputScrollGuard(view: EditorView): void {
+  pointerActivatedInputScrollGuards.delete(view);
+}
+
+function clearPointerActivatedInputScrollGuard(view: EditorView): void {
+  const pendingFrame = pendingPointerActivatedInputScrollFrames.get(view);
+  if (pendingFrame !== undefined) {
+    cancelAnimationFrame(pendingFrame);
+    pendingPointerActivatedInputScrollFrames.delete(view);
+  }
+  dropPointerActivatedInputScrollGuard(view);
+}
+
 /**
  * 跳转到目标行对应块（搜索命中跳行）：行号 → 顶层块索引（钳制），定位光标 + 滚动到视区。
  * text/source-protected Markdown 按行装载；结构化 Markdown 按顶层块定位。
@@ -77,6 +119,249 @@ function textToDoc(text: string) {
       line ? { type: "paragraph", content: [{ type: "text", text: line }] } : { type: "paragraph" },
     ),
   };
+}
+
+/** BDocx 只有当前 loadSeq 的 setContent 与首轮分页均完成后才可揭示。 */
+export function isEditorContentReady(
+  loadedContent: string | null,
+  loadSeq: number,
+  settledLoadSeq: number,
+): boolean {
+  return loadedContent !== null && loadSeq > 0 && settledLoadSeq === loadSeq;
+}
+
+function viewportRectFromDOMRect(rect: DOMRect): ViewportRect | null {
+  if (
+    !Number.isFinite(rect.left)
+    || !Number.isFinite(rect.right)
+    || !Number.isFinite(rect.top)
+    || !Number.isFinite(rect.bottom)
+    || (rect.width <= 0 && rect.height <= 0)
+  ) {
+    return null;
+  }
+  return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+}
+
+function renderedCaretRect(view: EditorView): ViewportRect | null {
+  const selection = view.root instanceof Document
+    ? view.root.getSelection()
+    : view.root.ownerDocument.getSelection();
+  const focusNode = selection?.focusNode;
+  if (selection?.isCollapsed && selection.rangeCount && focusNode && view.dom.contains(focusNode)) {
+    try {
+      const range = selection.getRangeAt(0);
+      const rect = viewportRectFromDOMRect(range.getBoundingClientRect());
+      if (rect) return rect;
+      const lineRect = range.getClientRects().item(0);
+      if (lineRect) {
+        const fallback = viewportRectFromDOMRect(lineRect);
+        if (fallback) return fallback;
+      }
+    } catch {
+      // WebKit 在 selection/decorations 同步窗口内可能暂时不给出可读 Range；继续按 PM position 降级。
+    }
+  }
+  try {
+    const range = view.dom.ownerDocument.createRange();
+    const point = view.domAtPos(view.state.selection.head);
+    range.setStart(point.node, point.offset);
+    range.collapse(true);
+    const rect = viewportRectFromDOMRect(range.getBoundingClientRect())
+      ?? (() => {
+        const lineRect = range.getClientRects().item(0);
+        return lineRect ? viewportRectFromDOMRect(lineRect) : null;
+      })();
+    range.detach();
+    return rect;
+  } catch {
+    return null;
+  }
+}
+
+function positionCaretRect(view: EditorView): ViewportRect | null {
+  try {
+    const rect = view.coordsAtPos(view.state.selection.head, 1);
+    if (
+      !Number.isFinite(rect.left)
+      || !Number.isFinite(rect.right)
+      || !Number.isFinite(rect.top)
+      || !Number.isFinite(rect.bottom)
+    ) {
+      return null;
+    }
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+  } catch {
+    return null;
+  }
+}
+
+function currentCaretRect(view: EditorView): ViewportRect | null {
+  return renderedCaretRect(view) ?? positionCaretRect(view);
+}
+
+function clientViewportRectFor(paper: HTMLElement): ViewportRect | null {
+  const paperBorderRect = paper.getBoundingClientRect();
+  return computeClientViewportRect({
+    borderRect: {
+      left: paperBorderRect.left,
+      right: paperBorderRect.right,
+      top: paperBorderRect.top,
+      bottom: paperBorderRect.bottom,
+      width: paperBorderRect.width,
+      height: paperBorderRect.height,
+    },
+    offsetWidth: paper.offsetWidth,
+    offsetHeight: paper.offsetHeight,
+    clientLeft: paper.clientLeft,
+    clientTop: paper.clientTop,
+    clientWidth: paper.clientWidth,
+    clientHeight: paper.clientHeight,
+  });
+}
+
+/**
+ * Range rect 已包含 zoom 的引擎不再换算；WKWebView 若返回未缩放 rect，则按 computed zoom
+ * 把相对位移映射回屏幕像素。只用于相对差，不改变绝对坐标。
+ */
+function renderedCaretDeltaScale(editorDOM: HTMLElement): number {
+  const cssZoom = parseFloat(window.getComputedStyle(editorDOM).zoom);
+  const safeZoom = Number.isFinite(cssZoom) && cssZoom > 0 ? cssZoom : 1;
+  const rectWidth = editorDOM.getBoundingClientRect().width;
+  const layoutWidth = editorDOM.offsetWidth;
+  const rectScale = Number.isFinite(rectWidth) && rectWidth > 0 && layoutWidth > 0
+    ? rectWidth / layoutWidth
+    : 1;
+  const scale = safeZoom / rectScale;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function armPointerActivatedInputScrollGuard(
+  view: EditorView,
+  event: PointerActivationEventSnapshot,
+): void {
+  const editorDOM = view.dom as HTMLElement;
+  const paper = editorDOM.closest(".editor-paper") as HTMLElement | null;
+  const viewportRect = paper ? clientViewportRectFor(paper) : null;
+  const collapsedTextSelection = view.state.selection instanceof TextSelection && view.state.selection.empty;
+  if (
+    view.isDestroyed
+    || !paper
+    || !shouldArmPointerActivatedInputScroll({
+      button: event.button,
+      clickCount: event.clickCount,
+      paginated: editorDOM.classList.contains("rm-paginated"),
+      loading: paper.getAttribute("aria-busy") === "true",
+      collapsedTextSelection,
+      activationPoint: { x: event.clientX, y: event.clientY },
+      viewportRect,
+    })
+  ) {
+    dropPointerActivatedInputScrollGuard(view);
+    return;
+  }
+  pointerActivatedInputScrollGuards.set(view, {
+    documentAtLastDecision: view.state.doc,
+    scrollTopAtPointer: paper.scrollTop,
+    activationPoint: { x: event.clientX, y: event.clientY },
+    activationRenderedRect: currentCaretRect(view),
+  });
+}
+
+/**
+ * ProseMirror 在 document/root 的 mouseup 监听中完成最终选区；编辑器 DOM 的自定义 mouseup
+ * 会更早执行。延后一帧可同时等待原生 selectionchange 与 ProseMirror 选区同步，避免双击/拖选
+ * 用旧的折叠光标误建激活周期。
+ */
+function schedulePointerActivatedInputScrollGuard(view: EditorView, event: MouseEvent): void {
+  clearPointerActivatedInputScrollGuard(view);
+  const snapshot: PointerActivationEventSnapshot = {
+    button: event.button,
+    clickCount: event.detail,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  };
+  const frame = requestAnimationFrame(() => {
+    if (pendingPointerActivatedInputScrollFrames.get(view) !== frame) return;
+    pendingPointerActivatedInputScrollFrames.delete(view);
+    armPointerActivatedInputScrollGuard(view, snapshot);
+  });
+  pendingPointerActivatedInputScrollFrames.set(view, frame);
+}
+
+function rebasePointerActivatedInputScrollGuard(view: EditorView, event: Event): void {
+  const guard = pointerActivatedInputScrollGuards.get(view);
+  if (!guard) return;
+  const correctedScrollTop = (event as CustomEvent<{ scrollTop?: unknown }>).detail?.scrollTop;
+  if (typeof correctedScrollTop === "number" && Number.isFinite(correctedScrollTop)) {
+    guard.scrollTopAtPointer = correctedScrollTop;
+  }
+}
+
+function pointerActivatedInputScrollDecision(
+  view: EditorView,
+  paper: HTMLElement,
+  editorDOM: HTMLElement,
+  viewportRect: ViewportRect,
+): boolean | null {
+  const guard = pointerActivatedInputScrollGuards.get(view);
+  if (!guard) return null;
+  const documentChanged = view.state.doc !== guard.documentAtLastDecision;
+  if (!documentChanged) {
+    dropPointerActivatedInputScrollGuard(view);
+    return false;
+  }
+  const currentRenderedRect = currentCaretRect(view);
+  const activationRenderedRect = guard.activationRenderedRect ?? currentRenderedRect;
+  if (!activationRenderedRect || !currentRenderedRect) {
+    dropPointerActivatedInputScrollGuard(view);
+    return false;
+  }
+  const suppress = shouldSuppressPointerActivatedInputScroll({
+    documentChangedSinceLastDecision: true,
+    scrollTopAtPointer: guard.scrollTopAtPointer,
+    currentScrollTop: paper.scrollTop,
+    activationPoint: guard.activationPoint,
+    activationRenderedRect,
+    currentRenderedRect,
+    renderedDeltaScale: renderedCaretDeltaScale(editorDOM),
+    viewportRect,
+  });
+  if (!suppress) {
+    dropPointerActivatedInputScrollGuard(view);
+    return false;
+  }
+  guard.documentAtLastDecision = view.state.doc;
+  guard.activationRenderedRect = activationRenderedRect;
+  return true;
+}
+
+/**
+ * 分页编辑器只接管“光标已经完整可见”的冗余 scrollIntoView。真实越界、显式导航、IME、
+ * 非文本选区与不可测量状态全部交还 ProseMirror，保留其原生滚动和更新期视口保持。
+ */
+function handlePaginatedScrollToSelection(view: EditorView): boolean {
+  const editorDOM = view.dom as HTMLElement;
+  const paper = editorDOM.closest(".editor-paper") as HTMLElement | null;
+  const selection = view.state.selection;
+  const paginated = editorDOM.classList.contains("rm-paginated");
+  const loading = paper?.getAttribute("aria-busy") === "true";
+  const collapsedTextSelection = selection instanceof TextSelection && selection.empty;
+  if (!paper || !paginated || loading || !collapsedTextSelection) return false;
+  const viewportRect = clientViewportRectFor(paper);
+  if (!viewportRect) return false;
+  // 指针激活周期以真实点击点 + Range 相对位移判断；不按第几个字符硬编码。
+  const pointerDecision = pointerActivatedInputScrollDecision(view, paper, editorDOM, viewportRect);
+  if (pointerDecision !== null) return pointerDecision;
+  if (view.composing) return false;
+  return shouldSuppressPaginatedSelectionScroll({
+    paginated,
+    loading,
+    composing: view.composing,
+    collapsedTextSelection,
+    renderedRect: renderedCaretRect(view),
+    viewportRect,
+  });
 }
 
 /** 序列化编辑器当前内容为 LogicalState：HTML 与结构化 Markdown 使用 HTML，纯文本/源码保护使用文本。 */
@@ -145,6 +430,13 @@ export function Editor() {
   const { diffs } = useDeStore(); // GreenReview 同步用（标签状态投影已移至 center TabStrip）
   const hostRef = useRef<HTMLDivElement>(null);
   const paperRef = useRef<HTMLDivElement>(null);
+  const [settledLoadSeq, setSettledLoadSeq] = useState(0);
+  const pendingPaginationLoadSeqRef = useRef(0);
+  const pendingScrollRestoreRef = useRef<{
+    path: string;
+    loadSeq: number;
+    scrollTop: number;
+  } | null>(null);
   // 上一活动文档路径（切换标签前据此把当前编辑内容序列化回写其会话 → 不丢草稿）。
   const lastPathRef = useRef<string | null>(null);
   // 视图偏好（PI-ED-06/07：纸张 + 缩放，per-doc localStorage；不落盘文档）。
@@ -154,6 +446,21 @@ export function Editor() {
   const zoom = paperPrefs?.zoom ?? ZOOM.default;
   const setZoom = (z: number) => {
     if (openPath) edViewPrefsStore.setZoom(openPath, z);
+  };
+
+  const restorePendingScroll = (path: string, seq: number) => {
+    const pending = pendingScrollRestoreRef.current;
+    if (!pending || pending.path !== path || pending.loadSeq !== seq) return;
+    pendingScrollRestoreRef.current = null;
+    requestAnimationFrame(() => {
+      if (
+        paperRef.current
+        && lastPathRef.current === path
+        && edStore.getSnapshot().loadSeq === seq
+      ) {
+        paperRef.current.scrollTop = pending.scrollTop;
+      }
+    });
   };
 
   const prefixBefore = (view: EditorView, pos: number) =>
@@ -471,10 +778,30 @@ export function Editor() {
       if (assistStore.getSnapshot().kind !== "none") finishCurrentAssist("dismiss");
     },
     editorProps: {
+      // 分页模式下，光标已完整可见时阻止冗余 scrollIntoView；真实越界仍由 ProseMirror 原生滚动。
+      handleScrollToSelection: handlePaginatedScrollToSelection,
+      scrollThreshold: 12,
+      scrollMargin: 12,
       // 选区拖拽携带位置引用（PI-ED-10 #6，BR-ED-DATA-004/TERM-ED-005）：dragstart 时把 SelectionRef
       // （字符锚 + 文本 + 来源路径）写入自定义 MIME——拖入 AG 输入面成为位置引用；编辑器内拖动仍走
       // ProseMirror 原生移动（不阻止默认，返回 false）。
       handleDOMEvents: {
+        pointerup: (view, event) => {
+          schedulePointerActivatedInputScrollGuard(view, event);
+          return false;
+        },
+        mouseup: (view, event) => {
+          schedulePointerActivatedInputScrollGuard(view, event);
+          return false;
+        },
+        blur: (view) => {
+          clearPointerActivatedInputScrollGuard(view);
+          return false;
+        },
+        [PAGINATION_VIEWPORT_CORRECTION_EVENT]: (view, event) => {
+          rebasePointerActivatedInputScrollGuard(view, event);
+          return false;
+        },
         dragstart: (_view, event) => {
           const ref = getSelectionRef();
           if (ref && event.dataTransfer) {
@@ -527,6 +854,33 @@ export function Editor() {
     registerEditor(editor);
     return () => registerEditor(null);
   }, [editor]);
+
+  // 光标激活周期只属于当前文档与当前分页几何。文档/格式/缩放切换必须显式清除；
+  // 纯选区事务（键盘导航、程序化定位）结束旧周期，但保留同一 mouseup 尚待最终选区同步的待建周期。
+  useEffect(() => {
+    if (!editor) return;
+    const view = editor.view;
+    clearPointerActivatedInputScrollGuard(view);
+    const releaseOnSelectionOnlyTransaction = ({ transaction }: { transaction: Transaction }) => {
+      if (!transaction.docChanged && transaction.selectionSet) {
+        dropPointerActivatedInputScrollGuard(view);
+      }
+    };
+    editor.on("transaction", releaseOnSelectionOnlyTransaction);
+    return () => {
+      editor.off("transaction", releaseOnSelectionOnlyTransaction);
+      clearPointerActivatedInputScrollGuard(view);
+    };
+  }, [
+    editor,
+    openPath,
+    loadSeq,
+    editFormat,
+    contentFormat,
+    zoom,
+    paperPrefs?.paper,
+    paperPrefs?.orientation,
+  ]);
 
   // WebView/系统快捷键可能先于 ProseMirror 消费 ⌘J；在窗口捕获阶段补一层，仅限当前编辑器区域生效。
   useEffect(() => {
@@ -627,6 +981,29 @@ export function Editor() {
     };
   }, [editor]);
 
+  // BDocx 首轮分页 settled 门禁：只接受当前活动 loadSeq；迟到的旧测量不能揭示新文档。
+  useEffect(() => {
+    if (!editor) return;
+    const onTransaction = ({ transaction }: { transaction: Transaction }) => {
+      if (!isPaginationSettledTransaction(transaction)) return;
+      const pendingLoadSeq = pendingPaginationLoadSeqRef.current;
+      const current = edStore.getSnapshot();
+      if (
+        pendingLoadSeq > 0
+        && current.loadSeq === pendingLoadSeq
+        && current.openPath === lastPathRef.current
+      ) {
+        pendingPaginationLoadSeqRef.current = 0;
+        setSettledLoadSeq(pendingLoadSeq);
+        if (current.openPath) restorePendingScroll(current.openPath, pendingLoadSeq);
+      }
+    };
+    editor.on("transaction", onTransaction);
+    return () => {
+      editor.off("transaction", onTransaction);
+    };
+  }, [editor]);
+
   // 载入活动会话：loadSeq 变更（loadDoc / 切换活动会话 setActivePath 投影）→ 先把上一文档的当前编辑序列化
   // 回写其会话（切标签不丢草稿），再 setContent 活动会话内容（不触发脏态）。
   // text/source-protected Markdown 按纯文本装载；结构化 Markdown、docx/html 按 HTML LogicalState 解析。
@@ -642,9 +1019,13 @@ export function Editor() {
     }
     lastPathRef.current = openPath;
     if (!openPath || loadedContent === null) {
+      pendingPaginationLoadSeqRef.current = 0;
+      pendingScrollRestoreRef.current = null;
       clearActiveEditorBinding();
       return;
     }
+    const waitsForPagination = editFormat === "html";
+    pendingPaginationLoadSeqRef.current = waitsForPagination ? loadSeq : 0;
     if (editFormat === "html" || editFormat === "html_file" || (editFormat === "markdown" && contentFormat === "html")) {
       // docx 编辑链 / .html 独立文件（PI-ED-13）：loadedContent 为 HTML，用 generateJSON 按 HTML 解析为
       // ProseMirror JSON；样式子集经扩展（TextAlign/Color/FontSize/Table 等）解析。
@@ -655,25 +1036,29 @@ export function Editor() {
       editor.commands.setContent(textToDoc(loadedContent), { emitUpdate: false });
     }
     bindActiveEditorDocument({ relPath: openPath, loadSeq, editFormat, contentFormat });
-    // 分页呈现（BR-ED-DATA-003）：docx 编辑（html）默认开分页，md/纯文本关（人类决策 2026-07-02）。
-    // 纸张几何取该文档视图偏好（PI-ED-06）。纯呈现层——不触发脏态（仅 setMeta，docChanged=false）。
+    // 分页呈现（BR-ED-DATA-003）：内容装载后只经一个命令同步开关/纸张并丢弃上一文档 plan。
+    // 防止恢复链与视图偏好链分别重置几何；纯呈现层——不触发脏态（仅 setMeta，docChanged=false）。
     if (editFormat === "html" && openPath) {
       const p = edViewPrefsStore.getPrefs(openPath);
-      editor.commands.setPageGeometry(getPageGeometry(p.paper, p.orientation));
+      editor.commands.syncPaginationLayout(true, getPageGeometry(p.paper, p.orientation));
+    } else {
+      editor.commands.syncPaginationLayout(false);
+      setSettledLoadSeq(loadSeq);
     }
-    editor.commands.setPagination(editFormat === "html");
     // 搜索命中跳行：内容设入后定位到目标行（块），随后清除请求。
     const { jumpLine } = edStore.getSnapshot();
     if (jumpLine !== null) {
+      pendingScrollRestoreRef.current = null;
       jumpToLine(editor, jumpLine);
       edStore.clearJump();
     } else {
-      // N7：无跳行请求时恢复该标签上次滚动位置（下一帧，待内容布局）。
+      // N7：分页文档等首轮 settled 后恢复；连续流文档下一帧恢复。
       const memo = scrollMemo.get(openPath);
       if (memo !== undefined) {
-        requestAnimationFrame(() => {
-          if (paperRef.current && lastPathRef.current === openPath) paperRef.current.scrollTop = memo;
-        });
+        pendingScrollRestoreRef.current = { path: openPath, loadSeq, scrollTop: memo };
+        if (!waitsForPagination) restorePendingScroll(openPath, loadSeq);
+      } else {
+        pendingScrollRestoreRef.current = null;
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 loadSeq 驱动载入；openPath/loadedContent/editFormat 在 loadSeq 变更时同步刷新，单独入依赖会引发重复 setContent
@@ -895,7 +1280,7 @@ export function Editor() {
   }
 
   // 会话已建但内容未载入（大 docx 转换中）→ 加载骨架，立即反馈不阻塞交互（PI-ED-07 #7）。
-  const loading = loadedContent === null;
+  const loading = !isEditorContentReady(loadedContent, loadSeq, settledLoadSeq);
 
   return (
     <div className="editor-host" ref={hostRef}>
@@ -911,15 +1296,19 @@ export function Editor() {
         onPaperChange={(p) => openPath && edViewPrefsStore.setPaper(openPath, p)}
         onOrientationChange={(o) => openPath && edViewPrefsStore.setOrientation(openPath, o)}
       />
-      <div className="editor-paper" ref={paperRef} style={{ "--ed-zoom": String(zoom) } as CSSProperties}>
-        {loading ? (
+      <div
+        className="editor-paper"
+        ref={paperRef}
+        aria-busy={loading}
+        style={{ "--ed-zoom": String(zoom) } as CSSProperties}
+      >
+        <EditorContent editor={editor} className={loading ? "editor-content-loading" : undefined} />
+        {loading && (
           <div className="editor-loading" role="status" aria-live="polite">
             <span className="editor-loading-spinner" aria-hidden="true" />
             <p className="muted">{converting ? "正在转换文档…" : "正在打开文档…"}</p>
             <span className="editor-loading-bar" aria-hidden="true" />
           </div>
-        ) : (
-          <EditorContent editor={editor} />
         )}
       </div>
       <EditorStatusBar

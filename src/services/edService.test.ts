@@ -154,4 +154,30 @@ describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模
     expect(edStore.getSnapshot().sessions["gone.md"]).toBeUndefined();
     expect(edStore.getSnapshot().openPath).toBeNull();
   });
+
+  it("迟到的打开结果只补全原会话，不能抢回当前编辑器", async () => {
+    edStore.reset();
+    const pending = new Map<string, (value: unknown) => void>();
+    invokeMock.mockImplementation((_command, args) => {
+      const request = (args as { request: { command: string; params: { relPath?: string } } }).request;
+      if (request.command === "ed.persist_session_snapshot") return Promise.resolve(ok({}));
+      if (request.command === "ws.read_doc") {
+        return new Promise((resolve) => {
+          pending.set(request.params.relPath ?? "", resolve);
+        });
+      }
+      throw new Error(`unexpected command ${request.command}`);
+    });
+
+    const first = openDocument("first.md");
+    const second = openDocument("second.md");
+    pending.get("second.md")?.(ok({ content: "第二份", baseline: 2 }));
+    await second;
+    pending.get("first.md")?.(ok({ content: "第一份", baseline: 1 }));
+    await first;
+
+    const state = edStore.getSnapshot();
+    expect(state).toMatchObject({ openPath: "second.md", loadedContent: "<p>第二份</p>" });
+    expect(state.sessions["first.md"]).toMatchObject({ content: "<p>第一份</p>", baseline: 1 });
+  });
 });

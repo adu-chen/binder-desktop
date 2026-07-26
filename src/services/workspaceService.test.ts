@@ -99,4 +99,30 @@ describe("workspaceService 编辑器启动恢复", () => {
     expect(edStore.getSnapshot().sessions["docs/stale.md"]).toBeUndefined();
     expect(agServiceMock.hydrateAgentHistory).toHaveBeenCalled();
   });
+
+  it("并发启动恢复复用同一轮后端读取，避免重复恢复编辑会话", async () => {
+    let resolveActive: ((value: unknown) => void) | undefined;
+    invokeMock.mockImplementation((command, arg) => {
+      if (command !== "dispatch") return Promise.resolve(undefined);
+      const request = (arg as { request: { command: string } }).request;
+      if (request.command === "ws.active_workspace") {
+        return new Promise((resolve) => { resolveActive = resolve; });
+      }
+      if (request.command === "ws.list_docs") return Promise.resolve(ok([]));
+      if (request.command === "ed.list_open_tabs") return Promise.resolve(ok({ tabs: [] }));
+      if (request.command === "ed.list_session_snapshots") return Promise.resolve(ok({ snapshots: [] }));
+      return Promise.resolve(ok({ ok: true }));
+    });
+
+    const first = restoreActiveWorkspace();
+    const second = restoreActiveWorkspace();
+    expect(invokeMock.mock.calls.filter(([, arg]) => (
+      (arg as { request: { command: string } }).request.command === "ws.active_workspace"
+    ))).toHaveLength(1);
+
+    resolveActive?.(ok({ workspace_id: "ws1", root_path: "/tmp/ws", is_active: true }));
+    await Promise.all([first, second]);
+
+    expect(agServiceMock.hydrateAgentHistory).toHaveBeenCalledTimes(1);
+  });
 });

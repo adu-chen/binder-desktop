@@ -138,6 +138,10 @@ flowchart TD
 > 前置（本地编辑离线可用，REQ-CORE-009），仅 AI 功能要求会话+订阅。Workbench 内关闭/切换
 > workspace 的入口统一在模块栏顶部 Logo，标题栏仅承担标题显示与窗口拖拽。
 
+> 启动投影控制：React 开发态重复 effect 与正常入口必须复用同一 workspace 恢复任务；状态机事件监听也只允许
+> 一组有效注册，卸载期间完成的旧注册必须自行注销。恢复中的文档读取采用路径 latest-wins：已切换标签的迟到
+> 结果只能补全对应非活动会话，不能重新激活编辑器或触发当前文档的内容/布局重置。
+
 ### 4.2 写作与保存（投影 SM-ED-01 + SM-WS-01，含外部修改冲突）
 
 ```mermaid
@@ -213,7 +217,8 @@ flowchart TD
   MK -- 是 --> DR[doc.create_draft → *.draft.docx / BDocx]
   DR --> CE[doc.open_for_edit Pandoc→HTML 编辑模型 + 子集告知]
   KIND -- 否（b-docx） --> CE
-  CE --> ED2[编辑区编辑 同 md 交互]
+  CE --> PSET[ED setContent + 当前 loadSeq 首轮分页 settled]
+  PSET --> ED2[揭示编辑区并进入编辑]
   ED2 --> SVD[doc.save_from_edit Pandoc→docx → ws.save_doc]
   CE -. 转换失败 .-> ER[失败态 会话不建立]
   CV -. 转换失败 .-> ER2[预览失败态 不空白]
@@ -223,7 +228,8 @@ flowchart TD
 > （BR-DOC-DATA-001）；原生 docx 不直接进入编辑区，b-docx 才进入 ED 编辑态。b-docx 来源包括
 > EditDraft、文件树新建和 Agent 创建。前端文件树不得只靠文件名猜测 docx 路由，必须消费
 > `ws.list_docs.is_bdocx`：`true` 进入 ED/DOC 编辑链，`false` 进入 PRV 只读预览链；`*.draft.docx`
-> 仅作为兼容识别来源。
+> 仅作为兼容识别来源。BDocx 的转换结果到达不等于编辑区可见就绪；当前 `loadSeq` 完成 `setContent`
+> 与首轮分页 settled 前保持加载遮罩，同时保留隐藏的真实编辑 DOM 供布局测量，避免把中间回填帧揭示给用户。
 
 ## §4bis 次级交互流程（主干之外，贴各模块 G4 再细化）
 
@@ -458,3 +464,5 @@ status: mapped
 | 2026-07-16 | v1.18 | 修正 §4.5 AG-ASSIST 辅助续写失败态：候选不足 3 条时保留空态，不展示半候选、不允许采纳，避免浮层瞬间关闭 |
 | 2026-07-17 | v1.19 | 收敛 §4.5 AG-ASSIST 空态诊断：普通 UI 保持轻量空态，但 service/store/overlay 必须保留内部 failure_reason |
 | 2026-07-18 | v1.20 | 修正 §4.3 AgentEdit 主链：发起回合必须携 open_doc_snapshots；DiffProjection 按 current_editor/open_session/background 三路径分流，已打开非激活文档自动应用 LogicalState 并禁用 DiffCard 裁决，未打开文档才允许后台落盘 |
+| 2026-07-25 | v1.22 | 补齐启动恢复投影收敛：workspace 恢复与状态机监听单飞；路径 latest-wins 防止迟到文档结果重新激活编辑器或回填当前布局。 |
+| 2026-07-26 | v1.23 | BDocx 打开流程增加当前 loadSeq 的首轮分页 settled 门禁；转换结果到达后保持加载遮罩，避免揭示 setContent 与分页收敛的中间回填帧。 |

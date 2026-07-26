@@ -23,6 +23,8 @@ interface CommandResponse<T> {
 
 const SAVE_CONFLICT_CODES = new Set(["WS_SAVE_CONFLICT", "save_conflict"]);
 let seq = 0;
+let openRequestSeq = 0;
+const latestOpenRequestByPath = new Map<string, number>();
 
 async function callCommand<T>(command: string, params: Record<string, unknown>): Promise<T> {
   const request = { command, correlation_id: `ed-${Date.now()}-${(seq += 1)}`, params };
@@ -88,6 +90,39 @@ export function makePersistedSnapshot(
   };
 }
 
+function beginOpenRequest(relPath: string): number {
+  const requestId = ++openRequestSeq;
+  latestOpenRequestByPath.set(relPath, requestId);
+  return requestId;
+}
+
+function isLatestOpenRequest(relPath: string, requestId: number): boolean {
+  return latestOpenRequestByPath.get(relPath) === requestId;
+}
+
+function finishOpenRequest(relPath: string, requestId: number): void {
+  if (isLatestOpenRequest(relPath, requestId)) latestOpenRequestByPath.delete(relPath);
+}
+
+/**
+ * 只提交当前路径的最新打开结果。用户在读取期间切换标签时，结果仍可补齐该会话，
+ * 但不会改写活动编辑器或触发一次迟到的 setContent。
+ */
+function applyOpenResult(
+  relPath: string,
+  requestId: number,
+  content: string,
+  baseline: number | string,
+  jumpLine: number | null,
+  editFormat: EditFormat,
+  contentFormat?: ContentFormat,
+): boolean {
+  if (!isLatestOpenRequest(relPath, requestId)) return false;
+  const activate = edStore.getSnapshot().activePath === relPath;
+  edStore.loadDoc(relPath, content, baseline, jumpLine, editFormat, contentFormat, { activate });
+  return true;
+}
+
 /**
  * @GOV
  * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016
@@ -100,12 +135,13 @@ export function makePersistedSnapshot(
 /** 打开文档：docx 经 DOC 编辑链（doc.open_for_edit → HTML），其余经 ws.read_doc（文本）→ 载入编辑器
  *  （内容 + 加载基线）；jumpLine 时载入后跳转到该行。 */
 export async function openDocument(relPath: string, jumpLine: number | null = null): Promise<void> {
+  const requestId = beginOpenRequest(relPath);
   const hadSession = Boolean(edStore.getSnapshot().sessions[relPath]);
   if (!hadSession) edStore.openDoc(relPath);
   try {
     if (isDocxEditable(relPath)) {
       const { html, baseline } = await openDocxForEdit(relPath);
-      edStore.loadDoc(relPath, html, baseline, jumpLine, "html");
+      if (!applyOpenResult(relPath, requestId, html, baseline, jumpLine, "html", "html")) return;
       const sess = edStore.getSnapshot().sessions[relPath];
       if (sess) {
         await persistSessionSnapshot(makePersistedSnapshot(relPath, html, "html", false, sess.sessionVersion, "html"));
@@ -122,15 +158,17 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
       logicalContent = parsed.ok ? parsed.html : parsed.source;
       contentFormat = parsed.contentFormat;
     }
-    edStore.loadDoc(relPath, logicalContent, baseline, jumpLine, editFormat, contentFormat);
+    if (!applyOpenResult(relPath, requestId, logicalContent, baseline, jumpLine, editFormat, contentFormat)) return;
     const sess = edStore.getSnapshot().sessions[relPath];
     if (sess) {
       await persistSessionSnapshot(makePersistedSnapshot(relPath, logicalContent, editFormat, false, sess.sessionVersion, contentFormat));
     }
   } catch (e) {
     const err = e as IpcLikeError;
-    if (!hadSession) edStore.closeSession(relPath);
+    if (!hadSession && isLatestOpenRequest(relPath, requestId)) edStore.closeSession(relPath);
     console.error(`open document failed [${err.code ?? "?"}]: ${err.message ?? e}`);
+  } finally {
+    finishOpenRequest(relPath, requestId);
   }
 }
 

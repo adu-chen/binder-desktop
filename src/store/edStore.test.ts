@@ -46,6 +46,17 @@ describe("edStore · SM-ED-01 脏态投影 (BR-ED-STATE-001)", () => {
     expect(s.baseline).toBe(7);
     expect(s.loadSeq).toBe(before + 1);
   });
+
+  it("后台载入只补全非活动会话，不改 activePath 或触发当前编辑器重载", () => {
+    edStore.loadDoc("active.md", "当前文档", 1);
+    const before = edStore.getSnapshot();
+
+    edStore.loadDoc("late.docx", "迟到结果", 2, null, "html", "html", { activate: false });
+
+    const after = edStore.getSnapshot();
+    expect(after).toMatchObject({ openPath: "active.md", loadedContent: "当前文档", loadSeq: before.loadSeq });
+    expect(after.sessions["late.docx"]).toMatchObject({ content: "迟到结果", editFormat: "html" });
+  });
 });
 
 describe("edStore · 多文档会话 (PI-FE-27)", () => {

@@ -25,6 +25,8 @@ function resetDownstreamStores() {
 let editorOpenTabsPersistenceBound = false;
 let editorOpenTabsPersistenceSuspended = false;
 let editorOpenTabsPersistTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+/** React StrictMode 会重放启动 effect；恢复过程必须单飞，不能并发重复水合编辑器会话。 */
+let activeWorkspaceRestore: Promise<void> | null = null;
 
 async function persistCurrentEditorOpenTabs(): Promise<void> {
   if (!workspaceShell.getSnapshot().activeWorkspace) return;
@@ -257,7 +259,7 @@ export async function closeWorkspace(): Promise<void> {
  * 死项目探测：恢复前以 ws.list_docs 探 root 可达——读目录失败（目录被删/移）→ ws.close_workspace +
  * 停欢迎页 + 提示，避免进入坏掉的工作台。可达则用探测结果预置文件树（FileTree 仅 idle 时再加载）。
  */
-export async function restoreActiveWorkspace(): Promise<void> {
+async function restoreActiveWorkspaceOnce(): Promise<void> {
   bindEditorOpenTabsPersistence();
   let ref: WorkspaceRefDto | null;
   try {
@@ -285,4 +287,23 @@ export async function restoreActiveWorkspace(): Promise<void> {
     }
     workspaceShell.setNotice(`上次的 workspace「${ref.root_path}」已不可用（可能被移动或删除）`);
   }
+}
+
+/**
+ * 启动恢复单飞入口：开发态 StrictMode 的重复 effect 与正常调用共用同一 Promise。
+ * 这样同一轮恢复只会投影一次打开标签/编辑会话，避免重复 loadSeq → setContent。
+ */
+export function restoreActiveWorkspace(): Promise<void> {
+  if (activeWorkspaceRestore) return activeWorkspaceRestore;
+  const task = restoreActiveWorkspaceOnce();
+  activeWorkspaceRestore = task;
+  void task.then(
+    () => {
+      if (activeWorkspaceRestore === task) activeWorkspaceRestore = null;
+    },
+    () => {
+      if (activeWorkspaceRestore === task) activeWorkspaceRestore = null;
+    },
+  );
+  return task;
 }

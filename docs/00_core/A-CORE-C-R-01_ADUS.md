@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-07-22T03:36:58.345Z -->
+<!-- 最后生成时间：2026-07-26T13:59:28.232Z -->
 
 ### 模块编码表
 
@@ -231,6 +231,7 @@
 | TERM-DOC-001   | DOC-CONVERT                                          | 样式子集   | StyleSubset      | 样式白名单, 格式子集, 样式范围, 支持样式表                             | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
 | TERM-DOC-002   | DOC-CONVERT                                          | 编辑草稿   | EditDraft        | 草稿副本, draft文件, 临时编辑文件, 编辑副本                          | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
 | TERM-DOC-003   | DOC-CONVERT, ED-EDIT                                 | b-docx | BDocx            | 模拟docx, HTML模拟docx, 可编辑docx, 项目docx, 生成docx, docx编辑稿 | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
+| TERM-DOC-004   | DOC-CONVERT                                          | 字体身份修复 | FontIdentityFix  | 字体fallback修复, 字形回退修复, 字体替换修复                         | docs/01_modules/DOC/A-DOC-M-T-01_文档转换技术设计.md    |
 | TERM-ED-001    | ED-EDIT                                              | 内容块    | Block            | 内容节点, 段落块, 文本块, 块节点, chunk                           | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-ED-002    | ED-DECOR                                             | 编辑器装饰层 | EditorDecoration | 高亮层, 标注层, 覆盖层, overlay层, 装饰器层                        | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
 | TERM-ED-004    | ED-EDIT                                              | 字符锚    | CharAnchor       | 字符偏移锚, 文本锚, 偏移量锚, inline锚, 字符定位符                     | docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md       |
@@ -260,9 +261,9 @@
 | codes                                   | type   | rules                                                                | 文件                                        | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------------------------- | ----------------------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 195  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 391  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 808  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 502  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 698  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1193 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
@@ -309,7 +310,7 @@
 
 | codes                                     | type   | rules            | 文件                           | 行号   |
 | ----------------------------------------- | ------ | ---------------- | ---------------------------- | ---- |
-| BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | BR-SYS-STATE-006 | src/services/closeService.ts | 229  |
+| BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | BR-SYS-STATE-006 | src/services/closeService.ts | 230  |
 | BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | BR-SYS-STATE-004 | src/shell/App.tsx            | 30   |
 | BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1091 |
 | BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1155 |
@@ -433,7 +434,11 @@
 | codes                                                                | type   | rules                                              | 文件                                               | 行号  |
 | -------------------------------------------------------------------- | ------ | -------------------------------------------------- | ------------------------------------------------ | --- |
 | BR-ED-DATA-001-DATA-ED-ED-EDIT-001                                   | DATA   | BR-ED-DATA-001 term_ref: TERM-ED-001               | src/components/ed/extensions/BlockIdExtension.ts | 46  |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-005                                     | RB     | BR-ED-DATA-003                                     | src/components/ed/extensions/Pagination.ts       | 243 |
+| BR-ED-DATA-003-GUARD-ED-ED-EDIT-019                                  | GUARD  | BR-ED-DATA-003                                     | src/components/ed/extensions/Pagination.ts       | 263 |
+| BR-ED-DATA-003-GUARD-ED-ED-EDIT-020                                  | GUARD  | BR-ED-DATA-003                                     | src/components/ed/extensions/Pagination.ts       | 585 |
+| BR-ED-DATA-003-GUARD-ED-ED-EDIT-018                                  | GUARD  | BR-ED-DATA-003                                     | src/components/ed/extensions/Pagination.ts       | 636 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005                                     | RB     | BR-ED-DATA-003                                     | src/components/ed/extensions/Pagination.ts       | 893 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-017                                     | RB     | BR-ED-DATA-003                                     | src/components/ed/extensions/paginationFlow.ts   | 57  |
 | BR-ED-DATA-006-DATA-ED-ED-EDIT-014                                   | DATA   | BR-ED-DATA-006                                     | src/components/ed/markdown/markdownCodec.ts      | 75  |
 | BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-015                                | GUARD  | BR-ED-VERIFY-001, BR-ED-DATA-005                   | src/components/ed/markdown/markdownCodec.ts      | 155 |
 | BR-ED-DATA-003-RB-ED-ED-EDIT-006                                     | RB     | BR-ED-DATA-003                                     | src/services/docService.ts                       | 36  |
@@ -441,11 +446,11 @@
 | BR-ED-STATE-001-EFFECT-ED-ED-EDIT-012                                | EFFECT | BR-ED-STATE-001 term_ref: TERM-ED-001, TERM-ED-004 | src/services/edLocate.ts                         | 295 |
 | BR-ED-STATE-001-EFFECT-ED-ED-EDIT-011                                | EFFECT | BR-ED-STATE-001 term_ref: TERM-ED-001              | src/services/edLocate.ts                         | 334 |
 | BR-ED-DATA-004-QUERY-ED-ED-EDIT-007                                  | QUERY  | BR-ED-DATA-004 term_ref: TERM-ED-004, TERM-ED-005  | src/services/edLocate.ts                         | 364 |
-| BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB     | BR-ED-DATA-002, BR-ED-DATA-006                     | src/services/edService.ts                        | 92  |
-| BR-ED-STATE-003-EFFECT-ED-ED-EDIT-013                                | EFFECT | BR-ED-STATE-003                                    | src/services/edService.ts                        | 141 |
-| BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016                                | GUARD  | BR-ED-VERIFY-001, BR-ED-DATA-006                   | src/services/edService.ts                        | 175 |
+| BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB     | BR-ED-DATA-002, BR-ED-DATA-006                     | src/services/edService.ts                        | 127 |
+| BR-ED-STATE-003-EFFECT-ED-ED-EDIT-013                                | EFFECT | BR-ED-STATE-003                                    | src/services/edService.ts                        | 179 |
+| BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016                                | GUARD  | BR-ED-VERIFY-001, BR-ED-DATA-006                   | src/services/edService.ts                        | 213 |
 | BR-ED-DATA-005-RB-ED-ED-EDIT-008                                     | RB     | BR-ED-DATA-005 term_ref: TERM-ED-006, TERM-ED-004  | src/services/edStyleOps.ts                       | 125 |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002                                    | RB     | BR-ED-STATE-001                                    | src/store/edStore.ts                             | 196 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002                                    | RB     | BR-ED-STATE-001                                    | src/store/edStore.ts                             | 206 |
 | BR-ED-DATA-005-QUERY-ED-ED-EDIT-009                                  | QUERY  | BR-ED-DATA-005 term_ref: TERM-ED-006, TERM-ED-004  | src-tauri/src/ag/blocks.rs                       | 570 |
 
 #### IPC-CALL
@@ -658,22 +663,22 @@
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
-| codes                               | type | chain     | 文件                                   | 行号  |
-| ----------------------------------- | ---- | --------- | ------------------------------------ | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 195 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 808 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-003 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 96  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-008 | RB   | AG-ASSIST | src/store/assistStore.ts             | 94  |
+| codes                               | type | chain     | 文件                                   | 行号   |
+| ----------------------------------- | ---- | --------- | ------------------------------------ | ---- |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 502  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1193 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-003 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 96   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-008 | RB   | AG-ASSIST | src/store/assistStore.ts             | 94   |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-004
 
 | codes                                   | type   | chain     | 文件                                        | 行号  |
 | --------------------------------------- | ------ | --------- | ----------------------------------------- | --- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | AG-ASSIST | src/components/ag/AutocompleteOverlay.tsx | 16  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 391 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 698 |
 
 #### BR-AG-STATE-004
 
@@ -840,16 +845,20 @@
 
 #### BR-ED-DATA-002
 
-| codes                                                                | type | chain   | 文件                        | 行号 |
-| -------------------------------------------------------------------- | ---- | ------- | ------------------------- | -- |
-| BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB   | ED-EDIT | src/services/edService.ts | 92 |
+| codes                                                                | type | chain   | 文件                        | 行号  |
+| -------------------------------------------------------------------- | ---- | ------- | ------------------------- | --- |
+| BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB   | ED-EDIT | src/services/edService.ts | 127 |
 
 #### BR-ED-DATA-003
 
-| codes                            | type | chain   | 文件                                         | 行号  |
-| -------------------------------- | ---- | ------- | ------------------------------------------ | --- |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-005 | RB   | ED-EDIT | src/components/ed/extensions/Pagination.ts | 243 |
-| BR-ED-DATA-003-RB-ED-ED-EDIT-006 | RB   | ED-EDIT | src/services/docService.ts                 | 36  |
+| codes                               | type  | chain   | 文件                                             | 行号  |
+| ----------------------------------- | ----- | ------- | ---------------------------------------------- | --- |
+| BR-ED-DATA-003-GUARD-ED-ED-EDIT-019 | GUARD | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 263 |
+| BR-ED-DATA-003-GUARD-ED-ED-EDIT-020 | GUARD | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 585 |
+| BR-ED-DATA-003-GUARD-ED-ED-EDIT-018 | GUARD | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 636 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-005    | RB    | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 893 |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-017    | RB    | ED-EDIT | src/components/ed/extensions/paginationFlow.ts | 57  |
+| BR-ED-DATA-003-RB-ED-ED-EDIT-006    | RB    | ED-EDIT | src/services/docService.ts                     | 36  |
 
 #### BR-ED-DATA-004 term_ref: TERM-ED-004
 
@@ -876,14 +885,14 @@
 | codes                                                                | type  | chain   | 文件                                          | 行号  |
 | -------------------------------------------------------------------- | ----- | ------- | ------------------------------------------- | --- |
 | BR-ED-DATA-006-DATA-ED-ED-EDIT-014                                   | DATA  | ED-EDIT | src/components/ed/markdown/markdownCodec.ts | 75  |
-| BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB    | ED-EDIT | src/services/edService.ts                   | 92  |
-| BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016                                | GUARD | ED-EDIT | src/services/edService.ts                   | 175 |
+| BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016 | RB    | ED-EDIT | src/services/edService.ts                   | 127 |
+| BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016                                | GUARD | ED-EDIT | src/services/edService.ts                   | 213 |
 
 #### BR-ED-STATE-001
 
 | codes                             | type | chain   | 文件                   | 行号  |
 | --------------------------------- | ---- | ------- | -------------------- | --- |
-| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 196 |
+| BR-ED-STATE-001-RB-ED-ED-EDIT-002 | RB   | ED-EDIT | src/store/edStore.ts | 206 |
 
 #### BR-ED-STATE-001 term_ref: TERM-ED-001
 
@@ -902,14 +911,14 @@
 
 | codes                                 | type   | chain   | 文件                        | 行号  |
 | ------------------------------------- | ------ | ------- | ------------------------- | --- |
-| BR-ED-STATE-003-EFFECT-ED-ED-EDIT-013 | EFFECT | ED-EDIT | src/services/edService.ts | 141 |
+| BR-ED-STATE-003-EFFECT-ED-ED-EDIT-013 | EFFECT | ED-EDIT | src/services/edService.ts | 179 |
 
 #### BR-ED-VERIFY-001
 
 | codes                                 | type  | chain   | 文件                                          | 行号  |
 | ------------------------------------- | ----- | ------- | ------------------------------------------- | --- |
 | BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-015 | GUARD | ED-EDIT | src/components/ed/markdown/markdownCodec.ts | 155 |
-| BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016 | GUARD | ED-EDIT | src/services/edService.ts                   | 175 |
+| BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016 | GUARD | ED-EDIT | src/services/edService.ts                   | 213 |
 
 #### BR-ENT-DATA-001
 
@@ -1096,7 +1105,7 @@
 
 | codes                                     | type   | chain     | 文件                           | 行号  |
 | ----------------------------------------- | ------ | --------- | ---------------------------- | --- |
-| BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | APP-CLOSE | src/services/closeService.ts | 229 |
+| BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | APP-CLOSE | src/services/closeService.ts | 230 |
 
 #### BR-SYS-VERIFY-001
 
@@ -1186,16 +1195,16 @@
 
 #### TERM-AG-004
 
-| codes                                   | type   | chain     | 文件                                   | 行号  |
-| --------------------------------------- | ------ | --------- | ------------------------------------ | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 195 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 808 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-003     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 96  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts            | 700 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-008     | RB     | AG-ASSIST | src/store/assistStore.ts             | 94  |
+| codes                                   | type   | chain     | 文件                                   | 行号   |
+| --------------------------------------- | ------ | --------- | ------------------------------------ | ---- |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 502  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1193 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-003     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 96   |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts            | 700  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-008     | RB     | AG-ASSIST | src/store/assistStore.ts             | 94   |
 
 #### TERM-AG-009
 

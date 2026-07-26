@@ -294,8 +294,68 @@ rule_id: BR-ED-DATA-005
 
 ## §6 分页与图文媒体（呈现层纯化，ED-EDIT）
 
-- **分页**：分页布局（分页模式、光标与遮罩、打印友好呈现）是**呈现层**行为：依内容块切分页面，
-  不改变文档模型与落盘内容；分页开/关与重排不产生模型变更，不触发脏态。
+- **分页**：分页布局（分页模式、光标与遮罩、打印友好呈现）是**呈现层**行为：由当前文档可映射的
+  ProseMirror position 标识 Block/视觉行断点，不改变文档模型与落盘内容；分页开/关与重排不产生模型
+  变更，不触发脏态。
+- **普通段落视觉行拆分（PI-ED-16，2026-07-26）**：分页先测全部 Block 连续高度，只对当前页实际无法
+  整块容纳的**顶层普通段落**按 grapheme 合法位置以指数探测+二分定位视觉行；自然视觉行必须在不含
+  段内分页缝的当前可见 ProseMirror 真实排版中测量。已有段内断点时，插件须在同一个 rAF 回调内通过
+  纯呈现事务临时过滤 `paragraph-line` widget，直接读取当前纸张宽度、字体、marks、文字方向与缩放下的
+  Range 行盒，并在该回调返回前提交最终完整分页方案；不得再用克隆可见 DOM 或 schema `DOMSerializer`
+  生成的离屏副本近似真实行宽。断点必须同时满足“后一个 grapheme 进入更低视觉行”与“水平方向回到
+  行首侧”；仅纵坐标变化不足以证明换行。分页流采用贪心填页：
+  当前页保留所有能够完整容纳的视觉行，只有一行都放不下时才换页，允许页底或页首出现单行片段；
+  超整页行以保证前进为准。
+  标题、`listItem`/TaskList、引用、代码、表格、图片/媒体，以及含 hardBreak 或 inline atom 的段落保持
+  原子 Block；hardBreak 不得作为段内分页候选，因为它会形成未填满短行，且可能与旧 widget 邻近污染
+  形态相同。
+  Range/position、横向回行或文字方向几何任一不可靠时同样原子降级，不得猜测断点。
+  行间断点使用 `span` widget，Block 断点使用 `div` widget，二者均为不可交互 Decoration，不得写入
+  LogicalState、DiskState 或 history。
+- **分页重测量稳定性**：完整物理分页是硬约束；分页启用期间不得撤下 Block 页缝、页码、纸张高度或末页
+  补白，也不得把编辑器切换成无分页模式。为消除旧行间 widget 对自然换行的自证污染，唯一允许的测量
+  例外是：捕获可见锚点后，在同一个 rAF 回调内以 `addToHistory=false` 的呈现事务暂时排除
+  `paragraph-line` Decoration，保留所有 Block 页缝，立即读取可见 ProseMirror Range，并在回调返回前
+  恢复完整方案及锚点；中间态不得跨帧、不得 `await`、不得修改 doc/selection/history/dirty。异常、重试或
+  相同方案路径也必须恢复测量态。已有段内分页缝不得作为自身断点有效性的测量依据；重排后不再成立的
+  断点必须随最终 Decoration 方案移除，使段落恢复自然连续排版。末页补白是独立 CSS 呈现值；仅该值变化时不得重建
+  普通分页缝 DecorationSet。只有分页断点 position、类型或数量变化时才允许重建对应呈现装饰；非末页
+  fill 与末页 fill 都只能更新稳定 DOM 的 CSS 变量，不属于 Decoration 身份。既有 Block/行间分页缝高度
+  必须按 position 与 `side:-1` bias 从后续 Block 和行坐标扣除，不得用 Block 序号近似。
+  重测量触发只能来自文档事务、纸张几何、字体/媒体加载或窗口尺寸等外部布局输入；不得用观察整个
+  ProseMirror 高度的 ResizeObserver 反向触发重测量，因为分页缝和末页补白自身会改变该高度并构成正反馈。
+- **打开收敛（2026-07-25）**：BDocx 打开期间，编辑器只接受活动路径的**最新**内容载入。workspace 启动恢复
+  必须单飞；状态机监听启动必须单飞，且卸载时使尚未完成注册的一组监听失效；同一路径的旧异步打开结果必须
+  丢弃。用户已切换到其他标签时，迟到结果只可补全其非活动 `EditSession`，不得改写 `activePath`、推进
+  `loadSeq` 或触发当前 ProseMirror `setContent`。内容载入时，分页启用/几何重置必须经一次受控布局事务合并，
+  不得以多个命令对同一新文档重复触发分页计划。
+- **滚动控制权（2026-07-26）**：浏览器 Scroll Anchoring 只在 `.editor-paper` 滚动容器禁用，不得在
+  ProseMirror DOM 写入内联 `overflow-anchor:none`，以保留 ProseMirror 的 `storeScrollPos/resetScrollPos`
+  更新期保持。普通输入请求 `scrollIntoView` 时，分页模式只可预先接管**已经完整位于滚动容器 client viewport
+  内**的折叠文本光标，阻止冗余滚动；真实越界、不可测量状态和非文本选区必须交还 ProseMirror 原生滚动。
+  IME 未处于有效指针激活周期时同样交还原生滚动；若已有有效周期，则 composition 的 doc 变化可沿用相同的
+  可见性判定阻止冗余滚动，但分页重测量仍须在 composition 期间暂停并于结束后静默结算。
+  可见性只能用浏览器实际 Selection/DOM Range 与容器 client rect 的同一屏幕坐标判断，不得混入
+  `scrollTop` 或对内容 CSS zoom 二次换算。若运行时不能提供可靠的绝对 Range，允许把用户在已揭示分页编辑器
+  内完成的主键指针定位建立为光标激活周期：以可信的指针屏幕点为锚，只消费后续 Range 相对激活 Range 的位移，
+  并按运行时检测的“computed zoom/rect实际比例”换算；估算光标仍可见且用户未改变 `scrollTop` 时可持续
+  拦截后续 doc 变化滚动，不得按字符数硬编码。选择导航、真实越界、用户滚动、blur或新指针定位必须结束周期。
+  周期只能在 ProseMirror 最终选区同步后的下一帧建立，双击、拖选与非折叠选区不得误建；文档身份、编辑格式、
+  缩放、纸张或方向变化必须显式清除待建与现有周期。分页结构结算若主动补偿 `scrollTop`，必须以内部事件同步
+  现有周期的滚动基线，不得把分页层写入误判为用户滚动；该事件不得携带或修改文档、选区、分页计划与脏态。
+  搜索/大纲跳转与滚动恢复由显式导航命令负责；分页结算只允许在事务返回后校验可见锚点残差并至多补偿一次，
+  不得反向补偿普通输入或显式导航。
+- **输入期分页冻结（2026-07-26）**：文档内容事务只失效化分页计划；连续输入和 IME composition 期间保留
+  当前 break 归属，且 position 以 `assoc=-1` 随文档事务同步映射；被删除或不再位于顶层普通段落内部的
+  行间断点安全丢弃。最后一次内容变化静默 450ms 后统一测量并提交一次。首次装载、纸张几何、字体/媒体和
+  窗口变化使用独立即时结算。输入期间允许分页呈现短暂滞后，但该状态不得写入模型、脏态或保存内容。
+- **分页 DOM 稳定与精度（2026-07-26）**：分页缝 Decoration 身份由按页序确定的稳定 id 承载，结构相等
+  由 position+断点类型判断；position 会随事务映射，不得写入 DOM dataset 充当身份。非末页 fill 与末页
+  fill 均通过稳定 DOM 的 CSS 变量更新，fill 变化不得重建同一 widget。分页高度计算全程保留小数，只在
+  相等判断和最终滚动写入使用亚像素容差，禁止逐页取整形成累计漂移。
+- **首帧揭示（2026-07-26）**：BDocx 的 `loadedContent` 只表示转换结果到达；编辑器须继续保持加载遮罩，
+  直到 `setContent`、当前 `loadSeq` 绑定和首轮分页 settled 均完成。隐藏期间 `EditorContent` 必须保持挂载
+  以供真实 DOM 测量；旧 `loadSeq` 的 settled 结果不得揭示当前文档。
 - **图文媒体**：图片等媒体以媒体内容块进入编辑模型；媒体资源文件经 WS 存取并限定 workspace 内
   （X-FORBID-004），ED 不自行落盘媒体文件。
 
@@ -473,7 +533,10 @@ status: mapped
 - **Markdown/b-docx 统一模型**（BR-ED-DATA-002/006、BR-ED-VERIFY-001）：Markdown 受支持语法渲染为结构化节点，支持子集语义往返；未编辑不改写、非支持结构不静默保存；docx 进入编辑与往返保存经 DOC
   转换；ED 代码无 docx 二进制处理（静态可查）。
 - **呈现层纯化**（BR-ED-DATA-003，REQ-ED-003/004 验收）：分页开/关与重排不改文档模型、不产生脏态；
-  媒体资源越界路径被拒（X-FORBID-004）。
+  媒体资源越界路径被拒（X-FORBID-004）；启动恢复、监听与异步打开并发时，当前活动编辑器只发生一次受控
+  内容载入，旧结果不得回填或重新触发分页几何。普通段落行间拆分须覆盖 position 映射、最大可容纳行数、
+  零行可容纳才换页、既有 gap position/bias 扣除和复杂节点原子降级。正式应用多轮人工测试后，人类接受
+  当前普通段落仍可能行中强制断开、复杂节点仍原子换页的发布边界；该限制不改变分页纯呈现验收。
 - **装饰层契约**（BR-ED-STATE-002 / X-FORBID-005，REQ-ED-005 验收）：decoration 按 blockId 挂载、
   按信号呈现/复位且终态不残留；decoration 不改文档模型；不存在绕过 ED 接口直改编辑器状态的调用
   路径（与 DE/AG G4 集成验证）；`open_session` 已应用卡切换到目标文档时不触发二次内容变更。
@@ -518,7 +581,16 @@ status: mapped
   关闭重开必换锚）——与 2026-07-03 人类裁定 D-2 一致，agent 跨重开须重新取块（ag.list_blocks）。
   附带实测发现（DOC 侧既有"部分支持"债务佐证，登记不扩范围）：保存侧 color/text-align 内联样式
   衰减、`data-custom-style` div 包裹残留。
-- 分页光标/遮罩具体实现：移植 `tiptap-pagination-plus` 后按新架构适配，实现期敲定。
+- ~~分页光标/遮罩具体实现待敲定~~ → **已实现（PI-ED-15，2026-07-26）**：当前控制权、输入期冻结、
+  光标激活周期与首帧揭示以 §6 为准；人类已确认当前发布需求并闭合 `SCROLL-JUMP-PAGINATION-01`，
+  后续分页算法修改必须继续满足该课题的滚动稳定性回归门槛。
+- **Block 内分页拆分第一阶段已实现并按当前边界闭合**（`PAGINATION-INTRABLOCK-SPLIT-01`）：
+  顶层普通段落已按视觉行和可映射 position 拆分；自动测试覆盖分页流、事务映射与既有 gap 扣除。标题、
+  `listItem`/TaskList、引用、代码、表格、图片/媒体和含 inline atom 的段落仍按第一阶段设计原子降级，
+  因而这些长 Block 仍可能整块后移或超页；扩展它们必须另行设计容器内全宽 gap 与编辑兼容性。正式
+  Tauri/WKWebView 中普通段落 `paragraph-line` widget 仍可能形成已观察到的行中强制断开。人类于
+  2026-07-26 明确决定不再继续优化，并接受上述两项为当前版本限制；本课题因此闭合，但不得把限制描述为
+  已修复。未来若要求 Word 级自然行分页，必须新开架构课题并继续满足 PI-ED-15 防跳硬门槛。
 - **open_session StyleOp 无头事务**：文本/块/整篇替换可在 `EditSession.content` 上执行；StyleOp 需要不依赖
   当前 ProseMirror editor instance 的事务实现。未落地前应返回不支持并让 DiffCard 失效，不能后台写 DiskState。
 - **孤立 ED session 镜像清理**：本轮恢复链路只保证孤立 `ed_session_snapshots` 不会打开文档；历史镜像的
@@ -556,3 +628,22 @@ status: mapped
 | 2026-07-18 | v1.13 | 补齐已打开文档 LogicalState 门禁：active 取 ProseMirror 实时序列化，非 active open session 取 `EditSession.content + sessionVersion/contentHash`；`draft_mode=open_session` 经 ED session 事务自动应用并持久化 `ed_session_snapshots` |
 | 2026-07-18 | v1.14 | 补齐启动恢复打开标签协议：`ed_open_tabs` 作为打开集合、顺序和当前文档真源；恢复只对打开集合取 session 镜像，恢复后当前文档直接进入 AG LogicalState 读取链 |
 | 2026-07-18 | v1.15 | ED-MARKDOWN-RICH-ROUNDTRIP-01：替代 Markdown 纯文本实现裁决，修订 BR-ED-DATA-002/005；新增 BR-ED-DATA-006 Markdown Codec 与 BR-ED-VERIFY-001 无静默丢失规则；区分 editFormat/contentFormat，补 CommonMark+GFM 支持矩阵、源码保护与 REQ-ED-001 映射 |
+| 2026-07-25 | v1.16 | 分页滚动闪跳修复设计：重测量改为读取当前分页树并扣除既有分页缝几何，禁止以临时隐藏/恢复可见分页缝换取无缝测量；末页补白与普通分页缝 DecorationSet 更新解耦，仅分页结构变化才重建普通装饰。复用 BR-ED-DATA-003 / ED-EDIT，不新增规则。 |
+| 2026-07-25 | v1.17 | 分页打开即振荡复盘：禁止以整个 ProseMirror 的 ResizeObserver 作为重测量源，改为仅由文档事务、纸张几何、字体/媒体加载与窗口尺寸等外部输入失效化；分页方案提交不能递归触发下一轮重排。 |
+| 2026-07-25 | v1.18 | BDocx 打开控制面收敛：启动恢复、状态机监听均单飞；异步打开按路径 latest-wins，非活动路径迟到结果仅补全会话不重置当前编辑器；内容载入将分页启用与纸张几何合并为一次布局事务。 |
+| 2026-07-25 | v1.19 | 修正缩放下的光标自动滚动判定：统一以视口 rect 判断可见性，移除 scrollTop/clientHeight 混算与高频日志；底部仍可见光标不再错误放行 ProseMirror 默认滚动。 |
+| 2026-07-25 | v1.20 | 分页视口锚定落地：结构分页变化前后保持可见光标/首内容块的屏幕位置，分页层成为唯一布局滚动控制器；停用 ProseMirror scroll-preserve 竞争写入、淘汰过期测量并修正末页底边距叠加。 |
+| 2026-07-25 | v1.21 | 分页锚定首帧修正：将补偿由下一帧移入分页提交同一任务，优先以原生 Selection/Dom range 而非 widget 边界 `coordsAtPos` 作为可见光标锚，避免先下推再回拉的单跳。 |
+| 2026-07-26 | v1.22 | 分页控制权重新收敛：恢复 ProseMirror 原生 preserve/scrollIntoView；输入期冻结 break plan，静默后一次结算；Decoration 结构与 fill CSS 更新解耦并保留小数精度；分页事务只做末尾残差校验；BDocx 等待当前 loadSeq 首轮 settled 后揭示。 |
+| 2026-07-26 | v1.23 | 发布构建复测后收敛残余首输入单跳：保留 ProseMirror 更新期 preserve 与真实越界滚动，分页模式仅在折叠文本光标已经完整可见时预拦截冗余 `scrollIntoView`；Selection/DOM Range 与 client viewport 统一使用屏幕坐标，不混入 scrollTop/zoom。 |
+| 2026-07-26 | v1.24 | Range可见性门控真机失败后增加一次性指针激活事务门控：主键定位记录doc引用与scrollTop，只对其后的第一次doc变化且用户未主动滚动时吞掉scrollIntoView；消费/非内容请求/blur即失效，composition首输入纳入但不接管后续原生滚动。 |
+| 2026-07-26 | v1.25 | 第二字符稳定单跳证明一次性门控仅延迟原生归位；升级为光标激活周期，以指针真实屏幕点和Range相对位移估算后续光标，运行时适配zoom是否已进入rect，仍可见且用户未滚动时持续拦截，真实越界/导航/blur释放。 |
+| 2026-07-26 | v1.26 | 闭合前隐患收口：分页内部scrollTop补偿以专用事件更新激活周期基线；文档/格式/缩放/纸张身份变化显式清理；指针守卫延至ProseMirror最终选区同步后建立，排除双击、拖选与非折叠选区。 |
+| 2026-07-26 | v1.27 | 实现一致性同步：明确fill只更新稳定DOM、不重建Decoration；IME仅在无有效激活周期时无条件交还原生滚动；关闭“分页方案待敲定”旧债务，并登记当前仅支持顶层块/listItem边界、尚不支持块内行盒拆分页。 |
+| 2026-07-26 | v1.28 | 课题迁移：人类确认闭合 SCROLL-JUMP-PAGINATION-01；Block 内分页拆分转入 PAGINATION-INTRABLOCK-SPLIT-01，锁定普通段落视觉行先行、复杂类型原子降级、纯呈现不改模型及滚动稳定性硬回归门槛。 |
+| 2026-07-26 | v1.29 | PI-ED-16 第一阶段实现同步：分页计划迁移为可映射 position+稳定页序id；顶层普通段落按grapheme合法位置以指数探测+二分定位视觉行，并按2+2优先规则拆分；既有Block/行间gap按position+bias扣除，复杂节点和不可测几何原子降级。自动验证完成，正式WKWebView交互与缩放矩阵仍待人工验收。 |
+| 2026-07-26 | v1.30 | PI-ED-16人工验收纠偏：2+2防孤行会主动撤回上一页本可容纳的一行并制造页尾空白；现行规则改为贪心填页——保留当前页所有完整可容纳视觉行，仅零行可容纳时换页，允许单行页首/页尾片段。测量、position映射、输入冻结与滚动补偿边界不变。 |
+| 2026-07-26 | v1.31 | PI-ED-16行尾断点修复：确认旧段内`display:block`分页缝会污染可见DOM换行并自证旧position；自然行改由无分页缝离屏段落副本测量，断点增加纵向换行+横向回行双验证，无法证明即整段原子降级；旧断点移除后由Decoration自然恢复连续排版，不修改LogicalState。 |
+| 2026-07-26 | v1.32 | PI-ED-16二次人工失败纠偏：v1.31离屏副本仍克隆了受WebKit辅助BR/残留结构污染的可见DOM，不能作为自然排版真值；现改由ProseMirror LogicalState经schema DOMSerializer重新生成段落，并将含hardBreak段落原子降级，禁止短行/疑似旧widget污染成为分页候选。 |
+| 2026-07-26 | v1.33 | PI-ED-16物理分页边界纠正：完整保留页缝、页码、纸张高度和既有防跳链；废止离屏近似。已有段内断点重测时，仅在同一rAF内以呈现事务暂时过滤paragraph-line widget，Block页缝始终保留，直接读取当前可见ProseMirror真实行盒并在回调返回前恢复最终完整分页。 |
+| 2026-07-26 | v1.34 | 分页课题闭合：人类接受普通段落仍可能行中强制断开及复杂节点原子降级作为当前版本边界；移除正式人工矩阵开放门禁，保留物理分页、纯呈现规则、打开收敛和PI-ED-15防跳控制。 |

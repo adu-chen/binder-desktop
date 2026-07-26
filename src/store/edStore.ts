@@ -61,6 +61,16 @@ export type SessionApplyResult =
   | { ok: true; snapshot: OpenDocSnapshot }
   | { ok: false; code: string; message: string };
 
+/**
+ * 异步读取完成后写回会话的控制项。
+ *
+ * 正常打开必须激活该路径；但当用户已切换到另一文档时，旧请求的结果只能补全原会话，
+ * 不得夺回 activePath 或推进 loadSeq。这使编辑器只响应当前活动路径的受控载入。
+ */
+export interface LoadDocOptions {
+  activate?: boolean;
+}
+
 export function hashLogicalContent(content: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < content.length; i += 1) {
@@ -232,15 +242,17 @@ export const edStore = {
     jumpLine: number | null = null,
     editFormat: EditFormat = "text",
     contentFormat: ContentFormat = editFormat === "html" || editFormat === "html_file" ? "html" : "text",
+    options: LoadDocOptions = {},
   ) {
+    const activate = options.activate ?? true;
     commit({
       sessions: {
         ...state.sessions,
         [path]: makeSession(content, baseline, "saved", editFormat, contentFormat),
       },
-      activePath: path,
-      loadSeq: state.loadSeq + 1,
-      jumpLine,
+      activePath: activate ? path : state.activePath,
+      loadSeq: activate ? state.loadSeq + 1 : state.loadSeq,
+      jumpLine: activate ? jumpLine : state.jumpLine,
     });
   },
   /** 切换活动会话到已打开文档（不重新读盘 → 保留该会话未保存编辑）；loadSeq 递增触发编辑器载入会话内容。 */

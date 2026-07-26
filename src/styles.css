@@ -571,6 +571,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .editor-loading {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: var(--sp-3); width: 100%; min-height: 40vh;
+  position: absolute; inset: 0; z-index: 4;
+  background: var(--bg-sunken);
 }
 .editor-loading-spinner {
   width: 22px; height: 22px; border-radius: 50%;
@@ -588,10 +590,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 @keyframes ed-indeterminate { to { left: 100%; } }
 
-.editor-paper { flex: 1; overflow: auto; display: flex; justify-content: center; padding: var(--sp-8) var(--sp-6); }
+.editor-paper {
+  position: relative;
+  flex: 1; overflow: auto; overflow-anchor: none;
+  display: flex; justify-content: center;
+  padding: var(--sp-8) var(--sp-6);
+}
 /* EditorContent 包装 div（2026-07-03 修复：内容极少时 flex item shrink-to-fit 使纸张塌缩成窄条）——
    占满可用宽、内部再居中；纸张宽度恒由 .ProseMirror 自身规则决定（常规 max-width / 分页固定纸宽）。 */
 .editor-paper > div { width: 100%; display: flex; justify-content: center; align-items: flex-start; }
+/* BDocx 首轮 setContent + 分页 settled 前仍挂载真实 EditorContent 供布局测量，但不揭示中间回填帧。 */
+.editor-paper > .editor-content-loading { visibility: hidden; pointer-events: none; }
 .editor-paper .ProseMirror {
   /* 编辑预览区缩放（视图态）：CSS zoom 缩放纸张会重排布局，滚动条自适应；分页测量按 computed zoom 归一化。 */
   zoom: var(--ed-zoom, 1);
@@ -674,29 +683,48 @@ button:disabled { opacity: 0.5; cursor: default; }
   max-width: var(--rm-page-width);
   flex: none;
   padding: var(--rm-page-margin-y) var(--rm-page-margin-x);
+  /* 末页补白必须叠加原有底部页边距：top margin + content + end-fill + bottom margin = 纸张高度。
+   * 放在本规则块内以覆盖 padding 简写；不能用 end-fill 直接替换 margin-y。 */
+  padding-bottom: calc(var(--rm-page-margin-y) + var(--rm-page-end-fill, 0px));
+  min-height: var(--rm-page-height);
   background: var(--bg-card);
   border: none;
   border-radius: 0;
   box-shadow: 0 1px 10px rgba(14, 12, 10, 0.14);
 }
-/* 无缝测量态（2026-07-04 三轮修复）：测量瞬间隐藏缝/end-fill，同帧恢复——差分只测纯内容。 */
-.ProseMirror.rm-measuring .rm-page-gap,
-.ProseMirror.rm-measuring .rm-page-end-fill { display: none !important; }
-
-/* 分页缝（PI-ED-06）：页尾补足(fill) + 白色下页边 + 灰色装订缝（含页码）+ 白色上页边，
-   全宽出血覆盖左右页边距。fill 使每页视觉高度恒等所选纸张内容区（#8 页高修复）。 */
+/* 分页缝（PI-ED-06 / PI-ED-16）：页尾补足(fill) + 白色下页边 + 灰色装订缝（含页码）+
+   白色上页边，全宽出血覆盖左右页边距。Block 断点使用 div；普通段落行间断点使用 span widget，
+   但显式建立独立 block 盒，避免继承段落字号/行高后额外放大分页缝。 */
 .ProseMirror.rm-paginated .rm-page-gap {
-  display: flow-root; /* BFC：使 gutter 上下 margin 在缝内部起作用（不塌陷出去） */
   margin: 0 calc(-1 * var(--rm-page-margin-x));
   background: var(--bg-card);
   user-select: none;
   -webkit-user-select: none;
+  pointer-events: none;
 }
-.ProseMirror.rm-paginated .rm-page-gap-fill { background: var(--bg-card); }
-.ProseMirror.rm-paginated .rm-page-end-fill {
+.ProseMirror.rm-paginated .rm-page-gap-block {
+  display: flow-root; /* BFC：使 gutter 上下 margin 在缝内部起作用（不塌陷出去） */
+}
+.ProseMirror.rm-paginated .rm-page-gap-inline {
   display: block;
-  user-select: none;
-  -webkit-user-select: none;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  font-size: 0;
+  line-height: 0;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+  text-indent: 0;
+}
+.ProseMirror.rm-paginated .rm-page-gap-inline > .rm-page-gap-fill,
+.ProseMirror.rm-paginated .rm-page-gap-inline > .rm-page-gap-gutter {
+  display: block;
+}
+.ProseMirror.rm-paginated .rm-page-gap-fill {
+  height: var(--rm-page-fill, 0px);
+  background: var(--bg-card);
 }
 .ProseMirror.rm-paginated .rm-page-gap-gutter {
   position: relative;
