@@ -81,7 +81,8 @@ NONE             无法判断或不适用
 3. 不新增或修改任一 RULE / CHAIN / CONSTRAINT / TERM 静态定义
 4. 不改变已有 @GOV 块的 boundary 语义（in / out / effect / does_not 承载实体不变）
 5. 不引入新的业务规则判断，改动落在既有规则与链路覆盖范围内
-6. 不触及治理文件（ADU.md / ADP.md / CLAUDE.md / ADUS.md / APC / governance.config.json）
+6. 不触及治理文件或测试治理能力（ADU.md / ADP.md / AGENTS.md / CLAUDE.md / ADUS.md /
+   APC / governance.config.json / test_governance_path 指向的注册表与脚本）
 
 判据由客观事实判定，不由 AI 主观裁量"是否够小"。存疑时按 `CODE_CHANGE` 处理。
 
@@ -255,10 +256,10 @@ ADU 中的 `RULE_MISSING`、`NEEDS_HUMAN_DECISION` 等治理分类，是 Stop Co
 
 | task_type | 最小验证 |
 |-----------|----------|
-| CODE_CHANGE | 运行相关测试；运行 `npm run governance:audit`；若本次修改了设计文档标注块（RULE / CHAIN / MODULE / TERM / CONSTRAINT），必须先运行 `npm run governance:generate` 再运行 audit；若本次涉及规则有 `semantic_review_candidates` 标记，必须执行 AI 语义比对（ADU.md §5.7），结论写入 Task Runtime Report |
-| CODE_CHANGE_MINOR | 运行相关测试；运行 `npm run governance:audit`。按 §1.2 判据不应新增标注块或静态定义，故无须 generate；若 audit 出现 error 级违规，回到 PATCHING 或升级为 CODE_CHANGE |
-| GOVERNANCE_CHANGE | 运行 `npm run governance:audit`；若本次修改了设计文档标注块，必须先运行 `npm run governance:generate` 再运行 audit |
-| TEST_ONLY | 运行相关测试 |
+| CODE_CHANGE | 运行 `npm run test:plan -- --files [changed_files]` 审阅变更映射，再运行同一输入的 `npm run test:related -- --files [changed_files]`；选择器按模块、直接消费者与风险自动决定定向或全量测试，并串联治理审计。若本次修改了设计文档标注块（RULE / CHAIN / MODULE / TERM / CONSTRAINT），必须先运行 `npm run governance:generate`；若涉及规则有 `semantic_review_candidates` 标记，必须执行 AI 语义比对（ADU.md §5.7），结论写入 Task Runtime Report |
+| CODE_CHANGE_MINOR | 运行 `npm run test:related -- --files [changed_files]`。按 §1.2 判据不应新增标注块或静态定义，故无须 generate；若选择器无法映射可执行文件或 audit 出现 error 级违规，回到 PATCHING 或升级为 CODE_CHANGE |
+| GOVERNANCE_CHANGE | 运行 `npm run test:governance` 与 `npm run governance:audit`；若修改了设计文档标注块，必须先运行 `npm run governance:generate` |
+| TEST_ONLY | 运行 `npm run test:related -- --files [changed_test_files]`，默认直选变更测试，不扩散成虚构的业务源影响 |
 | DOC_ONLY | 检查文档头、引用关系和变更记录 |
 | INDEX_ONLY | 运行 `npm run governance:generate` 后检查 ADUS.md 是否与输入一致 |
 
@@ -277,6 +278,10 @@ ADU 中的 `RULE_MISSING`、`NEEDS_HUMAN_DECISION` 等治理分类，是 Stop Co
 | NONE | 不执行阶段补充验证；若阶段影响门禁，应先触发 `SC-05 AMBIGUOUS_TASK` |
 
 具体 @GOV、triage、日志、Issue Trace 内容的判断标准来自 ADU.md，不在 ADP 重写。
+
+`test:plan` / `test:related` 的选择结果是运行时证据，不是永久测试清单。每次变更都必须以实际
+`changed_files` 重新计算；不得复制上一次任务的测试列表。选择器失败关闭时视为 SC-04，除非根因是
+缺失模块、规则或链路定义，此时按 SC-02 / SC-07 处理。
 
 ### 5.1 越级请求处理
 
@@ -300,7 +305,7 @@ AI 不得进入 PATCHING。
 ```markdown
 ## Task Runtime Report — [任务简述]
 
-task_type: [CODE_CHANGE | GOVERNANCE_CHANGE | DOC_ONLY | TEST_ONLY | INDEX_ONLY]
+task_type: [CODE_CHANGE | CODE_CHANGE_MINOR | GOVERNANCE_CHANGE | DOC_ONLY | TEST_ONLY | INDEX_ONLY]
 governance_phase: [REQUIREMENT | DESIGN | PLAN | IMPLEMENTATION | VALIDATION | NONE]
 final_state: [READY | BLOCKED | ABANDONED]
 issue_trace: [无 | Issue Trace 路径或 ID]
@@ -319,6 +324,12 @@ phase_gate:
 mapping_chain:
   status: [complete | partial | blocked | not_applicable]
   evidence: [REQ/RULE/CHAIN/@GOV/Test 的最小说明]
+
+test_impact:
+  changed_files: [输入选择器的文件]
+  direct_modules: [直接归属模块]
+  affected_modules: [含风险扩展后的模块]
+  selection: [定向测试路径 | frontend-full | rust-full | not_applicable]
 
 validation:
   - [命令或检查项] # [passed | failed | skipped，原因]
@@ -365,9 +376,11 @@ unresolved_items:
 | 方向 | 内容 |
 |------|------|
 | CLAUDE.md -> ADP.md | CLAUDE 读取 ADP，并在开发任务开始前进入 INTAKE |
+| AGENTS.md -> ADP.md | AGENTS 读取 ADP，并在开发任务开始前进入 INTAKE |
 | ADP.md -> ADU.md | ADP 引用 ADU 的静态规则、Issue Trace 内容、@GOV、triage、日志和测试覆盖判断 |
-| ADP.md -> ADUS.md | ADP 使用 ADUS.md 查询规则、链路、模块、代码块和测试覆盖 |
-| ADP.md -> package scripts | ADP 通过 `npm run governance:generate` 和 `npm run governance:audit` 调用工具链 |
+| ADP.md -> ADUS.md | ADP 使用 ADUS.md 查询规则、链路、模块、代码块和动态测试能力索引 |
+| ADP.md -> test_governance_path | ADP 使用项目测试注册表进行模块归属、风险扩展、文件预算和测试选择 |
+| ADP.md -> package scripts | ADP 通过 `test:plan` / `test:related` / `test:governance` 与 `governance:generate` / `governance:audit` 调用工具链 |
 
 ---
 
@@ -383,4 +396,5 @@ unresolved_items:
 | 2026-05-22 | v0.6 | 新增 governance_phase、Phase Gate Check、SC-06/SC-07、阶段化补充验证、越级请求处理和 Task Runtime Report 最小阶段门禁字段 |
 | 2026-06-09 | v0.7 | 自审计修正：§3.1 TERM 前置门禁拆分硬阻断档（代码实际写 term_ref 引用）与非阻断档（仅提及，记入 unresolved_items）；§4 SC-02 触发口径收窄为 term_ref 实际引用未注册 TERM，与 CLAUDE.md §8 软提示对齐 |
 | 2026-06-09 | v0.8 | 结构性减负：§1 新增 CODE_CHANGE_MINOR 任务类型；新增 §1.2 变更比例原则（六条客观判据 + 轻量流程 + 会话内快速通道）；§3.1 补充 MINOR 轻量 Scope 声明；§5 验证表新增 CODE_CHANGE_MINOR 行；新增 §6.1 紧凑版 Runtime Report |
+| 2026-08-01 | v0.9 | TEST-GOVERNANCE-01：VALIDATING 接入动态变更影响选择器；Runtime Report 新增 test_impact；明确 TEST_ONLY 直选、可执行变更失败关闭及测试/验证证据分离 |
 | 2026-06-09 | v0.9 | 编辑时刻强制：§3.1 新增 PreToolUse 钩子说明与 `.governance/active_scope.json`（Scope Lock 机器可读镜像）schema，对应 scripts/scope_lock_guard.mjs 与 .claude/settings.json 钩子配置 |

@@ -147,6 +147,7 @@ ADUS.md 中已有的规则和链路，用于后续治理时的重复性校验，
 bootstrap 流程完成后，governance.config.json 会自动写入以下字段：
   apc_path      APC 文件路径（相对于 governance.config.json 所在目录）
   adus_path     ADUS 输出路径（相对于 governance.config.json 所在目录）
+  test_governance_path  项目测试治理注册表路径；由项目初始化或专项治理明确写入
 
 bootstrap 前请手动确认 governance.config.json 中 project_root 已正确填写：
   project_root  项目根目录相对路径，脚本以此为基准扫描 docs/src/tests 子目录
@@ -1566,15 +1567,36 @@ codes:          [代码块 codes 值]
 
 ### 5.6 测试文件处理
 
-测试文件不标注 @GOV。
-通过规则注册表的测试覆盖字段连接到治理体系。
+测试文件不标注 @GOV；测试治理通过“稳定策略 + 动态资产”接入治理系统：
 
-三种测试类型及映射目标：
-- `rule_test`：映射到规则 ID
-- `invariant_test`：映射到 X-INDEX 约束 ID
-- `chain_test`：映射到链路 ID
+- ADU 定义跨项目不变的映射、发现、覆盖和失败关闭规则。
+- APC 定义项目风险、阶段深度、硬门和例外边界。
+- `governance.config.json.test_governance_path` 指向项目测试治理注册表；注册表保存模块源码路径、
+  测试路径、风险等级、直接消费者、测试文件基线与整合目标。
+- ADP 在每次任务的 VALIDATING 阶段消费变更影响计划，并在 Runtime Report 留存实际选择和结果。
+- ADUS 的“测试能力索引”由当前文件系统动态生成，不人工维护测试文件名单。
 
-测试文件内允许轻量注释，供脚本提取测试覆盖信息：
+测试来源不是测试文件本身，也不是仅凭需求标题推断。候选测试必须由以下至少一个来源产生：
+
+1. 已注册 RULE 的可观察行为、边界、异常和不变量。
+2. CHAIN / CONSTRAINT / STATE_MACHINE 的步骤、转移、跨模块契约与恢复路径。
+3. 模块公开功能、组件交互状态、服务副作用和历史缺陷回归。
+4. 本次变更文件及其所属模块、直接消费者和风险等级。
+
+需求及验收标准用于验证“产品是否满足意图”；上列技术事实用于测试“实现是否保持可执行约束”。
+二者可在同一开发循环连续执行，但证据必须分别记录。能稳定自动化的细节（包括按钮单次交互后的
+前端状态变化）应下沉到最小可靠层；只有依赖主观观感、真实外设、签名/发布环境等内容才进入人工验证。
+
+测试层级与默认映射目标：
+
+- `unit`：纯逻辑、数据转换、小粒度交互决策。
+- `state`：状态机转移、store 状态与不变量。
+- `service`：I/O 边界、命令编排、错误恢复和副作用。
+- `component`：用户事件到可观察 UI 状态，不以像素级实现细节为默认断言。
+- `integration`：跨模块 CHAIN / CONSTRAINT 与前后端契约。
+- `system`：关键需求路径、发布环境与完整产品结果；可自动部分优先自动化。
+
+测试文件内允许轻量注释，供脚本提取规则覆盖信息：
 ```typescript
 // covers: BR-[模块]-[域]-[序号]
 ```
@@ -1585,13 +1607,20 @@ codes:          [代码块 codes 值]
   一行只写一个 rule_id
   多条规则分多行写
 
-脚本扫描规则：
-  generate_adus.mjs 扫描测试文件中的 // covers: 注释
-  提取 rule_id，更新规则注册表的测试覆盖字段
-  格式：[测试文件路径]::file-level
-  若注释在测试函数内部，格式：[测试文件路径]::[测试名称]
+动态发现与归属规则：
 
-测试辅助代码无需治理映射。
+- 前端发现 `*.test.*` / `*.spec.*`；Rust 发现 `#[cfg(test)]` 内联测试与 `src-tauri/tests/*.rs`。
+- 每个测试资产必须有模块 owner 和 layer；`covers` 可建立附加规则映射。
+- 每个可执行源文件必须能映射到模块。无法映射的新文件按失败关闭处理，不得静默跳过。
+- 直接修改测试时只运行该测试；修改业务源时选择所属模块，并对 critical/high 风险模块扩展一跳直接消费者。
+- 共享配置、Cargo/Rust、高风险跨层或影响范围过大时自动升级为全量回归。
+- `only` / `skip` / Rust `#[ignore]` 默认是治理失败，不得作为临时通过手段。
+- 文件数量以注册表 baseline 作为“禁止继续增长”的硬线，以 target 作为整合债务；目标不是机械地每模块
+  只留一个大文件，而是在可诊断性和加载成本允许时收敛到一个或少数稳定套件。
+
+测试辅助代码无需逐条规则映射，但仍必须由某个已归属测试资产使用。新增或删除功能时，应同步更新
+技术设计/模块路径与测试；动态清单会自动增删测试资产，`governance:audit` 负责发现无 owner、无 layer、
+未知 `covers`、文件基线增长或可执行源未映射等漂移。
 
 **链路集成测试声明规范：**
 
@@ -1803,4 +1832,5 @@ Issue Trace 完成后，必须产出文件范围结论，作为 ADP Scope Lock �
 | 2026-05-23 | v1.18 | §1.2 阶段二完成标准：「扫描脚本无 P0/P1 违规」改为「audit 无 CHAIN_ENTRY_UNANNOTATED error 或其他 error 级违规」（P0/P1 audit 分级未在 ADU 定义） |
 | 2026-06-09 | v1.19 | §3.2 TERM_DUPLICATE 触发条件补充 term_id 字面冲突（同一 term_id 注册多次）；§4.2 term_ref 字段支持逗号分隔多 TERM ID，audit 逐个校验（同步引擎能力） |
 | 2026-06-09 | v1.20 | 自审计修正：§3.2 CHAIN status 枚举补全 planned；§3.2 RULE 示例移除手写 registry_status 并加派生说明；§3.2 CHAIN 新增可选 risk_tier 字段，§5.5 日志分级由「P0/P1 链路」改为引用 risk_tier；§3.2 REQ_MAP、§4.6 DELEGATE_ABSTRACT、§5.6 CHAIN_INTEGRATION_TEST_MISSING 标注 enforcement: deferred（规范声明对齐引擎现状） |
+| 2026-08-01 | v1.21 | TEST-GOVERNANCE-01：§0 接入 test_governance_path；§5.6 建立测试来源、模块 × 层级 × 风险模型、动态资产发现、变更影响选择、失败关闭与测试/验证分证据规则 |
 | 2026-06-09 | v1.21 | 结构性减负：§4.3 新增「@GOV 强制标注范围」分层（强制=CHAIN 入口 error / 应当=业务可执行块 BLOCK_UNANNOTATED warning / 不要求=纯展示组件、薄包装、纯类型），明确人类可显式豁免须留痕；§4.5 CHAIN_ENTRY_UNANNOTATED 改述为引擎已实现的覆盖式检测、入口函数粒度标 deferred，superseded 链路加入豁免 |

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { auditTestGovernance } from './test_governance.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -24,10 +25,14 @@ const PROJECT_ROOT_REL = (govConfig.project_root || '.').trim();
 const REQUIRED_FILES = [
   'ADU.md',
   'ADP.md',
+  'AGENTS.md',
   'CLAUDE.md',
   'governance.config.json',
+  '.governance/test-governance.json',
   'scripts/generate_adus.mjs',
   'scripts/audit_taskflow_governance.mjs',
+  'scripts/test_governance.mjs',
+  'scripts/test_governance.test.mjs',
 ];
 
 const LEGACY_ADU_FILES = [
@@ -41,6 +46,11 @@ const LEGACY_ADU_FILES = [
 const REQUIRED_PACKAGE_SCRIPTS = {
   'governance:generate': 'node scripts/generate_adus.mjs',
   'governance:audit': 'node scripts/audit_taskflow_governance.mjs',
+  'test:governance': 'vitest run scripts/test_governance.test.mjs && node scripts/test_governance.mjs audit',
+  'test:inventory': 'node scripts/test_governance.mjs inventory',
+  'test:plan': 'node scripts/test_governance.mjs select',
+  'test:related': 'node scripts/test_governance.mjs run',
+  'test:full': 'npm test && cargo test --manifest-path src-tauri/Cargo.toml',
 };
 
 // ADU §4.3 八种代码块类型
@@ -49,7 +59,7 @@ const VALID_GOV_TYPES = new Set(['DATA', 'GUARD', 'EFFECT', 'RB', 'API', 'UTIL',
 // list narrow and backed by controlled debt records; do not use it for local gaps.
 const CLIENT_OUT_OF_SCOPE_RULES = new Set(['BR-SYS-DATA-004']);
 
-const GOVERNANCE_FILES = new Set(['ADU.md', 'adu.md', 'ADUS.md', 'adus.md', 'ADP.md', 'CLAUDE.md']);
+const GOVERNANCE_FILES = new Set(['ADU.md', 'adu.md', 'ADUS.md', 'adus.md', 'ADP.md', 'AGENTS.md', 'CLAUDE.md']);
 // APC 是宪章文档、ADUS 是自动生成索引，两者不含业务标注块，排除在扫描外
 const APC_PATH  = govConfig.apc_path  ? govConfig.apc_path.trim()  : null;
 const ADUS_PATH = govConfig.adus_path ? govConfig.adus_path.trim() : null;
@@ -292,6 +302,18 @@ function runIssueScopeAudit(relativeIssuePath) {
 // ── 必需治理文件检查 ─────────────────────────────────────────────────────
 for (const file of REQUIRED_FILES) {
   addCheck({ name: `required file exists: ${file}`, status: fileExists(file) ? 'passed' : 'failed' });
+}
+
+const testGovernanceConfigured = !!(govConfig.test_governance_path && govConfig.test_governance_path.trim());
+addCheck({
+  name: 'test_governance_path configured',
+  status: testGovernanceConfigured ? 'passed' : 'failed',
+});
+if (testGovernanceConfigured) {
+  addCheck({
+    name: `test_governance_path target exists: ${govConfig.test_governance_path}`,
+    status: fileExists(govConfig.test_governance_path.trim()) ? 'passed' : 'failed',
+  });
 }
 
 // adus_path 配置的 ADUS 文件必须存在（bootstrap 完成后）
@@ -660,6 +682,28 @@ const semanticReviewCandidates = govBlocks
     review_instruction: 'Compare rule document text against boundary description: check if core entity names match. Output finding per ADU §5.8 format.',
   }));
 
+// ── 测试治理注册表、动态资产与变更映射能力 ────────────────────────────────
+let testGovernanceAudit = null;
+try {
+  testGovernanceAudit = auditTestGovernance(ROOT);
+  addCheck({
+    name: 'test governance registry and inventory',
+    status: testGovernanceAudit.status,
+    ...testGovernanceAudit.checks,
+    warnings: testGovernanceAudit.warnings.length,
+  });
+  for (const finding of testGovernanceAudit.findings) {
+    addFinding(finding.type, 'Test governance audit failed', finding);
+  }
+} catch (error) {
+  addCheck({
+    name: 'test governance registry and inventory',
+    status: 'failed',
+    note: error.message,
+  });
+  addFinding('TEST_GOVERNANCE_UNAVAILABLE', error.message);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const failedChecks = checks.filter(c => c.status !== 'passed');
@@ -672,6 +716,12 @@ const result = {
   semantic_review_candidates: semanticReviewCandidates,
   new_domain_concept_candidates: newDomainCandidates,
   block_unannotated: blockUnannotated,
+  test_governance: testGovernanceAudit ? {
+    status: testGovernanceAudit.status,
+    checks: testGovernanceAudit.checks,
+    findings: testGovernanceAudit.findings,
+    warnings: testGovernanceAudit.warnings,
+  } : null,
 };
 
 console.log(JSON.stringify(result, null, 2));

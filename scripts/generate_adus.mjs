@@ -10,6 +10,11 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
 import { join, relative, dirname, extname, basename } from 'path';
 import { fileURLToPath } from 'url';
+import {
+  buildCoverageMapFromInventory,
+  buildTestInventory,
+  renderTestCapabilityIndex,
+} from './test_governance.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
@@ -30,7 +35,6 @@ const PROJECT_ROOT = join(ROOT, (govConfig.project_root || '.').trim());
 const DOCS      = join(PROJECT_ROOT, 'docs');
 const SRC       = join(PROJECT_ROOT, 'src');
 const SRC_TAURI = join(PROJECT_ROOT, 'src-tauri', 'src'); // Rust 后端源码根
-const TESTS     = join(PROJECT_ROOT, 'tests');
 const OUTPUT    = join(ROOT, govConfig.adus_path.trim());
 
 // 自动生成区的起始标记
@@ -40,7 +44,7 @@ const AUTO_MARKER = '## 【自动生成区】';
 const SKIP_DIRS = new Set(['node_modules', 'generated', 'build', 'dist', '__mocks__', 'target']);
 
 // 治理控制文档本身不扫描；APC 是宪章文档、ADUS 是自动生成索引，两者不含业务标注块，同样排除
-const GOVERNANCE_FILES = new Set(['adu.md', 'adus.md', 'ADP.md', 'CLAUDE.md']);
+const GOVERNANCE_FILES = new Set(['ADU.md', 'adu.md', 'ADUS.md', 'adus.md', 'ADP.md', 'AGENTS.md', 'CLAUDE.md']);
 const APC_PATH  = govConfig.apc_path  ? govConfig.apc_path.trim()  : null;
 const ADUS_PATH = govConfig.adus_path ? govConfig.adus_path.trim() : null;
 
@@ -95,55 +99,6 @@ function collectTriageFiles(dir, results = []) {
     }
   }
   return results;
-}
-
-function collectTestFiles(dir, results = []) {
-  let entries;
-  try { entries = readdirSync(dir); } catch { return results; }
-  for (const entry of entries) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
-      collectTestFiles(full, results);
-    } else if (
-      entry.endsWith('.test.ts') || entry.endsWith('.spec.ts') ||
-      entry.endsWith('.test.tsx') || entry.endsWith('.spec.tsx')
-    ) {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
-function collectTestCoverage(testsDir) {
-  const coverageMap = new Map();
-  if (!existsSync(testsDir)) return coverageMap;
-
-  const coverRe = /^\s*\/\/\s*covers:\s*(\S+)\s*$/;
-  const blockRe = /(?:describe|it|test)\s*\(\s*['"`]([^'"`]+)['"`]/;
-
-  for (const filePath of collectTestFiles(testsDir)) {
-    const relPath = relative(ROOT, filePath);
-    const lines   = readFileSync(filePath, 'utf8').split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      const m = coverRe.exec(lines[i]);
-      if (!m) continue;
-      const ruleId = m[1];
-
-      let testName = 'file-level';
-      for (let j = i - 1; j >= 0; j--) {
-        const bm = blockRe.exec(lines[j]);
-        if (bm) { testName = bm[1]; break; }
-      }
-
-      const entry = `${relPath}::${testName}`;
-      if (!coverageMap.has(ruleId)) coverageMap.set(ruleId, []);
-      coverageMap.get(ruleId).push(entry);
-    }
-  }
-  return coverageMap;
 }
 
 // ── 设计文档标注块解析 ────────────────────────────────────────────────────
@@ -577,8 +532,10 @@ function main() {
   const triageRecords = [];
   for (const f of triageFiles) triageRecords.push(...parseTriageRecords(f));
 
-  // 4. 扫描测试覆盖 covers 注释
-  const coverageMap = collectTestCoverage(TESTS);
+  // 4. 动态发现前端、Rust 内联与 Rust 集成测试，并派生 covers 与模块能力索引。
+  const testInventory = buildTestInventory(ROOT);
+  const coverageMap = buildCoverageMapFromInventory(testInventory);
+  const testCapabilityIndex = renderTestCapabilityIndex(testInventory);
 
   const timestamp       = new Date().toISOString();
   const knownChainIds   = new Set(allChains.map(c => c['chain_id']).filter(Boolean));
@@ -688,6 +645,10 @@ ${chainView}
 
 ${ruleView}
 
+### 测试能力索引
+
+${testCapabilityIndex}
+
 ### triage 汇总
 
 ${triageSummary}
@@ -703,6 +664,8 @@ ${triageSummary}
     `约束标注: ${allConstraints.length}`,
     `triage 记录: ${triageRecords.length}`,
     `术语标注: ${allTerms.length}`,
+    `测试资产: ${testInventory.totals.assets}`,
+    `测试用例: ${testInventory.totals.tests}`,
   ].join('，');
 
   if (existingContent && !contentChanged(existingContent, newContent)) {

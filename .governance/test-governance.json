@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "strategy": {
+    "organization": "module_x_depth_x_risk",
+    "selection_policy": "fail_closed_conservative",
+    "test_source": "rules_chains_modules_and_changed_files",
+    "validation_source": "requirements_acceptance_and_human_observation",
+    "baseline_policy": "freeze_growth_then_consolidate",
+    "phase_layers": {
+      "G2": ["unit", "state"],
+      "G3": ["unit", "state", "service"],
+      "G4": ["unit", "state", "service", "component"],
+      "G5": ["unit", "state", "service", "component", "integration", "system"],
+      "G6": ["full_regression", "release_validation"]
+    }
+  },
+  "discovery": {
+    "frontend_roots": ["src", "scripts"],
+    "rust_source_root": "src-tauri/src",
+    "rust_integration_root": "src-tauri/tests",
+    "skip_directories": [".git", "node_modules", "target", "dist", "build", "generated", "__mocks__", "buildbot"],
+    "ignored_change_globs": [
+      "buildbot/**",
+      "dist/**",
+      "src-tauri/target/**",
+      "node_modules/**",
+      ".DS_Store"
+    ]
+  },
+  "policy": {
+    "fail_on_unmapped_executable": true,
+    "fail_on_unowned_test": true,
+    "forbid_focused_or_skipped_tests": true,
+    "allow_rust_ignore": false,
+    "full_frontend_globs": [
+      "package.json",
+      "package-lock.json",
+      "vite.config.ts",
+      "tsconfig.json",
+      "tsconfig.*.json"
+    ],
+    "full_rust_globs": [
+      "src-tauri/Cargo.toml",
+      "src-tauri/Cargo.lock",
+      "src-tauri/build.rs"
+    ],
+    "governance_globs": [
+      "ADU.md",
+      "ADP.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "governance.config.json",
+      ".governance/test-governance.json",
+      "scripts/test_governance.mjs",
+      "scripts/test_governance.test.mjs",
+      "scripts/generate_adus.mjs",
+      "scripts/audit_taskflow_governance.mjs",
+      "docs/00_core/A-CORE-C-P-01_APC.md"
+    ],
+    "executable_globs": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "src-tauri/src/**/*.rs",
+      "scripts/**/*.mjs",
+      "scripts/**/*.sh"
+    ]
+  },
+  "layer_rules": [
+    { "layer": "governance", "globs": ["scripts/**/*.test.mjs"] },
+    { "layer": "integration", "globs": ["src-tauri/tests/**/*.rs"] },
+    { "layer": "state", "globs": ["src/store/**/*.test.ts", "src/store/**/*.test.tsx"] },
+    { "layer": "service", "globs": ["src/services/**/*.test.ts", "src/services/**/*.test.tsx"] },
+    { "layer": "component", "globs": ["src/components/**/*.test.tsx", "src/shell/**/*.test.tsx"] },
+    { "layer": "unit", "globs": ["src/components/**/*.test.ts", "src/**/*.test.ts", "src-tauri/src/**/*.rs"] }
+  ],
+  "modules": [
+    {
+      "code": "CORE",
+      "risk": "high",
+      "source_globs": [
+        "ADU.md", "ADP.md", "AGENTS.md", "CLAUDE.md", "governance.config.json",
+        ".governance/**", "scripts/**", "docs/00_core/**"
+      ],
+      "test_globs": ["scripts/**/*.test.mjs"],
+      "downstream": [],
+      "baseline_frontend_test_files": 1,
+      "target_frontend_test_files": 1,
+      "requires_rust_on_related": false
+    },
+    {
+      "code": "SYS",
+      "risk": "critical",
+      "source_globs": [
+        "src/main.tsx", "src/styles.css", "src/types/**", "src/shell/**", "src/components/shell/**",
+        "src/components/brand/**", "src/services/closeService*", "src/services/smListeners*",
+        "src/store/closeStore*", "src/store/layoutStore*", "src/store/tabsStore*",
+        "src-tauri/src/db/**", "src-tauri/src/ipc/**", "src-tauri/src/session/**",
+        "src-tauri/src/types/**", "src-tauri/src/sm_events.rs", "src-tauri/src/main.rs", "src-tauri/src/lib.rs",
+        "docs/01_modules/SYS/**"
+      ],
+      "test_globs": [
+        "src/shell/**/*.test.tsx", "src/components/shell/**/*.test.tsx",
+        "src/services/closeService.test.ts", "src/services/smListeners.test.ts",
+        "src/store/closeStore.test.ts", "src/store/layoutStore.test.ts", "src/store/tabsStore.test.ts",
+        "src-tauri/tests/core_chain.rs", "src-tauri/tests/sm_broadcast.rs"
+      ],
+      "downstream": ["WS", "ED", "DE", "AG", "CBT", "DOC", "PRV", "REF", "AST", "KB", "TPL", "ACCT", "ENT"],
+      "baseline_frontend_test_files": 8,
+      "target_frontend_test_files": 3,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "WS",
+      "risk": "critical",
+      "source_globs": [
+        "src/components/ws/**", "src/services/wsService*", "src/services/workspaceService*",
+        "src/store/wsStore*", "src/store/workspaceShell*", "src-tauri/src/workspace/**", "docs/01_modules/WS/**"
+      ],
+      "test_globs": [
+        "src/components/ws/**/*.test.ts", "src/components/ws/**/*.test.tsx",
+        "src/services/wsService.test.ts", "src/services/workspaceService.test.ts",
+        "src/store/wsStore.test.ts", "src/store/workspaceShell.test.ts", "src-tauri/tests/core_chain.rs"
+      ],
+      "downstream": ["ED", "DE", "AG", "SYS"],
+      "baseline_frontend_test_files": 6,
+      "target_frontend_test_files": 2,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "ED",
+      "risk": "critical",
+      "source_globs": [
+        "src/components/ed/**", "src/services/ed*", "src/store/ed*", "src/store/outlineStore*",
+        "docs/01_modules/ED/**"
+      ],
+      "test_globs": [
+        "src/components/ed/**/*.test.ts", "src/components/ed/**/*.test.tsx",
+        "src/services/ed*.test.ts", "src/store/ed*.test.ts", "src/store/outlineStore.test.ts"
+      ],
+      "test_exclude_globs": ["src/components/ed/assistPlacement.test.ts"],
+      "downstream": ["DE", "AG", "SYS"],
+      "baseline_frontend_test_files": 27,
+      "target_frontend_test_files": 7,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "DE",
+      "risk": "critical",
+      "source_globs": [
+        "src/components/de/**", "src/services/deService*", "src/store/deStore*",
+        "src-tauri/src/de/**", "docs/01_modules/DE/**"
+      ],
+      "test_globs": [
+        "src/components/de/**/*.test.ts", "src/components/de/**/*.test.tsx",
+        "src/services/deService.test.ts", "src/store/deStore.test.ts", "src-tauri/tests/core_chain.rs"
+      ],
+      "downstream": ["AG", "SYS"],
+      "baseline_frontend_test_files": 4,
+      "target_frontend_test_files": 2,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "AG",
+      "risk": "critical",
+      "source_globs": [
+        "src/components/ag/**", "src/services/agService*", "src/store/agStore*", "src/store/assistStore*",
+        "src/components/ed/assistPlacement*", "src/store/modelStore*", "src-tauri/src/ag/**", "docs/01_modules/AG/**"
+      ],
+      "test_globs": [
+        "src/components/ag/**/*.test.ts", "src/components/ag/**/*.test.tsx",
+        "src/services/agService.test.ts", "src/store/agStore.test.ts", "src/store/assistStore.test.ts",
+        "src/components/ed/assistPlacement.test.ts", "src-tauri/tests/core_chain.rs"
+      ],
+      "downstream": ["SYS"],
+      "baseline_frontend_test_files": 8,
+      "target_frontend_test_files": 3,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "CBT",
+      "risk": "critical",
+      "source_globs": ["src-tauri/src/cbt/**", "docs/01_modules/CBT/**"],
+      "test_globs": [],
+      "downstream": ["AG", "SYS"],
+      "baseline_frontend_test_files": 0,
+      "target_frontend_test_files": 0,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "DOC",
+      "risk": "critical",
+      "source_globs": ["src/services/docService*", "src-tauri/src/doc/**", "docs/01_modules/DOC/**"],
+      "test_globs": ["src/services/docService.test.ts"],
+      "downstream": ["ED", "PRV", "AG", "SYS"],
+      "baseline_frontend_test_files": 1,
+      "target_frontend_test_files": 1,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "PRV",
+      "risk": "high",
+      "source_globs": [
+        "src/components/prv/**", "src/services/prvService*", "src/services/tableData*",
+        "src-tauri/src/prv/**", "docs/01_modules/PRV/**"
+      ],
+      "test_globs": ["src/services/prvService.test.ts", "src/services/tableData.test.ts"],
+      "downstream": ["SYS"],
+      "baseline_frontend_test_files": 2,
+      "target_frontend_test_files": 1,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "REF",
+      "risk": "high",
+      "source_globs": ["src/services/referencePayload*", "src-tauri/src/reference/**", "docs/01_modules/REF/**"],
+      "test_globs": ["src/services/referencePayload.test.ts"],
+      "downstream": ["AG", "SYS"],
+      "baseline_frontend_test_files": 1,
+      "target_frontend_test_files": 1,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "AST",
+      "risk": "high",
+      "source_globs": ["src-tauri/src/ast/**", "docs/01_modules/AST/**"],
+      "test_globs": [],
+      "downstream": ["AG"],
+      "baseline_frontend_test_files": 0,
+      "target_frontend_test_files": 0,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "KB",
+      "risk": "high",
+      "source_globs": ["src-tauri/src/kb/**", "docs/01_modules/KB/**"],
+      "test_globs": [],
+      "downstream": ["AG"],
+      "baseline_frontend_test_files": 0,
+      "target_frontend_test_files": 0,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "TPL",
+      "risk": "high",
+      "source_globs": ["src-tauri/src/tpl/**", "docs/01_modules/TPL/**"],
+      "test_globs": [],
+      "downstream": ["CBT", "AG"],
+      "baseline_frontend_test_files": 0,
+      "target_frontend_test_files": 0,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "ACCT",
+      "risk": "critical",
+      "source_globs": ["src-tauri/src/acct/**", "docs/01_modules/ACCT/**"],
+      "test_globs": [],
+      "downstream": ["ENT", "AG", "SYS"],
+      "baseline_frontend_test_files": 0,
+      "target_frontend_test_files": 0,
+      "requires_rust_on_related": true
+    },
+    {
+      "code": "ENT",
+      "risk": "critical",
+      "source_globs": ["src-tauri/src/ent/**", "docs/01_modules/ENT/**"],
+      "test_globs": [],
+      "downstream": ["AG", "SYS"],
+      "baseline_frontend_test_files": 0,
+      "target_frontend_test_files": 0,
+      "requires_rust_on_related": true
+    }
+  ],
+  "system_validation": [
+    {
+      "id": "VAL-CORE-EDIT-DIFF-SAVE",
+      "modules": ["ED", "DE", "AG", "WS", "SYS"],
+      "phase": "G5",
+      "automation": "partial",
+      "automated_evidence": ["src-tauri/tests/core_chain.rs", "src/shell/App.test.tsx"],
+      "manual_evidence": "真实 Tauri/WKWebView：编辑→代理建议→接受/拒绝→保存→关闭重开",
+      "status": "deferred"
+    },
+    {
+      "id": "VAL-CORE-CLOSE-RECOVERY",
+      "modules": ["SYS", "ED", "DE", "WS"],
+      "phase": "G5",
+      "automation": "partial",
+      "automated_evidence": ["src/services/closeService.test.ts", "src/components/shell/CloseConfirmDialog.test.tsx"],
+      "manual_evidence": "真实窗口关闭、失败恢复与强制退出",
+      "status": "deferred"
+    }
+  ]
+}
