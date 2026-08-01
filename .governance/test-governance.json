@@ -200,9 +200,9 @@
         "src/components/prv/**", "src/services/prvService*", "src/services/tableData*",
         "src-tauri/src/prv/**", "docs/01_modules/PRV/**"
       ],
-      "test_globs": ["src/services/prvService.test.ts", "src/services/tableData.test.ts"],
+      "test_globs": ["src/services/prvRuntime.test.ts"],
       "downstream": ["SYS"],
-      "baseline_frontend_test_files": 2,
+      "baseline_frontend_test_files": 1,
       "target_frontend_test_files": 1,
       "requires_rust_on_related": true
     },

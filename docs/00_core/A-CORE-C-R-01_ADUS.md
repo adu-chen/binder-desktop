@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-01T08:09:17.641Z -->
+<!-- 最后生成时间：2026-08-01T08:18:59.968Z -->
 
 ### 模块编码表
 
@@ -151,8 +151,8 @@
 | BR-ENT-DATA-002    | DATA    | CLOUD-GATE                           | docs/01_modules/ENT/A-ENT-M-T-01_订阅门控技术设计.md      | registered      | src-tauri/src/ent/usage.rs::file-level                                                                                                                                                                                                                                                                                                                                |
 | BR-KB-DATA-001     | DATA    | KB-RETRIEVE                          | docs/01_modules/KB/A-KB-M-T-01_知识库技术设计.md         | registered      | src-tauri/src/kb/store.rs::file-level                                                                                                                                                                                                                                                                                                                                 |
 | BR-KB-DATA-002     | DATA    | KB-RETRIEVE                          | docs/01_modules/KB/A-KB-M-T-01_知识库技术设计.md         | registered      | src-tauri/src/kb/retrieve.rs::file-level                                                                                                                                                                                                                                                                                                                              |
-| BR-PRV-DATA-002    | DATA    | PRV-VIEW                             | docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md      | registered      | src-tauri/src/doc/table_preview.rs::file-level, src/services/prvService.test.ts::file-level                                                                                                                                                                                                                                                                           |
-| BR-PRV-DATA-001    | DATA    | PRV-VIEW                             | docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md      | registered      | src/services/prvService.test.ts::file-level, src/services/tableData.test.ts::file-level                                                                                                                                                                                                                                                                               |
+| BR-PRV-DATA-002    | DATA    | PRV-VIEW                             | docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md      | registered      | src-tauri/src/doc/table_preview.rs::file-level, src/services/prvRuntime.test.ts::file-level                                                                                                                                                                                                                                                                           |
+| BR-PRV-DATA-001    | DATA    | PRV-VIEW                             | docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md      | registered      | src/services/prvRuntime.test.ts::file-level                                                                                                                                                                                                                                                                                                                           |
 | BR-REF-DATA-001    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/reference/resolve.rs::file-level                                                                                                                                                                                                                                                                                                                        |
 | BR-REF-DATA-002    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/reference/inject.rs::file-level                                                                                                                                                                                                                                                                                                                         |
 | BR-REF-DATA-003    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src/components/ag/AgentUI.test.tsx::file-level, src/services/referencePayload.test.ts::file-level                                                                                                                                                                                                                                                                     |
@@ -1488,7 +1488,7 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 22；Rust 内联测试文件 61；Rust 集成测试文件 2；测试用例约 724。
+动态发现：前端测试文件 21；Rust 内联测试文件 61；Rust 集成测试文件 2；测试用例约 724。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
@@ -1500,7 +1500,7 @@
 | AG | critical | 20 | 188 | component:1, integration:1, service:1, state:1, unit:16 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
 | DOC | critical | 17 | 124 | service:1, unit:16 | 1/1 → 1 |
-| PRV | high | 4 | 38 | service:2, unit:2 | 2/2 → 1 |
+| PRV | high | 3 | 38 | service:1, unit:2 | 1/1 → 1 |
 | REF | high | 7 | 97 | component:1, service:2, unit:4 | 1/1 → 1 |
 | AST | high | 4 | 9 | unit:4 | 0/0 → 0 |
 | KB | high | 2 | 5 | unit:2 | 0/0 → 0 |
