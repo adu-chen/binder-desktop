@@ -99,13 +99,12 @@
         "docs/01_modules/SYS/**"
       ],
       "test_globs": [
-        "src/shell/**/*.test.tsx", "src/components/shell/**/*.test.tsx",
-        "src/services/closeService.test.ts", "src/services/smListeners.test.ts",
-        "src/store/closeStore.test.ts", "src/store/layoutStore.test.ts", "src/store/tabsStore.test.ts",
+        "src/components/shell/ShellComponents.test.tsx",
+        "src/services/systemRuntime.test.ts", "src/store/systemState.test.ts",
         "src-tauri/tests/core_chain.rs", "src-tauri/tests/sm_broadcast.rs"
       ],
       "downstream": ["WS", "ED", "DE", "AG", "CBT", "DOC", "PRV", "REF", "AST", "KB", "TPL", "ACCT", "ENT"],
-      "baseline_frontend_test_files": 8,
+      "baseline_frontend_test_files": 3,
       "target_frontend_test_files": 3,
       "requires_rust_on_related": true
     },
@@ -276,7 +275,7 @@
       "modules": ["ED", "DE", "AG", "WS", "SYS"],
       "phase": "G5",
       "automation": "partial",
-      "automated_evidence": ["src-tauri/tests/core_chain.rs", "src/shell/App.test.tsx"],
+      "automated_evidence": ["src-tauri/tests/core_chain.rs", "src/components/shell/ShellComponents.test.tsx"],
       "manual_evidence": "真实 Tauri/WKWebView：编辑→代理建议→接受/拒绝→保存→关闭重开",
       "status": "deferred"
     },
@@ -285,7 +284,7 @@
       "modules": ["SYS", "ED", "DE", "WS"],
       "phase": "G5",
       "automation": "partial",
-      "automated_evidence": ["src/services/closeService.test.ts", "src/components/shell/CloseConfirmDialog.test.tsx"],
+      "automated_evidence": ["src/services/systemRuntime.test.ts", "src/components/shell/ShellComponents.test.tsx"],
       "manual_evidence": "真实窗口关闭、失败恢复与强制退出",
       "status": "deferred"
     }

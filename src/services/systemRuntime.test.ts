@@ -1,5 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { closeStore } from "../store/closeStore";
+import { deStore } from "../store/deStore";
+import { edStore } from "../store/edStore";
+import { tabsStore } from "../store/tabsStore";
+import {
+  requestClose,
+  cancelClose,
+  submitDecision,
+  forceQuit,
+  hasUnsavedOrPendingWork,
+} from "./closeService";
+import { startSmListeners, stopSmListeners } from "./smListeners";
 
+// Migrated intact from src/services/closeService.test.ts.
+{
 const tauriMock = vi.hoisted(() => ({ invoke: vi.fn() }));
 const windowMock = vi.hoisted(() => ({ close: vi.fn(), destroy: vi.fn() }));
 const workspaceServiceMock = vi.hoisted(() => ({ flushEditorStateBeforeExit: vi.fn() }));
@@ -13,18 +29,6 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => windowMock })
 vi.mock("./workspaceService", () => workspaceServiceMock);
 vi.mock("./edLocate", () => edLocateMock);
 
-import { invoke } from "@tauri-apps/api/core";
-import { closeStore } from "../store/closeStore";
-import { deStore } from "../store/deStore";
-import { edStore } from "../store/edStore";
-import { tabsStore } from "../store/tabsStore";
-import {
-  requestClose,
-  cancelClose,
-  submitDecision,
-  forceQuit,
-  hasUnsavedOrPendingWork,
-} from "./closeService";
 
 const invokeMock = vi.mocked(invoke);
 const ok = <T,>(result: T) => ({ correlation_id: "close-test", result });
@@ -244,3 +248,32 @@ describe("closeService.forceQuit（2026-07-20 人类决策 3，BR-SYS-STATE-006�
     expect(windowMock.close).toHaveBeenCalled();
   });
 });
+}
+
+// Migrated intact from src/services/smListeners.test.ts.
+{
+const eventMock = vi.hoisted(() => ({ listen: vi.fn() }));
+
+vi.mock("@tauri-apps/api/event", () => ({ listen: eventMock.listen }));
+
+
+const listenMock = vi.mocked(listen);
+
+beforeEach(() => {
+  listenMock.mockReset();
+});
+
+afterEach(() => {
+  stopSmListeners();
+});
+
+describe("smListeners 启动控制", () => {
+  it("并发 start 只注册一组状态机监听", async () => {
+    listenMock.mockResolvedValue(vi.fn());
+
+    await Promise.all([startSmListeners(), startSmListeners(), startSmListeners()]);
+
+    expect(listenMock).toHaveBeenCalledTimes(5);
+  });
+});
+}
