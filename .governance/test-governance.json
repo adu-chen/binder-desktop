@@ -116,12 +116,11 @@
         "src/store/wsStore*", "src/store/workspaceShell*", "src-tauri/src/workspace/**", "docs/01_modules/WS/**"
       ],
       "test_globs": [
-        "src/components/ws/**/*.test.ts", "src/components/ws/**/*.test.tsx",
-        "src/services/wsService.test.ts", "src/services/workspaceService.test.ts",
-        "src/store/wsStore.test.ts", "src/store/workspaceShell.test.ts", "src-tauri/tests/core_chain.rs"
+        "src/components/ws/WorkspaceUI.test.tsx", "src/services/workspaceRuntime.test.ts",
+        "src-tauri/tests/core_chain.rs"
       ],
       "downstream": ["ED", "DE", "AG", "SYS"],
-      "baseline_frontend_test_files": 6,
+      "baseline_frontend_test_files": 2,
       "target_frontend_test_files": 2,
       "requires_rust_on_related": true
     },
