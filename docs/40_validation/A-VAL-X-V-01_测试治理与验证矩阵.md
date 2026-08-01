@@ -69,7 +69,7 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 
 ## 5. 当前健康基线（2026-08-01）
 
-动态清单已识别 121 个测试资产、约 724 个测试用例：58 个前端测试文件、61 个 Rust 内联测试文件、
+动态清单已识别 101 个测试资产、约 724 个测试用例：38 个前端测试文件、61 个 Rust 内联测试文件、
 2 个 Rust 集成测试文件。97 个可执行源文件均有模块映射；当前无 unowned/unclassified 测试、无
 `only`/`skip`/`#[ignore]`、无未知 `covers`。精确现状以 `npm run test:inventory` 为准。
 规则注册表中 `BR-SYS-DATA-004` 属于客户端仓库外的云 provider catalog 契约，当前按既有
@@ -82,7 +82,7 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 | CORE | high | 1 | 1 | 达标 |
 | SYS | critical | 8 | 3 | 待整合 |
 | WS | critical | 6 | 2 | 待整合 |
-| ED | critical | 27 | 7 | 待整合，优先级最高 |
+| ED | critical | 7 | 7 | 已于 TEST-CONSOLIDATION-ED-01 达标；207 个 owner 用例保持 |
 | DE | critical | 4 | 2 | 待整合 |
 | AG | critical | 8 | 3 | 待整合 |
 | DOC | critical | 1 | 1 | 达标 |
@@ -90,8 +90,9 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 | REF | high | 1 | 1 | 达标 |
 | CBT / AST / KB / TPL / ACCT / ENT | high/critical | 0 | 0 | 当前由 Rust 内联测试承接；新增前端功能时动态调整 |
 
-现状的关键问题不是测试不存在，而是前端文件碎片化、部分模块靠同一测试跨模块关联，以及 G5/G6
-系统验证记录尚未形成统一台账。治理策略先冻结增长，再按独立 Scope 合并；本轮不搬迁既有测试。
+现状的关键问题不是测试不存在，而是除 ED 外的前端文件仍有碎片化、部分模块靠同一测试跨模块关联，
+以及 G5/G6 系统验证记录尚未形成统一台账。ED 已按 7 个真实物理套件完成整合，没有使用 helper/case
+文件隐藏测试；其余模块继续按独立 Scope 合并。
 
 ## 6. 目标套件大纲
 
@@ -164,7 +165,7 @@ TEST-GOVERNANCE-01 的验收是能力闭环，不是一次性整理全部测试�
 - 当前文件增长被冻结，六个模块的整合债务可量化。
 - 测试与需求验证各自有权威来源和交付证据。
 
-后续应按模块分别开 Scope，从 ED 开始合并测试套件；另开 VALIDATION Scope 建立核心编辑、代理编辑、
+后续应按模块分别开 Scope，从 SYS 开始继续合并测试套件；另开 VALIDATION Scope 建立核心编辑、代理编辑、
 workspace 恢复与发布验证场景卡。两类工作不应混在本治理基础设施改动中。
 
 ## 变更记录
@@ -172,3 +173,4 @@ workspace 恢复与发布验证场景卡。两类工作不应混在本治理基�
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-01 | v1.0 | TEST-GOVERNANCE-01：建立 Binder 测试治理、影响选择、模块整合目标与 G5/G6 验证方案 |
+| 2026-08-01 | v1.1 | TEST-CONSOLIDATION-ED-01：ED 27 个前端测试文件整合为 7 个物理套件，207 个 owner 用例与 covers 保持；动态资产总数更新为 101 |

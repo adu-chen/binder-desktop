@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { Schema } from "@tiptap/pm/model";
 import { EditorState } from "@tiptap/pm/state";
 import {
@@ -22,7 +22,26 @@ import {
   PAGE_CONTENT_HEIGHT,
   type PageBreakPlan,
 } from "./Pagination";
+import {
+  createPaginationFlowPlanner,
+  type RenderedFlowBlock,
+} from "./paginationFlow";
+import {
+  computeClientViewportRect,
+  computeClampedViewportScrollTop,
+  computeViewportAnchorScrollDelta,
+  estimatePointerActivatedCaretRect,
+  isRenderedRectInsideViewport,
+  normalizeViewportPixelsPerScrollPixel,
+  shouldArmPointerActivatedInputScroll,
+  shouldApplyViewportAnchorCorrection,
+  shouldSuppressPaginatedSelectionScroll,
+  shouldSuppressPointerActivatedInputScroll,
+} from "./paginationViewportAnchor";
+import { clampZoom, stepZoom, formatZoom, ZOOM } from "../zoom";
 
+// Migrated intact from src/components/ed/extensions/Pagination.test.ts
+{
 // covers: BR-ED-DATA-003
 // 切页判定纯逻辑（PI-ED-06 页高修复版）：块级不切分，累计超页高在块前换页；每页携带页尾补足 fill；
 // 不变量：非溢出页 used + fill = 预算（每页视觉高度恒等所选纸张内容区，#8 修复）；末页 lastFill 撑满。
@@ -419,3 +438,402 @@ describe("Pagination · natural paragraph line boundary", () => {
     )).toBe(false);
   });
 });
+}
+// Migrated intact from src/components/ed/extensions/paginationFlow.test.ts
+{
+function atomic(pos: number, height: number): RenderedFlowBlock {
+  return {
+    blockPos: pos,
+    kind: "atomic",
+    fragments: [{
+      pos,
+      height,
+      kind: "block",
+      blockPos: pos,
+      lineIndex: 0,
+      lineCount: 1,
+    }],
+  };
+}
+
+function paragraph(pos: number, heights: number[]): RenderedFlowBlock {
+  return {
+    blockPos: pos,
+    kind: "paragraph",
+    fragments: heights.map((height, lineIndex) => ({
+      pos: pos + lineIndex,
+      height,
+      kind: lineIndex === 0 ? "block" : "paragraph-line",
+      blockPos: pos,
+      lineIndex,
+      lineCount: heights.length,
+    })),
+  };
+}
+
+function plan(budget: number, blocks: RenderedFlowBlock[]) {
+  const planner = createPaginationFlowPlanner(budget);
+  blocks.forEach((block) => planner.append(block));
+  return planner.finish();
+}
+
+// covers: BR-ED-DATA-003
+describe("paginationFlow · position 分页规划", () => {
+  it("原子 Block 与旧规则等价，并保留精确满页语义", () => {
+    expect(plan(100, [atomic(0, 60), atomic(10, 60)])).toEqual({
+      breaks: [{ id: "pg-2", pos: 10, kind: "block", fill: 40 }],
+      lastFill: 40,
+    });
+    expect(plan(100, [atomic(0, 50), atomic(10, 50)])).toEqual({
+      breaks: [],
+      lastFill: 0,
+    });
+  });
+
+  it("段落在当前页保留所有能完整容纳的视觉行，断点使用下一行行首 position", () => {
+    expect(plan(100, [atomic(0, 80), paragraph(100, [10, 10, 10, 10])])).toEqual({
+      breaks: [{ id: "pg-2", pos: 102, kind: "paragraph-line", fill: 0 }],
+      lastFill: 80,
+    });
+  });
+
+  it("当前页只能再放一行时仍保留该行；一行都放不下才在段落前换页", () => {
+    expect(plan(100, [atomic(0, 90), paragraph(100, [10, 10, 10, 10])])).toEqual({
+      breaks: [{ id: "pg-2", pos: 101, kind: "paragraph-line", fill: 0 }],
+      lastFill: 70,
+    });
+    expect(plan(100, [atomic(0, 95), paragraph(100, [10, 10])])).toEqual({
+      breaks: [{ id: "pg-2", pos: 100, kind: "block", fill: 5 }],
+      lastFill: 80,
+    });
+  });
+
+  it("下一页只剩一行时不回退本可容纳的行，优先填满当前页", () => {
+    expect(plan(100, [atomic(0, 40), paragraph(100, [20, 20, 20, 20])])).toEqual({
+      breaks: [{ id: "pg-2", pos: 103, kind: "paragraph-line", fill: 0 }],
+      lastFill: 80,
+    });
+  });
+
+  it("2–3 行段落同样按剩余空间贪心拆分，不整段移页", () => {
+    expect(plan(100, [atomic(0, 60), paragraph(100, [20, 20, 20])])).toEqual({
+      breaks: [{ id: "pg-2", pos: 102, kind: "paragraph-line", fill: 0 }],
+      lastFill: 80,
+    });
+  });
+
+  it("长段落跨多页时每页均使用最大可容纳行数", () => {
+    expect(plan(100, [paragraph(0, Array.from({ length: 10 }, () => 30))])).toEqual({
+      breaks: [
+        { id: "pg-2", pos: 3, kind: "paragraph-line", fill: 10 },
+        { id: "pg-3", pos: 6, kind: "paragraph-line", fill: 10 },
+        { id: "pg-4", pos: 9, kind: "paragraph-line", fill: 10 },
+      ],
+      lastFill: 70,
+    });
+  });
+
+  it("单行高于整页时仍保证前进，溢出页 fill 钳为 0", () => {
+    expect(plan(100, [paragraph(0, [150, 20, 20])])).toEqual({
+      breaks: [{ id: "pg-2", pos: 1, kind: "paragraph-line", fill: 0 }],
+      lastFill: 60,
+    });
+  });
+
+  it("fill 保留小数且页面 id 按页序确定", () => {
+    expect(plan(100, [atomic(0, 60.4), atomic(10, 60), atomic(20, 60)])).toEqual({
+      breaks: [
+        { id: "pg-2", pos: 10, kind: "block", fill: 39.6 },
+        { id: "pg-3", pos: 20, kind: "block", fill: 40 },
+      ],
+      lastFill: 40,
+    });
+  });
+
+  it("无效预算安全返回空方案；wouldOverflow 反映当前页余量", () => {
+    expect(plan(0, [atomic(0, 50)])).toEqual({ breaks: [], lastFill: 0 });
+    const planner = createPaginationFlowPlanner(100);
+    expect(planner.wouldOverflow(101)).toBe(true);
+    planner.append(atomic(0, 60));
+    expect(planner.wouldOverflow(41)).toBe(true);
+    expect(planner.wouldOverflow(40)).toBe(false);
+  });
+});
+}
+
+// Migrated intact from src/components/ed/extensions/paginationViewportAnchor.test.ts
+{
+describe("pagination viewport anchor", () => {
+  it("分页缝把锚点向下推时，正向滚动补偿保持屏幕位置", () => {
+    expect(computeViewportAnchorScrollDelta({
+      beforeTop: 240,
+      afterTop: 388,
+      viewportPixelsPerScrollPixel: 1,
+    })).toBe(148);
+  });
+
+  it("容器存在屏幕/滚动比例时按比例换算，内容 zoom 不直接参与计算", () => {
+    expect(computeViewportAnchorScrollDelta({
+      beforeTop: 200,
+      afterTop: 250,
+      viewportPixelsPerScrollPixel: 0.5,
+    })).toBe(100);
+  });
+
+  it("无效比例安全回落为 1；亚像素噪声不写滚动", () => {
+    expect(normalizeViewportPixelsPerScrollPixel(0)).toBe(1);
+    expect(normalizeViewportPixelsPerScrollPixel(Number.NaN)).toBe(1);
+    expect(shouldApplyViewportAnchorCorrection(0.5)).toBe(false);
+    expect(shouldApplyViewportAnchorCorrection(0.51)).toBe(true);
+  });
+
+  it("补偿目标钳制在滚动容器合法范围", () => {
+    expect(computeClampedViewportScrollTop({
+      currentScrollTop: 100,
+      delta: 40,
+      scrollHeight: 1000,
+      clientHeight: 400,
+    })).toBe(140);
+    expect(computeClampedViewportScrollTop({
+      currentScrollTop: 590,
+      delta: 40,
+      scrollHeight: 1000,
+      clientHeight: 400,
+    })).toBe(600);
+    expect(computeClampedViewportScrollTop({
+      currentScrollTop: 10,
+      delta: -40,
+      scrollHeight: 1000,
+      clientHeight: 400,
+    })).toBe(0);
+  });
+
+  it("从 border rect 计算排除边框和滚动条的 client viewport", () => {
+    expect(computeClientViewportRect({
+      borderRect: {
+        left: 10,
+        right: 414,
+        top: 20,
+        bottom: 324,
+        width: 404,
+        height: 304,
+      },
+      offsetWidth: 202,
+      offsetHeight: 152,
+      clientLeft: 1,
+      clientTop: 1,
+      clientWidth: 200,
+      clientHeight: 150,
+    })).toEqual({
+      left: 12,
+      right: 412,
+      top: 22,
+      bottom: 322,
+    });
+  });
+
+  it("光标与 viewport 同处屏幕坐标时，缩放不改变可见性判断", () => {
+    expect(isRenderedRectInsideViewport(
+      { left: 200, right: 200, top: 80, bottom: 98 },
+      { left: 0, right: 400, top: 0, bottom: 300 },
+    )).toBe(true);
+    expect(isRenderedRectInsideViewport(
+      { left: 100, right: 100, top: 40, bottom: 49 },
+      { left: 0, right: 200, top: 0, bottom: 150 },
+    )).toBe(true);
+  });
+
+  it("仅容忍 1px 亚像素误差，真实越界交回原生滚动", () => {
+    const viewport = { left: 0, right: 400, top: 0, bottom: 300 };
+    expect(isRenderedRectInsideViewport(
+      { left: 20, right: 20, top: -0.5, bottom: 18 },
+      viewport,
+    )).toBe(true);
+    expect(isRenderedRectInsideViewport(
+      { left: 20, right: 20, top: -1.1, bottom: 18 },
+      viewport,
+    )).toBe(false);
+    expect(isRenderedRectInsideViewport(
+      { left: 20, right: 20, top: 285, bottom: 302 },
+      viewport,
+    )).toBe(false);
+    expect(isRenderedRectInsideViewport(
+      { left: -2, right: 0, top: 80, bottom: 98 },
+      viewport,
+    )).toBe(false);
+  });
+
+  it("只接管分页、已揭示、非 composition 的折叠文本光标", () => {
+    const visible = {
+      renderedRect: { left: 200, right: 200, top: 80, bottom: 98 },
+      viewportRect: { left: 0, right: 400, top: 0, bottom: 300 },
+    };
+    expect(shouldSuppressPaginatedSelectionScroll({
+      paginated: true,
+      loading: false,
+      composing: false,
+      collapsedTextSelection: true,
+      ...visible,
+    })).toBe(true);
+    expect(shouldSuppressPaginatedSelectionScroll({
+      paginated: false,
+      loading: false,
+      composing: false,
+      collapsedTextSelection: true,
+      ...visible,
+    })).toBe(false);
+    expect(shouldSuppressPaginatedSelectionScroll({
+      paginated: true,
+      loading: true,
+      composing: false,
+      collapsedTextSelection: true,
+      ...visible,
+    })).toBe(false);
+    expect(shouldSuppressPaginatedSelectionScroll({
+      paginated: true,
+      loading: false,
+      composing: true,
+      collapsedTextSelection: true,
+      ...visible,
+    })).toBe(false);
+    expect(shouldSuppressPaginatedSelectionScroll({
+      paginated: true,
+      loading: false,
+      composing: false,
+      collapsedTextSelection: false,
+      ...visible,
+    })).toBe(false);
+    expect(shouldSuppressPaginatedSelectionScroll({
+      paginated: true,
+      loading: false,
+      composing: false,
+      collapsedTextSelection: true,
+      renderedRect: null,
+      viewportRect: visible.viewportRect,
+    })).toBe(false);
+  });
+
+  it("只在最终选区为单击折叠光标时建立指针激活周期", () => {
+    const base = {
+      button: 0,
+      clickCount: 1,
+      paginated: true,
+      loading: false,
+      collapsedTextSelection: true,
+      activationPoint: { x: 200, y: 120 },
+      viewportRect: { left: 0, right: 400, top: 0, bottom: 300 },
+    };
+    expect(shouldArmPointerActivatedInputScroll(base)).toBe(true);
+    expect(shouldArmPointerActivatedInputScroll({ ...base, clickCount: 2 })).toBe(false);
+    expect(shouldArmPointerActivatedInputScroll({ ...base, collapsedTextSelection: false })).toBe(false);
+    expect(shouldArmPointerActivatedInputScroll({
+      ...base,
+      activationPoint: { x: 200, y: 320 },
+    })).toBe(false);
+  });
+
+  it("用指针屏幕锚与Range相对位移估算缩放后的真实光标位置", () => {
+    expect(estimatePointerActivatedCaretRect({
+      activationPoint: { x: 200, y: 120 },
+      activationRenderedRect: { left: 300, right: 300, top: 400, bottom: 436 },
+      currentRenderedRect: { left: 316, right: 316, top: 448, bottom: 484 },
+      renderedDeltaScale: 0.5,
+    })).toEqual({
+      left: 207.5,
+      right: 208.5,
+      top: 135,
+      bottom: 153,
+    });
+  });
+
+  it("激活周期内连续文档变化保持抑制，真实越界或用户滚动时释放", () => {
+    const base = {
+      scrollTopAtPointer: 480,
+      currentScrollTop: 480,
+      activationPoint: { x: 200, y: 120 },
+      activationRenderedRect: { left: 300, right: 300, top: 400, bottom: 436 },
+      renderedDeltaScale: 0.5,
+      viewportRect: { left: 0, right: 400, top: 0, bottom: 300 },
+    };
+    expect(shouldSuppressPointerActivatedInputScroll({
+      ...base,
+      documentChangedSinceLastDecision: true,
+      currentRenderedRect: { left: 300, right: 300, top: 400, bottom: 436 },
+    })).toBe(true);
+    expect(shouldSuppressPointerActivatedInputScroll({
+      ...base,
+      documentChangedSinceLastDecision: true,
+      currentRenderedRect: { left: 304, right: 304, top: 400, bottom: 436 },
+    })).toBe(true);
+    expect(shouldSuppressPointerActivatedInputScroll({
+      ...base,
+      documentChangedSinceLastDecision: false,
+      currentRenderedRect: { left: 304, right: 304, top: 400, bottom: 436 },
+    })).toBe(false);
+    expect(shouldSuppressPointerActivatedInputScroll({
+      ...base,
+      documentChangedSinceLastDecision: true,
+      currentScrollTop: 482,
+      currentRenderedRect: { left: 304, right: 304, top: 400, bottom: 436 },
+    })).toBe(false);
+    // 分页层内部补偿会把激活周期基线同步到新 scrollTop；相同位置随后继续输入仍受保护。
+    expect(shouldSuppressPointerActivatedInputScroll({
+      ...base,
+      documentChangedSinceLastDecision: true,
+      scrollTopAtPointer: 512,
+      currentScrollTop: 512,
+      currentRenderedRect: { left: 304, right: 304, top: 400, bottom: 436 },
+    })).toBe(true);
+    expect(shouldSuppressPointerActivatedInputScroll({
+      ...base,
+      documentChangedSinceLastDecision: true,
+      currentRenderedRect: { left: 304, right: 304, top: 780, bottom: 816 },
+    })).toBe(false);
+  });
+});
+}
+
+// Migrated intact from src/components/ed/zoom.test.ts
+{
+describe("ed/zoom · clampZoom", () => {
+  it("区间内保留（规整 2 位小数）", () => {
+    expect(clampZoom(1)).toBe(1);
+    expect(clampZoom(1.2)).toBe(1.2);
+  });
+  it("越界钳到 min/max", () => {
+    expect(clampZoom(0.1)).toBe(ZOOM.min);
+    expect(clampZoom(5)).toBe(ZOOM.max);
+  });
+  it("消 FP 漂移", () => {
+    expect(clampZoom(0.7999999999)).toBe(0.8);
+  });
+  it("非有限 → 默认 100%", () => {
+    expect(clampZoom(NaN)).toBe(ZOOM.default);
+    expect(clampZoom(Infinity)).toBe(ZOOM.default);
+  });
+});
+
+describe("ed/zoom · stepZoom", () => {
+  it("放大/缩小一步且钳制", () => {
+    expect(stepZoom(1, ZOOM.step)).toBe(1.1);
+    expect(stepZoom(1, -ZOOM.step)).toBe(0.9);
+  });
+  it("连续步进无 FP 漂移", () => {
+    let z = 1;
+    for (let i = 0; i < 3; i++) z = stepZoom(z, -ZOOM.step);
+    expect(z).toBe(0.7);
+  });
+  it("到达边界不越界", () => {
+    expect(stepZoom(ZOOM.max, ZOOM.step)).toBe(ZOOM.max);
+    expect(stepZoom(ZOOM.min, -ZOOM.step)).toBe(ZOOM.min);
+  });
+});
+
+describe("ed/zoom · formatZoom", () => {
+  it("格式化为百分比整数", () => {
+    expect(formatZoom(1)).toBe("100%");
+    expect(formatZoom(1.2)).toBe("120%");
+    expect(formatZoom(0.5)).toBe("50%");
+  });
+});
+}

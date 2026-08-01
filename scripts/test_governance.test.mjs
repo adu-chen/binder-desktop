@@ -39,7 +39,7 @@ describe('Test Governance', () => {
   });
 
   it('直接修改测试文件时直选该文件，不伪造业务源变更', () => {
-    const path = 'src/components/ed/extensions/FontSize.test.ts';
+    const path = 'src/components/ed/extensions/EditorExtensions.test.ts';
     const plan = buildRelatedTestPlan(DEFAULT_ROOT, [path], registry, inventory);
     expect(plan.status).toBe('passed');
     expect(plan.direct_tests).toEqual([path]);
@@ -53,7 +53,7 @@ describe('Test Governance', () => {
     expect(plan.status).toBe('passed');
     expect(plan.direct_modules).toContain('ED');
     expect(plan.affected_modules).toEqual(expect.arrayContaining(['ED', 'DE', 'AG', 'SYS']));
-    expect(plan.selected_frontend_tests).toContain('src/services/edService.test.ts');
+    expect(plan.selected_frontend_tests).toContain('src/services/edRuntime.test.ts');
     expect(plan.commands.map((entry) => entry.id)).toEqual(expect.arrayContaining([
       'frontend-related', 'typescript', 'rust-full', 'governance-audit',
     ]));
@@ -73,10 +73,14 @@ describe('Test Governance', () => {
   });
 
   it('真实测试 inventory 全部具备 owner、layer 且治理 audit 通过', () => {
-    expect(inventory.totals.frontend_files).toBeGreaterThanOrEqual(58);
+    expect(inventory.totals.frontend_files).toBeGreaterThanOrEqual(38);
     expect(inventory.totals.rust_inline_files).toBeGreaterThan(0);
     expect(inventory.totals.rust_integration_files).toBe(2);
     expect(inventory.system_validation).toHaveLength(2);
+    expect(inventory.modules.ED.frontend_owned).toBe(7);
+    expect(inventory.assets
+      .filter((asset) => asset.kind === 'frontend' && asset.owner === 'ED')
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(207);
     expect(inventory.assets.every((asset) => asset.owner && asset.layer !== 'unclassified')).toBe(true);
     expect(auditTestGovernance(DEFAULT_ROOT, registry, inventory).status).toBe('passed');
   }, 10_000);
