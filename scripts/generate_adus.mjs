@@ -15,6 +15,11 @@ import {
   buildTestInventory,
   renderTestCapabilityIndex,
 } from './test_governance.mjs';
+import {
+  displayDeferralRecord,
+  displayTriageRecord,
+  loadTriageRegistry,
+} from './triage_registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
@@ -482,19 +487,22 @@ function buildRuleView(govBlocks) {
   }).join('\n\n');
 }
 
-// ── triage 汇总 ───────────────────────────────────────────────────────────
+// ── triage / 标注延期汇总 ─────────────────────────────────────────────────
 
-function buildTriageSummary(triageRecords) {
-  const note = '\n\n注：triage 汇总为精简视图，只包含 codes、文件、分类、已解决四列。\n完整的七字段记录（含原因、已采取动作、需要人类介入）\n保存在各模块的 [模块]_triage.md 报告文件中。';
-  if (!triageRecords.length) {
-    return `（triage 报告存在后自动生成）
+function buildTriageSummary(records) {
+  if (!records.length) return '（暂无有效 triage 记录）';
+  const rows = records.map(displayTriageRecord).map(record => [
+    record.codes, record.file, record.classification, record.resolved,
+  ]);
+  return mdTable(['codes', '文件', '分类', '已解决'], rows);
+}
 
-| codes | 文件 | 分类 | 已解决 |
-|-------|------|------|--------|
-| （待生成） | | | |` + note;
-  }
-  const rows = triageRecords.map(r => [r.codes, r.file, r.type, r.resolved]);
-  return mdTable(['codes', '文件', '分类', '已解决'], rows) + note;
+function buildAnnotationDeferralSummary(records) {
+  if (!records.length) return '（暂无有效标注延期记录）';
+  const rows = records.map(displayDeferralRecord).map(record => [
+    record.symbol, record.file, record.plan, record.reviewDate, record.resolved,
+  ]);
+  return mdTable(['符号', '文件', '承接计划', '复核日期', '已解决'], rows);
 }
 
 // ── timestamp churn 防护 ──────────────────────────────────────────────────
@@ -527,10 +535,12 @@ function main() {
     allTerms.push(...terms);
   }
 
-  // 3. 扫描 triage 报告
-  const triageFiles = collectTriageFiles(PROJECT_ROOT);
-  const triageRecords = [];
-  for (const f of triageFiles) triageRecords.push(...parseTriageRecords(f));
+  // 3. 扫描正式 triage 与标注延期记录。两者与 audit 共享严格解析器。
+  const triageRegistry = loadTriageRegistry(ROOT);
+  if (triageRegistry.findings.length) {
+    const messages = triageRegistry.findings.map(finding => `${finding.type}: ${finding.message}`).join('\n');
+    throw new Error(`triage registry is invalid:\n${messages}`);
+  }
 
   // 4. 动态发现前端、Rust 内联与 Rust 集成测试，并派生 covers 与模块能力索引。
   const testInventory = buildTestInventory(ROOT);
@@ -547,7 +557,8 @@ function main() {
   const termRegistry    = buildTermRegistry(allTerms);
   const chainView       = buildChainView(govBlocks, knownChainIds);
   const ruleView        = buildRuleView(govBlocks);
-  const triageSummary   = buildTriageSummary(triageRecords);
+  const triageSummary   = buildTriageSummary(triageRegistry.triageRecords);
+  const annotationDeferralSummary = buildAnnotationDeferralSummary(triageRegistry.deferralRecords);
 
   // 5. 读取现有 adus.md，提取元信息头部（自动生成区之前的内容）
   let metadataHeader = '';
@@ -652,6 +663,10 @@ ${testCapabilityIndex}
 ### triage 汇总
 
 ${triageSummary}
+
+### 标注延期汇总
+
+${annotationDeferralSummary}
 `;
 
   const newContent = trimmedMetadataHeader + '\n\n---\n' + autoArea;
@@ -662,7 +677,8 @@ ${triageSummary}
     `规则标注: ${allRules.length}`,
     `链路标注: ${allChains.length}`,
     `约束标注: ${allConstraints.length}`,
-    `triage 记录: ${triageRecords.length}`,
+    `triage 记录: ${triageRegistry.triageRecords.length}`,
+    `标注延期: ${triageRegistry.deferralRecords.length}`,
     `术语标注: ${allTerms.length}`,
     `测试资产: ${testInventory.totals.assets}`,
     `测试用例: ${testInventory.totals.tests}`,

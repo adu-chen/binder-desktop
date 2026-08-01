@@ -8,6 +8,13 @@ import { execFileSync } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { auditTestGovernance } from './test_governance.mjs';
+import {
+  activeRecords,
+  deferralKey,
+  isReviewOverdue,
+  loadTriageRegistry,
+  sourceFileExists,
+} from './triage_registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -439,6 +446,45 @@ const filesWithLineGov = sourceFiles.filter(f => /^\s*\/\/\s*@GOV/m.test(readTex
 addCheck({ name: 'legacy line @GOV absent', status: filesWithLineGov.length === 0 ? 'passed' : 'failed', files: filesWithLineGov });
 
 const govBlocks = sourceFiles.flatMap(parseGovBlocks);
+const triageRegistry = loadTriageRegistry(ROOT);
+for (const finding of triageRegistry.findings) {
+  addFinding(finding.type, finding.message, finding);
+}
+
+const activeTriageRecords = activeRecords(triageRegistry.triageRecords);
+const triageByCodes = new Map();
+for (const record of activeTriageRecords) {
+  const codes = record.fields.codes;
+  const records = triageByCodes.get(codes) ?? [];
+  records.push(record);
+  triageByCodes.set(codes, records);
+}
+const govBlocksByCodes = new Map(govBlocks.map(block => [block.fields.codes, block]));
+for (const record of activeTriageRecords) {
+  const codes = record.fields.codes;
+  const block = govBlocksByCodes.get(codes);
+  if (!block) {
+    addFinding('TRIAGE_RECORD_ORPHAN', 'triage record does not resolve to a current @GOV block', {
+      codes, registry_file: record.registryFile,
+    });
+  } else if (block.file !== record.sourceFile) {
+    addFinding('TRIAGE_RECORD_MISMATCH', 'triage record file differs from its @GOV block', {
+      codes, registry_file: record.registryFile, record_file: record.sourceFile, gov_file: block.file,
+    });
+  } else if (block.fields.rules !== '[]') {
+    addFinding('TRIAGE_RECORD_MISMATCH', 'triage record must target an @GOV block with rules: []', {
+      codes, registry_file: record.registryFile,
+    });
+  }
+}
+for (const block of govBlocks.filter(candidate => candidate.fields.rules === '[]')) {
+  const records = triageByCodes.get(block.fields.codes) ?? [];
+  if (records.length !== 1) {
+    addFinding('TRIAGE_REQUIRED', 'an @GOV block with rules: [] must have exactly one active triage record', {
+      codes: block.fields.codes, file: block.file, line: block.line, records: records.length,
+    });
+  }
+}
 const referencedRules = new Set();
 const referencedChains = new Set();
 
@@ -632,10 +678,27 @@ addCheck({
 });
 
 // ── BLOCK_UNANNOTATED 负空间扫描 ──────────────────────────────────────────
-// 扫描 src 导出的可执行符号（function / 箭头函数 const / class），
-// 上方缺少 @GOV 块且未在 triage 记录中登记 → 记为警告（启发式，不阻断）。
-const triageFiles = collectFiles(docDir, f => basename(f).endsWith('_triage.md'));
-const triageText = triageFiles.map(readText).join('\n');
+// 扫描 src 导出的可执行符号（function / 箭头函数 const / class）。
+// 只有精确匹配“文件 + 符号”的有效标注延期记录可以豁免负空间告警。
+const activeDeferralRecords = activeRecords(triageRegistry.deferralRecords);
+const activeDeferralsByKey = new Map(activeDeferralRecords.map(record => [
+  deferralKey(record.sourceFile, record.fields.symbol), record,
+]));
+const scannedExportKeys = new Set();
+const annotatedExportKeys = new Set();
+for (const record of activeDeferralRecords) {
+  const identifier = deferralKey(record.sourceFile, record.fields.symbol);
+  if (!sourceFileExists(ROOT, record.sourceFile)) {
+    addFinding('ANNOTATION_DEFERRAL_STALE', 'annotation deferral source file no longer exists', {
+      identifier, registry_file: record.registryFile,
+    });
+  }
+  if (isReviewOverdue(record.fields['复核日期'])) {
+    addFinding('ANNOTATION_DEFERRAL_STALE', 'annotation deferral review date has passed', {
+      identifier, registry_file: record.registryFile, review_date: record.fields['复核日期'],
+    });
+  }
+}
 
 const EXPORT_FN_RE = /^export\s+(?:default\s+)?(?:async\s+)?function\s+(\w+)/;
 const EXPORT_CLASS_RE = /^export\s+(?:default\s+)?(?:abstract\s+)?class\s+(\w+)/;
@@ -656,17 +719,34 @@ for (const file of sourceFiles) {
     if (!m) continue;
     const name = m[1];
     if (!name) continue;
+    const identifier = deferralKey(file, name);
+    scannedExportKeys.add(identifier);
     const annotated = govEndLines.some(e => e < i && i - e <= 5); // 上方 5 行内有 @GOV 块结束
-    if (annotated) continue;
-    if (triageText.includes(name) || triageText.includes(basename(file))) continue; // triage 登记豁免
+    if (annotated) {
+      annotatedExportKeys.add(identifier);
+      continue;
+    }
+    if (activeDeferralsByKey.has(identifier)) continue;
     blockUnannotated.push({ file, line: i + 1, symbol: name });
+  }
+}
+for (const record of activeDeferralRecords) {
+  const identifier = deferralKey(record.sourceFile, record.fields.symbol);
+  if (annotatedExportKeys.has(identifier)) {
+    addFinding('ANNOTATION_DEFERRAL_STALE', 'annotation deferral targets a symbol that now has @GOV', {
+      identifier, registry_file: record.registryFile,
+    });
+  } else if (!scannedExportKeys.has(identifier)) {
+    addFinding('ANNOTATION_DEFERRAL_STALE', 'annotation deferral does not target an auditable exported symbol', {
+      identifier, registry_file: record.registryFile,
+    });
   }
 }
 addCheck({
   name: 'BLOCK_UNANNOTATED scan',
   status: 'passed', // 警告级，不阻断（负空间扫描存在启发式误报）
   unannotated: blockUnannotated.length,
-  note: blockUnannotated.length > 0 ? '导出的可执行符号缺少 @GOV 标注，复核应补标注或在 triage 中登记' : undefined,
+  note: blockUnannotated.length > 0 ? '导出的可执行符号缺少 @GOV 标注，复核应补标注或登记精确的标注延期记录' : undefined,
 });
 
 // ── AI 语义审计候选列表 ────────────────────────────────────────────────────

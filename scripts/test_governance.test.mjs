@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   DEFAULT_ROOT,
   auditTestGovernance,
@@ -11,6 +14,11 @@ import {
   loadTestGovernance,
   matchesGlob,
 } from './test_governance.mjs';
+import {
+  activeRecords,
+  deferralKey,
+  loadTriageRegistry,
+} from './triage_registry.mjs';
 
 describe('Test Governance', () => {
   const { registry } = loadTestGovernance(DEFAULT_ROOT);
@@ -128,4 +136,85 @@ describe('Test Governance', () => {
     expect(inventory.assets.every((asset) => asset.owner && asset.layer !== 'unclassified')).toBe(true);
     expect(auditTestGovernance(DEFAULT_ROOT, registry, inventory).status).toBe('passed');
   }, 10_000);
+});
+
+describe('Triage Registry', () => {
+  function withRegistryFiles(files, callback) {
+    const root = mkdtempSync(join(tmpdir(), 'binder-triage-registry-'));
+    try {
+      for (const [relativePath, content] of Object.entries(files)) {
+        const path = join(root, relativePath);
+        mkdirSync(join(path, '..'), { recursive: true });
+        writeFileSync(path, content);
+      }
+      callback(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('只接受七类正式 triage，并保留文件与 codes 的结构化字段', () => {
+    withRegistryFiles({
+      'docs/ED_triage.md': [
+        'codes: CODE-ED-001',
+        '文件: src/ed.ts',
+        '分类: VALID_EMPTY',
+        '原因: pure helper',
+        '已采取动作: documented',
+        '需要人类介入: 否',
+        '已解决: 否',
+      ].join('\n'),
+    }, root => {
+      const registry = loadTriageRegistry(root);
+      expect(registry.findings).toEqual([]);
+      expect(registry.triageRecords).toHaveLength(1);
+      expect(registry.triageRecords[0].fields.codes).toBe('CODE-ED-001');
+      expect(registry.triageRecords[0].sourceFile).toBe('src/ed.ts');
+    });
+  });
+
+  it('拒绝 BLOCK_UNANNOTATED 和缺字段，避免把负空间发现当作正式分类', () => {
+    withRegistryFiles({
+      'docs/CORE_triage.md': [
+        'codes: CODE-CORE-001',
+        '文件: src/core.ts',
+        '分类: BLOCK_UNANNOTATED',
+        '原因: missing annotation',
+        '已采取动作: deferred',
+        '需要人类介入: 否',
+        '已解决: 否',
+        '',
+        'codes: CODE-CORE-002',
+        '文件: src/core.ts',
+        '分类: VALID_EMPTY',
+      ].join('\n'),
+    }, root => {
+      const registry = loadTriageRegistry(root);
+      expect(registry.findings.map(finding => finding.type)).toEqual(expect.arrayContaining([
+        'TRIAGE_RECORD_INVALID',
+      ]));
+      expect(registry.findings.some(finding => finding.classification === 'BLOCK_UNANNOTATED')).toBe(true);
+    });
+  });
+
+  it('标注延期以文件与符号组成唯一键，不因同名符号而跨文件匹配', () => {
+    withRegistryFiles({
+      'docs/CORE_标注延期清单.md': [
+        'symbol: App',
+        '文件: src/shell/App.tsx',
+        '原因: shell scaffold',
+        '承接计划: PI-SYS-05',
+        '退出条件: add @GOV when business logic lands',
+        '复核日期: 2026-08-01',
+        '需要人类介入: 否',
+        '已解决: 否',
+      ].join('\n'),
+    }, root => {
+      const registry = loadTriageRegistry(root);
+      const records = activeRecords(registry.deferralRecords);
+      const keys = new Set(records.map(record => deferralKey(record.sourceFile, record.fields.symbol)));
+      expect(keys.has('src/shell/App.tsx::App')).toBe(true);
+      expect(keys.has('src/other/App.tsx::App')).toBe(false);
+    });
+  });
 });

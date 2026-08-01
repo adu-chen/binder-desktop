@@ -214,7 +214,7 @@ audit 绿；@GOV 追溯 BR-DOC-*；SM-DOC-01 矩阵全覆盖；`// covers: BR-DO
 | 2026-07-28 | v1.14 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：PI-DOC-01 接入 `image_media` 与 `doc.restore_edit_media`，完成 baseline 媒体身份、重启恢复、保存资源/警告/OOXML 数量门禁；PI-DOC-02 将嵌入图片以真实资源、尺寸、alt 和重开报告证据升为已实测保证。 |
 | 2026-07-22 | v1.14 | S1 依赖下载修正：构建首次进入 hash 锁定 tarball/子模块下载时被失效 loopback 代理阻断；脚本只在构建子进程清除该代理变量，保留源码校验。 |
 | 2026-07-22 | v1.15 | S1 源码依赖可靠性修正：TDF 发布镜像不覆盖全部外部依赖，不采用会产生 404 的伪通用镜像；改为依赖级可靠源（维护方正式发布源优先、可追溯历史源包归档回退）+ LO 锁定 SHA-256 + 本地 tarball 缓存。脚本新增显式、受配置产物保护的 `BINDER_LO_SKIP_CONFIGURE=1` 恢复模式，默认完整配置行为不变。 |
-| 2026-07-24 | v1.17 | PI-DOC-03-S3 字体身份修复完成：确定根因为 CoreText 本地化名与 OOXML 英文名不匹配，实现三层修复（英文名注册/Office别名表/未知字体回退链），补丁 `binder_font_identity.patch`（237行，3文件）。验证 40+ 次 DOCX 转换完全一致，Rust 55 tests pass。新增 `A-DOC-X-R-02` 决策 triage。 |
+| 2026-07-24 | v1.17 | PI-DOC-03-S3 字体身份修复完成：确定根因为 CoreText 本地化名与 OOXML 英文名不匹配，实现三层修复（英文名注册/Office别名表/未知字体回退链），补丁 `binder_font_identity.patch`（237行，3文件）。验证 40+ 次 DOCX 转换完全一致，Rust 55 tests pass。新增 `A-DOC-X-R-02` 技术决策记录。 |
 | 2026-07-24 | v1.18 | PI-DOC-03-S4 运行时融合完成：lo_worker.rs 472行，独立 profile/超时/崩溃隔离已落地。 |
 | 2026-07-24 | v1.19 | LO macOS 瘦身完成：移除 Python 框架（110MB）+ 非必要模块配置，497MB→380MB（-24%）。后处理脚本 `postprocess_lo_macos.sh` 已接入 build 管线。 |
 | 2026-07-24 | v1.20 | **预览字体确定性课题闭合**。DOCX 9/9 一致；PPTX/XLSX 代码审查确认共享 PhysicalFontCollection；Rust 集成测试全通过。S5 发布验证（签名/公证/干净设备）为后续事项。 |

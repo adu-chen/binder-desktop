@@ -1,102 +1,88 @@
 {
-  "scope_id": "VAL-CORE-EDIT-DIFF-SAVE-AUTOMATION-01",
-  "task_type": "CODE_CHANGE",
+  "scope_id": "TRIAGE-REGISTRY-REPAIR-01",
+  "task_type": "GOVERNANCE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "核心编辑保存重开跨层自动化与测试治理闭合",
+  "title": "triage、标注延期与决策记录治理语义修复",
   "status": "READY",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/VAL-CORE-EDIT-DIFF-SAVE-AUTOMATION-01.md",
+  "issue_trace": ".governance/issues/TRIAGE-REGISTRY-REPAIR-01.md",
   "stop_condition": null,
-  "reason": "承接 A-VAL-X-V-02 明确排序第一的 AUTOMATION_GAP-01；上一轮交付已说明下一步为建立 frontend-shaped Webview IPC → Tauri → Rust → DiskState → reopen harness，人类回复‘继续下一步并闭合本次治理’，确认执行该 Scope 并在保留产品验证边界的前提下闭合 TEST-GOVERNANCE-01。",
+  "reason": "人类审计确认：正式 triage、未标注符号延期和技术决策目前混用 _triage.md，生成器与 audit 的语义不一致；人类已明确要求按修复方案实施。",
   "objectives": [
-    "使用 Tauri MockRuntime 从 Webview IPC 请求实际命中生产注册与共享路由",
-    "自动验证 Diff 草稿接受、保存、真实文件内容和第二次读取重开内容",
-    "在同一 harness 验证拒绝后 DiskState 不变，关闭 AUTOMATION_GAP-03",
-    "不修改或弱化既有测试，将剩余 Agent 与真实 WKWebView 项转入独立产品验证 backlog",
-    "闭合 TEST-GOVERNANCE-01 的能力建设 Scope 并提交"
+    "将正式 triage 限定为已有 @GOV rules: [] 的七类分类记录",
+    "将脚手架暂缓标注迁移为文件与符号精确匹配的独立延期清单",
+    "将字体方案从 triage 迁移为不参与 audit 的决策记录",
+    "让 generate 与 audit 复用同一结构化解析器并以测试固定行为"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/VAL-CORE-EDIT-DIFF-SAVE-AUTOMATION-01.md",
-    "src-tauri/src/lib.rs",
-    "scripts/test_governance.mjs",
+    ".governance/issues/TRIAGE-REGISTRY-REPAIR-01.md",
+    "ADU.md",
+    "scripts/triage_registry.mjs",
+    "scripts/generate_adus.mjs",
+    "scripts/audit_taskflow_governance.mjs",
     "scripts/test_governance.test.mjs",
-    ".governance/test-governance.json",
-    "docs/40_validation/A-VAL-X-V-01_测试治理与验证矩阵.md",
-    "docs/40_validation/A-VAL-X-V-02_核心编辑与DiffEdit保存验证.md",
+    "docs/00_core/A-CORE-X-R-02_脚手架占位_标注延期清单.md",
+    "docs/00_core/A-CORE-X-R-02_脚手架占位_triage.md",
+    "docs/00_core/A-CORE-X-R-03_需求实现对齐审计与补全计划.md",
+    "docs/01_modules/DOC/A-DOC-X-R-02_字体身份修复决策记录.md",
+    "docs/01_modules/DOC/A-DOC-X-R-02_字体身份修复决策_triage.md",
+    "docs/01_modules/DOC/A-DOC-X-L-01_文档转换开发计划.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
-    "buildbot/**",
-    "src/**/*.test.ts",
-    "src/**/*.test.tsx",
+    "src/**",
+    "src-tauri/src/**",
     "src-tauri/tests/**",
-    "ADU.md",
+    "buildbot/**",
     "ADP.md",
     "AGENTS.md",
+    "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "governance.config.json",
     "package.json",
     "package-lock.json"
   ],
   "constraints": [
-    "测试必须经过 Tauri Mock Webview InvokeRequest、CommandRegistry 与生产共享路由，不能直接调用领域函数冒充跨层验证",
-    "测试使用真实 SQLite 和临时文件，不 mock 或 stub 保存、裁决、baseline 守卫与重开读取逻辑",
-    "Runtime 泛型化不得改变生产 Wry command、状态机、响应信封或副作用语义",
-    "不得修改、删除、跳过或弱化既有测试与断言",
-    "不得把 MockRuntime 自动化描述为真实 WKWebView GUI 验证",
-    "不新增 RULE、CHAIN、CONSTRAINT、TERM 或修改需求/设计真值"
+    "不得把 BLOCK_UNANNOTATED 作为正式 triage 分类",
+    "不得用文本包含、文件名匹配或批量豁免取代精确文件与符号匹配",
+    "不得将设计决策纳入 triage 汇总或 audit 豁免",
+    "不得修改产品代码、业务规则、链路、术语或测试资产基线"
   ],
   "acceptance_criteria": [
-    "接受路径从 Webview IPC 生成 Diff、接受草稿、保存到真实文件并通过第二次 IPC 读取观察重开内容",
-    "接受路径断言 Diff status=accepted 且 effect_status=saved",
-    "拒绝路径从 Webview IPC 拒绝 Diff，真实文件和重开内容保持原文",
-    "生产 dispatch 与测试 harness 复用同一持久化路由函数",
-    "AUTOMATION_GAP-01 与 AUTOMATION_GAP-03 标记 resolved；TEST-GOVERNANCE-01 标记 closed，剩余项保留在独立 G5 backlog",
-    "test:related、非沙箱 test:full、test:governance、generate、audit 与 diff check 全部通过"
+    "正式 triage 与标注延期由共享解析器严格校验",
+    "audit 只对精确文件与符号的有效延期记录豁免",
+    "ADUS 分别生成正式 triage 与标注延期汇总，决策记录不入表",
+    "迁移后的存量文档保持原有决策和脚手架信息",
+    "test:governance、generate、audit、影响选择与 related 测试通过"
   ],
   "validation_commands": [
-    "npm run test:plan -- --files src-tauri/src/lib.rs",
-    "npm run test:related -- --files src-tauri/src/lib.rs",
-    "npm run test:full (non-sandbox macOS process environment)",
+    "npm run test:plan -- --files [changed_files]",
+    "npm run test:related -- --files [changed_files]",
     "npm run test:governance",
     "npm run governance:generate",
     "npm run governance:audit",
     "git diff --check"
   ],
   "out_of_scope": [
-    "真实 WKWebView GUI 自动化与视觉/焦点观察",
-    "真实或确定性 Agent provider → DE → DiffCard 集成供给",
-    "BLOCK-REL-LO-001 发布专项",
-    "VAL-CORE-CLOSE-RECOVERY 与 G6 发布验证"
+    "为现有 BLOCK_UNANNOTATED 警告批量补 @GOV 或批量建立延期记录",
+    "修改产品功能、业务规则、链路、术语和测试治理注册表",
+    "修复与本次 triage 语义无关的 audit 启发式扫描"
   ],
   "unresolved_items": [
-    "AUTOMATION_GAP-02 and VALIDATION_ONLY-01~02 remain product validation backlog and do not block closing the test-governance capability build."
+    "现有 226 个 BLOCK_UNANNOTATED 警告保留为独立治理债务；本次只修复其延期豁免的准确性。"
   ],
-  "scope_expansions": [
-    {
-      "reason": "test:plan exposed that Rust production files carrying inline tests bypass rust-full and governance-audit",
-      "added_files": [
-        "scripts/test_governance.mjs",
-        "scripts/test_governance.test.mjs"
-      ],
-      "confirmation": "YES",
-      "confirmed_by": "human",
-      "confirmation_basis": "用户在收到精确文件与原因后回复‘去人’，结合确认问句按‘确认’执行。"
-    }
-  ],
+  "scope_expansions": [],
   "validation_results": {
-    "targeted_system_harness": "PASS: edit_persistence_system_tests 2 passed",
-    "selector_regression": "PASS: scripts/test_governance.test.mjs 10 passed; Rust inline production source selects frontend-full + rust-full + governance-audit; Rust integration test selects rust-full",
-    "related_non_sandbox": "PASS: frontend 21 files / 457 tests; Rust lib 263/263; core_chain 4/4; sm_broadcast 4/4; governance audit passed",
-    "full_non_sandbox": "PASS: frontend 21 files / 457 tests; Rust lib 263/263; core_chain 4/4; sm_broadcast 4/4",
-    "test_governance": "PASS: 84 assets / 728 tests / 0 findings / 0 warnings",
-    "governance_generate": "PASS: ADUS refreshed with 215 @GOV blocks and 728 tests",
-    "governance_audit": "PASS",
-    "diff_check": "PASS",
-    "scope_check": "PASS: all tracked changes are in allowed_files; buildbot remains untracked and excluded"
+    "test_governance": "PASS: 13 governance tests; 84 assets / 731 tests / 0 findings / 0 warnings",
+    "governance_generate": "PASS: triage 0; annotation deferrals 5",
+    "governance_audit": "PASS: 0 governance findings; BLOCK_UNANNOTATED warnings 231",
+    "test_plan": "PASS: CORE/DOC/PRV impact plan",
+    "related_frontend": "PASS: 21 files / 460 tests",
+    "related_rust": "ACCEPTED_RISK: 262/263 passed; doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available crashed its LO worker with signal=6; human accepted this out-of-scope failure for this governance repair",
+    "diff_check": "PASS"
   },
   "resolved_stop_conditions": [
-    "SC-01 resolved after human-confirmed expansion to scripts/test_governance.mjs and scripts/test_governance.test.mjs"
+    "SC-04 resolved by human acceptance: the LibreOffice Worker signal=6 failure remains an out-of-scope DOC/runtime issue."
   ]
 }

@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-01T15:20:23.434Z -->
+<!-- 最后生成时间：2026-08-01T15:41:37.489Z -->
 
 ### 模块编码表
 
@@ -1490,11 +1490,11 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 21；Rust 内联测试文件 61；Rust 集成测试文件 2；测试用例约 728。
+动态发现：前端测试文件 21；Rust 内联测试文件 61；Rust 集成测试文件 2；测试用例约 731。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
-| CORE | high | 1 | 10 | governance:1 | 1/1 → 1 |
+| CORE | high | 1 | 13 | governance:1 | 1/1 → 1 |
 | SYS | critical | 17 | 159 | component:2, integration:2, service:1, state:1, unit:11 | 3/3 → 3 |
 | WS | critical | 17 | 185 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
 | ED | critical | 17 | 366 | component:4, service:5, state:1, unit:7 | 7/7 → 7 |
@@ -1519,12 +1519,14 @@
 
 ### triage 汇总
 
-（triage 报告存在后自动生成）
+（暂无有效 triage 记录）
 
-| codes | 文件 | 分类 | 已解决 |
-|-------|------|------|--------|
-| （待生成） | | | |
+### 标注延期汇总
 
-注：triage 汇总为精简视图，只包含 codes、文件、分类、已解决四列。
-完整的七字段记录（含原因、已采取动作、需要人类介入）
-保存在各模块的 [模块]_triage.md 报告文件中。
+| 符号                | 文件                               | 承接计划      | 复核日期       | 已解决 |
+| ----------------- | -------------------------------- | --------- | ---------- | --- |
+| App               | src/shell/App.tsx                | PI-SYS-05 | 2026-08-01 | 否   |
+| Welcome           | src/shell/Welcome.tsx            | PI-SYS-05 | 2026-08-01 | 否   |
+| Workbench         | src/shell/Workbench.tsx          | PI-SYS-05 | 2026-08-01 | 否   |
+| useWorkspaceShell | src/store/workspaceShell.ts      | PI-SYS-05 | 2026-08-01 | 否   |
+| openWorkspace     | src/services/workspaceService.ts | PI-WS-01  | 2026-08-01 | 否   |

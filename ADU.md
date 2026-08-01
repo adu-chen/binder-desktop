@@ -1430,7 +1430,7 @@ DELEGATE_ABSTRACT 说明：
 
 负空间扫描（coverage-driven）：
   从代码出发，扫描导出符号（exported function / exported component）和 ADUS 链路注册表中登记的入口函数。
-  对在扫描范围内但既无 @GOV 又无 triage 记录的代码块，报 `BLOCK_UNANNOTATED` warning。
+  对在扫描范围内、既无 @GOV 又无有效标注延期记录的代码块，报 `BLOCK_UNANNOTATED` warning。
   对 ADUS 链路入口函数缺失 @GOV 或 @GOV 中无 `chain=` 引用的，报 `CHAIN_ENTRY_UNANNOTATED` error/warning（规则见 §4.5）。
 
 两种模式都是 `governance:audit` 的必须执行项，不是可选项。
@@ -1439,7 +1439,7 @@ DELEGATE_ABSTRACT 说明：
 每个 `rules: []` 块必须在 triage 报告中有分类记录。
 分类信息不写入 @GOV 代码头。
 
-### 5.2 七种分类及处理方式
+### 5.2 七种正式分类及处理方式
 
 **VALID_EMPTY（有效空规则）**
   适用：纯工具函数，无业务规则所有权，
@@ -1499,7 +1499,7 @@ DELEGATE_ABSTRACT 说明：
     输出提示：等待人类裁决
   不得跨两个治理周期持续存在。
 
-**BLOCK_UNANNOTATED（未标注代码块）**
+**BLOCK_UNANNOTATED（未标注代码块，负空间检测结果，不是 triage 分类）**
   适用：函数或组件在以下任一检测范围内，但既无 @GOV 又无 triage 记录：
     - 导出函数（export function / export const）
     - 导出组件（export default / export const [大写开头]）
@@ -1514,12 +1514,18 @@ DELEGATE_ABSTRACT 说明：
     对检测范围内的未标注块，在 triage 报告中逐一记录
     同时判断其应归属的分类（VALID_EMPTY / CALLER_OWNS_RULE / RULE_MISSING 等）
     不得将「暂时找不到对应规则」直接记录为 BLOCK_UNANNOTATED，须进一步分类
-  audit 脚本对在范围内但既无 @GOV 又无 triage 记录的代码块，报 BLOCK_UNANNOTATED warning。
+    尚未有 @GOV、但经人类批准暂缓标注的脚手架符号，登记到 §5.3.1 标注延期清单；
+    不得伪造 codes 字段，也不得以自然语言文本出现符号名作为豁免
+  audit 脚本对在范围内、既无 @GOV 又无有效标注延期记录的代码块，报 BLOCK_UNANNOTATED warning。
 
 ### 5.3 triage 报告格式
 
 triage 报告是独立文件：`[模块]_triage.md`
 不是 ADU.md 或 ADUS.md 的一部分。
+
+适用边界：triage 仅记录已有 `@GOV` 且 `rules: []` 的代码块分类；不得用于尚无
+`@GOV` 的延期标注，也不得用于技术/产品决策。`codes` 必须精确对应一个现存 @GOV 块，
+`文件` 必须与该块所在文件一致；每个未解决的 `rules: []` 块必须恰有一条未解决 triage 记录。
 
 每条记录格式：
 ```
@@ -1531,6 +1537,31 @@ codes:          [代码块 codes 值]
 需要人类介入:   是 / 否
 已解决:         是 / 否
 ```
+
+`分类` 只能为本节的七种正式分类：`VALID_EMPTY`、`CALLER_OWNS_RULE`、`ADAPTER_ONLY`、
+`RULE_MISSING`、`RULE_UNMAPPED`、`LEGACY_COMPAT`、`NEEDS_HUMAN_DECISION`。`BLOCK_UNANNOTATED`
+是扫描发现类型，不得填入该字段。
+
+### 5.3.1 标注延期清单
+
+对尚无 `@GOV`、但经人类批准在明确退出条件前暂缓标注的可执行导出符号，使用独立文件：
+`[模块]_标注延期清单.md`。该文件不是 triage 报告，也不承载设计决策。
+
+每条活动记录格式：
+```
+symbol:           [精确导出符号名]
+文件:             [相对源文件路径]
+原因:             [为何暂缓标注]
+承接计划:         [Plan Item / 已批准工作项]
+退出条件:         [补 @GOV、删除符号或退出扫描范围的条件]
+复核日期:         [YYYY-MM-DD]
+需要人类介入:     是 / 否
+已解决:           是 / 否
+```
+
+`文件 + symbol` 是唯一键。audit 只能以该精确键豁免负空间告警，不得依据文件名、符号子串或
+叙事文本匹配。源文件/符号不存在、符号已拥有 @GOV、复核日期逾期或记录重复时，均为陈旧延期记录，
+必须清退、更新或由人类重新裁决。
 
 ### 5.4 豁免 @GOV 的文件类型
 
@@ -1834,3 +1865,4 @@ Issue Trace 完成后，必须产出文件范围结论，作为 ADP Scope Lock �
 | 2026-06-09 | v1.20 | 自审计修正：§3.2 CHAIN status 枚举补全 planned；§3.2 RULE 示例移除手写 registry_status 并加派生说明；§3.2 CHAIN 新增可选 risk_tier 字段，§5.5 日志分级由「P0/P1 链路」改为引用 risk_tier；§3.2 REQ_MAP、§4.6 DELEGATE_ABSTRACT、§5.6 CHAIN_INTEGRATION_TEST_MISSING 标注 enforcement: deferred（规范声明对齐引擎现状） |
 | 2026-08-01 | v1.21 | TEST-GOVERNANCE-01：§0 接入 test_governance_path；§5.6 建立测试来源、模块 × 层级 × 风险模型、动态资产发现、变更影响选择、失败关闭与测试/验证分证据规则 |
 | 2026-06-09 | v1.21 | 结构性减负：§4.3 新增「@GOV 强制标注范围」分层（强制=CHAIN 入口 error / 应当=业务可执行块 BLOCK_UNANNOTATED warning / 不要求=纯展示组件、薄包装、纯类型），明确人类可显式豁免须留痕；§4.5 CHAIN_ENTRY_UNANNOTATED 改述为引擎已实现的覆盖式检测、入口函数粒度标 deferred，superseded 链路加入豁免 |
+| 2026-08-01 | v1.22 | triage 语义修复：§5.2 明确 BLOCK_UNANNOTATED 为负空间发现而非正式分类；§5.3 收紧为已有 `@GOV rules: []` 的七类分类记录；新增 §5.3.1 标注延期清单，以文件 + symbol 精确豁免，禁止决策记录和文本包含匹配混入 triage |
