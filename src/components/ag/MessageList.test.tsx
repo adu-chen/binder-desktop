@@ -3,12 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { agStore } from "../../store/agStore";
 import { deStore, type DiffView } from "../../store/deStore";
+import { startTurn } from "../../services/agService";
 import { MessageList } from "./MessageList";
 
 vi.mock("../../services/deService", () => ({
   acceptDiff: vi.fn(),
   rejectDiff: vi.fn(),
   generateSampleDiff: vi.fn(),
+}));
+
+vi.mock("../../services/agService", () => ({
+  startTurn: vi.fn(),
 }));
 
 vi.mock("../../services/edLocate", () => ({
@@ -35,7 +40,8 @@ function visibleFlow(container: HTMLElement): string[] {
 }
 
 beforeEach(() => {
-  agStore.applyTurnState("test-turn", "Completed");
+  vi.clearAllMocks();
+  agStore.reset();
   deStore.reset();
 });
 
@@ -80,5 +86,65 @@ describe("MessageList · DiffCard 回合归属渲染", () => {
     expect(screen.getByText("未归属修改建议 · 1")).toBeTruthy();
     expect(screen.getByText("未归属当前修改")).toBeTruthy();
     expect(screen.queryByText("其他会话修改")).toBeNull();
+  });
+
+  it("不把无会话归属的全局 pending diff 混进当前历史流", () => {
+    const current = agStore.newSession();
+    agStore.pushMessage(current, { id: "u1", role: "user", content: "当前会话" });
+    agStore.pushMessage(current, { id: "a1", role: "assistant", content: "当前 AI" });
+    deStore.addDiff(diff({ diffId: "global", sessionId: undefined, title: "全局未归属修改", createdAt: 1 }));
+
+    render(<MessageList />);
+
+    expect(screen.queryByText("全局未归属修改")).toBeNull();
+  });
+
+  it("历史工具卡插入对应 assistant 消息后，而不是沉底汇总", () => {
+    const sessionId = agStore.newSession();
+    agStore.pushMessage(sessionId, { id: "u1", role: "user", content: "读取文档" });
+    agStore.pushMessage(sessionId, {
+      id: "a1",
+      role: "assistant",
+      content: "已读取",
+      toolCalls: [{ id: "tc1", name: "read_doc", state: "done", detail: "notes/a.md", readonly: true, anchorMessageId: "a1" }],
+    });
+    agStore.pushMessage(sessionId, { id: "u2", role: "user", content: "第二轮" });
+
+    const { container } = render(<MessageList />);
+
+    expect(visibleFlow(container)).toEqual(["读取文档", "已读取", "第二轮"]);
+    expect(screen.getByText("read_doc")).toBeTruthy();
+    expect(screen.queryByText("未归属工具调用")).toBeNull();
+  });
+
+  it("draft 重试保留引用 payload", () => {
+    const sessionId = agStore.newSession();
+    agStore.pushMessage(sessionId, {
+      id: "u1",
+      role: "user",
+      content: "请参考  修改",
+      turnStatus: "draft",
+      parts: [
+        { type: "text", text: "请参考 " },
+        {
+          type: "reference",
+          refId: "r1",
+          kind: "doc",
+          label: "notes/a.md",
+          payload: { kind: "doc", relPath: "notes/a.md" },
+        },
+        { type: "text", text: " 修改" },
+      ],
+    });
+
+    render(<MessageList />);
+    screen.getByText("重试").click();
+
+    expect(vi.mocked(startTurn)).toHaveBeenCalledWith(
+      "请参考  修改",
+      expect.objectContaining({
+        references: [{ kind: "doc", relPath: "notes/a.md" }],
+      }),
+    );
   });
 });

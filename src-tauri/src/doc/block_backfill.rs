@@ -4,6 +4,10 @@
 //! 与 ED blockId 机制一致：唯一、不复用），保障上层锚定不因转换缺锚；编辑模型→docx **尽力保留**
 //! data-block-id；**往返保留度不达标时显式采用「重建锚」降级**（回写本文与 A-ED-M-T-01），不得静默让锚漂移。
 //! id 生成算法与 ED 对齐（占位实现，实现期换 ULID；A 类）。
+//!
+//! **已知限制（2026-07-24 审计）**：HTML 解析使用手工字符串扫描（非 HTML parser），不处理注释、
+//! CDATA、`<script>`/`<style>` 标签内的 `<`。当前适用场景的 HTML 均来自 Pandoc/TipTap 可控产出，
+//! 无上述结构。正式 HTML parser 替代记为 1.0-post 债务（DOC-BLOCK-BACKFILL-PARSER-01）。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -55,6 +59,7 @@ pub fn backfill_default(ids: &[Option<String>]) -> Vec<String> {
     backfill_block_ids(ids, gen_block_id)
 }
 
+/// 审计修复（2026-07-25 · A+D）：新增 ul/ol 容器块标签
 const BLOCK_TAGS: &[&str] = &[
     "p",
     "h1",
@@ -67,7 +72,11 @@ const BLOCK_TAGS: &[&str] = &[
     "li",
     "pre",
     "div",
+    "td",
+    "th",
     "table",
+    "ul",
+    "ol",
 ];
 
 #[derive(Debug)]

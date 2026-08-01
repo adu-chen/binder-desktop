@@ -84,6 +84,21 @@
 - **验收**：欢迎页↔工作台切换投影 workspace 活动态；静态审查前端 Store 无与后端可漂移的并行业务
   状态（X-FORBID-007）；前端经 Service→command 分层、无跨层直连（X-SEQ-002）。
 
+### PI-SYS-06　BDocx 代理编辑能力清单　✅ G4 已完成（BDOCX-AGENT-CAPABILITY-MANIFEST-01）
+
+- **承接**：REQ-SYS-002 / BR-SYS-DATA-006 / TERM-SYS-002 / X-SHARED-001；跨链引用
+  BR-AG-STATE-002、BR-ED-DATA-005/007、BR-DOC-DATA-002、BR-DE-DATA-002。
+- **文件范围**：`src-tauri/resources/bdocx-agent-capabilities.json`（机器清单）、
+  `src-tauri/src/ag/bdocx_capabilities.rs`（加载、版本/hash、Schema/提示词投影、执行前校验）、
+  `src-tauri/src/ag/prompts.rs` / `tool_registry.rs` / `blocks.rs` / `lib.rs`（消费面），以及
+  `src/services/edStyleOps.ts`（ED 防御性校验）。
+- **@GOV 落点**：manifest 加载与一致性校验、提示词投影、工具 Schema 投影、Diff 前参数校验引用
+  BR-SYS-DATA-006；StyleOp 当前锚/范围继续引用 BR-ED-DATA-005。
+- **非目标**：不新增编辑功能，不提升 DOCX 往返等级，不修改转换器、Diff UI、保存状态机或表格执行器。
+- **验收**：同一 manifest version/hash 投影提示词、工具 Schema 和校验器；错误 `sub/sup` 不再声明；
+  StyleOp 未知 mark/非法 attrs/错误锚/越界范围在 PendingDiff 前拒绝；TableOperation 有条件 Schema 且
+  继续服从 list_tables 动态能力；治理、Rust、TypeScript 与定向 Vitest 通过。
+
 ## §3 实施顺序与依赖
 
 ```
@@ -124,3 +139,5 @@ PI-SYS-05（前端外壳）可与 PI-SYS-01 并行（依赖 IPC 信封就绪）
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3 首件，确立 Plan Item 结构）：SYS 5 条 Plan Item（IPC 信封与错误/共享数据结构/workspace.db 迁移/会话门禁状态机/前端外壳含欢迎页），每条承接 REQ/RULE/CHAIN/CONSTRAINT/状态机 + 文件范围 + @GOV 落点 + A 类债务承接 + 验收；实施顺序与依赖；横切验收（audit/状态机矩阵/covers）；承接 A 类债务汇总；标注 AG Plan Item 须强制承接 4 项 B 类门禁例外 |
+| 2026-07-28 | v1.1 | 新增 PI-SYS-06 BDocxCapabilityManifest，实现独立能力协议、机器清单、提示词/工具 Schema/执行前校验同源投影与定向验收。 |
+| 2026-07-28 | v1.2 | PI-SYS-06 完成：manifest 1.1.0、运行时格式/能力/人工边界/往返风险注入、条件工具 Schema、Diff 前静态与 UTF-16 CharAnchor 校验均已接线并通过定向验证。 |

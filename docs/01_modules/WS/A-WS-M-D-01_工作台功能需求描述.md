@@ -111,9 +111,9 @@ req_id: REQ-WS-002
 title: 文件 I/O、save 保存与跨文档资源操作
 owner_module: WS
 status: active
-summary: 提供 workspace 内文档/资源的读写、列举与跨文档操作，以及编辑内容的 save 保存；AI 文件操作限定在 workspace 内
+summary: 提供 workspace 内文档/资源的读写、列举与跨文档操作，以及编辑内容的 save 保存；包含供代理只读发现的项目图片资源，AI 文件操作限定在 workspace 内
 source_doc: REQ-CORE-001、REQ-CORE-002、APC §4.1、§6
-acceptance: workspace 内可读写/列举/跨文档操作；save 保存可靠落盘；AI 文件操作不越出 workspace
+acceptance: workspace 内可读写/列举/跨文档操作；项目图片发现只返回未越界、未跟随符号链接的相对普通文件；save 保存可靠落盘；AI 文件操作不越出 workspace
 open_issues: save 保存状态机（APC §6 核心链）归 WS L2（M-S，解除 SY-04）；并发写入边界归 WS L2
 -->
 
@@ -199,3 +199,4 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版：WS 工作台模块级 L1；声明 REQ-WS-001~005（workspace 生命周期与边界 / 文件 I/O 与 save / pending_diffs 持久化与落盘 / 文档级时间轴回溯 / 控制态缓存与重启可恢复），承接 REQ-CORE-001/002/007 与 A-SYS-I-P-01 契约；代表性流程 W1–W3；边界闭合（含与 DE/SYS 边界）与 G1 暴露清单（WS-01~05 显式延期/部分关闭，对接 SY-03/SY-04） |
+| 2026-07-29 | v1.1 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-WS-002 增加 workspace 项目图片只读发现、相对普通文件与符号链接/越界保护验收。 |

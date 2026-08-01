@@ -3,7 +3,12 @@ import { deStore, type DiffView, type ExpiredReason } from "../store/deStore";
 import { edStore } from "../store/edStore";
 import { closeStore } from "../store/closeStore";
 import { openDocument, persistSessionSnapshot } from "./edService";
-import { applyEditOps, getActiveDocumentContent } from "./edLocate";
+import { applyEditOps, getActiveDocumentContent, getActiveEditor } from "./edLocate";
+import type { DocumentImageSnapshot } from "./edImageOps";
+import {
+  applyStructuredBlockOperations,
+  validateStructuredBlockOperations,
+} from "./edBlockOps";
 
 /**
  * DE 模块 Service（X-SEQ-002）：diff 生成/裁决经 dispatch 信封触达后端（PI-BE-02 的 de.*）。
@@ -29,7 +34,7 @@ async function callCommand<T>(command: string, params: Record<string, unknown>):
 }
 
 const snippet = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n)}…` : s);
-const isDocxPath = (path?: string) => Boolean(path && /\.(docx|doc)$/i.test(path));
+// isDocxPath 已移除（2026-07-26 · D2）：BDocx background diff 不再阻断，直写盘
 const errMsg = (e: unknown) => {
   const x = e as { code?: string; message?: string };
   return x?.code ? `[${x.code}] ${x.message ?? ""}` : String(e);
@@ -46,7 +51,7 @@ interface PendingDiffDto {
 
 export interface DiffDetailDto extends PendingDiffDto {
   projection?: {
-    patch_kind?: "replace_block" | "replace_document" | "style_ops";
+    patch_kind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
     block_id?: string | null;
     block_index?: number | null;
     before_text?: string;
@@ -57,60 +62,32 @@ export interface DiffDetailDto extends PendingDiffDto {
     base_session_version?: number | null;
     base_content_hash?: string | null;
     style_ops?: unknown;
+    block_ops?: unknown;
+    table_ops?: unknown;
+    image_ops?: unknown;
+    image_before?: unknown;
+    image_after?: unknown;
+    image_affected_block_ids?: unknown;
   };
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 function replaceTextBlock(content: string, blockIndex: number | undefined, nextText: string): string | null {
   if (blockIndex === undefined || blockIndex < 0) return null;
-  const blocks = content.split("\n");
+  // 审计修复（2026-07-24）：统一换行符为 \n，防止 \r\n 导致 split 偏移
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const blocks = normalized.split("\n");
   if (blockIndex >= blocks.length) return null;
   blocks[blockIndex] = nextText;
   return blocks.join("\n");
 }
 
-function findTagClose(content: string, tag: string, from: number): number {
-  return content.toLowerCase().indexOf(`</${tag.toLowerCase()}>`, from);
-}
-
-function replaceHtmlBlock(content: string, blockId: string | undefined, blockIndex: number | undefined, nextText: string): string | null {
-  const escaped = escapeHtml(nextText);
-  const blocks: { id?: string; start: number; end: number }[] = [];
-  const re = /<([a-zA-Z][\w:-]*)\b[^>]*>/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(content)) !== null) {
-    const openTag = match[0];
-    if (!/\bdata-block-id\s*=/.test(openTag) && !/^(p|h[1-6]|li|blockquote|pre|div|td|th)$/i.test(match[1])) {
-      continue;
-    }
-    const innerStart = match.index + openTag.length;
-    const closeStart = findTagClose(content, match[1], innerStart);
-    if (closeStart === -1) continue;
-    const idMatch = openTag.match(/\bdata-block-id\s*=\s*["']([^"']+)["']/i);
-    blocks.push({ id: idMatch?.[1], start: innerStart, end: closeStart });
-  }
-  const target = blockId
-    ? blocks.find((b) => b.id === blockId)
-    : blockIndex === undefined ? undefined : blocks[blockIndex];
-  if (!target) return null;
-  return `${content.slice(0, target.start)}${escaped}${content.slice(target.end)}`;
-}
-
 function applyOpenSessionPatch(diff: DiffView, content: string, editFormat: string, contentFormat: string): string | null {
-  if (diff.patchKind === "style_ops") return null;
+  if (diff.patchKind === "block_ops" || diff.patchKind === "style_ops" || diff.patchKind === "table_ops" || diff.patchKind === "image_ops") return null;
+  const isRich = contentFormat === "html" || editFormat === "html" || editFormat === "html_file";
+  if (isRich) return null;
   if (diff.patchKind === "replace_document") return diff.after;
   if (diff.patchKind === "replace_block") {
     const index = typeof diff.blockIndex === "number" ? diff.blockIndex : undefined;
-    if (contentFormat === "html" || editFormat === "html" || editFormat === "html_file") {
-      return replaceHtmlBlock(content, diff.blockId || undefined, index, diff.after);
-    }
     return replaceTextBlock(content, index, diff.after);
   }
   return null;
@@ -129,6 +106,29 @@ export async function loadDiffDetails(diffIds: string[]): Promise<DiffDetailDto[
   const ids = Array.from(new Set(diffIds.filter(Boolean)));
   if (!ids.length) return [];
   return callCommand<DiffDetailDto[]>("de.list_diffs", { diffIds: ids });
+}
+
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-002-EFFECT-DE-DE-DIFF-005
+ * type:     EFFECT
+ * chain:    DE-DIFF
+ * rules:    BR-DE-DATA-002
+ * term_ref: TERM-DE-004, TERM-ED-008
+ * boundary: in=ImageOperationDiffIdAndBeforeAfterImageSnapshots | out=PersistedImageReviewSnapshotAcknowledgement | effect=IPC-de.update_image_diff_snapshots | does_not=write_document_content_or_change_diff_terminal
+ */
+export async function persistImageDiffSnapshots(
+  diffId: string,
+  before: DocumentImageSnapshot[],
+  after: DocumentImageSnapshot[],
+  affectedBlockIds: string[],
+): Promise<void> {
+  await callCommand<{ persisted: boolean }>("de.update_image_diff_snapshots", {
+    diffId,
+    before,
+    after,
+    affectedBlockIds,
+  });
 }
 
 export async function loadPersistedDiffs(): Promise<void> {
@@ -174,8 +174,8 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
     await expireDiff(diffId, "block_resolve_failed", "ED_OPEN_SESSION_REQUIRED");
     return;
   }
-  if (diff.patchKind === "style_ops") {
-    await expireDiff(diffId, "apply_replace_failed", "ED_OPEN_SESSION_STYLE_OPS_UNSUPPORTED");
+  if (diff.patchKind === "block_ops" || diff.patchKind === "style_ops" || diff.patchKind === "table_ops" || diff.patchKind === "image_ops") {
+    await expireDiff(diffId, "apply_replace_failed", "ED_OPEN_SESSION_STRUCTURED_OPS_UNSUPPORTED");
     return;
   }
   const nextContent = applyOpenSessionPatch(diff, session.content, session.editFormat, session.contentFormat);
@@ -193,19 +193,10 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
     await expireDiff(diffId, "document_revision_advanced", applied.code);
     return;
   }
-  try {
-    await persistSessionSnapshot(applied.snapshot);
-    await callCommand<{ accepted: boolean }>("de.accept_draft_diff", {
-      diffId,
-      applyContext: "open_session",
-      baseSessionVersion: diff.baseSessionVersion,
-      baseContentHash: diff.baseContentHash,
-    });
-    deStore.markOpenSessionApplied(diffId, session.content, nextContent);
-  } catch (e) {
-    deStore.setLocalView(diffId, "error", { errorCode: (e as { code?: string })?.code ?? "DE_OPEN_SESSION_CONFIRM_FAILED" });
-    console.error(`open session diff confirm failed ${errMsg(e)}`);
-  }
+  // 审计修复（2026-07-26 · D1）：open_session diff 不再 auto-accept。apply 只修改 session 内容，
+  // 不调用 de.accept_draft_diff。accept 由后续用户操作驱动。
+  await persistSessionSnapshot(applied.snapshot);
+  deStore.markDraftApplied(diffId, session.content, session.tabState, nextContent);
 }
 
 /**
@@ -255,9 +246,31 @@ export async function generateSampleDiff(): Promise<void> {
 export async function acceptDiff(diffId: string): Promise<void> {
   try {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
+    if (diff?.state === "error" && !diff.draftApplied) return;
     const { openPath } = edStore.getSnapshot();
+    if (diff?.draftApplied && diff.blockOpsPayload) {
+      const activeEditor = getActiveEditor();
+      if (!activeEditor || diff.relPath !== openPath) {
+        deStore.setLocalView(diffId, "conflict", { errorCode: "ED_BLOCK_OPERATION_EDITOR_MISSING" });
+        return;
+      }
+      const preflight = validateStructuredBlockOperations(
+        activeEditor,
+        diff.blockOpsPayload,
+        "reverse",
+      );
+      if (!preflight.ok) {
+        deStore.setLocalView(diffId, "conflict", { errorCode: preflight.reason });
+        return;
+      }
+    }
     if (diff?.draftMode === "open_session") {
+      // D1：open_session diff 不再 auto-accept。apply 已在 diff_proposed 后用户触发时调用，
+      // 此处仅确认 accept（状态变更）
       await applyOpenSessionDiff(diffId);
+      if (deStore.getSnapshot().diffs.find((d) => d.diffId === diffId)?.draftApplied) {
+        await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId });
+      }
       return;
     }
     if (diff?.draftApplied && diff.relPath === openPath) {
@@ -268,10 +281,7 @@ export async function acceptDiff(diffId: string): Promise<void> {
       deStore.setLocalView(diffId, "error", { errorCode: "DE_OPEN_DOC_REQUIRES_LOGICAL_STATE" });
       return;
     }
-    if (diff && isDocxPath(diff.relPath)) {
-      deStore.setLocalView(diffId, "error", { errorCode: "DE_BDOCX_DRAFT_REQUIRED" });
-      return;
-    }
+    // 审计修复（2026-07-26 · D2）：无逻辑状态→直写盘（BDocx 也不例外）。session 不存在已验证。 |
 
     const entry = await callCommand<{ entry_id: string; version_seq: number }>("de.accept_diff", { diffId });
     // applying/accepted 经 SM-WS-02 + SM-DE-01 广播到达；此处仅回填展示元数据 + 重载编辑器。
@@ -289,12 +299,58 @@ export async function rejectDiff(diffId: string): Promise<void> {
   try {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
     if (diff?.draftMode === "open_session" || diff?.readonly) return;
+    const activeEditor = diff?.draftApplied && diff.blockOpsPayload ? getActiveEditor() : null;
+    if (diff?.draftApplied && diff.blockOpsPayload) {
+      if (!activeEditor || diff.relPath !== edStore.getSnapshot().openPath) {
+        deStore.setLocalView(diffId, "conflict", { errorCode: "ED_BLOCK_OPERATION_EDITOR_MISSING" });
+        return;
+      }
+      const preflight = validateStructuredBlockOperations(
+        activeEditor,
+        diff.blockOpsPayload,
+        "reverse",
+      );
+      if (!preflight.ok) {
+        deStore.setLocalView(diffId, "conflict", { errorCode: preflight.reason });
+        return;
+      }
+    }
     await callCommand("de.reject_diff", { diffId });
     const { openPath, editFormat, contentFormat } = edStore.getSnapshot();
     if (
+      diff?.draftApplied
+      && diff.blockOpsPayload
+      && diff.relPath === openPath
+      && activeEditor
+    ) {
+      const reversed = applyStructuredBlockOperations(
+        activeEditor,
+        diff.blockOpsPayload,
+        "reverse",
+      );
+      if (!reversed.ok) {
+        deStore.setLocalView(diffId, "error", { errorCode: reversed.reason });
+        return;
+      }
+      const currentContent = getActiveDocumentContent(editFormat, contentFormat);
+      if (currentContent !== null) {
+        edStore.updateContent(openPath, currentContent);
+        if (currentContent === diff.draftBaseContent) {
+          if (diff.draftBaseDirty) {
+            edStore.setTabState(openPath, "dirty");
+          } else if (diff.draftBaseTabState) {
+            edStore.setTabState(openPath, diff.draftBaseTabState);
+          }
+        } else {
+          edStore.setTabState(openPath, "dirty");
+        }
+      }
+      return;
+    }
+    if (
       diff?.draftApplied &&
       diff.relPath === openPath &&
-      (!diff.blockId || diff.styleOpsPayload?.length) &&
+      (!diff.blockId || diff.styleOpsPayload?.length || diff.tableOpsPayload || diff.imageOpsPayload) &&
       diff.draftBaseContent !== undefined
     ) {
       // D4 后置编辑检测（A-CORE-C-T-01 §5.4）：比较当前内容与 draftAfterContent。

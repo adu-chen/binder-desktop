@@ -4,8 +4,11 @@
 //! 经 DOC 预览链（LibreOffice → PDF）出只读 PDF；本模块只做"格式→预览链"归属编排，转换运行时归 DOC
 //! （doc::libreoffice_runtime）。音视频系统解码、导出/打印延后（A-PRV-I-P-01 §4）。
 
-use crate::doc::libreoffice_runtime::{convert_to_pdf, PreviewKind};
 use crate::doc::pandoc_runtime::{docx_to_markdown, markdown_to_docx};
+use crate::doc::{
+    libreoffice_runtime::{convert_to_pdf, PreviewKind},
+    tool_runtime,
+};
 use crate::ipc::IpcError;
 use std::path::Path;
 
@@ -39,7 +42,7 @@ pub fn render_preview(abs_path: &Path, ext: &str) -> Result<Vec<u8>, IpcError> {
             false,
         )
     })?;
-    let out_dir = std::env::temp_dir().join(format!("binder_prv_{}", std::process::id()));
+    let out_dir = tool_runtime::runtime_dir()?.join(format!("preview-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| IpcError::new("PRV_IO_ERROR", &format!("建预览目录失败: {e}"), true, false))?;
     let pdf = convert_to_pdf(abs_path, kind, &out_dir)?; // 失败态（含 LibreOffice 缺失）由 DOC 运行时回报
@@ -52,6 +55,7 @@ pub fn render_preview(abs_path: &Path, ext: &str) -> Result<Vec<u8>, IpcError> {
         )
     })?;
     let _ = std::fs::remove_file(&pdf); // 预览产物即用即清（字节已回传）
+    let _ = std::fs::remove_dir_all(&out_dir);
     Ok(bytes)
 }
 

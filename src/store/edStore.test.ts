@@ -30,11 +30,11 @@ describe("edStore · SM-ED-01 脏态投影 (BR-ED-STATE-001)", () => {
     expect(edStore.getSnapshot().tabState).toBe("saved");
   });
 
-  it("markDirty 不覆盖 pending_diff", () => {
+  it("用户编辑将 pending_diff 转为 dirty，保留未落盘事实", () => {
     edStore.openDoc("a.md");
     edStore.setTabState("a.md", "pending_diff");
     edStore.markDirty();
-    expect(edStore.getSnapshot().tabState).toBe("pending_diff");
+    expect(edStore.getSnapshot().tabState).toBe("dirty");
   });
 
   it("载入真实文档：saved 态 + 基线 + loadSeq 递增", () => {
@@ -45,6 +45,16 @@ describe("edStore · SM-ED-01 脏态投影 (BR-ED-STATE-001)", () => {
     expect(s.loadedContent).toBe("# 内容");
     expect(s.baseline).toBe(7);
     expect(s.loadSeq).toBe(before + 1);
+  });
+
+  it("DOCX 样式风险随会话装载并在活动投影中可见", () => {
+    edStore.loadDoc("color.draft.docx", "<p>红字</p>", 8, null, "html", "html", {
+      styleNotices: ["检测到 1 个颜色片段未能恢复"],
+    });
+    expect(edStore.getSnapshot().styleNotices).toEqual(["检测到 1 个颜色片段未能恢复"]);
+    expect(edStore.getSnapshot().sessions["color.draft.docx"].styleNotices).toEqual([
+      "检测到 1 个颜色片段未能恢复",
+    ]);
   });
 
   it("后台载入只补全非活动会话，不改 activePath 或触发当前编辑器重载", () => {
@@ -115,6 +125,7 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
       {
         relPath: "b.md",
         content: "B",
+        baseline: 42,
         editFormat: "text",
         contentFormat: "text",
         source: "open_editor_session",
@@ -129,15 +140,20 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
     expect(s.openPath).toBe("b.md");
     expect(s.loadedContent).toBe("B");
     expect(s.loadSeq).toBe(1);
-    expect(s.sessions["b.md"]).toMatchObject({ tabState: "dirty", sessionVersion: 3, contentHash: "hb" });
+    expect(s.sessions["b.md"]).toMatchObject({
+      baseline: 42,
+      tabState: "dirty",
+      sessionVersion: 3,
+      contentHash: "hb",
+    });
   });
 
-  it("closeSession 销毁会话；关活动会话则置空活动", () => {
+  it("closeSession 保留会话缓存；关活动会话则置空活动", () => {
     edStore.loadDoc("a.md", "A", 1);
     edStore.loadDoc("b.md", "B", 2);
     edStore.closeSession("b.md");
     let s = edStore.getSnapshot();
-    expect(s.sessions["b.md"]).toBeUndefined();
+    expect(s.sessions["b.md"]?.content).toBe("B");
     expect(s.openPath).toBeNull();
     expect(s.tabState).toBe("normal");
     edStore.setActivePath("a.md");
@@ -168,13 +184,13 @@ describe("edStore · 多文档会话 (PI-FE-27)", () => {
     expect(edStore.getSnapshot()).toMatchObject({ openPath: "b.md", baseline: 2 });
   });
 
-  it("会话已关闭时 markSaved/setTabState 为空操作", () => {
+  it("关闭标签后仍保留会话，保存态投影继续按路径更新", () => {
     edStore.loadDoc("a.md", "A", 1);
     edStore.closeSession("a.md");
     expect(() => {
       edStore.markSaved("a.md", 7);
       edStore.setTabState("a.md", "dirty");
     }).not.toThrow();
-    expect(edStore.getSnapshot().sessions["a.md"]).toBeUndefined();
+    expect(edStore.getSnapshot().sessions["a.md"]?.tabState).toBe("dirty");
   });
 });

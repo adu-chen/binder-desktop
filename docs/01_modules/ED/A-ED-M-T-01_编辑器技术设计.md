@@ -2,8 +2,8 @@
 文档编号：ED-M-T-01
 文档状态：A
 负责模块：ED
-文档职责：ED 编辑器模块级 L2 技术设计（规则 SSOT）——富文本编辑运行时（TipTap）与编辑会话、block 模型与稳定 blockId 定位、md/docx 统一编辑模型、分页与图文媒体的呈现层纯化、编辑器装饰层（decoration）接口契约；承接 REQ-ED-001~005
-上游约束：A-ED-M-D-01_编辑器功能需求描述.md（REQ-ED-001~005、ED-01~06）、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§6 状态机阈值、§9 文件系统/离线边界）、A-SYS-C-T-01_系统总体架构.md（§4 ED→WS、X-SEQ-002）、A-SYS-I-P-01_数据结构定义.md（DocRef、X-SHARED-001）、A-SYS-I-P-02_IPC协议.md（统一错误形状 BR-SYS-OBS-002）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001、BR-WS-PERSIST-001、X-FORBID-004）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01）、ADU.md（§3 RULE/CHAIN/CONSTRAINT/TERM 格式）
+文档职责：ED 编辑器模块级 L2 技术设计（规则 SSOT）——富文本编辑运行时（TipTap）与编辑会话、block 模型与稳定 blockId 定位、md/docx 统一编辑模型、分页与图文媒体的呈现层纯化、编辑器装饰层（decoration）接口契约；承接 REQ-ED-001~009
+上游约束：A-ED-M-D-01_编辑器功能需求描述.md（REQ-ED-001~009、ED-01~06）、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§6 状态机阈值、§9 文件系统/离线边界）、A-SYS-C-T-01_系统总体架构.md（§4 ED→WS、X-SEQ-002）、A-SYS-I-P-01_数据结构定义.md（DocRef、X-SHARED-001）、A-SYS-I-P-02_IPC协议.md（统一错误形状 BR-SYS-OBS-002）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001、BR-WS-PERSIST-001、X-FORBID-004）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01）、ADU.md（§3 RULE/CHAIN/CONSTRAINT/TERM 格式）
 直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 ED 规则 SSOT，代码经 @GOV 映射；文档编辑会话状态机在 A-ED-M-S-01 定义并登记 A-SYS-M-S-01 总图；decoration 接口契约供 DE（diff 呈现）/ AG（局部修改呈现）G2 承接
 使用边界：本文是 ED 规则 SSOT；不定义 diff 生成与终态（归 DE）、不定义 DOCX/Pandoc 二进制转换（归 DOC）、不做文件 I/O 与落盘（归 WS，ED 经 WS）、不锁定 TipTap/ProseMirror 具体版本与扩展集（延实现期选型记录）、状态机内部归 A-ED-M-S-01；inline-assist/autocomplete 业务归 AG（2026-06-11 人类确认），本文定义草稿编辑接口与 decoration 承载面
 变更要求：blockId 稳定性语义变更须与 DE（diff 定位）联合复核；decoration 接口契约变更须复核 DE/AG 消费方；跨模块共享结构变更回写 A-SYS-I-P-01（X-SHARED-001）；TERM 一经被 term_ref 引用其 en 不可更改（ADU §3.0）
@@ -69,13 +69,33 @@ forbidden: 样式指令, 格式操作, style命令, 样式patch
 agent 样式修改的唯一操作形态（REQ-ED-007，BR-ED-DATA-005）；落盘路径按裁定 D-3 分流
 （回合产出经 DE diff 裁决、显式内联视为用户编辑）。
 
+<!-- TERM
+term_id: TERM-ED-007
+chains: ED-EDIT, AG-TOOL, DE-DIFF
+zh: 表格操作
+en: TableOperation
+forbidden: 表格指令, 表格补丁, table命令
+-->
+针对稳定 `tableId` 与表格指纹执行的受限结构/属性修改单元。人工表格工具和代理
+`table_ops` 共用同一 ProseMirror 规划器；代理产出仍须进入 DE Diff 裁决，不得提交原始 HTML。
+
+<!-- TERM
+term_id: TERM-ED-008
+chains: ED-EDIT, AG-TOOL, DE-DIFF, DOC-CONVERT
+zh: 图片操作
+en: ImageOperation
+forbidden: 图片指令, 图片补丁, image命令
+-->
+针对当前 BDocx 图片实例或稳定 Block 执行的受限图片修改单元。代理只可执行项目内图片的独立段落
+插入与文档图片节点删除，并须进入 DE Diff 裁决；项目源文件不属于删除目标。
+
 ## §1 文档定位
 
 本文是 **ED 模块**的 L2 技术设计，是 ED 规则的唯一来源（SSOT，APC §2/§3.2），承接 ED L1
-（REQ-ED-001~005）：
+（REQ-ED-001~009）：
 
 ```
-REQ-CORE-002/004/009 → REQ-ED-001~005（ED L1）→ 本文 RULE/CHAIN/CONSTRAINT/TERM（SSOT）→ 代码(@GOV)
+REQ-CORE-002/004/009 → REQ-ED-001~009（ED L1）→ 本文 RULE/CHAIN/CONSTRAINT/TERM（SSOT）→ 代码(@GOV)
 本文 ←引用← A-SYS-I-P-01（DocRef）、A-WS-M-T-01（文件 I/O 经 WS）、A-WS-M-S-01（SM-WS-01 save）
 本文 →驱动→ A-ED-M-S-01（文档编辑会话状态机 SM-ED-01）→登记→ A-SYS-M-S-01 总图
 本文 decoration 契约 →供→ DE G2（diff 呈现）/ AG G2（局部修改呈现）承接
@@ -183,7 +203,8 @@ rule_id: BR-ED-DATA-001
 ### §4.1 字符级锚定与选区引用（PI-ED-10，承 REQ-ED-006）
 
 块级锚之上提供**字符锚（CharAnchor，TERM-ED-004）**与**选区引用（SelectionRef，TERM-ED-005）**：
-字符锚 = blockId + 块内纯文本偏移 {start,end}；**偏移定义在块内纯文本平面**（`textBetween` 语义，
+字符锚 = blockId + 块内纯文本偏移 {start,end}；**偏移定义在块内纯文本平面并按 UTF-16 code unit
+计数**（JavaScript `String.length` / `textBetween` 语义，
 跨 md/docx/html/纯文本统一，与序列化源码偏移无关——docx HTML 模型的标签偏移不作为锚定平面）。
 光标/选区位置经**受控查询接口按需读取**（非常驻投影：选区高频变化，常驻投影引发重渲染风暴且
 非业务态，X-FORBID-007 无涉）。
@@ -275,6 +296,18 @@ Markdown 保存必须满足无静默丢失：支持子集执行 parse→serializ
   语义，产生脏态经 SM-ED-01→SM-WS-01）。
 - **草稿恢复**：包含 StyleOp 的 pending diff 被拒绝时，ED 必须用草稿应用前的完整编辑器内容恢复，
   不得只回滚单块纯文本；恢复仍经当前编辑器受控接口触发普通脏态/标签态投影。
+- **能力清单与防御性校验（2026-07-28）**：代理可用 StyleOp 的名称、attrs 和 DOCX 往返等级由
+  A-SYS-I-P-04 BDocxCapabilityManifest 声明；AG 必须在生成 PendingDiff 前校验。ED 的
+  `planStyleOps()` 仍须对不可信历史/IPC 载荷做批内原子防御：只接受真实 mark 名
+  `bold/italic/underline/strike/highlight/subscript/superscript/code/link/textStyle`，严格校验
+  mark attrs、textAlign 目标节点和字符范围；任何未知项整批拒绝，不得等到事务执行中途才发现。
+
+- **富文档结构化内容块（2026-07-30）**：活动 ProseMirror doc 是层级块结构唯一真源。
+  `projectAgentEditableBlocks()` 遍历所有稳定 blockId 节点，投影 node type、role、父子层级、node JSON、
+  fingerprint 与动态 capabilities；列表/listItem/blockquote 等非 textblock 容器只读，其 paragraph
+  子节点独立可写，表格祖先和图片承载块不开放通用写能力。`applyStructuredBlockOperations()` 先整批
+  预检，再以一个 transaction 倒序 replaceWith，避免多个列表条目被拼成单段。Diff 拒绝使用 exact
+  beforeNode/afterNode 反向事务；节点在提案后被人工修改时转 conflict，不使用全文恢复覆盖其他改动。
 
 <!-- RULE
 rule_id: BR-ED-DATA-005
@@ -291,6 +324,57 @@ rule_id: BR-ED-DATA-005
 表达的 marks/blockAttrs；字体、字号、颜色、下划线、上下标、高亮、文本对齐等非标准能力在 Markdown
 模式下必须禁用或返回明确不支持，不得允许编辑后保存静默丢失。已打开非激活文档的 StyleOp 自动应用需要无 ProseMirror runtime
 事务；未具备时必须返回明确不支持并让 DiffCard 失效，不得降级为 DiskState 写入。
+
+### §5.3 BDocx 表格操作协议（PI-ED-17）
+
+BDocx 表格以表格操作（TableOperation，TERM-ED-007）表达受控结构与属性修改。操作目标由
+`tableId + fingerprint` 锚定，坐标为 0 起逻辑行列；预览规划与实际应用必须共用同一执行器并整批原子
+成功。支持集包括课题 A 的行列增删、表头、合并/拆分、纯文本单元格写入、文档流移动，以及课题 B 的
+`set_cell_background`。
+
+`set_cell_background` 只修改 `tableCell/tableHeader.backgroundColor`，不得改写单元格子树，因此富
+文本、多段落和 inline atom 必须保持不变。颜色只接受不透明 `#RRGGBB` 或 `null`（清除）；合并单元格
+只接受其左上锚。TableSnapshot 必须投影每个单元格的 `backgroundColor` 并把它纳入 fingerprint，使
+底纹变化能够令旧建议过期。人工多单元格选择使用同一节点属性语义；代理只能使用 `list_tables`
+公开的 capability。
+
+人工 `move_table` 与删除表格入口采用当前活动表格邻近的临时按钮组，不在顶部工具组重复呈现。控件以当前
+选区解析 tableId，并从选区 DOM 取得活动 table 所属的 TipTap `.tableWrapper`。控件须通过 portal
+直接挂载到该 wrapper，并以 wrapper 内 absolute 布局固定在右上角；不得读取或换算 table、paper、
+editor host、分页纸张、滚动内容或 viewport 的 top/left。TableView 的 `ignoreMutation` 明确忽略
+wrapper 中 contentDOM 之外的 childList/attribute/characterData 变化，因此该外挂 UI 不进入
+ProseMirror 文档模型。按钮采用右上方横向迷你工具条，wrapper 为所有表格保留一致的顶部安全区，工具
+条不得覆盖表头或单元格，也不得因选区进入/离开导致表格上下跳动。选区离开表格即卸载；表格移动、
+分页、缩放和滚动时由 DOM 归属自然跟随。
+按钮只调用既有逐块上移/下移 TableOperation，
+不可用方向禁用；`mousedown` 不得夺走编辑器选区，移动事务完成后须把选区恢复到同一 tableId，使
+控件跟随移动后的表格。真实 TableView DOM 识别必须兼容 table 与 `.tableWrapper`，相同选区再次点击
+也须通过 DOM 交互事件唤起控件；删除按钮调用既有 ED `deleteTable` 命令。该控件不引入拖动、任意
+位置、浮动定位或嵌套表格跨容器移动。
+
+<!-- RULE
+rule_id: BR-ED-DATA-007
+主链路: ED-EDIT, AG-TOOL, DE-DIFF
+域: DATA
+-->
+BDocx 表格结构与受支持单元格属性必须以表格操作（TableOperation）进入 ED 受控编辑路径：
+目标同时携带稳定 tableId 与 pre-update fingerprint，操作使用 0 起坐标并由同一 ProseMirror 规划器
+完成预览与原子应用；任一操作、坐标、动态 capability 或基准不匹配时整批失败。单元格纯色底纹只允许
+`set_cell_background(at,color)`，其中 color 为不透明 `#RRGGBB` 或 `null`，合并单元格只接受左上锚；
+该操作只修改 tableCell/tableHeader 的 backgroundColor 属性，不得替换或降级富内容子树。
+
+### §5.4 BDocx 图片操作协议
+
+BDocx 图片代理修改以图片操作（ImageOperation，TERM-ED-008）表达。操作批次绑定当前
+`sessionVersion + contentHash`；插入以稳定 Block 和 `before/after` 锚定，只生成包含一个图片的独立
+顶层段落；删除以 `imageId + fingerprint` 锚定当前图片实例。预览与实际应用必须共用同一
+ProseMirror 规划语义并整批原子成功。
+
+`insert_image` 只消费 DOC 已物化的稳定媒体引用与 workspace 来源路径/内容哈希；可选 alt 与受限
+正整数 width。`delete_image` 只删除 LogicalState 中的图片节点：独立图片删除其段落，唯一段落时保留
+空段落，混排图片只删节点。两种操作都不得删除或改写项目源文件、接受原始 HTML、引入远程/data URL，
+也不得扩展为浮动/绝对定位、任意坐标布局、裁剪、旋转或独立高度。非活动编辑器不具备图片节点事务，必须
+明确拒绝而不是降级改写 DiskState。
 
 ## §6 分页与图文媒体（呈现层纯化，ED-EDIT）
 
@@ -357,7 +441,23 @@ rule_id: BR-ED-DATA-005
   直到 `setContent`、当前 `loadSeq` 绑定和首轮分页 settled 均完成。隐藏期间 `EditorContent` 必须保持挂载
   以供真实 DOM 测量；旧 `loadSeq` 的 settled 结果不得揭示当前文档。
 - **图文媒体**：图片等媒体以媒体内容块进入编辑模型；媒体资源文件经 WS 存取并限定 workspace 内
-  （X-FORBID-004），ED 不自行落盘媒体文件。
+  （X-FORBID-004），ED 不自行落盘媒体文件。来源 BDocx 的已嵌入图片由 DOC 转换层抽取为按 baseline
+  隔离的只读编辑媒体，不属于 ED 导入项目文件；ED 的 HTML 节点以 `data-binder-media-src` 保留规范
+  相对身份，`src=asset://...` 仅为当前 WebView 显示投影。持久快照与保存输入必须恢复规范相对 `src`，
+  重启后经 DOC 重新授权，禁止依赖进程内 URL Map。
+- **图片代理操作**：代理插入的项目图片节点除稳定 `data-binder-media-src` 外，还保留 workspace
+  相对来源与内容哈希，供未保存草稿在媒体缓存缺失时重新校验和物化；这些属性是草稿恢复元数据，不
+  赋予 ED 文件写权限。代理必须先读取当前图片/Block 快照，再由 ImageOperation 单事务应用。DOC
+  打开、恢复和保存结果按文档更新本进程媒体显示目录；ED 只用该本地映射把稳定 mediaRef 投影为
+  `asset://`，本地绝对目录不得进入 ImageOperation 或模型工具结果。
+- **图片人工交互**：图片宽度修改必须由 NodeView 手柄提交单个 ProseMirror 属性事务，DOM 预览不能
+  取代 LogicalState；鼠标位移和 DOM 宽度按 computed zoom 归一化，WebKit 使用 document 捕获阶段
+  `mousemove/mouseup`，空拖动不产生事务。只有顶层且段落仅含一个图片的媒体 Block 可与相邻顶层 Block
+  交换位置，交换时保持段落 blockId、图片媒体身份和 NodeSelection；混排图片不提供块移动方向。
+  删除独立图片时删除其段落，文档仅剩该段时保留空段落；混排图片只删除图片节点。
+- **inline/block 边界**：真实 Pandoc 探针确认 `data-display` 在 HTML→DOCX→HTML 后丢失。BDocx 中
+  行内图片与独立图片只由段落结构区分，不提供虚假的 inline/block 持久切换；旧 `data-display` 仅用于
+  会话 HTML 显示兼容。浮动、绝对定位和任意位置拖放不在当前支持集。
 
 <!-- RULE
 rule_id: BR-ED-DATA-003
@@ -366,7 +466,14 @@ rule_id: BR-ED-DATA-003
 -->
 分页布局与遮罩是纯呈现层行为，不得改变文档模型或落盘内容，分页重排不产生脏态；图片等媒体以媒体
 内容块建模，其资源文件的存取必须经 WS 且限定 workspace 内（X-FORBID-004 / BR-WS-DATA-001），
-ED 不得自行写入媒体文件。打印/导出管线归 PRV，ED 仅提供打印友好的分页呈现。
+ED 不得自行写入媒体文件。图片宽度、文档流位置与删除必须通过 ED 受控 LogicalState 事务修改并产生
+脏态（BR-ED-STATE-001）；只有独立顶层图片段落可整体上移/下移，混排文字中的图片不得按块重排，
+代理仅可通过图片操作（ImageOperation）把经 DOC 物化的 workspace 图片插入稳定 Block 前后，或按
+稳定会话 imageId 与当前 fingerprint 删除、缩放、上下移动和设置独立顶层图片段落的左/中/右对齐；
+每个图片快照必须给出动态 capabilities、resizeBounds 与 moveDirections。同一图片单批可各含至多
+一个缩放、对齐和移动并按固定顺序在单一事务执行；重复同类操作拒绝，删除必须独占。批次基线、动态
+能力、锚或来源哈希失效时必须整批拒绝，且不得删除或改写项目源文件。所有操作必须保持未删除图片的
+稳定媒体身份。打印/导出管线归 PRV，ED 仅提供打印友好的分页呈现。
 
 ## §7 编辑器装饰层接口契约（ED-DECOR）
 
@@ -521,6 +628,12 @@ target_type: RULE
 target_id: BR-ED-DATA-002
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-ED-009
+target_type: RULE
+target_id: BR-ED-DATA-007
+status: mapped
+-->
 
 ## §10 测试与验收
 
@@ -537,9 +650,23 @@ status: mapped
   内容载入，旧结果不得回填或重新触发分页几何。普通段落行间拆分须覆盖 position 映射、最大可容纳行数、
   零行可容纳才换页、既有 gap position/bias 扣除和复杂节点原子降级。正式应用多轮人工测试后，人类接受
   当前普通段落仍可能行中强制断开、复杂节点仍原子换页的发布边界；该限制不改变分页纯呈现验收。
+- **图片人工交互**（BR-ED-DATA-001/003、BR-ED-STATE-001，REQ-ED-004 验收）：真实 NodeView +
+  document 捕获鼠标事件在 zoom 下可拖宽，空拖动不产生事务；独立图片段落可移动并保持 blockId、媒体
+  属性和选中态；混排图片移动被拒且同段文字不变；删除后的 LogicalState、HTML 序列化和 BDocx
+  保存重开图片数量/顺序一致。`data-display` 丢失测试作为明确排除证据，不得转写为已支持。
+- **图片代理操作**（BR-ED-DATA-001/003、BR-ED-STATE-001，REQ-ED-004 验收）：ImageOperation
+  必须校验当前 session/content 基线、Block/image fingerprint 和项目来源哈希；插入只形成稳定 Block
+  前后的独立图片段落；删除、缩放、上下移动和 left/center/right 对齐服从稳定 imageId、当前
+  fingerprint 与动态能力，删除不触碰项目源文件；整批原子应用、拒绝时恢复草稿前全文，保存重开后的
+  图片实例、资源、alt、受限宽度、文档流位置和受支持段落对齐一致。
 - **装饰层契约**（BR-ED-STATE-002 / X-FORBID-005，REQ-ED-005 验收）：decoration 按 blockId 挂载、
   按信号呈现/复位且终态不残留；decoration 不改文档模型；不存在绕过 ED 接口直改编辑器状态的调用
   路径（与 DE/AG G4 集成验证）；`open_session` 已应用卡切换到目标文档时不触发二次内容变更。
+- **BDocx 表格操作**（BR-ED-DATA-007，REQ-ED-009 验收）：人工和代理操作共用 TableOperation
+  规划语义；表格指纹、坐标、动态能力和合并单元格左上锚校验失败时整批拒绝；一个或多个选中单元格
+  设置/清除纯色底纹时只改变节点属性，富内容子树保持不变；表格邻近移动按钮随选区/滚动/缩放/事务
+  重定位，移动后仍锚定同一 tableId；删除表格入口与移动按钮同组并调用 ED 受控命令，顶部工具组不
+  保留重复移动或删除入口。
 - 量化 NFR（编辑响应延迟、大文档分页性能）延 G5 标定（APC §9，ED-06）。
 
 ## §11 技术债务与盲区（诚实声明）
@@ -569,6 +696,12 @@ status: mapped
   保留并对用户明示；**明确不处理**（页眉页脚 / 文本框 / SmartArt / VBA 宏 / 复杂样式继承链 /
   合并单元格等复杂表格格式）。完整往返保真由 PRV 预览（LibreOffice→PDF 全保真）补偿查看需求。
   转换管线归 DOC（DOC L2 为该子集契约的执行 SSOT，本文为编辑模型侧承载声明）。
+  嵌入图片在 `BDOCX-IMAGE-MEDIA-FOUNDATION-01` 已完成资源、alt、宽高与重开证据：TipTap Image 节点
+  同时保留稳定媒体身份，并把 Pandoc 的 px/in/cm/mm/pt/pc 长度按 96dpi 规范为 width/height px 属性；
+  `BDOCX-IMAGE-INTERACTION-01` 进一步完成 WebKit document 捕获拖宽、独立图片段落文档流移动和人工
+  删除；拖宽提交新 width 时清除来源固定 height，由浏览器按固有比例重算。浮动/绝对定位、任意位置
+  拖放与外部图片导入仍不属于当前支持集。`BDOCX-IMAGE-AGENT-EDIT-01` 只新增 workspace 项目图片的
+  代理独立段落插入和文档节点删除，不开放代理缩放/移动。
 
 ### §11.2 仍开放的债务
 
@@ -596,6 +729,17 @@ status: mapped
 - **孤立 ED session 镜像清理**：本轮恢复链路只保证孤立 `ed_session_snapshots` 不会打开文档；历史镜像的
   GC/清理策略暂不实现，后续可在 workspace 维护任务中按 `ed_open_tabs` 差集清理。
 - §11.1 各推荐选型均待实现期验证后转正式锁定；验证不符须回写本文并复核 DE/DOC 依赖方。
+
+### §11.3 BDocx 基础表格结构编辑（2026-07-28）
+
+光标位于 BDocx 表格内时，编辑器必须提供独立、可见的表格工具组：行列增删、首行表头、合并/拆分、
+文档流上移/下移及删除表格。合并操作以当前矩形单元格选择为前提；移动仅限顶层文档流中相邻的非表格
+块，边界或相邻表格时禁用。列宽允许通过可见列边界拖拽调整，当前会话列宽进入表格快照；不提供数值
+列宽、均分列、行高、浮动定位或自由拖放。
+
+富内容单元格的人工编辑保持既有富文本能力，但代理纯文本 `set_cell_text` 必须拒绝，避免覆盖标记或
+多个段落。单元格纯色底纹由 §5.3 的 `set_cell_background` 独立承载，只支持不透明 `#RRGGBB` 与清除；
+渐变、透明度、图案、主题继承、整行/整表填充和复杂 Word 表格样式仍不属于支持范围。
 
 ## §12 后续动作
 
@@ -646,4 +790,21 @@ status: mapped
 | 2026-07-26 | v1.31 | PI-ED-16行尾断点修复：确认旧段内`display:block`分页缝会污染可见DOM换行并自证旧position；自然行改由无分页缝离屏段落副本测量，断点增加纵向换行+横向回行双验证，无法证明即整段原子降级；旧断点移除后由Decoration自然恢复连续排版，不修改LogicalState。 |
 | 2026-07-26 | v1.32 | PI-ED-16二次人工失败纠偏：v1.31离屏副本仍克隆了受WebKit辅助BR/残留结构污染的可见DOM，不能作为自然排版真值；现改由ProseMirror LogicalState经schema DOMSerializer重新生成段落，并将含hardBreak段落原子降级，禁止短行/疑似旧widget污染成为分页候选。 |
 | 2026-07-26 | v1.33 | PI-ED-16物理分页边界纠正：完整保留页缝、页码、纸张高度和既有防跳链；废止离屏近似。已有段内断点重测时，仅在同一rAF内以呈现事务暂时过滤paragraph-line widget，Block页缝始终保留，直接读取当前可见ProseMirror真实行盒并在回调返回前恢复最终完整分页。 |
+| 2026-07-26 | v1.34 | 块模型A+D方案落地：引入"容器块"（orderedList/bulletList）与"内容块"（paragraph/heading/listItem/codeBlock/blockquote）两级分类，容器块获得blockId但对分页/投影透明；BlockIdExtension导出isContentBlock/isContainerBlock/iterContentBlocks；edLocate的topBlockAt改为resolveContentBlock递归穿透容器；edStyleOps/outlineStore改用descendants遍历；Pagination新增flattenBlocks展平列表容器；findTopBlockSnapshotById/getTopBlockSnapshotByIndex/getTopBlockIdByIndex改为descendants收集所有blockId节点。后端blocks.rs/deService.ts/block_backfill.rs同步扩展ul/ol标签。BR-ED-DATA-003分页闭环，PI-FE-30债务台账更新。 |
 | 2026-07-26 | v1.34 | 分页课题闭合：人类接受普通段落仍可能行中强制断开及复杂节点原子降级作为当前版本边界；移除正式人工矩阵开放门禁，保留物理分页、纯呈现规则、打开收敛和PI-ED-15防跳控制。 |
+| 2026-07-28 | v1.35 | BDocx 表格基础交互实现同步：新增 §11.3，表格内独立可见工具组覆盖行列、表头、合并/拆分、文档流移动与删除；列边界拖拽可见且写入会话快照。锁定不支持数值/均分列、行高、浮动/自由拖放、背景底纹和复杂样式往返；富内容单元格拒绝代理纯文本覆盖。 |
+| 2026-07-28 | v1.36 | BDocx TableCellShading：注册 TERM-ED-007 TableOperation 与 BR-ED-DATA-007；新增 `set_cell_background` 的颜色、坐标、富内容保护、指纹和原子规划契约；§11.3 将纯色底纹从排除项收敛为明确支持子集。 |
+| 2026-07-28 | v1.37 | BDocx 表格移动入口迁移：顶部工具组移除 `↑表/↓表`，改为活动表格附近的临时上下按钮；锁定选区/滚动/缩放/事务重定位、不可用方向禁用及移动后同一 tableId 继续激活，不扩大为拖动或任意位置移动。 |
+| 2026-07-28 | v1.38 | 表格邻近控件真实 UI 修复：活动表格 DOM 改由选区 `domAtPos` 优先解析并兼容 TableView wrapper，补充 pointerup/keyup/focusin 与嵌套滚动重定位；删除表格入口一并迁入邻近按钮组，顶部不再重复展示。 |
+| 2026-07-28 | v1.39 | 表格邻近控件位置修复：依据人工截图确认 WebKit 下 viewport fixed 坐标与编辑器容器错位；改为 editor-host 内 absolute 局部坐标，控件默认贴表格右上侧、空间不足回落左侧，并保持 paper 可视区钳制。 |
+| 2026-07-28 | v1.40 | 表格邻近控件锚定方案重构：人工复测证明 editor-host 局部坐标仍受分页/缩放布局影响；废止祖先坐标换算，改由 `document.body` portal 承载 fixed 浮层，直接使用活动 table 的 viewport DOMRect 作为唯一位置真值。 |
+| 2026-07-28 | v1.41 | 表格邻近控件改为 DOM 归属锚定：人工复测证明 table viewport rect 路径仍不可靠；删除全部几何计算，React portal 直接挂到活动 TipTap `.tableWrapper`，由 wrapper 内 absolute 右上角布局自然跟随表格。 |
+| 2026-07-28 | v1.42 | 表格邻近控件防遮挡优化：依据人工截图将右上角竖向按钮组改为横向迷你工具条；所有 tableWrapper 保留一致顶部安全区，避免遮挡最后一列表头/单元格及选区切换时的布局跳动。 |
+| 2026-07-28 | v1.43 | StyleOp 接入 A-SYS-I-P-04 BDocxCapabilityManifest；明确 AG Diff 前静态/锚/范围校验与 ED 对历史/IPC 载荷的严格批内原子防御，真实 mark 名固定为 subscript/superscript。 |
+| 2026-07-28 | v1.44 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：锁定 BDocx 图片稳定相对媒体身份与 `asset://` 显示投影分层；持久快照/保存去投影、重启经 DOC 重新授权；ResizableImage 恢复 Pandoc 物理宽高并明确本课题不含移动或代理图片操作。 |
+| 2026-07-28 | v1.44 | 明确 CharAnchor 偏移单位为 UTF-16 code unit，与 JavaScript/ProseMirror 实现及 BDocx 代理执行前校验统一。 |
+| 2026-07-28 | v1.45 | BDOCX-IMAGE-INTERACTION-01：BR-ED-DATA-003 纳入图片属性事务、独立图片段落移动/删除和媒体身份保持边界；WebKit 拖宽改用 document 捕获鼠标事件；真实 Pandoc 探针确认 data-display 不持久，撤下 inline/block 按钮声明。 |
+| 2026-07-29 | v1.46 | BDOCX-IMAGE-AGENT-EDIT-01：注册 TERM-ED-008 ImageOperation；定义项目内图片独立段落插入、图片实例删除、动态基线/锚/来源哈希校验、批原子草稿事务、源文件保护与代理缩放/移动排除边界。 |
+| 2026-07-29 | v1.47 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：ImageOperation 扩展受控缩放、上下移动与独立段落对齐，锁定稳定 imageId、当前 fingerprint、动态能力和同图单批一操作。 |
+| 2026-07-30 | v1.48 | 图片编辑闭合审计：移除“代理缩放/移动不可用”的历史排除描述；当前子集对齐 ImageOperation 组合缩放/布局/移动与受控拖入，继续排除高级布局。 |
+| 2026-07-30 | v1.49 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档块投影直接来自 ProseMirror 层级节点；容器/原子块只读，内容子块独立写；BlockOperation 批原子应用及 fingerprint 冲突安全的 exact node 回滚取代 HTML 字符串替换。 |

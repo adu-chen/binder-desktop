@@ -107,6 +107,8 @@ diff 生成必须满足：自修改建议（ChangeProposal）生成待裁决修�
 | before_snapshot | 修改前目标内容快照 | 外部变更检测基准（§6）+ 审阅对比基准 |
 | after_content | 修改后内容 | 当前编辑器草稿应用或后台 apply 的执行物；纯样式 diff 时可空 |
 | style_ops | 样式操作序列（StyleOp，A-ED-M-T-01 §5.1；2026-07-03 裁定 D-3 新增，可空） | 回合产出的样式修改载体，与 after_content 并存或独立 |
+| table_ops | 表格操作载荷（TableOperation + before/after TableSnapshot，可空） | BDocx 表格语义修改载体；不得退化为原始 HTML 替换 |
+| image_ops | 图片操作载荷（ImageOperation + 项目来源/锚 + before/after ImageSnapshot，可空） | BDocx 图片语义修改载体；不得退化为原始 HTML 替换 |
 | snapshot_source | 生成基线来源 | active_editor / active_editor_session / open_editor_session / disk_snapshot；已打开文档不得为 disk_snapshot |
 | base_session_version | 生成时 ED session 版本 | `snapshot_source=active_editor/active_editor_session/open_editor_session` 时必填 |
 | base_content_hash | 生成时内容哈希 | `snapshot_source=active_editor/active_editor_session/open_editor_session` 时必填；用于自动应用与冲突重检 |
@@ -119,7 +121,7 @@ diff 生成必须满足：自修改建议（ChangeProposal）生成待裁决修�
 运行时视图投影约定：AG 的 `propose_edit` 必须在 `DiffProposed` 前通过 `ToolResult` 返回
 `DiffProjection`，字段包括 `{diff_id, rel_path, patch_kind, block_id?, block_index?, before_text,
 after_text, location_label, draft_mode, snapshot_source, base_session_version?, base_content_hash?,
-style_ops?}`。`draft_mode` 仅允许 `current_editor / open_session / background`。DE/前端建 DiffCard 与 ED 草稿只能消费该投影，
+style_ops?, block_ops?, table_ops?, image_ops?}`。`draft_mode` 仅允许 `current_editor / open_session / background`。DE/前端建 DiffCard 与 ED 草稿只能消费该投影，
 不得用当前编辑器整篇内容截尾或 `tool_request.params` 重建 before/after。`replace_block` 的 before/after
 必须来自同一目标 Block；`replace_document` 只在显式整篇替换时使用整篇基准。`draft_mode=open_session`
 必须携带 session 基线元数据，且只能用于已打开非激活文档；`draft_mode=background` 只能用于未打开文档。
@@ -130,9 +132,11 @@ rule_id: BR-DE-DATA-002
 域: DATA
 -->
 diff 载荷必须含：载荷版本（payload_version，形状变更须版本递增并兼容迁移）、目标内容块定位
-（可细化至字符锚区间）、修改前内容快照、修改后内容（纯样式 diff 可空）、样式操作序列（可空，
-StyleOp 语义归 ED BR-ED-DATA-005，本规则锁其在载荷中的承载与版本化）、生成基线来源、session 版本/内容哈希（已打开文档必填）、来源元数据；经 WS 持久化
-并重启恢复后必须可完整重建审阅呈现（对比基准 = before_snapshot，含样式变更语义的可视对比）；
+（可细化至字符锚区间）、修改前内容快照、修改后内容（纯样式/结构操作 diff 可保持基线）、样式操作、BlockOperation、TableOperation
+或 ImageOperation 序列（均可空；其编辑语义归 ED，本规则锁在载荷中的承载与版本化）、生成基线来源、
+session 版本/内容哈希（已打开文档必填）、来源元数据；ImageOperation 还必须保留项目来源路径/hash、
+Block 或图片实例锚及 before/after ImageSnapshot。经 WS 持久化并恢复后必须可完整重建审阅呈现
+（对比基准 = before_snapshot，含样式、表格和图片变更语义的可视对比）；
 具体序列化格式延实现期，本规则锁字段语义集合。
 
 ## §5 终态裁决语义（DE-DIFF）
@@ -144,16 +148,22 @@ rule_id: BR-DE-STATE-001
 -->
 待裁决修改的终态转移必须满足：pending→accepted/rejected/expired 三终态互斥且不可逆（终态后
 不得再转移、不得复活）。当前打开编辑器且可定位的块级 diff、显式 `replace_document` 整篇 diff、
-StyleOp diff 在 pending 时即经 ED 受控接口把 after/样式操作应用为草稿并产生脏态；accepted 只确认该草稿，落盘由
-用户 save 触发 SM-WS-01，save 成功后 ED 复位 GreenReview。已打开非激活文档的 `draft_mode=open_session`
+StyleOp diff 在 pending 时即经 ED 受控接口把 after/样式操作应用为草稿并产生脏态；当前文档的任意 save
+动作都必须先将已应用 pending Diff 经 `de.accept_draft_diff` 确认为 accepted（不依赖额外点击“接受”），再触发
+SM-WS-01；save 成功后 ED 复位 GreenReview，save 失败则 accepted 保持 awaiting_save。已打开非激活文档的 `draft_mode=open_session`
 diff 必须在 pending 后立即经 ED session 事务应用到目标 LogicalState：基线匹配则自动 accepted、DiffCard
 禁用接受/拒绝；基线不匹配、事务不支持或应用失败则 expired/error 投影，不允许用户继续裁决该卡。
 未打开文档的后台 diff 可继续走 accepted→SM-WS-02 apply 路径，但该路径仅适用于文本/.html 等可直接应用载荷的文档。既有 BDocx 的磁盘
 权威是 docx 字节，DiffPayload 中的 HTML/Block 投影不得经后台 raw apply 写入 `.docx`；未在当前编辑器
 HTML 草稿中成功应用的 BDocx diff 必须进入 error（如 `DE_BDOCX_DRAFT_REQUIRED`），等待用户打开目标
 BDocx 后重新生成。
-rejected/expired 不写文件；若草稿已应用，rejected 必须经 ED 受控接口按 before 回滚。用户裁决交互经
-ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。状态转移归 SM-DE-01。
+rejected/expired 不写文件；若普通文本草稿已应用，rejected 经 ED 受控接口按 before 回滚；若
+block_ops 草稿已应用，拒绝前必须验证当前目标仍匹配 afterNode fingerprint，再在一个事务中恢复
+exact beforeNode。指纹已变化则投 conflict 并停止后端拒绝，不得整篇覆盖后置人工编辑。用户裁决交互经
+ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。DiffCard 显式接受 block_ops
+也必须先验证 afterNode fingerprint；已变化则保持 Pending 并投 conflict，不确认不可逆终态。保存动作
+仍按既定“保存即接受”决策确认当前文档全部已应用 pending Diff，该产品语义不被显式接受门禁改写。
+状态转移归 SM-DE-01。
 
 ### §5.1 效果态（解除审计发现：accepted 不等于已落盘的历史不一致，2026-07-20 新增）
 
@@ -166,7 +176,7 @@ ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。�
 
 DE 侧责任：`de.accept_diff`/`de.accept_draft_diff` 成功时按路径写入 `effect_status`——`background`
 路径与 `ws.apply_diff` 同一事务原子完成，写 `saved`；`current_editor`/`open_session` 路径写
-`awaiting_save`。真实保存成功（SM-ED-01 saved 事件）时由 ED/WS 侧按 `rel_path` 批量把该文档下
+`awaiting_save`。当前文档的保存编排将“保存”映射为先发生的 `de.accept_draft_diff`；真实保存成功（SM-ED-01 saved 事件）时由 ED/WS 侧按 `rel_path` 批量把该文档下
 `awaiting_save` 的 accepted 行翻转为 `saved`（DE 不直接监听保存事件，由调用方在保存成功回调中
 调用 DE 提供的批量翻转接口，避免 DE 反向依赖 ED/WS 内部状态机）。`awaiting_save` 的另一去向是
 关闭流程内用户显式放弃或 `BR-SYS-STATE-005` 启动清算转 `discarded_on_abnormal_exit`（归 SYS 侧编排，
@@ -268,6 +278,45 @@ target_id: BR-DE-STATE-002
 status: mapped
 -->
 
+### §9.1 BDocx 表格语义与单元格底纹 Diff（2026-07-28）
+
+BDocx 表格结构建议是 `table_ops` 专用载荷，不得伪装为 `replace_block` 或原始 HTML 替换。其
+`after_content` 保持生成时的完整 HTML 基线，实际预览与草稿应用由同一 ProseMirror 表格操作规划器
+执行受限 `TableOperation`；任一操作不能规划或执行则整批失败，不产生部分结构效果。载荷目标必须同时
+匹配活动 BDocx 编辑会话、`tableId`、表格拓扑指纹、sessionVersion 与 contentHash。代理只能使用
+`list_tables` 投影公开的动态 capabilities 和 moveDirections；富内容单元格不能用纯文本操作覆盖。
+`set_cell_background` 只修改节点属性，before/after TableSnapshot 必须包含各逻辑单元格的
+`backgroundColor`，且该属性参与表格指纹。
+
+DiffCard 须呈现结构前后行列形状和每个操作的坐标/参数，而非仅把表格显示为笼统的全文替换。拒绝时以
+底纹操作还须显示 `RnCn` 坐标、修改前/后色块和 `#RRGGBB`；清除态须明确显示“无底纹”，不得只显示
+操作名称。该 diff 的完整草稿前 HTML 用于拒绝恢复，接受沿用已应用草稿的既有裁决语义。列宽拖拽值是当前编辑会话的交互
+锚与差异上下文，不能声明为 DOCX 往返保真承诺。
+
+### §9.1.1 富文档结构化内容块 Diff（2026-07-30）
+
+富文档普通内容建议使用 `block_ops`，不得伪装为 replace_block、replace_document 或替换后的 HTML。
+持久载荷保留生成基线和 canonical operations；每项 beforeNode 由 AG 工具层从同次可信
+ProseMirror 快照补齐。Pending 时 ED 先整批预检再单事务应用，DiffCard 紧凑态显示块数，展开后按
+blockId/nodeType 逐项显示精确前后文本。拒绝只精确反向这些节点；目标在应用后被人工修改时进入
+conflict。接受仍只确认已应用草稿，保存进入既有 ED/WS 链。
+
+### §9.2 BDocx 图片语义 Diff（2026-07-29）
+
+BDocx 图片建议使用 `image_ops` 专用载荷，不得伪装为 `replace_block`、`replace_document` 或原始
+HTML 图片变更。载荷必须保留生成时 sessionVersion/contentHash、插入 Block 与项目来源 path/hash，
+或目标稳定 imageId/当前 fingerprint；并携带操作级 before/after ImageSnapshot。缩放须显示前后宽度，
+移动须显示前后序号/Block 相对位置，对齐须显示前后 left/center/right。仅
+`draft_mode=current_editor` 可应用，其他模式在生成前拒绝。
+
+DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受限宽度与新增图片状态；对删除须显示
+目标图片 alt、尺寸、所在 Block、媒体身份和删除后状态；缩放、移动与对齐须显示精确参数及真实前后
+快照。该结构化信息必须来自后端 DiffProjection，
+不得从原始 HTML 或工具请求文案猜测。Pending 时先由 ED 单事务应用草稿；拒绝恢复草稿前全文，接受只
+确认现有草稿，保存进入既有链。同一图片可在一张卡中组合一次缩放、对齐和移动，展示顺序与执行顺序
+固定为缩放→对齐→移动；删除必须独占。项目源文件始终不属于 Diff 删除效果。未应用或已过期的错误卡
+不得以接受动作伪装“重试”并覆盖首要根因；只有已应用但持久化失败的卡才可重试持久化。
+
 ## §10 测试与验收
 
 - **生成与锚**（BR-DE-DATA-001，REQ-DE-001 验收）：建议可生成为持久化 PendingDiff 且定位准确；
@@ -285,6 +334,9 @@ status: mapped
 - **DiffCard 紧凑态**（TERM-DE-003，DE-04 局部闭合）：默认渲染为标题/位置/红删/绿增/操作五行；
   长内容、状态提示与样式摘要不无界撑高默认卡片，展开后可查看详情；多轮 DiffCard 按各自
   AgentTurn/assistant 消息锚点插入消息流，不沉底汇总；`open_session` 已应用/失效卡不可接受或拒绝。
+  BDocx 底纹 Diff 必须同时显示精确逻辑坐标、前后色块与色值/清除态。
+  BDocx 图片 Diff 必须分别显示插入来源/位置/alt/width 或删除目标前后状态，不得退化为“修改图片”
+  摘要；非活动会话不产生 image_ops 卡。
 - 跨模块（G5 联调）：AG HandingOff→DE 生成、DE pending→ED 草稿应用、DE accepted→ED/WS save
   或后台 SM-WS-02 apply、DE rejected→ED 回滚/复位三链对接。
 - 量化 NFR（生成/呈现延迟）延 G5（DE-05）。
@@ -327,3 +379,11 @@ status: mapped
 | 2026-07-09 | v1.9 | 补齐 DiffProjection 与 BDocx 裁决路径：DiffCard/ED 草稿只消费后端权威投影，禁止前端预测 before/after；既有 BDocx 未应用到当前编辑器 HTML 草稿时不得走后台 raw apply 写入 docx 字节 |
 | 2026-07-18 | v1.10 | 新增 `draft_mode=open_session` 技术契约：已打开非激活文档 diff 基线校验通过后直接应用到 ED session LogicalState 并禁用裁决；DiffProjection 增 source/session/hash 基线字段；记录视觉与撤销债务 |
 | 2026-07-20 | v1.11 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：§3 精确化"重启可恢复"边界（只保证正常运行期审阅呈现，不保证裁决权跨异常退出存活，异常退出清算先于恢复执行）；新增 §5.1 效果态（`effect_status`/`terminal_reason`，语义 SSOT 归 `BR-SYS-DATA-005`，A-SYS-M-T-02 §4）解决"accepted 不等于已落盘"历史不一致 |
+| 2026-07-27 | v1.13 | DE-SAVE-IMPLICIT-ACCEPT-01：保存即接受产品决策落地；当前文档保存前必须把已应用 pending Diff 持久化为 accepted/awaiting_save，保存成功后复用既有效果态回调转 saved，禁止仅改前端卡片状态。 |
+| 2026-07-28 | v1.14 | BDocx 表格结构编辑：新增 §9.1，锁定 `table_ops` 的活动会话/表格指纹/动态能力校验、共享 ProseMirror 原子规划与草稿恢复、富内容单元格保护和结构化 DiffCard；列宽拖拽不构成 DOCX 往返保真承诺。 |
+| 2026-07-28 | v1.15 | BDocx TableCellShading：`table_ops` 载荷纳入 before/after `backgroundColor`；DiffCard 锁定逻辑坐标、前后色块、十六进制色值与清除态的精确呈现。 |
+| 2026-07-29 | v1.16 | BDOCX-IMAGE-AGENT-EDIT-01：新增 image_ops 载荷与 §9.2，锁定项目来源/动态锚、前后 ImageSnapshot、current_editor 草稿、结构化 DiffCard 与源文件保护。 |
+| 2026-07-30 | v1.17 | 图片代理编辑闭合审计：§9.2 同步同图缩放/对齐/移动组合、删除独占及错误卡不得用接受动作伪装重试的语义。 |
+| 2026-07-29 | v1.17 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：图片结构化 Diff 扩展缩放宽度、文档流移动与段落对齐的精确前后快照。 |
+| 2026-07-30 | v1.18 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：新增 §9.1.1 block_ops 结构化 Diff；exact beforeNode/afterNode 成为应用/审阅/回滚共同真值，列表子块逐项展示，fingerprint 变化转 conflict 而非全文恢复。 |
+| 2026-07-30 | v1.19 | AG-RICH-BLOCK-STRUCTURED-EDIT-01 闭合补强：DiffCard 显式接受 block_ops 增 afterNode fingerprint 前置校验；后置编辑时不提交 accepted，并明确保存即接受仍按既有产品决策执行。 |

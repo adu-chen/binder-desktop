@@ -143,8 +143,8 @@ owner_module: ED
 status: active
 summary: 支持图片等媒体在编辑器内的插入、呈现与处理，媒体资源经 WS 限定在 workspace 内
 source_doc: APC §4.1、REQ-CORE-001（workspace 边界）
-acceptance: 可在编辑器内插入并呈现图片等媒体；媒体资源不越出 workspace（WS X-FORBID-004）
-open_issues: 媒体处理（缩放/存储/引用）实现与格式支持范围归 ED L2
+acceptance: 可在编辑器内呈现和选择图片；图片宽度可通过可见手柄按固有比例调整；独立图片段落可经邻近控件在文档流内上移、下移或删除，混排文字中的行内图片不得被当作整块重排；代理可把经校验的 workspace 项目图片插入稳定 Block 前后，或对当前文档图片实例执行删除、受限宽度缩放、上下移动和独立段落左/中/右对齐，操作经结构化 Diff 裁决且不改写项目源文件；同图缩放/对齐/移动可单批原子组合，删除独占；用户从项目树、Finder 拖入或粘贴的 PNG/JPEG 经受控复制/复用后插入独立图片段落；成功操作产生脏态，BDocx 保存重开后图片资源、alt、尺寸、顺序、对齐和删除结果保持；媒体资源不越出 workspace（WS X-FORBID-004）
+open_issues: 图片视觉识别/OCR、文字环绕、行内混排重排、浮动或绝对定位、任意坐标布局、裁剪、旋转和独立高度不在当前支持子集；Pandoc 不保留自定义 data-display，故不把 inline/block 按钮声明为 BDocx 持久能力
 -->
 
 <!-- REQ
@@ -189,6 +189,17 @@ summary: 独立 .html 文件加入统一编辑模型：富文本编辑 + blockId
 source_doc: REQ-CORE-004、2026-07-03 人类需求 #1 与裁定 D-1（A-ED-X-L-02 §2：.html 富文本入范围）
 acceptance: .html 打开为富文本并可编辑；编辑保存往返保真；blockId 跨保存稳定（.html 可落盘 id，锚定强于 md）
 open_issues: 统一模型扩展归 ED L2（BR-ED-DATA-002 修订）；.html 的 head/script 等非正文内容的处理策略实现期定
+-->
+
+<!-- REQ
+req_id: REQ-ED-009
+title: BDocx 表格语义编辑与单元格底纹
+owner_module: ED
+status: active
+summary: BDocx 表格的人工交互与代理修改共用受控表格操作协议；支持基础结构操作和单元格纯色底纹，代理建议必须进入 Diff Edit 裁决
+source_doc: REQ-CORE-002、REQ-CORE-004、2026-07-28 人类确认课题 A/B
+acceptance: 表格可执行行列增删、表头、合并拆分、文档流移动和列边界拖拽；所选一个或多个单元格可设置或清除纯色底纹；代理可经 list_tables→table_ops 产生结构化建议，底纹差异按坐标和前后色值准确呈现；富内容单元格设置底纹时内容树不变；保存并重开 BDocx 后受支持底纹保持
+open_issues: 列宽数值输入/均分列、行高、浮动或绝对定位、渐变/主题/图案填充、嵌套表格和列宽 DOCX 往返保证不在当前范围
 -->
 
 ## §6 模块边界与约束（边界闭合）
@@ -250,3 +261,7 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 2026-07-03 | v1.1 | 编辑器专项优化承接（A-ED-X-L-02 批B，人类裁定 D-1/D-2/D-3）：追加 REQ-ED-006 字符级定位与选区引用（会话内锚，跨会话显式延后）、REQ-ED-007 agent 可读可编辑的样式协议（落盘路径 A 默认+B 限内联）、REQ-ED-008 .html 富文本编辑接入；技术契约分别归 ED L2 BR-ED-DATA-004/005 与 BR-ED-DATA-002 修订 |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
 | 2026-07-18 | v1.3 | 人类裁决替代 2026-07-03 Markdown 纯文本路径：修订 REQ-ED-001，要求 Markdown 经格式 Codec 进入结构化 LogicalState、默认终态富文本呈现、未编辑不改写、编辑后语义往返且非支持结构不得静默丢失；纯文本路径保持不变 |
+| 2026-07-28 | v1.4 | BDocx 表格课题 A/B：新增 REQ-ED-009，锁定基础表格交互、受控 TableOperation、单元格纯色底纹、结构化 Diff 与 DOCX 往返验收边界。 |
+| 2026-07-28 | v1.5 | BDOCX-IMAGE-INTERACTION-01：收紧 REQ-ED-004 验收，明确真实拖宽、独立图片段落文档流移动/删除、混排保护、脏态及 BDocx 保存重开结果；撤下不能由 Pandoc 持久的 inline/block 能力声明。 |
+| 2026-07-29 | v1.6 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-ED-004 纳入 workspace 项目图片的代理插入与当前图片实例删除、结构化 Diff、源文件保护和保存重开验收；继续排除外部导入、代理缩放/移动及自由布局。 |
+| 2026-07-30 | v1.7 | 图片编辑闭合审计：REQ-ED-004 同步代理缩放/上下移动/独立段落对齐、同图组合操作，以及项目树/Finder/粘贴受控导入；排除项收敛为视觉识别和高级布局。 |

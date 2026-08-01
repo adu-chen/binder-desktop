@@ -33,9 +33,27 @@ describe("Markdown Codec", () => {
     expect(normalizeMarkdownSemantic(reparsed)).toEqual(normalizeMarkdownSemantic(original));
   });
 
-  it("非标准结构进入源码保护，不构造有损富文本", () => {
+  it("保留 YAML front matter 并支持往返", () => {
+    const source = "---\ntitle: x\n---\n\n正文";
+    expect(inspectMarkdownSource(source)).toEqual([]);
+
+    const parsed = parseMarkdownForEditing(source);
+    expect(parsed).toMatchObject({
+      ok: true,
+      sourceProtected: false,
+      json: { attrs: { frontMatter: "title: x" } },
+    });
+    if (!parsed.ok) return;
+
+    expect(serializeMarkdownDocument(parsed.json)).toMatchObject({
+      ok: true,
+      markdown: expect.stringContaining("---\ntitle: x\n---"),
+    });
+  });
+
+  it("HTML 注释进入源码保护，不构造有损富文本", () => {
     const source = "---\ntitle: x\n---\n\n正文\n\n<!-- keep -->";
-    expect(inspectMarkdownSource(source)).toEqual(expect.arrayContaining(["front_matter", "comment"]));
+    expect(inspectMarkdownSource(source)).toEqual(["comment"]);
     expect(parseMarkdownForEditing(source)).toMatchObject({ ok: false, sourceProtected: true, contentFormat: "text", source });
   });
 

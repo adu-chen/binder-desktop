@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { deStore, toGreenReview, EXPIRED_REASON_TEXT, type DiffView } from "./deStore";
+import type { DocumentImageSnapshot } from "../services/edImageOps";
 
 const mk = (id: string, state: DiffView["state"]): DiffView => ({
   diffId: id,
@@ -96,6 +97,42 @@ describe("deStore 状态投影（SM-DE-01）", () => {
     deStore.applyBackendState("d", "Accepted", true);
     deStore.markDraftSaved("a.md");
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({ state: "accepted", draftSaved: true });
+  });
+
+  it("保存投影不得把 pending 草稿伪造成 accepted", () => {
+    deStore.addDiff({ ...mk("d-pending", "pending"), relPath: "a.md", blockId: "b1" });
+    deStore.markDraftApplied("d-pending", "base", "saved");
+    deStore.markDraftSaved("a.md");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({ state: "pending", draftSaved: false });
+  });
+
+  // covers: BR-DE-DATA-002
+  it("ImageOperation 前后实例和受影响 Block 与同一 DiffView 绑定", () => {
+    const image: DocumentImageSnapshot = {
+      imageId: "image_0_fp",
+      fingerprint: "fp",
+      ordinal: 0,
+      blockId: "b-image",
+      imagePos: 1,
+      standalone: true,
+      alt: null,
+      width: null,
+      height: null,
+      mediaRef: "media/image.png",
+      projectSourcePath: null,
+      projectSourceHash: null,
+      alignment: "left" as const,
+      capabilities: ["delete_image", "resize_image", "move_image", "set_image_layout"],
+      resizeBounds: { min: 40, max: 800 },
+      moveDirections: [],
+    };
+    deStore.addDiff({ ...mk("d-image", "pending"), patchKind: "image_ops" });
+    deStore.setImageSnapshots("d-image", [], [image], ["b1", "b-image"]);
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      imageBefore: [],
+      imageAfter: [image],
+      imageAffectedBlockIds: ["b1", "b-image"],
+    });
   });
 
   it("toGreenReview 映射：rejected/error→null，过渡态→applying，pending/conflict→pending", () => {

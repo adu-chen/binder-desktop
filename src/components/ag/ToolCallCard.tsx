@@ -17,7 +17,7 @@ const STATE_LABEL: Record<ToolCallView["state"], string> = {
 };
 
 export function ToolCallCard({ tool }: { tool: ToolCallView }) {
-  const { name, state, detail } = tool;
+  const { name, state, detail, readonly } = tool;
   return (
     <div className={`toolcard toolcard-${state}`}>
       <div className="toolcard-head">
@@ -31,13 +31,13 @@ export function ToolCallCard({ tool }: { tool: ToolCallView }) {
           <span style={{ width: "62%" }} />
         </div>
       )}
-      {state === "awaiting_confirmation" && (
+      {state === "awaiting_confirmation" && !readonly && (
         <div className="toolcard-actions">
           <button className="toolcard-allow">授权</button>
           <button className="ghost">拒绝</button>
         </div>
       )}
-      {state === "failed" && (
+      {state === "failed" && !readonly && (
         <div className="toolcard-actions">
           <button>重试</button>
           <button className="ghost">跳过</button>

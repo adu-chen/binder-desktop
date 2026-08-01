@@ -14,10 +14,13 @@ export function EditorStatusBar({
   editor,
   tabState,
   converting,
+  styleNotices = [],
 }: {
   editor: Editor | null;
   tabState: TabState;
   converting: boolean;
+  /** DOCX 转换报告的风险告知；无告知时不增加状态栏噪声。 */
+  styleNotices?: string[];
 }) {
   const [, tick] = useReducer((n: number) => n + 1, 0);
 
@@ -52,6 +55,11 @@ export function EditorStatusBar({
       <span className="ed-sb-item">{cursorLine}:{cursorCol}</span>
       <span className="ed-sb-spacer" aria-hidden="true" />
       {converting && <span className="ed-sb-item ed-sb-loading">正在转换文档…</span>}
+      {styleNotices.length > 0 && (
+        <span className="ed-sb-item" title={styleNotices.join("\n")} aria-label={`样式提示：${styleNotices.join("；")}`}>
+          样式提示：{styleNotices.length}
+        </span>
+      )}
       <span className={`ed-sb-item ed-sb-state ed-sb-${tabState}`}>{STATE_TEXT[tabState]}</span>
     </div>
   );

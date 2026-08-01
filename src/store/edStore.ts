@@ -45,9 +45,46 @@ export type ContentFormat = "text" | "html";
 
 export type OpenDocSnapshotSource = "active_editor" | "active_editor_session" | "open_editor_session";
 
+export type AgentEditableBlockRole = "content" | "container" | "atom";
+
+export interface AgentEditableBlockSnapshot {
+  blockId: string;
+  blockIndex: number;
+  /** HTML 语义标签投影；nodeType 保留 ProseMirror schema 名。 */
+  blockType: string;
+  nodeType: string;
+  role: AgentEditableBlockRole;
+  parentBlockId: string | null;
+  depth: number;
+  ordinal: number;
+  text: string;
+  attrs: Record<string, unknown>;
+  marks: { type: string; range: [number, number]; attrs?: Record<string, unknown> }[];
+  nodeJson: Record<string, unknown>;
+  fingerprint: string;
+  capabilities: string[];
+}
+
+export interface StructuredBlockOperation {
+  op: "replace_node" | "insert_before" | "insert_after" | "append";
+  blockId: string;
+  fingerprint: string;
+  expectedNodeType: string;
+  beforeNode: Record<string, unknown>;
+  afterNode: Record<string, unknown>;
+}
+
+export interface StructuredBlockEditPayload {
+  payloadVersion: 1;
+  base: { sessionVersion: number; contentHash: string };
+  operations: StructuredBlockOperation[];
+}
+
 export interface OpenDocSnapshot {
   relPath: string;
   content: string;
+  /** BDocx 持久恢复使用的磁盘加载基线；旧快照可缺省。 */
+  baseline?: number | string | null;
   editFormat: EditFormat;
   contentFormat: ContentFormat;
   source: OpenDocSnapshotSource;
@@ -55,6 +92,8 @@ export interface OpenDocSnapshot {
   sessionVersion: number;
   contentHash: string;
   capturedAt: number;
+  /** 仅活动富文档编辑器提供，直接从同次 ProseMirror LogicalState 投影。 */
+  blockSnapshots?: AgentEditableBlockSnapshot[];
 }
 
 export type SessionApplyResult =
@@ -69,6 +108,8 @@ export type SessionApplyResult =
  */
 export interface LoadDocOptions {
   activate?: boolean;
+  /** DOCX 转换时实际检测到的样式风险，随会话切换而切换。 */
+  styleNotices?: string[];
 }
 
 export function hashLogicalContent(content: string): string {
@@ -93,6 +134,7 @@ function makeSession(
   contentFormat: ContentFormat = editFormat === "html" || editFormat === "html_file" ? "html" : "text",
   version = content === null ? 0 : 1,
   converting = false,
+  styleNotices: string[] = [],
 ): EditSession {
   return {
     content,
@@ -101,6 +143,7 @@ function makeSession(
     editFormat,
     contentFormat,
     converting,
+    styleNotices,
     sessionVersion: version,
     contentHash: content === null ? "" : hashLogicalContent(content),
   };
@@ -127,6 +170,10 @@ export interface EditSession {
   contentHash: string;
   /** docx 打开转换进行中（SM-DOC-01 OpenConverting 投影，PI-ED-07 #7 加载反馈）。 */
   converting?: boolean;
+  /** 当前文档的样式风险告知；仅来自 DOCX 转换报告。 */
+  styleNotices?: string[];
+  /** Markdown 文档的源码视图开关（仅 editFormat=markdown 有效）。true=显示 Markdown 源码，false=WYSIWYG 富文本。 */
+  sourceView?: boolean;
 }
 
 interface EdState {
@@ -150,6 +197,10 @@ interface EdState {
   contentFormat: ContentFormat;
   /** 活动会话 docx 转换进行中（SM-DOC-01 投影）。 */
   converting: boolean;
+  /** 活动会话的 DOCX 样式风险告知。 */
+  styleNotices: string[];
+  /** Markdown 文档当前是否在源码视图（仅 editFormat=markdown 时有效）。 */
+  sourceView: boolean;
 }
 
 type Core = Pick<EdState, "sessions" | "activePath" | "loadSeq" | "jumpLine">;
@@ -166,6 +217,8 @@ function derive(core: Core): Omit<EdState, keyof Core> {
     editFormat: sess?.editFormat ?? "text",
     contentFormat: sess?.contentFormat ?? "text",
     converting: sess?.converting ?? false,
+    styleNotices: sess?.styleNotices ?? [],
+    sourceView: sess?.sourceView ?? false,
   };
 }
 
@@ -248,7 +301,7 @@ export const edStore = {
     commit({
       sessions: {
         ...state.sessions,
-        [path]: makeSession(content, baseline, "saved", editFormat, contentFormat),
+        [path]: makeSession(content, baseline, "saved", editFormat, contentFormat, 1, false, options.styleNotices),
       },
       activePath: activate ? path : state.activePath,
       loadSeq: activate ? state.loadSeq + 1 : state.loadSeq,
@@ -264,6 +317,12 @@ export const edStore = {
       loadSeq: state.loadSeq + 1,
       jumpLine: null,
     });
+  },
+  /** Markdown 文档切换源码/富文本视图（仅 editFormat=markdown 时有效）。 */
+  setSourceView(path: string, sourceView: boolean) {
+    const cur = state.sessions[path];
+    if (!cur || cur.editFormat !== "markdown") return;
+    patchSession(path, { sourceView });
   },
   /** 暂存某会话的当前编辑内容（切换标签前由编辑器序列化回写 → 不丢草稿）；不触发 loadSeq/不改脏态。 */
   updateContent(path: string, content: string) {
@@ -293,6 +352,7 @@ export const edStore = {
         return [{
           relPath: path,
           content: sess.content,
+          baseline: sess.baseline,
           editFormat: sess.editFormat,
           contentFormat: sess.contentFormat,
           source: path === state.activePath ? activeSource : "open_editor_session",
@@ -317,7 +377,7 @@ export const edStore = {
     for (const snap of snapshots) {
       sessions[snap.relPath] = {
         content: snap.content,
-        baseline: sessions[snap.relPath]?.baseline ?? null,
+        baseline: snap.baseline ?? sessions[snap.relPath]?.baseline ?? null,
         tabState: snap.dirty ? "dirty" : "saved",
         editFormat: snap.editFormat,
         contentFormat: snap.contentFormat ?? (snap.editFormat === "html" || snap.editFormat === "html_file" ? "html" : "text"),
@@ -419,7 +479,7 @@ export const edStore = {
   /** 编辑产生脏态（编辑器 onUpdate 驱动，作用于活动会话）。 */
   markDirty() {
     const sess = state.activePath ? state.sessions[state.activePath] : undefined;
-    if (sess && sess.tabState !== "pending_diff") {
+    if (sess) {
       patchActive({ tabState: "dirty" });
     }
   },
@@ -428,9 +488,25 @@ export const edStore = {
   setTabState(path: string, tabState: TabState) {
     patchSession(path, { tabState });
   },
-  /** 关闭某文档会话（关闭标签时调用）；若为活动会话则置空活动（相邻激活由 tabsStore 决定）。 */
+  /** 关闭某文档会话（关闭标签时调用）；若为活动会话则置空活动（相邻激活由 tabsStore 决定）。
+   *  审计修复（2026-07-26 · D11）：不 delete session，保留缓存逻辑状态供重开时 setActivePath 复用。
+   *  workspace 切换时 reset() 全清，不会跨 workspace 污染。 */
   closeSession(path: string) {
     if (!state.sessions[path]) return;
+    const sessions = { ...state.sessions };
+    commit({
+      sessions,
+      activePath: state.activePath === path ? null : state.activePath,
+      loadSeq: state.loadSeq,
+      jumpLine: state.jumpLine,
+    });
+  },
+  /** 丢弃尚未形成逻辑内容的打开占位会话。
+   * 与 closeSession 不同：后者保留已加载会话以维护 BDocx 的稳定 blockId；本方法只供打开失败路径
+   * 清理空占位，避免文件不存在/转换失败时留下可被重开的假文档。 */
+  discardOpenPlaceholder(path: string) {
+    const session = state.sessions[path];
+    if (!session || session.content !== null) return;
     const sessions = { ...state.sessions };
     delete sessions[path];
     commit({

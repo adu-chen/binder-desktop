@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useRef } from "react";
-import { activeSession, useAgStore } from "../../store/agStore";
+import { activeSession, useAgStore, type ToolCallView } from "../../store/agStore";
 import { useDeStore } from "../../store/deStore";
-import type { MessageContentPart } from "../../services/referencePayload";
+import type { MessageContentPart, ReferencePayload } from "../../services/referencePayload";
 import { DiffList } from "../de/DiffList";
 import { ToolCallCard } from "./ToolCallCard";
+import { startTurn } from "../../services/agService";
 
 /**
  * 消息流（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01）。
@@ -17,10 +18,15 @@ export function MessageList() {
   const { messages, toolCalls } = session;
   const endRef = useRef<HTMLDivElement>(null);
   const sessionDiffs = diffs
-    .filter((d) => !d.sessionId || d.sessionId === session.id)
+    .filter((d) => d.sessionId === session.id)
     .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   const fallbackDiffs = sessionDiffs.filter((d) => !d.anchorMessageId);
   const diffsForMessage = (messageId: string) => sessionDiffs.filter((d) => d.anchorMessageId === messageId);
+  const fallbackToolCalls = toolCalls.filter((t) => !t.anchorMessageId);
+  const toolCallsForMessage = (messageId: string) => [
+    ...toolCalls.filter((t) => t.anchorMessageId === messageId),
+    ...(messages.find((m) => m.id === messageId)?.toolCalls ?? []),
+  ];
 
   useEffect(() => {
     if (typeof endRef.current?.scrollIntoView === "function") {
@@ -42,16 +48,28 @@ export function MessageList() {
               {m.streaming && <span className="msg-caret" aria-hidden />}
             </div>
           </div>
+          <ToolCallList tools={toolCallsForMessage(m.id)} />
           <DiffList diffs={diffsForMessage(m.id)} />
+          {m.role === "user" && m.turnStatus === "draft" && (
+            <div className="msg msg-assistant msg-error">
+              <span className="label msg-role">AI</span>
+              <div className="msg-body">
+                本回合未完成。
+                <button className="ghost" onClick={() => void startTurn(m.content, { displayParts: m.parts, references: referencesFromParts(m.parts) })}>
+                  重试
+                </button>
+              </div>
+            </div>
+          )}
         </Fragment>
       ))}
 
       <DiffList diffs={fallbackDiffs} label="未归属修改建议" />
 
-      {toolCalls.length > 0 && (
+      {fallbackToolCalls.length > 0 && (
         <div className="toolcalls">
-          <span className="label">工具调用</span>
-          {toolCalls.map((t) => (
+          <span className="label">未归属工具调用</span>
+          {fallbackToolCalls.map((t) => (
             <ToolCallCard key={t.id} tool={t} />
           ))}
         </div>
@@ -60,6 +78,22 @@ export function MessageList() {
       <div ref={endRef} />
     </div>
   );
+}
+
+function ToolCallList({ tools }: { tools: ToolCallView[] }) {
+  if (!tools.length) return null;
+  return (
+    <div className="toolcalls">
+      <span className="label">工具调用</span>
+      {tools.map((t) => (
+        <ToolCallCard key={t.id} tool={t} />
+      ))}
+    </div>
+  );
+}
+
+function referencesFromParts(parts?: MessageContentPart[]): ReferencePayload[] {
+  return (parts ?? []).flatMap((part) => (part.type === "reference" ? [part.payload] : []));
 }
 
 function MessageParts({ parts }: { parts: MessageContentPart[] }) {

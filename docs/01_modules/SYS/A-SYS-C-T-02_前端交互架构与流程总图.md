@@ -105,7 +105,7 @@ UI 组件（界面分区，§3）
 | 对话区（代理编辑面板） | AG | 代理编辑（AgentEdit）：编辑/构建双模式切换、回合输入与流式回显（ag.start_turn/turn_stream）；每轮产出的 DiffCard 插入对应 assistant 消息后；构建过程同窗口呈现 |
 | diff 审阅 | DE（+ED 装饰层） | diff 高亮（编辑区内联）+ 裁决控件（接受/拒绝） |
 | 时间轴面板 | WS | 文档历史节点浏览/预览/还原（ws.list_timeline/restore） |
-| 预览面板 | PRV | docx 全保真/Excel/PPT/音视频（prv.preview，独立面板/标签，与编辑分离） |
+| 预览面板 | PRV | docx/Excel/PPT 的 LO 语料实测只读预览、音视频（`prv.preview`，独立面板/标签，与编辑分离） |
 | 构建视图 | CBT | 任务计划/进度/接管（cbt.start_build；构建移交 切换） |
 | 资产面板 | AST/KB/TPL | 记忆/知识库/模板管理 |
 | @mention 触发 | REF | 编辑/对话输入内的引用候选浮层（前端进程内，经 ED 扩展点） |
@@ -211,7 +211,7 @@ flowchart TD
 ```mermaid
 flowchart TD
   OP[打开 docx 类文件] --> KIND{原生 docx?}
-  KIND -- 是 --> CV[doc.render_preview LibreOffice→PDF 全保真]
+  KIND -- 是 --> CV[prv.preview → DOC 内部 LibreOffice→PDF 只读预览]
   CV --> PV[预览面板只读呈现]
   PV --> MK{创建 b-docx 进行编辑?}
   MK -- 是 --> DR[doc.create_draft → *.draft.docx / BDocx]
@@ -224,7 +224,7 @@ flowchart TD
   CV -. 转换失败 .-> ER2[预览失败态 不空白]
 ```
 
-> 编辑链（Pandoc，子集化可改）与预览链（LibreOffice→PDF，全保真只读）**完全分离**
+> 编辑链（Pandoc，子集化可改）与预览链（LibreOffice→PDF，以 LO 语料实测为准的只读预览）**完全分离**
 > （BR-DOC-DATA-001）；原生 docx 不直接进入编辑区，b-docx 才进入 ED 编辑态。b-docx 来源包括
 > EditDraft、文件树新建和 Agent 创建。前端文件树不得只靠文件名猜测 docx 路由，必须消费
 > `ws.list_docs.is_bdocx`：`true` 进入 ED/DOC 编辑链，`false` 进入 PRV 只读预览链；`*.draft.docx`
@@ -464,5 +464,6 @@ status: mapped
 | 2026-07-16 | v1.18 | 修正 §4.5 AG-ASSIST 辅助续写失败态：候选不足 3 条时保留空态，不展示半候选、不允许采纳，避免浮层瞬间关闭 |
 | 2026-07-17 | v1.19 | 收敛 §4.5 AG-ASSIST 空态诊断：普通 UI 保持轻量空态，但 service/store/overlay 必须保留内部 failure_reason |
 | 2026-07-18 | v1.20 | 修正 §4.3 AgentEdit 主链：发起回合必须携 open_doc_snapshots；DiffProjection 按 current_editor/open_session/background 三路径分流，已打开非激活文档自动应用 LogicalState 并禁用 DiffCard 裁决，未打开文档才允许后台落盘 |
+| 2026-07-21 | v1.21 | 审计修正：原生 docx 预览总图统一为 `prv.preview` 消费 DOC 内部转换能力；删除不存在的 `doc.render_preview`，并将“全保真”收敛为 LO 语料实测的只读预览目标。 |
 | 2026-07-25 | v1.22 | 补齐启动恢复投影收敛：workspace 恢复与状态机监听单飞；路径 latest-wins 防止迟到文档结果重新激活编辑器或回填当前布局。 |
 | 2026-07-26 | v1.23 | BDocx 打开流程增加当前 loadSeq 的首轮分页 settled 门禁；转换结果到达后保持加载遮罩，避免揭示 setContent 与分页收敛的中间回填帧。 |

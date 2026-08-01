@@ -2,7 +2,7 @@
 文档编号：PRV-M-D-01
 文档状态：A
 负责模块：PRV
-文档职责：PRV 预览与输出模块级功能需求描述——声明模块级 REQ-PRV-*，承接产品级 REQ-CORE-004/009 与 v1 范围冻结（音视频预览纳入、Excel/PPT 仅预览不编辑），界定 docx 全保真预览 / Excel·PPT 预览 / 音视频预览 / 打印与导出
+文档职责：PRV 预览与输出模块级功能需求描述——声明模块级 REQ-PRV-*，承接产品级 REQ-CORE-004/009 与 v1 范围冻结（音视频预览纳入、Excel/PPT 仅预览不编辑），界定 docx 语料实测只读预览 / Excel·PPT 预览 / 音视频预览 / 打印与导出
 上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-004/009）、A-CORE-C-P-01_APC.md（§4.1 PRV 职责、§9）、A-CORE-X-L-01_总体开发路线图.md（§2 v1 范围冻结：音视频纳入、Excel/PPT 编辑确认不做）、A-SYS-C-T-01_系统总体架构.md（§4 PRV→WS）、A-DOC-M-T-01_文档转换技术设计.md（预览链 LibreOffice→PDF、BR-DOC-DATA-001 双链分离、DOC-03 归属待联合）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004）、ADU.md（§3.2）
 直接承接：PRV L2 技术设计（预览呈现契约 / 打印导出管线）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；与 DOC 联合解除 DOC-03（Excel/PPT 等预览转换归属）
 使用边界：本文是 L1 功能需求描述层，仅声明 REQ-PRV-*；**代码不得直接映射 REQ**（ADU §3.2）；docx 预览转换归 DOC（PRV 消费 PDF）；编辑归 ED；文件读取经 WS；Excel/PPT/音视频的转换/解码归属在 §7 暴露联合确认
@@ -18,7 +18,7 @@
 产品概述(REQ-CORE-004/009) + v1 范围冻结 → 本文(REQ-PRV-*) → REQ_MAP → PRV L2 规则(SSOT) → 代码(@GOV)
 ```
 
-PRV 是**预览与输出模块**：承载多格式只读预览（docx 全保真、Excel/PPT、音视频）与打印/导出
+PRV 是**预览与输出模块**：承载多格式只读预览（docx 以 LO 语料实测为准、Excel/PPT、音视频）与打印/导出
 （APC §4.1）。v1 冻结边界（2026-06-09 人类确认）：**音视频预览纳入 v1；Excel/PPT 仅预览 +
 打印/导出，确认不做编辑**。PRV 依赖 WS（文件边界）并消费 DOC 预览转换。取材台账 §4.7。
 
@@ -26,7 +26,7 @@ PRV 是**预览与输出模块**：承载多格式只读预览（docx 全保真�
 
 | # | 职责 | 锚定 |
 |---|---|---|
-| P-J1 | docx 全保真预览：消费 DOC 预览链（LibreOffice→PDF）只读呈现 | REQ-CORE-004、A-DOC-M-T-01 |
+| P-J1 | docx 语料实测只读预览：消费 DOC 预览链（LibreOffice→PDF）只读呈现 | REQ-CORE-004、A-DOC-M-T-01 |
 | P-J2 | Excel / PPT 预览：只读预览，**无编辑入口** | REQ-CORE-004、v1 冻结 |
 | P-J3 | 音视频预览：workspace 内音视频资源的播放预览 | v1 冻结（纳入） |
 | P-J4 | 打印与导出：预览内容的打印输出与格式导出 | REQ-CORE-004 |
@@ -38,7 +38,7 @@ PRV 是**预览与输出模块**：承载多格式只读预览（docx 全保真�
 
 ## §3 能力范围（PRV v1）
 
-**IN**：docx 全保真只读预览（PDF 呈现）；Excel/PPT 只读预览；音视频播放预览；打印输出；导出
+**IN**：docx 以 LO 语料实测为准的只读预览（PDF 呈现）；Excel/PPT 只读预览；音视频播放预览；打印输出；导出
 （格式清单 G2 定）；以上全部离线可用。
 
 **OUT**：任何编辑能力（md/docx 编辑归 ED；Excel/PPT 编辑 v1 确认不做）；docx 预览转换（DOC）；
@@ -59,12 +59,12 @@ PRV 是**预览与输出模块**：承载多格式只读预览（docx 全保真�
 
 <!-- REQ
 req_id: REQ-PRV-001
-title: docx 全保真预览
+title: docx 语料实测只读预览
 owner_module: PRV
 status: active
-summary: 消费 DOC 预览链（LibreOffice→PDF）对 docx 做全保真只读预览，补偿编辑链样式子集化的查看需求；预览失败呈现明确失败态
+summary: 消费 DOC 预览链（LibreOffice→PDF）对 docx 做以 LO 语料实测为准的只读预览，补偿编辑链样式子集化的查看需求；工具无效、启动、字体覆盖或转换失败均呈现明确失败态
 source_doc: REQ-CORE-004、A-DOC-M-T-01（BR-DOC-DATA-001 双链分离、REQ-DOC-004）
-acceptance: docx 可全保真只读预览；预览与编辑链无功能黏连；失败态明确
+acceptance: docx 可按 LO 语料实测结果只读预览；预览与编辑链无功能黏连；工具无效、启动、字体覆盖和转换失败态明确
 open_issues: 预览缓存与刷新策略归 PRV G2
 -->
 
@@ -142,3 +142,4 @@ open_issues: 无
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（P4，五模块 L1 收尾）：PRV 预览与输出模块级 L1；声明 REQ-PRV-001~005（docx 全保真预览 / Excel·PPT 预览无编辑入口 / 音视频预览 / 打印导出 / 离线可用），承接 REQ-CORE-004/009 与 v1 范围冻结；只读硬边界与双链分离承接；G1 暴露清单 PRV-01~05（Excel/PPT 转换归属联合 DOC-03） |
+| 2026-07-21 | v1.1 | 审计修正：REQ-PRV-001 的“全保真”改为以 LO 语料实测为准的只读预览目标，明确不构成对任意 Office 文档的无条件承诺；DOC 工具、启动、字体覆盖和转换故障均须显式呈现。 |

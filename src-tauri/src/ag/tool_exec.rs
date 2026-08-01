@@ -1,4 +1,5 @@
-//! PI-AG-08B · 工具执行（只读：list_docs / read_doc / search_text / list_blocks；结构：move_doc / create_folder）。
+//! PI-AG-08B · 工具执行（只读：list_docs / read_doc / search_text / list_blocks / list_tables /
+//! list_images；结构：move_doc / create_folder）。
 //!
 //! 经 WS 在 **active workspace** 内执行（X-FORBID-004 边界守卫），结果回注模型（SM-AG-02 ResultInjecting）。
 //! 文档内容读取统一走 AgentEditableSnapshot；权限/注册校验归 tool_registry::validate_requested_tool
@@ -31,6 +32,86 @@ fn string_arg(args: &serde_json::Value, key: &str, tool: &str) -> Result<String,
                 false,
             )
         })
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012
+ * type:     QUERY
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001
+ * term_ref: TERM-ED-008, TERM-WS-001
+ * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets)
+ */
+fn exec_list_images(
+    ctx: &crate::ag::blocks::AgentReadContext,
+    rel: &str,
+) -> Result<String, IpcError> {
+    let snapshot = ctx.snapshot(rel)?;
+    let images = ctx
+        .image_snapshots(rel)?
+        .iter()
+        .cloned()
+        .map(|mut image| {
+            let block_id = image.get("blockId").and_then(|value| value.as_str());
+            let block_index = block_id.and_then(|id| {
+                snapshot
+                    .blocks
+                    .iter()
+                    .position(|block| block.block_id.as_deref() == Some(id))
+            });
+            let preview = |index: usize| -> Option<String> {
+                snapshot
+                    .blocks
+                    .get(index)
+                    .map(|block| block.text.trim().chars().take(160).collect::<String>())
+                    .filter(|text| !text.is_empty())
+            };
+            let before_text = block_index.and_then(|index| (0..index).rev().find_map(preview));
+            let after_text = block_index
+                .and_then(|index| ((index + 1)..snapshot.blocks.len()).find_map(preview));
+            if let Some(object) = image.as_object_mut() {
+                object.insert(
+                    "positionContext".to_string(),
+                    serde_json::json!({
+                        "blockIndex": block_index,
+                        "precedingText": before_text,
+                        "followingText": after_text,
+                    }),
+                );
+            }
+            image
+        })
+        .collect::<Vec<_>>();
+    let mut assets = Vec::new();
+    let mut rejected_candidates = 0usize;
+    let catalog = crate::workspace::listing::load_project_image_catalog(ctx.root())?;
+    for candidate in catalog.candidates {
+        match crate::doc::image_media::inspect_project_image(ctx.root(), &candidate) {
+            Ok(asset) => assets.push(serde_json::json!({
+                "assetId": asset.asset_id,
+                "sourcePath": asset.rel_path,
+                "sourceHash": asset.content_hash,
+                "mediaType": asset.media_type,
+                "byteSize": asset.byte_size,
+            })),
+            Err(_) => rejected_candidates += 1,
+        }
+    }
+    Ok(serde_json::to_string(&serde_json::json!({
+        "relPath": snapshot.rel_path,
+        "baseline": snapshot.baseline,
+        "sessionVersion": snapshot.session_version,
+        "contentHash": snapshot.content_hash,
+        "images": images,
+        "assets": assets,
+        "imageRoots": catalog.image_roots,
+        "catalogSource": catalog.config_source,
+        "rejectedCandidates": rejected_candidates,
+        "visualContentAvailable": false,
+        "contextNotice": "图片内容未被视觉识别；precedingText/followingText 仅用于文档流定位，不代表图片画面。",
+    }))
+    .unwrap_or_else(|_| "{}".into()))
 }
 
 /// 执行非破坏性文件树结构工具。此类工具只改变 workspace 内文件树结构，不修改文档内容，不走 DE diff。
@@ -68,6 +149,23 @@ pub fn exec_structure_tool(
             }))
             .unwrap_or_else(|_| "目录已存在或已创建".into()))
         }
+        "import_image_asset" => {
+            let source_path = string_arg(args, "source_path", "import_image_asset")?;
+            let source = crate::workspace::resolve_in_workspace(root, &source_path)?;
+            let asset = crate::doc::image_media::import_project_image(root, &source)?;
+            Ok(serde_json::to_string(&serde_json::json!({
+                "operation": "import_image_asset",
+                "copiedOrReused": true,
+                "sourceFilePreserved": true,
+                "assetId": asset.asset_id,
+                "sourcePath": asset.rel_path,
+                "sourceHash": asset.content_hash,
+                "mediaType": asset.media_type,
+                "byteSize": asset.byte_size,
+                "summary": "图片已复制或复用到受控项目图片目录；源文件保持不变。请重新调用 list_images 后提出 image_ops 修改建议。"
+            }))
+            .unwrap_or_else(|_| "图片已准备".into()))
+        }
         other => Err(IpcError::new(
             "AG_TOOL_UNKNOWN",
             &format!("结构工具执行器不支持: {other}"),
@@ -75,6 +173,26 @@ pub fn exec_structure_tool(
             false,
         )),
     }
+}
+
+pub fn exec_edit_blocked(args: &serde_json::Value) -> Result<String, IpcError> {
+    let code = string_arg(args, "code", "edit_blocked")?;
+    let reason = string_arg(args, "reason", "edit_blocked")?;
+    if code.len() > 80 || reason.len() > 1000 {
+        return Err(IpcError::new(
+            "AG_TOOL_ARG",
+            "edit_blocked 的 code/reason 过长",
+            false,
+            false,
+        ));
+    }
+    Ok(serde_json::json!({
+        "status": "edit_blocked",
+        "code": code,
+        "reason": reason,
+        "documentModified": false,
+    })
+    .to_string())
 }
 
 /// 执行只读工具，返回回注模型的结果文本（JSON 序列化）。`ctx` 持有 active workspace 根与打开文档
@@ -140,6 +258,34 @@ pub fn exec_read_only(
             }))
             .unwrap_or_else(|_| "{}".into()))
         }
+        "list_tables" => {
+            let rel = path_arg(args, "list_tables")?;
+            let snapshot = ctx.snapshot(&rel)?;
+            if !matches!(
+                snapshot.source.as_str(),
+                "active_editor" | "active_editor_session"
+            ) || snapshot.content_format != "html"
+            {
+                return Err(IpcError::new(
+                    "AG_TABLE_EDIT_REQUIRES_ACTIVE_EDITOR",
+                    "表格结构读取必须针对当前活动的 BDocx HTML 编辑器会话；原生预览或未打开文档不可编辑。",
+                    false,
+                    false,
+                ));
+            }
+            let tables = ctx.table_snapshots(&rel)?;
+            Ok(serde_json::to_string(&serde_json::json!({
+                "rel_path": snapshot.rel_path,
+                "session_version": snapshot.session_version,
+                "content_hash": snapshot.content_hash,
+                "tables": tables,
+            }))
+            .unwrap_or_else(|_| "{}".into()))
+        }
+        "list_images" => {
+            let rel = path_arg(args, "list_images")?;
+            exec_list_images(ctx, &rel)
+        }
         other => Err(IpcError::new(
             "AG_TOOL_UNKNOWN",
             &format!(
@@ -157,6 +303,42 @@ mod tests {
 
     fn ctx(root: &Path) -> crate::ag::blocks::AgentReadContext {
         crate::ag::blocks::AgentReadContext::new(root, Vec::new()).unwrap()
+    }
+
+    fn active_block(
+        block_id: &str,
+        block_index: usize,
+        text: &str,
+        role: &str,
+    ) -> crate::ag::blocks::AgentEditableBlockSnapshot {
+        crate::ag::blocks::AgentEditableBlockSnapshot {
+            block_id: block_id.to_string(),
+            block_index,
+            block_type: "p".to_string(),
+            node_type: "paragraph".to_string(),
+            role: role.to_string(),
+            parent_block_id: None,
+            depth: 0,
+            ordinal: block_index,
+            text: text.to_string(),
+            attrs: serde_json::json!({ "blockId": block_id }),
+            marks: Vec::new(),
+            node_json: serde_json::json!({
+                "type": "paragraph",
+                "attrs": { "blockId": block_id },
+                "content": if text.is_empty() {
+                    Vec::<serde_json::Value>::new()
+                } else {
+                    vec![serde_json::json!({ "type": "text", "text": text })]
+                },
+            }),
+            fingerprint: format!("fp-{block_id}"),
+            capabilities: if role == "content" {
+                vec!["replace_node".to_string(), "style_ops".to_string()]
+            } else {
+                Vec::new()
+            },
+        }
     }
 
     #[test]
@@ -211,6 +393,7 @@ mod tests {
             vec![crate::ag::blocks::OpenDocSnapshot {
                 rel_path: "a.md".to_string(),
                 content: "最新 LogicalState".to_string(),
+                baseline: None,
                 edit_format: "text".to_string(),
                 content_format: "text".to_string(),
                 source: "open_editor_session".to_string(),
@@ -218,6 +401,9 @@ mod tests {
                 session_version: 3,
                 content_hash: "h3".to_string(),
                 captured_at: 1,
+                block_snapshots: Vec::new(),
+                table_snapshots: Vec::new(),
+                image_snapshots: Vec::new(),
             }],
         )
         .unwrap();
@@ -226,6 +412,153 @@ mod tests {
         assert!(out.contains("最新 LogicalState"));
         assert!(!out.contains("旧内容"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_tables_only_returns_active_html_bdocx_snapshot() {
+        let dir = std::env::temp_dir().join(format!("ag-toolexec-tables-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::ag::blocks::AgentReadContext::new(
+            &dir,
+            vec![crate::ag::blocks::OpenDocSnapshot {
+                rel_path: "a.docx".to_string(),
+                content: "<table data-table-id=\"table_1\"></table>".to_string(),
+                baseline: Some(17),
+                edit_format: "html".to_string(),
+                content_format: "html".to_string(),
+                source: "active_editor".to_string(),
+                dirty: true,
+                session_version: 7,
+                content_hash: "h7".to_string(),
+                captured_at: 1,
+                block_snapshots: vec![active_block("table-context", 0, "", "container")],
+                table_snapshots: vec![
+                    serde_json::json!({ "tableId": "table_1", "rows": 1, "columns": 1 }),
+                ],
+                image_snapshots: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let out = exec_read_only(
+            &ctx,
+            "list_tables",
+            &serde_json::json!({ "path": "a.docx" }),
+        )
+        .unwrap();
+        assert!(out.contains("table_1"));
+        assert!(out.contains("session_version"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // covers: BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001
+    #[test]
+    fn list_images_combines_active_image_snapshots_and_valid_project_assets() {
+        let dir = std::env::temp_dir().join(format!("ag-toolexec-images-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("images")).unwrap();
+        std::fs::write(dir.join("a.docx"), b"docx").unwrap();
+        std::fs::write(
+            dir.join("images/cover.png"),
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1],
+        )
+        .unwrap();
+        std::fs::write(dir.join("images/bad.png"), b"bad").unwrap();
+        crate::workspace::listing::mark_bdocx(&dir, "a.docx").unwrap();
+        let ctx = crate::ag::blocks::AgentReadContext::new(
+            &dir,
+            vec![crate::ag::blocks::OpenDocSnapshot {
+                rel_path: "a.docx".to_string(),
+                content: "<p data-block-id=\"before\">第一条说明</p><p data-block-id=\"b1\"><img src=\"media/a.png\"></p><p data-block-id=\"after\">第二条说明</p>".to_string(),
+                baseline: Some(17),
+                edit_format: "html".to_string(),
+                content_format: "html".to_string(),
+                source: "active_editor".to_string(),
+                dirty: true,
+                session_version: 8,
+                content_hash: "h8".to_string(),
+                captured_at: 1,
+                block_snapshots: vec![
+                    active_block("before", 0, "第一条说明", "content"),
+                    active_block("b1", 1, "", "atom"),
+                    active_block("after", 2, "第二条说明", "content"),
+                ],
+                table_snapshots: Vec::new(),
+                image_snapshots: vec![serde_json::json!({
+                    "imageId": "image_0",
+                    "fingerprint": "fp_0",
+                    "blockId": "b1",
+                    "ordinal": 0,
+                    "standalone": true
+                })],
+            }],
+        )
+        .unwrap();
+        let output = exec_read_only(
+            &ctx,
+            "list_images",
+            &serde_json::json!({ "path": "a.docx" }),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["sessionVersion"], 8);
+        assert_eq!(value["images"][0]["imageId"], "image_0");
+        assert_eq!(
+            value["images"][0]["positionContext"]["precedingText"],
+            "第一条说明"
+        );
+        assert_eq!(
+            value["images"][0]["positionContext"]["followingText"],
+            "第二条说明"
+        );
+        assert_eq!(value["visualContentAvailable"], false);
+        assert_eq!(value["assets"].as_array().unwrap().len(), 1);
+        assert!(value["assets"][0]["assetId"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("asset_")));
+        assert_eq!(value["assets"][0]["sourcePath"], "images/cover.png");
+        assert_eq!(value["assets"][0]["sourceHash"].as_str().unwrap().len(), 64);
+        assert_eq!(value["assets"][0]["mediaType"], "image/png");
+        assert_eq!(value["imageRoots"], serde_json::json!(["images"]));
+        assert_eq!(value["catalogSource"], "default");
+        assert_eq!(value["rejectedCandidates"], 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_image_asset_copies_workspace_source_and_edit_blocked_is_structured() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ag-import-image-{unique}"));
+        std::fs::create_dir_all(dir.join("文档/多媒体")).unwrap();
+        let source = dir.join("文档/多媒体/a.png");
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1];
+        std::fs::write(&source, png).unwrap();
+
+        let result = exec_structure_tool(
+            &dir,
+            "import_image_asset",
+            &serde_json::json!({ "source_path": "文档/多媒体/a.png" }),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["sourceFilePreserved"], true);
+        assert!(value["sourcePath"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("images/imported/")));
+        assert_eq!(std::fs::read(&source).unwrap(), png);
+
+        let blocked = exec_edit_blocked(&serde_json::json!({
+            "code": "IMAGE_ASSET_UNAVAILABLE",
+            "reason": "没有可用图片，请用户提供项目内来源。"
+        }))
+        .unwrap();
+        let blocked: serde_json::Value = serde_json::from_str(&blocked).unwrap();
+        assert_eq!(blocked["status"], "edit_blocked");
+        assert_eq!(blocked["documentModified"], false);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -11,7 +11,7 @@ import {
   type AgentComposerDraft,
 } from "../../store/agStore";
 import { modelKey, modelStore, useModelStore } from "../../store/modelStore";
-import { startTurn } from "../../services/agService";
+import { setAgentMode, startTurn } from "../../services/agService";
 import { useWsStore } from "../../store/wsStore";
 import {
   DOC_REF_MIME,
@@ -440,7 +440,7 @@ export function Composer() {
                       key={m.id}
                       className={`cbar-pop-item${mode === m.id ? " selected" : ""}`}
                       onClick={() => {
-                        agStore.setMode(m.id);
+                        setAgentMode(m.id);
                         setModePop(false);
                       }}
                     >

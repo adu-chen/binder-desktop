@@ -137,6 +137,7 @@ Binder 预设模型，而是经 AiGateway 接入 DeepSeek 托管模型与 BYOK�
   | `list_docs` | 只读 | `workspace::listing::list_docs`（限 active workspace） | DocRef 列表（rel_path + doc_type） |
   | `search_text` | ReadOnly | `AgentEditableSnapshot` 块文本搜索 | 匹配条目摘要列表 |
   | `list_blocks` | ReadOnly | `AgentEditableSnapshot.blocks` | block_id/block_index/text/marks/block_attrs |
+  | `list_images` | ReadOnly | 活动 BDocx ImageSnapshot + workspace 项目图片发现 | 当前图片实例、稳定 Block、项目资源相对路径与 hash |
   | `move_doc` | StructureWrite | `workspace::fileops::rename_doc`（两端守界） | 移动/重命名结果 |
   | `create_folder` | StructureWrite | `workspace::fileops::create_folder`（守界） | 建目录结果 |
   | `propose_edit` | WriteIntent | 产出 ChangeProposal → `de::generate::generate_diff`（锚校验）→ `workspace::diff_apply::persist_diff` | diff_id + 修改摘要（非文件内容） |
@@ -162,6 +163,10 @@ Binder 预设模型，而是经 AiGateway 接入 DeepSeek 托管模型与 BYOK�
 - **A 类债务**：删除类工具的人类确认 UI/协议；tool call JSON schema 继续随实现迭代；`search_text` 的向量检索能力延 KB G5
 
 - **验收**：注册工具均经 `validate_tool` 校验；未注册名称返回 Reject；`read_doc`/`list_docs`/`search_text`/`list_blocks` 不产生文件写入；`move_doc`/`create_folder` 限 workspace 且不覆盖；`propose_edit` 产出 diff_id（`Pending` 状态）且文件未被直接改动；未注册工具拒绝原因字符串含工具名
+
+- **图片专项扩展（BDOCX-IMAGE-AGENT-EDIT-01）**：`list_images` 只读发现与 `image_ops` 写意图使用
+  BDocxCapabilityManifest 同源 Schema；项目图片插入/文档图片删除必须经 DE/ED/DOC/WS，禁止原始
+  HTML、远程来源、非活动会话和源文件删除。
 
 ---
 
@@ -394,6 +399,38 @@ Binder 预设模型，而是经 AiGateway 接入 DeepSeek 托管模型与 BYOK�
   - cancel → `stop_reason: "cancelled"` → 无半落盘
   - 与 G5 联调：AG↔GW↔provider 端到端流式通过
 
+---
+
+### PI-AG-12　代理编辑历史持久化（会话标签 + 回合内容）
+
+- **承接**：BR-AG-PERSIST-001；BR-SYS-PERSIST-001；X-SHARED-001；SM-AG-01 持久化投影
+- **文件范围**：
+  - 后端：`src-tauri/src/db/mod.rs`、`src-tauri/src/ag/turn.rs`、`src-tauri/src/ag/history.rs`、
+    `src-tauri/src/ag/mod.rs`、`src-tauri/src/lib.rs`
+  - 前端：`src/store/agStore.ts`、`src/services/agService.ts`、`src/services/workspaceService.ts`、
+    `src/services/deService.ts`、`src/components/ag/AgentPanel.tsx`、`MessageList.tsx`、`ToolCallCard.tsx`
+  - 测试：对应 store/service/UI/Rust 单测
+- **实现口径**：
+  - `agent_sessions` 恢复全部代理编辑会话标签元数据：存在状态、顺序、标题、模式、归档/打开态、激活态。
+  - `agent_turns.status` 使用 `completed / error / cancelled / gate_rejected / draft`；不只保留成功回合。
+  - `ag_start_turn` 发起后立即写 `draft`，完成/错误/取消/门禁拒绝时更新状态；崩溃遗留 draft。
+  - 启动/切换 workspace 后先 `ag.list_sessions`，只 eager-load 激活会话 turns；其它会话点击时懒加载。
+  - 工具卡只恢复结构化摘要，折叠只读，不从历史触发工具，且按 `anchorMessageId` 回到对应 assistant
+    消息后；DiffCard 只存 `diff_id`/`rel_path`/锚点引用，通过 DE/WS 当前状态合并展示，不在 AG payload
+    保存 diff 内容快照。
+  - 历史存储继续位于 app data 下 `workspace.db`；workspace 级软上限 200MB，超限先软归档最老会话。
+  - draft 重试复用同一条 user message 内容新建回合，不覆盖旧 draft。
+  - 历史菜单每个会话行提供删除按钮：调用 `ag.delete_session(session_id)` 删除当前 workspace 内指定
+    AG 会话/回合/payload 持久化记录；不得删除 DE pending diff 本体，代理回合进行中禁用。
+- **验收**：
+  - 重启后会话标签、顺序、标题、模式、归档/打开态和激活态恢复。
+  - completed/error/cancelled/gate_rejected/draft 均能恢复展示；draft 不显示为完成态且可重试。
+  - 仅激活会话启动即加载内容，其余会话点击才拉取 turns。
+  - 工具摘要只读且不沉底；DiffCard 与当前 DE/WS diff 状态合并，不显示陈旧快照，不把
+    accepted/rejected/expired 或缺失 diff 默认恢复为 pending。
+  - 历史会话行删除按钮确认后移除该会话，重启不再恢复该会话；待裁决修改仍按 DE 状态保留。
+  - `cargo test`、相关 `npm test`、`tsc --noEmit`、`governance:generate`、`governance:audit` 通过。
+
 ## §4 横切验收（全部 PI）
 
 ```
@@ -416,6 +453,7 @@ npm run governance:audit（无新增 RULE_MISSING / BOUNDARY_ABSTRACT）
 | 意图沿用识别策略 + 补强层相关性打分 | A | PI-AG-09 | 实现期（R-AG-X-R-01 §4.3/§2.2），打分缺位则 P2 TopK 失效 |
 | diff 卡片逐块揭示动画 | A | PI-AG-10F | 实现期（参考 Cline，R-AG-X-R-01 §3.3）|
 | HTTP 客户端超时/重试参数 | A | PI-AG-11 | G5 生产压测 |
+| 历史后台压缩策略 | A | PI-AG-12 | 单会话删除已落地；后台压缩按数据库体积表现后续再定 |
 | 高频门禁延迟（ENT-03）| C | PI-AG-11 | 云 GW 短时凭证方案（CLOUD-04），X-FORBID-002 复核后 |
 
 ## 变更记录
@@ -429,3 +467,6 @@ npm run governance:audit（无新增 RULE_MISSING / BOUNDARY_ABSTRACT）
 | 2026-07-16 | v1.3 | 更新 PI-AG-08 工具集：加入 `list_blocks`、`move_doc`、`create_folder` 与 `StructureWrite` 权限；移除“v1 仅 4 个工具”的过期债务描述；删除类工具改为确认 UI/协议债务，未落地前不得注册 |
 | 2026-07-16 | v1.4 | 拆分 Assist 提示词：辅助续写使用 `SYSTEM_PROMPT_AUTOCOMPLETE`，局部修改使用 `SYSTEM_PROMPT_INLINE_ASSIST`，避免 JSON 三候选契约与单正文契约混用 |
 | 2026-07-17 | v1.5 | 对齐 1.0 Experience Preview：PI-AG-11 的真实模型调用目标明确为 AiGateway → DeepSeek 托管模型/BYOK；自部署 Binder 预设模型、多模态模型矩阵、复杂 ModelRouter 后置，不阻断 1.0 EP 的 AG 真实调用闭环 |
+| 2026-07-17 | v1.6 | 新增 PI-AG-12 代理编辑历史持久化：会话标签元数据全恢复、回合内容懒加载、五类 status 保留、工具摘要只读、Diff 仅引用、app data workspace.db 与 200MB 软归档 |
+| 2026-07-18 | v1.7 | 补齐 PI-AG-12 用户删除历史会话入口：历史菜单每个会话行调用 `ag.delete_session(session_id)` 删除指定 AG 会话历史，保留 DE 待裁决修改 |
+| 2026-07-29 | v1.8 | BDOCX-IMAGE-AGENT-EDIT-01：PI-AG-08 增加 list_images 与 image_ops，明确活动 BDocx、workspace 项目图片 hash、结构化 Diff 和源文件保护边界。 |

@@ -99,6 +99,262 @@ pub fn persist_diff(conn: &Connection, diff: &PendingDiff) -> rusqlite::Result<(
     Ok(())
 }
 
+const MAX_IMAGE_SNAPSHOTS: usize = 4096;
+const MAX_IMAGE_AFFECTED_BLOCKS: usize = 64;
+
+fn image_snapshot_string(
+    snapshot: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    max_len: usize,
+    nullable: bool,
+) -> bool {
+    match snapshot.get(field) {
+        Some(serde_json::Value::String(value)) => {
+            !value.is_empty() && value.len() <= max_len && !value.chars().any(char::is_control)
+        }
+        Some(serde_json::Value::Null) => nullable,
+        _ => false,
+    }
+}
+
+fn is_workspace_relative_path(value: &str) -> bool {
+    !value.starts_with('/')
+        && !value.starts_with('\\')
+        && !value.contains('\\')
+        && !value.contains("://")
+        && !value
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+}
+
+fn validate_image_snapshot_list(value: &serde_json::Value) -> bool {
+    let Some(snapshots) = value.as_array() else {
+        return false;
+    };
+    if snapshots.len() > MAX_IMAGE_SNAPSHOTS {
+        return false;
+    }
+    let mut image_ids = std::collections::HashSet::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        let Some(snapshot) = snapshot.as_object() else {
+            return false;
+        };
+        if !image_snapshot_string(snapshot, "imageId", 256, false)
+            || !image_snapshot_string(snapshot, "fingerprint", 256, false)
+            || !matches!(
+                snapshot.get("ordinal").and_then(serde_json::Value::as_u64),
+                Some(value) if value <= u32::MAX as u64
+            )
+            || !image_snapshot_string(snapshot, "blockId", 512, true)
+            || !matches!(
+                snapshot.get("imagePos").and_then(serde_json::Value::as_u64),
+                Some(value) if value <= u32::MAX as u64
+            )
+            || !matches!(snapshot.get("standalone"), Some(serde_json::Value::Bool(_)))
+            || !image_snapshot_string(snapshot, "alt", 512, true)
+            || !image_snapshot_string(snapshot, "width", 64, true)
+            || !image_snapshot_string(snapshot, "height", 64, true)
+            || !image_snapshot_string(snapshot, "mediaRef", 4096, true)
+            || !image_snapshot_string(snapshot, "projectSourcePath", 4096, true)
+            || !image_snapshot_string(snapshot, "projectSourceHash", 64, true)
+        {
+            return false;
+        }
+        let image_id = snapshot
+            .get("imageId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if !image_ids.insert(image_id) {
+            return false;
+        }
+        if let Some(media_ref) = snapshot.get("mediaRef").and_then(serde_json::Value::as_str) {
+            if !media_ref.starts_with("media/") || !is_workspace_relative_path(media_ref) {
+                return false;
+            }
+        }
+        if let Some(source_path) = snapshot
+            .get("projectSourcePath")
+            .and_then(serde_json::Value::as_str)
+        {
+            if !is_workspace_relative_path(source_path) {
+                return false;
+            }
+        }
+        if let Some(source_hash) = snapshot
+            .get("projectSourceHash")
+            .and_then(serde_json::Value::as_str)
+        {
+            if source_hash.len() != 64
+                || !source_hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn validate_image_affected_block_ids(value: &serde_json::Value) -> bool {
+    let Some(block_ids) = value.as_array() else {
+        return false;
+    };
+    if block_ids.len() > MAX_IMAGE_AFFECTED_BLOCKS {
+        return false;
+    }
+    let mut unique = std::collections::HashSet::with_capacity(block_ids.len());
+    block_ids.iter().all(|value| {
+        let Some(block_id) = value.as_str() else {
+            return false;
+        };
+        !block_id.is_empty()
+            && block_id.len() <= 512
+            && !block_id.chars().any(char::is_control)
+            && unique.insert(block_id)
+    })
+}
+
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-002-EFFECT-WS-DE-DIFF-004
+ * type:     EFFECT
+ * chain:    DE-DIFF
+ * rules:    BR-DE-DATA-002
+ * term_ref: TERM-DE-004, TERM-ED-008
+ * boundary: in=WorkspaceImageOperationDiffAndBeforeAfterImageSnapshots | out=DiffPayloadWithImmutableImageReviewSnapshots | effect=DB-update_diff_payload_image_snapshots | does_not=write_document_content_or_project_image
+ */
+/// 将当前 LogicalState 实际应用得到的图片前后快照补入既有 ImageOperation DiffPayload。
+/// 首次写入后只允许完全相同的幂等重试，避免终态历史被后续调用改写。
+pub fn persist_image_diff_snapshots(
+    conn: &Connection,
+    workspace_id: &str,
+    diff_id: &str,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    affected_block_ids: &serde_json::Value,
+) -> Result<(), IpcError> {
+    if !validate_image_snapshot_list(before)
+        || !validate_image_snapshot_list(after)
+        || !validate_image_affected_block_ids(affected_block_ids)
+    {
+        return Err(IpcError::new(
+            "DE_IMAGE_SNAPSHOT_INVALID",
+            "图片 Diff 快照形状无效",
+            false,
+            false,
+        ));
+    }
+
+    let style_ops_json: Option<String> = conn
+        .query_row(
+            "SELECT p.style_ops \
+             FROM pending_diffs d JOIN diff_payloads p ON p.payload_ref = d.payload_ref \
+             WHERE d.workspace_id = ?1 AND d.diff_id = ?2",
+            (workspace_id, diff_id),
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| {
+            IpcError::new(
+                "DE_DB_ERROR",
+                &format!("读取图片 DiffPayload 失败: {error}"),
+                true,
+                false,
+            )
+        })?
+        .ok_or_else(|| {
+            IpcError::new(
+                "DE_IMAGE_DIFF_NOT_FOUND",
+                "当前 workspace 中不存在对应图片 DiffPayload",
+                false,
+                false,
+            )
+        })?;
+    let mut envelope = style_ops_json
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
+        .and_then(|value| value.as_object().cloned())
+        .filter(|value| {
+            value.get("kind").and_then(serde_json::Value::as_str) == Some("image_ops")
+                && value
+                    .get("payloadVersion")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(1)
+        })
+        .ok_or_else(|| {
+            IpcError::new(
+                "DE_IMAGE_PAYLOAD_INVALID",
+                "目标 DiffPayload 不是可持久化的 ImageOperation 载荷",
+                false,
+                false,
+            )
+        })?;
+
+    let persisted = (
+        envelope.get("imageBefore"),
+        envelope.get("imageAfter"),
+        envelope.get("imageAffectedBlockIds"),
+    );
+    if let (Some(saved_before), Some(saved_after), Some(saved_affected)) = persisted {
+        if saved_before == before && saved_after == after && saved_affected == affected_block_ids {
+            return Ok(());
+        }
+        return Err(IpcError::new(
+            "DE_IMAGE_SNAPSHOT_CONFLICT",
+            "图片 Diff 快照已持久化且与本次提交不一致",
+            false,
+            false,
+        ));
+    }
+    if persisted.0.is_some() || persisted.1.is_some() || persisted.2.is_some() {
+        return Err(IpcError::new(
+            "DE_IMAGE_PAYLOAD_INVALID",
+            "图片 DiffPayload 中存在不完整的历史快照",
+            false,
+            false,
+        ));
+    }
+
+    envelope.insert("imageBefore".to_string(), before.clone());
+    envelope.insert("imageAfter".to_string(), after.clone());
+    envelope.insert(
+        "imageAffectedBlockIds".to_string(),
+        affected_block_ids.clone(),
+    );
+    let serialized = serde_json::to_string(&envelope).map_err(|error| {
+        IpcError::new(
+            "DE_IMAGE_SNAPSHOT_INVALID",
+            &format!("序列化图片 Diff 快照失败: {error}"),
+            false,
+            false,
+        )
+    })?;
+    let changed = conn
+        .execute(
+            "UPDATE diff_payloads SET style_ops = ?1 \
+             WHERE payload_ref = (SELECT payload_ref FROM pending_diffs \
+                                  WHERE workspace_id = ?2 AND diff_id = ?3)",
+            (&serialized, workspace_id, diff_id),
+        )
+        .map_err(|error| {
+            IpcError::new(
+                "DE_DB_ERROR",
+                &format!("持久化图片 Diff 快照失败: {error}"),
+                true,
+                false,
+            )
+        })?;
+    if changed != 1 {
+        return Err(IpcError::new(
+            "DE_IMAGE_DIFF_NOT_FOUND",
+            "图片 DiffPayload 在写入前已不可用",
+            false,
+            false,
+        ));
+    }
+    Ok(())
+}
+
 /**
  * @GOV
  * codes:    BR-WS-STATE-001-EFFECT-WS-WS-DIFF-APPLY-002
@@ -109,6 +365,11 @@ pub fn persist_diff(conn: &Connection, diff: &PendingDiff) -> rusqlite::Result<(
  */
 /// accepted 落盘（BR-WS-STATE-001）：原子写入目标文档后记**恰好一个**时间轴节点并置 status=accepted。
 /// 写盘失败先于记节点返回错误——不留半节点（节点仅在 save 成功后写）。仅应在 SM-WS-02 Applying 态调用。
+///
+/// **已知限制（2026-07-24 审计）**：文件写入与 DB 操作（快照存储+节点记录+状态更新）跨介质非原子。
+/// 文件写入成功后若 DB 操作失败，文件已变更但时间轴缺失节点、diff 状态未更新。1.0 EP 策略：
+/// DB 操作失败返回统一错误供调用方重试，不静默丢弃。完整两阶段提交方案记为 1.0-post 债务
+/// （WS-DIFF-APPLY-TWO-PHASE-01）。
 pub fn apply_diff(
     conn: &Connection,
     diff_id: &str,
@@ -324,6 +585,121 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    fn insert_image_payload(conn: &Connection, diff_id: &str, kind: &str) {
+        let payload_ref = format!("p-{diff_id}");
+        conn.execute(
+            "INSERT INTO diff_payloads \
+             (payload_ref, workspace_id, rel_path, after_content, before_snapshot, is_new_doc, style_ops, created_at) \
+             VALUES (?1, 'ws1', 'a.docx', X'', '', 0, ?2, 0)",
+            (
+                &payload_ref,
+                serde_json::json!({
+                    "kind": kind,
+                    "payloadVersion": 1,
+                    "payload": {
+                        "base": { "sessionVersion": 1, "contentHash": "h1" },
+                        "operations": [{
+                            "op": "delete_image",
+                            "imageId": "image_0_abcd",
+                            "fingerprint": "abcd"
+                        }]
+                    }
+                })
+                .to_string(),
+            ),
+        )
+        .unwrap();
+        let mut diff = sample_diff(diff_id);
+        diff.target.rel_path = "a.docx".into();
+        diff.target.doc_type = "docx".into();
+        diff.payload_ref = payload_ref;
+        persist_diff(conn, &diff).unwrap();
+    }
+
+    fn image_snapshot() -> serde_json::Value {
+        serde_json::json!({
+            "imageId": "image_0_abcd",
+            "fingerprint": "abcd",
+            "ordinal": 0,
+            "blockId": "b-img",
+            "imagePos": 2,
+            "standalone": true,
+            "alt": "项目图",
+            "width": "240",
+            "height": null,
+            "mediaRef": "media/image.png",
+            "projectSourcePath": "images/image.png",
+            "projectSourceHash": "a".repeat(64)
+        })
+    }
+
+    // covers: BR-DE-DATA-002
+    // ImageOperation 实际应用后的前后快照补入既有 DiffPayload；同值重试幂等，冲突和非图片载荷拒绝。
+    #[test]
+    fn persist_image_diff_snapshots_is_complete_idempotent_and_immutable() {
+        let conn = fresh();
+        insert_image_payload(&conn, "d-image", "image_ops");
+        let before = serde_json::json!([image_snapshot()]);
+        let after = serde_json::json!([]);
+        let affected = serde_json::json!(["b-img"]);
+
+        persist_image_diff_snapshots(&conn, "ws1", "d-image", &before, &after, &affected).unwrap();
+        persist_image_diff_snapshots(&conn, "ws1", "d-image", &before, &after, &affected).unwrap();
+
+        let stored: String = conn
+            .query_row(
+                "SELECT p.style_ops FROM pending_diffs d \
+                 JOIN diff_payloads p ON p.payload_ref = d.payload_ref \
+                 WHERE d.diff_id = 'd-image'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(stored["imageBefore"], before);
+        assert_eq!(stored["imageAfter"], after);
+        assert_eq!(stored["imageAffectedBlockIds"], affected);
+
+        let conflict = serde_json::json!(["another-block"]);
+        assert_eq!(
+            persist_image_diff_snapshots(&conn, "ws1", "d-image", &before, &after, &conflict)
+                .unwrap_err()
+                .code,
+            "DE_IMAGE_SNAPSHOT_CONFLICT"
+        );
+
+        insert_image_payload(&conn, "d-table", "table_ops");
+        assert_eq!(
+            persist_image_diff_snapshots(&conn, "ws1", "d-table", &before, &after, &affected)
+                .unwrap_err()
+                .code,
+            "DE_IMAGE_PAYLOAD_INVALID"
+        );
+    }
+
+    // covers: BR-DE-DATA-002
+    #[test]
+    fn persist_image_diff_snapshots_rejects_untrusted_paths_and_hashes() {
+        let conn = fresh();
+        insert_image_payload(&conn, "d-invalid", "image_ops");
+        let mut snapshot = image_snapshot();
+        snapshot["projectSourcePath"] = serde_json::json!("../outside.png");
+        snapshot["projectSourceHash"] = serde_json::json!("NOT-A-HASH");
+        assert_eq!(
+            persist_image_diff_snapshots(
+                &conn,
+                "ws1",
+                "d-invalid",
+                &serde_json::json!([snapshot]),
+                &serde_json::json!([]),
+                &serde_json::json!(["b-img"]),
+            )
+            .unwrap_err()
+            .code,
+            "DE_IMAGE_SNAPSHOT_INVALID"
+        );
     }
 
     // covers: BR-WS-STATE-001

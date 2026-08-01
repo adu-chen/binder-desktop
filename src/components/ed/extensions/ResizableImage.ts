@@ -1,16 +1,60 @@
 import { Image } from "@tiptap/extension-image";
 
 /**
- * 可交互图片（PI-ED-08 · #3 图片嵌入样式切换 + 大小拖动可调）。
- * 扩展 TipTap Image：`width`（拖拽手柄调整）与 `display`（inline/block 嵌入样式）为**节点属性**——
- * 属用户编辑（改文档模型、产生脏态、经 SM-ED-01→SM-WS-01 保存），非装饰层；序列化为
- * `width=` / `data-display=` 落 HTML（docx 往返保留度与 DOC 联合实测，A 类登记）。
- * NodeView 仅承载选中态手柄呈现与拖拽交互（X-FORBID-005：属性变更经 editor command 受控接口）。
+ * 可交互图片（PI-ED-08）：width/height/media identity 都是图片节点属性；NodeView 只提供选中态与
+ * 拖宽手柄。`data-display` 仅兼容旧会话 HTML，不属于 BDocx 持久能力：Pandoc 会在 DOCX 往返时丢弃
+ * 该自定义属性，独立图片改由“段落仅含图片”的真实文档结构识别。
  */
 
 /** 拖拽调宽的最小宽度（px）。 */
 const MIN_WIDTH = 40;
 
+/** Pandoc 会把 DOCX `wp:extent` 序列化成 CSS 物理长度；编辑器统一换算为 96dpi CSS px。 */
+export function imageCssLengthToPx(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const match = raw.trim().match(/^([0-9]+(?:\.[0-9]+)?)(px|in|cm|mm|pt|pc)?$/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const factors: Record<string, number> = {
+    px: 1,
+    in: 96,
+    cm: 96 / 2.54,
+    mm: 96 / 25.4,
+    pt: 96 / 72,
+    pc: 16,
+  };
+  const px = value * factors[(match[2] ?? "px").toLowerCase()];
+  return String(Math.max(1, Math.round(px)));
+}
+
+function styleDimension(element: HTMLElement, property: "width" | "height"): string | null {
+  const direct = imageCssLengthToPx(element.getAttribute(property));
+  if (direct) return direct;
+  const style = element.getAttribute("style") ?? "";
+  const value = style
+    .split(";")
+    .map((declaration) => declaration.split(":"))
+    .find(([name]) => name?.trim().toLowerCase() === property)?.[1];
+  return imageCssLengthToPx(value);
+}
+
+function editorZoom(element: HTMLElement): number {
+  const inlineZoom = Number.parseFloat(element.style.zoom);
+  if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
+  const zoom = Number.parseFloat(window.getComputedStyle(element).zoom);
+  return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+}
+
+/**
+ * @GOV
+ * codes:    BR-ED-DATA-003-EFFECT-ED-ED-EDIT-020, BR-ED-STATE-001-EFFECT-ED-ED-EDIT-020
+ * type:     EFFECT
+ * chain:    ED-EDIT
+ * rules:    BR-ED-DATA-003, BR-ED-STATE-001
+ * term_ref: TERM-ED-008
+ * boundary: in=SelectedImageNodeAndZoomNormalizedMouseDrag | out=LogicalStateImageWidthAttributeTransaction | effect=memory | does_not=write_DiskState_or_media_resource
+ */
 export const ResizableImage = Image.extend({
   name: "image",
 
@@ -20,10 +64,40 @@ export const ResizableImage = Image.extend({
       /** 显示宽度（px；null=原始尺寸）。 */
       width: {
         default: null as string | null,
-        parseHTML: (el) => el.getAttribute("width"),
+        parseHTML: (el) => styleDimension(el as HTMLElement, "width"),
         renderHTML: (attrs) => (attrs.width ? { width: attrs.width } : {}),
       },
-      /** 嵌入样式：inline=行内随文字，block=独占块居中。 */
+      /** 来源图片高度（px）；人工拖动调宽后清空，让浏览器按固有比例重新计算。 */
+      height: {
+        default: null as string | null,
+        parseHTML: (el) => styleDimension(el as HTMLElement, "height"),
+        renderHTML: (attrs) => (attrs.height ? { height: attrs.height } : {}),
+      },
+      /** 可持久的 Pandoc 相对媒体身份；src=asset:// 只是当前进程显示投影。 */
+      binderMediaSrc: {
+        default: null as string | null,
+        parseHTML: (el) => el.getAttribute("data-binder-media-src"),
+        renderHTML: (attrs) => (
+          attrs.binderMediaSrc ? { "data-binder-media-src": attrs.binderMediaSrc } : {}
+        ),
+      },
+      /** 代理插入图片的 workspace 相对来源；仅用于未保存草稿缓存重建。 */
+      binderProjectSrc: {
+        default: null as string | null,
+        parseHTML: (el) => el.getAttribute("data-binder-project-src"),
+        renderHTML: (attrs) => (
+          attrs.binderProjectSrc ? { "data-binder-project-src": attrs.binderProjectSrc } : {}
+        ),
+      },
+      /** 与 binderProjectSrc 配对的来源 SHA-256；来源变化时 DOC 明确拒绝重建。 */
+      binderProjectHash: {
+        default: null as string | null,
+        parseHTML: (el) => el.getAttribute("data-binder-project-hash"),
+        renderHTML: (attrs) => (
+          attrs.binderProjectHash ? { "data-binder-project-hash": attrs.binderProjectHash } : {}
+        ),
+      },
+      /** 旧会话显示兼容；不作为 BDocx inline/block 持久契约。 */
       display: {
         default: "inline",
         parseHTML: (el) => (el.getAttribute("data-display") === "block" ? "block" : "inline"),
@@ -36,7 +110,8 @@ export const ResizableImage = Image.extend({
     return ({ node, editor, getPos }) => {
       let current = node;
       const isBlock = () => current.attrs.display === "block";
-      const wrap = document.createElement(isBlock() ? "div" : "span");
+      // Image 配置为 inline node，NodeView DOM 必须保持行内容器；旧 block 投影只通过 CSS 兼容。
+      const wrap = document.createElement("span");
       wrap.className = "ed-img-view";
       if (isBlock()) wrap.classList.add("ed-img-block");
 
@@ -47,62 +122,95 @@ export const ResizableImage = Image.extend({
         if (current.attrs.alt) img.alt = current.attrs.alt as string;
         if (current.attrs.width) img.setAttribute("width", String(current.attrs.width));
         else img.removeAttribute("width");
+        if (current.attrs.height) img.setAttribute("height", String(current.attrs.height));
+        else img.removeAttribute("height");
       };
       syncImg();
 
-      // 右下角调宽手柄（选中时显示）；拖动按编辑器 zoom 归一化位移。
+      // 右下角调宽手柄（选中时显示）；document 捕获阶段监听兼容 WebKit 丢失 pointer capture 的情况。
       const handle = document.createElement("span");
       handle.className = "ed-img-handle";
       handle.contentEditable = "false";
-      let dragging = false;
-      let startX = 0;
-      let startW = 0;
-      handle.addEventListener("pointerdown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dragging = true;
-        startX = e.clientX;
-        startW = img.getBoundingClientRect().width;
-        handle.setPointerCapture(e.pointerId);
-      });
-      handle.addEventListener("pointermove", (e) => {
-        if (!dragging) return;
-        const zoom = parseFloat(window.getComputedStyle(editor.view.dom).zoom) || 1;
-        const w = Math.max(MIN_WIDTH, Math.round(startW / zoom + (e.clientX - startX) / zoom));
-        img.setAttribute("width", String(w)); // 拖动中即时预览（DOM 级）
-      });
-      const commit = (e: PointerEvent) => {
-        if (!dragging) return;
-        dragging = false;
-        try {
-          handle.releasePointerCapture(e.pointerId);
-        } catch {
-          /* 已释放 */
-        }
-        const w = img.getAttribute("width");
+      handle.setAttribute("role", "separator");
+      handle.setAttribute("aria-label", "拖拽调整图片宽度");
+      handle.setAttribute("aria-orientation", "vertical");
+      handle.setAttribute("title", "拖拽调整图片宽度");
+      let removeDragListeners: (() => void) | null = null;
+
+      const commitWidth = (width: number) => {
+        img.style.removeProperty("width");
         const pos = typeof getPos === "function" ? getPos() : undefined;
-        if (w !== null && pos !== undefined) {
-          // 经受控 command 落属性 → 文档模型变更 → 脏态（用户编辑，X-FORBID-005）。
-          editor
-            .chain()
-            .focus()
-            .command(({ tr }) => {
-              tr.setNodeMarkup(pos, undefined, { ...current.attrs, width: w });
-              return true;
-            })
-            .run();
+        if (typeof pos !== "number") {
+          syncImg();
+          return;
         }
+        const imageNode = editor.state.doc.nodeAt(pos);
+        if (!imageNode || imageNode.type.name !== "image") {
+          syncImg();
+          return;
+        }
+        const nextWidth = String(width);
+        if (String(imageNode.attrs.width ?? "") === nextWidth) {
+          syncImg();
+          return;
+        }
+        editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, {
+          ...imageNode.attrs,
+          width: nextWidth,
+          height: null,
+        }));
       };
-      handle.addEventListener("pointerup", commit);
-      handle.addEventListener("pointercancel", commit);
+
+      const beginResize = (event: MouseEvent) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        removeDragListeners?.();
+        const ownerDocument = wrap.ownerDocument;
+        const zoom = editorZoom(editor.view.dom);
+        const startWidth = Math.max(MIN_WIDTH, img.getBoundingClientRect().width / zoom);
+        const parentWidth = wrap.parentElement?.getBoundingClientRect().width ?? 0;
+        const maxWidth = parentWidth > 0 ? Math.max(MIN_WIDTH, parentWidth / zoom) : Number.POSITIVE_INFINITY;
+        const startX = event.clientX;
+        let previewWidth = Math.min(maxWidth, startWidth);
+        let moved = false;
+
+        const move = (moveEvent: MouseEvent) => {
+          moveEvent.preventDefault();
+          moved = moved || moveEvent.clientX !== startX;
+          previewWidth = Math.max(
+            MIN_WIDTH,
+            Math.min(maxWidth, Math.round(startWidth + (moveEvent.clientX - startX) / zoom)),
+          );
+          img.style.width = `${previewWidth}px`;
+          img.setAttribute("width", String(previewWidth));
+        };
+        const finish = (upEvent: MouseEvent) => {
+          upEvent.preventDefault();
+          removeDragListeners?.();
+          if (moved) commitWidth(Math.round(previewWidth));
+          else {
+            img.style.removeProperty("width");
+            syncImg();
+          }
+        };
+        removeDragListeners = () => {
+          ownerDocument.removeEventListener("mousemove", move, true);
+          ownerDocument.removeEventListener("mouseup", finish, true);
+          removeDragListeners = null;
+        };
+        ownerDocument.addEventListener("mousemove", move, true);
+        ownerDocument.addEventListener("mouseup", finish, true);
+      };
+      handle.addEventListener("mousedown", beginResize);
 
       wrap.append(img, handle);
       return {
         dom: wrap,
         update(next) {
           if (next.type.name !== "image") return false;
-          if (next.attrs.display !== current.attrs.display) return false; // 嵌入样式变化 → 重建视图（span↔div）
           current = next;
+          wrap.classList.toggle("ed-img-block", isBlock());
           syncImg();
           return true;
         },
@@ -115,6 +223,13 @@ export const ResizableImage = Image.extend({
         ignoreMutation(m) {
           // 手柄拖动的 DOM 预览变更不回灌 ProseMirror（提交经 command）。
           return m.type !== "selection";
+        },
+        stopEvent(event) {
+          return event.target === handle || handle.contains(event.target as Node);
+        },
+        destroy() {
+          removeDragListeners?.();
+          handle.removeEventListener("mousedown", beginResize);
         },
       };
     };

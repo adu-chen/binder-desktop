@@ -262,6 +262,40 @@ workspace 内、目标冲突拒绝或幂等，不可覆盖。删除类工具在�
 用模型参数伪造用户确认。工具注册清单与权限分级的具体内容延实现期运营配置，本规则锁校验机制与
 写盘禁令。状态转移归 SM-AG-02。
 
+BDocx 表格工具是该循环的受控特例：模型必须先调用 `list_tables` 读取活动编辑会话的
+TableSnapshot，再以 `propose_edit(operation=table_ops)` 提交 TableOperation。底纹建议只允许
+`set_cell_background(at,color)`，`color` 为 `#RRGGBB` 或 `null`；工具执行层必须校验会话版本、
+内容哈希、表格指纹、坐标、动态能力与合并单元格左上锚。校验成功只生成 DE Diff，不直接改写
+LogicalState 或 DiskState。
+
+BDocx 图片工具同样是受控特例：模型必须先调用 `list_images` 读取同一次活动编辑会话的图片实例、
+稳定 Block 和 workspace 内项目图片资源，再以 `propose_edit(operation=image_ops)` 提交
+ImageOperation。执行层必须校验 sessionVersion/contentHash、Block 或稳定 imageId/当前 fingerprint、
+项目相对路径与内容哈希，并服从每张图片的 capabilities、resizeBounds 与 moveDirections；插入仅允许
+稳定 Block 前后的独立图片段落，删除仅删除文档图片节点，缩放只设宽度，上下移动只交换相邻顶层 Block，
+布局只允许独立图片段落 left/center/right。同一图片单批可各含一次缩放、布局和移动，执行层基于同一
+原始 fingerprint 预校验并以缩放→布局→移动的固定顺序生成原子载荷；删除必须独占。workspace 内非受控
+PNG/JPEG 先经 `import_image_asset` 复制到受控图片根并重新 `list_images`，不得用 `move_doc` 搬走源图；
+没有安全资产、锚或动态能力时调用 `edit_blocked` 结构化结束，不能伪造修改建议。`list_images` 的相邻
+文本只用于文档流定位，不构成图片像素、OCR 或视觉识别。成功只生成 DE Diff，不得直接修改
+LogicalState/DiskState，也不得删除或改写项目源文件。非活动 BDocx 会话必须明确拒绝。
+
+BDocx 的静态工具能力不得继续由提示词、function schema 与执行器分别手写。三者统一消费
+A-SYS-I-P-04 定义的 BDocxCapabilityManifest（TERM-SYS-002 / BR-SYS-DATA-006）：提示词负责如实
+说明格式、代理可用/人工专属能力、Diff 等级和 DOCX 往返风险；工具 Schema 负责条件字段与枚举；
+执行器在生成 PendingDiff 前负责同版本静态校验，并叠加当前
+AgentEditableSnapshot/TableSnapshot/ImageSnapshot 的锚、范围、来源哈希和动态能力校验。manifest
+无效或任一校验失败时必须回注错误，不得退回手写默认清单或先生成
+不可执行 Diff。
+
+富文档普通内容块采用与表格/图片相同的结构化原则：活动编辑器把同次 ProseMirror LogicalState
+直接投影为层级 AgentEditableBlockSnapshot；container/atom 只供模型理解父子关系，只有声明
+`replace_node` 的 content 块可写。模型提交 `block_ops` 时，工具层以 sessionVersion/contentHash、
+blockId、fingerprint、expectedNodeType 和受控 node JSON 完成整批预检，并从可信快照补齐 beforeNode。
+成功后 after_content 仍保持生成基线，实际草稿由 ED 单一 ProseMirror transaction 应用；富文档
+`replace_block/replace_document` 必须在 PendingDiff 前返回 `AG_RICH_BLOCK_OPERATION_REQUIRED`。
+HTML 字符串扫描只保留未打开文档只读兼容，不再承担结构编辑或重建职责。
+
 ## §5 上下文组装（AG-TURN）
 
 <!-- RULE
@@ -556,3 +590,9 @@ status: mapped
 | 2026-07-16 | v2.13 | 修正 AG-ASSIST 稳定定位模型：撤销运行时 DOM 测量反向驱动状态，改为静态尺寸估算 + 滚动/缩放/resize 简单重定位，优先保证浮层稳定显示 |
 | 2026-07-16 | v2.14 | 修正 AG-ASSIST 辅助续写失败态：候选不足 3 条不展示半候选、不允许采纳，但保留轻量空态，避免生成失败被误认为快捷键无效 |
 | 2026-07-17 | v2.15 | 收敛 AG-ASSIST 唯一实现映射链：Editor、assistStore、agService、后端 request_assist、overlay 均须承接规则；failure_reason 不得在前端链路被吞掉 |
+| 2026-07-28 | v2.18 | BDocx TableCellShading：工具循环补充 `list_tables→table_ops` 受控链，锁定 `set_cell_background` 的基准、能力、坐标、合并锚校验及只生成 Diff 的边界。 |
+| 2026-07-28 | v2.19 | 接入 A-SYS-I-P-04 BDocxCapabilityManifest：提示词、工具 Schema 与 PendingDiff 前校验使用同一版本/hash，明确静态能力与当前表格动态能力分层。 |
+| 2026-07-29 | v2.20 | BDOCX-IMAGE-AGENT-EDIT-01：工具循环新增 `list_images→image_ops`，锁定活动会话、Block/图片实例、workspace 来源哈希、只生成 Diff 与项目源文件保护。 |
+| 2026-07-29 | v2.21 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：list_images 增加稳定图片身份和动态操作边界，image_ops 开放受控缩放、上下移动和独立段落对齐。 |
+| 2026-07-30 | v2.22 | 图片代理编辑闭合审计：同步同图 resize/layout/move 原子组合与 delete 独占，补齐 import_image_asset、edit_blocked、非视觉识别和源文件不搬移边界。 |
+| 2026-07-30 | v2.23 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：富文档普通内容写入改为活动 ProseMirror 层级快照 → block_ops → 后端批校验/补齐 beforeNode → ED 单事务；container/atom 只读，HTML 字符串替换与整篇替换在富文档生成前拒绝。 |

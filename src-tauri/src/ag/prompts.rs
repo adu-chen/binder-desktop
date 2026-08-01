@@ -23,17 +23,26 @@ pub const SYSTEM_PROMPT_CHAT: &str = "\
 【能力边界（如实告知，不可夸大）】
 - 你能看到上文提供的当前文档内容。
 - 你可以按需使用工具：list_docs 列出 workspace 内文档，read_doc 读取指定文档，search_text 搜索\
-workspace 内文本，list_blocks 读取文档块与样式投影，move_doc 移动/重命名 workspace 内文件，\
-create_folder 创建 workspace 内目录，propose_edit 生成待用户审阅的修改建议。
+workspace 内文本，list_blocks 读取文档块与样式投影，list_tables 读取当前 BDocx 的表格结构，move_doc 移动/重命名 workspace 内文件，\
+create_folder 创建 workspace 内目录，create_doc 新建文档（支持 .md/.txt/.docx 所有格式；.docx 自动经 BDocx 管道创建为可编辑富文档），propose_edit 生成待用户审阅的修改建议。
 - 工具边界必须如实遵守：只能读取 workspace 内文件；未由当前文档、@引用或块引用声明的既有文档，\
-不得擅自作为修改目标；文档内容修改必须通过 propose_edit 生成 DiffCard，等待用户接受后才会写入文件。
+不得擅自作为修改目标；文档内容修改必须通过 propose_edit 生成 DiffCard，等待用户接受后才会写入文件。\
+用户明确要求「新建文件」「创建文档」时，使用 create_doc 直接创建（.docx 同样支持，无需额外步骤），不经过 DiffCard。
 - 文件树结构整理（移动、重命名、创建分类目录）不是文档内容修改；用户要求整理 workspace 文件时，\
 应先用 list_docs/read_doc/search_text 分析，再用 create_folder/move_doc 执行。目标已存在时不要覆盖，\
 删除文件当前没有可用的确认工具，不要执行删除，只能列出需确认的删除清单。
 - 用户要求改写、插入、删除、调整样式、加粗、改颜色、改标题、改段落时，必须调用 propose_edit；\
-仅口头回复“已修改”无效。已有文档的局部修改必须用 operation=replace_block + block_id/block_index + new_text；\
-只有用户明确要求整篇重写时才用 operation=replace_document + content。样式类修改使用 operation=style_ops + style_ops，\
-不要只用自然语言描述。
+仅口头回复「已修改」无效。纯文本文件的局部修改使用 replace_block，整篇替换使用 replace_document。\
+富文档内容修改和新增使用 block_ops：修改已有块用 replace_node，\
+在指定块前插入新块用 insert_before（blockId 为后方锚点块）、在指定块后插入用 insert_after（blockId 为前方锚点块）、\
+在文档末尾追加新块用 append（无需 blockId）。所有 block_ops 操作必须原样带回 base，\
+并把块投影的 block_id/node_type 映射为 blockId/expectedNodeType，带回 fingerprint（replace_node），基于 node_json 构造 afterNode。\
+容器块和原子块只作上下文，不得通用替换；多个相关内容块必须在一次 block_ops 中提交。\
+样式类修改使用 operation=style_ops + style_ops，不要只用自然语言描述。
+- 当前文档的格式与编辑能力以运行时注入的「当前文档运行时声明」为准；若包含「当前 BDocx 编辑能力声明」，\
+它是本轮 StyleOp/TableOperation、人工专属能力、Diff 等级与 DOCX 往返风险的唯一能力来源，必须逐项遵守。\
+表格修改仍须先调用 list_tables，并服从该表当前的 capabilities、fingerprint 与 moveDirections；\
+不得用 replace_block/replace_document 或原始 HTML 绕过富文档结构化块、表格或图片操作；目标不唯一时先追问。
 - 你不直接写入文档内容，也不要声称内容已经写入；文档内容写入只发生在用户接受修改建议之后。\
 move_doc/create_folder 只表示文件树结构已变更。
 
@@ -42,6 +51,12 @@ move_doc/create_folder 只表示文件树结构已变更。
 
 【输出风格】
 简洁、直接，纯文本，不使用 markdown 标记符号。任务全部完成后只在最后总结一次，执行过程中不逐步汇报。";
+
+/// 从 BDocxCapabilityManifest 投影当前 BDocx 的模型可见能力边界。
+pub fn bdocx_capability_prompt(
+) -> Result<String, super::bdocx_capabilities::CapabilityValidationError> {
+    super::bdocx_capabilities::prompt_projection()
+}
 
 /// CBT 构建任务系统提示词。单文件产出导向，硬约束同 Chat。
 pub const SYSTEM_PROMPT_BUILD: &str = "\
@@ -108,8 +123,10 @@ mod tests {
             "read_doc",
             "search_text",
             "list_blocks",
+            "list_tables",
             "move_doc",
             "create_folder",
+            "create_doc",
             "propose_edit",
         ] {
             assert!(SYSTEM_PROMPT_CHAT.contains(tool), "缺工具能力声明: {tool}");
@@ -126,6 +143,21 @@ mod tests {
         );
         // 防提示注入。
         assert!(SYSTEM_PROMPT_CHAT.contains("数据") && SYSTEM_PROMPT_CHAT.contains("指令"));
+        assert!(
+            !SYSTEM_PROMPT_CHAT.contains("sub/sup"),
+            "真实 mark 清单不得在静态提示词中漂移"
+        );
+    }
+
+    #[test]
+    fn bdocx_capability_prompt_is_manifest_projected() {
+        let prompt = bdocx_capability_prompt().unwrap();
+        assert!(prompt.contains("BDocx 编辑能力声明"));
+        assert!(prompt.contains("manifestId=binder.bdocx.agent-edit"));
+        assert!(prompt.contains("subscript"));
+        assert!(prompt.contains("superscript"));
+        assert!(prompt.contains("set_cell_background"));
+        assert!(prompt.contains("人工专属"));
     }
 
     #[test]

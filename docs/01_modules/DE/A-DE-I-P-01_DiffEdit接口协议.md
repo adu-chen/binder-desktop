@@ -30,12 +30,31 @@ accepted 后才驱动 WS 落盘，rejected/expired 不写文件。
 | `de.generate_diff` | ChangeProposal（target_blocks: DocRef+blockId、修改内容、origin: 模块/回合、DiffProjection 基线元数据） | diff_id（SM-DE-01 Pending）+ 呈现就绪 | **anchor_lost**（blockId 失效→GenFailed，回报 AG handoffFail）；已打开文档缺 session 基线；持久化失败 | 经 `ed.locate_block`/AgentReadContext 校验锚 + `ws.persist_diff` 持久化 + `ed.mount_decoration` 或 DiffCard 呈现 |
 | `de.get_diff` | diff_id | PendingDiff + payload（含 before_snapshot 对比基准） | 不存在 | BR-DE-DATA-002（重启恢复可重建审阅） |
 | `de.list_diffs` | DocRef（可空 → workspace 全量） | PendingDiff 列表（按创建序） | — | 多 diff 并存呈现（BR-DE-DATA-003） |
+| `de.update_image_diff_snapshots` | diff_id、before/after ImageSnapshot、affectedBlockIds | 将 ED 实际应用结果补入既有 ImageOperation DiffPayload；首次写入后只接受同值幂等重试 | workspace/diff 不匹配、非 image_ops、快照字段/路径/hash 无效、已写值冲突 | BR-DE-DATA-002；只补审阅载荷，不修改文档内容或 diff 终态 |
+
+`patch_kind=block_ops` 时 DiffProjection 必须携带版本化 StructuredBlockEditPayload。每个目标块的
+beforeNode/afterNode、blockId、expectedNodeType 与 fingerprint 是执行、详细审阅和精确拒绝的共同
+真值；before/after 文本摘要只供紧凑卡显示，不得反向重建执行载荷。该 kind 仅允许
+`draft_mode=current_editor`，不得进入 open_session HTML 字符串或 background raw apply。
+
+`patch_kind=table_ops` 时 DiffProjection 必须携带受限 TableOperation 及 before/after TableSnapshot，
+包括每个逻辑单元格的 `backgroundColor`。DiffCard 直接消费该投影：`set_cell_background` 按 `RnCn`
+呈现修改前后色块与 `#RRGGBB`，`null` 明确呈现为无底纹；不得从原始 HTML 或工具请求参数猜测差异。
+
+`patch_kind=image_ops` 时初始 DiffProjection 必须携带受限 ImageOperation、生成基线与项目来源/锚；
+持久载荷 envelope 固定 `payloadVersion=1`，该版本允许快照字段在 ED 应用前缺省、应用后完整固化。
+ED 在当前 LogicalState 单事务应用后立即调用 `de.update_image_diff_snapshots` 固化真实 before/after
+ImageSnapshot 与受影响 Block。后续 `de.list_diffs(diffIds)` 必须从持久载荷返回
+`image_before/image_after/image_affected_block_ids`，DiffCard 直接消费该投影细分插入与删除；该 kind 仅允许
+`draft_mode=current_editor`，不得进入后台 raw apply 或非活动会话字符串替换。同一图片单批可各含一次
+resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐项呈现插入、删除、缩放、移动与
+对齐的真实前后快照，不得只细分插入/删除。
 
 ## §3 裁决接口（DE-DIFF / SM-DE-01 / BR-DE-STATE-001）
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `de.accept_draft_diff` | diff_id、apply_context(current_editor/open_session)、base_session_version?、base_content_hash? | Accepted（不可逆）；仅确认已进入 LogicalState，不触发 `ws.apply_diff` | open_session 基线不匹配 → 拒绝，调用方应转 `de.expire_diff`；终态后再调用 → 协议错误 | SM-DE-01 Accepted → ED/WS save 路径 |
+| `de.accept_draft_diff` | diff_id、apply_context(current_editor/open_session)、base_session_version?、base_content_hash? | Accepted（不可逆）；仅确认已进入 LogicalState，不触发 `ws.apply_diff`。可由 DiffCard 的“接受”或当前文档的任意保存动作调用 | open_session 基线不匹配 → 拒绝，调用方应转 `de.expire_diff`；终态后再调用 → 协议错误 | SM-DE-01 Accepted → ED/WS save 路径 |
 | `de.accept_diff` | diff_id | Accepted（不可逆）→ 仅当目标文档未打开时触发 `ws.apply_diff`，回 Applied + 装饰复位 | 目标文档已打开 → `DE_OPEN_DOC_REQUIRES_LOGICAL_STATE`；apply 失败 → 终态保持 Accepted、WS 侧重试（不回退） | SM-DE-01 Accepted → SM-WS-02（X-INTER-001，未打开文档后台落盘触发） |
 | `de.reject_diff` | diff_id | Rejected（不可逆）→ `ws.discard_diff` + 装饰复位 | `draft_mode=open_session` 已自动应用/失效 → 协议错误（卡片无拒绝入口） | 不写文件 |
 | `de.expire_diff` | diff_id、reason | Expired（不可逆）→ `ws.discard_diff` + 装饰复位 | 终态后再调用 → 协议错误 | 自动应用失败、超时或外部变更关闭 |
@@ -88,3 +107,8 @@ accepted 后才驱动 WS 落盘，rejected/expired 不写文件。
 | 2026-06-12 | v1.0 | 初版（实现前置件，核心交互链 DE 侧）：DE 接口协议——生成 3 条（generate_diff 接 ChangeProposal+锚校验、get/list）、裁决 2 条（accept 唯一触发落盘不可逆、reject）、过期与重检 2 条（check_expiry 保守过期 / recheck_overlap 冲突）；§5 跨模块对接索引（AG/ED/WS，不重复定义）；零新增注册项；债务（批量裁决接口待 DE-04 决策、序列化/过期触发延实现期） |
 | 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
 | 2026-07-18 | v1.2 | 补齐已打开文档接口边界：`de.accept_draft_diff` 确认 current/open session LogicalState，不触发后台落盘；`de.accept_diff` 限未打开文档；新增 `de.expire_diff` 承接 open_session 自动应用失败 |
+| 2026-07-27 | v1.3 | DE-SAVE-IMPLICIT-ACCEPT-01：确定任意保存动作是已应用草稿 Diff 的接受入口；保存编排先调用既有 `de.accept_draft_diff`，再走 ED/WS 保存链，以既有 effect_status 回调确认 saved。 |
+| 2026-07-28 | v1.4 | BDocx TableCellShading：`patch_kind=table_ops` 的 DiffProjection 明确携前后 TableSnapshot；DiffCard 按逻辑坐标显示前后色块、色值与无底纹状态。 |
+| 2026-07-29 | v1.5 | BDOCX-IMAGE-AGENT-EDIT-01：新增 patch_kind=image_ops 的 ImageOperation、项目来源/锚、current_editor 与 structured DiffCard 契约；补充 `de.update_image_diff_snapshots` 一次性幂等持久化以及历史查询返回前后 ImageSnapshot 的闭环。 |
+| 2026-07-30 | v1.6 | 图片代理编辑闭合审计：image_ops 接口同步同图 resize/layout/move 组合、delete 独占，并明确五类图片操作均须由真实前后快照结构化呈现。 |
+| 2026-07-30 | v1.7 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：新增 patch_kind=block_ops 的 exact node before/after、活动草稿限定与逐块结构化审阅；文本摘要不再承担执行或回滚。 |

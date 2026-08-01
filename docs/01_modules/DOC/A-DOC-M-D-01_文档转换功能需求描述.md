@@ -37,12 +37,12 @@ R-ED-M-R-23（样式子集），原料不为权威，REQ 重新撰写（APC §8�
 |---|---|---|
 | D-J1 | docx 打开转换：docx → 统一编辑模型（Pandoc 编辑链），交 ED 编辑 | REQ-CORE-004 |
 | D-J2 | docx 保存转换：统一编辑模型 → docx（往返），经 WS 原子落盘 | REQ-CORE-004 |
-| D-J3 | 样式子集契约执行：必需/部分/不处理三级，进入编辑即子集化且用户可知 | REQ-CORE-004、A-ED-M-T-01 §11.1 |
-| D-J4 | 预览转换服务：docx 等 → PDF（LibreOffice 预览链），供 PRV 全保真预览 | REQ-CORE-004 |
+| D-J3 | 样式能力契约执行：当前三级结果与五档目标报告模型均须用户可知，进入编辑即子集化 | REQ-CORE-004、A-ED-M-T-01 §11.1 |
+| D-J4 | 预览转换服务：docx 等 → PDF（LibreOffice 预览链），供 PRV 以语料实测为准的只读预览 | REQ-CORE-004 |
 | D-J5 | 本地转换运行时：转换全程本地执行（Pandoc/LibreOffice 本地依赖），离线可用、内容不上行 | REQ-CORE-001/009 |
 
 > 边界澄清：**编辑链与预览链完全分离**（旧版实证决策）：编辑链 Pandoc（样式子集化、可编辑），
-> 预览链 LibreOffice→PDF（全保真、只读）。编辑呈现归 ED、预览呈现与打印导出归 PRV、落盘归 WS；
+> 预览链 LibreOffice→PDF（以语料实测为准的只读保真目标）。编辑呈现归 ED、预览呈现与打印导出归 PRV、落盘归 WS；
 > DOC 只做转换。docx 开/存为状态化核心链（A-SYS-M-S-01 §3，owner=DOC），DOC G2 建机。
 
 ## §3 能力范围（DOC v1）
@@ -81,7 +81,7 @@ R-ED-M-R-23（样式子集），原料不为权威，REQ 重新撰写（APC §8�
 
 | step | actor | input | action | output | next | exception |
 |---|---|---|---|---|---|---|
-| 1 | PRV | docx 预览请求 | DOC 经 LibreOffice 转换为 PDF | PDF（全保真） | 终态 | 转换失败→统一错误形状，PRV 呈现失败态 |
+| 1 | PRV | docx 预览请求 | DOC 经 LibreOffice 转换为 PDF | PDF（以语料实测为准） | 终态 | 工具无效、启动、字体覆盖或转换失败→统一错误形状，PRV 呈现失败态 |
 
 ## §5 模块级需求声明（REQ-DOC-*）
 
@@ -103,19 +103,19 @@ owner_module: DOC
 status: active
 summary: 将编辑模型转换回 docx 并经 WS 原子落盘，实现 DOCX 往返；转换或落盘失败时原 docx 文件保持不变
 source_doc: REQ-CORE-004、A-WS-M-T-01（BR-WS-PERSIST-001）
-acceptance: docx 编辑后可往返保存；失败不破坏原文件；必需样式子集往返保真
+acceptance: docx 编辑后可往返保存；失败不破坏原文件；必需样式子集往返保真；受支持的显式文本颜色与单元格纯色底纹保存后写入对应 OOXML，重开后恢复到统一编辑模型；嵌入图片以及经校验物化的 workspace 项目图片，其资源、alt、显式尺寸、文档流顺序与删除结果在保存重开后保持
 open_issues: blockId（data-block-id）经 Pandoc 往返的保留度需实测（A-ED-M-T-01 §11.2），不达则兜底重建
 -->
 
 <!-- REQ
 req_id: REQ-DOC-003
-title: 样式子集契约与用户明示
+title: 样式能力契约与用户明示
 owner_module: DOC
 status: active
-summary: 执行三级样式子集契约（必需承诺保真 / 部分尽力保留 / 明确不处理），docx 进入编辑态即子集化，子集化范围与可能损失对用户可知，不静默丢失
+summary: 当前实现执行三级样式子集结果（必需 / 部分 / 明确不处理），并演进为五档目标报告模型（已实测保证 / 必需待扩展 / 尽力保留 / 仅模板继承 / 明确不处理）；docx 进入编辑态即子集化，范围与可能损失对用户可知，不静默丢失
 source_doc: REQ-CORE-004、A-ED-M-T-01 §11.1（选型记录）、旧版 R-ED-M-R-23（实证原料）
-acceptance: 必需子集（标题/对齐/粗斜下/列表/基础表格/图片）往返保真；部分支持项损失对用户明示；不处理项清单明确且预览链可全保真查看
-open_issues: 三级清单的执行细则与告知交互归 DOC L2 与实现期
+acceptance: 必需子集在三层语料达标后往返保真；部分支持项损失对用户明示；嵌入图片保证仅覆盖受控资源、alt、显式尺寸、实例数量和文档流顺序/删除结果，项目图片草稿缓存缺失时可按 workspace 相对来源与内容哈希重新物化；不处理项清单明确且预览链可按 LO 语料实测结果只读查看
+open_issues: 文本颜色、单元格纯色底纹、嵌入图片基础往返、`doc.get_style_report` 与 ED 状态栏告知已闭合；`data-display`、浮动/绝对定位和任意位置布局不在图片保证集；ED custom-style/字号单位闭环及其余 OOXML 高级样式逐项检测仍归 DOC L2 与实现期
 -->
 
 <!-- REQ
@@ -123,9 +123,9 @@ req_id: REQ-DOC-004
 title: 预览转换服务（供 PRV）
 owner_module: DOC
 status: active
-summary: 提供 docx→PDF 的本地预览转换（LibreOffice 预览链），与编辑链完全分离，供 PRV 全保真只读预览，补偿编辑链样式子集化的查看需求
+summary: 提供 docx→PDF 的本地预览转换（LibreOffice 预览链），与编辑链完全分离，供 PRV 以 LO 语料实测为准的只读预览，补偿编辑链样式子集化的查看需求
 source_doc: REQ-CORE-004、APC §4.1（PRV 职责分界）
-acceptance: docx 可经 DOC 转换为全保真 PDF 供 PRV 呈现；预览链与编辑链无功能黏连
+acceptance: docx 可经 DOC 转换为以 LO 语料实测为准的只读 PDF 供 PRV 呈现；预览链与编辑链无功能黏连；工具无效、启动、字体覆盖和转换失败均为明确失败态
 open_issues: Excel/PPT/其他格式的预览转换是否归 DOC 待 PRV G1 暴露后联合确认（§7 DOC-03）
 -->
 
@@ -134,10 +134,10 @@ req_id: REQ-DOC-005
 title: 本地转换运行时与离线边界
 owner_module: DOC
 status: active
-summary: 转换全程在本地执行（Pandoc/LibreOffice 本地依赖打包），离线可用，文档内容不因转换上行云端；转换依赖缺失时明确报错不静默降级
+summary: 转换全程在本地执行，Pandoc/LibreOffice 与默认回退字体必须随 Binder 发布包内置；运行时只能执行经校验的包内工具，离线可用，文档内容不因转换上行云端；包内依赖缺失、版本不符或失效时 Binder 仍可启动，但 DOC command 必须明确报错并禁用相关入口，绝不探测或降级到设备本地工具
 source_doc: REQ-CORE-001、REQ-CORE-009、APC §9
-acceptance: 断网时 docx 开/存/预览转换可用；无网络传输文档内容；依赖缺失有明确错误
-open_issues: Pandoc/LibreOffice 的打包体积与按需加载策略归 DOC L2/实现期
+acceptance: 断网时 docx 开/存/预览转换可用；无网络传输文档内容；真实发布包只调用自身资源目录内的 Pandoc/LibreOffice；包内依赖缺失时 Binder 其余功能可启动、DOC command 返回明确错误且不调用 PATH、/Applications 或用户安装工具
+open_issues: 工具版本、架构、许可证、哈希与按需加载策略归 DOC L2/实现期；LibreOffice GlyphFallback 字体债务受发布阻断项管理；DOC-PLAT-001（macOS 最低版本与 arm64/x86_64 发布矩阵）已登记为暂缓债务，不以本地工具补救
 -->
 
 ## §6 模块边界与约束（边界闭合）
@@ -146,7 +146,8 @@ open_issues: Pandoc/LibreOffice 的打包体积与按需加载策略归 DOC L2/�
 - **唯一转换通道**：docx 等二进制格式的解析/生成必经 DOC（ED 无二进制代码，BR-ED-DATA-002 对偶），
   DOC L2 以 CONSTRAINT 锁定。
 - **双链分离**：编辑链（Pandoc）与预览链（LibreOffice→PDF）完全分离，无功能黏连（旧版实证决策）。
-- **文件边界**：DOC 读写文档经 WS（X-FORBID-004 路径守护），转换中间产物不越 workspace 管理边界。
+- **文件边界**：DOC 读写文档经 WS（X-FORBID-004 路径守护）；转换中间产物仅位于应用数据目录的受控请求生命周期内，
+  不进入 workspace 文件树或无界系统临时目录。
 - **状态机边界**：docx 开/存为状态化核心链（X-SEQ-003），DOC G2 建机（SM-DOC-01）并登记总图。
 - **L4 原料边界**：取材台账 §4.5 docx 子节（A-ED-M-T-04、R-ED-M-R-01 P1 主源、R-ED-M-R-23），
   原料不为权威。
@@ -160,6 +161,7 @@ open_issues: Pandoc/LibreOffice 的打包体积与按需加载策略归 DOC L2/�
 | DOC-03 | BOUNDARY_OPEN | 显式延期 | Excel/PPT/音视频预览的转换服务归属（DOC 抑或 PRV 自带）待 PRV G1 暴露后联合确认 |
 | DOC-04 | NEEDS_HUMAN_DECISION | 显式延期（不阻断 G1） | 样式子集告知交互形态（打开时弹层/状态栏标识）属产品体验决策，延 G2/实现期人类确认 |
 | DOC-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5；量化指标（转换耗时：旧版目标首开 <12s/缓存 <2s、准确率 ≥90%）延 G5 标定复核 |
+| DOC-06 | PLATFORM_DEFERRED | 已登记，暂不处理 | macOS 最低版本与 arm64/x86_64 发布矩阵见 DOC-PLAT-001；本轮不扩大为跨架构实现 |
 
 > 术语：样式子集为 DOC 主责核心概念，在 DOC L2 注册 TERM。
 
@@ -176,3 +178,11 @@ open_issues: Pandoc/LibreOffice 的打包体积与按需加载策略归 DOC L2/�
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版：DOC 文档转换模块级 L1；声明 REQ-DOC-001~005（docx 打开转换 / 保存转换往返 / 样式子集契约与用户明示 / 预览转换服务 / 本地转换运行时与离线边界），承接 REQ-CORE-001/004/009 与 APC §4.1；采纳旧版实证三模式分离（编辑链 Pandoc / 预览链 LibreOffice→PDF / 保存链 HTML→Pandoc→DOCX，R-ED-M-R-01 v2.0 原料）；代表性流程 D1–D3；G1 暴露清单 DOC-01~05 |
 | 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-21 | v1.2 | DOC-BUNDLED-RUNTIME-01：REQ-DOC-005 收紧为 Pandoc、LibreOffice 与默认字体均须由 Binder 包内受控资源提供；禁止 PATH、`/Applications` 或其他设备本地安装回退；包内资源校验失败必须显式失败。 |
+| 2026-07-21 | v1.3 | DOC-LO-RELIABILITY-FONT-PLAN-01：登记 DOC-06 / DOC-PLAT-001 为暂缓平台债务；本轮修复范围聚焦无界面 LO 运行、稳定 headless、确定性包内字体回退和 Pandoc 样式能力可告知。 |
+| 2026-07-21 | v1.4 | 审计修正：REQ-DOC-005 明确包内工具失效只禁用 DOC command、不得阻断 Binder 其余功能启动；运行时仍无系统工具/字体回退。 |
+| 2026-07-21 | v1.5 | 审计修正：预览保真改为以 LO 语料实测为准的只读目标；REQ-DOC-003 明确当前三级结果、五档目标报告和 ED 样式闭环待实现；转换中间产物改由应用数据目录受控生命周期管理。 |
+| 2026-07-27 | v1.6 | DOCX-COLOR-ROUNDTRIP-01：回写文本颜色的保存/重开保真、实际检测报告与 ED 状态栏告知闭合范围；保留其余样式子集与高级 OOXML 检测为未闭合项。 |
+| 2026-07-28 | v1.7 | BDocx TableCellShading：REQ-DOC-002/003 纳入单元格纯色底纹的 OOXML `w:shd` 保存、重开恢复、实际检测与风险报告；渐变、主题与图案填充仍不在保证集。 |
+| 2026-07-28 | v1.8 | BDOCX-IMAGE-INTERACTION-01：REQ-DOC-002/003 增加图片文档流顺序和删除结果的保存重开验收；明确 data-display、浮动/绝对定位不属于嵌入图片保证集。 |
+| 2026-07-29 | v1.9 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-DOC-002/003 增加 workspace 项目图片的受控物化、来源/hash 草稿恢复以及资源、alt、尺寸、位置和删除结果验收。 |

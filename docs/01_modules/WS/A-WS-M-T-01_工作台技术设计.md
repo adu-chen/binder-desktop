@@ -100,7 +100,10 @@ rule_id: BR-WS-DATA-001
 -->
 workspace 内文档/资源的读、写、列举、建目录与跨文档操作必经 WS 物理边界层，统一以 WorkspaceRef/DocRef
 （A-SYS-I-P-01）定位目标；调用方不得旁路 WS 直接触达文件系统（X-SEQ-002 / APC §9）。跨模块传递的
-WorkspaceRef/DocRef 字段集合引用 A-SYS-I-P-01 共享结构，WS 不私自重定义（X-SHARED-001）。
+WorkspaceRef/DocRef 字段集合引用 A-SYS-I-P-01 共享结构，WS 不私自重定义（X-SHARED-001）。代理项目
+图片发现只允许读取 `.binder/project_assets.json` 声明的 workspace 相对 `imageRoots`；配置缺失时
+使用单一默认根 `images`，不得回退扫描整个 workspace。只递归列举受控根内普通文件的相对路径，跳过
+隐藏目录与符号链接；格式/magic/hash 的图片语义校验由 DOC 消费侧完成。
 
 ## §4 文件 I/O 与跨文档操作的边界（WS-FS）
 
@@ -429,3 +432,5 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-07-02 | v1.2 | §12 选型定档回填（人类授权执行 A-CORE-X-R-03 §7 补全计划）：G-4 不透明 ID = 前缀 + UUIDv4（Rust uuid crate；blockId 归 ED §11.1）；G-5 内容基线哈希 = FNV-1a 64 定档（非对抗性变更检测/内容寻址去重的用途边界声明，与既有 IPC 契约及持久化基线兼容） |
 | 2026-07-12 | v1.3 | 三态实现回写：保存前 baseline guard 已落地到 `ws.save_doc` / `doc.save_from_edit`，冲突返回 `WS_SAVE_CONFLICT` 且不写文件，`override=true` 仅源自用户显式确认；声明 baseline IPC 字符串化；文件监视、`ws.external_change` 推送与独立检测 command 仍延后 |
 | 2026-07-16 | v1.4 | 补齐 WS-FS 建目录语义：建目录属于 workspace 内文件树结构操作，必经 WS 物理边界层，供 Agent `create_folder` 结构工具复用；目标为目录幂等成功，目标为文件拒绝 |
+| 2026-07-29 | v1.5 | BDOCX-IMAGE-AGENT-EDIT-01：BR-WS-DATA-001 增加 workspace 项目图片只读发现，锁定相对普通文件、隐藏目录跳过、符号链接和越界拒绝边界。 |
+| 2026-07-29 | v1.6 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：项目图片发现收敛到 `.binder/project_assets.json` 的相对 imageRoots，缺失时只使用 `images`，禁止全 workspace 回退。 |

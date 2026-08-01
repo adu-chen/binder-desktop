@@ -2,6 +2,7 @@ import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { generateJSON } from "@tiptap/core";
 import { buildEditorExtensions } from "../components/ed/extensions";
+import { isContentBlock } from "../components/ed/extensions/BlockIdExtension";
 import type { ContentFormat, EditFormat } from "../store/edStore";
 import { makeDocReference, makeSelectionReference, writeReferencePayloadData } from "./referencePayload";
 
@@ -131,8 +132,27 @@ export interface BlockSnapshot {
   contentTo: number;
 }
 
-/** 文档顶层块定位辅助：返回 pos 所在顶层块 {node, blockPos}；不在任何块内 → null。 */
-function topBlockAt(doc: PMNode, pos: number): { node: PMNode; blockPos: number } | null {
+/**
+ * 解析 pos 所在的最深层内容块。从当前位置向上遍历祖先，找到最近的内容块。
+ * 对于 `orderedList > listItem > paragraph` 中的文本位置，返回 listItem（内容块），
+ * 而非 orderedList（容器块）。审计修复（2026-07-25 · A+D 方案）。
+ */
+function resolveContentBlock(doc: PMNode, pos: number): { node: PMNode; blockPos: number } | null {
+  const resolved = doc.resolve(pos);
+  for (let depth = resolved.depth; depth >= 0; depth--) {
+    const node = resolved.node(depth);
+    if (isContentBlock(node as unknown as { type: { name: string } })) {
+      // `blockPos` 表示节点前的位置；`start(depth)` 已经越过了节点的
+      // opening token。调用方会再加 1 得到内容起点，因此这里必须使用 before。
+      return { node, blockPos: resolved.before(depth) };
+    }
+  }
+  // 回退：顶层块查找（兼容非 binderBlock 节点）
+  return topBlockAtFallback(doc, pos);
+}
+
+/** 回退顶层块查找：当 resolveContentBlock 未找到内容块时使用。 */
+function topBlockAtFallback(doc: PMNode, pos: number): { node: PMNode; blockPos: number } | null {
   let p = 0;
   for (let i = 0; i < doc.childCount; i++) {
     const node = doc.child(i);
@@ -166,7 +186,7 @@ export function resolveSelectionAnchor(
   to: number,
 ): { blockId: string; start: number; end: number } | null {
   if (from >= to) return null;
-  const hit = topBlockAt(doc, from);
+  const hit = resolveContentBlock(doc, from);
   if (!hit) return null;
   const blockId = (hit.node.attrs.blockId as string | null) ?? "";
   if (!blockId) return null;
@@ -180,11 +200,18 @@ export function resolveSelectionAnchor(
   return { blockId, start, end };
 }
 
-/** 按当前块列表的 0 起块号解析稳定 blockId；用于 text/md 的 propose_edit block_index 回连编辑器锚。 */
+/** 按当前块列表的 0 起块号解析稳定 blockId；用于 text/md 的 propose_edit block_index 回连编辑器锚。
+ *  审计修复（2026-07-25 · A+D 补充）：改用 flat block 列表（descendants 收集所有有 blockId 的节点），
+ *  支持定位嵌套在 orderedList/table 等容器内的内容块。 */
 export function getTopBlockIdByIndex(doc: PMNode, index: number): string | null {
-  if (!Number.isInteger(index) || index < 0 || index >= doc.childCount) return null;
-  const blockId = (doc.child(index).attrs.blockId as string | null) ?? "";
-  return blockId || null;
+  if (!Number.isInteger(index) || index < 0) return null;
+  const blocks: PMNode[] = [];
+  doc.descendants((node) => {
+    if ((node.attrs.blockId as string | null) != null) blocks.push(node);
+    return true;
+  });
+  if (index >= blocks.length) return null;
+  return (blocks[index].attrs.blockId as string) || null;
 }
 
 function snapshotTopBlock(node: PMNode, pos: number, index: number): BlockSnapshot {
@@ -211,22 +238,45 @@ function snapshotTopBlock(node: PMNode, pos: number, index: number): BlockSnapsh
  */
 /// 当前编辑器块快照查询守则（BR-ED-DATA-004）：按会话内 blockId 或 0 起 block_index 读取目标块
 /// 的当前纯文本与 ProseMirror 位置，用于 AG 修改建议和 DE 草稿回滚；查询只读，不修正文档。
+/// 审计修复（2026-07-25 · A+D 补充）：改用 flat block 列表（descendants 收集所有 blockId 节点）。
 export function getTopBlockSnapshotByIndex(doc: PMNode, index: number): BlockSnapshot | null {
-  if (!Number.isInteger(index) || index < 0 || index >= doc.childCount) return null;
-  let pos = 0;
-  for (let i = 0; i < index; i++) pos += doc.child(i).nodeSize;
-  return snapshotTopBlock(doc.child(index), pos, index);
+  if (!Number.isInteger(index) || index < 0) return null;
+  const blocks: { node: PMNode; pos: number }[] = [];
+  doc.descendants((node, pos) => {
+    if ((node.attrs.blockId as string | null) != null) blocks.push({ node, pos });
+    return true;
+  });
+  if (index >= blocks.length) return null;
+  const { node, pos } = blocks[index];
+  return snapshotTopBlock(node, pos, index);
 }
 
+/**
+ * 审计修复（2026-07-25 · A+D 补充）：改为 doc.descendants() 递归搜索，
+ * 支持定位嵌套在 table/orderedList 等容器内的内容块（如 tableCell 内的 paragraph）。
+ * 之前仅搜索 doc.child(i) 顶层子节点，无法找到深层嵌套的 blockId。
+ */
 export function findTopBlockSnapshotById(doc: PMNode, blockId: string): BlockSnapshot | null {
   if (!blockId) return null;
-  let pos = 0;
-  for (let index = 0; index < doc.childCount; index++) {
-    const node = doc.child(index);
-    if (node.attrs.blockId === blockId) return snapshotTopBlock(node, pos, index);
-    pos += node.nodeSize;
+  let foundPos = -1;
+  doc.descendants((node, pos) => {
+    if (node.attrs.blockId === blockId) {
+      foundPos = pos;
+      return false;
+    }
+    return true;
+  });
+  if (foundPos < 0) return null;
+  const node = doc.nodeAt(foundPos);
+  if (!node) return null;
+  // 计算顶层块索引（用于 addBlockIndex 向下兼容）
+  let p = 0;
+  let index = 0;
+  for (let i = 0; i < doc.childCount; i++) {
+    if (foundPos >= p && foundPos < p + doc.child(i).nodeSize) { index = i; break; }
+    p += doc.child(i).nodeSize;
   }
-  return null;
+  return snapshotTopBlock(node, foundPos, index);
 }
 
 /** 从当前注册编辑器解析 0 起块号对应的稳定 blockId；无活动编辑器或越界时返回 null。 */
@@ -378,7 +428,7 @@ export function getCursorRef(): CursorRef | null {
   const ed = activeEditor;
   if (!ed) return null;
   const { head } = ed.state.selection;
-  const hit = topBlockAt(ed.state.doc, head);
+  const hit = resolveContentBlock(ed.state.doc, head);
   if (!hit) return null;
   const blockId = (hit.node.attrs.blockId as string | null) ?? "";
   if (!blockId) return null;

@@ -10,6 +10,27 @@ export interface FontSizeOptions {
   types: string[];
 }
 
+export function parseFontSize(element: HTMLElement): string | null {
+  const size = element.style.fontSize;
+  return size ? normalizeFontSize(size) : null;
+}
+
+/** 正规化字号值：去除空格、去除 ".0" 后缀、统一 pt 单位格式。
+ *  审计修复（2026-07-24）：Pandoc 产出的 "12.0pt" 与手动设置的 "12pt" 应视为同一字号，
+ *  否则 sameMark 的 JSON 比较会认为它们是不同的 attrs，阻止 mark 段合并。 */
+function normalizeFontSize(raw: string): string {
+  let s = raw.trim().toLowerCase();
+  // 正规化 "12.0pt" → "12pt", "12.00pt" → "12pt"
+  s = s.replace(/\.0+(pt)$/, "$1");
+  // 统一空格： "12 pt" → "12pt"
+  s = s.replace(/\s*(pt)\s*$/, "$1");
+  return s;
+}
+
+export function renderFontSize(fontSize: unknown): Record<string, string> {
+  return fontSize ? { style: `font-size: ${fontSize}` } : {};
+}
+
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     fontSize: {
@@ -33,16 +54,8 @@ export const FontSize = Extension.create<FontSizeOptions>({
         attributes: {
           fontSize: {
             default: null,
-            parseHTML: (element) => {
-              const size = (element as HTMLElement).style.fontSize;
-              if (!size) return null;
-              // 移除单位，只保留数字（与旧项目一致）。
-              return size.replace(/px|pt|em|rem|%/, "");
-            },
-            renderHTML: (attributes) => {
-              if (!attributes.fontSize) return {};
-              return { style: `font-size: ${attributes.fontSize}px` };
-            },
+            parseHTML: parseFontSize,
+            renderHTML: (attributes) => renderFontSize(attributes.fontSize),
           },
         },
       },

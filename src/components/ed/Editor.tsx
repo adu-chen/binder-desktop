@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent as ReactDragEvent,
+} from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { EditorView } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection, type Transaction } from "@tiptap/pm/state";
-import { generateJSON } from "@tiptap/core";
+import { generateJSON, type Editor as TiptapEditor } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
 import {
   isPaginationSettledTransaction,
@@ -16,9 +22,17 @@ import {
   shouldSuppressPointerActivatedInputScroll,
   type ViewportRect,
 } from "./extensions/paginationViewportAnchor";
+import { isContainerBlock } from "./extensions/BlockIdExtension";
 import { applyGreenReview, type GreenReviewValue } from "./extensions/DiffDecorationExtension";
-import { edStore, useEdStore, type ContentFormat, type EditFormat } from "../../store/edStore";
-import { deStore, toGreenReview, useDeStore } from "../../store/deStore";
+import {
+  edStore,
+  useEdStore,
+  type ContentFormat,
+  type EditFormat,
+  type EditSession,
+  type TabState,
+} from "../../store/edStore";
+import { deStore, toGreenReview, useDeStore, type DiffView } from "../../store/deStore";
 import { assistStore, type AssistTarget } from "../../store/assistStore";
 import {
   makePersistedSnapshot,
@@ -27,7 +41,8 @@ import {
   saveDocxDocument,
   saveMarkdownDocument,
 } from "../../services/edService";
-import { serializeMarkdownDocument } from "./markdown/markdownCodec";
+import { importProjectImage, importProjectImageData } from "../../services/docService";
+import { serializeMarkdownDocument, parseMarkdownForEditing } from "./markdown/markdownCodec";
 import {
   registerEditor,
   bindActiveEditorDocument,
@@ -37,17 +52,29 @@ import {
   getActiveBlockSnapshotById,
   locateBlock,
   applyEditOps,
+  getActiveBlockSnapshotByIndex,
   isActiveEditorBoundTo,
+  DOC_REF_MIME,
+  readDocRefData,
   writeSelectionRefData,
   registerActiveSaveHandler,
 } from "../../services/edLocate";
 import { applyStyleOps } from "../../services/edStyleOps";
+import { applyTableOperations } from "../../services/edTableOps";
+import {
+  applyImageOperations,
+  type ImageOperationApplyResult,
+} from "../../services/edImageOps";
+import { applyStructuredBlockOperations } from "../../services/edBlockOps";
+import { persistImageDiffSnapshots } from "../../services/deService";
 import { outlineStore, extractOutline } from "../../store/outlineStore";
 import { finishAssist, requestAssist, type AssistFinishEvent } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorStatusBar } from "./EditorStatusBar";
+import { TableMoveControls } from "./TableMoveControls";
+import { ImageMoveControls } from "./ImageMoveControls";
 import { ZOOM, stepZoom } from "./zoom";
 import { edViewPrefsStore, getPageGeometry, useEdViewPrefs } from "../../store/edViewPrefsStore";
 import {
@@ -377,6 +404,245 @@ function serialize(
   return editor.getText({ blockSeparator: "\n" });
 }
 
+/**
+ * 将单条待裁决 ImageOperation 应用到当前编辑器，并建立可拒绝恢复的 Diff 快照。
+ *
+ * 该函数是 Editor pending-diff effect 的可测试边界：只编排既有受控操作、deStore 和快照持久化，
+ * 不引入第二套图片编辑实现。
+ */
+export function applyPendingImageDiffToEditor(
+  editor: TiptapEditor,
+  diff: DiffView,
+  session: EditSession | undefined,
+  baseContent: string,
+  baseTabState: TabState,
+  serializeAfter: () => string,
+  persistSnapshots: typeof persistImageDiffSnapshots = persistImageDiffSnapshots,
+): ImageOperationApplyResult | null {
+  const payload = diff.imageOpsPayload;
+  if (!payload) return null;
+  if (
+    !session
+    || session.sessionVersion !== payload.base.sessionVersion
+    || session.contentHash !== payload.base.contentHash
+  ) {
+    deStore.setLocalView(diff.diffId, "error", { errorCode: "ED_IMAGE_SNAPSHOT_STALE" });
+    return null;
+  }
+  const applied = applyImageOperations(editor, payload);
+  if (!applied) {
+    deStore.setLocalView(diff.diffId, "error", { errorCode: "ED_IMAGE_OPERATION_FAILED" });
+    return null;
+  }
+  deStore.setImageSnapshots(diff.diffId, applied.before, applied.after, applied.affectedBlockIds);
+  deStore.markDraftApplied(
+    diff.diffId,
+    baseContent,
+    baseTabState,
+    serializeAfter(),
+  );
+  void persistSnapshots(
+    diff.diffId,
+    applied.before,
+    applied.after,
+    applied.affectedBlockIds,
+  ).catch((error) => {
+    console.error("[de-diff] 图片审阅快照持久化失败", error);
+    deStore.setLocalView(diff.diffId, "error", {
+      errorCode: "DE_IMAGE_SNAPSHOT_PERSIST_FAILED",
+    });
+  });
+  return applied;
+}
+
+export interface ImageDropAnchor {
+  anchorBlockId: string;
+  position: "before" | "after";
+}
+
+export type ImageDropTransferKind = "project_image" | "local_files";
+
+type ImageIngressSource =
+  | { kind: "path"; sourcePath: string }
+  | { kind: "data"; sourceName: string; sourceDataUrl: string };
+
+/** 图片选区必须保留 ProseMirror 原生富剪贴板，不能降级成 SelectionRef 的叶子占位字符。 */
+export function selectionContainsImage(doc: PMNode, from: number, to: number): boolean {
+  let contains = false;
+  doc.nodesBetween(from, to, (node) => {
+    if (node.type.name === "image") {
+      contains = true;
+      return false;
+    }
+    return !contains;
+  });
+  return contains;
+}
+
+/** 剪贴板只接收可由 DOC magic 再校验的 PNG/JPEG File；其他图片格式不进入受控导入链。 */
+export function clipboardImageFiles(dataTransfer: DataTransfer): File[] {
+  const files = Array.from(dataTransfer.files ?? []);
+  if (!files.length && dataTransfer.items) {
+    for (const item of Array.from(dataTransfer.items)) {
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  return files.filter((file) => (
+    file.type === "image/png"
+    || file.type === "image/jpeg"
+    || /\.(png|jpe?g)$/i.test(file.name)
+  ));
+}
+
+/**
+ * DOM 拖放是 WKWebView 的单一人工图片入口：Binder 文件树使用稳定 DocRef，
+ * Finder 使用 Files。普通富文本/文档内图片拖动返回 null，继续交给 ProseMirror。
+ */
+export function imageDropTransferKind(dataTransfer: DataTransfer): ImageDropTransferKind | null {
+  const types = Array.from(dataTransfer.types ?? []);
+  if (types.includes(DOC_REF_MIME)) return "project_image";
+  if (
+    types.some((type) => type.toLowerCase() === "files")
+    || (dataTransfer.files?.length ?? 0) > 0
+    || Array.from(dataTransfer.items ?? []).some((item) => item.kind === "file")
+  ) {
+    return "local_files";
+  }
+  return null;
+}
+
+function dataTransferFileCount(dataTransfer: DataTransfer): number {
+  if (dataTransfer.files?.length) return dataTransfer.files.length;
+  return Array.from(dataTransfer.items ?? []).filter((item) => item.kind === "file").length;
+}
+
+/** Binder 自身复制的图片 HTML 携稳定媒体身份，可交还 ProseMirror 原生粘贴并复用同一媒体资源。 */
+export function isManagedImageClipboardHtml(html: string): boolean {
+  return /<img\b[^>]*\bdata-binder-media-src\s*=/i.test(html);
+}
+
+/** 某些截图/浏览器只把图片像素放在 HTML data URL 中；仅纯图片且全为 PNG/JPEG 时才接管。 */
+export function clipboardImageDataSourcesFromHtml(
+  html: string,
+): Array<{ sourceName: string; sourceDataUrl: string }> {
+  if (!html || typeof DOMParser === "undefined") return [];
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  if (parsed.body.textContent?.trim()) return [];
+  const images = Array.from(parsed.body.querySelectorAll("img"));
+  if (!images.length) return [];
+  const sources = images.map((image, index) => {
+    const sourceDataUrl = image.getAttribute("src") ?? "";
+    const match = sourceDataUrl.match(/^data:(image\/(?:png|jpeg));base64,/i);
+    if (!match) return null;
+    const extension = match[1].toLowerCase() === "image/jpeg" ? "jpg" : "png";
+    return { sourceName: `clipboard-${index + 1}.${extension}`, sourceDataUrl };
+  });
+  return sources.every((source) => source !== null)
+    ? sources as Array<{ sourceName: string; sourceDataUrl: string }>
+    : [];
+}
+
+function clipboardImageMediaType(file: File): "image/png" | "image/jpeg" {
+  if (file.type === "image/jpeg") return "image/jpeg";
+  if (file.type === "image/png") return "image/png";
+  return /\.jpe?g$/i.test(file.name) ? "image/jpeg" : "image/png";
+}
+
+function clipboardImageName(file: File, index: number): string {
+  const extension = clipboardImageMediaType(file) === "image/jpeg" ? "jpg" : "png";
+  const stem = file.name.replace(/\.[^.]+$/, "").trim() || `clipboard-${index + 1}`;
+  return `${stem}.${extension}`;
+}
+
+function fileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => (
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("本地图片读取结果无效"))
+    );
+    reader.onerror = () => reject(reader.error ?? new Error("读取本地图片失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 将 WebView 拖放点映射到一个稳定顶层 Block 锚；绝对坐标只参与本次交互，不进入文档模型。 */
+export function imageDropAnchorAtClientPoint(
+  editor: TiptapEditor,
+  clientX: number,
+  clientY: number,
+): ImageDropAnchor | null {
+  const hit = editor.view.posAtCoords({ left: clientX, top: clientY });
+  let hitBlock: { node: PMNode; offset: number } | null = null;
+  const candidates: Array<{
+    blockId: string;
+    rect: DOMRect;
+  }> = [];
+  editor.state.doc.forEach((node, offset) => {
+    const blockId = node.attrs?.blockId;
+    if (typeof blockId !== "string" || !blockId.trim()) return;
+    const dom = editor.view.nodeDOM(offset);
+    if (dom instanceof Element) {
+      candidates.push({ blockId, rect: dom.getBoundingClientRect() });
+    }
+    if (
+      hit
+      && !hitBlock
+      && hit.pos >= offset
+      && hit.pos <= offset + node.nodeSize
+    ) {
+      hitBlock = { node, offset };
+    }
+  });
+  const block = hitBlock as { node: PMNode; offset: number } | null;
+  const hitBlockId = block?.node.attrs?.blockId;
+  if (block && typeof hitBlockId === "string" && hitBlockId.trim()) {
+    const dom = editor.view.nodeDOM(block.offset);
+    const rect = dom instanceof Element ? dom.getBoundingClientRect() : null;
+    return {
+      anchorBlockId: hitBlockId,
+      position: rect && clientY < rect.top + rect.height / 2 ? "before" : "after",
+    };
+  }
+  if (!candidates.length) return null;
+  const nearest = candidates.reduce((best, candidate) => {
+    const distance = clientY < candidate.rect.top
+      ? candidate.rect.top - clientY
+      : clientY > candidate.rect.bottom
+        ? clientY - candidate.rect.bottom
+        : 0;
+    const bestDistance = clientY < best.rect.top
+      ? best.rect.top - clientY
+      : clientY > best.rect.bottom
+        ? clientY - best.rect.bottom
+        : 0;
+    return distance < bestDistance ? candidate : best;
+  });
+  return {
+    anchorBlockId: nearest.blockId,
+    position: clientY < nearest.rect.top + nearest.rect.height / 2 ? "before" : "after",
+  };
+}
+
+/** 剪贴板没有落点坐标，按当前光标所在顶层 Block 之后插入独立图片段落。 */
+export function imagePasteAnchorAtSelection(editor: TiptapEditor): ImageDropAnchor | null {
+  const selectionPos = editor.state.selection.head;
+  let anchorBlockId: string | null = null;
+  editor.state.doc.forEach((node, offset) => {
+    if (
+      anchorBlockId
+      || selectionPos < offset
+      || selectionPos > offset + node.nodeSize
+    ) return;
+    const blockId = node.attrs?.blockId;
+    if (typeof blockId === "string" && blockId.trim()) anchorBlockId = blockId;
+  });
+  return anchorBlockId ? { anchorBlockId, position: "after" } : null;
+}
+
 let sessionSnapshotPersistTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
 function isDirtySessionState(tabState: string): boolean {
@@ -426,11 +692,20 @@ const scrollMemo = new Map<string, number>();
 const ASSIST_ANCHOR_CONTEXT_CHARS = 80;
 
 export function Editor() {
-  const { openPath, tabState, loadSeq, loadedContent, editFormat, contentFormat, converting } = useEdStore();
+  const { openPath, tabState, loadSeq, loadedContent, editFormat, contentFormat, converting, styleNotices, sourceView } = useEdStore();
   const { diffs } = useDeStore(); // GreenReview 同步用（标签状态投影已移至 center TabStrip）
   const hostRef = useRef<HTMLDivElement>(null);
   const paperRef = useRef<HTMLDivElement>(null);
   const [settledLoadSeq, setSettledLoadSeq] = useState(0);
+  const [imageDropError, setImageDropError] = useState<string | null>(null);
+  const [imageDropActive, setImageDropActive] = useState(false);
+  const [sourceViewText, setSourceViewText] = useState<string>("");
+  const sourceViewTextRef = useRef<string>("");
+  const editorInstanceRef = useRef<TiptapEditor | null>(null);
+  const imageIngressRef = useRef<(
+    sources: ImageIngressSource[],
+    anchor: ImageDropAnchor,
+  ) => Promise<void>>(async () => undefined);
   const pendingPaginationLoadSeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{
     path: string;
@@ -614,6 +889,8 @@ export function Editor() {
     });
     const found = hit as { node: PMNode; pos: number } | null;
     if (!found) return null;
+    // 审计修复（2026-07-25 · A+D）：容器块不支持字符偏移计算
+    if (isContainerBlock(found.node as unknown as { type: { name: string } })) return null;
     const from = found.pos + 1 + charOffsetToBlockContentPos(found.node, target.start);
     const to = found.pos + 1 + charOffsetToBlockContentPos(found.node, target.end);
     return { from, to };
@@ -802,7 +1079,10 @@ export function Editor() {
           rebasePointerActivatedInputScrollGuard(view, event);
           return false;
         },
-        dragstart: (_view, event) => {
+        dragstart: (view, event) => {
+          if (selectionContainsImage(view.state.doc, view.state.selection.from, view.state.selection.to)) {
+            return false;
+          }
           const ref = getSelectionRef();
           if (ref && event.dataTransfer) {
             const path = edStore.getSnapshot().openPath ?? "";
@@ -810,12 +1090,64 @@ export function Editor() {
           }
           return false; // 不接管：器内拖动保持原生行为
         },
-        copy: (_view, event) => {
+        copy: (view, event) => {
+          if (selectionContainsImage(view.state.doc, view.state.selection.from, view.state.selection.to)) {
+            return false;
+          }
           const ref = getSelectionRef();
           if (!ref || !event.clipboardData) return false;
           const path = edStore.getSnapshot().openPath ?? "";
           writeSelectionRefData(event.clipboardData, { ...ref, path });
           event.preventDefault();
+          return true;
+        },
+        paste: (_view, event) => {
+          const dataTransfer = event.clipboardData;
+          if (!dataTransfer) return false;
+          const imageFiles = clipboardImageFiles(dataTransfer);
+          if (!imageFiles.length) {
+            const html = dataTransfer.getData("text/html");
+            if (isManagedImageClipboardHtml(html)) return false;
+            const dataSources = clipboardImageDataSourcesFromHtml(html);
+            if (dataSources.length) {
+              event.preventDefault();
+              const activeEditor = editorInstanceRef.current;
+              const anchor = activeEditor ? imagePasteAnchorAtSelection(activeEditor) : null;
+              if (!anchor) {
+                setImageDropError("无法在当前光标位置建立图片插入锚点");
+                return true;
+              }
+              void imageIngressRef.current(
+                dataSources.map((source) => ({ kind: "data", ...source })),
+                anchor,
+              );
+              return true;
+            }
+            if (/<img\b/i.test(html)) {
+              event.preventDefault();
+              setImageDropError("不能直接粘贴远程或未受控图片；请复制本地 PNG/JPEG 文件或图片像素");
+              return true;
+            }
+            return false;
+          }
+          event.preventDefault();
+          const activeEditor = editorInstanceRef.current;
+          const anchor = activeEditor ? imagePasteAnchorAtSelection(activeEditor) : null;
+          if (!anchor) {
+            setImageDropError("无法在当前光标位置建立图片插入锚点");
+            return true;
+          }
+          void Promise.all(imageFiles.map(async (file, index): Promise<ImageIngressSource> => ({
+            kind: "data",
+            sourceName: clipboardImageName(file, index),
+            sourceDataUrl: (await fileAsDataUrl(file)).replace(
+              /^data:[^,]*,/i,
+              `data:${clipboardImageMediaType(file)};base64,`,
+            ),
+          }))).then(
+            (sources) => imageIngressRef.current(sources, anchor),
+            (error) => setImageDropError(error instanceof Error ? error.message : "读取剪贴板图片失败"),
+          );
           return true;
         },
       },
@@ -848,11 +1180,76 @@ export function Editor() {
       },
     },
   });
+  editorInstanceRef.current = editor;
+  imageIngressRef.current = async (sources, anchor) => {
+    const expected = edStore.getSnapshot();
+    const expectedPath = expected.openPath;
+    const expectedLoadSeq = expected.loadSeq;
+    const expectedSession = expectedPath ? expected.sessions[expectedPath] : undefined;
+    const activeEditor = editorInstanceRef.current;
+    if (
+      !activeEditor
+      || !expectedPath
+      || expected.editFormat !== "html"
+      || expectedSession?.baseline === null
+      || expectedSession?.baseline === undefined
+    ) {
+      setImageDropError("只有已载入的 BDocx 编辑会话可以插入本地图片");
+      return;
+    }
+    setImageDropError(null);
+    try {
+      const imported = [];
+      for (const source of sources) {
+        imported.push(source.kind === "path"
+          ? await importProjectImage(expectedPath, source.sourcePath, expectedSession.baseline)
+          : await importProjectImageData(
+            expectedPath,
+            source.sourceName,
+            source.sourceDataUrl,
+            expectedSession.baseline,
+          ));
+      }
+      const current = edStore.getSnapshot();
+      if (
+        current.openPath !== expectedPath
+        || current.loadSeq !== expectedLoadSeq
+        || current.editFormat !== "html"
+        || editorInstanceRef.current !== activeEditor
+      ) {
+        setImageDropError("文档已切换，图片未插入；已导入的项目资源可供后续使用");
+        return;
+      }
+      const currentSession = current.sessions[expectedPath];
+      const applied = applyImageOperations(activeEditor, {
+        base: {
+          sessionVersion: currentSession?.sessionVersion ?? 0,
+          contentHash: currentSession?.contentHash ?? "",
+        },
+        operations: imported.map((asset) => ({
+          op: "insert_image" as const,
+          ...anchor,
+          assetId: asset.assetId,
+          sourcePath: asset.sourcePath,
+          sourceHash: asset.sourceHash,
+          mediaRef: asset.mediaRef,
+          displaySrc: asset.displaySrc,
+        })),
+      });
+      if (!applied) setImageDropError("图片已导入项目，但插入文档失败，请重试");
+    } catch (error) {
+      const detail = error as { code?: string; message?: string };
+      setImageDropError(detail.message ?? detail.code ?? "图片导入失败");
+    }
+  };
 
   // 注册编辑器实例供按需查询（PI-ED-10：getSelectionRef/getCursorRef/locateBlock 精确计算）。
   useEffect(() => {
     registerEditor(editor);
-    return () => registerEditor(null);
+    return () => {
+      if (editorInstanceRef.current === editor) editorInstanceRef.current = null;
+      registerEditor(null);
+    };
   }, [editor]);
 
   // 光标激活周期只属于当前文档与当前分页几何。文档/格式/缩放切换必须显式清除；
@@ -1064,6 +1461,42 @@ export function Editor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 loadSeq 驱动载入；openPath/loadedContent/editFormat 在 loadSeq 变更时同步刷新，单独入依赖会引发重复 setContent
   }, [editor, loadSeq]);
 
+  // 源码/富文本视图切换：进入源码模式时序列化当前编辑内容为 Markdown
+  const prevSourceViewRef = useRef(sourceView);
+  useEffect(() => {
+    if (!editor || editFormat !== "markdown") return;
+    if (sourceView && !prevSourceViewRef.current) {
+      // 切换到源码视图：序列化当前 ProseMirror JSON 为 Markdown
+      try {
+        const result = serializeMarkdownDocument(editor.getJSON());
+        const md = result.ok ? result.markdown : editor.getText();
+        setSourceViewText(md);
+        sourceViewTextRef.current = md;
+      } catch {
+        // Markdown 序列化失败 → 退回到纯文本
+        setSourceViewText(editor.getText());
+        sourceViewTextRef.current = editor.getText();
+      }
+    } else if (!sourceView && prevSourceViewRef.current && sourceViewTextRef.current) {
+      // 从源码视图切回富文本：解析 Markdown 并重载
+      try {
+        const edited = sourceViewTextRef.current;
+        const result = parseMarkdownForEditing(edited);
+        if (result.ok && result.contentFormat === "html") {
+          editor.commands.setContent(generateJSON(result.html!, buildEditorExtensions()), { emitUpdate: false });
+          if (openPath) edStore.updateContent(openPath, result.html!);
+        } else {
+          // 源码含不支持语法 → 保留在源码模式，提示用户
+          console.warn("[Editor] Markdown 源码含不支持语法，无法切回富文本视图");
+        }
+      } catch {
+        console.warn("[Editor] 切回富文本失败");
+      }
+    }
+    prevSourceViewRef.current = sourceView;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 sourceView 变化时触发
+  }, [sourceView]);
+
   const saveCurrent = async (): Promise<{ ok: boolean; message?: string; conflict?: boolean }> => {
     if (!editor) return { ok: false, message: "编辑器未就绪" };
     if (!isActiveEditorBoundTo(openPath, loadSeq, editFormat, contentFormat)) {
@@ -1127,6 +1560,68 @@ export function Editor() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [openPath === null]); // eslint-disable-line react-hooks/exhaustive-deps -- paper 容器随空态/编辑态切换重挂
 
+  useEffect(() => setImageDropActive(false), [openPath, loadSeq]);
+
+  const handlePaperImageDrag = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!imageDropTransferKind(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setImageDropActive(true);
+  };
+
+  const handlePaperImageDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    const related = event.relatedTarget;
+    if (related instanceof Node && event.currentTarget.contains(related)) return;
+    setImageDropActive(false);
+  };
+
+  const handlePaperImageDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    const transferKind = imageDropTransferKind(event.dataTransfer);
+    if (!transferKind) return; // 文档内图片/富文本拖动继续交给 ProseMirror。
+    event.preventDefault();
+    event.stopPropagation();
+    setImageDropActive(false);
+    const activeEditor = editorInstanceRef.current;
+    const anchor = activeEditor
+      ? imageDropAnchorAtClientPoint(activeEditor, event.clientX, event.clientY)
+      : null;
+    if (!anchor) {
+      setImageDropError("当前文档没有可用的图片插入锚点");
+      return;
+    }
+    if (transferKind === "project_image") {
+      const ref = readDocRefData(event.dataTransfer);
+      if (!ref) {
+        setImageDropError("项目图片拖放数据无效，请从文件树重新拖入");
+        return;
+      }
+      if (!/\.(png|jpe?g)$/i.test(ref.relPath)) {
+        setImageDropError("仅支持拖入 PNG、JPG 或 JPEG 图片");
+        return;
+      }
+      void imageIngressRef.current([{ kind: "path", sourcePath: ref.relPath }], anchor);
+      return;
+    }
+    const imageFiles = clipboardImageFiles(event.dataTransfer);
+    const fileCount = dataTransferFileCount(event.dataTransfer);
+    if (!imageFiles.length || imageFiles.length !== fileCount) {
+      setImageDropError("仅支持拖入 PNG、JPG 或 JPEG 图片，且一次拖入不能混有其他文件");
+      return;
+    }
+    void Promise.all(imageFiles.map(async (file, index): Promise<ImageIngressSource> => ({
+      kind: "data",
+      sourceName: clipboardImageName(file, index),
+      sourceDataUrl: (await fileAsDataUrl(file)).replace(
+        /^data:[^,]*,/i,
+        `data:${clipboardImageMediaType(file)};base64,`,
+      ),
+    }))).then(
+      (sources) => imageIngressRef.current(sources, anchor),
+      (error) => setImageDropError(error instanceof Error ? error.message : "读取拖入图片失败"),
+    );
+  };
+
   // Pending diff 到达当前编辑器时先成为 ED 草稿内容；GreenReview 只标绿当前 after 内容。
   // 三态链路标注（A-CORE-C-T-01 §5.1）：
   //   deStore 变更（LogicalCandidate 投影层）→ 触发本 effect
@@ -1141,26 +1636,70 @@ export function Editor() {
     if (!isActiveEditorBoundTo(open, ed.loadSeq, ed.editFormat, ed.contentFormat)) return;
     for (const d of deStore.getSnapshot().diffs) {
       const hasStyleOps = Boolean(d.styleOpsPayload?.length);
+      const hasBlockOps = Boolean(d.blockOpsPayload);
+      const hasTableOps = Boolean(d.tableOpsPayload);
+      const hasImageOps = Boolean(d.imageOpsPayload);
+      let imageDiffFinalized = false;
       if (d.relPath !== open || d.state !== "pending" || d.draftApplied || d.draftSaved) continue;
       const baseContent = serialize(editor, editFormat, contentFormat, open);
       const syntheticAfter = isSyntheticAfter(d.after);
-      if (!d.blockId && !hasStyleOps && syntheticAfter) {
+      if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && syntheticAfter) {
         deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_CONTENT_MISSING" });
         continue;
       }
-      if (d.blockId && !syntheticAfter) {
+      if (hasBlockOps && d.blockOpsPayload) {
+        const session = open ? ed.sessions[open] : undefined;
+        if (!session) {
+          deStore.setLocalView(d.diffId, "error", { errorCode: "ED_BLOCK_OPERATION_SESSION_MISSING" });
+          continue;
+        }
+        const blockApplied = applyStructuredBlockOperations(
+          editor,
+          d.blockOpsPayload,
+          "forward",
+          {
+            sessionVersion: session.sessionVersion,
+            contentHash: session.contentHash,
+          },
+        );
+        if (!blockApplied.ok) {
+          deStore.setLocalView(d.diffId, "error", { errorCode: blockApplied.reason });
+          continue;
+        }
+      } else if (hasImageOps && d.imageOpsPayload) {
+        const session = open ? ed.sessions[open] : undefined;
+        const imageApplied = applyPendingImageDiffToEditor(
+          editor,
+          d,
+          session,
+          baseContent,
+          tabState,
+          () => serialize(editor, editFormat, contentFormat, open),
+        );
+        if (!imageApplied) {
+          continue;
+        }
+        imageDiffFinalized = true;
+      } else if (hasTableOps && d.tableOpsPayload) {
+        const tableApplied = applyTableOperations(d.tableOpsPayload);
+        if (!tableApplied.ok) {
+          deStore.setLocalView(d.diffId, "error", { errorCode: tableApplied.reason });
+          continue;
+        }
+        deStore.setTableSnapshots(d.diffId, tableApplied.before, tableApplied.after);
+      } else if (d.blockId && !syntheticAfter) {
         const applied = applyEditOps([{ op: "replace_block", blockId: d.blockId, text: d.after }]);
         if (!applied.ok) {
           deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_ANCHOR_LOST" });
           continue;
         }
-      } else if (!d.blockId && !hasStyleOps && d.patchKind === "replace_document" && !syntheticAfter) {
+      } else if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && d.patchKind === "replace_document" && !syntheticAfter) {
         const applied = applyEditOps([{ op: "replace_document", content: d.after, format: editFormat, contentFormat }]);
         if (!applied.ok) {
           deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_REPLACE_FAILED" });
           continue;
         }
-      } else if (!d.blockId && !hasStyleOps && !syntheticAfter) {
+      } else if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && !syntheticAfter) {
         deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_TARGET_MISSING" });
         continue;
       }
@@ -1171,14 +1710,34 @@ export function Editor() {
           continue;
         }
       }
-      deStore.markDraftApplied(d.diffId, baseContent, tabState, serialize(editor, editFormat, contentFormat, open));
+      if (!imageDiffFinalized) {
+        deStore.markDraftApplied(
+          d.diffId,
+          baseContent,
+          tabState,
+          serialize(editor, editFormat, contentFormat, open),
+        );
+      }
     }
 
     const map = new Map<string, GreenReviewValue>();
     for (const d of deStore.getSnapshot().diffs) {
       const gr = toGreenReview(d.state);
       if (!gr || d.relPath !== open || d.draftSaved) continue;
+      if (d.draftApplied && d.imageAffectedBlockIds?.length) {
+        for (const blockId of d.imageAffectedBlockIds) map.set(blockId, gr);
+        continue;
+      }
+      if (d.draftApplied && d.blockOpsPayload) {
+        for (const operation of d.blockOpsPayload.operations) map.set(operation.blockId, gr);
+        continue;
+      }
       if (d.blockId && d.draftApplied) {
+        if (d.styleOpsPayload?.length) {
+          for (const op of d.styleOpsPayload) {
+            if (op.blockId) map.set(op.blockId, gr);
+          }
+        }
         map.set(d.blockId, gr);
         continue;
       }
@@ -1188,6 +1747,21 @@ export function Editor() {
     }
     applyGreenReview(editor.view, map);
   }, [editor, diffs, editFormat, contentFormat, tabState, openPath, loadSeq]);
+
+  // 审计修复（2026-07-26 · D3）：background diff 在文档被打开时自动映射到逻辑状态。
+  // 当文档通过 loadDoc 获得逻辑状态后，将基于磁盘快照的 block_index 映射为编辑器当前 blockId。
+  useEffect(() => {
+    if (!editor || !openPath || loadSeq === 0) return;
+    const isCurrent = openPath === edStore.getSnapshot().activePath;
+    const mode: "current_editor" | "open_session" = isCurrent ? "current_editor" : "open_session";
+    for (const d of deStore.getSnapshot().diffs) {
+      if (d.relPath !== openPath || d.draftMode !== "background" || d.state !== "pending") continue;
+      if (typeof d.blockIndex !== "number") continue;
+      const snapshot = getActiveBlockSnapshotByIndex(d.blockIndex);
+      if (!snapshot?.blockId) continue;
+      deStore.migrateDraftMode(d.diffId, snapshot.blockId, mode);
+    }
+  }, [editor, openPath, loadSeq]);
 
   /**
    * @GOV
@@ -1295,14 +1869,35 @@ export function Editor() {
         orientation={editFormat === "html" && paperPrefs ? paperPrefs.orientation : undefined}
         onPaperChange={(p) => openPath && edViewPrefsStore.setPaper(openPath, p)}
         onOrientationChange={(o) => openPath && edViewPrefsStore.setOrientation(openPath, o)}
+        localImageDropOnly={editFormat === "html"}
+        editFormat={editFormat}
+        sourceView={sourceView}
+        onToggleSourceView={openPath ? () => edStore.setSourceView(openPath, !sourceView) : undefined}
       />
       <div
-        className="editor-paper"
+        className={`editor-paper${imageDropActive ? " editor-paper-image-drop-active" : ""}`}
         ref={paperRef}
         aria-busy={loading}
         style={{ "--ed-zoom": String(zoom) } as CSSProperties}
+        onDragEnterCapture={handlePaperImageDrag}
+        onDragOverCapture={handlePaperImageDrag}
+        onDragLeaveCapture={handlePaperImageDragLeave}
+        onDropCapture={handlePaperImageDrop}
       >
-        <EditorContent editor={editor} className={loading ? "editor-content-loading" : undefined} />
+        {sourceView && editFormat === "markdown" ? (
+          <textarea
+            className="editor-source-view"
+            value={sourceViewText}
+            onChange={(e) => {
+              setSourceViewText(e.target.value);
+              sourceViewTextRef.current = e.target.value;
+            }}
+            spellCheck={false}
+            aria-label="Markdown 源码编辑区"
+          />
+        ) : (
+          <EditorContent editor={editor} className={loading ? "editor-content-loading" : undefined} />
+        )}
         {loading && (
           <div className="editor-loading" role="status" aria-live="polite">
             <span className="editor-loading-spinner" aria-hidden="true" />
@@ -1310,11 +1905,26 @@ export function Editor() {
             <span className="editor-loading-bar" aria-hidden="true" />
           </div>
         )}
+        {imageDropError && (
+          <div className="editor-image-drop-error" role="alert">
+            {imageDropError}
+            <button type="button" onClick={() => setImageDropError(null)}>关闭</button>
+          </div>
+        )}
       </div>
+      <TableMoveControls
+        editor={editor}
+        enabled={!loading}
+      />
+      <ImageMoveControls
+        editor={editor}
+        enabled={!loading}
+      />
       <EditorStatusBar
         editor={editor}
         tabState={tabState}
         converting={converting}
+        styleNotices={styleNotices}
       />
       <InlineAssistPopover onGenerate={generateInline} onApply={applyInline} onDismiss={dismissAssist} />
       <AutocompleteOverlay

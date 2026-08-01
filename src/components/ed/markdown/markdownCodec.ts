@@ -62,13 +62,20 @@ function markdownManager(): MarkdownManager {
 
 export function inspectMarkdownSource(markdown: string): MarkdownSupportReason[] {
   const reasons = new Set<MarkdownSupportReason>();
-  if (/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(markdown)) reasons.add("front_matter");
+  // Front matter 已支持：提取后只读保留，不拒绝
   if (/<!--[\s\S]*?-->/.test(markdown)) reasons.add("comment");
   if (/^\[\^[^\]]+\]:|\[\^[^\]]+\]/m.test(markdown)) reasons.add("footnote");
-  if (/^\s*\$\$|\$[^\n$]+\$/m.test(markdown)) reasons.add("math");
+  // 数学公式已支持：`$$` 块公式和 `$` 行内公式作为文本保留，不拒绝
   if (/^\s*:::/m.test(markdown)) reasons.add("admonition");
   if (/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?>/.test(markdown)) reasons.add("embedded_html");
   return [...reasons];
+}
+
+/** 提取 YAML front matter（`---\n...\n---`），返回 [frontMatter, body]。无则返回 ["", markdown]。 */
+function extractFrontMatter(markdown: string): [string, string] {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return ["", markdown];
+  return [match[1], markdown.slice(match[0].length)];
 }
 
 /**
@@ -87,7 +94,11 @@ export function parseMarkdownForEditing(markdown: string): MarkdownParseResult {
     return { ok: false, source: markdown, contentFormat: "text", sourceProtected: true, reasons };
   }
   try {
-    const json = markdownManager().parse(markdown);
+    const [frontMatter, body] = extractFrontMatter(markdown);
+    const json = markdownManager().parse(body);
+    if (frontMatter) {
+      json.attrs = { ...(json.attrs ?? {}), frontMatter };
+    }
     const html = generateHTML(json, codecExtensions());
     return { ok: true, json, html, contentFormat: "html", sourceProtected: false };
   } catch {
@@ -144,6 +155,10 @@ export function normalizeMarkdownSemantic(node: JSONContent): JSONContent {
   if (node.text !== undefined) normalized.text = node.text;
   const attrs = semanticAttrs(node);
   if (attrs) normalized.attrs = attrs;
+  // 保留 frontMatter 但不参与语义等价比较（它是只读保留字段，不随编辑内容变化）
+  if (node.type === "doc" && node.attrs?.frontMatter) {
+    normalized.attrs = { ...(normalized.attrs ?? {}), frontMatter: node.attrs.frontMatter };
+  }
   if (node.marks?.length) {
     normalized.marks = node.marks.map(normalizeMark).sort((a, b) => String(a.type).localeCompare(String(b.type)));
   }
@@ -166,13 +181,18 @@ export function serializeMarkdownDocument(json: JSONContent): MarkdownSerializeR
   if (unsupported) {
     return { ok: false, code: "ED_MARKDOWN_UNSUPPORTED_MODEL", message: unsupported };
   }
+  // 序列化前提取 frontMatter 并临时移除，序列化后再前置写入
+  const frontMatter = (json.attrs?.frontMatter as string | undefined) ?? "";
+  const serializeJson = frontMatter ? { ...json, attrs: { ...(json.attrs as Record<string, unknown> ?? {}), frontMatter: undefined } } : json;
   try {
-    const markdown = markdownManager().serialize(json);
+    const markdown = markdownManager().serialize(serializeJson);
     const reparsed = markdownManager().parse(markdown);
-    if (JSON.stringify(normalizeMarkdownSemantic(json)) !== JSON.stringify(normalizeMarkdownSemantic(reparsed))) {
+    const normalized = normalizeMarkdownSemantic(serializeJson);
+    if (JSON.stringify(normalized) !== JSON.stringify(normalizeMarkdownSemantic(reparsed))) {
       return { ok: false, code: "ED_MARKDOWN_ROUNDTRIP_FAILED", message: "Markdown 语义往返校验失败，已阻止写盘" };
     }
-    return { ok: true, markdown };
+    const output = frontMatter ? `---\n${frontMatter}\n---\n\n${markdown}` : markdown;
+    return { ok: true, markdown: output };
   } catch (error) {
     return {
       ok: false,

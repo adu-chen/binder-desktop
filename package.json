@@ -5,12 +5,13 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run verify:bundled-tools && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri",
     "governance:generate": "node scripts/generate_adus.mjs",
-    "governance:audit": "node scripts/audit_taskflow_governance.mjs"
+    "governance:audit": "node scripts/audit_taskflow_governance.mjs",
+    "verify:bundled-tools": "bash scripts/verify_bundled_tools.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -22,15 +22,15 @@ PRV 多格式只读预览与输出。**只读硬边界**（全产品无 Excel/PP
 ### PI-PRV-01　多格式预览（只读硬边界）
 - **承接**：REQ-PRV-001/002/003/005 / CHAIN PRV-VIEW / BR-PRV-DATA-001（只读）/ BR-PRV-DATA-002
   （管线归属）。
-- **文件范围**：`src/`（预览面板：docx/Excel/PPT 经 `doc.render_preview`→PDF 呈现；音视频
-  系统解码 AVFoundation）；`prv.preview`。
+- **文件范围**：`src/`（预览面板：docx/Excel/PPT 经唯一公开入口 `prv.preview` 消费 DOC 内部
+  转换能力后呈现；音视频系统解码 AVFoundation）；`prv.preview`。
 - **@GOV**：只读无编辑/无 Excel·PPT 编辑入口 `BR-PRV-DATA-001`；管线归属（文档经 DOC、音视频
   系统解码）`BR-PRV-DATA-002`。
 - **A 类债务**：音视频支持格式清单（PRV-02，系统解码能力，实现期）；预览缓存（PRV-04，引入缓存
   编排则建机复核）。
 - **验收（强制）**：preview 只读无修改交互、不产生脏态；**全产品无 Excel/PPT 编辑入口（静态+交互
-  核验，v1 冻结 G4/G5 强制）**；docx/Excel/PPT 经 DOC 预览链、音视频系统解码、失败态明确不空白；
-  断网可用。
+  核验，v1 冻结 G4/G5 强制）**；docx/Excel/PPT 经 DOC 预览链并按语料实测目标呈现、音视频系统解码；
+  `DOC_TOOL_INVALID`、启动、字体覆盖和转换错误均明确不空白；断网可用。
 
 ### PI-PRV-02　打印与导出
 - **承接**：REQ-PRV-004 / BR-PRV-DATA-001/002。
@@ -65,3 +65,4 @@ audit 绿；@GOV 追溯 BR-PRV-*；`// covers: BR-PRV-*`（2 条）有断言；�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3，P4 收尾）：PRV 2 条 Plan Item（多格式预览只读 / 打印导出），承接 PRV-VIEW + 2 规则；无状态机（豁免维持，§3 复核）；全产品无 Excel/PPT 编辑入口 G4/G5 强制核验；docx/Excel/PPT 经 DOC、音视频系统解码；文件范围/@GOV/验收齐 |
+| 2026-07-21 | v1.1 | 审计修正：PI-PRV-01 移除不存在的 `doc.render_preview`，外部预览统一走 `prv.preview` 并消费 DOC 内部能力；预览保真改以语料实测为准，工具/启动/字体/转换错误必须呈现明确失败态。 |

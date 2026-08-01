@@ -163,17 +163,18 @@
 
 ### BLOCK-REL-LO-001　内置 LibreOffice 预览链必须打包在应用内（不得调用设备本地 LO）
 
-- **需求**：预览链（docx/xlsx/pptx→PDF）须使用**应用内打包的优化版 LibreOffice**；其他设备安装后
+- **需求**：预览链（docx/xlsx/pptx→PDF）须使用**应用内打包的受控 LibreOffice**（发布版须为经验证的
+  Binder 定制构建）；其他设备安装后
   **不依赖、不调用设备本地 LO，不静默降级到系统 LO**（系统兜底仅为开发期便利，发布版须命中内置）。
 - **阻断点（打包不得绕过任一项）**：
   1. **部署前置**：`scripts/deploy_lo.sh` 必须在 `tauri build` **之前**执行，使
-     `src-tauri/resources/libreoffice/LibreOffice.app`（优化版，~687M）就位；否则包内仅占位 README、无真 LO。
+     `src-tauri/resources/libreoffice/LibreOffice.app`（受控产物）就位；否则包内仅占位 README、无真 LO。
      建议接入 `beforeBuildCommand` / CI，构建即校验内置 LO 存在（soffice 可执行），缺失即**中断打包**。
   2. **打包路径核对**：须以真 `tauri build` 产物核对内置路径解析（`doc::libreoffice_runtime::resolve_soffice_path`
      方法 2 `Contents/Resources/libreoffice/...`）实际命中；建议改用 Tauri `resource_dir()` API 避免布局假设。
   3. **签名 + 公证**：嵌套的 `LibreOffice.app`（`soffice` + 全部 `.dylib`/Frameworks）必须随主 app
-     **一并代码签名 + 公证**，否则其他设备 macOS Gatekeeper 拦截内置 soffice，预览不可用。优化版为自定义
-     构建（LibreOfficeDev），尤须确保签名链完整。
+     **一并代码签名 + 公证**，否则其他设备 macOS Gatekeeper 拦截内置 soffice，预览不可用。最终定制构建
+     必须来自稳定源码 tag，禁止发布 LibreOfficeDev/alpha 产物。
 - **性质**：G6 发布工程硬门（承 A-CORE-X-L-02 P5/§5、APC §5.2）。
 - **⚠️ 债务登记（2026-07-03 复测确认，A 类·已生效挂起）**：**pptx 字体随机 = 字形级回退（GlyphFallback），
   现有补丁不覆盖**。复测实证：命中内置 LO + BINDER_FORCE_DEFAULT_FONTS=1 已激活（[binder:lo] 日志确认）
@@ -188,6 +189,10 @@
   后复测仍随机 → 即此因，**需 LO 源码二次改造**（FindFontSubstitute 优先尝试 Binder 默认字体）+
   重建 687M 优化版——成本高，按人类指示（2026-07-03）**停止本项优化、挂起为债务**，待专项排期。
   运行时已加命中日志（[binder:lo] 行）供复测分流「未走内置」vs「字形级」。
+- **状态校正（2026-07-22）**：上述 `BINDER_FORCE_DEFAULT_FONTS` / PhysicalFontCollection 表述是历史
+  自定义构建的候审记录，不是当前 `25.8.7.3` 官方稳定验证产物的已实现能力；当前运行时不得以该环境变量
+  声称字体债务已解决。专项以 Font Trace 先确认华文魏碑、微软雅黑等来源字体的实际请求与最终嵌入字体，
+  再由稳定源码重建后的 `FindFontSubstitute` 策略关闭宿主随机回退。
 - **构建配方补充（2026-07-03）**：优化版 LO 含 **Binder VCL 字体回退源码补丁**（PhysicalFontCollection.cxx
   +147 / salgdi.cxx +11，BINDER_FORCE_DEFAULT_FONTS 门控，运行时激活见 doc/libreoffice_runtime.rs）——
   缺失字体统一回退默认字体（pptx 字体随机匹配根治）。**重建 LO 必须移植该补丁**（补丁在旧项目
@@ -195,6 +200,17 @@
 - **验证（G6 出口）**：在**无系统 LO 的干净设备**安装发布版后，预览 docx→PDF 实际通过（命中内置 LO）。
 - **状态**：标记登记（2026-06-22）；运行时与部署设施已就位（`libreoffice_runtime.rs` + `deploy_lo.sh` +
   `tauri.conf.json bundle.resources`），**签名/公证 + CI 前置校验待 G6 发布工程落实**。
+- **专项接管（2026-07-21）**：`DOC-BUNDLED-RUNTIME-01` 已接管 Pandoc/LibreOffice 内置运行时治理：
+  删除系统工具回退、构建前校验包内资源、Pandoc 3.10 arm64 manifest 锁定。LO 当前 headless `docx→PDF`
+  实测仍 `Abort trap: 6`；GlyphFallback 源码修复与重建不在本仓，继续作为本标记的发布阻断，不得用系统 LO 规避。
+
+### DOC-PLAT-001　macOS 版本与双架构发布兼容（暂缓，不进入本轮修复）
+
+- **现状**：当前包内 Pandoc 与 LibreOffice 都只有 arm64 资源；macOS 最低版本、Intel 产物、通用二进制
+  策略、双架构签名/公证和真实机器矩阵均未验收。
+- **本轮决定**：仅登记债务，不以设备本地 Pandoc/LibreOffice 作为补救，也不在本轮修改运行时或打包策略。
+- **后续出口**：确定 Binder 支持的最低 macOS 版本后，交付独立签名的 arm64/x86_64 发布包（或验证的
+  universal 产物），在每个目标系统的无本地工具干净环境中验证转换与签名链。
 
 ## §10 前端治理可追溯闭合（PI-FE-30，2026-06-26 追加）
 
@@ -290,3 +306,6 @@ BR-SYS-DATA-004（云端，§5 C 类）。~~BR-ED-DATA-003~~ 已于 2026-07-02 �
 | 2026-07-03 | v1.7 | 字形级回退债务转正（复测实证：内置 LO 命中+激活确认仍随机）：pptx 字体随机根因锁定为 GlyphFallback，按人类指示停止优化挂起，附专项修复方案指引（salgdi.cxx FindFontSubstitute 改造+重建） |
 | 2026-07-15 | v1.8 | 新增 §11 独立产品/架构债务登记：ND-AG-RESP-001 代理回复呈现规范、ND-DOC-CAP-001 文档能力矩阵与模型上下文规范；明确二者不按 G2/G3 门禁 A/B/C 口径归类，后续进入实现前须补对应模块设计/计划 |
 | 2026-07-16 | v1.9 | §11 追加 ND-AG-CHAR-EDIT-001 代理字符级正文编辑链路债务：明确当前 ED 具备 CharAnchor / `replace_text` 基础，但 AG/DE 修改建议与裁决主链路仍以内容块级正文替换为主；建议分阶段接入单内容块 `replace_text`、字符级定位展示、跨内容块与富文本保真方案 |
+| 2026-07-21 | v2.0 | DOC-BUNDLED-RUNTIME-01：§9 记录包内 Pandoc 供应链已落地、系统回退已移除；实测包内 LibreOffice 的 docx→PDF 进程以 SIGABRT 退出，GlyphFallback 源码修复、稳定重建、嵌套签名与公证仍为 BLOCK-REL-LO-001 的未解除条件。 |
+| 2026-07-21 | v2.1 | DOC-LO-RELIABILITY-FONT-PLAN-01：新增 DOC-PLAT-001，登记 macOS 最低版本、arm64/x86_64 资源与发布矩阵债务；人类决定暂不处理，不得以设备本地工具替代。 |
+| 2026-07-22 | v2.2 | BLOCK-REL-LO-001 状态校正：当前 25.8.7.3 为官方稳定验证产物，历史 BINDER_FORCE_DEFAULT_FONTS/自定义补丁不得视为当前已实现能力；人类确认继续 LO 源码融合，新增 Font Trace 先行与无 GUI可行性停止门。 |

@@ -22,6 +22,23 @@ pub mod pandoc_runtime;
 /// + reference.docx，保留样式子集供 TipTap，BR-DOC-DATA-002）。
 pub mod edit_chain;
 
+/// BDocx 图片媒体身份、资源校验与往返恢复报告。
+pub mod image_media;
+
+/// DOCX `w:color` 与编辑器 HTML `color` 的显式往返适配层。
+pub mod docx_color;
+pub mod docx_image_layout;
+
+/// DOCX `w:tcPr/w:shd` 与编辑器 TableCellShading 属性的显式往返适配层。
+pub mod docx_cell_shading;
+
 /// PI-DOC-01/03（实现期续接）· LibreOffice 预览链运行时（docx/xlsx/pptx→PDF；移植旧项目处理逻辑，
 /// BR-DOC-DATA-001）。
 pub mod libreoffice_runtime;
+pub mod lo_worker;
+
+/// DOC-LO-RELIABILITY-FONT-IMPLEMENT-01 · 原生 Office 只读字体取证与通用 FontPlan。
+pub mod font_trace;
+
+/// DOC-BUNDLED-RUNTIME-01 · 包内 Pandoc / LibreOffice 的唯一资源解析与完整性校验。
+pub mod tool_runtime;

@@ -3,6 +3,7 @@ import { Schema } from "@tiptap/pm/model";
 import {
   extractBlockStyles,
   projectDocStyles,
+  parseStyleOps,
   posFromCharOffset,
   planStyleOps,
   type StyleOp,
@@ -104,5 +105,41 @@ describe("edStyleOps · planStyleOps（批内原子）", () => {
 
   it("空批 → ok 空步骤", () => {
     expect(planStyleOps(doc, [])).toEqual({ ok: true, steps: [] });
+  });
+
+  it("未知 mark、非法 attrs 与不支持块属性在规划前整批拒绝", () => {
+    expect(planStyleOps(doc, [
+      { op: "set_mark", blockId: "b1", start: 0, end: 1, mark: { type: "sub" } },
+    ]).ok).toBe(false);
+    expect(planStyleOps(doc, [
+      { op: "set_mark", blockId: "b1", start: 0, end: 1, mark: { type: "bold", attrs: { color: "#FF0000" } } },
+    ]).ok).toBe(false);
+  });
+});
+
+describe("edStyleOps · 不可信载荷严格解析", () => {
+  it("接受真实 mark 名与受控 attrs", () => {
+    expect(parseStyleOps([
+      { op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "subscript" } },
+      { op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "textStyle", attrs: { color: "#FF0000", fontSize: "12pt" } } },
+      { op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "link", attrs: { href: "https://example.com" } } },
+      { op: "set_block_attr", blockId: "b1", attrs: { textAlign: "center" } },
+    ])).toHaveLength(4);
+  });
+
+  it("错误别名、危险链接、未知字段或批内任一非法项使整批拒绝", () => {
+    for (const value of [
+      [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "sub" } }],
+      [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "bold", attrs: {} } }],
+      [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "textStyle", attrs: { fontSize: "01pt" } } }],
+      [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "link", attrs: { href: "javascript:alert(1)" } } }],
+      [{ op: "set_block_attr", blockId: "b1", attrs: { textAlign: "middle" } }],
+      [
+        { op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "bold" } },
+        { op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "bold" }, extra: true },
+      ],
+    ]) {
+      expect(parseStyleOps(value)).toEqual([]);
+    }
   });
 });

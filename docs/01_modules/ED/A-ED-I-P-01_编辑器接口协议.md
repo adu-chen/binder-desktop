@@ -36,8 +36,8 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 | `ed.get_open_snapshots` | — | OpenDocSnapshot[]（全部已打开文档 LogicalState 快照） | active live 序列化失败/缺 session 版本 → 错误 | AG/DE 读门禁（A-SYS-I-P-01 OpenDocSnapshot） |
 | `ed.persist_open_tabs` | EditorOpenTab[] | ok | 无 workspace / active 数量非法 / open_index 冲突 → 错误 | `ed_open_tabs` 打开集合控制态 |
 | `ed.list_open_tabs` | workspace_id | EditorOpenTab[] | 无打开标签 → 空列表 | 重启恢复打开集合、顺序与当前文档 |
-| `ed.persist_session_snapshot` | OpenDocSnapshot | ok | 无 workspace / session 缺失 → 错误 | `ed_session_snapshots` 内部镜像 |
-| `ed.list_session_snapshots` | workspace_id | OpenDocSnapshot[] | 无镜像 → 空列表 | 重启恢复已打开文档 LogicalState 镜像 |
+| `ed.persist_session_snapshot` | OpenDocSnapshot；BDocx 须含 baseline 且图片为规范相对引用 | ok | 无 workspace / session 缺失 / baseline 非 u64 → 错误 | `ed_session_snapshots` 内部镜像 |
+| `ed.list_session_snapshots` | workspace_id | OpenDocSnapshot[]；BDocx 恢复投影含 baseline、纯净规范 HTML | 无镜像 → 空列表 | 重启恢复已打开文档 LogicalState 镜像 |
 | `ed.confirm_discard` | 会话句柄 | 确认丢弃脏态并关闭 | — | 显式确认语义 |
 | `ed.resolve_conflict` | 会话句柄、选择（keep_mine / reload） | 重置态（Editing/Loading） | 非 Conflicted 态调用→协议错误 | SM-ED-01 Conflicted（BR-ED-STATE-003，对接 ws.save_doc override / external_change） |
 
@@ -50,6 +50,10 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 > 失败时调用方必须阻断，不得读取 DiskState。
 > 重启恢复必须先调用 `ed.list_open_tabs` 得到打开集合、顺序与当前文档，再只恢复这些路径对应的
 > `ed.list_session_snapshots` 镜像；不在 `ed_open_tabs` 中的孤立 session 镜像不得打开文档。
+> BDocx 图片的 `asset://` 地址只属于当前 WebView 显示投影。持久化前必须按
+> `data-binder-media-src` 还原规范相对 `src`；恢复后携 snapshot baseline 调
+> `doc.restore_edit_media` 重新授权/同基线重建媒体，再生成本进程显示地址。内部存储 envelope 必须在
+> `ed.list_session_snapshots` 返回前移除，不能进入 TipTap LogicalState。
 
 ## §3 装饰层接口（ED-DECOR / BR-ED-STATE-002 / X-FORBID-005）
 
@@ -96,6 +100,21 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 | `set_block_attr` | blockId、attrs（textAlign…） | 块属性设置 | BR-ED-DATA-005（StyleOp） |
 
 > op 序列原子应用（任一 op 锚失效则整批拒绝回明确错误，不产生半应用状态）。
+> StyleOp 的代理可用子集及 DOCX 往返等级见 A-SYS-I-P-04 BDocxCapabilityManifest。ED 执行侧仍须
+> 防御性拒绝未知 mark/attrs、非法 textAlign、错误 blockId、空区间或越界区间；真实上下标 mark 名为
+> `subscript/superscript`，`sub/sup` 不是合法 StyleOp。
+
+### §4.1.1 富文档结构化 BlockOperation
+
+活动富文档内容修改使用 `applyStructuredBlockOperations(payload,direction)`，payload 为
+`{payloadVersion:1,base:{sessionVersion,contentHash},operations[]}`。每项是
+`{op:replace_node,blockId,fingerprint,expectedNodeType,beforeNode,afterNode}`。
+
+前向应用先对整批完成 base、blockId 唯一性、锚、动态能力、node type、fingerprint、attrs/blockId
+保持和 ProseMirror Schema 校验，再按位置倒序写入一个 transaction；任一失败不得 dispatch。
+反向拒绝只在目标节点仍精确匹配 afterNode fingerprint 时恢复 beforeNode；后置人工编辑导致不匹配时
+返回 conflict，不得用 draftBaseContent 整篇覆盖。表格、图片及其祖先/承载块没有 replace_node 能力，
+继续使用专用 TableOperation/ImageOperation。
 
 ### §4.2 open session 自动应用操作（2026-07-18）
 
@@ -103,12 +122,62 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 
 | patch_kind | 支持条件 | 应用语义 |
 |---|---|---|
-| `replace_block` | `block_id` 或 `block_index` 可定位到当前 session 内容块；基线匹配 | 替换目标块文本/HTML 内容，保持其他块不变 |
-| `replace_document` | 基线匹配；after_text/after_content 为整篇内容 | 整篇替换 session content |
+| `replace_block` | 仅 contentFormat=text；基线匹配 | 替换纯文本行块 |
+| `replace_document` | 仅 contentFormat=text；基线匹配 | 整篇替换纯文本 session content |
+| `block_ops` | 不支持非活动 session | 明确拒绝；不得解析/改写缓存 HTML |
 | `style_ops` | 存在不依赖当前 ProseMirror editor instance 的 StyleOp 事务实现 | 批内原子应用；未具备时拒绝，不降级 |
 
 该接口必须先比对 `base_session_version` 与 `base_content_hash`，再执行内容事务；成功后递增版本、刷新哈希、
 置脏并持久化 `ed_session_snapshots`。任何失败都不得产生半应用状态。
+
+### §4.3 BDocx TableOperation
+
+BDocx 表格修改使用 `table_ops` 专用载荷：`{table_id, fingerprint, operations[]}`。人工工具与代理建议
+共用同一 ProseMirror 规划器；预览和应用均按整批原子语义执行。代理必须先从 `list_tables` 获取当前
+`sessionVersion`、`contentHash`、表格指纹和动态 capabilities，不得自行拼接原始 HTML。
+
+### §4.4 BDocx 图片人工操作
+
+以下是 ED 前端进程内受控接口，不是公开 IPC command：
+
+| 操作 | 前置条件 | 结果 | 拒绝边界 |
+|---|---|---|---|
+| `activeImageSnapshot` | 当前选区为 Image NodeSelection | blockId、是否独立图片段落、真实可移动方向 | 非图片选区返回空 |
+| `ResizableImage` 拖宽 | 左键命中选中图片右下手柄 | zoom 归一后的 `width` 节点属性事务；实际改宽时清除固定 `height` | 空拖动无事务；不写媒体资源 |
+| `moveActiveImage(up/down)` | 顶层 paragraph 仅含一个 image，且目标方向有相邻顶层 Block | 整个图片段落交换一块，保持 blockId、媒体属性与 NodeSelection | 混排图片、越界方向、非图片选区均拒绝 |
+| `deleteActiveImage` | 当前选区为 image | 独立图片删除段落；混排图片只删节点；唯一段落留下空段 | 不删除媒体缓存文件 |
+| Finder 文件拖入 | 活动 BDocx；WKWebView DOM `Files` 拖入纸张容器；PNG/JPEG 普通文件 | 前端读取用户明确拖入的 File 字节并经 DOC 受控复制/复用，以命中或最近顶层 Block 的 before/after 锚在单一事务插入独立图片段落 | 非图片/混合文件、导入失败、文档切换或无稳定 Block 锚拒绝；本地绝对路径不进入 IPC/LogicalState；撤销不删除项目资产 |
+| 项目文件树拖入 | 文件树 DocRef 指向 workspace 内 PNG/JPEG，拖放点在纸张容器内 | 相对路径经 DOC 守界校验后复用或复制到受控图片根，再按同一 Block 锚插入 | 非规范相对路径、越界、非图片或无锚拒绝；不得把 DocRef 当系统绝对路径 |
+| 剪贴板图片粘贴 | Clipboard File，或不含文字的纯图片 HTML data URL 为 PNG/JPEG；当前光标命中稳定顶层 Block | 图片字节经 data URL 送 DOC，重新校验大小、媒体类型、magic、哈希并复制/去重；插入当前 Block 之后 | 远程/混合文字 HTML 图片、其他格式或读取失败拒绝；data URL 不进入 LogicalState |
+| 文档内图片复制粘贴 | 复制选区包含已有 image | 保留 ProseMirror 富剪贴板和 `data-binder-media-src`，粘贴时复用既有媒体身份 | 含图片选区不得降级为 SelectionRef 叶子占位字符 |
+
+邻近按钮通过 portal 直接挂到选中 `.ed-img-view`，由 DOM 归属自然跟随滚动、缩放、选区和事务；按钮
+位于图片上方，不覆盖图片主体。BDocx 不提供 inline/block 切换：`data-display` 经 Pandoc 往返丢失，
+独立与行内只按段落结构区分。
+
+### §4.5 BDocx ImageOperation
+
+代理图片修改使用 `image_ops` 专用载荷：
+`{base:{sessionVersion,contentHash},operations:ImageOperation[]}`。`insert_image` 携带稳定
+`anchorBlockId + position(before|after)`、workspace 相对 `sourcePath + sourceHash`、DOC 物化后的
+`mediaRef`，以及可选 alt/width；其余操作均携带稳定 `imageId + 当前 fingerprint`：
+`delete_image` 删除文档节点，`resize_image(width)` 服从动态宽度边界，
+`move_image(direction=up|down)` 服从动态方向，`set_image_layout(alignment=left|center|right)`
+只作用于独立顶层图片段落。
+
+载荷只允许当前活动 BDocx editor 以单个 ProseMirror 事务整批应用；同一图片单批可各含一个
+resize/layout/move，并按缩放→对齐→移动固定顺序执行，重复同类操作拒绝，delete 独占。插入
+生成独立图片段落，删除遵循 §4.4 的独立/混排语义；基线、Block、图片实例、fingerprint、动态能力或
+来源哈希失效时整批拒绝。`image_ops` 不进入
+`ed.apply_session_diff`：非活动会话不得降级修改 HTML 字符串。拒绝 Diff 必须恢复应用前完整
+LogicalState，接受只确认当前草稿，保存才进入既有 DOC/WS 链。
+
+| op | 参数 | 语义 | 失败边界 |
+|---|---|---|---|
+| `set_cell_background` | `at:{row,col}`、`color:#RRGGBB \| null` | 设置或清除目标单元格纯色底纹；人工多选时逐节点应用同一属性 | 非不透明六位十六进制、越界、非合并单元格左上锚、能力或指纹不匹配时拒绝 |
+
+该操作只修改 `tableCell/tableHeader.backgroundColor`，不得替换单元格内容。表格快照必须为每个逻辑
+单元格投影 `backgroundColor`，使底纹改变参与 fingerprint 与 Diff 过期判断。
 
 ## §5 外部变更订阅（承 A-WS-I-P-01 §6）
 
@@ -127,6 +196,8 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
   覆盖 active/open session 且失败阻断；`ed.apply_session_diff` 基线匹配成功、基线不匹配拒绝且不修改；
   `ed.persist_open_tabs` / `ed.list_open_tabs` 覆盖多标签顺序、当前文档唯一性、孤立 session 镜像不恢复；
   与 DE/AG/REF G5 联调。
+- ImageOperation 覆盖插入/删除批原子应用、Block/image 锚失效、项目来源属性保持、非活动会话拒绝、
+  reject 全文恢复，以及保存前规范媒体引用不含 `asset://`。
 
 ## §7 债务与盲区
 
@@ -150,3 +221,13 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
 | 2026-07-18 | v1.4 | 新增已打开文档接口：`ed.get_open_snapshots`、`ed.persist_session_snapshot`、`ed.list_session_snapshots` 与 `ed.apply_session_diff`；`draft_mode=open_session` 必须基线校验后自动应用 LogicalState，不得后台写盘 |
 | 2026-07-18 | v1.5 | 新增编辑器打开标签持久化接口：`ed.persist_open_tabs` / `ed.list_open_tabs`；启动恢复以打开集合为门禁，只恢复对应 session 镜像并同步当前文档 |
 | 2026-07-18 | v1.6 | ED-MARKDOWN-RICH-ROUNDTRIP-01：接口增加 editFormat=markdown 与 contentFormat；open/serialize/replace_document 明确 Markdown Codec、源码保护、语义校验失败不写盘契约 |
+| 2026-07-28 | v1.7 | BDocx TableCellShading：新增 §4.3 TableOperation 接口，锁定 `set_cell_background`、多选节点属性语义、合并单元格左上锚、动态能力/指纹校验及富内容保护。 |
+| 2026-07-28 | v1.8 | StyleOp 接入 BDocxCapabilityManifest，补真实 mark 名、attrs/textAlign、blockId 与字符范围的 ED 防御性批内原子校验边界。 |
+| 2026-07-28 | v1.9 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：BDocx session snapshot 增 baseline 与规范相对媒体引用要求；重启恢复经 `doc.restore_edit_media` 重建显示授权，禁止持久化 `asset://` 或让存储 envelope 进入 LogicalState。 |
+| 2026-07-28 | v1.10 | BDOCX-IMAGE-INTERACTION-01：新增 §4.4 图片前端受控操作，锁定真实拖宽、独立图片段落移动、删除、混排保护、DOM 归属锚定及 data-display 非持久边界。 |
+| 2026-07-29 | v1.11 | BDOCX-IMAGE-AGENT-EDIT-01：新增 §4.5 ImageOperation 载荷、动态锚/基线、项目来源、当前活动编辑器批原子应用、拒绝恢复和保存边界。 |
+| 2026-07-29 | v1.12 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：ImageOperation 增加缩放、上下移动与独立图片段落对齐，明确稳定 imageId、当前 fingerprint、动态能力及同图单批一操作。 |
+| 2026-07-29 | v1.13 | BDOCX-IMAGE-COMPOSITE-IMPORT-01：同图 resize/layout/move 单事务组合；新增系统本地图片受控拖入、Block 坐标锚、源文件保护、撤销/脏态边界；BDocx 工具栏禁用远程 URL 插图。 |
+| 2026-07-30 | v1.14 | BDOCX-IMAGE-COMPOSITE-IMPORT-01 人工入口闭合：系统拖入增加可见反馈和错误提示；项目文件树拖入、剪贴板 PNG/JPEG、文档内图片复制粘贴统一进入受控媒体与 Block 锚链。 |
+| 2026-07-30 | v1.15 | 拖放运行时冲突修复：关闭 Tauri 内部 drag-drop handler，WKWebView DOM 纸张容器成为 Finder Files、项目 DocRef 与 ProseMirror 内部图片拖动的单一事件入口；外部图片捕获阶段分流，内部拖动不被接管；空白/分页间隙按最近稳定 Block 降级。 |
+| 2026-07-30 | v1.16 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：新增活动富文档 BlockOperation 单事务接口、整批基线/锚/类型/指纹/Schema 校验与精确节点反向恢复；非活动富文档及 HTML replace_block/replace_document 不再支持。 |

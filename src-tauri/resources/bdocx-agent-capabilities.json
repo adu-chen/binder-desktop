@@ -1,0 +1,429 @@
+{
+  "manifestId": "binder.bdocx.agent-edit",
+  "version": "1.5.0",
+  "editableKind": "bdocx",
+  "contentFormat": "html",
+  "documentOperations": [
+    {
+      "capabilityId": "bdocx.document.block_ops",
+      "operation": "block_ops",
+      "agentAvailability": "available",
+      "diffFidelity": "structured",
+      "constraint": "Active ProseMirror LogicalState only. Target only blocks declaring replace_node; preserve blockId, node type and attrs; use base sessionVersion/contentHash and exact fingerprint."
+    }
+  ],
+  "styleOps": {
+    "operation": "style_ops",
+    "maxItems": 64,
+    "rangeUnit": "utf16_code_unit",
+    "marks": [
+      {
+        "capabilityId": "bdocx.style.bold",
+        "markType": "bold",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "bold",
+        "roundtripTier": "verified",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.italic",
+        "markType": "italic",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "italic",
+        "roundtripTier": "required_pending",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.underline",
+        "markType": "underline",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "underline",
+        "roundtripTier": "required_pending",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.strike",
+        "markType": "strike",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "strike",
+        "roundtripTier": "unsupported",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.highlight",
+        "markType": "highlight",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "highlight",
+        "roundtripTier": "unsupported",
+        "requireAnyAttribute": false,
+        "attributes": [
+          {
+            "name": "color",
+            "kind": "hex_color",
+            "required": false
+          }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.style.subscript",
+        "markType": "subscript",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "subscript",
+        "roundtripTier": "unsupported",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.superscript",
+        "markType": "superscript",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "superscript",
+        "roundtripTier": "unsupported",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.code",
+        "markType": "code",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "code",
+        "roundtripTier": "unsupported",
+        "requireAnyAttribute": false,
+        "attributes": []
+      },
+      {
+        "capabilityId": "bdocx.style.link",
+        "markType": "link",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "link",
+        "roundtripTier": "unsupported",
+        "requireAnyAttribute": true,
+        "attributes": [
+          {
+            "name": "href",
+            "kind": "safe_href",
+            "required": true
+          }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.style.text_style",
+        "markType": "textStyle",
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "requireAnyAttribute": true,
+        "attributes": [
+          {
+            "name": "color",
+            "kind": "hex_color",
+            "required": false,
+            "roundtripFeature": "text_color",
+            "roundtripTier": "verified"
+          },
+          {
+            "name": "fontSize",
+            "kind": "font_size",
+            "required": false,
+            "roundtripFeature": "font_size",
+            "roundtripTier": "best_effort"
+          },
+          {
+            "name": "fontFamily",
+            "kind": "font_family",
+            "required": false,
+            "roundtripFeature": "font_family",
+            "roundtripTier": "best_effort"
+          }
+        ]
+      }
+    ],
+    "blockAttributes": [
+      {
+        "capabilityId": "bdocx.style.text_align",
+        "name": "textAlign",
+        "kind": "enum",
+        "values": ["left", "center", "right", "justify"],
+        "supportedBlockTypes": ["p", "h1", "h2", "h3", "h4", "h5", "h6"],
+        "agentAvailability": "available",
+        "diffFidelity": "summary",
+        "roundtripFeature": "paragraph_align",
+        "roundtripTier": "required_pending"
+      }
+    ]
+  },
+  "tableOps": {
+    "operation": "table_ops",
+    "operations": [
+      {
+        "capabilityId": "bdocx.table.insert_row",
+        "op": "insert_row",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "at", "kind": "non_negative_integer", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.delete_row",
+        "op": "delete_row",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "row", "kind": "non_negative_integer", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.insert_column",
+        "op": "insert_column",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "at", "kind": "non_negative_integer", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.delete_column",
+        "op": "delete_column",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "column", "kind": "non_negative_integer", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.set_header_row",
+        "op": "set_header_row",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "enabled", "kind": "boolean", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.merge_cells",
+        "op": "merge_cells",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "merged_cells",
+        "roundtripTier": "unsupported",
+        "fields": [
+          { "name": "from", "kind": "coordinate", "required": true },
+          { "name": "to", "kind": "coordinate", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.split_cell",
+        "op": "split_cell",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "merged_cells",
+        "roundtripTier": "unsupported",
+        "fields": [
+          { "name": "at", "kind": "coordinate", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.set_cell_text",
+        "op": "set_cell_text",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "at", "kind": "coordinate", "required": true },
+          { "name": "text", "kind": "string", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.set_cell_background",
+        "op": "set_cell_background",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "table_cell_shading",
+        "roundtripTier": "verified",
+        "fields": [
+          { "name": "at", "kind": "coordinate", "required": true },
+          { "name": "color", "kind": "hex_color_or_null", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.table.move_table",
+        "op": "move_table",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "basic_table",
+        "roundtripTier": "required_pending",
+        "fields": [
+          { "name": "direction", "kind": "enum", "required": true, "values": ["up", "down"] }
+        ]
+      }
+    ]
+  },
+  "imageOps": {
+    "operation": "image_ops",
+    "maxItems": 16,
+    "batchConstraints": {
+      "compatiblePerImage": ["resize_image", "set_image_layout", "move_image"],
+      "exclusive": ["delete_image"]
+    },
+    "operations": [
+      {
+        "capabilityId": "bdocx.image.insert_image",
+        "op": "insert_image",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "image",
+        "roundtripTier": "verified",
+        "fields": [
+          { "name": "anchorBlockId", "kind": "string", "required": true },
+          { "name": "position", "kind": "enum", "required": true, "values": ["before", "after"] },
+          { "name": "assetId", "kind": "string", "required": true },
+          { "name": "sourcePath", "kind": "relative_path", "required": true },
+          { "name": "sourceHash", "kind": "sha256", "required": true },
+          { "name": "alt", "kind": "string", "required": false },
+          { "name": "width", "kind": "positive_integer", "required": false }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.image.delete_image",
+        "op": "delete_image",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "image",
+        "roundtripTier": "verified",
+        "fields": [
+          { "name": "imageId", "kind": "string", "required": true },
+          { "name": "fingerprint", "kind": "string", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.image.resize_image",
+        "op": "resize_image",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "image",
+        "roundtripTier": "verified",
+        "fields": [
+          { "name": "imageId", "kind": "string", "required": true },
+          { "name": "fingerprint", "kind": "string", "required": true },
+          { "name": "width", "kind": "positive_integer", "required": true }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.image.move_image",
+        "op": "move_image",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "image",
+        "roundtripTier": "verified",
+        "fields": [
+          { "name": "imageId", "kind": "string", "required": true },
+          { "name": "fingerprint", "kind": "string", "required": true },
+          { "name": "direction", "kind": "enum", "required": true, "values": ["up", "down"] }
+        ]
+      },
+      {
+        "capabilityId": "bdocx.image.set_image_layout",
+        "op": "set_image_layout",
+        "agentAvailability": "dynamic",
+        "diffFidelity": "structured",
+        "roundtripFeature": "image",
+        "roundtripTier": "verified",
+        "fields": [
+          { "name": "imageId", "kind": "string", "required": true },
+          { "name": "fingerprint", "kind": "string", "required": true },
+          { "name": "alignment", "kind": "enum", "required": true, "values": ["left", "center", "right"] }
+        ]
+      }
+    ]
+  },
+  "manualOnly": [
+    {
+      "capabilityId": "bdocx.manual.table_column_resize",
+      "label": "拖拽调整列宽",
+      "reason": "Only the active editor UI owns the live pointer transaction; DOCX roundtrip is not guaranteed."
+    },
+    {
+      "capabilityId": "bdocx.manual.advanced_image_layout",
+      "label": "图片文字环绕、行内混排重排、浮动、任意定位、裁剪、旋转与独立高度",
+      "reason": "Outside the verified ImageOperation and DOCX roundtrip subset."
+    },
+    {
+      "capabilityId": "bdocx.manual.block_structure",
+      "label": "标题、列表、引用与代码块结构切换",
+      "reason": "No agent node-structure operation is registered."
+    },
+    {
+      "capabilityId": "bdocx.manual.delete_table",
+      "label": "删除整张表格",
+      "reason": "Destructive table deletion is not registered for the agent."
+    },
+    {
+      "capabilityId": "bdocx.manual.advanced_table_layout",
+      "label": "表格任意位置、浮动、数值列宽、均分列与行高",
+      "reason": "Outside the supported BDocx editor subset."
+    }
+  ],
+  "diffFidelity": {
+    "replaceBlock": "none",
+    "blockOps": "structured",
+    "replaceDocument": "none",
+    "styleOps": "summary",
+    "tableOps": "structured",
+    "imageOps": "structured"
+  },
+  "roundtrip": [
+    { "feature": "heading", "tier": "verified" },
+    { "feature": "bold", "tier": "verified" },
+    { "feature": "text_color", "tier": "verified" },
+    { "feature": "table_cell_shading", "tier": "verified" },
+    { "feature": "paragraph_align", "tier": "required_pending" },
+    { "feature": "italic", "tier": "required_pending" },
+    { "feature": "underline", "tier": "required_pending" },
+    { "feature": "ordered_list", "tier": "required_pending" },
+    { "feature": "unordered_list", "tier": "required_pending" },
+    { "feature": "basic_table", "tier": "required_pending" },
+    { "feature": "image", "tier": "verified" },
+    { "feature": "font_family", "tier": "best_effort" },
+    { "feature": "font_size", "tier": "best_effort" },
+    { "feature": "custom_style", "tier": "best_effort" },
+    { "feature": "page_margin", "tier": "template_inherited" },
+    { "feature": "page_size", "tier": "template_inherited" },
+    { "feature": "output_header_footer", "tier": "template_inherited" },
+    { "feature": "header_footer", "tier": "unsupported" },
+    { "feature": "text_box", "tier": "unsupported" },
+    { "feature": "smartart", "tier": "unsupported" },
+    { "feature": "vba_macro", "tier": "unsupported" },
+    { "feature": "complex_style_inheritance", "tier": "unsupported" },
+    { "feature": "merged_cells", "tier": "unsupported" },
+    { "feature": "strike", "tier": "unsupported" },
+    { "feature": "highlight", "tier": "unsupported" },
+    { "feature": "subscript", "tier": "unsupported" },
+    { "feature": "superscript", "tier": "unsupported" },
+    { "feature": "code", "tier": "unsupported" },
+    { "feature": "link", "tier": "unsupported" }
+  ]
+}

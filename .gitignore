@@ -14,3 +14,6 @@ src-tauri/target
 # bundled optimized LibreOffice (~687M, 经 scripts/deploy_lo.sh 部署 + Tauri bundle.resources 自动打包，不入 git)
 # 仅排除部署的二进制 .app，保留目录与占位 README（使 bundle.resources glob 在未部署时仍匹配，构建不破）
 src-tauri/resources/libreoffice/LibreOffice.app/
+# Bundled Pandoc is a verified release asset prepared by scripts/prepare_bundled_tools.sh.
+# The release build refuses to proceed when it is absent or does not match tools/manifest.json.
+src-tauri/resources/tools/pandoc/*/pandoc

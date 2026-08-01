@@ -7,21 +7,23 @@
 //! BR-AG-DATA-003 2026-07-04 版：默认当前文档，显式声明集内可跨，新建经 diff 裁决闸门，未声明既有文档拒绝
 //! （原「单文档铁律/跨文档升级 CBT」已废止）。预算数值/裁剪算法/提示词文本延实现期。
 
-/// 上下文来源（裁剪保留优先级：ExplicitMention > Memory ≈ Knowledge > CurrentDoc）。
+/// 上下文来源（裁剪保留优先级：BR-AG-DATA-005 分层截断序）。
+/// P0 永不截：ExplicitMention、CurrentDoc（当前文档层，与显式引用同级不可裁）。
+/// P1 可裁：Memory、Knowledge（补强层，仅作补强不覆盖当前文档与显式引用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextSource {
-    ExplicitMention, // 用户显式 @mention（最高，永不静默丢弃）
-    Memory,
-    Knowledge,
-    CurrentDoc,
+    ExplicitMention, // 用户显式 @mention（P0 永不裁剪）
+    CurrentDoc,      // 当前文档（P0 永不裁剪，与 BR-AG-DATA-005 一致）
+    Memory,          // 记忆补强层（P1 可裁）
+    Knowledge,       // 知识补强层（P1 可裁）
 }
 
 fn priority(s: ContextSource) -> u8 {
     match s {
         ContextSource::ExplicitMention => 0,
-        ContextSource::Memory => 1,
-        ContextSource::Knowledge => 1,
-        ContextSource::CurrentDoc => 2,
+        ContextSource::CurrentDoc => 0, // P0 永不截，与 ExplicitMention 同级
+        ContextSource::Memory => 1,     // P1 补强层
+        ContextSource::Knowledge => 1,  // P1 补强层
     }
 }
 
@@ -58,12 +60,14 @@ pub fn assemble_context(mut items: Vec<ContextItem>, budget: u32) -> AssembledCo
     let mut trimmed = Vec::new();
     let mut used = 0u32;
     for it in items {
-        let is_explicit = it.source == ContextSource::ExplicitMention;
-        if is_explicit || used.saturating_add(it.cost) <= budget {
+        // P0 永不截：ExplicitMention 与 CurrentDoc 优先于预算
+        let is_p0 =
+            it.source == ContextSource::ExplicitMention || it.source == ContextSource::CurrentDoc;
+        if is_p0 || used.saturating_add(it.cost) <= budget {
             used = used.saturating_add(it.cost);
-            kept.push(it); // 显式注入永不裁剪（即便超预算）
+            kept.push(it);
         } else {
-            trimmed.push(it); // 裁剪可追溯
+            trimmed.push(it);
         }
     }
     AssembledContext { kept, trimmed }
@@ -394,9 +398,9 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-001
-    // 显式 @mention 永不裁剪（即便超预算）；低优先级超预算被裁剪且可追溯（trimmed 非空）。
+    // P0 永不截：ExplicitMention 与 CurrentDoc 在预算不足时仍保留；P1 补强层可裁且可追溯。
     #[test]
-    fn explicit_mention_always_kept_trim_is_traceable() {
+    fn explicit_mention_and_current_doc_always_kept_trim_is_traceable() {
         use ContextSource::*;
         let items = vec![
             item(CurrentDoc, "doc", 100),
@@ -404,10 +408,11 @@ mod tests {
             item(ExplicitMention, "@ref", 80),
         ];
         let r = assemble_context(items, 60); // 预算 60
-                                             // @mention 必在 kept（即便 cost 80 > 60）
+                                             // @mention 与 CurrentDoc 必在 kept（P0 永不截）
         assert!(r.kept.iter().any(|i| i.source == ExplicitMention));
-        // CurrentDoc(100) 超预算被裁剪，进入 trimmed（可追溯）
-        assert!(r.trimmed.iter().any(|i| i.source == CurrentDoc));
+        assert!(r.kept.iter().any(|i| i.source == CurrentDoc));
+        // Memory(50) 超预算被裁剪，进入 trimmed（可追溯）
+        assert!(r.trimmed.iter().any(|i| i.source == Memory));
         assert!(!r.trimmed.is_empty(), "裁剪须可追溯");
     }
 

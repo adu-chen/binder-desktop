@@ -27,6 +27,8 @@ WS 是 P2 编码起点（文件/编辑底座）。本计划把 WS L2 规则/状�
 - **@GOV**：文件 I/O 边界层 `BR-WS-DATA-001`；路径守护 `X-FORBID-004`。
 - **A 类债务**：缓存策略与多 workspace 控制态隔离（WS-04，实现期）。
 - **验收**：越界路径被拒（X-FORBID-004 测试）；workspace 可开/切/关；I/O 经 WS 物理边界、无旁路。
+- **图片专项扩展（BDOCX-IMAGE-AGENT-EDIT-01）**：只读递归发现项目图片候选，返回 workspace
+  相对普通文件并跳过隐藏目录、符号链接和越界项；不提供外部导入、源文件删除或改写。
 
 ### PI-WS-02　save 保存机与外部变更冲突保护　✅ G4 已实现（2026-06-22，cargo test 含原子写入/冲突路/SM-WS-01 矩阵 + 3 @GOV + audit 绿）
 - **承接**：REQ-WS-002 / CHAIN WS-SAVE / SM-WS-01（含 saveConflict/overrideConfirmed）/
@@ -92,3 +94,4 @@ PI-SYS-03（db 框架，前置）→ PI-WS-01（生命周期/IO）→ PI-WS-05�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（G3，P2 编码起点）：WS 5 条 Plan Item（生命周期与 IO 边界 / save 机含外部变更冲突 / diff 落盘 / 时间轴 / 控制态持久化），承接 4 链路 + 7 规则 + X-FORBID-004 + SM-WS-01/02/03；文件范围/@GOV/A 类债务/验收齐；依赖 PI-SYS-03 |
+| 2026-07-29 | v1.1 | BDOCX-IMAGE-AGENT-EDIT-01：PI-WS-01 增加项目图片候选只读发现与相对普通文件/隐藏目录/符号链接/越界边界。 |

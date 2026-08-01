@@ -2,12 +2,43 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
+import { listActiveTables, parseTableEditPayload, summarizeTableOperation, type TableEditPayload } from "./edTableOps";
+import {
+  parseImageDiffSnapshotProjection,
+  parseImageEditPayload,
+  projectDocumentImages,
+  type ImageEditPayload,
+  type ImageOperation,
+} from "./edImageOps";
+import {
+  ensureDocumentMediaDisplayBase,
+  projectDocumentMediaDisplaySrc,
+} from "./docService";
 import { closeStore } from "../store/closeStore";
-import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditorBinding } from "./edLocate";
+
+/** 审计修复（2026-07-26 · D10）：HTML sanitize — 保留内联安全标签，剥离 script/iframe/on* 等。
+ *  用于 replace_block 的 new_html 在进入后端前清洗。 */
+const SAFE_INLINE_TAGS = /<\/?(strong|em|u|s|sub|sup|code|a|span|br)\b[^>]*\/?>/i;
+const DANGEROUS_ATTR = /\s+on\w+\s*=\s*["'][^"']*["']/gi;
+function sanitizeInlineHtml(html: string): string {
+  // 1. 剥离所有标签
+  let result = html.replace(/<[^>]*>/g, (match) => {
+    // 保留安全内联标签
+    const cleaned = match.replace(DANGEROUS_ATTR, "");
+    return SAFE_INLINE_TAGS.test(match) ? cleaned : "";
+  });
+  // 2. 还原 HTML 实体（允许模型输出已转义的内容）
+  return result;
+}
+import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditor, getActiveEditorBinding } from "./edLocate";
 import { loadDocs } from "./wsService";
-import { applyOpenSessionDiff, loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
+import { loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
-import type { StyleOp } from "./edStyleOps";
+import { parseStyleOps, type StyleOp } from "./edStyleOps";
+import {
+  parseStructuredBlockEditPayload,
+  projectAgentEditableBlocks,
+} from "./edBlockOps";
 
 /**
  * AG 模块 Service 层。
@@ -25,7 +56,7 @@ export type AgTurnEvent =
   | { type: "done"; turn_id: string; stop_reason: string }
   | { type: "error"; turn_id: string; code: string; message: string; retriable: boolean };
 
-type AgentEditPatchKind = "replace_block" | "replace_document" | "style_ops";
+type AgentEditPatchKind = "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
 
 interface AgentDiffProjection {
   diff_id: string;
@@ -41,6 +72,9 @@ interface AgentDiffProjection {
   base_session_version?: number | null;
   base_content_hash?: string | null;
   style_ops?: unknown;
+  block_ops?: unknown;
+  table_ops?: unknown;
+  image_ops?: unknown;
 }
 
 let seq = 0;
@@ -58,7 +92,7 @@ function parseDiffProjectionResult(result: string): AgentDiffProjection | null {
     if (
       typeof p.diff_id !== "string" ||
       typeof p.rel_path !== "string" ||
-      (p.patch_kind !== "replace_block" && p.patch_kind !== "replace_document" && p.patch_kind !== "style_ops") ||
+      (p.patch_kind !== "replace_block" && p.patch_kind !== "block_ops" && p.patch_kind !== "replace_document" && p.patch_kind !== "style_ops" && p.patch_kind !== "table_ops" && p.patch_kind !== "image_ops") ||
       typeof p.before_text !== "string" ||
       typeof p.after_text !== "string" ||
       typeof p.location_label !== "string"
@@ -85,34 +119,13 @@ function parseDiffProjectionResult(result: string): AgentDiffProjection | null {
       base_session_version: typeof p.base_session_version === "number" ? p.base_session_version : null,
       base_content_hash: typeof p.base_content_hash === "string" ? p.base_content_hash : null,
       style_ops: p.style_ops,
+      block_ops: p.block_ops,
+      table_ops: p.table_ops,
+      image_ops: p.image_ops,
     };
   } catch {
     return null;
   }
-}
-
-function parseStyleOps(value: unknown): StyleOp[] {
-  if (!Array.isArray(value)) return [];
-  const out: StyleOp[] = [];
-  for (const item of value) {
-    if (!isRecord(item) || typeof item.blockId !== "string" || !item.blockId.trim()) continue;
-    if (item.op === "set_block_attr" && isRecord(item.attrs)) {
-      out.push({ op: "set_block_attr", blockId: item.blockId, attrs: item.attrs });
-      continue;
-    }
-    const start = typeof item.start === "number" && Number.isInteger(item.start) ? item.start : null;
-    const end = typeof item.end === "number" && Number.isInteger(item.end) ? item.end : null;
-    if (start === null || end === null) continue;
-    if (item.op === "set_mark" && isRecord(item.mark) && typeof item.mark.type === "string") {
-      const attrs = isRecord(item.mark.attrs) ? item.mark.attrs : undefined;
-      out.push({ op: "set_mark", blockId: item.blockId, start, end, mark: { type: item.mark.type, attrs } });
-      continue;
-    }
-    if (item.op === "unset_mark" && typeof item.markType === "string") {
-      out.push({ op: "unset_mark", blockId: item.blockId, start, end, markType: item.markType });
-    }
-  }
-  return out;
 }
 
 function summarizeStyleOp(op: StyleOp): string {
@@ -121,10 +134,44 @@ function summarizeStyleOp(op: StyleOp): string {
   return `${op.blockId} 设置 ${op.mark.type} [${op.start},${op.end}]`;
 }
 
+function parseTableOps(value: unknown): TableEditPayload | undefined {
+  return parseTableEditPayload(value);
+}
+
+function parseImageOps(value: unknown, relPath?: string | null): ImageEditPayload | undefined {
+  const payload = parseImageEditPayload(value);
+  if (!payload) return undefined;
+  if (!relPath) return payload;
+  const operations: ImageOperation[] = [];
+  for (const operation of payload.operations) {
+    if (operation.op !== "insert_image") {
+      operations.push(operation);
+      continue;
+    }
+    const displaySrc = projectDocumentMediaDisplaySrc(relPath, operation.mediaRef);
+    if (!displaySrc) return undefined;
+    operations.push({ ...operation, displaySrc });
+  }
+  return { ...payload, operations };
+}
+
+function summarizeImageOperation(operation: ImageOperation): string {
+  if (operation.op === "insert_image") {
+    return `插入 ${operation.sourcePath} · ${operation.position === "before" ? "锚点前" : "锚点后"}`;
+  }
+  if (operation.op === "delete_image") return `删除图片 ${operation.imageId}`;
+  if (operation.op === "resize_image") return `缩放图片 ${operation.imageId} · ${operation.width}px`;
+  if (operation.op === "move_image") {
+    return `移动图片 ${operation.imageId} · ${operation.direction === "up" ? "向上" : "向下"}`;
+  }
+  return `图片对齐 ${operation.imageId} · ${operation.alignment}`;
+}
+
 /** 文档块（供块级 @mention 选择非当前文档的块，PI-AG-09G）。 */
 export interface DocBlock {
   block_id: string | null;
   block_index: number;
+  block_type?: string | null;
   text: string;
   /** 样式投影（PI-ED-11 · A-AG-I-P-01 §4.1）：mark 段（range 在块内纯文本平面，与字符锚同基准）。
    *  text 块为空数组；schema 单一来源 A-ED-M-T-01 §5.1。 */
@@ -197,7 +244,37 @@ interface ActiveDocTarget {
   contentFormat: ContentFormat;
 }
 
-export function collectOpenDocSnapshots(target?: ActiveDocTarget): OpenDocSnapshot[] {
+export type AgentOpenDocSnapshot = OpenDocSnapshot & {
+  tableSnapshots?: ReturnType<typeof listActiveTables>;
+  imageSnapshots?: ReturnType<typeof projectDocumentImages>;
+};
+
+function attachActiveStructuredSnapshots(snapshots: OpenDocSnapshot[], activePath: string | null): AgentOpenDocSnapshot[] {
+  const tables = listActiveTables();
+  const images = projectDocumentImages(getActiveEditor());
+  const blocks = projectAgentEditableBlocks(getActiveEditor());
+  return snapshots.map((snapshot) => (
+    snapshot.relPath === activePath && snapshot.source === "active_editor" && snapshot.contentFormat === "html"
+      ? {
+          ...snapshot,
+          blockSnapshots: blocks,
+          tableSnapshots: tables,
+          imageSnapshots: images,
+        }
+      : snapshot
+  ));
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-001-EFFECT-AG-AG-TURN-005
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-001
+ * term_ref: TERM-DOC-003, TERM-ED-008
+ * boundary: in=CurrentOpenDocumentLogicalStateAndEditorBinding | out=AgentOpenDocSnapshotList(withSameVersionBlockTableImageSnapshots) | effect=memory | delegate=projectAgentEditableBlocks,projectTables,projectDocumentImages | caller_context=agentTurnSnapshotAssembly | does_not=fall_back_to_DiskState_or_reparse_HTML_for_open_document
+ */
+export function collectOpenDocSnapshots(target?: ActiveDocTarget): AgentOpenDocSnapshot[] {
   const ed = edStore.getSnapshot();
   const activeTarget = target ?? {
     relPath: ed.openPath,
@@ -217,13 +294,19 @@ export function collectOpenDocSnapshots(target?: ActiveDocTarget): OpenDocSnapsh
       throw snapshotError("AG_ACTIVE_SNAPSHOT_REQUIRED", "当前打开文档无法序列化，已阻断代理回合");
     }
     edStore.updateContent(activeTarget.relPath, activeContent);
-    return edStore.getOpenSnapshots();
+    return attachActiveStructuredSnapshots(edStore.getOpenSnapshots(), activeTarget.relPath);
   }
 
   latest = edStore.getSnapshot();
   const activeSession = latest.sessions[activeTarget.relPath];
   if (!activeSession || activeSession.content === null) {
     throw snapshotError("AG_ACTIVE_SESSION_LOADING", "当前文档 LogicalState 正在载入，请稍候");
+  }
+  if (activeTarget.contentFormat === "html") {
+    throw snapshotError(
+      "AG_ACTIVE_SESSION_LOADING",
+      "当前富文档正在建立 ProseMirror 结构化快照，请稍候",
+    );
   }
 
   // 切换/启动恢复期间，目标文档的 LogicalState 可能已经在 EditSession 中就绪，
@@ -449,6 +532,14 @@ function diffStateFromStatus(status: DiffDetailDto["status"]): DiffCardState {
 function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<DiffView> {
   const projection = detail.projection;
   const styleOpsPayload = parseStyleOps(projection?.style_ops);
+  const blockOpsPayload = parseStructuredBlockEditPayload(projection?.block_ops);
+  const tableOpsPayload = parseTableOps(projection?.table_ops);
+  const imageOpsPayload = parseImageOps(projection?.image_ops);
+  const imageSnapshots = parseImageDiffSnapshotProjection(
+    projection?.image_before,
+    projection?.image_after,
+    projection?.image_affected_block_ids,
+  );
   return {
     sessionId: ref.sessionId,
     turnId: ref.turnId,
@@ -476,6 +567,17 @@ function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<Dif
     readonly: true,
     styleOps: styleOpsPayload.length ? styleOpsPayload.map(summarizeStyleOp) : undefined,
     styleOpsPayload: styleOpsPayload.length ? styleOpsPayload : undefined,
+    blockOpsPayload,
+    blockOps: blockOpsPayload?.operations.map((operation) => (
+      `${operation.blockId} · ${operation.expectedNodeType}`
+    )),
+    tableOpsPayload,
+    tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),
+    imageOpsPayload,
+    imageOps: imageOpsPayload?.operations.map(summarizeImageOperation),
+    imageBefore: imageSnapshots?.before,
+    imageAfter: imageSnapshots?.after,
+    imageAffectedBlockIds: imageSnapshots?.affectedBlockIds,
   };
 }
 
@@ -876,8 +978,10 @@ export async function startTurn(
       finish();
     };
 
+    let eventWork = Promise.resolve();
     onEvent.onmessage = (ev) => {
-      switch (ev.type) {
+      eventWork = eventWork.then(async () => {
+        switch (ev.type) {
         case "chunk":
           agStore.appendToMessage(sessionId, assistantId, ev.text);
           break;
@@ -943,6 +1047,51 @@ export async function startTurn(
             errorCode = "ED_DRAFT_TARGET_MISSING";
           }
           const styleOpsPayload = projection ? parseStyleOps(projection.style_ops) : [];
+          const blockOpsPayload = projection
+            ? parseStructuredBlockEditPayload(projection.block_ops)
+            : undefined;
+          const tableOpsPayload = projection ? parseTableOps(projection.table_ops) : undefined;
+          const rawImageOpsPayload = projection
+            ? parseImageEditPayload(projection.image_ops)
+            : null;
+          if (
+            projection?.patch_kind === "image_ops"
+            && rawImageOpsPayload?.operations.some((operation) => operation.op === "insert_image")
+          ) {
+            const ed = edStore.getSnapshot();
+            const activeHtml = projection.rel_path === ed.openPath
+              ? getActiveDocumentContent(ed.editFormat, ed.contentFormat)
+              : null;
+            if (activeHtml !== null) {
+              try {
+                await ensureDocumentMediaDisplayBase(
+                  projection.rel_path,
+                  activeHtml,
+                  ed.baseline,
+                );
+              } catch {
+                // 下方统一投影为不可裁决图片载荷错误；不把本地绝对媒体路径回注模型。
+              }
+            }
+          }
+          const imageOpsPayload = projection
+            ? parseImageOps(projection.image_ops, projection.rel_path)
+            : undefined;
+          if (projection?.patch_kind === "style_ops" && styleOpsPayload.length === 0) {
+            title = `⚠ 样式修改载荷无效，请重试 · ${ev.rel_path}`;
+            state = "error";
+            errorCode = "AG_STYLE_OPERATION_INVALID";
+          }
+          if (projection?.patch_kind === "block_ops" && !blockOpsPayload) {
+            title = `⚠ 结构化块修改载荷无效，请重试 · ${ev.rel_path}`;
+            state = "error";
+            errorCode = "AG_BLOCK_OPERATION_INVALID";
+          }
+          if (projection?.patch_kind === "image_ops" && !imageOpsPayload) {
+            title = `⚠ 图片修改载荷无效，请重试 · ${ev.rel_path}`;
+            state = "error";
+            errorCode = "AG_IMAGE_OPERATION_INVALID";
+          }
           deStore.addDiff({
             diffId: ev.diff_id,
             sessionId,
@@ -960,16 +1109,22 @@ export async function startTurn(
             baseContentHash: projection?.base_content_hash ?? undefined,
             title,
             before: projection?.before_text ?? "",
-            after: projection?.after_text ?? "",
+            after: sanitizeInlineHtml(projection?.after_text ?? ""),
             state,
             errorCode,
             readonly: projection?.draft_mode === "open_session",
             styleOps: styleOpsPayload.length ? styleOpsPayload.map(summarizeStyleOp) : undefined,
             styleOpsPayload: styleOpsPayload.length ? styleOpsPayload : undefined,
+            blockOpsPayload,
+            blockOps: blockOpsPayload?.operations.map((operation) => (
+              `${operation.blockId} · ${operation.expectedNodeType}`
+            )),
+            tableOpsPayload,
+            tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),
+            imageOpsPayload,
+            imageOps: imageOpsPayload?.operations.map(summarizeImageOperation),
           });
-          if (state === "pending" && projection?.draft_mode === "open_session") {
-            void applyOpenSessionDiff(ev.diff_id);
-          }
+          // 审计修复（2026-07-26 · D1）：open_session diff 不再 auto-accept，等用户裁决
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
@@ -997,9 +1152,10 @@ export async function startTurn(
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
-        default:
-          break;
-      }
+          default:
+            break;
+        }
+      }).catch(failStart);
     };
 
     void (async () => {

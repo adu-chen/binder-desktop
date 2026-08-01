@@ -3,6 +3,8 @@
 //! 各模块为 G3 脚手架占位，@GOV 块在 G4 实现时随实际逻辑落入对应模块。
 //! 分层约束 X-SEQ-002：前端经 command 触达，后端经领域逻辑触达 FS/db。
 
+#![recursion_limit = "512"]
+
 use std::{collections::HashMap, sync::Mutex};
 use tauri::{Emitter, Manager, State};
 
@@ -193,6 +195,9 @@ fn build_registry() -> CommandRegistry {
     reg.register("prv.table_data");
     reg.register("doc.create_draft");
     reg.register("doc.open_for_edit");
+    reg.register("doc.restore_edit_media");
+    reg.register("doc.import_project_image");
+    reg.register("doc.get_style_report");
     reg.register("doc.save_from_edit");
     reg.register("ws.list_timeline");
     reg.register("ws.preview_node");
@@ -203,6 +208,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("de.reject_diff");
     reg.register("de.expire_diff");
     reg.register("de.list_diffs");
+    reg.register("de.update_image_diff_snapshots");
     reg.register("ed.persist_session_snapshot");
     reg.register("ed.list_session_snapshots");
     reg.register("ed.persist_open_tabs");
@@ -269,6 +275,9 @@ fn dispatch(
         "prv.table_data" => route_table_data(&request, &state),
         "doc.create_draft" => route_create_draft(&request, &state),
         "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
+        "doc.restore_edit_media" => route_restore_edit_media(&request, &state, &app),
+        "doc.import_project_image" => route_import_project_image(&request, &state, &app),
+        "doc.get_style_report" => route_get_style_report(&request, &state),
         "doc.save_from_edit" => route_save_from_edit(&request, &state, &app),
         "ws.list_timeline" => route_list_timeline(&request, &state),
         "ws.preview_node" => route_preview_node(&request, &state),
@@ -279,6 +288,7 @@ fn dispatch(
         "de.reject_diff" => route_reject_diff(&request, &state, &app),
         "de.expire_diff" => route_expire_diff(&request, &state, &app),
         "de.list_diffs" => route_list_diffs(&request, &state),
+        "de.update_image_diff_snapshots" => route_update_image_diff_snapshots(&request, &state),
         "ed.persist_session_snapshot" => route_persist_session_snapshot(&request, &state),
         "ed.list_session_snapshots" => route_list_session_snapshots(&state),
         "ed.persist_open_tabs" => route_persist_open_tabs(&request, &state),
@@ -639,7 +649,7 @@ fn route_create_doc(
     let (ws, abs) = resolve_active(state, &rel_path)?;
     let baseline = if is_docx_rel_path(&rel_path) {
         let html = initial_bdocx_html(content);
-        let docx_bytes = doc::edit_chain::html_to_docx(&html)?;
+        let docx_bytes = doc::edit_chain::html_to_docx(&html, None)?;
         let baseline = workspace::fileops::create_doc(&abs, &docx_bytes)?;
         workspace::listing::mark_bdocx(std::path::Path::new(&ws.root_path), &rel_path)?;
         baseline
@@ -668,9 +678,15 @@ fn route_rename_doc(
 ) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let new_rel_path = str_param(request, "newRelPath", "WS_NEW_PATH_REQUIRED")?;
-    let (_, from_abs) = resolve_active(state, &rel_path)?;
+    let (ws, from_abs) = resolve_active(state, &rel_path)?;
     let (_, to_abs) = resolve_active(state, &new_rel_path)?;
     workspace::fileops::rename_doc(&from_abs, &to_abs)?;
+    // 审计修复（2026-07-24）：rename 后同步更新 bdocx_manifest
+    let _ = workspace::listing::update_bdocx_for_rename(
+        std::path::Path::new(&ws.root_path),
+        &rel_path,
+        &new_rel_path,
+    );
     Ok(serde_json::json!({ "rel_path": new_rel_path }))
 }
 
@@ -823,20 +839,41 @@ fn emit_doc01(app: &tauri::AppHandle, rel_path: &str, st: doc::convert::DocConve
 
 /// 递归授权 extract-media 工作目录下所有抽取媒体文件进入 asset 协议 scope（编辑链图文呈现）。
 /// 逐文件最小暴露（不开放整目录，同 prv.media_src 纪律）；work_dir 按文档 baseline 隔离，仅本 docx 媒体。
-/// 授权失败不阻断打开（个别图片无法呈现降级为 broken img，不影响文本编辑）。
-fn authorize_media_files(app: &tauri::AppHandle, dir: &std::path::Path) {
+/// 授权失败必须阻断打开/恢复：不可显示的图片不能被伪装成完整可编辑 LogicalState。
+fn authorize_media_files(app: &tauri::AppHandle, dir: &std::path::Path) -> Result<(), IpcError> {
     use tauri::Manager;
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        IpcError::new(
+            "DOC_IMAGE_MEDIA_AUTHORIZE_FAILED",
+            &format!("读取 BDocx 编辑媒体目录失败: {error}"),
+            true,
+            false,
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            IpcError::new(
+                "DOC_IMAGE_MEDIA_AUTHORIZE_FAILED",
+                &format!("枚举 BDocx 编辑媒体失败: {error}"),
+                true,
+                false,
+            )
+        })?;
         let p = entry.path();
         if p.is_dir() {
-            authorize_media_files(app, &p);
+            authorize_media_files(app, &p)?;
         } else if p.is_file() {
-            let _ = app.asset_protocol_scope().allow_file(&p);
+            app.asset_protocol_scope().allow_file(&p).map_err(|error| {
+                IpcError::new(
+                    "DOC_IMAGE_MEDIA_AUTHORIZE_FAILED",
+                    &format!("授权 BDocx 编辑媒体失败: {error}"),
+                    true,
+                    false,
+                )
+            })?;
         }
     }
+    Ok(())
 }
 
 fn route_open_for_edit(
@@ -873,23 +910,27 @@ fn route_open_for_edit(
         .expect("SM-DOC-01: Idle+OpenDocx→OpenConverting");
     emit_doc01(app, &rel_path, opening);
     // 编辑链：docx → HTML；extract-media 工作目录按文档隔离（图片解出供编辑器；缓存策略实现期）。
-    let work_dir = std::env::temp_dir()
-        .join("binder_edit_media")
-        .join(format!("{baseline:x}"));
-    match doc::edit_chain::docx_to_html(&abs, &work_dir) {
-        Ok(html) => {
+    let work_dir = doc::image_media::edit_media_dir(baseline);
+    match doc::edit_chain::docx_to_edit_html(&abs, &work_dir) {
+        Ok(edit_model) => {
+            if let Err(error) = authorize_media_files(app, &work_dir) {
+                let st = transition(opening, DocConvertEvent::ConvertFail)
+                    .expect("OpenConverting+ConvertFail→OpenError");
+                emit_doc01(app, &rel_path, st);
+                return Err(error);
+            }
             let st = transition(opening, DocConvertEvent::ConvertOk)
                 .expect("OpenConverting+ConvertOk→Ready");
             emit_doc01(app, &rel_path, st);
             // 图文呈现（BR-DOC-DATA-002 嵌入图片必需子集）：extract-media 把图片解到 work_dir（按 baseline
             // 隔离），HTML 内为相对 `media/…` 路径。逐文件授权入 asset 协议 scope（最小暴露，同 prv.media_src，
             // X-FORBID-004 守界由后端把关）；回 media_base 供前端将相对 <img src> 改写为 asset URL（只读呈现）。
-            authorize_media_files(app, &work_dir);
             Ok(serde_json::json!({
                 "format": "html",
-                "html": html,
+                "html": edit_model.html,
                 "baseline": baseline.to_string(),
                 "media_base": work_dir.to_string_lossy(),
+                "style_report": edit_model.style_report,
             }))
         }
         Err(e) => {
@@ -900,6 +941,235 @@ fn route_open_for_edit(
             Err(e)
         }
     }
+}
+
+/// 恢复持久化 BDocx LogicalState 的显示媒体：前端只回稳定 HTML 相对引用和原加载 baseline，
+/// 后端据此授权同一媒体目录。缓存缺失时，只有磁盘仍与该 baseline 相同才允许重新抽取；磁盘已变化
+/// 则保留保存冲突，不用新文档媒体替换旧草稿媒体。
+fn route_restore_edit_media(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let html = request
+        .params
+        .get("html")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| IpcError::new("DOC_HTML_REQUIRED", "缺少 html 参数", false, false))?;
+    let requested_baseline = optional_u64_param(request, "baseline", "DOC_BASELINE_INVALID")?;
+    let (ws, abs) = resolve_active(state, &rel_path)?;
+    if !is_docx_rel_path(&rel_path)
+        || !workspace::listing::is_bdocx(std::path::Path::new(&ws.root_path), &rel_path)
+    {
+        return Err(IpcError::new(
+            "DOC_NOT_BDOCX",
+            "只有 BDocx 编辑会话可以恢复编辑媒体",
+            false,
+            false,
+        ));
+    }
+    let current = std::fs::read(&abs).map_err(|error| {
+        IpcError::new(
+            "DOC_READ_FAILED",
+            &format!("读 BDocx 失败: {error}"),
+            true,
+            false,
+        )
+    })?;
+    let current_baseline = workspace::save::content_hash(&current);
+    let baseline = requested_baseline.unwrap_or(current_baseline);
+    let work_dir = doc::image_media::edit_media_dir(baseline);
+    doc::image_media::materialize_project_images_for_html(
+        std::path::Path::new(&ws.root_path),
+        baseline,
+        html,
+    )?;
+    let initial = doc::image_media::inspect_html_resources(html, Some(&work_dir))?;
+    if !initial.missing_resources.is_empty() {
+        if current_baseline != baseline {
+            return Err(IpcError::new(
+                "DOC_IMAGE_MEDIA_RESTORE_CONFLICT",
+                &format!(
+                    "旧编辑媒体已不存在，且磁盘 BDocx 已偏离会话基线；缺失资源：{}",
+                    initial.missing_resources.join("、")
+                ),
+                false,
+                false,
+            ));
+        }
+        // 只借同基线源文档重建媒体目录；持久化草稿 HTML 仍是 LogicalState，不被转换结果替换。
+        let _ = doc::edit_chain::docx_to_edit_html(&abs, &work_dir)?;
+        // docx 重抽取可能重建 media 子目录；项目来源图片按持久化 path/hash 再物化一次。
+        doc::image_media::materialize_project_images_for_html(
+            std::path::Path::new(&ws.root_path),
+            baseline,
+            html,
+        )?;
+        let rebuilt = doc::image_media::inspect_html_resources(html, Some(&work_dir))?;
+        if !rebuilt.missing_resources.is_empty() {
+            return Err(IpcError::new(
+                "DOC_IMAGE_RESOURCE_MISSING",
+                &format!(
+                    "重建同基线编辑媒体后仍缺失资源：{}",
+                    rebuilt.missing_resources.join("、")
+                ),
+                true,
+                false,
+            ));
+        }
+    } else {
+        std::fs::create_dir_all(&work_dir).map_err(|error| {
+            IpcError::new(
+                "DOC_IMAGE_MEDIA_RESTORE_FAILED",
+                &format!("创建编辑媒体目录失败: {error}"),
+                true,
+                false,
+            )
+        })?;
+    }
+    authorize_media_files(app, &work_dir)?;
+    Ok(serde_json::json!({
+        "baseline": baseline.to_string(),
+        "media_base": work_dir.to_string_lossy(),
+    }))
+}
+
+fn route_import_project_image(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let baseline =
+        optional_u64_param(request, "baseline", "DOC_BASELINE_INVALID")?.ok_or_else(|| {
+            IpcError::new(
+                "DOC_BASELINE_REQUIRED",
+                "导入 BDocx 图片必须携带当前编辑会话 baseline",
+                false,
+                false,
+            )
+        })?;
+    let (workspace, _) = resolve_active(state, &rel_path)?;
+    let workspace_root = std::path::Path::new(&workspace.root_path);
+    if !is_docx_rel_path(&rel_path) || !workspace::listing::is_bdocx(workspace_root, &rel_path) {
+        return Err(IpcError::new(
+            "DOC_NOT_BDOCX",
+            "只有 BDocx 编辑会话可以受控导入本地图片",
+            false,
+            false,
+        ));
+    }
+    let source_path = request
+        .params
+        .get("sourcePath")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty());
+    let source_data_url = request
+        .params
+        .get("sourceDataUrl")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty());
+    let imported = match (source_path, source_data_url) {
+        (Some(source_path), None) => {
+            let source = std::path::Path::new(source_path);
+            let resolved_source = if source.is_absolute() {
+                source.to_path_buf()
+            } else {
+                if !source
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+                {
+                    return Err(IpcError::new(
+                        "DOC_PROJECT_IMAGE_IMPORT_SOURCE_INVALID",
+                        "项目文件树图片必须使用规范 workspace 相对路径",
+                        false,
+                        false,
+                    ));
+                }
+                workspace_root.join(source)
+            };
+            doc::image_media::import_project_image(workspace_root, &resolved_source)?
+        }
+        (None, Some(source_data_url)) => {
+            let source_name = request
+                .params
+                .get("sourceName")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    IpcError::new(
+                        "DOC_PROJECT_IMAGE_IMPORT_SOURCE_REQUIRED",
+                        "剪贴板图片缺少文件名",
+                        false,
+                        false,
+                    )
+                })?;
+            doc::image_media::import_project_image_data_url(
+                workspace_root,
+                source_name,
+                source_data_url,
+            )?
+        }
+        _ => {
+            return Err(IpcError::new(
+                "DOC_PROJECT_IMAGE_IMPORT_SOURCE_REQUIRED",
+                "必须且只能提供 sourcePath 或 sourceDataUrl",
+                false,
+                false,
+            ))
+        }
+    };
+    let materialized = doc::image_media::materialize_project_image(
+        workspace_root,
+        &imported.rel_path,
+        &imported.content_hash,
+        baseline,
+    )?;
+    let media_base = doc::image_media::edit_media_dir(baseline);
+    authorize_media_files(app, &media_base)?;
+    Ok(serde_json::json!({
+        "assetId": imported.asset_id,
+        "sourcePath": imported.rel_path,
+        "sourceHash": imported.content_hash,
+        "mediaType": imported.media_type,
+        "byteSize": imported.byte_size,
+        "mediaRef": materialized.media_ref,
+        "mediaBase": media_base.to_string_lossy(),
+        "baseline": baseline.to_string(),
+    }))
+}
+
+/// 路由样式报告：复用与打开链完全相同的 DOCX→HTML 颜色恢复与实际检测，不返回正文或授权媒体。
+fn route_get_style_report(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (ws, abs) = resolve_active(state, &rel_path)?;
+    if is_docx_rel_path(&rel_path)
+        && !workspace::listing::is_bdocx(std::path::Path::new(&ws.root_path), &rel_path)
+    {
+        return Err(IpcError::new(
+            "DOC_NOT_BDOCX",
+            "原生 docx 不能进入可编辑样式报告，请先创建 b-docx",
+            false,
+            false,
+        ));
+    }
+    let source = std::fs::read(&abs).map_err(|e| {
+        IpcError::new(
+            "DOC_READ_FAILED",
+            &format!("读 docx 失败: {e}"),
+            true,
+            false,
+        )
+    })?;
+    let work_dir = std::env::temp_dir()
+        .join("binder_style_report")
+        .join(format!("{:x}", workspace::save::content_hash(&source)));
+    let edit_model = doc::edit_chain::docx_to_edit_html(&abs, &work_dir)?;
+    Ok(serde_json::json!({ "style_report": edit_model.style_report }))
 }
 
 /// 路由 `doc.save_from_edit`（A-DOC-I-P-01 §2 编辑链）：编辑 HTML → docx（--reference-doc 统一样式）→
@@ -916,7 +1186,15 @@ fn route_save_from_edit(
         .get("html")
         .and_then(|v| v.as_str())
         .ok_or_else(|| IpcError::new("DOC_HTML_REQUIRED", "缺少 html 参数", false, false))?;
-    let baseline = optional_u64_param(request, "baseline", "DOC_BASELINE_INVALID")?;
+    let baseline =
+        optional_u64_param(request, "baseline", "DOC_BASELINE_INVALID")?.ok_or_else(|| {
+            IpcError::new(
+                "DOC_BASELINE_REQUIRED",
+                "保存 BDocx 必须携带打开或持久恢复时的加载基线",
+                false,
+                false,
+            )
+        })?;
     let override_confirmed = bool_param(request, "override", false);
     let (ws, abs) = resolve_active(state, &rel_path)?;
     let saving = doc::convert::transition(
@@ -925,7 +1203,18 @@ fn route_save_from_edit(
     )
     .expect("SM-DOC-01: Ready+SaveDocx→SaveConverting");
     emit_doc01(app, &rel_path, saving);
-    let docx_bytes = match doc::edit_chain::html_to_docx(html) {
+    let media_dir = doc::image_media::edit_media_dir(baseline);
+    if let Err(error) = doc::image_media::materialize_project_images_for_html(
+        std::path::Path::new(&ws.root_path),
+        baseline,
+        html,
+    ) {
+        let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+            .expect("SaveConverting+SaveConvertFail→SaveError");
+        emit_doc01(app, &rel_path, st);
+        return Err(error);
+    }
+    let docx_bytes = match doc::edit_chain::html_to_docx(html, Some(&media_dir)) {
         Ok(b) => b,
         Err(e) => {
             let st =
@@ -935,12 +1224,36 @@ fn route_save_from_edit(
             return Err(e);
         }
     };
+    let next_baseline = workspace::save::content_hash(&docx_bytes);
+    if let Err(error) = doc::image_media::carry_html_media_forward(html, baseline, next_baseline) {
+        let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+            .expect("SaveConverting+SaveConvertFail→SaveError");
+        emit_doc01(app, &rel_path, st);
+        return Err(error);
+    }
+    let next_media_dir = doc::image_media::edit_media_dir(next_baseline);
+    if let Err(error) = std::fs::create_dir_all(&next_media_dir)
+        .map_err(|cause| {
+            IpcError::new(
+                "DOC_IMAGE_MEDIA_CARRY_FAILED",
+                &format!("创建新 baseline 编辑媒体目录失败: {cause}"),
+                true,
+                false,
+            )
+        })
+        .and_then(|_| authorize_media_files(app, &next_media_dir))
+    {
+        let st = doc::convert::transition(saving, doc::convert::DocConvertEvent::SaveConvertFail)
+            .expect("SaveConverting+SaveConvertFail→SaveError");
+        emit_doc01(app, &rel_path, st);
+        return Err(error);
+    }
     match save_atomic_sm(
         app,
         &rel_path,
         &abs,
         &docx_bytes,
-        baseline,
+        Some(baseline),
         override_confirmed,
     ) {
         Ok(saved) => {
@@ -959,7 +1272,10 @@ fn route_save_from_edit(
                         false,
                     )
                 })?;
-            Ok(serde_json::json!({ "baseline": saved.baseline.to_string() }))
+            Ok(serde_json::json!({
+                "baseline": saved.baseline.to_string(),
+                "media_base": next_media_dir.to_string_lossy(),
+            }))
         }
         Err(e) => {
             let st =
@@ -1434,6 +1750,10 @@ fn style_ops_param(params: &serde_json::Value) -> Option<&serde_json::Value> {
         })
 }
 
+fn capability_error_to_ipc(error: ag::bdocx_capabilities::CapabilityValidationError) -> IpcError {
+    IpcError::new(error.code, &error.message, error.retriable, false)
+}
+
 fn parse_block_index_param(value: Option<&serde_json::Value>) -> Option<usize> {
     match value {
         Some(serde_json::Value::Number(n)) => n.as_u64().map(|v| v as usize),
@@ -1447,8 +1767,11 @@ fn parse_block_index_param(value: Option<&serde_json::Value>) -> Option<usize> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentEditOperation {
     ReplaceBlock,
+    BlockOps,
     ReplaceDocument,
     StyleOps,
+    TableOps,
+    ImageOps,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1466,6 +1789,9 @@ struct AgentDiffProjection {
     base_session_version: Option<u64>,
     base_content_hash: Option<String>,
     style_ops: Option<serde_json::Value>,
+    block_ops: Option<serde_json::Value>,
+    table_ops: Option<serde_json::Value>,
+    image_ops: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1489,15 +1815,31 @@ fn resolve_agent_edit_operation(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let has_style_ops = style_ops_param(params).is_some();
+    let has_style_payload = params.get("style_ops").is_some() || params.get("styleOps").is_some();
     let has_block_selector =
         params.get("block_id").is_some() || params.get("block_index").is_some();
+    let has_new_text_payload = params.get("new_text").is_some();
     let has_new_text = params.get("new_text").and_then(|v| v.as_str()).is_some();
+    let has_content_payload = params.get("content").is_some();
     let has_content = params.get("content").and_then(|v| v.as_str()).is_some();
+    let has_table_payload = params.get("base").is_some()
+        || params.get("target").is_some()
+        || params.get("operations").is_some();
+    let has_table_target = params.get("target").is_some();
+    let has_table_ops = params
+        .get("operations")
+        .and_then(|v| v.as_array())
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let has_structured_base = params.get("base").is_some();
 
     let op = match operation {
         Some("replace_block") => AgentEditOperation::ReplaceBlock,
+        Some("block_ops") => AgentEditOperation::BlockOps,
         Some("replace_document") => AgentEditOperation::ReplaceDocument,
         Some("style_ops") => AgentEditOperation::StyleOps,
+        Some("table_ops") => AgentEditOperation::TableOps,
+        Some("image_ops") => AgentEditOperation::ImageOps,
         Some(other) => {
             return Err(IpcError::new(
                 "AG_TOOL_ARG",
@@ -1512,7 +1854,7 @@ fn resolve_agent_edit_operation(
         None if has_content => {
             return Err(IpcError::new(
                 "AG_PRECISE_TARGET_REQUIRED",
-                "已有文档的修改必须使用 operation=replace_block + block_id/block_index + new_text；只有用户明确要求整篇重写时才可使用 operation=replace_document + content。",
+                "已有文本文件按块修改使用 replace_block；富文档必须使用 block_ops；只有用户明确要求整篇重写时才可使用 replace_document。",
                 true,
                 false,
             ));
@@ -1520,12 +1862,49 @@ fn resolve_agent_edit_operation(
         None => {
             return Err(IpcError::new(
                 "AG_TOOL_ARG",
-                "propose_edit 缺 operation/content/new_text/style_ops 参数",
+                "propose_edit 缺 operation/content/new_text/style_ops/operations 参数",
                 false,
                 false,
             ));
         }
     };
+
+    let mixed_payload = match op {
+        AgentEditOperation::ReplaceBlock => {
+            has_content_payload || has_style_payload || has_table_payload
+        }
+        AgentEditOperation::BlockOps => {
+            has_block_selector
+                || has_new_text_payload
+                || has_content_payload
+                || has_style_payload
+                || has_table_target
+        }
+        AgentEditOperation::ReplaceDocument => {
+            has_block_selector || has_new_text_payload || has_style_payload || has_table_payload
+        }
+        AgentEditOperation::StyleOps => {
+            has_block_selector || has_new_text_payload || has_content_payload || has_table_payload
+        }
+        AgentEditOperation::TableOps => {
+            has_block_selector || has_new_text_payload || has_content_payload || has_style_payload
+        }
+        AgentEditOperation::ImageOps => {
+            has_block_selector
+                || has_new_text_payload
+                || has_content_payload
+                || has_style_payload
+                || has_table_target
+        }
+    };
+    if mixed_payload {
+        return Err(IpcError::new(
+            "AG_TOOL_ARG",
+            "propose_edit 不允许混合不同 operation 的载荷字段",
+            false,
+            false,
+        ));
+    }
 
     match op {
         AgentEditOperation::ReplaceBlock if !has_block_selector || !has_new_text => {
@@ -1542,14 +1921,820 @@ fn resolve_agent_edit_operation(
             false,
             false,
         )),
+        AgentEditOperation::BlockOps if !has_structured_base || !has_table_ops => {
+            Err(IpcError::new(
+                "AG_TOOL_ARG",
+                "operation=block_ops 必须提供 base 与非空 operations 数组",
+                false,
+                false,
+            ))
+        }
         AgentEditOperation::StyleOps if !has_style_ops => Err(IpcError::new(
             "AG_TOOL_ARG",
             "operation=style_ops 必须提供 style_ops",
             false,
             false,
         )),
+        AgentEditOperation::TableOps if !has_table_ops => Err(IpcError::new(
+            "AG_TOOL_ARG",
+            "operation=table_ops 必须提供非空 operations 数组",
+            false,
+            false,
+        )),
+        AgentEditOperation::ImageOps if !has_structured_base || !has_table_ops => {
+            Err(IpcError::new(
+                "AG_TOOL_ARG",
+                "operation=image_ops 必须提供 base 与非空 operations 数组",
+                false,
+                false,
+            ))
+        }
         _ => Ok(op),
     }
+}
+
+fn html_image_tags(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut tags = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative) = lower[cursor..].find("<img") {
+        let start = cursor + relative;
+        let name_end = start + 4;
+        if lower
+            .as_bytes()
+            .get(name_end)
+            .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b'>' && *byte != b'/')
+        {
+            cursor = name_end;
+            continue;
+        }
+        let Some(end_relative) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end_relative + 1;
+        // 标签名匹配大小写不敏感，但防绕过比较必须保留属性和值的原始字节；
+        // 否则 case-only 的 src/hash/alt 变化会被误认为“图片未变”。
+        tags.push(html[start..end].to_string());
+        cursor = end;
+    }
+    tags
+}
+
+fn html_tag_attribute(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let needle = format!("{}=", name.to_ascii_lowercase());
+    let mut cursor = 0usize;
+    while let Some(relative) = lower[cursor..].find(&needle) {
+        let start = cursor + relative;
+        if start > 0 && !lower.as_bytes()[start - 1].is_ascii_whitespace() {
+            cursor = start + needle.len();
+            continue;
+        }
+        let quote_pos = start + needle.len();
+        let quote = *tag.as_bytes().get(quote_pos)?;
+        if quote != b'\'' && quote != b'"' {
+            cursor = quote_pos + 1;
+            continue;
+        }
+        let value_start = quote_pos + 1;
+        let value_end = value_start + tag[value_start..].find(quote as char)?;
+        return Some(tag[value_start..value_end].to_string());
+    }
+    None
+}
+
+fn top_level_html_block_ids(html: &str) -> std::collections::BTreeSet<String> {
+    let void_tags = [
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+        "source", "track", "wbr",
+    ];
+    let mut ids = std::collections::BTreeSet::new();
+    let mut depth = 0usize;
+    let mut cursor = 0usize;
+    while let Some(relative) = html[cursor..].find('<') {
+        let start = cursor + relative;
+        let Some(end_relative) = html[start..].find('>') else {
+            break;
+        };
+        let end = start + end_relative + 1;
+        let tag = &html[start..end];
+        let inner = tag[1..tag.len() - 1].trim();
+        if inner.starts_with('!') || inner.starts_with('?') {
+            cursor = end;
+            continue;
+        }
+        if inner.starts_with('/') {
+            depth = depth.saturating_sub(1);
+            cursor = end;
+            continue;
+        }
+        let name = inner
+            .trim_start_matches('/')
+            .split(|character: char| character.is_ascii_whitespace() || character == '/')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if depth == 0 {
+            if let Some(block_id) = html_tag_attribute(tag, "data-block-id") {
+                ids.insert(block_id);
+            }
+        }
+        if !inner.ends_with('/') && !void_tags.contains(&name.as_str()) {
+            depth = depth.saturating_add(1);
+        }
+        cursor = end;
+    }
+    ids
+}
+
+fn guard_bdocx_raw_image_edit(
+    rel_path: &str,
+    before: &str,
+    after: &str,
+    replace_document: bool,
+) -> Result<(), IpcError> {
+    if !is_docx_rel_path(rel_path) {
+        return Ok(());
+    }
+    let before_images = html_image_tags(before);
+    let after_images = html_image_tags(after);
+    if (replace_document && (!before_images.is_empty() || !after_images.is_empty()))
+        || (!replace_document && before_images != after_images)
+    {
+        return Err(IpcError::new(
+            "AG_IMAGE_OPERATION_REQUIRED",
+            if replace_document {
+                "含图片的 BDocx 不允许通过 replace_document 原始 HTML 重写；图片增删必须使用 image_ops。"
+            } else {
+                "BDocx 块替换不得改变图片节点；请先调用 list_images，再使用 image_ops。"
+            },
+            false,
+            false,
+        ));
+    }
+    Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-SYS-DATA-006, BR-ED-DATA-001, BR-ED-DATA-003
+ * term_ref: TERM-SYS-002, TERM-ED-008
+ * boundary: in=UntrustedImageOperationAndActiveBDocxSnapshot | out=ValidatedMaterializedImageOperationPayloadOrPreDiffRejection
+ */
+fn image_ops_payload(
+    params: &serde_json::Value,
+    snapshot: &ag::blocks::AgentEditableSnapshot,
+    images: &[serde_json::Value],
+    workspace_root: &std::path::Path,
+) -> Result<serde_json::Value, IpcError> {
+    let base = params
+        .get("base")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TOOL_ARG",
+                "image_ops 缺 base（list_images 的 sessionVersion/contentHash）",
+                false,
+                false,
+            )
+        })?;
+    let base_version = base
+        .get("sessionVersion")
+        .or_else(|| base.get("session_version"))
+        .and_then(|value| value.as_u64());
+    let base_hash = base
+        .get("contentHash")
+        .or_else(|| base.get("content_hash"))
+        .and_then(|value| value.as_str());
+    if base_version != snapshot.session_version || base_hash != snapshot.content_hash.as_deref() {
+        return Err(IpcError::new(
+            "AG_IMAGE_STALE_SNAPSHOT",
+            "图片快照已过期；请重新调用 list_images 后再提出修改建议。",
+            true,
+            false,
+        ));
+    }
+    let baseline = snapshot.baseline.ok_or_else(|| {
+        IpcError::new(
+            "AG_IMAGE_BASELINE_REQUIRED",
+            "当前 BDocx 图片操作缺少媒体 baseline；请重新打开文档后重试。",
+            true,
+            false,
+        )
+    })?;
+    let operations = params
+        .get("operations")
+        .and_then(|value| value.as_array())
+        .filter(|operations| !operations.is_empty())
+        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "image_ops 缺非空 operations", false, false))?;
+    ag::bdocx_capabilities::validate_image_operation_shapes(operations)
+        .map_err(capability_error_to_ipc)?;
+
+    let top_level_block_ids = top_level_html_block_ids(&snapshot.content);
+    let catalog = workspace::listing::load_project_image_catalog(workspace_root)?;
+    let catalog_candidates = catalog
+        .candidates
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut image_targets =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    let mut insert_anchors = std::collections::BTreeSet::new();
+    let mut removed_block_anchors = std::collections::BTreeSet::new();
+    for operation in operations {
+        match operation.get("op").and_then(|value| value.as_str()) {
+            Some("insert_image") => {
+                let anchor_block_id = operation["anchorBlockId"].as_str().unwrap_or_default();
+                if !top_level_block_ids.contains(anchor_block_id) {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_ANCHOR_LOST",
+                        &format!(
+                            "未找到 anchorBlockId={anchor_block_id} 的当前 Block；请重新调用 list_blocks/list_images。"
+                        ),
+                        true,
+                        false,
+                    ));
+                }
+                insert_anchors.insert(anchor_block_id.to_string());
+                let source_path = operation["sourcePath"].as_str().unwrap_or_default();
+                let source_hash = operation["sourceHash"].as_str().unwrap_or_default();
+                let asset_id = operation["assetId"].as_str().unwrap_or_default();
+                if !catalog_candidates.contains(source_path) {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_SOURCE_UNAVAILABLE",
+                        &format!(
+                            "项目图片不在当前配置 imageRoots 中：{source_path}；请重新调用 list_images。"
+                        ),
+                        true,
+                        false,
+                    ));
+                }
+                let asset = doc::image_media::inspect_project_image(workspace_root, source_path)?;
+                if asset.content_hash != source_hash || asset.asset_id != asset_id {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_SOURCE_CHANGED",
+                        &format!(
+                            "项目图片身份或内容已变化：{source_path}；请重新调用 list_images 获取最新 assetId/sourceHash。"
+                        ),
+                        true,
+                        false,
+                    ));
+                }
+            }
+            Some(op @ ("delete_image" | "resize_image" | "move_image" | "set_image_layout")) => {
+                let image_id = operation["imageId"].as_str().unwrap_or_default();
+                let fingerprint = operation["fingerprint"].as_str().unwrap_or_default();
+                let planned = image_targets.entry(image_id.to_string()).or_default();
+                if planned.contains(op) {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_OPERATION_INVALID",
+                        &format!("同一图片 {image_id} 在单批中不能重复执行 {op}"),
+                        false,
+                        false,
+                    ));
+                }
+                if planned.contains("delete_image") || (op == "delete_image" && !planned.is_empty())
+                {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_OPERATION_INVALID",
+                        &format!(
+                            "同一图片 {image_id} 的 delete_image 必须独占，不能与其他 ImageOperation 组合"
+                        ),
+                        false,
+                        false,
+                    ));
+                }
+                planned.insert(op.to_string());
+                let matched = images.iter().find(|image| {
+                    image.get("imageId").and_then(|value| value.as_str()) == Some(image_id)
+                        && image.get("fingerprint").and_then(|value| value.as_str())
+                            == Some(fingerprint)
+                });
+                let Some(matched) = matched else {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_ANCHOR_LOST",
+                        &format!(
+                            "未找到 imageId={image_id} 且 fingerprint 匹配的当前图片；请重新调用 list_images。"
+                        ),
+                        true,
+                        false,
+                    ));
+                };
+                let capability_available = matched
+                    .get("capabilities")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|capabilities| {
+                        capabilities.iter().any(|value| value.as_str() == Some(op))
+                    });
+                if !capability_available {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_OPERATION_UNAVAILABLE",
+                        &format!("当前图片 {image_id} 不允许操作 {op}；请重新调用 list_images。"),
+                        true,
+                        false,
+                    ));
+                }
+                if op == "resize_image" {
+                    let width = operation["width"].as_u64().unwrap_or_default();
+                    let bounds = matched
+                        .get("resizeBounds")
+                        .and_then(|value| value.as_object());
+                    let min = bounds
+                        .and_then(|value| value.get("min"))
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(1);
+                    let max = bounds
+                        .and_then(|value| value.get("max"))
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0);
+                    if width < min || width > max {
+                        return Err(IpcError::new(
+                            "AG_IMAGE_OPERATION_UNAVAILABLE",
+                            &format!("图片宽度 {width} 超出当前 resizeBounds {min}..={max}"),
+                            false,
+                            false,
+                        ));
+                    }
+                }
+                if op == "move_image" {
+                    let direction = operation["direction"].as_str().unwrap_or_default();
+                    let allowed = matched
+                        .get("moveDirections")
+                        .and_then(|value| value.as_array())
+                        .is_some_and(|directions| {
+                            directions
+                                .iter()
+                                .any(|value| value.as_str() == Some(direction))
+                        });
+                    if !allowed {
+                        return Err(IpcError::new(
+                            "AG_IMAGE_OPERATION_UNAVAILABLE",
+                            &format!("当前图片 {image_id} 不能向 {direction} 移动"),
+                            true,
+                            false,
+                        ));
+                    }
+                }
+                if op == "set_image_layout"
+                    && matched.get("standalone").and_then(|value| value.as_bool()) != Some(true)
+                {
+                    return Err(IpcError::new(
+                        "AG_IMAGE_OPERATION_UNAVAILABLE",
+                        "只有独立顶层图片段落可设置 left/center/right 对齐",
+                        false,
+                        false,
+                    ));
+                }
+                if op == "delete_image"
+                    && top_level_block_ids.len() > 1
+                    && matched.get("standalone").and_then(|value| value.as_bool()) == Some(true)
+                {
+                    if let Some(block_id) = matched.get("blockId").and_then(|value| value.as_str())
+                    {
+                        removed_block_anchors.insert(block_id.to_string());
+                    }
+                }
+            }
+            _ => unreachable!("static ImageOperation validation rejects unknown operations"),
+        }
+    }
+    if let Some(anchor) = insert_anchors.intersection(&removed_block_anchors).next() {
+        return Err(IpcError::new(
+            "AG_IMAGE_OPERATION_INVALID",
+            &format!(
+                "同一批 ImageOperation 不能一边以 Block {anchor} 为插入锚，一边删除会移除该 Block 的独立图片。"
+            ),
+            false,
+            false,
+        ));
+    }
+
+    let mut materialized_operations = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let mut materialized = operation.clone();
+        if operation.get("op").and_then(|value| value.as_str()) == Some("insert_image") {
+            let source_path = operation["sourcePath"].as_str().unwrap_or_default();
+            let source_hash = operation["sourceHash"].as_str().unwrap_or_default();
+            let image = doc::image_media::materialize_project_image(
+                workspace_root,
+                source_path,
+                source_hash,
+                baseline,
+            )?;
+            materialized
+                .as_object_mut()
+                .expect("validated image operation object")
+                .insert(
+                    "mediaRef".to_string(),
+                    serde_json::Value::String(image.media_ref),
+                );
+        }
+        materialized_operations.push(materialized);
+    }
+    Ok(serde_json::json!({
+        "base": {
+            "sessionVersion": base_version,
+            "contentHash": base_hash,
+        },
+        "operations": materialized_operations,
+    }))
+}
+
+fn table_ops_payload(
+    params: &serde_json::Value,
+    snapshot: &ag::blocks::AgentEditableSnapshot,
+    tables: &[serde_json::Value],
+) -> Result<serde_json::Value, IpcError> {
+    let base = params
+        .get("base")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TOOL_ARG",
+                "table_ops 缺 base（list_tables 的 sessionVersion/contentHash）",
+                false,
+                false,
+            )
+        })?;
+    let base_version = base
+        .get("sessionVersion")
+        .or_else(|| base.get("session_version"))
+        .and_then(|v| v.as_u64());
+    let base_hash = base
+        .get("contentHash")
+        .or_else(|| base.get("content_hash"))
+        .and_then(|v| v.as_str());
+    if base_version != snapshot.session_version || base_hash != snapshot.content_hash.as_deref() {
+        return Err(IpcError::new(
+            "AG_TABLE_STALE_SNAPSHOT",
+            "表格快照已过期；请重新调用 list_tables 后再提出修改建议。",
+            true,
+            false,
+        ));
+    }
+    let target = params
+        .get("target")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TOOL_ARG",
+                "table_ops 缺 target（tableId/fingerprint）",
+                false,
+                false,
+            )
+        })?;
+    let table_id = target
+        .get("tableId")
+        .or_else(|| target.get("table_id"))
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "table_ops target 缺 tableId", false, false))?;
+    let fingerprint = target
+        .get("fingerprint")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TOOL_ARG",
+                "table_ops target 缺 fingerprint",
+                false,
+                false,
+            )
+        })?;
+    let known = tables.iter().find(|table| {
+        table.get("tableId").and_then(|v| v.as_str()) == Some(table_id)
+            && table.get("fingerprint").and_then(|v| v.as_str()) == Some(fingerprint)
+    });
+    let Some(table) = known else {
+        return Err(IpcError::new(
+            "AG_TABLE_ANCHOR_LOST",
+            "未找到匹配 tableId/fingerprint 的当前表格；请重新调用 list_tables。",
+            true,
+            false,
+        ));
+    };
+    let operations = params
+        .get("operations")
+        .and_then(|v| v.as_array())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "table_ops 缺非空 operations", false, false))?;
+    ag::bdocx_capabilities::validate_table_operation_shapes(operations)
+        .map_err(capability_error_to_ipc)?;
+    let rows = table.get("rows").and_then(|v| v.as_u64()).ok_or_else(|| {
+        IpcError::new("AG_TABLE_SNAPSHOT_INVALID", "表格快照缺 rows", true, false)
+    })?;
+    let columns = table
+        .get("columns")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TABLE_SNAPSHOT_INVALID",
+                "表格快照缺 columns",
+                true,
+                false,
+            )
+        })?;
+    let capabilities = table
+        .get("capabilities")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TABLE_SNAPSHOT_INVALID",
+                "表格快照缺 capabilities",
+                true,
+                false,
+            )
+        })?;
+    let has_capability = |operation: &str| {
+        capabilities
+            .iter()
+            .any(|value| value.as_str() == Some(operation))
+    };
+    let coordinate = |operation: &serde_json::Value, field: &str| -> Result<(u64, u64), IpcError> {
+        let object = operation
+            .get(field)
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_TABLE_OPERATION_INVALID",
+                    &format!("{field} 必须是 {{row,column}} 坐标"),
+                    false,
+                    false,
+                )
+            })?;
+        let row = object.get("row").and_then(|v| v.as_u64()).ok_or_else(|| {
+            IpcError::new(
+                "AG_TABLE_OPERATION_INVALID",
+                &format!("{field}.row 必须是非负整数"),
+                false,
+                false,
+            )
+        })?;
+        let column = object
+            .get("column")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_TABLE_OPERATION_INVALID",
+                    &format!("{field}.column 必须是非负整数"),
+                    false,
+                    false,
+                )
+            })?;
+        if row >= rows || column >= columns {
+            return Err(IpcError::new(
+                "AG_TABLE_OPERATION_INVALID",
+                &format!("{field} 超出当前表格范围"),
+                false,
+                false,
+            ));
+        }
+        Ok((row, column))
+    };
+    for operation in operations {
+        let name = operation.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        if operation.get("html").is_some() || operation.get("content").is_some() {
+            return Err(IpcError::new(
+                "AG_TABLE_OPERATION_INVALID",
+                "table_ops 只允许受限 TableOperation，禁止 HTML/content。",
+                false,
+                false,
+            ));
+        }
+        let require_capability = |capability: &str| -> Result<(), IpcError> {
+            if has_capability(capability) {
+                Ok(())
+            } else {
+                Err(IpcError::new(
+                    "AG_TABLE_OPERATION_UNAVAILABLE",
+                    &format!("当前表格不可执行 {capability}"),
+                    false,
+                    false,
+                ))
+            }
+        };
+        match name {
+            "insert_row" => {
+                require_capability(name)?;
+                if operation
+                    .get("at")
+                    .and_then(|v| v.as_u64())
+                    .filter(|at| *at <= rows)
+                    .is_none()
+                {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "insert_row.at 必须是 0..=rows 的整数",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "delete_row" => {
+                require_capability(name)?;
+                if operation
+                    .get("row")
+                    .and_then(|v| v.as_u64())
+                    .filter(|row| *row < rows)
+                    .is_none()
+                {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "delete_row.row 必须是表内行号",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "insert_column" => {
+                require_capability(name)?;
+                if operation
+                    .get("at")
+                    .and_then(|v| v.as_u64())
+                    .filter(|at| *at <= columns)
+                    .is_none()
+                {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "insert_column.at 必须是 0..=columns 的整数",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "delete_column" => {
+                require_capability(name)?;
+                if operation
+                    .get("column")
+                    .and_then(|v| v.as_u64())
+                    .filter(|column| *column < columns)
+                    .is_none()
+                {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "delete_column.column 必须是表内列号",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "set_header_row" => {
+                require_capability(name)?;
+                if operation.get("enabled").and_then(|v| v.as_bool()).is_none() {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "set_header_row.enabled 必须是布尔值",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "merge_cells" => {
+                require_capability(name)?;
+                let from = coordinate(operation, "from")?;
+                let to = coordinate(operation, "to")?;
+                if from == to {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "merge_cells 必须覆盖至少两个单元格",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "split_cell" => {
+                require_capability(name)?;
+                coordinate(operation, "at")?;
+            }
+            "set_cell_text" => {
+                require_capability(name)?;
+                let (row, column) = coordinate(operation, "at")?;
+                if operation.get("text").and_then(|v| v.as_str()).is_none() {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "set_cell_text.text 必须是字符串",
+                        false,
+                        false,
+                    ));
+                }
+                let editable = table
+                    .get("cells")
+                    .and_then(|v| v.as_array())
+                    .map(|cells| {
+                        cells.iter().any(|cell| {
+                            let start_row =
+                                cell.get("row").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+                            let start_column = cell
+                                .get("column")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(u64::MAX);
+                            let rowspan = cell.get("rowspan").and_then(|v| v.as_u64()).unwrap_or(1);
+                            let colspan = cell.get("colspan").and_then(|v| v.as_u64()).unwrap_or(1);
+                            row >= start_row
+                                && row < start_row.saturating_add(rowspan)
+                                && column >= start_column
+                                && column < start_column.saturating_add(colspan)
+                                && cell.get("contentKind").and_then(|v| v.as_str())
+                                    == Some("plain_text")
+                        })
+                    })
+                    .unwrap_or(false);
+                if !editable {
+                    return Err(IpcError::new(
+                        "AG_TABLE_RICH_CELL_UNSUPPORTED",
+                        "代理只能改写单一纯文本段落单元格；富内容单元格请保留人工编辑。",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "set_cell_background" => {
+                require_capability(name)?;
+                let (row, column) = coordinate(operation, "at")?;
+                let anchored = table
+                    .get("cells")
+                    .and_then(|v| v.as_array())
+                    .map(|cells| {
+                        cells.iter().any(|cell| {
+                            cell.get("row").and_then(|v| v.as_u64()) == Some(row)
+                                && cell.get("column").and_then(|v| v.as_u64()) == Some(column)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !anchored {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "set_cell_background.at 必须是单元格左上锚；合并单元格内部坐标不允许使用",
+                        false,
+                        false,
+                    ));
+                }
+                if let Some(color) = operation.get("color").filter(|value| !value.is_null()) {
+                    let valid = color
+                        .as_str()
+                        .map(|value| {
+                            value.len() == 7
+                                && value.starts_with('#')
+                                && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                        .unwrap_or(false);
+                    if !valid {
+                        return Err(IpcError::new(
+                            "AG_TABLE_OPERATION_INVALID",
+                            "set_cell_background.color 只能是 #RRGGBB 或 null",
+                            false,
+                            false,
+                        ));
+                    }
+                } else if operation.get("color").is_none() {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "set_cell_background 必须显式提供 color（#RRGGBB 或 null）",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            "move_table" => {
+                require_capability(name)?;
+                let direction = operation.get("direction").and_then(|v| v.as_str());
+                if !matches!(direction, Some("up" | "down")) {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_INVALID",
+                        "move_table.direction 只能是 up 或 down",
+                        false,
+                        false,
+                    ));
+                }
+                let available = table
+                    .get("moveDirections")
+                    .and_then(|v| v.as_array())
+                    .map(|directions| directions.iter().any(|value| value.as_str() == direction))
+                    .unwrap_or(false);
+                if !available {
+                    return Err(IpcError::new(
+                        "AG_TABLE_OPERATION_UNAVAILABLE",
+                        "表格在当前文档流位置不能向该方向移动",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            _ => {
+                return Err(IpcError::new(
+                    "AG_TABLE_OPERATION_INVALID",
+                    "table_ops 包含不支持的表格操作",
+                    false,
+                    false,
+                ))
+            }
+        }
+    }
+    Ok(
+        serde_json::json!({ "tableId": table_id, "fingerprint": fingerprint, "operations": operations }),
+    )
 }
 
 fn looks_like_edit_intent(prompt: &str) -> bool {
@@ -1757,6 +2942,24 @@ fn route_accept_diff(
     })?;
     // ② 落盘：apply_diff 置 status=accepted，与 transition 给出的权威态 next=Accepted 一致。
     let stored = crate::de::store::load_payload_for_diff(&conn, &diff_id)?;
+    let semantic_kind = stored
+        .style_ops
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|value| {
+            value
+                .get("kind")
+                .and_then(|kind| kind.as_str())
+                .map(str::to_string)
+        });
+    if semantic_kind.as_deref() == Some("image_ops") {
+        return Err(IpcError::new(
+            "DE_IMAGE_OPERATION_REQUIRES_LOGICAL_STATE",
+            "ImageOperation 只能在当前活动 BDocx LogicalState 中应用，不能经后台 accept_diff 落盘。",
+            false,
+            false,
+        ));
+    }
     let rel_path = stored.rel_path.clone();
     if !can_accept_background_diff(&rel_path, stored.is_new_doc) {
         return Err(IpcError::new(
@@ -1796,7 +2999,7 @@ fn route_accept_diff(
                 false,
             )
         })?;
-        match doc::edit_chain::html_to_docx(html) {
+        match doc::edit_chain::html_to_docx(html, None) {
             Ok(bytes) => bytes,
             Err(e) => {
                 let st = doc::convert::transition(
@@ -1935,6 +3138,33 @@ fn route_persist_session_snapshot(
             false,
         )
     })?;
+    let snapshot_baseline = match snapshot_value.get("baseline") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Number(value)) => Some(value.as_u64().ok_or_else(|| {
+            IpcError::new(
+                "ED_SESSION_SNAPSHOT_INVALID",
+                "BDocx snapshot baseline 必须是 u64",
+                false,
+                false,
+            )
+        })?),
+        Some(serde_json::Value::String(value)) => Some(value.parse::<u64>().map_err(|_| {
+            IpcError::new(
+                "ED_SESSION_SNAPSHOT_INVALID",
+                "BDocx snapshot baseline 必须是 u64 字符串",
+                false,
+                false,
+            )
+        })?),
+        Some(_) => {
+            return Err(IpcError::new(
+                "ED_SESSION_SNAPSHOT_INVALID",
+                "BDocx snapshot baseline 类型无效",
+                false,
+                false,
+            ))
+        }
+    };
     let snapshot: ag::blocks::OpenDocSnapshot =
         serde_json::from_value(snapshot_value).map_err(|e| {
             IpcError::new(
@@ -1961,6 +3191,11 @@ fn route_persist_session_snapshot(
             false,
         )
     })?;
+    let persisted_content = if snapshot.edit_format == "html" {
+        doc::image_media::encode_snapshot_content(&snapshot.content, snapshot_baseline)
+    } else {
+        snapshot.content.clone()
+    };
     let conn = lock_db(state)?;
     conn.execute(
         "INSERT OR REPLACE INTO ed_session_snapshots \
@@ -1969,7 +3204,7 @@ fn route_persist_session_snapshot(
         rusqlite::params![
             ws.workspace_id,
             snapshot.rel_path,
-            snapshot.content,
+            persisted_content,
             snapshot.edit_format,
             snapshot.content_format,
             if snapshot.dirty { 1 } else { 0 },
@@ -1993,12 +3228,15 @@ fn route_list_session_snapshots(state: &AppState) -> Result<serde_json::Value, I
         .map_err(|e| IpcError::new("ED_SESSION_DB_ERROR", &e.to_string(), true, false))?;
     let rows = stmt
         .query_map([ws.workspace_id], |r| {
+            let stored_content: String = r.get(1)?;
+            let (content, baseline) = doc::image_media::decode_snapshot_content(&stored_content);
             let dirty: i64 = r.get(4)?;
             let session_version: i64 = r.get(5)?;
             let updated_at: i64 = r.get(7)?;
             Ok(serde_json::json!({
                 "relPath": r.get::<_, String>(0)?,
-                "content": r.get::<_, String>(1)?,
+                "content": content,
+                "baseline": baseline.map(|value| value.to_string()),
                 "editFormat": r.get::<_, String>(2)?,
                 "contentFormat": r.get::<_, String>(3)?,
                 "source": "open_editor_session",
@@ -2141,6 +3379,50 @@ fn route_list_open_tabs(state: &AppState) -> Result<serde_json::Value, IpcError>
     Ok(serde_json::json!({ "tabs": tabs }))
 }
 
+/// 路由 `de.update_image_diff_snapshots`：把 ED 实际应用得到的图片前后快照补入既有
+/// ImageOperation DiffPayload。载荷只能首次写入或同值幂等重试，不改变文档内容或 Diff 终态。
+fn route_update_image_diff_snapshots(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let diff_id = str_param(request, "diffId", "DE_DIFF_ID_REQUIRED")?;
+    let before = request.params.get("before").ok_or_else(|| {
+        IpcError::new(
+            "DE_IMAGE_SNAPSHOT_REQUIRED",
+            "缺少 before 图片快照",
+            false,
+            false,
+        )
+    })?;
+    let after = request.params.get("after").ok_or_else(|| {
+        IpcError::new(
+            "DE_IMAGE_SNAPSHOT_REQUIRED",
+            "缺少 after 图片快照",
+            false,
+            false,
+        )
+    })?;
+    let affected_block_ids = request.params.get("affectedBlockIds").ok_or_else(|| {
+        IpcError::new(
+            "DE_IMAGE_SNAPSHOT_REQUIRED",
+            "缺少 affectedBlockIds 图片锚列表",
+            false,
+            false,
+        )
+    })?;
+    let ws = active_ws(state)?;
+    let conn = lock_db(state)?;
+    workspace::diff_apply::persist_image_diff_snapshots(
+        &conn,
+        &ws.workspace_id,
+        &diff_id,
+        before,
+        after,
+        affected_block_ids,
+    )?;
+    Ok(serde_json::json!({ "persisted": true }))
+}
+
 /// 路由 `de.list_diffs`：活动 workspace 未裁决 diff 列表（重启恢复，复用 WS 持久化查询）。
 fn route_list_diffs(
     request: &CommandRequest,
@@ -2222,9 +3504,62 @@ fn route_list_diff_details(
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
                 .unwrap_or(serde_json::Value::Null);
+            let table_ops = style_ops
+                .get("kind")
+                .and_then(|kind| (kind == "table_ops").then_some(()))
+                .and_then(|_| style_ops.get("payload").cloned());
+            let block_ops = style_ops
+                .get("kind")
+                .and_then(|kind| (kind == "block_ops").then_some(()))
+                .and_then(|_| style_ops.get("payload").cloned());
+            let image_ops = style_ops
+                .get("kind")
+                .and_then(|kind| (kind == "image_ops").then_some(()))
+                .and_then(|_| style_ops.get("payload").cloned());
+            let image_before = image_ops
+                .as_ref()
+                .and_then(|_| style_ops.get("imageBefore").cloned());
+            let image_after = image_ops
+                .as_ref()
+                .and_then(|_| style_ops.get("imageAfter").cloned());
+            let image_affected_block_ids = image_ops
+                .as_ref()
+                .and_then(|_| style_ops.get("imageAffectedBlockIds").cloned());
             let after_text = after_content
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                 .unwrap_or_default();
+            let block_id = block_ops
+                .as_ref()
+                .and_then(|payload| payload.get("operations"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|operations| operations.first())
+                .and_then(|operation| operation.get("blockId"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let block_before_text = block_ops.as_ref().map(|payload| {
+                payload["operations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|operation| {
+                        let id = operation["blockId"].as_str().unwrap_or("");
+                        format!("{id}: {}", ag::block_ops::node_text(&operation["beforeNode"]))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            let block_after_text = block_ops.as_ref().map(|payload| {
+                payload["operations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|operation| {
+                        let id = operation["blockId"].as_str().unwrap_or("");
+                        format!("{id}: {}", ag::block_ops::node_text(&operation["afterNode"]))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
             Ok(serde_json::json!({
                 "diff_id": diff_id,
                 "target": {
@@ -2237,17 +3572,35 @@ fn route_list_diff_details(
                 "terminal_reason": terminal_reason,
                 "created_at": created_at,
                 "projection": {
-                    "patch_kind": "replace_document",
-                    "block_id": null,
+                    "patch_kind": if block_ops.is_some() {
+                        "block_ops"
+                    } else if table_ops.is_some() {
+                        "table_ops"
+                    } else if image_ops.is_some() {
+                        "image_ops"
+                    } else {
+                        "replace_document"
+                    },
+                    "block_id": block_id,
                     "block_index": null,
-                    "before_text": before_snapshot.unwrap_or_default(),
-                    "after_text": after_text,
+                    "before_text": block_before_text.unwrap_or_else(|| before_snapshot.unwrap_or_default()),
+                    "after_text": block_after_text.unwrap_or(after_text),
                     "location_label": "历史修改建议",
                     "draft_mode": "background",
                     "snapshot_source": "disk_snapshot",
                     "base_session_version": null,
                     "base_content_hash": null,
-                    "style_ops": style_ops,
+                    "style_ops": if block_ops.is_some() || table_ops.is_some() || image_ops.is_some() {
+                        serde_json::Value::Null
+                    } else {
+                        style_ops
+                    },
+                    "block_ops": block_ops,
+                    "table_ops": table_ops,
+                    "image_ops": image_ops,
+                    "image_before": image_before,
+                    "image_after": image_after,
+                    "image_affected_block_ids": image_affected_block_ids,
                 }
             }))
         })
@@ -2256,6 +3609,119 @@ fn route_list_diff_details(
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
     Ok(serde_json::Value::Array(values))
+}
+
+#[cfg(test)]
+mod image_diff_history_tests {
+    use super::*;
+
+    fn state_with_image_diff() -> AppState {
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces \
+             (workspace_id, root_path, is_active, opened_at) VALUES ('ws-image','/w',1,0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO diff_payloads \
+             (payload_ref, workspace_id, rel_path, after_content, before_snapshot, is_new_doc, style_ops, created_at) \
+             VALUES ('p-image','ws-image','notes/a.docx',X'','',0,?1,0)",
+            [serde_json::json!({
+                "kind": "image_ops",
+                "payloadVersion": 1,
+                "payload": {
+                    "base": { "sessionVersion": 1, "contentHash": "h1" },
+                    "operations": [{
+                        "op": "delete_image",
+                        "imageId": "image_0_abcd",
+                        "fingerprint": "abcd"
+                    }]
+                }
+            })
+            .to_string()],
+        )
+        .unwrap();
+        let diff = crate::types::PendingDiff {
+            diff_id: "d-image".into(),
+            target: crate::types::DocRef {
+                workspace_id: "ws-image".into(),
+                rel_path: "notes/a.docx".into(),
+                doc_type: "docx".into(),
+            },
+            origin_module: "AG".into(),
+            status: crate::types::DiffStatus::Pending,
+            payload_ref: "p-image".into(),
+            created_at: 1,
+        };
+        workspace::diff_apply::persist_diff(&conn, &diff).unwrap();
+        AppState {
+            db: Mutex::new(conn),
+            registry: build_registry(),
+            assist_terminals: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn request(command: &str, params: serde_json::Value) -> CommandRequest {
+        CommandRequest {
+            command: command.to_string(),
+            correlation_id: "test-image-history".into(),
+            params,
+        }
+    }
+
+    // covers: BR-DE-DATA-002
+    #[test]
+    fn image_snapshot_update_is_projected_back_into_history_details() {
+        let state = state_with_image_diff();
+        let before = serde_json::json!([{
+            "imageId": "image_0_abcd",
+            "fingerprint": "abcd",
+            "ordinal": 0,
+            "blockId": "b-img",
+            "imagePos": 2,
+            "standalone": true,
+            "alt": "旧图",
+            "width": "240",
+            "height": null,
+            "mediaRef": "media/image.png",
+            "projectSourcePath": "images/image.png",
+            "projectSourceHash": "a".repeat(64)
+        }]);
+        route_update_image_diff_snapshots(
+            &request(
+                "de.update_image_diff_snapshots",
+                serde_json::json!({
+                    "diffId": "d-image",
+                    "before": before,
+                    "after": [],
+                    "affectedBlockIds": ["b-img"]
+                }),
+            ),
+            &state,
+        )
+        .unwrap();
+
+        let details = route_list_diff_details(
+            &request(
+                "de.list_diffs",
+                serde_json::json!({ "diffIds": ["d-image"] }),
+            ),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(details[0]["projection"]["patch_kind"], "image_ops");
+        assert_eq!(details[0]["projection"]["image_before"], before);
+        assert_eq!(
+            details[0]["projection"]["image_after"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            details[0]["projection"]["image_affected_block_ids"],
+            serde_json::json!(["b-img"])
+        );
+    }
 }
 
 /**
@@ -2808,6 +4274,7 @@ mod ag_reference_context_tests {
             vec![ag::blocks::OpenDocSnapshot {
                 rel_path: "notes/a.md".to_string(),
                 content: "打开后的最新内容".to_string(),
+                baseline: None,
                 edit_format: "text".to_string(),
                 content_format: "text".to_string(),
                 source: "open_editor_session".to_string(),
@@ -2815,6 +4282,9 @@ mod ag_reference_context_tests {
                 session_version: 2,
                 content_hash: "h2".to_string(),
                 captured_at: 1,
+                block_snapshots: Vec::new(),
+                table_snapshots: Vec::new(),
+                image_snapshots: Vec::new(),
             }],
         )
         .unwrap();
@@ -2868,6 +4338,7 @@ mod ag_reference_context_tests {
             vec![ag::blocks::OpenDocSnapshot {
                 rel_path: "a.html".to_string(),
                 content: "<p data-block-id=\"b1\">0123456789</p>".to_string(),
+                baseline: None,
                 edit_format: "html".to_string(),
                 content_format: "html".to_string(),
                 source: "active_editor".to_string(),
@@ -2875,6 +4346,28 @@ mod ag_reference_context_tests {
                 session_version: 4,
                 content_hash: "h4".to_string(),
                 captured_at: 1,
+                block_snapshots: vec![ag::blocks::AgentEditableBlockSnapshot {
+                    block_id: "b1".to_string(),
+                    block_index: 0,
+                    block_type: "p".to_string(),
+                    node_type: "paragraph".to_string(),
+                    role: "content".to_string(),
+                    parent_block_id: None,
+                    depth: 0,
+                    ordinal: 0,
+                    text: "0123456789".to_string(),
+                    attrs: serde_json::json!({"blockId": "b1"}),
+                    marks: Vec::new(),
+                    node_json: serde_json::json!({
+                        "type": "paragraph",
+                        "attrs": {"blockId": "b1"},
+                        "content": [{"type": "text", "text": "0123456789"}]
+                    }),
+                    fingerprint: "fp-b1".to_string(),
+                    capabilities: vec!["replace_node".to_string()],
+                }],
+                table_snapshots: Vec::new(),
+                image_snapshots: Vec::new(),
             }],
         )
         .unwrap();
@@ -2959,6 +4452,72 @@ mod ag_edit_base_tests {
     use super::*;
     use serde_json::json;
 
+    fn table_editable_snapshot() -> ag::blocks::AgentEditableSnapshot {
+        ag::blocks::AgentEditableSnapshot {
+            rel_path: "notes/a.docx".to_string(),
+            editable_kind: "bdocx".to_string(),
+            source: "active_editor".to_string(),
+            content_format: "html".to_string(),
+            content: "<table></table>".to_string(),
+            baseline: None,
+            session_version: Some(7),
+            content_hash: Some("h7".to_string()),
+            blocks: Vec::new(),
+        }
+    }
+
+    fn table_snapshot(content_kind: &str) -> serde_json::Value {
+        json!({
+            "tableId": "table_1",
+            "fingerprint": "fp_1",
+            "rows": 2,
+            "columns": 2,
+            "moveDirections": ["up", "down"],
+            "capabilities": ["insert_row", "delete_row", "insert_column", "delete_column", "set_header_row", "merge_cells", "split_cell", "set_cell_text", "set_cell_background", "move_table"],
+            "cells": [{ "row": 0, "column": 0, "rowspan": 1, "colspan": 1, "backgroundColor": null, "contentKind": content_kind }]
+        })
+    }
+
+    fn image_editable_snapshot(baseline: u64) -> ag::blocks::AgentEditableSnapshot {
+        ag::blocks::AgentEditableSnapshot {
+            rel_path: "notes/a.docx".to_string(),
+            editable_kind: "bdocx".to_string(),
+            source: "active_editor".to_string(),
+            content_format: "html".to_string(),
+            content: r#"<p data-block-id="b1">正文</p><p data-block-id="img1"><img src="media/image1.png"></p>"#.to_string(),
+            baseline: Some(baseline),
+            session_version: Some(8),
+            content_hash: Some("h8".to_string()),
+            blocks: vec![
+                ag::blocks::AgentEditableBlock {
+                    block_id: Some("b1".to_string()),
+                    block_index: 0,
+                    block_type: Some("p".to_string()),
+                    text: "正文".to_string(),
+                    marks: Vec::new(),
+                    block_attrs: json!({}),
+                    ..Default::default()
+                },
+                ag::blocks::AgentEditableBlock {
+                    block_id: Some("img1".to_string()),
+                    block_index: 1,
+                    block_type: Some("p".to_string()),
+                    text: "\u{fffc}".to_string(),
+                    marks: Vec::new(),
+                    block_attrs: json!({}),
+                    ..Default::default()
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn structured_edit_blocked_satisfies_edit_tool_terminal_without_a_diff() {
+        assert!(edit_intent_has_terminal_tool_result(true, false));
+        assert!(edit_intent_has_terminal_tool_result(false, true));
+        assert!(!edit_intent_has_terminal_tool_result(false, false));
+    }
+
     // covers: BR-AG-DATA-003
     // 当前编辑器实时快照只允许作为当前目标文档的 diff 基准；非当前目标必须另读自身内容，避免锚错位。
     #[test]
@@ -3020,6 +4579,23 @@ mod ag_edit_base_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "AG_TOOL_ARG");
+
+        let err = resolve_agent_edit_operation(
+            &json!({
+                "path": "notes/a.docx",
+                "operation": "block_ops",
+                "operations": [{
+                    "op": "replace_node",
+                    "blockId": "p-1",
+                    "fingerprint": "fp-1",
+                    "expectedNodeType": "paragraph",
+                    "afterNode": { "type": "paragraph", "attrs": { "blockId": "p-1" } }
+                }]
+            }),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AG_TOOL_ARG");
     }
 
     #[test]
@@ -3039,6 +4615,137 @@ mod ag_edit_base_tests {
         assert_eq!(err.code, "AG_TOOL_ARG");
     }
 
+    #[test]
+    fn explicit_block_ops_requires_base_and_non_empty_operations() {
+        let op = resolve_agent_edit_operation(
+            &json!({
+                "path": "notes/a.docx",
+                "operation": "block_ops",
+                "base": { "sessionVersion": 1, "contentHash": "h1" },
+                "operations": [{
+                    "op": "replace_node",
+                    "blockId": "p-1",
+                    "fingerprint": "fp-1",
+                    "expectedNodeType": "paragraph",
+                    "afterNode": { "type": "paragraph", "attrs": { "blockId": "p-1" } }
+                }]
+            }),
+            true,
+        )
+        .unwrap();
+        assert_eq!(op, AgentEditOperation::BlockOps);
+
+        let err = resolve_agent_edit_operation(
+            &json!({
+                "path": "notes/a.docx",
+                "operation": "block_ops",
+                "base": { "sessionVersion": 1, "contentHash": "h1" },
+                "operations": []
+            }),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AG_TOOL_ARG");
+    }
+
+    #[test]
+    fn propose_edit_rejects_mixed_operation_payloads_before_execution() {
+        let err = resolve_agent_edit_operation(
+            &json!({
+                "path": "notes/a.docx",
+                "operation": "replace_block",
+                "block_id": "b1",
+                "new_text": "新块",
+                "style_ops": [
+                    { "op": "set_mark", "blockId": "b1", "start": 0, "end": 1, "mark": { "type": "bold" } }
+                ]
+            }),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AG_TOOL_ARG");
+        assert!(err.message.contains("不允许混合"));
+
+        let err = resolve_agent_edit_operation(
+            &json!({
+                "path": "notes/a.docx",
+                "operation": "replace_block",
+                "block_id": "b1",
+                "new_text": "新块",
+                "base": { "sessionVersion": 1, "contentHash": "h1" }
+            }),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AG_TOOL_ARG");
+        assert!(err.message.contains("不允许混合"));
+    }
+
+    #[test]
+    fn image_ops_is_a_distinct_typed_operation_and_html_tag_projection_is_stable() {
+        let op = resolve_agent_edit_operation(
+            &json!({
+                "path": "notes/a.docx",
+                "operation": "image_ops",
+                "base": { "sessionVersion": 8, "contentHash": "h8" },
+                "operations": [{ "op": "delete_image", "imageId": "image_0", "fingerprint": "fp0" }]
+            }),
+            true,
+        )
+        .unwrap();
+        assert_eq!(op, AgentEditOperation::ImageOps);
+        assert_eq!(
+            html_image_tags(r#"<p>x</p><IMG src="media/a.png"><p>y</p>"#),
+            vec![r#"<IMG src="media/a.png">"#]
+        );
+        assert_eq!(
+            top_level_html_block_ids(
+                r#"<p data-block-id="top">正文</p><ul data-block-id="list"><li data-block-id="nested">项</li></ul>"#
+            ),
+            std::collections::BTreeSet::from(["list".to_string(), "top".to_string()])
+        );
+        assert!(guard_bdocx_raw_image_edit(
+            "notes/a.docx",
+            r#"<p><img src="media/a.png"></p><p>旧</p>"#,
+            r#"<p><img src="media/a.png"></p><p>新</p>"#,
+            false,
+        )
+        .is_ok());
+        assert_eq!(
+            guard_bdocx_raw_image_edit(
+                "notes/a.docx",
+                r#"<p><img src="media/a.png"></p>"#,
+                r#"<p><img src="MEDIA/A.PNG"></p>"#,
+                false,
+            )
+            .unwrap_err()
+            .code,
+            "AG_IMAGE_OPERATION_REQUIRED"
+        );
+        assert_eq!(
+            guard_bdocx_raw_image_edit(
+                "notes/a.docx",
+                r#"<p><img src="media/a.png"></p>"#,
+                "<p>删除图片</p>",
+                false,
+            )
+            .unwrap_err()
+            .code,
+            "AG_IMAGE_OPERATION_REQUIRED"
+        );
+        assert_eq!(
+            guard_bdocx_raw_image_edit(
+                "notes/a.docx",
+                r#"<p><img src="media/a.png"></p>"#,
+                r#"<p><img src="media/a.png"></p>"#,
+                true,
+            )
+            .unwrap_err()
+            .code,
+            "AG_IMAGE_OPERATION_REQUIRED"
+        );
+    }
+
     // covers: BR-DE-STATE-001
     // 既有 BDocx 的接受必须确认当前编辑器草稿，不保留后台 accept_diff 平行落盘路径；新建 docx 仍可创建。
     #[test]
@@ -3047,6 +4754,193 @@ mod ag_edit_base_tests {
         assert!(!can_accept_background_diff("notes/a.draft.docx", false));
         assert!(can_accept_background_diff("notes/new.docx", true));
         assert!(can_accept_background_diff("notes/a.md", false));
+    }
+
+    #[test]
+    fn table_ops_requires_complete_typed_operations_and_plain_text_cells() {
+        let snapshot = table_editable_snapshot();
+        let base = json!({ "sessionVersion": 7, "contentHash": "h7" });
+        let target = json!({ "tableId": "table_1", "fingerprint": "fp_1" });
+        let malformed = json!({ "base": base, "target": target, "operations": [{ "op": "merge_cells", "from": { "row": 0, "column": 0 } }] });
+        assert_eq!(
+            table_ops_payload(&malformed, &snapshot, &[table_snapshot("plain_text")])
+                .unwrap_err()
+                .code,
+            "AG_TABLE_OPERATION_INVALID"
+        );
+
+        let rich = json!({
+            "base": { "sessionVersion": 7, "contentHash": "h7" },
+            "target": { "tableId": "table_1", "fingerprint": "fp_1" },
+            "operations": [{ "op": "set_cell_text", "at": { "row": 0, "column": 0 }, "text": "覆盖" }]
+        });
+        assert_eq!(
+            table_ops_payload(&rich, &snapshot, &[table_snapshot("rich_content")])
+                .unwrap_err()
+                .code,
+            "AG_TABLE_RICH_CELL_UNSUPPORTED"
+        );
+
+        let valid = json!({
+            "base": { "sessionVersion": 7, "contentHash": "h7" },
+            "target": { "tableId": "table_1", "fingerprint": "fp_1" },
+            "operations": [{ "op": "set_cell_text", "at": { "row": 0, "column": 0 }, "text": "安全" }]
+        });
+        assert!(table_ops_payload(&valid, &snapshot, &[table_snapshot("plain_text")]).is_ok());
+
+        let rich_background = json!({
+            "base": { "sessionVersion": 7, "contentHash": "h7" },
+            "target": { "tableId": "table_1", "fingerprint": "fp_1" },
+            "operations": [{ "op": "set_cell_background", "at": { "row": 0, "column": 0 }, "color": "#FFE699" }]
+        });
+        assert!(table_ops_payload(
+            &rich_background,
+            &snapshot,
+            &[table_snapshot("rich_content")]
+        )
+        .is_ok());
+
+        let invalid_color = json!({
+            "base": { "sessionVersion": 7, "contentHash": "h7" },
+            "target": { "tableId": "table_1", "fingerprint": "fp_1" },
+            "operations": [{ "op": "set_cell_background", "at": { "row": 0, "column": 0 }, "color": "yellow" }]
+        });
+        assert_eq!(
+            table_ops_payload(&invalid_color, &snapshot, &[table_snapshot("plain_text")])
+                .unwrap_err()
+                .code,
+            "AG_TABLE_OPERATION_INVALID"
+        );
+    }
+
+    // covers: BR-SYS-DATA-006, BR-ED-DATA-001, BR-ED-DATA-003, BR-WS-DATA-001
+    #[test]
+    fn image_ops_validates_base_anchors_hash_and_materializes_only_after_full_batch_validation() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let baseline = unique as u64;
+        let root = std::env::temp_dir().join(format!("binder-agent-image-{}", unique));
+        std::fs::create_dir_all(root.join("images")).unwrap();
+        let source = root.join("images/new.png");
+        let bytes = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3];
+        std::fs::write(&source, bytes).unwrap();
+        let asset = doc::image_media::inspect_project_image(&root, "images/new.png").unwrap();
+        let snapshot = image_editable_snapshot(baseline);
+        let images = vec![json!({
+            "imageId": "image_stable",
+            "fingerprint": "fp0",
+            "blockId": "img1",
+            "standalone": true,
+            "capabilities": ["delete_image", "resize_image", "move_image", "set_image_layout"],
+            "resizeBounds": { "min": 40, "max": 800 },
+            "moveDirections": ["up", "down"]
+        })];
+
+        let invalid_batch = json!({
+            "base": { "sessionVersion": 8, "contentHash": "h8" },
+            "operations": [
+                {
+                    "op": "insert_image",
+                    "anchorBlockId": "b1",
+                    "position": "after",
+                    "assetId": asset.asset_id,
+                    "sourcePath": "images/new.png",
+                    "sourceHash": asset.content_hash
+                },
+                { "op": "delete_image", "imageId": "missing", "fingerprint": "missing" }
+            ]
+        });
+        assert_eq!(
+            image_ops_payload(&invalid_batch, &snapshot, &images, &root)
+                .unwrap_err()
+                .code,
+            "AG_IMAGE_ANCHOR_LOST"
+        );
+        assert!(!doc::image_media::edit_media_dir(baseline)
+            .join(format!("media/binder-project-{}.png", asset.content_hash))
+            .exists());
+
+        let valid = json!({
+            "base": { "sessionVersion": 8, "contentHash": "h8" },
+            "operations": [
+                {
+                    "op": "insert_image",
+                    "anchorBlockId": "b1",
+                    "position": "after",
+                    "assetId": asset.asset_id,
+                    "sourcePath": "images/new.png",
+                    "sourceHash": asset.content_hash,
+                    "alt": "项目图",
+                    "width": 240
+                },
+                { "op": "delete_image", "imageId": "image_stable", "fingerprint": "fp0" }
+            ]
+        });
+        let payload = image_ops_payload(&valid, &snapshot, &images, &root).unwrap();
+        let media_ref = payload["operations"][0]["mediaRef"].as_str().unwrap();
+        assert!(doc::image_media::edit_media_dir(baseline)
+            .join(media_ref)
+            .is_file());
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+
+        let stale = json!({
+            "base": { "sessionVersion": 7, "contentHash": "h8" },
+            "operations": [{ "op": "delete_image", "imageId": "image_stable", "fingerprint": "fp0" }]
+        });
+        assert_eq!(
+            image_ops_payload(&stale, &snapshot, &images, &root)
+                .unwrap_err()
+                .code,
+            "AG_IMAGE_STALE_SNAPSHOT"
+        );
+        for operation in [
+            json!({ "op": "resize_image", "imageId": "image_stable", "fingerprint": "fp0", "width": 320 }),
+            json!({ "op": "move_image", "imageId": "image_stable", "fingerprint": "fp0", "direction": "up" }),
+            json!({ "op": "set_image_layout", "imageId": "image_stable", "fingerprint": "fp0", "alignment": "right" }),
+        ] {
+            let payload = json!({
+                "base": { "sessionVersion": 8, "contentHash": "h8" },
+                "operations": [operation]
+            });
+            assert!(image_ops_payload(&payload, &snapshot, &images, &root).is_ok());
+        }
+        let composite = json!({
+            "base": { "sessionVersion": 8, "contentHash": "h8" },
+            "operations": [
+                { "op": "move_image", "imageId": "image_stable", "fingerprint": "fp0", "direction": "up" },
+                { "op": "set_image_layout", "imageId": "image_stable", "fingerprint": "fp0", "alignment": "center" },
+                { "op": "resize_image", "imageId": "image_stable", "fingerprint": "fp0", "width": 320 }
+            ]
+        });
+        assert!(image_ops_payload(&composite, &snapshot, &images, &root).is_ok());
+
+        for invalid in [
+            json!({
+                "base": { "sessionVersion": 8, "contentHash": "h8" },
+                "operations": [
+                    { "op": "resize_image", "imageId": "image_stable", "fingerprint": "fp0", "width": 320 },
+                    { "op": "resize_image", "imageId": "image_stable", "fingerprint": "fp0", "width": 360 }
+                ]
+            }),
+            json!({
+                "base": { "sessionVersion": 8, "contentHash": "h8" },
+                "operations": [
+                    { "op": "delete_image", "imageId": "image_stable", "fingerprint": "fp0" },
+                    { "op": "set_image_layout", "imageId": "image_stable", "fingerprint": "fp0", "alignment": "center" }
+                ]
+            }),
+        ] {
+            assert_eq!(
+                image_ops_payload(&invalid, &snapshot, &images, &root)
+                    .unwrap_err()
+                    .code,
+                "AG_IMAGE_OPERATION_INVALID"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(doc::image_media::edit_media_dir(baseline));
     }
 }
 
@@ -3079,9 +4973,11 @@ mod ag_turn_prompt_tests {
                 .map(|(block_index, text)| ag::blocks::AgentEditableBlock {
                     block_id: None,
                     block_index,
+                    block_type: None,
                     text: text.to_string(),
                     marks: Vec::new(),
                     block_attrs: serde_json::json!({}),
+                    ..Default::default()
                 })
                 .collect(),
         }
@@ -3157,7 +5053,7 @@ mod ag_turn_prompt_tests {
             &format!("第一段\n{}\n最后一段", "正文".repeat(4000)),
         );
 
-        let ctx = build_current_doc_prompt_context("long.md", &snapshot, 900);
+        let ctx = build_current_doc_prompt_context("long.md", &snapshot, 900).unwrap();
 
         let text = ctx.text.expect("long doc context");
         assert!(ctx.requires_read_before_edit);
@@ -3165,6 +5061,49 @@ mod ag_turn_prompt_tests {
         assert!(text.contains("块目录"));
         assert!(text.contains("必须先调用 read_doc 或 list_blocks"));
         assert!(!text.contains("已截取前部"));
+    }
+
+    // covers: BR-SYS-DATA-006, BR-AG-DATA-005
+    #[test]
+    fn bdocx_current_doc_context_injects_manifest_version_hash_and_real_capabilities() {
+        let snapshot = ag::blocks::AgentEditableSnapshot {
+            rel_path: "notes/a.docx".to_string(),
+            editable_kind: "bdocx".to_string(),
+            source: "active_editor".to_string(),
+            content_format: "html".to_string(),
+            content: r#"<p data-block-id="b1">正文</p>"#.to_string(),
+            baseline: None,
+            session_version: Some(1),
+            content_hash: Some("h1".to_string()),
+            blocks: vec![ag::blocks::AgentEditableBlock {
+                block_id: Some("b1".to_string()),
+                block_index: 0,
+                block_type: Some("p".to_string()),
+                text: "正文".to_string(),
+                marks: Vec::new(),
+                block_attrs: serde_json::json!({}),
+                node_type: Some("paragraph".to_string()),
+                role: "content".to_string(),
+                node_json: serde_json::json!({
+                    "type": "paragraph",
+                    "attrs": {"blockId": "b1"},
+                    "content": [{"type": "text", "text": "正文"}]
+                }),
+                fingerprint: Some("fp-b1".to_string()),
+                capabilities: vec!["replace_node".to_string()],
+                ..Default::default()
+            }],
+        };
+
+        let ctx = build_current_doc_prompt_context("notes/a.docx", &snapshot, 20_000).unwrap();
+        let text = ctx.text.unwrap();
+        assert!(text.contains("editable_kind=bdocx"));
+        assert!(text.contains("manifestId=binder.bdocx.agent-edit"));
+        assert!(text.contains("sha256="));
+        assert!(text.contains("subscript"));
+        assert!(text.contains("set_cell_background"));
+        assert!(text.contains("人工专属"));
+        assert!(text.contains("type=p"));
     }
 
     // covers: BR-AG-DATA-005
@@ -3210,11 +5149,49 @@ async fn byok_upload(provider: String, key: String) -> Result<(), IpcError> {
 /// PI-AG-08C/08E/08F + PI-AG-SEM-01 · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）；
+/// Agent 工具 create_doc：workspace 内新建文档（守界，已存在拒绝）。
+/// 不经 DE diff，直接写入文件系统；用于用户明确要求「新建文件」的场景。
+fn ag_create_doc(state: &AppState, params: &serde_json::Value) -> Result<String, IpcError> {
+    let rel_path = params
+        .get("path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| IpcError::new("AG_TOOL_ARG", "create_doc 缺 path 参数", false, false))?
+        .to_string();
+    let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let ws = active_ws(state)?;
+    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
+    if abs.exists() {
+        return Err(IpcError::new(
+            "WS_EXISTS",
+            &format!("目标文件已存在: {rel_path}"),
+            false,
+            false,
+        ));
+    }
+    let baseline = if is_docx_rel_path(&rel_path) {
+        let html = initial_bdocx_html(content);
+        let docx_bytes = doc::edit_chain::html_to_docx(&html, None)?;
+        let baseline = workspace::fileops::create_doc(&abs, &docx_bytes)?;
+        workspace::listing::mark_bdocx(std::path::Path::new(&ws.root_path), &rel_path)?;
+        baseline
+    } else {
+        workspace::fileops::create_doc(&abs, content.as_bytes())?
+    };
+    Ok(serde_json::to_string(&serde_json::json!({
+        "rel_path": rel_path,
+        "baseline": baseline,
+        "summary": format!("已创建文档 {rel_path}")
+    }))
+    .unwrap_or_else(|_| format!("已创建文档 {rel_path}")))
+}
+
 /// target 须属回合声明目标集或为新建路径（BR-AG-DATA-003 2026-07-04 版，AG guard + DE 校验双侧把守）。
 /// 三模式：块级（replace_block）/ 整篇（replace_document）/ 样式（style_ops）。
 /// 返回后端权威 DiffProjection；前端不得再从 tool_request 预测 before/after。
 fn ag_propose_edit(
     state: &AppState,
+    app: &tauri::AppHandle,
     params: &serde_json::Value,
     read_ctx: &ag::blocks::AgentReadContext,
     current_rel: Option<&str>,
@@ -3260,7 +5237,6 @@ fn ag_propose_edit(
     let target_is_current_editor = current_rel == Some(rel_path.as_str());
 
     let style_ops_json = style_ops_param(params).cloned();
-    let style_ops = style_ops_json.as_ref().map(|v| v.to_string());
     let snapshot = if target_exists {
         Some(read_ctx.snapshot(&rel_path)?)
     } else {
@@ -3296,11 +5272,178 @@ fn ag_propose_edit(
             false,
         ));
     }
+    if edit_operation == AgentEditOperation::TableOps
+        && (!target_is_current_editor
+            || !is_docx_rel_path(&rel_path)
+            || snapshot.as_ref().map(|s| s.source.as_str()) != Some("active_editor"))
+    {
+        return Err(IpcError::new(
+            "AG_TABLE_EDIT_REQUIRES_ACTIVE_EDITOR",
+            "表格结构修改仅支持当前活动 BDocx 编辑器会话；请先打开目标 BDocx。",
+            false,
+            false,
+        ));
+    }
+    if edit_operation == AgentEditOperation::ImageOps
+        && (!target_is_current_editor
+            || !is_docx_rel_path(&rel_path)
+            || snapshot.as_ref().map(|current| current.source.as_str()) != Some("active_editor"))
+    {
+        return Err(IpcError::new(
+            "AG_IMAGE_OPERATION_REQUIRES_ACTIVE_EDITOR",
+            "图片插入/删除仅支持当前活动 BDocx 编辑器会话；请先打开目标 BDocx。",
+            false,
+            false,
+        ));
+    }
+    if edit_operation == AgentEditOperation::BlockOps
+        && (!target_is_current_editor
+            || snapshot.as_ref().map(|current| current.source.as_str()) != Some("active_editor")
+            || snapshot
+                .as_ref()
+                .map(|current| current.content_format.as_str())
+                != Some("html"))
+    {
+        return Err(IpcError::new(
+            "AG_BLOCK_OPERATION_REQUIRES_ACTIVE_EDITOR",
+            "富文档结构化块修改仅支持当前活动编辑器 LogicalState；请先打开并激活目标文档。",
+            false,
+            false,
+        ));
+    }
+    if edit_operation == AgentEditOperation::StyleOps {
+        let current = snapshot.as_ref().ok_or_else(|| {
+            IpcError::new(
+                "AG_EDIT_BASE_REQUIRED",
+                "样式修改必须基于既有文档快照",
+                false,
+                false,
+            )
+        })?;
+        let style_ops = style_ops_json.as_ref().ok_or_else(|| {
+            IpcError::new(
+                "AG_TOOL_ARG",
+                "operation=style_ops 必须提供 style_ops",
+                false,
+                false,
+            )
+        })?;
+        ag::bdocx_capabilities::validate_style_ops(style_ops, current)
+            .map_err(capability_error_to_ipc)?;
+    }
     let base_content_for_diff = snapshot.as_ref().map(|s| s.content.as_str()).unwrap_or("");
     let base_is_html = snapshot
         .as_ref()
         .map(|s| s.content_format == "html")
         .unwrap_or(false);
+    if target_exists
+        && base_is_html
+        && matches!(
+            edit_operation,
+            AgentEditOperation::ReplaceBlock | AgentEditOperation::ReplaceDocument
+        )
+    {
+        return Err(IpcError::new(
+            "AG_RICH_BLOCK_OPERATION_REQUIRED",
+            "富文档内容修改必须使用 operation=block_ops 和受控 ProseMirror node JSON；不再接受 HTML 字符串块替换或整篇替换。",
+            true,
+            false,
+        ));
+    }
+    let block_ops_json = if edit_operation == AgentEditOperation::BlockOps {
+        let current = snapshot.as_ref().ok_or_else(|| {
+            IpcError::new(
+                "AG_EDIT_BASE_REQUIRED",
+                "结构化块修改必须基于当前活动编辑器快照",
+                false,
+                false,
+            )
+        })?;
+        Some(
+            serde_json::to_value(ag::block_ops::validate_and_build(params, current)?).map_err(
+                |error| {
+                    IpcError::new(
+                        "AG_BLOCK_OPERATION_INVALID",
+                        &format!("结构化块载荷序列化失败: {error}"),
+                        false,
+                        false,
+                    )
+                },
+            )?,
+        )
+    } else {
+        None
+    };
+    let table_ops_json = if edit_operation == AgentEditOperation::TableOps {
+        let current = snapshot.as_ref().ok_or_else(|| {
+            IpcError::new(
+                "AG_TABLE_EDIT_REQUIRES_ACTIVE_EDITOR",
+                "表格结构修改缺活动编辑器快照",
+                false,
+                false,
+            )
+        })?;
+        Some(table_ops_payload(
+            params,
+            current,
+            read_ctx.table_snapshots(&rel_path)?,
+        )?)
+    } else {
+        None
+    };
+    let image_ops_json = if edit_operation == AgentEditOperation::ImageOps {
+        let current = snapshot.as_ref().ok_or_else(|| {
+            IpcError::new(
+                "AG_IMAGE_OPERATION_REQUIRES_ACTIVE_EDITOR",
+                "图片操作缺活动编辑器快照",
+                false,
+                false,
+            )
+        })?;
+        let payload = image_ops_payload(
+            params,
+            current,
+            read_ctx.image_snapshots(&rel_path)?,
+            std::path::Path::new(&ws.root_path),
+        )?;
+        let baseline = current.baseline.ok_or_else(|| {
+            IpcError::new(
+                "AG_IMAGE_BASELINE_REQUIRED",
+                "当前 BDocx 图片操作缺少媒体 baseline",
+                true,
+                false,
+            )
+        })?;
+        authorize_media_files(app, &doc::image_media::edit_media_dir(baseline))?;
+        Some(payload)
+    } else {
+        None
+    };
+    // 复用现有可持久化 JSON 字段承载语义操作，避免把 TableOperation/ImageOperation
+    // 伪装为 after HTML；kind 负责在读取/执行侧禁止错误路径。
+    let style_ops = if let Some(block_ops) = &block_ops_json {
+        Some(
+            serde_json::json!({
+                "kind": "block_ops",
+                "payloadVersion": 1,
+                "payload": block_ops
+            })
+            .to_string(),
+        )
+    } else if let Some(table_ops) = &table_ops_json {
+        Some(serde_json::json!({ "kind": "table_ops", "payload": table_ops }).to_string())
+    } else if let Some(image_ops) = &image_ops_json {
+        Some(
+            serde_json::json!({
+                "kind": "image_ops",
+                "payloadVersion": 1,
+                "payload": image_ops
+            })
+            .to_string(),
+        )
+    } else {
+        style_ops_json.as_ref().map(|v| v.to_string())
+    };
 
     // replace_block：基准用当前编辑器快照或 BDocx 转换 HTML 切块，替目标块并重建文档；
     // replace_document：仅显式整篇重写可用；style_ops：文本基准保持不变，样式语义由载荷进入 DE 裁决。
@@ -3380,7 +5523,7 @@ fn ag_propose_edit(
             projection_before = selected_block.text.clone();
             projection_after = new_text.to_string();
             projection_location = format!("Block {}", selected_block.block_index);
-            if let Some(block_id) = selected_block.block_id.as_deref() {
+            let replaced = if let Some(block_id) = selected_block.block_id.as_deref() {
                 // 真实 blockId 锚（HTML data-block-id，PI-AG-08G）：按 id 定位；锚失效报错不误改。
                 crate::ag::blocks::replace_block_by_id(base_content_for_diff, block_id, new_text)
                     .map_err(|m| IpcError::new("AG_ANCHOR_LOST", &m, true, false))?
@@ -3393,7 +5536,65 @@ fn ag_propose_edit(
                     new_text,
                 )
                 .map_err(|m| IpcError::new("AG_TOOL_ARG", &m, false, false))?
-            }
+            };
+            guard_bdocx_raw_image_edit(&rel_path, base_content_for_diff, &replaced, false)?;
+            replaced
+        }
+        AgentEditOperation::BlockOps => {
+            let payload = block_ops_json
+                .as_ref()
+                .expect("block_ops validated before match");
+            let operations = payload["operations"]
+                .as_array()
+                .expect("validated block operations");
+            let first_block_id = operations
+                .first()
+                .and_then(|operation| operation.get("blockId"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    IpcError::new(
+                        "AG_BLOCK_OPERATION_INVALID",
+                        "结构化块载荷缺少首个 blockId",
+                        false,
+                        false,
+                    )
+                })?;
+            let current = snapshot
+                .as_ref()
+                .expect("block_ops requires existing snapshot");
+            let first_block = current
+                .blocks
+                .iter()
+                .find(|block| block.block_id.as_deref() == Some(first_block_id))
+                .ok_or_else(|| {
+                    IpcError::new("AG_ANCHOR_LOST", "结构化块首个锚已失效", true, false)
+                })?;
+            projection_block_id = Some(first_block_id.to_string());
+            projection_block_index = Some(first_block.block_index);
+            projection_before = operations
+                .iter()
+                .map(|operation| {
+                    let block_id = operation["blockId"].as_str().unwrap_or("");
+                    let text = ag::block_ops::node_text(&operation["beforeNode"]);
+                    format!("{block_id}: {text}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            projection_after = operations
+                .iter()
+                .map(|operation| {
+                    let block_id = operation["blockId"].as_str().unwrap_or("");
+                    let text = ag::block_ops::node_text(&operation["afterNode"]);
+                    format!("{block_id}: {text}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            projection_location = if operations.len() == 1 {
+                format!("Block {}", first_block.block_index)
+            } else {
+                format!("{} 个独立内容块", operations.len())
+            };
+            base_content_for_diff.to_string()
         }
         AgentEditOperation::ReplaceDocument => {
             let content = params
@@ -3420,6 +5621,7 @@ fn ag_propose_edit(
                     false,
                 ));
             }
+            guard_bdocx_raw_image_edit(&rel_path, base_content_for_diff, content, true)?;
             projection_block_id = None;
             projection_block_index = None;
             projection_before = base_content_for_diff.to_string();
@@ -3462,6 +5664,100 @@ fn ag_propose_edit(
             }
             projection_after = "（样式修改）".to_string();
             projection_location = "样式修改".to_string();
+            base_content_for_diff.to_string()
+        }
+        AgentEditOperation::TableOps => {
+            let payload = table_ops_json
+                .as_ref()
+                .expect("table_ops validated before match");
+            projection_block_id = None;
+            projection_block_index = None;
+            projection_before = format!(
+                "表格 {} 当前结构",
+                payload["tableId"].as_str().unwrap_or("")
+            );
+            projection_after = format!(
+                "表格结构修改（{} 项）",
+                payload["operations"]
+                    .as_array()
+                    .map(|v| v.len())
+                    .unwrap_or(0)
+            );
+            projection_location = "表格结构".to_string();
+            base_content_for_diff.to_string()
+        }
+        AgentEditOperation::ImageOps => {
+            let payload = image_ops_json
+                .as_ref()
+                .expect("image_ops validated before match");
+            let operations = payload["operations"]
+                .as_array()
+                .expect("validated image operations");
+            let inserted = operations
+                .iter()
+                .filter(|operation| operation["op"] == "insert_image")
+                .count();
+            let deleted = operations
+                .iter()
+                .filter(|operation| operation["op"] == "delete_image")
+                .count();
+            let resized = operations
+                .iter()
+                .filter(|operation| operation["op"] == "resize_image")
+                .count();
+            let moved = operations
+                .iter()
+                .filter(|operation| operation["op"] == "move_image")
+                .count();
+            let aligned = operations
+                .iter()
+                .filter(|operation| operation["op"] == "set_image_layout")
+                .count();
+            projection_block_id = operations
+                .iter()
+                .find_map(|operation| {
+                    operation
+                        .get("anchorBlockId")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    let images = read_ctx.image_snapshots(&rel_path).ok()?;
+                    operations.iter().find_map(|operation| {
+                        let image_id = operation.get("imageId")?.as_str()?;
+                        let fingerprint = operation.get("fingerprint")?.as_str()?;
+                        images.iter().find_map(|image| {
+                            (image.get("imageId").and_then(|value| value.as_str())
+                                == Some(image_id)
+                                && image.get("fingerprint").and_then(|value| value.as_str())
+                                    == Some(fingerprint))
+                            .then(|| {
+                                image
+                                    .get("blockId")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_string)
+                            })
+                            .flatten()
+                        })
+                    })
+                });
+            projection_block_index = projection_block_id.as_ref().and_then(|block_id| {
+                snapshot
+                    .as_ref()
+                    .and_then(|current| {
+                        current
+                            .blocks
+                            .iter()
+                            .find(|block| block.block_id.as_ref() == Some(block_id))
+                    })
+                    .map(|block| block.block_index)
+            });
+            projection_before =
+                format!("当前图片 {} 张", read_ctx.image_snapshots(&rel_path)?.len());
+            projection_after = format!(
+                "图片操作：插入 {inserted}，删除 {deleted}，缩放 {resized}，移动 {moved}，对齐 {aligned}"
+            );
+            projection_location = "图片结构".to_string();
             base_content_for_diff.to_string()
         }
     };
@@ -3509,8 +5805,11 @@ fn ag_propose_edit(
         rel_path: rel_path.clone(),
         patch_kind: match edit_operation {
             AgentEditOperation::ReplaceBlock => "replace_block",
+            AgentEditOperation::BlockOps => "block_ops",
             AgentEditOperation::ReplaceDocument => "replace_document",
             AgentEditOperation::StyleOps => "style_ops",
+            AgentEditOperation::TableOps => "table_ops",
+            AgentEditOperation::ImageOps => "image_ops",
         }
         .to_string(),
         block_id: projection_block_id,
@@ -3539,6 +5838,9 @@ fn ag_propose_edit(
         base_session_version: snapshot.as_ref().and_then(|s| s.session_version),
         base_content_hash: snapshot.as_ref().and_then(|s| s.content_hash.clone()),
         style_ops: style_ops_json,
+        block_ops: block_ops_json,
+        table_ops: table_ops_json,
+        image_ops: image_ops_json,
     };
     Ok(AgentProposeEditResult {
         diff_id,
@@ -3564,13 +5866,40 @@ fn block_line_for_prompt(block: &ag::blocks::AgentEditableBlock, full_text: bool
             preview
         }
     };
-    let char_count = block.text.chars().count();
+    let char_count = block.text.encode_utf16().count();
+    let block_type = block
+        .block_type
+        .as_deref()
+        .map(|value| format!(" type={value}"))
+        .unwrap_or_default();
+    let structured = block.node_type.as_deref().map(|node_type| {
+        let parent = block.parent_block_id.as_deref().unwrap_or("-");
+        let capabilities = if block.capabilities.is_empty() {
+            "readonly".to_string()
+        } else {
+            block.capabilities.join(",")
+        };
+        let node_json = if full_text && !block.node_json.is_null() {
+            format!(" nodeJson={}", block.node_json)
+        } else {
+            String::new()
+        };
+        format!(
+            " nodeType={node_type} role={} parent={parent} depth={} fingerprint={} capabilities={capabilities}{node_json}",
+            block.role,
+            block.depth,
+            block.fingerprint.as_deref().unwrap_or("-"),
+        )
+    }).unwrap_or_default();
     match &block.block_id {
         Some(id) => format!(
-            "Block {} [id={id}] chars={char_count}: {text}\n",
+            "Block {} [id={id}]{block_type}{structured} chars={char_count}: {text}\n",
+            block.block_index,
+        ),
+        None => format!(
+            "Block {}{block_type} chars={char_count}: {text}\n",
             block.block_index
         ),
-        None => format!("Block {} chars={char_count}: {text}\n", block.block_index),
     }
 }
 
@@ -3578,13 +5907,29 @@ fn build_current_doc_prompt_context(
     path: &str,
     snapshot: &ag::blocks::AgentEditableSnapshot,
     inline_cap: usize,
-) -> CurrentDocPromptContext {
-    if snapshot.content.trim().is_empty() {
-        return CurrentDocPromptContext {
-            text: None,
-            requires_read_before_edit: false,
-        };
+) -> Result<CurrentDocPromptContext, IpcError> {
+    let mut runtime_declaration = format!(
+        "[当前文档运行时声明] editable_kind={} content_format={} source={}\n",
+        snapshot.editable_kind, snapshot.content_format, snapshot.source
+    );
+    if snapshot.editable_kind == "bdocx" {
+        runtime_declaration
+            .push_str(&ag::prompts::bdocx_capability_prompt().map_err(capability_error_to_ipc)?);
+        runtime_declaration.push('\n');
     }
+    if snapshot.content.trim().is_empty() {
+        return Ok(CurrentDocPromptContext {
+            text: Some(format!(
+                "{runtime_declaration}[当前编辑器打开的文档] 路径：{path}\n当前内容为空。"
+            )),
+            requires_read_before_edit: false,
+        });
+    }
+    let edit_instruction = if snapshot.content_format == "html" {
+        "富文档内容块只能使用 propose_edit operation=block_ops + base + operations。只能选择 capabilities 含 replace_node 的 role=content 块；role=container/atom 或 capabilities=readonly 仅作层级语境，不得直接替换。每个 operation 必须把块投影的 block_id、fingerprint、node_type 分别原样带回为 blockId、fingerprint、expectedNodeType，并从 node_json 复制节点，只修改受控 inline content 形成 afterNode；一批相关块必须在一次 block_ops 中提交。不得使用 replace_block/replace_document 或 HTML 字符串改变富文档结构。"
+    } else {
+        "文本文件修改某一块使用 propose_edit operation=replace_block + new_text：有 [id=…] 的块优先传 block_id，否则传 block_index；只有用户明确要求整篇重写时，才用 operation=replace_document + content。"
+    };
     let mut full_block_view = String::new();
     if snapshot.blocks.is_empty() {
         full_block_view.push_str(&format!("完整内容：\n{}\n", snapshot.content));
@@ -3594,18 +5939,18 @@ fn build_current_doc_prompt_context(
         }
     }
     let full_ctx = format!(
-        "[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{full_block_view}\n修改某一块必须用 propose_edit operation=replace_block + new_text：有 [id=…] 的块**优先传 block_id**（只能传方括号内完整 id，不要把数字块号填入 block_id），否则传 block_index（Block N 中的 0 起块号）；只有用户明确要求整篇重写时，才用 operation=replace_document + content。"
+        "{runtime_declaration}[当前编辑器打开的文档] 路径：{path}\n以下按块列出该文档当前内容（本轮主事实，回答关于「当前文档/这篇/这段」的问题时直接据此作答）：\n\n{full_block_view}\n{edit_instruction}"
     );
     if full_ctx.chars().count() <= inline_cap {
-        return CurrentDocPromptContext {
+        return Ok(CurrentDocPromptContext {
             text: Some(full_ctx),
             requires_read_before_edit: false,
-        };
+        });
     }
 
     let mut manifest = String::new();
     if snapshot.blocks.is_empty() {
-        let char_count = snapshot.content.chars().count();
+        let char_count = snapshot.content.encode_utf16().count();
         let preview: String = snapshot.content.chars().take(500).collect();
         manifest.push_str(&format!("全文 chars={char_count} preview={preview}...\n"));
     } else {
@@ -3614,12 +5959,12 @@ fn build_current_doc_prompt_context(
         }
     }
     let text = format!(
-        "[当前编辑器打开的文档] 路径：{path}\n当前文档较长，本轮不注入截断正文，改注入可追踪块目录（本轮主事实的索引）：\n\n{manifest}\n编辑前必须先调用 read_doc 或 list_blocks 读取当前文档的目标内容；不得根据历史对话或前部截断片段直接 propose_edit。块级修改优先使用 replace_block + block_id/block_index；整篇替换必须在读取当前文档后才能提出。"
+        "{runtime_declaration}[当前编辑器打开的文档] 路径：{path}\n当前文档较长，本轮不注入截断正文，改注入可追踪块目录（本轮主事实的索引）：\n\n{manifest}\n编辑前必须先调用 read_doc 或 list_blocks 读取当前文档的目标内容；不得根据历史对话或前部截断片段直接 propose_edit。\n{edit_instruction}"
     );
-    CurrentDocPromptContext {
+    Ok(CurrentDocPromptContext {
         text: Some(text),
         requires_read_before_edit: true,
-    }
+    })
 }
 
 #[derive(Debug)]
@@ -3707,6 +6052,10 @@ fn intent_hint_for_prompt(carryover: ag::context::Carryover, dropped_cross_doc: 
             "【本轮意图】用户显式延续上文话题/目标；历史只辅助解析回指，当前文档内容以当前 LogicalState 为唯一事实。".to_string()
         }
     }
+}
+
+fn edit_intent_has_terminal_tool_result(proposed_diff: bool, edit_blocked_reported: bool) -> bool {
+    proposed_diff || edit_blocked_reported
 }
 
 /**
@@ -4051,12 +6400,13 @@ async fn ag_start_turn(
         }
     }
     let mut proposed_diff = false;
+    let mut edit_blocked_reported = false;
 
     // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     const DOC_CTX_CAP: usize = 9000; // 字符（dev；G5 标定）
     let current_doc_prompt_context = match (active_doc_path.as_deref(), active_snapshot.as_ref()) {
         (Some(path), Some(snapshot)) => {
-            build_current_doc_prompt_context(path, snapshot, DOC_CTX_CAP)
+            build_current_doc_prompt_context(path, snapshot, DOC_CTX_CAP)?
         }
         _ => CurrentDocPromptContext {
             text: None,
@@ -4093,7 +6443,7 @@ async fn ag_start_turn(
     let _dropped_cross_doc_history = assembled_messages.dropped_cross_doc_history;
 
     // 工具定义（PI-AG-08B 只读 3 工具）；ws_root 已在上文 workspace 解析（X-FORBID-004 工具限界，PI-AG-09D）。
-    let tools = ag::tool_registry::tool_definitions_json();
+    let tools = ag::tool_registry::tool_definitions_json().map_err(capability_error_to_ipc)?;
 
     // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
     // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultInjecting→
@@ -4116,7 +6466,9 @@ async fn ag_start_turn(
             };
         match round {
             ent::gateway::RoundOutcome::Done => {
-                if requires_edit_tool && !proposed_diff {
+                if requires_edit_tool
+                    && !edit_intent_has_terminal_tool_result(proposed_diff, edit_blocked_reported)
+                {
                     let _ = on_event.send(AgTurnEvent::Error {
                         turn_id: turn_id.clone(),
                         code: "AG_EDIT_TOOL_REQUIRED".to_string(),
@@ -4160,6 +6512,15 @@ async fn ag_start_turn(
                         &c.name,
                     ) {
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
+                        ag::tool::ToolDecision::Allow if c.name == "edit_blocked" => {
+                            match ag::tool_exec::exec_edit_blocked(&params) {
+                                Ok(result) => {
+                                    edit_blocked_reported = true;
+                                    (result, true)
+                                }
+                                Err(error) => (format!("阻断报告无效：{}", error.message), false),
+                            }
+                        }
                         // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
                         ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
                             if current_doc_edit_requires_prior_read(
@@ -4180,6 +6541,7 @@ async fn ag_start_turn(
                             } else {
                                 match ag_propose_edit(
                                     &state,
+                                    &app,
                                     &params,
                                     &read_ctx,
                                     active_doc_path.as_deref(),
@@ -4205,6 +6567,16 @@ async fn ag_start_turn(
                                     }
                                     Err(e) => (format!("生成修改建议失败：{}", e.message), false),
                                 }
+                            }
+                        }
+                        // 新建文档工具 create_doc：不经 DE diff，直接创建文件（用户明确要求新建时使用）。
+                        ag::tool::ToolDecision::Allow if c.name == "create_doc" => {
+                            match ws_root.as_deref() {
+                                None => ("无活动 workspace，无法创建文件".to_string(), false),
+                                Some(_) => match ag_create_doc(&state, &params) {
+                                    Ok(r) => (r, true),
+                                    Err(e) => (format!("创建文件失败：{}", e.message), false),
+                                },
                             }
                         }
                         // 结构工具：经 WS 边界执行，只改变文件树，不修改文档内容。
@@ -4270,7 +6642,9 @@ async fn ag_start_turn(
     }
 
     // 达工具循环上限（BR-AG-STATE-002 LoopAborted）：收尾完成终态。
-    if requires_edit_tool && !proposed_diff {
+    if requires_edit_tool
+        && !edit_intent_has_terminal_tool_result(proposed_diff, edit_blocked_reported)
+    {
         let _ = on_event.send(AgTurnEvent::Error {
             turn_id: turn_id.clone(),
             code: "AG_EDIT_TOOL_REQUIRED".to_string(),
@@ -4570,6 +6944,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            doc::tool_runtime::initialize(&app.handle());
             #[cfg(target_os = "macos")]
             macos_exit_guard::install(&app.handle())
                 .map_err(std::io::Error::other)?;

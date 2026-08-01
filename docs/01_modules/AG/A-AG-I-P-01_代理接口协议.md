@@ -202,7 +202,8 @@ struct BlockRef {
 }
 ```
 
-`start/end` 为块内纯文本偏移区间（CharAnchor，A-ED-I-P-01 §4 / A-SYS-I-P-01 RefInjection
+`start/end` 为块内纯文本 UTF-16 code unit 偏移区间（CharAnchor，A-ED-I-P-01 §4 /
+A-SYS-I-P-01 RefInjection
 `block_ranges`）；缺省时降级为块级选中文本引用，不得静默丢弃 `text`。
 
 `references` 为新前端路径主通道，serde `tag="kind"` snake_case，字段 camelCase；覆盖
@@ -229,30 +230,37 @@ AG 内部必须建立 `AgentReadContext`：先按 `open_doc_snapshots.rel_path` 
 才允许读取目标文档 DiskState。
 
 AgentEdit 对文档内容的读取只有一个运行时投影：`AgentEditableSnapshot`。该投影由 AG 读取层统一产出，
-字段包括 `{rel_path, editable_kind, source, content_format, content, baseline?, blocks[]}`；`blocks[]`
-统一为 `{block_id, block_index, text, marks, block_attrs}`。当前编辑器实时内容、`read_doc`、`search_text`、
+字段包括 `{rel_path, editable_kind, source, content_format, content, baseline?, session_version?,
+content_hash?, blocks[]}`。活动富文档的 `blocks[]` 必须直接来自同次 ProseMirror
+`OpenDocSnapshot.block_snapshots`，字段为 `{block_id,block_index,block_type,node_type,role,
+parent_block_id,depth,ordinal,text,marks,block_attrs,node_json,fingerprint,capabilities}`；列表等容器
+不得被展平为一个可写文本块。纯文本块保留旧的行级投影。当前编辑器实时内容、`read_doc`、`search_text`、
 `ag.list_blocks`、`propose_edit`、ReferencePayload.doc 消费 BDocx 时必须复用该投影。BDocx 必须先经
 DOC 编辑链转为 canonical HTML 后投影；原生 `.docx` 不得进入该投影，应返回 `DOC_NOT_BDOCX`。
-HTML 编辑模型不得只识别 `data-block-id`；常见块级标签（如 `p/h1..h6/li/blockquote/pre/div/td/th`）
-即使没有稳定 id，也必须投影为 `block_index`，避免非空 HTML 文档在 AG 侧变成空块。编辑请求中若当前文档非空但
-`blocks[]` 为空，后端必须在模型调用前返回 `AG_ACTIVE_BLOCKS_REQUIRED` 并终止本轮。
+未打开 HTML 的字符串扫描只作只读兼容；活动富文档缺 ProseMirror 层级块快照时返回
+`AG_STRUCTURED_SNAPSHOT_REQUIRED`，不得从序列化 HTML 重新猜测写目标。
 `propose_edit` 的 `block_id` 只能传块列表中 `[id=...]` 的完整不透明 id；纯数字块号必须
 传 `block_index`。后端对数字型 `block_id` 做 `block_index` 兜底，但该兜底只用于防错，不作为推荐协议。
-`propose_edit` 必须声明 `operation`：已有文档局部编辑使用 `replace_block`，并提供
-`block_id/block_index` 与 `new_text`；只有用户明确要求整篇重写时才允许 `replace_document` + `content`；新建文档可兼容旧式
-`content` 创建路径。已有文档若只传裸 `content`，后端必须拒绝并返回 `AG_PRECISE_TARGET_REQUIRED`，
-不得静默生成整篇替换 diff。
+`propose_edit` 必须声明 `operation`：纯文本已有文档局部编辑使用 `replace_block`；活动富文档内容
+编辑只允许 `block_ops + base + operations`，只可命中 `role=content` 且 capabilities 含
+`replace_node` 的块。每项必须原样带回 blockId/fingerprint/expectedNodeType，并从 node_json
+构造保持类型、blockId、attrs 的 afterNode。BDocx/富文档使用 replace_block 或 replace_document
+返回 `AG_RICH_BLOCK_OPERATION_REQUIRED`。新建文档仍可用 `content` 创建路径。
 既有文档的 `replace_document` 还必须通过主题/实体身份守卫；若新旧全文重合度极低，返回
 `AG_REPLACE_DOCUMENT_IDENTITY_DRIFT`，视为疑似错文档或历史上下文污染，不生成 diff。
 `propose_edit` 可携带 `style_ops`（StyleOp 数组，schema 见 A-ED-M-T-01 §5.1）：样式类修改必须经该字段
 进入 DE 裁决，不得只用自然语言声明“已加粗/已改样式”。若本轮是编辑意图且当前文档存在，后端必须在
 回合结束前收到成功的 `propose_edit` 并发出 `DiffProposed`；否则回 `Error { code: AG_EDIT_TOOL_REQUIRED }`，
 前端不得将该回合投影为正常完成或“已修改”。
+`style_ops` 在生成 PendingDiff 前必须按 A-SYS-I-P-04 BDocxCapabilityManifest 校验真实 mark 名、
+attrs 与操作字段，并按同一 AgentEditableSnapshot 校验 blockId 和块内纯文本半开区间。未知 mark、
+错误别名（如 `sub/sup`）、非法 attrs、错误 blockId 或越界/空 range 必须返回
+`AG_STYLE_OPERATION_INVALID` / `AG_STYLE_ANCHOR_LOST`，不得持久化 Diff。
 
 成功的 `propose_edit` 必须先通过 `ToolResult { tool_name: "propose_edit" }` 返回后端权威
 `DiffProjection` JSON，再发送 `DiffProposed` 通知。`DiffProjection` 至少包含
 `{diff_id, rel_path, patch_kind, block_id?, block_index?, before_text, after_text, location_label,
-draft_mode, snapshot_source, base_session_version?, base_content_hash?, style_ops?}`，其中 before/after
+draft_mode, snapshot_source, base_session_version?, base_content_hash?, style_ops?, block_ops?}`，其中 before/after
 必须来自同一 `AgentEditableSnapshot` 的目标块或显式 `replace_document` 全文基准。`draft_mode`
 枚举为 `current_editor / open_session / background`：目标是激活文档时为 `current_editor`；目标是已打开非激活文档时为
 `open_session` 且必须携带 session 基线；目标未打开时为 `background`。前端不得再从 `tool_request.params`
@@ -284,15 +292,19 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 
 > 工具执行在回合内编排：只读类工具（读/搜/块读取）经 workspace 限界后统一产出
 > `AgentEditableSnapshot`，BDocx 走 DOC 编辑模型而非 WS UTF-8 文本读取；
-> 非破坏性结构工具（`move_doc` / `create_folder`）经 WS 边界直接执行，只改变文件树结构，不修改文档
+> 非破坏性结构工具（`move_doc` / `create_folder` / `import_image_asset`）经 WS/DOC 边界直接执行，只改变文件树结构，不修改文档
 > 内容、不生成 DiffCard；目标冲突拒绝，不覆盖；
 > **写意图工具不直写**——产出修改建议走 `de.generate_diff`（X-FORBID-006）；循环上限/中断由
-> SM-AG-02 管理，达上限 LoopAborted。删除类工具需独立用户确认回路，未落地前不得注册给模型。
+> SM-AG-02 管理，达上限 LoopAborted。确有资产/锚/动态能力阻断时，`edit_blocked` 返回
+> `{status,code,reason,documentModified:false}`，可诚实结束编辑回合而不追加 `AG_EDIT_TOOL_REQUIRED`。
+> 删除类工具需独立用户确认回路，未落地前不得注册给模型。
 
 | 工具 | 参数（语义） | 结果 | 权限 | 约束 |
 |---|---|---|---|---|
 | `move_doc` | from_path、to_path | operation/from_path/to_path/summary | StructureWrite | workspace 内移动/重命名；目标已存在拒绝；不覆盖 |
 | `create_folder` | path | operation/path/summary | StructureWrite | workspace 内建目录；目标已是目录幂等成功；目标为文件拒绝 |
+| `import_image_asset` | source_path | assetId/sourcePath/sourceHash/mediaType/byteSize/sourceFilePreserved | StructureWrite | 仅 workspace 相对 PNG/JPEG；受控根内复用，否则复制到图片根 imported 子目录；不得移动或删除源文件 |
+| `edit_blocked` | code、reason | 结构化阻断结果 | WriteIntent | 仅真实无法安全提案时使用；不修改文档、不生成 Diff |
 
 ## §4 局部修改/辅助续写接口（AG-ASSIST / SM-AG-03）
 
@@ -314,13 +326,21 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ag.list_blocks` | DocRef、open_doc_snapshots? | 块列表：`{block_id, block_index, text, marks, block_attrs}`；前端边界可映射为 camelCase。`marks` 为 `{type, range:[start,end], attrs}`，range 在块内纯文本平面，与字符锚同基准 | 文档不存在/越界 → WS/DOC 错误透传；已打开文档缺快照 → `AG_OPEN_DOC_SNAPSHOT_REQUIRED`；原生 docx → `DOC_NOT_BDOCX` | agent 块级引用选择 + 字符级取址基准 + 样式读取（BR-ED-DATA-005 读侧） |
+| `ag.list_blocks` | DocRef、open_doc_snapshots? | 纯文本返回行块；活动富文档返回 `{block_id,block_index,block_type,node_type,role,parent_block_id,depth,ordinal,text,marks,block_attrs,node_json,fingerprint,capabilities}` | 文档不存在/越界；活动富文档缺结构快照 → `AG_STRUCTURED_SNAPSHOT_REQUIRED`；原生 docx → `DOC_NOT_BDOCX` | agent 层级语境、结构化内容/样式动态能力与精确节点基线 |
 
 > 投影 schema 的单一来源在 A-ED-M-T-01 §5.1（ED 定义、AG 承载读取面）；写侧（StyleOp）经
 > `ed.apply_edit`（A-ED-I-P-01 §4.1），落盘分流按裁定 D-3（回合产出→DE diff / 显式内联→用户编辑）。
 > BDocx 的非当前文档读取必须先经 AgentReadContext：已打开时使用 OpenDocSnapshot，未打开时经 DOC 编辑链转为 HTML 后再分块；原生 `.docx` 不支持 `ag.list_blocks`，
 > 应回 `DOC_NOT_BDOCX`，避免把二进制 docx 当 UTF-8 文本或可编辑块列表处理。
 > 锚有效期 = 编辑会话内（BR-ED-DATA-004）：文档重开后 blockId 重建，agent 须重新 list_blocks。
+
+### §4.2 富文档 BlockOperation
+
+`propose_edit(operation=block_ops)` 仅接受当前活动 HTML LogicalState。`base` 必须精确匹配当前
+`sessionVersion/contentHash`；operations 为 1..32 个不重复 blockId 的 `replace_node`。后端先校验
+动态能力、fingerprint、expectedNodeType、blockId/attrs 保持和受控 inline/mark Schema，再从可信
+快照补齐 beforeNode。任一项失败整批不生成 PendingDiff；成功后以 `patch_kind=block_ops` 和完整
+beforeNode/afterNode 投影给 DE/ED，不生成替换后的 HTML 字符串。
 
 ## §5 上下文组装对接（AG-TURN / BR-AG-DATA-001，仅索引）
 
@@ -335,6 +355,54 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 | 知识库 | KB 召回（KnowledgeInjection） | A-KB-M-T-01 §3 |
 
 > REF/AST/KB 的供给接口随其各自 I-P（待建）声明；本文只定 AG 消费侧的组装入口。
+
+## §5.1 BDocx 表格语义工具（AG-TURN）
+
+`list_tables(path)` 仅接受当前活动 BDocx HTML 编辑器会话，返回 `sessionVersion`、`contentHash` 与每张表的
+`tableId`、`fingerprint`、行列/跨度、`columnWidths`、每个逻辑单元格的 `backgroundColor`、可执行能力及可移动方向。代理修改表格必须先读该投影，
+再调用 `propose_edit(operation=table_ops)`，原样带回基准版本与目标锚；不得传原始 HTML。
+
+`operations[]` 仅允许增删行列、首行表头、合并/拆分、纯文本单元格写入、文档流上/下移动和
+`set_cell_background`。该底纹操作的 `color` 只接受不透明 `#RRGGBB` 或 `null`，合并单元格只接受
+左上锚；它只改节点属性，富内容子树必须保持。后端以会话、内容哈希、表格指纹、坐标范围、动态能力
+五重验证；富内容单元格拒绝 `set_cell_text`，不得降级为纯文本。
+代理拿到 `AG_TABLE_OPERATION_UNAVAILABLE` 或 `AG_TABLE_RICH_CELL_UNSUPPORTED` 时必须重新读取表格或请用户手工处理。
+列宽仅允许人工在编辑器中直接拖拽，当前不作为代理操作，也不承诺 DOCX 往返保真。
+
+## §5.2 BDocx 图片语义工具（AG-TURN）
+
+`list_images(path)` 仅接受当前活动 BDocx HTML 编辑器会话，返回同次 `sessionVersion/contentHash`、
+当前图片实例的 `imageId/fingerprint/blockId/ordinal/alt/width/height/mediaRef/standalone/
+alignment/capabilities/resizeBounds/moveDirections/positionContext`；`positionContext` 只给出相邻文本
+摘要用于文档流定位，不是图片像素、OCR 或视觉识别结果。工具同时返回受配置图片根约束、通过扩展名、文件 magic
+与内容哈希校验的项目图片资源
+`assets[{assetId,sourcePath,sourceHash,mediaType,byteSize}]`。工具不接受目录、绝对路径或远程
+来源参数，不跟随越界符号链接。
+
+代理随后调用 `propose_edit(operation=image_ops)`：插入带
+`anchorBlockId/position/assetId/sourcePath/sourceHash` 与可选 alt/width；删除、缩放、移动和对齐带
+`imageId/fingerprint` 及对应参数，并服从动态能力。同一图片单批允许各一个 resize/layout/move，
+按固定顺序原子执行；同类重复拒绝，delete 独占。任一基线、锚、动态能力
+或来源失效时返回明确错误，不生成 Diff；删除只作用于文档图片节点，不删除项目源文件。
+workspace 内不在 imageRoots 的普通图片先用 `import_image_asset` 复制准备，再重新 `list_images`；
+不得用 `move_doc` 把源图搬走。确实没有安全来源或锚时用 `edit_blocked` 结束回合。
+
+## §5.3 BDocx 能力运行时声明
+
+当前 `AgentEditableSnapshot.editable_kind=bdocx` 时，模型上下文必须附带 A-SYS-I-P-04 定义的
+BDocxCapabilityManifest 投影，至少包含：
+
+- `editable_kind=bdocx`、`content_format=html`、manifestId/version/sha256，以及唯一文档内容操作 `block_ops`。
+- 可用 StyleOp 的真实 mark/attrs、块属性和各自 DOCX 往返等级。
+- 可用 TableOperation、`list_tables` 动态前置条件及表格往返风险。
+- 可用 ImageOperation、`list_images` 动态前置条件、项目来源限制及图片往返边界。
+- 人工专属能力和当前 Diff 呈现等级。
+
+`propose_edit` function schema 中 BlockOperation/StyleOp/TableOperation/ImageOperation 的 enum、条件必填字段与字段
+类型也必须由同一 manifest 生成。静态 Schema 只描述可表达形状；TableOperation 的当前可用性仍以
+list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线、锚和来源哈希为准。manifest
+加载或一致性校验失败时返回
+`AG_CAPABILITY_MANIFEST_INVALID`，不得以宽泛 object 继续调用模型。
 
 ## §6 测试与验收
 
@@ -383,3 +451,11 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 | 2026-07-18 | v1.20 | 细化 active 文档 source：新增 `active_editor_session`，补 binding 过渡期以 session LogicalState 读取、HTML 无 block id 投影和整篇替换身份漂移守卫 |
 | 2026-07-18 | v1.21 | 补齐 `HistTurn.rel_path/turn_id` 协议：历史消息必须带文档归属；AG 后端按当前文档分流历史，同文档可作背景，跨文档/无归属历史默认不得进入当前文档事实层 |
 | 2026-07-18 | v1.22 | 同步启动恢复决议：恢复后的当前文档若已有 ED session LogicalState，即使 ProseMirror binding 尚未完成，也必须进入 AG 工作序列 |
+| 2026-07-28 | v1.23 | 增加 BDocx 表格语义工具契约：`list_tables → table_ops`、会话/指纹校验、动态能力、富内容单元格保护与列宽边界。 |
+| 2026-07-28 | v1.24 | BDocx TableCellShading：`list_tables` 投影单元格 `backgroundColor`，`table_ops` 增 `set_cell_background`，锁定 #RRGGBB/null、合并左上锚与富内容保持。 |
+| 2026-07-28 | v1.25 | 新增 §5.2 BDocxCapabilityManifest 运行时声明；StyleOp 在 PendingDiff 前校验真实 mark/attrs/blockId/range，工具 Schema 与当前文档能力提示使用同一版本/hash。 |
+| 2026-07-28 | v1.26 | 明确 StyleOp/CharAnchor 的 start/end 按 UTF-16 code unit 计数，与 ED JavaScript/ProseMirror 偏移平面一致。 |
+| 2026-07-29 | v1.27 | BDOCX-IMAGE-AGENT-EDIT-01：新增 list_images 与 image_ops 接口，锁定活动会话图片实例、workspace 项目资源、动态锚/哈希、项目源文件保护及 manifest 同源 Schema。 |
+| 2026-07-29 | v1.28 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：list_images 增加 assetId、稳定 imageId、动态能力/边界；image_ops 增加缩放、上下移动和独立段落对齐。 |
+| 2026-07-29 | v1.29 | BDOCX-IMAGE-COMPOSITE-IMPORT-01：同图 resize/layout/move 组合提案；新增 import_image_asset 与 edit_blocked；list_images 增相邻文本并明确非视觉识别边界。 |
+| 2026-07-30 | v1.30 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档 `AgentEditableSnapshot` 改由 ProseMirror 层级块快照直投影；新增 `block_ops` 基线/锚/指纹/节点 Schema 批校验和结构化 Diff；BDocx replace_block/replace_document 明确拒绝。 |

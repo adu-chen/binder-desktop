@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readDoc, saveDoc } from "./wsService";
-import { openDocxForEdit, saveDocxFromEdit, isDocxEditable } from "./docService";
+import {
+  isDocxEditable,
+  openDocxForEdit,
+  prepareDocxSnapshotHtml,
+  restoreDocxEditMedia,
+  restoreMediaSrc,
+  saveDocxFromEdit,
+} from "./docService";
 import { edStore, hashLogicalContent, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import type { PersistedOpenDocTab } from "../store/tabsStore";
 import { deStore } from "../store/deStore";
@@ -40,6 +47,25 @@ function isSaveConflict(e: IpcLikeError): boolean {
   return Boolean(e.code && SAVE_CONFLICT_CODES.has(e.code));
 }
 
+/**
+ * 保存即接受：人类已决定任意保存动作都是对该文档已应用草稿 Diff 的接受。
+ *
+ * 必须先调用后端 `de.accept_draft_diff`，使持久化控制态成为 accepted + awaiting_save；随后真实保存成功时，
+ * `ws.save_doc` / `doc.save_from_edit` 已有回调负责将 effect_status 翻转为 saved。保存失败时不回退
+ * accepted——用户的接受意图已明确，但效果仍停留 awaiting_save，等待下一次保存。
+ */
+async function acceptAppliedPendingDiffsForSave(relPath: string): Promise<void> {
+  const pendingDrafts = deStore
+    .getSnapshot()
+    .diffs
+    .filter((diff) => diff.relPath === relPath && diff.draftApplied && diff.state === "pending");
+  for (const diff of pendingDrafts) {
+    await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId: diff.diffId });
+    // 状态广播通常会同步到达；此处在 command 成功后补投影，避免保存返回前卡片仍显示 pending。
+    deStore.applyBackendState(diff.diffId, "Accepted", true);
+  }
+}
+
 /** 是否 .html/.htm 独立文件（PI-ED-13 / REQ-ED-008：富文本编辑 + HTML 文本往返，不经 DOC）。 */
 export function isHtmlFile(relPath: string): boolean {
   const ext = relPath.toLowerCase().split(".").pop() ?? "";
@@ -51,12 +77,47 @@ export function isMarkdownFile(relPath: string): boolean {
 }
 
 export async function persistSessionSnapshot(snapshot: OpenDocSnapshot): Promise<void> {
-  await callCommand("ed.persist_session_snapshot", { snapshot });
+  const session = edStore.getSnapshot().sessions[snapshot.relPath];
+  const normalized = snapshot.editFormat === "html"
+    ? {
+        ...snapshot,
+        baseline: snapshot.baseline ?? session?.baseline ?? null,
+        content: prepareDocxSnapshotHtml(
+          snapshot.content,
+          snapshot.baseline ?? session?.baseline ?? null,
+        ),
+      }
+    : snapshot;
+  await callCommand("ed.persist_session_snapshot", { snapshot: normalized });
 }
 
 export async function restoreSessionSnapshots(): Promise<OpenDocSnapshot[]> {
   const res = await callCommand<{ snapshots: OpenDocSnapshot[] }>("ed.list_session_snapshots", {});
-  return res.snapshots;
+  return Promise.all(res.snapshots.map(async (snapshot) => {
+    if (snapshot.editFormat !== "html") return snapshot;
+    const persistedBaseline = snapshot.baseline ?? null;
+    if (snapshot.dirty && persistedBaseline === null) {
+      console.error(
+        `docx session snapshot lacks baseline ${snapshot.relPath}; media restore and save remain blocked until reload`,
+      );
+      return { ...snapshot, baseline: null };
+    }
+    if (!/<img\b/i.test(snapshot.content)) {
+      return { ...snapshot, baseline: persistedBaseline };
+    }
+    try {
+      const restored = await restoreDocxEditMedia(
+        snapshot.relPath,
+        snapshot.content,
+        persistedBaseline,
+      );
+      return { ...snapshot, content: restored.html, baseline: restored.baseline };
+    } catch (error) {
+      // 草稿正文仍须恢复；图片媒体错误保持为明确日志，baseline 继续保留，使后续保存不能绕过冲突。
+      console.error(`docx edit media restore failed ${snapshot.relPath}: ${String(error)}`);
+      return { ...snapshot, baseline: persistedBaseline };
+    }
+  }));
 }
 
 export async function persistOpenTabs(tabs: PersistedOpenDocTab[]): Promise<void> {
@@ -77,15 +138,19 @@ export function makePersistedSnapshot(
   contentFormat?: ContentFormat,
 ): OpenDocSnapshot {
   const session = edStore.getSnapshot().sessions[relPath];
+  const persistedContent = editFormat === "html"
+    ? prepareDocxSnapshotHtml(content, session?.baseline ?? null)
+    : content;
   return {
     relPath,
-    content,
+    content: persistedContent,
+    baseline: session?.baseline ?? null,
     editFormat,
     contentFormat: contentFormat ?? session?.contentFormat ?? (editFormat === "html" || editFormat === "html_file" ? "html" : "text"),
     source: "open_editor_session",
     dirty,
     sessionVersion: sessionVersion ?? edStore.getSnapshot().sessions[relPath]?.sessionVersion ?? 1,
-    contentHash: hashLogicalContent(content),
+    contentHash: session?.contentHash ?? hashLogicalContent(content),
     capturedAt: Date.now(),
   };
 }
@@ -116,10 +181,11 @@ function applyOpenResult(
   jumpLine: number | null,
   editFormat: EditFormat,
   contentFormat?: ContentFormat,
+  styleNotices?: string[],
 ): boolean {
   if (!isLatestOpenRequest(relPath, requestId)) return false;
   const activate = edStore.getSnapshot().activePath === relPath;
-  edStore.loadDoc(relPath, content, baseline, jumpLine, editFormat, contentFormat, { activate });
+  edStore.loadDoc(relPath, content, baseline, jumpLine, editFormat, contentFormat, { activate, styleNotices });
   return true;
 }
 
@@ -140,8 +206,8 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
   if (!hadSession) edStore.openDoc(relPath);
   try {
     if (isDocxEditable(relPath)) {
-      const { html, baseline } = await openDocxForEdit(relPath);
-      if (!applyOpenResult(relPath, requestId, html, baseline, jumpLine, "html", "html")) return;
+      const { html, baseline, styleReport } = await openDocxForEdit(relPath);
+      if (!applyOpenResult(relPath, requestId, html, baseline, jumpLine, "html", "html", styleReport.notices)) return;
       const sess = edStore.getSnapshot().sessions[relPath];
       if (sess) {
         await persistSessionSnapshot(makePersistedSnapshot(relPath, html, "html", false, sess.sessionVersion, "html"));
@@ -165,8 +231,11 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
     }
   } catch (e) {
     const err = e as IpcLikeError;
-    if (!hadSession && isLatestOpenRequest(relPath, requestId)) edStore.closeSession(relPath);
-    console.error(`open document failed [${err.code ?? "?"}]: ${err.message ?? e}`);
+    // 审计修复（2026-07-24）：hadSession 为 true 时不关闭会话，保留脏态内容；
+    // 仅在新建会话失败时清理空占位会话。
+    if (!hadSession && isLatestOpenRequest(relPath, requestId)) edStore.discardOpenPlaceholder(relPath);
+    // 传播错误供调用方展示错误提示（之前只 console.error，用户无感知）
+    throw err;
   } finally {
     finishOpenRequest(relPath, requestId);
   }
@@ -193,6 +262,7 @@ export async function saveDocument(content: string, override = false): Promise<S
   if (!openPath) return { ok: false, message: "无打开的文档" };
   const path = openPath;
   try {
+    await acceptAppliedPendingDiffsForSave(path);
     const newBaseline = await saveDoc(path, content, baseline, override);
     edStore.updateContent(path, content);
     edStore.setBaseline(path, newBaseline);
@@ -229,6 +299,7 @@ export async function saveMarkdownDocument(
   if (!openPath) return { ok: false, message: "无打开的文档" };
   const path = openPath;
   try {
+    await acceptAppliedPendingDiffsForSave(path);
     const newBaseline = await saveDoc(path, markdown, baseline, override);
     edStore.updateContent(path, logicalContent);
     edStore.setBaseline(path, newBaseline);
@@ -255,7 +326,9 @@ export async function saveDocxDocument(html: string, override = false): Promise<
   if (!openPath) return { ok: false, message: "无打开的文档" };
   const path = openPath;
   try {
-    const newBaseline = await saveDocxFromEdit(path, html, baseline, override);
+    await acceptAppliedPendingDiffsForSave(path);
+    const restored = restoreMediaSrc(html);
+    const newBaseline = await saveDocxFromEdit(path, restored, baseline, override);
     edStore.updateContent(path, html);
     edStore.setBaseline(path, newBaseline);
     const sess = edStore.getSnapshot().sessions[path];

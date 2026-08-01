@@ -442,6 +442,49 @@ button:disabled { opacity: 0.5; cursor: default; }
   border-bottom: 0.5px solid var(--rule);
   flex-shrink: 0;
 }
+.ed-table-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  padding: 2px 0 var(--sp-1); border-bottom: 0.5px solid var(--rule);
+}
+.ed-table-toolbar-label { margin-right: var(--sp-1); font-size: 12px; font-weight: 650; color: var(--ink); }
+.ed-table-toolbar-hint { margin-right: var(--sp-2); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.ed-table-shading {
+  display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 5px;
+  border: 1px solid transparent; border-radius: var(--r-1);
+  color: var(--ink-2); cursor: pointer; font-size: 11px;
+}
+.ed-table-shading:hover { background: var(--bg-overlay); color: var(--ink); }
+.ed-table-shading input {
+  width: 18px; height: 18px; padding: 0; border: 0; background: transparent; cursor: pointer;
+}
+.ed-table-move-controls {
+  position: absolute; z-index: 80; top: 2px; right: 2px;
+  display: flex; flex-direction: row; gap: 2px;
+  box-sizing: border-box; width: auto; padding: 1px;
+  border: 0.5px solid var(--rule); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  box-shadow: var(--shadow-2); backdrop-filter: blur(8px);
+}
+.ed-table-move-controls button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: var(--r-1);
+  background: transparent; color: var(--ink-2);
+  font-size: 14px; line-height: 1; cursor: pointer;
+}
+.ed-table-move-controls button:hover:not(:disabled) {
+  background: var(--bg-overlay); color: var(--ink);
+}
+.ed-table-move-controls button:disabled {
+  color: var(--ink-3); opacity: .38; cursor: default;
+}
+.ed-table-move-controls .ed-table-delete {
+  border-left: 0.5px solid var(--rule); border-radius: 0 var(--r-1) var(--r-1) 0;
+  color: var(--rust);
+}
+.ed-table-move-controls .ed-table-delete:hover {
+  background: var(--rust-bg); color: var(--rust);
+}
 .ed-tb-row {
   display: flex; align-items: center; gap: 2px;
   overflow-x: auto;
@@ -537,6 +580,37 @@ button:disabled { opacity: 0.5; cursor: default; }
   background: var(--bg-sunken); border: 0.5px solid var(--rule); border-radius: var(--r-1);
   color: var(--ink-3);
 }
+.diffcard-table-ops { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--sp-1); }
+.diffcard-table-shape { width: 100%; font-size: 11px; color: var(--ink-2); }
+.diffcard-table-detail { width: 100%; font-size: 11px; color: var(--ink-3); }
+.diffcard-table-shading-detail {
+  width: 100%; display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--ink-3);
+}
+.diffcard-table-shading-label { min-width: 34px; color: var(--ink-2); font-family: var(--font-mono); }
+.diffcard-table-shading-swatch {
+  width: 16px; height: 16px; border: 1px solid var(--rule); border-radius: 3px; flex: 0 0 auto;
+}
+.diffcard-table-shading-swatch.is-empty {
+  background:
+    linear-gradient(135deg, transparent 45%, var(--rust) 46%, var(--rust) 54%, transparent 55%),
+    var(--bg-card);
+}
+.diffcard-table-shading-detail code { font-size: 10px; color: var(--ink-3); }
+.diffcard-image-ops {
+  display: flex; flex-direction: column; gap: 7px; margin-top: var(--sp-1);
+}
+.diffcard-image-counts { font-size: 11px; color: var(--ink-2); }
+.diffcard-image-operation {
+  padding: 6px 8px; border: 0.5px solid var(--rule); border-radius: var(--r-1);
+  background: var(--bg-sunken); color: var(--ink-3);
+}
+.diffcard-image-operation strong {
+  display: block; margin-bottom: 3px; color: var(--ink-2); font-size: 11px;
+}
+.diffcard-image-detail {
+  overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 10px; line-height: 1.55;
+}
 
 /* 大纲面板（PI-ED-12）：标题树，按级别缩进；点击经 blockId 跳转。 */
 .outline { display: flex; flex-direction: column; gap: 1px; }
@@ -553,19 +627,49 @@ button:disabled { opacity: 0.5; cursor: default; }
 .outline-l3 { padding-left: calc(var(--sp-2) + 24px); }
 .outline-l4 { padding-left: calc(var(--sp-2) + 36px); }
 
-/* 可交互图片（PI-ED-08）：选中显蓝框 + 右下调宽手柄；block 模式独占行居中。 */
+/* 可交互图片（PI-ED-08）：选中显框 + 右下调宽手柄；legacy block 只兼容旧会话显示。 */
 .ed-img-view { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
 .ed-img-view.ed-img-block { display: block; text-align: center; margin: var(--sp-3) 0; }
 .ed-img-view img { max-width: 100%; height: auto; }
 .ed-img-view .ed-img-handle {
   display: none;
-  position: absolute; right: -5px; bottom: -5px;
-  width: 10px; height: 10px; border-radius: 2px;
-  background: var(--rust); border: 1.5px solid var(--bg-card);
-  cursor: nwse-resize; z-index: 3;
+  position: absolute; right: -7px; bottom: -7px;
+  width: 14px; height: 14px; border-radius: 3px;
+  background: var(--blue, #2563eb); border: 2px solid var(--bg-card);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue, #2563eb) 45%, transparent);
+  cursor: nwse-resize; z-index: 82;
 }
-.ed-img-view.selected { outline: 2px solid var(--rust); outline-offset: 1px; }
+.ed-img-view.selected { outline: 2px solid var(--blue, #2563eb); outline-offset: 2px; }
 .ed-img-view.selected .ed-img-handle { display: block; }
+.ed-image-move-controls {
+  position: absolute; z-index: 81; top: -6px; right: 0;
+  transform: translateY(-100%);
+  display: flex; flex-direction: row; gap: 2px;
+  box-sizing: border-box; width: auto; padding: 1px;
+  border: 0.5px solid var(--rule); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  box-shadow: var(--shadow-2); backdrop-filter: blur(8px);
+}
+.ed-image-move-controls button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: var(--r-1);
+  background: transparent; color: var(--ink-2);
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.ed-image-move-controls button:hover:not(:disabled) {
+  background: var(--bg-overlay); color: var(--ink);
+}
+.ed-image-move-controls button:disabled {
+  color: var(--ink-3); opacity: .38; cursor: default;
+}
+.ed-image-move-controls .ed-image-delete {
+  border-left: 0.5px solid var(--rule); border-radius: 0 var(--r-1) var(--r-1) 0;
+  color: var(--rust);
+}
+.ed-image-move-controls .ed-image-delete:hover {
+  background: var(--rust-bg); color: var(--rust);
+}
 
 /* 编辑加载骨架（PI-ED-07 #7）：大 docx 转换期的即时反馈（不确定进度，诚实不显假百分比）。 */
 .editor-loading {
@@ -596,9 +700,22 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex; justify-content: center;
   padding: var(--sp-8) var(--sp-6);
 }
+.editor-paper-image-drop-active {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--rust) 75%, transparent);
+  background: color-mix(in srgb, var(--rust) 4%, transparent);
+}
 /* EditorContent 包装 div（2026-07-03 修复：内容极少时 flex item shrink-to-fit 使纸张塌缩成窄条）——
    占满可用宽、内部再居中；纸张宽度恒由 .ProseMirror 自身规则决定（常规 max-width / 分页固定纸宽）。 */
 .editor-paper > div { width: 100%; display: flex; justify-content: center; align-items: flex-start; }
+/* Markdown 源码视图：等宽字体全高编辑区，深色背景增强对比。 */
+.editor-source-view {
+  width: 100%; height: 100%; min-height: 60vh;
+  padding: var(--sp-6); border: none; outline: none; resize: none;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", Menlo, monospace;
+  font-size: 14px; line-height: 1.65;
+  color: var(--ink); background: var(--bg-sunken);
+  tab-size: 2; white-space: pre-wrap; word-wrap: break-word;
+}
 /* BDocx 首轮 setContent + 分页 settled 前仍挂载真实 EditorContent 供布局测量，但不揭示中间回填帧。 */
 .editor-paper > .editor-content-loading { visibility: hidden; pointer-events: none; }
 .editor-paper .ProseMirror {
@@ -666,10 +783,39 @@ button:disabled { opacity: 0.5; cursor: default; }
 .editor-paper .ProseMirror hr { margin: var(--sp-6) 0; border: 0; border-top: 1px solid var(--rule); }
 .editor-paper .ProseMirror a { color: var(--blue, #2563eb); text-decoration: underline; text-underline-offset: 2px; }
 .editor-paper .ProseMirror img { max-width: 100%; height: auto; border-radius: var(--r-1); }
-.editor-paper .ProseMirror table { width: 100%; margin: var(--sp-4) 0; border-collapse: collapse; table-layout: fixed; }
+.editor-paper .ProseMirror .tableWrapper {
+  position: relative; overflow-x: auto;
+  /* 为活动表格横向迷你工具条保留稳定安全区；所有表格一致，避免选区切换时发生布局跳动。 */
+  padding-top: var(--sp-3);
+}
+.editor-paper .ProseMirror table {
+  width: 100%; margin: var(--sp-4) 0; overflow: hidden;
+  border-collapse: collapse; table-layout: fixed;
+}
 .editor-paper .ProseMirror th,
-.editor-paper .ProseMirror td { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--rule); vertical-align: top; text-align: left; }
+.editor-paper .ProseMirror td { position: relative; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--rule); vertical-align: top; text-align: left; }
 .editor-paper .ProseMirror th { background: var(--bg-sunken); font-weight: 650; }
+/* 官方插件仍负责 TableView/colgroup 同步；隐藏其重复蓝色装饰，拖拽命中由下方显式热区承担。 */
+.editor-paper .ProseMirror .column-resize-handle {
+  position: absolute; z-index: 20; top: 0; right: -4px; bottom: 0;
+  width: 8px; background: transparent; pointer-events: none; opacity: 0;
+}
+.editor-paper .ProseMirror.resize-cursor,
+.editor-paper .ProseMirror.resize-cursor * { cursor: col-resize !important; }
+/* BDocx 显式列宽热区：默认不覆盖原表格边框，仅悬停边界时提供轻量反馈。 */
+.editor-paper .ProseMirror .bdocx-column-resize-handle {
+  position: absolute; z-index: 24; top: -1px; right: -6px; bottom: -1px; width: 12px;
+  cursor: col-resize; pointer-events: auto;
+}
+.editor-paper .ProseMirror .bdocx-column-resize-handle::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 5px; width: 2px;
+  border-radius: 2px; background: var(--blue, #2563eb); opacity: 0;
+}
+.editor-paper .ProseMirror .bdocx-column-resize-handle:hover::after { opacity: .72; }
+.editor-paper .ProseMirror .selectedCell::after {
+  position: absolute; z-index: 2; inset: 0; content: ""; pointer-events: none;
+  background: color-mix(in srgb, var(--blue, #2563eb) 16%, transparent);
+}
 .editor-paper .ProseMirror ul[data-type="taskList"] { list-style: none; padding-left: 0; }
 .editor-paper .ProseMirror ul[data-type="taskList"] li { display: flex; gap: var(--sp-2); align-items: flex-start; }
 .editor-paper .ProseMirror ul[data-type="taskList"] li > label { margin-top: .35em; }
@@ -1535,3 +1681,22 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 12px;
 }
 .byok-status { color: var(--ink-4); font-size: 11px; }
+.editor-image-drop-error {
+  position: sticky;
+  bottom: 12px;
+  z-index: 8;
+  width: fit-content;
+  max-width: min(520px, calc(100% - 24px));
+  margin: 12px auto;
+  padding: 8px 10px;
+  border: 1px solid var(--danger, #c84a2f);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--danger, #a93b26);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+}
+
+.editor-image-drop-error button {
+  margin-left: 10px;
+}

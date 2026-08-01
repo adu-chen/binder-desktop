@@ -27,8 +27,7 @@
 #   源码重建都会丢失该补丁 → 字体随机匹配回归**；重建前必须移植这两处 diff。
 #
 # 用法：
-#   ./scripts/deploy_lo.sh                          # 用默认优化版源（旧项目预构建产物）
-#   LO_SOURCE_APP=/path/to/LibreOffice*.app ./scripts/deploy_lo.sh   # 指定已构建的优化版 .app
+#   LO_SOURCE_APP=/path/to/LibreOffice.app ./scripts/deploy_lo.sh
 #
 # 部署后由 tauri.conf.json 的 bundle.resources（resources/libreoffice/**）自动打包进
 # Binder.app/Contents/Resources/libreoffice；运行时路径解析（resolve_soffice_path）即可内置识别。
@@ -40,9 +39,9 @@ cd "$(dirname "$0")/.."  # 仓库根
 TARGET_DIR="src-tauri/resources/libreoffice"
 DEST_APP="$TARGET_DIR/LibreOffice.app"
 
-# 优化版 LO.app 源：默认指向旧项目预构建产物；可用 LO_SOURCE_APP 覆盖。
-# 若需从源码重建优化版，按上方 configure flags 在 LO 源码树执行 ./autogen.sh && make。
-SOURCE_APP="${LO_SOURCE_APP:-/Users/chenzhenqiang/Desktop/test/binder-project/libreoffice/core/instdir/LibreOfficeDev.app}"
+# 只接收显式提供、已构建并经发布流程校验的优化版 LO.app；禁止把旧项目的绝对路径隐式带入构建。
+# 若需从源码重建优化版，按上方 configure flags 与 GlyphFallback 补丁在 LO 源码树执行 ./autogen.sh && make。
+SOURCE_APP="${LO_SOURCE_APP:?请设置 LO_SOURCE_APP 为已构建、已校验的 Binder LibreOffice.app}"
 
 echo "📦 部署优化版 LibreOffice"
 echo "   源: $SOURCE_APP"

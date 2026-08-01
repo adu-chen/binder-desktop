@@ -1,0 +1,121 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "binder-latin-sans",
+      "aliases": ["Arial", "ArialMT", "Arial Unicode MS", "ArialUnicodeMS", "Helvetica", "Helvetica Neue", "sans-serif", "sansserif"],
+      "candidates": ["binder:latin-sans"]
+    },
+    {
+      "id": "binder-latin-serif",
+      "aliases": ["Times New Roman", "TimesNewRoman", "TimesNewRomanPSMT", "Times", "Times-Roman", "serif"],
+      "candidates": ["binder:latin-serif"]
+    },
+    {
+      "id": "binder-latin-mono",
+      "aliases": ["Courier New", "CourierNew", "Courier", "monospace", "Consolas", "Menlo", "Monaco"],
+      "candidates": ["binder:latin-mono"]
+    },
+    {
+      "id": "binder-cjk-sans",
+      "aliases": [
+        "SimHei", "STHeiti", "Heiti SC", "Heiti TC", "黑体",
+        "Microsoft YaHei", "微软雅黑", "PingFang SC", "PingFang TC", "PingFang HK",
+        "Hiragino Sans GB", "HiraginoSansGB", "Noto Sans CJK SC", "Noto Sans SC",
+        "Source Han Sans SC", "Source Han Sans CN"
+      ],
+      "candidates": ["binder:cjk-sans"]
+    },
+    {
+      "id": "binder-cjk-serif",
+      "aliases": [
+        "SimSun", "宋体", "STSong", "STSongti", "Songti SC", "Songti TC",
+        "NSimSun", "新宋体", "FangSong", "仿宋", "KaiTi", "楷体", "STKaiti",
+        "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", "Source Han Serif CN"
+      ],
+      "candidates": ["binder:cjk-serif"]
+    },
+    {
+      "id": "binder-cjk-sans-bold",
+      "aliases": [
+        "SimHei Bold", "STHeiti Medium", "Heiti SC Medium", "Heiti TC Medium",
+        "PingFang SC Semibold", "PingFang TC Semibold", "PingFang HK Semibold",
+        "Hiragino Sans GB W6", "Microsoft YaHei Bold", "Source Han Sans SC Bold"
+      ],
+      "candidates": ["binder:cjk-sans-bold"]
+    },
+    {
+      "id": "binder-cjk-serif-bold",
+      "aliases": [
+        "STSongti SC Bold", "STSongti TC Bold", "SimSun Bold",
+        "Songti SC Bold", "Songti TC Bold", "Source Han Serif SC Bold"
+      ],
+      "candidates": ["binder:cjk-serif-bold"]
+    },
+    {
+      "id": "binder-symbol",
+      "aliases": ["Symbol", "Wingdings", "Wingdings 2", "Webdings", "ZapfDingbats"],
+      "candidates": ["binder:symbol"]
+    },
+    {
+      "id": "binder-emoji",
+      "aliases": ["Apple Color Emoji", "Segoe UI Emoji", "EmojiOne Color", "Noto Color Emoji", "Twemoji"],
+      "candidates": ["binder:emoji"]
+    },
+    {
+      "id": "calibri-family",
+      "aliases": ["Calibri", "Calibri Light"],
+      "candidates": []
+    },
+    {
+      "id": "cambria-family",
+      "aliases": ["Cambria", "Cambria Math"],
+      "candidates": []
+    },
+    {
+      "id": "office-theme-major-latin",
+      "aliases": ["+mj-lt", "major-latin", "Major Latin", "+mj-ea", "major-east-asian", "Major East Asian", "+mn-lt", "minor-latin", "Minor Latin", "+mn-ea", "minor-east-asian", "Minor East Asian"],
+      "candidates": []
+    },
+    {
+      "id": "verdana-family",
+      "aliases": ["Verdana", "Verdana Bold"],
+      "candidates": []
+    },
+    {
+      "id": "georgia-family",
+      "aliases": ["Georgia", "Georgia Bold"],
+      "candidates": []
+    },
+    {
+      "id": "tahoma-family",
+      "aliases": ["Tahoma", "Tahoma Bold"],
+      "candidates": []
+    },
+    {
+      "id": "impact-family",
+      "aliases": ["Impact"],
+      "candidates": []
+    },
+    {
+      "id": "comic-sans-family",
+      "aliases": ["Comic Sans MS", "Comic Sans"],
+      "candidates": []
+    },
+    {
+      "id": "trebuchet-family",
+      "aliases": ["Trebuchet MS", "Trebuchet"],
+      "candidates": []
+    },
+    {
+      "id": "palatino-family",
+      "aliases": ["Palatino", "Palatino Linotype", "Book Antiqua"],
+      "candidates": []
+    },
+    {
+      "id": "garamond-family",
+      "aliases": ["Garamond"],
+      "candidates": []
+    }
+  ]
+}

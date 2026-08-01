@@ -3,11 +3,61 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 
 /**
  * BlockIdExtension（ED-EDIT · PI-FE-05）。
- * 为顶层内容块（Block, TERM-ED-001）赋稳定 blockId，是 diff 定位（DE）、@mention 引用锚（REF）
- * 与分页切分的统一定位基准（A-ED-M-T-01 §4）。生成算法：block_ + crypto.randomUUID()（§11.1 选型）。
+ * 为内容块（ContentBlock, TERM-ED-001）与容器块（ContainerBlock）赋稳定 blockId，
+ * 是 diff 定位（DE）、@mention 引用锚（REF）与分页切分的统一定位基准（A-ED-M-T-01 §4）。
+ * 生成算法：block_ + crypto.randomUUID()（§11.1 选型）。
+ *
+ * 审计修复（2026-07-25 · A+D 方案）：
+ * - 引入"容器块"（orderedList/bulletList）与"内容块"两级分类
+ * - 容器块获得 blockId 用于寻址，但在分页/投影中透明（其 listItem 子节点作为实际单元）
+ * - 导出 isContentBlock / isContainerBlock / iterContentBlocks 供其他模块使用
  */
 
-const BLOCK_TYPES = ["paragraph", "heading", "blockquote", "codeBlock", "listItem"];
+/** 内容块：直接包含内联内容，是分页/样式/光标定位的基本单元。 */
+const CONTENT_BLOCK_TYPES = ["paragraph", "heading", "blockquote", "codeBlock", "listItem", "tableCell", "tableHeader"];
+
+/** 容器块：包含其他块，对分页/投影透明但可寻址。 */
+const CONTAINER_BLOCK_TYPES = ["orderedList", "bulletList"];
+
+/** 所有应获得 blockId 的块类型（内容块 + 容器块）。 */
+const BINDER_BLOCK_TYPES = [...CONTENT_BLOCK_TYPES, ...CONTAINER_BLOCK_TYPES];
+
+/** 内容块类型集合（导出供其他模块使用）。 */
+export const CONTENT_BLOCK_SET = new Set(CONTENT_BLOCK_TYPES);
+
+/** 容器块类型集合（导出供其他模块使用）。 */
+export const CONTAINER_BLOCK_SET = new Set(CONTAINER_BLOCK_TYPES);
+
+/** 判断节点是否为内容块（内联内容承载者）。 */
+export function isContentBlock(node: { type: { name: string } }): boolean {
+  return CONTENT_BLOCK_SET.has(node.type.name);
+}
+
+/** 判断节点是否为容器块（块容器，分页透明）。 */
+export function isContainerBlock(node: { type: { name: string } }): boolean {
+  return CONTAINER_BLOCK_SET.has(node.type.name);
+}
+
+/**
+ * 展平遍历所有内容块。容器块（orderedList/bulletList）透明，
+ * 其子 listItem 直接参与遍历序列。跳过非 binderBlock 节点。
+ */
+export function iterContentBlocks(
+  doc: { descendants: (cb: (node: { type: { name: string }; attrs: Record<string, unknown> }, pos: number) => boolean | void) => void },
+  callback: (node: { type: { name: string }; attrs: Record<string, unknown> }, pos: number, flatIndex: number) => void,
+): void {
+  let flatIndex = 0;
+  doc.descendants((node, pos) => {
+    if (isContentBlock(node)) {
+      callback(node, pos, flatIndex++);
+      return false; // 内容块的子节点不重复遍历
+    }
+    if (isContainerBlock(node)) {
+      return true; // 容器块自身不回调，但继续遍历其子节点
+    }
+    return true;
+  });
+}
 
 /** 不透明 blockId 生成：`block_` + crypto.randomUUID()（A-ED-M-T-01 §11.1 选型记录，G-4 定档）。
  *  既有文档中的旧格式 id 依然有效——reconcile 只补缺/去重，不改既有唯一 id。 */
@@ -59,7 +109,7 @@ export const BlockIdExtension = Extension.create({
   addGlobalAttributes() {
     return [
       {
-        types: BLOCK_TYPES,
+        types: BINDER_BLOCK_TYPES,
         attributes: {
           blockId: {
             default: null,
@@ -83,7 +133,7 @@ export const BlockIdExtension = Extension.create({
           // 收集文档顺序的块位置与当前 id，交纯逻辑 reconcileBlockIds 判定修复。
           const slots: { pos: number; id: string | null }[] = [];
           newState.doc.descendants((node, pos) => {
-            if (!BLOCK_TYPES.includes(node.type.name)) return;
+            if (!BINDER_BLOCK_TYPES.includes(node.type.name)) return;
             slots.push({ pos, id: node.attrs.blockId ?? null });
           });
           const fixes = reconcileBlockIds(slots.map((s) => s.id));

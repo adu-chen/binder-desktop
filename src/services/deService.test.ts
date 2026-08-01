@@ -5,16 +5,29 @@ const edServiceMock = vi.hoisted(() => ({ openDocument: vi.fn(), persistSessionS
 const edLocateMock = vi.hoisted(() => ({
   applyEditOps: vi.fn(),
   getActiveDocumentContent: vi.fn(),
+  getActiveEditor: vi.fn(),
+}));
+const edBlockOpsMock = vi.hoisted(() => ({
+  applyStructuredBlockOperations: vi.fn(),
+  validateStructuredBlockOperations: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMock.invoke }));
 vi.mock("./edService", () => edServiceMock);
 vi.mock("./edLocate", () => edLocateMock);
+vi.mock("./edBlockOps", () => edBlockOpsMock);
 
 import { invoke } from "@tauri-apps/api/core";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
-import { acceptDiff, applyOpenSessionDiff, generateSampleDiff, rejectDiff } from "./deService";
+import {
+  acceptDiff,
+  applyOpenSessionDiff,
+  generateSampleDiff,
+  persistImageDiffSnapshots,
+  rejectDiff,
+} from "./deService";
+import type { DocumentImageSnapshot } from "./edImageOps";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -27,6 +40,12 @@ beforeEach(() => {
   edLocateMock.applyEditOps.mockReturnValue({ ok: true });
   edLocateMock.getActiveDocumentContent.mockReset();
   edLocateMock.getActiveDocumentContent.mockReturnValue(null);
+  edLocateMock.getActiveEditor.mockReset();
+  edLocateMock.getActiveEditor.mockReturnValue(null);
+  edBlockOpsMock.validateStructuredBlockOperations.mockReset();
+  edBlockOpsMock.validateStructuredBlockOperations.mockReturnValue({ ok: true, affectedBlockIds: ["p-1"] });
+  edBlockOpsMock.applyStructuredBlockOperations.mockReset();
+  edBlockOpsMock.applyStructuredBlockOperations.mockReturnValue({ ok: true, affectedBlockIds: ["p-1"] });
   deStore.reset();
   edStore.reset();
 });
@@ -38,6 +57,144 @@ function lastCommand(): string {
 }
 
 describe("deService 草稿 diff 裁决", () => {
+  // covers: BR-DE-DATA-002
+  it("persistImageDiffSnapshots：经受控 command 持久化完整前后图片快照", async () => {
+    const before: DocumentImageSnapshot[] = [{
+      imageId: "image_0_abcd",
+      fingerprint: "abcd",
+      ordinal: 0,
+      blockId: "b-img",
+      imagePos: 2,
+      standalone: true,
+      alt: "项目图",
+      width: "240",
+      height: null,
+      mediaRef: "media/image.png",
+      projectSourcePath: "images/image.png",
+      projectSourceHash: "a".repeat(64),
+      alignment: "left" as const,
+      capabilities: ["delete_image", "resize_image", "move_image", "set_image_layout"],
+      resizeBounds: { min: 40, max: 800 },
+      moveDirections: ["up", "down"],
+    }];
+    invokeMock.mockResolvedValue({ result: { persisted: true } });
+
+    await persistImageDiffSnapshots("d-image", before, [], ["b-img"]);
+
+    expect(invokeMock).toHaveBeenCalledWith("dispatch", {
+      request: expect.objectContaining({
+        command: "de.update_image_diff_snapshots",
+        params: {
+          diffId: "d-image",
+          before,
+          after: [],
+          affectedBlockIds: ["b-img"],
+        },
+      }),
+    });
+  });
+
+  // covers: BR-DE-DATA-002, BR-ED-DATA-001
+  it("rejectDiff：BlockOperation 先做反向冲突预检，再精确恢复节点而不整篇覆盖", async () => {
+    const before = '<ul><li><p data-block-id="p-1">原第一条</p></li><li><p data-block-id="p-2">第二条</p></li></ul>';
+    edStore.loadDoc("a.docx", before, 1, null, "html");
+    const fakeEditor = { state: {} };
+    edLocateMock.getActiveEditor.mockReturnValue(fakeEditor);
+    edLocateMock.getActiveDocumentContent.mockReturnValue(before);
+    invokeMock.mockResolvedValue({ result: { rejected: true } });
+    const blockOpsPayload = {
+      payloadVersion: 1 as const,
+      base: { sessionVersion: 1, contentHash: "base-hash" },
+      operations: [{
+        op: "replace_node" as const,
+        blockId: "p-1",
+        fingerprint: "block-v1-old",
+        expectedNodeType: "paragraph",
+        beforeNode: {
+          type: "paragraph",
+          attrs: { blockId: "p-1" },
+          content: [{ type: "text", text: "原第一条" }],
+        },
+        afterNode: {
+          type: "paragraph",
+          attrs: { blockId: "p-1" },
+          content: [{ type: "text", text: "新第一条" }],
+        },
+      }],
+    };
+    deStore.addDiff({
+      diffId: "d-block",
+      blockId: "p-1",
+      relPath: "a.docx",
+      title: "结构化块修改",
+      before: "原第一条",
+      after: "新第一条",
+      state: "pending",
+      patchKind: "block_ops",
+      blockOpsPayload,
+      draftApplied: true,
+      draftBaseContent: before,
+      draftBaseTabState: "normal",
+    });
+
+    await rejectDiff("d-block");
+
+    expect(edBlockOpsMock.validateStructuredBlockOperations).toHaveBeenCalledWith(
+      fakeEditor,
+      blockOpsPayload,
+      "reverse",
+    );
+    expect(lastCommand()).toBe("de.reject_diff");
+    expect(edBlockOpsMock.applyStructuredBlockOperations).toHaveBeenCalledWith(
+      fakeEditor,
+      blockOpsPayload,
+      "reverse",
+    );
+    expect(edLocateMock.applyEditOps).not.toHaveBeenCalled();
+    expect(edStore.getSnapshot().loadedContent).toBe(before);
+  });
+
+  it("rejectDiff：BlockOperation fingerprint 已变化时进入冲突且不提交后端拒绝", async () => {
+    edStore.loadDoc("a.docx", '<p data-block-id="p-1">用户后改</p>', 1, null, "html");
+    edLocateMock.getActiveEditor.mockReturnValue({ state: {} });
+    edBlockOpsMock.validateStructuredBlockOperations.mockReturnValue({
+      ok: false,
+      reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED",
+    });
+    deStore.addDiff({
+      diffId: "d-block-conflict",
+      blockId: "p-1",
+      relPath: "a.docx",
+      title: "结构化块修改",
+      before: "原文",
+      after: "候选",
+      state: "pending",
+      patchKind: "block_ops",
+      blockOpsPayload: {
+        payloadVersion: 1,
+        base: { sessionVersion: 1, contentHash: "base-hash" },
+        operations: [{
+          op: "replace_node",
+          blockId: "p-1",
+          fingerprint: "block-v1-old",
+          expectedNodeType: "paragraph",
+          beforeNode: { type: "paragraph", attrs: { blockId: "p-1" } },
+          afterNode: { type: "paragraph", attrs: { blockId: "p-1" } },
+        }],
+      },
+      draftApplied: true,
+    });
+
+    await rejectDiff("d-block-conflict");
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(edBlockOpsMock.applyStructuredBlockOperations).not.toHaveBeenCalled();
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "conflict",
+      errorCode: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED",
+    });
+  });
+
   // covers: BR-ED-STATE-001
   it("generateSampleDiff：以当前编辑器 LogicalState 为 before，不退回 stale 缓存", async () => {
     edStore.loadDoc("a.md", "缓存内容", 1);
@@ -71,6 +228,53 @@ describe("deService 草稿 diff 裁决", () => {
 
     expect(lastCommand()).toBe("de.accept_draft_diff");
     expect(edServiceMock.openDocument).not.toHaveBeenCalled();
+  });
+
+  it("acceptDiff：BlockOperation 被后置编辑时进入冲突且不确认 accepted", async () => {
+    edStore.loadDoc("a.docx", '<p data-block-id="p-1">用户后改</p>', 1, null, "html");
+    const fakeEditor = { state: {} };
+    edLocateMock.getActiveEditor.mockReturnValue(fakeEditor);
+    edBlockOpsMock.validateStructuredBlockOperations.mockReturnValue({
+      ok: false,
+      reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED",
+    });
+    const blockOpsPayload = {
+      payloadVersion: 1 as const,
+      base: { sessionVersion: 1, contentHash: "base-hash" },
+      operations: [{
+        op: "replace_node" as const,
+        blockId: "p-1",
+        fingerprint: "block-v1-old",
+        expectedNodeType: "paragraph",
+        beforeNode: { type: "paragraph", attrs: { blockId: "p-1" } },
+        afterNode: { type: "paragraph", attrs: { blockId: "p-1" } },
+      }],
+    };
+    deStore.addDiff({
+      diffId: "d-block-accept-conflict",
+      blockId: "p-1",
+      relPath: "a.docx",
+      title: "结构化块修改",
+      before: "原文",
+      after: "候选",
+      state: "pending",
+      patchKind: "block_ops",
+      blockOpsPayload,
+      draftApplied: true,
+    });
+
+    await acceptDiff("d-block-accept-conflict");
+
+    expect(edBlockOpsMock.validateStructuredBlockOperations).toHaveBeenCalledWith(
+      fakeEditor,
+      blockOpsPayload,
+      "reverse",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "conflict",
+      errorCode: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED",
+    });
   });
 
   it("acceptDiff：整篇草稿 diff 也只确认 accepted，不走旧落盘重开路径", async () => {
@@ -134,7 +338,30 @@ describe("deService 草稿 diff 裁决", () => {
     });
   });
 
-  it("applyOpenSessionDiff：已打开非激活文档直接应用 LogicalState 并确认 accepted", async () => {
+  it("acceptDiff：未应用错误态不再次接受，也不覆盖首要错误码", async () => {
+    edStore.loadDoc("a.docx", "<p>当前</p>", 1, null, "html");
+    deStore.addDiff({
+      diffId: "d-image-stale",
+      blockId: "b1",
+      relPath: "a.docx",
+      title: "图片居中",
+      before: "当前图片",
+      after: "图片操作：对齐 1",
+      state: "error",
+      errorCode: "ED_IMAGE_SNAPSHOT_STALE",
+      patchKind: "image_ops",
+    });
+
+    await acceptDiff("d-image-stale");
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "error",
+      errorCode: "ED_IMAGE_SNAPSHOT_STALE",
+    });
+  });
+
+  it("applyOpenSessionDiff：已打开非激活文档应用 LogicalState，但保持 pending 等待用户裁决", async () => {
     edStore.loadDoc("target.md", "一\n旧", 1);
     edStore.loadDoc("active.md", "当前", 2);
     const target = edStore.getSnapshot().sessions["target.md"];
@@ -154,8 +381,6 @@ describe("deService 草稿 diff 裁决", () => {
       baseContentHash: target.contentHash,
       readonly: true,
     });
-    invokeMock.mockResolvedValue({ result: { accepted: true } });
-
     await applyOpenSessionDiff("d-open");
 
     expect(edStore.getSnapshot().sessions["target.md"]).toMatchObject({
@@ -169,11 +394,11 @@ describe("deService 草稿 diff 裁决", () => {
       source: "open_editor_session",
       dirty: true,
     }));
-    expect(lastCommand()).toBe("de.accept_draft_diff");
+    expect(invokeMock).not.toHaveBeenCalled();
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({
-      state: "accepted",
+      state: "pending",
       readonly: true,
-      openSessionApplied: true,
+      draftApplied: true,
     });
   });
 
@@ -282,6 +507,94 @@ describe("deService 草稿 diff 裁决", () => {
 
     expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{ op: "replace_document", content: "<p>旧</p>", format: "html", contentFormat: "html" }]);
     expect(edStore.getSnapshot()).toMatchObject({ loadedContent: "<p>旧</p>", tabState: "saved" });
+  });
+
+  // covers: BR-DE-DATA-002, BR-ED-DATA-003
+  it("rejectDiff：ImageOperation 即使有 anchor blockId 也按草稿前全文恢复", async () => {
+    edStore.loadDoc("a.docx", '<p data-block-id="b1">旧</p><p><img src="media/new.png"></p>', 1, null, "html");
+    edStore.markDirty();
+    deStore.addDiff({
+      diffId: "d-image",
+      blockId: "b1",
+      relPath: "a.docx",
+      title: "插入图片",
+      before: "当前图片 0 张",
+      after: "图片操作：插入 1 张，删除 0 张",
+      state: "pending",
+      patchKind: "image_ops",
+      draftApplied: true,
+      draftBaseContent: '<p data-block-id="b1">旧</p>',
+      draftBaseTabState: "saved",
+      imageOpsPayload: {
+        base: { sessionVersion: 1, contentHash: "h1" },
+        operations: [{
+          op: "insert_image",
+          anchorBlockId: "b1",
+          position: "after",
+          assetId: "asset_new",
+          sourcePath: "images/new.png",
+          sourceHash: "a".repeat(64),
+          mediaRef: `media/binder-project-${"a".repeat(64)}.png`,
+        }],
+      },
+    });
+    invokeMock.mockResolvedValue({ result: { rejected: true } });
+
+    await rejectDiff("d-image");
+
+    expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{
+      op: "replace_document",
+      content: '<p data-block-id="b1">旧</p>',
+      format: "html",
+      contentFormat: "html",
+    }]);
+    expect(edStore.getSnapshot()).toMatchObject({
+      loadedContent: '<p data-block-id="b1">旧</p>',
+      tabState: "saved",
+    });
+  });
+
+  it("rejectDiff：多图片组合 Diff 后有人工编辑时完整回滚且保留 dirty", async () => {
+    const before = '<p data-block-id="a"><img src="media/a.png"></p><p data-block-id="b"><img src="media/b.png"></p>';
+    const after = '<p data-block-id="a" style="text-align:center"><img src="media/a.png" width="240"></p><p data-block-id="b"><img src="media/b.png"></p>';
+    edStore.loadDoc("a.docx", after, 1, null, "html");
+    deStore.addDiff({
+      diffId: "d-image-composite",
+      blockId: "",
+      relPath: "a.docx",
+      title: "调整多张图片",
+      before: "当前图片 2 张",
+      after: "图片操作 3 项",
+      state: "pending",
+      patchKind: "image_ops",
+      draftApplied: true,
+      draftBaseContent: before,
+      draftAfterContent: after,
+      draftBaseTabState: "saved",
+      imageOpsPayload: {
+        base: { sessionVersion: 1, contentHash: "h1" },
+        operations: [
+          { op: "resize_image", imageId: "image-a", fingerprint: "fp-a", width: 240 },
+          { op: "set_image_layout", imageId: "image-a", fingerprint: "fp-a", alignment: "center" },
+          { op: "move_image", imageId: "image-b", fingerprint: "fp-b", direction: "up" },
+        ],
+      },
+    });
+    invokeMock.mockResolvedValue({ result: { rejected: true } });
+    edLocateMock.getActiveDocumentContent.mockReturnValue(`${after}<p>用户后置编辑</p>`);
+
+    await rejectDiff("d-image-composite");
+
+    expect(edLocateMock.applyEditOps).toHaveBeenCalledWith([{
+      op: "replace_document",
+      content: before,
+      format: "html",
+      contentFormat: "html",
+    }]);
+    expect(edStore.getSnapshot()).toMatchObject({
+      loadedContent: before,
+      tabState: "dirty",
+    });
   });
 
   it("rejectDiff：整篇草稿 diff 用草稿前全文恢复", async () => {

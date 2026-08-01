@@ -38,6 +38,25 @@ scope_reason: 纯治理闭合（标注+测试+登记，无功能变更）：为�
 - referenced_rules +3、covered_rules +4（BR-ED-STATE-003/BR-ED-DATA-002/BR-PRV-DATA-001/BR-PRV-DATA-002 闭合）。
 - 全局 audit 仍 failed：剩余 OWNER_MISSING/uncovered = BR-AG-DATA-004/005（AG 窗口在做，台账 B-1）、BR-SYS-DATA-004（云端，台账 C 类）、BR-ED-DATA-003（分页延后，本 PI 登记）——均为已登记/他窗口责任，非前端可独立闭合项。
 
+## 闭合记录 · 2026-07-25 · 分页闭环
+
+BR-ED-DATA-003 由"延后债务"转为"已闭合"。分页呈现层经 7 轮修复完成闭环：
+
+| 轮次 | 修复 | 文件 | 状态 |
+|------|------|------|------|
+| 1 | end-fill widget → CSS `--rm-page-end-fill` 变量 | Pagination.ts | ✅ |
+| 2 | CSS padding-bottom 优先级修复 | styles.css | ✅ |
+| 3 | `overflow-anchor: none` 禁用浏览器 Scroll Anchoring | styles.css | ✅ |
+| 4 | `handleScrollToSelection` 条件接管 ProseMirror 滚动控制权 | Editor.tsx | ✅ |
+| 5 | `flattenBlocks` 展平 orderedList/bulletList（块级可分页） | Pagination.ts | ✅ |
+| 6 | 自适应防抖 `delay` 参数 bug 修复 | Pagination.ts | ✅ |
+| 7 | `blockCount` 改为展平计数 | Pagination.ts | ✅ |
+
+闭合文件：Pagination.ts、Editor.tsx、styles.css。
+详见 `.governance/issues/SCROLL-JUMP-FIX.md`。
+
+全局 audit 状态更新：BR-ED-DATA-003 不再计入 OWNER_MISSING/uncovered。
+
 ## Validation Commands
 
 ```

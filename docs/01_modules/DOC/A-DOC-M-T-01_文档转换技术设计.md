@@ -2,7 +2,7 @@
 文档编号：DOC-M-T-01
 文档状态：A
 负责模块：DOC
-文档职责：DOC 文档转换模块级 L2 技术设计（规则 SSOT）——docx 双向转换管线（编辑链 Pandoc / 预览链 LibreOffice，双链分离）、样式子集三级执行契约、blockId 转换层兜底、本地转换运行时边界；承接 REQ-DOC-001~005
+文档职责：DOC 文档转换模块级 L2 技术设计（规则 SSOT）——docx 双向转换管线（编辑链 Pandoc / 预览链 LibreOffice，双链分离）、样式子集五档执行契约、blockId 转换层兜底、本地转换运行时边界；承接 REQ-DOC-001~005
 上游约束：A-DOC-M-D-01_文档转换功能需求描述.md（REQ-DOC-001~005、DOC-01~05）、A-CORE-C-P-01_APC.md（§4.1、§6、§9）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-002 分工锁定、§11.1 样式子集与 blockId 选型记录）、A-WS-M-T-01_工作台技术设计.md（BR-WS-PERSIST-001 原子落盘、X-FORBID-004）、A-SYS-I-P-02_IPC协议.md（统一错误形状）、A-SYS-M-S-01_状态机总图.md（docx 开/存核心链、X-SEQ-003/X-INTER-001）、ADU.md（§3 格式）
 直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 DOC 规则 SSOT，代码经 @GOV 映射；SM-DOC-01 在 A-DOC-M-S-01 定义并登记总图；样式子集契约被 ED（编辑模型承载）与 PRV（预览补偿）消费
 使用边界：本文是 DOC 规则 SSOT；不定义编辑模型内部（归 ED）、不定义预览呈现（归 PRV）、不做文件落盘（经 WS）；工具具体版本由受控 manifest 锁定，状态机内部归 A-DOC-M-S-01
@@ -57,6 +57,17 @@ locale 下返回本地化显示名（如 "蘋方-簡"），而 OOXML 请求 ASCI
 生态缺失字体别名（层2）、以及未知字体的确定性回退链（层3）。补丁见
 binder_font_identity.patch。
 
+<!-- TERM
+term_id: TERM-DOC-005
+chains: DOC-CONVERT, ED-EDIT, DE-DIFF
+zh: 单元格底纹
+en: TableCellShading
+forbidden: 单元格背景, 表格底色, 单元格填色, cell background
+-->
+BDocx 样式子集中由 `tableCell/tableHeader.backgroundColor` 与 DOCX `w:tcPr/w:shd` 双向承载的
+单元格不透明纯色填充。仅保证显式 `#RRGGBB` 与清除；主题色、透明度、渐变和图案不属于该术语的
+支持子集。
+
 b-docx 是 Binder 内可编辑的 docx 类文档，区别于原生 `.docx`。它的编辑态由 DOC 编辑链将 docx
 字节转换为 HTML / ProseMirror 统一编辑模型，ED 只编辑该 HTML 模型，保存时再由 DOC 转回 docx
 字节并经 WS 落盘。来源包括：原生 docx 经 `doc.create_draft` 生成的 EditDraft（`*.draft.docx`）、
@@ -101,7 +112,9 @@ REQ-CORE-004 → REQ-DOC-001~005（DOC L1）→ 本文 RULE/CHAIN/CONSTRAINT/TER
   `pandoc <docx> --from docx+styles --to html+raw_html+native_divs+native_spans --wrap=none
   --extract-media=. --preserve-tabs --lua-filter preserve-styles.lua`
   - `docx+styles` 读取扩展保留 DOCX 样式；`native_divs/spans` 把样式落为内联 `style=`/`data-custom-style`；
-    `preserve-styles.lua`（资源）强制保留对齐/颜色/字号；`--extract-media` 解出图片至工作目录供编辑器显示。
+    `preserve-styles.lua`（资源）强制保留对齐/颜色/字号；`--extract-media` 解出图片至来源 DOCX
+    baseline 派生的隔离目录。HTML 保留规范相对引用，前端只把它投影为当前进程 `asset://` 显示地址，
+    并以 `data-binder-media-src` 保留稳定媒体身份。
   - **不加 `--standalone`**：只输出 `<body>` 正文片段（不含 `<head>/<style>` CSS），否则前端会把那坨 CSS
     当文本/代码块渲染。
   - **前端解析（关键）**：编辑器装有 `tiptap-markdown`（md 文件用），其会劫持 `setContent(string)` 按
@@ -112,6 +125,21 @@ REQ-CORE-004 → REQ-DOC-001~005（DOC L1）→ 本文 RULE/CHAIN/CONSTRAINT/TER
   `pandoc --from html --to docx --reference-doc reference.docx`（参考文档统一样式，往返保真）→ 交 WS
   保存机执行 baseline guard + `save_atomic` 原子落盘。调用方必须传入打开时加载基线；磁盘内容偏离基线且
   未 `override=true` 时返回 `WS_SAVE_CONFLICT`，原 docx 不变；`override=true` 只能来自用户显式确认。
+  图片相对引用必须在该 baseline 的隔离媒体目录解析；转换前校验资源存在且未越界，转换后检查 Pandoc
+  资源警告以及最终 `word/document.xml` 图片实例数。缺失资源或图片数量下降一律进入 SaveError，禁止把
+  alt 文本替代图像的 Pandoc 成功退出码当成成功保存。转换结果哈希确定新 baseline 后，当前 HTML
+  实际引用的媒体普通文件须从旧 baseline 精确复制到新 baseline 并重新授权；这样连续保存仍按同一
+  稳定 mediaRef 解析，未引用缓存不随带。前端只按文档持有该本地显示目录，不能把绝对缓存路径放进
+  ImageOperation、工具结果或模型上下文。
+- **持久会话恢复（`doc.restore_edit_media`）**：`ed_session_snapshots` 持久镜像保存规范 HTML 与加载
+  baseline；重启后后端重新授权该 baseline 的媒体目录。缓存缺失时，仅当磁盘 DOCX 仍等于该 baseline
+  才可重新抽取图片；磁盘已变化时不得用新文档媒体替换旧草稿媒体，后续保存仍受原 baseline 冲突保护。
+  代理插入的项目图片另保留 workspace 相对来源与 SHA-256；缓存缺失时须重新确认来源仍在当前
+  workspace、格式/magic 合法且哈希未变，再复制到同一 baseline 媒体目录。来源缺失或哈希变化必须
+  明确失败，不得使用相似文件替代。
+- **图片高级操作保存验证**：显式宽度须映射为 DOCX `wp:extent`；独立图片段落的文档流顺序按
+  `word/document.xml` 中 drawing 次序核对；left/center/right 须映射为所在 `w:pPr/w:jc`。任一受支持
+  图片的数量、媒体内容、尺寸、顺序或对齐无法对应时，保存失败且原 DOCX 不变。
 - **样式子集 ↔ 编辑器扩展**：HTML 的样式需编辑器对应 TipTap 扩展解析为「成熟文本块」，否则显示为生标记
   （映射见 §4 表）。编辑器扩展集为 DOC 编辑链可用性的前置（前端 ED 承载，A-ED-M-T-01）。
 - **资源（经 bundle.resources 打包）**：`reference.docx`（样式模板）、`preserve-styles.lua`（样式保留过滤器）；
@@ -229,14 +257,17 @@ BR-WS-PERSIST-001 保障），无半成品落盘；转换中断不残留破坏�
 
 | 级别 | 清单 | 对用户的承诺 | 当前证据与落地要求 |
 |---|---|---|---|
-| 已实测保证 | 标题、粗体 | 现有真实 DOCX 往返已覆盖 | 维持自动回归；这是当前唯一可以称为“已验证”的样式集合 |
-| 必需待扩展 | H1-H6、段落对齐、斜体/下划线、有序/无序列表、基础表格、嵌入图片 | 目标为往返保真（语料总通过率 ≥95%），未达标不得标为保证 | 每项都需 DOCX XML 断言、编辑器 HTML 断言与 LO PDF 视觉回归；完成后才转入“已实测保证” |
-| 尽力保留 | 文本颜色、字体、字号、同名 custom-style（未验证） | 内容及可承载的样式尽力保留；字体度量、行距、分页、表格宽度可变化 | `docx+styles`、Lua 与 `reference.docx` 参与传递；`data-custom-style` 与字号单位在 ED 未验证前不得宣称继承，字号 pt→px 偏差修复前必须明示差异；按语料统计而非承诺无损 |
+| 已实测保证 | 标题、粗体、文本颜色、单元格纯色底纹、嵌入图片 | 文本颜色覆盖 `w:color`；单元格底纹覆盖 `w:shd`；嵌入图片覆盖相对资源解析、`word/media`、`w:drawing`、`wp:extent`、alt 与重开 HTML 断言 | 维持自动回归；不能匹配的来源颜色、底纹、图片资源或尺寸必须进入报告，图片缺失不得继续保存 |
+| 必需待扩展 | H1-H6、段落对齐、斜体/下划线、有序/无序列表、基础表格 | 目标为往返保真（语料总通过率 ≥95%），未达标不得标为保证 | 每项都需 DOCX XML、编辑器 HTML 与可用预览视觉证据；完成后才转入“已实测保证” |
+| 尽力保留 | 字体、字号、同名 custom-style（未验证） | 内容及可承载的样式尽力保留；字体度量、行距、分页、表格宽度可变化 | `docx+styles`、Lua 与 `reference.docx` 参与传递；`data-custom-style` 与字号单位在 ED 未验证前不得宣称继承，字号 pt→px 偏差修复前必须明示差异；按语料统计而非承诺无损 |
 | 仅模板继承 | 页边距、页面尺寸、输出页眉页脚、reference.docx 中已注册的样式 | 输出继承 Binder `reference.docx` 的定义，不承诺复刻来源文档对应定义 | 不把“继承 Binder 模板”表述为“继承原文档布局” |
 | 明确不处理 | 来源页眉页脚内容、文本框、SmartArt、VBA 宏、修订/批注、域代码、复杂样式继承链、复杂合并表格格式、浮动对象定位 | 不进入可编辑往返承诺；原文档通过只读 PDF 查看 | `doc.get_style_report` 必须列出命中的风险项；禁止静默宣称保真 |
 
-五档是**目标报告模型**，不是当前三档 `StyleTier` 的同义改名；在 PI-DOC-02 完成枚举、IPC、前端告知和
-回归语料改造前，任何实现只能对用户报告现有三级结果，且不得把“必需待扩展”伪装为“已实测保证”。
+五档报告已由 `doc.open_for_edit` 同次结果和 `doc.get_style_report` 提供：报告按实际 HTML 命中的特性分类，
+并携带 DOCX 文本颜色、TableCellShading，以及图片实例/嵌入资源/尺寸的检测、恢复、未恢复计数；
+ED 在状态栏显示报告中的风险告知。不能匹配的来源颜色、底纹或图片不得被报告为保真。其余 OOXML
+高级对象的逐项检测仍属后续专项，不得把
+“必需待扩展”伪装为“已实测保证”。
 
 <!-- RULE
 rule_id: BR-DOC-DATA-002
@@ -246,7 +277,14 @@ rule_id: BR-DOC-DATA-002
 docx 进入编辑态必须按当前实现支持度子集化：已实测项维持回归覆盖；必需待扩展项在语料达标前不得
 向用户承诺保真；尽力保留项的损失必须对用户可知（不静默丢失）；明确不处理项清单公开且由只读预览
 补偿查看需求。能力清单的变更必须回写本文并同步 ED（编辑模型承载范围）与 PRV（预览补偿）复核，
-不得在转换代码中私自增减。
+不得在转换代码中私自增减。TableCellShading 的已实测子集只包含显式不透明 `#RRGGBB`：
+保存侧须写入 `w:tcPr/w:shd`，打开侧须恢复到同序 `td/th` 的编辑属性；主题色、透明度、渐变、图案及
+无法对应到编辑 HTML 的底纹必须计入未恢复报告，不得静默归入保真。嵌入图片的已实测子集只包含
+受控相对资源、alt、显式尺寸、图片实例数量及由 HTML 段落顺序表达的文档流位置/删除结果。workspace
+项目图片必须先以相对来源路径、格式/magic 和 SHA-256 校验后物化为 baseline 内稳定相对资源；草稿
+恢复和保存前须复核来源/哈希，复制不得改写源文件；保存成功后当前 HTML 引用的媒体须迁移到新
+baseline，保证后续保存不依赖旧 baseline 目录；
+`data-display`、浮动或绝对定位和任意坐标布局不属于保证集，不得借“image=Verified”扩大解释。
 
 ### §4.1 样式子集 ↔ 编辑器扩展映射（前端 ED 承载，实现 SSOT）
 
@@ -259,6 +297,7 @@ docx 进入编辑态必须按当前实现支持度子集化：已实测项维持
 | 必需子集 | 段落对齐 | `TextAlign` |
 | 必需子集 | 下划线 | `Underline` |
 | 必需子集 | 基础表格 | `Table` / `TableRow` / `TableHeader` / `TableCell` |
+| 已实测保证 | 单元格纯色底纹 | `TableCellShading`（`tableCell` / `tableHeader` 全局属性） |
 | 必需子集 | 嵌入图片 | `Image`（base64/inline） |
 | 部分支持 | 文本颜色 | `TextStyle` + `Color` |
 | 部分支持 | 字体 | `FontFamily` |
@@ -358,7 +397,10 @@ status: mapped
   预览链失败不影响编辑链；断网时开/存/预览转换可用；无文档内容网络上行（可经网络核验）。
 - **必需子集往返保真**（BR-DOC-DATA-002，REQ-DOC-003 验收）：标题/对齐/粗斜下/列表/基础表格/图片
   的 b-docx→编辑→docx 往返回归测试强制覆盖；每项至少有 DOCX XML、编辑模型 HTML 和 LO PDF 三层断言。
-  当前仅标题/粗体已实测，其余在语料通过前只能标记为“必需待扩展”；部分支持项损失有用户可见明示。
+  当前标题/粗体/文本颜色/单元格纯色底纹已具针对性 OOXML 与重开断言；嵌入图片已具 DOCX XML、
+  编辑模型 HTML、资源缺失失败、显式尺寸、文档流顺序、删除结果与重开恢复报告断言；`data-display`
+  丢失断言作为明确排除证据。预览视觉验证受独立 LO 债务影响时必须如实登记，
+  不得据此撤销已验证的编辑链资源与结构证据；其余项在语料通过前只能标记为“必需待扩展”。
 - **LO 无界面与字体**（BR-DOC-DATA-001）：启动 Binder 不产生 LO GUI；工具损坏时 Binder 仍可启动、DOC command
   明确不可用；真实转换只以隔离 profile headless 子进程运行。字体语料在无系统 LO、无额外字体干净环境中通过
   文本层/嵌入字体/视觉三重断言，并覆盖复杂脚本与 emoji cluster。
@@ -383,7 +425,8 @@ status: mapped
   §2）**——Excel/PPT 预览转换归 DOC 预览链扩展（LibreOffice→PDF，受 X-SEQ-004 约束）；音视频
   系统解码归 PRV（非文档转换职责）。Excel/PPT 保真度实现期实测，不达另议须回写两文。
 - **样式子集告知交互形态**（DOC-04）：延实现期人类确认，本文只锁"用户可知"语义。
-- 转换缓存策略（旧版 file_cache + content_hash 模式可取材）延实现期，与 WS 控制态缓存协同设计。
+- 通用转换缓存策略（文本模型、淘汰、容量与并发）仍延实现期；图片编辑媒体已按 baseline 隔离并可从
+  同基线 DOCX 重建，但缓存淘汰与容量治理仍需后续与 WS 控制态协同设计。
 
 ## §10 后续动作
 
@@ -410,7 +453,13 @@ status: mapped
 | 2026-07-21 | v2.0 | DOC-BUNDLED-RUNTIME-01：新增受校验包内工具清单、resource_dir 唯一路径和构建前校验设计；Pandoc 版本/哈希/许可证锁定。明确 LO 的 GlyphFallback 源码改造、重建、签名与公证仍为发布阻断，当前包内 LO 转换 SIGABRT 不得由系统回退掩盖。 |
 | 2026-07-21 | v2.1 | DOC-LO-RELIABILITY-FONT-PLAN-01：补充 LO 无 GUI 启动、稳定 headless、CoreText 包内字体注册及 GlyphFallback 源码策略；将 Pandoc 样式能力改为“已实测 / 必需待扩展 / 尽力 / 模板继承 / 不处理”五档，并锁定三层回归验收。DOC-PLAT-001 仅登记暂缓。 |
 | 2026-07-21 | v2.2 | 审计修正：工具失效改为 DOC 功能降级而非 Binder 启动失败；LO profile/临时文件收敛至应用缓存；字体完整性扩展为整个嵌套 app 清单与签名；GlyphFallback 改为 shaping run/grapheme cluster 覆盖；五档样式明确为待 PI-DOC-02 实现的目标模型。 |
+| 2026-07-27 | v2.3 | DOCX-COLOR-ROUNDTRIP-01：文本颜色升级为已实测保证；保存侧以短生命周期标记驱动 OOXML `w:color` 写入，打开侧从 `word/document.xml` 恢复 HTML 颜色；五档样式报告、`doc.get_style_report` 与 ED 状态栏风险告知接线，并以 DOCX XML + HTML 重开回归验证。 |
 | 2026-07-22 | v2.3 | 人类确认继续 LO 源码融合路线：在 §2.3 增加 Font Trace 与只读 Render Proxy 前置，明确先分流 family 规则、profile 与 glyph fallback，再进入 CoreText/GlyphFallback 源码裁决；原生 Office 源文件始终不修改。 |
 | 2026-07-22 | v2.4 | S0 实现回写：Font Trace/空 FontPlan 已开始落地并通过 DOCX/PPTX/真实参考文档测试；源码 tree 已确认有 headless/quartz 路径，完整源码重建仍受本机构建资源阻断。 |
 | 2026-07-22 | v2.5 | 通用方案校正：明确具体字体只作语料；移除运行时旧 `fontsubst.xcu` 宿主默认字体替换，未知字体不再被外部规则静默定向，等待可验证的包内 FontPlan 与源码 GlyphFallback。 |
 | 2026-07-22 | v2.6 | S1 源码证据回写：确认 Quartz `create_SalInstance()` 无条件初始化 `NSApplication`，与既有崩溃栈一致；`--headless` 不等于不触发 AppKit。空间恢复后，实际编译仍由完整 Xcode/JDK 前置门控。 |
+| 2026-07-28 | v2.7 | BDocx TableCellShading：注册 TERM-DOC-005；将不透明单元格纯色底纹纳入已实测样式子集，锁定 HTML/ProseMirror 属性与 DOCX `w:shd` 双向适配、恢复统计和明确排除边界。 |
+| 2026-07-28 | v2.8 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：嵌入图片升级为已实测保证；锁定 baseline 媒体目录、稳定相对媒体身份、重启授权/同基线重建、保存前资源校验、Pandoc 警告与最终 OOXML 图片计数门禁，并补图片实例/资源/尺寸恢复报告。 |
+| 2026-07-28 | v2.9 | BDOCX-IMAGE-INTERACTION-01：BR-DOC-DATA-002 收紧 image=Verified 的解释，增加图片文档流顺序和删除结果的真实 Pandoc/HTML 重开证据；确认 data-display 丢失并将浮动/绝对定位继续列为明确不处理。 |
+| 2026-07-29 | v2.10 | BDOCX-IMAGE-AGENT-EDIT-01：BR-DOC-DATA-002 增加 workspace 项目图片格式/magic/SHA-256 校验、baseline 稳定媒体物化、来源/hash 草稿重建与源文件只读边界。 |
+| 2026-07-29 | v2.11 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：保存链增加图片数量、媒体内容、wp:extent、文档流顺序与独立图片段落 w:jc 对齐联合验证。 |

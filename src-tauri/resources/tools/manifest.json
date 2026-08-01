@@ -11,7 +11,7 @@
     "license": "GPL-2.0-or-later"
   },
   "libreoffice": {
-    "version": "LibreOffice 25.8.7.3 30742500f2d3eb4366ac312fa33d3dcabdb3eba5",
+    "version": "LibreOfficeDev 25.8.7.3 30742500f2d3eb4366ac312fa33d3dcabdb3eba5",
     "architecture": "arm64",
     "path": "libreoffice/LibreOffice.app/Contents/MacOS/soffice",
     "sha256": "6ae8ac6aa5e06329aa2638fc1e6050d1473ceb1db5a1be3205a438d541b010a4",

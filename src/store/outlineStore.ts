@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { Node as PMNode } from "@tiptap/pm/model";
+import { isContentBlock } from "../components/ed/extensions/BlockIdExtension";
 
 /**
  * 大纲投影 store（PI-ED-12 · 视图层）。活动文档的标题树投影：Editor 在事务后提取（相等则不发布），
@@ -14,15 +15,17 @@ export interface OutlineItem {
   text: string;
 }
 
-/** 大纲提取纯逻辑（供 Editor 与单测共用）：顶层 heading 块 → {blockId, level, text}；
- *  无 blockId 的标题跳过（无锚不可跳转，不产生死项）。 */
+/** 大纲提取纯逻辑：遍历所有内容块（含嵌套在 blockquote/列表内的 heading）；
+ *  审计修复（2026-07-25 · A+D）：从 doc.forEach 改为 doc.descendants，支持嵌套 heading。 */
 export function extractOutline(doc: PMNode): OutlineItem[] {
   const items: OutlineItem[] = [];
-  doc.forEach((node) => {
-    if (node.type.name !== "heading") return;
+  doc.descendants((node, _pos) => {
+    if (!isContentBlock(node as unknown as { type: { name: string } })) return true;
+    if (node.type.name !== "heading") return true;
     const blockId = (node.attrs.blockId as string | null) ?? "";
-    if (!blockId) return;
+    if (!blockId) return true;
     items.push({ blockId, level: Number(node.attrs.level) || 1, text: node.textContent });
+    return false;
   });
   return items;
 }

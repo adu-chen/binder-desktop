@@ -156,10 +156,23 @@
 - **文件范围**：`EditorStatusBar.tsx`（新：字数/行数/光标位/脏态/保存态；接 @tiptap/extension-character-count）；冲突条重构为状态栏项+弹出双显式按钮；`tabsStore.reorder(+test)` + TabStrip 指针拖拽排序 + 滚动条隐藏 + 纵轮转横滚 + 激活标签 scrollIntoView；工具栏两排固定分组 + 溢出滚动；zoom 迁入 `edViewPrefsStore`（per-doc 持久）+ ctrl/pinch 滚轮缩放；SM-DOC-01 OpenConverting→ 会话 loading 呈现态 + 骨架/不确定进度；每标签滚动位置暂存。
 - **验收**：状态栏各项实时正确；冲突裁决仍双向显式（BR-ED-STATE-003 不弱化）；标签拖动排序/无滚动条；工具栏窄窗口尾部可滚出；缩放跨切换保留；大 docx 打开有即时反馈。
 
-#### PI-ED-08　表格操作 UI + 图片交互（N3 / #3 图片部分）　✅ G4 已实现（2026-07-03，320393e；拖宽/嵌入切换真机验收待做）
+#### PI-ED-08　表格操作 UI + 图片交互（N3 / #3 图片部分）　✅ G4 已实现（图片 Topic B 自动验证完成；WKWebView 人工验收待做）
 - **承接**：视图+用户编辑（改模型 attrs 产脏态，合法，非装饰层）。
-- **文件范围**：表格浮动控件/二级菜单（addRow/Column/delete/toggleHeader，TipTap 命令现成）；图片自定义 NodeView（选中手柄拖拽调宽改 `width` attr、inline/block 嵌入切换）。
-- **验收**：表格行列增删可用；图片可拖宽、可切嵌入样式，改动产生脏态且 ⌘S 往返（宽度经 docx 往返保留度与 DOC 联合实测，不达登记降级）。
+- **文件范围**：表格控件沿既有课题；图片使用自定义 NodeView document 捕获拖宽、ED 图片操作服务和
+  直接挂载 `.ed-img-view` 的邻近上移/下移/删除控件。
+- **验收**：图片真实拖宽产生单个 width 事务并在实际改宽时清除固定 height；空拖动不产生脏态；
+  独立图片段落可在文档流内移动并保持 Block/媒体属性/选中态，混排图片禁止块移动但可删除；保存重开
+  保持尺寸、顺序和删除结果。真实探针已证明 `data-display` 不经 DOCX 持久，因此撤销 inline/block
+  按钮验收，不把失败能力留在 UI。
+
+#### PI-ED-17　BDocx 项目图片代理编辑（BDOCX-IMAGE-AGENT-EDIT-01）
+
+- **承接**：REQ-ED-004 / BR-ED-DATA-001/003 / TERM-ED-008；联合 SYS/AG/DE/DOC/WS。
+- **范围**：当前活动 BDocx 的图片快照、workspace 项目图片来源、独立段落
+  `insert_image`、当前实例 `delete_image`、整批原子草稿事务与结构化 Diff。
+- **排除**：外部导入、远程/data URL、代理缩放/移动、浮动/绝对定位、任意拖放和源文件删除。
+- **验收**：基线/Block/image/source hash 均须匹配；reject 恢复全文；保存重开保持受支持图片语义，
+  缓存缺失时可凭 workspace 来源与哈希重新物化。
 
 ### 批B　契约批（文档修订先行 → 实现；D-1/2/3 为前提）
 
@@ -198,7 +211,7 @@
 - **范围**：官方 TipTap Markdown Codec、`editFormat=markdown` / `contentFormat`、终态样式、格式能力限制、AG/DE block projection、会话持久化迁移。
 - **验收**：CommonMark+GFM 支持子集终态呈现；未编辑不改写；编辑后语义往返；非支持结构不静默丢失；`.txt`、b-docx、html 路径不回归。
 
-**候补清单（不开 PI，待人类排期）**：N2 编辑器内查找/替换；N4 本地图片插入（需 A-WS-I-P-01 增
+**候补清单（不开 PI，待人类排期）**：N2 编辑器内查找/替换；N4 外部图片导入（需 A-WS-I-P-01 增
 `ws.import_media`）；N5 链接编辑弹层（随 #11 顺手）；N9 编辑器分页 vs PRV 打印分页差异说明（文档
 动作）；N10 自动保存（产品决策，与基线冲突模型有张力，默认不做）。
 
@@ -218,7 +231,7 @@
 | 项 | 处置 |
 |---|---|
 | 跨会话字符级锚定（内容哈希+diff 重建） | D-2 显式延后；登记 A-ED-M-T-01 §11（PI-ED-10 文档动作含此） |
-| 图片宽度/嵌入样式的 docx 往返保留度 | PI-ED-08 与 DOC 联合实测，不达登记降级 |
+| 图片宽度/嵌入样式的 docx 往返保留度 | 图片宽度、资源、文档流顺序、删除结果与重开尺寸已实测；`data-display` 探针确认丢失，已撤下 inline/block UI，不再作为待验证能力 |
 | 分页视觉 vs PRV 打印分页差异 | N9 候补（说明性文档动作） |
 | 大文档虚拟化/15MB 上限 | 既有债务不变，G5 NFR |
 | **分页大文档增量测量**（2026-07-04 登记，2026-07-26口径同步）：2682块/123页文档每次静默结算仍全量测2k+ rect；当前内容输入等待450ms，且已删除ProseMirror整体ResizeObserver自反馈，只保留文档事务/字体/媒体/窗口等外部失效源和末块单读。卡顿风险降低但全量测量成本未消除——增量测量（仅测变更块邻域 + 缓存未变块高）为下一档。 | A 类，专项排期（G5 NFR 联动） |
@@ -260,3 +273,6 @@
 | 2026-07-26 | v1.22 | PI-ED-16二次人工失败纠偏：确认过滤分页缝但继续克隆可见DOM仍会复制WebKit辅助BR/残留结构；离屏段落改由ProseMirror正文模型经schema DOMSerializer生成，含hardBreak段落不再参与段内分页，避免短行或旧widget污染成为断点。 |
 | 2026-07-26 | v1.23 | PI-ED-16物理分页边界纠正：恢复并保留完整页缝/页码/纸张高度/防跳实现，仅替换普通段落自然行真值路径；同一rAF内暂时过滤paragraph-line widget但保留Block页缝，读取当前可见ProseMirror真实行盒后立即恢复最终完整分页。 |
 | 2026-07-26 | v1.24 | 人类确认闭合PI-ED-16及整个分页课题：普通段落行中强制断开与复杂节点原子降级作为当前版本显式接受边界；保留物理分页、打开收敛和PI-ED-15防跳控制，不再保留人工矩阵开放门禁或后继优化Issue。 |
+| 2026-07-28 | v1.25 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：PI-ED-08 的图片宽度/资源/alt/重开尺寸完成 DOCX XML 与 HTML 联合实测；持久媒体恢复链已落地。NodeView 人工拖拽与 inline/block 样式不在本课题内，继续保持原验收边界。 |
+| 2026-07-28 | v1.26 | BDOCX-IMAGE-INTERACTION-01：PI-ED-08 图片 Topic B 实现 document 捕获拖宽、独立图片段落邻近移动/删除、混排保护及 DOCX 顺序/删除往返测试；撤下真实探针证明不可持久的 inline/block 按钮。 |
+| 2026-07-29 | v1.27 | 新增 PI-ED-17：以 ImageOperation 承接 workspace 项目图片代理插入/删除、动态锚与来源哈希、批原子草稿、结构化 Diff、缓存重建和保存重开验收。 |

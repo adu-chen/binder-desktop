@@ -27,6 +27,9 @@ pub mod memory_link;
 /// PI-AG-07 · 系统提示词正文（三类回合，文本属实现期运营配置）。
 pub mod prompts;
 
+/// PI-SYS-06 · BDocxCapabilityManifest 加载、投影与 Diff 前校验。
+pub mod bdocx_capabilities;
+
 /// PI-AG-08A · 工具注册表（4 工具 + 权限分级，喂 SM-AG-02 validate_tool）。
 pub mod tool_registry;
 
@@ -35,3 +38,6 @@ pub mod tool_exec;
 
 /// PI-AG-08E/08F · 文档分块（text 段落 + docx/html 块），块列表注入 + 块级 propose_edit 重建。
 pub mod blocks;
+
+/// 富文档结构化 BlockOperation 校验与 Diff 规范化。
+pub mod block_ops;

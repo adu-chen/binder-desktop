@@ -54,9 +54,11 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
 | Generating | genFail | 锚失效/持久化失败 | GenFailed | 回报 AG（SM-AG-01 handoffFail）；不进入裁决 |
 | Pending | autoApplyOk | draft_mode=open_session 且 ED session 基线匹配 | Accepted | status=accepted（不可逆）；内容已进入已打开非激活文档 LogicalState；不触发 SM-WS-02，后续由 ED/WS save 落盘；DiffCard 禁用裁决 |
 | Pending | autoApplyFail | draft_mode=open_session 且 ED session 基线不匹配/事务不支持/应用失败 | Expired | status=expired；不触发 SM-WS-02；DiffCard 禁用裁决并显示失效原因 |
-| Pending | userAccept | draft_mode=current_editor 且当前编辑器草稿已应用 | Accepted | status=accepted（不可逆）；不触发 SM-WS-02，后续由 ED/WS save 落盘 |
+| Pending | userAccept | draft_mode=current_editor 且当前编辑器草稿已应用；DiffCard 显式接受 block_ops 时当前节点仍匹配 afterNode fingerprint；任意保存动作沿用“保存即接受”产品决策 | Accepted | status=accepted（不可逆）；不触发 SM-WS-02，后续由 ED/WS save 落盘 |
+| Pending | userAccept | DiffCard 显式接受 block_ops，但当前节点与 afterNode fingerprint 不匹配 | Pending（视觉 conflict） | 不提交不可逆 accept；保留当前 LogicalState，提示目标已被后置编辑；保存动作不走本分支，仍视为用户对当前已应用 pending Diff 的接受 |
 | Pending | userAccept | draft_mode=background 且目标文档未打开 | Accepted | status=accepted（不可逆）；触发 SM-WS-02 accepted（后台 apply 路径） |
-| Pending | userReject | draft_mode!=open_session | Rejected | status=rejected；草稿已应用则 ED 回滚 before；否则通知 SM-WS-02 rejected（不落盘）；ED 装饰复位 |
+| Pending | userReject | draft_mode!=open_session；block_ops 当前节点仍匹配 afterNode fingerprint | Rejected | status=rejected；普通文本草稿回滚 before，block_ops 以 exact beforeNode 单事务反向；否则通知 SM-WS-02 rejected（不落盘）；ED 装饰复位 |
+| Pending | userReject | block_ops 当前节点与 afterNode fingerprint 不匹配 | Pending（视觉 conflict） | 不提交不可逆 reject；保留当前 LogicalState，提示目标已被后置编辑 |
 | Pending | timeout | 超过可配置时限 | Expired | status=expired；通知 SM-WS-02 expired；ED 装饰复位 |
 | Pending | externalChange | 目标块内容 ≠ before_snapshot（检测可得） | Expired | 同上（检测不可得保守保持 Pending，BR-DE-STATE-002） |
 | Accepted | saved | ED/WS save 成功（草稿路径） | Accepted | 落盘闭合：ED GreenReview 复位（终态保持） |
@@ -76,7 +78,7 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
   - Pending → SM-WS-02 accepted，当目标文档已打开（已打开文档只改 LogicalState，不后台写 DiskState）
   - Accepted → Pending（ApplyError 不得回退终态）
 - **acceptance_criteria**：三终态互斥不可逆且与 status 枚举一一对应；当前编辑器草稿路径经
-  userAccept→Accepted 后不直接落盘，必须等待 ED/WS save；已打开非激活文档经
+  DiffCard 接受或当前文档保存触发的 userAccept→Accepted 后不直接落盘，必须等待 ED/WS save；已打开非激活文档经
   autoApplyOk→Accepted 后只修改 LogicalState 并禁用裁决，必须等待 ED/WS save；后台 apply 路径通往
   SM-WS-02 Applying 的唯一路径仍经 userAccept→Accepted 且目标未打开；rejected/expired 后文件不变、
   装饰复位；externalChange 检测不可得时不自动过期
@@ -87,7 +89,7 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
 | 转移点 | 方向 | 契约 | 双侧状态 |
 |---|---|---|---|
 | 建议交接 | SM-AG-01 HandingOff → SM-DE-01 Generating | ChangeProposal（定位锚+修改内容+来源）交接；genOk→AG handoffOk，genFail→AG handoffFail | **双侧就绪**（AG 侧 A-AG-M-S-01 §2，本文闭合） |
-| 草稿确认保存 | SM-DE-01 Accepted → SM-ED-01 Editing → SM-WS-01 save | 当前编辑器草稿路径 accepted 只确认，文件写入由用户 save 触发；Saved 后 GreenReview 复位 | **双侧就绪**（ED/WS save 侧已就绪） |
+| 草稿确认保存 | SM-DE-01 Accepted → SM-ED-01 Editing → SM-WS-01 save | 当前编辑器草稿路径中，DiffCard 接受或保存动作均先触发 userAccept；文件写入由用户 save 触发；Saved 后 GreenReview 复位 | **双侧就绪**（ED/WS save 侧已就绪） |
 | 未打开文档后台裁决落盘 | SM-DE-01 Accepted → SM-WS-02 accepted | 目标文档未打开的后台/整篇 diff 可由 accepted 触发 apply；Applied/ApplyError 回执回传本机（终态不回退） | **双侧就绪**（WS 侧 A-WS-M-S-01 §3，本文闭合） |
 | 已打开非激活文档自动应用 | SM-DE-01 Pending → SM-ED-01 Editing → Accepted | `draft_mode=open_session` 基线校验通过后直接改对应 ED session LogicalState；不要求用户切换窗口，不触发 SM-WS-02；失败转 Expired/不可裁决投影 | **双侧就绪**（ED 侧待本文后续代码承接） |
 | 不落盘关闭 | SM-DE-01 Rejected/Expired → SM-WS-02 rejected/expired | 驱动 SM-WS-02 → Discarded（不写文件） | **双侧就绪** |
@@ -105,7 +107,7 @@ SM-DE-01 生成 PendingDiff 后，根据 DiffProjection 的 `draft_mode` 分三�
 
 | 条件 | 路径 | 三态语义 | 代码入口 | 触发落盘 |
 |---|---|---|---|---|
-| `draft_mode=current_editor` | **激活草稿路径** | LogicalCandidate → LogicalState（已进入 ProseMirror doc），userAccept 只确认裁决态 | `de.accept_draft_diff` | 等待用户 ⌘S → `save_atomic` |
+| `draft_mode=current_editor` | **激活草稿路径** | LogicalCandidate → LogicalState（已进入 ProseMirror doc）；DiffCard 接受或保存动作触发 userAccept 确认裁决态 | `de.accept_draft_diff` | 任意保存先确认 accepted，再 `save_atomic` |
 | `draft_mode=open_session` 且基线匹配 | **已打开非激活自动应用路径** | LogicalCandidate → LogicalState（已进入目标 ED session），autoApplyOk 直接 Accepted；DiffCard 禁用裁决 | ED session apply → `de.accept_draft_diff` | 等待用户保存目标文档 |
 | `draft_mode=open_session` 且基线不匹配/事务不支持 | **失效路径** | LogicalCandidate 不转正；DiffCard 禁用裁决并记录原因 | `deStore.setLocalView("expired"/"error")` | 无 |
 | `draft_mode=background` 且目标文档未打开 + `isDocxPath(relPath) === false` | **未打开后台路径** | LogicalCandidate → LogicalState + 同步触发 DiskState 写入 | `de.accept_diff` → `ws.apply_diff` → `save_atomic` | accepted 时立即触发 |
@@ -117,13 +119,13 @@ SM-DE-01 生成 PendingDiff 后，根据 DiffProjection 的 `draft_mode` 分三�
 
 ## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
 
-- **正路**：Generating→genOk→Pending→ED 草稿应用→userAccept→Accepted→saved（save 落盘 + 复位）；
+- **正路**：Generating→genOk→Pending→ED 草稿应用→（DiffCard 接受或保存触发 userAccept）→Accepted→saved（save 落盘 + 复位）；
   已打开非激活路径为 Generating→genOk→Pending→autoApplyOk→Accepted（不触发 SM-WS-02）；
   未打开后台路径为 Generating→genOk→Pending→userAccept→Accepted→appliedOk。
 - **拒绝/过期路**：userReject→Rejected、timeout/externalChange→Expired，断言文件不变 + 装饰复位 +
   SM-WS-02 达 Discarded。
 - **生成失败路**：genFail→GenFailed 回报 AG，不进入裁决、无持久化残留。
-- **禁止转移**：三终态互转不可达；Expired/Rejected 不可复活；无 userAccept 不存在通往保存/apply 路径；
+- **禁止转移**：三终态互转不可达；Expired/Rejected 不可复活；无 userAccept（含保存映射）不存在通往保存/apply 路径；
   ApplyError 后终态保持 Accepted；`open_session` 不存在 userAccept/userReject；已打开文档不存在后台 apply。
 - **保守过期**：externalChange 检测不可得时保持 Pending（不误杀）。
 - **冲突重检**（BR-DE-DATA-003）：先序 diff 落盘后，重叠 pending diff 触发 externalChange 重检转
@@ -169,3 +171,6 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
 | 2026-07-10 | v1.3 | 三态模型落地（A-CORE-C-T-01）：新增 §4 草稿路径 vs 后台路径选择规则（D5 决议）；后续各节编号顺移 |
 | 2026-07-18 | v1.4 | 新增已打开非激活文档 `open_session` 自动应用路径：Pending 后基线校验通过即修改 ED session LogicalState 并转 accepted；失败转 expired/error 投影；禁止用户裁决和后台落盘 |
 | 2026-07-20 | v1.5 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01（SYS 应用关闭协调机 SM-SYS-02）：新增 `startupAbnormalExitSweep` 事件与 Pending→Expired(terminal_reason=abnormal_exit) 启动清算转移；§3 新增「关闭前批量裁决」「启动异常退出清算」两条 SYS→DE 跨模块转移点，均双侧就绪 |
+| 2026-07-27 | v1.6 | DE-SAVE-IMPLICIT-ACCEPT-01：保存即接受已应用草稿 Diff；保存动作在写盘前映射为既有 userAccept→Accepted，保存成功后进入 saved 效果态；显式 DiffCard 接受仍保留。 |
+| 2026-07-30 | v1.7 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：userReject 增 block_ops afterNode fingerprint 前置 guard；匹配则 exact node 反向后进入 Rejected，不匹配保持后端 Pending 并以 conflict 视觉态阻止覆盖用户后置编辑。 |
+| 2026-07-30 | v1.8 | AG-RICH-BLOCK-STRUCTURED-EDIT-01 闭合补强：DiffCard 显式接受 block_ops 同样以前态 afterNode fingerprint 为门禁；后置编辑时保持 Pending/conflict。保存动作继续遵循已确认的“保存即接受”，不改变产品语义。 |

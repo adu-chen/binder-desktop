@@ -22,15 +22,20 @@ DOC 是 P2 docx 双链转换（编辑链 Pandoc / 预览链 LibreOffice）。本
 ### PI-DOC-01　编辑链转换与 docx 开/存机
 - **承接**：REQ-DOC-001/002 / CHAIN DOC-CONVERT / SM-DOC-01 / BR-DOC-STATE-001 / BR-DOC-DATA-001
   / BR-DOC-DATA-003（blockId 兜底）/ X-SEQ-004。
-- **文件范围**：`src-tauri/src/doc/edit_chain.rs`（Pandoc 调用 + data-block-id 注入）；command
-  `doc.open_for_edit/save_from_edit`；存盘经 `ws.save_doc`。
+- **文件范围**：`src-tauri/src/doc/edit_chain.rs`（Pandoc 调用 + data-block-id 注入）、
+  `src-tauri/src/doc/image_media.rs`（图片媒体身份/校验/报告）；command
+  `doc.open_for_edit/restore_edit_media/save_from_edit`；存盘经 `ws.save_doc`。
 - **@GOV**：转换唯一通道 `X-SEQ-004` + `BR-DOC-DATA-001`；生命周期原子性 `BR-DOC-STATE-001`；
   blockId 兜底 `BR-DOC-DATA-003`。
 - **A 类债务**：Pandoc/LibreOffice 包内工具 manifest、架构、哈希、许可证与构建校验（DOC-01）；**data-block-id 往返
-  保留度实测（DOC-02，不达走重建锚降级）**；转换缓存策略（file_cache+content_hash，实现期）；
+  保留度实测（DOC-02，不达走重建锚降级）**；通用转换缓存策略（图片 baseline 媒体恢复已实现，
+  其余 file_cache/淘汰/容量仍在实现期）；
   转换并发/进程池（实现期）。
 - **验收（强制，APC §6）**：SM-DOC-01 矩阵——open 失败 OpenError 会话不建立；save 失败原文件不变
   无半成品；除 DOC 外无二进制转换代码（X-SEQ-004 静态核验）；blockId 兜底注入全块有锚。
+- **图片专项扩展（BDOCX-IMAGE-AGENT-EDIT-01）**：workspace 项目图片经相对路径、magic、SHA-256
+  校验后物化到 baseline 媒体目录；HTML 保留来源/hash 供缓存丢失重建；保存重开验证图片资源、alt、
+  受限宽度、位置和删除结果，且不改写项目源文件。
 
 ### PI-DOC-02　样式能力矩阵与往返验证
 - **承接**：REQ-DOC-003 / BR-DOC-DATA-002。
@@ -39,7 +44,10 @@ DOC 是 P2 docx 双链转换（编辑链 Pandoc / 预览链 LibreOffice）。本
 - **@GOV**：子集化与用户可知 `BR-DOC-DATA-002`。
 - **A 类债务**：样式告知交互形态（DOC-04，**C 类待人类**——实现期定弹层/状态栏）；部分支持项
   （颜色/字体/字号）实际复现率实测。
-- **验收**：标题、粗体的实测保证与待扩展项严格分开；必需待扩展语料总通过率 ≥95%，并逐项具备 DOCX XML、
+- **验收**：标题、粗体、文本颜色、单元格纯色底纹和嵌入图片的实测保证与待扩展项严格分开；图片必须
+  覆盖资源存在/缺失、`word/media`、`w:drawing`、`wp:extent`、alt、文档流顺序、删除结果与重开恢复
+  报告，并以 `data-display` 丢失断言固定非支持边界；其余必需待扩展
+  语料总通过率 ≥95%，并逐项具备 DOCX XML、
   编辑器 HTML、LO PDF 三层断言后才可升档；`data-custom-style` 与字号单位在 ED 未验证前必须报告为尽力保留
   或差异项，不处理项清单公开。
 
@@ -182,7 +190,7 @@ audit 绿；@GOV 追溯 BR-DOC-*；SM-DOC-01 矩阵全覆盖；`// covers: BR-DO
 | data-block-id 往返保留度（DOC-02） | PI-DOC-01 | G4 实测，不达走重建锚 |
 | Excel/PPT 保真度实测 | PI-DOC-03 | G4 实测，不达另议 |
 | 样式告知形态（DOC-04，C 类） | PI-DOC-02 | 待人类/实现期 |
-| 转换缓存/并发/进程池 | PI-DOC-01 | 实现期 |
+| 转换缓存/并发/进程池 | PI-DOC-01 | 图片 baseline 媒体目录、重启授权与同基线重建已实现；通用淘汰/容量/并发仍在实现期 |
 | 首开<12s/缓存<2s/准确率≥90% NFR | 全 PI | G5 标定复核 |
 
 ## 变更记录
@@ -203,11 +211,14 @@ audit 绿；@GOV 追溯 BR-DOC-*；SM-DOC-01 矩阵全覆盖；`// covers: BR-DO
 | 2026-07-22 | v1.11 | S1 PATH 隔离修正：移除 Homebrew PATH，避免损坏的外部 Meson 与系统 Python 组合；让源码回退到 hash 锁定的内部 Meson 1.8.3。 |
 | 2026-07-22 | v1.12 | S1 Ninja 补足：LODE 未提供 Ninja；从官方 Ninja v1.12.1 源码构建隔离可执行文件并纳入预检。关闭的是 Ninja 自身测试下载，非 LO 编译验证。 |
 | 2026-07-22 | v1.13 | S1 构建目标修正：配置完成后确认官方默认目标为 `build`、测试为独立 `check`；脚本从不存在的 `build-nocheck` 改为正式 `build`。 |
+| 2026-07-28 | v1.14 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：PI-DOC-01 接入 `image_media` 与 `doc.restore_edit_media`，完成 baseline 媒体身份、重启恢复、保存资源/警告/OOXML 数量门禁；PI-DOC-02 将嵌入图片以真实资源、尺寸、alt 和重开报告证据升为已实测保证。 |
 | 2026-07-22 | v1.14 | S1 依赖下载修正：构建首次进入 hash 锁定 tarball/子模块下载时被失效 loopback 代理阻断；脚本只在构建子进程清除该代理变量，保留源码校验。 |
 | 2026-07-22 | v1.15 | S1 源码依赖可靠性修正：TDF 发布镜像不覆盖全部外部依赖，不采用会产生 404 的伪通用镜像；改为依赖级可靠源（维护方正式发布源优先、可追溯历史源包归档回退）+ LO 锁定 SHA-256 + 本地 tarball 缓存。脚本新增显式、受配置产物保护的 `BINDER_LO_SKIP_CONFIGURE=1` 恢复模式，默认完整配置行为不变。 |
 | 2026-07-24 | v1.17 | PI-DOC-03-S3 字体身份修复完成：确定根因为 CoreText 本地化名与 OOXML 英文名不匹配，实现三层修复（英文名注册/Office别名表/未知字体回退链），补丁 `binder_font_identity.patch`（237行，3文件）。验证 40+ 次 DOCX 转换完全一致，Rust 55 tests pass。新增 `A-DOC-X-R-02` 决策 triage。 |
 | 2026-07-24 | v1.18 | PI-DOC-03-S4 运行时融合完成：lo_worker.rs 472行，独立 profile/超时/崩溃隔离已落地。 |
 | 2026-07-24 | v1.19 | LO macOS 瘦身完成：移除 Python 框架（110MB）+ 非必要模块配置，497MB→380MB（-24%）。后处理脚本 `postprocess_lo_macos.sh` 已接入 build 管线。 |
 | 2026-07-24 | v1.20 | **预览字体确定性课题闭合**。DOCX 9/9 一致；PPTX/XLSX 代码审查确认共享 PhysicalFontCollection；Rust 集成测试全通过。S5 发布验证（签名/公证/干净设备）为后续事项。 |
+| 2026-07-28 | v1.21 | BDOCX-IMAGE-INTERACTION-01：PI-DOC-02 增加图片文档流顺序、删除结果和 data-display 排除边界的真实 Pandoc 往返验收。 |
+| 2026-07-29 | v1.22 | BDOCX-IMAGE-AGENT-EDIT-01：PI-DOC-01 增加 workspace 项目图片校验/物化、来源 hash 草稿重建、源文件保护及保存重开验证。 |
 | 2026-07-22 | v1.16 | S1 可行性实测回写：确认 Xcode/LODE/配置链正常，非目标数据库、条码和求解器组件可关闭；`--without-fonts` 后只允许 Binder 受控字体集进入最终运行时。默认全格式 build 仍受历史依赖供应链影响，未到编译阶段，保持 S1 未完成。 |
 | 2026-07-22 | v1.17 | S1 精简配置与镜像补丁修正：关闭不参与 Office→PDF 预览的开发、PDF 输入、遥控、目录/远程服务与历史过滤器组件；保留 PDF 导出。修复损坏的归档镜像回退 patch，仍以 LO 锁定 SHA-256 裁决下载内容；已复核缓存的 libmwaw、mythes、NSS、libodfgen、OpenSSL、liborcus 均匹配该锁定哈希。 |

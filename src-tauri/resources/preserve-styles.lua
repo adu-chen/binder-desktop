@@ -153,8 +153,12 @@ local function process_inline_formatting(elem)
       color = tostring(color)
     end
     -- 转换颜色格式（如果是 RRGGBB 格式，添加 # 前缀）
+    -- 确保颜色值有 # 前缀：支持 6 位 hex (RRGGBB) 和 3 位 hex (RGB)
     if color:match("^[0-9A-Fa-f]{6}$") then
       color = "#" .. color
+    elseif color:match("^[0-9A-Fa-f]{3}$") then
+      -- 3 位 hex → 6 位展开（#F00 → #FF0000）
+      color = "#" .. color:gsub("(.)", "%1%1")
     end
     attr = add_style(attr, string.format("color: %s", color))
     has_changes = true
@@ -503,29 +507,9 @@ function Header(elem)
     end
   end
   
-  -- 特殊处理：根据 DOCX 样式定义，heading 1 通常是居中的
-  -- 如果没有任何对齐信息，且是 h1，默认添加居中
-  if not align and elem.level == 1 then
-    -- 检查是否已经有 text-align 样式
-    local has_text_align = false
-    if attr.attributes and attr.attributes.style then
-      local style = attr.attributes.style
-      if type(style) == "string" then
-        has_text_align = style:match("text%-align")
-      elseif type(style) == "table" then
-        for _, s in ipairs(style) do
-          if s:match("text%-align") then
-            has_text_align = true
-            break
-          end
-        end
-      end
-    end
-    
-    if not has_text_align then
-      align = "center"
-    end
-  end
+  -- 审计修复（2026-07-24）：移除 h1 强制居中。DOCX 默认 "Heading 1" 样式是左对齐，
+  -- 强制居中会覆盖用户/模板的原始设计，每次打开 docx 都产生不可逆的样式变更。
+  -- h1 的对齐应完全由文档本身的对齐属性决定，无对齐信息时保持浏览器默认（左对齐）。
   
   -- 如果找到对齐信息，添加到样式（add_style 现在返回新的 Attr）
   if align then

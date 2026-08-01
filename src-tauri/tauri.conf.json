@@ -17,6 +17,7 @@
         "height": 800,
         "minWidth": 800,
         "minHeight": 600,
+        "dragDropEnabled": false,
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
@@ -38,10 +39,8 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.png"],
-    "resources": [
-      "resources/libreoffice/**/*",
-      "resources/reference.docx",
-      "resources/preserve-styles.lua"
-    ]
+    "resources": {
+      "resources/": ""
+    }
   }
 }

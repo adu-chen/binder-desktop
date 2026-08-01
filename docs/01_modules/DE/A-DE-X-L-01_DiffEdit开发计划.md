@@ -64,6 +64,10 @@ DE 是核心交互中枢（接 AG 产出→生成 diff→裁决→驱动 WS 落�
 - **验收**：默认态固定为标题行、位置行、红删行、绿增行、操作按钮行；长 before/after 默认单行省略，
   展开后显示完整内容；状态提示、进度和样式摘要不无界撑高默认卡片；组件测试、build、audit 绿。
 
+- **图片专项扩展（BDOCX-IMAGE-AGENT-EDIT-01）**：DiffPayload/DiffProjection 增加 `image_ops`，
+  DiffCard 展示插入来源/位置/alt/width 与删除目标前后 ImageSnapshot；只允许当前编辑器草稿，拒绝
+  恢复完整 before，项目源文件不属于删除效果。
+
 ## §3 实施顺序
 
 ```
@@ -93,3 +97,4 @@ audit 绿；@GOV 追溯 BR-DE-*；SM-DE-01 矩阵全覆盖；`// covers: BR-DE-*
 | 2026-06-12 | v1.0 | 初版（G3，P3 核心交互 DE 侧）：DE 3 条 Plan Item（生成与载荷 / 终态机与裁决 / 过期与冲突重检），承接 DE-DIFF + 5 规则 + SM-DE-01；accept 唯一触发 ws.apply_diff 不可逆、ApplyError 不回退；DE-04 审阅 UI 为 C 类（接口留 batch 扩展位）；文件范围/@GOV/验收齐 |
 | 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
 | 2026-07-08 | v1.2 | 新增 PI-DE-04 DiffCard 紧凑审阅卡：承接 A-DE-M-T-01 §8.1，锁定逐条默认卡片五行结构、长内容单行省略与展开详情区；DE-04 剩余项收敛为批量裁决、侧栏/内联整体布局 |
+| 2026-07-29 | v1.3 | BDOCX-IMAGE-AGENT-EDIT-01：PI-DE-01/04 扩展 image_ops 持久投影和结构化图片审阅，锁定 current_editor 草稿、拒绝恢复及源文件保护。 |

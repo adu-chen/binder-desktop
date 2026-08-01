@@ -1,11 +1,10 @@
-//! PI-AG-08F · 文档分块（块列表注入 + 块级 propose_edit 重建）。
+//! PI-AG-08F · 文档分块与结构化块快照。
 //!
 //! 两种文档形态：
 //! - **text/source-protected Markdown**：按行（`\n`）切块；结构化 Markdown 的 LogicalState 以 HTML
 //!   contentFormat 投影，复用 HTML 块解析，避免 Markdown 源行与编辑器块错位。
-//! - **docx/html**（editFormat=html）：按 `data-block-id` 块级元素切块（与 ED blockId / DOC 兜底同源思路，
-//!   A-DOC-M-T-01 BR-DOC-DATA-003），展示 strip 后文本；重建 = **原串 in-place 替换该块 inner（非破坏，
-//!   保留其余 HTML 与未捕获内容）**。
+//! - **docx/html**（editFormat=html）：活动编辑器必须直接投影 ProseMirror 层级块快照。HTML 字符串扫描
+//!   只用于未打开文档的只读兼容，不再作为富文档写操作的结构真值。
 //!
 //! dev 级轻量字符串扫描（无 HTML parser 依赖），适配 TipTap 平铺块元素（p/h/li/blockquote 等带 block-id）；
 //! 嵌套同名块、畸形 HTML 不保证——真实 ED blockId 锚定位（对齐 LocateResult）后续。
@@ -15,24 +14,76 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
+fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("baseline 必须是非负 u64")),
+        Some(serde_json::Value::String(number)) => number
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom("baseline 字符串必须是 u64")),
+        Some(_) => Err(serde::de::Error::custom(
+            "baseline 必须是 u64 数字、十进制字符串或 null",
+        )),
+    }
+}
+
 /// 一个文档块。`block_id` = HTML 块的 data-block-id（稳定锚；text 块 None）；
 /// `inner_span` = HTML 块 inner 在原串中的字节区间（in-place 重建用；text 块 None）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocBlock {
     pub block_id: Option<String>,
+    pub block_type: Option<String>,
     pub text: String,
     pub inner_span: Option<(usize, usize)>,
 }
 
 /// AgentEdit 统一可消费块投影：`block_index` 是当前快照内 0 起块号；`block_id` 是 HTML/BDocx
 /// 的稳定锚，text 文档可为空。marks/block_attrs 仅 HTML 快照有语义。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct AgentEditableBlock {
     pub block_id: Option<String>,
     pub block_index: usize,
+    pub block_type: Option<String>,
+    pub node_type: Option<String>,
+    pub role: String,
+    pub parent_block_id: Option<String>,
+    pub depth: usize,
+    pub ordinal: usize,
     pub text: String,
     pub marks: Vec<serde_json::Value>,
     pub block_attrs: serde_json::Value,
+    pub node_json: serde_json::Value,
+    pub fingerprint: Option<String>,
+    pub capabilities: Vec<String>,
+}
+
+/// 当前 ProseMirror LogicalState 的层级块投影。字段名与前端 OpenDocSnapshot 协议一致。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentEditableBlockSnapshot {
+    pub block_id: String,
+    pub block_index: usize,
+    pub block_type: String,
+    pub node_type: String,
+    pub role: String,
+    pub parent_block_id: Option<String>,
+    pub depth: usize,
+    pub ordinal: usize,
+    pub text: String,
+    pub attrs: serde_json::Value,
+    pub marks: Vec<serde_json::Value>,
+    pub node_json: serde_json::Value,
+    pub fingerprint: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// AgentEdit 统一内容快照。BDocx 下游一律消费此编辑模型快照，不直接读取 docx 二进制。
@@ -56,6 +107,8 @@ pub struct AgentEditableSnapshot {
 pub struct OpenDocSnapshot {
     pub rel_path: String,
     pub content: String,
+    #[serde(default, deserialize_with = "deserialize_optional_u64")]
+    pub baseline: Option<u64>,
     pub edit_format: String,
     pub content_format: String,
     pub source: String,
@@ -63,6 +116,18 @@ pub struct OpenDocSnapshot {
     pub session_version: u64,
     pub content_hash: String,
     pub captured_at: i64,
+    /// 仅活动 HTML 编辑器提供，直接由同次 ProseMirror LogicalState 投影；富文档结构写操作
+    /// 必须消费本字段，不能从 content HTML 再次猜测容器和子块。
+    #[serde(default)]
+    pub block_snapshots: Vec<AgentEditableBlockSnapshot>,
+    /// 仅活动 HTML 编辑器提供的 ProseMirror 表格投影。后端据此提供 list_tables，
+    /// 不从 HTML 字符串猜测嵌套表格结构。
+    #[serde(default)]
+    pub table_snapshots: Vec<serde_json::Value>,
+    /// 仅活动 BDocx 编辑器提供的 ProseMirror 图片实例投影。图片身份与 fingerprint
+    /// 必须和同次 sessionVersion/contentHash 捕获。
+    #[serde(default)]
+    pub image_snapshots: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,21 +166,112 @@ impl AgentReadContext {
         self.open_docs.get(rel_path)
     }
 
+    pub fn table_snapshots(&self, rel_path: &str) -> Result<&[serde_json::Value], IpcError> {
+        self.open_snapshot(rel_path)
+            .map(|snapshot| snapshot.table_snapshots.as_slice())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_TABLE_EDIT_REQUIRES_ACTIVE_EDITOR",
+                    "表格结构读取必须在活动编辑器会话中进行",
+                    false,
+                    false,
+                )
+            })
+    }
+
+    /**
+     * @GOV
+     * codes:    BR-AG-DATA-001-QUERY-AG-AG-TOOL-011, BR-ED-DATA-003-QUERY-AG-AG-TOOL-011
+     * type:     QUERY
+     * chain:    AG-TOOL
+     * rules:    BR-AG-DATA-001, BR-ED-DATA-003
+     * term_ref: TERM-ED-008, TERM-DOC-003
+     * boundary: in=ActiveBDocxOpenDocSnapshot | out=CurrentImageSnapshots(sameSessionVersionAndContentHash)
+     */
+    pub fn image_snapshots(&self, rel_path: &str) -> Result<&[serde_json::Value], IpcError> {
+        let snapshot = self.open_snapshot(rel_path).ok_or_else(|| {
+            IpcError::new(
+                "AG_IMAGE_OPERATION_REQUIRES_ACTIVE_EDITOR",
+                "图片操作必须在当前活动 BDocx 编辑器中进行",
+                false,
+                false,
+            )
+        })?;
+        if snapshot.source != "active_editor"
+            || snapshot.edit_format != "html"
+            || snapshot.content_format != "html"
+            || !is_docx_rel_path(rel_path)
+            || !crate::workspace::listing::is_bdocx(&self.root, rel_path)
+        {
+            return Err(IpcError::new(
+                "AG_IMAGE_OPERATION_REQUIRES_ACTIVE_EDITOR",
+                "图片操作只支持当前活动 BDocx HTML 编辑器",
+                false,
+                false,
+            ));
+        }
+        Ok(snapshot.image_snapshots.as_slice())
+    }
+
     pub fn snapshot(&self, rel_path: &str) -> Result<AgentEditableSnapshot, IpcError> {
         if let Some(open) = self.open_snapshot(rel_path) {
+            if open.content_format == "html" && open.source == "active_editor" {
+                if open.block_snapshots.is_empty() {
+                    return Err(IpcError::new(
+                        "AG_STRUCTURED_SNAPSHOT_REQUIRED",
+                        "当前富文档缺少 ProseMirror 层级块快照，请等待编辑器完成绑定后重试",
+                        true,
+                        false,
+                    ));
+                }
+                return Ok(snapshot_from_open_doc(rel_path, open));
+            }
             return Ok(snapshot_from_content(
                 rel_path,
                 &open.content,
                 &open.source,
                 Some(open.edit_format.as_str()),
                 Some(open.content_format.as_str()),
-                None,
+                open.baseline,
                 Some(open.session_version),
                 Some(open.content_hash.clone()),
             ));
         }
         let abs = crate::workspace::resolve_in_workspace(&self.root, rel_path)?;
         read_editable_snapshot(&self.root, rel_path, &abs, None, None)
+    }
+}
+
+fn snapshot_from_open_doc(rel_path: &str, open: &OpenDocSnapshot) -> AgentEditableSnapshot {
+    AgentEditableSnapshot {
+        rel_path: rel_path.to_string(),
+        editable_kind: editable_kind(rel_path, true),
+        source: open.source.clone(),
+        content_format: open.content_format.clone(),
+        content: open.content.clone(),
+        baseline: open.baseline,
+        session_version: Some(open.session_version),
+        content_hash: Some(open.content_hash.clone()),
+        blocks: open
+            .block_snapshots
+            .iter()
+            .map(|block| AgentEditableBlock {
+                block_id: Some(block.block_id.clone()),
+                block_index: block.block_index,
+                block_type: Some(block.block_type.clone()),
+                node_type: Some(block.node_type.clone()),
+                role: block.role.clone(),
+                parent_block_id: block.parent_block_id.clone(),
+                depth: block.depth,
+                ordinal: block.ordinal,
+                text: block.text.clone(),
+                marks: block.marks.clone(),
+                block_attrs: block.attrs.clone(),
+                node_json: block.node_json.clone(),
+                fingerprint: Some(block.fingerprint.clone()),
+                capabilities: block.capabilities.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -183,6 +339,7 @@ pub fn parse_blocks(content: &str, is_html: bool) -> Vec<DocBlock> {
             .split('\n')
             .map(|s| DocBlock {
                 block_id: None,
+                block_type: None,
                 text: s.to_string(),
                 inner_span: None,
             })
@@ -224,9 +381,18 @@ pub fn project_blocks(content: &str, is_html: bool) -> Vec<AgentEditableBlock> {
             AgentEditableBlock {
                 block_id: b.block_id,
                 block_index,
+                node_type: b.block_type.clone(),
+                block_type: b.block_type,
+                role: "legacy".to_string(),
+                parent_block_id: None,
+                depth: 0,
+                ordinal: block_index,
                 text: b.text,
                 marks,
                 block_attrs,
+                node_json: serde_json::Value::Null,
+                fingerprint: None,
+                capabilities: Vec::new(),
             }
         })
         .collect()
@@ -239,7 +405,7 @@ pub fn project_blocks(content: &str, is_html: bool) -> Vec<AgentEditableBlock> {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001, BR-DOC-DATA-003
  * term_ref: TERM-DOC-003, TERM-ED-001
- * boundary: in=workspaceDocOrActiveEditorSnapshot | out=AgentEditableSnapshot(singleBDocxReadModelWithBlocks)
+ * boundary: in=WorkspaceDocumentOrActiveEditorSnapshot | out=AgentEditableSnapshot(activeProseMirrorHierarchyOrReadOnlyLegacyProjection)
  */
 /// AgentEdit 统一快照读取：当前编辑器实时内容优先；非当前 BDocx 只经 DOC 转换链读取 HTML 编辑模型；
 /// 普通文本文件走 WS 文本读取。AG/REF/DE 下游不得绕过该快照另读 BDocx 二进制。
@@ -313,13 +479,14 @@ pub fn block_texts(content: &str, is_html: bool) -> Vec<String> {
         .collect()
 }
 
-/// 把第 `index` 块替换为 `new_text`，返回整篇新内容。
+/// 把第 `index` 块替换为 `new_html`，返回整篇新内容。
 /// HTML：原串 in-place 替换该块 inner（非破坏）；text：替块后 join("\n")。越界返回 Err。
+/// 审计修复（2026-07-26 · D10）：不再 html_escape，new_html 保留内联样式（已由前端 sanitize）。
 pub fn replace_block(
     content: &str,
     is_html: bool,
     index: usize,
-    new_text: &str,
+    new_html: &str,
 ) -> Result<String, String> {
     let blocks = parse_blocks(content, is_html);
     if index >= blocks.len() {
@@ -332,15 +499,10 @@ pub fn replace_block(
         let (s, e) = blocks[index]
             .inner_span
             .ok_or_else(|| "HTML 块缺 inner 区间".to_string())?;
-        Ok(format!(
-            "{}{}{}",
-            &content[..s],
-            html_escape(new_text),
-            &content[e..]
-        ))
+        Ok(format!("{}{}{}", &content[..s], new_html, &content[e..]))
     } else {
         let mut texts: Vec<String> = blocks.into_iter().map(|b| b.text).collect();
-        texts[index] = new_text.to_string();
+        texts[index] = new_html.to_string();
         Ok(texts.join("\n"))
     }
 }
@@ -365,6 +527,7 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// 审计修复（2026-07-25 · A+D）：新增 ul/ol 容器块识别，列表容器在 project_blocks 中以空文本占位。
 fn is_html_block_tag(tag: &str) -> bool {
     matches!(
         tag,
@@ -380,6 +543,9 @@ fn is_html_block_tag(tag: &str) -> bool {
             | "div"
             | "td"
             | "th"
+            | "ul"
+            | "ol"
+            | "table"
     )
 }
 
@@ -429,6 +595,7 @@ fn parse_html_blocks(html: &str) -> Vec<DocBlock> {
         let inner = &html[inner_start..inner_end];
         blocks.push(DocBlock {
             block_id: attr_value(open_tag, "data-block-id"),
+            block_type: Some(tag.to_string()),
             text: strip_tags(inner).trim().to_string(),
             inner_span: Some((inner_start, inner_end)),
         });
@@ -442,7 +609,7 @@ fn parse_html_blocks(html: &str) -> Vec<DocBlock> {
 pub fn replace_block_by_id(
     content: &str,
     block_id: &str,
-    new_text: &str,
+    new_html: &str,
 ) -> Result<String, String> {
     let blk = parse_html_blocks(content)
         .into_iter()
@@ -455,12 +622,7 @@ pub fn replace_block_by_id(
     let (s, e) = blk
         .inner_span
         .ok_or_else(|| "块缺 inner 区间".to_string())?;
-    Ok(format!(
-        "{}{}{}",
-        &content[..s],
-        html_escape(new_text),
-        &content[e..]
-    ))
+    Ok(format!("{}{}{}", &content[..s], new_html, &content[e..]))
 }
 
 // —— 样式投影（PI-ED-11 后端件 · A-AG-I-P-01 §4.1 / schema 单一来源 A-ED-M-T-01 §5.1） ——
@@ -580,7 +742,7 @@ fn decode_entity(ent: &str) -> Option<char> {
 /// void 标签 1 字符占位对齐叶子 pos）；本模块 dev 级定位（畸形 HTML 不保证）已在模块头声明。
 pub fn extract_marks(inner: &str) -> (String, Vec<MarkSpan>) {
     let mut text = String::new();
-    let mut offset = 0usize; // 字符偏移（非字节）
+    let mut offset = 0usize; // CharAnchor：UTF-16 code unit（与 JS String.length / ProseMirror 对齐）
     let mut spans: Vec<MarkSpan> = Vec::new();
     // 开标签栈：(tag, mark_type/attrs 可空, 起始偏移)
     let mut stack: Vec<(String, Option<(String, Option<serde_json::Value>)>, usize)> = Vec::new();
@@ -636,7 +798,7 @@ pub fn extract_marks(inner: &str) -> (String, Vec<MarkSpan>) {
                 let ent: String = bytes[i + 1..j].iter().collect();
                 if let Some(ch) = decode_entity(&ent) {
                     text.push(ch);
-                    offset += 1;
+                    offset += ch.len_utf16();
                     i = j + 1;
                     continue;
                 }
@@ -646,7 +808,7 @@ pub fn extract_marks(inner: &str) -> (String, Vec<MarkSpan>) {
             i += 1;
         } else {
             text.push(c);
-            offset += 1;
+            offset += c.len_utf16();
             i += 1;
         }
     }
@@ -802,6 +964,7 @@ mod tests {
             vec![OpenDocSnapshot {
                 rel_path: "notes.md".to_string(),
                 content: "<h1>标题</h1><p>正文</p>".to_string(),
+                baseline: None,
                 edit_format: "markdown".to_string(),
                 content_format: "html".to_string(),
                 source: "open_editor_session".to_string(),
@@ -809,6 +972,9 @@ mod tests {
                 session_version: 2,
                 content_hash: "h2".to_string(),
                 captured_at: 1,
+                block_snapshots: Vec::new(),
+                table_snapshots: Vec::new(),
+                image_snapshots: Vec::new(),
             }],
         )
         .unwrap();
@@ -820,14 +986,111 @@ mod tests {
     }
 
     #[test]
+    fn active_html_uses_prosemirror_hierarchy_instead_of_flat_html_scanner() {
+        let root =
+            std::env::temp_dir().join(format!("ag-structured-blocks-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let block = |id: &str, parent: Option<&str>, text: &str| AgentEditableBlockSnapshot {
+            block_id: id.to_string(),
+            block_index: if id == "p-1" { 2 } else { 4 },
+            block_type: "p".to_string(),
+            node_type: "paragraph".to_string(),
+            role: "content".to_string(),
+            parent_block_id: parent.map(str::to_string),
+            depth: 2,
+            ordinal: 0,
+            text: text.to_string(),
+            attrs: serde_json::json!({"blockId": id}),
+            marks: Vec::new(),
+            node_json: serde_json::json!({
+                "type": "paragraph",
+                "attrs": {"blockId": id},
+                "content": [{"type": "text", "text": text}]
+            }),
+            fingerprint: format!("fp-{id}"),
+            capabilities: vec!["replace_node".to_string(), "style_ops".to_string()],
+        };
+        let ctx = AgentReadContext::new(
+            &root,
+            vec![OpenDocSnapshot {
+                rel_path: "a.docx".to_string(),
+                content: "<ul><li><p>第一条</p></li><li><p>第二条</p></li></ul>".to_string(),
+                baseline: Some(1),
+                edit_format: "html".to_string(),
+                content_format: "html".to_string(),
+                source: "active_editor".to_string(),
+                dirty: true,
+                session_version: 7,
+                content_hash: "h7".to_string(),
+                captured_at: 1,
+                block_snapshots: vec![
+                    block("p-1", Some("item-1"), "第一条"),
+                    block("p-2", Some("item-2"), "第二条"),
+                ],
+                table_snapshots: Vec::new(),
+                image_snapshots: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let snapshot = ctx.snapshot("a.docx").unwrap();
+        assert_eq!(snapshot.blocks.len(), 2);
+        assert_eq!(snapshot.blocks[0].text, "第一条");
+        assert_eq!(snapshot.blocks[1].text, "第二条");
+        assert_eq!(
+            snapshot.blocks[0].parent_block_id.as_deref(),
+            Some("item-1")
+        );
+        assert_eq!(
+            snapshot.blocks[0].capabilities,
+            vec!["replace_node", "style_ops"]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn active_html_without_structured_blocks_is_rejected() {
+        let root =
+            std::env::temp_dir().join(format!("ag-structured-missing-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let ctx = AgentReadContext::new(
+            &root,
+            vec![OpenDocSnapshot {
+                rel_path: "a.html".to_string(),
+                content: "<p data-block-id=\"p-1\">正文</p>".to_string(),
+                baseline: None,
+                edit_format: "html".to_string(),
+                content_format: "html".to_string(),
+                source: "active_editor".to_string(),
+                dirty: true,
+                session_version: 1,
+                content_hash: "h1".to_string(),
+                captured_at: 1,
+                block_snapshots: Vec::new(),
+                table_snapshots: Vec::new(),
+                image_snapshots: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            ctx.snapshot("a.html").unwrap_err().code,
+            "AG_STRUCTURED_SNAPSHOT_REQUIRED"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn html_blocks_without_block_id_fall_back_to_block_index() {
         let html = r#"<p>农夫发现了一条冻僵的蛇。</p><h2>蛇<strong>苏醒</strong></h2>"#;
         let blocks = parse_blocks(html, true);
 
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_id, None);
+        assert_eq!(blocks[0].block_type.as_deref(), Some("p"));
         assert_eq!(blocks[0].text, "农夫发现了一条冻僵的蛇。");
         assert_eq!(blocks[1].block_id, None);
+        assert_eq!(blocks[1].block_type.as_deref(), Some("h2"));
         assert_eq!(blocks[1].text, "蛇苏醒");
     }
 
@@ -839,9 +1102,18 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].block_id.as_deref(), Some("b1"));
         assert_eq!(blocks[0].block_index, 0);
+        assert_eq!(blocks[0].block_type.as_deref(), Some("p"));
         assert_eq!(blocks[0].text, "你好世界");
         assert_eq!(blocks[0].marks[0]["type"], "bold");
         assert_eq!(blocks[0].block_attrs["textAlign"], "center");
+    }
+
+    #[test]
+    fn extract_marks_uses_utf16_offsets_like_editor_char_anchor() {
+        let (text, marks) = extract_marks("A<strong>😀B</strong>C");
+        assert_eq!(text, "A😀BC");
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].range, (1, 4));
     }
 
     #[test]
@@ -864,10 +1136,13 @@ mod tests {
     }
 
     #[test]
-    fn html_replace_escapes_special_chars() {
+    fn html_replace_preserves_sanitized_inline_html() {
         let html = r#"<p data-block-id="b1">x</p>"#;
-        let out = replace_block(html, true, 0, "a<b>&c").unwrap();
-        assert_eq!(out, r#"<p data-block-id="b1">a&lt;b&gt;&amp;c</p>"#);
+        let out = replace_block(html, true, 0, "a<strong>b</strong>&amp;c").unwrap();
+        assert_eq!(
+            out,
+            r#"<p data-block-id="b1">a<strong>b</strong>&amp;c</p>"#
+        );
     }
 
     // covers: BR-ED-DATA-005

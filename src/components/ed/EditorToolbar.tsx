@@ -2,6 +2,9 @@ import { useEffect, useReducer } from "react";
 import type { Editor } from "@tiptap/react";
 import { ZOOM, formatZoom } from "./zoom";
 import type { PaperKind, PaperOrientation } from "../../store/edViewPrefsStore";
+import type { EditFormat } from "../../store/edStore";
+import { activeTableSnapshot } from "../../services/edTableOps";
+import { normalizeTableCellShading } from "./extensions/TableCellShading";
 
 const PAPER_KINDS: PaperKind[] = ["A4", "A3", "A5", "Letter"];
 
@@ -62,6 +65,10 @@ export function EditorToolbar({
   orientation,
   onPaperChange,
   onOrientationChange,
+  localImageDropOnly = false,
+  editFormat,
+  sourceView,
+  onToggleSourceView,
 }: {
   editor: Editor | null;
   /** 编辑预览区当前缩放比例（1 = 100%）。 */
@@ -74,6 +81,14 @@ export function EditorToolbar({
   orientation?: PaperOrientation;
   onPaperChange?: (p: PaperKind) => void;
   onOrientationChange?: (o: PaperOrientation) => void;
+  /** BDocx 图片必须经本地受控导入，不能把远程 URL 直接写入持久文档。 */
+  localImageDropOnly?: boolean;
+  /** 编辑器格式：markdown 模式下禁用不支持 Markdown 序列化的样式按钮。 */
+  editFormat?: EditFormat;
+  /** Markdown 文档源码视图开关状态。 */
+  sourceView?: boolean;
+  /** Markdown 文档切换源码/富文本视图回调。 */
+  onToggleSourceView?: () => void;
 }) {
   // 订阅编辑器事务 → 刷新按钮 active 态（选区/格式变化即时反映）。
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -88,6 +103,13 @@ export function EditorToolbar({
 
   if (!editor) return null;
   const chain = () => editor.chain().focus();
+  const isMarkdownMode = editFormat === "markdown";
+  const inTable = editor.isActive("table");
+  const activeTable = inTable ? activeTableSnapshot() : null;
+  const supportsTable = (capability: NonNullable<typeof activeTable>["capabilities"][number]) => Boolean(activeTable?.capabilities.includes(capability));
+  const activeCellShading = normalizeTableCellShading(
+    editor.getAttributes(editor.isActive("tableHeader") ? "tableHeader" : "tableCell").backgroundColor,
+  );
 
   // 当前块类型（段落/标题级别）。
   const blockValue = editor.isActive("heading", { level: 1 })
@@ -102,12 +124,12 @@ export function EditorToolbar({
     else chain().toggleHeading({ level: Number(v.slice(1)) as 1 | 2 | 3 }).run();
   };
 
-  // 当前字号（textStyle.fontSize，如 "16px"）。
+  // 当前字号保留来源单位；工具栏新设定使用 pt，与 DOCX 字号语义一致。
   const rawSize = (editor.getAttributes("textStyle").fontSize as string | undefined) ?? "";
-  const curSize = rawSize.replace("px", "");
+  const curSize = rawSize ? String(parseFloat(rawSize)) : "";
   const onSizeChange = (v: string) => {
     if (!v) chain().unsetFontSize().run();
-    else chain().setFontSize(`${v}px`).run();
+    else chain().setFontSize(`${v}pt`).run();
   };
 
   const promptLink = () => {
@@ -126,6 +148,36 @@ export function EditorToolbar({
     // 两排固定分组（PI-ED-07 #11）：行1=历史/块型/字号/文本样式，行2=块级/插入/纸张/缩放；
     // 窄窗口时各行尾部溢出可横向滚出（滚动条隐藏）。
     <div className="ed-toolbar" role="toolbar" aria-label="编辑工具栏">
+      {inTable && (
+        <div className="ed-table-toolbar" role="group" aria-label="表格操作">
+          <span className="ed-table-toolbar-label">表格</span>
+          <span className="ed-table-toolbar-hint">拖拽列边界可调整列宽</span>
+          <TbBtn title="上方插行" onClick={() => chain().addRowBefore().run()}>⤒行</TbBtn>
+          <TbBtn title="下方插行" onClick={() => chain().addRowAfter().run()}>⤓行</TbBtn>
+          <TbBtn title="左侧插列" onClick={() => chain().addColumnBefore().run()}>⇤列</TbBtn>
+          <TbBtn title="右侧插列" onClick={() => chain().addColumnAfter().run()}>⇥列</TbBtn>
+          <TbBtn title="删除行" disabled={!supportsTable("delete_row")} onClick={() => chain().deleteRow().run()}>−行</TbBtn>
+          <TbBtn title="删除列" disabled={!supportsTable("delete_column")} onClick={() => chain().deleteColumn().run()}>−列</TbBtn>
+          <TbBtn title="表头行切换" onClick={() => chain().toggleHeaderRow().run()}>Ⓗ</TbBtn>
+          <TbBtn title="合并选中单元格（先拖选矩形区域）" disabled={!editor.can().mergeCells()} onClick={() => chain().mergeCells().run()}>合并</TbBtn>
+          <TbBtn title="拆分当前合并单元格" disabled={!editor.can().splitCell()} onClick={() => chain().splitCell().run()}>拆分</TbBtn>
+          <label className="ed-table-shading" title="设置所选单元格底纹">
+            <span>底纹</span>
+            <input
+              type="color"
+              aria-label="单元格底纹颜色"
+              value={activeCellShading ?? "#FFF2CC"}
+              onChange={(event) => chain().setCellAttribute("backgroundColor", event.target.value.toUpperCase()).run()}
+            />
+          </label>
+          <TbBtn
+            title="清除所选单元格底纹"
+            onClick={() => chain().setCellAttribute("backgroundColor", null).run()}
+          >
+            清底纹
+          </TbBtn>
+        </div>
+      )}
       <div className="ed-tb-row">
       <TbBtn title="撤销 ⌘Z" onClick={() => chain().undo().run()} disabled={!editor.can().undo()}>
         ↶
@@ -148,8 +200,9 @@ export function EditorToolbar({
       </select>
       <select
         className="ed-tb-select"
-        title="字号"
+        title={isMarkdownMode ? "Markdown 模式不支持字号修改" : "字号"}
         value={curSize}
+        disabled={isMarkdownMode}
         onChange={(e) => onSizeChange(e.target.value)}
       >
         <option value="">字号</option>
@@ -167,35 +220,40 @@ export function EditorToolbar({
       <TbBtn title="斜体 ⌘I" active={editor.isActive("italic")} onClick={() => chain().toggleItalic().run()}>
         <i>I</i>
       </TbBtn>
-      <TbBtn title="下划线 ⌘U" active={editor.isActive("underline")} onClick={() => chain().toggleUnderline().run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持下划线" : "下划线 ⌘U"} active={editor.isActive("underline")} disabled={isMarkdownMode} onClick={() => chain().toggleUnderline().run()}>
         <u>U</u>
       </TbBtn>
       <TbBtn title="删除线" active={editor.isActive("strike")} onClick={() => chain().toggleStrike().run()}>
         <s>S</s>
       </TbBtn>
-      <TbBtn title="上标" active={editor.isActive("superscript")} onClick={() => chain().toggleSuperscript().run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持上标" : "上标"} active={editor.isActive("superscript")} disabled={isMarkdownMode} onClick={() => chain().toggleSuperscript().run()}>
         x²
       </TbBtn>
-      <TbBtn title="下标" active={editor.isActive("subscript")} onClick={() => chain().toggleSubscript().run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持下标" : "下标"} active={editor.isActive("subscript")} disabled={isMarkdownMode} onClick={() => chain().toggleSubscript().run()}>
         x₂
       </TbBtn>
       <Sep />
 
-      <label className="ed-tb-color" title="文字颜色">
-        <span aria-hidden="true">A</span>
-        <input
-          type="color"
-          value={(editor.getAttributes("textStyle").color as string | undefined) ?? "#000000"}
-          onChange={(e) => chain().setColor(e.target.value).run()}
-        />
-      </label>
-      <TbBtn
-        title="高亮"
-        active={editor.isActive("highlight")}
-        onClick={() => chain().toggleHighlight({ color: HIGHLIGHT_COLOR }).run()}
-      >
-        ✏︎
-      </TbBtn>
+      {!isMarkdownMode && (
+        <>
+          <label className="ed-tb-color" title="文字颜色">
+            <span aria-hidden="true">A</span>
+            <input
+              type="color"
+              value={(editor.getAttributes("textStyle").color as string | undefined) ?? "#000000"}
+              onChange={(e) => chain().setColor(e.target.value).run()}
+            />
+          </label>
+          <TbBtn
+            title="高亮"
+            active={editor.isActive("highlight")}
+            onClick={() => chain().toggleHighlight({ color: HIGHLIGHT_COLOR }).run()}
+          >
+            ✏︎
+          </TbBtn>
+        </>
+      )}
+      {isMarkdownMode && <span className="ed-tb-hint" title="文字颜色和高亮不支持 Markdown 格式">MD</span>}
       </div>
 
       <div className="ed-tb-row">
@@ -213,16 +271,16 @@ export function EditorToolbar({
       </TbBtn>
       <Sep />
 
-      <TbBtn title="左对齐" active={editor.isActive({ textAlign: "left" })} onClick={() => chain().setTextAlign("left").run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持左对齐" : "左对齐"} active={editor.isActive({ textAlign: "left" })} disabled={isMarkdownMode} onClick={() => chain().setTextAlign("left").run()}>
         ⇤
       </TbBtn>
-      <TbBtn title="居中" active={editor.isActive({ textAlign: "center" })} onClick={() => chain().setTextAlign("center").run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持居中" : "居中"} active={editor.isActive({ textAlign: "center" })} disabled={isMarkdownMode} onClick={() => chain().setTextAlign("center").run()}>
         ↔
       </TbBtn>
-      <TbBtn title="右对齐" active={editor.isActive({ textAlign: "right" })} onClick={() => chain().setTextAlign("right").run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持右对齐" : "右对齐"} active={editor.isActive({ textAlign: "right" })} disabled={isMarkdownMode} onClick={() => chain().setTextAlign("right").run()}>
         ⇥
       </TbBtn>
-      <TbBtn title="两端对齐" active={editor.isActive({ textAlign: "justify" })} onClick={() => chain().setTextAlign("justify").run()}>
+      <TbBtn title={isMarkdownMode ? "Markdown 不支持两端对齐" : "两端对齐"} active={editor.isActive({ textAlign: "justify" })} disabled={isMarkdownMode} onClick={() => chain().setTextAlign("justify").run()}>
         ☰
       </TbBtn>
       <Sep />
@@ -230,7 +288,11 @@ export function EditorToolbar({
       <TbBtn title="链接" active={editor.isActive("link")} onClick={promptLink}>
         🔗
       </TbBtn>
-      <TbBtn title="插入图片" onClick={promptImage}>
+      <TbBtn
+        title={localImageDropOnly ? "请将本地 PNG/JPEG 图片拖入文档" : "插入图片"}
+        disabled={localImageDropOnly}
+        onClick={promptImage}
+      >
         🖼
       </TbBtn>
       <TbBtn
@@ -239,43 +301,6 @@ export function EditorToolbar({
       >
         ▦
       </TbBtn>
-
-      {/* 表格上下文操作（PI-ED-08 N3，光标在表格内时显示）：行列增删/表头/删表。 */}
-      {editor.isActive("table") && (
-        <>
-          <Sep />
-          <TbBtn title="上方插行" onClick={() => chain().addRowBefore().run()}>⤒行</TbBtn>
-          <TbBtn title="下方插行" onClick={() => chain().addRowAfter().run()}>⤓行</TbBtn>
-          <TbBtn title="左侧插列" onClick={() => chain().addColumnBefore().run()}>⇤列</TbBtn>
-          <TbBtn title="右侧插列" onClick={() => chain().addColumnAfter().run()}>⇥列</TbBtn>
-          <TbBtn title="删除行" onClick={() => chain().deleteRow().run()}>−行</TbBtn>
-          <TbBtn title="删除列" onClick={() => chain().deleteColumn().run()}>−列</TbBtn>
-          <TbBtn title="表头行切换" onClick={() => chain().toggleHeaderRow().run()}>Ⓗ</TbBtn>
-          <TbBtn title="删除表格" onClick={() => chain().deleteTable().run()}>✕表</TbBtn>
-        </>
-      )}
-
-      {/* 图片上下文操作（PI-ED-08 #3，选中图片时显示）：嵌入样式切换（行内↔独占块）。 */}
-      {editor.isActive("image") && (
-        <>
-          <Sep />
-          <TbBtn
-            title={editor.getAttributes("image").display === "block" ? "切换为行内嵌入" : "切换为独占块"}
-            active={editor.getAttributes("image").display === "block"}
-            onClick={() =>
-              editor
-                .chain()
-                .focus()
-                .updateAttributes("image", {
-                  display: editor.getAttributes("image").display === "block" ? "inline" : "block",
-                })
-                .run()
-            }
-          >
-            回
-          </TbBtn>
-        </>
-      )}
 
       <span className="ed-tb-spacer" aria-hidden="true" />
 
@@ -306,6 +331,18 @@ export function EditorToolbar({
       )}
 
       {/* 缩放：编辑预览区视觉缩放，比例显示于中间（点击复位 100%）——纯呈现层，不改文档模型/不产脏态。 */}
+      {isMarkdownMode && onToggleSourceView && (
+        <>
+          <TbBtn
+            title={sourceView ? "切换到富文本视图" : "切换到 Markdown 源码视图"}
+            active={sourceView}
+            onClick={onToggleSourceView}
+          >
+            {sourceView ? "WYSIWYG" : "MD"}
+          </TbBtn>
+          <Sep />
+        </>
+      )}
       <TbBtn title="缩小" onClick={onZoomOut} disabled={zoom <= ZOOM.min}>
         −
       </TbBtn>

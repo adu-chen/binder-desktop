@@ -8,23 +8,33 @@ const tauriMock = vi.hoisted(() => {
   return {
     Channel: MockChannel,
     invoke: vi.fn(),
+    convertFileSrc: (path: string) => `asset://localhost/${path}`,
   };
 });
 
 const edLocateMock = vi.hoisted(() => ({
+  getActiveEditor: vi.fn(),
   getActiveBlockSnapshotById: vi.fn(),
   getActiveBlockSnapshotByIndex: vi.fn(),
   getActiveDocumentContent: vi.fn(),
   getActiveEditorBinding: vi.fn(),
   locateBlock: vi.fn(),
 }));
+const docServiceMock = vi.hoisted(() => ({
+  ensureDocumentMediaDisplayBase: vi.fn(async () => undefined),
+  projectDocumentMediaDisplaySrc: vi.fn(
+    (relPath: string, mediaRef: string) => `asset://document/${relPath}/${mediaRef}`,
+  ),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: tauriMock.Channel,
   invoke: tauriMock.invoke,
+  convertFileSrc: tauriMock.convertFileSrc,
 }));
 
 vi.mock("./edLocate", () => edLocateMock);
+vi.mock("./docService", () => docServiceMock);
 
 import { invoke } from "@tauri-apps/api/core";
 import { agStore, activeSession } from "../store/agStore";
@@ -76,13 +86,22 @@ function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
       location_label: patch.location_label ?? "Block 1",
       draft_mode: patch.draft_mode ?? "current_editor",
       snapshot_source: patch.snapshot_source ?? "active_editor",
+      base_session_version: has("base_session_version") ? patch.base_session_version : null,
+      base_content_hash: has("base_content_hash") ? patch.base_content_hash : null,
       style_ops: patch.style_ops ?? null,
+      block_ops: patch.block_ops ?? null,
+      table_ops: patch.table_ops ?? null,
+      image_ops: patch.image_ops ?? null,
     },
   });
 }
 
 beforeEach(() => {
   invokeMock.mockReset();
+  docServiceMock.ensureDocumentMediaDisplayBase.mockClear();
+  docServiceMock.projectDocumentMediaDisplaySrc.mockClear();
+  edLocateMock.getActiveEditor.mockReset();
+  edLocateMock.getActiveEditor.mockReturnValue(null);
   edLocateMock.getActiveBlockSnapshotById.mockReset();
   edLocateMock.getActiveBlockSnapshotByIndex.mockReset();
   edLocateMock.getActiveDocumentContent.mockReset();
@@ -91,7 +110,14 @@ beforeEach(() => {
   edLocateMock.getActiveDocumentContent.mockImplementation(() => edStore.getSnapshot().loadedContent);
   edLocateMock.getActiveEditorBinding.mockImplementation(() => {
     const ed = edStore.getSnapshot();
-    return ed.openPath ? { relPath: ed.openPath, loadSeq: ed.loadSeq, editFormat: ed.editFormat } : null;
+    return ed.openPath
+      ? {
+          relPath: ed.openPath,
+          loadSeq: ed.loadSeq,
+          editFormat: ed.editFormat,
+          contentFormat: ed.contentFormat,
+        }
+      : null;
   });
   edLocateMock.locateBlock.mockReturnValue("located");
   edStore.reset();
@@ -255,6 +281,42 @@ describe("agService 历史恢复", () => {
                 location_label: "历史修改建议",
               },
             },
+            {
+              diff_id: "d-image",
+              target: { rel_path: "notes/a.docx" },
+              status: "rejected",
+              created_at: 5,
+              projection: {
+                patch_kind: "image_ops",
+                before_text: "当前图片 1 张",
+                after_text: "图片操作：插入 0 张，删除 1 张",
+                location_label: "图片结构",
+                image_ops: {
+                  base: { sessionVersion: 3, contentHash: "h3" },
+                  operations: [{
+                    op: "delete_image",
+                    imageId: "image_0_abcd",
+                    fingerprint: "abcd",
+                  }],
+                },
+                image_before: [{
+                  imageId: "image_0_abcd",
+                  fingerprint: "abcd",
+                  ordinal: 0,
+                  blockId: "b-img",
+                  imagePos: 2,
+                  standalone: true,
+                  alt: "旧图",
+                  width: "240",
+                  height: null,
+                  mediaRef: "media/image.png",
+                  projectSourcePath: "images/image.png",
+                  projectSourceHash: "a".repeat(64),
+                }],
+                image_after: [],
+                image_affected_block_ids: ["b-img"],
+              },
+            },
           ],
         };
       }
@@ -288,6 +350,7 @@ describe("agService 历史恢复", () => {
                 ],
                 diffRefs: [
                   { diffId: "d-accepted", relPath: "notes/a.md", anchorMessageId: "a1" },
+                  { diffId: "d-image", relPath: "notes/a.docx", anchorMessageId: "a1" },
                   { diffId: "d-missing", relPath: "notes/missing.md", anchorMessageId: "a1" },
                 ],
               },
@@ -323,6 +386,19 @@ describe("agService 历史恢复", () => {
         after: "新内容",
       }),
       expect.objectContaining({
+        diffId: "d-image",
+        state: "rejected",
+        readonly: true,
+        patchKind: "image_ops",
+        imageOps: ["删除图片 image_0_abcd"],
+        imageBefore: [expect.objectContaining({
+          imageId: "image_0_abcd",
+          projectSourcePath: "images/image.png",
+        })],
+        imageAfter: [],
+        imageAffectedBlockIds: ["b-img"],
+      }),
+      expect.objectContaining({
         diffId: "d-missing",
         sessionId: "s1",
         turnId: "t1",
@@ -337,7 +413,7 @@ describe("agService 历史恢复", () => {
       expect.objectContaining({
         request: expect.objectContaining({
           command: "de.list_diffs",
-          params: { diffIds: ["d-accepted", "d-missing"] },
+          params: { diffIds: ["d-accepted", "d-image", "d-missing"] },
         }),
       }),
     );
@@ -771,6 +847,185 @@ describe("agService ReferencePayload 发送契约", () => {
       locationLabel: "样式修改",
       patchKind: "style_ops",
     });
+  });
+
+  it("propose_edit 的 block_ops 投影保留精确 beforeNode/afterNode 执行真值", async () => {
+    edStore.loadDoc(
+      "notes/current.docx",
+      '<ul><li><p data-block-id="p-1">第一条</p></li><li><p data-block-id="p-2">第二条</p></li></ul>',
+      101,
+      null,
+      "html",
+    );
+    const blockOps = {
+      payloadVersion: 1,
+      base: { sessionVersion: 1, contentHash: "h1" },
+      operations: [{
+        op: "replace_node",
+        blockId: "p-1",
+        fingerprint: "block-v1-old",
+        expectedNodeType: "paragraph",
+        beforeNode: {
+          type: "paragraph",
+          attrs: { blockId: "p-1" },
+          content: [{ type: "text", text: "第一条" }],
+        },
+        afterNode: {
+          type: "paragraph",
+          attrs: { blockId: "p-1" },
+          content: [{ type: "text", text: "新第一条" }],
+        },
+      }],
+    };
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "tool_result",
+        turn_id: "t",
+        tool_name: "propose_edit",
+        result: projectionResult({
+          diff_id: "diff-block",
+          rel_path: "notes/current.docx",
+          patch_kind: "block_ops",
+          block_id: "p-1",
+          block_index: 2,
+          before_text: "p-1: 第一条",
+          after_text: "p-1: 新第一条",
+          location_label: "Block 2",
+          block_ops: blockOps,
+        }),
+        success: true,
+      });
+      onEvent.onmessage?.({
+        type: "diff_proposed",
+        turn_id: "t",
+        diff_id: "diff-block",
+        rel_path: "notes/current.docx",
+      });
+      completeTurn(arg);
+    });
+
+    await startTurn("把第一条改写");
+
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      diffId: "diff-block",
+      patchKind: "block_ops",
+      blockId: "p-1",
+      before: "p-1: 第一条",
+      after: "p-1: 新第一条",
+      blockOpsPayload: blockOps,
+      blockOps: ["p-1 · paragraph"],
+    });
+  });
+
+  it("不可信 style_ops 投影不会进入可裁决 Diff", async () => {
+    edStore.loadDoc("notes/current.docx", '<p data-block-id="b1">正文</p>', 101, null, "html");
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "tool_result",
+        turn_id: "t",
+        tool_name: "propose_edit",
+        result: projectionResult({
+          diff_id: "diff-invalid-style",
+          rel_path: "notes/current.docx",
+          patch_kind: "style_ops",
+          block_id: "b1",
+          block_index: 0,
+          before_text: "正文",
+          after_text: "（样式修改）",
+          location_label: "样式修改",
+          style_ops: [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "sub" } }],
+        }),
+        success: true,
+      });
+      onEvent.onmessage?.({
+        type: "diff_proposed",
+        turn_id: "t",
+        diff_id: "diff-invalid-style",
+        rel_path: "notes/current.docx",
+      });
+      completeTurn(arg);
+    });
+
+    await startTurn("设置下标");
+
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      diffId: "diff-invalid-style",
+      state: "error",
+      errorCode: "AG_STYLE_OPERATION_INVALID",
+      styleOpsPayload: undefined,
+    });
+  });
+
+  it("image_ops 投影生成带授权显示 URL的可执行 ImageOperation 载荷", async () => {
+    edStore.loadDoc("notes/current.docx", '<p data-block-id="b1">正文</p>', 101, null, "html");
+    const hash = "a".repeat(64);
+    const imageOps = {
+      base: { sessionVersion: 1, contentHash: "h1" },
+        operations: [{
+          op: "insert_image",
+          anchorBlockId: "b1",
+          position: "after",
+          assetId: "asset_cover",
+          sourcePath: "images/cover.png",
+        sourceHash: hash,
+        mediaRef: `media/binder-project-${hash}.png`,
+        alt: "封面",
+        width: 320,
+      }],
+    };
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "tool_result",
+        turn_id: "t",
+        tool_name: "propose_edit",
+        result: projectionResult({
+          diff_id: "diff-image",
+          rel_path: "notes/current.docx",
+          patch_kind: "image_ops",
+          block_id: "b1",
+          block_index: 0,
+          before_text: "当前图片 0 张",
+          after_text: "图片操作：插入 1 张，删除 0 张",
+          location_label: "图片结构",
+          image_ops: imageOps,
+        }),
+        success: true,
+      });
+      onEvent.onmessage?.({
+        type: "diff_proposed",
+        turn_id: "t",
+        diff_id: "diff-image",
+        rel_path: "notes/current.docx",
+      });
+      completeTurn(arg);
+    });
+
+    await startTurn("插入项目封面");
+
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      diffId: "diff-image",
+      patchKind: "image_ops",
+      state: "pending",
+      imageOps: ["插入 images/cover.png · 锚点后"],
+      imageOpsPayload: {
+        base: { sessionVersion: 1, contentHash: "h1" },
+        operations: [{
+          op: "insert_image",
+          assetId: "asset_cover",
+          sourcePath: "images/cover.png",
+          mediaRef: `media/binder-project-${hash}.png`,
+          displaySrc: `asset://document/notes/current.docx/media/binder-project-${hash}.png`,
+        }],
+      },
+    });
+    expect(docServiceMock.ensureDocumentMediaDisplayBase).toHaveBeenCalledWith(
+      "notes/current.docx",
+      '<p data-block-id="b1">正文</p>',
+      101,
+    );
   });
 
   it("显式 replace_document 投影为整篇 diff，供 Editor 执行整篇草稿替换", async () => {

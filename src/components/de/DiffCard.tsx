@@ -48,12 +48,164 @@ function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone
   }
   if (diff.state === "accepted") return { text: `已写入 · 时间轴 #${diff.timelineSeq ?? "-"}`, tone: "ok" };
   if (diff.state === "rejected") return { text: "已拒绝，文件未改动", tone: "muted" };
-  if (diff.state === "conflict") return { text: `与 ${diff.conflictWith ?? "其他修改"} 范围重叠，接受已禁用`, tone: "warn" };
+  if (diff.state === "conflict") {
+    return diff.errorCode
+      ? { text: `目标块已在提案后变化（${diff.errorCode}），已停止回滚`, tone: "warn" }
+      : { text: `与 ${diff.conflictWith ?? "其他修改"} 范围重叠，接受已禁用`, tone: "warn" };
+  }
   if (diff.state === "expired" && diff.expiredReason) return { text: EXPIRED_REASON_TEXT[diff.expiredReason], tone: "warn" };
   if (diff.state === "error") return { text: diff.errorCode ?? "写入失败", tone: "err" };
   return null;
 }
 
+function tableCellText(diff: DiffView, row: number, column: number, phase: "before" | "after"): string | null {
+  const table = phase === "before" ? diff.tableBefore : diff.tableAfter;
+  const cell = table?.cells.find((candidate) => (
+    row >= candidate.row
+    && row < candidate.row + candidate.rowspan
+    && column >= candidate.column
+    && column < candidate.column + candidate.colspan
+  ));
+  return cell?.text ?? null;
+}
+
+function tableCellShading(diff: DiffView, row: number, column: number, phase: "before" | "after"): string | null {
+  const table = phase === "before" ? diff.tableBefore : diff.tableAfter;
+  const cell = table?.cells.find((candidate) => (
+    row >= candidate.row
+    && row < candidate.row + candidate.rowspan
+    && column >= candidate.column
+    && column < candidate.column + candidate.colspan
+  ));
+  return cell?.backgroundColor ?? null;
+}
+
+function tableOperationDetails(diff: DiffView): string[] {
+  if (!diff.tableOpsPayload) return [];
+  return diff.tableOpsPayload.operations.map((operation) => {
+    switch (operation.op) {
+      case "set_cell_text": {
+        const label = `R${operation.at.row + 1}C${operation.at.column + 1}`;
+        const before = tableCellText(diff, operation.at.row, operation.at.column, "before");
+        const after = tableCellText(diff, operation.at.row, operation.at.column, "after");
+        return `${label}：${before === null ? "（应用前待解析）" : previewText(before)} → ${after === null ? previewText(operation.text) : previewText(after)}`;
+      }
+      case "merge_cells":
+        return `合并范围：R${operation.from.row + 1}C${operation.from.column + 1} 至 R${operation.to.row + 1}C${operation.to.column + 1}`;
+      case "split_cell":
+        return `拆分单元格：R${operation.at.row + 1}C${operation.at.column + 1}`;
+      case "set_header_row":
+        return `首行表头：${diff.tableBefore?.headerRow ? "是" : "否"} → ${operation.enabled ? "是" : "否"}`;
+      case "set_cell_background":
+        return "";
+      case "move_table":
+        return `文档流位置：第 ${(diff.tableBefore?.ordinal ?? 0) + 1} 个表格 → 第 ${(diff.tableAfter?.ordinal ?? diff.tableBefore?.ordinal ?? 0) + 1} 个表格`;
+      default:
+        return "";
+    }
+  }).filter(Boolean);
+}
+
+function imageOperationDetails(diff: DiffView): Array<{ title: string; details: string[] }> {
+  if (!diff.imageOpsPayload) return [];
+  return diff.imageOpsPayload.operations.map((operation) => {
+    if (operation.op === "insert_image") {
+      const beforeIds = new Set(diff.imageBefore?.map((image) => image.imageId) ?? []);
+      const inserted = diff.imageAfter?.find((image) => (
+        !beforeIds.has(image.imageId)
+        &&
+        image.projectSourcePath === operation.sourcePath
+        && image.projectSourceHash === operation.sourceHash
+        && image.blockId !== operation.anchorBlockId
+      ));
+      return {
+        title: `插入图片 · ${operation.sourcePath}`,
+        details: [
+          `位置：Block ${operation.anchorBlockId} ${operation.position === "before" ? "之前" : "之后"}`,
+          `替代文本：${operation.alt === undefined || operation.alt === "" ? "（无）" : operation.alt}`,
+          `宽度：${operation.width === undefined ? "保留图片默认宽度" : `${operation.width}px`}`,
+          `资源：${operation.mediaRef}`,
+          `来源哈希：${operation.sourceHash}`,
+          `结果：${inserted ? `已生成图片实例 ${inserted.imageId}` : "等待应用到当前草稿"}`,
+        ],
+      };
+    }
+    const previous = diff.imageBefore?.find((image) => (
+      image.imageId === operation.imageId && image.fingerprint === operation.fingerprint
+    ));
+    const current = diff.imageAfter?.find((image) => image.imageId === operation.imageId);
+    if (operation.op === "resize_image") {
+      return {
+        title: `缩放图片 · ${operation.imageId}`,
+        details: [
+          `宽度：${previous?.width ?? "默认宽度"} → ${current?.width ?? `${operation.width}px`}`,
+          `高度：${previous?.height ?? "按比例"} → ${current?.height ?? "按比例"}`,
+          `位置：${previous?.blockId ? `Block ${previous.blockId}` : "当前图片节点"}`,
+        ],
+      };
+    }
+    if (operation.op === "move_image") {
+      return {
+        title: `移动图片 · ${operation.imageId}`,
+        details: [
+          `方向：${operation.direction === "up" ? "向上" : "向下"}`,
+          `文档流位置：第 ${(previous?.ordinal ?? 0) + 1} 张 → 第 ${(current?.ordinal ?? previous?.ordinal ?? 0) + 1} 张`,
+          `Block：${previous?.blockId ?? "（无）"} → ${current?.blockId ?? previous?.blockId ?? "（无）"}`,
+        ],
+      };
+    }
+    if (operation.op === "set_image_layout") {
+      return {
+        title: `图片段落对齐 · ${operation.imageId}`,
+        details: [
+          `对齐：${previous?.alignment ?? "left"} → ${current?.alignment ?? operation.alignment}`,
+          `位置：${previous?.blockId ? `Block ${previous.blockId}` : "独立图片段落"}`,
+        ],
+      };
+    }
+    return {
+      title: `删除文档图片 · ${operation.imageId}`,
+      details: [
+        `原位置：${previous?.blockId ? `Block ${previous.blockId}` : `第 ${(previous?.ordinal ?? 0) + 1} 张图片`}`,
+        `原替代文本：${previous?.alt ?? "（无）"}`,
+        `原尺寸：${previous?.width ?? "默认宽度"}${previous?.height ? ` × ${previous.height}` : ""}`,
+        `原资源：${previous?.mediaRef ?? "（等待当前图片快照）"}`,
+        `原项目来源：${previous?.projectSourcePath ?? "（非项目来源）"}`,
+        `原来源哈希：${previous?.projectSourceHash ?? "（无）"}`,
+        "项目源文件：保留，不执行删除",
+        `结果：${diff.imageAfter?.some((image) => image.imageId === operation.imageId) ? "目标仍存在（需重新校验）" : "文档图片节点已移除"}`,
+      ],
+    };
+  });
+}
+
+function nodeText(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  if (Array.isArray(value)) return value.map(nodeText).join("");
+  const node = value as Record<string, unknown>;
+  if (node.type === "hardBreak") return "\n";
+  if (typeof node.text === "string") return node.text;
+  return nodeText(node.content);
+}
+
+function blockOperationDetails(diff: DiffView): Array<{ blockId: string; nodeType: string; before: string; after: string }> {
+  return diff.blockOpsPayload?.operations.map((operation) => ({
+    blockId: operation.blockId,
+    nodeType: operation.expectedNodeType,
+    before: nodeText(operation.beforeNode),
+    after: nodeText(operation.afterNode),
+  })) ?? [];
+}
+
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-002-RB-DE-DE-DIFF-003
+ * type:     RB
+ * chain:    DE-DIFF
+ * rules:    BR-DE-DATA-002
+ * term_ref: TERM-DE-003, TERM-ED-008
+ * boundary: in=ImageOperationDiffPayloadAndBeforeAfterSnapshots | out=StructuredImageOperationReviewCard(insertDeleteResizeMoveAlignmentWithBeforeAfterValues)
+ */
 export function DiffCard({ diff }: { diff: DiffView }) {
   const { diffId, title, before, after, state } = diff;
   const busy = state === "validating" || state === "applying";
@@ -62,14 +214,36 @@ export function DiffCard({ diff }: { diff: DiffView }) {
   const [locateFailed, setLocateFailed] = useState(false);
   const longPreview = before.length > PREVIEW_LIMIT || after.length > PREVIEW_LIMIT || /\n/.test(before + after);
   const hasStyleOps = Boolean(diff.styleOps && diff.styleOps.length > 0);
-  const canExpand = longPreview || hasStyleOps;
+  const hasBlockOps = Boolean(diff.blockOpsPayload);
+  const hasTableOps = Boolean(diff.tableOps && diff.tableOps.length > 0);
+  const hasImageOps = Boolean(diff.imageOpsPayload || (diff.imageOps && diff.imageOps.length > 0));
+  const tableDetails = hasTableOps ? tableOperationDetails(diff) : [];
+  const imageDetails = hasImageOps ? imageOperationDetails(diff) : [];
+  const blockDetails = hasBlockOps ? blockOperationDetails(diff) : [];
+  const tableShadingDetails = diff.tableOpsPayload?.operations.flatMap((operation) => {
+    if (operation.op !== "set_cell_background") return [];
+    return [{
+      label: `R${operation.at.row + 1}C${operation.at.column + 1}`,
+      before: tableCellShading(diff, operation.at.row, operation.at.column, "before"),
+      after: tableCellShading(diff, operation.at.row, operation.at.column, "after") ?? operation.color,
+    }];
+  }) ?? [];
+  const canExpand = longPreview || hasStyleOps || hasBlockOps || hasTableOps || hasImageOps;
   const location = diff.locationLabel ?? (diff.blockId ? "目标块" : "整篇");
   const locationText = diff.relPath ? `${diff.relPath} · ${location}` : location;
   const beforeView = previewText(before);
   const afterView = previewText(after);
   const detail = statusText(diff, locateFailed);
   const styleSummary = hasStyleOps ? `样式 ${diff.styleOps?.length ?? 0} 项` : "";
-  const inlineStatus = [detail?.text, styleSummary].filter(Boolean).join(" · ");
+  const blockSummary = hasBlockOps
+    ? `独立内容块 ${diff.blockOpsPayload?.operations.length ?? 0} 项`
+    : "";
+  const tableSummary = hasTableOps ? `表格操作 ${diff.tableOps?.length ?? 0} 项` : "";
+  const imageSummary = hasImageOps
+    ? `图片操作 ${diff.imageOpsPayload?.operations.length ?? diff.imageOps?.length ?? 0} 项`
+    : "";
+  const inlineStatus = [detail?.text, blockSummary, styleSummary, tableSummary, imageSummary].filter(Boolean).join(" · ");
+  const canRetryError = state === "error" && Boolean(diff.draftApplied);
 
   useEffect(() => {
     setLocateFailed(false);
@@ -125,8 +299,12 @@ export function DiffCard({ diff }: { diff: DiffView }) {
           )}
           {state === "error" && !readonly && (
             <>
-              <button onClick={() => void acceptDiff(diffId)}>重试 ↻</button>
-              <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝</button>
+              {canRetryError
+                ? <button onClick={() => void acceptDiff(diffId)}>重试 ↻</button>
+                : <span className="diffcard-status diffcard-status-error">需重新生成修改建议</span>}
+              <button className="ghost" onClick={() => void rejectDiff(diffId)}>
+                {canRetryError ? "拒绝" : "关闭"}
+              </button>
             </>
           )}
           {busy && <button disabled>处理中…</button>}
@@ -155,6 +333,73 @@ export function DiffCard({ diff }: { diff: DiffView }) {
             <div className="diffcard-styles">
               {diff.styleOps?.map((s, i) => (
                 <span key={i} className="diffcard-style-tag">{s}</span>
+              ))}
+            </div>
+          )}
+          {hasBlockOps && (
+            <div className="diffcard-block-ops">
+              {blockDetails.map((operation) => (
+                <div key={operation.blockId} className="diffcard-block-operation">
+                  <strong>{operation.blockId} · {operation.nodeType}</strong>
+                  <div className="diffcard-detail-line diffcard-detail-before">
+                    <span className="diffcard-mark">-</span>
+                    <pre>{operation.before || "（空）"}</pre>
+                  </div>
+                  <div className="diffcard-detail-line diffcard-detail-after">
+                    <span className="diffcard-mark">+</span>
+                    <pre>{operation.after || "（空）"}</pre>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {hasTableOps && (
+            <div className="diffcard-table-ops">
+              <div className="diffcard-table-shape">
+                {diff.tableBefore ? `${diff.tableBefore.rows}×${diff.tableBefore.columns}` : "表格"}
+                {diff.tableAfter ? ` → ${diff.tableAfter.rows}×${diff.tableAfter.columns}` : ""}
+              </div>
+              {diff.tableOps?.map((operation, index) => (
+                <span key={index} className="diffcard-style-tag">{operation}</span>
+              ))}
+              {tableDetails.map((detail, index) => (
+                <div key={index} className="diffcard-table-detail">{detail}</div>
+              ))}
+              {tableShadingDetails.map((detail, index) => (
+                <div key={index} className="diffcard-table-shading-detail">
+                  <span className="diffcard-table-shading-label">{detail.label}</span>
+                  <span
+                    className={`diffcard-table-shading-swatch${detail.before ? "" : " is-empty"}`}
+                    style={detail.before ? { backgroundColor: detail.before } : undefined}
+                    aria-label={`原底纹 ${detail.before ?? "无"}`}
+                  />
+                  <code>{detail.before ?? "无底纹"}</code>
+                  <span aria-hidden="true">→</span>
+                  <span
+                    className={`diffcard-table-shading-swatch${detail.after ? "" : " is-empty"}`}
+                    style={detail.after ? { backgroundColor: detail.after } : undefined}
+                    aria-label={`新底纹 ${detail.after ?? "无"}`}
+                  />
+                  <code>{detail.after ?? "无底纹"}</code>
+                </div>
+              ))}
+            </div>
+          )}
+          {hasImageOps && (
+            <div className="diffcard-image-ops">
+              <div className="diffcard-image-counts">
+                图片实例：{diff.imageBefore?.length ?? "待解析"} → {diff.imageAfter?.length ?? "待应用"}
+              </div>
+              {imageDetails.map((operation, index) => (
+                <div key={index} className="diffcard-image-operation">
+                  <strong>{operation.title}</strong>
+                  {operation.details.map((detail, detailIndex) => (
+                    <div key={detailIndex} className="diffcard-image-detail">{detail}</div>
+                  ))}
+                </div>
+              ))}
+              {!imageDetails.length && diff.imageOps?.map((operation, index) => (
+                <span key={index} className="diffcard-style-tag">{operation}</span>
               ))}
             </div>
           )}

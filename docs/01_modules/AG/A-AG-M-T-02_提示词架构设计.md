@@ -184,7 +184,8 @@ diff。未打开文档仍按 DiskState 读取规则处理。
 [系统层] 角色 + 硬约束(改经diff裁决/不越权落盘/workspace限界) + 格式约束
 [工具层] read_doc, list_docs, search_text, propose_edit
 ──缓存边界──
-[当前文档] file + 文档块列表(block_index 0起, 标注光标) + revision/baseline + pending diffs
+[当前文档] file + 文档块列表；富文档含 node_type/role/parent/depth/node_json/fingerprint/capabilities，
+容器/原子块只作语境，内容块按稳定 blockId 独立寻址 + revision/baseline + pending diffs
 [引用层] @mention: ref#1 精确锚点 block[..]→block[..] / ref#2 阅读上下文(仅理解)
 [补强层] (经门控,带权重声明:不覆盖当前文档/显式引用)
 messages[]: …历史(弱化/摘要)… → [当前对话] user 输入 (+ carryover 结果)
@@ -216,7 +217,10 @@ messages[]: 任务计划上下文 → [当前对话] 本步指令
 
 实现承接（提示词入口不得混用）：
 
-- `SYSTEM_PROMPT_CHAT`：Agent 编辑回合，允许工具调用，文档内容修改必须经 `propose_edit` → DiffCard。
+- `SYSTEM_PROMPT_CHAT`：Agent 编辑回合，允许工具调用，文档内容修改必须经 `propose_edit` → DiffCard；
+  系统常量只保留稳定行为边界。当前文档为 BDocx 时，格式、manifestId/version/sha256、StyleOp/
+  TableOperation/ImageOperation、人工专属能力、Diff 等级和 DOCX 往返风险必须由 A-SYS-I-P-04
+  BDocxCapabilityManifest 动态投影，禁止在系统常量中维护第二套 mark/op 清单。
 - `SYSTEM_PROMPT_AUTOCOMPLETE`：辅助续写，禁止改写既有内容，禁止解释，唯一合法输出为正好 3 项 JSON 字符串数组；提示词需明确不要 markdown fenced block、不要对象包装、不要解释文字，降低模型偏航概率。
 - `SYSTEM_PROMPT_INLINE_ASSIST`：局部修改，禁止 JSON 数组，唯一合法输出为单一候选正文。
 
@@ -272,3 +276,8 @@ status: mapped
 | 2026-07-17 | v1.5 | 加固辅助续写提示词与解析契约：提示词继续要求严格 JSON 三候选，运行时兼容常见模型格式偏差并通过 failure_reason 诊断解析不足 |
 | 2026-07-17 | v1.6 | 收敛 Assist failure_reason 承接：解析不足等内部原因必须传递到前端诊断点，不得被统一空态吞掉 |
 | 2026-07-18 | v1.7 | 加固 Agent 编辑 Prompt 装配：历史按 `relPath` 分流，跨文档历史仅显式回指时弱注入；泛编辑词不触发 IntentCarryover；当前文档超预算改为块目录 + read_doc/list_blocks 门禁，禁止前部截断后继续编辑 |
+| 2026-07-28 | v1.8 | BDocx TableCellShading：`SYSTEM_PROMPT_CHAT` 能力说明纳入 `list_tables→table_ops`、`set_cell_background` 与禁止原始 HTML 的编辑协议。 |
+| 2026-07-28 | v1.9 | BDocx 能力说明改由版本化 BDocxCapabilityManifest 投影；SYSTEM_PROMPT_CHAT 仅保留稳定行为边界，当前文档上下文注入格式、版本/hash、代理/人工能力、Diff 与往返等级。 |
+| 2026-07-29 | v1.10 | BDOCX-IMAGE-AGENT-EDIT-01：BDocx 能力投影增加 list_images→image_ops、项目图片来源、动态锚/哈希和图片操作排除边界；提示词仍只消费 manifest，不新增手写枚举。 |
+| 2026-07-30 | v1.11 | 图片代理编辑闭合审计：明确 SYSTEM_PROMPT_CHAT 的 BDocx 动态投影同时包含 ImageOperation；组合操作、受控导入与非视觉识别继续由 manifest 单一来源注入。 |
+| 2026-07-30 | v1.12 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：当前富文档层注入 ProseMirror 层级块、动态写能力和 node_json；提示词只允许 capability 驱动的 block_ops，多块同批，禁止用 HTML replace_block/replace_document。 |

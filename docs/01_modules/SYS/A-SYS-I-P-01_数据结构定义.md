@@ -137,6 +137,7 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 |---|---|---|
 | rel_path | workspace 内文档路径 | DocRef 的路径部分；必须规范化后传输 |
 | content | 当前 LogicalState 的序列化内容 | 激活文档优先来自 ProseMirror `doc` 实时序列化；active binding 未就绪时可来自当前文档 `EditSession.content`；非激活打开文档来自 `EditSession.content` |
+| baseline | 可空磁盘加载基线 | BDocx 持久恢复必填；用于恢复同一来源媒体目录并继续承担保存冲突保护；旧镜像可空但不得据此静默覆盖 |
 | edit_format | 磁盘解析/保存格式 | text / markdown / html / html_file；与 ED session 格式一致，不能用于推断 content 编码 |
 | content_format | content 的编码格式 | text / html；受支持 Markdown 的 LogicalState 为 html，源码保护 Markdown 为 text |
 | source | 快照来源 | active_editor / active_editor_session / open_editor_session |
@@ -144,10 +145,43 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | session_version | ED session 版本 | 每次受控修改递增；用于防多重编辑与基线偏移 |
 | content_hash | content 的稳定哈希 | 与 `session_version` 共同构成自动应用基线 |
 | captured_at | 采集时间 | 仅用于诊断，不作为一致性判定主键 |
+| block_snapshots | 可空层级块投影 | 仅活动富文档必填；必须与 content/session_version/content_hash 来自同次 ProseMirror LogicalState |
 
 > 边界：OpenDocSnapshot 是已打开文档进入 AG/DE 链路的唯一读取门禁。AG 轮次、只读工具、
 > ReferencePayload.selection 校验、DiffProjection 生成必须优先使用它。未打开文档没有
 > OpenDocSnapshot 时，AG 才允许读取 DiskState 快照。
+> `ed_session_snapshots` 现有表无独立 baseline 列时，允许持久化适配器在数据库 `content` 列内部使用
+> 版本受控的短 envelope 编码 BDocx baseline，但 `ed.list_session_snapshots` 返回前必须解码并移除；
+> IPC 与 ED/AG/DE 消费到的 `content` 始终是纯 LogicalState，内部 envelope 不得进入编辑器或写回 DOCX。
+
+**AgentEditableBlockSnapshot · 富文档层级块投影（基线）**（主责 ED，AG 消费，2026-07-30 登记）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| block_id / block_index | 稳定锚与同次投影顺序 | block_id 全文唯一；index 只作显示/诊断 |
+| block_type / node_type | HTML 语义标签与 ProseMirror schema 类型 | 不得互相猜测替代 |
+| role | content / container / atom | container/atom 只提供上下文 |
+| parent_block_id / depth / ordinal | 父块、层级与同父顺序 | 列表等嵌套结构不得展平为一个文本块 |
+| text / marks / attrs | 当前内容与样式投影 | text 偏移为 UTF-16 code unit |
+| node_json | 当前 ProseMirror 节点快照 | 结构化内容编辑的节点 Schema 基线 |
+| fingerprint | node_json 的稳定指纹 | 不包含易漂移文档 position |
+| capabilities | 当前块动态可写能力 | `replace_node` / `style_ops`；空数组表示只读 |
+
+> 活动富文档的 AgentEditableSnapshot.blocks 必须直接由 `block_snapshots` 构造。HTML 字符串扫描只可
+> 用作未打开文档的只读兼容，不得成为富文档写操作、Diff 或回滚的结构真值。
+
+**StructuredBlockEditPayload · 结构化内容块候选（基线）**（主责 AG/ED，DE 承载，2026-07-30 登记）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| payload_version | 载荷版本 | 当前固定 1 |
+| base | session_version + content_hash | 必须与当前活动 LogicalState 精确匹配 |
+| operations[] | replace_node 批次 | 1..32，block_id 不得重复 |
+| operation.block_id / fingerprint / expected_node_type | 稳定锚、节点指纹与类型前置条件 | 任一失效整批拒绝 |
+| operation.before_node / after_node | 精确前后 ProseMirror 节点 JSON | before_node 由后端从可信快照补齐；类型、blockId、attrs 必须保持 |
+
+> `operations[]` 先整批校验，再在一个 ProseMirror transaction 内按位置倒序应用。拒绝时只在当前
+> 节点仍等于 after_node 指纹时精确反向恢复 before_node；否则进入 conflict，不得整篇覆盖用户后置编辑。
 
 **EditorOpenTab · 编辑器打开标签持久态（基线）**（主责 ED，2026-07-18 登记）
 
@@ -169,17 +203,34 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 |---|---|---|
 | diff_id | diff 不透明标识 | 与 PendingDiff 关联 |
 | rel_path | 目标文档路径 | DocRef 路径部分 |
-| patch_kind | 修改形态 | replace_block / replace_document / style_ops 等枚举完整语义归 DE |
+| patch_kind | 修改形态 | replace_block / block_ops / replace_document / style_ops / table_ops / image_ops |
 | before_text / after_text | 候选变更文本 | 内容在转正前属于 LogicalCandidate |
 | block_id / block_index | 块定位信息 | 块级替换至少应提供一种；锚语义归 ED |
 | draft_mode | 应用路径 | current_editor / open_session / background |
 | snapshot_source | 生成基线来源 | active_editor / active_editor_session / open_editor_session / disk_snapshot |
 | base_session_version | 生成时 ED session 版本 | 已打开文档必填；未打开文档为空 |
 | base_content_hash | 生成时内容哈希 | 已打开文档必填；未打开文档可使用 DiskState baseline |
+| block_ops | 可空 StructuredBlockEditPayload | patch_kind=block_ops 时必填；执行与详细 Diff 的唯一真值 |
 
 > 边界：DiffProjection 是跨 AG/DE/ED 的最小互操作载荷。`draft_mode=open_session` 时，
 > ED 必须以 `base_session_version` 与 `base_content_hash` 校验当前 LogicalState；校验失败不得应用，
 > DiffCard 进入不可裁决的失效/冲突状态。`draft_mode=background` 只允许目标文档未打开。
+
+**BDocxCapabilityManifest · BDocx 代理编辑能力清单（基线）**（主责 SYS，AG/ED/DE/DOC 消费，
+2026-07-28 登记）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| manifest_id / version | 稳定清单标识与语义版本 | 运行时另计算原始清单 SHA-256，禁止手工维护第二 hash |
+| editable_kind / content_format | 适用编辑模型 | 固定为 bdocx / html |
+| style_ops | mark、mark attrs、块属性、批上限 | 真实操作名和参数约束 |
+| table_operations | 表格操作名与字段形状 | 静态声明不取代动态 table capabilities |
+| manual_only | 人工专属能力 | 不得投影进代理操作 enum |
+| diff_fidelity | 各操作族 Diff 呈现等级 | block / summary / structured / none |
+| roundtrip | StyleSubset 五档 | 与 DOC `classify_style` 逐项一致 |
+
+> 完整协议、TERM 与规则 SSOT 见 A-SYS-I-P-04（TERM-SYS-002 / BR-SYS-DATA-006）。本文只登记跨模块
+> 字段基线；提示词、工具 Schema 与执行前校验必须消费同一份版本化机器清单。
 
 **AgentSession / AgentTurnHistory · 代理编辑历史控制态（基线）**（主责 AG，2026-07-17 随
 `BR-AG-PERSIST-001` 具体化登记）
@@ -366,8 +417,11 @@ status: mapped
 | 2026-06-12 | v1.2 | 进入实现前批量登记（X-SHARED-001/BR-SYS-PERSIST-001 回写，解除 AG/CBT/TPL/AST/KB 五模块"实现前登记"承诺）：§3 新增 MemoryInjection（memory_kind/content/origin_turn，主责 AST）与 KnowledgeInjection（content/source_ref/organization，主责 KB）注入共享结构基线；§4 新增七张 workspace.db 控制态扩展表基线——agent_turns（AG 回合历史）/build_runs（CBT 构建控制态）/workflow_runs（TPL 执行控制态）/templates·workflows（TPL 定义）/memory_entries（AST）/knowledge_entries（KB），均 workspace 级隔离（2026-06-11 人类决策）、payload/定义形状归各 owner、迁移受 BR-SYS-PERSIST-001 约束；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-03 | v1.3 | 随 ED 批B PI-ED-10 登记（X-SHARED-001 回写，承 A-REF-M-T-01 v1.1 扩展意向）：§3 RefInjection 增可空 block_ranges 选区级锚集合（{blockId,start,end} 块内纯文本偏移区间；CharAnchor 契约归 ED BR-ED-DATA-004、有效期=编辑会话内、失效校验归 REF §5 保守语义）；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-08 | v1.4 | 随引用令牌修复登记 ReferencePayload 共享结构基线：新增 doc/selection/session/memory/knowledge/template/url/long_text 八类输入侧显式引用字段集合；声明其为 Composer→AG 主通道，与 RefInjection 分层不同；无新增规则（受 BR-SYS-DATA-002 覆盖） |
+| 2026-07-28 | v1.5 | 登记 BDocxCapabilityManifest 跨模块字段基线，完整版本化能力协议、TERM-SYS-002 与 BR-SYS-DATA-006 委派 A-SYS-I-P-04。 |
 | 2026-07-17 | v1.5 | 随 AG 历史持久化具体化登记 AgentSession / AgentTurnHistory / AgentTurnPayload 基线；`agent_sessions`、增强 `agent_turns`、`agent_turn_payloads` 入 workspace.db 控制态扩展表；锁定 AgentTurnHistory.status 枚举 completed/error/cancelled/gate_rejected/draft 与 Diff 仅引用不快照边界 |
 | 2026-07-18 | v1.6 | 登记 OpenDocSnapshot、DiffProjection 基线与 `ed_session_snapshots` 表：已打开文档 AG/DE/ED 链路必须以 LogicalState 快照为唯一读取门禁，未打开文档才允许读取 DiskState |
 | 2026-07-18 | v1.7 | 登记 HistTurn 历史消息投影字段：`rel_path/turn_id` 用于 AG 按当前文档分流历史，防跨文档历史作为当前文档事实 |
 | 2026-07-18 | v1.8 | 登记 EditorOpenTab 与 `ed_open_tabs` 表：打开集合、顺序和当前文档由独立控制态恢复；`ed_session_snapshots` 只作为打开文档 LogicalState 内容镜像，孤立镜像不得打开文档 |
 | 2026-07-18 | v1.9 | ED-MARKDOWN-RICH-ROUNDTRIP-01：OpenDocSnapshot/edit session 增 content_format，edit_format 墄 markdown；`ed_session_snapshots` 墠 content_format 迁移列，使 Markdown DiskState 格式与 LogicalState HTML 编码不再混淆 |
+| 2026-07-28 | v1.10 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：OpenDocSnapshot 增可空 baseline；BDocx 持久镜像以存储层内部 envelope 兼容现有表结构，列表 IPC 返回前必须解码，保证 LogicalState 不含缓存协议元数据。 |
+| 2026-07-30 | v1.11 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：OpenDocSnapshot 增同次 ProseMirror `block_snapshots`；登记 AgentEditableBlockSnapshot 与 StructuredBlockEditPayload，锁定层级结构不展平、动态写能力、基线/指纹/节点 Schema 批原子应用及冲突安全的精确反向恢复。 |

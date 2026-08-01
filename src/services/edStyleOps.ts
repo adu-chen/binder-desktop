@@ -1,6 +1,7 @@
 import type { Node as PMNode, Mark } from "@tiptap/pm/model";
 import { getActiveEditor } from "./edLocate";
 import { blockTextLength } from "./edLocate";
+import { isContentBlock } from "../components/ed/extensions/BlockIdExtension";
 
 /**
  * 样式协议 ED 侧（PI-ED-11 · A-ED-M-T-01 §5.1 · A-ED-I-P-01 §4.1）。
@@ -34,6 +35,109 @@ export type StyleOp =
   | { op: "unset_mark"; blockId: string; start: number; end: number; markType: string }
   | { op: "set_block_attr"; blockId: string; attrs: Record<string, unknown> };
 
+const SIMPLE_MARK_TYPES = new Set(["bold", "italic", "underline", "strike", "subscript", "superscript", "code"]);
+const SUPPORTED_MARK_TYPES = new Set([...SIMPLE_MARK_TYPES, "highlight", "link", "textStyle"]);
+const TEXT_ALIGN_VALUES = new Set(["left", "center", "right", "justify"]);
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+const FONT_SIZE = /^[1-9][0-9]{0,2}(?:\.[0-9]+)?(?:pt|px)$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isSafeHref(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim() || [...value].length > 2048 || /[\u0000-\u001F\u007F]/.test(value)) return false;
+  const lower = value.trim().toLowerCase();
+  return !lower.startsWith("javascript:") && !lower.startsWith("data:");
+}
+
+function isFontFamily(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value.trim()) && [...value].length <= 128 && !/[;\u0000-\u001F\u007F]/.test(value);
+}
+
+function parseMark(value: unknown): { type: string; attrs?: Record<string, unknown> } | null {
+  if (!isRecord(value) || !exactKeys(value, ["type", "attrs"]) || typeof value.type !== "string" || !SUPPORTED_MARK_TYPES.has(value.type)) return null;
+  const attrs = value.attrs === undefined ? undefined : isRecord(value.attrs) ? value.attrs : null;
+  if (attrs === null) return null;
+  if (SIMPLE_MARK_TYPES.has(value.type)) {
+    return attrs === undefined ? { type: value.type } : null;
+  }
+  if (value.type === "highlight") {
+    if (!attrs || Object.keys(attrs).length === 0) return { type: value.type };
+    return exactKeys(attrs, ["color"]) && typeof attrs.color === "string" && HEX_COLOR.test(attrs.color)
+      ? { type: value.type, attrs: { color: attrs.color } }
+      : null;
+  }
+  if (value.type === "link") {
+    return attrs && exactKeys(attrs, ["href"]) && isSafeHref(attrs.href)
+      ? { type: value.type, attrs: { href: attrs.href } }
+      : null;
+  }
+  if (!attrs || Object.keys(attrs).length === 0 || !exactKeys(attrs, ["color", "fontSize", "fontFamily"])) return null;
+  if (attrs.color !== undefined && (typeof attrs.color !== "string" || !HEX_COLOR.test(attrs.color))) return null;
+  if (attrs.fontSize !== undefined && (typeof attrs.fontSize !== "string" || !FONT_SIZE.test(attrs.fontSize))) return null;
+  if (attrs.fontFamily !== undefined && !isFontFamily(attrs.fontFamily)) return null;
+  return { type: value.type, attrs };
+}
+
+type NormalizeStyleOpsResult =
+  | { ok: true; ops: StyleOp[] }
+  | { ok: false; reason: string };
+
+function normalizeStyleOps(value: unknown): NormalizeStyleOpsResult {
+  if (!Array.isArray(value)) return { ok: false, reason: "style_operation_invalid: 载荷必须是数组" };
+  if (value.length === 0) return { ok: true, ops: [] };
+  if (value.length > 64) return { ok: false, reason: "style_operation_invalid: 单批超过 64 项" };
+  const ops: StyleOp[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!isRecord(item) || typeof item.op !== "string" || typeof item.blockId !== "string" || !item.blockId.trim()) {
+      return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项缺 op/blockId` };
+    }
+    if (item.op === "set_block_attr") {
+      if (!exactKeys(item, ["op", "blockId", "attrs"]) || !isRecord(item.attrs) || !exactKeys(item.attrs, ["textAlign"])) {
+        return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项块属性字段非法` };
+      }
+      if (typeof item.attrs.textAlign !== "string" || !TEXT_ALIGN_VALUES.has(item.attrs.textAlign)) {
+        return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项 textAlign 非法` };
+      }
+      ops.push({ op: "set_block_attr", blockId: item.blockId, attrs: { textAlign: item.attrs.textAlign } });
+      continue;
+    }
+    if (!Number.isInteger(item.start) || !Number.isInteger(item.end) || (item.start as number) < 0 || (item.end as number) <= (item.start as number)) {
+      return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项字符范围非法` };
+    }
+    if (item.op === "set_mark") {
+      if (!exactKeys(item, ["op", "blockId", "start", "end", "mark"])) {
+        return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项 set_mark 字段非法` };
+      }
+      const mark = parseMark(item.mark);
+      if (!mark) return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项 mark/attrs 非法` };
+      ops.push({ op: "set_mark", blockId: item.blockId, start: item.start as number, end: item.end as number, mark });
+      continue;
+    }
+    if (item.op === "unset_mark") {
+      if (!exactKeys(item, ["op", "blockId", "start", "end", "markType"]) || typeof item.markType !== "string" || !SUPPORTED_MARK_TYPES.has(item.markType)) {
+        return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项 markType 非法` };
+      }
+      ops.push({ op: "unset_mark", blockId: item.blockId, start: item.start as number, end: item.end as number, markType: item.markType });
+      continue;
+    }
+    return { ok: false, reason: `style_operation_invalid: 第 ${index + 1} 项 op 不支持` };
+  }
+  return { ok: true, ops };
+}
+
+/** 将不可信 Diff/IPC 载荷按 StyleOp 严格协议解析；任一项非法则整批返回空。 */
+export function parseStyleOps(value: unknown): StyleOp[] {
+  const parsed = normalizeStyleOps(value);
+  return parsed.ok ? parsed.ops : [];
+}
+
 /** 内部：叶子内联占位（与 edLocate 同约定，1 字符对齐 PM pos）。 */
 const LEAF_CHAR = "￼";
 
@@ -49,7 +153,17 @@ function markAttrsOf(m: Mark): Record<string, unknown> | undefined {
 }
 
 function sameMark(a: MarkSpan, b: { type: string; attrs?: Record<string, unknown> }): boolean {
-  return a.type === b.type && JSON.stringify(a.attrs ?? {}) === JSON.stringify(b.attrs ?? {});
+  if (a.type !== b.type) return false;
+  // 审计修复（2026-07-24）：对 attrs 的 key 排序后比较，避免 `{a:1,b:2}` vs `{b:2,a:1}` 被误判为不等
+  const aKeys = Object.keys(a.attrs ?? {}).sort();
+  const bKeys = Object.keys(b.attrs ?? {}).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i++) {
+    if (aKeys[i] !== bKeys[i]) return false;
+    const k = aKeys[i];
+    if ((a.attrs?.[k] ?? null) !== (b.attrs?.[k] ?? null)) return false;
+  }
+  return true;
 }
 
 /**
@@ -78,18 +192,22 @@ export function extractBlockStyles(block: PMNode): { text: string; marks: MarkSp
   return { text, marks };
 }
 
-/** 文档级样式投影：全部顶层块 → BlockStyleView[]（无 blockId 块跳过——不产无锚投影）。 */
+/** 文档级样式投影：遍历所有内容块 → BlockStyleView[]（容器块透明、无 blockId 块跳过）。
+ *  审计修复（2026-07-25 · A+D 方案）：从 doc.forEach（仅顶层）改为 doc.descendants（递归），
+ *  使嵌套在 orderedList/bulletList 中的 listItem 也能被投影。 */
 export function projectDocStyles(doc: PMNode): BlockStyleView[] {
   const out: BlockStyleView[] = [];
-  doc.forEach((block) => {
+  doc.descendants((block, _pos) => {
+    if (!isContentBlock(block as unknown as { type: { name: string } })) return true;
     const blockId = (block.attrs.blockId as string | null) ?? "";
-    if (!blockId) return;
+    if (!blockId) return true;
     const { text, marks } = extractBlockStyles(block);
     const blockAttrs: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(block.attrs)) {
       if (!INTERNAL_ATTRS.has(k) && v !== null && v !== undefined) blockAttrs[k] = v;
     }
     out.push({ blockId, type: block.type.name, text, marks, blockAttrs });
+    return false; // 内容块的子节点不重复投影
   });
   return out;
 }
@@ -134,20 +252,26 @@ export type PlanResult = { ok: true; steps: PlannedStep[] } | { ok: false; reaso
 /// + 偏移区间 ≤ 块文本长），**任一锚失效整批拒绝**（批内原子，不产生半应用状态）；校验通过后把
 /// 字符锚区间换算为 PM 位置输出事务步骤。样式修改必经受控接口（X-FORBID-005），本函数是唯一规划面。
 export function planStyleOps(doc: PMNode, ops: StyleOp[]): PlanResult {
+  const normalized = normalizeStyleOps(ops);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason };
+  ops = normalized.ops;
   if (ops.length === 0) return { ok: true, steps: [] };
-  // 顶层块索引：blockId → {node, blockPos}
+  // 内容块索引：blockId → {node, blockPos}。审计修复（2026-07-25 · A+D）：改为 descendants 遍历支持嵌套块
   const index = new Map<string, { node: PMNode; blockPos: number }>();
-  let p = 0;
-  doc.forEach((node) => {
+  doc.descendants((node, pos) => {
+    if (!isContentBlock(node as unknown as { type: { name: string } })) return true;
     const id = (node.attrs.blockId as string | null) ?? "";
-    if (id) index.set(id, { node, blockPos: p });
-    p += node.nodeSize;
+    if (id) index.set(id, { node, blockPos: pos });
+    return false; // 内容块子节点不索引
   });
   const steps: PlannedStep[] = [];
   for (const op of ops) {
     const hit = index.get(op.blockId);
     if (!hit) return { ok: false, reason: `anchor_lost: 块不存在 ${op.blockId}` };
     if (op.op === "set_block_attr") {
+      if (!Object.prototype.hasOwnProperty.call(hit.node.attrs, "textAlign")) {
+        return { ok: false, reason: `style_operation_invalid: 块不支持 textAlign ${op.blockId}` };
+      }
       steps.push({ kind: "setBlockAttrs", blockPos: hit.blockPos, attrs: op.attrs });
       continue;
     }
@@ -160,8 +284,14 @@ export function planStyleOps(doc: PMNode, ops: StyleOp[]): PlanResult {
     const from = contentStart + posFromCharOffset(hit.node, op.start);
     const to = contentStart + posFromCharOffset(hit.node, op.end);
     if (op.op === "set_mark") {
+      if (!hit.node.type.schema.marks[op.mark.type]) {
+        return { ok: false, reason: `unknown_mark: ${op.mark.type}` };
+      }
       steps.push({ kind: "addMark", from, to, markType: op.mark.type, attrs: op.mark.attrs });
     } else {
+      if (!hit.node.type.schema.marks[op.markType]) {
+        return { ok: false, reason: `unknown_mark: ${op.markType}` };
+      }
       steps.push({ kind: "removeMark", from, to, markType: op.markType });
     }
   }

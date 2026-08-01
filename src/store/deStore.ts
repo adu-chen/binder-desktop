@@ -1,6 +1,12 @@
 import { useSyncExternalStore } from "react";
 import type { TabState } from "./edStore";
 import type { StyleOp } from "../services/edStyleOps";
+import type { TableEditPayload, TableSnapshot } from "../services/edTableOps";
+import type {
+  DocumentImageSnapshot,
+  ImageEditPayload,
+} from "../services/edImageOps";
+import type { StructuredBlockEditPayload } from "./edStore";
 
 /**
  * DE diff 裁决状态投影层（DE-DIFF · SM-DE-01 · X-FORBID-007）。
@@ -123,7 +129,7 @@ export interface DiffView {
   /** 人读位置摘要（如“Block 3”或“整篇”），与 blockId 一起用于 DiffCard 定位呈现。 */
   locationLabel?: string;
   /** AgentEdit 修改类型；Editor 只允许显式 replace_document 执行整篇草稿替换。 */
-  patchKind?: "replace_block" | "replace_document" | "style_ops";
+  patchKind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
   /** DiffProjection 分流路径：active 草稿 / open session 自动应用 / 未打开后台路径。 */
   draftMode?: DiffDraftMode;
   /** DiffProjection 生成基线来源。 */
@@ -141,6 +147,21 @@ export interface DiffView {
   styleOps?: string[];
   /** 可执行 StyleOp 载荷；由编辑器草稿路径消费，DiffCard 仍显示 styleOps 摘要。 */
   styleOpsPayload?: StyleOp[];
+  /** 富文档结构化块操作；beforeNode/afterNode 是接受、展示和精确拒绝的执行真值。 */
+  blockOps?: string[];
+  blockOpsPayload?: StructuredBlockEditPayload;
+  blockAffectedIds?: string[];
+  /** 表格结构操作与其前后结构快照；table_ops 不得回退为 HTML 块替换。 */
+  tableOps?: string[];
+  tableOpsPayload?: TableEditPayload;
+  tableBefore?: TableSnapshot;
+  tableAfter?: TableSnapshot;
+  /** 受控项目图片插入/文档图片删除及其当前 LogicalState 前后投影。 */
+  imageOps?: string[];
+  imageOpsPayload?: ImageEditPayload;
+  imageBefore?: DocumentImageSnapshot[];
+  imageAfter?: DocumentImageSnapshot[];
+  imageAffectedBlockIds?: string[];
   /** 已将 after 应用到当前编辑器草稿；accept 只确认，save 才落盘。 */
   draftApplied?: boolean;
   /** 已自动应用到已打开非激活文档 LogicalState；DiffCard 禁用裁决。 */
@@ -287,6 +308,19 @@ export const deStore = {
     mapDiff(id, (d) => ({ ...d, ...patch }));
   },
 
+  setTableSnapshots(id: string, tableBefore: TableSnapshot, tableAfter: TableSnapshot) {
+    mapDiff(id, (d) => ({ ...d, tableBefore, tableAfter }));
+  },
+
+  setImageSnapshots(
+    id: string,
+    imageBefore: DocumentImageSnapshot[],
+    imageAfter: DocumentImageSnapshot[],
+    imageAffectedBlockIds: string[],
+  ) {
+    mapDiff(id, (d) => ({ ...d, imageBefore, imageAfter, imageAffectedBlockIds }));
+  },
+
   /** 标记草稿已应用到编辑器。记录 baseContent/baseTabState/baseDirty 及 afterContent（D4 修复，
    *  A-CORE-C-T-01 §5.4），使 reject 后可通过比较当前内容与 afterContent 准确判断是否有后置编辑。
    *  baseContent/baseTabState 从 edStore 活动会话取；baseDirty 取该时的 tabState === "dirty"；
@@ -319,10 +353,19 @@ export const deStore = {
 
   markDraftSaved(relPath: string) {
     setDiffs(
-      state.diffs.map((d) =>
-        d.relPath === relPath && d.draftApplied && d.state === "accepted" ? { ...d, draftSaved: true } : d,
-      ),
+      state.diffs.map((d) => {
+        if (d.relPath !== relPath || !d.draftApplied) return d;
+        if (d.state === "accepted") return { ...d, draftSaved: true };
+        // pending 必须先经保存前的 `de.accept_draft_diff` 持久化接受；前端不能自行伪造 accepted。
+        return d;
+      }),
     );
+  },
+
+  /** 审计修复（2026-07-26 · D3）：background→open_session 锚点迁移。
+   *  当文档从"未打开"变为"已打开"时，将磁盘快照 block_index 映射为编辑器 blockId。 */
+  migrateDraftMode(diffId: string, blockId: string, draftMode: DiffDraftMode) {
+    mapDiff(diffId, (d) => ({ ...d, blockId, blockIndex: null, draftMode, snapshotSource: "active_editor_session" }));
   },
 
   setBatch(batchState: DeState["batchState"], expiredCount = 0) {

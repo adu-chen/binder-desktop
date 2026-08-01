@@ -67,7 +67,7 @@ WS 落盘的唯一触发（REQ-CORE-002 的「AI 修改在用户接受前不写�
 |---|---|---|---|---|---|---|
 | 1 | AG | AI 修改建议 | DE 按 blockId 定位生成 pending_diff，交 WS 持久化 | 持久化 pending_diff | 2 | 锚失效→生成失败回报 AG，不产生错位 diff |
 | 2 | DE | pending_diff | 经 ED 装饰层呈现修改对比与裁决控件 | 可审阅呈现 | 3 | 呈现锚失效→回报并转过期处理路径 |
-| 3 | 用户 | 接受/拒绝 | DE 终态机裁决（终态不可逆） | accepted / rejected | 4 | 超时/外部变更→expired（终态，不落盘） |
+| 3 | 用户 | 接受/拒绝，或保存已应用草稿 | DE 终态机裁决（终态不可逆）；任意保存视为接受 | accepted / rejected | 4 | 超时/外部变更→expired（终态，不落盘） |
 | 4 | DE→WS | accepted 信号 | 触发 SM-WS-02 落盘，接收 Applied/ApplyError 回执 | 已落盘 + 装饰复位 | 终态 | ApplyError→diff 保持 accepted 可重试落盘（WS 侧） |
 
 **DE2 · 过期与外部变更**（DE-J5）
@@ -95,9 +95,9 @@ req_id: REQ-DE-002
 title: diff 审阅呈现
 owner_module: DE
 status: active
-summary: 经 ED 装饰层按 blockId 呈现 diff 修改对比与接受/拒绝控件，用户交互由 ED 转达 DE 裁决；终态后装饰复位不残留
+summary: 经 ED 装饰层或 DiffCard 呈现文本、样式与 BDocx 表格语义修改对比和接受/拒绝控件，用户交互由 ED 转达 DE 裁决；终态后装饰复位不残留
 source_doc: REQ-CORE-002、A-ED-M-T-01（ED-DECOR、BR-ED-STATE-002）
-acceptance: diff 可视呈现于编辑器目标位置；裁决控件交互可达；终态后呈现复位
+acceptance: diff 可视呈现于编辑器目标位置；BDocx 表格操作按坐标/参数展示，单元格底纹显示修改前后色块与十六进制色值；裁决控件交互可达；终态后呈现复位
 open_issues: 审阅 UI 形态（逐条/批量/侧栏）归 DE G2/实现期（§7 DE-04）
 -->
 
@@ -117,9 +117,9 @@ req_id: REQ-DE-004
 title: diff 内容载荷形状
 owner_module: DE
 status: active
-summary: 定义 payload_ref 所指 diff 内容载荷的结构（修改前后内容、定位信息、来源元数据），为 A-SYS-I-P-01 显式留归 DE 的占位补形；载荷形状版本化以支持迁移
+summary: 定义 payload_ref 所指 diff 内容载荷的结构（修改前后内容、样式操作、TableOperation、ImageOperation、定位信息、来源元数据），为 A-SYS-I-P-01 显式留归 DE 的占位补形；载荷形状版本化以支持迁移
 source_doc: A-SYS-I-P-01 §3（payload 形状归 DE）
-acceptance: 载荷形状有单一定义且 WS 持久化/恢复后可完整重建审阅呈现
+acceptance: 载荷形状有单一定义且 WS 持久化/恢复后可完整重建文本、样式、表格与图片审阅呈现；table_ops 保留操作和前后 TableSnapshot，image_ops 保留操作、项目来源、锚和前后 ImageSnapshot，不退化为原始 HTML 替换
 open_issues: 载荷具体结构与版本化策略归 DE G2
 -->
 
@@ -172,3 +172,6 @@ open_issues: 超时时长与外部变更检测机制（内容哈希/版本序）
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（P3 第二件）：DE 对话编辑模块级 L1；声明 REQ-DE-001~005（diff 生成 / 审阅呈现 / 终态裁决 / 载荷形状 / 过期与外部变更），承接 REQ-CORE-002 与 A-SYS-I-P-01 PendingDiff 契约，对接 SM-WS-02（X-INTER-001 WS 侧已就绪）与 ED-DECOR；代表性流程 DE1/DE2；G1 暴露清单 DE-01~05 |
 | 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
+| 2026-07-27 | v1.6 | DE-SAVE-IMPLICIT-ACCEPT-01：人类决策固化——当前文档的任意保存是已应用 pending Diff 的接受动作；保存失败保留 accepted 待保存，不得将前端显示伪装为已保存。 |
+| 2026-07-28 | v1.7 | BDocx TableCellShading：REQ-DE-002/004 纳入 TableOperation 载荷以及单元格底纹按坐标、前后色块和十六进制色值的精确审阅呈现。 |
+| 2026-07-29 | v1.8 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-DE-004 纳入 ImageOperation、项目来源/锚与图片前后快照，要求持久化后可重建 structured 图片审阅。 |

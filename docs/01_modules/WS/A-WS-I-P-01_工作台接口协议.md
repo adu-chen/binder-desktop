@@ -37,6 +37,8 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
 |---|---|---|---|---|
 | `ws.list_docs` | workspace_id、过滤条件（可空） | FsEntry 列表（rel_path+doc_type+is_dir，**含空目录**；WS 本地结构非 SYS 共享 DocRef，PI-BE-07 补） | — | BR-WS-DATA-001 |
+| `ws.list_project_images`（内部只读服务） | active workspace；可选 `.binder/project_assets.json`（`version=1`、1–16 个安全相对 `imageRoots`；缺省仅 `images/`） | `imageRoots`、配置来源和图片候选相对路径列表 | 配置/图片根无效明确失败；隐藏项跳过；任何符号链接或越界来源拒绝 | BR-WS-DATA-001；供 AG list_images，格式/hash 由 DOC 校验；不退回全 workspace 扫描 |
+| `ws.prepare_project_image`（内部边界，由 DOC/AG 消费） | active workspace；已由用户拖放授权的本地路径、项目文件树相对路径、剪贴板图片字节，或代理给出的 workspace 相对路径 | 配置根内直接复用；其他路径/剪贴板字节复制到首个 imageRoot 的 `imported/`，返回项目相对路径 | 不移动/删除源文件；符号链接、目录、越界、非 PNG/JPEG、重名内容漂移拒绝；同 SHA-256 去重；临时 data URL 不持久化 | BR-WS-DATA-001；图片格式与媒体身份由 DOC 校验 |
 | `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001；IPC 为十进制字符串） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
 | `ws.create_doc` | DocRef、初始内容（可空） | DocRef + 基线哈希 | 已存在/越界 | BR-WS-DATA-001 |
 | `ws.create_folder` | DocRef（目录 rel_path） | rel_path + created/existed | 目标为文件/越界 | BR-WS-DATA-001 |
@@ -97,3 +99,7 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | 2026-06-12 | v1.0 | 初版（首份模块接口协议，实现前置件）：按 I-P-02 骨架声明 WS 全部 command 语义签名——workspace 生命周期 4 条、文件 I/O 与 save 5 条（read 返回加载基线、save 带基线校验与 override 显式覆盖语义）、pending_diffs 4 条、时间轴 3 条、外部变更事件 1 条；零新增注册项（契约细化非规则源）；债务（错误码表/序列化/跨文档操作签名延实现期） |
 | 2026-07-12 | v1.1 | 三态实现回写：`ws.read_doc`/`ws.save_doc` baseline IPC 字符串化；保存冲突错误码对齐 `WS_SAVE_CONFLICT`；移除当前 command 清单中的未注册 `ws.check_external_change`，将外部变更推送/轮询登记为 SY-02 后续能力；明确当前已落地保护为保存前 baseline guard |
 | 2026-07-16 | v1.2 | 新增 `ws.create_folder` command：Workspace 内建目录，目标为目录时幂等成功并返回 existed，目标为文件/越界拒绝；供 Agent 文件整理结构工具复用 |
+| 2026-07-29 | v1.3 | BDOCX-IMAGE-AGENT-EDIT-01：新增内部只读 ws.list_project_images 语义，锁定 workspace 相对路径、普通文件、隐藏目录/符号链接/越界边界。 |
+| 2026-07-29 | v1.4 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：项目图片发现收口为 `.binder/project_assets.json` 受控 `imageRoots`，缺省仅 `images/`；返回根目录与配置来源，禁止回退扫描整个 workspace。 |
+| 2026-07-29 | v1.5 | BDOCX-IMAGE-COMPOSITE-IMPORT-01：新增受控项目图片准备边界；配置根内复用，其他来源复制到 imported 子目录，默认保留源文件并按内容哈希去重。 |
+| 2026-07-30 | v1.6 | BDOCX-IMAGE-COMPOSITE-IMPORT-01 人工入口闭合：受控项目图片准备边界纳入项目文件树相对路径和剪贴板 PNG/JPEG 字节，继续复用同一图片根、哈希去重与源文件保护约束。 |
