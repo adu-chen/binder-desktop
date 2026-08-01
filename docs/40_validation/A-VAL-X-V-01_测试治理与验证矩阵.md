@@ -69,7 +69,7 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 
 ## 5. 当前健康基线（2026-08-01）
 
-动态清单已识别 90 个测试资产、约 724 个测试用例：27 个前端测试文件、61 个 Rust 内联测试文件、
+动态清单已识别 85 个测试资产、约 724 个测试用例：22 个前端测试文件、61 个 Rust 内联测试文件、
 2 个 Rust 集成测试文件。97 个可执行源文件均有模块映射；当前无 unowned/unclassified 测试、无
 `only`/`skip`/`#[ignore]`、无未知 `covers`。精确现状以 `npm run test:inventory` 为准。
 规则注册表中 `BR-SYS-DATA-004` 属于客户端仓库外的云 provider catalog 契约，当前按既有
@@ -84,14 +84,14 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 | WS | critical | 2 | 2 | 已于 TEST-CONSOLIDATION-WS-01 达标；28 个 owner 用例保持 |
 | ED | critical | 7 | 7 | 已于 TEST-CONSOLIDATION-ED-01 达标；207 个 owner 用例保持 |
 | DE | critical | 2 | 2 | 已于 TEST-CONSOLIDATION-DE-01 达标；58 个 owner 用例保持 |
-| AG | critical | 8 | 3 | 待整合 |
+| AG | critical | 3 | 3 | 已于 TEST-CONSOLIDATION-AG-01 达标；73 个 owner 用例保持 |
 | DOC | critical | 1 | 1 | 达标 |
 | PRV | high | 2 | 1 | 待整合 |
 | REF | high | 1 | 1 | 达标 |
 | CBT / AST / KB / TPL / ACCT / ENT | high/critical | 0 | 0 | 当前由 Rust 内联测试承接；新增前端功能时动态调整 |
 
-现状的关键问题不是测试不存在，而是除 ED、SYS、WS、DE 外的前端文件仍有碎片化、部分模块靠同一测试跨模块关联，
-以及 G5/G6 系统验证记录尚未形成统一台账。ED、SYS、WS、DE 已分别按 7 个、3 个、2 个和 2 个真实物理
+现状的关键问题不是测试不存在，而是除 ED、SYS、WS、DE、AG 外的前端文件仍有碎片化、部分模块靠同一测试跨模块关联，
+以及 G5/G6 系统验证记录尚未形成统一台账。ED、SYS、WS、DE、AG 已分别按 7 个、3 个、2 个、2 个和 3 个真实物理
 套件完成整合，没有使用 helper/case 文件隐藏测试；其余模块继续按独立 Scope 合并。
 
 ## 6. 目标套件大纲
@@ -103,7 +103,7 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 - ED（≤7）：editor core；文档格式与 codec；分页/viewport；结构移动与表格/图片；
   service/persistence；store/outline/view preferences；component interaction。
 - DE（2，已落地）：DiffReview；deRuntime。
-- AG（≤3）：代理 UI；session/runtime/service/store；assist/selection/placement。
+- AG（3，已落地）：AgentUI；agRuntime；assistRuntime。
 - DOC / PRV / REF（各≤1）：按模块服务与契约聚合。
 - Rust：纯单元测试保留内联；只有跨模块真实边界放入少量 `src-tauri/tests/*.rs` 集成套件。
 
@@ -165,7 +165,7 @@ TEST-GOVERNANCE-01 的验收是能力闭环，不是一次性整理全部测试�
 - 当前文件增长被冻结，六个模块的整合债务可量化。
 - 测试与需求验证各自有权威来源和交付证据。
 
-后续应按模块分别开 Scope，从 AG 开始继续合并测试套件；另开 VALIDATION Scope 建立核心编辑、代理编辑、
+后续应按模块分别开 Scope，从 PRV 开始继续合并测试套件；另开 VALIDATION Scope 建立核心编辑、代理编辑、
 workspace 恢复与发布验证场景卡。两类工作不应混在本治理基础设施改动中。
 
 ## 变更记录
@@ -177,3 +177,4 @@ workspace 恢复与发布验证场景卡。两类工作不应混在本治理基�
 | 2026-08-01 | v1.2 | TEST-CONSOLIDATION-SYS-01：SYS 8 个前端测试文件整合为 3 个物理套件，52 个 owner 用例与 covers 保持；动态资产总数更新为 96 |
 | 2026-08-01 | v1.3 | TEST-CONSOLIDATION-WS-01：WS 6 个前端测试文件整合为 2 个物理套件，28 个 owner 用例与 covers 保持；动态资产总数更新为 92 |
 | 2026-08-01 | v1.4 | TEST-CONSOLIDATION-DE-01：DE 4 个前端测试文件整合为 2 个物理套件，58 个 owner 用例与 covers 保持；动态资产总数更新为 90 |
+| 2026-08-01 | v1.5 | TEST-CONSOLIDATION-AG-01：AG 8 个前端测试文件整合为 3 个物理套件，73 个 owner 用例与 covers 保持；动态资产总数更新为 85 |

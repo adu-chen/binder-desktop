@@ -165,12 +165,11 @@
         "src/components/ed/assistPlacement*", "src/store/modelStore*", "src-tauri/src/ag/**", "docs/01_modules/AG/**"
       ],
       "test_globs": [
-        "src/components/ag/**/*.test.ts", "src/components/ag/**/*.test.tsx",
-        "src/services/agService.test.ts", "src/store/agStore.test.ts", "src/store/assistStore.test.ts",
-        "src/components/ed/assistPlacement.test.ts", "src-tauri/tests/core_chain.rs"
+        "src/components/ag/AgentUI.test.tsx", "src/services/agRuntime.test.ts",
+        "src/store/assistRuntime.test.ts", "src-tauri/tests/core_chain.rs"
       ],
       "downstream": ["SYS"],
-      "baseline_frontend_test_files": 8,
+      "baseline_frontend_test_files": 3,
       "target_frontend_test_files": 3,
       "requires_rust_on_related": true
     },

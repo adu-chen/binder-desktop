@@ -73,7 +73,7 @@ describe('Test Governance', () => {
   });
 
   it('真实测试 inventory 全部具备 owner、layer 且治理 audit 通过', () => {
-    expect(inventory.totals.frontend_files).toBeGreaterThanOrEqual(27);
+    expect(inventory.totals.frontend_files).toBeGreaterThanOrEqual(22);
     expect(inventory.totals.rust_inline_files).toBeGreaterThan(0);
     expect(inventory.totals.rust_integration_files).toBe(2);
     expect(inventory.system_validation).toHaveLength(2);
@@ -93,6 +93,10 @@ describe('Test Governance', () => {
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'DE')
       .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(58);
+    expect(inventory.modules.AG.frontend_owned).toBe(3);
+    expect(inventory.assets
+      .filter((asset) => asset.kind === 'frontend' && asset.owner === 'AG')
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(73);
     expect(inventory.assets.every((asset) => asset.owner && asset.layer !== 'unclassified')).toBe(true);
     expect(auditTestGovernance(DEFAULT_ROOT, registry, inventory).status).toBe('passed');
   }, 10_000);
