@@ -69,7 +69,7 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 
 ## 5. 当前健康基线（2026-08-01）
 
-动态清单已识别 84 个测试资产、约 724 个测试用例：21 个前端测试文件、61 个 Rust 内联测试文件、
+动态清单已识别 84 个测试资产、约 728 个测试用例：21 个前端测试文件、61 个 Rust 内联测试文件、
 2 个 Rust 集成测试文件。97 个可执行源文件均有模块映射；当前无 unowned/unclassified 测试、无
 `only`/`skip`/`#[ignore]`、无未知 `covers`。精确现状以 `npm run test:inventory` 为准。
 规则注册表中 `BR-SYS-DATA-004` 属于客户端仓库外的云 provider catalog 契约，当前按既有
@@ -115,6 +115,7 @@ Rust 内联测试和 Rust 集成测试重新发现资产；`governance:generate`
 
 1. 输入本次实际 changed files。
 2. 直接测试变更：直选该测试，不推断业务源变化。
+   Rust 内联测试与生产实现同文件，不适用 TEST_ONLY 快速路径，必须按 Rust 生产源码变化触发。
 3. 业务源变更：根据路径、规则引用与 @GOV 映射直接模块。
 4. critical/high 风险：加入一跳直接消费者；不递归无限放大。
 5. 共享前端配置或广泛模块影响：前端全量。
@@ -170,9 +171,15 @@ TEST-GOVERNANCE-01 的验收是能力闭环，不是一次性整理全部测试�
 - 当前文件增长被冻结，六个模块的整合债务可量化。
 - 测试与需求验证各自有权威来源和交付证据。
 
-模块测试文件整合债务已经清零。`VAL-CORE-EDIT-DIFF-SAVE` 已进入独立 VALIDATION Scope，并由
-`A-VAL-X-V-02` 承载首个 G5 场景卡；后续按卡内自动化缺口推进，再建立 workspace 恢复与发布验证场景卡。
-系统验证不得混入测试文件整合 Scope。
+模块测试文件整合债务已经清零；动态 inventory、保守影响选择、related 执行、治理审计、原生工具执行
+环境约束和首条 Tauri Mock Webview 持久化系统 harness 均已落地。因此 `TEST-GOVERNANCE-01` 的能力建设
+状态为 `closed`，后续作为持续门禁运行而非停止变化。执行中发现的 Rust 内联测试承载文件误走 TEST_ONLY
+路径也已修复并由治理自测固定。
+
+`VAL-CORE-EDIT-DIFF-SAVE` 继续作为独立产品 VALIDATION Scope，由 `A-VAL-X-V-02` 承载 G5 场景卡。
+其中 `AUTOMATION_GAP-01`、`AUTOMATION_GAP-03` 已在可确定自动化边界内关闭；确定性 Agent 供给、真实
+WKWebView 和 provider 验证仍留在该卡，不属于 TEST-GOVERNANCE-01 的未完成基础设施。系统验证不得混入
+测试文件整合 Scope，也不得因测试治理闭合而自动判定 G5 通过。
 
 ## 变更记录
 
@@ -187,3 +194,4 @@ TEST-GOVERNANCE-01 的验收是能力闭环，不是一次性整理全部测试�
 | 2026-08-01 | v1.6 | TEST-CONSOLIDATION-PRV-01：PRV 2 个前端测试文件整合为 1 个物理套件，7 个 owner 用例与 covers 保持；动态资产总数更新为 84；登记的文件整合债务清零 |
 | 2026-08-01 | v1.7 | VAL-CORE-EDIT-DIFF-SAVE-01：启动首个独立 G5 VALIDATION Scope；新增 A-VAL-X-V-02 场景卡并登记需求、约束、自动化证据、真实环境观察项与退出条件 |
 | 2026-08-01 | v1.8 | VAL-G5-REG-001：将原生工具执行环境纳入测试能力；LibreOffice signal 6 经沙箱/非沙箱对照确认为 AppKit 环境限制，非沙箱全量回归通过，解除该回归阻断 |
+| 2026-08-01 | v1.9 | VAL-CORE-EDIT-DIFF-SAVE-AUTOMATION-01：新增 Tauri Mock Webview→生产注册/共享路由→真实文件→重开系统 harness；修复 Rust 内联测试源误走 TEST_ONLY 的选择器缺陷；TEST-GOVERNANCE-01 能力建设闭合并转为持续门禁 |

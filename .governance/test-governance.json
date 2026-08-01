@@ -14,6 +14,19 @@
       "G6": ["full_regression", "release_validation"]
     }
   },
+  "capability_governance": {
+    "id": "TEST-GOVERNANCE-01",
+    "status": "closed",
+    "closed_on": "2026-08-01",
+    "closure_basis": [
+      "module ownership, layer, risk and physical-file budgets are registered",
+      "inventory, conservative impact selection, related execution and governance audit are hard-wired",
+      "Rust production files carrying inline tests trigger source-change regression instead of the TEST_ONLY fast path",
+      "registered frontend consolidation debt is zero",
+      "the first G5 scenario has deterministic Tauri Mock Webview IPC persistence evidence and a separate product-validation backlog"
+    ],
+    "ongoing_policy": "closed means the governance capability is operational, not frozen; inventory and impact plans are recomputed from current files, while new gaps remain governed by system_validation cards"
+  },
   "discovery": {
     "frontend_roots": ["src", "scripts"],
     "rust_source_root": "src-tauri/src",
@@ -287,6 +300,7 @@
       ],
       "constraints": ["X-FORBID-006", "X-FORBID-008", "X-INTER-001", "X-SEQ-002"],
       "automated_evidence": [
+        "src-tauri/src/lib.rs",
         "src-tauri/tests/core_chain.rs",
         "src/services/agRuntime.test.ts",
         "src/services/deRuntime.test.ts",
@@ -295,9 +309,11 @@
       ],
       "manual_evidence": "真实 Tauri/WKWebView：编辑→代理建议→接受/拒绝→保存→关闭重开",
       "automation_gaps": [
-        "AUTOMATION_GAP-01: frontend→Tauri→Rust→DiskState→reopen system harness",
-        "AUTOMATION_GAP-02: deterministic Agent turn→DE→DiffCard integration",
-        "AUTOMATION_GAP-03: rejection LogicalState rollback + unchanged DiskState integration"
+        "AUTOMATION_GAP-02: deterministic Agent turn→DE→DiffCard integration"
+      ],
+      "resolved_automation_gaps": [
+        "AUTOMATION_GAP-01: frontend command-envelope evidence composes with Tauri Mock Webview→production registry/shared route→Rust→DiskState→second IPC read; real WKWebView remains VALIDATION_ONLY-01",
+        "AUTOMATION_GAP-03: frontend LogicalState rollback evidence composes with the same Mock Webview rejection→unchanged DiskState→no timeline harness"
       ],
       "execution_constraints": [
         "macOS bundled LibreOffice E2E requires a process environment that permits AppKit application registration",
@@ -306,7 +322,7 @@
       ],
       "exit_criteria": [
         "场景卡 S1–S5 的真实系统实际结果完成且无阻断缺陷",
-        "AUTOMATION_GAP-01~03 关闭或经人类明确裁决",
+        "AUTOMATION_GAP-02 关闭或经人类明确裁决",
         "相关自动化回归、治理审计与 G5 NFR 门禁通过"
       ],
       "last_reviewed": "2026-08-01",

@@ -48,6 +48,30 @@ describe('Test Governance', () => {
     expect(plan.commands.find((entry) => entry.id === 'frontend-related')?.args).toContain(path);
   });
 
+  it('Rust 内联测试承载文件仍按生产源码触发 Rust 全量与治理审计', () => {
+    const path = 'src-tauri/src/lib.rs';
+    const plan = buildRelatedTestPlan(DEFAULT_ROOT, [path], registry, inventory);
+    expect(plan.status).toBe('passed');
+    expect(plan.direct_tests).not.toContain(path);
+    expect(plan.mapping).toContainEqual(expect.objectContaining({
+      file: path,
+      source: 'path_rule_or_gov',
+    }));
+    expect(plan.full_rust).toBe(true);
+    expect(plan.commands.map((entry) => entry.id)).toEqual(expect.arrayContaining([
+      'rust-full', 'governance-audit',
+    ]));
+  });
+
+  it('直接修改 Rust 集成测试时触发 Rust 全量但不伪造生产源码变化', () => {
+    const path = 'src-tauri/tests/core_chain.rs';
+    const plan = buildRelatedTestPlan(DEFAULT_ROOT, [path], registry, inventory);
+    expect(plan.status).toBe('passed');
+    expect(plan.direct_tests).toEqual([path]);
+    expect(plan.full_rust).toBe(true);
+    expect(plan.commands.map((entry) => entry.id)).toEqual(['rust-full']);
+  });
+
   it('高风险业务变更触发所属模块、直接消费者与完整 Rust 回归', () => {
     const plan = buildRelatedTestPlan(DEFAULT_ROOT, ['src/services/edService.ts'], registry, inventory);
     expect(plan.status).toBe('passed');

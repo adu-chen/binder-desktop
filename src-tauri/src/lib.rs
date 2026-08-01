@@ -225,6 +225,31 @@ fn build_registry() -> CommandRegistry {
 
 /**
  * @GOV
+ * codes:    BR-SYS-DATA-003-API-SYS-IPC-CALL-005
+ * type:     API
+ * chain:    IPC-CALL
+ * rules:    BR-SYS-DATA-003
+ * boundary: in=RegisteredEditPersistenceCommandRequest | out=SharedRustRouteResult(WryOrMockRuntimeSameStateMachineAndDiskEffects) | does_not=duplicate_test_only_route_or_bypass_command_registry
+ */
+/// 编辑持久化 G5 链共用的生产路由选择。Wry `dispatch` 与 Tauri Mock Webview 系统测试必须命中同一函数，
+/// 避免测试复制一套“能过但生产未接线”的 command 映射；注册校验仍由调用方在进入本函数前执行。
+fn route_edit_persistence_command<R: tauri::Runtime>(
+    request: &CommandRequest,
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+) -> Option<Result<serde_json::Value, IpcError>> {
+    match request.command.as_str() {
+        "ws.read_doc" => Some(route_read_doc(request, state)),
+        "ws.save_doc" => Some(route_save_doc(request, state, app)),
+        "de.generate_diff" => Some(route_generate_diff(request, state)),
+        "de.accept_draft_diff" => Some(route_accept_draft_diff(request, state, app)),
+        "de.reject_diff" => Some(route_reject_diff(request, state, app)),
+        _ => None,
+    }
+}
+
+/**
+ * @GOV
  * codes:    BR-SYS-DATA-003-API-SYS-IPC-CALL-002
  * type:     API
  * chain:    IPC-CALL
@@ -249,65 +274,62 @@ fn dispatch(
             error: Some(err),
         };
     }
-    let routed = match request.command.as_str() {
-        "ws.open_workspace" => route_open_workspace(&request, &state),
-        "ws.list_workspaces" => route_list_workspaces(&state),
-        "ws.switch_workspace" => route_switch_workspace(&request, &state),
-        "ws.close_workspace" => route_close_workspace(&request, &state),
-        "ws.active_workspace" => route_active_workspace(&state),
-        "ws.list_docs" => route_list_docs(&state),
-        "ws.search" => route_search(&request, &state),
-        "ws.read_doc" => route_read_doc(&request, &state),
-        "ws.save_doc" => route_save_doc(&request, &state, &app),
-        "ws.persist_diff" => route_persist_diff(&request, &state),
-        "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
-        "ws.apply_diff" => route_apply_diff(&request, &state, &app),
-        "ws.discard_diff" => route_discard_diff(&request, &state, &app),
-        "ws.discard_unsaved_sessions" => route_discard_unsaved_sessions(&state),
-        "sys.inspect_close" => route_inspect_close(&state),
-        "ws.create_doc" => route_create_doc(&request, &state),
-        "ws.create_folder" => route_create_folder(&request, &state),
-        "ws.rename_doc" => route_rename_doc(&request, &state),
-        "ws.delete_doc" => route_delete_doc(&request, &state),
-        "prv.preview" => route_preview(&request, &state),
-        "prv.export" => route_export(&request, &state),
-        "prv.media_src" => route_media_src(&request, &state, &app),
-        "prv.table_data" => route_table_data(&request, &state),
-        "doc.create_draft" => route_create_draft(&request, &state),
-        "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
-        "doc.restore_edit_media" => route_restore_edit_media(&request, &state, &app),
-        "doc.import_project_image" => route_import_project_image(&request, &state, &app),
-        "doc.get_style_report" => route_get_style_report(&request, &state),
-        "doc.save_from_edit" => route_save_from_edit(&request, &state, &app),
-        "ws.list_timeline" => route_list_timeline(&request, &state),
-        "ws.preview_node" => route_preview_node(&request, &state),
-        "ws.restore_node" => route_restore_node(&request, &state, &app),
-        "de.generate_diff" => route_generate_diff(&request, &state),
-        "de.accept_draft_diff" => route_accept_draft_diff(&request, &state, &app),
-        "de.accept_diff" => route_accept_diff(&request, &state, &app),
-        "de.reject_diff" => route_reject_diff(&request, &state, &app),
-        "de.expire_diff" => route_expire_diff(&request, &state, &app),
-        "de.list_diffs" => route_list_diffs(&request, &state),
-        "de.update_image_diff_snapshots" => route_update_image_diff_snapshots(&request, &state),
-        "ed.persist_session_snapshot" => route_persist_session_snapshot(&request, &state),
-        "ed.list_session_snapshots" => route_list_session_snapshots(&state),
-        "ed.persist_open_tabs" => route_persist_open_tabs(&request, &state),
-        "ed.list_open_tabs" => route_list_open_tabs(&state),
-        "ag.start_turn" => route_start_turn(&request),
-        "ag.list_blocks" => route_list_blocks(&request, &state),
-        "ag.list_sessions" => route_list_agent_sessions(&state),
-        "ag.save_session" => route_save_agent_session(&request, &state),
-        "ag.save_turn" => route_save_agent_turn(&request, &state),
-        "ag.list_turns" => route_list_agent_turns(&request, &state),
-        "ag.delete_session" => route_delete_agent_session(&request, &state),
-        // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
-        other => Err(IpcError::new(
-            "IPC_ROUTE_MISSING",
-            &format!("command 已注册但未接线: {other}"),
-            false,
-            false,
-        )),
-    };
+    let routed = route_edit_persistence_command(&request, &state, &app).unwrap_or_else(|| {
+        match request.command.as_str() {
+            "ws.open_workspace" => route_open_workspace(&request, &state),
+            "ws.list_workspaces" => route_list_workspaces(&state),
+            "ws.switch_workspace" => route_switch_workspace(&request, &state),
+            "ws.close_workspace" => route_close_workspace(&request, &state),
+            "ws.active_workspace" => route_active_workspace(&state),
+            "ws.list_docs" => route_list_docs(&state),
+            "ws.search" => route_search(&request, &state),
+            "ws.persist_diff" => route_persist_diff(&request, &state),
+            "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
+            "ws.apply_diff" => route_apply_diff(&request, &state, &app),
+            "ws.discard_diff" => route_discard_diff(&request, &state, &app),
+            "ws.discard_unsaved_sessions" => route_discard_unsaved_sessions(&state),
+            "sys.inspect_close" => route_inspect_close(&state),
+            "ws.create_doc" => route_create_doc(&request, &state),
+            "ws.create_folder" => route_create_folder(&request, &state),
+            "ws.rename_doc" => route_rename_doc(&request, &state),
+            "ws.delete_doc" => route_delete_doc(&request, &state),
+            "prv.preview" => route_preview(&request, &state),
+            "prv.export" => route_export(&request, &state),
+            "prv.media_src" => route_media_src(&request, &state, &app),
+            "prv.table_data" => route_table_data(&request, &state),
+            "doc.create_draft" => route_create_draft(&request, &state),
+            "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
+            "doc.restore_edit_media" => route_restore_edit_media(&request, &state, &app),
+            "doc.import_project_image" => route_import_project_image(&request, &state, &app),
+            "doc.get_style_report" => route_get_style_report(&request, &state),
+            "doc.save_from_edit" => route_save_from_edit(&request, &state, &app),
+            "ws.list_timeline" => route_list_timeline(&request, &state),
+            "ws.preview_node" => route_preview_node(&request, &state),
+            "ws.restore_node" => route_restore_node(&request, &state, &app),
+            "de.accept_diff" => route_accept_diff(&request, &state, &app),
+            "de.expire_diff" => route_expire_diff(&request, &state, &app),
+            "de.list_diffs" => route_list_diffs(&request, &state),
+            "de.update_image_diff_snapshots" => route_update_image_diff_snapshots(&request, &state),
+            "ed.persist_session_snapshot" => route_persist_session_snapshot(&request, &state),
+            "ed.list_session_snapshots" => route_list_session_snapshots(&state),
+            "ed.persist_open_tabs" => route_persist_open_tabs(&request, &state),
+            "ed.list_open_tabs" => route_list_open_tabs(&state),
+            "ag.start_turn" => route_start_turn(&request),
+            "ag.list_blocks" => route_list_blocks(&request, &state),
+            "ag.list_sessions" => route_list_agent_sessions(&state),
+            "ag.save_session" => route_save_agent_session(&request, &state),
+            "ag.save_turn" => route_save_agent_turn(&request, &state),
+            "ag.list_turns" => route_list_agent_turns(&request, &state),
+            "ag.delete_session" => route_delete_agent_session(&request, &state),
+            // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
+            other => Err(IpcError::new(
+                "IPC_ROUTE_MISSING",
+                &format!("command 已注册但未接线: {other}"),
+                false,
+                false,
+            )),
+        }
+    });
     match routed {
         Ok(result) => CommandResponse {
             correlation_id,
@@ -518,10 +540,10 @@ fn route_read_doc(
 }
 
 /// 路由 `ws.save_doc`：原子写入，回内容哈希（BR-WS-PERSIST-001 / SM-WS-01）。
-fn route_save_doc(
+fn route_save_doc<R: tauri::Runtime>(
     request: &CommandRequest,
     state: &AppState,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
 ) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let content = request
@@ -1494,7 +1516,11 @@ fn route_discard_unsaved_sessions(state: &AppState) -> Result<serde_json::Value,
 // —— SM-WS-02 落盘机集成（A-CORE-X-L-04 Task 2-D）——
 
 /// 广播 SM-WS-02 转移（diff_id 为实例）。
-fn emit_ws02(app: &tauri::AppHandle, diff_id: &str, st: workspace::diff_apply::DiffApplyState) {
+fn emit_ws02<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    diff_id: &str,
+    st: workspace::diff_apply::DiffApplyState,
+) {
     sm_events::emit_sm_state(
         app,
         sm_events::SmStatePayload::new(
@@ -1539,8 +1565,8 @@ fn apply_diff_sm(
 
 /// 经 SM-WS-02 驱动 discard：AwaitingDecision→Discarded（rejected/expired，不写文件）→广播。
 /// `terminal_reason` 可空（BR-SYS-DATA-005）：过期原因/异常退出清算标注，供历史只读展示区分。
-fn discard_diff_sm(
-    app: &tauri::AppHandle,
+fn discard_diff_sm<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     conn: &Connection,
     diff_id: &str,
     terminal: &str,
@@ -1565,7 +1591,11 @@ fn discard_diff_sm(
 // 广播：Dirty→Save→Saving（落盘开始）→SaveOk→Saved / SaveFail→SaveError。
 
 /// 广播 SM-WS-01 转移（rel_path 为实例，区分多文档会话）。保存机为循环机，无终态（terminal=false）。
-fn emit_ws01(app: &tauri::AppHandle, rel_path: &str, st: workspace::save::SaveState) {
+fn emit_ws01<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    rel_path: &str,
+    st: workspace::save::SaveState,
+) {
     sm_events::emit_sm_state(
         app,
         sm_events::SmStatePayload::new("SM-WS-01", rel_path, &format!("{st:?}"), false),
@@ -1613,8 +1643,8 @@ fn save_with_baseline_guard(
 }
 
 /// 经 SM-WS-01 保存机驱动原子落盘：Saving（广播）→ save_atomic effect → Saved / SaveError（广播）。
-fn save_atomic_sm(
-    app: &tauri::AppHandle,
+fn save_atomic_sm<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     rel_path: &str,
     abs: &std::path::Path,
     content: &[u8],
@@ -2850,10 +2880,10 @@ fn route_generate_diff(
 
 /// 路由 `de.accept_draft_diff`：用于已在打开编辑器中应用为草稿内容的 diff。经 SM-DE-01 守护
 /// Pending→Accepted，但不触发 SM-WS-02 落盘；后续由用户显式 save 走 SM-WS-01 写盘。
-fn route_accept_draft_diff(
+fn route_accept_draft_diff<R: tauri::Runtime>(
     request: &CommandRequest,
     state: &AppState,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
 ) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
     let apply_context = request
@@ -3055,10 +3085,10 @@ fn route_accept_diff(
 
 /// 路由 `de.reject_diff`：经 SM-DE-01 守护（仅 Pending 可拒绝）→ ws.discard_diff(rejected) 不写文件、
 /// 不记节点 → 广播 SM-DE-01 转移（终态不可逆，A-CORE-X-L-04 §5.4 Task 2-B）。
-fn route_reject_diff(
+fn route_reject_diff<R: tauri::Runtime>(
     request: &CommandRequest,
     state: &AppState,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
 ) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
     let conn = lock_db(state)?;
@@ -6937,6 +6967,269 @@ async fn ag_request_assist(
             }
             Ok(empty(Some("gateway_error")))
         }
+    }
+}
+
+#[cfg(test)]
+mod edit_persistence_system_tests {
+    use super::*;
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime};
+    use tauri::{Manager, State};
+
+    /// MockRuntime 的 command 必须保持生产名 `dispatch`，并复用生产注册表与
+    /// `route_edit_persistence_command`；这里只替换 Wry 运行时，不复制业务路由。
+    #[tauri::command(rename = "dispatch")]
+    fn mock_dispatch(
+        app: tauri::AppHandle<MockRuntime>,
+        request: CommandRequest,
+        state: State<'_, AppState>,
+    ) -> CommandResponse {
+        let correlation_id = request.correlation_id.clone();
+        if let Err(error) = state.registry.validate(&request) {
+            return CommandResponse {
+                correlation_id,
+                result: None,
+                error: Some(error),
+            };
+        }
+        let routed = route_edit_persistence_command(&request, &state, &app).unwrap_or_else(|| {
+            Err(IpcError::new(
+                "IPC_ROUTE_MISSING",
+                "G5 持久化 harness 收到范围外 command",
+                false,
+                false,
+            ))
+        });
+        match routed {
+            Ok(result) => CommandResponse {
+                correlation_id,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => CommandResponse {
+                correlation_id,
+                result: None,
+                error: Some(error),
+            },
+        }
+    }
+
+    fn temp_workspace(tag: &str, initial: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "binder_g5_persistence_{}_{}",
+            std::process::id(),
+            tag
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let document = root.join("notes/a.md");
+        std::fs::create_dir_all(document.parent().unwrap()).unwrap();
+        std::fs::write(&document, initial).unwrap();
+        (root, document)
+    }
+
+    fn app_for(root: &std::path::Path) -> tauri::App<MockRuntime> {
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::migrate(&mut conn).unwrap();
+        workspace::lifecycle::open_workspace(&mut conn, &root.to_string_lossy()).unwrap();
+        mock_builder()
+            .manage(AppState {
+                db: Mutex::new(conn),
+                registry: build_registry(),
+                assist_terminals: Mutex::new(HashMap::new()),
+            })
+            .invoke_handler(tauri::generate_handler![mock_dispatch])
+            .build(mock_context(noop_assets()))
+            .unwrap()
+    }
+
+    fn invoke(
+        webview: &tauri::WebviewWindow<MockRuntime>,
+        command: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let correlation_id = format!("g5-{command}");
+        let response = get_ipc_response(
+            webview,
+            tauri::webview::InvokeRequest {
+                cmd: "dispatch".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: serde_json::json!({
+                    "request": {
+                        "command": command,
+                        "correlation_id": correlation_id,
+                        "params": params
+                    }
+                })
+                .into(),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .unwrap_or_else(|error| panic!("Tauri IPC 拒绝 {command}: {error}"))
+        .deserialize::<CommandResponse>()
+        .unwrap();
+        assert_eq!(response.correlation_id, correlation_id);
+        if let Some(error) = response.error {
+            panic!("{command} 返回 {}: {}", error.code, error.message);
+        }
+        response
+            .result
+            .unwrap_or_else(|| panic!("{command} 缺少 result"))
+    }
+
+    fn generate_diff(
+        webview: &tauri::WebviewWindow<MockRuntime>,
+        before_snapshot: &str,
+        after_content: &str,
+    ) -> String {
+        invoke(
+            webview,
+            "de.generate_diff",
+            serde_json::json!({
+                "relPath": "notes/a.md",
+                "afterContent": after_content,
+                "beforeSnapshot": before_snapshot,
+                "originModule": "AG",
+                "originTask": "g5-system-harness",
+                "anchorLocate": "located"
+            }),
+        )["diff_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    // covers: BR-SYS-DATA-003
+    // covers: BR-DE-STATE-001
+    // covers: BR-WS-PERSIST-001
+    // covers: BR-WS-OBS-001
+    // Tauri Mock Webview → 生产注册/路由 → DE 接受 → WS 保存 → 真实 DiskState → 第二次 IPC 重开。
+    #[test]
+    fn accepted_draft_saves_to_disk_and_reopens_through_tauri_ipc() {
+        let initial = "# 初始\n\n正文\n";
+        let accepted = "# 已接受\n\n更新正文\n";
+        let (root, document) = temp_workspace("accepted", initial);
+        let app = app_for(&root);
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let opened = invoke(
+            &webview,
+            "ws.read_doc",
+            serde_json::json!({ "relPath": "notes/a.md" }),
+        );
+        assert_eq!(opened["content"], initial);
+        let baseline = opened["baseline"].as_str().unwrap();
+        let diff_id = generate_diff(&webview, baseline, accepted);
+
+        invoke(
+            &webview,
+            "de.accept_draft_diff",
+            serde_json::json!({ "diffId": diff_id, "applyContext": "current_editor" }),
+        );
+        invoke(
+            &webview,
+            "ws.save_doc",
+            serde_json::json!({
+                "relPath": "notes/a.md",
+                "content": accepted,
+                "baseline": baseline,
+                "override": false
+            }),
+        );
+
+        assert_eq!(std::fs::read_to_string(&document).unwrap(), accepted);
+        let reopened = invoke(
+            &webview,
+            "ws.read_doc",
+            serde_json::json!({ "relPath": "notes/a.md" }),
+        );
+        assert_eq!(reopened["content"], accepted);
+        assert_ne!(reopened["baseline"], opened["baseline"]);
+
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap();
+        let (status, effect_status): (String, String) = conn
+            .query_row(
+                "SELECT status, effect_status FROM pending_diffs WHERE diff_id = ?1",
+                [&diff_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "accepted");
+        assert_eq!(effect_status, "saved");
+        drop(conn);
+        drop(webview);
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // covers: BR-SYS-DATA-003
+    // covers: BR-DE-STATE-001
+    // covers: BR-WS-PERSIST-001
+    // 同一 Webview IPC harness 验证拒绝不写 DiskState，第二次读取仍观察原文且无时间轴节点。
+    #[test]
+    fn rejected_diff_keeps_disk_and_reopen_unchanged_through_tauri_ipc() {
+        let initial = "# 原文\n\n保持不变\n";
+        let (root, document) = temp_workspace("rejected", initial);
+        let app = app_for(&root);
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let opened = invoke(
+            &webview,
+            "ws.read_doc",
+            serde_json::json!({ "relPath": "notes/a.md" }),
+        );
+        let diff_id = generate_diff(
+            &webview,
+            opened["baseline"].as_str().unwrap(),
+            "# 不应落盘\n",
+        );
+        invoke(
+            &webview,
+            "de.reject_diff",
+            serde_json::json!({ "diffId": diff_id }),
+        );
+
+        assert_eq!(std::fs::read_to_string(&document).unwrap(), initial);
+        let reopened = invoke(
+            &webview,
+            "ws.read_doc",
+            serde_json::json!({ "relPath": "notes/a.md" }),
+        );
+        assert_eq!(reopened["content"], initial);
+        assert_eq!(reopened["baseline"], opened["baseline"]);
+
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM pending_diffs WHERE diff_id = ?1",
+                [&diff_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "rejected");
+        let workspace = workspace::lifecycle::active_workspace(&conn)
+            .unwrap()
+            .unwrap();
+        let target = crate::types::DocRef {
+            workspace_id: workspace.workspace_id,
+            rel_path: "notes/a.md".into(),
+            doc_type: "md".into(),
+        };
+        assert!(workspace::timeline::list_timeline(&conn, &target)
+            .unwrap()
+            .is_empty());
+        drop(conn);
+        drop(webview);
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 

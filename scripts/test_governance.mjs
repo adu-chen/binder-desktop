@@ -410,8 +410,10 @@ export function buildRelatedTestPlan(
   const registry = providedRegistry ?? loadTestGovernance(root).registry;
   const inventory = providedInventory ?? buildTestInventory(root, registry);
   const normalizedChanges = unique(changedFiles.map(normalizePath)).filter((file) => !isIgnoredChange(file, registry));
+  // Rust inline tests share a file with production code. They are inventory assets, but changing
+  // that file is still a production-source change and must not take the TEST_ONLY fast path.
   const directTestPaths = new Set(inventory.assets
-    .filter((asset) => normalizedChanges.includes(asset.path))
+    .filter((asset) => normalizedChanges.includes(asset.path) && asset.kind !== 'rust_inline')
     .map((asset) => asset.path));
   const nonTestChanges = normalizedChanges.filter((file) => !directTestPaths.has(file));
   const directModules = new Set();
@@ -424,9 +426,10 @@ export function buildRelatedTestPlan(
 
   for (const file of normalizedChanges) {
     const asset = inventory.assets.find((candidate) => candidate.path === file);
-    if (asset) {
+    if (asset && asset.kind !== 'rust_inline') {
       asset.modules.forEach((module) => directModules.add(module));
       mapping.push({ file, modules: asset.modules, source: 'direct_test' });
+      if (asset.kind === 'rust_integration') rustFull = true;
       continue;
     }
     const modules = inferModulesForPath(root, registry, file, 'source');
