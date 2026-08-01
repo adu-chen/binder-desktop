@@ -149,11 +149,11 @@
         "src-tauri/src/de/**", "docs/01_modules/DE/**"
       ],
       "test_globs": [
-        "src/components/de/**/*.test.ts", "src/components/de/**/*.test.tsx",
-        "src/services/deService.test.ts", "src/store/deStore.test.ts", "src-tauri/tests/core_chain.rs"
+        "src/components/de/DiffReview.test.tsx", "src/services/deRuntime.test.ts",
+        "src-tauri/tests/core_chain.rs"
       ],
       "downstream": ["AG", "SYS"],
-      "baseline_frontend_test_files": 4,
+      "baseline_frontend_test_files": 2,
       "target_frontend_test_files": 2,
       "requires_rust_on_related": true
     },
