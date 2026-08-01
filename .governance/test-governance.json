@@ -299,13 +299,18 @@
         "AUTOMATION_GAP-02: deterministic Agent turn→DE→DiffCard integration",
         "AUTOMATION_GAP-03: rejection LogicalState rollback + unchanged DiskState integration"
       ],
+      "execution_constraints": [
+        "macOS bundled LibreOffice E2E requires a process environment that permits AppKit application registration",
+        "DOC_PREVIEW_WORKER_CRASH signal=6 inside a restricted sandbox must be reproduced in a non-sandbox macOS process before product-defect adjudication",
+        "a non-sandbox automation pass does not replace the real Tauri/WKWebView system scenarios"
+      ],
       "exit_criteria": [
         "场景卡 S1–S5 的真实系统实际结果完成且无阻断缺陷",
         "AUTOMATION_GAP-01~03 关闭或经人类明确裁决",
         "相关自动化回归、治理审计与 G5 NFR 门禁通过"
       ],
       "last_reviewed": "2026-08-01",
-      "status": "blocked"
+      "status": "active"
     },
     {
       "id": "VAL-CORE-CLOSE-RECOVERY",

@@ -1,20 +1,18 @@
 {
-  "scope_id": "VAL-CORE-EDIT-DIFF-SAVE-01",
+  "scope_id": "VAL-G5-REG-001",
   "task_type": "GOVERNANCE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "核心编辑与 Diff Edit 保存 G5 验证场景治理",
-  "status": "BLOCKED",
+  "title": "G5 全量回归执行环境复核与阻断解除",
+  "status": "READY",
   "confirmation": "YES",
   "issue_trace": null,
-  "stop_condition": "SC-04 VALIDATION_BLOCKED",
-  "blocker": "APC G5 要求的 test:full 可重复失败：doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available 中 LibreOffice worker 以 signal 6 崩溃；修复需要修改当前 Scope 明确禁止的 DOC/Rust 实现或测试环境。",
-  "reason": "承接测试治理矩阵在测试文件整合债务清零后明确登记的首个 VALIDATION Scope，将 VAL-CORE-EDIT-DIFF-SAVE 从笼统 deferred 条目升级为可执行、可追溯、自动化与真实环境证据分离的 G5 场景卡。人类于 2026-08-01 回复‘继续下一步’，确认启动此前已明确提出的该验证 Scope。",
+  "stop_condition": null,
+  "reason": "承接 VAL-CORE-EDIT-DIFF-SAVE-01 发现的 LibreOffice signal 6 阻断。人类在已明确下一 Scope 为 VAL-G5-REG-001 后回复‘继续下一步’，确认进入该 Scope；复核已证明失败来自 macOS AppKit 在受控沙箱中的进程注册限制，非沙箱定向测试与 test:full 均通过。",
   "objectives": [
-    "将 REQ-CORE-002 及 AG/DE/ED/WS 承接需求映射到可执行子场景",
-    "区分现有单元、服务、组件、Rust 集成证据与真实 Tauri/WKWebView 系统证据",
-    "实际运行本场景相关自动化并记录结果，不以部分自动化冒充完整 G5 通过",
-    "登记明确的 AUTOMATION_GAP、VALIDATION_ONLY、退出条件与下一步实现顺序",
-    "保持测试治理注册表与 ADUS 系统验证索引同步"
+    "记录受控沙箱与非沙箱执行的对照证据并裁决根因边界",
+    "解除已经满足退出条件的 VAL-G5-REG-001 回归阻断",
+    "将 macOS 原生工具测试的执行环境约束持久化到测试治理注册表与验证文档",
+    "保持真实 Tauri/WKWebView 系统验证缺口与 DOC 发布阻断独立，不以全量自动化通过冒充 G5 完成"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
@@ -37,45 +35,45 @@
     "package-lock.json"
   ],
   "constraints": [
-    "不得把 mock Tauri、领域函数拼接或部分后端集成描述为真实 WKWebView 端到端通过",
-    "不得修改业务实现、测试实现、测试断言或新增测试框架",
-    "每个子场景必须分别记录预期、实际、自动化证据、真实环境观察项和状态",
-    "自动化证据必须引用实际存在且本次真实运行的测试资产",
-    "未执行的真实环境验证保持未验证，不能以推断填写实际结果",
+    "不得把受控沙箱中的 AppKit 注册失败误判为产品实现缺陷，也不得直接忽略该失败",
+    "只有同一真实转换测试在非沙箱 macOS 进程环境通过后，才能把 signal 6 裁决为环境假失败",
+    "不得修改或弱化 LibreOffice E2E 测试、断言或业务代码以制造全量测试通过",
+    "自动化全量通过不替代真实 Tauri/WKWebView 场景验证，也不解除 BLOCK-REL-LO-001 发布专项",
     "不新增 RULE、CHAIN、CONSTRAINT、TERM 或修改需求/设计真值"
   ],
   "acceptance_criteria": [
-    "新场景卡可追溯 REQ-CORE-002、REQ-AG-001、REQ-DE-001/002/003、REQ-ED-001/005、REQ-WS-002/003",
-    "接受、拒绝、保存即接受、保存失败、保存后重开五类核心路径均有独立状态",
-    "注册表将 VAL-CORE-EDIT-DIFF-SAVE 标记为 active/partial，并登记场景卡、需求、约束、证据与退出条件",
-    "相关前端自动化、Rust 核心链、test:governance、governance generate/audit 与 diff check 全部通过",
-    "最终结论明确限定为自动化基线已核验、完整 G5 系统验证尚未通过"
+    "LibreOffice 定向真转换在非沙箱环境通过，并保留沙箱内失败的对照记录",
+    "test:full 在满足 AppKit 注册条件的环境中完整通过前端、Rust 单元和 Rust 集成测试",
+    "测试治理注册表明确登记 macOS 原生工具测试的执行环境约束",
+    "VAL-G5-REG-001 标记 resolved，VAL-CORE-EDIT-DIFF-SAVE 恢复 active/partial 且最终 G5 仍为 NOT_READY",
+    "test:governance、governance:generate、governance:audit 与 git diff check 通过"
   ],
   "validation_commands": [
-    "npx vitest run src/services/agRuntime.test.ts src/services/deRuntime.test.ts src/services/edRuntime.test.ts src/components/de/DiffReview.test.tsx",
-    "cargo test --manifest-path src-tauri/Cargo.toml --test core_chain",
+    "cargo test --manifest-path src-tauri/Cargo.toml doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available -- --exact --nocapture (non-sandbox macOS process environment)",
+    "npm run test:full (non-sandbox macOS process environment)",
     "npm run test:governance",
     "npm run governance:generate",
     "npm run governance:audit",
     "git diff --check"
   ],
   "out_of_scope": [
-    "新增或修改自动化测试、业务代码或 Tauri command",
-    "执行并裁决真实 Agent 云调用、账号订阅或网关链路",
-    "将人工观察项计入自动化通过率",
-    "VAL-CORE-CLOSE-RECOVERY 或其他 G5/G6 场景卡"
+    "修改 LibreOffice 二进制、worker、测试或启动参数",
+    "关闭 BLOCK-REL-LO-001 的签名、公证、无 GUI 源码与字体语料发布验收",
+    "执行真实 Tauri/WKWebView S1–S5 场景或补齐 AUTOMATION_GAP-01~03",
+    "VAL-CORE-CLOSE-RECOVERY 或其他 G5/G6 场景"
   ],
   "validation_results": {
-    "targeted_frontend": "PASS: 4 files / 128 tests",
-    "targeted_rust": "PASS: core_chain 4 passed",
+    "sandbox_reproduction": "FAIL as expected for environment diagnosis: DOC_PREVIEW_WORKER_CRASH signal=6; crash stack NSApplication -> GetCurrentProcess -> _RegisterApplication",
+    "non_sandbox_targeted": "PASS: LibreOffice DOCX-to-PDF E2E 1 passed",
+    "non_sandbox_full_frontend": "PASS: 21 files / 455 tests",
+    "non_sandbox_full_rust": "PASS: lib 261 passed; core_chain 4 passed; sm_broadcast 4 passed",
     "test_governance": "PASS: 84 assets / 724 tests / 0 findings / 0 warnings",
+    "governance_generate": "PASS: ADUS refreshed; system validation status active",
     "governance_audit": "PASS",
-    "full_frontend": "PASS: 21 files / 455 tests",
-    "full_rust": "FAIL: lib 260 passed / 1 failed; integration suites not reached",
-    "reproduction": "FAIL: isolated LibreOffice DOCX-to-PDF test reproduced DOC_PREVIEW_WORKER_CRASH signal=6"
+    "diff_check": "PASS"
   },
   "unresolved_items": [
-    "VAL-G5-REG-001: DOC/LibreOffice worker crash blocks the G5 regression baseline; requires a separate confirmed Scope or human deferral decision.",
-    "AUTOMATION_GAP-01~03 and VALIDATION_ONLY-01~02 remain open as recorded in A-VAL-X-V-02."
+    "AUTOMATION_GAP-01~03 and VALIDATION_ONLY-01~02 remain open in A-VAL-X-V-02.",
+    "BLOCK-REL-LO-001 remains governed by the DOC release specialty and is not closed by this regression result."
   ]
 }

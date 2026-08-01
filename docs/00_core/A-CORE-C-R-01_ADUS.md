@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-01T08:37:04.077Z -->
+<!-- 最后生成时间：2026-08-01T08:52:46.366Z -->
 
 ### 模块编码表
 
@@ -1512,7 +1512,7 @@
 
 | validation | phase | modules | automation | status |
 |---|---|---|---|---|
-| VAL-CORE-EDIT-DIFF-SAVE | G5 | ED, DE, AG, WS, SYS | partial | blocked |
+| VAL-CORE-EDIT-DIFF-SAVE | G5 | ED, DE, AG, WS, SYS | partial | active |
 | VAL-CORE-CLOSE-RECOVERY | G5 | SYS, ED, DE, WS | partial | deferred |
 
 ### triage 汇总

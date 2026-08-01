@@ -18,9 +18,9 @@
 | validation_id | `VAL-CORE-EDIT-DIFF-SAVE` |
 | phase | G5 集成/系统验证 |
 | owner / participants | CORE / AG、DE、ED、WS、SYS |
-| 当前状态 | `blocked` |
+| 当前状态 | `active` |
 | 自动化程度 | `partial` |
-| 本轮裁决 | `BLOCKED`：本场景定向自动化通过，但 APC G5 全量回归存在可重复 DOC/LibreOffice 失败；真实 Tauri/WKWebView 完整链也尚未执行，不得表述为 G5 通过 |
+| 本轮裁决 | `IN_PROGRESS`：本场景定向自动化与满足 macOS AppKit 注册条件的全量回归均通过；真实 Tauri/WKWebView 完整链及自动化缺口尚未闭合，不得表述为 G5 通过 |
 | G5 退出条件 | §6 的 `AUTOMATION_GAP` 关闭，§4 真实环境观察完成且无阻断缺陷，相关回归与治理硬门通过 |
 
 本卡验证的是用户可观察的完整工作流，而不是把多个测试文件的绿色结果拼成“端到端”。当前项目已有
@@ -48,6 +48,9 @@ Agent 回合和 WKWebView 编辑器；因此这些证据只构成系统验证的
 - 后端：Rust integration test；真实 SQLite schema 与临时文件 I/O，但不经过真实 Tauri command、
   WKWebView 或云端 Agent 回合。
 - 数据：独立测试数据与临时文件，不依赖用户 workspace，不得把测试 fixture 当作真实工作区观察结果。
+- 原生工具：包内 LibreOffice 的 macOS Quartz 进程即使以 `--headless` 转换也会执行 AppKit 应用注册。
+  该 E2E 与 `test:full` 必须在允许此注册的非沙箱 macOS 进程环境执行；受控沙箱内的 signal 6 只构成
+  环境诊断，必须经同一测试的非沙箱对照复跑后才能裁决，不能被直接忽略。
 
 ### 3.2 真实系统环境
 
@@ -131,8 +134,9 @@ Agent 回合和 WKWebView 编辑器；因此这些证据只构成系统验证的
 | 2026-08-01 | `cargo test --manifest-path src-tauri/Cargo.toml --test core_chain` | `PASS`：4 passed，0 failed/ignored | DE→WS 的真实 DB/文件副作用；不含前端、真实 Agent、重开 UI |
 | 2026-08-01 | `npm run test:governance` | `PASS`：8 tests；84 assets / 724 tests；0 finding / warning | 证据路径、owner/layer 与测试治理完整性；不证明产品行为 |
 | 2026-08-01 | `npm run governance:generate` / `npm run governance:audit` | `PASS`：ADUS 刷新；audit status=passed，test governance 0 finding / warning | 注册表到 ADUS 的派生一致性与治理硬门；不证明产品行为 |
-| 2026-08-01 | `npm run test:full` | `FAIL`：前端 21 files / 455 tests 全过；Rust lib 260 passed / 1 failed，后续 integration 未执行 | G5 回归基线被范围外 DOC/LibreOffice 失败阻断 |
-| 2026-08-01 | 单独复跑 `doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available` | `FAIL`：`DOC_PREVIEW_WORKER_CRASH`，LibreOffice worker signal 6 | 证明失败可重复，不能按偶发波动忽略；根因与修复不在本 Scope |
+| 2026-08-01 | 受控沙箱内 `npm run test:full` / 单独复跑 LibreOffice E2E | `FAIL`：前端 21 files / 455 tests 全过；Rust 在真转换处 `DOC_PREVIEW_WORKER_CRASH` signal 6 | 原始阻断证据；崩溃报告定位 `NSApplication → GetCurrentProcess → _RegisterApplication`，需要环境对照而非弱化测试 |
+| 2026-08-01 | 非沙箱 macOS 进程内单独复跑 LibreOffice E2E | `PASS`：1 passed，生成 PDF；Font Trace 72 refs | 同一代码、二进制和输入在允许 AppKit 注册的环境通过，裁决 signal 6 为沙箱执行环境假失败 |
+| 2026-08-01 | 非沙箱 macOS 进程内 `npm run test:full` | `PASS`：前端 21 files / 455 tests；Rust lib 261/261；`core_chain` 4/4；`sm_broadcast` 4/4 | G5 自动化回归基线通过；不替代真实 Tauri/WKWebView 系统场景 |
 
 ## 6. 缺口、责任与退出条件
 
@@ -143,7 +147,7 @@ Agent 回合和 WKWebView 编辑器；因此这些证据只构成系统验证的
 | AUTOMATION_GAP-03 | rejection integration | 拒绝路径的前端回滚与后端不落盘由两套测试分别证明，尚未在同一真实边界串联 | DE / ED / WS | G5 | 单条集成场景同时断言 LogicalState 回滚、DiskState 不变、无时间轴节点 | open |
 | VALIDATION_ONLY-01 | WKWebView interaction | Diff 挂载位置、真实焦点/按钮交互、状态反馈需要真实应用观察 | ED / DE | G5 | 在 §3.2 环境执行 S1–S5，记录实际结果或缺陷 | open |
 | VALIDATION_ONLY-02 | real provider | 真实账号、订阅、网关与模型输出属于更大的 AI 系统链，当前证据不能覆盖 | AG / ENT / CLOUD | G5/G6 | 对接相应系统验证卡；本卡只消费其“可生成确定性修改建议”前置结论 | blocked_by_cloud |
-| VAL-G5-REG-001 | regression blocker | APC G5 `test:full` 中 DOCX→PDF 真转换 worker 可重复 signal 6 崩溃；Rust 全量基线未通过 | DOC / PRV | G5 | 独立 Scope 定位并修复，随后重跑目标测试与 `test:full`；或由人类按项目规则明确延期/裁决 | blocked |
+| VAL-G5-REG-001 | regression environment | 受控沙箱禁止 macOS AppKit 应用注册，导致 DOCX→PDF 真转换 worker signal 6；同一测试在非沙箱环境通过 | DOC / PRV / CORE | G5 | 非沙箱定向真转换与 `test:full` 通过，并登记执行环境约束 | resolved |
 
 自动化补齐顺序：先关闭 AUTOMATION_GAP-01（本地、确定、价值最高），再关闭
 AUTOMATION_GAP-03，最后以确定性 Agent 供给关闭 AUTOMATION_GAP-02。真实 provider 不应成为本地
@@ -153,14 +157,15 @@ AUTOMATION_GAP-03，最后以确定性 Agent 供给关闭 AUTOMATION_GAP-02。�
 
 | defect | scenario | severity | status | evidence |
 |---|---|---|---|---|
-| VAL-G5-REG-001 | G5 回归基线 | blocker | open | 两次可重复 `DOC_PREVIEW_WORKER_CRASH` / signal 6；当前 Scope 禁止修改 DOC/Rust |
+| VAL-G5-REG-001 | G5 回归基线 | blocker | resolved | 沙箱内 signal 6 与崩溃栈已保留；非沙箱同一 E2E 1/1、全量前端 455/455、Rust 261+4+4 全过；未修改或弱化测试 |
 | 真实系统验证未执行 | S1–S5 | — | not_applicable | 未执行不等于无缺陷 |
 
-最终 G5 裁决：`NOT_READY`。只有 §4 的真实系统实际结果完成、§6 的本卡 G5 缺口关闭，且自动化回归、
-治理审计与相关 NFR 均通过后，才可将注册表状态改为 `passed`。
+最终 G5 裁决：`NOT_READY`。`VAL-G5-REG-001` 已解除，但只有 §4 的真实系统实际结果完成、§6 的其余
+G5 缺口关闭，且自动化回归、治理审计与相关 NFR 均通过后，才可将注册表状态改为 `passed`。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-01 | v1.0 | VAL-CORE-EDIT-DIFF-SAVE-01：建立首个 G5 场景卡，拆分五类核心子场景、自动化证据、真实环境观察项与退出条件；定向证据通过，但全量回归发现 VAL-G5-REG-001，当前结论为 BLOCKED/NOT_READY |
+| 2026-08-01 | v1.1 | VAL-G5-REG-001：保留沙箱内 signal 6 原始失败，非沙箱复跑同一 LibreOffice E2E 与 test:full 全过，确认 AppKit 执行环境限制并解除回归阻断；真实系统验证缺口仍保持 NOT_READY |
