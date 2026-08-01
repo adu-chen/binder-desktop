@@ -1,37 +1,33 @@
 {
-  "scope_id": "TEST-CONSOLIDATION-PRV-01",
-  "task_type": "CODE_CHANGE",
-  "governance_phase": "IMPLEMENTATION",
-  "title": "PRV 前端测试资产治理整合",
-  "status": "READY",
+  "scope_id": "VAL-CORE-EDIT-DIFF-SAVE-01",
+  "task_type": "GOVERNANCE_CHANGE",
+  "governance_phase": "VALIDATION",
+  "title": "核心编辑与 Diff Edit 保存 G5 验证场景治理",
+  "status": "BLOCKED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/TEST-CONSOLIDATION-PRV-01.md",
-  "reason": "承接测试治理矩阵中 PRV 2→1 的最后一项文件整合债务，将预览/导出服务契约与表格只读解析收敛为一个可诊断 runtime 套件；保持全部测试行为、断言、covers、mock 语义和 node 运行环境，不修改业务实现。人类于 2026-08-01 回复“继续下一步”，确认启动此前明确提出的 TEST-CONSOLIDATION-PRV-01。",
+  "issue_trace": null,
+  "stop_condition": "SC-04 VALIDATION_BLOCKED",
+  "blocker": "APC G5 要求的 test:full 可重复失败：doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available 中 LibreOffice worker 以 signal 6 崩溃；修复需要修改当前 Scope 明确禁止的 DOC/Rust 实现或测试环境。",
+  "reason": "承接测试治理矩阵在测试文件整合债务清零后明确登记的首个 VALIDATION Scope，将 VAL-CORE-EDIT-DIFF-SAVE 从笼统 deferred 条目升级为可执行、可追溯、自动化与真实环境证据分离的 G5 场景卡。人类于 2026-08-01 回复‘继续下一步’，确认启动此前已明确提出的该验证 Scope。",
   "objectives": [
-    "将 PRV owner 的 2 个前端测试文件整合为 1 个逻辑套件",
-    "保持原有 7 个测试用例、断言、covers、mock 语义和 node 运行环境",
-    "保留预览/导出 service 与表格解析 unit 两个 describe 诊断边界",
-    "更新测试治理注册表 baseline，使 PRV 文件预算从冻结债务转为达标",
-    "刷新 ADUS 动态测试能力索引并验证 PRV high 风险影响选择",
-    "不修改任何 PRV 业务实现或 Rust 测试"
+    "将 REQ-CORE-002 及 AG/DE/ED/WS 承接需求映射到可执行子场景",
+    "区分现有单元、服务、组件、Rust 集成证据与真实 Tauri/WKWebView 系统证据",
+    "实际运行本场景相关自动化并记录结果，不以部分自动化冒充完整 G5 通过",
+    "登记明确的 AUTOMATION_GAP、VALIDATION_ONLY、退出条件与下一步实现顺序",
+    "保持测试治理注册表与 ADUS 系统验证索引同步"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/TEST-CONSOLIDATION-PRV-01.md",
     ".governance/test-governance.json",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
     "docs/40_validation/A-VAL-X-V-01_测试治理与验证矩阵.md",
-    "scripts/test_governance.test.mjs",
-    "src/services/prvService.test.ts",
-    "src/services/tableData.test.ts",
-    "src/services/prvRuntime.test.ts"
+    "docs/40_validation/A-VAL-X-V-02_核心编辑与DiffEdit保存验证.md"
   ],
   "forbidden_files": [
     "buildbot/**",
+    "src/**",
     "src-tauri/**",
-    "src/services/prvService.ts",
-    "src/services/tableData.ts",
-    "src/components/prv/**",
+    "scripts/**",
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
@@ -41,36 +37,45 @@
     "package-lock.json"
   ],
   "constraints": [
-    "不得删除、注释、跳过、改写为弱断言或减少任一既有测试用例",
-    "不得以 helper/case 文件拆分方式虚假降低动态测试文件计数",
-    "目标套件必须仍由 Vitest 直接发现并具备 PRV owner 与 service layer",
-    "目标套件必须保持默认 node 环境和既有 Tauri core mock",
-    "表格解析测试必须保留独立 describe，不得与 service mock 断言混淆",
-    "合并时允许统一 import 和 hook，但其行为必须由原测试和全量回归证明等价",
-    "不新增依赖，不修改业务代码，不接管 buildbot"
+    "不得把 mock Tauri、领域函数拼接或部分后端集成描述为真实 WKWebView 端到端通过",
+    "不得修改业务实现、测试实现、测试断言或新增测试框架",
+    "每个子场景必须分别记录预期、实际、自动化证据、真实环境观察项和状态",
+    "自动化证据必须引用实际存在且本次真实运行的测试资产",
+    "未执行的真实环境验证保持未验证，不能以推断填写实际结果",
+    "不新增 RULE、CHAIN、CONSTRAINT、TERM 或修改需求/设计真值"
   ],
   "acceptance_criteria": [
-    "PRV frontend_owned 从 2 降为 1，baseline/target 均为 1",
-    "目标套件同时覆盖预览/导出服务契约与表格只读解析",
-    "原 PRV owner 测试用例总数保持 7；covers 集合不减少",
-    "目标套件定向运行通过，test:governance 无 owner/layer/budget finding",
-    "PRV 影响计划扩展 SYS 并保守触发 Rust 全量",
-    "npm test、cargo test、npm run build、governance generate/audit、diff check 全部通过"
+    "新场景卡可追溯 REQ-CORE-002、REQ-AG-001、REQ-DE-001/002/003、REQ-ED-001/005、REQ-WS-002/003",
+    "接受、拒绝、保存即接受、保存失败、保存后重开五类核心路径均有独立状态",
+    "注册表将 VAL-CORE-EDIT-DIFF-SAVE 标记为 active/partial，并登记场景卡、需求、约束、证据与退出条件",
+    "相关前端自动化、Rust 核心链、test:governance、governance generate/audit 与 diff check 全部通过",
+    "最终结论明确限定为自动化基线已核验、完整 G5 系统验证尚未通过"
   ],
   "validation_commands": [
-    "npx vitest run src/services/prvRuntime.test.ts",
+    "npx vitest run src/services/agRuntime.test.ts src/services/deRuntime.test.ts src/services/edRuntime.test.ts src/components/de/DiffReview.test.tsx",
+    "cargo test --manifest-path src-tauri/Cargo.toml --test core_chain",
     "npm run test:governance",
-    "npm run test:plan -- --files [本 Scope 实际 changed files]",
-    "npm run test:related -- --files [本 Scope 实际 changed files]",
-    "cargo test --manifest-path src-tauri/Cargo.toml",
-    "npm run build",
     "npm run governance:generate",
     "npm run governance:audit",
     "git diff --check"
   ],
   "out_of_scope": [
-    "补充新的 PRV 功能测试或修改业务实现",
-    "新增 GUI E2E 框架或执行 G5 人工验证",
-    "修改 CI 平台或远端配置"
+    "新增或修改自动化测试、业务代码或 Tauri command",
+    "执行并裁决真实 Agent 云调用、账号订阅或网关链路",
+    "将人工观察项计入自动化通过率",
+    "VAL-CORE-CLOSE-RECOVERY 或其他 G5/G6 场景卡"
+  ],
+  "validation_results": {
+    "targeted_frontend": "PASS: 4 files / 128 tests",
+    "targeted_rust": "PASS: core_chain 4 passed",
+    "test_governance": "PASS: 84 assets / 724 tests / 0 findings / 0 warnings",
+    "governance_audit": "PASS",
+    "full_frontend": "PASS: 21 files / 455 tests",
+    "full_rust": "FAIL: lib 260 passed / 1 failed; integration suites not reached",
+    "reproduction": "FAIL: isolated LibreOffice DOCX-to-PDF test reproduced DOC_PREVIEW_WORKER_CRASH signal=6"
+  },
+  "unresolved_items": [
+    "VAL-G5-REG-001: DOC/LibreOffice worker crash blocks the G5 regression baseline; requires a separate confirmed Scope or human deferral decision.",
+    "AUTOMATION_GAP-01~03 and VALIDATION_ONLY-01~02 remain open as recorded in A-VAL-X-V-02."
   ]
 }

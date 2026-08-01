@@ -166,8 +166,9 @@ TEST-GOVERNANCE-01 的验收是能力闭环，不是一次性整理全部测试�
 - 当前文件增长被冻结，六个模块的整合债务可量化。
 - 测试与需求验证各自有权威来源和交付证据。
 
-模块测试文件整合债务已经清零。下一步应另开 VALIDATION Scope，建立核心编辑、代理编辑、workspace 恢复
-与发布验证场景卡；系统验证不得混入本测试文件治理 Scope。
+模块测试文件整合债务已经清零。`VAL-CORE-EDIT-DIFF-SAVE` 已进入独立 VALIDATION Scope，并由
+`A-VAL-X-V-02` 承载首个 G5 场景卡；后续按卡内自动化缺口推进，再建立 workspace 恢复与发布验证场景卡。
+系统验证不得混入测试文件整合 Scope。
 
 ## 变更记录
 
@@ -180,3 +181,4 @@ TEST-GOVERNANCE-01 的验收是能力闭环，不是一次性整理全部测试�
 | 2026-08-01 | v1.4 | TEST-CONSOLIDATION-DE-01：DE 4 个前端测试文件整合为 2 个物理套件，58 个 owner 用例与 covers 保持；动态资产总数更新为 90 |
 | 2026-08-01 | v1.5 | TEST-CONSOLIDATION-AG-01：AG 8 个前端测试文件整合为 3 个物理套件，73 个 owner 用例与 covers 保持；动态资产总数更新为 85 |
 | 2026-08-01 | v1.6 | TEST-CONSOLIDATION-PRV-01：PRV 2 个前端测试文件整合为 1 个物理套件，7 个 owner 用例与 covers 保持；动态资产总数更新为 84；登记的文件整合债务清零 |
+| 2026-08-01 | v1.7 | VAL-CORE-EDIT-DIFF-SAVE-01：启动首个独立 G5 VALIDATION Scope；新增 A-VAL-X-V-02 场景卡并登记需求、约束、自动化证据、真实环境观察项与退出条件 |

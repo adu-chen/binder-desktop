@@ -273,9 +273,39 @@
       "modules": ["ED", "DE", "AG", "WS", "SYS"],
       "phase": "G5",
       "automation": "partial",
-      "automated_evidence": ["src-tauri/tests/core_chain.rs", "src/components/shell/ShellComponents.test.tsx"],
+      "scenario_card": "docs/40_validation/A-VAL-X-V-02_核心编辑与DiffEdit保存验证.md",
+      "requirements": [
+        "REQ-CORE-002",
+        "REQ-AG-001",
+        "REQ-DE-001",
+        "REQ-DE-002",
+        "REQ-DE-003",
+        "REQ-ED-001",
+        "REQ-ED-005",
+        "REQ-WS-002",
+        "REQ-WS-003"
+      ],
+      "constraints": ["X-FORBID-006", "X-FORBID-008", "X-INTER-001", "X-SEQ-002"],
+      "automated_evidence": [
+        "src-tauri/tests/core_chain.rs",
+        "src/services/agRuntime.test.ts",
+        "src/services/deRuntime.test.ts",
+        "src/services/edRuntime.test.ts",
+        "src/components/de/DiffReview.test.tsx"
+      ],
       "manual_evidence": "真实 Tauri/WKWebView：编辑→代理建议→接受/拒绝→保存→关闭重开",
-      "status": "deferred"
+      "automation_gaps": [
+        "AUTOMATION_GAP-01: frontend→Tauri→Rust→DiskState→reopen system harness",
+        "AUTOMATION_GAP-02: deterministic Agent turn→DE→DiffCard integration",
+        "AUTOMATION_GAP-03: rejection LogicalState rollback + unchanged DiskState integration"
+      ],
+      "exit_criteria": [
+        "场景卡 S1–S5 的真实系统实际结果完成且无阻断缺陷",
+        "AUTOMATION_GAP-01~03 关闭或经人类明确裁决",
+        "相关自动化回归、治理审计与 G5 NFR 门禁通过"
+      ],
+      "last_reviewed": "2026-08-01",
+      "status": "blocked"
     },
     {
       "id": "VAL-CORE-CLOSE-RECOVERY",
