@@ -23,6 +23,14 @@ import { startSmListeners, stopSmListeners } from "../services/smListeners";
  */
 const basename = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
 
+/**
+ * @GOV
+ * codes:    BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-002
+ * type:     RB
+ * chain:    DATA-MIGRATE
+ * rules:    BR-WS-PERSIST-002
+ * boundary: in=ActiveWorkspaceProjectionAndViewNavigationState | out=WorkspaceBoundWorkbenchPanels | delegate=startSmListeners,stopSmListeners | does_not=store_workspace_control_state_locally
+ */
 export function Workbench() {
   const { activeWorkspace } = useWorkspaceShell();
   const [activePanel, setActivePanel] = useState<RailPanelId>("files");

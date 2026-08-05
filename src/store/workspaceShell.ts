@@ -42,6 +42,14 @@ function setState(patch: Partial<ShellState>) {
 }
 
 // 投影后端状态：所有写入均代表后端控制态/请求态变更，前端不自行决定权威业务态。
+/**
+ * @GOV
+ * codes:    BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-004
+ * type:     EFFECT
+ * chain:    DATA-MIGRATE
+ * rules:    BR-WS-PERSIST-002
+ * boundary: in=WorkspaceControlStateOrRecentWorkspaceQueryResult | out=WorkspaceShellStateProjection | effect=memory | does_not=write_workspace_database_or_choose_active_workspace
+ */
 export const workspaceShell = {
   subscribe(cb: () => void) {
     listeners.add(cb);

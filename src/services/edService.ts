@@ -33,6 +33,11 @@ let seq = 0;
 let openRequestSeq = 0;
 const latestOpenRequestByPath = new Map<string, number>();
 
+/** 保存成功广播（时间轴面板监听刷新；detail.path 供匹配当前文档）。 */
+function emitDocSaved(path: string): void {
+  window.dispatchEvent(new CustomEvent("binder:doc-saved", { detail: { path } }));
+}
+
 async function callCommand<T>(command: string, params: Record<string, unknown>): Promise<T> {
   const request = { command, correlation_id: `ed-${Date.now()}-${(seq += 1)}`, params };
   const response = await invoke<CommandResponse<T>>("dispatch", { request });
@@ -271,6 +276,7 @@ export async function saveDocument(content: string, override = false): Promise<S
       await persistSessionSnapshot(makePersistedSnapshot(path, content, sess.editFormat, false, sess.sessionVersion));
     }
     deStore.markDraftSaved(path);
+    emitDocSaved(path);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;
@@ -310,6 +316,7 @@ export async function saveMarkdownDocument(
       );
     }
     deStore.markDraftSaved(path);
+    emitDocSaved(path);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;
@@ -336,6 +343,7 @@ export async function saveDocxDocument(html: string, override = false): Promise<
       await persistSessionSnapshot(makePersistedSnapshot(path, html, sess.editFormat, false, sess.sessionVersion));
     }
     deStore.markDraftSaved(path);
+    emitDocSaved(path);
     return { ok: true };
   } catch (e) {
     const err = e as IpcLikeError;

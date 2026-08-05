@@ -164,9 +164,10 @@ diff 的终态转移语义归 DE，本规则只约束 WS 侧的落盘触发与�
 
 ## §6 文档级时间轴存储模型与还原（WS-TIMELINE）
 
-**节点准入**：时间轴节点（TimelineEntry，A-SYS-I-P-01）在两类事件各记**一个**：（a）diff 落盘
-（§5 accepted 后）、（b）历史还原成功。普通 save 是否记节点为可配置准入（默认不为每次 save 记节点，
-避免节点爆炸；具体准入策略见 §7 entry_kind 与债务 §11）。同一文档 version_seq 单调递增。
+**节点准入**：时间轴节点（TimelineEntry，A-SYS-I-P-01）在三类事件各记**一个**：（a）diff 落盘
+（§5 accepted 后）、（b）历史还原成功、（c）保存成功（save，2026-08-04 人类确认解除 WS-03「save
+默认否」准入——每次保存留一个历史版本；内容与最近节点快照相同则跳过，避免内容重复的空版本）。
+同一文档 version_seq 单调递增。
 
 **存储模型**：每个节点引用一份可取回的版本快照（§7 timeline.snapshot_ref）；快照的**物理存储形态**
 （workspace.db 内联 blob 抑或 workspace 内 sidecar 文件、全量抑或增量）属实现选型，延编码期（§11），
@@ -187,9 +188,10 @@ rule_id: BR-WS-DATA-002
 主链路: WS-TIMELINE
 域: DATA
 -->
-文档级时间轴节点以 A-SYS-I-P-01 的 TimelineEntry 为共享结构（WS 不重定义，X-SHARED-001）：落盘与
-还原各记恰好一个节点，同一文档内 version_seq 单调递增且不复用；每个节点须关联一份可取回的版本快照
-（snapshot_ref），使还原可据此重建目标版本。节点不可被静默删除以伪造历史连续性。
+文档级时间轴节点以 A-SYS-I-P-01 的 TimelineEntry 为共享结构（WS 不重定义，X-SHARED-001）：落盘、
+还原与保存成功（save，内容与最近节点快照不同才记，避免空版本）各记恰好一个节点，同一文档内
+version_seq 单调递增且不复用；每个节点须关联一份可取回的版本快照（snapshot_ref），使还原可据此
+重建目标版本。节点不可被静默删除以伪造历史连续性。
 
 <!-- RULE
 rule_id: BR-WS-STATE-002
@@ -398,8 +400,9 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
   `timeline_snapshots` 表**内联全量快照 BLOB**，**内容寻址**（snapshot_ref=`blob_{内容哈希}`）**去重**
   （同内容多节点共享一份）。timeline.snapshot_ref 指向之；`ws.preview_node` 据此取回版本内容、
   `ws.restore_node` 取回后原子写回并前进式记新节点。增量快照为后续优化（大文档体积），暂用全量。
-- **save 节点准入策略待定**：是否为每次 save 记时间轴节点（默认否，仅落盘/还原记节点）属体验权衡，
-  延 WS G2 末或实现期人类确认（entry_kind=save 的准入），本文标默认值不臆断最终策略。
+- ~~**save 节点准入策略待定**~~ → **已定档（2026-08-04 人类决策）**：每次保存成功且内容与最近节点
+  快照不同时记一个 `save` 节点（entry_kind=save，§7 schema 已预留枚举）；内容未变的保存跳过，
+  避免内容重复的空版本；节点经内容寻址快照去重共享存储。
 - **多 workspace 控制态隔离细节**：workspaces 表支持多注册，但并发多活动/切换时的控制态隔离与缓存
   失效策略延实现期（承 WS L1 WS-04）。
 - ~~不透明 ID 生成算法（ULID/UUID/自增）延实现期~~ → **已定档（G-4，2026-07-02，A-CORE-X-R-03 §7）**：
@@ -434,3 +437,4 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-07-16 | v1.4 | 补齐 WS-FS 建目录语义：建目录属于 workspace 内文件树结构操作，必经 WS 物理边界层，供 Agent `create_folder` 结构工具复用；目标为目录幂等成功，目标为文件拒绝 |
 | 2026-07-29 | v1.5 | BDOCX-IMAGE-AGENT-EDIT-01：BR-WS-DATA-001 增加 workspace 项目图片只读发现，锁定相对普通文件、隐藏目录跳过、符号链接和越界拒绝边界。 |
 | 2026-07-29 | v1.6 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：项目图片发现收敛到 `.binder/project_assets.json` 的相对 imageRoots，缺失时只使用 `images`，禁止全 workspace 回退。 |
+| 2026-08-04 | v1.7 | WS-TIMELINE save 准入定档（人类决策）：§6 节点准入与 BR-WS-DATA-002 将保存成功纳入节点准入——每次保存成功且内容与最近节点快照不同时记 `save` 节点，内容未变跳过；§12 债务「save 节点准入策略待定」改为已定档，解除 WS-03 该子项 |

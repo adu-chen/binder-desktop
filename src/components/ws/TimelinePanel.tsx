@@ -33,6 +33,17 @@ export function TimelinePanel() {
     void load();
   }, [load]);
 
+  // 保存成功（binder:doc-saved）后刷新：ws.save_doc / doc.save_from_edit 会记时间轴 save 节点
+  // （BR-WS-DATA-002，2026-08-04 save 准入），面板停留在当前文档时应即时呈现新历史。
+  useEffect(() => {
+    const onDocSaved = (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string }>).detail;
+      if (detail?.path === openPath) void load();
+    };
+    window.addEventListener("binder:doc-saved", onDocSaved);
+    return () => window.removeEventListener("binder:doc-saved", onDocSaved);
+  }, [load, openPath]);
+
   const select = async (entryId: string) => {
     setSelected(entryId);
     try {

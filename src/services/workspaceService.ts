@@ -189,6 +189,14 @@ function ipcMessage(e: unknown): string {
   return err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e);
 }
 
+/**
+ * @GOV
+ * codes:    BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-005
+ * type:     EFFECT
+ * chain:    DATA-MIGRATE
+ * rules:    BR-WS-PERSIST-002
+ * boundary: in=WorkspaceDirectorySelection | out=ActiveWorkspaceProjectionWithHydratedWorkspaceSessions | effect=IPC-ws.open_workspace | delegate=flushEditorOpenTabs,resetDownstreamStores,hydrateEditorState,hydrateAgentHistory | does_not=write_workspace_database_directly_or_keep_previous_workspace_sessions
+ */
 export async function openWorkspace(): Promise<void> {
   bindEditorOpenTabsPersistence();
   const selected = await open({ directory: true, multiple: false, title: "选择 workspace 目录" });

@@ -72,6 +72,8 @@ interface FileTreeNodeProps {
   onContextMenu?: (path: string, x: number, y: number) => void;
   /** 预览类型（docx/Excel/PPT/媒体/图片）点击 → 只读预览（PI-FE-22/23/24）。 */
   onPreviewFile?: (path: string) => void;
+  /** 原生 docx「创建草稿并编辑」按钮（2026-08-04）：跳过预览直接创建草稿编辑；草稿已存在则打开既有草稿。 */
+  onEditDocx?: (path: string) => void;
 }
 
 export function FileTreeNode({
@@ -83,6 +85,7 @@ export function FileTreeNode({
   pendingCount,
   onContextMenu,
   onPreviewFile,
+  onEditDocx,
 }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(true);
   const indent = { paddingLeft: `${depth * 12 + 8}px` };
@@ -106,6 +109,7 @@ export function FileTreeNode({
               pendingCount={pendingCount}
               onContextMenu={onContextMenu}
               onPreviewFile={onPreviewFile}
+              onEditDocx={onEditDocx}
             />
           ))}
       </div>
@@ -143,7 +147,40 @@ export function FileTreeNode({
     >
       <span className="ftn-type">{typeGlyph(node.docType)}</span>
       <span className="ftn-name">{node.name}</span>
-      {previewable && <span className="ftn-mode" aria-label="只读预览">VIEW</span>}
+      {previewable && (
+        <span className="ftn-mode" aria-label="只读预览">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </span>
+      )}
+      {/* 原生 docx 编辑按钮（2026-08-04）：跳过预览直达草稿编辑；草稿已存在由容器层打开既有草稿。
+          行本身是 button，嵌套 button 非法 → 用 span[role=button]，点击阻止冒泡避免触发行的预览打开。 */}
+      {nativeDocx && onEditDocx && (
+        <span
+          className="ftn-mode ftn-mode-edit"
+          role="button"
+          tabIndex={0}
+          aria-label="创建草稿并编辑"
+          title="创建草稿并编辑"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEditDocx(node.path);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              onEditDocx(node.path);
+            }
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+          </svg>
+        </span>
+      )}
       {nodeState === "dirty_open" && <span className="ftn-dot" aria-label="未保存" />}
       {nodeState === "pending_diff" && badge != null && <span className="ftn-badge">{badge}</span>}
     </button>

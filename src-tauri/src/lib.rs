@@ -564,8 +564,23 @@ fn route_save_doc<R: tauri::Runtime>(
     )?;
     // 文件已落盘后，必须同步确认对应 accepted diff 的效果态。这里不能吞错：否则调用方会把
     // "已保存但历史效果态仍 awaiting_save" 当作完整成功，后续异常清算会产生错误的历史结论。
+    // 先记时间轴 save 节点（BR-WS-DATA-002：内容与最近节点快照相同则跳过，内容寻址幂等），
+    // 再翻效果态；任一步失败都向调用方暴露（文件已落盘但控制态未完整，重试安全不重复记节点）。
     let conn = lock_db(state)?;
-    de::lifecycle::flip_awaiting_save_to_saved(&conn, &ws.workspace_id, &rel_path).map_err(
+    let doc = crate::types::DocRef {
+        workspace_id: ws.workspace_id,
+        doc_type: doc_type_of(&rel_path),
+        rel_path,
+    };
+    workspace::timeline::record_save_node(&conn, &doc, content.as_bytes()).map_err(|e| {
+        IpcError::new(
+            "WS_DB_ERROR",
+            &format!("文件已保存，但时间轴节点记录失败: {e}"),
+            true,
+            false,
+        )
+    })?;
+    de::lifecycle::flip_awaiting_save_to_saved(&conn, &doc.workspace_id, &doc.rel_path).map_err(
         |e| {
             IpcError::new(
                 "DE_EFFECT_STATUS_SYNC_FAILED",
@@ -1283,9 +1298,23 @@ fn route_save_from_edit(
                 .expect("SaveConverting+SaveConvertOk→Ready");
             emit_doc01(app, &rel_path, st);
             // 与文本保存路径相同：文件成功转换并写入后，效果态同步失败必须向调用方暴露，不能
-            // 静默把历史留在 awaiting_save。
+            // 静默把历史留在 awaiting_save。先记时间轴 save 节点（BR-WS-DATA-002，内容变化才记、
+            // 内容寻址幂等），再翻效果态。
             let conn = lock_db(state)?;
-            de::lifecycle::flip_awaiting_save_to_saved(&conn, &ws.workspace_id, &rel_path)
+            let doc = crate::types::DocRef {
+                workspace_id: ws.workspace_id,
+                doc_type: doc_type_of(&rel_path),
+                rel_path,
+            };
+            workspace::timeline::record_save_node(&conn, &doc, &docx_bytes).map_err(|e| {
+                IpcError::new(
+                    "WS_DB_ERROR",
+                    &format!("文件已保存，但时间轴节点记录失败: {e}"),
+                    true,
+                    false,
+                )
+            })?;
+            de::lifecycle::flip_awaiting_save_to_saved(&conn, &doc.workspace_id, &doc.rel_path)
                 .map_err(|e| {
                     IpcError::new(
                         "DE_EFFECT_STATUS_SYNC_FAILED",

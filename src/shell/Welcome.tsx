@@ -14,6 +14,14 @@ import { BinderWordmark } from "../components/brand/BinderWordmark";
  * 最近列表三态：loading / ready（含空态）/ error（统一错误形状 BR-SYS-OBS-002）。
  * 本地编辑离线可用（REQ-CORE-009），登录非进入工作台的前置。
  */
+/**
+ * @GOV
+ * codes:    BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-001
+ * type:     RB
+ * chain:    DATA-MIGRATE
+ * rules:    BR-WS-PERSIST-002
+ * boundary: in=RegisteredWorkspaceListAndOpenSwitchIntent | out=WorkspaceEntryActions | delegate=openWorkspace,switchWorkspace,loadRecentWorkspaces | does_not=mutate_workspace_control_state_directly
+ */
 export function Welcome() {
   const { recent, recentStatus, recentError, notice } = useWorkspaceShell();
 

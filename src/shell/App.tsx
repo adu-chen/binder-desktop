@@ -14,6 +14,14 @@ import { Workbench } from "./Workbench";
  * 欢迎页 ↔ 主工作台两阶段，依「活动 workspace 是否存在」切换。
  * 启动时投影后端活动态（ws.active_workspace 恢复）；X-FORBID-007：切换是活动态投影，非前端独立权威态。
  */
+/**
+ * @GOV
+ * codes:    BR-WS-PERSIST-002-RB-SYS-DATA-MIGRATE-001
+ * type:     RB
+ * chain:    DATA-MIGRATE
+ * rules:    BR-WS-PERSIST-002
+ * boundary: in=PersistedActiveWorkspaceProjection | out=WelcomeOrWorkspaceWorkbenchShell | delegate=restoreActiveWorkspace,requestClose | does_not=hold_independent_workspace_authority
+ */
 export function App() {
   const { activeWorkspace } = useWorkspaceShell();
 

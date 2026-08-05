@@ -78,6 +78,7 @@ function renderNode(opts: {
   pending?: number;
   onOpenFile?: (path: string) => void;
   onPreviewFile?: (path: string) => void;
+  onEditDocx?: (path: string) => void;
 }) {
   return render(
     <FileTreeNode
@@ -88,6 +89,7 @@ function renderNode(opts: {
       stateOverride={opts.override ? { "a.md": opts.override } : undefined}
       pendingCount={opts.pending != null ? { "a.md": opts.pending } : undefined}
       onPreviewFile={opts.onPreviewFile}
+      onEditDocx={opts.onEditDocx}
     />,
   );
 }
@@ -118,12 +120,13 @@ describe("FileTreeNode 状态与只读预览模式标记", () => {
     expect(container.querySelector(".ftn-file")!.className).toContain("ftn-open");
   });
 
-  it("preview_only（预览类型）：xlsx 保持可点击行，并叠加 VIEW 标记", () => {
+  it("preview_only（预览类型）：xlsx 保持可点击行，并叠加只读预览眼睛标记", () => {
     const { container } = renderNode({ docType: "xlsx", openPath: "a.md" });
     const btn = container.querySelector(".ftn-file") as HTMLButtonElement;
     expect(btn.className).toContain("ftn-open");
     expect(btn.className).toContain("ftn-preview_only");
-    expect(container.querySelector(".ftn-mode")?.textContent).toBe("VIEW");
+    // 只读预览标记 = .ftn-mode 徽章内含眼睛 SVG 图标（2026-08-04 VIEW 文本改为图标）。
+    expect(container.querySelector(".ftn-mode svg")).toBeTruthy();
     expect(btn.disabled).toBe(false); // 预览类型可点击触发只读预览（PI-FE-22）
   });
 
@@ -138,7 +141,7 @@ describe("FileTreeNode 状态与只读预览模式标记", () => {
     fireEvent.click(native.container.querySelector(".ftn-file") as HTMLButtonElement);
     expect(preview).toHaveBeenCalledWith("native.docx");
     expect(open).not.toHaveBeenCalled();
-    expect(native.container.querySelector(".ftn-mode")?.textContent).toBe("VIEW");
+    expect(native.container.querySelector(".ftn-mode svg")).toBeTruthy();
     native.unmount();
 
     const bdocx = renderNode({
@@ -149,6 +152,39 @@ describe("FileTreeNode 状态与只读预览模式标记", () => {
     fireEvent.click(bdocx.container.querySelector(".ftn-file") as HTMLButtonElement);
     expect(open).toHaveBeenCalledWith("generated.docx");
     expect(bdocx.container.querySelector(".ftn-mode")).toBeNull();
+  });
+
+  it("原生 docx 显示编辑按钮，点击触发创建草稿编辑且不触发预览（stopPropagation）", () => {
+    const edit = vi.fn();
+    const preview = vi.fn();
+    const { container } = renderNode({
+      node: fileNode("docx", { name: "native.docx", path: "native.docx" }),
+      onEditDocx: edit,
+      onPreviewFile: preview,
+    });
+    const editBtn = container.querySelector(".ftn-mode-edit") as HTMLElement;
+    expect(editBtn).toBeTruthy();
+    // 点击编辑按钮 → 只触发 onEditDocx，不触发行点击的预览打开
+    fireEvent.click(editBtn);
+    expect(edit).toHaveBeenCalledWith("native.docx");
+    expect(preview).not.toHaveBeenCalled();
+    // 键盘可达（Enter 同样触发，不冒泡）
+    edit.mockClear();
+    fireEvent.keyDown(editBtn, { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith("native.docx");
+    expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("编辑按钮仅对原生 docx 显示（xlsx/BDocx 无编辑按钮）", () => {
+    const edit = vi.fn();
+    const xlsx = renderNode({ docType: "xlsx", onEditDocx: edit });
+    expect(xlsx.container.querySelector(".ftn-mode-edit")).toBeNull();
+    xlsx.unmount();
+    const bdocx = renderNode({
+      node: fileNode("docx", { name: "generated.docx", path: "generated.docx", isBDocx: true }),
+      onEditDocx: edit,
+    });
+    expect(bdocx.container.querySelector(".ftn-mode-edit")).toBeNull();
   });
 
   it("dirty_open：红点标记", () => {

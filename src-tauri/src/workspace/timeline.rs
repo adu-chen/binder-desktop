@@ -118,6 +118,49 @@ pub fn list_timeline(conn: &Connection, doc: &DocRef) -> rusqlite::Result<Vec<Ti
     rows.collect()
 }
 
+/// 最近一个节点的 snapshot_ref（按 version_seq 倒序取 1 条），save 准入判定内容是否变化用。
+fn latest_snapshot_ref(
+    conn: &Connection,
+    ws_id: &str,
+    rel_path: &str,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT snapshot_ref FROM timeline \
+         WHERE workspace_id = ?1 AND rel_path = ?2 \
+         ORDER BY version_seq DESC LIMIT 1",
+        (ws_id, rel_path),
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-DATA-002-EFFECT-WS-WS-TIMELINE-002
+ * type:     EFFECT
+ * chain:    WS-TIMELINE
+ * rules:    BR-WS-DATA-002
+ * boundary: in=savedDocumentContent | out=timelineSaveNodeOrNone(skippedWhenContentUnchanged)
+ */
+/// save 节点准入（BR-WS-DATA-002，2026-08-04 人类决策）：保存成功且内容与最近节点快照相同 → 跳过
+/// （返回 None，不产生内容重复的空版本）；不同 → 存内容寻址快照 + 记恰好一个 entry_kind="save" 节点。
+/// 调用方（ws.save_doc / doc.save_from_edit 落盘成功后）在文件已写入后调用；失败由调用方返回统一
+/// 错误，调用方重试时本函数按内容寻址幂等（同内容不重复记节点）。
+pub fn record_save_node(
+    conn: &Connection,
+    doc: &DocRef,
+    content: &[u8],
+) -> rusqlite::Result<Option<TimelineEntry>> {
+    let snapshot_ref = format!("blob_{}", super::save::content_hash(content));
+    if latest_snapshot_ref(conn, &doc.workspace_id, &doc.rel_path)?.as_deref() == Some(&snapshot_ref)
+    {
+        return Ok(None);
+    }
+    store_snapshot(conn, &snapshot_ref, content)?;
+    let entry = append_node(conn, doc, "save", &snapshot_ref, None)?;
+    Ok(Some(entry))
+}
+
 /// 存储时间轴快照内容（解除 WS-03）：内容寻址（snapshot_ref=blob_{hash}）去重，多节点共享同一内容只存一份。
 pub fn store_snapshot(
     conn: &Connection,
@@ -255,6 +298,38 @@ mod tests {
             rel_path: "a.md".into(),
             doc_type: "md".into(),
         }
+    }
+
+    // covers: BR-WS-DATA-002
+    // save 准入（2026-08-04）：内容与最近节点相同 → 跳过（无新节点）；不同 → 记 save 节点、seq 递增、
+    // 快照可取回。与既有 apply/restore 节点共存时只按内容寻址判定。
+    #[test]
+    fn save_node_recorded_only_when_content_changed() {
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)",
+            [],
+        )
+        .unwrap();
+        let d = doc();
+        // 首次保存记节点（version_seq=1，entry_kind=save）
+        let e1 = record_save_node(&conn, &d, b"v1").unwrap().expect("首次保存应记节点");
+        assert_eq!(e1.version_seq, 1);
+        assert_eq!(list_timeline(&conn, &d).unwrap().len(), 1);
+        // 内容相同 → 跳过，不产生空版本
+        assert!(record_save_node(&conn, &d, b"v1").unwrap().is_none());
+        assert_eq!(list_timeline(&conn, &d).unwrap().len(), 1);
+        // 内容变化 → 记第二个节点，seq 递增，快照可取回
+        let e2 = record_save_node(&conn, &d, b"v2").unwrap().expect("内容变化应记节点");
+        assert_eq!(e2.version_seq, 2);
+        assert_eq!(list_timeline(&conn, &d).unwrap().len(), 2);
+        assert_eq!(preview_node(&conn, &e2.entry_id).unwrap(), b"v2");
+        // 与 apply 节点共存：apply（内容 v2）后同内容保存跳过（不重复记节点）
+        let v2_ref = format!("blob_{}", crate::workspace::save::content_hash(b"v2"));
+        let a1 = append_node(&conn, &d, "apply", &v2_ref, None).unwrap();
+        assert_eq!(a1.version_seq, 3);
+        assert!(record_save_node(&conn, &d, b"v2").unwrap().is_none());
+        assert_eq!(list_timeline(&conn, &d).unwrap().len(), 3);
     }
 
     // covers: BR-WS-STATE-002
