@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { tabsStore } from "../../store/tabsStore";
-import { previewDoc, mediaSrc } from "../../services/prvService";
+import { previewDoc, mediaSrc, exportDoc } from "../../services/prvService";
 import { TablePreview } from "./TablePreview";
 import { isTableFile } from "../../services/tableData";
-import { createDocxDraft, isNativeDocxPreview } from "../../services/docService";
+import { createDocxDraft } from "../../services/docService";
 import { openDocument } from "../../services/edService";
+import { PrvToolbar } from "./PrvToolbar";
+import { ZOOM } from "../ed/zoom";
 
 /**
  * PRV 预览面板（PRV-VIEW · 只读硬边界 · PI-FE-22/24 · 2026-07-03 #1 表格式预览）。按扩展名分流：
@@ -44,9 +46,13 @@ export function PrvPanel({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errMsg, setErrMsg] = useState("");
+  const [zoom, setZoom] = useState<number>(ZOOM.default);
   const frameRef = useRef<HTMLIFrameElement>(null);
 
-  const print = () => frameRef.current?.contentWindow?.print();
+  const print = () => {
+    if (mode === "pdf") frameRef.current?.contentWindow?.print();
+    else if (mode === "table") window.print();
+  };
 
   // docx 成熟流程：原生 docx 预览 →"创建草稿进行编辑"→ 复制为 *.draft.docx → 打开草稿进编辑态（HTML）。
   const enterEdit = async () => {
@@ -58,6 +64,17 @@ export function PrvPanel({ path }: { path: string }) {
       const err = e as { code?: string; message?: string };
       setErrMsg(err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e));
       setStatus("error");
+    }
+  };
+
+  // 导出复用 prv.export（落 workspace 内，X-FORBID-004）；失败回错误不静默降级。
+  const exportCurrent = async (format: "pdf" | "docx" | "md") => {
+    try {
+      const destination = await exportDoc(path, format);
+      return { ok: true as const, message: `已导出：${destination}` };
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      return { ok: false as const, message: err?.message ?? "导出失败" };
     }
   };
 
@@ -93,30 +110,17 @@ export function PrvPanel({ path }: { path: string }) {
   const name = path.split("/").pop();
   return (
     <div className="prv-panel">
-      <div className="prv-hd">
-        <span className="label">预览（只读） · {name}</span>
-        <span className="prv-hd-actions">
-          {mode === "pdf" && isNativeDocxPreview(path) && (
-            <button className="ghost" onClick={() => void enterEdit()} title="创建草稿进行编辑">
-              创建草稿进行编辑
-            </button>
-          )}
-          {mode === "pdf" && (
-            <button className="ghost" onClick={print} disabled={status !== "ready"} title="打印">打印</button>
-          )}
-          <button
-            className="ghost"
-            onClick={() => {
-              const id = tabsStore.getSnapshot().activeTabId;
-              if (id) tabsStore.close(id);
-            }}
-            title="关闭预览"
-          >
-            关闭
-          </button>
-        </span>
-      </div>
-      <div className="prv-body">
+      <PrvToolbar
+        mode={mode}
+        path={path}
+        status={status}
+        zoom={zoom}
+        onZoomChange={setZoom}
+        onEnterEdit={() => void enterEdit()}
+        onExport={exportCurrent}
+        onPrint={print}
+      />
+      <div className="prv-body" style={{ "--prv-zoom": String(zoom) } as React.CSSProperties}>
         {mode === "table" && <TablePreview path={path} />}
         {mode !== "table" && status === "loading" && (
           <p className="muted">{mode === "pdf" ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载中…"}</p>

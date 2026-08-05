@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useWsStore, type DocRefView } from "../../store/wsStore";
+import { useWsStore, wsStore, type DocRefView } from "../../store/wsStore";
 import { loadDocs, createDoc, renameDoc, deleteDoc, searchDocs, type SearchHitDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
+import { createDocxDraft } from "../../services/docService";
 import { edStore, useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
 import { tabsStore } from "../../store/tabsStore";
@@ -123,6 +124,32 @@ export function FileTree() {
   const handlePreviewFile = (path: string) => {
     setOpenPath(path);
     tabsStore.openPreview(path);
+  };
+
+  // 原生 docx「创建草稿并编辑」按钮（2026-08-04）：跳过预览直达草稿编辑。
+  // 草稿路径 {stem}.draft.{ext} 已存在（docs 投影）→ 直接打开既有草稿（不重建，保留草稿编辑）；
+  // 不存在 → doc.create_draft 基于原 docx 复制草稿后再打开编辑 tab（doc.open_for_edit 载入）。
+  const handleEditDocx = (path: string) => {
+    const dot = path.lastIndexOf(".");
+    const draftRel = dot > 0 ? `${path.slice(0, dot)}.draft${path.slice(dot)}` : path;
+    const hasDraft = wsStore
+      .getSnapshot()
+      .docs.some((d) => d.relPath === draftRel);
+    void (async () => {
+      if (!hasDraft) {
+        try {
+          await createDocxDraft(path);
+          await loadDocs(); // 文件树同步显示草稿节点
+        } catch (e) {
+          const err = e as { code?: string; message?: string };
+          window.alert(`创建草稿失败：${err?.message ?? String(e)}`);
+          return;
+        }
+      }
+      setOpenPath(draftRel);
+      tabsStore.openDoc(draftRel); // 切/跳转到编辑 tab（已有则激活既有标签）
+      await openDocument(draftRel);
+    })();
   };
 
   const closeOverlays = () => {
@@ -338,6 +365,7 @@ export function FileTree() {
             onOpenFile={handleOpenFile}
             onPreviewFile={handlePreviewFile}
             onContextMenu={(path, x, y) => setMenu({ path, x, y })}
+            onEditDocx={handleEditDocx}
             stateOverride={stateOverride}
             pendingCount={pendingCount}
           />
@@ -348,9 +376,11 @@ export function FileTree() {
 
   return (
     <>
-      {header}
-      {searchBox}
-      {inputRow}
+      <div className="ftn-top">
+        {header}
+        {searchBox}
+        {inputRow}
+      </div>
       {body}
       {contextMenu}
       {menu && <div className="ftn-menu-backdrop" onClick={() => setMenu(null)} />}

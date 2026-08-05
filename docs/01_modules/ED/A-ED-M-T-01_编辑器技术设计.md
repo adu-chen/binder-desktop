@@ -133,6 +133,39 @@ ED 编辑运行时（本文 SSOT）
 （经 WS SM-WS-01 落盘）→关闭（脏态须先保存或经用户确认丢弃）。解析失败降级只读（不建立可编辑
 会话，不静默丢内容）；读取失败回统一错误形状，会话不建立。状态机为 SM-ED-01（A-ED-M-S-01）。
 
+### §3.1 编辑器级操作与格式适配（ED-EDITOR-OPERATIONS-01）
+
+两行工具栏的第一行承载编辑器级操作：保存、撤销、重做、当前文档查找替换、定位、缩放、Markdown
+源码/富文本切换与导出；文档内容格式操作仍位于第二行。所有替换必须经当前 ProseMirror 会话事务执行，
+使其与键入相同地进入脏态和既有 save 路径，不能直接改 DiskState。
+
+定位语义按编辑面区分：纯文本与 Markdown 源码按真实换行定位；富文本没有稳定的视觉折行，因此按
+内容块（段落、标题、列表项等）定位，界面必须显式使用“段落”而非暗示视觉行。BDocx 的页码来自
+BR-ED-DATA-003 已有的纯呈现分页缝，可用于选择、前后翻页和滚动定位，但不得写入 LogicalState 或
+改变保存结果。
+
+导出不属于编辑命令：工具栏只向 PRV 已支持的 `prv.export` 发起当前已保存源文件的格式转换。文本和
+Markdown 可导出 DOCX；BDocx 可导出 PDF 或 Markdown；无支持组合时不展示入口。**编辑态不提供打印**；
+打印只在 PRV 只读预览成功后触发，避免把编辑应用壳、未保存内容或未收敛分页作为打印产物。
+
+### §3.2 文档工具增强与对象上下文（ED-DOCUMENT-TOOL-ENRICHMENT-01）
+
+第二行的文字分组在 BDocx 与 HTML 中提供文字颜色、删除线、高亮、上标和下标；不再单独建立颜色分组。
+高亮可选择预设色板或 HTML 颜色选择器的自定义不透明色，并能清除已有高亮。它们都属于编辑器扩展能力；
+但 BDocx 的删除线、高亮、上标和下标当前不构成转换保真承诺，具体等级以工具栏兼容性清单为准。Markdown 不展示
+该组能力，避免其写盘后静默丢失。列表分组只允许当前 `listItem` 升降层级；插入分组可插入水平分隔线，
+但其是文档节点，不得被解释为分页、页面设置或输出指令。
+
+图片和表格继续使用选中对象附近的临时工具组。独立图片段落可在 left/center/right 间切换，并只修改
+承载图片段落的 `textAlign`；行内图片不提供此入口。表格合并要求当前矩形单元格选择，拆分只对已合并
+单元格启用，二者复用现有表格 capability 与 ProseMirror 命令。图片本地替换必须走受控导入、媒体身份
+和加载基线校验；在没有可复用入口前不得以文件路径、Data URL 或直接 `src` 替换的方式伪造此能力。
+
+当前工具栏的完整功能矩阵、格式适配和转换风险见
+`A-ED-X-R-03_编辑器工具栏功能与兼容性清单.md`。其中 capability manifest 标为 `unsupported` 的入口只
+能视为会话内能力，不构成 BDocx 保存、重开或导出保真承诺；后续应以该清单的风险台账决定隐藏、警告或补齐
+转换链。
+
 <!-- CHAIN
 chain_id: ED-EDIT
 主责模块: ED
@@ -807,4 +840,11 @@ status: mapped
 | 2026-07-29 | v1.46 | BDOCX-IMAGE-AGENT-EDIT-01：注册 TERM-ED-008 ImageOperation；定义项目内图片独立段落插入、图片实例删除、动态基线/锚/来源哈希校验、批原子草稿事务、源文件保护与代理缩放/移动排除边界。 |
 | 2026-07-29 | v1.47 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：ImageOperation 扩展受控缩放、上下移动与独立段落对齐，锁定稳定 imageId、当前 fingerprint、动态能力和同图单批一操作。 |
 | 2026-07-30 | v1.48 | 图片编辑闭合审计：移除“代理缩放/移动不可用”的历史排除描述；当前子集对齐 ImageOperation 组合缩放/布局/移动与受控拖入，继续排除高级布局。 |
+| 2026-08-01 | v1.50 | ED-EDITOR-OPERATIONS-01：定义编辑器级保存、撤销重做、查找替换、格式感知定位、BDocx 纯呈现页码导航与格式化导出；明确编辑态无打印入口，打印仅归 PRV 只读预览。 |
+| 2026-08-01 | v1.51 | ED-DOCUMENT-TOOL-ENRICHMENT-01：补齐受支持文字、列表和分隔线工具；图片对齐与表格合并/拆分保持对象就近入口，并明确本地替换图片须待受控导入链接线。 |
+| 2026-08-01 | v1.52 | ED-DOCUMENT-TOOL-ENRICHMENT-01：高亮增加预设色板、自定义不透明底色与清除入口；Markdown 继续不暴露该样式。 |
+| 2026-08-01 | v1.53 | ED-DOCUMENT-TOOL-ENRICHMENT-01：已登记的删除线命令同时开放给 Markdown、BDocx 与 HTML 富文本。 |
+| 2026-08-01 | v1.54 | ED-DOCUMENT-TOOL-ENRICHMENT-01：文字颜色并入文字分组，取消第二行独立颜色分组。 |
+| 2026-08-01 | v1.55 | ED-DOCUMENT-TOOLBAR-COMPATIBILITY-01：回链工具栏功能与兼容性清单；明确 UI 已暴露能力不等于 BDocx 往返保真。 |
+| 2026-08-05 | v1.56 | PRV-TOOLBAR-ADAPTIVE-01：抽取 EditorToolbar 的 TbBtn/Sep/ToolbarMenu 为共享组件 edToolbarParts（EditorToolbar 行为不变）；预览模式 PrvToolbar 按内容类型自适应工具集（创建草稿/导出/缩放/打印），只读边界不弱化、不提供关闭工具。 |
 | 2026-07-30 | v1.49 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档块投影直接来自 ProseMirror 层级节点；容器/原子块只读，内容子块独立写；BlockOperation 批原子应用及 fingerprint 冲突安全的 exact node 回滚取代 HTML 字符串替换。 |

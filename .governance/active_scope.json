@@ -1,88 +1,77 @@
 {
-  "scope_id": "TRIAGE-REGISTRY-REPAIR-01",
-  "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "VALIDATION",
-  "title": "triage、标注延期与决策记录治理语义修复",
-  "status": "READY",
+  "scope_id": "PRV-TOOLBAR-ADAPTIVE-01",
+  "task_type": "CODE_CHANGE",
+  "governance_phase": "IMPLEMENTATION",
+  "title": "预览模式工具栏自适应（PrvToolbar）+ 编辑器工具栏组件抽取共享",
+  "status": "SCOPED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/TRIAGE-REGISTRY-REPAIR-01.md",
+  "issue_trace": ".governance/issues/PRV-TOOLBAR-ADAPTIVE-01.md",
   "stop_condition": null,
-  "reason": "人类审计确认：正式 triage、未标注符号延期和技术决策目前混用 _triage.md，生成器与 audit 的语义不一致；人类已明确要求按修复方案实施。",
+  "reason": "人类决策（2026-08-05）：实现预览模式工具栏方案并同步文档——预览模式（PrvPanel）应有与编辑器同风格的工具栏，按预览内容类型（pdf/table/image/video/audio）自适应工具集；不提供关闭工具（TabStrip 标签 × 承担关闭）；只承载查看/输出类工具，BR-PRV-DATA-001 只读边界不弱化。同步抽取 EditorToolbar 的 TbBtn/Sep/ToolbarMenu 为共享组件 edToolbarParts，EditorToolbar 与 PrvToolbar 复用。本 Scope 替换 WS-SAVE-TIMELINE-01 活动锁（其未提交工作保留在工作区，后续如需继续需重新建锁）。",
   "objectives": [
-    "将正式 triage 限定为已有 @GOV rules: [] 的七类分类记录",
-    "将脚手架暂缓标注迁移为文件与符号精确匹配的独立延期清单",
-    "将字体方案从 triage 迁移为不参与 audit 的决策记录",
-    "让 generate 与 audit 复用同一结构化解析器并以测试固定行为"
+    "抽取 EditorToolbar 的 TbBtn/Sep/ToolbarMenu 为共享组件 src/components/ed/edToolbarParts.tsx，EditorToolbar 改为引用共享组件（行为不变）",
+    "新建 src/components/prv/PrvToolbar.tsx：预览模式自适应工具栏，按 mode（pdf/table/image/video/audio）显示工具（创建草稿/导出/缩放/打印），不提供关闭工具",
+    "PrvPanel 头部接入 PrvToolbar，保持只读硬边界（BR-PRV-DATA-001）与导出守界（BR-PRV-DATA-002 / X-FORBID-004）",
+    "文档同步：A-ED-X-R-03 §2 新增预览模式适配行；A-ED-M-T-01 / A-PRV-M-T-01 变更记录；ADUS 重新生成"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/TRIAGE-REGISTRY-REPAIR-01.md",
-    "ADU.md",
-    "scripts/triage_registry.mjs",
-    "scripts/generate_adus.mjs",
-    "scripts/audit_taskflow_governance.mjs",
-    "scripts/test_governance.test.mjs",
-    "docs/00_core/A-CORE-X-R-02_脚手架占位_标注延期清单.md",
-    "docs/00_core/A-CORE-X-R-02_脚手架占位_triage.md",
-    "docs/00_core/A-CORE-X-R-03_需求实现对齐审计与补全计划.md",
-    "docs/01_modules/DOC/A-DOC-X-R-02_字体身份修复决策记录.md",
-    "docs/01_modules/DOC/A-DOC-X-R-02_字体身份修复决策_triage.md",
-    "docs/01_modules/DOC/A-DOC-X-L-01_文档转换开发计划.md",
+    ".governance/issues/PRV-TOOLBAR-ADAPTIVE-01.md",
+    "src/components/ed/edToolbarParts.tsx",
+    "src/components/ed/EditorToolbar.tsx",
+    "src/components/prv/PrvToolbar.tsx",
+    "src/components/prv/PrvToolbar.test.tsx",
+    "src/components/prv/PrvPanel.tsx",
+    "src/components/ws/FileTree.tsx",
+    "src/styles.css",
+    ".governance/test-governance.json",
+    "docs/01_modules/ED/A-ED-X-R-03_编辑器工具栏功能与兼容性清单.md",
+    "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
+    "docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
-    "src/**",
-    "src-tauri/src/**",
-    "src-tauri/tests/**",
-    "buildbot/**",
+    "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "governance.config.json",
-    "package.json",
-    "package-lock.json"
+    "scripts/test_governance.mjs",
+    "scripts/test_governance.test.mjs"
   ],
   "constraints": [
-    "不得把 BLOCK_UNANNOTATED 作为正式 triage 分类",
-    "不得用文本包含、文件名匹配或批量豁免取代精确文件与符号匹配",
-    "不得将设计决策纳入 triage 汇总或 audit 豁免",
-    "不得修改产品代码、业务规则、链路、术语或测试资产基线"
+    "PrvToolbar 只承载查看/输出类工具（创建草稿/导出/缩放/打印），不承载任何编辑命令；BR-PRV-DATA-001 只读硬边界不弱化",
+    "导出复用既有 prv.export（落 workspace 内，X-FORBID-004）；打印为 iframe 系统打印；缩放为 CSS zoom 视图态不产脏态",
+    "iframe 内 PDF 缩放由 WKWebView 原生查看器控制，工具栏不提供缩放（不承诺伪能力）",
+    "csv/tsv 导出能力取决于 prv.export 后端，能力矩阵先隐藏、不伪称可用",
+    "不提供关闭工具：关闭由 TabStrip 标签 × 承担",
+    "edToolbarParts 抽取不改 EditorToolbar 行为与既有测试"
   ],
   "acceptance_criteria": [
-    "正式 triage 与标注延期由共享解析器严格校验",
-    "audit 只对精确文件与符号的有效延期记录豁免",
-    "ADUS 分别生成正式 triage 与标注延期汇总，决策记录不入表",
-    "迁移后的存量文档保持原有决策和脚手架信息",
-    "test:governance、generate、audit、影响选择与 related 测试通过"
+    "PrvToolbar 与编辑器工具栏同风格（共用 edToolbarParts 组件与样式类）",
+    "按 mode 自适应：pdf（原生 docx）创建草稿+导出+打印；pdf（xlsx/pptx）导出+打印；table 导出+打印+缩放；image 缩放；video/audio 无额外工具",
+    "不提供关闭工具；只读边界不弱化；导出守界",
+    "governance:generate 与 governance:audit 通过；相关测试通过"
   ],
   "validation_commands": [
-    "npm run test:plan -- --files [changed_files]",
-    "npm run test:related -- --files [changed_files]",
-    "npm run test:governance",
+    "npx vitest run src/components/prv/PrvToolbar.test.tsx",
+    "npm run test:related -- --files src/components/ed/EditorToolbar.tsx src/components/prv/PrvToolbar.tsx src/components/prv/PrvPanel.tsx src/styles.css",
     "npm run governance:generate",
-    "npm run governance:audit",
-    "git diff --check"
+    "npm run governance:audit"
   ],
   "out_of_scope": [
-    "为现有 BLOCK_UNANNOTATED 警告批量补 @GOV 或批量建立延期记录",
-    "修改产品功能、业务规则、链路、术语和测试治理注册表",
-    "修复与本次 triage 语义无关的 audit 启发式扫描"
+    "WS-SAVE-TIMELINE-01 未提交工作（保留在工作区，另需建锁）",
+    "PCG-SPEC-01 未提交工作",
+    "预览 iframe PDF 缩放能力（WKWebView 原生查看器）",
+    "csv/tsv 后端导出能力补齐"
   ],
   "unresolved_items": [
-    "现有 226 个 BLOCK_UNANNOTATED 警告保留为独立治理债务；本次只修复其延期豁免的准确性。"
+    "预览面板 iframe PDF 缩放与 WKWebView 原生查看器绑定，工具栏不提供缩放（真机确认视需要补充）",
+    "csv/tsv 导出能力取决于 prv.export 后端，矩阵先隐藏、待后端确认后开放"
   ],
-  "scope_expansions": [],
-  "validation_results": {
-    "test_governance": "PASS: 13 governance tests; 84 assets / 731 tests / 0 findings / 0 warnings",
-    "governance_generate": "PASS: triage 0; annotation deferrals 5",
-    "governance_audit": "PASS: 0 governance findings; BLOCK_UNANNOTATED warnings 231",
-    "test_plan": "PASS: CORE/DOC/PRV impact plan",
-    "related_frontend": "PASS: 21 files / 460 tests",
-    "related_rust": "ACCEPTED_RISK: 262/263 passed; doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available crashed its LO worker with signal=6; human accepted this out-of-scope failure for this governance repair",
-    "diff_check": "PASS"
-  },
-  "resolved_stop_conditions": [
-    "SC-04 resolved by human acceptance: the LibreOffice Worker signal=6 failure remains an out-of-scope DOC/runtime issue."
+  "scope_expansions": [
+    "2026-08-05：新增 PrvToolbar.test.tsx 使 PRV 前端测试文件数 2 超基线 1，触发 TEST_FILE_BUDGET_EXCEEDED；按 AGENTS.md §8 修复模块登记——PRV test_globs 增加组件测试 glob、baseline/target_frontend_test_files 1→2，test-governance.json 纳入 allowed_files",
+    "2026-08-05 人类确认（扩展 Scope 修复）：build 被 WS-SAVE-TIMELINE-01 未提交工作既有错误阻断（FileTree.tsx L135 使用 wsStore 但未导入）；本 Scope 补 wsStore 导入修复，FileTree.tsx 纳入 allowed_files"
   ]
 }

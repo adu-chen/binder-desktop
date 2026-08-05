@@ -151,3 +151,4 @@ status: mapped
 | 2026-06-11 | v1.0 | 初版（PRV G2，P4 G2 收尾件）：预览管线归属决策（Excel/PPT 归 DOC 预览链扩展、音视频系统解码归 PRV，解除 PRV-01/DOC-03，门评供人类复核）；只读硬边界执行规则（全产品无 Excel/PPT 编辑入口为 G4/G5 强制核验项）；状态机豁免复核成立并列失效条件（解除 PRV-04）；注册链路 PRV-VIEW、规则 BR-PRV-DATA-001/002；无 TERM（通用技术词说明）；REQ_MAP（REQ-PRV-001~005） |
 | 2026-07-03 | v1.1 | 兑现 §9 预设通道（人类需求 #1）：Excel/csv/tsv 预览另议为表格式管线（xlsx 经 DOC calamine → 结构化数据 → 前端只读表格；csv/tsv 前端文本解析），§2 决策表拆分 Excel 与 PPT 行；§9 债务更新（PPT 保真待实测、表格样式保真登记 A 类）；接口 prv.table_data 登记于 A-PRV-I-P-01 v1.1 |
 | 2026-07-21 | v1.2 | 审计修正：公开预览入口统一为 `prv.preview`，DOC 只提供内部转换能力；LO 工具、启动、字体覆盖与转换错误统一转为显式预览失败态，并将 PDF 表述收敛为语料实测的只读保真目标。 |
+| 2026-08-05 | v1.3 | PRV-TOOLBAR-ADAPTIVE-01：预览模式工具栏（PrvToolbar）按内容类型自适应工具集——pdf（原生 docx）创建草稿+导出(PDF/MD)+打印、pdf（xlsx/pptx）导出(PDF)+打印、table 导出(PDF)+打印+缩放、image 缩放、video/audio 无额外工具；不提供关闭工具（TabStrip 标签 × 承担）；缩放为 CSS zoom 视图态不产脏态、pdf 缩放由 iframe 内 WKWebView 原生查看器控制；只读硬边界（BR-PRV-DATA-001）不弱化。 |
