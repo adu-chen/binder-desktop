@@ -148,6 +148,7 @@ pub mod ast; // PI-AST-* 记忆
 pub mod cbt; // PI-CBT-* 构建
 pub mod kb; // PI-KB-* 知识库
 pub mod prv;
+pub mod fonts; // ED-FONT-LOCAL-LIBRARY-01 本地字体库只读枚举
 pub mod tpl; // PI-TPL-* 模板/工作流 // PI-PRV-* 预览输出
 
 // —— 商业化客户端侧 ——
@@ -193,6 +194,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("prv.export");
     reg.register("prv.media_src");
     reg.register("prv.table_data");
+    reg.register("fonts.list_fonts");
     reg.register("doc.create_draft");
     reg.register("doc.open_for_edit");
     reg.register("doc.restore_edit_media");
@@ -297,6 +299,7 @@ fn dispatch(
             "prv.export" => route_export(&request, &state),
             "prv.media_src" => route_media_src(&request, &state, &app),
             "prv.table_data" => route_table_data(&request, &state),
+            "fonts.list_fonts" => route_list_fonts(),
             "doc.create_draft" => route_create_draft(&request, &state),
             "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
             "doc.restore_edit_media" => route_restore_edit_media(&request, &state, &app),
@@ -800,6 +803,13 @@ fn route_table_data(
     }
     let (sheets, truncated) = doc::table_preview::xlsx_to_sheets(&abs)?;
     Ok(serde_json::json!({ "sheets": sheets, "truncated": truncated }))
+}
+
+/// 路由 `fonts.list_fonts`（ED-FONT-LOCAL-LIBRARY-01）：只读枚举本地已注册字体族名。
+/// 仅返回字体族名数组，不读字体文件内容；失败回错误形状（前端回退常用子集，不阻塞编辑）。
+fn route_list_fonts() -> Result<serde_json::Value, IpcError> {
+    let families = fonts::list_local_font_families()?;
+    Ok(serde_json::json!({ "families": families }))
 }
 
 /// 路由 `prv.export`：源文档导出为目标格式，落点 = 同目录同名换扩展（workspace 内，守界 X-FORBID-004）。

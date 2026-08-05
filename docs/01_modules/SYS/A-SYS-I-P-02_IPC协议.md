@@ -243,3 +243,4 @@ status: mapped
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版（SYS G2）：IPC / Tauri command 协议骨架——命名/注册约定、请求-响应信封、统一错误形状（BR-SYS-OBS-002，云错误 BR-SYS-OBS-001 对齐其上）、流式回传逻辑契约（BR-SYS-STATE-002，物理传输 SY-02 延实现）；链路 IPC-CALL（P1）、规则 BR-SYS-DATA-003；复用 X-SEQ-002 不新增约束；REQ_MAP（REQ-SYS-001）；术语归属说明；测试验收与债务盲区 |
 | 2026-06-27 | v1.1 | 收口状态机投影广播的设计 SSOT（A-CORE-X-L-04 §3 缺口）：§5.1 新增「状态机投影广播契约」+ 注册规则 **BR-SYS-STATE-003**（事件名 `sm:{machine_id}:state_changed`、统一信封 SmStatePayload、权威先于广播、不替代流式数据通道、承接 X-FORBID-007）；§8 REQ_MAP 补 BR-SYS-STATE-003（承 REQ-SYS-001）；§9 验收补广播条；§11 后续动作补 generate 注册与代码 @GOV 追溯。此前该广播仅存于 L3 计划，本次落入 L2 设计 SSOT |
+| 2026-08-05 | v1.2 | ED-FONT-LOCAL-LIBRARY-01：登记新 command `fonts.list_fonts`（ED 字体组本地字体库同步）——无参数、返回 `{ families: string[] }`（macOS CoreText 只读枚举字体族名）；遵循 §3 命名/注册约定与 §4 统一错误形状；只读系统能力，不触达 workspace。 |

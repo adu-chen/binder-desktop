@@ -1,33 +1,33 @@
 {
-  "scope_id": "PRV-TOOLBAR-ADAPTIVE-01",
+  "scope_id": "ED-FONT-LOCAL-LIBRARY-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "预览模式工具栏自适应（PrvToolbar）+ 编辑器工具栏组件抽取共享",
-  "status": "SCOPED",
+  "title": "编辑器工具栏本地字体库同步（fonts.list_fonts + 字体组改造）",
+  "status": "CLOSED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/PRV-TOOLBAR-ADAPTIVE-01.md",
+  "issue_trace": ".governance/issues/ED-FONT-LOCAL-LIBRARY-01.md",
   "stop_condition": null,
-  "reason": "人类决策（2026-08-05）：实现预览模式工具栏方案并同步文档——预览模式（PrvPanel）应有与编辑器同风格的工具栏，按预览内容类型（pdf/table/image/video/audio）自适应工具集；不提供关闭工具（TabStrip 标签 × 承担关闭）；只承载查看/输出类工具，BR-PRV-DATA-001 只读边界不弱化。同步抽取 EditorToolbar 的 TbBtn/Sep/ToolbarMenu 为共享组件 edToolbarParts，EditorToolbar 与 PrvToolbar 复用。本 Scope 替换 WS-SAVE-TIMELINE-01 活动锁（其未提交工作保留在工作区，后续如需继续需重新建锁）。",
+  "reason": "人类决策（2026-08-05）：按方案修复编辑器工具栏字体组——新增 fonts.list_fonts command（macOS CoreText 只读枚举字体族名）+ 前端 fontService 缓存；字体下拉=常用子集置顶（仅可用展示）+本地可用字体追加；document.fonts.check 过滤不可用；写入统一引号规范化；枚举失败/空列表回退不阻塞编辑。本 Scope 替换 PRV-TOOLBAR-ADAPTIVE-01 活动锁（已提交闭合）。",
   "objectives": [
-    "抽取 EditorToolbar 的 TbBtn/Sep/ToolbarMenu 为共享组件 src/components/ed/edToolbarParts.tsx，EditorToolbar 改为引用共享组件（行为不变）",
-    "新建 src/components/prv/PrvToolbar.tsx：预览模式自适应工具栏，按 mode（pdf/table/image/video/audio）显示工具（创建草稿/导出/缩放/打印），不提供关闭工具",
-    "PrvPanel 头部接入 PrvToolbar，保持只读硬边界（BR-PRV-DATA-001）与导出守界（BR-PRV-DATA-002 / X-FORBID-004）",
-    "文档同步：A-ED-X-R-03 §2 新增预览模式适配行；A-ED-M-T-01 / A-PRV-M-T-01 变更记录；ADUS 重新生成"
+    "新增 fonts.list_fonts command：CTFontManagerCopyAvailableFontFamilyNames 只读枚举 macOS 字体族名",
+    "fontService.listLocalFonts + module 级缓存；失败/空回退不阻塞编辑",
+    "EditorToolbar 字体组改造：常用子集置顶（仅可用展示）+ 本地追加 + document.fonts.check 过滤 + 引号规范化",
+    "文档同步：A-SYS-I-P-02 command 登记、A-ED-X-R-03 字体行更新、A-ED-M-T-01 变更记录、ADUS 重新生成"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/PRV-TOOLBAR-ADAPTIVE-01.md",
-    "src/components/ed/edToolbarParts.tsx",
+    ".governance/issues/ED-FONT-LOCAL-LIBRARY-01.md",
+    "src-tauri/Cargo.toml",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/fonts/mod.rs",
+    "src/services/fontService.ts",
+    "src/services/fontService.test.ts",
     "src/components/ed/EditorToolbar.tsx",
-    "src/components/prv/PrvToolbar.tsx",
-    "src/components/prv/PrvToolbar.test.tsx",
-    "src/components/prv/PrvPanel.tsx",
-    "src/components/ws/FileTree.tsx",
-    "src/styles.css",
+    "src/components/ed/EditorControls.test.tsx",
     ".governance/test-governance.json",
+    "docs/01_modules/SYS/A-SYS-I-P-02_IPC协议.md",
     "docs/01_modules/ED/A-ED-X-R-03_编辑器工具栏功能与兼容性清单.md",
     "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
@@ -41,37 +41,37 @@
     "scripts/test_governance.test.mjs"
   ],
   "constraints": [
-    "PrvToolbar 只承载查看/输出类工具（创建草稿/导出/缩放/打印），不承载任何编辑命令；BR-PRV-DATA-001 只读硬边界不弱化",
-    "导出复用既有 prv.export（落 workspace 内，X-FORBID-004）；打印为 iframe 系统打印；缩放为 CSS zoom 视图态不产脏态",
-    "iframe 内 PDF 缩放由 WKWebView 原生查看器控制，工具栏不提供缩放（不承诺伪能力）",
-    "csv/tsv 导出能力取决于 prv.export 后端，能力矩阵先隐藏、不伪称可用",
-    "不提供关闭工具：关闭由 TabStrip 标签 × 承担",
-    "edToolbarParts 抽取不改 EditorToolbar 行为与既有测试"
+    "字体枚举只读：仅取字体族名，不读字体文件内容、不解析字形；不触达 workspace",
+    "不可用字体不渲染（document.fonts.check）；常用子集排序置顶",
+    "写入前引号规范化：多词字体名加单引号，修复无引号拆词隐患",
+    "枚举失败/空列表回退硬编码 5 字体（不阻塞编辑）；module 级缓存",
+    "BDocx 字体往返口径不变（best_effort），本地同步只增强所见即所得"
   ],
   "acceptance_criteria": [
-    "PrvToolbar 与编辑器工具栏同风格（共用 edToolbarParts 组件与样式类）",
-    "按 mode 自适应：pdf（原生 docx）创建草稿+导出+打印；pdf（xlsx/pptx）导出+打印；table 导出+打印+缩放；image 缩放；video/audio 无额外工具",
-    "不提供关闭工具；只读边界不弱化；导出守界",
-    "governance:generate 与 governance:audit 通过；相关测试通过"
+    "fonts.list_fonts 返回 macOS 已注册字体族名数组（只读）",
+    "字体下拉：常用子集置顶（仅可用展示）+ 本地字体追加；不可用不渲染；选择后写入带引号 CSS",
+    "枚举失败/空列表回退不阻塞编辑",
+    "governance:generate 与 governance:audit 通过；相关测试、tsc、build 通过"
   ],
   "validation_commands": [
-    "npx vitest run src/components/prv/PrvToolbar.test.tsx",
-    "npm run test:related -- --files src/components/ed/EditorToolbar.tsx src/components/prv/PrvToolbar.tsx src/components/prv/PrvPanel.tsx src/styles.css",
+    "cargo test --lib fonts",
+    "npx vitest run src/services/fontService.test.ts src/components/ed/EditorControls.test.tsx",
     "npm run governance:generate",
-    "npm run governance:audit"
+    "npm run governance:audit",
+    "npx tsc --noEmit",
+    "npm run build"
   ],
   "out_of_scope": [
-    "WS-SAVE-TIMELINE-01 未提交工作（保留在工作区，另需建锁）",
-    "PCG-SPEC-01 未提交工作",
-    "预览 iframe PDF 缩放能力（WKWebView 原生查看器）",
-    "csv/tsv 后端导出能力补齐"
+    "Windows/Linux 字体枚举（本 Scope 仅 macOS CoreText）",
+    "BDocx 字体往返保真提升（维持 best_effort）",
+    "字体列表搜索式下拉 UI（保持 select）",
+    "display-only 字体（仅打印字体）白名单"
   ],
   "unresolved_items": [
-    "预览面板 iframe PDF 缩放与 WKWebView 原生查看器绑定，工具栏不提供缩放（真机确认视需要补充）",
-    "csv/tsv 导出能力取决于 prv.export 后端，矩阵先隐藏、待后端确认后开放"
+    "document.fonts.check 可能隐藏极少数 display-only 字体（WKWebView 判不可用）——可接受，后续如需开白名单",
+    "跨平台字体枚举未纳入"
   ],
   "scope_expansions": [
-    "2026-08-05：新增 PrvToolbar.test.tsx 使 PRV 前端测试文件数 2 超基线 1，触发 TEST_FILE_BUDGET_EXCEEDED；按 AGENTS.md §8 修复模块登记——PRV test_globs 增加组件测试 glob、baseline/target_frontend_test_files 1→2，test-governance.json 纳入 allowed_files",
-    "2026-08-05 人类确认（扩展 Scope 修复）：build 被 WS-SAVE-TIMELINE-01 未提交工作既有错误阻断（FileTree.tsx L135 使用 wsStore 但未导入）；本 Scope 补 wsStore 导入修复，FileTree.tsx 纳入 allowed_files"
+    "2026-08-05：fontService/fontService.test 与 src-tauri/src/fonts/** 归属 ED——fontService.test.ts 因 covers 引用 BR-SYS-DATA-003 误归 SYS 触发 budget 超限（4/3），fontService.ts 与 fonts/mod.rs 因不在任何模块 source_globs 触发 owner missing；按 AGENTS.md §8 修复模块登记——ED source_globs 增 src/services/fontService* 与 src-tauri/src/fonts/**、test_globs 增 src/services/fontService.test.ts、baseline/target_frontend_test_files 7→8；test-governance.json 纳入 allowed_files"
   ]
 }

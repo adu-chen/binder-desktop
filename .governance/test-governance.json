@@ -141,17 +141,17 @@
       "code": "ED",
       "risk": "critical",
       "source_globs": [
-        "src/components/ed/**", "src/services/ed*", "src/store/ed*", "src/store/outlineStore*",
-        "docs/01_modules/ED/**"
+        "src/components/ed/**", "src/services/ed*", "src/services/fontService*", "src/store/ed*", "src/store/outlineStore*",
+        "src-tauri/src/fonts/**", "docs/01_modules/ED/**"
       ],
       "test_globs": [
         "src/components/ed/**/*.test.ts", "src/components/ed/**/*.test.tsx",
-        "src/services/ed*.test.ts", "src/store/ed*.test.ts", "src/store/outlineStore.test.ts"
+        "src/services/ed*.test.ts", "src/services/fontService.test.ts", "src/store/ed*.test.ts", "src/store/outlineStore.test.ts"
       ],
       "test_exclude_globs": ["src/components/ed/assistPlacement.test.ts"],
       "downstream": ["DE", "AG", "SYS"],
-      "baseline_frontend_test_files": 7,
-      "target_frontend_test_files": 7,
+      "baseline_frontend_test_files": 8,
+      "target_frontend_test_files": 8,
       "requires_rust_on_related": true
     },
     {

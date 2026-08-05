@@ -5,10 +5,12 @@ import type { PaperKind, PaperOrientation } from "../../store/edViewPrefsStore";
 import type { EditFormat } from "../../store/edStore";
 import { triggerActiveSave } from "../../services/edLocate";
 import { TbBtn, Sep, ToolbarMenu } from "./edToolbarParts";
+import { listLocalFonts } from "../../services/fontService";
 
 const PAPER_KINDS: PaperKind[] = ["A4", "A3", "A5", "Letter"];
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 36] as const;
-const FONT_FAMILIES = ["Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New"] as const;
+// 常用子集（固定优先项，仅本地可用时展示）：保证下拉至少保留常用字体入口。
+const COMMON_FONT_FAMILIES = ["Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New"] as const;
 const HIGHLIGHT_COLORS = [
   { label: "黄色", color: "#FDE68A" },
   { label: "绿色", color: "#BBF7D0" },
@@ -17,6 +19,16 @@ const HIGHLIGHT_COLORS = [
   { label: "紫色", color: "#DDD6FE" },
 ] as const;
 type ExportFormat = "pdf" | "docx" | "md";
+
+/**
+ * 字体名 → CSS font-family 值（ED-FONT-LOCAL-LIBRARY-01）。
+ * 单词名直写；含空格/特殊字符的多词名（Times New Roman、PingFang SC）加单引号，
+ * 避免 `font-family: Times New Roman` 无引号被浏览器按词拆分解析。
+ * 纯函数，导出供单测。
+ */
+export function toCssFontFamily(name: string): string {
+  return /^[A-Za-z0-9]+$/.test(name) ? name : `'${name.replace(/'/g, "\\'")}'`;
+}
 
 interface TextMatch {
   from: number;
@@ -114,6 +126,22 @@ export function EditorToolbar({
   const [pageInfo, setPageInfo] = useState({ current: 1, total: 0 });
   const [exportState, setExportState] = useState<"idle" | "exporting" | "success" | "error">("idle");
   const [exportMessage, setExportMessage] = useState("");
+  // 本地字体库（ED-FONT-LOCAL-LIBRARY-01）：懒加载 + 可用性过滤；失败回退常用子集，不阻塞编辑。
+  const [localFamilies, setLocalFamilies] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    listLocalFonts()
+      .then((families) => {
+        if (alive) setLocalFamilies(families);
+      })
+      .catch(() => {
+        // 枚举失败：保持 null（回退常用子集），下次打开重试。
+        if (alive) setLocalFamilies([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
   useEffect(() => {
     if (!editor) return;
     const refresh = () => {
@@ -170,6 +198,34 @@ export function EditorToolbar({
   const isMarkdown = editFormat === "markdown";
   const isPlainText = editFormat === "text";
   const isSourceView = isMarkdown && sourceView;
+
+  // 字体下拉列表（ED-FONT-LOCAL-LIBRARY-01）：常用子集置顶（仅可用展示）+ 本地可用字体追加。
+  // localFamilies === null → 枚举进行中/未尝试，先用常用子集（可用性未知时按可用展示，避免列表空白）；
+  // localFamilies === [] → 枚举失败或确实为空，回退常用子集（仅展示可用）。
+  const checkFontAvailable = (family: string): boolean => {
+    try {
+      return typeof document !== "undefined" && document.fonts?.check(`16px ${toCssFontFamily(family)}`);
+    } catch {
+      // WKWebView 字体 API 异常时按可用处理，避免误隐藏。
+      return true;
+    }
+  };
+  const fontOptions: Array<{ name: string; common: boolean }> = [];
+  const seen = new Set<string>();
+  for (const common of COMMON_FONT_FAMILIES) {
+    if (checkFontAvailable(common)) {
+      fontOptions.push({ name: common, common: true });
+      seen.add(common);
+    }
+  }
+  for (const family of localFamilies ?? []) {
+    if (seen.has(family)) continue;
+    if (checkFontAvailable(family)) {
+      fontOptions.push({ name: family, common: false });
+      seen.add(family);
+    }
+  }
+  fontOptions.sort((a, b) => Number(b.common) - Number(a.common) || a.name.localeCompare(b.name));
   const queryMatches = isSourceView
     ? sourceMatches(sourceText ?? "", findQuery)
     : documentMatches(editor, findQuery);
@@ -475,12 +531,12 @@ export function EditorToolbar({
                     <select
                       value={currentFontFamily}
                       onChange={(event) => {
-                        if (event.target.value) chain().setFontFamily(event.target.value).run();
+                        if (event.target.value) chain().setFontFamily(toCssFontFamily(event.target.value)).run();
                         else chain().unsetFontFamily().run();
                       }}
                     >
                       <option value="">默认</option>
-                      {FONT_FAMILIES.map((family) => <option key={family} value={family}>{family}</option>)}
+                      {fontOptions.map((option) => <option key={option.name} value={option.name}>{option.name}</option>)}
                     </select>
                   </label>
                 </>

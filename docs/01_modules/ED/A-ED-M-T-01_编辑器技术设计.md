@@ -847,4 +847,5 @@ status: mapped
 | 2026-08-01 | v1.54 | ED-DOCUMENT-TOOL-ENRICHMENT-01：文字颜色并入文字分组，取消第二行独立颜色分组。 |
 | 2026-08-01 | v1.55 | ED-DOCUMENT-TOOLBAR-COMPATIBILITY-01：回链工具栏功能与兼容性清单；明确 UI 已暴露能力不等于 BDocx 往返保真。 |
 | 2026-08-05 | v1.56 | PRV-TOOLBAR-ADAPTIVE-01：抽取 EditorToolbar 的 TbBtn/Sep/ToolbarMenu 为共享组件 edToolbarParts（EditorToolbar 行为不变）；预览模式 PrvToolbar 按内容类型自适应工具集（创建草稿/导出/缩放/打印），只读边界不弱化、不提供关闭工具。 |
+| 2026-08-05 | v1.57 | ED-FONT-LOCAL-LIBRARY-01：字体组本地字体库同步——新增 fonts.list_fonts（macOS CoreText 只读枚举）+ fontService 缓存；字体下拉常用子集置顶（仅可用展示）+ 本地字体追加（document.fonts.check 过滤）；写入前 toCssFontFamily 引号规范化（修复多词字体名无引号拆词）；枚举失败/空列表回退常用子集，不阻塞编辑。 |
 | 2026-07-30 | v1.49 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档块投影直接来自 ProseMirror 层级节点；容器/原子块只读，内容子块独立写；BlockOperation 批原子应用及 fingerprint 冲突安全的 exact node 回滚取代 HTML 字符串替换。 |

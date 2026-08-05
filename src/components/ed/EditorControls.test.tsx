@@ -27,6 +27,13 @@ vi.mock("../../services/edLocate", () => ({
   triggerActiveSave: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 
+vi.mock("../../services/fontService", () => ({
+  listLocalFonts: vi.fn(() => Promise.resolve(["PingFang SC", "Menlo", "Songti SC"])),
+  resetLocalFontCache: vi.fn(),
+}));
+
+import { listLocalFonts } from "../../services/fontService";
+
 import { EditorStatusBar } from "./EditorStatusBar";
 import { EditorToolbar } from "./EditorToolbar";
 import {
@@ -74,6 +81,45 @@ describe("EditorStatusBar · DOCX 样式风险告知", () => {
 afterEach(cleanup);
 
 describe("EditorToolbar · 格式工具集", () => {
+  afterEach(cleanup);
+
+  it("字体组：常用子集置顶（仅可用展示）+ 本地字体追加，写入带引号 CSS（ED-FONT-LOCAL-LIBRARY-01）", async () => {
+    // document.fonts.check 桩：Arial 可用、Times New Roman 可用、本地 PingFang SC/Menlo 可用、Songti SC 不可用。
+    const available = new Set(["Arial", "Times New Roman", "PingFang SC", "Menlo"]);
+    Object.defineProperty(document, "fonts", {
+      value: { check: vi.fn((spec: string) => [...available].some((name) => spec.includes(name))) },
+      configurable: true,
+    });
+    const chain: Record<string, (...args: unknown[]) => unknown> = {};
+    const setFontFamily = vi.fn(() => chain);
+    const unsetFontFamily = vi.fn(() => chain);
+    for (const name of ["focus"]) chain[name] = () => chain;
+    chain.setFontFamily = setFontFamily;
+    chain.unsetFontFamily = unsetFontFamily;
+    chain.run = () => true;
+    const editor = {
+      chain: () => chain,
+      isActive: () => false,
+      getAttributes: () => ({}),
+      can: () => ({ undo: () => true, redo: () => true }),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as Editor;
+    render(<EditorToolbar editor={editor} zoom={1} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onZoomReset={vi.fn()} editFormat="html" />);
+    await waitFor(() => expect(listLocalFonts).toHaveBeenCalledOnce());
+    const select = screen.getByLabelText("字体") as HTMLSelectElement;
+    const options = Array.from(select.options).map((o) => o.value);
+    // 常用子集：Arial/Times New Roman 可用 → 展示；Helvetica/Georgia/Courier New 不可用 → 隐藏；
+    // 本地：PingFang SC/Menlo 可用追加，Songti SC 不可用隐藏；常用置顶。
+    expect(options[1]).toBe("Arial");
+    expect(options[2]).toBe("Times New Roman");
+    expect(options).toContain("PingFang SC");
+    expect(options).toContain("Menlo");
+    expect(options).not.toContain("Songti SC");
+    // 选择多词字体 → setFontFamily 收到带引号 CSS 值。
+    fireEvent.change(select, { target: { value: "Times New Roman" } });
+    expect(setFontFamily).toHaveBeenCalledWith("'Times New Roman'");
+  });
   it("纯文本模式保留两行工具栏，保存复用活动编辑器路由且不渲染富文本或对象操作", async () => {
     const chain: Record<string, (...args: unknown[]) => unknown> = {};
     for (const name of ["focus", "undo", "redo"]) chain[name] = () => chain;

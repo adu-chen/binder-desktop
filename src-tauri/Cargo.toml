@@ -35,6 +35,9 @@ sha2 = "0.10"
 # S0 Font Trace：只读检查 DOCX/PPTX 包内 OOXML，不解压、不修改用户源文件。
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 quick-xml = "0.31.0"
+# 本地字体库只读枚举（ED-FONT-LOCAL-LIBRARY-01）：macOS CoreText 族名枚举，仅 macOS 使用。
+core-foundation = { version = "0.10", default-features = false }
+core-text = "19.2"
 
 # 测试期启用 tauri mock 运行时（A-CORE-X-L-04 验证：状态机广播 emit→listen 回路）。
 [dev-dependencies]
