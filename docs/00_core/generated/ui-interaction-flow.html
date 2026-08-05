@@ -1,0 +1,1270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Binder Ui Interaction Flow</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Binder Ui Interaction Flow" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Binder Ui Interaction Flow&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --red: light-dark(rgb(186 38 35), rgb(250 66 62));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: var(--border-radius-lg, 12.5px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed=&quot;true&quot;],
+    [aria-selected=&quot;true&quot;],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;binder-ui-interaction-flow&quot; aria-label=&quot;Binder UI interaction flow&quot;&gt;
+  &lt;style&gt;
+    #binder-ui-interaction-flow { color: var(--foreground); font: inherit; }
+    #binder-ui-interaction-flow .uif-legend,
+    #binder-ui-interaction-flow .uif-controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 14px; }
+    #binder-ui-interaction-flow .uif-legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
+    #binder-ui-interaction-flow .uif-dot { width: 11px; height: 11px; border: 1px solid var(--border); display: inline-block; }
+    #binder-ui-interaction-flow .uif-dot.user { border-radius: 50%; background: color-mix(in srgb, var(--viz-series-1) 34%, transparent); border-color: var(--viz-series-1); }
+    #binder-ui-interaction-flow .uif-dot.ui { border-radius: 2px; background: color-mix(in srgb, var(--viz-series-2) 34%, transparent); border-color: var(--viz-series-2); }
+    #binder-ui-interaction-flow .uif-dot.system { transform: rotate(45deg); background: color-mix(in srgb, var(--viz-series-4) 34%, transparent); border-color: var(--viz-series-4); }
+    #binder-ui-interaction-flow .uif-controls { border-bottom: 1px solid var(--border); padding-bottom: 14px; }
+    #binder-ui-interaction-flow .uif-flow { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    #binder-ui-interaction-flow .uif-zone { color: var(--muted-foreground); padding-top: 10px; }
+    #binder-ui-interaction-flow .uif-zone code { display: block; margin-top: 4px; }
+    #binder-ui-interaction-flow .uif-track { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+    #binder-ui-interaction-flow .uif-arrow { color: var(--muted-foreground); font-size: 18px; line-height: 1; }
+    #binder-ui-interaction-flow .uif-node { text-align: left; max-width: 220px; min-width: 124px; padding: 8px 10px; border: 1px solid var(--border); background: var(--card); color: var(--card-foreground); border-radius: 6px; }
+    #binder-ui-interaction-flow .uif-node:hover { border-color: var(--ring); }
+    #binder-ui-interaction-flow .uif-node.is-active { outline: 2px solid var(--ring); outline-offset: 2px; }
+    #binder-ui-interaction-flow .uif-node small,
+    #binder-ui-interaction-flow .uif-node strong { display: block; }
+    #binder-ui-interaction-flow .uif-node small { color: var(--muted-foreground); margin-bottom: 3px; }
+    #binder-ui-interaction-flow .uif-node.user { border-left: 3px solid var(--viz-series-1); }
+    #binder-ui-interaction-flow .uif-node.ui { border-left: 3px solid var(--viz-series-2); }
+    #binder-ui-interaction-flow .uif-node.system { border-left: 3px solid var(--viz-series-4); }
+    #binder-ui-interaction-flow .uif-branch { grid-column: 2; margin: 2px 0 4px; padding: 8px 10px; border-left: 2px dashed var(--destructive); color: var(--muted-foreground); }
+    #binder-ui-interaction-flow .uif-detail { margin-top: 18px; }
+    #binder-ui-interaction-flow .uif-detail-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; margin-bottom: 12px; }
+    #binder-ui-interaction-flow .uif-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 20px; }
+    #binder-ui-interaction-flow .uif-detail-grid h3 { margin: 0 0 7px; font-weight: 500; }
+    #binder-ui-interaction-flow .uif-detail-grid dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; }
+    #binder-ui-interaction-flow .uif-detail-grid dt { color: var(--muted-foreground); }
+    #binder-ui-interaction-flow .uif-detail-grid dd { margin: 0; overflow-wrap: anywhere; }
+    @media (max-width: 640px) {
+      #binder-ui-interaction-flow .uif-flow { grid-template-columns: 1fr; gap: 4px; }
+      #binder-ui-interaction-flow .uif-zone { padding-top: 0; }
+      #binder-ui-interaction-flow .uif-branch { grid-column: 1; }
+      #binder-ui-interaction-flow .uif-node { max-width: none; flex: 1 1 150px; }
+    }
+  &lt;/style&gt;
+
+  &lt;div class=&quot;uif-legend&quot; aria-label=&quot;节点语义图例&quot;&gt;
+    &lt;span&gt;&lt;i class=&quot;uif-dot user&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;用户动作&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;uif-dot ui&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;界面状态/操作&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;uif-dot system&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;受控系统处理&lt;/span&gt;
+    &lt;span&gt;虚线分支：失败、取消或回退&lt;/span&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;uif-controls&quot; role=&quot;group&quot; aria-label=&quot;选择交互流程&quot;&gt;
+    &lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot; data-flow=&quot;open&quot; aria-pressed=&quot;true&quot;&gt;进入工作区&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-flow=&quot;edit&quot; aria-pressed=&quot;false&quot;&gt;编辑并保存&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-flow=&quot;agent&quot; aria-pressed=&quot;false&quot;&gt;Agent 受控修改&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-flow=&quot;build&quot; aria-pressed=&quot;false&quot;&gt;多文件构建 &lt;span class=&quot;text-small&quot;&gt;V1+&lt;/span&gt;&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-flow=&quot;access&quot; aria-pressed=&quot;false&quot;&gt;账户与模型门禁&lt;/button&gt;
+  &lt;/div&gt;
+  &lt;p class=&quot;text-muted&quot; id=&quot;uif-flow-summary&quot; aria-live=&quot;polite&quot;&gt;&lt;/p&gt;
+  &lt;section id=&quot;uif-flow-board&quot; aria-label=&quot;UI 交互流程图&quot;&gt;&lt;/section&gt;
+  &lt;section class=&quot;card uif-detail&quot; aria-live=&quot;polite&quot; aria-label=&quot;当前流程节点详情&quot;&gt;
+    &lt;div class=&quot;uif-detail-head&quot;&gt;&lt;strong id=&quot;uif-detail-title&quot;&gt;选择一个流程节点&lt;/strong&gt;&lt;code id=&quot;uif-detail-id&quot;&gt;UIF-00&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;uif-detail-grid&quot;&gt;
+      &lt;section&gt;&lt;h3&gt;交互语义&lt;/h3&gt;&lt;dl&gt;&lt;dt&gt;操作者&lt;/dt&gt;&lt;dd data-detail=&quot;actor&quot;&gt;—&lt;/dd&gt;&lt;dt&gt;触发&lt;/dt&gt;&lt;dd data-detail=&quot;trigger&quot;&gt;—&lt;/dd&gt;&lt;dt&gt;结果&lt;/dt&gt;&lt;dd data-detail=&quot;result&quot;&gt;—&lt;/dd&gt;&lt;/dl&gt;&lt;/section&gt;
+      &lt;section&gt;&lt;h3&gt;状态与跨区&lt;/h3&gt;&lt;dl&gt;&lt;dt&gt;所在界面&lt;/dt&gt;&lt;dd data-detail=&quot;surface&quot;&gt;—&lt;/dd&gt;&lt;dt&gt;状态&lt;/dt&gt;&lt;dd data-detail=&quot;state&quot;&gt;—&lt;/dd&gt;&lt;dt&gt;下一落点&lt;/dt&gt;&lt;dd data-detail=&quot;handoff&quot;&gt;—&lt;/dd&gt;&lt;/dl&gt;&lt;/section&gt;
+      &lt;section&gt;&lt;h3&gt;治理绑定&lt;/h3&gt;&lt;dl&gt;&lt;dt&gt;能力/链&lt;/dt&gt;&lt;dd data-detail=&quot;chain&quot;&gt;—&lt;/dd&gt;&lt;dt&gt;规则&lt;/dt&gt;&lt;dd data-detail=&quot;rule&quot;&gt;—&lt;/dd&gt;&lt;dt&gt;验证&lt;/dt&gt;&lt;dd data-detail=&quot;verification&quot;&gt;—&lt;/dd&gt;&lt;/dl&gt;&lt;/section&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;script&gt;
+    (() =&gt; {
+      const root = document.getElementById(&#x27;binder-ui-interaction-flow&#x27;);
+      const board = root.querySelector(&#x27;#uif-flow-board&#x27;);
+      const summary = root.querySelector(&#x27;#uif-flow-summary&#x27;);
+      const title = root.querySelector(&#x27;#uif-detail-title&#x27;);
+      const identifier = root.querySelector(&#x27;#uif-detail-id&#x27;);
+      const fields = Object.fromEntries([...root.querySelectorAll(&#x27;[data-detail]&#x27;)].map(node =&gt; [node.dataset.detail, node]));
+      const flows = {
+        open: {
+          title: &#x27;进入工作区&#x27;, summary: &#x27;从应用启动、选择/恢复工作区，到 WB-01 形成可操作文件与编辑上下文。&#x27;,
+          steps: [
+            { id: &#x27;UIF-OPEN-01&#x27;, zone: &#x27;应用壳&#x27;, component: &#x27;LC-SHELL&#x27;, type: &#x27;system&#x27;, label: &#x27;启动并恢复会话&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;启动 Binder&#x27;, result: &#x27;计算最近会话与入口状态&#x27;, surface: &#x27;全局应用壳&#x27;, state: &#x27;启动中 / 无工作区 / 可恢复&#x27;, handoff: &#x27;UI-ENTRY&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;会话恢复不得绕过工作区边界&#x27;, verification: &#x27;启动与恢复工作流&#x27;, },
+            { id: &#x27;UIF-OPEN-02&#x27;, zone: &#x27;UI-ENTRY&#x27;, component: &#x27;LC-ENTRY&#x27;, type: &#x27;ui&#x27;, label: &#x27;选择或创建工作区&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;点击最近项、打开或创建&#x27;, result: &#x27;提交 WorkspaceSelection&#x27;, surface: &#x27;入口页&#x27;, state: &#x27;空态 / 最近项 / 选择中 / 错误&#x27;, handoff: &#x27;WorkspaceService → WB-01&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;路径与边界须受工作区约束&#x27;, verification: &#x27;工作区选择、取消和失败提示&#x27;, },
+            { id: &#x27;UIF-OPEN-03&#x27;, zone: &#x27;工作区服务&#x27;, component: &#x27;WS&#x27;, type: &#x27;system&#x27;, label: &#x27;初始化工作区上下文&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;收到 WorkspaceSelection&#x27;, result: &#x27;装载文件树、历史与活动文档候选&#x27;, surface: &#x27;跨区服务&#x27;, state: &#x27;初始化 / 就绪 / 失败&#x27;, handoff: &#x27;WB-01 文件区&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;工作区初始化是后续读写的唯一入口&#x27;, verification: &#x27;工作区初始化与失败回退&#x27;, },
+            { id: &#x27;UIF-OPEN-04&#x27;, zone: &#x27;WB-01 文件区&#x27;, component: &#x27;LC-WB-01&#x27;, type: &#x27;ui&#x27;, label: &#x27;显示文件与当前文档&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;上下文初始化完成&#x27;, result: &#x27;用户获得可选择文件与编辑入口&#x27;, surface: &#x27;WB-01 / 工作区与文件&#x27;, state: &#x27;空工作区 / 已加载 / 文件选中&#x27;, handoff: &#x27;编辑器或预览区&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;活动文档由文件区显式选择&#x27;, verification: &#x27;文件树、空态、打开失败&#x27;, },
+          ],
+          branch: &#x27;路径不可访问、初始化失败或用户取消：返回 UI-ENTRY，并保留可解释的失败状态。&#x27;
+        },
+        edit: {
+          title: &#x27;编辑并保存&#x27;, summary: &#x27;从文件选择、格式适配和编辑状态，到显式保存及冲突处理。&#x27;,
+          steps: [
+            { id: &#x27;UIF-EDIT-01&#x27;, zone: &#x27;WB-01 文件区&#x27;, component: &#x27;LC-WB-01&#x27;, type: &#x27;user&#x27;, label: &#x27;选择文档&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;点击文件或新建文档&#x27;, result: &#x27;产生 ActiveDocumentIntent&#x27;, surface: &#x27;WB-01 / 文件区&#x27;, state: &#x27;未选中 / 加载中 / 已选中&#x27;, handoff: &#x27;编辑器运行时&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;文档必须属于当前工作区&#x27;, verification: &#x27;文件选择与切换保护&#x27;, },
+            { id: &#x27;UIF-EDIT-02&#x27;, zone: &#x27;编辑器&#x27;, component: &#x27;ED + DOC&#x27;, type: &#x27;system&#x27;, label: &#x27;识别格式并建立编辑模型&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;收到 ActiveDocumentIntent&#x27;, result: &#x27;以适配模型打开 Markdown / HTML / Text / DOCX 草稿&#x27;, surface: &#x27;WB-01 / 编辑器&#x27;, state: &#x27;加载 / 只读预览 / 可编辑 / 降级&#x27;, handoff: &#x27;富文本或纯文本编辑面&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;无法无损表达时不得静默改写&#x27;, verification: &#x27;格式打开、边界提示与重开&#x27;, },
+            { id: &#x27;UIF-EDIT-03&#x27;, zone: &#x27;编辑器&#x27;, component: &#x27;ED&#x27;, type: &#x27;user&#x27;, label: &#x27;输入或调整内容&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;键盘、工具栏、拖拽或块操作&#x27;, result: &#x27;更新编辑状态并标记 dirty&#x27;, surface: &#x27;WB-01 / 编辑器&#x27;, state: &#x27;干净 / dirty / 不可编辑&#x27;, handoff: &#x27;保存守卫&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;未保存状态必须可见且可阻止错误切换&#x27;, verification: &#x27;细粒度 UI 状态与脏标记&#x27;, },
+            { id: &#x27;UIF-EDIT-04&#x27;, zone: &#x27;保存守卫&#x27;, component: &#x27;WS + ED&#x27;, type: &#x27;ui&#x27;, label: &#x27;确认保存&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;保存、切换或关闭触发&#x27;, result: &#x27;提交受控写入请求&#x27;, surface: &#x27;WB-01 / 编辑器与文件区&#x27;, state: &#x27;待确认 / 保存中 / 冲突 / 已保存&#x27;, handoff: &#x27;WorkspaceService&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;保存、切换与关闭共享同一 dirty 守卫&#x27;, verification: &#x27;保存、冲突、取消和关闭保护&#x27;, },
+            { id: &#x27;UIF-EDIT-05&#x27;, zone: &#x27;工作区服务&#x27;, component: &#x27;WS&#x27;, type: &#x27;system&#x27;, label: &#x27;落盘并刷新文件状态&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;受控写入请求通过&#x27;, result: &#x27;文件状态与编辑器基线同步&#x27;, surface: &#x27;跨区服务&#x27;, state: &#x27;写入中 / 成功 / 失败&#x27;, handoff: &#x27;WB-01 文件区与编辑器&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;只允许正式写入链路落盘&#x27;, verification: &#x27;写入成功、失败与状态同步&#x27;, },
+          ],
+          branch: &#x27;格式不可安全保存、外部改动冲突或用户取消：保持原始内容，回到可解释的 dirty / 冲突状态。&#x27;
+        },
+        agent: {
+          title: &#x27;Agent 受控修改&#x27;, summary: &#x27;AI 只生成可审阅提案；用户的接受或拒绝决定是否进入持久化。&#x27;,
+          steps: [
+            { id: &#x27;UIF-AG-01&#x27;, zone: &#x27;编辑器 / 引用区&#x27;, component: &#x27;ED + REF&#x27;, type: &#x27;user&#x27;, label: &#x27;选择范围并发起意图&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;选中文本、打开 Assist 或提交指令&#x27;, result: &#x27;形成可追溯编辑意图与上下文&#x27;, surface: &#x27;WB-01 / 编辑器、引用资产区&#x27;, state: &#x27;无选择 / 已锚定 / 上下文待注入&#x27;, handoff: &#x27;Agent 面板&#x27;, chain: &#x27;FC-CONTEXT → FC-CORE&#x27;, rule: &#x27;上下文受工作区、锚点和预算约束&#x27;, verification: &#x27;锚定、引用和上下文来源&#x27;, },
+            { id: &#x27;UIF-AG-02&#x27;, zone: &#x27;Agent 面板&#x27;, component: &#x27;AG&#x27;, type: &#x27;ui&#x27;, label: &#x27;发送回合请求&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;确认发送&#x27;, result: &#x27;显示流式状态与停止能力&#x27;, surface: &#x27;WB-01 / Agent&#x27;, state: &#x27;待发 / Streaming / 已停止 / 失败&#x27;, handoff: &#x27;模型访问门禁&#x27;, chain: &#x27;FC-ACCESS&#x27;, rule: &#x27;调用必须先通过认证/订阅/网关门禁&#x27;, verification: &#x27;发送、流式、停止和错误状态&#x27;, },
+            { id: &#x27;UIF-AG-03&#x27;, zone: &#x27;Agent 执行&#x27;, component: &#x27;AG + Tools&#x27;, type: &#x27;system&#x27;, label: &#x27;生成变更提案&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;门禁通过的 Agent 回合&#x27;, result: &#x27;输出 Proposal / Diff，不直接写文档&#x27;, surface: &#x27;跨区执行&#x27;, state: &#x27;执行中 / 工具调用 / 提案就绪 / 失败&#x27;, handoff: &#x27;审阅区&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;AI 修改必须先转为可审阅差异&#x27;, verification: &#x27;工具调用、提案与错误闭合&#x27;, },
+            { id: &#x27;UIF-AG-04&#x27;, zone: &#x27;审阅区&#x27;, component: &#x27;DE&#x27;, type: &#x27;ui&#x27;, label: &#x27;比较并裁决提案&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;查看 Diff 后接受或拒绝&#x27;, result: &#x27;产生 ReviewDecision&#x27;, surface: &#x27;WB-01 / Agent 与审阅&#x27;, state: &#x27;待审 / 接受 / 拒绝 / 部分接受&#x27;, handoff: &#x27;编辑器或保存守卫&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;裁决是变更写入的唯一授权&#x27;, verification: &#x27;Diff 呈现、接受、拒绝与撤销&#x27;, },
+            { id: &#x27;UIF-AG-05&#x27;, zone: &#x27;编辑器 / 保存守卫&#x27;, component: &#x27;ED + WS&#x27;, type: &#x27;system&#x27;, label: &#x27;应用已接受变更&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;收到 ReviewDecision=accept&#x27;, result: &#x27;编辑器变 dirty，后续仍须显式保存&#x27;, surface: &#x27;WB-01 / 编辑器&#x27;, state: &#x27;已应用未保存 / 保存中 / 已保存&#x27;, handoff: &#x27;FC-CORE 保存段&#x27;, chain: &#x27;FC-CORE&#x27;, rule: &#x27;接受提案不等于绕过保存守卫&#x27;, verification: &#x27;提案应用与后续保存&#x27;, },
+          ],
+          branch: &#x27;门禁拒绝、模型/工具失败、用户停止或拒绝提案：保留原文与可解释回合记录，不产生旁路写入。&#x27;
+        },
+        build: {
+          title: &#x27;多文件构建&#x27;, summary: &#x27;V1+：从确认项目蓝图到批量提案与统一裁决，沿用同一受控写入语义。&#x27;,
+          steps: [
+            { id: &#x27;UIF-BUILD-01&#x27;, zone: &#x27;引用 / 资产 / 构建区&#x27;, component: &#x27;CBT + AST&#x27;, type: &#x27;user&#x27;, label: &#x27;定义项目蓝图&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;新建构建任务或选择模板/资产&#x27;, result: &#x27;产生 ProjectBlueprint&#x27;, surface: &#x27;WB-01 / 引用资产构建区&#x27;, state: &#x27;草拟 / 待确认 / 已确认&#x27;, handoff: &#x27;构建计划&#x27;, chain: &#x27;FC-BUILD&#x27;, rule: &#x27;蓝图与资产来源须可追溯&#x27;, verification: &#x27;蓝图确认与资产选取&#x27;, },
+            { id: &#x27;UIF-BUILD-02&#x27;, zone: &#x27;构建计划&#x27;, component: &#x27;CBT&#x27;, type: &#x27;system&#x27;, label: &#x27;生成多文件计划&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;ProjectBlueprint 确认&#x27;, result: &#x27;展示文件、依赖和变更范围&#x27;, surface: &#x27;WB-01 / 构建区&#x27;, state: &#x27;计划中 / 待审 / 可执行 / 中断&#x27;, handoff: &#x27;Agent 执行&#x27;, chain: &#x27;FC-BUILD&#x27;, rule: &#x27;执行前必须给出可审阅计划&#x27;, verification: &#x27;计划显示、撤销与失败状态&#x27;, },
+            { id: &#x27;UIF-BUILD-03&#x27;, zone: &#x27;Agent / 审阅区&#x27;, component: &#x27;CBT + AG + DE&#x27;, type: &#x27;system&#x27;, label: &#x27;生成批量变更提案&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;用户确认构建计划&#x27;, result: &#x27;按文件汇集 Proposal / Diff&#x27;, surface: &#x27;WB-01 / Agent 与审阅&#x27;, state: &#x27;执行 / 部分完成 / 失败 / 待审&#x27;, handoff: &#x27;批量裁决&#x27;, chain: &#x27;FC-BUILD&#x27;, rule: &#x27;构建产物与单文件编辑共享提案/审阅协议&#x27;, verification: &#x27;批量提案、失败隔离和重试&#x27;, },
+            { id: &#x27;UIF-BUILD-04&#x27;, zone: &#x27;审阅与文件区&#x27;, component: &#x27;DE + WS&#x27;, type: &#x27;user&#x27;, label: &#x27;批量裁决并受控落盘&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;逐项或整体接受&#x27;, result: &#x27;将已接受产物交给保存守卫&#x27;, surface: &#x27;WB-01 / 审阅、文件区&#x27;, state: &#x27;待审 / 部分接受 / 已保存 / 回退&#x27;, handoff: &#x27;工作区持久化&#x27;, chain: &#x27;FC-BUILD → FC-CORE&#x27;, rule: &#x27;构建不存在绕过人工裁决的写盘通路&#x27;, verification: &#x27;批量裁决、回退与落盘&#x27;, },
+          ],
+          branch: &#x27;计划未确认、部分文件失败或用户中断：保留计划与已审状态，未接受产物不得写入工作区。&#x27;
+        },
+        access: {
+          title: &#x27;账户与模型门禁&#x27;, summary: &#x27;每个模型调用都由会话、订阅与网关规则共同决定；界面只显示结果与恢复入口。&#x27;,
+          steps: [
+            { id: &#x27;UIF-ACCESS-01&#x27;, zone: &#x27;UI-ENTRY / 账户门户&#x27;, component: &#x27;LC-ENTRY + LC-PORTAL&#x27;, type: &#x27;user&#x27;, label: &#x27;登录或查看账户状态&#x27;, actor: &#x27;用户&#x27;, trigger: &#x27;点击登录、账户或订阅入口&#x27;, result: &#x27;发起身份与账户查询&#x27;, surface: &#x27;UI-ENTRY / 个人账户门户&#x27;, state: &#x27;未认证 / 认证中 / 已认证 / 失败&#x27;, handoff: &#x27;账户服务&#x27;, chain: &#x27;FC-ACCESS&#x27;, rule: &#x27;身份信息仅经受控账户通道处理&#x27;, verification: &#x27;登录、登出和会话过期&#x27;, },
+            { id: &#x27;UIF-ACCESS-02&#x27;, zone: &#x27;账户服务&#x27;, component: &#x27;ACCT + ENT&#x27;, type: &#x27;system&#x27;, label: &#x27;计算权限与订阅门禁&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;用户访问或模型调用意图&#x27;, result: &#x27;返回 GatePassed / GateDenied&#x27;, surface: &#x27;跨区服务&#x27;, state: &#x27;检查中 / 通过 / 拒绝 / 过期&#x27;, handoff: &#x27;Agent 面板或账户门户&#x27;, chain: &#x27;FC-ACCESS&#x27;, rule: &#x27;无 GatePassed 不得发起 Provider 调用&#x27;, verification: &#x27;订阅门禁与拒绝原因&#x27;, },
+            { id: &#x27;UIF-ACCESS-03&#x27;, zone: &#x27;Agent 面板&#x27;, component: &#x27;AG + CLOUD-GW&#x27;, type: &#x27;ui&#x27;, label: &#x27;开始流式回合或给出恢复入口&#x27;, actor: &#x27;系统&#x27;, trigger: &#x27;GatePassed 或 GateDenied&#x27;, result: &#x27;允许 Streaming 或展示账户恢复动作&#x27;, surface: &#x27;WB-01 / Agent&#x27;, state: &#x27;可调用 / Streaming / GateDenied / Error&#x27;, handoff: &#x27;模型网关或账户门户&#x27;, chain: &#x27;FC-ACCESS&#x27;, rule: &#x27;密钥只在服务端；前端无旁路&#x27;, verification: &#x27;允许、拒绝、过期与恢复流程&#x27;, },
+          ],
+          branch: &#x27;认证失败、订阅过期或网关错误：不尝试模型调用；回到明确的账户、订阅或重试入口。&#x27;
+        },
+      };
+      const renderDetail = (step) =&gt; {
+        title.textContent = step.label;
+        identifier.textContent = step.id;
+        Object.entries({ actor: step.actor, trigger: step.trigger, result: step.result, surface: step.surface, state: step.state, handoff: step.handoff, chain: step.chain, rule: step.rule, verification: step.verification }).forEach(([key, value]) =&gt; { fields[key].textContent = value; });
+        root.querySelectorAll(&#x27;.uif-node&#x27;).forEach(node =&gt; node.classList.toggle(&#x27;is-active&#x27;, node.dataset.stepId === step.id));
+      };
+      const renderFlow = (flowId) =&gt; {
+        const flow = flows[flowId];
+        summary.textContent = `${flow.title}：${flow.summary}`;
+        const zones = [];
+        flow.steps.forEach(step =&gt; { const current = zones[zones.length - 1]; if (current &amp;&amp; current.zone === step.zone) current.steps.push(step); else zones.push({ zone: step.zone, component: step.component, steps: [step] }); });
+        board.innerHTML = zones.map((group, index) =&gt; `&lt;section class=&quot;uif-flow&quot;&gt;&lt;div class=&quot;uif-zone&quot;&gt;${group.zone}&lt;code&gt;${group.component}&lt;/code&gt;&lt;/div&gt;&lt;div class=&quot;uif-track&quot;&gt;${group.steps.map((step, stepIndex) =&gt; `${stepIndex ? &#x27;&lt;span class=&quot;uif-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;&#x27; : &#x27;&#x27;}&lt;button class=&quot;uif-node ${step.type}&quot; type=&quot;button&quot; data-step-id=&quot;${step.id}&quot;&gt;&lt;small&gt;${step.actor} · ${step.state.split(&#x27; / &#x27;)[0]}&lt;/small&gt;&lt;strong&gt;${step.label}&lt;/strong&gt;&lt;/button&gt;`).join(&#x27;&#x27;)}${index &lt; zones.length - 1 ? &#x27;&lt;span class=&quot;uif-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;&#x27; : &#x27;&#x27;}&lt;/div&gt;&lt;/section&gt;`).join(&#x27;&#x27;) + `&lt;p class=&quot;uif-branch&quot;&gt;↳ ${flow.branch}&lt;/p&gt;`;
+        board.querySelectorAll(&#x27;[data-step-id]&#x27;).forEach(node =&gt; node.addEventListener(&#x27;click&#x27;, () =&gt; renderDetail(flow.steps.find(step =&gt; step.id === node.dataset.stepId))));
+        renderDetail(flow.steps[0]);
+      };
+      root.querySelectorAll(&#x27;[data-flow]&#x27;).forEach(button =&gt; button.addEventListener(&#x27;click&#x27;, () =&gt; {
+        root.querySelectorAll(&#x27;[data-flow]&#x27;).forEach(item =&gt; { const active = item === button; item.classList.toggle(&#x27;btn-primary&#x27;, active); item.classList.toggle(&#x27;btn-ghost&#x27;, false); item.setAttribute(&#x27;aria-pressed&#x27;, String(active)); });
+        renderFlow(button.dataset.flow);
+      }));
+      renderFlow(&#x27;open&#x27;);
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>

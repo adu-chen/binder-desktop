@@ -1,0 +1,451 @@
+{
+  "generated_at": "2026-08-02T15:36:24.115Z",
+  "summary": {
+    "product_areas": 1,
+    "journeys": 1,
+    "capabilities": 2,
+    "variants": 7,
+    "support": {
+      "supported": 3,
+      "partial": 4,
+      "unsupported": 0,
+      "unknown": 0,
+      "not_applicable": 0
+    },
+    "automation": {
+      "none": 0,
+      "partial": 4,
+      "passed": 3,
+      "failed": 0
+    },
+    "system_validation": {
+      "not_required": 0,
+      "pending": 5,
+      "passed": 0,
+      "failed": 0,
+      "blocked": 2
+    }
+  },
+  "audit_status": "passed",
+  "variants": [
+    {
+      "id": "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+      "name": "编辑 Markdown 并安全保存",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown"
+      ],
+      "operation": "rich_text_edit_and_semantic_save",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "ED-EDIT",
+      "requirements": [
+        "REQ-ED-001"
+      ],
+      "rules": [
+        "BR-ED-DATA-006",
+        "BR-ED-VERIFY-001"
+      ],
+      "terms": [
+        "TERM-CORE-002",
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "支持语法以终态富文本呈现，源码标记不作为正文显示",
+        "未编辑时不改写；无法无损表达时不得静默保存",
+        "编辑保存后支持子集保持语义等价"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ed/extensions/EditorExtensions.test.ts",
+          "src/services/edRuntime.test.ts"
+        ],
+        "validations": [
+          "VAL-CORE-EDIT-DIFF-SAVE"
+        ]
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "passed",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-DOCUMENT-RICH-EDIT",
+      "capability_name": "编辑结构化文档内容",
+      "capability_summary": "用户以适合格式的编辑模型修改文档内容，并在支持范围内安全保存。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001",
+        "TERM-CORE-002"
+      ]
+    },
+    {
+      "id": "VAR-EDIT-HTML-ROUNDTRIP",
+      "name": "编辑 HTML 正文并保持块锚点",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "html"
+      ],
+      "operation": "rich_text_edit_and_roundtrip",
+      "support": "partial",
+      "side_effect": true,
+      "canonical_chain": "ED-EDIT",
+      "requirements": [
+        "REQ-ED-008"
+      ],
+      "rules": [
+        "BR-ED-DATA-002"
+      ],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "HTML 正文打开为富文本并可编辑",
+        "data-block-id 跨保存稳定",
+        "head/script 等非正文内容须有明确处理策略"
+      ],
+      "evidence": {
+        "tests": [
+          "src/services/edRuntime.test.ts",
+          "src-tauri/src/ag/blocks.rs"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-DOCUMENT-RICH-EDIT",
+      "capability_name": "编辑结构化文档内容",
+      "capability_summary": "用户以适合格式的编辑模型修改文档内容，并在支持范围内安全保存。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001",
+        "TERM-CORE-002"
+      ]
+    },
+    {
+      "id": "VAR-EDIT-TEXT-LINE-BLOCKS",
+      "name": "编辑纯文本并按行定位内容块",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "text"
+      ],
+      "operation": "line_oriented_edit",
+      "support": "partial",
+      "side_effect": true,
+      "canonical_chain": "ED-EDIT",
+      "requirements": [
+        "REQ-ED-001"
+      ],
+      "rules": [
+        "BR-ED-DATA-001"
+      ],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "纯文本行为保持不变",
+        "空行与行粒度定位保持",
+        "格式专项保存重开证据需要补齐"
+      ],
+      "evidence": {
+        "tests": [
+          "src-tauri/src/ag/blocks.rs",
+          "src/services/edRuntime.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-DOCUMENT-RICH-EDIT",
+      "capability_name": "编辑结构化文档内容",
+      "capability_summary": "用户以适合格式的编辑模型修改文档内容，并在支持范围内安全保存。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001",
+        "TERM-CORE-002"
+      ]
+    },
+    {
+      "id": "VAR-EDIT-BDOCX-SUPPORTED-SUBSET",
+      "name": "编辑 BDocx 支持子集并保存重开",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "bdocx"
+      ],
+      "operation": "structured_edit_and_docx_roundtrip",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "DOC-CONVERT",
+      "requirements": [
+        "REQ-ED-001",
+        "REQ-DOC-001",
+        "REQ-DOC-002"
+      ],
+      "rules": [
+        "BR-ED-DATA-002",
+        "BR-ED-DATA-003"
+      ],
+      "terms": [
+        "TERM-DOC-002",
+        "TERM-DOC-003",
+        "TERM-DOC-001"
+      ],
+      "acceptance": [
+        "编辑草稿可加载为富文本并保存回 DOCX",
+        "支持文字颜色、单元格底纹及受控图片基础往返",
+        "浮动布局、任意 OOXML 和高级样式不在保证集"
+      ],
+      "evidence": {
+        "tests": [
+          "src-tauri/src/doc/edit_chain.rs",
+          "src/services/edRuntime.test.ts"
+        ],
+        "validations": [
+          "VAL-CORE-EDIT-DIFF-SAVE"
+        ]
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "passed",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-DOCUMENT-RICH-EDIT",
+      "capability_name": "编辑结构化文档内容",
+      "capability_summary": "用户以适合格式的编辑模型修改文档内容，并在支持范围内安全保存。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001",
+        "TERM-CORE-002",
+        "TERM-DOC-002",
+        "TERM-DOC-003",
+        "TERM-DOC-001"
+      ]
+    },
+    {
+      "id": "VAR-OPEN-NATIVE-DOCX-PREVIEW",
+      "name": "打开原生 DOCX 并创建可编辑草稿",
+      "stage": "打开与理解",
+      "actor": "user",
+      "formats": [
+        "docx"
+      ],
+      "operation": "preview_and_create_edit_draft",
+      "support": "partial",
+      "side_effect": false,
+      "requirements": [
+        "REQ-DOC-001",
+        "REQ-DOC-004"
+      ],
+      "rules": [
+        "BR-ED-DATA-002"
+      ],
+      "terms": [
+        "TERM-DOC-002",
+        "TERM-DOC-003"
+      ],
+      "acceptance": [
+        "原生 DOCX 以只读预览进入",
+        "用户创建 BDocx 编辑草稿后才进入可编辑路径",
+        "原生 DOCX 不承诺直接富文本编辑"
+      ],
+      "evidence": {
+        "tests": [
+          "src-tauri/src/doc/edit_chain.rs"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-DOCUMENT-RICH-EDIT",
+      "capability_name": "编辑结构化文档内容",
+      "capability_summary": "用户以适合格式的编辑模型修改文档内容，并在支持范围内安全保存。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001",
+        "TERM-CORE-002",
+        "TERM-DOC-002",
+        "TERM-DOC-003"
+      ]
+    },
+    {
+      "id": "VAR-AGENT-TEXTUAL-DIFF",
+      "name": "代理修改文本、Markdown 或 HTML 内容块",
+      "stage": "代理协作",
+      "actor": "agent",
+      "formats": [
+        "text",
+        "markdown",
+        "html"
+      ],
+      "operation": "replace_block_or_explicit_document",
+      "support": "partial",
+      "side_effect": true,
+      "canonical_chain": "AG-TURN",
+      "fallbacks": [
+        {
+          "fallback_of": "AG-TURN",
+          "when": "目标块、会话或内容指纹不安全时",
+          "result": "edit_blocked，不生成直接写盘建议"
+        }
+      ],
+      "requirements": [
+        "REQ-AG-001",
+        "REQ-AG-002"
+      ],
+      "rules": [
+        "BR-AG-STATE-002",
+        "BR-ED-DATA-001"
+      ],
+      "terms": [
+        "TERM-AG-008",
+        "TERM-DE-001",
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "局部修改按 blockId 或块序号定位",
+        "整篇替换仅在用户明确要求时允许",
+        "提议必须进入待裁决修改，接受前不得写盘"
+      ],
+      "evidence": {
+        "tests": [
+          "src-tauri/src/ag/blocks.rs",
+          "src/services/deRuntime.test.ts",
+          "src/components/de/DiffReview.test.tsx"
+        ],
+        "validations": [
+          "VAL-CORE-EDIT-DIFF-SAVE"
+        ]
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "blocked",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-AGENT-DOCUMENT-EDIT",
+      "capability_name": "代理提出受控文档修改",
+      "capability_summary": "代理只生成可审阅修改建议，用户裁决后才允许进入保存链。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-AG-008",
+        "TERM-DE-001",
+        "TERM-ED-001"
+      ]
+    },
+    {
+      "id": "VAR-AGENT-BDOCX-STRUCTURED-EDIT",
+      "name": "代理以结构化操作修改 BDocx",
+      "stage": "代理协作",
+      "actor": "agent",
+      "formats": [
+        "bdocx"
+      ],
+      "operation": "structured_block_style_table_and_image_operations",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "AG-TURN",
+      "fallbacks": [
+        {
+          "fallback_of": "AG-TURN",
+          "when": "能力清单、会话快照、图片源哈希或表格指纹校验失败时",
+          "result": "edit_blocked，不执行原始 HTML 或直接写盘降级"
+        }
+      ],
+      "requirements": [
+        "REQ-AG-001",
+        "REQ-AG-002",
+        "REQ-ED-004",
+        "REQ-ED-009"
+      ],
+      "rules": [
+        "BR-AG-STATE-002",
+        "BR-ED-DATA-003",
+        "BR-ED-DATA-007"
+      ],
+      "terms": [
+        "TERM-DOC-003",
+        "TERM-ED-006",
+        "TERM-ED-007",
+        "TERM-ED-008"
+      ],
+      "acceptance": [
+        "原始 HTML 和整篇覆盖不作为 BDocx 代理修改通道",
+        "样式、表格和图片操作经动态能力、指纹和结构化 Diff 校验",
+        "图片仅处理受控 workspace 资源，保存重开保持受支持结果"
+      ],
+      "evidence": {
+        "tests": [
+          "src-tauri/src/ag/bdocx_capabilities.rs",
+          "src-tauri/src/doc/edit_chain.rs",
+          "src/services/deRuntime.test.ts"
+        ],
+        "validations": [
+          "VAL-CORE-EDIT-DIFF-SAVE"
+        ]
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "passed",
+        "system_validation": "blocked",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-AGENT-DOCUMENT-EDIT",
+      "capability_name": "代理提出受控文档修改",
+      "capability_summary": "代理只生成可审阅修改建议，用户裁决后才允许进入保存链。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-AG-008",
+        "TERM-DE-001",
+        "TERM-DOC-003",
+        "TERM-ED-006",
+        "TERM-ED-007",
+        "TERM-ED-008"
+      ]
+    }
+  ]
+}
