@@ -2,5 +2,7 @@
   "project_root": ".",
   "apc_path": "docs/00_core/A-CORE-C-P-01_APC.md",
   "adus_path": "docs/00_core/A-CORE-C-R-01_ADUS.md",
-  "test_governance_path": ".governance/test-governance.json"
+  "test_governance_path": ".governance/test-governance.json",
+  "product_capability_path": ".governance/product-capability-registry.json",
+  "product_capability_output_dir": "docs/00_core/generated"
 }

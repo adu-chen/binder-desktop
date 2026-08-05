@@ -8,6 +8,7 @@ import { execFileSync } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { auditTestGovernance } from './test_governance.mjs';
+import { auditProductCapabilityRegistry } from './product_capability.mjs';
 import {
   activeRecords,
   deferralKey,
@@ -40,6 +41,9 @@ const REQUIRED_FILES = [
   'scripts/audit_taskflow_governance.mjs',
   'scripts/test_governance.mjs',
   'scripts/test_governance.test.mjs',
+  'scripts/product_capability.mjs',
+  'scripts/generate_product_capability_atlas.mjs',
+  'scripts/audit_product_capability.mjs',
 ];
 
 const LEGACY_ADU_FILES = [
@@ -58,6 +62,9 @@ const REQUIRED_PACKAGE_SCRIPTS = {
   'test:plan': 'node scripts/test_governance.mjs select',
   'test:related': 'node scripts/test_governance.mjs run',
   'test:full': 'npm test && cargo test --manifest-path src-tauri/Cargo.toml',
+  'product:test': 'vitest run scripts/test_governance.test.mjs -t "Product Capability Graph"',
+  'product:generate': 'node scripts/generate_product_capability_atlas.mjs',
+  'product:audit': 'node scripts/audit_product_capability.mjs',
 };
 
 // ADU §4.3 八种代码块类型
@@ -323,6 +330,18 @@ if (testGovernanceConfigured) {
   });
 }
 
+const productCapabilityConfigured = !!(govConfig.product_capability_path && govConfig.product_capability_path.trim());
+addCheck({
+  name: 'product_capability_path configured',
+  status: productCapabilityConfigured ? 'passed' : 'failed',
+});
+if (productCapabilityConfigured) {
+  addCheck({
+    name: `product_capability_path target exists: ${govConfig.product_capability_path}`,
+    status: fileExists(govConfig.product_capability_path.trim()) ? 'passed' : 'failed',
+  });
+}
+
 // adus_path 配置的 ADUS 文件必须存在（bootstrap 完成后）
 if (govConfig.adus_path && govConfig.adus_path.trim()) {
   addCheck({
@@ -434,12 +453,18 @@ addCheck({
 const markdownWithLegacyHeadings = docFiles.filter(f => /^## (RULE|CHAIN|MODULE|CONSTRAINT)-/m.test(readText(f)));
 addCheck({ name: 'legacy markdown heading IDs absent', status: markdownWithLegacyHeadings.length === 0 ? 'passed' : 'failed', files: markdownWithLegacyHeadings });
 
-// ── 源代码 @GOV 扫描（project_root/src 前端 + project_root/src-tauri/src Rust 后端） ──
+// ── 源代码 @GOV 扫描（前端、Rust 后端与受治理脚本） ───────────────────────
 const srcDir = PROJECT_ROOT_REL === '.' ? 'src' : `${PROJECT_ROOT_REL}/src`;
 const rustDir = PROJECT_ROOT_REL === '.' ? 'src-tauri/src' : `${PROJECT_ROOT_REL}/src-tauri/src`;
+const scriptsDir = PROJECT_ROOT_REL === '.' ? 'scripts' : `${PROJECT_ROOT_REL}/scripts`;
+const PCG_GOVERNED_ENTRY_SCRIPTS = new Set([
+  'scripts/generate_product_capability_atlas.mjs',
+  'scripts/audit_product_capability.mjs',
+]);
 const sourceFiles = [
   ...collectFiles(srcDir, f => f.endsWith('.ts') || f.endsWith('.tsx')),
   ...collectFiles(rustDir, f => f.endsWith('.rs')),
+  ...collectFiles(scriptsDir, f => PCG_GOVERNED_ENTRY_SCRIPTS.has(f)),
 ];
 
 const filesWithLineGov = sourceFiles.filter(f => /^\s*\/\/\s*@GOV/m.test(readText(f)));
@@ -529,8 +554,9 @@ addCheck({
 // 使 Rust 后端内联覆盖注释被计入（惯用写法，避免对 Rust 项目结构性漏计）。
 const testsDir = PROJECT_ROOT_REL === '.' ? 'tests' : `${PROJECT_ROOT_REL}/tests`;
 const testFiles = collectFiles(testsDir, f => f.endsWith('.test.ts') || f.endsWith('.spec.ts') || f.endsWith('.test.tsx') || f.endsWith('.spec.tsx'));
+const governanceTestFiles = ['scripts/test_governance.test.mjs'].filter(fileExists);
 const coveredRules = new Set();
-for (const file of [...testFiles, ...sourceFiles]) {
+for (const file of [...testFiles, ...governanceTestFiles, ...sourceFiles]) {
   for (const m of readText(file).matchAll(/^\s*\/\/\s*covers:\s*(\S+)\s*$/gm)) {
     coveredRules.add(m[1]);
   }
@@ -784,6 +810,27 @@ try {
   addFinding('TEST_GOVERNANCE_UNAVAILABLE', error.message);
 }
 
+let productCapabilityAudit = null;
+try {
+  productCapabilityAudit = auditProductCapabilityRegistry(ROOT);
+  addCheck({
+    name: 'product capability registry and traceability',
+    status: productCapabilityAudit.status,
+    variants: productCapabilityAudit.summary.variants,
+    warnings: productCapabilityAudit.warnings.length,
+  });
+  for (const finding of productCapabilityAudit.findings) {
+    addFinding(finding.type, 'Product capability audit failed', finding);
+  }
+} catch (error) {
+  addCheck({
+    name: 'product capability registry and traceability',
+    status: 'failed',
+    note: error.message,
+  });
+  addFinding('PRODUCT_CAPABILITY_UNAVAILABLE', error.message);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const failedChecks = checks.filter(c => c.status !== 'passed');
@@ -801,6 +848,12 @@ const result = {
     checks: testGovernanceAudit.checks,
     findings: testGovernanceAudit.findings,
     warnings: testGovernanceAudit.warnings,
+  } : null,
+  product_capability: productCapabilityAudit ? {
+    status: productCapabilityAudit.status,
+    summary: productCapabilityAudit.summary,
+    findings: productCapabilityAudit.findings,
+    warnings: productCapabilityAudit.warnings,
   } : null,
 };
 

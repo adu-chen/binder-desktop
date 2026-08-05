@@ -397,6 +397,14 @@ function isExecutableChange(filePath, registry) {
   return matchesAny(filePath, registry.policy?.executable_globs);
 }
 
+function isProductCapabilityChange(filePath) {
+  return filePath === '.governance/product-capability-registry.json' ||
+    filePath === 'governance.config.json' ||
+    filePath === 'docs/00_core/A-CORE-C-P-02_产品能力图谱规范.md' ||
+    filePath === 'docs/40_validation/A-VAL-X-V-03_产品能力图谱验证.md' ||
+    /^scripts\/(?:product_capability|generate_product_capability_atlas|audit_product_capability)(?:\.test)?\.mjs$/.test(filePath);
+}
+
 function command(id, program, args, reason) {
   return { id, program, args, display: [program, ...args].join(' '), reason };
 }
@@ -420,6 +428,7 @@ export function buildRelatedTestPlan(
   const mapping = [];
   const unmappedExecutable = [];
   let governanceChanged = false;
+  let productCapabilityChanged = false;
   let frontendFull = false;
   let rustFull = false;
   let typescriptChanged = false;
@@ -437,6 +446,10 @@ export function buildRelatedTestPlan(
     mapping.push({ file, modules, source: modules.length ? 'path_rule_or_gov' : 'unmapped' });
     if (isExecutableChange(file, registry) && modules.length === 0) unmappedExecutable.push(file);
     if (matchesAny(file, registry.policy?.governance_globs)) governanceChanged = true;
+    if (isProductCapabilityChange(file)) {
+      governanceChanged = true;
+      productCapabilityChanged = true;
+    }
     if (matchesAny(file, registry.policy?.full_frontend_globs)) frontendFull = true;
     if (matchesAny(file, registry.policy?.full_rust_globs)) rustFull = true;
     if (/^src\/.*\.(?:ts|tsx)$/.test(file)) typescriptChanged = true;
@@ -449,7 +462,9 @@ export function buildRelatedTestPlan(
   const selectedFrontend = new Set([...directTestPaths].filter((file) => {
     return inventory.assets.find((asset) => asset.path === file)?.kind === 'frontend';
   }));
-  if (nonTestChanges.length > 0) {
+  // 控制文档与治理脚本不按 CORE 的测试文件集合扩散；它们由明确的治理自测入口负责。
+  // 这避免新增治理测试后，任意治理改动被误升级为无关的前端回归。
+  if (nonTestChanges.length > 0 && !governanceChanged) {
     for (const asset of inventory.assets) {
       if (asset.kind !== 'frontend') continue;
       if (asset.modules.some((module) => affectedModules.includes(module))) selectedFrontend.add(asset.path);
@@ -463,6 +478,9 @@ export function buildRelatedTestPlan(
   if (affectedModules.length >= 6) frontendFull = true;
 
   const commands = [];
+  if (productCapabilityChanged) {
+    commands.push(command('product-capability', 'npm', ['run', 'product:test'], '产品能力注册表、规则或生成/审计脚本发生变化'));
+  }
   if (governanceChanged) {
     commands.push(command('test-governance', 'npm', ['run', 'test:governance'], '测试治理或控制文档发生变化'));
   }

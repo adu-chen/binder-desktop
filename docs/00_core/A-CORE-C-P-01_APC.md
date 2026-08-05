@@ -205,6 +205,10 @@ layer 和 `covers` 由 `governance:generate` 动态派生到 ADUS，不人工复
   若突破 baseline 必须先治理整合或经人类批准调整基线并留痕。
 - `test:governance`、`test:related` 与 `governance:audit` 是 G4/合并硬门；`test:full` 是 G5/G6
   及发布回归入口。自动化通过不替代 G5/G6 的系统验证记录。
+- 产品视角的能力、格式边界、测试证据和系统验证状态登记在
+  `governance.config.json.product_capability_path` 指向的产品能力注册表；它只引用 REQ/RULE/CHAIN/TERM
+  和证据 ID，不复制其权威正文。`product:generate` 生成产品能力沙盘，`product:audit` 检查追溯、正式主链、
+  fallback 与过期证据；相关变更必须经 `test:related` 自动触发 `product:test`。
 
 ## §11 发布与上线节奏
 
@@ -228,6 +232,8 @@ layer 和 `covers` 由 `governance:generate` 动态派生到 ADUS，不人工复
 代码核心链用块注释 `/** @GOV ... */`；测试用 `// covers: BR-*`。
 启用 ADU 的 REQ/REQ_MAP/STATE_MACHINE 与 ADP 的 governance_phase/Phase Gate Check/
 SC-06/SC-07/Task Runtime Report 的 phase_gate / mapping_chain 字段。
+产品能力图谱规范（PCG-SPEC）作为产品视角的派生治理层启用：注册表是唯一人工编辑源，ADUS 和
+产品能力沙盘均为派生视图；PCG 不得反写 REQ、设计规则、测试结果或发布裁决。
 
 ## §13 AI 执行边界与工作风格
 
@@ -257,6 +263,7 @@ APC 被新版取代时旧版改为 X。治理成熟度只能由人类推进。
 |------|------|---------|
 | 2026-07-17 | v1.3 | 记录 1.0 Experience Preview 发布切片决策：完整功能地图不变，全功能开发不暂停；1.0 EP 先发布核心工作流体验版，构建/记忆协同/知识库/模板/自部署预设模型/多模态模型矩阵不作为上线阻断项；§11 增补 1.0 EP 与 alpha/beta/RC/GA 的关系 |
 | 2026-08-01 | v1.4 | TEST-GOVERNANCE-01：§10 落地模块 × 深度 × 风险策略、动态资产、影响选择、文件预算及测试/验证分证据；§12/§13 接入测试治理硬门和 AI 防绕过边界 |
+| 2026-08-02 | v1.5 | PCG-SPEC-01：§10/§12 登记产品能力注册表、产品能力沙盘、追溯/正式主链审计及变更触发的产品能力自测 |
 | 2026-06-09 | v1.0 | bootstrap 初版，经多轮人类确认落地（商业 Open Core / 桌面客户端主体 + 云契约 / 六级门禁 / 状态机驱动 / 上线节奏） |
 | 2026-06-09 | v1.1 | 人类确认 v1 范围：纳入文档级时间轴/历史回溯（WS）与音视频预览（PRV），确认 Excel/PPT 仅预览不编辑；同步 §1 范围与"明确不做"、§4.1 WS/PRV 模块职责 |
 | 2026-07-04 | v1.2 | 术语沿革澄清回写（人类三轮陈述+裁决，module_code 均不变）：§4.1 AG=「代理（Agent）」（代理编辑面板双模式）、DE=「Diff Edit」（无中文名，旧称「对话编辑」退役为 TERM-AG-008 禁用别名）、CBT=「构建（Build）」（弃 Chat Build）；§1/§6/§10 措辞同步（chat-agent→代理编辑/代理回合，Chat↔Build 接管→构建移交/回落） |

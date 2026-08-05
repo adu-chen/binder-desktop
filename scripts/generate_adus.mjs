@@ -16,6 +16,12 @@ import {
   renderTestCapabilityIndex,
 } from './test_governance.mjs';
 import {
+  auditProductCapabilityRegistry,
+  buildCapabilityView,
+  loadProductCapabilityRegistry,
+  renderProductCapabilityIndex,
+} from './product_capability.mjs';
+import {
   displayDeferralRecord,
   displayTriageRecord,
   loadTriageRegistry,
@@ -64,7 +70,7 @@ function collectSourceFiles(dir, results = []) {
     const stat = statSync(full);
     if (stat.isDirectory()) {
       collectSourceFiles(full, results);
-    } else if (entry.endsWith('.ts') || entry.endsWith('.tsx') || entry.endsWith('.rs')) {
+    } else if (entry.endsWith('.ts') || entry.endsWith('.tsx') || entry.endsWith('.rs') || entry.endsWith('.mjs')) {
       results.push(full);
     }
   }
@@ -518,7 +524,7 @@ function contentChanged(oldContent, newContent) {
 
 function main() {
   // 1. 扫描源代码 @GOV 块（前端 src/ 的 .ts/.tsx + Rust 后端 src-tauri/src/ 的 .rs）
-  const srcFiles  = [...collectSourceFiles(SRC), ...collectSourceFiles(SRC_TAURI)];
+  const srcFiles  = [...collectSourceFiles(SRC), ...collectSourceFiles(SRC_TAURI), ...collectSourceFiles(join(PROJECT_ROOT, 'scripts'))];
   const govBlocks = [];
   for (const f of srcFiles) govBlocks.push(...parseGovBlocks(f));
 
@@ -546,6 +552,13 @@ function main() {
   const testInventory = buildTestInventory(ROOT);
   const coverageMap = buildCoverageMapFromInventory(testInventory);
   const testCapabilityIndex = renderTestCapabilityIndex(testInventory);
+  const productCapability = loadProductCapabilityRegistry(ROOT);
+  const productCapabilityAudit = auditProductCapabilityRegistry(ROOT, productCapability.registry);
+  if (productCapabilityAudit.status !== 'passed') {
+    const messages = productCapabilityAudit.findings.map(finding => `${finding.type}: ${finding.message}`).join('\n');
+    throw new Error(`product capability registry is invalid:\n${messages}`);
+  }
+  const productCapabilityIndex = renderProductCapabilityIndex(buildCapabilityView(productCapability.registry), productCapabilityAudit);
 
   const timestamp       = new Date().toISOString();
   const knownChainIds   = new Set(allChains.map(c => c['chain_id']).filter(Boolean));
@@ -659,6 +672,10 @@ ${ruleView}
 ### 测试能力索引
 
 ${testCapabilityIndex}
+
+### 产品能力索引
+
+${productCapabilityIndex}
 
 ### triage 汇总
 

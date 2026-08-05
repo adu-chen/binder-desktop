@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -19,6 +19,12 @@ import {
   deferralKey,
   loadTriageRegistry,
 } from './triage_registry.mjs';
+import {
+  auditProductCapabilityRegistry,
+  buildCapabilityView,
+  renderCapabilityAtlas,
+  writeProductCapabilityArtifacts,
+} from './product_capability.mjs';
 
 describe('Test Governance', () => {
   const { registry } = loadTestGovernance(DEFAULT_ROOT);
@@ -96,6 +102,16 @@ describe('Test Governance', () => {
     expect(plan.status).toBe('passed');
     expect(plan.direct_modules).toEqual(['CORE']);
     expect(plan.commands.map((entry) => entry.id)).toEqual(['test-governance', 'governance-audit']);
+  });
+
+  it('产品能力图谱变更强制触发其自测、治理自测与审计', () => {
+    const plan = buildRelatedTestPlan(DEFAULT_ROOT, ['.governance/product-capability-registry.json'], registry, inventory);
+    expect(plan.status).toBe('passed');
+    expect(plan.direct_modules).toEqual(['CORE']);
+    expect(plan.commands.map((entry) => entry.id)).toEqual(expect.arrayContaining([
+      'product-capability', 'test-governance', 'governance-audit',
+    ]));
+    expect(plan.commands.find((entry) => entry.id === 'product-capability')?.display).toBe('npm run product:test');
   });
 
   it('无法映射的可执行变更失败关闭', () => {
@@ -217,4 +233,84 @@ describe('Triage Registry', () => {
       expect(keys.has('src/other/App.tsx::App')).toBe(false);
     });
   });
+});
+
+// covers: BR-PCG-DATA-001
+// covers: BR-PCG-STATE-001
+// covers: BR-PCG-VERIFY-001
+// covers: BR-PCG-VERIFY-002
+describe('Product Capability Graph', () => {
+  function withCapabilityFixture(callback) {
+    const root = mkdtempSync(join(tmpdir(), 'binder-pcg-'));
+    try {
+      mkdirSync(join(root, 'docs'), { recursive: true });
+      mkdirSync(join(root, 'src'), { recursive: true });
+      writeFileSync(join(root, 'docs', 'authority.md'), `<!-- REQ\nreq_id: REQ-DEMO-001\n-->\n<!-- RULE\nrule_id: BR-PCG-DATA-001\n-->\n<!-- RULE\nrule_id: BR-PCG-STATE-001\n-->\n<!-- RULE\nrule_id: BR-PCG-VERIFY-001\n-->\n<!-- RULE\nrule_id: BR-PCG-VERIFY-002\n-->\n<!-- CHAIN\nchain_id: PCG-GENERATE\n-->\n<!-- TERM\nterm_id: TERM-PCG-001\n-->\nvalidation_id: VAL-DEMO-001\n`);
+      writeFileSync(join(root, 'src', 'demo.test.ts'), 'export {};\n');
+      callback(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  function validCapabilityRegistry() {
+    return {
+      schema_version: 1,
+      product_areas: [{ id: 'AREA-1', name: '文档协作' }],
+      journeys: [{ id: 'JOURNEY-1', area_id: 'AREA-1', name: '编辑文档', stages: ['编辑'] }],
+      capabilities: [{
+        id: 'CAP-1', area_id: 'AREA-1', journey_ids: ['JOURNEY-1'], name: '安全保存', summary: '用户可以安全保存文档。', term_refs: ['TERM-PCG-001'],
+        variants: [{
+          id: 'VAR-1', name: '保存 Markdown', stage: '编辑', actor: 'user', formats: ['markdown'], operation: 'save', support: 'supported', side_effect: true, canonical_chain: 'PCG-GENERATE',
+          requirements: ['REQ-DEMO-001'], rules: ['BR-PCG-DATA-001', 'BR-PCG-STATE-001', 'BR-PCG-VERIFY-001', 'BR-PCG-VERIFY-002'], terms: ['TERM-PCG-001'], acceptance: ['用户保存后可重新打开相同内容。'],
+          evidence: { tests: ['src/demo.test.ts'], validations: ['VAL-DEMO-001'] },
+          state: { definition: 'confirmed', delivery: 'implemented', automation: 'passed', system_validation: 'passed', release: 'available' },
+        }],
+      }],
+    };
+  }
+
+  it('接受具有完整追溯、主链和独立状态的注册表', () => withCapabilityFixture((root) => {
+    const audit = auditProductCapabilityRegistry(root, validCapabilityRegistry());
+    expect(audit.status).toBe('passed');
+    expect(audit.summary).toMatchObject({ product_areas: 1, journeys: 1, capabilities: 1, variants: 1 });
+  }));
+
+  it('拒绝副作用变体缺失正式主链，并拒绝以自动化结果伪造可发布状态', () => withCapabilityFixture((root) => {
+    const registry = validCapabilityRegistry();
+    const variant = registry.capabilities[0].variants[0];
+    delete variant.canonical_chain;
+    variant.state.system_validation = 'pending';
+    const audit = auditProductCapabilityRegistry(root, registry);
+    expect(audit.findings.map((finding) => finding.type)).toEqual(expect.arrayContaining(['PCG_CANONICAL_CHAIN_MISSING', 'PCG_RELEASE_PROMOTION_INVALID']));
+  }));
+
+  it('验证 fallback、证据路径和失效证据', () => withCapabilityFixture((root) => {
+    const registry = validCapabilityRegistry();
+    const variant = registry.capabilities[0].variants[0];
+    variant.fallbacks = [{ fallback_of: 'OTHER-CHAIN', when: '', result: '' }];
+    variant.evidence.tests = ['src/missing.test.ts'];
+    variant.evidence_stale = true;
+    const audit = auditProductCapabilityRegistry(root, registry);
+    expect(audit.findings.map((finding) => finding.type)).toEqual(expect.arrayContaining(['PCG_FALLBACK_INVALID', 'PCG_TEST_EVIDENCE_UNKNOWN', 'PCG_EVIDENCE_STALE']));
+  }));
+
+  it('生成可点击的产品故事地图和格式矩阵', () => withCapabilityFixture((root) => {
+    const registry = validCapabilityRegistry();
+    const audit = auditProductCapabilityRegistry(root, registry);
+    const html = renderCapabilityAtlas(buildCapabilityView(registry), audit);
+    expect(html).toContain('Binder 产品能力沙盘');
+    expect(html).toContain('data-variant-id="VAR-1"');
+    expect(html).toContain('格式支持矩阵');
+    expect(html).toContain('系统验证');
+  }));
+
+  it('只向生成目录写 HTML、覆盖 JSON 与主链报告', () => withCapabilityFixture((root) => {
+    const registry = validCapabilityRegistry();
+    const audit = auditProductCapabilityRegistry(root, registry);
+    writeProductCapabilityArtifacts(root, { product_capability_output_dir: 'generated' }, buildCapabilityView(registry), audit);
+    expect(readFileSync(join(root, 'generated', 'product-capability-atlas.html'), 'utf8')).toContain('VAR-1');
+    expect(JSON.parse(readFileSync(join(root, 'generated', 'product-capability-coverage.json'), 'utf8')).variants).toHaveLength(1);
+    expect(readFileSync(join(root, 'generated', 'product-capability-chain-audit.md'), 'utf8')).toContain('正式主链');
+  }));
 });

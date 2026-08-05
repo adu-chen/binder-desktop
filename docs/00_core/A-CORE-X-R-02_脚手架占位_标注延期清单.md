@@ -21,48 +21,48 @@
 
 symbol: App
 文件: src/shell/App.tsx
-原因: 应用外壳仍只承载组合与视图投影，领域逻辑待 G4 对应实现落点稳定后标注
-承接计划: PI-SYS-05
-退出条件: App 承接业务规则时补 @GOV；若持续为纯展示外壳则从负空间扫描范围确认退出
+原因: 已复核为持久化活动 workspace 的恢复/投影外壳；对应业务边界已稳定
+承接计划: 已关闭（ANNOTATION-DEFERRAL-CLOSURE-01）
+退出条件: 已在 App 补 BR-WS-PERSIST-002-RB-SYS-DATA-MIGRATE-001
 复核日期: 2026-08-01
 需要人类介入: 否
-已解决: 否
+已解决: 是
 
 symbol: Welcome
 文件: src/shell/Welcome.tsx
-原因: 欢迎页仍为入口外壳，尚无独立领域决策所有权
-承接计划: PI-SYS-05
-退出条件: 入口承接已注册规则时补 @GOV；若保持纯展示则确认不要求标注
+原因: 已复核为注册 workspace 的打开、切换和最近列表入口协调者；边界已稳定
+承接计划: 已关闭（ANNOTATION-DEFERRAL-CLOSURE-01）
+退出条件: 已在 Welcome 补 BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-001
 复核日期: 2026-08-01
 需要人类介入: 否
-已解决: 否
+已解决: 是
 
 symbol: Workbench
 文件: src/shell/Workbench.tsx
-原因: 当前只负责工作台视图分区与导航投影，不拥有领域状态决策
-承接计划: PI-SYS-05
-退出条件: 工作台承接业务规则时补 @GOV；若保持视图层职责则确认不要求标注
+原因: 已复核为活动 workspace 绑定面板和状态机投影监听的协调边界；职责已稳定
+承接计划: 已关闭（ANNOTATION-DEFERRAL-CLOSURE-01）
+退出条件: 已在 Workbench 补 BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-002
 复核日期: 2026-08-01
 需要人类介入: 否
-已解决: 否
+已解决: 是
 
 symbol: useWorkspaceShell
 文件: src/store/workspaceShell.ts
-原因: 当前为 workspace 前端视图投影骨架，尚未独立拥有领域规则
-承接计划: PI-SYS-05
-退出条件: 承接 workspace 领域规则时补 @GOV，或由对应已标注 owner 取代后关闭记录
+原因: 已复核为后端 workspace 控制态的内存投影；不得自行决定活动 workspace
+承接计划: 已关闭（ANNOTATION-DEFERRAL-CLOSURE-01）
+退出条件: 已在 workspaceShell 补 BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-004
 复核日期: 2026-08-01
 需要人类介入: 否
-已解决: 否
+已解决: 是
 
 symbol: openWorkspace
 文件: src/services/workspaceService.ts
-原因: 入口仍处于脚手架过渡，尚未按最终 workspace 链路确定其领域规则 owner
-承接计划: PI-WS-01
-退出条件: 链路实现稳定后补 @GOV 并映射已注册规则
+原因: 已复核为目录选择、受控 IPC 打开、下游会话清理与恢复的活动 workspace 协调入口
+承接计划: 已关闭（ANNOTATION-DEFERRAL-CLOSURE-01）
+退出条件: 已在 openWorkspace 补 BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-005
 复核日期: 2026-08-01
 需要人类介入: 否
-已解决: 否
+已解决: 是
 
 ## §3 已关闭的旧登记
 
@@ -73,6 +73,8 @@ symbol: openWorkspace
 
 - 2026-07-02：原登记逐项复核，Workbench 的布局扩展仍属视图层导航态，当时无可清退项。
 - 2026-08-01：迁移为结构化延期清单；移除不在扫描范围内的 `WorkspaceRefView`，其余记录改为精确匹配。
+- 2026-08-01：`ANNOTATION-DEFERRAL-CLOSURE-01` 逐项复核。五个符号均已具备稳定的活动 workspace
+  控制态投影或协调职责，已映射既有 `BR-WS-PERSIST-002`；未新增规则，也未改变运行时行为。
 
 ## 变更记录
 
@@ -81,3 +83,4 @@ symbol: openWorkspace
 | 2026-06-22 | v1.0 | 初版：登记 6 个脚手架占位符号，供旧版文本匹配 audit 暂缓告警 |
 | 2026-07-02 | v1.1 | 新增 G-9 复核记录：无可清退项 |
 | 2026-08-01 | v2.0 | 迁移为标注延期清单：以文件 + symbol 精确匹配；`WorkspaceRefView` 因非可执行导出关闭；不再作为 triage 报告 |
+| 2026-08-01 | v2.1 | 清退 5 条到期延期：App、Welcome、Workbench、workspaceShell、openWorkspace 均映射既有 BR-WS-PERSIST-002；不改变功能或测试行为 |
