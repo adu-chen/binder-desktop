@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { activeTableSnapshot, moveActiveTable } from "../../services/edTableOps";
+import { normalizeTableCellShading } from "./extensions/TableCellShading";
 
 function tableElementFromNode(node: Node | null): HTMLElement | null {
   const element = node instanceof Element ? node : node?.parentElement;
@@ -37,6 +38,8 @@ interface MoveControlView {
   anchor: HTMLElement;
   moveDirections: Array<"up" | "down">;
   tableId: string | null;
+  capabilities: NonNullable<ReturnType<typeof activeTableSnapshot>>["capabilities"];
+  headerRow: boolean;
 }
 
 /**
@@ -46,7 +49,7 @@ interface MoveControlView {
  * chain:    ED-EDIT
  * rules:    BR-ED-DATA-007
  * term_ref: TERM-ED-007
- * boundary: in=ActiveTableSelectionAndTableViewWrapper | out=WrapperAnchoredTemporaryTableControls(moveOneBlockOrDeleteViaControlledEditorCommand) | does_not=calculate_cross_container_coordinates_or_enable_drag
+ * boundary: in=ActiveTableSelectionAndTableViewWrapper | out=WrapperAnchoredTemporaryTableControls(structureOrCellShadingOrDocumentFlowMoveOrDeleteViaControlledEditorCommand) | does_not=calculate_cross_container_coordinates_or_enable_drag
  */
 export function TableMoveControls({
   editor,
@@ -70,6 +73,8 @@ export function TableMoveControls({
           anchor,
           moveDirections: snapshot?.moveDirections ?? [],
           tableId: snapshot?.tableId ?? null,
+          capabilities: snapshot?.capabilities ?? [],
+          headerRow: snapshot?.headerRow ?? false,
         }
       : null);
   }, [editor, enabled]);
@@ -115,6 +120,12 @@ export function TableMoveControls({
     if (removed) setView(null);
     else requestAnimationFrame(update);
   };
+  const supports = (capability: MoveControlView["capabilities"][number]) => view.capabilities.includes(capability);
+  const safeEditor = editor as Partial<Editor> | null;
+  const tableCan = safeEditor?.can?.() as { mergeCells?: () => boolean; splitCell?: () => boolean } | undefined;
+  const activeCellShading = normalizeTableCellShading(
+    safeEditor?.getAttributes?.(safeEditor.isActive?.("tableHeader") ? "tableHeader" : "tableCell").backgroundColor,
+  );
 
   return createPortal(
     <div
@@ -127,6 +138,80 @@ export function TableMoveControls({
         event.stopPropagation();
       }}
     >
+      <span className="ed-context-label">表格</span>
+      <button
+        type="button"
+        aria-label="上方插行"
+        title="上方插行"
+        disabled={!supports("insert_row")}
+        onClick={() => editor?.chain().focus().addRowBefore().run()}
+      >
+        +行
+      </button>
+      <button
+        type="button"
+        aria-label="右侧插列"
+        title="右侧插列"
+        disabled={!supports("insert_column")}
+        onClick={() => editor?.chain().focus().addColumnAfter().run()}
+      >
+        +列
+      </button>
+      <button
+        type="button"
+        aria-label="删除当前行"
+        title="删除当前行"
+        disabled={!supports("delete_row")}
+        onClick={() => editor?.chain().focus().deleteRow().run()}
+      >
+        −行
+      </button>
+      <button
+        type="button"
+        aria-label="删除当前列"
+        title="删除当前列"
+        disabled={!supports("delete_column")}
+        onClick={() => editor?.chain().focus().deleteColumn().run()}
+      >
+        −列
+      </button>
+      <button
+        type="button"
+        aria-label="切换表头行"
+        title={view.headerRow ? "取消表头行" : "设为表头行"}
+        disabled={!supports("set_header_row")}
+        onClick={() => editor?.chain().focus().toggleHeaderRow().run()}
+      >
+        表头
+      </button>
+      <button
+        type="button"
+        aria-label="合并选中单元格"
+        title="合并矩形选区内的单元格"
+        disabled={!supports("merge_cells") || !(tableCan?.mergeCells?.() ?? false)}
+        onClick={() => editor?.chain().focus().mergeCells().run()}
+      >
+        合并
+      </button>
+      <button
+        type="button"
+        aria-label="拆分当前单元格"
+        title="拆分当前合并单元格"
+        disabled={!supports("split_cell") || !(tableCan?.splitCell?.() ?? false)}
+        onClick={() => editor?.chain().focus().splitCell().run()}
+      >
+        拆分
+      </button>
+      <label className="ed-context-color" title="设置所选单元格底纹">
+        <span>底纹</span>
+        <input
+          type="color"
+          aria-label="单元格底纹颜色"
+          value={activeCellShading ?? "#FFF2CC"}
+          disabled={!supports("set_cell_background")}
+          onChange={(event) => editor?.chain().focus().setCellAttribute("backgroundColor", event.target.value.toUpperCase()).run()}
+        />
+      </label>
       <button
         type="button"
         aria-label="表格上移一块"

@@ -42,6 +42,7 @@ import {
   saveMarkdownDocument,
 } from "../../services/edService";
 import { importProjectImage, importProjectImageData } from "../../services/docService";
+import { exportDoc } from "../../services/prvService";
 import { serializeMarkdownDocument, parseMarkdownForEditing } from "./markdown/markdownCodec";
 import {
   registerEditor,
@@ -135,6 +136,13 @@ function jumpToLine(editor: NonNullable<ReturnType<typeof useEditor>>, line: num
   let pos = 1; // doc 起始内偏移
   for (let j = 0; j < idx; j++) pos += doc.child(j).nodeSize;
   editor.chain().focus().setTextSelection(pos).scrollIntoView().run();
+}
+
+function exportTargetsForPath(relPath: string | null): Array<"pdf" | "docx" | "md"> {
+  const ext = relPath?.split(".").pop()?.toLowerCase();
+  if (ext === "md" || ext === "markdown" || ext === "txt") return ["docx"];
+  if (ext === "docx" || ext === "doc") return ["pdf", "md"];
+  return [];
 }
 
 /** 纯文本或源码保护 Markdown → ProseMirror doc（每行一段落，原文可编辑）。 */
@@ -1513,6 +1521,14 @@ export function Editor() {
         return saveDocument(serialize(editor, "html_file", "html", openPath), override);
       }
       if (editFormat === "markdown" && contentFormat === "html") {
+        if (sourceView) {
+          const source = sourceViewTextRef.current;
+          const parsed = parseMarkdownForEditing(source);
+          if (!parsed.ok || !parsed.html) {
+            return { ok: false as const, message: "Markdown 源码包含当前富文本模式无法承载的语法，请保持源码模式后另存" };
+          }
+          return saveMarkdownDocument(source, parsed.html, "html", override);
+        }
         const candidate = serializeMarkdownDocument(editor.getJSON());
         if (!candidate.ok) return { ok: false as const, message: candidate.message };
         return saveMarkdownDocument(candidate.markdown, editor.getHTML(), "html", override);
@@ -1526,6 +1542,19 @@ export function Editor() {
       if (confirmed) return saveSerialized(true);
     }
     return result;
+  };
+
+  const exportCurrent = async (format: "pdf" | "docx" | "md") => {
+    const saved = await saveCurrent();
+    if (!saved.ok) return { ok: false, message: saved.message ?? "请先完成保存后再导出" };
+    if (!openPath) return { ok: false, message: "没有可导出的文档" };
+    try {
+      const destination = await exportDoc(openPath, format);
+      return { ok: true, message: `已导出：${destination}` };
+    } catch (error) {
+      const message = error as { message?: string };
+      return { ok: false, message: message.message ?? "导出失败" };
+    }
   };
 
   // 关闭前处理（APP-CLOSE-DIFF-LIFECYCLE-01）复用本编辑器的保存路由：注册当前 saveCurrent，
@@ -1873,6 +1902,17 @@ export function Editor() {
         editFormat={editFormat}
         sourceView={sourceView}
         onToggleSourceView={openPath ? () => edStore.setSourceView(openPath, !sourceView) : undefined}
+        sourceText={sourceView ? sourceViewText : undefined}
+        onSourceTextChange={(text) => {
+          setSourceViewText(text);
+          sourceViewTextRef.current = text;
+          edStore.markDirty();
+        }}
+        onJumpToLine={(line) => {
+          if (editor) jumpToLine(editor, line);
+        }}
+        exportTargets={exportTargetsForPath(openPath)}
+        onExport={exportCurrent}
       />
       <div
         className={`editor-paper${imageDropActive ? " editor-paper-image-drop-active" : ""}`}

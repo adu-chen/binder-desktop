@@ -23,6 +23,10 @@ vi.mock("../../services/edImageOps", () => ({
   deleteActiveImage: vi.fn(() => true),
 }));
 
+vi.mock("../../services/edLocate", () => ({
+  triggerActiveSave: vi.fn(() => Promise.resolve({ ok: true })),
+}));
+
 import { EditorStatusBar } from "./EditorStatusBar";
 import { EditorToolbar } from "./EditorToolbar";
 import {
@@ -33,6 +37,7 @@ import {
 import { ImageMoveControls } from "./ImageMoveControls";
 import { activeTableSnapshot, moveActiveTable } from "../../services/edTableOps";
 import { TableMoveControls } from "./TableMoveControls";
+import { triggerActiveSave } from "../../services/edLocate";
 
 // Migrated intact from src/components/ed/EditorStatusBar.test.tsx
 {
@@ -68,40 +73,21 @@ describe("EditorStatusBar · DOCX 样式风险告知", () => {
 {
 afterEach(cleanup);
 
-// covers: BR-ED-DATA-007
-describe("EditorToolbar · TableCellShading", () => {
-  it("表格上下文提供底纹颜色与清除入口，并通过 setCellAttribute 修改所选单元格", () => {
-    const calls: Array<[string, ...unknown[]]> = [];
+describe("EditorToolbar · 格式工具集", () => {
+  it("纯文本模式保留两行工具栏，保存复用活动编辑器路由且不渲染富文本或对象操作", async () => {
     const chain: Record<string, (...args: unknown[]) => unknown> = {};
-    const fluent = (name: string) => (...args: unknown[]) => {
-      calls.push([name, ...args]);
-      return chain;
-    };
-    for (const name of [
-      "focus", "setCellAttribute", "addRowBefore", "addRowAfter", "addColumnBefore", "addColumnAfter",
-      "deleteRow", "deleteColumn", "toggleHeaderRow", "mergeCells", "splitCell", "deleteTable",
-      "undo", "redo", "setParagraph", "toggleHeading", "unsetFontSize", "setFontSize", "toggleBold",
-      "toggleItalic", "toggleUnderline", "toggleStrike", "toggleSuperscript", "toggleSubscript",
-      "setColor", "toggleHighlight", "toggleBulletList", "toggleOrderedList", "toggleBlockquote",
-      "toggleCodeBlock", "setTextAlign", "insertTable",
-    ]) chain[name] = fluent(name);
+    for (const name of ["focus", "undo", "redo"]) chain[name] = () => chain;
     chain.run = () => true;
-
     const editor = {
       chain: () => chain,
-      isActive: (name: string) => name === "table",
-      // 锚点本身无底纹时，多单元格选区仍可能包含有底纹单元格；清除入口必须保持可用。
-      getAttributes: (name: string) => name === "tableCell" ? { backgroundColor: null } : {},
-      can: () => ({
-        undo: () => true,
-        redo: () => true,
-        mergeCells: () => true,
-        splitCell: () => true,
-      }),
+      isActive: () => false,
+      getAttributes: () => ({}),
+      can: () => ({ undo: () => true, redo: () => true }),
       on: vi.fn(),
       off: vi.fn(),
     } as unknown as Editor;
-
+    const jumpToLine = vi.fn();
+    const exportDocument = vi.fn(() => Promise.resolve({ ok: true, message: "已导出：note.docx" }));
     render(
       <EditorToolbar
         editor={editor}
@@ -109,17 +95,59 @@ describe("EditorToolbar · TableCellShading", () => {
         onZoomIn={vi.fn()}
         onZoomOut={vi.fn()}
         onZoomReset={vi.fn()}
+        editFormat="text"
+        onJumpToLine={jumpToLine}
+        exportTargets={["docx"]}
+        onExport={exportDocument}
       />,
     );
+    expect(screen.getByLabelText("编辑器工具")).toBeTruthy();
+    expect(screen.getByLabelText("文档工具").textContent).toContain("纯文本模式");
+    expect(screen.queryByLabelText("插入内容")).toBeNull();
+    expect(screen.getAllByLabelText("查找和替换").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("跳转行号").length).toBeGreaterThan(0);
+    expect(screen.getByTitle("导出为 DOCX")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("查找下一处"));
+    expect(screen.getByText("请输入查找内容")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("跳转行号输入"), { target: { value: "3" } });
+    fireEvent.click(screen.getByTitle("跳转到行号"));
+    expect(jumpToLine).toHaveBeenCalledWith(3);
+    fireEvent.click(screen.getByRole("button", { name: "保存 ⌘S" }));
+    await waitFor(() => expect(triggerActiveSave).toHaveBeenCalledOnce());
+    expect(screen.getByText("已保存")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("导出为 DOCX"));
+    await waitFor(() => expect(exportDocument).toHaveBeenCalledWith("docx"));
+    expect(screen.getByText("已导出：note.docx")).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText("单元格底纹颜色"), { target: { value: "#ff0000" } });
-    expect(calls).toContainEqual(["setCellAttribute", "backgroundColor", "#FF0000"]);
-
-    fireEvent.click(screen.getByRole("button", { name: "清除所选单元格底纹" }));
-    expect(calls).toContainEqual(["setCellAttribute", "backgroundColor", null]);
-    expect(screen.queryByRole("button", { name: "表格上移一块" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "表格下移一块" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "删除表格" })).toBeNull();
+    cleanup();
+    const transaction = { insertText: vi.fn() };
+    transaction.insertText.mockImplementation(() => transaction);
+    const richChain: Record<string, (...args: unknown[]) => unknown> = {};
+    for (const name of ["focus", "undo", "redo", "setTextSelection", "scrollIntoView"]) richChain[name] = () => richChain;
+    richChain.run = () => true;
+    const dispatch = vi.fn();
+    const searchableEditor = {
+      chain: () => richChain,
+      commands: { focus: vi.fn() },
+      state: {
+        selection: { from: 1, to: 1 },
+        tr: transaction,
+        doc: { descendants: (visit: (node: { isText: boolean; text: string }, pos: number) => boolean) => visit({ isText: true, text: "alpha alpha" }, 1) },
+      },
+      view: { dispatch },
+      isActive: () => false,
+      getAttributes: () => ({}),
+      can: () => ({ undo: () => true, redo: () => true }),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as Editor;
+    render(<EditorToolbar editor={searchableEditor} zoom={1} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onZoomReset={vi.fn()} editFormat="text" />);
+    fireEvent.change(screen.getByLabelText("查找内容"), { target: { value: "alpha" } });
+    fireEvent.change(screen.getByLabelText("替换内容"), { target: { value: "beta" } });
+    fireEvent.click(screen.getByTitle("替换全部匹配"));
+    expect(transaction.insertText).toHaveBeenNthCalledWith(1, "beta", 7, 12);
+    expect(transaction.insertText).toHaveBeenNthCalledWith(2, "beta", 1, 6);
+    expect(dispatch).toHaveBeenCalledWith(transaction);
   });
 
   it("选中图片时不再显示无法跨 BDocx 持久化的 inline/block 切换入口", () => {
@@ -130,6 +158,12 @@ describe("EditorToolbar · TableCellShading", () => {
       "toggleSubscript", "setColor", "toggleHighlight", "toggleBulletList", "toggleOrderedList",
       "toggleBlockquote", "toggleCodeBlock", "setTextAlign", "insertTable",
     ]) chain[name] = () => chain;
+    const toggleHighlight = vi.fn(() => chain);
+    const toggleStrike = vi.fn(() => chain);
+    const unsetHighlight = vi.fn(() => chain);
+    chain.toggleHighlight = toggleHighlight;
+    chain.toggleStrike = toggleStrike;
+    chain.unsetHighlight = unsetHighlight;
     chain.run = () => true;
     const editor = {
       chain: () => chain,
@@ -152,6 +186,20 @@ describe("EditorToolbar · TableCellShading", () => {
 
     expect(screen.queryByTitle("切换为行内嵌入")).toBeNull();
     expect(screen.queryByTitle("切换为独占块")).toBeNull();
+    expect(screen.getByTitle("高亮")).toBeTruthy();
+    expect(screen.getAllByLabelText("文字颜色")).toHaveLength(1);
+    fireEvent.click(screen.getByTitle("删除线"));
+    expect(toggleStrike).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("高亮底色")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("自定义高亮底色"), { target: { value: "#00ff00" } });
+    expect(toggleHighlight).toHaveBeenCalledWith({ color: "#00ff00" });
+    fireEvent.click(screen.getByTitle("清除高亮"));
+    expect(unsetHighlight).toHaveBeenCalledOnce();
+    expect(screen.getByTitle("上标")).toBeTruthy();
+    expect(screen.getByTitle("下标")).toBeTruthy();
+    expect(screen.getByTitle("插入分隔线")).toBeTruthy();
+    expect(screen.getByTitle("降低列表层级")).toBeTruthy();
+    expect(screen.getByTitle("提高列表层级")).toBeTruthy();
   });
 
   it("BDocx 禁止远程 URL 插图并提示使用受控本地拖入", () => {
@@ -187,6 +235,42 @@ describe("EditorToolbar · TableCellShading", () => {
       name: "请将本地 PNG/JPEG 图片拖入文档",
     }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("弹出组在外部指针或焦点激活时关闭，但保持组内交互", () => {
+    const chain: Record<string, (...args: unknown[]) => unknown> = {};
+    for (const name of ["focus", "undo", "redo"]) chain[name] = () => chain;
+    chain.run = () => true;
+    const editor = {
+      chain: () => chain,
+      isActive: () => false,
+      getAttributes: () => ({}),
+      can: () => ({ undo: () => true, redo: () => true }),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as Editor;
+
+    render(<EditorToolbar editor={editor} zoom={1} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onZoomReset={vi.fn()} editFormat="text" />);
+
+    const findMenu = () => {
+      const summary = screen.getAllByLabelText("查找和替换").find((element) => element.tagName === "SUMMARY");
+      if (!summary) throw new Error("未找到查找菜单开关");
+      return summary.closest("details") as HTMLDetailsElement;
+    };
+
+    fireEvent.click(screen.getAllByLabelText("查找和替换").find((element) => element.tagName === "SUMMARY")!);
+    expect(findMenu().open).toBe(true);
+
+    fireEvent.pointerDown(screen.getByLabelText("查找内容"));
+    expect(findMenu().open).toBe(true);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "保存 ⌘S" }));
+    expect(findMenu().open).toBe(false);
+
+    fireEvent.click(screen.getAllByLabelText("查找和替换").find((element) => element.tagName === "SUMMARY")!);
+    expect(findMenu().open).toBe(true);
+    fireEvent.focusIn(document.body);
+    expect(findMenu().open).toBe(false);
+  });
 });
 }
 
@@ -207,10 +291,20 @@ describe("ImageMoveControls", () => {
     imageView.className = "ed-img-view selected";
     viewDom.append(imageView);
     document.body.append(viewDom);
+    const setNodeMarkup = vi.fn();
+    const transaction = { setNodeMarkup };
+    setNodeMarkup.mockReturnValue(transaction);
+    const dispatch = vi.fn();
+    const imageParagraph = { attrs: { blockId: "image-block" }, type: { name: "paragraph" } };
     const editor = {
+      state: {
+        doc: { resolve: () => ({ parent: imageParagraph, depth: 1, before: () => 0 }) },
+        tr: transaction,
+      },
       view: {
         dom: viewDom,
         nodeDOM: () => imageView,
+        dispatch,
       },
       on: vi.fn(),
       off: vi.fn(),
@@ -224,6 +318,14 @@ describe("ImageMoveControls", () => {
     expect(group.style.left).toBe("");
     expect(group.getAttribute("data-block-id")).toBe("image-block");
     expect(group.getAttribute("data-standalone")).toBe("true");
+    expect(screen.getByRole("button", { name: "编辑图片替代文本" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "恢复图片原始宽度" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "图片左对齐" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "图片居中" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "图片右对齐" })).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", { name: "图片居中" }));
+    expect(setNodeMarkup).toHaveBeenCalledWith(0, undefined, { blockId: "image-block", textAlign: "center" });
+    expect(dispatch).toHaveBeenCalledWith(transaction);
     expect(screen.getByRole("button", { name: "图片上移一块" })).toHaveProperty("disabled", false);
     expect(screen.getByRole("button", { name: "图片下移一块" })).toHaveProperty("disabled", true);
 
@@ -261,6 +363,7 @@ describe("ImageMoveControls", () => {
 
     expect(screen.getByRole("button", { name: "图片上移一块" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "图片下移一块" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "图片居中" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "删除图片" })).toHaveProperty("disabled", false);
   });
 });
@@ -298,6 +401,8 @@ describe("TableMoveControls", () => {
     const chain: Record<string, (...args: unknown[]) => unknown> = {};
     chain.focus = () => chain;
     chain.deleteTable = () => chain;
+    chain.mergeCells = () => chain;
+    chain.splitCell = () => chain;
     chain.run = run;
     const editor = {
       state: {
@@ -317,6 +422,7 @@ describe("TableMoveControls", () => {
         nodeDOM: () => wrapper,
       },
       chain: () => chain,
+      can: () => ({ mergeCells: () => true, splitCell: () => true }),
       on: vi.fn(),
       off: vi.fn(),
     } as unknown as Editor;
@@ -333,6 +439,11 @@ describe("TableMoveControls", () => {
     expect(group.style.left).toBe("");
     const up = screen.getByRole("button", { name: "表格上移一块" }) as HTMLButtonElement;
     const down = screen.getByRole("button", { name: "表格下移一块" }) as HTMLButtonElement;
+    expect(screen.getByRole("button", { name: "上方插行" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "右侧插列" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "合并选中单元格" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "拆分当前单元格" })).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("单元格底纹颜色")).toBeTruthy();
     expect(up.disabled).toBe(false);
     expect(down.disabled).toBe(true);
 
