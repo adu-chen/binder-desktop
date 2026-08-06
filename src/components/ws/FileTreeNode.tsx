@@ -68,8 +68,8 @@ interface FileTreeNodeProps {
   stateOverride?: Record<string, FileNodeState>;
   /** 后续 PI 注入的待裁决计数，按 path 查（pending_diff badge）。 */
   pendingCount?: Record<string, number>;
-  /** 右键文件节点（重命名/删除菜单，PI-FE-13）。 */
-  onContextMenu?: (path: string, x: number, y: number) => void;
+  /** 右键节点（文件：重命名/导出/删除/复制路径；目录：在此新建文件。PI-FE-13 迁移，CTX-MENU-01）。 */
+  onContextMenu?: (path: string, x: number, y: number, kind: "dir" | "file") => void;
   /** 预览类型（docx/Excel/PPT/媒体/图片）点击 → 只读预览（PI-FE-22/23/24）。 */
   onPreviewFile?: (path: string) => void;
   /** 原生 docx「创建草稿并编辑」按钮（2026-08-04）：跳过预览直接创建草稿编辑；草稿已存在则打开既有草稿。 */
@@ -93,7 +93,16 @@ export function FileTreeNode({
   if (node.kind === "dir") {
     return (
       <div className="ftn-dir">
-        <button className="ftn-row ftn-dir-row" style={indent} onClick={() => setExpanded((v) => !v)}>
+        <button
+          className="ftn-row ftn-dir-row"
+          style={indent}
+          onClick={() => setExpanded((v) => !v)}
+          onContextMenu={(e) => {
+            if (!onContextMenu) return;
+            e.preventDefault();
+            onContextMenu(node.path, e.clientX, e.clientY, "dir");
+          }}
+        >
           <span className="ftn-caret">{expanded ? "▾" : "▸"}</span>
           <span className="ftn-name">{node.name}</span>
         </button>
@@ -141,7 +150,7 @@ export function FileTreeNode({
       onContextMenu={(e) => {
         if (!onContextMenu) return;
         e.preventDefault();
-        onContextMenu(node.path, e.clientX, e.clientY);
+        onContextMenu(node.path, e.clientX, e.clientY, "file");
       }}
       title={previewable ? `${node.path}（只读预览）` : node.path}
     >

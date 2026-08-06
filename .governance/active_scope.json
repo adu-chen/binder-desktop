@@ -1,32 +1,41 @@
 {
-  "scope_id": "PRV-PREVIEW-OPT-01",
+  "scope_id": "CTX-MENU-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "预览链路优化（缓存落盘 + asset 授权）+ 本地打开 + 背景统一（不含渲染层）",
+  "title": "右键菜单优化：统一 ContextMenu 组件 + 全目标面接入（零新增后端命令）",
   "status": "SCOPED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/PRV-PREVIEW-OPT-01.md",
+  "issue_trace": ".governance/issues/CTX-MENU-01.md",
   "stop_condition": null,
-  "reason": "人类确认方案（2026-08-05）：不更换 PDF 渲染层（iframe + WKWebView，WebKit 悬浮工具栏接受现状）；执行预览链路优化（PDF 缓存落盘 + asset 协议授权替换 JSON number[] 字节回传）、本地打开（prv.open_external）、预览背景色统一。LO 转换链/字体补丁/FontPlan/manifest 校验链不动。本 Scope 替换 PRV-TOOLBAR-ADAPTIVE-01 活动锁（该锁工作已完成）。",
+  "reason": "人类 2026-08-06 下达实现指令，方案 v2 经多轮确认（简化方案：统一 ContextMenu + 键盘可达 + 视口钳制；覆盖文件树文件/目录、编辑器选区/光标（含剪切/复制/粘贴）、DiffCard、表格/图片、标签栏；零新增后端命令；不新增测试文件；菜单栏 1.0 不实现已记录 L-06 v1.1）。本 Scope 替换 PRV-PREVIEW-OPT-01 残留活动锁（该任务已提交 1d46d75）。",
   "objectives": [
-    "后端：prv::render_preview 改为 PDF 落盘缓存（app_data_dir/preview-cache，键=路径+size+mtime，命中跳过 LO 转换，惰性过期清理），返回路径；lib.rs route_preview 返回 { format, abs_path } + 逐文件 asset 授权；新增 prv.open_external（系统默认应用打开，X-FORBID-004 守界）",
-    "前端：prvService.previewDoc 返回 convertFileSrc asset URL，PrvPanel pdf iframe 直接 src=asset URL（去 blob revoke）；新增 openExternal",
-    "PrvToolbar pdf 模式新增本地打开按钮 + 测试扩展",
-    "styles.css：prv-body 背景 --bg-sunken → --bg-page",
-    "治理：A-PRV-M-T-01/A-PRV-I-P-01 回写；test_governance.test.mjs 过期断言修复（人类已批准）；generate/test:related/audit 通过"
+    "新增 src/components/shell/ContextMenu.tsx（SYS 纯展示组件）：items(x,y,onClose)，Esc/方向键/Enter 键盘可达、视口钳制、backdrop 关闭、role/aria、disabled 由调用方投影传入",
+    "styles.css 新增 .ctx-menu 基线（提升自 .ftn-menu token）",
+    "文件树：文件节点右键迁移（重命名/导出/删除 + 复制路径）；目录节点新增「在此新建文件」（ws.create_doc 子目录路径）",
+    "编辑器右键：有选区→剪切/复制/局部修改；无选区→粘贴/辅助续写（AG-ASSIST 门禁前置复用）；粘贴经 clipboard.readText + insertContent（WKWebView 实测项）",
+    "DiffCard 右键：pending 态接受/拒绝（de.accept/reject_diff）",
+    "表格/图片右键：删除表格/删除图片（ED 受控接口）",
+    "TabStrip 标签右键：关闭标签（tabsStore.close，视图层导航态）",
+    "治理：A-SYS-C-T-02 右键菜单交互小节 + 变更记录回写；测试并入既有文件（ShellComponents/WorkspaceUI/EditorCore/DiffReview）；test:related + governance:audit 通过"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/PRV-PREVIEW-OPT-01.md",
-    "src-tauri/src/prv/mod.rs",
-    "src-tauri/src/lib.rs",
-    "src/components/prv/PrvPanel.tsx",
-    "src/components/prv/PrvToolbar.tsx",
-    "src/components/prv/PrvToolbar.test.tsx",
-    "src/services/prvService.ts",
+    ".governance/issues/CTX-MENU-01.md",
+    "src/components/shell/ContextMenu.tsx",
     "src/styles.css",
-    "docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md",
-    "docs/01_modules/PRV/A-PRV-I-P-01_预览输出接口协议.md",
+    "src/components/ws/FileTreeNode.tsx",
+    "src/components/ws/FileTree.tsx",
+    "src/components/ed/Editor.tsx",
+    "src/components/ed/TableMoveControls.tsx",
+    "src/components/ed/ImageMoveControls.tsx",
+    "src/components/de/DiffCard.tsx",
+    "src/components/shell/TabStrip.tsx",
+    "src/components/shell/ShellComponents.test.tsx",
+    "src/components/ws/WorkspaceUI.test.tsx",
+    "src/components/ed/EditorCore.test.tsx",
+    "src/components/de/DiffReview.test.tsx",
+    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
+    "docs/00_core/A-CORE-X-L-06_1.0体验版发布范围与验收计划.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
     "scripts/test_governance.test.mjs"
   ],
@@ -39,49 +48,45 @@
     "scripts/test_governance.mjs",
     "scripts/generate_adus.mjs",
     "scripts/audit_taskflow_governance.mjs",
-    "src-tauri/src/doc/lo_worker.rs",
-    "src-tauri/src/doc/libreoffice_runtime.rs",
-    "src-tauri/src/doc/font_trace.rs",
-    "src-tauri/src/doc/tool_runtime.rs",
-    "src-tauri/resources/libreoffice/**",
-    "patches/libreoffice/**"
+    "src-tauri/src/**",
+    "src/services/closeService.ts",
+    "src/services/wsService.ts",
+    "src/services/deService.ts",
+    "src/services/prvService.ts",
+    "src/services/agService.ts"
   ],
   "constraints": [
-    "BR-PRV-DATA-001 只读硬边界不弱化：预览无编辑交互、无文档模型变更、无脏态",
-    "缓存是 DOC 预览链产物的复用，不绕过 X-SEQ-004；缓存目录限 app_data_dir，不在 workspace",
-    "本地打开（prv.open_external）仅系统默认应用打开，不写回、落点限 workspace 内（X-FORBID-004）",
-    "asset 授权逐文件最小暴露（同 prv.media_src 纪律）",
-    "LO 转换链/字体补丁/FontPlan/manifest 校验链一律不动",
-    "渲染层不更换：iframe + WKWebView 保持，WebKit 悬浮工具栏按人类决策接受现状",
-    "引入预览缓存编排触发 A-PRV-M-T-01 §5 状态机豁免失效条件，复核结论维持豁免，留痕于设计文档与 Runtime Report"
+    "菜单启停/disabled 态由调用方从既有投影 store 计算传入，ContextMenu 不持有业务状态（X-FORBID-007）",
+    "编辑器复制/剪切经 TipTap 受控命令；粘贴经 clipboard.readText→insertContent（WKWebView 可用性列为 G4 实测项，失败则菜单项禁用保留快捷键）",
+    "目录右键仅「在此新建文件」；目录重命名/删除无命令面，1.0 不提供（明示后续增强）",
+    "AI 项（局部修改/辅助续写）复用 ag.request_assist 门禁前置 + 静默语义（BR-AG-STATE-003），不新增模型调用面",
+    "后端零改动：全部动作复用既有命令（ws.*/prv.export/de.*/ag.request_assist）与视图层导航态（tabsStore）",
+    "不新增测试文件：用例并入 ShellComponents/WorkspaceUI/EditorCore/DiffReview 既有测试文件（SYS/WS baseline 冻结）",
+    "原生菜单栏 1.0 不实现（人类决策，记录于 L-06 §4/v1.1），本 Scope 不包含菜单栏任何工作"
   ],
   "acceptance_criteria": [
-    "prv.preview 不再回传 JSON number[]：返回缓存 PDF 路径 + asset 授权，iframe 直接加载",
-    "同文件重复预览命中缓存（不重复调用 LO 转换）",
-    "PrvToolbar pdf 模式含本地打开按钮且回调可用；预览背景与应用统一",
-    "前端测试与 Rust 缓存/command 测试通过；governance:generate 与 governance:audit 通过",
-    "LO 相关测试与资源未被改动；渲染层（iframe）保持"
+    "ContextMenu 组件：Esc 关闭、↑/↓ 导航、Enter 触发、backdrop 关闭、视口钳制、role/aria 可达",
+    "文件树文件右键含重命名/导出（按源类型）/删除/复制路径；目录右键含「在此新建文件」，均不回归既有行为",
+    "编辑器右键：有选区菜单=剪切/复制/局部修改；无选区菜单=粘贴/辅助续写；AI 项门禁 disabled 投影",
+    "DiffCard pending 态右键可接受/拒绝；表格/图片右键可删除；标签右键可关闭",
+    "governance:audit 通过；test:related（changed_files）通过；C-T-02 变更记录回写"
   ],
   "validation_commands": [
-    "npx vitest run src/components/prv/PrvToolbar.test.tsx",
-    "cargo test --manifest-path src-tauri/Cargo.toml prv::",
-    "npm run test:related -- --files src-tauri/src/prv/mod.rs src-tauri/src/lib.rs src/components/prv/PrvPanel.tsx src/components/prv/PrvToolbar.tsx src/components/prv/PrvToolbar.test.tsx src/services/prvService.ts src/styles.css",
-    "npm run governance:generate",
+    "npm run test:related -- --files src/components/shell/ContextMenu.tsx src/styles.css src/components/ws/FileTreeNode.tsx src/components/ws/FileTree.tsx src/components/ed/Editor.tsx src/components/ed/TableMoveControls.tsx src/components/ed/ImageMoveControls.tsx src/components/de/DiffCard.tsx src/components/shell/TabStrip.tsx src/components/shell/ShellComponents.test.tsx src/components/ws/WorkspaceUI.test.tsx src/components/ed/EditorCore.test.tsx src/components/de/DiffReview.test.tsx",
     "npm run governance:audit"
   ],
   "out_of_scope": [
-    "PDF 渲染层更换（PDF.js）——人类决策接受 WebKit 悬浮工具栏现状",
-    "LO 源码包瘦身、LO 进程常驻（UNO socket）",
-    "沙箱 signal 6（已裁决环境假失败，不动）",
-    "prv.export 后端能力扩展"
+    "应用原生菜单栏（1.0 不实现，人类决策）",
+    "目录节点重命名/删除（无后端命令面）",
+    "预览面板右键（只读面，决策不提供；导出已覆盖于文件树）",
+    "右键菜单的跨窗口/多实例支持"
   ],
   "unresolved_items": [
-    "iframe 加载 asset URL 的 PDF 兼容性需真机确认（原 blob URL 等价，media_src 已证 asset 授权可用）",
-    "缓存失效边界（文件修改/删除/容量上限）持续观察",
-    "WebKit 悬浮工具栏为系统行为，接受现状不处理"
+    "navigator.clipboard.readText() 在 macOS WKWebView 的可用性需真机实测（G4 实测项）；失败则粘贴菜单项禁用，保留 ⌘V 快捷键",
+    "编辑器右键在 ProseMirror 复杂选区（表格内/图片选中态）下的行为需真机确认",
+    "DiffCard「接受 ⏎」「拒绝 ⌫」提示与键盘接线不一致为既有现状，本次不处理（超出本 Scope）"
   ],
   "scope_expansions": [
-    "2026-08-05：回退 PRV-PDFJS-RENDER-01 后，test_governance.test.mjs 的 ED/WS/PRV 断言仍为过期值（ED 207/WS 28/PRV 1，HEAD 实际 208/30/3），沿用人类 2026-08-05 已批准授权同步修复，避免 test:related 反复受阻",
-    "2026-08-05：人类反馈「预览缩放 + 鼠标/触控板适配」——确认缩放逻辑未被破坏（image/table 为 CSS zoom，pdf 由 iframe 原生 + 悬浮条承担）；PrvPanel 新增 Ctrl/Cmd+滚轮与 WebKit gesture 捏合缩放适配（image/table 视图态，BR-PRV-DATA-001 不弱化）"
+    "2026-08-06：test_governance.test.mjs 的 SYS/WS/DE 前端用例数断言因本 Scope 新增测试用例而过期（SYS 52→59、WS 30→32、DE 58→61），沿用人类 2026-08-05 已批准授权（记录于 PRV-PREVIEW-OPT-01 scope_expansions）同步修复断言数字，避免 test:related 反复受阻；不改治理逻辑"
   ]
 }

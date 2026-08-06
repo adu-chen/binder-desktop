@@ -34,6 +34,7 @@ import {
 } from "../../store/edStore";
 import { deStore, toGreenReview, useDeStore, type DiffView } from "../../store/deStore";
 import { assistStore, type AssistTarget } from "../../store/assistStore";
+import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 import {
   makePersistedSnapshot,
   persistSessionSnapshot,
@@ -709,6 +710,8 @@ export function Editor() {
   const [imageDropActive, setImageDropActive] = useState(false);
   const [sourceViewText, setSourceViewText] = useState<string>("");
   const sourceViewTextRef = useRef<string>("");
+  // 编辑器右键菜单（CTX-MENU-01）：选区态决定菜单项集（有选区→剪切/复制/局部修改；无选区→粘贴/辅助续写）。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
   const editorInstanceRef = useRef<TiptapEditor | null>(null);
   const imageIngressRef = useRef<(
     sources: ImageIngressSource[],
@@ -1316,9 +1319,10 @@ export function Editor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 触发时从 edStore/ref 读取当前上下文，避免 useEditor 初始化闭包过期。
   }, [editor, openPath, loadSeq]);
 
-  // 文档切换/重载会使 assist 锚失效；旧请求返回后也不应再展示或应用。
+  // 文档切换/重载会使 assist 锚失效；旧请求返回后也不应再展示或应用。右键菜单同步关闭。
   useEffect(() => {
     finishCurrentAssist("dismiss");
+    setCtxMenu(null);
   }, [openPath, loadSeq]);
 
   // AG-ASSIST 交互锚生命周期：点击浮层外即视为用户放弃；旧请求后续返回由 requestId 失效拦截。
@@ -1885,6 +1889,61 @@ export function Editor() {
   // 会话已建但内容未载入（大 docx 转换中）→ 加载骨架，立即反馈不阻塞交互（PI-ED-07 #7）。
   const loading = !isEditorContentReady(loadedContent, loadSeq, settledLoadSeq);
 
+  // 编辑器右键（CTX-MENU-01）：富文本模式在正文区弹出上下文菜单；sourceView（textarea）保持无右键
+  // （原生 ⌘C/⌘V 可用，避免选区读取与 TipTap 状态不一致）。选区态在触发瞬间读取——contextmenu 后
+  // ProseMirror 选区可能被 DOM 重建，须先读后开。
+  const onEditorContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!editor || sourceView) return;
+    event.preventDefault();
+    const { empty } = editor.state.selection;
+    setCtxMenu({ x: event.clientX, y: event.clientY, hasSelection: !empty });
+  };
+
+  // 剪切/复制经 ProseMirror 剪贴板处理路径（execCommand 触发 PM 的 copy/cut 事件，X-FORBID-005
+  // 不绕过编辑接口）；粘贴经 Web Clipboard API 读取后 insertContent 进编辑模型
+  // （WKWebView 可用性为 G4 实测项，失败静默并保留 ⌘V 快捷键路径）。
+  const doCut = () => {
+    if (!editor) return;
+    editor.view.focus();
+    document.execCommand("cut");
+  };
+  const doCopy = () => {
+    if (!editor) return;
+    editor.view.focus();
+    document.execCommand("copy");
+  };
+  const doPaste = () => {
+    if (!editor) return;
+    void navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text) editor.chain().focus().insertContent(text).run();
+      })
+      .catch(() => {
+        // 静默：读剪贴板失败不打断用户（保留 ⌘V 快捷键路径）。
+      });
+  };
+
+  // 编辑器右键菜单项：有选区→剪切/复制/局部修改（TERM-AG-003）；无选区→粘贴/辅助续写（TERM-AG-004）。
+  // AI 项复用 openInlineAssist/openAutocompleteAssist（门禁前置 + 静默语义，BR-AG-STATE-003），
+  // 与 ⌘K/⌘J 快捷键行为一致。
+  const ctxMenuItems: ContextMenuDef[] | null = (() => {
+    if (!ctxMenu || !editor) return null;
+    if (ctxMenu.hasSelection) {
+      return [
+        { type: "item", id: "cut", label: "剪切", onSelect: doCut },
+        { type: "item", id: "copy", label: "复制", onSelect: doCopy },
+        { type: "separator", id: "sep-ai" },
+        { type: "item", id: "inline", label: "局部修改", onSelect: () => openInlineAssist(editor.view) },
+      ];
+    }
+    return [
+      { type: "item", id: "paste", label: "粘贴", onSelect: doPaste },
+      { type: "separator", id: "sep-ai" },
+      { type: "item", id: "autocomplete", label: "辅助续写", onSelect: () => openAutocompleteAssist(editor.view) },
+    ];
+  })();
+
   return (
     <div className="editor-host" ref={hostRef}>
       {/* 标签栏由 center TabStrip 统一承载（PI-FE-26）；冲突裁决移入底部状态栏（PI-ED-07 #4） */}
@@ -1919,6 +1978,7 @@ export function Editor() {
         ref={paperRef}
         aria-busy={loading}
         style={{ "--ed-zoom": String(zoom) } as CSSProperties}
+        onContextMenu={onEditorContextMenu}
         onDragEnterCapture={handlePaperImageDrag}
         onDragOverCapture={handlePaperImageDrag}
         onDragLeaveCapture={handlePaperImageDragLeave}
@@ -1972,6 +2032,9 @@ export function Editor() {
         onDismiss={dismissAssist}
         isKeyboardScope={isAssistKeyboardScope}
       />
+      {ctxMenu && ctxMenuItems && (
+        <ContextMenu items={ctxMenuItems} x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} />
+      )}
     </div>
   );
 }

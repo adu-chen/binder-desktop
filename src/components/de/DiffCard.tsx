@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
 import { acceptDiff, rejectDiff, generateSampleDiff } from "../../services/deService";
 import { revealBlock } from "../../services/edLocate";
+import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
 /**
  * DiffCard（DiffCard / TERM-DE-003 · 参考稿 §6.1）· PI-FE-07。
@@ -212,6 +213,8 @@ export function DiffCard({ diff }: { diff: DiffView }) {
   const readonly = Boolean(diff.readonly);
   const [expanded, setExpanded] = useState(false);
   const [locateFailed, setLocateFailed] = useState(false);
+  // DiffCard 右键（CTX-MENU-01）：仅 pending 且可裁决态提供接受/拒绝快捷入口。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const longPreview = before.length > PREVIEW_LIMIT || after.length > PREVIEW_LIMIT || /\n/.test(before + after);
   const hasStyleOps = Boolean(diff.styleOps && diff.styleOps.length > 0);
   const hasBlockOps = Boolean(diff.blockOpsPayload);
@@ -253,8 +256,24 @@ export function DiffCard({ diff }: { diff: DiffView }) {
     setLocateFailed(revealBlock(diff.blockId) === "anchor_lost");
   };
 
+  // DiffCard 右键菜单（仅 pending 且非 readonly：接受/拒绝；动作复用 de.accept/reject_diff）。
+  const onContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    if (state !== "pending" || readonly) return;
+    setCtxMenu({ x: event.clientX, y: event.clientY });
+  };
+  const ctxMenuItems: ContextMenuDef[] | null = ctxMenu && state === "pending" && !readonly
+    ? [
+        { type: "item", id: "accept", label: "接受", onSelect: () => void acceptDiff(diffId) },
+        { type: "item", id: "reject", label: "拒绝", onSelect: () => void rejectDiff(diffId) },
+      ]
+    : null;
+
   return (
-    <div className={`diffcard diffcard-${state}${expanded ? " diffcard-expanded" : ""}`}>
+    <div
+      className={`diffcard diffcard-${state}${expanded ? " diffcard-expanded" : ""}`}
+      onContextMenu={onContextMenu}
+    >
       <div className="diffcard-row diffcard-row-title">
         <span className="diffcard-title" title={title}>{title}</span>
         <span className="diffcard-badge">{STATE_BADGE[state]}</span>
@@ -404,6 +423,9 @@ export function DiffCard({ diff }: { diff: DiffView }) {
             </div>
           )}
         </div>
+      )}
+      {ctxMenu && ctxMenuItems && (
+        <ContextMenu items={ctxMenuItems} x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} />
       )}
     </div>
   );

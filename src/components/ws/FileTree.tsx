@@ -8,6 +8,7 @@ import { useDeStore } from "../../store/deStore";
 import { tabsStore } from "../../store/tabsStore";
 import { exportDoc } from "../../services/prvService";
 import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
+import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
 /**
  * 文件树容器（A-SYS-C-T-02 §3 Side Panel WS · PI-FE-04）。
@@ -107,8 +108,8 @@ export function FileTree() {
     return () => window.clearTimeout(id);
   }, [query]);
 
-  // 右键菜单（重命名/删除）+ 内联输入（新建/重命名）状态。
-  const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  // 右键菜单（文件：重命名/导出/删除/复制路径；目录：在此新建文件）+ 内联输入（新建/重命名）状态。
+  const [menu, setMenu] = useState<{ path: string; x: number; y: number; kind: "dir" | "file" } | null>(null);
   const [input, setInput] = useState<{ mode: "create" | "rename"; path?: string } | null>(null);
   const [value, setValue] = useState("");
 
@@ -159,8 +160,9 @@ export function FileTree() {
   };
 
   // 新建：内联输入文件名 → ws.create_doc → 刷新 + 打开新文件（X-SEQ-002）。
-  const submitCreate = async (name: string) => {
-    const rel = name.trim();
+  // dirPath 为目录右键「在此新建文件」的目录前缀（CTX-MENU-01），根目录新建为空串。
+  const submitCreate = async (name: string, dirPath = "") => {
+    const rel = (dirPath ? `${dirPath}/${name}` : name).trim();
     if (!rel) return;
     try {
       const created = await createDoc(rel);
@@ -228,6 +230,62 @@ export function FileTree() {
     }
   };
 
+  // 复制路径（CTX-MENU-01）：写剪贴板在用户手势内可用；失败静默（便利功能不阻断）。
+  const copyPath = async (path: string) => {
+    setMenu(null);
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch {
+      // 静默：写剪贴板失败不打扰用户（可改用 ⌘C 复制标签/路径）。
+    }
+  };
+
+  // 右键菜单项：按目标面生成（X-FORBID-007——全部动作复用既有命令面，无本地业务判断）。
+  const menuItems: ContextMenuDef[] | null = useMemo(() => {
+    if (!menu) return null;
+    if (menu.kind === "dir") {
+      return [
+        {
+          type: "item",
+          id: "new",
+          label: "在此新建文件",
+          onSelect: () => {
+            setInput({ mode: "create", path: menu.path });
+            setValue(menu.path ? `${menu.path}/` : "");
+            setMenu(null);
+          },
+        },
+      ];
+    }
+    const items: ContextMenuDef[] = [
+      {
+        type: "item",
+        id: "rename",
+        label: "重命名",
+        onSelect: () => {
+          setInput({ mode: "rename", path: menu.path });
+          setValue(menu.path);
+          setMenu(null);
+        },
+      },
+    ];
+    for (const fmt of exportTargets(menu.path)) {
+      items.push({
+        type: "item",
+        id: `export-${fmt}`,
+        label: `导出 ${fmt.toUpperCase()}`,
+        onSelect: () => void doExport(menu.path, fmt),
+      });
+    }
+    items.push(
+      { type: "item", id: "copy-path", label: "复制路径", onSelect: () => void copyPath(menu.path) },
+      { type: "separator", id: "sep-del" },
+      { type: "item", id: "delete", label: "删除", danger: true, onSelect: () => void doDelete(menu.path) },
+    );
+    return items;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- menu 为唯一依赖；setInput/setValue 为稳定 setter。
+  }, [menu]);
+
   // 仅 idle 时自动加载（启动恢复预置 / 切换重置会置 idle）；避免覆盖已预置结果。
   useEffect(() => {
     if (status === "idle") void loadDocs();
@@ -257,7 +315,7 @@ export function FileTree() {
       className="ftn-input-row"
       onSubmit={(e) => {
         e.preventDefault();
-        if (input.mode === "create") void submitCreate(value);
+        if (input.mode === "create") void submitCreate(value, input.path ?? "");
         else if (input.path) void submitRename(input.path, value);
       }}
     >
@@ -273,33 +331,9 @@ export function FileTree() {
     </form>
   );
 
-  // 右键上下文菜单（重命名/删除）。
-  const contextMenu = menu && (
-    <div className="ftn-menu" style={{ left: menu.x, top: menu.y }} role="menu">
-      <button
-        className="ftn-menu-item"
-        onMouseDown={(e) => {
-          e.preventDefault();
-          setInput({ mode: "rename", path: menu.path });
-          setValue(menu.path);
-          setMenu(null);
-        }}
-      >
-        重命名
-      </button>
-      {exportTargets(menu.path).map((fmt) => (
-        <button
-          key={fmt}
-          className="ftn-menu-item"
-          onMouseDown={(e) => { e.preventDefault(); void doExport(menu.path, fmt); }}
-        >
-          导出 {fmt.toUpperCase()}
-        </button>
-      ))}
-      <button className="ftn-menu-item ftn-menu-del" onMouseDown={(e) => { e.preventDefault(); void doDelete(menu.path); }}>
-        删除
-      </button>
-    </div>
+  // 右键上下文菜单（统一 ContextMenu 组件，CTX-MENU-01：文件重命名/导出/复制路径/删除，目录在此新建）。
+  const contextMenu = menu && menuItems && (
+    <ContextMenu items={menuItems} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />
   );
 
   const searchBox = (
@@ -364,7 +398,7 @@ export function FileTree() {
             openPath={openPath}
             onOpenFile={handleOpenFile}
             onPreviewFile={handlePreviewFile}
-            onContextMenu={(path, x, y) => setMenu({ path, x, y })}
+            onContextMenu={(path, x, y, kind) => setMenu({ path, x, y, kind })}
             onEditDocx={handleEditDocx}
             stateOverride={stateOverride}
             pendingCount={pendingCount}
@@ -383,7 +417,6 @@ export function FileTree() {
       </div>
       {body}
       {contextMenu}
-      {menu && <div className="ftn-menu-backdrop" onClick={() => setMenu(null)} />}
     </>
   );
 }

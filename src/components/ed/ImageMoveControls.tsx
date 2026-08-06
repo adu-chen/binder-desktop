@@ -6,6 +6,7 @@ import {
   deleteActiveImage,
   moveActiveImage,
 } from "../../services/edImageOps";
+import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
 function selectedImageElement(editor: Editor): HTMLElement | null {
   const snapshot = activeImageSnapshot(editor);
@@ -50,6 +51,8 @@ export function ImageMoveControls({
   enabled?: boolean;
 }) {
   const [view, setView] = useState<ImageControlView | null>(null);
+  // 图片右键（CTX-MENU-01）：删除图片快捷入口（stopPropagation 避免冒泡到编辑器右键）。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   const update = useCallback(() => {
     if (!enabled || !editor) {
@@ -111,6 +114,15 @@ export function ImageMoveControls({
     if (deleteActiveImage(editor)) setView(null);
     else requestAnimationFrame(update);
   };
+  // 图片右键（CTX-MENU-01）：仅提供「删除图片」（移动/对齐等已有浮动控件）。
+  const onContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCtxMenu({ x: event.clientX, y: event.clientY });
+  };
+  const ctxMenuItems: ContextMenuDef[] | null = ctxMenu
+    ? [{ type: "item", id: "delete", label: "删除图片", danger: true, onSelect: remove }]
+    : null;
   const setAlt = () => {
     const alt = window.prompt("图片替代文本（留空清除）", view.alt ?? "");
     if (alt === null) return;
@@ -142,6 +154,7 @@ export function ImageMoveControls({
       aria-label="图片操作"
       data-block-id={view.blockId ?? undefined}
       data-standalone={view.standalone ? "true" : "false"}
+      onContextMenu={onContextMenu}
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -206,6 +219,9 @@ export function ImageMoveControls({
         ×
       </button>
       <span className="ed-context-hint" title="拖动图片右下角手柄可调整宽度">拖动调宽</span>
+      {ctxMenu && ctxMenuItems && (
+        <ContextMenu items={ctxMenuItems} x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} />
+      )}
     </div>,
     view.anchor,
   );

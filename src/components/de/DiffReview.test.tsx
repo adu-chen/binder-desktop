@@ -468,4 +468,28 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     expect(screen.queryByText(/目标块已不可定位/)).toBeNull();
   });
 });
+
+describe("DiffCard 右键（CTX-MENU-01）", () => {
+  it("pending 态右键弹出接受/拒绝菜单项", () => {
+    const { container } = renderCard({ state: "pending" });
+    fireEvent.contextMenu(container.querySelector(".diffcard") as HTMLElement, { clientX: 5, clientY: 6 });
+    expect(screen.getByRole("menuitem", { name: "接受" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "拒绝" })).toBeTruthy();
+  });
+
+  it("非 pending 态（accepted/rejected）右键不弹菜单", () => {
+    for (const state of ["accepted", "rejected"] as const) {
+      cleanup();
+      const { container } = renderCard({ state });
+      fireEvent.contextMenu(container.querySelector(".diffcard") as HTMLElement);
+      expect(screen.queryByRole("menuitem", { name: "接受" })).toBeNull();
+    }
+  });
+
+  it("readonly pending 不弹菜单", () => {
+    const { container } = renderCard({ state: "pending", readonly: true });
+    fireEvent.contextMenu(container.querySelector(".diffcard") as HTMLElement);
+    expect(screen.queryByRole("menuitem", { name: "接受" })).toBeNull();
+  });
+});
 }

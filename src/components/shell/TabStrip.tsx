@@ -3,6 +3,7 @@ import { tabsStore, useTabsStore, type OpenTab } from "../../store/tabsStore";
 import { useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
 import { writeDocRefData } from "../../services/edLocate";
+import { ContextMenu, type ContextMenuDef } from "./ContextMenu";
 
 /**
  * center 标签栏（A-SYS-C-T-02 §3 单窗多 tab · 参考稿 §4 · PI-FE-26 · PI-ED-07）。
@@ -21,6 +22,8 @@ export function TabStrip() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined);
   const pointerDown = useRef<{ id: string; x: number } | null>(null);
+  // 标签右键（CTX-MENU-01）：关闭标签（视图层导航态，X-FORBID-007 允许）。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
 
   // #12 纵向滚轮 → 横向滚动（passive:false 以 preventDefault 阻止页面滚动）。
   useEffect(() => {
@@ -95,6 +98,15 @@ export function TabStrip() {
     setDropBefore(undefined);
   };
 
+  // 标签右键（CTX-MENU-01）：关闭标签；actions 复用 tabsStore.close（视图层导航态）。
+  const onContextMenu = (event: React.MouseEvent, id: string) => {
+    event.preventDefault();
+    setCtxMenu({ x: event.clientX, y: event.clientY, tabId: id });
+  };
+  const ctxMenuItems: ContextMenuDef[] | null = ctxMenu
+    ? [{ type: "item", id: "close", label: "关闭标签", onSelect: () => tabsStore.close(ctxMenu.tabId) }]
+    : null;
+
   return (
     <div className="tabstrip" role="tablist" ref={stripRef}>
       {tabs.map((tab) => (
@@ -109,6 +121,7 @@ export function TabStrip() {
           draggable
           onDragStart={(e) => writeDocRefData(e.dataTransfer, tab.path)}
           onClick={() => dragId === null && tabsStore.activate(tab.id)}
+          onContextMenu={(e) => onContextMenu(e, tab.id)}
           onPointerDown={(e) => onPointerDown(e, tab.id)}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
@@ -132,6 +145,9 @@ export function TabStrip() {
       ))}
       {/* 末尾落点指示（拖到最右） */}
       {dragId !== null && dropBefore === null && <span className="tab-drop-end" aria-hidden="true" />}
+      {ctxMenu && ctxMenuItems && (
+        <ContextMenu items={ctxMenuItems} x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} />
+      )}
     </div>
   );
 }

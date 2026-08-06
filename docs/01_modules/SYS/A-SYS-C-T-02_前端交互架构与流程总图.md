@@ -374,6 +374,32 @@ flowchart TD
 > 购买/账单/设备会话/BYOK 管理/注销均在**个人账户门户**（浏览器）；桌面端仅展示 + 跳转，不内置
 > 支付（BR-ENT-DATA-002）；模型调用前的门禁不在此图（属各 AI 回合内部，见 §4.3/§4.5）。
 
+### 4.11 右键上下文菜单（统一 ContextMenu，CTX-MENU-01）
+
+右键菜单收敛为 SYS 前端交互的统一轻量组件 `ContextMenu`（纯展示组件）：**不持有业务状态、不决定
+启停/disabled**（X-FORBID-007——菜单项集与禁用态由各目标面调用方从既有投影 store 计算后传入）；
+行为最小集为**视口钳制**（右/下溢出翻转）、**键盘可达**（Esc 关闭、↑/↓ 导航、Enter 触发）、
+backdrop 点击关闭、`role="menu"/"menuitem"`。样式沿用 `.ftn-menu` token 基线提升为 `.ctx-menu`
+（深色主题兼容）。WKWebView 无系统右键菜单，故右键入口均需本组件承载。
+
+| 目标面 | 菜单项 | 动作复用（X-SEQ-002） |
+|---|---|---|
+| 文件树·文件节点 | 重命名 / 导出 X（按源类型）/ 复制路径 / 删除 | `ws.rename_doc` / `prv.export` / `ws.delete_doc` |
+| 文件树·目录节点 | 在此新建文件 | `ws.create_doc`（子目录相对路径） |
+| 编辑器·有选区 | 剪切 / 复制 / 局部修改（TERM-AG-003） | ProseMirror 剪贴板事件（execCommand）/ `ag.request_assist` |
+| 编辑器·无选区 | 粘贴 / 辅助续写（TERM-AG-004） | `navigator.clipboard.readText`→`insertContent` / `ag.request_assist` |
+| DiffCard（pending） | 接受 / 拒绝 | `de.accept_diff` / `de.reject_diff` |
+| 表格选中态 | 删除表格 | TipTap `deleteTable`（ED 受控接口，X-FORBID-005） |
+| 图片选中态 | 删除图片 | `deleteActiveImage`（ED 受控接口） |
+| 已打开文档标签 | 关闭标签 | `tabsStore.close`（视图层导航态，X-FORBID-007 允许） |
+| 预览面板 | 不提供 | 只读面；导出已覆盖于文件树 |
+
+> 关键约束：编辑器 AI 项（局部修改/辅助续写）复用 `openInlineAssist`/`openAutocompleteAssist`
+> 既有触发路径——门禁前置 + 静默语义与 ⌘K/⌘J 快捷键一致（BR-AG-STATE-003），不新增模型调用面；
+> 剪切/复制经 ProseMirror 剪贴板处理，粘贴经 Web Clipboard API 读取（WKWebView 可用性为实现期
+> 实测项，失败则菜单项静默、保留 ⌘V 快捷键）；目录节点 1.0 仅「在此新建文件」（目录重命名/删除
+> 无命令面，明示后续增强）；右键目标面交互不再分散各模块局部实现，新增目标面统一挂入本组件。
+
 ## §5 跨模块界面协作点（一个界面多模块协作）
 
 | 协作点 | 参与模块 | 协作语义 |
@@ -417,6 +443,9 @@ status: mapped
 - **投影一致**（X-FORBID-007，G4/G5）：静态审查前端 Store 无与后端可漂移的并行业务状态（如自存
   门禁通过/保存终态/diff 终态）；界面流转由后端事件驱动（状态机投影），核心交互在 G5 跨模块联调
   验证界面与后端态一致。
+- **右键菜单**（CTX-MENU-01，G4）：ContextMenu 组件键盘可达（Esc/↑↓/Enter）与视口钳制有自动化
+  断言；各目标面菜单项集与 disabled 态由投影 store 计算（无本地业务判断）；文件树迁移不回归既有
+  重命名/导出/删除路径。
 - UI 视觉/可用性验收 just-in-time 贴各模块 G4（路线图 §9.2），不在本文。
 
 ## §9 技术债务与盲区（诚实声明）
@@ -467,3 +496,4 @@ status: mapped
 | 2026-07-21 | v1.21 | 审计修正：原生 docx 预览总图统一为 `prv.preview` 消费 DOC 内部转换能力；删除不存在的 `doc.render_preview`，并将“全保真”收敛为 LO 语料实测的只读预览目标。 |
 | 2026-07-25 | v1.22 | 补齐启动恢复投影收敛：workspace 恢复与状态机监听单飞；路径 latest-wins 防止迟到文档结果重新激活编辑器或回填当前布局。 |
 | 2026-07-26 | v1.23 | BDocx 打开流程增加当前 loadSeq 的首轮分页 settled 门禁；转换结果到达后保持加载遮罩，避免揭示 setContent 与分页收敛的中间回填帧。 |
+| 2026-08-06 | v1.24 | 新增 §4.11 右键上下文菜单（统一 ContextMenu，CTX-MENU-01）：右键收敛为 SYS 纯展示组件（不持业务状态、X-FORBID-007），覆盖文件树文件/目录、编辑器选区/光标（剪切/复制/粘贴 + 局部修改/辅助续写）、DiffCard、表格/图片、标签栏；预览面板不提供；§8 补右键菜单验收条目；无新增 TERM/RULE 标注块 |

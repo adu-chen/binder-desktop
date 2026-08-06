@@ -1513,6 +1513,24 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .ftn-menu-item:hover { background: var(--bg-overlay); }
 .ftn-menu-del { color: var(--rust); }
+/* 统一上下文菜单（ContextMenu，SYS 前端交互 · 右键菜单简化方案 v2）：token 基线提升自 .ftn-menu */
+.ctx-menu-backdrop { position: fixed; inset: 0; z-index: 19; }
+.ctx-menu {
+  position: fixed; z-index: 20; min-width: 120px;
+  background: var(--bg-card); border: 0.5px solid var(--rule-strong);
+  border-radius: var(--r-2); box-shadow: 0 4px 16px rgba(14, 12, 10, 0.14); padding: var(--sp-1);
+  outline: none;
+}
+.ctx-menu-item {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  border-radius: var(--r-1); padding: var(--sp-1) var(--sp-2); font-size: 13px; color: var(--ink-2); cursor: pointer;
+}
+.ctx-menu-item:hover, .ctx-menu-item:focus-visible { background: var(--bg-overlay); color: var(--ink); outline: none; }
+.ctx-menu-item:disabled { color: var(--ink-5); cursor: default; }
+.ctx-menu-item:disabled:hover { background: transparent; color: var(--ink-5); }
+.ctx-menu-del { color: var(--rust); }
+.ctx-menu-del:hover, .ctx-menu-del:focus-visible { background: var(--bg-overlay); color: var(--rust); }
+.ctx-menu-sep { height: 1px; background: var(--rule); margin: var(--sp-1); }
 .filetree { display: flex; flex-direction: column; }
 .ftn-hint { font-size: 13px; padding: var(--sp-2); }
 .ftn-error { color: var(--rust); font-size: 13px; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2); }

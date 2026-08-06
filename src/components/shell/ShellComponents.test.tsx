@@ -5,6 +5,7 @@ import defaultCapability from "../../../src-tauri/capabilities/default.json";
 import { App } from "../../shell/App";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import { TabStrip } from "./TabStrip";
+import { ContextMenu } from "./ContextMenu";
 import { DOC_REF_MIME } from "../../services/edLocate";
 import { REFERENCE_MIME } from "../../services/referencePayload";
 import { closeStore } from "../../store/closeStore";
@@ -329,6 +330,126 @@ describe("TabStrip · 文档引用拖出", () => {
     expect(JSON.parse(values.get(DOC_REF_MIME) ?? "{}")).toEqual({ relPath: "notes/a.md" });
     expect(JSON.parse(values.get(REFERENCE_MIME) ?? "{}")).toEqual({ kind: "doc", relPath: "notes/a.md" });
     expect(values.get("text/plain")).toBe("notes/a.md");
+  });
+});
+
+describe("TabStrip · 标签右键（CTX-MENU-01）", () => {
+  afterEach(() => {
+    tabsStore.reset();
+  });
+
+  it("右键标签弹出「关闭标签」菜单项，触发后关闭标签", () => {
+    tabsStore.openDoc("notes/a.md");
+    const { container } = render(<TabStrip />);
+    const tab = container.querySelector("[data-tab-id]") as HTMLElement;
+
+    fireEvent.contextMenu(tab);
+    const item = screen.getByRole("menuitem", { name: "关闭标签" });
+    expect(item).toBeTruthy();
+
+    fireEvent.mouseDown(item);
+    expect(screen.queryByRole("tablist")).toBeNull(); // 唯一标签关闭后标签栏隐藏
+  });
+
+  it("右键不触发标签激活/拖动", () => {
+    tabsStore.openDoc("a.md");
+    tabsStore.openDoc("b.md");
+    const { container } = render(<TabStrip />);
+    const tabs = Array.from(container.querySelectorAll("[data-tab-id]")) as HTMLElement[];
+    const activeBefore = tabsStore.getSnapshot().activeTabId;
+
+    fireEvent.contextMenu(tabs[0]);
+    // 菜单打开但激活标签未变
+    expect(tabsStore.getSnapshot().activeTabId).toBe(activeBefore);
+    expect(screen.getByRole("menuitem", { name: "关闭标签" })).toBeTruthy();
+  });
+});
+
+describe("ContextMenu 统一右键菜单（CTX-MENU-01）", () => {
+  it("渲染菜单项，点击触发 onSelect 并关闭", () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <ContextMenu
+        items={[{ type: "item", id: "accept", label: "接受", onSelect }]}
+        x={10}
+        y={10}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole("menuitem", { name: "接受" }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Esc 关闭菜单", () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <ContextMenu
+        items={[{ type: "item", id: "a", label: "项", onSelect: vi.fn() }]}
+        x={10}
+        y={10}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.keyDown(container.querySelector(".ctx-menu") as HTMLElement, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("方向键导航跳过禁用项与分隔线，Enter 触发可选项", () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <ContextMenu
+        items={[
+          { type: "item", id: "a", label: "A", onSelect },
+          { type: "item", id: "b", label: "禁用B", disabled: true, onSelect: vi.fn() },
+          { type: "separator", id: "s" },
+          { type: "item", id: "c", label: "C", onSelect },
+        ]}
+        x={10}
+        y={10}
+        onClose={vi.fn()}
+      />,
+    );
+    const menu = container.querySelector(".ctx-menu") as HTMLElement;
+    fireEvent.keyDown(menu, { key: "ArrowDown" }); // A → C（跳过禁用与分隔线）
+    fireEvent.keyDown(menu, { key: "ArrowDown" }); // C → A（循环）
+    fireEvent.keyDown(menu, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("backdrop 点击关闭", () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <ContextMenu
+        items={[{ type: "item", id: "a", label: "项", onSelect: vi.fn() }]}
+        x={10}
+        y={10}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(container.querySelector(".ctx-menu-backdrop") as HTMLElement);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disabled 菜单项不可触发；separator 渲染分隔线", () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <ContextMenu
+        items={[
+          { type: "item", id: "del", label: "删除", danger: true, disabled: true, onSelect },
+          { type: "separator", id: "s" },
+        ]}
+        x={10}
+        y={10}
+        onClose={vi.fn()}
+      />,
+    );
+    const item = screen.getByRole("menuitem", { name: "删除" }) as HTMLButtonElement;
+    expect(item.disabled).toBe(true);
+    expect(container.querySelector(".ctx-menu-sep")).toBeTruthy();
+    fireEvent.mouseDown(item);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 }

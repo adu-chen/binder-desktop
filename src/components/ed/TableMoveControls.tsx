@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { activeTableSnapshot, moveActiveTable } from "../../services/edTableOps";
 import { normalizeTableCellShading } from "./extensions/TableCellShading";
+import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
 function tableElementFromNode(node: Node | null): HTMLElement | null {
   const element = node instanceof Element ? node : node?.parentElement;
@@ -59,6 +60,8 @@ export function TableMoveControls({
   enabled?: boolean;
 }) {
   const [view, setView] = useState<MoveControlView | null>(null);
+  // 表格右键（CTX-MENU-01）：删除表格快捷入口（stopPropagation 避免冒泡到编辑器右键）。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   const update = useCallback(() => {
     if (!enabled || !editor) {
@@ -120,6 +123,15 @@ export function TableMoveControls({
     if (removed) setView(null);
     else requestAnimationFrame(update);
   };
+  // 表格右键（CTX-MENU-01）：仅提供「删除表格」（行/列/合并/底纹等已有浮动控件）。
+  const onContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCtxMenu({ x: event.clientX, y: event.clientY });
+  };
+  const ctxMenuItems: ContextMenuDef[] | null = ctxMenu
+    ? [{ type: "item", id: "delete", label: "删除表格", danger: true, onSelect: remove }]
+    : null;
   const supports = (capability: MoveControlView["capabilities"][number]) => view.capabilities.includes(capability);
   const safeEditor = editor as Partial<Editor> | null;
   const tableCan = safeEditor?.can?.() as { mergeCells?: () => boolean; splitCell?: () => boolean } | undefined;
@@ -133,6 +145,7 @@ export function TableMoveControls({
       role="group"
       aria-label="表格位置移动"
       data-table-id={view.tableId ?? undefined}
+      onContextMenu={onContextMenu}
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -239,6 +252,9 @@ export function TableMoveControls({
       >
         ×
       </button>
+      {ctxMenu && ctxMenuItems && (
+        <ContextMenu items={ctxMenuItems} x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(null)} />
+      )}
     </div>,
     view.anchor,
   );

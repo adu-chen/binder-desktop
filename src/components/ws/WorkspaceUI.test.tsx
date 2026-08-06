@@ -210,6 +210,34 @@ describe("FileTreeNode 状态与只读预览模式标记", () => {
     expect(values.get("text/plain")).toBe("a.md");
   });
 });
+
+describe("FileTreeNode 右键（CTX-MENU-01）", () => {
+  function renderCtx(node: TreeNode, onContextMenu: (path: string, x: number, y: number, kind: "dir" | "file") => void) {
+    return render(
+      <FileTreeNode
+        node={node}
+        depth={0}
+        openPath={null}
+        onOpenFile={() => {}}
+        onContextMenu={onContextMenu}
+      />,
+    );
+  }
+
+  it("文件节点右键回调携带 kind=file", () => {
+    const onContextMenu = vi.fn();
+    const { container } = renderCtx(fileNode(), onContextMenu);
+    fireEvent.contextMenu(container.querySelector(".ftn-file") as HTMLElement, { clientX: 11, clientY: 22 });
+    expect(onContextMenu).toHaveBeenCalledWith("a.md", 11, 22, "file");
+  });
+
+  it("目录节点右键回调携带 kind=dir", () => {
+    const onContextMenu = vi.fn();
+    const { container } = renderCtx({ name: "notes", path: "notes", kind: "dir", children: [] }, onContextMenu);
+    fireEvent.contextMenu(container.querySelector(".ftn-dir-row") as HTMLElement, { clientX: 33, clientY: 44 });
+    expect(onContextMenu).toHaveBeenCalledWith("notes", 33, 44, "dir");
+  });
+});
 }
 
 // Migrated intact from src/store/workspaceShell.test.ts.
