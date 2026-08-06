@@ -23,6 +23,7 @@ import { Markdown } from "@tiptap/markdown";
 import { BlockIdExtension } from "./BlockIdExtension";
 import { TableIdExtension } from "./TableIdExtension";
 import { DiffDecorationExtension } from "./DiffDecorationExtension";
+import { SelectionPersistExtension } from "./SelectionPersistExtension";
 import { PaginationExtension } from "./Pagination";
 import { FontSize } from "./FontSize";
 import { TableCellShading } from "./TableCellShading";
@@ -209,6 +210,8 @@ export function buildEditorExtensions(): Extensions {
     BlockIdExtension,
     // GreenReview 装饰层（BR-ED-STATE-002 / TERM-ED-003）——依赖 blockId 锚定。
     DiffDecorationExtension,
+    // 选区失焦持久化（ED-SELECTION-PERSIST-01）：blur 挂 inline Decoration 视觉副本，focus/事务清除。
+    SelectionPersistExtension,
     // 分页呈现层（BR-ED-DATA-003）——按块高在块边界叠加分页缝 widget；仅 docx 编辑默认开（Editor 切换）。
     PaginationExtension,
     // 字数统计（PI-ED-07 状态栏：中文按字符计）。

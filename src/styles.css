@@ -777,6 +777,20 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--ink);
 }
 .editor-paper .ProseMirror p { margin: 0 0 var(--sp-3); }
+/* 编辑器选区统一品牌蓝（ED-SELECTION-PERSIST-01 · 方案 A）：聚焦时原生 ::selection 用品牌蓝，
+   与失焦持久化装饰同色系，避免系统默认选区色（灰褐）与持久化色（蓝）割裂。 */
+.editor-paper .ProseMirror ::selection {
+  background: rgba(37, 99, 235, 0.30);
+}
+/* 选区失焦持久化（ED-SELECTION-PERSIST-01）：blur 后原生长条高亮消失，本装饰作为视觉副本，
+   比原生选区略淡以区分"未聚焦"状态；focus（用户点击编辑器内）即清除（恢复原生）。
+   注意：用纯 rgba 而非 color-mix()——后者需 Safari 16.2+/macOS 13.1+，旧系统 WKWebView 不支持时
+   整条 background-color 失效（装饰存在但不可见），这正是此前"失焦后选区消失"的隐藏根因之一。 */
+.editor-paper .ProseMirror .pm-selection-persist {
+  background-color: rgba(37, 99, 235, 0.16);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.28);
+  border-radius: 1px;
+}
 .editor-paper .ProseMirror h1,
 .editor-paper .ProseMirror h2,
 .editor-paper .ProseMirror h3,

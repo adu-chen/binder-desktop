@@ -150,8 +150,8 @@
       ],
       "test_exclude_globs": ["src/components/ed/assistPlacement.test.ts"],
       "downstream": ["DE", "AG", "SYS"],
-      "baseline_frontend_test_files": 8,
-      "target_frontend_test_files": 8,
+      "baseline_frontend_test_files": 11,
+      "target_frontend_test_files": 11,
       "requires_rust_on_related": true
     },
     {

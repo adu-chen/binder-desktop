@@ -24,6 +24,7 @@ import {
 } from "./extensions/paginationViewportAnchor";
 import { isContainerBlock } from "./extensions/BlockIdExtension";
 import { applyGreenReview, type GreenReviewValue } from "./extensions/DiffDecorationExtension";
+import { clearPersistedSelection, persistSelectionOnBlur } from "./extensions/SelectionPersistExtension";
 import {
   edStore,
   useEdStore,
@@ -1084,6 +1085,13 @@ export function Editor() {
         },
         blur: (view) => {
           clearPointerActivatedInputScrollGuard(view);
+          // 选区失焦持久化（ED-SELECTION-PERSIST-01）：PM 的 handleDOMEvents 只取组件级 props，
+          // 插件级被遮蔽，故在此桥接扩展的 persist 事务。
+          persistSelectionOnBlur(view);
+          return false;
+        },
+        focus: (view) => {
+          clearPersistedSelection(view);
           return false;
         },
         [PAGINATION_VIEWPORT_CORRECTION_EVENT]: (view, event) => {
