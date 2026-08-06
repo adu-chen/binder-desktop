@@ -26,14 +26,13 @@ async function callCommand<T>(command: string, params: Record<string, unknown>):
 /** module 级缓存：枚举一次，下拉重复打开不重复调用。 */
 let cachedFamilies: string[] | null = null;
 
-/** 是否已尝试枚举（失败也置位，避免每次重试；重试由上层显式触发 resetLocalFontCache）。 */
-let attempted = false;
-
-/** 枚举本地已注册字体族名（只读）。失败抛错，由调用方回退。 */
+/**
+ * 枚举本地已注册字体族名（只读）。失败抛错，由调用方回退常用子集。
+ * 失败**不缓存、不锁死**（修复 ED-FONT-LOCAL-LIBRARY-01 锁死缺陷）：dev 启动期 Rust backend
+ * 未就绪的瞬时 IPC 失败只影响当次调用，下次调用自动重试；仅成功结果进入缓存。
+ */
 export async function listLocalFonts(): Promise<string[]> {
   if (cachedFamilies !== null) return cachedFamilies;
-  if (attempted) throw { code: "FONTS_LIST_FAILED", message: "字体枚举已失败", retriable: true, reauth_required: false };
-  attempted = true;
   const res = await callCommand<{ families: string[] }>("fonts.list_fonts", {});
   cachedFamilies = Array.isArray(res.families) ? res.families : [];
   return cachedFamilies;
@@ -42,5 +41,4 @@ export async function listLocalFonts(): Promise<string[]> {
 /** 清空缓存（如应用设置变化后重试）。 */
 export function resetLocalFontCache(): void {
   cachedFamilies = null;
-  attempted = false;
 }

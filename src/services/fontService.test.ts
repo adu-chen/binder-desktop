@@ -43,11 +43,12 @@ describe("fontService · 本地字体库只读枚举", () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("resetLocalFontCache 后允许重试", async () => {
-    invokeMock.mockResolvedValueOnce({ correlation_id: "c", error: { code: "X", message: "m", retriable: true, reauth_required: false } });
-    await expect(listLocalFonts()).rejects.toBeTruthy();
-    resetLocalFontCache();
+  it("失败仅当次抛错，下次调用自动重试（不锁死）", async () => {
+    invokeMock.mockResolvedValueOnce({ correlation_id: "c", error: { code: "FONTS_LIST_FAILED", message: "boom", retriable: true, reauth_required: false } });
+    await expect(listLocalFonts()).rejects.toMatchObject({ code: "FONTS_LIST_FAILED" });
+    // 失败不缓存失败态：下次调用重新走 Rust（dev 启动期瞬时失败不导致会话退化成默认字体）。
     invokeMock.mockResolvedValueOnce(ok({ families: ["Arial"] }));
     await expect(listLocalFonts()).resolves.toEqual(["Arial"]);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 });

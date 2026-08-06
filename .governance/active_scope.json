@@ -1,26 +1,28 @@
 {
-  "scope_id": "ED-TXT-TOOLBAR-01",
+  "scope_id": "ED-FONT-RETRY-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "txt 编辑模式提供段落级内容编辑工具栏（修正误读决策）",
+  "title": "字体枚举锁死缺陷修复（attempted 永久锁死 → 失败自动重试）",
   "status": "CLOSED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/ED-TXT-TOOLBAR-01.md",
+  "issue_trace": ".governance/issues/ED-FONT-RETRY-01.md",
   "stop_condition": null,
-  "reason": "人类 2026-08-06 判定"纯文本（.txt 等）编辑不展示内容编辑工具栏"为误读决策，要求 txt 也实现内容编辑工具栏。多轮确认后最终范围：txt 第二行提供段落组（引用/代码块/分隔线）——仅展示可在纯段落文档生效且内容可保存的段落级结构工具；文字级样式（字体/字号/颜色等）不展示（txt 保存为纯文本不持久化）。本 Scope 替换 ED-HIGHLIGHT-BACKGROUND-01 活动锁（已提交闭合）。",
+  "reason": "人类 2026-08-06 决策：修复 ED-FONT-LOCAL-LIBRARY-01 锁死缺陷。观测定案：Rust CoreText 枚举 212 族正常、document.fonts.check 全通过，唯一失败点为 fontService attempted 永久锁死（dev 启动期 Rust backend 未就绪的瞬时 IPC 失败一次后，本会话永远回退常用子集，表现为本地字体突然消失）。修复：失败仅当次抛错、下次自动重试，仅成功结果缓存。本 Scope 替换 ED-SELECTION-PERSIST-01 活动锁（已闭合）。",
   "objectives": [
-    "EditorToolbar 纯文本第二行：提示 + 段落组（引用/代码块/分隔线）",
-    "EditorControls.test.tsx 纯文本断言更新",
-    "文档同步：A-ED-X-R-03 §2 + v1.5、A-ED-M-T-01 v1.58、A-ED-M-D-01 acceptance、ADUS"
+    "移除 fontService.listLocalFonts 的 attempted 永久锁死",
+    "失败仅当次抛错，下次调用自动重试；仅成功结果缓存",
+    "更新 fontService.test.ts 断言失败后自动重试",
+    "移除临时审计打点（EditorToolbar [FONT-AUDIT]、Rust println）",
+    "文档同步：A-ED-M-T-01 v1.60、ADUS 重新生成"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/ED-TXT-TOOLBAR-01.md",
+    ".governance/issues/ED-FONT-RETRY-01.md",
+    "src/services/fontService.ts",
+    "src/services/fontService.test.ts",
     "src/components/ed/EditorToolbar.tsx",
-    "src/components/ed/EditorControls.test.tsx",
-    "docs/01_modules/ED/A-ED-X-R-03_编辑器工具栏功能与兼容性清单.md",
+    "src-tauri/src/lib.rs",
     "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/01_modules/ED/A-ED-M-D-01_编辑器功能需求描述.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
@@ -34,27 +36,27 @@
     "scripts/test_governance.test.mjs"
   ],
   "constraints": [
-    "txt 装载/保存路径不变：editFormat=text、textToDoc 纯段落、serialize→getText",
-    "仅展示可在纯段落文档生效且内容可保存的段落级结构工具：引用/代码块/分隔线",
-    "不展示样式（标题）、文字（字体/字号/颜色）、列表、插入、页面视图",
-    "提示文案明示：文字样式不保存"
+    "成功结果才进入 cachedFamilies 缓存；失败不缓存失败态",
+    "不改变 Rust 侧 fonts.list_fonts 枚举行为",
+    "移除全部临时审计打点"
   ],
   "acceptance_criteria": [
-    "txt 第二行显示提示 + 段落组（引用/代码块/分隔线）",
-    "无样式/文字/列表/插入组渲染",
+    "失败后下次调用自动重试并成功（测试断言 invoke 2 次）",
+    "无临时审计打点残留",
     "相关测试、tsc、governance:generate/audit、build 通过"
   ],
   "validation_commands": [
-    "npx vitest run src/components/ed/EditorControls.test.tsx",
+    "npx vitest run src/services/fontService.test.ts src/components/ed/EditorControls.test.tsx",
+    "npm run test:related",
     "npm run governance:generate",
     "npm run governance:audit",
     "npx tsc --noEmit",
-    "npm run build"
+    "npm run build",
+    "cargo check --manifest-path src-tauri/Cargo.toml"
   ],
   "out_of_scope": [
-    "txt 富文本呈现（保持 textToDoc 纯段落装载）",
-    "txt 保存持久化富文本样式（txt 语义为纯文本）",
-    "Markdown 路径任何改动"
+    "工具栏字体选择器与 DOCX 导出字体链路（font_trace FontPolicy aliases）的 SSOT 统一（架构注记，另行立项）",
+    "字体枚举缓存策略重构（如 LRU/过期）"
   ],
   "unresolved_items": [],
   "scope_expansions": []
