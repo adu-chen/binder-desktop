@@ -22,11 +22,15 @@ async function callCommand<T>(command: string, params: Record<string, unknown>):
   return response.result;
 }
 
-/** 预览文档 → PDF blob URL（字节回传组装）。调用方负责 revokeObjectURL。 */
+/** 预览文档 → PDF asset URL（后端缓存落盘 + asset 授权，前端 convertFileSrc 生成 URL 交 iframe 加载）。 */
 export async function previewDoc(relPath: string): Promise<string> {
-  const res = await callCommand<{ format: string; bytes: number[] }>("prv.preview", { relPath });
-  const blob = new Blob([new Uint8Array(res.bytes)], { type: "application/pdf" });
-  return URL.createObjectURL(blob);
+  const res = await callCommand<{ format: string; abs_path: string }>("prv.preview", { relPath });
+  return convertFileSrc(res.abs_path);
+}
+
+/** 本地打开：以系统默认应用打开 workspace 内文件（只读查看，X-FORBID-004 守界）。 */
+export async function openExternal(relPath: string): Promise<void> {
+  await callCommand<{ opened: boolean }>("prv.open_external", { relPath });
 }
 
 /** 导出文档为目标格式（落 workspace 内，守界）；回导出文件 rel_path。 */

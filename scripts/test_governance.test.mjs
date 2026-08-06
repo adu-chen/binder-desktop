@@ -125,10 +125,10 @@ describe('Test Governance', () => {
     expect(inventory.totals.rust_inline_files).toBeGreaterThan(0);
     expect(inventory.totals.rust_integration_files).toBe(2);
     expect(inventory.system_validation).toHaveLength(2);
-    expect(inventory.modules.ED.frontend_owned).toBe(7);
+    expect(inventory.modules.ED.frontend_owned).toBe(8);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'ED')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(207);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(214);
     expect(inventory.modules.SYS.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'SYS')
@@ -136,7 +136,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.WS.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'WS')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(28);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(30);
     expect(inventory.modules.DE.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'DE')
@@ -145,10 +145,10 @@ describe('Test Governance', () => {
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'AG')
       .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(73);
-    expect(inventory.modules.PRV.frontend_owned).toBe(1);
+    expect(inventory.modules.PRV.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'PRV')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(7);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(19);
     expect(inventory.assets.every((asset) => asset.owner && asset.layer !== 'unclassified')).toBe(true);
     expect(auditTestGovernance(DEFAULT_ROOT, registry, inventory).status).toBe('passed');
   }, 10_000);

@@ -194,6 +194,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("prv.export");
     reg.register("prv.media_src");
     reg.register("prv.table_data");
+    reg.register("prv.open_external");
     reg.register("fonts.list_fonts");
     reg.register("doc.create_draft");
     reg.register("doc.open_for_edit");
@@ -295,10 +296,11 @@ fn dispatch(
             "ws.create_folder" => route_create_folder(&request, &state),
             "ws.rename_doc" => route_rename_doc(&request, &state),
             "ws.delete_doc" => route_delete_doc(&request, &state),
-            "prv.preview" => route_preview(&request, &state),
+            "prv.preview" => route_preview(&request, &state, &app),
             "prv.export" => route_export(&request, &state),
             "prv.media_src" => route_media_src(&request, &state, &app),
             "prv.table_data" => route_table_data(&request, &state),
+            "prv.open_external" => route_open_external(&request, &state),
             "fonts.list_fonts" => route_list_fonts(),
             "doc.create_draft" => route_create_draft(&request, &state),
             "doc.open_for_edit" => route_open_for_edit(&request, &state, &app),
@@ -741,10 +743,13 @@ fn route_delete_doc(
     Ok(serde_json::json!({ "rel_path": rel_path, "deleted": true }))
 }
 
-/// 路由 `prv.preview`：docx/Excel/PPT 经 DOC 预览链出只读 PDF 字节（守界 X-FORBID-004，只读 PRV 硬边界）。
+/// 路由 `prv.preview`：docx/Excel/PPT 经 DOC 预览链出只读 PDF（缓存落盘，X-SEQ-004 产物复用），
+/// 返回缓存文件绝对路径并逐文件授权 asset 协议（最小暴露，同 prv.media_src 纪律；守界 X-FORBID-004）。
+/// 前端以 convertFileSrc 生成 asset URL 交由 iframe 加载，不再回传 PDF 字节（PRV-PREVIEW-OPT-01）。
 fn route_preview(
     request: &CommandRequest,
     state: &AppState,
+    app: &tauri::AppHandle,
 ) -> Result<serde_json::Value, IpcError> {
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let (_, abs) = resolve_active(state, &rel_path)?;
@@ -752,8 +757,27 @@ fn route_preview(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
-    let bytes = prv::render_preview(&abs, ext)?;
-    Ok(serde_json::json!({ "format": "pdf", "bytes": bytes }))
+    let pdf_path = prv::render_preview(&abs, ext)?;
+    app.asset_protocol_scope().allow_file(&pdf_path).map_err(|e| {
+        IpcError::new(
+            "PRV_SCOPE_FAILED",
+            &format!("授权预览访问失败: {e}"),
+            false,
+            false,
+        )
+    })?;
+    Ok(serde_json::json!({ "format": "pdf", "abs_path": pdf_path.to_string_lossy() }))
+}
+
+/// 路由 `prv.open_external`：以系统默认应用打开 workspace 内文件（只读查看，X-FORBID-004 守界）。
+fn route_open_external(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let (_, abs) = resolve_active(state, &rel_path)?;
+    prv::open_external(&abs)?;
+    Ok(serde_json::json!({ "opened": true }))
 }
 
 /// 路由 `prv.media_src`：守界解析媒体文件绝对路径（X-FORBID-004）+ 仅把**该单个文件**加入 asset 协议

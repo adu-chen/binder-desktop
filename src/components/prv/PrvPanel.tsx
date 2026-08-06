@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { tabsStore } from "../../store/tabsStore";
-import { previewDoc, mediaSrc, exportDoc } from "../../services/prvService";
+import { previewDoc, mediaSrc, exportDoc, openExternal } from "../../services/prvService";
 import { TablePreview } from "./TablePreview";
 import { isTableFile } from "../../services/tableData";
 import { createDocxDraft } from "../../services/docService";
 import { openDocument } from "../../services/edService";
 import { PrvToolbar } from "./PrvToolbar";
-import { ZOOM } from "../ed/zoom";
+import { ZOOM, stepZoom, clampZoom } from "../ed/zoom";
 
 /**
- * PRV 预览面板（PRV-VIEW · 只读硬边界 · PI-FE-22/24 · 2026-07-03 #1 表格式预览）。按扩展名分流：
- * - docx/PPT → prv.preview（DOC 链）出 PDF，字节→blob iframe；
- * - csv/tsv/xlsx/xls → 表格式预览（TablePreview：行列/多 sheet/可选中复制，PDF 保真不达另议管线的兑现）；
+ * PRV 预览面板（PRV-VIEW · 只读硬边界 · PI-FE-22/24 · 2026-07-03 #1 表格式预览 · PRV-PREVIEW-OPT-01 缓存链路）。
+ * 按扩展名分流：
+ * - docx/PPT → prv.preview（DOC 链）出 PDF，缓存落盘 + asset 授权 → iframe 直接加载 asset URL；
+ * - csv/tsv/xlsx/xls → 表格式预览（TablePreview：行列/多 sheet/可选中复制）；
  * - 音视频 → prv.media_src（asset 协议）流式喂 <video>/<audio>（不进内存，系统解码）。
  * 加载/失败/不支持各有明确态（不静默空白，BR-PRV-DATA-002）；无任何编辑入口。
  */
@@ -48,6 +49,42 @@ export function PrvPanel({ path }: { path: string }) {
   const [errMsg, setErrMsg] = useState("");
   const [zoom, setZoom] = useState<number>(ZOOM.default);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+
+  // 鼠标/触控板缩放适配（image/table 视图态，PRV-PREVIEW-OPT-01 追加）：
+  // - Ctrl/Cmd + 滚轮 → 步进缩放（普通滚轮留给滚动，不拦截）；
+  // - 触控板捏合 → WebKit gesture 事件（scale 相对手势起始基线）。
+  // 只作用于 CSS zoom 视图态（--prv-zoom），无文档模型变更、无脏态（BR-PRV-DATA-001）。
+  // pdf 模式不在此列：iframe 内 WKWebView 原生查看器自持缩放（悬浮条 + 原生捏合）。
+  useEffect(() => {
+    if (mode !== "image" && mode !== "table") return;
+    const el = bodyRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      setZoom((z) => stepZoom(z, event.deltaY < 0 ? ZOOM.step : -ZOOM.step));
+    };
+    let base = zoomRef.current;
+    const onGestureStart = () => {
+      base = zoomRef.current;
+    };
+    const onGestureChange = (event: Event) => {
+      const scale = (event as unknown as { scale?: number }).scale;
+      if (typeof scale !== "number" || !Number.isFinite(scale)) return;
+      setZoom(clampZoom(base * scale));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", onGestureStart);
+    el.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart);
+      el.removeEventListener("gesturechange", onGestureChange);
+    };
+  }, [mode]);
 
   const print = () => {
     if (mode === "pdf") frameRef.current?.contentWindow?.print();
@@ -78,8 +115,18 @@ export function PrvPanel({ path }: { path: string }) {
     }
   };
 
+  // 本地打开：系统默认应用打开 workspace 内文件（只读查看，X-FORBID-004 守界）
+  const openLocal = async () => {
+    try {
+      await openExternal(path);
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      setErrMsg(err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e));
+      setStatus("error");
+    }
+  };
+
   useEffect(() => {
-    let revoked: string | null = null;
     let alive = true;
     if (mode === "table") return; // 表格式预览由 TablePreview 自管数据加载
     setStatus("loading");
@@ -87,12 +134,8 @@ export function PrvPanel({ path }: { path: string }) {
     const loader = mode === "pdf" ? previewDoc(path) : mediaSrc(path);
     loader
       .then((u) => {
-        if (!alive) {
-          if (mode === "pdf") URL.revokeObjectURL(u);
-          return;
-        }
-        if (mode === "pdf") revoked = u; // 仅 blob URL 需回收；asset URL 不需
-        setUrl(u);
+        if (!alive) return;
+        setUrl(u); // asset URL 无需 revoke
         setStatus("ready");
       })
       .catch((e) => {
@@ -103,7 +146,6 @@ export function PrvPanel({ path }: { path: string }) {
       });
     return () => {
       alive = false;
-      if (revoked) URL.revokeObjectURL(revoked);
     };
   }, [path, mode]);
 
@@ -119,8 +161,9 @@ export function PrvPanel({ path }: { path: string }) {
         onEnterEdit={() => void enterEdit()}
         onExport={exportCurrent}
         onPrint={print}
+        onOpenExternal={() => void openLocal()}
       />
-      <div className="prv-body" style={{ "--prv-zoom": String(zoom) } as React.CSSProperties}>
+      <div ref={bodyRef} className="prv-body" style={{ "--prv-zoom": String(zoom) } as React.CSSProperties}>
         {mode === "table" && <TablePreview path={path} />}
         {mode !== "table" && status === "loading" && (
           <p className="muted">{mode === "pdf" ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载中…"}</p>

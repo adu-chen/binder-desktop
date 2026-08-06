@@ -36,6 +36,7 @@ export function PrvToolbar({
   onEnterEdit,
   onExport,
   onPrint,
+  onOpenExternal,
 }: {
   mode: PreviewMode;
   path: string;
@@ -50,6 +51,8 @@ export function PrvToolbar({
   onExport: (format: ExportFormat) => Promise<{ ok: boolean; message?: string }>;
   /** 打印当前预览（pdf 为 iframe 系统打印；table 为 window.print）。 */
   onPrint: () => void;
+  /** 本地打开（系统默认应用打开，只读查看；PRV-PREVIEW-OPT-01）。 */
+  onOpenExternal?: () => void;
 }) {
   const [exportState, setExportState] = useState<"idle" | "exporting" | "success" | "error">("idle");
   const [exportMessage, setExportMessage] = useState("");
@@ -120,6 +123,12 @@ export function PrvToolbar({
           <>
             {canZoom && <Sep />}
             <TbBtn title="打印" disabled={printDisabled} onClick={onPrint}>打印</TbBtn>
+          </>
+        )}
+        {onOpenExternal && (
+          <>
+            <Sep />
+            <TbBtn title="在本地应用中打开" onClick={onOpenExternal}>本地打开</TbBtn>
           </>
         )}
       </div>

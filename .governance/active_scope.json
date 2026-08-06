@@ -1,77 +1,87 @@
 {
-  "scope_id": "ED-FONT-LOCAL-LIBRARY-01",
+  "scope_id": "PRV-PREVIEW-OPT-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "编辑器工具栏本地字体库同步（fonts.list_fonts + 字体组改造）",
-  "status": "CLOSED",
+  "title": "预览链路优化（缓存落盘 + asset 授权）+ 本地打开 + 背景统一（不含渲染层）",
+  "status": "SCOPED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/ED-FONT-LOCAL-LIBRARY-01.md",
+  "issue_trace": ".governance/issues/PRV-PREVIEW-OPT-01.md",
   "stop_condition": null,
-  "reason": "人类决策（2026-08-05）：按方案修复编辑器工具栏字体组——新增 fonts.list_fonts command（macOS CoreText 只读枚举字体族名）+ 前端 fontService 缓存；字体下拉=常用子集置顶（仅可用展示）+本地可用字体追加；document.fonts.check 过滤不可用；写入统一引号规范化；枚举失败/空列表回退不阻塞编辑。本 Scope 替换 PRV-TOOLBAR-ADAPTIVE-01 活动锁（已提交闭合）。",
+  "reason": "人类确认方案（2026-08-05）：不更换 PDF 渲染层（iframe + WKWebView，WebKit 悬浮工具栏接受现状）；执行预览链路优化（PDF 缓存落盘 + asset 协议授权替换 JSON number[] 字节回传）、本地打开（prv.open_external）、预览背景色统一。LO 转换链/字体补丁/FontPlan/manifest 校验链不动。本 Scope 替换 PRV-TOOLBAR-ADAPTIVE-01 活动锁（该锁工作已完成）。",
   "objectives": [
-    "新增 fonts.list_fonts command：CTFontManagerCopyAvailableFontFamilyNames 只读枚举 macOS 字体族名",
-    "fontService.listLocalFonts + module 级缓存；失败/空回退不阻塞编辑",
-    "EditorToolbar 字体组改造：常用子集置顶（仅可用展示）+ 本地追加 + document.fonts.check 过滤 + 引号规范化",
-    "文档同步：A-SYS-I-P-02 command 登记、A-ED-X-R-03 字体行更新、A-ED-M-T-01 变更记录、ADUS 重新生成"
+    "后端：prv::render_preview 改为 PDF 落盘缓存（app_data_dir/preview-cache，键=路径+size+mtime，命中跳过 LO 转换，惰性过期清理），返回路径；lib.rs route_preview 返回 { format, abs_path } + 逐文件 asset 授权；新增 prv.open_external（系统默认应用打开，X-FORBID-004 守界）",
+    "前端：prvService.previewDoc 返回 convertFileSrc asset URL，PrvPanel pdf iframe 直接 src=asset URL（去 blob revoke）；新增 openExternal",
+    "PrvToolbar pdf 模式新增本地打开按钮 + 测试扩展",
+    "styles.css：prv-body 背景 --bg-sunken → --bg-page",
+    "治理：A-PRV-M-T-01/A-PRV-I-P-01 回写；test_governance.test.mjs 过期断言修复（人类已批准）；generate/test:related/audit 通过"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/ED-FONT-LOCAL-LIBRARY-01.md",
-    "src-tauri/Cargo.toml",
+    ".governance/issues/PRV-PREVIEW-OPT-01.md",
+    "src-tauri/src/prv/mod.rs",
     "src-tauri/src/lib.rs",
-    "src-tauri/src/fonts/mod.rs",
-    "src/services/fontService.ts",
-    "src/services/fontService.test.ts",
-    "src/components/ed/EditorToolbar.tsx",
-    "src/components/ed/EditorControls.test.tsx",
-    ".governance/test-governance.json",
-    "docs/01_modules/SYS/A-SYS-I-P-02_IPC协议.md",
-    "docs/01_modules/ED/A-ED-X-R-03_编辑器工具栏功能与兼容性清单.md",
-    "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    "src/components/prv/PrvPanel.tsx",
+    "src/components/prv/PrvToolbar.tsx",
+    "src/components/prv/PrvToolbar.test.tsx",
+    "src/services/prvService.ts",
+    "src/styles.css",
+    "docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md",
+    "docs/01_modules/PRV/A-PRV-I-P-01_预览输出接口协议.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "scripts/test_governance.test.mjs"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "CLAUDE.md",
-    "docs/00_core/A-CORE-C-P-01_APC.md",
     "governance.config.json",
     "scripts/test_governance.mjs",
-    "scripts/test_governance.test.mjs"
+    "scripts/generate_adus.mjs",
+    "scripts/audit_taskflow_governance.mjs",
+    "src-tauri/src/doc/lo_worker.rs",
+    "src-tauri/src/doc/libreoffice_runtime.rs",
+    "src-tauri/src/doc/font_trace.rs",
+    "src-tauri/src/doc/tool_runtime.rs",
+    "src-tauri/resources/libreoffice/**",
+    "patches/libreoffice/**"
   ],
   "constraints": [
-    "字体枚举只读：仅取字体族名，不读字体文件内容、不解析字形；不触达 workspace",
-    "不可用字体不渲染（document.fonts.check）；常用子集排序置顶",
-    "写入前引号规范化：多词字体名加单引号，修复无引号拆词隐患",
-    "枚举失败/空列表回退硬编码 5 字体（不阻塞编辑）；module 级缓存",
-    "BDocx 字体往返口径不变（best_effort），本地同步只增强所见即所得"
+    "BR-PRV-DATA-001 只读硬边界不弱化：预览无编辑交互、无文档模型变更、无脏态",
+    "缓存是 DOC 预览链产物的复用，不绕过 X-SEQ-004；缓存目录限 app_data_dir，不在 workspace",
+    "本地打开（prv.open_external）仅系统默认应用打开，不写回、落点限 workspace 内（X-FORBID-004）",
+    "asset 授权逐文件最小暴露（同 prv.media_src 纪律）",
+    "LO 转换链/字体补丁/FontPlan/manifest 校验链一律不动",
+    "渲染层不更换：iframe + WKWebView 保持，WebKit 悬浮工具栏按人类决策接受现状",
+    "引入预览缓存编排触发 A-PRV-M-T-01 §5 状态机豁免失效条件，复核结论维持豁免，留痕于设计文档与 Runtime Report"
   ],
   "acceptance_criteria": [
-    "fonts.list_fonts 返回 macOS 已注册字体族名数组（只读）",
-    "字体下拉：常用子集置顶（仅可用展示）+ 本地字体追加；不可用不渲染；选择后写入带引号 CSS",
-    "枚举失败/空列表回退不阻塞编辑",
-    "governance:generate 与 governance:audit 通过；相关测试、tsc、build 通过"
+    "prv.preview 不再回传 JSON number[]：返回缓存 PDF 路径 + asset 授权，iframe 直接加载",
+    "同文件重复预览命中缓存（不重复调用 LO 转换）",
+    "PrvToolbar pdf 模式含本地打开按钮且回调可用；预览背景与应用统一",
+    "前端测试与 Rust 缓存/command 测试通过；governance:generate 与 governance:audit 通过",
+    "LO 相关测试与资源未被改动；渲染层（iframe）保持"
   ],
   "validation_commands": [
-    "cargo test --lib fonts",
-    "npx vitest run src/services/fontService.test.ts src/components/ed/EditorControls.test.tsx",
+    "npx vitest run src/components/prv/PrvToolbar.test.tsx",
+    "cargo test --manifest-path src-tauri/Cargo.toml prv::",
+    "npm run test:related -- --files src-tauri/src/prv/mod.rs src-tauri/src/lib.rs src/components/prv/PrvPanel.tsx src/components/prv/PrvToolbar.tsx src/components/prv/PrvToolbar.test.tsx src/services/prvService.ts src/styles.css",
     "npm run governance:generate",
-    "npm run governance:audit",
-    "npx tsc --noEmit",
-    "npm run build"
+    "npm run governance:audit"
   ],
   "out_of_scope": [
-    "Windows/Linux 字体枚举（本 Scope 仅 macOS CoreText）",
-    "BDocx 字体往返保真提升（维持 best_effort）",
-    "字体列表搜索式下拉 UI（保持 select）",
-    "display-only 字体（仅打印字体）白名单"
+    "PDF 渲染层更换（PDF.js）——人类决策接受 WebKit 悬浮工具栏现状",
+    "LO 源码包瘦身、LO 进程常驻（UNO socket）",
+    "沙箱 signal 6（已裁决环境假失败，不动）",
+    "prv.export 后端能力扩展"
   ],
   "unresolved_items": [
-    "document.fonts.check 可能隐藏极少数 display-only 字体（WKWebView 判不可用）——可接受，后续如需开白名单",
-    "跨平台字体枚举未纳入"
+    "iframe 加载 asset URL 的 PDF 兼容性需真机确认（原 blob URL 等价，media_src 已证 asset 授权可用）",
+    "缓存失效边界（文件修改/删除/容量上限）持续观察",
+    "WebKit 悬浮工具栏为系统行为，接受现状不处理"
   ],
   "scope_expansions": [
-    "2026-08-05：fontService/fontService.test 与 src-tauri/src/fonts/** 归属 ED——fontService.test.ts 因 covers 引用 BR-SYS-DATA-003 误归 SYS 触发 budget 超限（4/3），fontService.ts 与 fonts/mod.rs 因不在任何模块 source_globs 触发 owner missing；按 AGENTS.md §8 修复模块登记——ED source_globs 增 src/services/fontService* 与 src-tauri/src/fonts/**、test_globs 增 src/services/fontService.test.ts、baseline/target_frontend_test_files 7→8；test-governance.json 纳入 allowed_files"
+    "2026-08-05：回退 PRV-PDFJS-RENDER-01 后，test_governance.test.mjs 的 ED/WS/PRV 断言仍为过期值（ED 207/WS 28/PRV 1，HEAD 实际 208/30/3），沿用人类 2026-08-05 已批准授权同步修复，避免 test:related 反复受阻",
+    "2026-08-05：人类反馈「预览缩放 + 鼠标/触控板适配」——确认缩放逻辑未被破坏（image/table 为 CSS zoom，pdf 由 iframe 原生 + 悬浮条承担）；PrvPanel 新增 Ctrl/Cmd+滚轮与 WebKit gesture 捏合缩放适配（image/table 视图态，BR-PRV-DATA-001 不弱化）"
   ]
 }

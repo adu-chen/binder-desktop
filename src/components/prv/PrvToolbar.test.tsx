@@ -101,4 +101,12 @@ describe("PrvToolbar · 预览模式工具栏自适应（PRV-VIEW）", () => {
     expect(screen.queryByTitle("关闭")).toBeNull();
     expect(screen.queryByText("关闭")).toBeNull();
   });
+
+  it("pdf 本地打开：传 onOpenExternal 时显示按钮并回调", () => {
+    const onOpenExternal = vi.fn();
+    render(<PrvToolbar mode="pdf" path="note.docx" {...base} onOpenExternal={onOpenExternal} />);
+    expect(screen.getByTitle("在本地应用中打开")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("在本地应用中打开"));
+    expect(onOpenExternal).toHaveBeenCalledOnce();
+  });
 });
