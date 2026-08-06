@@ -148,7 +148,13 @@ describe("EditorToolbar · 格式工具集", () => {
       />,
     );
     expect(screen.getByLabelText("编辑器工具")).toBeTruthy();
-    expect(screen.getByLabelText("文档工具").textContent).toContain("纯文本模式");
+    expect(screen.getByLabelText("文档工具")).toBeTruthy();
+    expect(screen.queryByText(/仅提供段落级结构工具/)).toBeNull();
+    expect(screen.getByTitle("引用")).toBeTruthy();
+    expect(screen.getByTitle("代码块")).toBeTruthy();
+    expect(screen.getByTitle("插入分隔线")).toBeTruthy();
+    expect(screen.queryByTitle("无序列表")).toBeNull();
+    expect(screen.queryByTitle("加粗 ⌘B")).toBeNull();
     expect(screen.queryByLabelText("插入内容")).toBeNull();
     expect(screen.getAllByLabelText("查找和替换").length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText("跳转行号").length).toBeGreaterThan(0);
@@ -206,10 +212,8 @@ describe("EditorToolbar · 格式工具集", () => {
     ]) chain[name] = () => chain;
     const toggleHighlight = vi.fn(() => chain);
     const toggleStrike = vi.fn(() => chain);
-    const unsetHighlight = vi.fn(() => chain);
     chain.toggleHighlight = toggleHighlight;
     chain.toggleStrike = toggleStrike;
-    chain.unsetHighlight = unsetHighlight;
     chain.run = () => true;
     const editor = {
       chain: () => chain,
@@ -232,15 +236,15 @@ describe("EditorToolbar · 格式工具集", () => {
 
     expect(screen.queryByTitle("切换为行内嵌入")).toBeNull();
     expect(screen.queryByTitle("切换为独占块")).toBeNull();
-    expect(screen.getByTitle("高亮")).toBeTruthy();
-    expect(screen.getAllByLabelText("文字颜色")).toHaveLength(1);
+    expect(screen.getByLabelText("文字颜色")).toBeTruthy();
     fireEvent.click(screen.getByTitle("删除线"));
     expect(toggleStrike).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText("高亮底色")).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("自定义高亮底色"), { target: { value: "#00ff00" } });
+    expect(screen.getByLabelText("文字背景")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("文字背景"), { target: { value: "#00ff00" } });
     expect(toggleHighlight).toHaveBeenCalledWith({ color: "#00ff00" });
-    fireEvent.click(screen.getByTitle("清除高亮"));
-    expect(unsetHighlight).toHaveBeenCalledOnce();
+    expect(screen.queryByTitle("清除高亮")).toBeNull();
+    expect(screen.queryByTitle("高亮")).toBeNull();
+    expect(screen.queryByLabelText("高亮底色")).toBeNull();
     expect(screen.getByTitle("上标")).toBeTruthy();
     expect(screen.getByTitle("下标")).toBeTruthy();
     expect(screen.getByTitle("插入分隔线")).toBeTruthy();

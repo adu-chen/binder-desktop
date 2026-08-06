@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-06T15:15:35.072Z -->
+<!-- 最后生成时间：2026-08-06T17:04:59.657Z -->
 
 ### 模块编码表
 
@@ -278,9 +278,9 @@
 | codes                                   | type   | rules                                                                | 文件                                        | 行号   |
 | --------------------------------------- | ------ | -------------------------------------------------------------------- | ----------------------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 785  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 983  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1796 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 788  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 986  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1800 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
@@ -419,7 +419,7 @@
 
 | codes                                 | type   | rules                                              | 文件                                    | 行号  |
 | ------------------------------------- | ------ | -------------------------------------------------- | ------------------------------------- | --- |
-| BR-DE-DATA-002-RB-DE-DE-DIFF-003      | RB     | BR-DE-DATA-002 term_ref: TERM-DE-003, TERM-ED-008  | src/components/de/DiffCard.tsx        | 201 |
+| BR-DE-DATA-002-RB-DE-DE-DIFF-003      | RB     | BR-DE-DATA-002 term_ref: TERM-DE-003, TERM-ED-008  | src/components/de/DiffCard.tsx        | 202 |
 | BR-DE-DATA-002-EFFECT-DE-DE-DIFF-005  | EFFECT | BR-DE-DATA-002 term_ref: TERM-DE-004, TERM-ED-008  | src/services/deService.ts             | 112 |
 | BR-DE-DATA-002-RB-ED-DE-DIFF-028      | RB     | BR-DE-DATA-002 term_ref: TERM-DE-004, TERM-ED-008  | src/services/edImageOps.ts            | 493 |
 | BR-ED-DATA-007-RB-ED-ED-EDIT-018      | RB     | BR-ED-DATA-007 term_ref: TERM-ED-007, TERM-DOC-005 | src/services/edTableOps.ts            | 407 |
@@ -483,8 +483,8 @@
 
 | codes                                                                                                             | type   | rules                                                                 | 文件                                               | 行号  |
 | ----------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------- | ------------------------------------------------ | --- |
-| BR-ED-DATA-001-RB-ED-ED-EDIT-024, BR-ED-DATA-003-RB-ED-ED-EDIT-024                                                | RB     | BR-ED-DATA-001, BR-ED-DATA-003                                        | src/components/ed/ImageMoveControls.tsx          | 38  |
-| BR-ED-DATA-007-RB-ED-ED-EDIT-019                                                                                  | RB     | BR-ED-DATA-007 term_ref: TERM-ED-007                                  | src/components/ed/TableMoveControls.tsx          | 46  |
+| BR-ED-DATA-001-RB-ED-ED-EDIT-024, BR-ED-DATA-003-RB-ED-ED-EDIT-024                                                | RB     | BR-ED-DATA-001, BR-ED-DATA-003                                        | src/components/ed/ImageMoveControls.tsx          | 39  |
+| BR-ED-DATA-007-RB-ED-ED-EDIT-019                                                                                  | RB     | BR-ED-DATA-007 term_ref: TERM-ED-007                                  | src/components/ed/TableMoveControls.tsx          | 47  |
 | BR-ED-DATA-001-DATA-ED-ED-EDIT-001                                                                                | DATA   | BR-ED-DATA-001 term_ref: TERM-ED-001                                  | src/components/ed/extensions/BlockIdExtension.ts | 96  |
 | BR-ED-DATA-003-GUARD-ED-ED-EDIT-019                                                                               | GUARD  | BR-ED-DATA-003                                                        | src/components/ed/extensions/Pagination.ts       | 263 |
 | BR-ED-DATA-003-GUARD-ED-ED-EDIT-020                                                                               | GUARD  | BR-ED-DATA-003                                                        | src/components/ed/extensions/Pagination.ts       | 585 |
@@ -756,8 +756,8 @@
 
 | codes                               | type | chain     | 文件                                   | 行号   |
 | ----------------------------------- | ---- | --------- | ------------------------------------ | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 785  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1796 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 788  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1800 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
@@ -769,7 +769,7 @@
 | codes                                   | type   | chain     | 文件                                        | 行号  |
 | --------------------------------------- | ------ | --------- | ----------------------------------------- | --- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | AG-ASSIST | src/components/ag/AutocompleteOverlay.tsx | 16  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 983 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 986 |
 
 #### BR-AG-STATE-004
 
@@ -861,7 +861,7 @@
 
 | codes                            | type | chain   | 文件                             | 行号  |
 | -------------------------------- | ---- | ------- | ------------------------------ | --- |
-| BR-DE-DATA-002-RB-DE-DE-DIFF-003 | RB   | DE-DIFF | src/components/de/DiffCard.tsx | 201 |
+| BR-DE-DATA-002-RB-DE-DE-DIFF-003 | RB   | DE-DIFF | src/components/de/DiffCard.tsx | 202 |
 
 #### BR-DE-DATA-002 term_ref: TERM-DE-004
 
@@ -976,7 +976,7 @@
 
 | codes                                                                                                             | type   | chain   | 文件                                      | 行号   |
 | ----------------------------------------------------------------------------------------------------------------- | ------ | ------- | --------------------------------------- | ---- |
-| BR-ED-DATA-001-RB-ED-ED-EDIT-024, BR-ED-DATA-003-RB-ED-ED-EDIT-024                                                | RB     | ED-EDIT | src/components/ed/ImageMoveControls.tsx | 38   |
+| BR-ED-DATA-001-RB-ED-ED-EDIT-024, BR-ED-DATA-003-RB-ED-ED-EDIT-024                                                | RB     | ED-EDIT | src/components/ed/ImageMoveControls.tsx | 39   |
 | BR-ED-DATA-001-QUERY-ED-ED-EDIT-024, BR-ED-DATA-003-QUERY-ED-ED-EDIT-024                                          | QUERY  | ED-EDIT | src/services/edImageOps.ts              | 228  |
 | BR-ED-DATA-001-QUERY-ED-ED-EDIT-021, BR-ED-DATA-003-QUERY-ED-ED-EDIT-021                                          | QUERY  | ED-EDIT | src/services/edImageOps.ts              | 570  |
 | BR-ED-DATA-001-EFFECT-ED-ED-EDIT-022, BR-ED-DATA-003-EFFECT-ED-ED-EDIT-022, BR-ED-STATE-001-EFFECT-ED-ED-EDIT-022 | EFFECT | ED-EDIT | src/services/edImageOps.ts              | 599  |
@@ -1001,7 +1001,7 @@
 
 | codes                                                                                                             | type   | chain   | 文件                                             | 行号  |
 | ----------------------------------------------------------------------------------------------------------------- | ------ | ------- | ---------------------------------------------- | --- |
-| BR-ED-DATA-001-RB-ED-ED-EDIT-024, BR-ED-DATA-003-RB-ED-ED-EDIT-024                                                | RB     | ED-EDIT | src/components/ed/ImageMoveControls.tsx        | 38  |
+| BR-ED-DATA-001-RB-ED-ED-EDIT-024, BR-ED-DATA-003-RB-ED-ED-EDIT-024                                                | RB     | ED-EDIT | src/components/ed/ImageMoveControls.tsx        | 39  |
 | BR-ED-DATA-003-GUARD-ED-ED-EDIT-019                                                                               | GUARD  | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 263 |
 | BR-ED-DATA-003-GUARD-ED-ED-EDIT-020                                                                               | GUARD  | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 585 |
 | BR-ED-DATA-003-GUARD-ED-ED-EDIT-018                                                                               | GUARD  | ED-EDIT | src/components/ed/extensions/Pagination.ts     | 636 |
@@ -1069,7 +1069,7 @@
 
 | codes                                | type   | chain            | 文件                                               | 行号  |
 | ------------------------------------ | ------ | ---------------- | ------------------------------------------------ | --- |
-| BR-ED-DATA-007-RB-ED-ED-EDIT-019     | RB     | ED-EDIT          | src/components/ed/TableMoveControls.tsx          | 46  |
+| BR-ED-DATA-007-RB-ED-ED-EDIT-019     | RB     | ED-EDIT          | src/components/ed/TableMoveControls.tsx          | 47  |
 | BR-ED-DATA-007-DATA-ED-ED-EDIT-018   | DATA   | ED-EDIT          | src/components/ed/extensions/TableCellShading.ts | 37  |
 | BR-ED-DATA-007-RB-ED-ED-EDIT-018     | RB     | ED-EDIT, DE-DIFF | src/services/edTableOps.ts                       | 407 |
 | BR-ED-DATA-007-EFFECT-ED-ED-EDIT-014 | EFFECT | ED-EDIT, DE-DIFF | src/services/edTableOps.ts                       | 438 |
@@ -1452,8 +1452,8 @@
 
 | codes                                   | type   | chain     | 文件                                   | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------------------ | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 785  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1796 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 788  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1800 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
@@ -1527,7 +1527,7 @@
 
 | codes                                                                                                          | type   | chain   | 文件                                     | 行号   |
 | -------------------------------------------------------------------------------------------------------------- | ------ | ------- | -------------------------------------- | ---- |
-| BR-DE-DATA-002-RB-DE-DE-DIFF-003                                                                               | RB     | DE-DIFF | src/components/de/DiffCard.tsx         | 201  |
+| BR-DE-DATA-002-RB-DE-DE-DIFF-003                                                                               | RB     | DE-DIFF | src/components/de/DiffCard.tsx         | 202  |
 | BR-AG-DATA-001-EFFECT-AG-AG-TURN-005                                                                           | EFFECT | AG-TURN | src/services/agService.ts              | 269  |
 | BR-DE-DATA-002-EFFECT-DE-DE-DIFF-005                                                                           | EFFECT | DE-DIFF | src/services/deService.ts              | 112  |
 | BR-SYS-DATA-006-RB-ED-ED-EDIT-027, BR-ED-DATA-003-RB-ED-ED-EDIT-027                                            | RB     | ED-EDIT | src/services/edImageOps.ts             | 256  |
@@ -1554,15 +1554,15 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 23；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 763。
+动态发现：前端测试文件 23；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 775。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
 | CORE | high | 1 | 19 | governance:1 | 1/1 → 1 |
-| SYS | critical | 18 | 164 | component:2, integration:2, service:2, state:1, unit:11 | 3/3 → 3 |
-| WS | critical | 17 | 188 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
-| ED | critical | 19 | 374 | component:4, service:6, state:1, unit:8 | 8/8 → 8 |
-| DE | critical | 17 | 212 | component:3, integration:1, service:2, unit:11 | 2/2 → 2 |
+| SYS | critical | 18 | 174 | component:2, integration:2, service:2, state:1, unit:11 | 3/3 → 3 |
+| WS | critical | 17 | 190 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
+| ED | critical | 19 | 384 | component:4, service:6, state:1, unit:8 | 8/8 → 8 |
+| DE | critical | 17 | 215 | component:3, integration:1, service:2, unit:11 | 2/2 → 2 |
 | AG | critical | 20 | 190 | component:1, integration:1, service:1, state:1, unit:16 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
 | DOC | critical | 17 | 126 | service:1, unit:16 | 1/1 → 1 |

@@ -11,13 +11,6 @@ const PAPER_KINDS: PaperKind[] = ["A4", "A3", "A5", "Letter"];
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 36] as const;
 // 常用子集（固定优先项，仅本地可用时展示）：保证下拉至少保留常用字体入口。
 const COMMON_FONT_FAMILIES = ["Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New"] as const;
-const HIGHLIGHT_COLORS = [
-  { label: "黄色", color: "#FDE68A" },
-  { label: "绿色", color: "#BBF7D0" },
-  { label: "蓝色", color: "#BAE6FD" },
-  { label: "粉色", color: "#FBCFE8" },
-  { label: "紫色", color: "#DDD6FE" },
-] as const;
 type ExportFormat = "pdf" | "docx" | "md";
 
 /**
@@ -457,7 +450,13 @@ export function EditorToolbar({
 
       <div className="ed-tb-row ed-tb-row-document" aria-label="文档工具">
         {isPlainText ? (
-          <span className="ed-tb-mode-note" role="status">纯文本模式：仅保留文本内容与编辑器工具</span>
+          <>
+            <ToolbarMenu label="段落" title="段落工具">
+              <TbBtn title="引用" active={editor.isActive("blockquote")} onClick={() => chain().toggleBlockquote().run()}>引用</TbBtn>
+              <TbBtn title="代码块" active={editor.isActive("codeBlock")} onClick={() => chain().toggleCodeBlock().run()}>代码块</TbBtn>
+              <TbBtn title="插入分隔线" onClick={() => chain().setHorizontalRule().run()}>分隔线</TbBtn>
+            </ToolbarMenu>
+          </>
         ) : isSourceView ? (
           <span className="ed-tb-mode-note" role="status">Markdown 源码模式：格式操作请使用 Markdown 语法</span>
         ) : (
@@ -483,7 +482,6 @@ export function EditorToolbar({
               ) : (
                 <>
                   <TbBtn title="下划线 ⌘U" active={editor.isActive("underline")} onClick={() => chain().toggleUnderline().run()}><u>U</u></TbBtn>
-                  <TbBtn title="高亮" active={editor.isActive("highlight")} onClick={() => chain().toggleHighlight({ color: "#FDE68A" }).run()}>高亮</TbBtn>
                   <label className="ed-tb-color-field">
                     <span>文字颜色</span>
                     <input
@@ -493,30 +491,15 @@ export function EditorToolbar({
                       onChange={(event) => chain().setColor(event.target.value).run()}
                     />
                   </label>
-                  <div className="ed-tb-highlight-control" role="group" aria-label="高亮底色">
-                    {HIGHLIGHT_COLORS.map(({ label, color }) => (
-                      <button
-                        key={color}
-                        type="button"
-                        className="ed-tb-highlight-swatch"
-                        aria-label={`设置高亮为${label}`}
-                        title={`高亮：${label}`}
-                        style={{ backgroundColor: color }}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => chain().toggleHighlight({ color }).run()}
-                      />
-                    ))}
-                    <label className="ed-tb-highlight-custom" title="自定义高亮底色">
-                      <span>更多</span>
-                      <input
-                        type="color"
-                        aria-label="自定义高亮底色"
-                        value={(editor.getAttributes("highlight").color as string | undefined) ?? "#FDE68A"}
-                        onChange={(event) => chain().toggleHighlight({ color: event.target.value }).run()}
-                      />
-                    </label>
-                    <TbBtn title="清除高亮" onClick={() => chain().unsetHighlight().run()}>清除高亮</TbBtn>
-                  </div>
+                  <label className="ed-tb-color-field">
+                    <span>文字背景</span>
+                    <input
+                      type="color"
+                      aria-label="文字背景"
+                      value={(editor.getAttributes("highlight").color as string | undefined) ?? "#FDE68A"}
+                      onChange={(event) => chain().toggleHighlight({ color: event.target.value }).run()}
+                    />
+                  </label>
                   <TbBtn title="上标" active={editor.isActive("superscript")} onClick={() => chain().toggleSuperscript().run()}>X<sup>2</sup></TbBtn>
                   <TbBtn title="下标" active={editor.isActive("subscript")} onClick={() => chain().toggleSubscript().run()}>X<sub>2</sub></TbBtn>
                   <label className="ed-tb-field">

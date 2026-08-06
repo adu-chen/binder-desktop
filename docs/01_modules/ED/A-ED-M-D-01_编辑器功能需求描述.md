@@ -110,7 +110,7 @@ owner_module: ED
 status: active
 summary: 提供基于 TipTap 的富文本编辑运行时，支持 workspace 内 Markdown/b-docx 内容按格式解析为结构化 LogicalState、以终态样式编辑并安全序列化，编辑能力离线可用；落盘经 WS
 source_doc: APC §4.1、REQ-CORE-004、REQ-CORE-009
-acceptance: Markdown 的 H1-H6、强调、列表、引用、代码、链接、图片、表格、分隔线等受支持语法加载后以终态富文本呈现且源码标记不作为正文显示；未编辑 Markdown 不改写，编辑后保存保持支持子集语义等价，无法无损处理时不得静默保存；b-docx 可加载为富文本并编辑；纯文本行为不变；离线编辑可用；save 经 WS 可靠落盘（A-WS-M-T-01）
+acceptance: Markdown 的 H1-H6、强调、列表、引用、代码、链接、图片、表格、分隔线等受支持语法加载后以终态富文本呈现且源码标记不作为正文显示；未编辑 Markdown 不改写，编辑后保存保持支持子集语义等价，无法无损处理时不得静默保存；b-docx 可加载为富文本并编辑；纯文本（.txt 等）提供段落级结构内容编辑工具栏（引用/代码块/分隔线，内容可保存），文字级样式（字体/字号/颜色等）不展示（txt 保存为纯文本不持久化，ED-TXT-TOOLBAR-01）；离线编辑可用；save 经 WS 可靠落盘（A-WS-M-T-01）
 open_issues: Markdown 扩展仍为 Beta，具体兼容范围与非标准语法降级由 ED L2 及 fixtures 门禁锁定；docx 富文本编辑与 DOC 转换边界归 ED/DOC L2（ED-04）
 -->
 
