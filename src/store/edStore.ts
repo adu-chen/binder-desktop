@@ -516,6 +516,21 @@ export const edStore = {
       jumpLine: state.jumpLine,
     });
   },
+  /** 关闭 relPath 以 dirPath/ 为前缀的所有编辑器会话（目录删除后清理，WS-DIR-DELETE-01）；
+   *  活动会话在被删目录内则置空并重置载入序号（对齐 reset）；其余会话/活动保留（不误伤未保存编辑）。 */
+  closeDocsUnder(dirPath: string) {
+    const prefix = `${dirPath}/`;
+    const sessions = Object.fromEntries(
+      Object.entries(state.sessions).filter(([path]) => !path.startsWith(prefix)),
+    );
+    const activeInDir = state.activePath != null && state.activePath.startsWith(prefix);
+    commit({
+      sessions,
+      activePath: activeInDir ? null : state.activePath,
+      loadSeq: activeInDir ? 0 : state.loadSeq,
+      jumpLine: state.jumpLine,
+    });
+  },
   /** 切换/关闭 workspace 时清空全部编辑会话（避免残留旧文档内容/基线）。 */
   reset() {
     commit({ sessions: {}, activePath: null, loadSeq: 0, jumpLine: null });

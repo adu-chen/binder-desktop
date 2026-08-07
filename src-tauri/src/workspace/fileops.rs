@@ -98,6 +98,35 @@ pub fn rename_doc(from_abs: &Path, to_abs: &Path) -> Result<(), IpcError> {
 
 /**
  * @GOV
+ * codes:    BR-WS-DATA-001-EFFECT-WS-WS-FS-007
+ * type:     EFFECT
+ * chain:    WS-FS
+ * rules:    BR-WS-DATA-001
+ * boundary: in=folderAbsolutePathAndRecursiveMode | out=deletedFolder(rejectedWhenMissingOrNotDirOrNotEmptyWhenNonRecursive) | does_not=remove_single_file
+ */
+/// 删除目录（BR-WS-DATA-001，两级语义 2026-08-06）：缺失拒 WS_NOT_FOUND；目标为文件拒 WS_EXISTS；
+/// recursive=false 仅删空目录（非空拒 WS_NOT_EMPTY）；recursive=true 递归删除整个子树。
+/// 路径守界由调用方保证（X-FORBID-004）。
+pub fn delete_folder(abs_path: &Path, recursive: bool) -> Result<(), IpcError> {
+    if !abs_path.exists() {
+        return Err(IpcError::new("WS_NOT_FOUND", "目录不存在", false, false));
+    }
+    if !abs_path.is_dir() {
+        return Err(IpcError::new("WS_EXISTS", "目标已存在且不是目录", false, false));
+    }
+    if recursive {
+        std::fs::remove_dir_all(abs_path).map_err(|e| io_err("删除目录", e))
+    } else {
+        let mut entries = std::fs::read_dir(abs_path).map_err(|e| io_err("读目录", e))?;
+        if entries.next().is_some() {
+            return Err(IpcError::new("WS_NOT_EMPTY", "目录非空", false, false));
+        }
+        std::fs::remove_dir(abs_path).map_err(|e| io_err("删除目录", e))
+    }
+}
+
+/**
+ * @GOV
  * codes:    BR-WS-DATA-001-EFFECT-WS-WS-FS-003
  * type:     EFFECT
  * chain:    WS-FS
@@ -173,6 +202,40 @@ mod tests {
         // 目标已存在
         std::fs::write(&from, b"x").unwrap();
         assert_eq!(rename_doc(&from, &to).unwrap_err().code, "WS_EXISTS");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // covers: BR-WS-DATA-001
+    // 目录删除两级语义：empty 删空目录、非空拒 WS_NOT_EMPTY、目标是文件拒 WS_EXISTS、缺失拒 WS_NOT_FOUND；
+    // recursive 递归删除含子项目录。
+    #[test]
+    fn delete_folder_two_tier_semantics() {
+        let d = tmp_dir("delete_folder");
+        // empty：删空目录
+        let empty = d.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        delete_folder(&empty, false).unwrap();
+        assert!(!empty.exists());
+        // empty：非空拒 WS_NOT_EMPTY
+        let nonempty = d.join("nonempty");
+        std::fs::create_dir_all(nonempty.join("sub")).unwrap();
+        assert_eq!(
+            delete_folder(&nonempty, false).unwrap_err().code,
+            "WS_NOT_EMPTY"
+        );
+        // recursive：递归删除含子项目录
+        delete_folder(&nonempty, true).unwrap();
+        assert!(!nonempty.exists());
+        // 目标是文件 → WS_EXISTS（不删除文件）
+        let f = d.join("f.txt");
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(delete_folder(&f, true).unwrap_err().code, "WS_EXISTS");
+        assert!(f.exists());
+        // 缺失 → WS_NOT_FOUND
+        assert_eq!(
+            delete_folder(&d.join("missing"), true).unwrap_err().code,
+            "WS_NOT_FOUND"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

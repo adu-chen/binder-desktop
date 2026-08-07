@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useWsStore, wsStore, type DocRefView } from "../../store/wsStore";
-import { loadDocs, createDoc, createFolder, renameDoc, deleteDoc, searchDocs, type SearchHitDto } from "../../services/wsService";
+import { loadDocs, createDoc, createFolder, renameDoc, deleteDoc, deleteFolder, searchDocs, type SearchHitDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
 import { createDocxDraft } from "../../services/docService";
 import { edStore, useEdStore } from "../../store/edStore";
@@ -270,6 +270,26 @@ export function FileTree() {
     }
   };
 
+  // 删除目录（WS-DIR-DELETE-01，两级）：空目录直接删（mode=empty，无需确认）；非空目录确认后递归删。
+  // 空判断基于 docs 投影（无 dir/ 前缀条目）；删除后精确关闭被删目录下的标签与编辑器会话（不误伤其他目录未保存编辑）。
+  const doDeleteFolder = async (path: string) => {
+    setMenu(null);
+    const isEmpty = !docs.some((d) => d.relPath.startsWith(`${path}/`));
+    if (!isEmpty && !window.confirm(`将删除文件夹「${path}」及其中所有内容，此操作不可撤销。`)) return;
+    try {
+      await deleteFolder(path, isEmpty ? "empty" : "recursive");
+      const prefix = `${path}/`;
+      for (const t of tabsStore.getSnapshot().tabs) {
+        if (t.path.startsWith(prefix)) tabsStore.close(t.id);
+      }
+      edStore.closeDocsUnder(path);
+      await loadDocs();
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      window.alert(`删除失败：${err?.message ?? String(e)}`);
+    }
+  };
+
   // 复制路径（CTX-MENU-01）：写剪贴板在用户手势内可用；失败静默（便利功能不阻断）。
   const copyPath = async (path: string) => {
     setMenu(null);
@@ -294,6 +314,14 @@ export function FileTree() {
             setValue(menu.path ? `${menu.path}/` : "");
             setMenu(null);
           },
+        },
+        { type: "separator", id: "sep-dir-del" },
+        {
+          type: "item",
+          id: "delete-folder",
+          label: "删除",
+          danger: true,
+          onSelect: () => void doDeleteFolder(menu.path),
         },
       ];
     }

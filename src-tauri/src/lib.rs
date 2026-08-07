@@ -190,6 +190,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.create_folder");
     reg.register("ws.rename_doc");
     reg.register("ws.delete_doc");
+    reg.register("ws.delete_folder");
     reg.register("prv.preview");
     reg.register("prv.export");
     reg.register("prv.media_src");
@@ -296,6 +297,7 @@ fn dispatch(
             "ws.create_folder" => route_create_folder(&request, &state),
             "ws.rename_doc" => route_rename_doc(&request, &state),
             "ws.delete_doc" => route_delete_doc(&request, &state),
+            "ws.delete_folder" => route_delete_folder(&request, &state),
             "prv.preview" => route_preview(&request, &state, &app),
             "prv.export" => route_export(&request, &state),
             "prv.media_src" => route_media_src(&request, &state, &app),
@@ -740,6 +742,29 @@ fn route_delete_doc(
     let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let (_, abs) = resolve_active(state, &rel_path)?;
     workspace::fileops::delete_doc(&abs)?;
+    Ok(serde_json::json!({ "rel_path": rel_path, "deleted": true }))
+}
+
+/// 路由 `ws.delete_folder`：workspace 内删除目录（守界；两级语义 2026-08-06——mode=empty 仅空目录、
+/// mode=recursive 递归删除；缺失/文件冲突/非空拒绝；删除后清洗 bdocx_manifest）。
+fn route_delete_folder(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let mode = str_param(request, "mode", "WS_MODE_REQUIRED")?;
+    if mode != "empty" && mode != "recursive" {
+        return Err(IpcError::new(
+            "WS_MODE_INVALID",
+            "mode 仅支持 empty | recursive",
+            false,
+            false,
+        ));
+    }
+    let (ws, abs) = resolve_active(state, &rel_path)?;
+    workspace::fileops::delete_folder(&abs, mode == "recursive")?;
+    // 删除目录后清洗 bdocx_manifest（WS-DIR-DELETE-01）：empty 模式命中为空则不写。
+    workspace::listing::cleanup_bdocx_under(std::path::Path::new(&ws.root_path), &rel_path)?;
     Ok(serde_json::json!({ "rel_path": rel_path, "deleted": true }))
 }
 

@@ -15,13 +15,14 @@ vi.mock("../../services/wsService", () => ({
   createFolder: vi.fn().mockResolvedValue("notes"),
   renameDoc: vi.fn().mockResolvedValue("x.md"),
   deleteDoc: vi.fn().mockResolvedValue(undefined),
+  deleteFolder: vi.fn().mockResolvedValue(undefined),
   searchDocs: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../services/edService", () => ({
   openDocument: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { createDoc, createFolder } from "../../services/wsService";
+import { createDoc, createFolder, deleteFolder } from "../../services/wsService";
 import { FileTree } from "./FileTree";
 
 // Migrated intact from src/components/ws/buildTree.test.ts.
@@ -335,6 +336,7 @@ const doc = (relPath: string, docType = "md"): DocRefView => ({ relPath, docType
 
 const mockedCreateDoc = vi.mocked(createDoc);
 const mockedCreateFolder = vi.mocked(createFolder);
+const mockedDeleteFolder = vi.mocked(deleteFolder);
 
 /** ContextMenu 菜单项用 onMouseDown 触发选择（ContextMenu.tsx），fireEvent.mouseDown 模拟。 */
 function clickMenuItem(container: HTMLElement, label: string) {
@@ -411,6 +413,26 @@ describe("FileTree「＋」新建下拉（WS-NEW-BUTTON-01）", () => {
     fireEvent.change(customInput, { target: { value: "data.json" } });
     fireEvent.submit(customInput.closest("form")!);
     expect(mockedCreateDoc).toHaveBeenLastCalledWith("data.json");
+  });
+
+  it("目录右键「删除」：空目录直接删（mode=empty，无确认）", () => {
+    const { container } = renderFileTree([dir("empty"), doc("a.md")]);
+    fireEvent.contextMenu(container.querySelector(".ftn-dir-row")!, { clientX: 1, clientY: 2 });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    clickMenuItem(container, "删除");
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(mockedDeleteFolder).toHaveBeenCalledWith("empty", "empty");
+    confirmSpy.mockRestore();
+  });
+
+  it("目录右键「删除」：非空目录确认后递归删（mode=recursive）", () => {
+    const { container } = renderFileTree([dir("notes"), doc("notes/b.md"), doc("a.md")]);
+    fireEvent.contextMenu(container.querySelector(".ftn-dir-row")!, { clientX: 1, clientY: 2 });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    clickMenuItem(container, "删除");
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mockedDeleteFolder).toHaveBeenCalledWith("notes", "recursive");
+    confirmSpy.mockRestore();
   });
 });
 }

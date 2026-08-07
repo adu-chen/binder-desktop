@@ -146,6 +146,32 @@ pub fn update_bdocx_for_rename(root: &Path, old_rel: &str, new_rel: &str) -> Res
 
 /**
  * @GOV
+ * codes:    BR-WS-DATA-001-EFFECT-WS-WS-FS-008
+ * type:     EFFECT
+ * chain:    WS-FS
+ * rules:    BR-WS-DATA-001
+ * boundary: in=workspaceRootAndDeletedDirRelPath | out=bdocxManifestWithoutDeletedPrefixPaths(unchangedWhenNoHit)
+ */
+/// 删除目录后清洗 bdocx_manifest（WS-DIR-DELETE-01）：移除 rel_path 等于 dir_rel 或以其 `dir_rel/` 为前缀的
+/// 已注册路径，防陈旧清单。无命中不写文件（避免无谓 IO）。文件级删除无需清洗（清单只登记 docx 文件路径，
+/// 文件删除不产生子路径残留）。
+pub fn cleanup_bdocx_under(root: &Path, dir_rel: &str) -> Result<(), IpcError> {
+    let dir_rel = normalize_rel_path(dir_rel);
+    let prefix = format!("{dir_rel}/");
+    let paths: Vec<String> = load_bdocx_manifest(root).paths;
+    let retained: Vec<String> = paths
+        .iter()
+        .filter(|p| *p != &dir_rel && !p.starts_with(&prefix))
+        .cloned()
+        .collect();
+    if retained.len() == paths.len() {
+        return Ok(()); // 无命中不写
+    }
+    write_bdocx_manifest(root, &BDocxManifest { paths: retained })
+}
+
+/**
+ * @GOV
  * codes:    BR-WS-DATA-001-QUERY-WS-WS-FS-002
  * type:     QUERY
  * chain:    WS-FS
@@ -701,6 +727,26 @@ mod tests {
         assert!(by("created.docx").is_bdocx);
         assert!(!entries.iter().any(|e| e.rel_path.contains(".binder")));
 
-        let _ = fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // covers: BR-WS-DATA-001
+    // 目录删除后清洗 bdocx_manifest：移除目录前缀与子目录路径，保留无关路径；无命中不写。
+    #[test]
+    fn cleanup_bdocx_under_removes_deleted_prefix_paths() {
+        let tmp = std::env::temp_dir().join(format!("binder_bdocx_clean_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        mark_bdocx(&tmp, "notes/a.docx").unwrap();
+        mark_bdocx(&tmp, "notes/sub/b.docx").unwrap();
+        mark_bdocx(&tmp, "keep.docx").unwrap();
+        cleanup_bdocx_under(&tmp, "notes").unwrap();
+        assert!(!is_bdocx(&tmp, "notes/a.docx"));
+        assert!(!is_bdocx(&tmp, "notes/sub/b.docx"));
+        assert!(is_bdocx(&tmp, "keep.docx"));
+        // 无命中：清单不变（cleanup 无关目录后 keep 仍注册）
+        cleanup_bdocx_under(&tmp, "other").unwrap();
+        assert!(is_bdocx(&tmp, "keep.docx"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

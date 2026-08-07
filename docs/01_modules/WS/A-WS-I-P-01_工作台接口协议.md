@@ -42,6 +42,7 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.read_doc` | DocRef | 内容 + **加载基线哈希**（BR-WS-OBS-001；IPC 为十进制字符串） | 文件不存在/不可读 | 基线供 save 校验与外部变更检测 |
 | `ws.create_doc` | DocRef、初始内容（可空） | DocRef + 基线哈希 | 已存在/越界 | BR-WS-DATA-001 |
 | `ws.create_folder` | DocRef（目录 rel_path） | rel_path + created/existed | 目标为文件/越界 | BR-WS-DATA-001 |
+| `ws.delete_folder` | DocRef（目录 rel_path）、mode（empty \| recursive） | rel_path + deleted | 不存在（WS_NOT_FOUND）/目标为文件（WS_EXISTS）/非空（WS_NOT_EMPTY，empty 模式）/越界 | BR-WS-DATA-001 |
 | `ws.rename_doc` | DocRef、新 rel_path | 新 rel_path | **WS_EXISTS**（目标已存在）/源不存在/越界 | BR-WS-DATA-001（§8 move 签名，PI-BE-04 补） |
 | `ws.delete_doc` | DocRef | 删除确认 | 不存在/越界 | BR-WS-DATA-001 |
 | `ws.save_doc` | DocRef、内容、**基线哈希**（十进制字符串或兼容数字）、override（默认 false） | 新基线哈希（十进制字符串） | **WS_SAVE_CONFLICT / save_conflict 语义**（磁盘≠基线且未 override，SM-WS-01 saveConflict）；写入失败 | SM-WS-01 / BR-WS-PERSIST-001 / BR-WS-OBS-001 / BR-WS-DATA-002（保存成功且内容与最近节点快照不同时记一个 `save` 时间轴节点）；override=true 即 overrideConfirmed 语义，必须源自用户显式确认 |
@@ -105,3 +106,4 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | 2026-07-29 | v1.5 | BDOCX-IMAGE-COMPOSITE-IMPORT-01：新增受控项目图片准备边界；配置根内复用，其他来源复制到 imported 子目录，默认保留源文件并按内容哈希去重。 |
 | 2026-07-30 | v1.6 | BDOCX-IMAGE-COMPOSITE-IMPORT-01 人工入口闭合：受控项目图片准备边界纳入项目文件树相对路径和剪贴板 PNG/JPEG 字节，继续复用同一图片根、哈希去重与源文件保护约束。 |
 | 2026-08-04 | v1.7 | `ws.save_doc` 副作用补充（人类决策，A-WS-M-T-01 v1.7）：保存成功且内容与最近节点快照不同时记一个 `save` 时间轴节点，规则归属补 BR-WS-DATA-002 |
+| 2026-08-06 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder` command（镜像 `ws.create_folder`）：两级语义——mode=empty 仅删空目录（非空拒 WS_NOT_EMPTY）、mode=recursive 递归删除；缺失/目标为文件拒绝；删除后由实现侧清洗 bdocx_manifest。文件删除 `ws.delete_doc` 语义不变 |

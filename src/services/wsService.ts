@@ -83,6 +83,12 @@ export async function deleteDoc(relPath: string): Promise<void> {
   await callCommand("ws.delete_doc", { relPath });
 }
 
+/** 删除目录（ws.delete_folder，守界，两级语义）：mode=empty 仅删空目录（非空拒 WS_NOT_EMPTY），
+ *  mode=recursive 递归删除；不存在/目标为文件拒绝。 */
+export async function deleteFolder(relPath: string, mode: "empty" | "recursive"): Promise<void> {
+  await callCommand("ws.delete_folder", { relPath, mode });
+}
+
 export interface SearchHitDto {
   rel_path: string;
   line: number;

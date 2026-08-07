@@ -5,7 +5,7 @@ import { tabsStore } from "../store/tabsStore";
 import { workspaceShell } from "../store/workspaceShell";
 import { wsStore } from "../store/wsStore";
 import { restoreActiveWorkspace } from "./workspaceService";
-import { createDoc, createFolder, renameDoc, deleteDoc, fetchDocs, saveDoc } from "./wsService";
+import { createDoc, createFolder, renameDoc, deleteDoc, deleteFolder, fetchDocs, saveDoc } from "./wsService";
 
 // Migrated intact from src/services/workspaceService.test.ts.
 {
@@ -171,6 +171,15 @@ describe("wsService dispatch 信封契约（X-SEQ-002）", () => {
     invokeMock.mockResolvedValue(ok({ deleted: true }));
     await deleteDoc("b.md");
     expect(vi.mocked(invoke).mock.calls[1][1]).toMatchObject({ request: { command: "ws.delete_doc", params: { relPath: "b.md" } } });
+  });
+
+  // covers: BR-WS-DATA-001
+  it("deleteFolder 构造 ws.delete_folder 信封并透传 mode（两级语义）", async () => {
+    invokeMock.mockResolvedValue(ok({ rel_path: "notes", deleted: true }));
+    await deleteFolder("notes", "recursive");
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      request: { command: "ws.delete_folder", params: { relPath: "notes", mode: "recursive" } },
+    });
   });
 
   it("error 信封 → 抛出 IpcError（result/error 互斥）", async () => {
