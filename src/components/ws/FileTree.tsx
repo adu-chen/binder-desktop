@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useWsStore, wsStore, type DocRefView } from "../../store/wsStore";
-import { loadDocs, createDoc, renameDoc, deleteDoc, searchDocs, type SearchHitDto } from "../../services/wsService";
+import { loadDocs, createDoc, createFolder, renameDoc, deleteDoc, searchDocs, type SearchHitDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
 import { createDocxDraft } from "../../services/docService";
 import { edStore, useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
 import { tabsStore } from "../../store/tabsStore";
 import { exportDoc } from "../../services/prvService";
-import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
+import { FileTreeNode, PREVIEW_ONLY, type TreeNode, type FileNodeState } from "./FileTreeNode";
 import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
 /**
@@ -63,6 +63,19 @@ function sortTree(node: TreeNode) {
   for (const c of node.children) sortTree(c);
 }
 
+/** 「＋」新建下拉格式清单（WS-NEW-BUTTON-01）。固定格式命名时自动补扩展名；custom 保留任意扩展名能力。 */
+const CREATE_FORMATS = [
+  { key: "folder", label: "文件夹", ext: null },
+  { key: "md", label: "Markdown (.md)", ext: "md" },
+  { key: "txt", label: "纯文本 (.txt)", ext: "txt" },
+  { key: "html", label: "HTML (.html)", ext: "html" },
+  { key: "docx", label: "Word 文档 (.docx)", ext: "docx" },
+  { key: "csv", label: "CSV (.csv)", ext: "csv" },
+  { key: "custom", label: "自定义格式…", ext: "custom" },
+] as const;
+
+type CreateFormatKey = (typeof CREATE_FORMATS)[number]["key"];
+
 export function FileTree() {
   const { docs, status, error } = useWsStore();
   const { sessions } = useEdStore();
@@ -110,8 +123,13 @@ export function FileTree() {
 
   // 右键菜单（文件：重命名/导出/删除/复制路径；目录：在此新建文件）+ 内联输入（新建/重命名）状态。
   const [menu, setMenu] = useState<{ path: string; x: number; y: number; kind: "dir" | "file" } | null>(null);
-  const [input, setInput] = useState<{ mode: "create" | "rename"; path?: string } | null>(null);
+  const [input, setInput] = useState<{ mode: "create" | "rename"; path?: string; format?: CreateFormatKey } | null>(null);
   const [value, setValue] = useState("");
+
+  // 「＋」新建：当前激活区域（WS-NEW-BUTTON-01）。"" = 根目录；目录行点击即激活；头部可回根目录。
+  const [activeDir, setActiveDir] = useState("");
+  // 「＋」格式下拉锚点（复用 ContextMenu）。
+  const [newMenu, setNewMenu] = useState<{ x: number; y: number } | null>(null);
 
   // 点击文件：开/激活文档标签 + 经 ws.read_doc 载入编辑器（X-SEQ-002）。
   // 已有会话（文档已打开）→ 仅切活动标签（openDoc 内 setActivePath），不重新读盘，保留未保存编辑。
@@ -157,18 +175,40 @@ export function FileTree() {
     setMenu(null);
     setInput(null);
     setValue("");
+    setNewMenu(null);
   };
 
-  // 新建：内联输入文件名 → ws.create_doc → 刷新 + 打开新文件（X-SEQ-002）。
-  // dirPath 为目录右键「在此新建文件」的目录前缀（CTX-MENU-01），根目录新建为空串。
-  const submitCreate = async (name: string, dirPath = "") => {
-    const rel = (dirPath ? `${dirPath}/${name}` : name).trim();
+  // 新建：内联输入文件名 → 按格式新建（WS-NEW-BUTTON-01：文件夹走 create_folder 不打开；固定格式自动补
+  // 扩展名；文档创建后按类型分流——可编辑进编辑器、预览类进预览标签）。dirPath 为目录右键「在此新建文件」
+  // 的目录前缀（CTX-MENU-01）或「＋」下拉的激活区域；根目录新建为空串。
+  const submitCreate = async (name: string, dirPath = "", format?: CreateFormatKey) => {
+    let fileName = name.trim();
+    if (!fileName) return;
+    // 命名输入预填了激活目录前缀；用户若保留前缀输入则先剥离，避免双重前缀（WS-NEW-BUTTON-01）。
+    if (dirPath && fileName.startsWith(`${dirPath}/`)) {
+      fileName = fileName.slice(dirPath.length + 1);
+    }
+    const fmt = CREATE_FORMATS.find((f) => f.key === format);
+    // 固定格式：名称无扩展名时自动补（custom 不补，保留任意扩展名能力）。
+    if (fmt?.ext && fmt.ext !== "custom" && !/\.[a-z0-9]+$/i.test(fileName)) {
+      fileName = `${fileName}.${fmt.ext}`;
+    }
+    const rel = (dirPath ? `${dirPath}/${fileName}` : fileName).trim();
     if (!rel) return;
     try {
+      if (format === "folder") {
+        await createFolder(rel);
+        await loadDocs();
+        closeOverlays();
+        return;
+      }
       const created = await createDoc(rel);
       await loadDocs();
       setOpenPath(created);
-      await openDocument(created);
+      // 打开分流：仅「＋」下拉新建按类型分流（预览类进预览）；目录右键（无 format）保持原编辑路径。
+      const ext = created.split(".").pop()?.toLowerCase() ?? "";
+      if (format && PREVIEW_ONLY.has(ext)) tabsStore.openPreview(created);
+      else await openDocument(created);
     } catch (e) {
       const err = e as { code?: string; message?: string };
       window.alert(`新建失败：${err?.message ?? String(e)}`);
@@ -294,10 +334,21 @@ export function FileTree() {
   const header = (
     <div className="filetree-hd">
       <span className="label">工作区</span>
+      <span className="ftn-active-dir" title="当前新建位置">
+        {activeDir ? `${activeDir}/` : "根目录"}
+        {activeDir && (
+          <button className="ghost ftn-active-reset" onClick={() => setActiveDir("")} title="回到根目录新建">
+            ↖
+          </button>
+        )}
+      </span>
       <span className="filetree-hd-actions">
         <button
           className="ghost ftn-refresh"
-          onClick={() => { setInput({ mode: "create" }); setValue(""); }}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setNewMenu({ x: rect.left, y: rect.bottom + 4 });
+          }}
           title="新建文件"
         >
           ＋
@@ -309,20 +360,46 @@ export function FileTree() {
     </div>
   );
 
+  // 「＋」新建格式下拉（WS-NEW-BUTTON-01）：复用统一 ContextMenu；选格式后进入命名输入，落点在激活区域。
+  const newMenuEl = newMenu && (
+    <ContextMenu
+      items={CREATE_FORMATS.map((f) => ({
+        type: "item",
+        id: f.key,
+        label: f.label,
+        onSelect: () => {
+          setInput({ mode: "create", path: activeDir || undefined, format: f.key });
+          setValue(activeDir ? `${activeDir}/` : "");
+        },
+      }))}
+      x={newMenu.x}
+      y={newMenu.y}
+      onClose={() => setNewMenu(null)}
+    />
+  );
+
   // 新建/重命名内联输入行。
+  const createPlaceholder = (() => {
+    if (!input?.format) return "新文件相对路径，如 notes/a.md";
+    if (input.format === "folder") return "文件夹名";
+    if (input.format === "custom") return "文件名.扩展名（如 data.json）";
+    const ext = CREATE_FORMATS.find((f) => f.key === input.format)?.ext;
+    return `文件名（自动追加 .${ext}）`;
+  })();
+
   const inputRow = input && (
     <form
       className="ftn-input-row"
       onSubmit={(e) => {
         e.preventDefault();
-        if (input.mode === "create") void submitCreate(value, input.path ?? "");
+        if (input.mode === "create") void submitCreate(value, input.path ?? "", input.format);
         else if (input.path) void submitRename(input.path, value);
       }}
     >
       <input
         autoFocus
         className="ftn-input"
-        placeholder={input.mode === "create" ? "新文件相对路径，如 notes/a.md" : "新路径"}
+        placeholder={input.mode === "create" ? createPlaceholder : "新路径"}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => e.key === "Escape" && closeOverlays()}
@@ -402,6 +479,8 @@ export function FileTree() {
             onEditDocx={handleEditDocx}
             stateOverride={stateOverride}
             pendingCount={pendingCount}
+            activeDir={activeDir}
+            onActivateDir={setActiveDir}
           />
         ))}
       </div>
@@ -417,6 +496,7 @@ export function FileTree() {
       </div>
       {body}
       {contextMenu}
+      {newMenuEl}
     </>
   );
 }

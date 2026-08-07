@@ -5,7 +5,7 @@ import { tabsStore } from "../store/tabsStore";
 import { workspaceShell } from "../store/workspaceShell";
 import { wsStore } from "../store/wsStore";
 import { restoreActiveWorkspace } from "./workspaceService";
-import { createDoc, renameDoc, deleteDoc, fetchDocs, saveDoc } from "./wsService";
+import { createDoc, createFolder, renameDoc, deleteDoc, fetchDocs, saveDoc } from "./wsService";
 
 // Migrated intact from src/services/workspaceService.test.ts.
 {
@@ -151,6 +151,16 @@ describe("wsService dispatch 信封契约（X-SEQ-002）", () => {
     expect((arg as { request: { command: string; params: unknown } }).request).toMatchObject({
       command: "ws.create_doc",
       params: { relPath: "notes/a.md", content: "hi" },
+    });
+  });
+
+  // covers: BR-WS-DATA-001
+  it("createFolder 构造 ws.create_folder 信封并回 rel_path", async () => {
+    invokeMock.mockResolvedValue(ok({ rel_path: "notes", created: true, existed: false }));
+    const rel = await createFolder("notes");
+    expect(rel).toBe("notes");
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      request: { command: "ws.create_folder", params: { relPath: "notes" } },
     });
   });
 

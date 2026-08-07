@@ -24,8 +24,9 @@ export interface TreeNode {
 
 /** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；2026-07-03 #1 补 csv/tsv——表格式只读预览，
  *  修复 csv 误入编辑态）。点击 → PRV 预览（xlsx/csv 走 TablePreview，pptx 走 PDF）。
- *  注：docx/doc 可编辑——经 DOC 编辑链（doc.open_for_edit/save_from_edit）打开进 TipTap，点击 → 编辑。 */
-const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt", "csv", "tsv"]);
+ *  注：docx/doc 可编辑——经 DOC 编辑链（doc.open_for_edit/save_from_edit）打开进 TipTap，点击 → 编辑。
+ *  导出供 FileTree 新建后按类型分流（WS-NEW-BUTTON-01，单一来源）。 */
+export const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt", "csv", "tsv"]);
 
 /** 音视频/图片类型（asset 协议预览）；可点击预览。 */
 const MEDIA_TYPES = new Set([
@@ -74,6 +75,10 @@ interface FileTreeNodeProps {
   onPreviewFile?: (path: string) => void;
   /** 原生 docx「创建草稿并编辑」按钮（2026-08-04）：跳过预览直接创建草稿编辑；草稿已存在则打开既有草稿。 */
   onEditDocx?: (path: string) => void;
+  /** 当前激活目录（「＋」新建落点）；目录行命中时加激活态标记（WS-NEW-BUTTON-01）。 */
+  activeDir?: string;
+  /** 目录行点击时同步设为激活区域。 */
+  onActivateDir?: (path: string) => void;
 }
 
 export function FileTreeNode({
@@ -86,6 +91,8 @@ export function FileTreeNode({
   onContextMenu,
   onPreviewFile,
   onEditDocx,
+  activeDir,
+  onActivateDir,
 }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(true);
   const indent = { paddingLeft: `${depth * 12 + 8}px` };
@@ -94,9 +101,12 @@ export function FileTreeNode({
     return (
       <div className="ftn-dir">
         <button
-          className="ftn-row ftn-dir-row"
+          className={`ftn-row ftn-dir-row${activeDir === node.path ? " ftn-dir-active" : ""}`}
           style={indent}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => {
+            setExpanded((v) => !v);
+            onActivateDir?.(node.path);
+          }}
           onContextMenu={(e) => {
             if (!onContextMenu) return;
             e.preventDefault();
@@ -119,6 +129,8 @@ export function FileTreeNode({
               onContextMenu={onContextMenu}
               onPreviewFile={onPreviewFile}
               onEditDocx={onEditDocx}
+              activeDir={activeDir}
+              onActivateDir={onActivateDir}
             />
           ))}
       </div>

@@ -66,6 +66,12 @@ export async function createDoc(relPath: string, content = ""): Promise<string> 
   return r.rel_path;
 }
 
+/** 新建目录（ws.create_folder，守界；目标已为目录则幂等成功，目标为文件拒绝）。回 rel_path。 */
+export async function createFolder(relPath: string): Promise<string> {
+  const r = await callCommand<{ rel_path: string }>("ws.create_folder", { relPath });
+  return r.rel_path;
+}
+
 /** 重命名/移动文档（ws.rename_doc，守界，目标已存在拒绝）。回新 rel_path。 */
 export async function renameDoc(relPath: string, newRelPath: string): Promise<string> {
   const r = await callCommand<{ rel_path: string }>("ws.rename_doc", { relPath, newRelPath });

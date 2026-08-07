@@ -1,12 +1,28 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { DOC_REF_MIME } from "../../services/edLocate";
 import { REFERENCE_MIME } from "../../services/referencePayload";
 import { workspaceShell } from "../../store/workspaceShell";
 import { wsStore, type DocRefView } from "../../store/wsStore";
 import { buildTree } from "./FileTree";
 import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
+
+// FileTree 容器测试依赖 wsService/edService（WS-NEW-BUTTON-01）：mock 服务层，仅验证 UI 交互与命令组装。
+vi.mock("../../services/wsService", () => ({
+  loadDocs: vi.fn().mockResolvedValue(undefined),
+  createDoc: vi.fn().mockResolvedValue("a.md"),
+  createFolder: vi.fn().mockResolvedValue("notes"),
+  renameDoc: vi.fn().mockResolvedValue("x.md"),
+  deleteDoc: vi.fn().mockResolvedValue(undefined),
+  searchDocs: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("../../services/edService", () => ({
+  openDocument: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { createDoc, createFolder } from "../../services/wsService";
+import { FileTree } from "./FileTree";
 
 // Migrated intact from src/components/ws/buildTree.test.ts.
 {
@@ -306,6 +322,95 @@ describe("wsStore 文件树状态投影", () => {
     unsub();
     wsStore._projectLoading();
     expect(calls).toBe(2); // 退订后不再收到
+  });
+});
+}
+
+// FileTree「＋」新建下拉 + 激活区域（WS-NEW-BUTTON-01）：wsService/edService 已 mock，仅验 UI 交互与命令组装。
+{
+afterEach(cleanup);
+
+const dir = (relPath: string): DocRefView => ({ relPath, docType: "", isDir: true });
+const doc = (relPath: string, docType = "md"): DocRefView => ({ relPath, docType, isDir: false });
+
+const mockedCreateDoc = vi.mocked(createDoc);
+const mockedCreateFolder = vi.mocked(createFolder);
+
+/** ContextMenu 菜单项用 onMouseDown 触发选择（ContextMenu.tsx），fireEvent.mouseDown 模拟。 */
+function clickMenuItem(container: HTMLElement, label: string) {
+  const item = [...container.querySelectorAll(".ctx-menu-item")].find((b) => b.textContent === label);
+  if (!item) throw new Error(`菜单项不存在: ${label}`);
+  fireEvent.mouseDown(item);
+}
+
+function renderFileTree(docs: DocRefView[]) {
+  wsStore._projectDocs(docs);
+  return render(<FileTree />);
+}
+
+beforeEach(() => {
+  wsStore.reset();
+  vi.clearAllMocks();
+});
+
+describe("FileTree「＋」新建下拉（WS-NEW-BUTTON-01）", () => {
+  it("点击＋弹出格式下拉，选文件夹后提交触发 ws.create_folder（根目录）", () => {
+    const { container } = renderFileTree([dir("notes"), doc("a.md")]);
+    fireEvent.click(container.querySelector('button[title="新建文件"]')!);
+    const labels = [...container.querySelectorAll(".ctx-menu-item")].map((b) => b.textContent);
+    expect(labels).toEqual([
+      "文件夹",
+      "Markdown (.md)",
+      "纯文本 (.txt)",
+      "HTML (.html)",
+      "Word 文档 (.docx)",
+      "CSV (.csv)",
+      "自定义格式…",
+    ]);
+    clickMenuItem(container, "文件夹");
+    const input = container.querySelector(".ftn-input") as HTMLInputElement;
+    expect(input.placeholder).toBe("文件夹名");
+    fireEvent.change(input, { target: { value: "docs" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(mockedCreateFolder).toHaveBeenCalledWith("docs");
+    expect(mockedCreateDoc).not.toHaveBeenCalled();
+  });
+
+  it("目录行点击激活区域（高亮 + 头部显示），Markdown 新建自动补扩展名并落在激活目录", () => {
+    const { container } = renderFileTree([dir("notes"), doc("notes/b.md"), doc("a.md")]);
+    const dirRow = container.querySelector(".ftn-dir-row") as HTMLButtonElement;
+    fireEvent.click(dirRow);
+    expect(dirRow.className).toContain("ftn-dir-active");
+    expect(container.querySelector(".ftn-active-dir")!.textContent).toContain("notes");
+    // ＋ → Markdown：命名输入预填激活目录前缀，提交落点在激活目录
+    fireEvent.click(container.querySelector('button[title="新建文件"]')!);
+    clickMenuItem(container, "Markdown (.md)");
+    const input = container.querySelector(".ftn-input") as HTMLInputElement;
+    expect(input.value).toBe("notes/");
+    fireEvent.change(input, { target: { value: "笔记" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(mockedCreateDoc).toHaveBeenCalledWith("notes/笔记.md");
+  });
+
+  it("固定格式已有扩展名不重复追加；自定义格式保留任意扩展名", async () => {
+    const { container } = renderFileTree([]);
+    // Markdown 输入 a.md → 不重复追加
+    fireEvent.click(container.querySelector('button[title="新建文件"]')!);
+    clickMenuItem(container, "Markdown (.md)");
+    const mdInput = container.querySelector(".ftn-input") as HTMLInputElement;
+    fireEvent.change(mdInput, { target: { value: "a.md" } });
+    fireEvent.submit(mdInput.closest("form")!);
+    expect(mockedCreateDoc).toHaveBeenLastCalledWith("a.md");
+    // 冲刷提交 async 链（createDoc→loadDocs→openDocument→closeOverlays），避免其延迟关闭下一次下拉
+    await act(async () => {});
+    // 自定义 data.json → 原样传递（不补扩展名）
+    fireEvent.click(container.querySelector('button[title="新建文件"]')!);
+    clickMenuItem(container, "自定义格式…");
+    const customInput = container.querySelector(".ftn-input") as HTMLInputElement;
+    expect(customInput.placeholder).toContain("data.json");
+    fireEvent.change(customInput, { target: { value: "data.json" } });
+    fireEvent.submit(customInput.closest("form")!);
+    expect(mockedCreateDoc).toHaveBeenLastCalledWith("data.json");
   });
 });
 }

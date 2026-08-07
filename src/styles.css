@@ -1482,6 +1482,15 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 var(--sp-1) var(--sp-2);
 }
+.ftn-active-dir {
+  display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;
+  font-size: 10px; color: var(--ink-4); font-family: var(--font-mono);
+}
+.ftn-active-reset {
+  border: none; background: transparent; color: var(--ink-4); cursor: pointer;
+  padding: 0 2px; line-height: 1; border-radius: var(--r-1);
+}
+.ftn-active-reset:hover { background: var(--bg-overlay); color: var(--rust); }
 .ftn-refresh {
   border: none; background: transparent; color: var(--ink-4);
   font-size: 13px; line-height: 1; padding: 2px 6px; border-radius: var(--r-1); cursor: pointer;
@@ -1582,6 +1591,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   white-space: nowrap;
 }
 .ftn-dir-row { color: var(--ink-2); font-weight: 500; }
+/* 激活目录（「＋」新建落点，WS-NEW-BUTTON-01）：目录行高亮标识当前区域。 */
+.ftn-dir-active { background: var(--bg-overlay); color: var(--ink); }
 /* 文件树状态视觉：open/dirty/pending 为互斥会话状态，preview_only 为可叠加打开模式。 */
 .ftn-open { color: var(--ink); }
 .ftn-open::before {
