@@ -35,7 +35,7 @@
 - 持久化装饰不干扰原生编辑、不替换 DOM。
 - 相关测试、tsc、governance:generate/audit、build 通过。
 
-## Task Runtime Report — 选区持久化（含两次链路修复）
+## Task Runtime Report — 选区持久化（两次链路修复 + v2 统一链路 + 跨文档/输入面 1+2）
 
 task_type: CODE_CHANGE
 governance_phase: IMPLEMENTATION
@@ -44,31 +44,35 @@ issue_trace: ED-SELECTION-PERSIST-01
 
 changed_files:
 
-- `src/components/ed/extensions/SelectionPersistExtension.ts`：新扩展——插件 state 记录最后非空选区（lastNonEmpty）+ DecorationSet；persist/clear 事务；导出桥接函数 persistSelectionOnBlur/clearPersistedSelection。
-- `src/components/ed/Editor.tsx`：editorProps.handleDOMEvents 桥接 blur→persistSelectionOnBlur、focus→clearPersistedSelection（PM someProp 只取组件级 props，插件级 handleDOMEvents 被遮蔽）。
+- `src/components/ed/extensions/SelectionPersistExtension.ts`：新扩展——v2 统一链路：decorations 实时跟随非空 TextSelection（聚焦也渲染 span），失焦回退 lastNonEmpty 记录；persist/clear 事务桥接。
+- `src/components/ed/Editor.tsx`：editorProps.handleDOMEvents 桥接 blur（延迟派发 persist，待 view.hasFocus() 归 false）→ focus（clear）；切换文档（loadSeq 变更）时 clearPersistedSelection 清记录（持久化绑定文档，问题 1）。
 - `src/components/ed/extensions/index.ts`：注册扩展。
-- `src/styles.css`：`.pm-selection-persist` 背景样式。
+- `src/styles.css`：原生 ::selection 透明禁用，统一由 PM Decoration 渲染；.pm-selection-persist 背景 rgba(37,99,235,.16)+描边；agent 输入面（.composer-prosemirror 输入框 + .msglist 会话流）统一品牌蓝 ::selection rgba(37,99,235,.30)（问题 2，纯文本不做持久化）。
 - `src/components/ed/extensions/SelectionPersistExtension.test.ts`：纯逻辑 3 用例。
-- `src/components/ed/extensions/SelectionPersistExtension.integration.test.ts`：桥接集成 7 用例。
+- `src/components/ed/extensions/SelectionPersistExtension.integration.test.ts`：统一链路集成 7 用例（含切文档清记录）。
 - `src/components/ed/extensions/SelectionPersistExtension.dom.test.ts`：DOM 渲染 5 用例。
-- `docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md`：v1.59。
+- `docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md`：v1.59（v2 统一链路 + ④生命周期注记）。
 - `docs/00_core/A-CORE-C-R-01_ADUS.md`：重新生成。
-
-补充（方案 A 视觉统一）：styles.css 新增 `.editor-paper .ProseMirror ::selection { background: rgba(37,99,235,.30) }`，与持久化装饰 rgba(37,99,235,.16)+描边 同色系——聚焦原生选区不再显示系统默认灰褐色，聚焦/失焦统一品牌蓝。
 
 test_impact:
 
-- direct: ED
+- direct: ED, AG（styles.css 影响 Composer 输入面样式）
 - affected: 无
 
 validation:
 
-- `npx vitest run src/components/ed/extensions/SelectionPersistExtension.test.ts src/components/ed/extensions/SelectionPersistExtension.integration.test.ts src/components/ed/extensions/SelectionPersistExtension.dom.test.ts`：passed（15/15）。
+- `npx vitest run src/components/ed/extensions/SelectionPersistExtension.test.ts src/components/ed/extensions/SelectionPersistExtension.integration.test.ts src/components/ed/extensions/SelectionPersistExtension.dom.test.ts`：passed（15/15，DOM 断言）。
 - `npm run test:related`：passed（21 文件 / 446 测试）。
-- `npm run governance:generate`：passed（测试资产 91 / 用例 790）。
-- `npm run governance:audit`：passed（governance_findings 清零；ED baseline 8→11 同步）。
+- `npm run governance:generate`：passed。
+- `npm run governance:audit`：passed（governance_findings 清零）。
 - `npx tsc --noEmit`、`npm run build`：passed。
 
 unresolved_items:
 
-- 无。
+- 问题 3（跨编辑面选区互斥 + assist 豁免）：人类决策放弃修复，接受当前效果（2026-08-07）。
+- Composer 输入框"分行"统一：人类决策放弃（接受当前品牌蓝连续块），不引入额外复杂度（2026-08-07）。
+
+## 闭合确认
+
+- 人类 2026-08-07：接受当前效果，闭合本 Issue（v2 统一链路 + 跨文档生命周期 1+2 已生效）。
+- 遗留变更未提交：v2 统一链路与问题 1+2 的改动在工作区（与并行 MODEL-CONFIG-01 改动共存），待用户指定提交。

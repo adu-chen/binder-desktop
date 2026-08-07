@@ -7,7 +7,6 @@ import {
   SELECTION_PERSIST_CLASS,
   clearPersistedSelection,
   persistSelectionOnBlur,
-  selectionPersistKey,
 } from "./SelectionPersistExtension";
 
 function makeEditor() {
@@ -34,8 +33,8 @@ describe("SelectionPersistExtension · DOM 渲染与真实事件链路", () => {
     const view = editor.view;
     const spy = vi.fn(persistSelectionOnBlur);
     spy(view);
-    const decos = (selectionPersistKey.getState(editor.state) as { decos: { find(start: number): unknown[] } }).decos;
-    expect(decos.find(0).length).toBeGreaterThan(0);
+    // 统一链路：selection 非空 → decorations 实时派生 span（DOM 可见）。
+    expect(editor.view.dom.querySelector(`.${SELECTION_PERSIST_CLASS}`)).not.toBeNull();
     expect(spy).toHaveBeenCalledOnce();
     editor.destroy();
   });
@@ -61,12 +60,14 @@ describe("SelectionPersistExtension · DOM 渲染与真实事件链路", () => {
     editor.destroy();
   });
 
-  it("clearPersistedSelection 后 DOM span 移除", () => {
+  it("clearPersistedSelection（点击编辑器空白处：collapsed + clear）后 DOM span 移除", () => {
     const editor = makeEditor();
     editor.commands.setTextSelection({ from: 1, to: 12 });
     persistSelectionOnBlur(editor.view);
     expect(editor.view.dom.querySelector(`.${SELECTION_PERSIST_CLASS}`)).not.toBeNull();
+    // 用户点击编辑器空白处：selection collapsed + clear 记录 → span 消失。
     clearPersistedSelection(editor.view);
+    editor.commands.setTextSelection({ from: 1, to: 1 });
     expect(editor.view.dom.querySelector(`.${SELECTION_PERSIST_CLASS}`)).toBeNull();
     editor.destroy();
   });
