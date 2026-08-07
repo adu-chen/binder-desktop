@@ -12,7 +12,7 @@ import type { MessageContentPart, ReferenceTokenAttrs } from "../services/refere
  * （agent_turns 接线批）落地，本结构按可持久化形状设计。
  */
 
-/** 代理编辑（AgentEdit）面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=构建（项目级蓝图与整体构建，接 CBT）。 */
+/** 代理编辑（AgentEdit）面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=代理构建（TERM-AG-007，项目级蓝图与整体构建，接 CBT）。 */
 export type AgMode = "edit" | "build";
 
 export interface ChatMessage {
@@ -221,7 +221,7 @@ export const agStore = {
         : state.activeSessionId;
     setState({ sessions, activeSessionId });
   },
-  /** 设定活动会话模式（编辑/构建，TERM-AG-006/007）。 */
+  /** 设定活动会话模式（编辑/代理构建，TERM-AG-006/007）。 */
   setMode(mode: AgMode) {
     mapSession(state.activeSessionId, (s) => ({ ...s, mode }));
   },

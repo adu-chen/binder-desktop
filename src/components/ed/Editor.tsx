@@ -71,6 +71,7 @@ import {
 import { applyStructuredBlockOperations } from "../../services/edBlockOps";
 import { persistImageDiffSnapshots } from "../../services/deService";
 import { outlineStore, extractOutline } from "../../store/outlineStore";
+import { modelStore } from "../../store/modelStore";
 import { finishAssist, requestAssist, type AssistFinishEvent } from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
@@ -1086,8 +1087,9 @@ export function Editor() {
         blur: (view) => {
           clearPointerActivatedInputScrollGuard(view);
           // 选区失焦持久化（ED-SELECTION-PERSIST-01）：PM 的 handleDOMEvents 只取组件级 props，
-          // 插件级被遮蔽，故在此桥接扩展的 persist 事务。
-          persistSelectionOnBlur(view);
+          // 插件级被遮蔽，故在此桥接。注意：必须延迟到 PM handlers.blur（view.focused=false）之后
+          // 再派发 persist 事务——否则 decorations 重算时 focused 仍 true，失焦分支不命中。
+          setTimeout(() => persistSelectionOnBlur(view), 0);
           return false;
         },
         focus: (view) => {
@@ -1435,6 +1437,9 @@ export function Editor() {
       if (paperRef.current) scrollMemo.set(prev, paperRef.current.scrollTop);
     }
     lastPathRef.current = openPath;
+    // 选区持久化生命周期（ED-SELECTION-PERSIST-01）：持久化绑定文档——切走/加载其他文档即清除
+    // 上文档的 lastNonEmpty 记录，避免残留位置错误渲染到新 doc（view 仍在旧 doc，清后 setContent）。
+    clearPersistedSelection(editor.view);
     if (!openPath || loadedContent === null) {
       pendingPaginationLoadSeqRef.current = 0;
       pendingScrollRestoreRef.current = null;
@@ -1853,6 +1858,8 @@ export function Editor() {
     const requestId = assistStore.startRequest("inline");
     if (!requestId) return;
     const target = snap.target;
+    // 模型参数按 inline-assist 能力偏好解析（BR-AG-DATA-007：跟随全局或显式指定）。
+    const inlineModel = modelStore.resolveFor("inlineAssist");
     void requestAssist({
       requestId,
       kind: "inline",
@@ -1867,6 +1874,8 @@ export function Editor() {
       before: target.before,
       after: target.after,
       baseText,
+      provider: inlineModel.provider,
+      model: inlineModel.model,
     }).then((result) => {
       const candidate = result.candidate ?? result.candidates[0] ?? null;
       if (!assistStore.isCurrent(requestId, "inline")) {

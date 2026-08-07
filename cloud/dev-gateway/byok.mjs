@@ -31,3 +31,26 @@ export function setByokKey(provider, key) {
 export function getByokKey(provider) {
   return byokKeys.get(provider);
 }
+
+const del = db.prepare('DELETE FROM byok_keys WHERE provider = ?');
+
+/** 脱敏 preview（不回显明文，PI-GW-02）。 */
+function previewKey(key) {
+  if (typeof key !== 'string' || key.length <= 8) return '***';
+  return `${key.slice(0, 3)}***${key.slice(-4)}`;
+}
+
+/** 已配置 BYOK provider 列表（脱敏 preview）。 */
+export function listByokProviders() {
+  const out = [];
+  for (const [provider, key] of byokKeys) {
+    out.push({ provider, key_preview: previewKey(key) });
+  }
+  return out;
+}
+
+/** 删除指定 provider 的 BYOK 密钥，立即生效（A-GW-M-D-01 PI-GW-02）。 */
+export function deleteByokKey(provider) {
+  byokKeys.delete(provider);
+  del.run(provider);
+}

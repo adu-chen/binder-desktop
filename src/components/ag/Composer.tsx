@@ -114,7 +114,7 @@ interface MentionQuery {
 
 const MODES: { id: AgMode; label: string; hint: string }[] = [
   { id: "edit", label: "edit", hint: "编辑 · 精确修改当前内容（diff 裁决）" },
-  { id: "build", label: "build", hint: "构建 · 项目蓝图与整体构建" },
+  { id: "build", label: "build", hint: "代理构建 · 项目蓝图与整体构建" },
 ];
 const REFERENCE_DRAG_TYPES = [REFERENCE_MIME, SELECTION_REF_MIME, DOC_REF_MIME, "text/uri-list", "text/plain"] as const;
 
@@ -312,11 +312,13 @@ export function Composer() {
     if (!editor || sending) return;
     const snapshot = serializeEditor(editor);
     if (!snapshot.prompt.trim() && snapshot.references.length === 0) return;
+    // 调用模型按能力偏好解析（BR-AG-DATA-007）：编辑模式=agentEdit，代理构建=build（人类确认：代理构建归 AG）。
+    const sendModel = modelStore.resolveFor(mode === "build" ? "build" : "agentEdit");
     void startTurn(snapshot.prompt, {
       references: snapshot.references,
       displayParts: snapshot.parts,
-      provider: currentModel.provider,
-      model: currentModel.model,
+      provider: sendModel.provider,
+      model: sendModel.model,
     });
     editor.commands.clearContent(true);
     const emptyDraft = emptyComposerDraft();
@@ -424,7 +426,7 @@ export function Composer() {
             <div className="cbar-wrap">
               <button
                 className="cbar-btn"
-                title="模式：edit 编辑 / build 构建"
+                title="模式：edit 编辑 / build 代理构建"
                 aria-haspopup="menu"
                 onClick={() => {
                   setModePop((v) => !v);
@@ -463,7 +465,9 @@ export function Composer() {
                   setModePop(false);
                 }}
               >
-                {currentModel.label} <span className="cbar-caret">▾</span>
+                {currentModel.label}{" "}
+                <span className="label cbar-pop-src">{currentModel.source === "byok" ? "BYOK" : "预设"}</span>{" "}
+                <span className="cbar-caret">▾</span>
               </button>
               {modelPop && (
                 <div className="cbar-pop" role="menu">
@@ -480,6 +484,7 @@ export function Composer() {
                       >
                         {selectedKey === key ? "✓ " : ""}
                         {m.label}
+                        <span className="label cbar-pop-src">{m.source === "byok" ? "BYOK" : "预设"}</span>
                         <span className="label cbar-pop-hint">{key}</span>
                       </button>
                     );

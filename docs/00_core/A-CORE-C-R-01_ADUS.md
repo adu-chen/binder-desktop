@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-06T19:25:02.366Z -->
+<!-- 最后生成时间：2026-08-07T08:01:19.393Z -->
 
 ### 模块编码表
 
@@ -76,33 +76,34 @@
 
 ### 链路注册表
 
-| chain_id      | 主责模块 | status | 集成测试 |
-| ------------- | ---- | ------ | ---- |
-| PCG-GENERATE  | PCG  | active |      |
-| PCG-AUDIT     | PCG  | active |      |
-| AG-TURN       | AG   | active |      |
-| AG-TOOL       | AG   | active |      |
-| AG-ASSIST     | AG   | active |      |
-| AST-MEMORY    | AST  | active |      |
-| CBT-BUILD     | CBT  | active |      |
-| DE-DIFF       | DE   | active |      |
-| DOC-CONVERT   | DOC  | active |      |
-| ED-EDIT       | ED   | active |      |
-| ED-DECOR      | ED   | active |      |
-| KB-RETRIEVE   | KB   | active |      |
-| PRV-VIEW      | PRV  | active |      |
-| REF-INJECT    | REF  | active |      |
-| DATA-MIGRATE  | SYS  | active |      |
-| IPC-CALL      | SYS  | active |      |
-| CLOUD-AUTH    | SYS  | active |      |
-| CLOUD-GATE    | SYS  | active |      |
-| CLOUD-INVOKE  | SYS  | active |      |
-| APP-CLOSE     | SYS  | active |      |
-| TPL-FLOW      | TPL  | active |      |
-| WS-FS         | WS   | active |      |
-| WS-DIFF-APPLY | WS   | active |      |
-| WS-TIMELINE   | WS   | active |      |
-| WS-SAVE       | WS   | active |      |
+| chain_id         | 主责模块 | status | 集成测试 |
+| ---------------- | ---- | ------ | ---- |
+| PCG-GENERATE     | PCG  | active |      |
+| PCG-AUDIT        | PCG  | active |      |
+| AG-TURN          | AG   | active |      |
+| AG-TOOL          | AG   | active |      |
+| AG-ASSIST        | AG   | active |      |
+| AG-MODEL-CATALOG | AG   | active |      |
+| AST-MEMORY       | AST  | active |      |
+| CBT-BUILD        | CBT  | active |      |
+| DE-DIFF          | DE   | active |      |
+| DOC-CONVERT      | DOC  | active |      |
+| ED-EDIT          | ED   | active |      |
+| ED-DECOR         | ED   | active |      |
+| KB-RETRIEVE      | KB   | active |      |
+| PRV-VIEW         | PRV  | active |      |
+| REF-INJECT       | REF  | active |      |
+| DATA-MIGRATE     | SYS  | active |      |
+| IPC-CALL         | SYS  | active |      |
+| CLOUD-AUTH       | SYS  | active |      |
+| CLOUD-GATE       | SYS  | active |      |
+| CLOUD-INVOKE     | SYS  | active |      |
+| APP-CLOSE        | SYS  | active |      |
+| TPL-FLOW         | TPL  | active |      |
+| WS-FS            | WS   | active |      |
+| WS-DIFF-APPLY    | WS   | active |      |
+| WS-TIMELINE      | WS   | active |      |
+| WS-SAVE          | WS   | active |      |
 
 ### 规则注册表
 
@@ -123,6 +124,8 @@
 | BR-AG-DATA-002     | DATA    | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          | registered      | src-tauri/src/ag/context.rs::file-level                                                                                                                                                                                                                                                                                                                               |
 | BR-AG-STATE-004    | STATE   | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          | registered      | src-tauri/src/ag/memory_link.rs::file-level                                                                                                                                                                                                                                                                                                                           |
 | BR-AG-STATE-003    | STATE   | AG-ASSIST                            | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          | registered      | src-tauri/src/ag/assist.rs::file-level, src/components/ag/AgentUI.test.tsx::file-level, src/services/agRuntime.test.ts::file-level, src/store/assistRuntime.test.ts::file-level                                                                                                                                                                                       |
+| BR-AG-DATA-006     | DATA    | AG-MODEL-CATALOG                     | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          | registered      | src/store/assistRuntime.test.ts::file-level                                                                                                                                                                                                                                                                                                                           |
+| BR-AG-DATA-007     | DATA    | AG-MODEL-CATALOG                     | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          | registered      | src/services/agRuntime.test.ts::file-level, src/store/assistRuntime.test.ts::file-level                                                                                                                                                                                                                                                                               |
 | BR-AG-DATA-004     | DATA    | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md         | registered      | src-tauri/src/ag/context.rs::file-level, src-tauri/src/lib.rs::file-level                                                                                                                                                                                                                                                                                             |
 | BR-AG-DATA-005     | DATA    | AG-TURN                              | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md         | registered      | src-tauri/src/ag/context.rs::file-level, src-tauri/src/lib.rs::file-level                                                                                                                                                                                                                                                                                             |
 | BR-AST-DATA-001    | DATA    | AST-MEMORY                           | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md      | registered      | src-tauri/src/ast/store.rs::file-level                                                                                                                                                                                                                                                                                                                                |
@@ -230,9 +233,10 @@
 | TERM-AG-003    | AG-ASSIST                                            | 局部修改      | InlineAssist            | 内联辅助, 行内辅助, 内联建议, inline建议, 行内AI                     | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-004    | AG-ASSIST                                            | 辅助续写      | Autocomplete            | 自动补全, 自动完成, 补全建议, 智能补全, 续写补全                         | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-006    | AG-TURN                                              | 编辑模式      | EditMode                | 对话模式, chat模式, chat 模式, 对话编辑模式                        | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
-| TERM-AG-007    | AG-TURN                                              | 构建模式      | BuildMode               | agent模式, agent 模式, Chat Build, chat-build            | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
+| TERM-AG-007    | AG-TURN                                              | 代理构建      | BuildMode               | 构建模式, agent模式, agent 模式, Chat Build, chat-build      | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-008    | AG-TURN                                              | 代理编辑      | AgentEdit               | 对话编辑, 对话编辑板块                                         | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-009    | AG-TURN                                              | 代理编辑会话    | AgentSession            | 聊天标签, 对话标签, 会话标签, agent标签, chat tab, session tab     | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
+| TERM-AG-010    | AG-MODEL-CATALOG, AG-ASSIST, AG-TURN                 | 预设模型      | PresetModel             | 内置模型, 托管模型, 官方模型                                     | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-005    | AG-TURN                                              | 意图沿用判定    | IntentCarryover         | 历史复用, 意图继承, 上下文继承, 意图沿袭, carryover                   | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md         |
 | TERM-AST-001   | AST-MEMORY                                           | 记忆条目      | MemoryEntry             | 记忆点, 记忆项, 记忆片段, memory条目                             | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md      |
 | TERM-CBT-001   | CBT-BUILD                                            | 构建回合      | BuildRun                | 构建会话, 构建过程, build流程, 项目构建轮                           | docs/01_modules/CBT/A-CBT-M-T-01_构建技术设计.md        |
@@ -275,20 +279,28 @@
 
 #### AG-ASSIST
 
-| codes                                   | type   | rules                                                                | 文件                                        | 行号   |
-| --------------------------------------- | ------ | -------------------------------------------------------------------- | ----------------------------------------- | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 789  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 987  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1808 |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-003     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 96   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001 term_ref: TERM-AG-003, TERM-AG-004 | src/services/agService.ts                 | 802  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-008     | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/store/assistStore.ts                  | 94   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | BR-AG-STATE-003                                                      | src-tauri/src/ag/assist.rs                | 40   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                                    | src-tauri/src/lib.rs                      | 6809 |
+| codes                                        | type   | rules                                                                | 文件                                        | 行号   |
+| -------------------------------------------- | ------ | -------------------------------------------------------------------- | ----------------------------------------- | ---- |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-009          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 790  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003      | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 988  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1813 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-004          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-005          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-006          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-003          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 96   |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002      | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001 term_ref: TERM-AG-003, TERM-AG-004 | src/services/agService.ts                 | 836  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-008          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/store/assistStore.ts                  | 94   |
+| BR-AG-DATA-007-QUERY-AG-AG-MODEL-CATALOG-013 | QUERY  | BR-AG-DATA-007 term_ref: TERM-AG-010                                 | src/store/modelStore.ts                   | 162  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-001          | RB     | BR-AG-STATE-003                                                      | src-tauri/src/ag/assist.rs                | 40   |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001      | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                                    | src-tauri/src/lib.rs                      | 6827 |
+
+#### AG-MODEL-CATALOG
+
+| codes                                         | type   | rules                                | 文件                      | 行号  |
+| --------------------------------------------- | ------ | ------------------------------------ | ----------------------- | --- |
+| BR-AG-DATA-007-QUERY-AG-AG-MODEL-CATALOG-013  | QUERY  | BR-AG-DATA-007 term_ref: TERM-AG-010 | src/store/modelStore.ts | 162 |
+| BR-AG-DATA-006-EFFECT-AG-AG-MODEL-CATALOG-006 | EFFECT | BR-AG-DATA-006 term_ref: TERM-AG-010 | src/store/modelStore.ts | 179 |
 
 #### AG-TOOL
 
@@ -310,6 +322,7 @@
 | codes                                                                                                                                          | type   | rules                                                                                | 文件                                     | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------ | -------------------------------------- | ---- |
 | BR-AG-DATA-001-EFFECT-AG-AG-TURN-005                                                                                                           | EFFECT | BR-AG-DATA-001 term_ref: TERM-DOC-003, TERM-ED-008                                   | src/services/agService.ts              | 269  |
+| BR-AG-DATA-007-QUERY-AG-AG-MODEL-CATALOG-013                                                                                                   | QUERY  | BR-AG-DATA-007 term_ref: TERM-AG-010                                                 | src/store/modelStore.ts                | 162  |
 | BR-SYS-DATA-006-DATA-AG-AG-TURN-001                                                                                                            | DATA   | BR-SYS-DATA-006 term_ref: TERM-SYS-002                                               | src-tauri/src/ag/bdocx_capabilities.rs | 1235 |
 | BR-AG-DATA-001-QUERY-AG-AG-TURN-010, BR-DOC-DATA-003-QUERY-AG-AG-TURN-010                                                                      | QUERY  | BR-AG-DATA-001, BR-DOC-DATA-003 term_ref: TERM-DOC-003, TERM-ED-001                  | src-tauri/src/ag/blocks.rs             | 402  |
 | BR-AG-DATA-001-DATA-AG-AG-TURN-001                                                                                                             | DATA   | BR-AG-DATA-001                                                                       | src-tauri/src/ag/context.rs            | 46   |
@@ -331,7 +344,7 @@
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001                                                                                                         | QUERY  | BR-AG-PERSIST-001                                                                    | src-tauri/src/ag/turn.rs               | 164  |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004                                                                                                         | QUERY  | BR-AG-PERSIST-001 term_ref: TERM-AG-001                                              | src-tauri/src/lib.rs                   | 3536 |
 | BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA   | BR-AG-DATA-001, BR-REF-DATA-003 term_ref: TERM-REF-003                               | src-tauri/src/lib.rs                   | 4106 |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA   | BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005 term_ref: TERM-AG-005 | src-tauri/src/lib.rs                   | 6155 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA   | BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005 term_ref: TERM-AG-005 | src-tauri/src/lib.rs                   | 6173 |
 
 #### APP-CLOSE
 
@@ -341,7 +354,7 @@
 | BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | BR-SYS-STATE-004 | src/shell/App.tsx            | 38   |
 | BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1492 |
 | BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1556 |
-| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 7345 |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 7366 |
 
 #### AST-MEMORY
 
@@ -403,7 +416,7 @@
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-005   | EFFECT | BR-WS-PERSIST-002  | src/services/workspaceService.ts     | 193 |
 | BR-WS-PERSIST-002-RB-SYS-DATA-MIGRATE-001      | RB     | BR-WS-PERSIST-002  | src/shell/App.tsx                    | 18  |
 | BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-001       | RB     | BR-WS-PERSIST-002  | src/shell/Welcome.tsx                | 18  |
-| BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-002       | RB     | BR-WS-PERSIST-002  | src/shell/Workbench.tsx              | 27  |
+| BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-002       | RB     | BR-WS-PERSIST-002  | src/shell/Workbench.tsx              | 28  |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-004   | EFFECT | BR-WS-PERSIST-002  | src/store/workspaceShell.ts          | 46  |
 | BR-SYS-PERSIST-001-EFFECT-SYS-DATA-MIGRATE-001 | EFFECT | BR-SYS-PERSIST-001 | src-tauri/src/db/mod.rs              | 241 |
 | BR-SYS-STATE-005-EFFECT-SYS-DATA-MIGRATE-002   | EFFECT | BR-SYS-STATE-005   | src-tauri/src/de/lifecycle.rs        | 199 |
@@ -654,7 +667,7 @@
 | BR-AG-DATA-001-DATA-AG-AG-TURN-001                                                                                                             | DATA  | AG-TURN | src-tauri/src/ag/context.rs   | 46   |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012                                 | QUERY | AG-TOOL | src-tauri/src/ag/tool_exec.rs | 38   |
 | BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA  | AG-TURN | src-tauri/src/lib.rs          | 4106 |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA  | AG-TURN | src-tauri/src/lib.rs          | 6155 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA  | AG-TURN | src-tauri/src/lib.rs          | 6173 |
 
 #### BR-AG-DATA-001 term_ref: TERM-DOC-003
 
@@ -667,7 +680,7 @@
 | codes                                                                                                                                          | type | chain   | 文件                          | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | --------------------------- | ---- |
 | BR-AG-DATA-002-DATA-AG-AG-TURN-002                                                                                                             | DATA | AG-TURN | src-tauri/src/ag/context.rs | 102  |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs        | 6155 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs        | 6173 |
 
 #### BR-AG-DATA-003
 
@@ -681,7 +694,7 @@
 
 | codes                                                                                                                                          | type | chain   | 文件                   | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------- | ---- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6155 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6173 |
 
 #### BR-AG-DATA-004 term_ref: TERM-AG-005
 
@@ -700,7 +713,19 @@
 
 | codes                                                                                                                                          | type | chain   | 文件                   | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------- | ---- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6155 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6173 |
+
+#### BR-AG-DATA-006 term_ref: TERM-AG-010
+
+| codes                                         | type   | chain            | 文件                      | 行号  |
+| --------------------------------------------- | ------ | ---------------- | ----------------------- | --- |
+| BR-AG-DATA-006-EFFECT-AG-AG-MODEL-CATALOG-006 | EFFECT | AG-MODEL-CATALOG | src/store/modelStore.ts | 179 |
+
+#### BR-AG-DATA-007 term_ref: TERM-AG-010
+
+| codes                                        | type  | chain                                | 文件                      | 行号  |
+| -------------------------------------------- | ----- | ------------------------------------ | ----------------------- | --- |
+| BR-AG-DATA-007-QUERY-AG-AG-MODEL-CATALOG-013 | QUERY | AG-MODEL-CATALOG, AG-ASSIST, AG-TURN | src/store/modelStore.ts | 162 |
 
 #### BR-AG-PERSIST-001
 
@@ -748,16 +773,16 @@
 
 | codes                                   | type   | chain     | 文件                         | 行号   |
 | --------------------------------------- | ------ | --------- | -------------------------- | ---- |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts  | 802  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts  | 836  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 40   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 6809 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 6827 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
 | codes                               | type | chain     | 文件                                   | 行号   |
 | ----------------------------------- | ---- | --------- | ------------------------------------ | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 789  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1808 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 790  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1813 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
@@ -769,7 +794,7 @@
 | codes                                   | type   | chain     | 文件                                        | 行号  |
 | --------------------------------------- | ------ | --------- | ----------------------------------------- | --- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | AG-ASSIST | src/components/ag/AutocompleteOverlay.tsx | 16  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 987 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 988 |
 
 #### BR-AG-STATE-004
 
@@ -783,13 +808,13 @@
 | codes                                   | type   | chain     | 文件                       | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------ | ---- |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 110  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 6809 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 6827 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-003
 
 | codes                                   | type   | chain     | 文件                        | 行号  |
 | --------------------------------------- | ------ | --------- | ------------------------- | --- |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts | 802 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts | 836 |
 
 #### BR-AST-DATA-001
 
@@ -1332,7 +1357,7 @@
 | BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | APP-CLOSE | src/shell/App.tsx    | 38   |
 | BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | APP-CLOSE | src-tauri/src/lib.rs | 1492 |
 | BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | APP-CLOSE | src-tauri/src/lib.rs | 1556 |
-| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | APP-CLOSE | src-tauri/src/lib.rs | 7345 |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | APP-CLOSE | src-tauri/src/lib.rs | 7366 |
 
 #### BR-SYS-STATE-005
 
@@ -1423,7 +1448,7 @@
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-005 | EFFECT | DATA-MIGRATE | src/services/workspaceService.ts     | 193 |
 | BR-WS-PERSIST-002-RB-SYS-DATA-MIGRATE-001    | RB     | DATA-MIGRATE | src/shell/App.tsx                    | 18  |
 | BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-001     | RB     | DATA-MIGRATE | src/shell/Welcome.tsx                | 18  |
-| BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-002     | RB     | DATA-MIGRATE | src/shell/Workbench.tsx              | 27  |
+| BR-WS-PERSIST-002-RB-WS-DATA-MIGRATE-002     | RB     | DATA-MIGRATE | src/shell/Workbench.tsx              | 28  |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-004 | EFFECT | DATA-MIGRATE | src/store/workspaceShell.ts          | 46  |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-001 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 34  |
 | BR-WS-PERSIST-002-EFFECT-WS-DATA-MIGRATE-002 | EFFECT | DATA-MIGRATE | src-tauri/src/workspace/lifecycle.rs | 71  |
@@ -1452,13 +1477,13 @@
 
 | codes                                   | type   | chain     | 文件                                   | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------------------ | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 789  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1808 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 790  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1813 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-003     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 96   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts            | 802  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts            | 836  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-008     | RB     | AG-ASSIST | src/store/assistStore.ts             | 94   |
 
 #### TERM-AG-009
@@ -1554,7 +1579,7 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 790。
+动态发现：前端测试文件 26；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 795。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
@@ -1563,11 +1588,11 @@
 | WS | critical | 17 | 190 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
 | ED | critical | 22 | 399 | component:4, service:6, state:1, unit:11 | 11/11 → 11 |
 | DE | critical | 17 | 215 | component:3, integration:1, service:2, unit:11 | 2/2 → 2 |
-| AG | critical | 20 | 190 | component:1, integration:1, service:1, state:1, unit:16 | 3/3 → 3 |
+| AG | critical | 21 | 199 | component:1, integration:1, service:1, state:1, unit:17 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
 | DOC | critical | 17 | 126 | service:1, unit:16 | 1/1 → 1 |
 | PRV | high | 5 | 55 | component:1, service:1, unit:3 | 2/2 → 2 |
-| REF | high | 7 | 99 | component:1, service:2, unit:4 | 1/1 → 1 |
+| REF | high | 7 | 100 | component:1, service:2, unit:4 | 1/1 → 1 |
 | AST | high | 4 | 9 | unit:4 | 0/0 → 0 |
 | KB | high | 2 | 5 | unit:2 | 0/0 → 0 |
 | TPL | high | 2 | 6 | unit:2 | 0/0 → 0 |

@@ -162,6 +162,8 @@ describe("requestAssist 契约", () => {
       before: "前",
       after: "后",
       baseText: undefined,
+      provider: undefined,
+      model: undefined,
     });
     expect(result).toEqual({
       requestId: "as-1",
@@ -169,6 +171,36 @@ describe("requestAssist 契约", () => {
       candidates: ["候选 1", "候选 2", "候选 3"],
       failureReason: null,
     });
+  });
+
+  // covers: BR-AG-DATA-007
+  // requestAssist 透传调用点按能力偏好解析出的 provider/model（仅标识符，不含密钥）。
+  it("forwards provider/model into ag_request_assist", async () => {
+    invokeMock.mockResolvedValue({
+      request_id: "as-m",
+      candidate: "候选",
+      candidates: ["候选"],
+      failure_reason: null,
+    });
+
+    await requestAssist({
+      requestId: "as-m",
+      kind: "inline",
+      docPath: "notes/current.md",
+      loadSeq: 7,
+      blockId: "b1",
+      start: 0,
+      end: 2,
+      instruction: "改短",
+      selection: "原文",
+      provider: "openai",
+      model: "gpt-4o-mini",
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "ag_request_assist",
+      expect.objectContaining({ provider: "openai", model: "gpt-4o-mini" }),
+    );
   });
 
   it("keeps assist failure reason internal while returning empty candidates", async () => {

@@ -770,6 +770,37 @@ export async function uploadByok(provider: string, key: string): Promise<void> {
   await invoke("byok_upload", { provider, key });
 }
 
+/** dev GW `/models` 预设模型条目（TERM-AG-010，桌面端仅消费标识符）。 */
+export interface PresetModelDto {
+  provider: string;
+  model: string;
+  label: string;
+  source: string;
+}
+
+/** 拉取预设模型清单（AG-MODEL-CATALOG / TERM-AG-010）：经后端 ent::gateway fetch_models。 */
+export async function listPresetModels(): Promise<PresetModelDto[]> {
+  const models = await invoke<PresetModelDto[]>("list_models");
+  return Array.isArray(models) ? models : [];
+}
+
+/** dev GW 已配置 BYOK provider（脱敏 key_preview，不回显明文）。 */
+export interface ByokProviderStatus {
+  provider: string;
+  key_preview: string;
+}
+
+/** 查询已配置 BYOK provider 状态（AG-MODEL-CATALOG / PI-GW-02）。 */
+export async function byokListProviders(): Promise<ByokProviderStatus[]> {
+  const providers = await invoke<ByokProviderStatus[]>("byok_list_providers");
+  return Array.isArray(providers) ? providers : [];
+}
+
+/** 删除指定 provider 的 BYOK 密钥（立即生效）。 */
+export async function byokDeleteKey(provider: string): Promise<void> {
+  await invoke("byok_delete_key", { provider });
+}
+
 /** 辅助请求（⌘K 内联改写 / ⌘J 续写补全）。 */
 export interface AssistReq {
   requestId: string;
@@ -785,6 +816,9 @@ export interface AssistReq {
   before?: string; // 触发锚点前文指纹
   after?: string; // 触发锚点后文指纹
   baseText?: string; // inline refine：上一轮候选
+  /** 调用模型（provider/model 标识符，不含密钥；调用点按能力偏好解析传入，BR-AG-DATA-007）。缺省由后端按 provider 默认模型。 */
+  provider?: string;
+  model?: string;
 }
 
 export interface AssistResponse {
@@ -830,6 +864,8 @@ export async function requestAssist(req: AssistReq): Promise<AssistResponse> {
       before: req.before,
       after: req.after,
       baseText: req.baseText,
+      provider: req.provider,
+      model: req.model,
     });
     return {
       requestId: r.request_id ?? req.requestId,

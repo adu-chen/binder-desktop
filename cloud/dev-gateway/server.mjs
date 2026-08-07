@@ -8,10 +8,18 @@ import { createServer } from 'node:http';
 import { PROVIDERS, sse, streamProvider } from './providers.mjs';
 import { login } from './auth.mjs';
 import { checkGate } from './gate.mjs';
-import { setByokKey, getByokKey } from './byok.mjs';
+import { setByokKey, getByokKey, listByokProviders, deleteByokKey } from './byok.mjs';
 import { recordUsage } from './usage.mjs';
 
 const PORT = Number(process.env.GW_PORT) || 8787;
+
+// 预设模型清单（dev；TERM-AG-010 正式版由云端运营配置经 GET /models 下发，桌面端仅消费）。
+const PRESET_MODELS = [
+  { provider: 'deepseek', model: 'deepseek-chat', label: 'DeepSeek Chat', source: 'preset' },
+  { provider: 'deepseek', model: 'deepseek-reasoner', label: 'DeepSeek Reasoner', source: 'preset' },
+  { provider: 'openai', model: 'gpt-4o-mini', label: 'GPT-4o mini', source: 'preset' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-6', label: 'Claude Sonnet', source: 'preset' },
+];
 
 async function readJson(req) {
   const chunks = [];
@@ -72,6 +80,23 @@ const server = createServer(async (req, res) => {
     }
     setByokKey(body.provider, body.api_key);
     return json(res, 200, { ok: true, provider: body.provider });
+  }
+
+  // BYOK 已配置 provider 列表（脱敏 preview，PI-GW-02）。
+  if (req.method === 'GET' && req.url === '/byok/providers') {
+    return json(res, 200, { providers: listByokProviders() });
+  }
+
+  // BYOK 删除指定 provider 密钥，立即生效。
+  if (req.method === 'DELETE' && req.url.startsWith('/byok/keys/')) {
+    const provider = decodeURIComponent(req.url.slice('/byok/keys/'.length));
+    deleteByokKey(provider);
+    return json(res, 200, { ok: true, provider });
+  }
+
+  // 预设模型清单（TERM-AG-010，桌面端仅消费；订阅档位映射归正式云 GW/LIC）。
+  if (req.method === 'GET' && req.url === '/models') {
+    return json(res, 200, { models: PRESET_MODELS });
   }
 
   if (req.method === 'POST' && req.url === '/invoke/stream') {

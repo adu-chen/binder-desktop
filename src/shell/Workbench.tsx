@@ -12,6 +12,7 @@ import { useTabsStore } from "../store/tabsStore";
 import { Editor } from "../components/ed/Editor";
 import { OutlinePanel } from "../components/ed/OutlinePanel";
 import { AgentPanel } from "../components/ag/AgentPanel";
+import { ModelConfig } from "../components/ag/ModelConfig";
 import { startSmListeners, stopSmListeners } from "../services/smListeners";
 
 /**
@@ -34,6 +35,7 @@ const basename = (path: string) => path.split("/").filter(Boolean).pop() ?? path
 export function Workbench() {
   const { activeWorkspace } = useWorkspaceShell();
   const [activePanel, setActivePanel] = useState<RailPanelId>("files");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // 三栏宽度（可拖动自适应，视图态）：side/chat 像素宽由 CSS 变量驱动，center 取剩余 1fr。
   const { sideW, chatW } = useLayoutStore();
   const { tabs, activeTabId } = useTabsStore();
@@ -59,7 +61,7 @@ export function Workbench() {
         className="work"
         style={{ "--side-w": `${sideW}px`, "--chat-w": `${chatW}px` } as CSSProperties}
       >
-        <LeftRail active={activePanel} onChange={setActivePanel} />
+        <LeftRail active={activePanel} onChange={setActivePanel} onOpenSettings={() => setSettingsOpen(true)} />
         <aside className="side">
           {activePanel === "files" ? (
             // 按 workspaceId 重挂：切换项目即刷新文件树为新项目内容（PI-FE-10）。
@@ -102,6 +104,8 @@ export function Workbench() {
         <span>就绪</span>
         <span>{activeWorkspace?.rootPath ?? "无 workspace"}</span>
       </footer>
+
+      {settingsOpen && <ModelConfig onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

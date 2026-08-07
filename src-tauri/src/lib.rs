@@ -5239,6 +5239,24 @@ async fn byok_upload(provider: String, key: String) -> Result<(), IpcError> {
     ent::byok::upload_to_gateway(&provider, key).await
 }
 
+/// MODEL-CONFIG-01 · 预设模型清单（TERM-AG-010 / AG-MODEL-CATALOG）：桌面端仅消费标识符，不承载配置权威源。
+#[tauri::command]
+async fn list_models() -> Result<Vec<ent::gateway::PresetModel>, IpcError> {
+    ent::gateway::fetch_models().await
+}
+
+/// MODEL-CONFIG-01 · BYOK 已配置 provider 列表（脱敏 preview，不回显明文）。
+#[tauri::command]
+async fn byok_list_providers() -> Result<Vec<serde_json::Value>, IpcError> {
+    ent::byok::list_providers().await
+}
+
+/// MODEL-CONFIG-01 · 删除指定 provider 的 BYOK 密钥（立即生效，A-GW-M-D-01 PI-GW-02）。
+#[tauri::command]
+async fn byok_delete_key(provider: String) -> Result<(), IpcError> {
+    ent::byok::delete_key(&provider).await
+}
+
 /// PI-AG-08C/08E/08F + PI-AG-SEM-01 · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）；
@@ -7335,6 +7353,9 @@ pub fn run() {
             dispatch,
             ag_start_turn,
             byok_upload,
+            byok_list_providers,
+            byok_delete_key,
+            list_models,
             ag_request_assist,
             ag_finish_assist
         ])

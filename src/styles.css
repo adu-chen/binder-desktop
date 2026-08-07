@@ -777,10 +777,11 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--ink);
 }
 .editor-paper .ProseMirror p { margin: 0 0 var(--sp-3); }
-/* 编辑器选区统一品牌蓝（ED-SELECTION-PERSIST-01 · 方案 A）：聚焦时原生 ::selection 用品牌蓝，
-   与失焦持久化装饰同色系，避免系统默认选区色（灰褐）与持久化色（蓝）割裂。 */
+/* 选区高亮统一走 PM Decoration 链路（ED-SELECTION-PERSIST-01 · 统一链路）：原生 ::selection 透明
+   禁用——原生是"连续大块"（line-box），span 是"分行"（内容盒），二者视觉不一致。统一后聚焦拖选
+   与失焦持久化都是同一条 decoration 渲染（span 分行样式），聚焦/失焦观感完全一致。 */
 .editor-paper .ProseMirror ::selection {
-  background: rgba(37, 99, 235, 0.30);
+  background: transparent;
 }
 /* 选区失焦持久化（ED-SELECTION-PERSIST-01）：blur 后原生长条高亮消失，本装饰作为视觉副本，
    比原生选区略淡以区分"未聚焦"状态；focus（用户点击编辑器内）即清除（恢复原生）。
@@ -1094,6 +1095,13 @@ button:disabled { opacity: 0.5; cursor: default; }
   outline: none;
   white-space: pre-wrap;
 }
+/* agent 输入面选区统一品牌蓝（ED-SELECTION-PERSIST-01 · 问题 2）：Composer 输入框与会话流文本
+   无 SelectionPersistExtension（纯文本/只读，不做失焦持久化），用原生 ::selection 品牌蓝即可，
+   与主编辑器失焦持久化装饰（rgba(37,99,235,.16)+描边）同色系、略浓以示聚焦态。 */
+.composer-prosemirror ::selection,
+.msglist ::selection {
+  background: rgba(37, 99, 235, 0.30);
+}
 .composer-prosemirror p { margin: 0; }
 .composer-prosemirror p + p { margin-top: 4px; }
 .composer-editor.is-empty .composer-prosemirror::before {
@@ -1161,6 +1169,12 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 12px; color: var(--ink); border-radius: var(--r-1); cursor: pointer;
 }
 .modelcfg-pick.selected { border-color: var(--rust); font-weight: 600; }
+/* BYOK Provider 状态只读行（脱敏 preview，PI-GW-02） */
+.modelcfg-pick-readonly {
+  flex: 1; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  border: 0.5px solid var(--rule); background: var(--bg-card); padding: 6px 8px;
+  font-size: 12px; color: var(--ink); border-radius: var(--r-1);
+}
 .modelcfg-key { font-family: var(--font-mono); font-size: 11px; }
 .modelcfg-del { font-size: 11px; }
 .modelcfg-form { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

@@ -1,29 +1,30 @@
 {
-  "scope_id": "ED-FONT-RETRY-01",
+  "scope_id": "MODEL-CONFIG-TERM-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "字体枚举锁死缺陷修复（attempted 永久锁死 → 失败自动重试）",
+  "title": "构建模式中文称呼更名「代理构建」（TERM-AG-007 + 弹窗/文档引用同步）",
   "status": "CLOSED",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/ED-FONT-RETRY-01.md",
+  "issue_trace": ".governance/issues/MODEL-CONFIG-TERM-01.md",
   "stop_condition": null,
-  "reason": "人类 2026-08-06 决策：修复 ED-FONT-LOCAL-LIBRARY-01 锁死缺陷。观测定案：Rust CoreText 枚举 212 族正常、document.fonts.check 全通过，唯一失败点为 fontService attempted 永久锁死（dev 启动期 Rust backend 未就绪的瞬时 IPC 失败一次后，本会话永远回退常用子集，表现为本地字体突然消失）。修复：失败仅当次抛错、下次自动重试，仅成功结果缓存。本 Scope 替换 ED-SELECTION-PERSIST-01 活动锁（已闭合）。",
+  "reason": "人类 2026-08-07 指令：注册「代理构建」替换「构建模式」中文称呼（TERM-AG-007 zh 更名，en/term_id 不变，旧名退役为禁用别名）；弹窗内「构建」改为「代理构建」。",
   "objectives": [
-    "移除 fontService.listLocalFonts 的 attempted 永久锁死",
-    "失败仅当次抛错，下次调用自动重试；仅成功结果缓存",
-    "更新 fontService.test.ts 断言失败后自动重试",
-    "移除临时审计打点（EditorToolbar [FONT-AUDIT]、Rust println）",
-    "文档同步：A-ED-M-T-01 v1.60、ADUS 重新生成"
+    "TERM-AG-007 zh 改为「代理构建」，forbidden 增加「构建模式」，补沿革注释",
+    "ModelConfig 弹窗能力偏好区「构建」→「代理构建」",
+    "Composer/agStore/modelStore/AgentPanel 中 BuildMode 指代的「构建」文本同步",
+    "A-AG-M-T-01 正文与 REQ-AG-006 summary 中「构建模式」引用同步"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/ED-FONT-RETRY-01.md",
-    "src/services/fontService.ts",
-    "src/services/fontService.test.ts",
-    "src/components/ed/EditorToolbar.tsx",
-    "src-tauri/src/lib.rs",
-    "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ".governance/issues/MODEL-CONFIG-TERM-01.md",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "src/components/ag/ModelConfig.tsx",
+    "src/components/ag/Composer.tsx",
+    "src/components/ag/AgentPanel.tsx",
+    "src/store/agStore.ts",
+    "src/store/modelStore.ts"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -33,31 +34,30 @@
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "governance.config.json",
     "scripts/test_governance.mjs",
-    "scripts/test_governance.test.mjs"
+    "scripts/test_governance.test.mjs",
+    "docs/01_modules/CBT/**",
+    "docs/00_core/generated/**"
   ],
   "constraints": [
-    "成功结果才进入 cachedFamilies 缓存；失败不缓存失败态",
-    "不改变 Rust 侧 fonts.list_fonts 枚举行为",
-    "移除全部临时审计打点"
+    "term_id=TERM-AG-007、en=BuildMode、代码标识符 build 均不变",
+    "仅改 BuildMode 指代的中文称呼；CBT 模块「构建（Build）」语义域不改"
   ],
   "acceptance_criteria": [
-    "失败后下次调用自动重试并成功（测试断言 invoke 2 次）",
-    "无临时审计打点残留",
-    "相关测试、tsc、governance:generate/audit、build 通过"
+    "TERM-AG-007 zh=代理构建，forbidden 含「构建模式」，ADUS 刷新一致",
+    "弹窗能力偏好区显示「代理构建」",
+    "AG 文档/UI 中 BuildMode 指代处不再出现「构建模式」",
+    "generate/audit、tsc、相关测试通过"
   ],
   "validation_commands": [
-    "npx vitest run src/services/fontService.test.ts src/components/ed/EditorControls.test.tsx",
-    "npm run test:related",
     "npm run governance:generate",
     "npm run governance:audit",
-    "npx tsc --noEmit",
-    "npm run build",
-    "cargo check --manifest-path src-tauri/Cargo.toml"
+    "./node_modules/.bin/tsc --noEmit",
+    "./node_modules/.bin/vitest run src/store/assistRuntime.test.ts src/services/agRuntime.test.ts"
   ],
   "out_of_scope": [
-    "工具栏字体选择器与 DOCX 导出字体链路（font_trace FontPolicy aliases）的 SSOT 统一（架构注记，另行立项）",
-    "字体枚举缓存策略重构（如 LRU/过期）"
+    "CBT 模块文档中的「构建（Build）」模块名/正文",
+    "历史变更记录与 generated 产物的旧称",
+    "上一 Scope 遗留的 SC-04 断言漂移（另行处理）"
   ],
-  "unresolved_items": [],
-  "scope_expansions": []
+  "unresolved_items": []
 }

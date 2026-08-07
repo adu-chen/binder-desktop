@@ -31,9 +31,11 @@ const RAIL_ITEMS: RailItem[] = [
 interface LeftRailProps {
   active: RailPanelId;
   onChange: (id: RailPanelId) => void;
+  /** 底部设置按钮：打开全局设置（当前承载模型配置，MODEL-CONFIG-01）。 */
+  onOpenSettings?: () => void;
 }
 
-export function LeftRail({ active, onChange }: LeftRailProps) {
+export function LeftRail({ active, onChange, onOpenSettings }: LeftRailProps) {
   return (
     <nav className="rail" aria-label="模块导航">
       <div className="rail-logo">
@@ -57,7 +59,7 @@ export function LeftRail({ active, onChange }: LeftRailProps) {
         </button>
       ))}
       <div className="rail-spacer" />
-      <button className="rail-btn" title="设置">
+      <button className="rail-btn" title="设置" onClick={onOpenSettings}>
         <span className="rail-btn-glyph">·</span>
         <span className="rail-btn-num">SET</span>
       </button>

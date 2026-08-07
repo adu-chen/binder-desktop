@@ -72,17 +72,18 @@ forbidden: 对话模式, chat模式, chat 模式, 对话编辑模式
 代理编辑（TERM-AG-008）面板双模式之一（2026-07-04 人类裁决）：默认面向当前文档的 AI 精确修改
 （编辑器感知 + 块级锚定，产出一律经 DE diff 裁决、人最后裁定），兼具文件创建、文件树整理
 （移动/重命名/新建文件夹直接执行；**删除须用户确认**）、项目感知、对话与资源获取。模式是默认
-姿态非能力墙——与构建模式互相复用彼此能力。注：编辑器/文档层的「编辑态 vs 预览态」（docx 打开
+姿态非能力墙——与代理构建互相复用彼此能力。注：编辑器/文档层的「编辑态 vs 预览态」（docx 打开
 形态）与本模式无关，不得混用。
 
 <!-- TERM
 term_id: TERM-AG-007
 chains: AG-TURN
-zh: 构建模式
+zh: 代理构建
 en: BuildMode
-forbidden: agent模式, agent 模式, Chat Build, chat-build
+forbidden: 构建模式, agent模式, agent 模式, Chat Build, chat-build
 -->
-代理编辑（TERM-AG-008）面板双模式之一（2026-07-04 人类裁决）：对话阶段（多轮需求搜集→项目蓝图
+代理编辑（TERM-AG-008）面板双模式之一（2026-07-04 人类裁决；2026-08-07 中文称呼更名
+「代理构建」，旧称「构建模式」退役为禁用别名，en/term_id 不变）：对话阶段（多轮需求搜集→项目蓝图
 BuildBlueprint，属本模式下的普通代理回合）→ 显式触发构建（明确指令或构建按钮）→ 计划确认 →
 执行构建（期间不可发起对话，仅中断）→ 完成后回落对话继续编辑调整。构建执行编排归 CBT（SM-CBT-01）。
 
@@ -94,7 +95,7 @@ en: AgentEdit
 forbidden: 对话编辑, 对话编辑板块
 -->
 AI 编辑三层之第三层（面板级，2026-07-04 人类裁决定名）：agent 面板承载的完整 AI 能力域
-（编辑模式 EditMode + 构建模式 BuildMode），会话持久化、产出经 DE diff 裁决、工具调用、项目
+（编辑模式 EditMode + 代理构建 BuildMode），会话持久化、产出经 DE diff 裁决、工具调用、项目
 构建。沿革：旧版曾以「对话编辑」总称整个 agent 能力，该词后又错位为 DE 模块中文名——三重身份
 致混，2026-07-04 裁定：正式名「代理编辑」，「对话编辑」全面退役为禁用别名；DE 模块更名
 **Diff Edit**（不再有中文名）。
@@ -113,6 +114,17 @@ forbidden: 聊天标签, 对话标签, 会话标签, agent标签, chat tab, sess
 归档/打开顺序与激活态。它是 workspace 控制态的一部分，重启后恢复标签存在状态与顺序；回合内容按
 懒加载策略恢复。代理编辑会话不同于文档标签（SYS/ED 视图导航态）和账号会话（云认证），不得混用。
 
+<!-- TERM
+term_id: TERM-AG-010
+chains: AG-MODEL-CATALOG, AG-ASSIST, AG-TURN
+zh: 预设模型
+en: PresetModel
+forbidden: 内置模型, 托管模型, 官方模型
+-->
+云端配置下发、经订阅门禁可调用的模型（REQ-AG-006）：与 BYOK 模型（TERM-CLOUD-004，用户自带
+密钥）分层呈现；桌面端仅消费清单（GET /models），不承载配置权威源；1.0 EP 主路径 DeepSeek 托管
+模型，自部署预设模型演进边界见 A-GW-M-D-01 §3.5（GW-06）。
+
 ## §1 文档定位
 
 ```
@@ -128,7 +140,7 @@ REQ-CORE-001/002/006/008/009 → REQ-AG-001~005（AG L1）→ 本文（SSOT）�
 ## §2 技术分层与边界
 
 ```
-AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模式 + 构建模式（构建编排归 CBT）
+AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模式 + 代理构建（构建编排归 CBT）
   ├─ 代理回合（§3，AG-TURN）        组装→门禁→网关流式→产出处置；历史持久化原则
   ├─ 工具调用循环（§4，AG-TOOL）    注册/权限校验→执行→回注→循环控制
   ├─ 上下文组装（§5）               文档/注入载荷/本地资产，workspace 限界
@@ -425,6 +437,41 @@ AG-ASSIST 的实现映射必须覆盖完整唯一链：编辑器快捷键捕获�
 A-ED-M-T-01 §5.1）经 ed.apply_edit 视为用户编辑直改；chat/agent **回合产出**的样式修改不走
 本路径，一律经 DE diff 裁决落盘（X-FORBID-006 / BR-ED-DATA-005），不得借内联语义绕过裁决。
 
+### §6.1 模型注册表与能力偏好（AG-MODEL-CATALOG）
+
+模型配置体系的客户端承载（REQ-AG-006）：模型注册表（来源分层）与能力偏好（四类能力独立配模型）
+均由客户端维护（localStorage 偏好，P0-P1 沿用；统一设置体系并入后立项）；预设模型清单由云端
+下发（GET /models，桌面端仅消费，TERM-AG-010）；调用时按能力偏好解析 provider/model 传入
+既有 AG-ASSIST / AG-TURN 链路，门禁与密钥语义不变（X-FORBID-001/002、X-SEQ-001）。
+
+<!-- CHAIN
+chain_id: AG-MODEL-CATALOG
+主责模块: AG
+status: active
+-->
+模型注册表维护与预设清单拉取、能力偏好配置与解析、调用前按能力偏好解析 provider/model。
+
+<!-- RULE
+rule_id: BR-AG-DATA-006
+主链路: AG-MODEL-CATALOG
+域: DATA
+-->
+模型注册表条目必须携带来源分层：`source` 仅允许 `preset`（预设模型，云端下发、订阅可调用，
+TERM-AG-010）或 `byok`（BYOK 模型，用户自带密钥、网关代持，TERM-CLOUD-004）；同一
+`provider/model` 键在注册表中唯一；注册表只保存 provider/model/label/source 标识符与可用性标记，
+**不保存任何密钥**（X-FORBID-001）；来源为 `byok` 的条目仅在对应 provider 密钥已上送网关时可用。
+
+<!-- RULE
+rule_id: BR-AG-DATA-007
+主链路: AG-MODEL-CATALOG
+域: DATA
+-->
+能力模型偏好解析必须满足：四类能力（autocomplete / inline-assist / agent-edit / build）各自维护
+一项偏好，值为「跟随全局默认」或「显式指定 modelKey」二者之一；解析结果必须是注册表内存在的
+modelKey，注册表条目被删除后引用它的显式偏好回落为「跟随全局默认」，不得产出悬空 modelKey；
+解析为**纯同步逻辑**，不引入跨请求状态；解析出的 provider/model 仅作为调用参数传入既有链路，
+不改变门禁前置与服务端裁决路径（X-FORBID-002）。
+
 ## §7 跨模块约束（CONSTRAINT）
 
 <!-- CONSTRAINT
@@ -518,6 +565,24 @@ target_type: RULE
 target_id: BR-AG-DATA-003
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-AG-006
+target_type: CHAIN
+target_id: AG-MODEL-CATALOG
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-006
+target_type: RULE
+target_id: BR-AG-DATA-006
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-006
+target_type: RULE
+target_id: BR-AG-DATA-007
+status: mapped
+-->
 
 ## §9 测试与验收
 
@@ -596,3 +661,5 @@ status: mapped
 | 2026-07-29 | v2.21 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：list_images 增加稳定图片身份和动态操作边界，image_ops 开放受控缩放、上下移动和独立段落对齐。 |
 | 2026-07-30 | v2.22 | 图片代理编辑闭合审计：同步同图 resize/layout/move 原子组合与 delete 独占，补齐 import_image_asset、edit_blocked、非视觉识别和源文件不搬移边界。 |
 | 2026-07-30 | v2.23 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：富文档普通内容写入改为活动 ProseMirror 层级快照 → block_ops → 后端批校验/补齐 beforeNode → ED 单事务；container/atom 只读，HTML 字符串替换与整篇替换在富文档生成前拒绝。 |
+| 2026-08-06 | v2.24 | MODEL-CONFIG-01：新增 §6.1 模型注册表与能力偏好（AG-MODEL-CATALOG 链路、BR-AG-DATA-006 来源分层、BR-AG-DATA-007 能力偏好解析）；TERM-AG-010 预设模型；REQ-MAP REQ-AG-006 映射；客户端仅保存标识符不保存密钥（X-FORBID-001）不变 |
+| 2026-08-07 | v2.25 | MODEL-CONFIG-TERM-01：TERM-AG-007 中文称呼「构建模式」更名「代理构建」（en BuildMode / term_id 不变），旧称退役为禁用别名；正文 BuildMode 指代同步 |

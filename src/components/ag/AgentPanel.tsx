@@ -10,7 +10,7 @@ import { closeAgentSession, deleteAgentSession, newAgentSession, switchAgentSess
  * 代理编辑面板 AgentPanel（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01）。
  * 顶部=多会话标签栏（新建/关闭/历史重开，运行期内存态，持久化随 BR-AG-PERSIST-001 接线批）；
  * 中部=消息流（DiffCard 嵌入对应回合消息内）；输入框上方=批量裁决条（无待裁决自隐藏）；底部=Composer。
- * 编辑/构建模式切换已移入 Composer 框内（原顶部切换移除，逻辑同源 agStore session.mode）。
+ * 编辑/代理构建模式切换已移入 Composer 框内（原顶部切换移除，逻辑同源 agStore session.mode）。
  * AI 调用前经订阅门禁硬门（X-SEQ-001，后端 ensure_gate_passed）；客户端不持密钥（X-FORBID-001）。
  */
 export function AgentPanel() {

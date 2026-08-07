@@ -563,6 +563,54 @@ pub async fn assist_complete(
     Ok(out)
 }
 
+/// dev GW `/models` 返回的预设模型条目（TERM-AG-010，桌面端仅消费标识符；不承载配置权威源）。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PresetModel {
+    pub provider: String,
+    pub model: String,
+    pub label: String,
+    pub source: String,
+}
+
+/// 拉取预设模型清单（GET /models，TERM-AG-010）：只读清单，不鉴权（dev）；订阅档位映射归正式
+/// 云 GW/LIC。供 AG-MODEL-CATALOG 注册表合并（BR-AG-DATA-006）。失败回统一错误，由调用方决定是否缓存。
+pub async fn fetch_models() -> Result<Vec<PresetModel>, IpcError> {
+    let url = format!("{}/models", gw_base_url());
+    let resp = reqwest::Client::new().get(&url).send().await.map_err(|e| {
+        IpcError::new(
+            "AG_GW_UNREACHABLE",
+            &format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
+            true,
+            false,
+        )
+    })?;
+    if !resp.status().is_success() {
+        return Err(IpcError::new(
+            "AG_GW_HTTP",
+            &format!("预设清单拉取失败：网关 HTTP {}", resp.status()),
+            true,
+            false,
+        ));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        IpcError::new(
+            "AG_GW_BAD_RESPONSE",
+            &format!("预设清单响应无法解析：{e}"),
+            true,
+            false,
+        )
+    })?;
+    let arr = body
+        .get("models")
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(arr
+        .iter()
+        .filter_map(|m| serde_json::from_value::<PresetModel>(m.clone()).ok())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::InvokeEvent::*;

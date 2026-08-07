@@ -26,6 +26,9 @@ node server.mjs          # 或 npm start
 | POST | `/auth/login` | `{email?}` → `{token,userId,expiresAt}`（dev 会话令牌，TTL 24h，**持久化**重启不丢） |
 | POST | `/gate/check` | `{token}` → `{verdict,reason,reauth_required,used,limit}`（真门禁：验令牌 + 订阅 + 额度。配额 env `GW_DAILY_QUOTA`，默认 50；令牌问题→401、超额→429） |
 | POST | `/byok/keys` | BYOK 代持：`{provider,api_key}` → **信封加密入库**（SQLite，磁盘无明文），回 `{ok,provider}`（不回显密钥）。客户端经「🔑 key」录入上送 |
+| GET  | `/byok/providers` | 已配置 BYOK provider 列表（脱敏 `key_preview`，不回显明文；MODEL-CONFIG-01 / PI-GW-02） |
+| DELETE | `/byok/keys/:provider` | 删除指定 provider 的 BYOK 密钥，**立即生效**（MODEL-CONFIG-01 / PI-GW-02） |
+| GET  | `/models` | 预设模型清单 `{models:[{provider,model,label,source}]}`（TERM-AG-010：桌面端仅消费；订阅档位映射归正式云 GW/LIC） |
 | POST | `/invoke/stream` | 归一化 SSE：`event: chunk {text}` / `done {stop_reason}` / `error {code,message,retriable}` |
 
 `/invoke/stream` 请求体：

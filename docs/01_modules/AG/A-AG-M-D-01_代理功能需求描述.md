@@ -145,6 +145,17 @@ acceptance: 辅助续写可呈现 3 个候选且 Tab/1/2/3 采纳正确；候选
 open_issues: 防抖具体数值属实现参数，默认 450ms；成本策略与延迟指标延 G5 标定
 -->
 
+<!-- REQ
+req_id: REQ-AG-006
+title: 能力模型独立配置
+owner_module: AG
+status: active
+summary: 四类 agent 能力（辅助续写 Autocomplete / 局部修改 InlineAssist / 代理编辑 AgentEdit / 代理构建 BuildMode）各自可独立配置调用模型（provider/model），默认跟随全局默认模型、可显式指定覆盖；模型分预设（云端下发、订阅可调用）与 BYOK（用户自带密钥、网关代持）两类来源分层呈现与选择；模型配置的密钥语义仍受 X-FORBID-001 约束（客户端不持密钥）
+source_doc: MODEL-CONFIG-FIX-PLAN-01（2026-08-06 人类四项确认）、A-GW-M-D-01（预设模型演进边界 GW-06）
+acceptance: 四类能力在模型配置界面各自可选择「跟随全局」或指定独立模型；辅助续写/局部修改/代理编辑/代理构建四类调用按其能力偏好解析出 provider/model 生效；预设模型与 BYOK 模型在界面分层展示且来源可辨；密钥不落客户端、不因模型配置引入新密钥路径
+open_issues: 预设模型清单云端下发契约（GET /models）与订阅档位映射归云 GW/LIC；能力偏好持久化并入统一设置体系后立项
+-->
+
 ## §6 模块边界与约束（边界闭合）
 
 - **云薄端硬边界**（APC §4.3/§13）：AG 不持密钥、不内置 provider SDK、不绕过订阅门禁；一切模型
@@ -198,3 +209,5 @@ open_issues: 防抖具体数值属实现参数，默认 450ms；成本策略与�
 | 2026-07-28 | v2.11 | BDocx TableCellShading：REQ-AG-002 纳入 `list_tables→table_ops` 表格语义链，以及单元格底纹的严格颜色、合并锚、动态能力与基准校验验收。 |
 | 2026-07-29 | v2.12 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-AG-002 纳入 `list_images→image_ops`、活动 BDocx 基线、Block/image/source hash 校验、结构化 Diff 和项目源文件保护。 |
 | 2026-07-30 | v2.13 | 图片代理编辑闭合审计：REQ-AG-002 同步 manifest 1.4.0，补齐缩放/移动/对齐组合、import_image_asset、edit_blocked 和非视觉识别边界。 |
+| 2026-08-06 | v2.14 | MODEL-CONFIG-01：新增 REQ-AG-006 能力模型独立配置（四类 agent 能力各自可独立配置模型；预设/BYOK 来源分层；密钥语义不变） |
+| 2026-08-07 | v2.15 | MODEL-CONFIG-TERM-01：REQ-AG-006 中「构建 BuildMode」中文称呼同步为「代理构建 BuildMode」（TERM-AG-007 zh 更名） |

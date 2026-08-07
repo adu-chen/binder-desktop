@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { computeAssistPlacement, type AssistRect } from "../components/ed/assistPlacement";
 import { assistStore, type AssistTarget } from "./assistStore";
+import { modelKey, modelStore } from "./modelStore";
 
 const target: AssistTarget = {
   docPath: "notes/a.md",
@@ -247,4 +248,55 @@ describe("assistPlacement migrated suite", () => {
   function rect(left: number, top: number, right: number, bottom: number): AssistRect {
     return { left, top, right, bottom, width: right - left, height: bottom - top };
   }
+});
+
+// modelStore：能力模型偏好与来源分层（MODEL-CONFIG-01，BR-AG-DATA-006/007）。
+describe("modelStore 能力偏好与来源分层", () => {
+  beforeEach(() => {
+    modelStore.resetForTest();
+  });
+
+  // covers: BR-AG-DATA-007
+  // 默认所有能力跟随全局默认模型；resolveFor 与 current() 一致。
+  it("resolves followGlobal to the global default model", () => {
+    const snap = modelStore.getSnapshot();
+    modelStore.select(modelKey(snap.models[0]));
+    for (const cap of ["autocomplete", "inlineAssist", "agentEdit", "build"] as const) {
+      expect(modelStore.resolveFor(cap)).toEqual(modelStore.current());
+    }
+  });
+
+  // covers: BR-AG-DATA-007
+  // 显式偏好命中注册表条目时按显式解析，其他能力仍跟随全局。
+  it("resolves explicit capability preference to the specified model", () => {
+    const snap = modelStore.getSnapshot();
+    const target = snap.models[1];
+    modelStore.setCapabilityPref("agentEdit", { mode: "explicit", modelKey: modelKey(target) });
+
+    expect(modelStore.resolveFor("agentEdit")).toEqual(target);
+    expect(modelStore.resolveFor("build")).toEqual(modelStore.current());
+  });
+
+  // covers: BR-AG-DATA-007
+  // 被显式偏好引用的注册表条目删除后，偏好回落为跟随全局，不产出悬空 modelKey。
+  it("falls back to followGlobal after the explicit model is removed", () => {
+    const snap = modelStore.getSnapshot();
+    const target = snap.models[1];
+    const key = modelKey(target);
+    modelStore.setCapabilityPref("inlineAssist", { mode: "explicit", modelKey: key });
+    modelStore.removeModel(key);
+
+    expect(modelStore.getSnapshot().capabilityPref.inlineAssist).toEqual({ mode: "followGlobal" });
+    expect(modelStore.resolveFor("inlineAssist")).toEqual(modelStore.current());
+  });
+
+  // covers: BR-AG-DATA-006
+  // 默认清单为 preset；手动添加的模型为 byok 来源，注册表保留来源标记。
+  it("keeps source layering across preset defaults and byok additions", () => {
+    expect(modelStore.getSnapshot().models.every((m) => m.source === "preset")).toBe(true);
+
+    modelStore.addModel({ provider: "openai", model: "gpt-4o", label: "GPT-4o", source: "byok" });
+    const added = modelStore.getSnapshot().models.find((m) => m.model === "gpt-4o");
+    expect(added?.source).toBe("byok");
+  });
 });
