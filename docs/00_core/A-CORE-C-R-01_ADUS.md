@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-07T10:08:46.502Z -->
+<!-- 最后生成时间：2026-08-07T10:21:04.825Z -->
 
 ### 模块编码表
 
@@ -1579,7 +1579,7 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 804。
+动态发现：前端测试文件 26；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 805。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
@@ -1588,11 +1588,11 @@
 | WS | critical | 17 | 194 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
 | ED | critical | 22 | 405 | component:4, service:6, state:1, unit:11 | 11/11 → 11 |
 | DE | critical | 17 | 215 | component:3, integration:1, service:2, unit:11 | 2/2 → 2 |
-| AG | critical | 21 | 199 | component:1, integration:1, service:1, state:1, unit:17 | 3/3 → 3 |
+| AG | critical | 21 | 200 | component:1, integration:1, service:1, state:1, unit:17 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
 | DOC | critical | 17 | 126 | service:1, unit:16 | 1/1 → 1 |
 | PRV | high | 5 | 55 | component:1, service:1, unit:3 | 2/2 → 2 |
-| REF | high | 7 | 100 | component:1, service:2, unit:4 | 1/1 → 1 |
+| REF | high | 7 | 101 | component:1, service:2, unit:4 | 1/1 → 1 |
 | AST | high | 4 | 9 | unit:4 | 0/0 → 0 |
 | KB | high | 2 | 5 | unit:2 | 0/0 → 0 |
 | TPL | high | 2 | 6 | unit:2 | 0/0 → 0 |

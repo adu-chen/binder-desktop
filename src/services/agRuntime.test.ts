@@ -1319,3 +1319,26 @@ describe("agStore migrated suite", () => {
     });
   });
 });
+
+// covers: BR-AG-DATA-007
+// MODEL-CONFIG-01 丢失回归（2026-08-07）：Editor 辅助续写调用点的 autocompleteModel 段曾因并行改动
+// 在提交时静默丢失（requestAssist 的 provider/model 为可选参数，tsc 不报错，功能静默降级）。
+// 该段在组件闭包内、依赖 DOM 布局测量（jsdom 无法稳定集成渲染），故用源码契约守卫调用点接线：
+// openAutocompleteAssist 必须按 autocomplete 能力偏好解析模型并透传 provider/model。
+describe("Editor autocomplete 调用点接线（MODEL-CONFIG-01 丢失回归）", () => {
+  it("openAutocompleteAssist 解析能力偏好模型并透传", () => {
+    // vite raw glob：直接读取 Editor.tsx 源码文本（避免 node:fs 类型依赖）。
+    const editorSources = import.meta.glob("../components/ed/Editor.tsx", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    const editorSource = editorSources["../components/ed/Editor.tsx"] ?? "";
+    expect(editorSource).not.toBe("");
+    // 能力偏好解析（BR-AG-DATA-007：跟随全局或显式指定）。
+    expect(editorSource).toContain('const autocompleteModel = modelStore.resolveFor("autocomplete")');
+    // 透传到 requestAssist（provider/model 与解析结果一致）。
+    expect(editorSource).toContain("provider: autocompleteModel.provider");
+    expect(editorSource).toContain("model: autocompleteModel.model");
+  });
+});
