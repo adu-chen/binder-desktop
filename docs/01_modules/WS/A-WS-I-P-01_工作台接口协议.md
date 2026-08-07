@@ -107,3 +107,4 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | 2026-07-30 | v1.6 | BDOCX-IMAGE-COMPOSITE-IMPORT-01 人工入口闭合：受控项目图片准备边界纳入项目文件树相对路径和剪贴板 PNG/JPEG 字节，继续复用同一图片根、哈希去重与源文件保护约束。 |
 | 2026-08-04 | v1.7 | `ws.save_doc` 副作用补充（人类决策，A-WS-M-T-01 v1.7）：保存成功且内容与最近节点快照不同时记一个 `save` 时间轴节点，规则归属补 BR-WS-DATA-002 |
 | 2026-08-06 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder` command（镜像 `ws.create_folder`）：两级语义——mode=empty 仅删空目录（非空拒 WS_NOT_EMPTY）、mode=recursive 递归删除；缺失/目标为文件拒绝；删除后由实现侧清洗 bdocx_manifest。文件删除 `ws.delete_doc` 语义不变 |
+| 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）为前端入口组合，复用既有 `ws.create_doc` / `ws.create_folder` command，无新增命令面；登记本行避免前端入口与协议脱节。 |

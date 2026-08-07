@@ -276,3 +276,4 @@
 | 2026-07-28 | v1.25 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：PI-ED-08 的图片宽度/资源/alt/重开尺寸完成 DOCX XML 与 HTML 联合实测；持久媒体恢复链已落地。NodeView 人工拖拽与 inline/block 样式不在本课题内，继续保持原验收边界。 |
 | 2026-07-28 | v1.26 | BDOCX-IMAGE-INTERACTION-01：PI-ED-08 图片 Topic B 实现 document 捕获拖宽、独立图片段落邻近移动/删除、混排保护及 DOCX 顺序/删除往返测试；撤下真实探针证明不可持久的 inline/block 按钮。 |
 | 2026-07-29 | v1.27 | 新增 PI-ED-17：以 ImageOperation 承接 workspace 项目图片代理插入/删除、动态锚与来源哈希、批原子草稿、结构化 Diff、缓存重建和保存重开验收。 |
+| 2026-08-07 | v1.28 | DOC-SYNC-01 补登：新增 PI-ED-18 选区交互（ED-SELECTION-PERSIST-01 失焦持久化 + ED-SELECTION-DRAG-01 拖动不错位）实现闭合，需求见 A-ED-M-D-01 REQ-ED-006 落地说明（v1.8），技术见 A-ED-M-T-01 v1.59/v1.61。 |

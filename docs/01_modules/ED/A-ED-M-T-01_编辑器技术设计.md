@@ -151,7 +151,8 @@ Markdown 可导出 DOCX；BDocx 可导出 PDF 或 Markdown；无支持组合时�
 ### §3.2 文档工具增强与对象上下文（ED-DOCUMENT-TOOL-ENRICHMENT-01）
 
 第二行的文字分组在 BDocx 与 HTML 中提供文字颜色、删除线、高亮、上标和下标；不再单独建立颜色分组。
-高亮可选择预设色板或 HTML 颜色选择器的自定义不透明色，并能清除已有高亮。它们都属于编辑器扩展能力；
+高亮收敛为「文字背景」（ED-HIGHLIGHT-BACKGROUND-01）：与文字颜色同款取色器，去除颜色即去除背景，移除
+五色预设与清除高亮独立入口。它们都属于编辑器扩展能力；
 但 BDocx 的删除线、高亮、上标和下标当前不构成转换保真承诺，具体等级以工具栏兼容性清单为准。Markdown 不展示
 该组能力，避免其写盘后静默丢失。列表分组只允许当前 `listItem` 升降层级；插入分组可插入水平分隔线，
 但其是文档节点，不得被解释为分页、页面设置或输出指令。
@@ -851,5 +852,7 @@ status: mapped
 | 2026-08-06 | v1.58 | ED-TXT-TOOLBAR-01：修正纯文本（.txt）不展示内容编辑工具栏的误读决策——txt 第二行提供段落组（引用/代码块/分隔线）内容编辑工具；仅展示可在纯段落文档生效且内容可保存的段落级结构工具；文字级样式（字体/字号/颜色等）不展示（txt 保存为纯文本不持久化）。详细矩阵回链 A-ED-X-R-03 v1.5。 |
 | 2026-08-06 | v1.59 | ED-SELECTION-PERSIST-01：选区失焦持久化——失焦后浏览器原生 ::selection 不渲染高亮（PM selection state 仍保留），新增 SelectionPersistExtension：blur 时对选区挂 inline Decoration（.pm-selection-persist）视觉副本，focus 清除；不修改 selection state、不替换 DOM（X-FORBID-005）。实现注记：①PM someProp(handleDOMEvents) 只取组件级 props（插件级被遮蔽），blur/focus 事件桥接放在 Editor.tsx editorProps.handleDOMEvents（persistSelectionOnBlur/clearPersistedSelection，blur 延迟派发待 view.hasFocus() 归 false）；②失焦时序——WKWebView 失焦可能先清 DOM selection 再发 blur，插件 state 记录最后非空选区（lastNonEmpty），blur 挂装饰用记录而非实时 selection，失焦同步事务（collapsed）不覆盖记录；③v2 统一链路——原生 ::selection 透明禁用，选区高亮统一由 PM Decoration 实时渲染（聚焦拖选与失焦持久化同样式），decorations 实时跟随非空 TextSelection + 失焦回退 lastNonEmpty；④生命周期——持久化绑定文档，切换文档（loadSeq 变更）即 clear 记录，避免跨文档残留；agent 输入面（Composer 输入框 + 会话流 .msglist）统一品牌蓝 ::selection（纯文本不做持久化），PDF 预览 iframe 为 WKWebView 原生查看器、跨 document 不可 CSS 覆盖、保留原生。 |
 | 2026-08-07 | v1.61 | ED-SELECTION-DRAG-01：选区拖动错位修复——从选区中间按下拖动时 WebKit 原生拖选篡改 selection（从按下点重新拖出），PM 原生 drop 的 deleteSelection() 删除被篡改选区而非原选区（编辑器内错删错插、拖出引用锚错位）。修复：dragstart 锁定原选区（插件 dragLock）→ 拖动期间 lastNonEmpty/decorations 以锁定范围为准；自定义 handleDrop 删除锁定范围并插入；dragend 解锁；拖出编辑器（agent 输入框）原选区保持（引用语义）。 |
+| 2026-08-07 | v1.62 | ED-TOOLBAR-CONTEXTUAL-GROUPS-01 / ED-EDITOR-OPERATIONS-01 实现闭合登记（DOC-SYNC-01）：工具栏按上下文分组、编辑操作富化（保存/撤销/查找/格式定位）、对象就近工具（图片/表格）合并进 EditorControls 自动化；08-05 闭合提交 c0e9823 未在本文登记，本行补录。 |
+| 2026-08-07 | v1.63 | ED-HIGHLIGHT-BACKGROUND-01（DOC-SYNC-01）：§3.2 高亮正文口径收敛为「文字背景」（与文字颜色同款取色器、移除五色预设/清除独立入口），与 A-ED-X-R-03 v1.4 一致；覆盖本行之前的 v1.52「预设色板+清除入口」旧描述。 |
 | 2026-08-06 | v1.60 | ED-FONT-LOCAL-LIBRARY-01 锁死缺陷修复：fontService.listLocalFonts 移除 attempted 永久锁死——dev 启动期 Rust backend 未就绪的瞬时 IPC 失败只影响当次调用，下次调用自动重试；仅成功结果进入 cachedFamilies 缓存（此前一次失败后本会话永远回退常用子集，表现为"本地字体突然消失"）。观测定位：Rust CoreText 枚举 212 族、document.fonts.check 全通过，唯一失败点即该锁死。 |
 | 2026-07-30 | v1.49 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档块投影直接来自 ProseMirror 层级节点；容器/原子块只读，内容子块独立写；BlockOperation 批原子应用及 fingerprint 冲突安全的 exact node 回滚取代 HTML 字符串替换。 |

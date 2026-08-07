@@ -135,3 +135,4 @@ status: mapped
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（ENT G2，greenfield 商业化关键路径收尾）：门禁客户端执行（逐次裁决、禁缓存通过、断网即拒）、网关通道（无 provider SDK/直连、流式三终态）、BYOK 边界（一次性上送、零残留、不豁免门禁）、用量呈现（服务端唯一数据源、门户购买）；主链路引用 CLOUD-GATE/INVOKE 不重复声明；零新增注册项（§5 说明）；ENT-03 高频门禁延迟解法限定服务端凭证类并锚定 X-FORBID-002；REQ_MAP（REQ-ENT-001~004） |
+| 2026-08-07 | v1.1 | MODEL-CONFIG-01（DOC-SYNC-01 补登）：BYOK 管理客户端实现闭合——`ent::byok` 与 `ent::gateway` 落地 BYOK 代持提交与校验，前端模型配置界面提供 BYOK 录入/管理（来源分层 preset/byok，见 A-AG-M-T-01 §6.1 AG-MODEL-CATALOG）；零残留与不豁免门禁口径不变（BR-ENT-DATA-001）。 |

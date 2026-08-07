@@ -102,7 +102,7 @@ G 阶段口径沿用 APC §5：
 | Agent 对话式编辑 | AG / ENT / GW | in_progress | 从 dev/桩状态转为 AiGateway + DeepSeek 托管模型生产链路 |
 | Diff Edit 审阅和落盘 | DE / WS / ED | in_progress | 接真实 Agent 输出，完成 ChangeProposal → PendingDiff → accept/reject → save 验收 |
 | AiGateway 托管模型 | CLOUD / GW / ENT | blocked | 云端实现 DeepSeek 官方 API 适配、SubscriptionGate、计量与错误形状 |
-| BYOK | GW / ENT / PORTAL | blocked | 确认 GW-02 加密方案；实现密钥代持、删除生效、仍经 SubscriptionGate |
+| BYOK | GW / ENT / PORTAL | blocked（客户端已实现） | 客户端 BYOK 管理已落地（MODEL-CONFIG-01，ent::byok/gateway）；云 GW 代持、删除生效与 SubscriptionGate 仍阻断 |
 | 账号与订阅 | AUTH / LIC / ACCT / ENT | blocked | 完成 AUTH/LIC/PORTAL 最小实现，替换客户端桩 |
 | 管理员端最小能力 | PORTAL / AUTH / LIC / GW | not_started | 实现用户、订阅、调用量、错误率、网关健康与人工处理入口 |
 | 反馈与脱敏 telemetry | CORE / CLOUD / AG / DE | planned | 记录任务类型、模型档、耗时、Diff 接受率、错误码，不保存调用正文 |
@@ -173,6 +173,7 @@ G 阶段口径沿用 APC §5：
 | PI-WS-03 pending_diffs 持久化与裁决后落盘 | done | A-WS-X-L-01 标记 G4 | 与 DE accepted 唯一路径联调 |
 | PI-WS-04 时间轴存储与还原 | done | A-WS-X-L-01 标记 G4 | G5 大文档/异常恢复验证 |
 | PI-WS-05 控制态持久化 | done | A-WS-X-L-01 标记 G4 | 迁移回归 |
+| WS 专项（08-05~07）：WS-NEW-BUTTON-01 / WS-DIR-DELETE-01 / WS-SAVE-TIMELINE-01 | partial | 提交 4e01e7b/3f730c7/3933092；A-WS-I-P-01 v1.8~1.9、A-WS-M-T-01 v1.8~1.9；WorkspaceUI/workspaceRuntime 测试通过 | G5 联调；模块计划 PI 状态回填 |
 
 ### 5.4 ED
 
@@ -184,6 +185,7 @@ G 阶段口径沿用 APC §5：
 | PI-ED-04 分页与图文媒体 | done | A-ED-X-L-02 PI-ED-06/08、A-CORE-X-L-03 PI-FE-31 | 视觉/IME/大文档真机验收 |
 | PI-ED-05 编辑器装饰层接口 | partial | DE/AG/ED 多处实现；A-CORE-X-L-04 仍要求投影修复 | 与 DE/AG 联调 |
 | PI-ED-06~13 编辑器专项优化 | done | A-ED-X-L-02 v1.3 标记计划全部 PI 收口 | 真机验收、AG 解桩后样式 diff 数据填充 |
+| ED 专项（08-05~07）：工具栏上下文分组/本地字体库/高亮收敛/txt 工具栏/选区持久化与拖动 | partial | A-ED-M-T-01 v1.56~v1.63、A-ED-X-L-02 v1.28；EditorControls/fontService/SelectionPersist 测试通过 | 真机验收；与 DE/AG 联调 |
 
 ### 5.5 DOC
 
@@ -218,6 +220,7 @@ G 阶段口径沿用 APC §5：
 | PI-AG-09 上下文供给真实接入 | planned | A-AG-X-L-02 未标 G4 | 接 REF/AST/KB/WS，验证截断序 |
 | PI-AG-10C/10B/10F 流式 IPC | planned | A-AG-X-L-02 未标 G4 | 契约冻结、前后端双轨实现 |
 | PI-AG-11 真实模型调用集成 | blocked | A-AG-X-L-02 明确依赖 PI-GW-01~04 | 云 GW 未实现 |
+| AG 专项：MODEL-CONFIG-01 模型配置体系 | partial | A-AG-M-D-01 v2.14 / A-AG-M-T-01 v2.24；agRuntime/assistRuntime 测试通过 | 预设清单（GET /models）与订阅档位映射依赖云 GW/LIC |
 
 ### 5.8 REF
 
@@ -262,6 +265,7 @@ G 阶段口径沿用 APC §5：
 |---|---|---|---|
 | PI-PRV-01 多格式预览 | partial | A-CORE-X-L-03 PI-BE-08~10/PI-FE-22~25 G4；A-PRV-X-L-01 未标 G4 | 模块计划回填、全格式保真/失败态验证 |
 | PI-PRV-02 打印与导出 | partial | A-CORE-X-L-03 PI-BE-09+FE-23 G4；A-PRV-X-L-01 未标 G4 | 导出格式清单、workspace 限界验证 |
+| PRV 专项（08-05~07）：PRV-PREVIEW-OPT-01 / PRV-TOOLBAR-ADAPTIVE-01 | partial | A-PRV-M-T-01 / A-PRV-I-P-01；PrvToolbar 测试通过 | 全格式保真/失败态验证待做 |
 
 ### 5.14 ACCT
 
@@ -313,5 +317,6 @@ G 阶段口径沿用 APC §5：
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-07 | v1.2 | DOC-SYNC-01 回填 08-05~08-07 课题进度：§5.3 WS 新增专项行（WS-NEW-BUTTON-01 / WS-DIR-DELETE-01 / WS-SAVE-TIMELINE-01）；§5.4 ED 新增专项行（工具栏/本地字体库/高亮收敛/txt 工具栏/选区持久化与拖动）；§5.7 AG 新增专项行（MODEL-CONFIG-01）；§5.13 PRV 新增专项行（PRV-PREVIEW-OPT-01 / PRV-TOOLBAR-ADAPTIVE-01）；§2.4 BYOK 发布行注明客户端已实现（云 GW 仍阻断）；同步功能明细台账与产品能力图谱（function-ledger 147 行、注册表 19 变体） |
 | 2026-07-17 | v1.1 | 接入 1.0 Experience Preview 发布切片：来源新增 A-CORE-X-L-06；新增 §2.4 发布视图，按上线阻断项重排当前状态；§6 新增 BLK-07 云端最小闭环阻断 |
 | 2026-07-15 | v1.0 | 初版：建立项目进度跟踪台账；定义状态枚举、P0-P5/G1-G6 总览、端侧/云侧/模型调用视图、15 个客户端模块 + CLOUD 明细、跨模块阻断清单与维护规则；明确本文不定义规则、不承接 REQ_MAP、不作为代码追溯来源 |

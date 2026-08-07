@@ -438,3 +438,5 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-07-29 | v1.5 | BDOCX-IMAGE-AGENT-EDIT-01：BR-WS-DATA-001 增加 workspace 项目图片只读发现，锁定相对普通文件、隐藏目录跳过、符号链接和越界拒绝边界。 |
 | 2026-07-29 | v1.6 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：项目图片发现收敛到 `.binder/project_assets.json` 的相对 imageRoots，缺失时只使用 `images`，禁止全 workspace 回退。 |
 | 2026-08-04 | v1.7 | WS-TIMELINE save 准入定档（人类决策）：§6 节点准入与 BR-WS-DATA-002 将保存成功纳入节点准入——每次保存成功且内容与最近节点快照不同时记 `save` 节点，内容未变跳过；§12 债务「save 节点准入策略待定」改为已定档，解除 WS-03 该子项 |
+| 2026-08-07 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder`（mode=empty\|recursive）——fileops::delete_folder 实现两级删除语义（empty 非空拒 WS_NOT_EMPTY / recursive 递归删除），listing::cleanup_bdocx_under 清洗删除目录前缀下的 BDocx 清单路径（empty 无命中不写）；目标越界经 resolve_active 守界。 |
+| 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）复用 WS-FS `create_doc` / `create_folder`，前端激活区域与文件夹入口为 UI 层组合，无后端命令面变化。 |

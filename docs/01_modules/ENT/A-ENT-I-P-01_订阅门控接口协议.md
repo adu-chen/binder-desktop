@@ -65,3 +65,4 @@ provider 密钥无任何 command 经手（X-FORBID-001）。
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件，商业化关键路径收尾）：ENT 接口协议——invoke_model（门禁前置+网关流式，唯一模型调用通道）/invoke_stream/submit_byok（零残留不豁免门禁）/get_subscription_state（服务端数据源）/open_portal（门户跳转）；X-SEQ-001/X-FORBID-001/002 接口层固化无绕过入口；零新增注册项；债务（高频凭证锚定 X-FORBID-002、用量粒度/BYOK API 延云端） |
+| 2026-08-07 | v1.1 | MODEL-CONFIG-01（DOC-SYNC-01 补登）：`submit_byok` 客户端实现闭合（ent::byok/gateway 落地代持提交与校验，本地零残留、无订阅仍被拒）；`get_models` 预设清单为云端下发契约（A-SYS-I-P-03），客户端仅消费，本次不新增命令面。 |
