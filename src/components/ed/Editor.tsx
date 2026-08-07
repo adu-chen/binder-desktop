@@ -24,7 +24,13 @@ import {
 } from "./extensions/paginationViewportAnchor";
 import { isContainerBlock } from "./extensions/BlockIdExtension";
 import { applyGreenReview, type GreenReviewValue } from "./extensions/DiffDecorationExtension";
-import { clearPersistedSelection, persistSelectionOnBlur } from "./extensions/SelectionPersistExtension";
+import {
+  clearPersistedSelection,
+  handleSelectionDragDrop,
+  lockDragSelection,
+  persistSelectionOnBlur,
+  unlockDragSelection,
+} from "./extensions/SelectionPersistExtension";
 import {
   edStore,
   useEdStore,
@@ -1104,12 +1110,19 @@ export function Editor() {
           if (selectionContainsImage(view.state.doc, view.state.selection.from, view.state.selection.to)) {
             return false;
           }
+          // 拖动锁定（ED-SELECTION-DRAG-01）：锁定当前非空选区为原选区，防原生拖选篡改 selection。
+          lockDragSelection(view);
           const ref = getSelectionRef();
           if (ref && event.dataTransfer) {
             const path = edStore.getSnapshot().openPath ?? "";
             writeSelectionRefData(event.dataTransfer, { ...ref, path });
           }
-          return false; // 不接管：器内拖动保持原生行为
+          return false; // 不接管 dragstart 本身：编辑器内拖动仍由 PM 触发 drop，handleDrop 接管
+        },
+        dragend: (view) => {
+          // 拖动结束释放锁（未 drop 的拖出场景同样在此解锁；lastNonEmpty 已保持锁定范围）。
+          unlockDragSelection(view);
+          return false;
         },
         copy: (view, event) => {
           if (selectionContainsImage(view.state.doc, view.state.selection.from, view.state.selection.to)) {
@@ -1172,6 +1185,8 @@ export function Editor() {
           return true;
         },
       },
+      // 选区拖动 drop（ED-SELECTION-DRAG-01）：接管 move 型选区拖动，删除 dragstart 锁定的原选区。
+      handleDrop: (view, event, slice, move) => handleSelectionDragDrop(view, event, slice, move),
       handleKeyDown: (view, event) => {
         const mod = event.metaKey || event.ctrlKey;
         if (!mod) return false;
