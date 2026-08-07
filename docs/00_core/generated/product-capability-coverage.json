@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-08-02T15:36:24.115Z",
+  "generated_at": "2026-08-07T15:35:21.326Z",
   "summary": {
     "product_areas": 1,
     "journeys": 1,
-    "capabilities": 2,
-    "variants": 7,
+    "capabilities": 7,
+    "variants": 19,
     "support": {
-      "supported": 3,
-      "partial": 4,
+      "supported": 14,
+      "partial": 5,
       "unsupported": 0,
       "unknown": 0,
       "not_applicable": 0
     },
     "automation": {
       "none": 0,
-      "partial": 4,
+      "partial": 16,
       "passed": 3,
       "failed": 0
     },
     "system_validation": {
       "not_required": 0,
-      "pending": 5,
+      "pending": 17,
       "passed": 0,
       "failed": 0,
       "blocked": 2
@@ -445,6 +445,607 @@
         "TERM-ED-006",
         "TERM-ED-007",
         "TERM-ED-008"
+      ]
+    },
+    {
+      "id": "VAR-WS-CREATE-RESOURCE",
+      "name": "新建文件或文件夹",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx",
+        "folder"
+      ],
+      "operation": "create_doc_or_folder_via_new_button",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "WS-FS",
+      "requirements": [
+        "REQ-WS-002"
+      ],
+      "rules": [
+        "BR-WS-DATA-001"
+      ],
+      "terms": [
+        "TERM-WS-001"
+      ],
+      "acceptance": [
+        "「＋」新建按钮提供格式选择、激活区域与文件夹入口（WS-NEW-BUTTON-01）",
+        "新文件/文件夹落在工作区边界内并进入文件树与保存链路"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ws/WorkspaceUI.test.tsx",
+          "src/services/workspaceRuntime.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-WORKSPACE-FILE-MANAGEMENT",
+      "capability_name": "管理工作区文件与版本历史",
+      "capability_summary": "用户在工作区内新建、删除文件与文件夹，并在保存时维护文档版本时间线；操作经 WS 文件系统边界。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-WS-001"
+      ]
+    },
+    {
+      "id": "VAR-WS-DELETE-FOLDER",
+      "name": "文件夹删除两级语义",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "folder"
+      ],
+      "operation": "delete_folder_two_tier",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "WS-FS",
+      "requirements": [
+        "REQ-WS-002"
+      ],
+      "rules": [
+        "BR-WS-DATA-001"
+      ],
+      "terms": [
+        "TERM-WS-001"
+      ],
+      "acceptance": [
+        "空目录直接删除（无确认），非空目录确认后递归（WS-DIR-DELETE-01）",
+        "删除后 BDocx 清单无陈旧路径；被删目录下打开会话关闭；文件树刷新"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ws/WorkspaceUI.test.tsx",
+          "src/services/workspaceRuntime.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-WORKSPACE-FILE-MANAGEMENT",
+      "capability_name": "管理工作区文件与版本历史",
+      "capability_summary": "用户在工作区内新建、删除文件与文件夹，并在保存时维护文档版本时间线；操作经 WS 文件系统边界。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-WS-001"
+      ]
+    },
+    {
+      "id": "VAR-WS-SAVE-TIMELINE",
+      "name": "保存成功记时间轴节点",
+      "stage": "保存与重开",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx"
+      ],
+      "operation": "record_save_timeline_node",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "WS-TIMELINE",
+      "requirements": [
+        "REQ-WS-004"
+      ],
+      "rules": [
+        "BR-WS-DATA-002"
+      ],
+      "terms": [
+        "TERM-WS-001"
+      ],
+      "acceptance": [
+        "保存成功且内容与最近节点快照不同时记 save 节点，内容未变跳过（WS-SAVE-TIMELINE-01）",
+        "文件树固定顶部区；落盘与还原各记恰好一个节点"
+      ],
+      "evidence": {
+        "tests": [
+          "src/services/workspaceRuntime.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-WORKSPACE-FILE-MANAGEMENT",
+      "capability_name": "管理工作区文件与版本历史",
+      "capability_summary": "用户在工作区内新建、删除文件与文件夹，并在保存时维护文档版本时间线；操作经 WS 文件系统边界。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-WS-001"
+      ]
+    },
+    {
+      "id": "VAR-AG-MODEL-CONFIG",
+      "name": "模型配置体系（来源分层+能力偏好+预设清单+BYOK管理）",
+      "stage": "代理协作",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx"
+      ],
+      "operation": "configure_model_capability_preference",
+      "support": "supported",
+      "side_effect": false,
+      "requirements": [
+        "REQ-AG-006",
+        "REQ-ENT-003"
+      ],
+      "rules": [
+        "BR-AG-DATA-006",
+        "BR-AG-DATA-007",
+        "BR-ENT-DATA-001"
+      ],
+      "terms": [
+        "TERM-AG-010",
+        "TERM-CLOUD-004"
+      ],
+      "acceptance": [
+        "autocomplete/inline-assist/agent-edit/build 四类能力各自可配置模型，调用按能力偏好解析（MODEL-CONFIG-01）",
+        "预设模型（云端下发）与 BYOK 模型来源分层且可辨；密钥不落客户端、不因配置引入新密钥路径",
+        "BYOK 管理经网关代持；能力偏好接线由 Editor autocomplete 调用点守卫覆盖（BR-AG-DATA-006/007）"
+      ],
+      "evidence": {
+        "tests": [
+          "src/services/agRuntime.test.ts",
+          "src/store/assistRuntime.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-AGENT-MODEL-CONFIG",
+      "capability_name": "配置 Agent 模型与能力偏好",
+      "capability_summary": "四类 agent 能力各自可独立配置模型；预设与 BYOK 模型来源分层呈现，调用按能力偏好解析，密钥不落客户端。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-AG-010",
+        "TERM-CLOUD-004"
+      ]
+    },
+    {
+      "id": "VAR-PRV-CACHE-LOCAL-OPEN",
+      "name": "预览缓存落盘与本地打开",
+      "stage": "打开与理解",
+      "actor": "user",
+      "formats": [
+        "docx",
+        "xlsx",
+        "pptx",
+        "pdf"
+      ],
+      "operation": "cache_preview_and_open_locally",
+      "support": "supported",
+      "side_effect": true,
+      "canonical_chain": "PRV-VIEW",
+      "requirements": [
+        "REQ-PRV-001",
+        "REQ-PRV-005"
+      ],
+      "rules": [
+        "BR-PRV-DATA-001"
+      ],
+      "terms": [],
+      "acceptance": [
+        "预览结果缓存落盘可本地打开；预览背景统一、缩放手势适配（PRV-PREVIEW-OPT-01）",
+        "断网或未认证仍可打开已缓存预览（REQ-PRV-005 离线边界）"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/prv/PrvToolbar.test.tsx"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-PREVIEW-OUTPUT",
+      "capability_name": "只读预览与输出",
+      "capability_summary": "用户以只读表面预览工作区文档，预览可缓存本地打开、适配工具栏，并可打印导出。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": []
+    },
+    {
+      "id": "VAR-PRV-TOOLBAR-ADAPTIVE",
+      "name": "预览模式工具栏自适应",
+      "stage": "打开与理解",
+      "actor": "user",
+      "formats": [
+        "docx",
+        "xlsx",
+        "pptx"
+      ],
+      "operation": "adaptive_preview_toolbar",
+      "support": "supported",
+      "side_effect": false,
+      "requirements": [
+        "REQ-PRV-004"
+      ],
+      "rules": [],
+      "terms": [],
+      "acceptance": [
+        "预览工具栏按内容类型自适应工具集（创建草稿/导出/缩放/打印），只读边界不弱化（PRV-TOOLBAR-ADAPTIVE-01）",
+        "工具栏抽取共享组件 edToolbarParts，编辑器工具栏行为不变"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/prv/PrvToolbar.test.tsx"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-PREVIEW-OUTPUT",
+      "capability_name": "只读预览与输出",
+      "capability_summary": "用户以只读表面预览工作区文档，预览可缓存本地打开、适配工具栏，并可打印导出。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": []
+    },
+    {
+      "id": "VAR-CTX-MENU-UNIFIED",
+      "name": "统一右键菜单",
+      "stage": "打开与理解",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx",
+        "folder"
+      ],
+      "operation": "unified_context_menu",
+      "support": "supported",
+      "side_effect": false,
+      "internal_source": "CTX-MENU-01",
+      "requirements": [],
+      "rules": [],
+      "terms": [],
+      "acceptance": [
+        "统一 ContextMenu 组件接入全目标面（文件树、标签、编辑器、图片/表格对象、Diff 卡）",
+        "菜单项与既有命令一致，不提供越权操作（CTX-MENU-01）"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/shell/ShellComponents.test.tsx",
+          "src/components/ws/WorkspaceUI.test.tsx",
+          "src/components/de/DiffReview.test.tsx"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-SHELL-INTERACTION",
+      "capability_name": "外壳交互与选区语义",
+      "capability_summary": "统一的右键菜单入口与编辑器选区交互语义（失焦持久化、拖动不错位），提升编辑操作的确定性。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001"
+      ]
+    },
+    {
+      "id": "VAR-ED-SELECTION-PERSIST",
+      "name": "选区失焦持久化",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx"
+      ],
+      "operation": "persist_selection_on_blur",
+      "support": "supported",
+      "side_effect": false,
+      "internal_source": "ED-SELECTION-PERSIST-01",
+      "requirements": [
+        "REQ-ED-006"
+      ],
+      "rules": [],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "失焦后选区高亮仍可见，聚焦清除；选区高亮统一由 PM Decoration 渲染（ED-SELECTION-PERSIST-01）",
+        "切换文档不跨文档残留；agent 输入面与 PDF 预览的选区呈现符合各自边界"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ed/extensions/SelectionPersistExtension.test.ts",
+          "src/components/ed/extensions/SelectionPersistExtension.dom.test.ts",
+          "src/components/ed/extensions/SelectionPersistExtension.integration.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-SHELL-INTERACTION",
+      "capability_name": "外壳交互与选区语义",
+      "capability_summary": "统一的右键菜单入口与编辑器选区交互语义（失焦持久化、拖动不错位），提升编辑操作的确定性。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001"
+      ]
+    },
+    {
+      "id": "VAR-ED-SELECTION-DRAG",
+      "name": "选区拖动不错位",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx"
+      ],
+      "operation": "drag_selection_without_misplacement",
+      "support": "supported",
+      "side_effect": false,
+      "internal_source": "ED-SELECTION-DRAG-01",
+      "requirements": [
+        "REQ-ED-006"
+      ],
+      "rules": [],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "从选区中间按下拖动不篡改原选区，删除/插入作用于锁定范围（ED-SELECTION-DRAG-01）",
+        "拖出编辑器（agent 输入面）保持原选区引用语义"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ed/extensions/SelectionPersistExtension.integration.test.ts"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-SHELL-INTERACTION",
+      "capability_name": "外壳交互与选区语义",
+      "capability_summary": "统一的右键菜单入口与编辑器选区交互语义（失焦持久化、拖动不错位），提升编辑操作的确定性。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001"
+      ]
+    },
+    {
+      "id": "VAR-EDIT-TOOLBAR-CONTEXTUAL",
+      "name": "工具栏上下文分组与编辑操作富化",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "text",
+        "html",
+        "bdocx"
+      ],
+      "operation": "contextual_toolbar_groups",
+      "support": "supported",
+      "side_effect": false,
+      "internal_source": "ED-TOOLBAR-CONTEXTUAL-GROUPS-01",
+      "requirements": [],
+      "rules": [],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "工具栏按上下文分组；编辑操作（保存/撤销/查找/格式定位等）富化（ED-TOOLBAR-CONTEXTUAL-GROUPS-01 / ED-EDITOR-OPERATIONS-01 / ED-DOCUMENT-TOOL-ENRICHMENT-01）",
+        "图片/表格对象上下文工具就近呈现，Markdown 不暴露不支持的样式"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ed/EditorControls.test.tsx"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-EDITOR-TOOLBAR-ENHANCEMENT",
+      "capability_name": "编辑器工具栏增强",
+      "capability_summary": "编辑器工具栏的上下文分组、本地字体库与高亮收敛等增强，提升编辑操作的可用性与往返确定性。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001"
+      ]
+    },
+    {
+      "id": "VAR-EDIT-FONT-LOCAL-LIBRARY",
+      "name": "本地字体库同步",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "html",
+        "bdocx"
+      ],
+      "operation": "local_font_library_sync",
+      "support": "supported",
+      "side_effect": false,
+      "internal_source": "ED-FONT-LOCAL-LIBRARY-01",
+      "requirements": [],
+      "rules": [],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "常用字体子集置顶（仅可用展示）+ macOS 本地已装字体追加（CoreText 枚举）；不可用字体不渲染（ED-FONT-LOCAL-LIBRARY-01）",
+        "枚举失败/瞬时 IPC 失败自动重试，不锁死本地字体（ED-FONT-RETRY-01）"
+      ],
+      "evidence": {
+        "tests": [
+          "src/services/fontService.test.ts",
+          "src/components/ed/EditorControls.test.tsx"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-EDITOR-TOOLBAR-ENHANCEMENT",
+      "capability_name": "编辑器工具栏增强",
+      "capability_summary": "编辑器工具栏的上下文分组、本地字体库与高亮收敛等增强，提升编辑操作的可用性与往返确定性。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001"
+      ]
+    },
+    {
+      "id": "VAR-EDIT-HIGHLIGHT-BACKGROUND",
+      "name": "高亮收敛为文字背景",
+      "stage": "编辑内容",
+      "actor": "user",
+      "formats": [
+        "markdown",
+        "html",
+        "bdocx"
+      ],
+      "operation": "highlight_as_text_background",
+      "support": "partial",
+      "side_effect": false,
+      "internal_source": "ED-HIGHLIGHT-BACKGROUND-01",
+      "requirements": [],
+      "rules": [],
+      "terms": [
+        "TERM-ED-001"
+      ],
+      "acceptance": [
+        "高亮收敛为文字背景（与文字颜色同款取色器），移除五色预设与清除独立入口（ED-HIGHLIGHT-BACKGROUND-01）",
+        "BDocx 明确不支持，禁用或明确提示而非静默失败"
+      ],
+      "evidence": {
+        "tests": [
+          "src/components/ed/EditorControls.test.tsx"
+        ],
+        "validations": []
+      },
+      "state": {
+        "definition": "confirmed",
+        "delivery": "implemented",
+        "automation": "partial",
+        "system_validation": "pending",
+        "release": "not_ready"
+      },
+      "capability_id": "CAP-EDITOR-TOOLBAR-ENHANCEMENT",
+      "capability_name": "编辑器工具栏增强",
+      "capability_summary": "编辑器工具栏的上下文分组、本地字体库与高亮收敛等增强，提升编辑操作的可用性与往返确定性。",
+      "area_name": "文档协作",
+      "journey_names": [
+        "完成一次文档协作"
+      ],
+      "term_refs": [
+        "TERM-ED-001"
       ]
     }
   ]

@@ -14,7 +14,7 @@
     "test:related": "node scripts/test_governance.mjs run",
     "test:full": "npm test && cargo test --manifest-path src-tauri/Cargo.toml",
     "product:test": "vitest run scripts/test_governance.test.mjs -t \"Product Capability Graph\"",
-    "product:generate": "node scripts/generate_product_capability_atlas.mjs",
+    "product:generate": "node scripts/generate_product_capability_atlas.mjs && node scripts/generate_function_ledger.mjs",
     "product:audit": "node scripts/audit_product_capability.mjs",
     "tauri": "tauri",
     "governance:generate": "node scripts/generate_adus.mjs",
