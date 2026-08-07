@@ -73,6 +73,7 @@ pub struct TimelineEntry {
 
 /// 引用注入载荷基线（REQ-CORE-006，主责 REF；REF→AG/CBT 传递）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RefInjection {
     pub target: DocRef,
     /// 块级锚集合；路径级引用时为空。
@@ -141,6 +142,15 @@ pub enum ReferencePayload {
         text: String,
         #[serde(rename = "charCount")]
         char_count: usize,
+        label: Option<String>,
+    },
+    /// 外部文件引用（F5，纳入 v1）：仅元数据（name/path/size），不读内容，守 X-FORBID-004。
+    File {
+        name: String,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        size: Option<u64>,
         label: Option<String>,
     },
 }
@@ -242,5 +252,25 @@ mod tests {
         assert!(json.contains("\"blockId\":\"block_1\""));
         let back: ReferencePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
+    }
+
+    // covers: BR-SYS-DATA-002
+    // file 变体（F5）：tag=kind=file，可选 path/size 缺省可解析（前端 file 拖入只给 name/size）。
+    #[test]
+    fn reference_payload_file_serde_roundtrip() {
+        let payload = ReferencePayload::File {
+            name: "report.pdf".into(),
+            path: None,
+            size: Some(2048),
+            label: None,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"kind\":\"file\""));
+        let back: ReferencePayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, payload);
+        // 缺省字段（size/path）兼容前端拖入。
+        let minimal: ReferencePayload =
+            serde_json::from_str(r#"{"kind":"file","name":"a.pdf"}"#).unwrap();
+        assert!(matches!(minimal, ReferencePayload::File { size: None, .. }));
     }
 }

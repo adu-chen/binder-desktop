@@ -224,6 +224,10 @@ fn build_registry() -> CommandRegistry {
     reg.register("ag.save_turn");
     reg.register("ag.list_turns");
     reg.register("ag.delete_session");
+    reg.register("ref.list_candidates");
+    reg.register("ref.resolve_anchor");
+    reg.register("ref.verify_anchor");
+    reg.register("ref.build_injection");
     reg
 }
 
@@ -328,6 +332,10 @@ fn dispatch(
             "ag.save_turn" => route_save_agent_turn(&request, &state),
             "ag.list_turns" => route_list_agent_turns(&request, &state),
             "ag.delete_session" => route_delete_agent_session(&request, &state),
+            "ref.list_candidates" => route_ref_list_candidates(&request, &state),
+            "ref.resolve_anchor" => route_ref_resolve_anchor(&request, &state),
+            "ref.verify_anchor" => route_ref_verify_anchor(&request, &state),
+            "ref.build_injection" => route_ref_build_injection(&request, &state),
             // 注册表已放行但路由缺失：实现期补全各模块 command（视为内部错误）。
             other => Err(IpcError::new(
                 "IPC_ROUTE_MISSING",
@@ -4099,25 +4107,6 @@ struct BlockRef {
     text: String,
 }
 
-#[cfg(test)]
-fn block_ref_range_label(br: &BlockRef) -> String {
-    match (br.start, br.end) {
-        (Some(start), Some(end)) if end > start => format!("字符区间 [{start}..{end}]"),
-        _ => "字符区间未提供（按该块选中内容理解）".to_string(),
-    }
-}
-
-#[cfg(test)]
-fn format_block_ref_context(br: &BlockRef, capped_text: &str) -> String {
-    format!(
-        "引用文档「{}」块 [{}] 的选中内容，{}：\n{}",
-        br.rel_path,
-        br.block_id,
-        block_ref_range_label(br),
-        capped_text
-    )
-}
-
 fn reference_target_path(payload: &ReferencePayload) -> Option<&str> {
     match payload {
         ReferencePayload::Doc { rel_path, .. } | ReferencePayload::Selection { rel_path, .. } => {
@@ -4132,142 +4121,460 @@ fn reference_target_path(payload: &ReferencePayload) -> Option<&str> {
  * codes:    BR-AG-DATA-001-AG-AG-TURN-009
  * type:     DATA
  * chain:    AG-TURN
- * rules:    BR-AG-DATA-001, BR-REF-DATA-003
+ * rules:    BR-AG-DATA-001, BR-REF-DATA-003, BR-REF-VERIFY-001
  * term_ref: TERM-REF-003
  * boundary: in=ReferencePayloadAndAgentReadContext | out=explicitReferenceContextBlock(validatedReadSnapshot)
  */
+/// 引用上下文读取+分派（AG 组装职责，REF-REFERENCE-REPAIR-01 F3）：doc/selection 经 AgentReadContext
+/// 读取（已打开文档优先 LogicalState），格式化与锚校验委托 reference::context（BR-REF-DATA-003 /
+/// BR-REF-VERIFY-001）；REF 模块不再持有 AG 类型，规则逻辑集中于 REF。
 fn format_reference_payload_context(
     payload: &ReferencePayload,
     read_ctx: Option<&ag::blocks::AgentReadContext>,
     cap: usize,
 ) -> String {
+    use crate::reference::context::DocRead;
     match payload {
-        ReferencePayload::Doc { rel_path, .. } => match read_ctx {
-            Some(ctx) => match ctx.snapshot(rel_path) {
-                Ok(snapshot) => {
-                    let capped = crate::ag::context::cap_text(
-                        &snapshot.content,
-                        cap,
-                        "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
-                    );
-                    format!("引用文档「{rel_path}」：\n{capped}")
-                }
-                Err(e) => format!(
-                    "引用文档「{rel_path}」读取失败（{}）：{}",
-                    e.code, e.message
-                ),
-            },
-            None => format!("引用文档「{rel_path}」未读取：当前没有 active workspace"),
-        },
-        ReferencePayload::Selection {
-            rel_path,
-            block_id,
-            start,
-            end,
-            text,
-            ..
-        } => {
-            let stale = || {
-                let capped = crate::ag::context::cap_text(text, cap, "[引用选区较长，已截取前部]");
-                format!(
-                    "引用选区「{rel_path}」块 [{block_id}] 锚未校验或已失效，以下仅为用户原始选区快照（不得作为当前文档事实）：\n{capped}"
-                )
-            };
+        ReferencePayload::Doc { rel_path, .. } => {
             let Some(ctx) = read_ctx else {
-                return stale();
+                return crate::reference::context::format_payload_context(
+                    payload,
+                    Some(DocRead::NoWorkspace),
+                    None,
+                    cap,
+                );
             };
-            let snapshot = match ctx.snapshot(rel_path) {
-                Ok(snapshot) => snapshot,
-                Err(e) => {
-                    let capped =
-                        crate::ag::context::cap_text(text, cap, "[引用选区较长，已截取前部]");
-                    return format!(
-                        "引用选区「{rel_path}」读取失败（{}）：{}。以下仅为用户原始选区快照（不得作为当前文档事实）：\n{capped}",
-                        e.code, e.message
-                    );
-                }
-            };
-            let Some(block) = snapshot
-                .blocks
-                .iter()
-                .find(|b| b.block_id.as_deref() == Some(block_id.as_str()))
-            else {
-                return stale();
-            };
-            let (Some(start), Some(end)) = (*start, *end) else {
-                return stale();
-            };
-            if end <= start {
-                return stale();
-            }
-            let chars: Vec<char> = block.text.chars().collect();
-            if end > chars.len() {
-                return stale();
-            }
-            let current: String = chars[start..end].iter().collect();
-            let capped = crate::ag::context::cap_text(&current, cap, "[引用选区较长，已截取前部]");
-            if current == *text {
-                format!(
-                    "引用选区（已校验）「{rel_path}」块 [{block_id}] 字符区间 [{start}..{end}]：\n{capped}"
-                )
-            } else {
-                let original =
-                    crate::ag::context::cap_text(text, cap, "[原始选区较长，已截取前部]");
-                format!(
-                    "引用选区「{rel_path}」块 [{block_id}] 字符区间 [{start}..{end}] 已按当前 LogicalState 重新校验，当前内容：\n{capped}\n\n原始选区快照仅作背景（不得作为当前文档事实）：\n{original}"
-                )
+            match ctx.snapshot(rel_path) {
+                Ok(snapshot) => crate::reference::context::format_payload_context(
+                    payload,
+                    Some(DocRead::Loaded {
+                        content: &snapshot.content,
+                    }),
+                    None,
+                    cap,
+                ),
+                Err(e) => crate::reference::context::format_payload_context(
+                    payload,
+                    Some(DocRead::Failed {
+                        code: &e.code,
+                        message: &e.message,
+                    }),
+                    None,
+                    cap,
+                ),
             }
         }
-        ReferencePayload::Session {
-            title, messages, ..
-        } => {
-            let body = messages
-                .iter()
-                .filter(|m| !m.content.trim().is_empty())
-                .map(|m| format!("{}: {}", m.role, m.content))
+        ReferencePayload::Selection { .. } => {
+            let Some(ctx) = read_ctx else {
+                return crate::reference::context::format_payload_context(payload, None, None, cap);
+            };
+            let check =
+                crate::reference::context::validate_selection(payload, selection_block_text(ctx, payload).as_deref());
+            crate::reference::context::format_payload_context(payload, None, Some(check), cap)
+        }
+        _ => crate::reference::context::format_payload_context(payload, None, None, cap),
+    }
+}
+
+/// 经 AgentReadContext 取选区所在块的当前文本（LogicalState 优先；读取失败/块缺失 → None → 保守 Stale）。
+fn selection_block_text(
+    read_ctx: &ag::blocks::AgentReadContext,
+    payload: &ReferencePayload,
+) -> Option<String> {
+    let ReferencePayload::Selection { rel_path, block_id, .. } = payload else {
+        return None;
+    };
+    let snapshot = read_ctx.snapshot(rel_path).ok()?;
+    snapshot
+        .blocks
+        .iter()
+        .find(|b| b.block_id.as_deref() == Some(block_id.as_str()))
+        .map(|b| b.text.clone())
+}
+
+/// ref.* command 锚参数（A-REF-I-P-01 §2）。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefAnchorParam {
+    workspace_id: String,
+    rel_path: String,
+    block_ids: Option<Vec<String>>,
+}
+
+fn parse_ref_anchor_param(request: &CommandRequest) -> Result<RefAnchorParam, IpcError> {
+    let p = request
+        .params
+        .get("anchor")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| IpcError::new("REF_PARAM_MISSING", "缺少 anchor 参数", false, false))?;
+    let workspace_id = p
+        .get("workspaceId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let rel_path = p
+        .get("relPath")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if rel_path.is_empty() {
+        return Err(IpcError::new("REF_PARAM_MISSING", "缺少 anchor.relPath", false, false));
+    }
+    let block_ids = p.get("blockIds").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect::<Vec<_>>()
+    });
+    Ok(RefAnchorParam {
+        workspace_id,
+        rel_path,
+        block_ids,
+    })
+}
+
+fn to_reference_anchor(param: &RefAnchorParam) -> reference::resolve::ReferenceAnchor {
+    let target = crate::types::DocRef {
+        workspace_id: param.workspace_id.clone(),
+        rel_path: param.rel_path.clone(),
+        doc_type: reference::resolve::infer_doc_type(&param.rel_path),
+    };
+    match &param.block_ids {
+        Some(ids) if !ids.is_empty() => reference::resolve::ReferenceAnchor::Block {
+            target,
+            block_ids: ids.clone(),
+        },
+        _ => reference::resolve::ReferenceAnchor::Path(target),
+    }
+}
+
+/** 可读引用文档过滤（F7）：@ 候选仅可读文档，资源文件不进入引用候选。 */
+fn is_readable_reference_doc(rel_path: &str) -> bool {
+    let ext = reference::resolve::infer_doc_type(rel_path);
+    matches!(
+        ext.as_str(),
+        "md" | "markdown" | "docx" | "doc" | "html" | "htm" | "txt" | "rtf"
+    )
+}
+
+/**
+ * @GOV
+ * codes:    BR-REF-DATA-001-API-REF-REF-INJECT-001
+ * type:     API
+ * chain:    REF-INJECT
+ * rules:    BR-REF-DATA-001
+ * term_ref: TERM-REF-001
+ * boundary: in=workspaceQuery | out=referenceCandidateList(scopedWithinWorkspaceReadableDocs)
+ */
+/// 路由 `ref.list_candidates`（A-REF-I-P-01 §2）：活动 workspace 内候选列举，限界 X-FORBID-004，
+/// 仅可读文档（F7 过滤资源文件）；当前无前端消费者，契约闭合 + 供调试/未来消费方。
+fn route_ref_list_candidates(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let active = active_ws(state)?;
+    let docs = workspace::listing::list_docs(std::path::Path::new(&active.root_path))?;
+    let query = request
+        .params
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let candidates: Vec<serde_json::Value> = docs
+        .iter()
+        .filter(|d| !d.is_dir && is_readable_reference_doc(&d.rel_path))
+        .filter(|d| query.is_empty() || d.rel_path.to_lowercase().contains(&query))
+        .map(|d| {
+            serde_json::json!({
+                "relPath": d.rel_path,
+                "docType": d.doc_type,
+            })
+        })
+        .collect();
+    Ok(serde_json::Value::Array(candidates))
+}
+
+/**
+ * @GOV
+ * codes:    BR-REF-DATA-001-API-REF-REF-INJECT-002
+ * type:     API
+ * chain:    REF-INJECT
+ * rules:    BR-REF-DATA-001
+ * term_ref: TERM-REF-001
+ * boundary: in=workspaceMentionTargetSelection | out=ReferenceAnchor(scopedReachableElseFailNoDangling)
+ */
+/// 路由 `ref.resolve_anchor`（A-REF-I-P-01 §2）：守界 + 目标可达判定 → 路径/块级锚；不可达明确失败。
+fn route_ref_resolve_anchor(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let active = active_ws(state)?;
+    let rel_path = str_param(request, "relPath", "REF_PARAM_MISSING")?;
+    let block_ids = request
+        .params
+        .get("blockIds")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(String::from))
                 .collect::<Vec<_>>()
-                .join("\n");
-            let capped = crate::ag::context::cap_text(&body, cap, "[引用会话较长，已截取前部]");
-            format!("引用会话「{title}」：\n{capped}")
+        });
+    let root = std::path::Path::new(&active.root_path);
+    // 先守界再判存在，避免越界路径触发外部文件系统访问。
+    crate::workspace::resolve_in_workspace(root, &rel_path)?;
+    let target_exists = root.join(&rel_path).exists();
+    let anchor = reference::resolve::resolve_mention(&active, &rel_path, block_ids, target_exists)?;
+    match anchor {
+        reference::resolve::ReferenceAnchor::Path(target) => Ok(serde_json::json!({
+            "kind": "path",
+            "workspaceId": target.workspace_id,
+            "relPath": target.rel_path,
+            "docType": target.doc_type,
+        })),
+        reference::resolve::ReferenceAnchor::Block { target, block_ids } => Ok(serde_json::json!({
+            "kind": "block",
+            "workspaceId": target.workspace_id,
+            "relPath": target.rel_path,
+            "docType": target.doc_type,
+            "blockIds": block_ids,
+        })),
+    }
+}
+
+/**
+ * @GOV
+ * codes:    BR-REF-VERIFY-001-API-REF-REF-INJECT-001
+ * type:     API
+ * chain:    REF-INJECT
+ * rules:    BR-REF-VERIFY-001
+ * term_ref: TERM-REF-001
+ * boundary: in=referenceAnchor | out=validOrAnchorInvalid(conservativeNoInjection)
+ */
+/// 路由 `ref.verify_anchor`（A-REF-I-P-01 §2）：路径级判存在；块级在 command 路径无 LogicalState 快照
+/// （OpenDocSnapshot 门禁归 AG 回合），保守按 Undetectable 处理（检测不可得 → 不注入）。
+fn route_ref_verify_anchor(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let active = active_ws(state)?;
+    let param = parse_ref_anchor_param(request)?;
+    let root = std::path::Path::new(&active.root_path);
+    crate::workspace::resolve_in_workspace(root, &param.rel_path)?;
+    let path_exists = root.join(&param.rel_path).exists();
+    let locate = match &param.block_ids {
+        Some(ids) if !ids.is_empty() => crate::types::LocateResult::Undetectable,
+        _ => crate::types::LocateResult::Located,
+    };
+    reference::inject::verify_anchor(&to_reference_anchor(&param), path_exists, locate)?;
+    Ok(serde_json::json!({ "valid": true }))
+}
+
+/**
+ * @GOV
+ * codes:    BR-REF-DATA-002-API-REF-REF-INJECT-001
+ * type:     API
+ * chain:    REF-INJECT
+ * rules:    BR-REF-DATA-002, BR-REF-VERIFY-001
+ * term_ref: TERM-REF-002
+ * boundary: in=verifiedAnchorAndReadTimeContent | out=RefInjection(freshContentTraceableNoSelfExtend)
+ */
+/// 路由 `ref.build_injection`（A-REF-I-P-01 §2）：verify 通过后经 WS 读取**读取时点**内容组装
+/// RefInjection（A-SYS-I-P-01 结构）。command 路径无 LogicalState 快照（已打开文档的引用消费归
+/// AG 回合），内容经 workspace 读盘；块级锚同 verify 保守 Undetectable → 不注入。
+fn route_ref_build_injection(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let active = active_ws(state)?;
+    let param = parse_ref_anchor_param(request)?;
+    let root = std::path::Path::new(&active.root_path);
+    crate::workspace::resolve_in_workspace(root, &param.rel_path)?;
+    let path_exists = root.join(&param.rel_path).exists();
+    let locate = match &param.block_ids {
+        Some(ids) if !ids.is_empty() => crate::types::LocateResult::Undetectable,
+        _ => crate::types::LocateResult::Located,
+    };
+    let anchor = to_reference_anchor(&param);
+    reference::inject::verify_anchor(&anchor, path_exists, locate)?;
+    let content = std::fs::read_to_string(root.join(&param.rel_path))
+        .map_err(|e| IpcError::new("REF_READ_FAILED", &format!("读取引用目标失败: {e}"), true, false))?;
+    let block_suffix = match &param.block_ids {
+        Some(ids) if !ids.is_empty() => format!("#{}", ids.join(",")),
+        _ => String::new(),
+    };
+    let injection = reference::inject::build_injection(
+        &anchor,
+        content,
+        format!("@{}{}", param.rel_path, block_suffix),
+    );
+    serde_json::to_value(injection)
+        .map_err(|e| IpcError::new("REF_SERIALIZE_FAILED", &format!("序列化注入载荷失败: {e}"), false, false))
+}
+
+#[cfg(test)]
+mod ref_route_tests {
+    use super::*;
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "binder-ref-route-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn state_with_ws(root: &std::path::Path) -> AppState {
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws-ref', ?1, 1, 0)",
+            [root.to_str().unwrap()],
+        )
+        .unwrap();
+        AppState {
+            db: Mutex::new(conn),
+            registry: build_registry(),
+            assist_terminals: Mutex::new(HashMap::new()),
         }
-        ReferencePayload::Memory { title, content, .. } => {
-            let capped = crate::ag::context::cap_text(content, cap, "[引用记忆较长，已截取前部]");
-            format!(
-                "引用记忆「{}」：\n{}",
-                title.as_deref().unwrap_or("未命名"),
-                capped
-            )
+    }
+
+    fn request(command: &str, params: serde_json::Value) -> CommandRequest {
+        CommandRequest {
+            command: command.to_string(),
+            correlation_id: "ref-route".into(),
+            params,
         }
-        ReferencePayload::Knowledge {
-            title,
-            content,
-            source_ref,
-            ..
-        } => {
-            let capped = crate::ag::context::cap_text(content, cap, "[引用知识较长，已截取前部]");
-            format!(
-                "引用知识「{}」{}：\n{}",
-                title.as_deref().unwrap_or("未命名"),
-                source_ref
-                    .as_deref()
-                    .map(|s| format!("（来源：{s}）"))
-                    .unwrap_or_default(),
-                capped
-            )
-        }
-        ReferencePayload::Template { name, content, .. } => {
-            let capped = crate::ag::context::cap_text(content, cap, "[引用模板较长，已截取前部]");
-            format!("引用模板「{name}」：\n{capped}")
-        }
-        ReferencePayload::Url { url, title, .. } => {
-            format!("引用外部链接「{}」：{url}", title.as_deref().unwrap_or(url))
-        }
-        ReferencePayload::LongText {
-            text, char_count, ..
-        } => {
-            let capped = crate::ag::context::cap_text(text, cap, "[引用长文本较长，已截取前部]");
-            format!("引用长文本（{char_count} 字）：\n{capped}")
-        }
+    }
+
+    // covers: BR-REF-DATA-001
+    // 候选列举限 workspace 内且仅可读文档（F7 过滤资源文件）。
+    #[test]
+    fn list_candidates_filters_to_readable_docs() {
+        let root = temp_root("candidates");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "x").unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/pic.png"), b"\x89PNG").unwrap();
+        let state = state_with_ws(&root);
+
+        let out = route_ref_list_candidates(&request("ref.list_candidates", serde_json::json!({})), &state).unwrap();
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "资源文件不得进入引用候选");
+        assert_eq!(arr[0]["relPath"], "notes/a.md");
+        assert_eq!(arr[0]["docType"], "md");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // covers: BR-REF-DATA-001
+    // resolve：可达路径级锚正确；越界拒绝；不可达明确失败不悬空；doc_type 按扩展名推断。
+    #[test]
+    fn resolve_anchor_scopes_rejects_escape_and_unreachable() {
+        let root = temp_root("resolve");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "x").unwrap();
+        std::fs::write(root.join("notes/b.docx"), "x").unwrap();
+        let state = state_with_ws(&root);
+
+        let ok = route_ref_resolve_anchor(
+            &request("ref.resolve_anchor", serde_json::json!({ "relPath": "notes/b.docx" })),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(ok["kind"], "path");
+        assert_eq!(ok["docType"], "docx");
+
+        let esc = route_ref_resolve_anchor(
+            &request("ref.resolve_anchor", serde_json::json!({ "relPath": "../../etc/passwd" })),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(esc.code, "WS_PATH_ESCAPE");
+
+        let un = route_ref_resolve_anchor(
+            &request("ref.resolve_anchor", serde_json::json!({ "relPath": "gone.md" })),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(un.code, "REF_UNREACHABLE");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // covers: BR-REF-VERIFY-001
+    // verify：路径存在通过；缺失拒绝；块级（command 路径无 LogicalState 快照）保守 Undetectable 拒绝。
+    #[test]
+    fn verify_anchor_rejects_missing_and_block_undetectable() {
+        let root = temp_root("verify");
+        std::fs::write(root.join("a.md"), "x").unwrap();
+        let state = state_with_ws(&root);
+
+        let ok = route_ref_verify_anchor(
+            &request(
+                "ref.verify_anchor",
+                serde_json::json!({ "anchor": { "workspaceId": "ws-ref", "relPath": "a.md" } }),
+            ),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(ok["valid"], true);
+
+        let missing = route_ref_verify_anchor(
+            &request(
+                "ref.verify_anchor",
+                serde_json::json!({ "anchor": { "workspaceId": "ws-ref", "relPath": "gone.md" } }),
+            ),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, "REF_ANCHOR_INVALID");
+
+        let block = route_ref_verify_anchor(
+            &request(
+                "ref.verify_anchor",
+                serde_json::json!({
+                    "anchor": { "workspaceId": "ws-ref", "relPath": "a.md", "blockIds": ["b1"] }
+                }),
+            ),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(block.code, "REF_ANCHOR_INVALID");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // covers: BR-REF-DATA-002
+    // build_injection：路径级读取时点内容 + origin_label 可溯源；块级保守拒绝。
+    #[test]
+    fn build_injection_reads_fresh_content_and_traceable() {
+        let root = temp_root("inject");
+        std::fs::write(root.join("a.md"), "读取时点内容").unwrap();
+        let state = state_with_ws(&root);
+
+        let out = route_ref_build_injection(
+            &request(
+                "ref.build_injection",
+                serde_json::json!({ "anchor": { "workspaceId": "ws-ref", "relPath": "a.md" } }),
+            ),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(out["content"], "读取时点内容");
+        assert_eq!(out["originLabel"], "@a.md");
+
+        let block = route_ref_build_injection(
+            &request(
+                "ref.build_injection",
+                serde_json::json!({
+                    "anchor": { "workspaceId": "ws-ref", "relPath": "a.md", "blockIds": ["b1"] }
+                }),
+            ),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(block.code, "REF_ANCHOR_INVALID");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
@@ -4285,9 +4592,18 @@ mod ag_reference_context_tests {
         }
     }
 
+    // covers: BR-REF-DATA-003
+    // 块引用上下文（REF-REFERENCE-REPAIR-01 F3：委托 reference::context 纯函数）。
     #[test]
     fn block_ref_context_preserves_selection_range() {
-        let out = format_block_ref_context(&block_ref(Some(2), Some(8)), "引用文本");
+        let br = block_ref(Some(2), Some(8));
+        let out = crate::reference::context::format_block_ref_context(
+            &br.rel_path,
+            &br.block_id,
+            br.start,
+            br.end,
+            "引用文本",
+        );
         assert!(out.contains("chapter.md"));
         assert!(out.contains("block_1"));
         assert!(out.contains("字符区间 [2..8]"));
@@ -4301,7 +4617,13 @@ mod ag_reference_context_tests {
             block_ref(Some(3), None),
             block_ref(Some(8), Some(2)),
         ] {
-            let out = format_block_ref_context(&br, "引用文本");
+            let out = crate::reference::context::format_block_ref_context(
+                &br.rel_path,
+                &br.block_id,
+                br.start,
+                br.end,
+                "引用文本",
+            );
             assert!(out.contains("字符区间未提供"));
             assert!(out.ends_with("引用文本"));
         }
@@ -4431,7 +4753,7 @@ mod ag_reference_context_tests {
 
         let out = format_reference_payload_context(&payload, None, 1000);
 
-        assert!(out.contains("锚未校验或已失效"));
+        assert!(out.contains("引用锚已失效"));
         assert!(out.contains("不得作为当前文档事实"));
         assert!(out.ends_with("选区引用内容"));
     }

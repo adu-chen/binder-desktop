@@ -27,13 +27,13 @@ import {
   makeReferenceToken,
   makeSelectionReference,
   promptTextFromParts,
-  readReferencePayloadData,
   referenceFromPlainTextPaste,
   referenceKey,
   type MessageContentPart,
   type ReferencePayload,
   type ReferenceTokenAttrs,
 } from "../../services/referencePayload";
+import { DRAG_SESSION_MIME, resolveReferenceDrag } from "../../services/referenceDrag";
 import { ModelConfig } from "./ModelConfig";
 
 /**
@@ -116,7 +116,14 @@ const MODES: { id: AgMode; label: string; hint: string }[] = [
   { id: "edit", label: "edit", hint: "编辑 · 精确修改当前内容（diff 裁决）" },
   { id: "build", label: "build", hint: "代理构建 · 项目蓝图与整体构建" },
 ];
-const REFERENCE_DRAG_TYPES = [REFERENCE_MIME, SELECTION_REF_MIME, DOC_REF_MIME, "text/uri-list", "text/plain"] as const;
+const REFERENCE_DRAG_TYPES = [
+  REFERENCE_MIME,
+  DRAG_SESSION_MIME,
+  SELECTION_REF_MIME,
+  DOC_REF_MIME,
+  "text/uri-list",
+  "text/plain",
+] as const;
 
 function activeMentionQuery(editor: TipTapEditor): MentionQuery | null {
   const { $from } = editor.state.selection;
@@ -198,9 +205,21 @@ function safeFocusEditor(editor: TipTapEditor) {
   }
 }
 
+function fileReferenceFromTransfer(dataTransfer: DataTransfer): ReferencePayload | null {
+  const files = Array.from(dataTransfer.files ?? []);
+  if (files.length === 0) return null;
+  const file = files[0];
+  // F5：仅取文件名与大小元数据，不携带绝对路径（X-FORBID-004，外部文件不读内容）。
+  return { kind: "file", name: file.name, size: file.size };
+}
+
 function payloadFromTransfer(dataTransfer: DataTransfer): ReferencePayload | null {
-  const generic = readReferencePayloadData(dataTransfer);
-  if (generic) return generic;
+  // REF-REFERENCE-REPAIR-01 F1：优先解析统一 drag session 通道（REFERENCE_MIME → DRAG_SESSION_MIME →
+  // text/plain marker，命中即消费清理），再回落外部文件/旧 selection/doc MIME 与 uri/plain 分类。
+  const sessionResolved = resolveReferenceDrag(dataTransfer);
+  if (sessionResolved) return sessionResolved;
+  const externalFile = fileReferenceFromTransfer(dataTransfer);
+  if (externalFile) return externalFile;
   const selection = readSelectionRefData(dataTransfer);
   if (selection) return makeSelectionReference(selection);
   const doc = readDocRefData(dataTransfer);
@@ -271,7 +290,14 @@ export function Composer() {
     setModelPop(false);
   }, [editor, session.id]);
 
-  const fileDocs = docs.filter((d) => !d.isDir);
+  // F7：@ 候选仅可读文档（md/markdown/docx/doc/html/txt/rtf），资源文件不进入引用候选。
+  const READABLE_DOC_EXT = new Set(["md", "markdown", "docx", "doc", "html", "htm", "txt", "rtf"]);
+  const isReadableReferenceDoc = (relPath: string): boolean => {
+    const dot = relPath.lastIndexOf(".");
+    if (dot < 0) return false;
+    return READABLE_DOC_EXT.has(relPath.slice(dot + 1).toLowerCase());
+  };
+  const fileDocs = docs.filter((d) => !d.isDir && isReadableReferenceDoc(d.relPath));
   const atMatches = atQuery
     ? fileDocs.filter((d) => d.relPath.toLowerCase().includes(atQuery.query.toLowerCase())).slice(0, 8)
     : [];
@@ -380,7 +406,8 @@ export function Composer() {
 
   const visibleTokens = draft.tokens.slice(0, 5);
   const hiddenTokenCount = Math.max(0, draft.tokens.length - visibleTokens.length);
-  const canSend = Boolean(draft.prompt.trim()) && !sending;
+  // REF-REFERENCE-REPAIR-01 F2：纯引用（无正文文字）可发送（REQ-REF-006），canSend 与 send() guard 对齐。
+  const canSend = (Boolean(draft.prompt.trim()) || draft.tokens.length > 0) && !sending;
   const sendCls = sending ? "is-busy" : canSend ? "is-ready" : "is-disabled";
 
   return (

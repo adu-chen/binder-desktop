@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-07T15:35:07.448Z -->
+<!-- 最后生成时间：2026-08-07T19:32:09.743Z -->
 
 ### 模块编码表
 
@@ -163,11 +163,11 @@
 | BR-KB-DATA-002     | DATA    | KB-RETRIEVE                          | docs/01_modules/KB/A-KB-M-T-01_知识库技术设计.md         | registered      | src-tauri/src/kb/retrieve.rs::file-level                                                                                                                                                                                                                                                                                                                              |
 | BR-PRV-DATA-002    | DATA    | PRV-VIEW                             | docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md      | registered      | src-tauri/src/doc/table_preview.rs::file-level, src-tauri/src/prv/mod.rs::file-level, src/services/prvRuntime.test.ts::file-level                                                                                                                                                                                                                                     |
 | BR-PRV-DATA-001    | DATA    | PRV-VIEW                             | docs/01_modules/PRV/A-PRV-M-T-01_预览输出技术设计.md      | registered      | src/services/prvRuntime.test.ts::file-level                                                                                                                                                                                                                                                                                                                           |
-| BR-REF-DATA-001    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/reference/resolve.rs::file-level                                                                                                                                                                                                                                                                                                                        |
-| BR-REF-DATA-002    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/reference/inject.rs::file-level                                                                                                                                                                                                                                                                                                                         |
-| BR-REF-DATA-003    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src/components/ag/AgentUI.test.tsx::file-level, src/services/referencePayload.test.ts::file-level                                                                                                                                                                                                                                                                     |
+| BR-REF-DATA-001    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/lib.rs::file-level, src-tauri/src/reference/resolve.rs::file-level                                                                                                                                                                                                                                                                                      |
+| BR-REF-DATA-002    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/lib.rs::file-level, src-tauri/src/reference/inject.rs::file-level                                                                                                                                                                                                                                                                                       |
+| BR-REF-DATA-003    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/lib.rs::file-level, src-tauri/src/reference/context.rs::file-level, src/components/ag/AgentUI.test.tsx::file-level, src/services/referencePayload.test.ts::file-level                                                                                                                                                                                   |
 | BR-REF-DATA-004    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src/components/ag/AgentUI.test.tsx::file-level, src/services/referencePayload.test.ts::file-level                                                                                                                                                                                                                                                                     |
-| BR-REF-VERIFY-001  | VERIFY  | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/reference/inject.rs::file-level                                                                                                                                                                                                                                                                                                                         |
+| BR-REF-VERIFY-001  | VERIFY  | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/lib.rs::file-level, src-tauri/src/reference/context.rs::file-level, src-tauri/src/reference/inject.rs::file-level                                                                                                                                                                                                                                       |
 | BR-SYS-DATA-002    | DATA    | DATA-MIGRATE                         | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/types/mod.rs::file-level                                                                                                                                                                                                                                                                                                                                |
 | BR-SYS-PERSIST-001 | PERSIST | DATA-MIGRATE                         | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/db/mod.rs::file-level                                                                                                                                                                                                                                                                                                                                   |
 | BR-SYS-DATA-003    | DATA    | IPC-CALL                             | docs/01_modules/SYS/A-SYS-I-P-02_IPC协议.md         | registered      | src-tauri/src/ipc/mod.rs::file-level, src-tauri/src/lib.rs::file-level                                                                                                                                                                                                                                                                                                |
@@ -282,9 +282,9 @@
 | codes                                        | type   | rules                                                                | 文件                                        | 行号   |
 | -------------------------------------------- | ------ | -------------------------------------------------------------------- | ----------------------------------------- | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 796  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003      | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 994  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1832 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 802  |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003      | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 1000 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1856 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
@@ -293,7 +293,7 @@
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-008          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/store/assistStore.ts                  | 94   |
 | BR-AG-DATA-007-QUERY-AG-AG-MODEL-CATALOG-013 | QUERY  | BR-AG-DATA-007 term_ref: TERM-AG-010                                 | src/store/modelStore.ts                   | 162  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001          | RB     | BR-AG-STATE-003                                                      | src-tauri/src/ag/assist.rs                | 40   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001      | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                                    | src-tauri/src/lib.rs                      | 6852 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001      | EFFECT | BR-AG-STATE-003, BR-AG-VERIFY-001                                    | src-tauri/src/lib.rs                      | 7174 |
 
 #### AG-MODEL-CATALOG
 
@@ -315,7 +315,7 @@
 | BR-AG-STATE-002-RB-AG-AG-TOOL-001                                                                              | RB    | BR-AG-STATE-002 term_ref: TERM-AG-002                                               | src-tauri/src/ag/tool.rs               | 50   |
 | BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                           | GUARD | BR-AG-STATE-002                                                                     | src-tauri/src/ag/tool.rs               | 84   |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012 | QUERY | BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001 term_ref: TERM-ED-008, TERM-WS-001  | src-tauri/src/ag/tool_exec.rs          | 38   |
-| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD | BR-SYS-DATA-006, BR-ED-DATA-001, BR-ED-DATA-003 term_ref: TERM-SYS-002, TERM-ED-008 | src-tauri/src/lib.rs                   | 2197 |
+| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD | BR-SYS-DATA-006, BR-ED-DATA-001, BR-ED-DATA-003 term_ref: TERM-SYS-002, TERM-ED-008 | src-tauri/src/lib.rs                   | 2205 |
 
 #### AG-TURN
 
@@ -342,9 +342,9 @@
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001                                                                                                          | GUARD  | BR-AG-VERIFY-001                                                                     | src-tauri/src/ag/turn.rs               | 110  |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001                                                                                                        | EFFECT | BR-AG-PERSIST-001                                                                    | src-tauri/src/ag/turn.rs               | 139  |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001                                                                                                         | QUERY  | BR-AG-PERSIST-001                                                                    | src-tauri/src/ag/turn.rs               | 164  |
-| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004                                                                                                         | QUERY  | BR-AG-PERSIST-001 term_ref: TERM-AG-001                                              | src-tauri/src/lib.rs                   | 3561 |
-| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA   | BR-AG-DATA-001, BR-REF-DATA-003 term_ref: TERM-REF-003                               | src-tauri/src/lib.rs                   | 4131 |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA   | BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005 term_ref: TERM-AG-005 | src-tauri/src/lib.rs                   | 6198 |
+| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004                                                                                                         | QUERY  | BR-AG-PERSIST-001 term_ref: TERM-AG-001                                              | src-tauri/src/lib.rs                   | 3569 |
+| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA   | BR-AG-DATA-001, BR-REF-DATA-003, BR-REF-VERIFY-001 term_ref: TERM-REF-003            | src-tauri/src/lib.rs                   | 4120 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA   | BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005 term_ref: TERM-AG-005 | src-tauri/src/lib.rs                   | 6520 |
 
 #### APP-CLOSE
 
@@ -352,9 +352,9 @@
 | ----------------------------------------- | ------ | ---------------- | ---------------------------- | ---- |
 | BR-SYS-STATE-006-EFFECT-SYS-APP-CLOSE-001 | EFFECT | BR-SYS-STATE-006 | src/services/closeService.ts | 230  |
 | BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | BR-SYS-STATE-004 | src/shell/App.tsx            | 38   |
-| BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1517 |
-| BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1581 |
-| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 7391 |
+| BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1525 |
+| BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 1589 |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | BR-SYS-STATE-004 | src-tauri/src/lib.rs         | 7713 |
 
 #### AST-MEMORY
 
@@ -538,8 +538,8 @@
 | BR-SYS-STATE-002-DATA-SYS-IPC-CALL-003   | DATA   | BR-SYS-STATE-002                      | src-tauri/src/ipc/mod.rs   | 73   |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-001     | API    | BR-SYS-DATA-003                       | src-tauri/src/ipc/mod.rs   | 154  |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-005     | API    | BR-SYS-DATA-003                       | src-tauri/src/lib.rs       | 3    |
-| BR-SYS-DATA-003-API-SYS-IPC-CALL-002     | API    | BR-SYS-DATA-003 term_ref: TERM-WS-001 | src-tauri/src/lib.rs       | 256  |
-| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004   | GUARD  | BR-SYS-DATA-003                       | src-tauri/src/lib.rs       | 3846 |
+| BR-SYS-DATA-003-API-SYS-IPC-CALL-002     | API    | BR-SYS-DATA-003 term_ref: TERM-WS-001 | src-tauri/src/lib.rs       | 260  |
+| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004   | GUARD  | BR-SYS-DATA-003                       | src-tauri/src/lib.rs       | 3854 |
 | BR-SYS-STATE-003-EFFECT-SYS-IPC-CALL-001 | EFFECT | BR-SYS-STATE-003                      | src-tauri/src/sm_events.rs | 48   |
 
 #### KB-RETRIEVE
@@ -577,16 +577,27 @@
 
 #### REF-INJECT
 
-| codes                                      | type  | rules                                                   | 文件                                 | 行号  |
-| ------------------------------------------ | ----- | ------------------------------------------------------- | ---------------------------------- | --- |
-| BR-REF-DATA-004-AG-REF-INJECT-001          | DATA  | BR-REF-DATA-004 term_ref: TERM-REF-004, TERM-REF-003    | src/components/ag/Composer.tsx     | 40  |
-| BR-REF-DATA-003-REF-REF-INJECT-001         | DATA  | BR-REF-DATA-003, BR-SYS-DATA-002 term_ref: TERM-REF-003 | src/services/referencePayload.ts   | 2   |
-| BR-REF-DATA-003-REF-REF-INJECT-004         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                  | src/services/referencePayload.ts   | 112 |
-| BR-REF-DATA-003-REF-REF-INJECT-002         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                  | src/services/referencePayload.ts   | 173 |
-| BR-REF-DATA-004-REF-REF-INJECT-003         | DATA  | BR-REF-DATA-004 term_ref: TERM-REF-004, TERM-REF-003    | src/services/referencePayload.ts   | 374 |
-| BR-REF-VERIFY-001-GUARD-REF-REF-INJECT-001 | GUARD | BR-REF-VERIFY-001                                       | src-tauri/src/reference/inject.rs  | 14  |
-| BR-REF-DATA-002-DATA-REF-REF-INJECT-001    | DATA  | BR-REF-DATA-002                                         | src-tauri/src/reference/inject.rs  | 54  |
-| BR-REF-DATA-001-GUARD-REF-REF-INJECT-001   | GUARD | BR-REF-DATA-001                                         | src-tauri/src/reference/resolve.rs | 24  |
+| codes                                      | type  | rules                                                     | 文件                                 | 行号   |
+| ------------------------------------------ | ----- | --------------------------------------------------------- | ---------------------------------- | ---- |
+| BR-REF-DATA-004-AG-REF-INJECT-001          | DATA  | BR-REF-DATA-004 term_ref: TERM-REF-004, TERM-REF-003      | src/components/ag/Composer.tsx     | 40   |
+| BR-REF-DATA-003-REF-REF-INJECT-005         | DATA  | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src/services/referenceDrag.ts      | 2    |
+| BR-REF-DATA-003-REF-REF-INJECT-005         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src/services/referenceDrag.ts      | 49   |
+| BR-REF-DATA-003-REF-REF-INJECT-006         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src/services/referenceDrag.ts      | 71   |
+| BR-REF-DATA-003-REF-REF-INJECT-001         | DATA  | BR-REF-DATA-003, BR-SYS-DATA-002 term_ref: TERM-REF-003   | src/services/referencePayload.ts   | 2    |
+| BR-REF-DATA-003-REF-REF-INJECT-004         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src/services/referencePayload.ts   | 114  |
+| BR-REF-DATA-003-REF-REF-INJECT-002         | GUARD | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src/services/referencePayload.ts   | 175  |
+| BR-REF-DATA-004-REF-REF-INJECT-003         | DATA  | BR-REF-DATA-004 term_ref: TERM-REF-004, TERM-REF-003      | src/services/referencePayload.ts   | 407  |
+| BR-REF-DATA-001-API-REF-REF-INJECT-001     | API   | BR-REF-DATA-001 term_ref: TERM-REF-001                    | src-tauri/src/lib.rs               | 4260 |
+| BR-REF-DATA-001-API-REF-REF-INJECT-002     | API   | BR-REF-DATA-001 term_ref: TERM-REF-001                    | src-tauri/src/lib.rs               | 4297 |
+| BR-REF-VERIFY-001-API-REF-REF-INJECT-001   | API   | BR-REF-VERIFY-001 term_ref: TERM-REF-001                  | src-tauri/src/lib.rs               | 4344 |
+| BR-REF-DATA-002-API-REF-REF-INJECT-001     | API   | BR-REF-DATA-002, BR-REF-VERIFY-001 term_ref: TERM-REF-002 | src-tauri/src/lib.rs               | 4372 |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-003    | DATA  | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src-tauri/src/reference/context.rs | 36   |
+| BR-REF-VERIFY-001-GUARD-REF-REF-INJECT-002 | GUARD | BR-REF-VERIFY-001 term_ref: TERM-REF-003                  | src-tauri/src/reference/context.rs | 54   |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-002    | DATA  | BR-REF-DATA-003, BR-REF-VERIFY-001 term_ref: TERM-REF-003 | src-tauri/src/reference/context.rs | 100  |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-004    | DATA  | BR-REF-DATA-003 term_ref: TERM-REF-003                    | src-tauri/src/reference/context.rs | 223  |
+| BR-REF-VERIFY-001-GUARD-REF-REF-INJECT-001 | GUARD | BR-REF-VERIFY-001                                         | src-tauri/src/reference/inject.rs  | 14   |
+| BR-REF-DATA-002-DATA-REF-REF-INJECT-001    | DATA  | BR-REF-DATA-002                                           | src-tauri/src/reference/inject.rs  | 54   |
+| BR-REF-DATA-001-GUARD-REF-REF-INJECT-001   | GUARD | BR-REF-DATA-001                                           | src-tauri/src/reference/resolve.rs | 34   |
 
 #### TPL-FLOW
 
@@ -613,7 +624,7 @@
 
 | codes                              | type   | rules                                | 文件                                 | 行号   |
 | ---------------------------------- | ------ | ------------------------------------ | ---------------------------------- | ---- |
-| BR-WS-OBS-001-RB-WS-WS-FS-001      | RB     | BR-WS-OBS-001                        | src-tauri/src/lib.rs               | 1694 |
+| BR-WS-OBS-001-RB-WS-WS-FS-001      | RB     | BR-WS-OBS-001                        | src-tauri/src/lib.rs               | 1702 |
 | BR-WS-DATA-001-EFFECT-WS-WS-FS-001 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 16   |
 | BR-WS-DATA-001-EFFECT-WS-WS-FS-004 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 43   |
 | BR-WS-DATA-001-EFFECT-WS-WS-FS-002 | EFFECT | BR-WS-DATA-001 term_ref: TERM-WS-001 | src-tauri/src/workspace/fileops.rs | 70   |
@@ -669,8 +680,8 @@
 | BR-AG-DATA-001-QUERY-AG-AG-TURN-010, BR-DOC-DATA-003-QUERY-AG-AG-TURN-010                                                                      | QUERY | AG-TURN | src-tauri/src/ag/blocks.rs    | 402  |
 | BR-AG-DATA-001-DATA-AG-AG-TURN-001                                                                                                             | DATA  | AG-TURN | src-tauri/src/ag/context.rs   | 46   |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012                                 | QUERY | AG-TOOL | src-tauri/src/ag/tool_exec.rs | 38   |
-| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA  | AG-TURN | src-tauri/src/lib.rs          | 4131 |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA  | AG-TURN | src-tauri/src/lib.rs          | 6198 |
+| BR-AG-DATA-001-AG-AG-TURN-009                                                                                                                  | DATA  | AG-TURN | src-tauri/src/lib.rs          | 4120 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA  | AG-TURN | src-tauri/src/lib.rs          | 6520 |
 
 #### BR-AG-DATA-001 term_ref: TERM-DOC-003
 
@@ -683,7 +694,7 @@
 | codes                                                                                                                                          | type | chain   | 文件                          | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | --------------------------- | ---- |
 | BR-AG-DATA-002-DATA-AG-AG-TURN-002                                                                                                             | DATA | AG-TURN | src-tauri/src/ag/context.rs | 102  |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs        | 6198 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs        | 6520 |
 
 #### BR-AG-DATA-003
 
@@ -697,7 +708,7 @@
 
 | codes                                                                                                                                          | type | chain   | 文件                   | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------- | ---- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6198 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6520 |
 
 #### BR-AG-DATA-004 term_ref: TERM-AG-005
 
@@ -716,7 +727,7 @@
 
 | codes                                                                                                                                          | type | chain   | 文件                   | 行号   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- | -------------------- | ---- |
-| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6198 |
+| BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN | src-tauri/src/lib.rs | 6520 |
 
 #### BR-AG-DATA-006 term_ref: TERM-AG-010
 
@@ -744,7 +755,7 @@
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-003 | EFFECT | AG-TURN | src-tauri/src/ag/history.rs | 275  |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-003  | QUERY  | AG-TURN | src-tauri/src/ag/history.rs | 337  |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-004 | EFFECT | AG-TURN | src-tauri/src/ag/history.rs | 376  |
-| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004  | QUERY  | AG-TURN | src-tauri/src/lib.rs        | 3561 |
+| BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004  | QUERY  | AG-TURN | src-tauri/src/lib.rs        | 3569 |
 
 #### BR-AG-PERSIST-001 term_ref: TERM-AG-009
 
@@ -778,14 +789,14 @@
 | --------------------------------------- | ------ | --------- | -------------------------- | ---- |
 | BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002 | EFFECT | AG-ASSIST | src/services/agService.ts  | 836  |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-001     | RB     | AG-ASSIST | src-tauri/src/ag/assist.rs | 40   |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 6852 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs       | 7174 |
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-003
 
 | codes                               | type | chain     | 文件                                   | 行号   |
 | ----------------------------------- | ---- | --------- | ------------------------------------ | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 796  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1832 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 802  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1856 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
@@ -794,10 +805,10 @@
 
 #### BR-AG-STATE-003 term_ref: TERM-AG-004
 
-| codes                                   | type   | chain     | 文件                                        | 行号  |
-| --------------------------------------- | ------ | --------- | ----------------------------------------- | --- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | AG-ASSIST | src/components/ag/AutocompleteOverlay.tsx | 16  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 994 |
+| codes                                   | type   | chain     | 文件                                        | 行号   |
+| --------------------------------------- | ------ | --------- | ----------------------------------------- | ---- |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-009     | RB     | AG-ASSIST | src/components/ag/AutocompleteOverlay.tsx | 16   |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003 | EFFECT | AG-ASSIST | src/components/ed/Editor.tsx              | 1000 |
 
 #### BR-AG-STATE-004
 
@@ -811,7 +822,7 @@
 | codes                                   | type   | chain     | 文件                       | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------ | ---- |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001   | GUARD  | AG-TURN   | src-tauri/src/ag/turn.rs | 110  |
-| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 6852 |
+| BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-001 | EFFECT | AG-ASSIST | src-tauri/src/lib.rs     | 7174 |
 
 #### BR-AG-VERIFY-001 term_ref: TERM-AG-003
 
@@ -1011,7 +1022,7 @@
 | BR-ED-DATA-001-EFFECT-ED-ED-EDIT-023, BR-ED-DATA-003-EFFECT-ED-ED-EDIT-023, BR-ED-STATE-001-EFFECT-ED-ED-EDIT-023 | EFFECT | ED-EDIT | src/services/edImageOps.ts              | 640  |
 | BR-ED-DATA-001-EFFECT-ED-ED-EDIT-025, BR-ED-DATA-003-EFFECT-ED-ED-EDIT-025, BR-ED-STATE-001-EFFECT-ED-ED-EDIT-025 | EFFECT | ED-EDIT | src/services/edImageOps.ts              | 731  |
 | BR-AG-DATA-003-RB-AG-AG-TOOL-016, BR-ED-DATA-001-RB-AG-AG-TOOL-016, BR-DE-DATA-001-RB-AG-AG-TOOL-016              | RB     | AG-TOOL | src-tauri/src/ag/block_ops.rs           | 271  |
-| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002    | GUARD  | AG-TOOL | src-tauri/src/lib.rs                    | 2197 |
+| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002    | GUARD  | AG-TOOL | src-tauri/src/lib.rs                    | 2205 |
 
 #### BR-ED-DATA-001 term_ref: TERM-ED-001
 
@@ -1057,7 +1068,7 @@
 | -------------------------------------------------------------------------------------------------------------- | ----- | ------- | -------------------------------------- | ---- |
 | BR-SYS-DATA-006-RB-ED-ED-EDIT-027, BR-ED-DATA-003-RB-ED-ED-EDIT-027                                            | RB    | ED-EDIT | src/services/edImageOps.ts             | 256  |
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-003, BR-ED-DATA-003-GUARD-AG-AG-TOOL-001                                      | GUARD | AG-TOOL | src-tauri/src/ag/bdocx_capabilities.rs | 1855 |
-| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD | AG-TOOL | src-tauri/src/lib.rs                   | 2197 |
+| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD | AG-TOOL | src-tauri/src/lib.rs                   | 2205 |
 
 #### BR-ED-DATA-004 term_ref: TERM-ED-004
 
@@ -1228,40 +1239,74 @@
 
 | codes                                    | type  | chain      | 文件                                 | 行号 |
 | ---------------------------------------- | ----- | ---------- | ---------------------------------- | -- |
-| BR-REF-DATA-001-GUARD-REF-REF-INJECT-001 | GUARD | REF-INJECT | src-tauri/src/reference/resolve.rs | 24 |
+| BR-REF-DATA-001-GUARD-REF-REF-INJECT-001 | GUARD | REF-INJECT | src-tauri/src/reference/resolve.rs | 34 |
+
+#### BR-REF-DATA-001 term_ref: TERM-REF-001
+
+| codes                                  | type | chain      | 文件                   | 行号   |
+| -------------------------------------- | ---- | ---------- | -------------------- | ---- |
+| BR-REF-DATA-001-API-REF-REF-INJECT-001 | API  | REF-INJECT | src-tauri/src/lib.rs | 4260 |
+| BR-REF-DATA-001-API-REF-REF-INJECT-002 | API  | REF-INJECT | src-tauri/src/lib.rs | 4297 |
 
 #### BR-REF-DATA-002
 
-| codes                                   | type | chain      | 文件                                | 行号 |
-| --------------------------------------- | ---- | ---------- | --------------------------------- | -- |
-| BR-REF-DATA-002-DATA-REF-REF-INJECT-001 | DATA | REF-INJECT | src-tauri/src/reference/inject.rs | 54 |
+| codes                                   | type | chain      | 文件                                | 行号   |
+| --------------------------------------- | ---- | ---------- | --------------------------------- | ---- |
+| BR-REF-DATA-002-API-REF-REF-INJECT-001  | API  | REF-INJECT | src-tauri/src/lib.rs              | 4372 |
+| BR-REF-DATA-002-DATA-REF-REF-INJECT-001 | DATA | REF-INJECT | src-tauri/src/reference/inject.rs | 54   |
 
 #### BR-REF-DATA-003
 
-| codes                              | type | chain      | 文件                               | 行号 |
-| ---------------------------------- | ---- | ---------- | -------------------------------- | -- |
-| BR-REF-DATA-003-REF-REF-INJECT-001 | DATA | REF-INJECT | src/services/referencePayload.ts | 2  |
+| codes                                   | type | chain      | 文件                                 | 行号   |
+| --------------------------------------- | ---- | ---------- | ---------------------------------- | ---- |
+| BR-REF-DATA-003-REF-REF-INJECT-001      | DATA | REF-INJECT | src/services/referencePayload.ts   | 2    |
+| BR-AG-DATA-001-AG-AG-TURN-009           | DATA | AG-TURN    | src-tauri/src/lib.rs               | 4120 |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-002 | DATA | REF-INJECT | src-tauri/src/reference/context.rs | 100  |
 
 #### BR-REF-DATA-003 term_ref: TERM-REF-003
 
-| codes                              | type  | chain      | 文件                               | 行号   |
-| ---------------------------------- | ----- | ---------- | -------------------------------- | ---- |
-| BR-REF-DATA-003-REF-REF-INJECT-004 | GUARD | REF-INJECT | src/services/referencePayload.ts | 112  |
-| BR-REF-DATA-003-REF-REF-INJECT-002 | GUARD | REF-INJECT | src/services/referencePayload.ts | 173  |
-| BR-AG-DATA-001-AG-AG-TURN-009      | DATA  | AG-TURN    | src-tauri/src/lib.rs             | 4131 |
+| codes                                   | type  | chain      | 文件                                 | 行号  |
+| --------------------------------------- | ----- | ---------- | ---------------------------------- | --- |
+| BR-REF-DATA-003-REF-REF-INJECT-005      | DATA  | REF-INJECT | src/services/referenceDrag.ts      | 2   |
+| BR-REF-DATA-003-REF-REF-INJECT-005      | GUARD | REF-INJECT | src/services/referenceDrag.ts      | 49  |
+| BR-REF-DATA-003-REF-REF-INJECT-006      | GUARD | REF-INJECT | src/services/referenceDrag.ts      | 71  |
+| BR-REF-DATA-003-REF-REF-INJECT-004      | GUARD | REF-INJECT | src/services/referencePayload.ts   | 114 |
+| BR-REF-DATA-003-REF-REF-INJECT-002      | GUARD | REF-INJECT | src/services/referencePayload.ts   | 175 |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-003 | DATA  | REF-INJECT | src-tauri/src/reference/context.rs | 36  |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-004 | DATA  | REF-INJECT | src-tauri/src/reference/context.rs | 223 |
 
 #### BR-REF-DATA-004 term_ref: TERM-REF-004
 
 | codes                              | type | chain      | 文件                               | 行号  |
 | ---------------------------------- | ---- | ---------- | -------------------------------- | --- |
 | BR-REF-DATA-004-AG-REF-INJECT-001  | DATA | REF-INJECT | src/components/ag/Composer.tsx   | 40  |
-| BR-REF-DATA-004-REF-REF-INJECT-003 | DATA | REF-INJECT | src/services/referencePayload.ts | 374 |
+| BR-REF-DATA-004-REF-REF-INJECT-003 | DATA | REF-INJECT | src/services/referencePayload.ts | 407 |
 
 #### BR-REF-VERIFY-001
 
 | codes                                      | type  | chain      | 文件                                | 行号 |
 | ------------------------------------------ | ----- | ---------- | --------------------------------- | -- |
 | BR-REF-VERIFY-001-GUARD-REF-REF-INJECT-001 | GUARD | REF-INJECT | src-tauri/src/reference/inject.rs | 14 |
+
+#### BR-REF-VERIFY-001 term_ref: TERM-REF-001
+
+| codes                                    | type | chain      | 文件                   | 行号   |
+| ---------------------------------------- | ---- | ---------- | -------------------- | ---- |
+| BR-REF-VERIFY-001-API-REF-REF-INJECT-001 | API  | REF-INJECT | src-tauri/src/lib.rs | 4344 |
+
+#### BR-REF-VERIFY-001 term_ref: TERM-REF-002
+
+| codes                                  | type | chain      | 文件                   | 行号   |
+| -------------------------------------- | ---- | ---------- | -------------------- | ---- |
+| BR-REF-DATA-002-API-REF-REF-INJECT-001 | API  | REF-INJECT | src-tauri/src/lib.rs | 4372 |
+
+#### BR-REF-VERIFY-001 term_ref: TERM-REF-003
+
+| codes                                      | type  | chain      | 文件                                 | 行号   |
+| ------------------------------------------ | ----- | ---------- | ---------------------------------- | ---- |
+| BR-AG-DATA-001-AG-AG-TURN-009              | DATA  | AG-TURN    | src-tauri/src/lib.rs               | 4120 |
+| BR-REF-VERIFY-001-GUARD-REF-REF-INJECT-002 | GUARD | REF-INJECT | src-tauri/src/reference/context.rs | 54   |
+| BR-REF-DATA-003-DATA-REF-REF-INJECT-002    | DATA  | REF-INJECT | src-tauri/src/reference/context.rs | 100  |
 
 #### BR-SYS-DATA-001
 
@@ -1287,13 +1332,13 @@
 | -------------------------------------- | ----- | -------- | ------------------------ | ---- |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-001   | API   | IPC-CALL | src-tauri/src/ipc/mod.rs | 154  |
 | BR-SYS-DATA-003-API-SYS-IPC-CALL-005   | API   | IPC-CALL | src-tauri/src/lib.rs     | 3    |
-| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004 | GUARD | IPC-CALL | src-tauri/src/lib.rs     | 3846 |
+| BR-SYS-DATA-003-GUARD-SYS-IPC-CALL-004 | GUARD | IPC-CALL | src-tauri/src/lib.rs     | 3854 |
 
 #### BR-SYS-DATA-003 term_ref: TERM-WS-001
 
 | codes                                | type | chain    | 文件                   | 行号  |
 | ------------------------------------ | ---- | -------- | -------------------- | --- |
-| BR-SYS-DATA-003-API-SYS-IPC-CALL-002 | API  | IPC-CALL | src-tauri/src/lib.rs | 256 |
+| BR-SYS-DATA-003-API-SYS-IPC-CALL-002 | API  | IPC-CALL | src-tauri/src/lib.rs | 260 |
 
 #### BR-SYS-DATA-005
 
@@ -1309,7 +1354,7 @@
 | BR-SYS-DATA-006-RB-ED-ED-EDIT-027, BR-ED-DATA-003-RB-ED-ED-EDIT-027                                            | RB    | ED-EDIT | src/services/edImageOps.ts             | 256  |
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-001, BR-ED-DATA-005-GUARD-AG-AG-TOOL-001                                      | GUARD | AG-TOOL | src-tauri/src/ag/bdocx_capabilities.rs | 1503 |
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-003, BR-ED-DATA-003-GUARD-AG-AG-TOOL-001                                      | GUARD | AG-TOOL | src-tauri/src/ag/bdocx_capabilities.rs | 1855 |
-| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD | AG-TOOL | src-tauri/src/lib.rs                   | 2197 |
+| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD | AG-TOOL | src-tauri/src/lib.rs                   | 2205 |
 
 #### BR-SYS-DATA-006 term_ref: TERM-SYS-002
 
@@ -1360,9 +1405,9 @@
 | codes                                     | type   | chain     | 文件                   | 行号   |
 | ----------------------------------------- | ------ | --------- | -------------------- | ---- |
 | BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-003  | GUARD  | APP-CLOSE | src/shell/App.tsx    | 38   |
-| BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | APP-CLOSE | src-tauri/src/lib.rs | 1517 |
-| BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | APP-CLOSE | src-tauri/src/lib.rs | 1581 |
-| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | APP-CLOSE | src-tauri/src/lib.rs | 7391 |
+| BR-SYS-STATE-004-QUERY-SYS-APP-CLOSE-001  | QUERY  | APP-CLOSE | src-tauri/src/lib.rs | 1525 |
+| BR-SYS-STATE-004-EFFECT-SYS-APP-CLOSE-002 | EFFECT | APP-CLOSE | src-tauri/src/lib.rs | 1589 |
+| BR-SYS-STATE-004-GUARD-SYS-APP-CLOSE-004  | GUARD  | APP-CLOSE | src-tauri/src/lib.rs | 7713 |
 
 #### BR-SYS-STATE-005
 
@@ -1439,7 +1484,7 @@
 
 | codes                         | type | chain | 文件                   | 行号   |
 | ----------------------------- | ---- | ----- | -------------------- | ---- |
-| BR-WS-OBS-001-RB-WS-WS-FS-001 | RB   | WS-FS | src-tauri/src/lib.rs | 1694 |
+| BR-WS-OBS-001-RB-WS-WS-FS-001 | RB   | WS-FS | src-tauri/src/lib.rs | 1702 |
 
 #### BR-WS-PERSIST-001
 
@@ -1484,8 +1529,8 @@
 
 | codes                                   | type   | chain     | 文件                                   | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------------------ | ---- |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 796  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1832 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 802  |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1856 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
@@ -1566,7 +1611,7 @@
 | BR-DE-DATA-002-RB-ED-DE-DIFF-028                                                                               | RB     | DE-DIFF | src/services/edImageOps.ts             | 493  |
 | BR-SYS-DATA-006-DATA-AG-AG-TOOL-002                                                                            | DATA   | AG-TOOL | src-tauri/src/ag/bdocx_capabilities.rs | 897  |
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-003, BR-ED-DATA-003-GUARD-AG-AG-TOOL-001                                      | GUARD  | AG-TOOL | src-tauri/src/ag/bdocx_capabilities.rs | 1855 |
-| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD  | AG-TOOL | src-tauri/src/lib.rs                   | 2197 |
+| BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-002, BR-ED-DATA-003-GUARD-AG-AG-TOOL-002 | GUARD  | AG-TOOL | src-tauri/src/lib.rs                   | 2205 |
 | BR-DE-DATA-002-EFFECT-WS-DE-DIFF-004                                                                           | EFFECT | DE-DIFF | src-tauri/src/workspace/diff_apply.rs  | 219  |
 
 #### TERM-REF-003
@@ -1574,7 +1619,7 @@
 | codes                              | type | chain      | 文件                               | 行号  |
 | ---------------------------------- | ---- | ---------- | -------------------------------- | --- |
 | BR-REF-DATA-004-AG-REF-INJECT-001  | DATA | REF-INJECT | src/components/ag/Composer.tsx   | 40  |
-| BR-REF-DATA-004-REF-REF-INJECT-003 | DATA | REF-INJECT | src/services/referencePayload.ts | 374 |
+| BR-REF-DATA-004-REF-REF-INJECT-003 | DATA | REF-INJECT | src/services/referencePayload.ts | 407 |
 
 #### TERM-WS-001
 
@@ -1586,20 +1631,20 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 63；Rust 集成测试文件 2；测试用例约 810。
+动态发现：前端测试文件 26；Rust 内联测试文件 64；Rust 集成测试文件 2；测试用例约 835。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
 | CORE | high | 1 | 19 | governance:1 | 1/1 → 1 |
-| SYS | critical | 18 | 174 | component:2, integration:2, service:2, state:1, unit:11 | 3/3 → 3 |
-| WS | critical | 17 | 199 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
-| ED | critical | 22 | 406 | component:4, service:6, state:1, unit:11 | 11/11 → 11 |
-| DE | critical | 17 | 215 | component:3, integration:1, service:2, unit:11 | 2/2 → 2 |
-| AG | critical | 21 | 200 | component:1, integration:1, service:1, state:1, unit:17 | 3/3 → 3 |
+| SYS | critical | 18 | 179 | component:2, integration:2, service:2, state:1, unit:11 | 3/3 → 3 |
+| WS | critical | 17 | 203 | component:1, integration:1, service:3, unit:12 | 2/2 → 2 |
+| ED | critical | 23 | 420 | component:4, service:6, state:1, unit:12 | 11/11 → 11 |
+| DE | critical | 17 | 223 | component:3, integration:1, service:2, unit:11 | 2/2 → 2 |
+| AG | critical | 22 | 217 | component:1, integration:1, service:1, state:1, unit:18 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
-| DOC | critical | 17 | 126 | service:1, unit:16 | 1/1 → 1 |
-| PRV | high | 5 | 55 | component:1, service:1, unit:3 | 2/2 → 2 |
-| REF | high | 7 | 101 | component:1, service:2, unit:4 | 1/1 → 1 |
+| DOC | critical | 17 | 130 | service:1, unit:16 | 1/1 → 1 |
+| PRV | high | 5 | 59 | component:1, service:1, unit:3 | 2/2 → 2 |
+| REF | high | 8 | 126 | component:1, service:2, unit:5 | 1/1 → 1 |
 | AST | high | 4 | 9 | unit:4 | 0/0 → 0 |
 | KB | high | 2 | 5 | unit:2 | 0/0 → 0 |
 | TPL | high | 2 | 6 | unit:2 | 0/0 → 0 |

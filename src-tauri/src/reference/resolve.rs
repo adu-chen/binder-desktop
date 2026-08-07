@@ -20,6 +20,16 @@ pub enum ReferenceAnchor {
     },
 }
 
+/// 由 rel_path 推断 doc_type（F7：不再硬编码 "md"；无扩展名归 txt）。
+pub fn infer_doc_type(rel_path: &str) -> String {
+    std::path::Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| "txt".to_string())
+}
+
 /**
  * @GOV
  * codes:    BR-REF-DATA-001-GUARD-REF-REF-INJECT-001
@@ -50,7 +60,7 @@ pub fn resolve_mention(
     let target = DocRef {
         workspace_id: ws.workspace_id.clone(),
         rel_path: rel_path.to_string(),
-        doc_type: "md".into(),
+        doc_type: infer_doc_type(rel_path),
     };
     match block_ids {
         Some(ids) if !ids.is_empty() => Ok(ReferenceAnchor::Block {

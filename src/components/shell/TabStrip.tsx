@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { tabsStore, useTabsStore, type OpenTab } from "../../store/tabsStore";
 import { useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
-import { writeDocRefData } from "../../services/edLocate";
+import { startReferenceDrag } from "../../services/referenceDrag";
+import { makeDocReference } from "../../services/referencePayload";
 import { ContextMenu, type ContextMenuDef } from "./ContextMenu";
 
 /**
@@ -119,7 +120,7 @@ export function TabStrip() {
           role="tab"
           aria-selected={tab.id === activeTabId}
           draggable
-          onDragStart={(e) => writeDocRefData(e.dataTransfer, tab.path)}
+          onDragStart={(e) => startReferenceDrag(e.dataTransfer, makeDocReference(tab.path))}
           onClick={() => dragId === null && tabsStore.activate(tab.id)}
           onContextMenu={(e) => onContextMenu(e, tab.id)}
           onPointerDown={(e) => onPointerDown(e, tab.id)}

@@ -6,7 +6,6 @@ import { App } from "../../shell/App";
 import { CloseConfirmDialog } from "./CloseConfirmDialog";
 import { TabStrip } from "./TabStrip";
 import { ContextMenu } from "./ContextMenu";
-import { DOC_REF_MIME } from "../../services/edLocate";
 import { REFERENCE_MIME } from "../../services/referencePayload";
 import { closeStore } from "../../store/closeStore";
 import { deStore } from "../../store/deStore";
@@ -319,7 +318,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("TabStrip · 文档引用拖出", () => {
-  it("标签拖出时写入旧文档引用 MIME 与统一 ReferencePayload MIME", () => {
+  it("标签拖出时经统一 drag session 通道写入 ReferencePayload（REF-REFERENCE-REPAIR-01 F1）", () => {
     tabsStore.openDoc("notes/a.md");
     const { container } = render(<TabStrip />);
     const tab = container.querySelector("[data-tab-id]") as HTMLElement;
@@ -327,9 +326,8 @@ describe("TabStrip · 文档引用拖出", () => {
 
     fireEvent.dragStart(tab, { dataTransfer });
 
-    expect(JSON.parse(values.get(DOC_REF_MIME) ?? "{}")).toEqual({ relPath: "notes/a.md" });
     expect(JSON.parse(values.get(REFERENCE_MIME) ?? "{}")).toEqual({ kind: "doc", relPath: "notes/a.md" });
-    expect(values.get("text/plain")).toBe("notes/a.md");
+    expect(values.get("text/plain")).toMatch(/^binder-ref:/);
   });
 });
 

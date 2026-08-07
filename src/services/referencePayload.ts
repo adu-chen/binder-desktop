@@ -21,7 +21,8 @@ export type ReferenceKind =
   | "knowledge"
   | "template"
   | "url"
-  | "long_text";
+  | "long_text"
+  | "file";
 
 export interface ReferenceSessionMessage {
   role: "user" | "assistant";
@@ -50,7 +51,8 @@ export type ReferencePayload =
   | { kind: "knowledge"; entryId?: string; title?: string; content: string; sourceRef?: string; label?: string }
   | { kind: "template"; templateId?: string; name: string; content: string; label?: string }
   | { kind: "url"; url: string; title?: string; label?: string }
-  | { kind: "long_text"; text: string; charCount: number; label?: string };
+  | { kind: "long_text"; text: string; charCount: number; label?: string }
+  | { kind: "file"; name: string; path?: string; size?: number; label?: string };
 
 export interface ReferenceTokenAttrs {
   refId: string;
@@ -254,6 +256,18 @@ export function coerceReferencePayload(value: unknown): ReferencePayload | null 
           }
         : null;
     }
+    case "file": {
+      const name = str(value.name);
+      return name
+        ? {
+            kind: "file",
+            name,
+            path: str(value.path),
+            size: num(value.size),
+            label: str(value.label),
+          }
+        : null;
+    }
     default:
       return null;
   }
@@ -311,6 +325,8 @@ export function referenceLabel(payload: ReferencePayload): string {
       return payload.title ? `${payload.title} ${payload.url}` : payload.url;
     case "long_text":
       return `长文本 ${payload.charCount || payload.text.length}字`;
+    case "file":
+      return payload.path ? `文件 ${payload.name}（${payload.path}）` : `文件 ${payload.name}`;
   }
 }
 
@@ -332,6 +348,8 @@ export function referenceKey(payload: ReferencePayload): string {
       return `url:${payload.url}`;
     case "long_text":
       return `long_text:${payload.text}`;
+    case "file":
+      return `file:${payload.name}:${payload.size ?? ""}`;
   }
 }
 
@@ -360,9 +378,24 @@ export function isLikelyUrl(text: string): boolean {
   }
 }
 
+/** 从 file:// URL 提取文件名（F5 外部文件拖入的 text/uri-list 兜底）；非 file:// 返回 null。 */
+export function fileNameFromFileUrl(text: string): string | null {
+  const clean = text.trim();
+  try {
+    const u = new URL(clean);
+    if (u.protocol !== "file:") return null;
+    const name = u.pathname.split("/").filter(Boolean).pop();
+    return name ? decodeURIComponent(name) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function referenceFromPlainTextPaste(text: string): ReferencePayload | null {
   const clean = text.trim();
   if (!clean) return null;
+  const fileName = fileNameFromFileUrl(clean);
+  if (fileName) return { kind: "file", name: fileName };
   if (isLikelyUrl(clean)) return { kind: "url", url: clean };
   if (clean.length > LONG_TEXT_REF_THRESHOLD) {
     return { kind: "long_text", text: clean, charCount: clean.length };

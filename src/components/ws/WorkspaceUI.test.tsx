@@ -1,7 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { DOC_REF_MIME } from "../../services/edLocate";
 import { REFERENCE_MIME } from "../../services/referencePayload";
 import { workspaceShell } from "../../store/workspaceShell";
 import { wsStore, type DocRefView } from "../../store/wsStore";
@@ -215,16 +214,15 @@ describe("FileTreeNode 状态与只读预览模式标记", () => {
     expect(container.querySelector(".ftn-badge")?.textContent).toBe("3");
   });
 
-  it("文件节点拖出时写入旧文档引用 MIME 与统一 ReferencePayload MIME", () => {
+  it("文件节点拖出时经统一 drag session 通道写入 ReferencePayload（REF-REFERENCE-REPAIR-01 F1）", () => {
     const { container } = renderNode({});
     const btn = container.querySelector(".ftn-file") as HTMLButtonElement;
     const { values, dataTransfer } = dragData();
 
     fireEvent.dragStart(btn, { dataTransfer });
 
-    expect(JSON.parse(values.get(DOC_REF_MIME) ?? "{}")).toEqual({ relPath: "a.md" });
     expect(JSON.parse(values.get(REFERENCE_MIME) ?? "{}")).toEqual({ kind: "doc", relPath: "a.md" });
-    expect(values.get("text/plain")).toBe("a.md");
+    expect(values.get("text/plain")).toMatch(/^binder-ref:/);
   });
 });
 

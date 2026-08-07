@@ -1,40 +1,49 @@
 {
-  "scope_id": "DOC-SYNC-01",
-  "task_type": "CODE_CHANGE_MINOR",
+  "scope_id": "REF-REFERENCE-REPAIR-01",
+  "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "最近两天课题 → 文档/台账同步：台账生成管线 + 注册表扩展 + 模块文档回填 + 进度台账回填",
+  "title": "引用功能全链缺口闭合（G1~G7：拖拽链路/纯引用发送/REF 孤岛/偏移基准/外部文件/失效信号/候选与doc_type）",
   "status": "COMPLETE",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/DOC-SYNC-01.md",
+  "issue_trace": ".governance/issues/REF-REFERENCE-REPAIR-01.md",
   "stop_condition": null,
-  "reason": "人类 2026-08-07 审计后决策 D1-D4（D1 补同步 WS-NEW-BUTTON-01 文档；D2 新增台账生成脚本并入 product:generate；D3 状态口径=已实现·待核验；D4 注册表全量登记）。前置 scope WS-DIR-DELETE-01 已随提交 3933092 完成。",
+  "reason": "引用功能审计结论（2026-08-07），人类确认三项决策：全量缺口 / 逻辑抽回 REF 模块 / 外部文件纳入 v1。修复方案见 docs/02_plans/REF-REFERENCE-REPAIR-01_修复方案.md。",
   "objectives": [
-    "新增 .governance/function-ledger.json 台账数据源（147 行：143 行基线 + 4 新增行；12 处状态/细节按 D3 更新）",
-    "新增 scripts/generate_function_ledger.mjs 由数据源生成 binder-product-function-ledger.xlsx，接入 product:generate",
-    "扩展 .governance/product-capability-registry.json（D4 全量登记新能力 variant）并重跑图谱生成",
-    "回填模块文档：ED（M-T/M-D/X-R-03）、WS（M-D/I-P/M-T）、ENT（M-T/I-P）",
-    "回填全局进度台账 A-CORE-X-L-05 v1.2 与 A-CORE-X-L-06 复核"
+    "F1 拖拽引用链路闭合（解 REF-06）：drag session store + 编辑器 document 冒泡回写 + 四源接线（P0）",
+    "F2 纯引用发送：canSend 放开（P0）",
+    "F3 REF 后端孤岛收敛：reference/context.rs 迁移 + lib.rs 收敛 + ref.* command 注册（P1）",
+    "F4 选区锚偏移基准统一为 UTF-16（P1）",
+    "F5 外部文件拖入：ReferencePayload 增 file 类型（P2，纳入 v1）",
+    "F6 锚失效信号一致性：标注注入双形态 + 文档语义修订（P2）",
+    "F7 @ 候选过滤资源文件 + doc_type 按扩展名推断（P2）"
   ],
   "allowed_files": [
-    ".governance/active_scope.json",
-    ".governance/issues/DOC-SYNC-01.md",
-    ".governance/function-ledger.json",
-    ".governance/product-capability-registry.json",
-    "scripts/generate_function_ledger.mjs",
-    "scripts/audit_taskflow_governance.mjs",
-    "package.json",
-    "docs/00_core/generated/**",
-    "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/01_modules/ED/A-ED-M-D-01_编辑器功能需求描述.md",
-    "docs/01_modules/ED/A-ED-X-R-03_编辑器工具栏功能与兼容性清单.md",
-    "docs/01_modules/ED/A-ED-X-L-02_编辑器专项优化计划.md",
-    "docs/01_modules/WS/A-WS-M-D-01_工作台功能需求描述.md",
-    "docs/01_modules/WS/A-WS-I-P-01_工作台接口协议.md",
-    "docs/01_modules/WS/A-WS-M-T-01_工作台技术设计.md",
-    "docs/01_modules/ENT/A-ENT-M-T-01_订阅门控技术设计.md",
-    "docs/01_modules/ENT/A-ENT-I-P-01_订阅门控接口协议.md",
-    "docs/00_core/A-CORE-X-L-05_项目进度跟踪台账.md",
-    "docs/00_core/A-CORE-X-L-06_1.0体验版发布范围与验收计划.md"
+    "src/services/referenceDrag.ts",
+    "src/services/referencePayload.ts",
+    "src/services/referencePayload.test.ts",
+    "src/components/ag/Composer.tsx",
+    "src/components/ag/Composer.test.tsx",
+    "src/components/ag/AgentPanel.tsx",
+    "src/components/ag/MessageList.tsx",
+    "src/components/ed/Editor.tsx",
+    "src/components/ws/FileTreeNode.tsx",
+    "src/components/shell/TabStrip.tsx",
+    "src/components/ws/WorkspaceUI.test.tsx",
+    "src/components/shell/ShellComponents.test.tsx",
+    "src/services/edRuntime.test.ts",
+    "src/services/agRuntime.test.ts",
+    "src-tauri/src/reference/context.rs",
+    "src-tauri/src/reference/resolve.rs",
+    "src-tauri/src/reference/mod.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/types/mod.rs",
+    "docs/01_modules/REF/A-REF-M-D-01_引用功能需求描述.md",
+    "docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md",
+    "docs/01_modules/REF/A-REF-I-P-01_引用接口协议.md",
+    "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+    "scripts/test_governance.test.mjs",
+    ".governance/issues/REF-REFERENCE-REPAIR-01.md",
+    ".governance/active_scope.json"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -43,37 +52,42 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "governance.config.json",
-    "scripts/product_capability.mjs",
-    "scripts/generate_product_capability_atlas.mjs",
-    "scripts/generate_adus.mjs",
-    "src/**",
-    "src-tauri/**"
+    "scripts/**",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "constraints": [
-    "不新增/修改 RULE/CHAIN/TERM/MODULE 静态定义；沿用既有 BR/REQ 引用",
-    "不修改运行时代码（src/**、src-tauri/**）",
-    "台账状态口径按 D3：代码已实现即「已实现 · 待核验 · EP」，不提升为已验收",
-    "注册表扩展需满足 product:audit 引用校验（REQ/RULE/CHAIN/TERM/测试文件必须真实存在）"
+    "REF-06 拖拽修复必须先完成 F1.1 真实事件观测（观测记录回填 issue_trace）",
+    "F5 file 类型须回写 A-SYS-I-P-01（X-SHARED-001）后方可改代码",
+    "F3 迁移后 BR-AG-DATA-001 / BR-REF-* 的 @GOV 覆盖链必须保持完整",
+    "修改设计文档标注块（REQ/BR）后必须运行 governance:generate 并复核 ADUS",
+    "不新增 RULE/CHAIN/TERM 静态定义；仅按 F6 修订 BR-REF-VERIFY-001 语义描述与 F5 扩展 ReferencePayload 共享结构"
   ],
   "acceptance_criteria": [
-    "product:generate 同时生成图谱与台账 xlsx；xlsx 可被 Excel/Numbers 打开，147 行数据完整",
-    "product:audit 0 阻断；governance:audit 0 error",
-    "ED/WS/ENT 文档变更记录回填至最近两天课题；A-CORE-X-L-05 回填 14 课题进度",
-    "test:governance 通过（注册表/选择器自测）"
+    "F1：真实观测后四源拖拽（编辑器选区/文件树/编辑器标签/会话标签）到 Composer 均生成 ReferenceToken；drag session 生命周期无泄漏",
+    "F2：纯引用可点击发送，startTurn 收到 references",
+    "F3：reference/context.rs 承担 REF 规则逻辑，lib.rs 收敛为调用方；ref.* 四 command 注册并经 dispatch 可达",
+    "F4：含 emoji 选区前后端偏移一致，校验不再误退化",
+    "F5：外部文件拖入生成 file 引用，发送后注入上下文含文件元数据标注",
+    "F6：失效引用输出统一「锚已失效」前缀标注",
+    "F7：@ 候选仅可读文档；doc_type 按扩展名推断",
+    "test:related / cargo test / governance:generate+audit 全绿"
   ],
   "validation_commands": [
-    "npm run product:generate",
-    "npm run product:audit",
-    "npm run governance:audit",
-    "npm run test:governance"
+    "npx vitest run src/services/referenceDrag.test.ts src/services/referencePayload.test.ts src/components/ag/Composer.test.tsx",
+    "npm run test:related -- --files [changed_files]",
+    "cargo test --manifest-path src-tauri/Cargo.toml",
+    "npm run governance:generate",
+    "npm run governance:audit"
   ],
   "out_of_scope": [
-    "运行时代码行为调整",
-    "新增 RULE/CHAIN/TERM 静态定义",
-    "测试文件新增/修改（除既有测试断言同步）"
+    "KB/AST 资产面板拖拽来源接线（REF-01 延后，仅协议就绪）",
+    "锚失效后的重选/自动重定位交互（REF-03）",
+    "候选解析延迟等量化 NFR（G5 标定）",
+    "跨会话字符锚持久化（ED 显式延后债务）"
   ],
   "scope_extensions": [
-    "2026-08-07 自验证（SC-01）：product:generate 串联台账生成后，governance:audit 的 REQUIRED_PACKAGE_SCRIPTS 对 product:generate 期望命令仍为单命令导致 failed。管线变化应同步审计期望而非绕过——扩展 allowed_files 加入 scripts/audit_taskflow_governance.mjs，并将其 product:generate 期望更新为串联命令。"
+    "2026-08-07 自验证（SC-01）：TabStrip/FileTreeNode 拖拽源改造为 startReferenceDrag 后，其组件测试（ShellComponents.test.tsx / WorkspaceUI.test.tsx）断言旧 writeDocRefData 行为（DOC_REF_MIME/text/plain=relPath），纳入 allowed_files 同步为新 drag session 通道断言",
+    "2026-08-07 自验证（SC-01）：新增 AgentUI 引用测试 3 用例使 AG frontend test_count 79→82，scripts/test_governance.test.mjs 快照断言过期；人类跳过决策按推荐执行，纳入 allowed_files 同步断言为 82（test:related 全绿所需）"
   ],
   "unresolved_items": []
 }

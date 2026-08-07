@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { writeDocRefData } from "../../services/edLocate";
+import { startReferenceDrag } from "../../services/referenceDrag";
+import { makeDocReference } from "../../services/referencePayload";
 
 /**
  * 文件树单节点（A-SYS-C-T-02 §3 Side Panel WS · 参考稿 §6.4）。
@@ -157,7 +158,7 @@ export function FileTreeNode({
       className={`ftn-row ftn-file ftn-${nodeState}${previewable ? " ftn-preview_only" : ""}`}
       style={indent}
       draggable
-      onDragStart={(e) => writeDocRefData(e.dataTransfer, node.path)}
+      onDragStart={(e) => startReferenceDrag(e.dataTransfer, makeDocReference(node.path))}
       onClick={() => (previewable ? onPreviewFile?.(node.path) : onOpenFile(node.path))}
       onContextMenu={(e) => {
         if (!onContextMenu) return;

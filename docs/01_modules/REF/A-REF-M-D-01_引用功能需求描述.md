@@ -130,10 +130,10 @@ req_id: REQ-REF-005
 title: 多来源引用归一化
 owner_module: REF
 status: active
-summary: 编辑器选区、文件树、编辑器标签、会话标签、记忆条目、知识条目、模板条目、外部 URL 与外部长文本必须归一为 ReferencePayload；REF 不接管 AST/KB/TPL 的检索或管理，只接收已选中条目快照
+summary: 编辑器选区、文件树、编辑器标签、会话标签、记忆条目、知识条目、模板条目、外部 URL、外部长文本与外部文件必须归一为 ReferencePayload；REF 不接管 AST/KB/TPL 的检索或管理，只接收已选中条目快照
 source_doc: REQ-CORE-006、APC §4.1
-acceptance: 每类来源可生成可溯源 ReferencePayload；不可识别粘贴内容按普通输入处理；外部纯文本超过阈值生成长文本引用而非直接塞入 prompt
-open_issues: 长文本阈值先按实现常量标定，后续可进入 NFR 调整；拖拽入口真实链路未闭合，见 REF-06
+acceptance: 每类来源可生成可溯源 ReferencePayload；不可识别粘贴内容按普通输入处理；外部纯文本超过阈值生成长文本引用而非直接塞入 prompt；外部文件拖入生成 file 引用（仅元数据 name/path/size，不读内容）
+open_issues: 长文本阈值先按实现常量标定，后续可进入 NFR 调整；拖拽入口真实链路待观测确认（见 REF-06）
 -->
 
 <!-- REQ
@@ -167,7 +167,7 @@ open_issues: 引用令牌视觉细节随前端 G4 可继续优化
 | REF-03 | BOUNDARY_OPEN | 显式延期 | 锚失效修复交互（重选/自动重定位）归 REF G2/实现期 |
 | REF-04 | FLOW_INCOMPLETE | 显式延期 | 状态机豁免预判须在 REF G2 复核（若暴露状态化链路则建机登记总图） |
 | REF-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5；量化指标（候选列举/解析延迟）延 G5 NFR 标定 |
-| REF-06 | IMPLEMENTATION_DEBT | 暂停优化 | 拖拽引用入口真实链路未闭合：复制/粘贴引用可用，拖拽路径在 Tauri/WebKit 真实事件链中仍未稳定生成 ReferenceToken；尝试、预计根因与重启条件见 A-REF-M-T-01 §9 |
+| REF-06 | IMPLEMENTATION_DEBT | 已修复·待观测确认 | 拖拽引用入口真实链路已闭合（REF-REFERENCE-REPAIR-01 F1）：统一 drag session store（text/plain marker 保底）+ 编辑器 document 冒泡回写解决 PM clearData；文件树/编辑器标签/会话标签/编辑器选区四源接线完成；真实 Tauri/WebKit 事件观测与冒烟待人工确认后正式关闭 |
 
 > 术语：引用、注入载荷等 REF 主责核心概念在 REF L2 评估注册 TERM。
 
@@ -186,3 +186,4 @@ open_issues: 引用令牌视觉细节随前端 G4 可继续优化
 | 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |
 | 2026-07-08 | v1.2 | 引用输入扩展：新增多来源引用归一化与输入流 ReferenceToken 一致性需求（REQ-REF-005/006）；代表性流程增 R3；REF-01 关闭为“接收已选中快照、不接管 AST/KB/TPL 检索管理” |
 | 2026-07-08 | v1.3 | 登记 REF-06 拖拽引用入口真实链路未闭合：复制/粘贴路径可用，拖拽路径暂停优化，技术侧详见 A-REF-M-T-01 §9 |
+| 2026-08-07 | v1.4 | REF-REFERENCE-REPAIR-01：REQ-REF-005 目标范围扩至外部文件（file 引用仅元数据）；REF-06 状态更新为「已修复·待观测确认」（drag session store + 编辑器 document 冒泡回写落地，真实观测待人工） |

@@ -31,6 +31,12 @@ A-SYS-I-P-02（骨架）→ 本文（REF 解析/校验/组装接口）→ 实现
 > 候选列举/标记渲染依托 ED 扩展点（X-FORBID-005，前端进程内，不在本 command 表）；REF 不直接
 > 操纵编辑器状态。KB 条目/AST 记忆是否纳入候选待 REF-01（联动 KB/AST，本文 v1 仅 workspace 目标）。
 
+> **落地状态（2026-08-07 REF-REFERENCE-REPAIR-01 F3）**：四 command 已注册并经 `dispatch` 路由
+> （build_registry），实现见 `lib.rs route_ref_*`；AG 回合组装在进程内调用 `reference::context`
+> 底层函数（不绕 Tauri IPC）。`ref.list_candidates` 候选过滤为可读文档（F7）；`ref.verify_anchor`/
+> `ref.build_injection` 的**块级锚**在 command 路径无 LogicalState 快照，保守按 Undetectable →
+> REF_ANCHOR_INVALID（不注入），块级引用消费归 AG 回合路径（OpenDocSnapshot 门禁）。
+
 ## §2.1 前端进程内 ReferencePayload 协议（REF-INJECT）
 
 前端拖拽/粘贴引用不经 Tauri command，使用进程内 `DataTransfer` / clipboard MIME 协议与 Composer
@@ -46,6 +52,11 @@ A-SYS-I-P-02（骨架）→ 本文（REF 解析/校验/组装接口）→ 实现
 | `template` | `templateId?`, `name`, `content` | TPL 模板条目拖拽 | 发送时作为显式模板快照 |
 | `url` | `url`, `title?` | 外部 URL 粘贴/拖拽 | 仅注入链接，不自动抓取外部内容 |
 | `long_text` | `text`, `charCount` | 外部纯文本粘贴超过阈值 | 作为长文本快照注入，避免直接撑大输入正文 |
+| `file` | `name`, `path?`, `size?` | 外部文件拖入（`dataTransfer.files`）/ `file://` 文本 | 仅文件元数据引用，不读内容（X-FORBID-004） |
+
+> 应用内拖拽经统一 **drag session store**（REF-REFERENCE-REPAIR-01 F1）：拖拽源 `startReferenceDrag`
+> 写入进程内 session + `text/plain` marker 保底，Composer drop 经 `resolveReferenceDrag` 解析，规避
+> WebKit custom MIME 清洗与 PM clearData 问题。
 
 `ReferencePayload` 在 Composer 内插入 `ReferenceToken`，发送时作为 `ag.start_turn.references` 传给 AG；
 旧 `mentions`/`block_refs` 参数仅保留兼容，不再作为新前端路径的主通道。
@@ -68,3 +79,4 @@ A-SYS-I-P-02（骨架）→ 本文（REF 解析/校验/组装接口）→ 实现
 |------|------|---------|
 | 2026-06-12 | v1.0 | 初版（实现前置件）：REF 接口协议——list_candidates/resolve_anchor/verify_anchor/build_injection 四接口，限界+无悬空+失效保守+读取时点一致；零新增注册项；债务（KB/AST 纳入候选待联合） |
 | 2026-07-08 | v1.1 | 新增前端进程内 ReferencePayload 协议：声明 doc/selection/session/memory/knowledge/template/url/long_text 八类 payload 字段、来源入口和 AG 消费路径；明确新路径通过 `ag.start_turn.references`，旧 mentions/block_refs 仅兼容 |
+| 2026-08-07 | v1.2 | REF-REFERENCE-REPAIR-01：§2 四 command 登记落地状态（F3 已注册并经 dispatch 路由；块级锚保守 Undetectable 归 AG 回合）；§2.1 增 file 类型（F5）与 drag session store 说明（F1） |

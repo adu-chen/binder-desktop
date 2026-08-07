@@ -3,7 +3,7 @@ import { useAgStore } from "../../store/agStore";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
 import { DiffAllActionsBar } from "../de/DiffAllActionsBar";
-import { writeReferencePayloadData } from "../../services/referencePayload";
+import { startReferenceDrag } from "../../services/referenceDrag";
 import { closeAgentSession, deleteAgentSession, newAgentSession, switchAgentSession } from "../../services/agService";
 
 /**
@@ -61,7 +61,7 @@ export function AgentPanel() {
               className={`agtab${s.id === activeSessionId ? " active" : ""}`}
               draggable
               onDragStart={(e) =>
-                writeReferencePayloadData(e.dataTransfer, {
+                startReferenceDrag(e.dataTransfer, {
                   kind: "session",
                   sessionId: s.id,
                   title: s.title,

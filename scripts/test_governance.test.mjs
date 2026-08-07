@@ -144,7 +144,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.AG.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'AG')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(79);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(82);
     expect(inventory.modules.PRV.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'PRV')

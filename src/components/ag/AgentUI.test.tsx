@@ -6,6 +6,7 @@ import { assistStore, type AssistTarget } from "../../store/assistStore";
 import { deStore, type DiffView } from "../../store/deStore";
 import { wsStore } from "../../store/wsStore";
 import { DOC_REF_MIME, SELECTION_REF_MIME, type SelectionRef } from "../../services/edLocate";
+import { startReferenceDrag } from "../../services/referenceDrag";
 import { LONG_TEXT_REF_THRESHOLD, REFERENCE_MIME, type ReferencePayload } from "../../services/referencePayload";
 import { deleteAgentSession, startTurn } from "../../services/agService";
 import { AgentPanel } from "./AgentPanel";
@@ -249,6 +250,53 @@ describe("Composer · 引用令牌", () => {
         ],
       }),
     );
+  });
+
+  // covers: BR-REF-DATA-003
+  // drag session 快路径（REF-REFERENCE-REPAIR-01 F1）：源端 startReferenceDrag 后 drop 命中。
+  it("drop 经 drag session 快路径生成引用令牌", async () => {
+    const { dropTarget, editor } = renderComposer();
+    const dt = dataTransfer({});
+    startReferenceDrag(dt, { kind: "doc", relPath: "notes/fast.md" });
+
+    fireEvent.drop(dropTarget, { dataTransfer: dt });
+
+    await waitFor(() => {
+      expect(editor.querySelectorAll(".ref-token-doc").length).toBe(1);
+    });
+  });
+
+  // covers: BR-REF-DATA-003
+  // drag session 保底通道：custom MIME 全部不可见时，仅 text/plain marker 仍可解析生成令牌。
+  it("drop 在 custom MIME 不可见时经 text/plain marker 保底生成引用令牌", async () => {
+    const { dropTarget, editor } = renderComposer();
+    const dt = dataTransfer({});
+    startReferenceDrag(dt, { kind: "doc", relPath: "notes/fallback.md" });
+    // 构造仅 text/plain（marker）可见的 transfer：模拟 WebKit 清洗 custom MIME。
+    const fallback = dataTransfer({ "text/plain": dt.getData("text/plain") });
+
+    fireEvent.drop(dropTarget, { dataTransfer: fallback });
+
+    await waitFor(() => {
+      expect(editor.querySelectorAll(".ref-token-doc").length).toBe(1);
+    });
+  });
+
+  // covers: BR-REF-DATA-003
+  // 外部文件拖入（F5）：dataTransfer.files 非空生成 file 引用令牌，仅元数据不读内容。
+  it("外部文件拖入生成 file 引用令牌", async () => {
+    const { dropTarget, editor } = renderComposer();
+    const dt = dataTransfer({ "text/uri-list": "file:///tmp/report.pdf" });
+    Object.defineProperty(dt, "files", {
+      value: [{ name: "report.pdf", size: 2048 }],
+    });
+
+    fireEvent.drop(dropTarget, { dataTransfer: dt });
+
+    await waitFor(() => {
+      expect(editor.querySelectorAll(".ref-token-file").length).toBe(1);
+    });
+    expect(screen.getAllByText("文件 report.pdf").length).toBeGreaterThanOrEqual(1);
   });
 
   it("切换会话时输入框草稿和引用跟随会话恢复", async () => {

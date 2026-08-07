@@ -69,7 +69,8 @@ REF 无状态机：豁免复核结论见 §6（解除 REF-04）。
 
 v1 可引用目标 = workspace 内**文档**（路径级锚）、**内容块**（块级锚：DocRef + blockId）、
 **资源文件**（路径级锚）、**代理会话**、**记忆条目**、**知识条目**、**模板条目**、**外部 URL**、
-**外部长文本**。候选列举与 workspace 内容读取一律经 WS（X-FORBID-004 限界）；AST/KB/TPL
+**外部长文本**、**外部文件**（file 引用：仅元数据 name/path/size，不读内容，守 X-FORBID-004 精神）。
+候选列举与 workspace 内容读取一律经 WS（X-FORBID-004 限界）；AST/KB/TPL
 条目的生成、筛选、检索和管理归各 owner，REF 只接收用户已选中的 ReferencePayload 快照。
 
 **选区级锚（2026-07-03 批B 扩展，A-ED-X-L-02 PI-ED-10）**：块级锚的细化——DocRef + blockId +
@@ -149,6 +150,11 @@ rule_id: BR-REF-VERIFY-001
 过期内容或错位内容**；有效性检测不可得时按失效保守处理（不注入）。失效后的修复交互（重选/自动
 重定位）延实现期（REF-03），本规则锁校验时机与保守语义。
 
+> **失效信号双形态（2026-08-07 REF-REFERENCE-REPAIR-01 F6 澄清）**：失效信号允许两种形态——
+> ① AG 回合内采用**标注注入**：`reference/context.rs` 对失效选区输出统一「引用锚已失效」前缀 +
+> 发送时原始快照（不中断回合，明确标注不得作为当前文档事实）；② ref.* command 路径采用**接口
+> Err**（REF_ANCHOR_INVALID）不注入。两者语义一致：不静默注入空/过期/错位内容。
+
 ## §6 状态机豁免复核（解除 REF-04）
 
 **结论：豁免成立，REF v1 不建状态机。** 复核依据（APC §6 强制阈值口径 b）：
@@ -224,7 +230,7 @@ status: mapped
 
 ## §9 技术债务与盲区（诚实声明）
 
-- **拖拽引用入口未闭环（REF-06，2026-07-08 暂停优化）**：复制编辑器选区并粘贴到 Composer
+- **拖拽引用入口未闭环（REF-06，2026-07-08 暂停优化 → 2026-08-07 已修复·待观测确认）**：复制编辑器选区并粘贴到 Composer
   已可经 clipboard MIME 形成 ReferencePayload / ReferenceToken；但拖拽路径在真实界面中仍未稳定形成
   ReferenceToken，本轮停止继续优化，整体登记为实现债务。
 
@@ -264,6 +270,46 @@ status: mapped
 - **候选排序与搜索匹配算法**属实现期（不入规则）。
 - 豁免结论的失效触发条件已列（§6），任一出现须复核建机。
 
+### 审计延伸债务（2026-08-07，REF-REFERENCE-REPAIR-01 审计后续）
+
+以下三项为引用功能审计后登记的延伸债务，均属 **AG 能力层扩展**，不在引用功能上打补丁；每项含
+问题/需求、缺口、路径、主责与状态，供立项。
+
+- **外部文件内容受控快照（REF-07）**
+  - 问题/需求：外部（workspace 外）文档拖入生成 `file` 引用后 agent 无法读取内容；期望引用外部文档
+    时可识别其内容，同时**不破坏 X-FORBID-004（上下文读取不越出 workspace）与 X-SEQ-002（前端不经
+    后端不读文件）**，也不以"导入到文件树"形式明示进 workspace（可接受受控隐藏缓存/会话级数据）。
+  - 缺口：`file` 引用当前仅元数据（name/path?/size?），后端注入输出「仅文件引用，未读取内容」；
+    外部内容进系统无既有通道——前端 FileReader 直读违 X-SEQ-002，后端直读外部路径违 X-FORBID-004。
+  - 路径：新增后端 command（如 `ref.snapshot_external_file`）——前端将拖入 File 内容经 IPC 交给后端 →
+    写入 workspace 内受控隐藏缓存（如 `.binder/ref-snapshots/`，文件树过滤隐藏）→ 生成携带
+    snapshotId 的 `file` 引用 → 发送时经后端读 workspace 内快照注入内容。生命周期随会话标签
+    （会话删除清快照；持久化归 BR-AG-PERSIST-001 域）。预算：文本快照大小阈值（建议 ≤2MB）+ hash
+    去重；非文本文件（pdf/docx/xlsx）保持仅元数据。快照语义=拖入时点内容，明确标注非实时源文件。
+  - 主责：REF（缓存/注入契约）/ SYS（控制态表基线，X-SHARED-001 回写）/ AG（消费）。
+  - 状态：已登记，待立项（建议独立课题）。
+- **样式上下文投影（REF-08，AgentEdit 前置预研）**
+  - 问题/需求：AgentEdit 需"编辑样式、匹配当前样式"能力；模型输出适配样式需知道**目标位置的样式
+    上下文**（标题层级/加粗/列表等）。样式数据已存在于 `AgentEditableBlockSnapshot`
+    （block_type / node_type / marks / attrs）。
+  - 缺口：AG 回合组装当前只注入 `snapshot.content`（序列化全文）/ selection 的 `block.text`（纯文本），
+    块快照样式字段未格式化进 prompt；REF 引用载荷不携带样式。
+  - 路径：主路径=AG 上下文组装层把目标块样式（block_type + marks 摘要）投影进 prompt（覆盖 active
+    doc 与引用文档）；辅路径=selection 引用附加目标块样式摘要。归 **AgentEdit 编辑能力课题**统一
+    设计，引用功能本阶段不加样式字段。
+  - 主责：AG（主）/ REF（辅，selection 样式摘要）。
+  - 状态：已登记，随 AgentEdit 能力课题预研。
+- **URL 内容抓取（REF-09，AG 工具层）**
+  - 问题/需求：`url` 引用仅注入链接；若 AgentEdit 需要网页内容（如参考某网页改文档），需 agent 具备
+    网络访问能力。
+  - 缺口：AG 工具集当前为只读 workspace 工具（list_docs / read_doc / search_text / list_blocks /
+    list_tables），**无网络抓取工具**；`url` 引用对 agent 仅有链接文本，网页内容进不来（与外部文件
+    同类边界）。
+  - 路径：AG 工具层补 `fetch_url`（下行抓取，不违反 X-FORBID-001 无上行）；涉及网络访问的安全/隐私
+    模型，需人类决策；`url` 引用作为"agent 抓取目标"提示，引用阶段不改。
+  - 主责：AG（工具层）/ 安全模型（人类决策）。
+  - 状态：已登记，待决策。
+
 ## §10 后续动作
 
 1. 落地后随 `npm run governance:generate` 注册：REF-INJECT 链路、BR-REF-DATA-001/002/003/004、
@@ -282,3 +328,5 @@ status: mapped
 | 2026-07-08 | v1.3 | 引用令牌修复设计：新增 TERM-REF-003 ReferencePayload 与 TERM-REF-004 ReferenceToken；目标模型扩到会话、记忆、知识、模板、外部 URL、长文本；新增 BR-REF-DATA-003/004 覆盖多来源归一、输入流令牌、草稿折叠与发送后一致性；映射 REQ-REF-005/006 |
 | 2026-07-08 | v1.4 | 登记 SelectionRef 拖拽入口未闭环债务：复制/粘贴路径已可形成 ReferenceToken，拖拽到 Composer 仍未稳定闭合；记录 ProseMirror 清理 DataTransfer 自定义 MIME 的疑似根因，本轮暂停继续优化 |
 | 2026-07-08 | v1.5 | 扩展拖拽引用债务登记为 REF-06：记录全部拖拽引用入口的尝试、现状、预计根因与后续重启条件；明确未完成真实 Tauri/WebKit 事件观测前不再继续优化拖拽引用 |
+| 2026-08-07 | v1.6 | REF-REFERENCE-REPAIR-01：§2 目标模型扩至外部文件（file 仅元数据）；BR-REF-VERIFY-001 补失效信号双形态澄清（回合内标注注入 / command Err）；§4 登记选区 UTF-16 偏移校验基准（BR-ED-DATA-004 对齐） |
+| 2026-08-07 | v1.7 | 登记审计延伸债务（§9）：REF-07 外部文件内容受控快照（会话生命周期缓存路径）、REF-08 样式上下文投影（AgentEdit 前置，块快照 marks 注入 prompt）、REF-09 URL 内容抓取（AG 工具层 fetch_url，待安全模型决策）；REF-06 状态同步为「已修复·待观测确认」 |

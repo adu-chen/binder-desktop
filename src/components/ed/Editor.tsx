@@ -68,6 +68,12 @@ import {
   writeSelectionRefData,
   registerActiveSaveHandler,
 } from "../../services/edLocate";
+import { makeSelectionReference } from "../../services/referencePayload";
+import { startReferenceDrag } from "../../services/referenceDrag";
+
+// REF-REFERENCE-REPAIR-01 F1.3：dragstart 时暂存的原选区引用，供 document 冒泡阶段（PM 内置
+// dragstart 执行 clearData() 之后）回写到 DataTransfer，规避自定义 MIME 被清除。
+let dragStartSelectionRef: ReturnType<typeof getSelectionRef> = null;
 import { applyStyleOps } from "../../services/edStyleOps";
 import { applyTableOperations } from "../../services/edTableOps";
 import {
@@ -1110,22 +1116,22 @@ export function Editor() {
           rebasePointerActivatedInputScrollGuard(view, event);
           return false;
         },
-        dragstart: (view, event) => {
+        dragstart: (view, _event) => {
           if (selectionContainsImage(view.state.doc, view.state.selection.from, view.state.selection.to)) {
             return false;
           }
           // 拖动锁定（ED-SELECTION-DRAG-01）：锁定当前非空选区为原选区，防原生拖选篡改 selection。
           lockDragSelection(view);
-          const ref = getSelectionRef();
-          if (ref && event.dataTransfer) {
-            const path = edStore.getSnapshot().openPath ?? "";
-            writeSelectionRefData(event.dataTransfer, { ...ref, path });
-          }
+          // MIME 写入统一由 document 冒泡阶段后置回写（REF-REFERENCE-REPAIR-01 F1.3）：PM 内置
+          // dragstart 会执行 clearData() 并只重写 text/html·text/plain，此处写入会被清除；此处仅
+          // 暂存原选区引用（handleDOMEvents 先于 PM 内置 handler，selection 尚未被篡改）。
+          dragStartSelectionRef = getSelectionRef();
           return false; // 不接管 dragstart 本身：编辑器内拖动仍由 PM 触发 drop，handleDrop 接管
         },
         dragend: (view) => {
           // 拖动结束释放锁（未 drop 的拖出场景同样在此解锁；lastNonEmpty 已保持锁定范围）。
           unlockDragSelection(view);
+          dragStartSelectionRef = null;
           return false;
         },
         copy: (view, event) => {
@@ -1290,6 +1296,24 @@ export function Editor() {
       if (editorInstanceRef.current === editor) editorInstanceRef.current = null;
       registerEditor(null);
     };
+  }, [editor]);
+
+  // REF-REFERENCE-REPAIR-01 F1.3：document 冒泡阶段 dragstart 后置回写引用 MIME。PM 内置 dragstart
+  // handler 注册在编辑器 DOM（冒泡阶段），document 冒泡监听在其之后执行；此时 PM 已完成
+  // clearData() + 重写 text/html·text/plain，回写覆盖自定义 MIME 与 text/plain marker，使拖出编辑器
+  // 到 AG 输入面仍能经 drag session store 形成 ReferenceToken。
+  useEffect(() => {
+    if (!editor) return;
+    const onDocDragStart = (event: DragEvent) => {
+      const ref = dragStartSelectionRef;
+      if (!ref) return;
+      const path = edStore.getSnapshot().openPath ?? "";
+      if (!path || !event.dataTransfer) return;
+      startReferenceDrag(event.dataTransfer, makeSelectionReference({ ...ref, path }));
+      dragStartSelectionRef = null;
+    };
+    document.addEventListener("dragstart", onDocDragStart);
+    return () => document.removeEventListener("dragstart", onDocDragStart);
   }, [editor]);
 
   // 光标激活周期只属于当前文档与当前分页几何。文档/格式/缩放切换必须显式清除；

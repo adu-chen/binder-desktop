@@ -125,6 +125,7 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | template | templateId?, name, content | TPL 模板条目快照 |
 | url | url, title? | 外部链接引用，不包含抓取内容 |
 | long_text | text, charCount | 外部长文本粘贴快照 |
+| file | name, path?, size? | 外部文件引用（2026-08-07 REF-REFERENCE-REPAIR-01 F5 登记）：仅元数据，不读内容，守 X-FORBID-004 |
 
 > 边界：ReferencePayload 是输入侧显式引用结构（Composer→AG）；它不等同于 RefInjection。workspace
 > 文档内容读取、锚校验与发送时组装归 REF/AG；若引用目标是已打开文档，校验必须基于 OpenDocSnapshot
@@ -424,4 +425,5 @@ status: mapped
 | 2026-07-18 | v1.8 | 登记 EditorOpenTab 与 `ed_open_tabs` 表：打开集合、顺序和当前文档由独立控制态恢复；`ed_session_snapshots` 只作为打开文档 LogicalState 内容镜像，孤立镜像不得打开文档 |
 | 2026-07-18 | v1.9 | ED-MARKDOWN-RICH-ROUNDTRIP-01：OpenDocSnapshot/edit session 增 content_format，edit_format 墄 markdown；`ed_session_snapshots` 墠 content_format 迁移列，使 Markdown DiskState 格式与 LogicalState HTML 编码不再混淆 |
 | 2026-07-28 | v1.10 | BDOCX-IMAGE-MEDIA-FOUNDATION-01：OpenDocSnapshot 增可空 baseline；BDocx 持久镜像以存储层内部 envelope 兼容现有表结构，列表 IPC 返回前必须解码，保证 LogicalState 不含缓存协议元数据。 |
+| 2026-08-07 | v1.12 | 随 REF-REFERENCE-REPAIR-01 F5 登记（X-SHARED-001 回写）：§3 ReferencePayload 基线增 file 类型（name/path?/size?，外部文件仅元数据不读内容）；无新增规则（受 BR-SYS-DATA-002 覆盖） |
 | 2026-07-30 | v1.11 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：OpenDocSnapshot 增同次 ProseMirror `block_snapshots`；登记 AgentEditableBlockSnapshot 与 StructuredBlockEditPayload，锁定层级结构不展平、动态写能力、基线/指纹/节点 Schema 批原子应用及冲突安全的精确反向恢复。 |
