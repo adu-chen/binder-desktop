@@ -1028,6 +1028,8 @@ export function Editor() {
       mode: "cursor",
     };
     const requestId = assistStore.openAutocomplete(anchor, target);
+    // 模型参数按 autocomplete 能力偏好解析（BR-AG-DATA-007：跟随全局或显式指定）。
+    const autocompleteModel = modelStore.resolveFor("autocomplete");
     void requestAssist({
       requestId,
       kind: "autocomplete",
@@ -1039,6 +1041,8 @@ export function Editor() {
       prefix,
       before: target.before,
       after: target.after,
+      provider: autocompleteModel.provider,
+      model: autocompleteModel.model,
     }).then((result) => {
       const suggestions = result.candidates.length ? result.candidates : result.candidate ? [result.candidate] : [];
       if (!assistStore.isCurrent(requestId, "autocomplete")) {

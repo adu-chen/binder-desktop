@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-07T09:48:39.270Z -->
+<!-- 最后生成时间：2026-08-07T10:08:46.502Z -->
 
 ### 模块编码表
 
@@ -284,7 +284,7 @@
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-009          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ag/AutocompleteOverlay.tsx | 16   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-007          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 796  |
 | BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-003      | EFFECT | BR-AG-STATE-003 term_ref: TERM-AG-004                                | src/components/ed/Editor.tsx              | 994  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1828 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/Editor.tsx              | 1832 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006          | RB     | BR-AG-STATE-003 term_ref: TERM-AG-003, TERM-AG-004                   | src/components/ed/assistPlacement.ts      | 78   |
@@ -782,7 +782,7 @@
 | codes                               | type | chain     | 文件                                   | 行号   |
 | ----------------------------------- | ---- | --------- | ------------------------------------ | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-007 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 796  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1828 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002 | RB   | AG-ASSIST | src/components/ed/Editor.tsx         | 1832 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006 | RB   | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |
@@ -1478,7 +1478,7 @@
 | codes                                   | type   | chain     | 文件                                   | 行号   |
 | --------------------------------------- | ------ | --------- | ------------------------------------ | ---- |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-007     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 796  |
-| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1828 |
+| BR-AG-STATE-003-RB-AG-AG-ASSIST-002     | RB     | AG-ASSIST | src/components/ed/Editor.tsx         | 1832 |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-004     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 36   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-005     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 60   |
 | BR-AG-STATE-003-RB-AG-AG-ASSIST-006     | RB     | AG-ASSIST | src/components/ed/assistPlacement.ts | 78   |

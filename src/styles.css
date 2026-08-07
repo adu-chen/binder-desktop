@@ -1136,6 +1136,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .cbar-pop-item:hover { background: var(--bg-card); }
 .cbar-pop-item.selected { font-weight: 600; }
 .cbar-pop-hint { font-size: 11px; white-space: nowrap; }
+/* 来源标记（BR-AG-DATA-006）：下拉内辨识预设/BYOK */
+.cbar-pop-src { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-card); border: 0.5px solid var(--rule); white-space: nowrap; }
 .cbar-pop-add { border-top: 0.5px dashed var(--rule); border-radius: 0 0 4px 4px; color: var(--rust); }
 /* 发送按钮三态（需求4）：空内容禁用 / 待发送 / AI 回复中。 */
 .composer-send {
@@ -1180,6 +1182,16 @@ button:disabled { opacity: 0.5; cursor: default; }
 .modelcfg-form { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .modelcfg-label-input { max-width: 120px; }
 .modelcfg-note { font-size: 11px; margin: 0; }
+/* 来源分层标记（BR-AG-DATA-006：preset/BYOK 分组与辨识） */
+.modelcfg-src { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--bg-card); border: 0.5px solid var(--rule); }
+.modelcfg-group-gap { margin-top: var(--sp-2); }
+/* 能力模型偏好区（BR-AG-DATA-007） */
+.modelcfg-cap-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.modelcfg-cap-label { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.modelcfg-cap-select {
+  min-width: 0; flex: 1; max-width: 260px; padding: 4px 6px; font-size: 12px; color: var(--ink);
+  border: 0.5px solid var(--rule); background: var(--bg-card); border-radius: var(--r-1);
+}
 
 /* 关闭前处理弹窗（BR-SYS-STATE-004，APP-CLOSE-DIFF-LIFECYCLE-01） */
 .close-dialog-overlay {
