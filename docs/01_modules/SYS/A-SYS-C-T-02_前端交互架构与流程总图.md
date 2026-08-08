@@ -39,7 +39,8 @@ PendingDiff（TERM-DE-001）在对话面板（Chat Panel）中的视图投影组
 （pending / validating / applying / accepted / rejected / expired / conflict / error）；
 当前编辑器草稿路径与编辑器绿色审阅层（GreenReview，TERM-ED-003）同步；已打开非激活文档自动应用路径
 成功后显示为已应用且禁用接受/拒绝，不要求 GreenReview 一一对应。DiffCard
-归属触发它的 AgentTurn 信息流，默认渲染在对应 assistant 消息后方；批量裁决条是独立全局操作控件。
+归属触发它的 AgentTurn 信息流，按回合内事件时序内嵌在对应 assistant 消息流中（消息片段
+TERM-AG-011 / BR-AG-UI-001，AG 技术设计 §3.2），不整体沉到正文底部；批量裁决条是独立全局操作控件。
 状态机来源：SM-DE-01；视觉规范：docs/binder_ui/binder-showcase.jsx §02。
 
 <!-- TERM
@@ -497,3 +498,4 @@ status: mapped
 | 2026-07-25 | v1.22 | 补齐启动恢复投影收敛：workspace 恢复与状态机监听单飞；路径 latest-wins 防止迟到文档结果重新激活编辑器或回填当前布局。 |
 | 2026-07-26 | v1.23 | BDocx 打开流程增加当前 loadSeq 的首轮分页 settled 门禁；转换结果到达后保持加载遮罩，避免揭示 setContent 与分页收敛的中间回填帧。 |
 | 2026-08-06 | v1.24 | 新增 §4.11 右键上下文菜单（统一 ContextMenu，CTX-MENU-01）：右键收敛为 SYS 纯展示组件（不持业务状态、X-FORBID-007），覆盖文件树文件/目录、编辑器选区/光标（剪切/复制/粘贴 + 局部修改/辅助续写）、DiffCard、表格/图片、标签栏；预览面板不提供；§8 补右键菜单验收条目；无新增 TERM/RULE 标注块 |
+| 2026-08-07 | v1.25 | AG-MSG-RENDER-01：TERM-DE-003 DiffCard 归属语义由"对应 assistant 消息后方"细化为"按回合内事件时序内嵌于 assistant 消息流"（消息片段 TERM-AG-011 / BR-AG-UI-001） |

@@ -52,6 +52,18 @@ pub struct PersistedChatMessage {
     pub streaming: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<bool>,
+    /// 回合内消息片段（TERM-AG-011 · BR-AG-UI-001）：additive，旧记录缺省 → None（前端降级沉底）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<TurnSegment>>,
+}
+
+/// 回合内消息片段（TERM-AG-011）：text=流式累积正文 / tool=引用 ToolCall 摘要 / diff=引用 DiffRef。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TurnSegment {
+    Text { text: String },
+    Tool { #[serde(rename = "toolCallId")] tool_call_id: String },
+    Diff { #[serde(rename = "diffId")] diff_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -460,6 +472,7 @@ mod tests {
                 parts: None,
                 streaming: None,
                 error: None,
+                segments: None,
             },
             assistant_message: Some(PersistedChatMessage {
                 id: "a1".into(),
@@ -468,6 +481,7 @@ mod tests {
                 parts: None,
                 streaming: Some(false),
                 error: None,
+                segments: None,
             }),
             tool_summaries: vec![ToolSummary {
                 id: "tc1".into(),
@@ -485,6 +499,29 @@ mod tests {
             failure: None,
             incomplete_reason: None,
         }
+    }
+
+    // covers: BR-AG-PERSIST-001, BR-AG-UI-001
+    #[test]
+    fn legacy_payload_without_segments_deserializes_to_none_and_new_segments_roundtrip() {
+        // 新 payload：assistantMessage 携带 segments（text/tool/diff 时序交错）。
+        let json = r#"{"version":1,"userMessage":{"id":"u1","role":"user","content":"hi"},"assistantMessage":{"id":"a1","role":"assistant","content":"先看文档","segments":[{"kind":"text","text":"先看文档"},{"kind":"tool","toolCallId":"tc1"},{"kind":"diff","diffId":"d1"}]},"toolSummaries":[{"id":"tc1","name":"read_doc","state":"done","anchorMessageId":"a1"}],"diffRefs":[{"diffId":"d1","relPath":"a.md","anchorMessageId":"a1"}]}"#;
+        let p: AgentTurnPayload = serde_json::from_str(json).unwrap();
+        let segments = p.assistant_message.unwrap().segments.unwrap();
+        assert_eq!(segments.len(), 3);
+        match &segments[1] {
+            TurnSegment::Tool { tool_call_id } => assert_eq!(tool_call_id, "tc1"),
+            other => panic!("expected tool segment, got {other:?}"),
+        }
+        match &segments[2] {
+            TurnSegment::Diff { diff_id } => assert_eq!(diff_id, "d1"),
+            other => panic!("expected diff segment, got {other:?}"),
+        }
+
+        // 旧记录（无 segments 字段）→ None，前端降级沉底、不丢数据（BR-AG-PERSIST-001）。
+        let legacy = r#"{"version":1,"userMessage":{"id":"u1","role":"user","content":"hi"},"assistantMessage":{"id":"a1","role":"assistant","content":"ok"},"toolSummaries":[],"diffRefs":[]}"#;
+        let p2: AgentTurnPayload = serde_json::from_str(legacy).unwrap();
+        assert!(p2.assistant_message.unwrap().segments.is_none());
     }
 
     // covers: BR-AG-PERSIST-001

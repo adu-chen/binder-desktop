@@ -66,7 +66,7 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 |---|---|---|---|---|---|
 | 治理/系统层 | 系统提示词层 | 角色定位 + 硬约束边界（修改经 diff 裁决、不越权落盘、workspace 限界） | AG | P0 永不截 | BR-AG-STATE-001 / X-FORBID-006 |
 | 工具/能力层 | 工具/能力定义层 | 工具清单与契约（AG-TOOL 注册项投影），按模式启停 | AG | P0 | BR-AG-STATE-002 |
-| 格式层 | 系统提示词层（子项） | 输出格式约束（纯文本/HTML/docx、块编号约定） | DOC/DE | P0 | BR-AG-DATA-002（骨架内） |
+| 格式层 | 系统提示词层（子项） | 输出格式约束（**GFM Markdown 子集**：段落/标题/列表/加粗/围栏代码块标注语言/表格；**声明当前无图表/流程图（Mermaid）渲染能力**；HTML/docx 仅面向 BDocx 能力投影） | DOC/DE | P0 | BR-AG-DATA-002（骨架内）、BR-AG-UI-001 |
 | 任务状态层 | 上下文注入层 | 当前 Agent 任务 + 阶段 + artifacts（仅 active） | AG | P1 | BR-AG-STATE-004 |
 | 当前文档/编辑器层 | 上下文注入层 | 当前文件 + 分级块列表 + 选区/光标 + revision/baseline + pending diffs | WS/ED/DE | **P0 当前轮主事实** | BR-AG-DATA-001 |
 | 引用层 | 上下文注入层 | 显式 @mention（精确锚点可编辑 / 阅读上下文仅理解） | REF | P1 最高保留 | BR-AG-DATA-001（@mention 优先） |
@@ -281,3 +281,4 @@ status: mapped
 | 2026-07-29 | v1.10 | BDOCX-IMAGE-AGENT-EDIT-01：BDocx 能力投影增加 list_images→image_ops、项目图片来源、动态锚/哈希和图片操作排除边界；提示词仍只消费 manifest，不新增手写枚举。 |
 | 2026-07-30 | v1.11 | 图片代理编辑闭合审计：明确 SYSTEM_PROMPT_CHAT 的 BDocx 动态投影同时包含 ImageOperation；组合操作、受控导入与非视觉识别继续由 manifest 单一来源注入。 |
 | 2026-07-30 | v1.12 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：当前富文档层注入 ProseMirror 层级块、动态写能力和 node_json；提示词只允许 capability 驱动的 block_ops，多块同批，禁止用 HTML replace_block/replace_document。 |
+| 2026-08-07 | v1.13 | AG-MSG-RENDER-01：格式层输出格式约束由「纯文本」改为「GFM Markdown 子集」，声明当前无图表/流程图（Mermaid）渲染能力；展示层承接 BR-AG-UI-001（消息流渲染与时序契约） |

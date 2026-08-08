@@ -1,48 +1,47 @@
 {
-  "scope_id": "REF-REFERENCE-REPAIR-01",
+  "scope_id": "AG-MSG-RENDER-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "引用功能全链缺口闭合（G1~G7：拖拽链路/纯引用发送/REF 孤岛/偏移基准/外部文件/失效信号/候选与doc_type）",
+  "title": "AI 消息 Markdown 渲染（react-markdown 生态）与回合内有序流式排列（消息片段 TERM-AG-011 / BR-AG-UI-001）",
   "status": "COMPLETE",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/REF-REFERENCE-REPAIR-01.md",
+  "issue_trace": ".governance/issues/AG-MSG-RENDER-01.md",
   "stop_condition": null,
-  "reason": "引用功能审计结论（2026-08-07），人类确认三项决策：全量缺口 / 逻辑抽回 REF 模块 / 外部文件纳入 v1。修复方案见 docs/02_plans/REF-REFERENCE-REPAIR-01_修复方案.md。",
+  "reason": "人类 2026-08-07 确认四项决策（方案A react-markdown 生态 / 放开提示词禁 markdown / 流程图本期不做并明确告知模型 / 进入实现）并追加需求：工具调用与 Diff 卡按回合内时序交错排列；人类随后指示「落地方案，执行实现」。",
   "objectives": [
-    "F1 拖拽引用链路闭合（解 REF-06）：drag session store + 编辑器 document 冒泡回写 + 四源接线（P0）",
-    "F2 纯引用发送：canSend 放开（P0）",
-    "F3 REF 后端孤岛收敛：reference/context.rs 迁移 + lib.rs 收敛 + ref.* command 注册（P1）",
-    "F4 选区锚偏移基准统一为 UTF-16（P1）",
-    "F5 外部文件拖入：ReferencePayload 增 file 类型（P2，纳入 v1）",
-    "F6 锚失效信号一致性：标注注入双形态 + 文档语义修订（P2）",
-    "F7 @ 候选过滤资源文件 + doc_type 按扩展名推断（P2）"
+    "R1 assistant 消息正文 GFM Markdown 子集渲染（react-markdown + remark-gfm + rehype-sanitize）",
+    "R2 仅 assistant 非 error 消息渲染；user/error 保持纯文本",
+    "R3 流式容错：半成品持续渲染 + done 后完整重渲染",
+    "R4 渲染前 sanitize；链接仅 http/https 且阻止 WebView 内导航",
+    "R5 SYSTEM_PROMPT_CHAT 输出风格放开为 Markdown，并明确告知模型无图表/流程图（Mermaid）能力",
+    "R6 mermaid 围栏块降级为普通代码块",
+    "R7 持久化存储原始文本，payload additive 扩展 assistantMessage.segments[]",
+    "R8 流式增量渲染 memo 化、不阻塞输入",
+    "R9 消息正文排版 CSS（标题/代码/表格/列表/引用）",
+    "R10 回合内时序：text/tool/diff 消息片段按事件到达顺序交错排列；历史恢复保持时序；legacy 降级沉底"
   ],
   "allowed_files": [
-    "src/services/referenceDrag.ts",
-    "src/services/referencePayload.ts",
-    "src/services/referencePayload.test.ts",
-    "src/components/ag/Composer.tsx",
-    "src/components/ag/Composer.test.tsx",
-    "src/components/ag/AgentPanel.tsx",
     "src/components/ag/MessageList.tsx",
-    "src/components/ed/Editor.tsx",
-    "src/components/ws/FileTreeNode.tsx",
-    "src/components/shell/TabStrip.tsx",
-    "src/components/ws/WorkspaceUI.test.tsx",
-    "src/components/shell/ShellComponents.test.tsx",
-    "src/services/edRuntime.test.ts",
+    "src/components/ag/MessageFlow.tsx",
+    "src/components/ag/MessageMarkdown.tsx",
+    "src/store/agStore.ts",
+    "src/services/agService.ts",
     "src/services/agRuntime.test.ts",
-    "src-tauri/src/reference/context.rs",
-    "src-tauri/src/reference/resolve.rs",
-    "src-tauri/src/reference/mod.rs",
+    "src/components/ag/AgentUI.test.tsx",
+    "src/styles.css",
+    "src-tauri/src/ag/prompts.rs",
+    "src-tauri/src/ag/history.rs",
     "src-tauri/src/lib.rs",
-    "src-tauri/src/types/mod.rs",
-    "docs/01_modules/REF/A-REF-M-D-01_引用功能需求描述.md",
-    "docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md",
-    "docs/01_modules/REF/A-REF-I-P-01_引用接口协议.md",
-    "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+    "src-tauri/src/ipc/mod.rs",
+    "package.json",
+    "package-lock.json",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+    "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
     "scripts/test_governance.test.mjs",
-    ".governance/issues/REF-REFERENCE-REPAIR-01.md",
+    ".governance/issues/AG-MSG-RENDER-01.md",
     ".governance/active_scope.json"
   ],
   "forbidden_files": [
@@ -52,42 +51,45 @@
     "CLAUDE.md",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "governance.config.json",
-    "scripts/**",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ".governance/test-governance.json",
+    "scripts/**"
   ],
   "constraints": [
-    "REF-06 拖拽修复必须先完成 F1.1 真实事件观测（观测记录回填 issue_trace）",
-    "F5 file 类型须回写 A-SYS-I-P-01（X-SHARED-001）后方可改代码",
-    "F3 迁移后 BR-AG-DATA-001 / BR-REF-* 的 @GOV 覆盖链必须保持完整",
-    "修改设计文档标注块（REQ/BR）后必须运行 governance:generate 并复核 ADUS",
-    "不新增 RULE/CHAIN/TERM 静态定义；仅按 F6 修订 BR-REF-VERIFY-001 语义描述与 F5 扩展 ReferencePayload 共享结构"
+    "设计文档标注块变更后必须运行 governance:generate 并复核 ADUS",
+    "BR-AG-PERSIST-001 payload 扩展必须 additive（旧记录无 segments → None → 前端降级沉底，不丢数据）",
+    "Rust AgentTurnPayload/PersistedChatMessage 仅 additive Option 字段，不得改既有字段语义",
+    "渲染为纯展示层：不改变回合/工具/持久化语义，不新增写盘或门禁路径（X-FORBID-006）",
+    "新依赖（react-markdown/remark-gfm/rehype-sanitize）纳入 package.json 并记录供应链评估",
+    "AG 为 critical 模块：test:related 必须联动 SYS/Rust（requires_rust_on_related）",
+    "MessageList 补 @GOV（BR-AG-UI-001），新组件随注册"
   ],
   "acceptance_criteria": [
-    "F1：真实观测后四源拖拽（编辑器选区/文件树/编辑器标签/会话标签）到 Composer 均生成 ReferenceToken；drag session 生命周期无泄漏",
-    "F2：纯引用可点击发送，startTurn 收到 references",
-    "F3：reference/context.rs 承担 REF 规则逻辑，lib.rs 收敛为调用方；ref.* 四 command 注册并经 dispatch 可达",
-    "F4：含 emoji 选区前后端偏移一致，校验不再误退化",
-    "F5：外部文件拖入生成 file 引用，发送后注入上下文含文件元数据标注",
-    "F6：失效引用输出统一「锚已失效」前缀标注",
-    "F7：@ 候选仅可读文档；doc_type 按扩展名推断",
-    "test:related / cargo test / governance:generate+audit 全绿"
+    "assistant 消息中 #/*/表格竖线/围栏代码显示为排版后的标题/强调/表格/代码块",
+    "回合内 text→tool→text→tool→diff 按事件时序交错渲染，卡片不再整体沉底",
+    "历史回合恢复保持时序；legacy 无 segments 记录降级沉底且不丢数据",
+    "提示词明确声明无图表能力；mermaid 围栏块渲染为普通代码块",
+    "sanitize 用例通过（script/iframe/on* 不落地）；链接点击不触发 WebView 导航",
+    "Rust 反序列化兼容旧 payload（无 segments → None）",
+    "test:related / governance:audit 全绿"
   ],
   "validation_commands": [
-    "npx vitest run src/services/referenceDrag.test.ts src/services/referencePayload.test.ts src/components/ag/Composer.test.tsx",
     "npm run test:related -- --files [changed_files]",
     "cargo test --manifest-path src-tauri/Cargo.toml",
     "npm run governance:generate",
     "npm run governance:audit"
   ],
   "out_of_scope": [
-    "KB/AST 资产面板拖拽来源接线（REF-01 延后，仅协议就绪）",
-    "锚失效后的重选/自动重定位交互（REF-03）",
-    "候选解析延迟等量化 NFR（G5 标定）",
-    "跨会话字符锚持久化（ED 显式延后债务）"
+    "Mermaid/流程图渲染（二期，本期仅降级为代码块 + 提示词声明无能力）",
+    "链接外部打开（opener 插件二期；本期阻止 WebView 导航）",
+    "消息渲染与量化 NFR（首 token/渲染延迟标定归 G5）",
+    "非 AG 消息面（欢迎页/预览面板）排版"
   ],
   "scope_extensions": [
-    "2026-08-07 自验证（SC-01）：TabStrip/FileTreeNode 拖拽源改造为 startReferenceDrag 后，其组件测试（ShellComponents.test.tsx / WorkspaceUI.test.tsx）断言旧 writeDocRefData 行为（DOC_REF_MIME/text/plain=relPath），纳入 allowed_files 同步为新 drag session 通道断言",
-    "2026-08-07 自验证（SC-01）：新增 AgentUI 引用测试 3 用例使 AG frontend test_count 79→82，scripts/test_governance.test.mjs 快照断言过期；人类跳过决策按推荐执行，纳入 allowed_files 同步断言为 82（test:related 全绿所需）"
+    "2026-08-07 自验证（SC-01）：src-tauri/src/lib.rs 的 ag_start_turn draft payload 构造点需补 `segments: None`（PersistedChatMessage 新增 additive 字段导致的 Rust struct 编译接线），纳入 allowed_files",
+    "2026-08-07 自验证（SC-01）：AgentUI.test.tsx 新增 MessageMarkdown/MessageFlow 测试 8 例、agRuntime.test.ts 新增消息片段时序测试 2 例，AG frontend test_count 82→92，scripts/test_governance.test.mjs 快照断言同步为 92（test:related 全绿所需）"
   ],
-  "unresolved_items": []
+  "unresolved_items": [
+    "新依赖供应链与打包体积评估记录（react-markdown 生态，离线打包无 CDN）",
+    "MessageList/AgentPanel 历史缺 @GOV 补齐（随 BR-AG-UI-001 注册，BLOCK_UNANNOTATED）"
+  ]
 }

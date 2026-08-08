@@ -67,6 +67,10 @@ pub enum AgTurnEvent {
 }
 ```
 
+> **事件顺序即时序契约（2026-08-07，承接 BR-AG-UI-001 / TERM-AG-011）**：同一回合内
+> `Chunk → ToolRequest → ToolResult → (DiffProposed) → 下一轮 Chunk → …` 按发射顺序经 Channel
+> FIFO 到达前端；前端据此重建"正文↔工具卡↔Diff 卡"的交错时序（消息片段），接口分支本身不变。
+
 **ag_start_turn 命令签名**（独立 `tauri::command`，不走 dispatch 信封）：
 
 ```rust
@@ -459,3 +463,4 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 | 2026-07-29 | v1.28 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：list_images 增加 assetId、稳定 imageId、动态能力/边界；image_ops 增加缩放、上下移动和独立段落对齐。 |
 | 2026-07-29 | v1.29 | BDOCX-IMAGE-COMPOSITE-IMPORT-01：同图 resize/layout/move 组合提案；新增 import_image_asset 与 edit_blocked；list_images 增相邻文本并明确非视觉识别边界。 |
 | 2026-07-30 | v1.30 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档 `AgentEditableSnapshot` 改由 ProseMirror 层级块快照直投影；新增 `block_ops` 基线/锚/指纹/节点 Schema 批校验和结构化 Diff；BDocx replace_block/replace_document 明确拒绝。 |
+| 2026-08-07 | v1.31 | AG-MSG-RENDER-01：§2.1 注明事件到达顺序即时序契约（Chunk→ToolRequest→ToolResult→DiffProposed→下一轮 Chunk，Channel FIFO）；`ag.save_turn` payload 的 `assistantMessage` 可含可选 `segments[]`（additive，恢复时序交错，旧记录降级） |

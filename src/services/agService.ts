@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView } from "../store/agStore";
+import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView, type TurnSegment } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
 import { listActiveTables, parseTableEditPayload, summarizeTableOperation, type TableEditPayload } from "./edTableOps";
@@ -350,6 +350,8 @@ interface PersistedChatMessage {
   parts?: MessageContentPart[];
   streaming?: boolean;
   error?: boolean;
+  /** 回合内消息片段（TERM-AG-011 · BR-AG-UI-001）：additive，恢复时重建时序交错。 */
+  segments?: TurnSegment[];
 }
 
 interface AgentTurnPayloadV1 {
@@ -393,6 +395,7 @@ function serializeMessage(message: ChatMessage | PersistedChatMessage): Persiste
     parts: message.parts,
     streaming: false,
     error: message.error,
+    segments: message.segments,
   };
 }
 
@@ -407,6 +410,7 @@ function messageFromPersisted(message: PersistedChatMessage, turn: AgentTurnDto)
     turnId: turn.turn_id,
     relPath: turn.rel_path ?? null,
     turnStatus: turn.status,
+    segments: message.segments,
   };
 }
 
@@ -459,8 +463,9 @@ function projectTurns(turns: AgentTurnDto[]): { messages: ChatMessage[]; toolCal
   for (const turn of turns) {
     messages.push(messageFromPersisted(turn.payload.userMessage, turn));
     let assistantAnchor: string | undefined;
+    let assistant: ChatMessage | null = null;
     if (turn.payload.assistantMessage) {
-      const assistant = messageFromPersisted(turn.payload.assistantMessage, turn);
+      assistant = messageFromPersisted(turn.payload.assistantMessage, turn);
       assistantAnchor = assistant.id;
       messages.push(assistant);
     } else {
@@ -470,6 +475,9 @@ function projectTurns(turns: AgentTurnDto[]): { messages: ChatMessage[]; toolCal
         messages.push(fallback);
       }
     }
+    // 工具摘要 id → 恢复后 ToolCallView id 映射（AG-MSG-RENDER-01 · TERM-AG-011）：
+    // payload 的 tool 段引用 ToolSummary.id，恢复后卡 id 带 turn 前缀，需重写段引用以匹配。
+    const toolIdMap = new Map<string, string>();
     for (const t of turn.payload.toolSummaries ?? []) {
       const anchorMessageId = t.anchorMessageId ?? assistantAnchor;
       const tool: ToolCallView = {
@@ -481,8 +489,22 @@ function projectTurns(turns: AgentTurnDto[]): { messages: ChatMessage[]; toolCal
         turnId: turn.turn_id,
         anchorMessageId,
       };
+      toolIdMap.set(t.id, tool.id);
       if (!anchorMessageId || !appendToolToMessage(messages, anchorMessageId, tool)) {
         toolCalls.push(tool);
+      }
+    }
+    if (assistant?.segments?.length) {
+      const index = messages.findIndex((m) => m.id === assistant!.id);
+      if (index >= 0) {
+        messages[index] = {
+          ...messages[index],
+          segments: assistant.segments.map((segment) =>
+            segment.kind === "tool"
+              ? { ...segment, toolCallId: toolIdMap.get(segment.toolCallId) ?? segment.toolCallId }
+              : segment,
+          ),
+        };
       }
     }
   }
@@ -977,6 +999,9 @@ export async function startTurn(
   const onEvent = new Channel<AgTurnEvent>();
   // propose_edit 的权威投影来自后端 tool_result.projection；diff_proposed 只负责通知展示。
   const pendingDiffProjections = new Map<string, AgentDiffProjection>();
+  // 同轮多个同名工具按事件到达顺序配对（AG-MSG-RENDER-01 · BR-AG-UI-001）：tool_request 入队 id，
+  // tool_result 出队按 id 精确置终态，避免 name+executing 首配错乱。
+  const pendingToolIds: string[] = [];
 
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -1161,16 +1186,21 @@ export async function startTurn(
             imageOps: imageOpsPayload?.operations.map(summarizeImageOperation),
           });
           // 审计修复（2026-07-26 · D1）：open_session diff 不再 auto-accept，等用户裁决
+          // 消息片段（TERM-AG-011）：DiffCard 内嵌于回合内时序位置（紧随其产出工具/正文）。
+          agStore.addDiffSegment(sessionId, assistantId, ev.diff_id);
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
         case "tool_request": {
           // 工具卡 executing（PI-AG-08D）。参数摘要作 detail。
           const p = typeof ev.params === "object" && ev.params ? JSON.stringify(ev.params) : "";
-          agStore.addToolCall(sessionId, ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined, {
+          const toolCallId = agStore.addToolCall(sessionId, ev.tool_name, p && p !== "{}" ? p.slice(0, 80) : undefined, {
             turnId,
             anchorMessageId: assistantId,
           });
+          pendingToolIds.push(toolCallId);
+          // 消息片段（TERM-AG-011）：工具调用内嵌于正文时序位置。
+          agStore.addToolSegment(sessionId, assistantId, toolCallId);
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
@@ -1184,7 +1214,12 @@ export async function startTurn(
           if ((ev.tool_name === "move_doc" || ev.tool_name === "create_folder") && ev.success) {
             void loadDocs();
           }
-          agStore.resolveToolCall(sessionId, ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined, turnId);
+          const toolCallId = pendingToolIds.shift();
+          if (toolCallId) {
+            agStore.resolveToolCallById(sessionId, toolCallId, ev.success, r ? r.slice(0, 80) : undefined);
+          } else {
+            agStore.resolveToolCall(sessionId, ev.tool_name, ev.success, r ? r.slice(0, 80) : undefined, turnId);
+          }
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }

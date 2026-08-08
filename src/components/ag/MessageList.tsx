@@ -1,14 +1,24 @@
 import { Fragment, useEffect, useRef } from "react";
-import { activeSession, useAgStore, type ToolCallView } from "../../store/agStore";
+import { activeSession, useAgStore } from "../../store/agStore";
 import { useDeStore } from "../../store/deStore";
 import type { MessageContentPart, ReferencePayload } from "../../services/referencePayload";
 import { DiffList } from "../de/DiffList";
 import { ToolCallCard } from "./ToolCallCard";
+import { MessageFlow } from "./MessageFlow";
 import { startTurn } from "../../services/agService";
 
 /**
- * 消息流（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01）。
+ * @GOV
+ * codes:    BR-AG-UI-001-RB-AG-AG-TURN-014
+ * type:     RB
+ * chain:    AG-TURN
+ * rules:    BR-AG-UI-001, BR-AG-STATE-001, BR-AG-PERSIST-001
+ * term_ref: TERM-AG-011
+ * boundary: in=ActiveSessionMessagesToolCallsAndAnchoredDiffs | out=orderedMessageStreamRender | effect=memory | caller_context=agentPanelMessageListRender | does_not=render_user_message_as_markdown_or_move_diffs_off_turn
+ *
+ * 消息流（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01 · AG-MSG-RENDER-01）。
  * 渲染活动会话的 AgentTurn 消息（含流式回显光标）+ ToolCall 状态卡。
+ * assistant 消息经 MessageFlow 按回合内时序（text/tool/diff 消息片段）交错渲染；
  * 人类消息靠右、AI 消息靠左（需求2，CSS .msg-user 对齐控制）。
  */
 export function MessageList() {
@@ -17,6 +27,9 @@ export function MessageList() {
   const session = activeSession(state);
   const { messages, toolCalls } = session;
   const endRef = useRef<HTMLDivElement>(null);
+  /** 贴底跟随标记（修复流式会话流跳动）：用户向上滚动离开底部阈值后暂停自动拉底，回到底部后恢复。
+   *  流式 chunk 高频到达时若每次都 smooth 滚动，动画互相打断会造成上下抖动，故贴底时用非动画直接置底。 */
+  const stickToBottomRef = useRef(true);
   const sessionDiffs = diffs
     .filter((d) => d.sessionId === session.id)
     .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
@@ -28,10 +41,25 @@ export function MessageList() {
     ...(messages.find((m) => m.id === messageId)?.toolCalls ?? []),
   ];
 
+  // 滚动容器（.chatpanel-scroll）贴底状态跟踪：用户向上滚动查看历史/卡片 → 暂停自动跟随；
+  // 回到底部阈值内 → 恢复跟随。避免流式/卡片更新把用户强制拉回底部造成会话流跳动。
   useEffect(() => {
-    if (typeof endRef.current?.scrollIntoView === "function") {
-      endRef.current.scrollIntoView({ behavior: "smooth" });
-    }
+    const el = endRef.current?.closest(".chatpanel-scroll") as HTMLElement | null;
+    if (!el) return;
+    const update = () => {
+      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    };
+    el.addEventListener("scroll", update, { passive: true });
+    update();
+    return () => el.removeEventListener("scroll", update);
+  }, []);
+
+  // 内容变化（流式 chunk / 工具卡 / diff 卡）时：仅贴底状态跟随，直接置底（无动画，避免 smooth 竞争抖动）。
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const el = endRef.current?.closest(".chatpanel-scroll") as HTMLElement | null;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages, diffs]);
 
   return (
@@ -43,13 +71,15 @@ export function MessageList() {
         <Fragment key={m.id}>
           <div className={`msg msg-${m.role}${m.error ? " msg-error" : ""}`}>
             <span className="label msg-role">{m.role === "user" ? "你" : "AI"}</span>
-            <div className="msg-body">
-              {m.parts?.length ? <MessageParts parts={m.parts} /> : m.content}
-              {m.streaming && <span className="msg-caret" aria-hidden />}
-            </div>
+            {m.role === "assistant" ? (
+              <MessageFlow message={m} toolCalls={toolCallsForMessage(m.id)} diffs={diffsForMessage(m.id)} />
+            ) : (
+              <div className="msg-body">
+                {m.parts?.length ? <MessageParts parts={m.parts} /> : m.content}
+                {m.streaming && <span className="msg-caret" aria-hidden />}
+              </div>
+            )}
           </div>
-          <ToolCallList tools={toolCallsForMessage(m.id)} />
-          <DiffList diffs={diffsForMessage(m.id)} />
           {m.role === "user" && m.turnStatus === "draft" && (
             <div className="msg msg-assistant msg-error">
               <span className="label msg-role">AI</span>
@@ -76,18 +106,6 @@ export function MessageList() {
       )}
 
       <div ref={endRef} />
-    </div>
-  );
-}
-
-function ToolCallList({ tools }: { tools: ToolCallView[] }) {
-  if (!tools.length) return null;
-  return (
-    <div className="toolcalls">
-      <span className="label">工具调用</span>
-      {tools.map((t) => (
-        <ToolCallCard key={t.id} tool={t} />
-      ))}
     </div>
   );
 }

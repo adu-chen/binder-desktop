@@ -13,6 +13,23 @@ import { AgentPanel } from "./AgentPanel";
 import { AutocompleteOverlay } from "./AutocompleteOverlay";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
+import { MessageFlow } from "./MessageFlow";
+import { MessageMarkdown } from "./MessageMarkdown";
+import type { ChatMessage, ToolCallView } from "../../store/agStore";
+
+/** DiffView 测试构造（AG-MSG-RENDER-01：MessageFlow 时序测试复用）。 */
+function diff(patch: Partial<DiffView>): DiffView {
+  return {
+    diffId: patch.diffId ?? "diff",
+    blockId: patch.blockId ?? "b1",
+    relPath: patch.relPath ?? "notes/a.md",
+    title: patch.title ?? "修改建议",
+    before: patch.before ?? "旧文本",
+    after: patch.after ?? "新文本",
+    state: patch.state ?? "pending",
+    ...patch,
+  };
+}
 
 const agServiceMock = vi.hoisted(() => ({
   startTurn: vi.fn(),
@@ -521,19 +538,6 @@ describe("AutocompleteOverlay migrated suite", () => {
 
 // Migrated intact from MessageList.test.tsx.
 describe("MessageList migrated suite", () => {
-  function diff(patch: Partial<DiffView>): DiffView {
-    return {
-      diffId: patch.diffId ?? "diff",
-      blockId: patch.blockId ?? "b1",
-      relPath: patch.relPath ?? "notes/a.md",
-      title: patch.title ?? "修改建议",
-      before: patch.before ?? "旧文本",
-      after: patch.after ?? "新文本",
-      state: patch.state ?? "pending",
-      ...patch,
-    };
-  }
-
   function visibleFlow(container: HTMLElement): string[] {
     return Array.from(container.querySelectorAll(".msg-body, .diffcard-title")).map((node) =>
       node.textContent?.trim() ?? "",
@@ -646,5 +650,98 @@ describe("MessageList migrated suite", () => {
         }),
       );
     });
+  });
+});
+
+// AG-MSG-RENDER-01 · BR-AG-UI-001：assistant 消息 GFM Markdown 渲染与安全。
+describe("MessageMarkdown · GFM 渲染与安全", () => {
+  it("渲染标题、加粗、代码块、表格", () => {
+    const content = "# 标题\n\n**加粗**\n\n```js\nconst a = 1;\n```\n\n| 列 | 值 |\n|---|---|\n| x | 1 |";
+    const { container } = render(<MessageMarkdown content={content} />);
+    expect(container.querySelector("h1")?.textContent).toBe("标题");
+    expect(container.querySelector("strong")?.textContent).toBe("加粗");
+    expect(container.querySelector("pre code")).toBeTruthy();
+    expect(container.querySelector("table")).toBeTruthy();
+  });
+
+  it("sanitize：script 与事件属性不落地", () => {
+    const content = '<script>alert(1)</script>\n\n<img src="x" onerror="alert(2)">\n\n普通文本';
+    const { container } = render(<MessageMarkdown content={content} />);
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("普通文本");
+  });
+
+  it("链接阻止 WebView 内导航", () => {
+    const { container } = render(<MessageMarkdown content="[链接](https://example.com)" />);
+    const anchor = container.querySelector("a");
+    expect(anchor?.getAttribute("href")).toBe("https://example.com");
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    anchor?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("mermaid 围栏块降级为普通代码块", () => {
+    const { container } = render(<MessageMarkdown content={"```mermaid\nflowchart LR\nA-->B\n```"} />);
+    expect(container.querySelector("pre code")).toBeTruthy();
+    expect(container.textContent).toContain("flowchart");
+  });
+});
+
+// AG-MSG-RENDER-01 · TERM-AG-011：回合内消息片段时序交错渲染与降级。
+describe("MessageFlow · 回合内时序交错", () => {
+  function assistantMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
+    return { id: "a1", role: "assistant", content: "", ...overrides };
+  }
+
+  it("按 segments 顺序交错渲染 text/tool/text/diff", () => {
+    const msg = assistantMsg({
+      content: "先看文档 然后修改",
+      segments: [
+        { kind: "text", text: "先看文档" },
+        { kind: "tool", toolCallId: "tc1" },
+        { kind: "text", text: "然后修改" },
+        { kind: "diff", diffId: "d1" },
+      ],
+    });
+    const toolCalls: ToolCallView[] = [
+      { id: "tc1", name: "read_doc", state: "done", detail: "a.md", readonly: false, anchorMessageId: "a1" },
+    ];
+    deStore.reset();
+    deStore.addDiff(diff({ diffId: "d1", sessionId: "s1", anchorMessageId: "a1", title: "修改" }));
+    const { container } = render(<MessageFlow message={msg} toolCalls={toolCalls} diffs={deStore.getSnapshot().diffs} />);
+    const flow = Array.from(container.querySelectorAll(".msg-body, .toolcard-name, .diffcard-title")).map((node) =>
+      node.textContent?.trim() ?? "",
+    );
+    expect(flow).toEqual(["先看文档", "read_doc", "然后修改", "修改"]);
+  });
+
+  it("无 segments 时降级：整段正文 + 沉底卡片", () => {
+    const msg = assistantMsg({ content: "整段正文" });
+    const toolCalls: ToolCallView[] = [
+      { id: "tc1", name: "read_doc", state: "done", detail: "a.md", readonly: false, anchorMessageId: "a1" },
+    ];
+    const { container } = render(<MessageFlow message={msg} toolCalls={toolCalls} diffs={[]} />);
+    expect(container.querySelector(".msg-body")?.textContent).toContain("整段正文");
+    expect(container.querySelector(".toolcard")).toBeTruthy();
+  });
+
+  it("错误消息保持纯文本不渲染 Markdown", () => {
+    const msg = assistantMsg({ content: "# 标题", error: true });
+    const { container } = render(<MessageFlow message={msg} toolCalls={[]} diffs={[]} />);
+    expect(container.querySelector("h1")).toBeNull();
+    expect(container.querySelector(".msg-body")?.textContent).toBe("# 标题");
+  });
+
+  it("未被子段引用的卡沉底兜底，避免丢失", () => {
+    const msg = assistantMsg({
+      content: "正文",
+      segments: [{ kind: "text", text: "正文" }],
+    });
+    const toolCalls: ToolCallView[] = [
+      { id: "tc1", name: "read_doc", state: "done", readonly: false, anchorMessageId: "a1" },
+    ];
+    const { container } = render(<MessageFlow message={msg} toolCalls={toolCalls} diffs={[]} />);
+    expect(container.querySelector(".toolcard")).toBeTruthy();
   });
 });

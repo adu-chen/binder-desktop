@@ -1342,3 +1342,78 @@ describe("Editor autocomplete 调用点接线（MODEL-CONFIG-01 丢失回归）"
     expect(editorSource).toContain("model: autocompleteModel.model");
   });
 });
+
+// covers: BR-AG-UI-001
+// AG-MSG-RENDER-01 · TERM-AG-011：事件流按时序构造消息片段（chunk→tool→chunk→tool→diff 交错），
+// 同名工具按事件到达顺序（FIFO）精确配对，不再 name+executing 首配错乱。
+describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
+  it("chunk/tool_request/tool_result/diff_proposed 交错构造 segments", async () => {
+    edStore.loadDoc("notes/current.md", "第一段\n第二段", 101);
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "先读取文档" });
+      onEvent.onmessage?.({
+        type: "tool_request",
+        turn_id: "t",
+        tool_name: "read_doc",
+        params: { path: "notes/a.md" },
+      });
+      onEvent.onmessage?.({ type: "tool_result", turn_id: "t", tool_name: "read_doc", result: "内容", success: true });
+      onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "再读取另一篇" });
+      onEvent.onmessage?.({
+        type: "tool_request",
+        turn_id: "t",
+        tool_name: "read_doc",
+        params: { path: "notes/b.md" },
+      });
+      onEvent.onmessage?.({ type: "tool_result", turn_id: "t", tool_name: "read_doc", result: "内容2", success: false });
+      onEvent.onmessage?.({
+        type: "tool_request",
+        turn_id: "t",
+        tool_name: "propose_edit",
+        params: { path: "notes/current.md", operation: "replace_block", block_index: 1, new_text: "改写" },
+      });
+      onEvent.onmessage?.({
+        type: "tool_result",
+        turn_id: "t",
+        tool_name: "propose_edit",
+        result: projectionResult({ diff_id: "diff-seq" }),
+        success: true,
+      });
+      onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-seq", rel_path: "notes/current.md" });
+      completeTurn(arg);
+    });
+
+    await startTurn("读取两个文档后改写");
+
+    const session = activeSession(agStore.getSnapshot());
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("先读取文档再读取另一篇");
+    expect(assistant?.segments).toEqual([
+      { kind: "text", text: "先读取文档" },
+      { kind: "tool", toolCallId: expect.stringMatching(/^tc-/) },
+      { kind: "text", text: "再读取另一篇" },
+      { kind: "tool", toolCallId: expect.stringMatching(/^tc-/) },
+      { kind: "tool", toolCallId: expect.stringMatching(/^tc-/) },
+      { kind: "diff", diffId: "diff-seq" },
+    ]);
+    // 同名 read_doc 两次按 FIFO 精确配对：第一次成功、第二次失败（BR-AG-UI-001 修复 name 首配错乱）。
+    const readTools = session.toolCalls.filter((t) => t.name === "read_doc");
+    expect(readTools.map((t) => t.state)).toEqual(["done", "failed"]);
+  });
+
+  it("无工具/无 diff 的纯文本回合产生单一 text 段", async () => {
+    edStore.loadDoc("notes/current.md", "第一段", 101);
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "好的" });
+      completeTurn(arg);
+    });
+
+    await startTurn("只回复");
+
+    const session = activeSession(agStore.getSnapshot());
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(assistant?.segments).toEqual([{ kind: "text", text: "好的" }]);
+  });
+});

@@ -125,6 +125,18 @@ forbidden: 内置模型, 托管模型, 官方模型
 密钥）分层呈现；桌面端仅消费清单（GET /models），不承载配置权威源；1.0 EP 主路径 DeepSeek 托管
 模型，自部署预设模型演进边界见 A-GW-M-D-01 §3.5（GW-06）。
 
+<!-- TERM
+term_id: TERM-AG-011
+chains: AG-TURN
+zh: 消息片段
+en: MessageSegment
+forbidden: 消息块, 消息段, 文本片段, 卡片锚点, segment
+-->
+assistant 消息内部按事件到达顺序组织的最小呈现单元：`text`（流式累积正文）、`tool`（引用
+ToolCall 卡片）、`diff`（引用 DiffCard）。回合内 text/tool/diff 片段按时间序交错排列，构成
+"对话流与工具调用、修改建议的时序呈现"（BR-AG-UI-001）；持久化时随 assistantMessage 序列化，
+旧记录无片段信息时前端降级为消息后沉底布局。
+
 ## §1 文档定位
 
 ```
@@ -171,7 +183,9 @@ rule_id: BR-AG-STATE-001
 中断为终态且不产生半落盘副作用（对齐 BR-SYS-STATE-002）；含修改建议的产出唯一出口是交 DE 生成
 pending_diff（AG 无直接写盘路径，X-FORBID-006）；交 DE 生成待裁决修改时必须保留会话、回合和
 本轮 assistant 消息锚点，使 DiffCard 回到对应 AgentTurn 信息流内呈现，而不是作为会话底部全局列表
-沉底汇总；回合失败回统一错误形状且可重试。状态转移归 SM-AG-01（A-AG-M-S-01）。
+沉底汇总；**回合内呈现时序（2026-08-07 细化，承接 BR-AG-UI-001）**：DiffCard 与 ToolCallCard 按
+事件到达顺序内嵌于 assistant 消息流（消息片段 TERM-AG-011），不整体沉到正文底部——模型正文、
+工具调用、修改建议按时间序交错呈现；回合失败回统一错误形状且可重试。状态转移归 SM-AG-01（A-AG-M-S-01）。
 
 <!-- RULE
 rule_id: BR-AG-DATA-003
@@ -238,13 +252,33 @@ rule_id: BR-AG-PERSIST-001
 	`payload_json` v1 至少包含：`userMessage`、可空 `assistantMessage`、`toolSummaries[]`、
 	`diffRefs[]`、可空 `failure`、可空 `incompleteReason`。`toolSummaries[]` 只保存名称、入参摘要、
 	结果摘要、状态和 `anchorMessageId`；`diffRefs[]` 只保存 `diffId`、`relPath`、`anchorMessageId`，
-	不保存 before/after/styleOps 等 diff 快照。前端恢复时先拉 `agent_sessions` 元数据，再拉当前激活会话的
+	不保存 before/after/styleOps 等 diff 快照。
+	**回合内时序（2026-08-07 增补，承接 BR-AG-UI-001 / TERM-AG-011）**：`assistantMessage` 可含
+	可选 `segments[]`（`{kind:"text",text} | {kind:"tool",toolCallId} | {kind:"diff",diffId}` 按事件
+	到达顺序），用于恢复时重建"正文↔工具卡↔Diff 卡"的时序交错；无 `segments` 的旧记录降级为
+	按 `anchorMessageId` 沉底布局，不得丢失或篡改数据。前端恢复时先拉 `agent_sessions` 元数据，再拉当前激活会话的
 	turns；其他会话点击后按 `session_id` 懒加载。恢复 `diffRefs[]` 时必须按 `diffId` 查询 DE 当前状态：
 	`pending` 可继续裁决，`accepted/rejected/expired` 只读展示，DE 找不到的 diff 只读标记为不可用，不得默认
 	复活为 `pending`。
 	`ag.delete_session(session_id)` 以当前 workspace + 指定会话为边界删除该会话历史记录；成功后前端从
 	历史/标签列表移除该会话，若删除的是活动会话则切换到剩余会话，没有剩余会话时新建空会话并持久化。
 	该命令不触碰 DE/WS 的修改建议状态。
+
+## §3.2 消息流渲染与时序（AG-TURN 展示子域）
+
+<!-- RULE
+rule_id: BR-AG-UI-001
+主链路: AG-TURN
+域: UI
+-->
+代理编辑面板的消息流呈现必须满足：assistant 消息正文按 GFM Markdown 子集渲染（段落、标题、
+加粗/斜体/删除线、行内代码、围栏代码块、有序/无序/任务列表、引用、分隔线、表格、链接），
+用户消息与错误消息保持纯文本；渲染前必须经 sanitize 白名单过滤（禁 script/iframe/事件属性，
+react-markdown 默认不渲染原始 HTML 作第一道安全底）；**回合内时序**：文本段、ToolCallCard 段、
+DiffCard 段按事件到达顺序交错排列（TERM-AG-011 消息片段），不整体沉到消息正文底部；
+Mermaid/流程图语法**当前不渲染**——mermaid 围栏块降级为普通代码块展示，提示词同步声明无图表能力；
+链接仅允许 http/https 且默认阻止 WebView 内导航（防应用被导航出界）。渲染为纯展示层，不改变
+回合/工具/持久化语义；历史回合无片段信息时降级为消息后沉底布局且不丢失数据（承接 BR-AG-PERSIST-001）。
 
 ## §4 工具调用循环（AG-TOOL）
 
@@ -566,6 +600,12 @@ target_id: BR-AG-DATA-003
 status: mapped
 -->
 <!-- REQ_MAP
+req_id: REQ-AG-001
+target_type: RULE
+target_id: BR-AG-UI-001
+status: mapped
+-->
+<!-- REQ_MAP
 req_id: REQ-AG-006
 target_type: CHAIN
 target_id: AG-MODEL-CATALOG
@@ -663,3 +703,4 @@ status: mapped
 | 2026-07-30 | v2.23 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：富文档普通内容写入改为活动 ProseMirror 层级快照 → block_ops → 后端批校验/补齐 beforeNode → ED 单事务；container/atom 只读，HTML 字符串替换与整篇替换在富文档生成前拒绝。 |
 | 2026-08-06 | v2.24 | MODEL-CONFIG-01：新增 §6.1 模型注册表与能力偏好（AG-MODEL-CATALOG 链路、BR-AG-DATA-006 来源分层、BR-AG-DATA-007 能力偏好解析）；TERM-AG-010 预设模型；REQ-MAP REQ-AG-006 映射；客户端仅保存标识符不保存密钥（X-FORBID-001）不变 |
 | 2026-08-07 | v2.25 | MODEL-CONFIG-TERM-01：TERM-AG-007 中文称呼「构建模式」更名「代理构建」（en BuildMode / term_id 不变），旧称退役为禁用别名；正文 BuildMode 指代同步 |
+| 2026-08-07 | v2.26 | AG-MSG-RENDER-01：新增 §3.2 消息流渲染与时序（BR-AG-UI-001，AG-TURN 展示子域）与 TERM-AG-011 消息片段（MessageSegment）；BR-AG-STATE-001 增补 DiffCard/ToolCallCard 按事件时序内嵌语义；BR-AG-PERSIST-001 增补 `assistantMessage.segments[]` additive 结构（旧记录降级沉底）；REQ_MAP REQ-AG-001→BR-AG-UI-001 |

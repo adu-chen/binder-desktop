@@ -6638,6 +6638,7 @@ async fn ag_start_turn(
                 parts: None,
                 streaming: None,
                 error: None,
+                segments: None,
             },
             assistant_message: None,
             tool_summaries: Vec::new(),

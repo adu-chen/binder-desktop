@@ -26,7 +26,16 @@ export interface ChatMessage {
   turnId?: string;
   relPath?: string | null;
   turnStatus?: AgentTurnStatus;
+  /** 回合内消息片段（TERM-AG-011 · BR-AG-UI-001）：assistant 消息按事件到达顺序交错排列
+   *  text/tool/diff 片段；缺省（legacy 历史/降级）时渲染层沉底布局，不丢失数据。 */
+  segments?: TurnSegment[];
 }
+
+/** 回合内消息片段（TERM-AG-011）：text=流式累积正文 / tool=引用 ToolCall 卡 / diff=引用 DiffCard。 */
+export type TurnSegment =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; toolCallId: string }
+  | { kind: "diff"; diffId: string };
 
 export type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft";
 
@@ -101,6 +110,16 @@ interface AgState {
 }
 
 const sid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** 把流式分片追加到消息片段序列的最后一个 text 段；最后一个段非 text 或无序列时新建 text 段。 */
+function appendTextSegment(segments: TurnSegment[] | undefined, chunk: string): TurnSegment[] {
+  const list = segments ?? [];
+  const last = list[list.length - 1];
+  if (last?.kind === "text") {
+    return [...list.slice(0, -1), { ...last, text: last.text + chunk }];
+  }
+  return [...list, { kind: "text", text: chunk }];
+}
 
 export function emptyComposerDraft(): AgentComposerDraft {
   return {
@@ -258,11 +277,37 @@ export const agStore = {
           : s.title,
     }));
   },
-  /** 追加流式分片到指定会话的指定消息。 */
+  /** 追加流式分片到指定会话的指定消息；同步追加到消息片段序列的最后一个 text 段（无则创建）。 */
   appendToMessage(sessionId: string, id: string, chunk: string) {
     mapSession(sessionId, (s) => ({
       ...s,
-      messages: s.messages.map((m) => (m.id === id ? { ...m, content: m.content + chunk } : m)),
+      messages: s.messages.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              content: m.content + chunk,
+              segments: appendTextSegment(m.segments, chunk),
+            }
+          : m,
+      ),
+    }));
+  },
+  /** 关闭当前 text 段并追加 tool 段（TERM-AG-011）：工具调用在正文时序位置内嵌。 */
+  addToolSegment(sessionId: string, id: string, toolCallId: string) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) =>
+        m.id === id ? { ...m, segments: [...(m.segments ?? []), { kind: "tool", toolCallId }] } : m,
+      ),
+    }));
+  },
+  /** 追加 diff 段（TERM-AG-011）：DiffCard 紧跟其产出的工具调用/正文时序位置。 */
+  addDiffSegment(sessionId: string, id: string, diffId: string) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) =>
+        m.id === id ? { ...m, segments: [...(m.segments ?? []), { kind: "diff", diffId }] } : m,
+      ),
     }));
   },
   /** 标记消息流式结束。 */
@@ -300,6 +345,15 @@ export const agStore = {
         }
         return t;
       }),
+    }));
+  },
+  /** 按 toolCallId 精确置终态（AG-MSG-RENDER-01 · BR-AG-UI-001）：修复同轮多个同名工具的配对错乱。 */
+  resolveToolCallById(sessionId: string, toolCallId: string, ok: boolean, detail?: string) {
+    mapSession(sessionId, (s) => ({
+      ...s,
+      toolCalls: s.toolCalls.map((t) =>
+        t.id === toolCallId ? { ...t, state: ok ? "done" : "failed", detail: detail ?? t.detail } : t,
+      ),
     }));
   },
   /** 清空该会话工具卡（新回合起）。 */
