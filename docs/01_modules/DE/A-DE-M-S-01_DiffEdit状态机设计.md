@@ -31,10 +31,10 @@ status=pending，三裁决终态 ↔ 对应枚举值），无第三处定义。
 machine_id: SM-DE-01
 owner_module: DE
 status: active
-summary: 单条待裁决修改自生成到终态闭合的生命周期（三终态互斥不可逆；当前编辑器草稿与已打开非激活文档 accepted 由 save 落盘）
+summary: 单条待裁决修改自生成到终态闭合的生命周期（三终态互斥不可逆；按 LogicalState 存在性在预览保存与接受后台落盘间分流）
 source_type: design
 chain: DE-DIFF
-rules: BR-DE-DATA-001, BR-DE-STATE-001, BR-DE-STATE-002, BR-DE-DATA-003
+rules: BR-DE-DATA-001, BR-DE-STATE-001, BR-DE-STATE-002, BR-DE-DATA-003, BR-CORE-STATE-001, BR-CORE-STATE-002, BR-CORE-STATE-003
 initial_state: Generating
 terminal_states: Accepted, Rejected, Expired, GenFailed
 -->
@@ -45,19 +45,22 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
   DiffProjection（draft_mode/snapshot_source/base_session_version/base_content_hash）、裁决输入、
   外部变更检测结果、编辑器草稿应用状态、已打开非激活文档自动应用状态、后台 apply 回执
 - **states**：Generating、Pending、Accepted、Rejected、Expired、GenFailed
-- **events**：genOk、genFail、autoApplyOk、autoApplyFail、userAccept、userReject、timeout、externalChange、appliedOk、applyFail、startupAbnormalExitSweep
+- **events**：genOk、genFail、previewApplied、previewFail、logicalStateOpened、userAccept、userSave、userReject、timeout、externalChange、appliedOk、applyFail、startupAbnormalExitSweep
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
 | Generating | genOk | blockId 锚有效且 WS 持久化成功 | Pending | status=pending；经 ED 装饰层呈现审阅 |
 | Generating | genFail | 锚失效/持久化失败 | GenFailed | 回报 AG（SM-AG-01 handoffFail）；不进入裁决 |
-| Pending | autoApplyOk | draft_mode=open_session 且 ED session 基线匹配 | Accepted | status=accepted（不可逆）；内容已进入已打开非激活文档 LogicalState；不触发 SM-WS-02，后续由 ED/WS save 落盘；DiffCard 禁用裁决 |
-| Pending | autoApplyFail | draft_mode=open_session 且 ED session 基线不匹配/事务不支持/应用失败 | Expired | status=expired；不触发 SM-WS-02；DiffCard 禁用裁决并显示失效原因 |
-| Pending | userAccept | draft_mode=current_editor 且当前编辑器草稿已应用；DiffCard 显式接受 block_ops 时当前节点仍匹配 afterNode fingerprint；任意保存动作沿用“保存即接受”产品决策 | Accepted | status=accepted（不可逆）；不触发 SM-WS-02，后续由 ED/WS save 落盘 |
-| Pending | userAccept | DiffCard 显式接受 block_ops，但当前节点与 afterNode fingerprint 不匹配 | Pending（视觉 conflict） | 不提交不可逆 accept；保留当前 LogicalState，提示目标已被后置编辑；保存动作不走本分支，仍视为用户对当前已应用 pending Diff 的接受 |
+| Pending | previewApplied | 目标已有 LogicalState 且 ED 基线校验/事务成功 | Pending | after 内容进入 LogicalState、置脏并显示 GreenReview；卡片仍可接受/拒绝 |
+| Pending | previewFail | 目标已有 LogicalState 但基线不匹配/事务不支持/应用失败 | Expired | status=expired；不触发 SM-WS-02；卡片显示失效原因 |
+| Pending | logicalStateOpened | 原为无 LogicalState 的后台目标在 pending 期间被打开，且同一 DiffPayload/基准可投影 | Pending | ED 建立 LogicalState、应用 after 并显示 GreenReview；取消后台路径，卡片仍可接受/拒绝 |
+| Pending | userAccept | 目标已有 LogicalState 且当前节点仍匹配 afterNode fingerprint | Accepted | status=accepted（不可逆）；不触发 SM-WS-02，后续仅由用户 save 落盘 |
+| Pending | userSave | 目标已有 LogicalState 且当前 LogicalState 仍等于该 diff 的 after 基准 | Accepted | 保存即接受：先置 accepted/awaiting_save，再经 SM-WS-01 写盘；成功回 saved，失败保留 awaiting_save |
+| Pending | userAccept / userSave | DiffCard 显式接受或保存时发现当前节点/内容已偏离 after 基准 | Expired | 不提交 accepted；保留当前 LogicalState，旧卡标记 `document_revision_advanced`，保存当前内容仍可继续 |
 | Pending | userAccept | draft_mode=background 且目标文档未打开 | Accepted | status=accepted（不可逆）；触发 SM-WS-02 accepted（后台 apply 路径） |
-| Pending | userReject | draft_mode!=open_session；block_ops 当前节点仍匹配 afterNode fingerprint | Rejected | status=rejected；普通文本草稿回滚 before，block_ops 以 exact beforeNode 单事务反向；否则通知 SM-WS-02 rejected（不落盘）；ED 装饰复位 |
+| Pending | userReject | 目标已有 LogicalState，且 block_ops 当前节点仍匹配 afterNode fingerprint | Rejected | status=rejected；普通文本草稿回滚 before，block_ops 以 exact beforeNode 单事务反向；ED 装饰复位，不落盘 |
+| Pending | userReject | 目标无 LogicalState | Rejected | status=rejected；解除 DiffCard 临时挂载，不写文件 |
 | Pending | userReject | block_ops 当前节点与 afterNode fingerprint 不匹配 | Pending（视觉 conflict） | 不提交不可逆 reject；保留当前 LogicalState，提示目标已被后置编辑 |
 | Pending | timeout | 超过可配置时限 | Expired | status=expired；通知 SM-WS-02 expired；ED 装饰复位 |
 | Pending | externalChange | 目标块内容 ≠ before_snapshot（检测可得） | Expired | 同上（检测不可得保守保持 Pending，BR-DE-STATE-002） |
@@ -73,31 +76,66 @@ terminal_states: Accepted, Rejected, Expired, GenFailed
   - Generating → Accepted/Rejected/Expired（未持久化呈现不得裁决）
   - Accepted ↔ Rejected ↔ Expired（三终态互斥，任意互转禁止）
   - Expired / Rejected → Accepted（不得复活已关闭 diff）
-  - Pending → 文件落盘（无 userAccept 或 save/apply 不存在通往文件写入的路径）
-  - Pending → userAccept/userReject，当 draft_mode=open_session（自动应用路径不提供用户裁决入口）
+  - Pending → 文件落盘（无 LogicalState 时仅 userAccept→SM-WS-02；已有 LogicalState 时仅用户 save 可写盘）
   - Pending → SM-WS-02 accepted，当目标文档已打开（已打开文档只改 LogicalState，不后台写 DiskState）
   - Accepted → Pending（ApplyError 不得回退终态）
-- **acceptance_criteria**：三终态互斥不可逆且与 status 枚举一一对应；当前编辑器草稿路径经
-  DiffCard 接受或当前文档保存触发的 userAccept→Accepted 后不直接落盘，必须等待 ED/WS save；已打开非激活文档经
-  autoApplyOk→Accepted 后只修改 LogicalState 并禁用裁决，必须等待 ED/WS save；后台 apply 路径通往
-  SM-WS-02 Applying 的唯一路径仍经 userAccept→Accepted 且目标未打开；rejected/expired 后文件不变、
-  装饰复位；externalChange 检测不可得时不自动过期
+- **acceptance_criteria**：三终态互斥不可逆且与 status 枚举一一对应；已有 LogicalState 时 previewApplied
+或 logicalStateOpened 只改 LogicalState，DiffCard 显式接受只裁决、用户 save 对有效 pending 预览同时裁决并落盘；无 LogicalState 的后台
+路径通往 SM-WS-02 Applying 的唯一路径经 userAccept→Accepted；pending 后打开必须不可再走后台 apply；
+rejected/expired 后文件不变、装饰复位；externalChange 检测不可得时不自动过期
 - **test_matrix**：见 §4
+
+### 2.1 连续 Proposal 接力契约（REQ-DE-009 / BR-SYS-STATE-008，2026-08-14 D2 登记）
+
+承接 REQ-DE-009（A-DE-M-D-01）与冻结基线 R5-B：同一受限 TaskRun 中明确的同文档连续编辑
+（Diff1→Diff2→Diff3…），SM-DE-01 按以下契约处理，**不新增补丁栈或任务级回滚**：
+
+| 场景 | SM-DE-01 语义 | 承接方 |
+|---|---|---|
+| 基准真值 | Diff2/3 的 before/base 必须来自上一张**成功预览后的当前 LogicalState**（`session_version` + `content_hash`），不是前卡 payload 叠加 | DE（生成前校验） |
+| 前卡失效 | 后续 Proposal 成功预览推进基准 → 所有基于旧基准的前卡转 `Expired`（`terminal_reason=document_revision_advanced`），保留历史、接受/拒绝禁用；`nextProposalPreviewApplied` 等价于前卡 revision-advanced 检测 | SM-DE-01（Pending→Expired） |
+| 非补丁栈 | 连续卡不构成可叠加补丁栈；拒绝最新卡只回到其自身有效基准，**不产生任务级回滚** | SM-DE-01（userReject guard） |
+| background 限制 | 无 LogicalState 的 background pending 卡必须先迁移（BR-CORE-STATE-003）或完成背景分流裁决（BR-CORE-STATE-002），**不得作为后续编辑输入** | SM-DE-01 / SM-ED-01 / SM-WS-02 |
+| TaskRun 关联 | 每张卡保留 task_run_id/回合关联供 Trace 与事件投影；关联**不授予**叠加、续编或回滚能力 | AG（D3 字段）、DE（卡片关联） |
+| 保存语义 | 连续接力中保存当前 LogicalState 仍按既有规则：仍有效 pending 卡先裁决为 accepted/awaiting_save 再落盘；已失效卡不得被误裁决 | SM-WS-01 协调（A-WS-M-S-01 §2.1） |
+
+<!-- REQ_MAP
+req_id: REQ-DE-009
+target_type: RULE
+target_id: BR-SYS-STATE-008
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-009
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-009
+target_type: RULE
+target_id: BR-CORE-STATE-003
+status: mapped
+-->
+
+> 迁移债务：现有 SM-DE-01 已含「userAccept/userSave 偏离 after 基准 → Expired(document_revision_advanced)」，
+> 但「后续 Proposal 成功预览主动推进基准使前卡失效」的检测源未显式建模；实现时须以 `nextProposalPreviewApplied`
+> 驱动前卡失效，不得依赖旧 payload 续编或补丁叠加（BR-SYS-STATE-008）。
 
 ## §3 跨模块转移契约（X-INTER-001，本文闭合双侧）
 
 | 转移点 | 方向 | 契约 | 双侧状态 |
 |---|---|---|---|
 | 建议交接 | SM-AG-01 HandingOff → SM-DE-01 Generating | ChangeProposal（定位锚+修改内容+来源）交接；genOk→AG handoffOk，genFail→AG handoffFail | **双侧就绪**（AG 侧 A-AG-M-S-01 §2，本文闭合） |
-| 草稿确认保存 | SM-DE-01 Accepted → SM-ED-01 Editing → SM-WS-01 save | 当前编辑器草稿路径中，DiffCard 接受或保存动作均先触发 userAccept；文件写入由用户 save 触发；Saved 后 GreenReview 复位 | **双侧就绪**（ED/WS save 侧已就绪） |
+| 草稿确认保存 | SM-DE-01 Pending/Accepted → SM-ED-01 Editing → SM-WS-01 save | 已有 LogicalState 路径中，显式接受只裁决；保存有效 Pending 预览会先转 Accepted/awaiting_save，再写文件；Saved 后 GreenReview 复位 | **双侧就绪**（ED/WS save 侧已就绪） |
 | 未打开文档后台裁决落盘 | SM-DE-01 Accepted → SM-WS-02 accepted | 目标文档未打开的后台/整篇 diff 可由 accepted 触发 apply；Applied/ApplyError 回执回传本机（终态不回退） | **双侧就绪**（WS 侧 A-WS-M-S-01 §3，本文闭合） |
-| 已打开非激活文档自动应用 | SM-DE-01 Pending → SM-ED-01 Editing → Accepted | `draft_mode=open_session` 基线校验通过后直接改对应 ED session LogicalState；不要求用户切换窗口，不触发 SM-WS-02；失败转 Expired/不可裁决投影 | **双侧就绪**（ED 侧待本文后续代码承接） |
+| 已有或后打开文档预览 | SM-DE-01 Pending → SM-ED-01 Editing → Pending | 已有 LogicalState 时直接预览；后台 pending 在用户打开时以同一载荷建立 LogicalState 并显示绿色增量；两者均不触发 SM-WS-02、仍允许用户裁决 | **双侧就绪**（ED/DE 按 BR-CORE-STATE-001/003） |
 | 不落盘关闭 | SM-DE-01 Rejected/Expired → SM-WS-02 rejected/expired | 驱动 SM-WS-02 → Discarded（不写文件） | **双侧就绪** |
 | 审阅呈现 | SM-DE-01 ↔ ED 装饰层 | Pending 呈现/终态复位；裁决交互经 ED 转达（X-FORBID-005）；装饰为本机投影不独立建机（A-ED-M-S-01 §4 豁免成立） | 双侧就绪 |
 | 关闭前批量裁决 | SM-SYS-02 Resolving → SM-DE-01（userAccept/userReject 批量） | 应用关闭决策入口批量调用既有 `de.accept_diff`/`de.reject_diff`/`de.accept_draft_diff`，本机不新增事件，仅为既有转移的批量调用方（BR-SYS-STATE-004） | **双侧就绪**（SYS 侧 A-SYS-M-S-02 §3，2026-07-20 新增） |
 | 启动异常退出清算 | SM-SYS-02（启动期）→ SM-DE-01 Pending → Expired | 应用启动、先于会话/历史恢复执行；workspace 内残留 `status=pending` 一律转 `expired`，`terminal_reason=abnormal_exit`，不进入裁决投影（BR-SYS-STATE-005） | **双侧就绪**（SYS 侧 A-SYS-M-S-02 §4，2026-07-20 新增） |
 
-至此「对话生成 diff→裁决或自动应用→LogicalState/保存或未打开后台 apply」核心交互的状态机链 **AG→DE→ED/WS**，
+至此「对话生成 diff→已有 LogicalState 预览/保存，或无 LogicalState 卡片挂载/接受落盘；pending 后打开迁移」核心交互的状态机链 **AG→DE→ED/WS**，
 两侧一致性在 G5 跨模块联调验证（APC §5.1）。应用关闭前后的批量裁决与异常退出清算属应用级编排，
 两个新增转移点归 **SYS→DE**（A-SYS-M-S-02，2026-07-20 新增），一致性同样在 G5 验证。
 
@@ -107,26 +145,24 @@ SM-DE-01 生成 PendingDiff 后，根据 DiffProjection 的 `draft_mode` 分三�
 
 | 条件 | 路径 | 三态语义 | 代码入口 | 触发落盘 |
 |---|---|---|---|---|
-| `draft_mode=current_editor` | **激活草稿路径** | LogicalCandidate → LogicalState（已进入 ProseMirror doc）；DiffCard 接受或保存动作触发 userAccept 确认裁决态 | `de.accept_draft_diff` | 任意保存先确认 accepted，再 `save_atomic` |
-| `draft_mode=open_session` 且基线匹配 | **已打开非激活自动应用路径** | LogicalCandidate → LogicalState（已进入目标 ED session），autoApplyOk 直接 Accepted；DiffCard 禁用裁决 | ED session apply → `de.accept_draft_diff` | 等待用户保存目标文档 |
-| `draft_mode=open_session` 且基线不匹配/事务不支持 | **失效路径** | LogicalCandidate 不转正；DiffCard 禁用裁决并记录原因 | `deStore.setLocalView("expired"/"error")` | 无 |
-| `draft_mode=background` 且目标文档未打开 + `isDocxPath(relPath) === false` | **未打开后台路径** | LogicalCandidate → LogicalState + 同步触发 DiskState 写入 | `de.accept_diff` → `ws.apply_diff` → `save_atomic` | accepted 时立即触发 |
-| `draft_mode=background` 且目标文档已打开 | **拒绝（报错）** | 已打开文档禁止后台 apply，必须使用 open_session/current_editor | `deStore.setLocalView("error", "DE_OPEN_DOC_REQUIRES_LOGICAL_STATE")` | 无 |
+| `draft_mode=current_editor` 或 `open_session` | **已有 LogicalState 路径** | LogicalCandidate → LogicalState（GreenReview）；卡片仍 pending，显式接受只裁决，保存有效 pending 预览则一并裁决 | ED 受控 apply → `de.accept_draft_diff` | 用户 save 后触发 |
+| `draft_mode=background` 且目标文档未打开 + `isDocxPath(relPath) === false` | **无 LogicalState 后台路径** | LogicalCandidate 只临时挂载于卡片 | `de.accept_diff` → `ws.apply_diff` → `save_atomic` | accepted 时立即触发 |
+| `draft_mode=background` 且目标文档在 pending 期间打开 | **打开迁移路径** | LogicalCandidate → LogicalState（GreenReview）；卡片仍 pending，显式接受只裁决，保存有效 pending 预览则一并裁决 | ED 建立会话并投影 → `de.accept_draft_diff` | 用户 save 后触发 |
 | `draft_mode=background` + `isDocxPath(relPath) === true` | **拒绝（报错）** | BDocx 必须进入打开文档 LogicalState，不支持后台 raw apply | `deStore.setLocalView("error", "DE_BDOCX_DRAFT_REQUIRED")` | 无 |
 
-> 只有 `current_editor/background` 路径提供用户裁决入口。`open_session` 路径在模型回传 DiffProjection 后立即尝试自动应用，
-> 成功即 accepted，失败即不可裁决；禁止要求用户先切换或打开目标窗口。
+> 三条路径均由同一张 DiffCard 呈现；所有已有 LogicalState 路径都提供用户裁决入口。`open_session` 表示在生成时已存在的会话，`background` 在用户打开目标文档后必须迁移，禁止继续后台接受落盘。
 
 ## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
 
-- **正路**：Generating→genOk→Pending→ED 草稿应用→（DiffCard 接受或保存触发 userAccept）→Accepted→saved（save 落盘 + 复位）；
-  已打开非激活路径为 Generating→genOk→Pending→autoApplyOk→Accepted（不触发 SM-WS-02）；
-  未打开后台路径为 Generating→genOk→Pending→userAccept→Accepted→appliedOk。
+- **正路**：Generating→genOk→Pending→ED 草稿应用→用户 DiffCard 接受→Accepted→用户 save→saved（save 落盘 + 复位）；
+  已打开非激活路径与 pending 后打开迁移均为 Generating→genOk→Pending→受控预览/迁移→Pending，再由用户
+  接受或拒绝裁决；未打开后台路径为 Generating→genOk→Pending→userAccept→Accepted→appliedOk。
 - **拒绝/过期路**：userReject→Rejected、timeout/externalChange→Expired，断言文件不变 + 装饰复位 +
   SM-WS-02 达 Discarded。
 - **生成失败路**：genFail→GenFailed 回报 AG，不进入裁决、无持久化残留。
-- **禁止转移**：三终态互转不可达；Expired/Rejected 不可复活；无 userAccept（含保存映射）不存在通往保存/apply 路径；
-  ApplyError 后终态保持 Accepted；`open_session` 不存在 userAccept/userReject；已打开文档不存在后台 apply。
+- **禁止转移**：三终态互转不可达；Expired/Rejected 不可复活；保存只可裁决当前 after 基准仍有效的 Pending，不得接受已失效卡；
+  无 LogicalState 的后台路径无 userAccept 不存在 apply 路径；ApplyError 后终态保持 Accepted；已有或迁移
+  LogicalState 路径不存在后台 apply。
 - **保守过期**：externalChange 检测不可得时保持 Pending（不误杀）。
 - **冲突重检**（BR-DE-DATA-003）：先序 diff 落盘后，重叠 pending diff 触发 externalChange 重检转
   Expired；不重叠者不受影响。
@@ -151,8 +187,9 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
   待 CBT G2 与审阅 UI 决策（DE-04）后评估，可能扩展本机或加编排机，届时回填总图。
 - **超时 timeout 的驱动源**（定时器/呈现时检查/裁决时检查）属实现期调度设计，本机只锁事件语义。
 - GenFailed 回报后的 AG 重试策略归 AG（新回合新 diff），本机不管理重试计数。
-- 已打开非激活文档自动应用后的 DiffCard 当前只展示增量效果，缺少红删效果与独立撤销能力；后续应补
-  DiffCard 失效态视觉、diff 撤销或文档级回滚能力。当前安全线是不允许二次裁决、基线偏移或 DiskState 兜底。
+- 已打开非激活或迁移文档预览后的 DiffCard 可能只展示增量、缺少完整红删效果；后续应补 DiffCard
+  失效态视觉与更长期的文档级回滚能力。当前安全线是保留接受/拒绝（拒绝精确回滚）、禁止二次内容应用、
+  防止基线偏移和后台 DiskState 兜底。
 
 ## §9 后续动作
 
@@ -174,3 +211,7 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
 | 2026-07-27 | v1.6 | DE-SAVE-IMPLICIT-ACCEPT-01：保存即接受已应用草稿 Diff；保存动作在写盘前映射为既有 userAccept→Accepted，保存成功后进入 saved 效果态；显式 DiffCard 接受仍保留。 |
 | 2026-07-30 | v1.7 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：userReject 增 block_ops afterNode fingerprint 前置 guard；匹配则 exact node 反向后进入 Rejected，不匹配保持后端 Pending 并以 conflict 视觉态阻止覆盖用户后置编辑。 |
 | 2026-07-30 | v1.8 | AG-RICH-BLOCK-STRUCTURED-EDIT-01 闭合补强：DiffCard 显式接受 block_ops 同样以前态 afterNode fingerprint 为门禁；后置编辑时保持 Pending/conflict。保存动作继续遵循已确认的“保存即接受”，不改变产品语义。 |
+| 2026-08-13 | v1.9 | DIFF-STATE-COMPASS-01：SM-DE-01 三分流与强制矩阵同步：已有或迁移 LogicalState 的预览保持 Pending，接受/拒绝仍可操作；保存不再映射 userAccept；仅持续无 LogicalState 的后台接受进入 SM-WS-02。 |
+| 2026-08-13 | v1.10 | 人类复核：保存有效 pending 预览应映射为 `userSave → Accepted/awaiting_save → save`；只有基线推进时 `userSave → Expired`，随后继续保存当前 LogicalState。 |
+| 2026-08-14 | v1.11 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 连续 Proposal 接力契约（REQ-DE-009 / BR-SYS-STATE-008）——Diff2/3 以最新 LogicalState 为基准、后预览推进基准使前卡 Expired(document_revision_advanced)、非补丁栈/任务级回滚、background pending 先迁移或裁决；补 REQ-DE-009 的 REQ_MAP（BR-SYS-STATE-008、BR-CORE-STATE-001/003）。 |
+| 2026-08-14 | v1.12 | AG-1.0-IMP-CONSECUTIVE-PROPOSAL-01：§2.1 契约落地——前端 deService.expireStalePendingForPath（同文档旧 pending 卡按 base 版本/哈希比较失效 document_revision_advanced，并行同基准卡不失效、background 卡不参与），在 applyOpenSessionDiff 成功预览后与 diff_proposed 新卡加入后触发；deRuntime +4 用例；BR-SYS-STATE-008 进入代码 @GOV 引用与测试 covers。 |

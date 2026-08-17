@@ -24,6 +24,9 @@ pub mod assist;
 /// PI-AG-05 · 记忆写入对接（终态异步触发 AST）。
 pub mod memory_link;
 
+/// AG-1.0-IMP-TASKRUN-01 · 受限任务实例编排机 SM-AG-04（TERM-AG-015/016 · BR-SYS-STATE-008）。
+pub mod task;
+
 /// PI-AG-07 · 系统提示词正文（三类回合，文本属实现期运营配置）。
 pub mod prompts;
 

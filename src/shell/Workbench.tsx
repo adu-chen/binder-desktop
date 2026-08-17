@@ -6,6 +6,7 @@ import { layoutStore, useLayoutStore } from "../store/layoutStore";
 import { AppTitleBar } from "../components/shell/AppTitleBar";
 import { FileTree } from "../components/ws/FileTree";
 import { TimelinePanel } from "../components/ws/TimelinePanel";
+import { MemoryPanel } from "../components/ws/MemoryPanel";
 import { PrvPanel } from "../components/prv/PrvPanel";
 import { TabStrip } from "../components/shell/TabStrip";
 import { useTabsStore } from "../store/tabsStore";
@@ -70,8 +71,11 @@ export function Workbench() {
             <OutlinePanel />
           ) : activePanel === "timeline" ? (
             <TimelinePanel key={wsKey} />
+          ) : activePanel === "memory" ? (
+            // 记忆库（BR-SYS-DATA-007 / TERM-AST-002）：显式选择条目注入输入区。
+            <MemoryPanel key={wsKey} />
           ) : (
-            // 其余面板（记忆/知识/模板）由后续 PI 填充
+            // 其余面板（知识/模板）由后续 PI 填充
             <span className="label">{activePanel}</span>
           )}
         </aside>

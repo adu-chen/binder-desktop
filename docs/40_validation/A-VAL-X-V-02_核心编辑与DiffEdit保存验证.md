@@ -20,7 +20,7 @@
 | owner / participants | CORE / AG、DE、ED、WS、SYS |
 | 当前状态 | `active` |
 | 自动化程度 | `partial` |
-| 本轮裁决 | `IN_PROGRESS`：`AUTOMATION_GAP-01`、`AUTOMATION_GAP-03` 已在确定性自动化边界关闭，相关回归通过；真实 WKWebView、确定性 Agent 链和 provider 验证仍未闭合，不得表述为 G5 通过 |
+| 本轮裁决 | `IN_PROGRESS`：`AUTOMATION_GAP-01`、`AUTOMATION_GAP-03` 已在确定性自动化边界关闭；AG 1.0 Runtime、CapabilityGrant 与新建空基准提案的模块/消费者回归已通过；真实 WKWebView、完整确定性 Agent 回合和 provider 验证仍未闭合，不得表述为 G5 通过 |
 | G5 退出条件 | §6 的 `AUTOMATION_GAP` 关闭，§4 真实环境观察完成且无阻断缺陷，相关回归与治理硬门通过 |
 
 本卡验证的是用户可观察的完整工作流，而不是把多个测试文件的绿色结果拼成“端到端”。当前项目已有
@@ -36,6 +36,7 @@ Agent 回合和 WKWebView 编辑器；因此这些证据只构成系统验证的
 | 接受后才允许保存；拒绝后磁盘不变 | REQ-CORE-002、REQ-DE-003、REQ-WS-003 | BR-DE-STATE-001、BR-WS-STATE-001、X-INTER-001 | `deRuntime.test.ts`、`core_chain.rs` |
 | 保存可靠落盘，失败不能伪装为已保存 | REQ-ED-001、REQ-WS-002 | BR-ED-STATE-001、BR-WS-PERSIST-001 | `edRuntime.test.ts` |
 | 保存后关闭重开可观察到已接受内容 | REQ-ED-001、REQ-WS-002 | BR-ED-STATE-001、BR-WS-PERSIST-001、X-SEQ-002 | `src-tauri/src/lib.rs::edit_persistence_system_tests`；前端 command 信封由 `edRuntime.test.ts` 覆盖 |
+| BDocx 多块建议不丢标题、不留残句，且可精确拒绝回滚 | REQ-AG-001、REQ-DE-001~003、REQ-ED-005 | BR-DE-DATA-002、BR-ED-DATA-001、X-FORBID-006 | `edOperations.test.ts`、`deRuntime.test.ts`、`agRuntime.test.ts`、`src-tauri/src/lib.rs` BDocx guard 测试 |
 
 辅助约束：X-FORBID-008 要求显示态、LogicalState 与 DiskState 单向受控转换；本卡分别观察 DiffCard、
 编辑器内容和真实文件，不能只断言其中一层。
@@ -129,6 +130,19 @@ Agent 回合和 WKWebView 编辑器；因此这些证据只构成系统验证的
 | 真实环境实际 | `NOT_RUN` |
 | 状态 | `PARTIAL` |
 
+### 4.6 S6 · BDocx 结构化改写、预览状态与安全回滚
+
+| 字段 | 内容 |
+|---|---|
+| 前置条件 | 打开无表格、无图片的 BDocx；准备四个正文块，并针对每个块生成 `insert_before(heading) + replace_node`；另准备含表格或图片的 BDocx 整篇改写请求 |
+| 完整操作 | 生成待确认建议；观察 queued → applied/failed 预览状态；检查四个标题与新正文；拒绝建议；分别提交无受保护结构与含/新引入表格或图片的 `replace_document` |
+| 期望结果 | 四个标题均保留、旧段尾不残留；拒绝后 LogicalState 精确回到原始节点树；建议生成、编辑器预览、接受、保存分别显示；前端日志只含 diff id、预览状态和错误码；受保护结构整篇改写被服务端拒绝并要求结构化操作 |
+| 自动化证据 | `edOperations.test.ts` 覆盖 4 组同锚点 insert+replace、insert_after、append、delete reverse 与 forward→reverse JSON 等值；`deRuntime.test.ts` 覆盖 queued 禁止接受、failed 未应用事实和无正文 trace；`agRuntime.test.ts` 覆盖 proposal 创建为 queued；Rust `bdocx_` 与 `ag::prompts` 覆盖动态改写路由和工具结果语义 |
+| 人类观察项 | 真实 WKWebView 中标题、绿色审阅标记、卡片 queued/applied/failed 文案、拒绝回滚、保存和重开；应用日志出现 `[de-draft-preview]` 且不含故事正文 |
+| 自动化实际 | `PASS`：本轮定向前端 147/147 通过；Rust BDocx 16/16、提示词 6/6 通过。证据不包含真实 WKWebView 或 provider 回合 |
+| 真实环境实际 | `NOT_RUN` |
+| 状态 | `PARTIAL` |
+
 ## 5. 本轮自动化执行记录
 
 | 时间 | 命令/范围 | 结果 | 证明边界 |
@@ -143,16 +157,23 @@ Agent 回合和 WKWebView 编辑器；因此这些证据只构成系统验证的
 | 2026-08-01 | `cargo test --manifest-path src-tauri/Cargo.toml edit_persistence_system_tests -- --nocapture` | `PASS`：2 passed | Tauri Mock Webview IPC→生产注册/共享路由→真实 SQLite/文件→第二次读取；不含真实 WKWebView UI |
 | 2026-08-01 | 非沙箱 macOS 进程内 `npm run test:related -- --files src-tauri/src/lib.rs` | `PASS`：前端 21 files / 457 tests；Rust lib 263/263；`core_chain` 4/4；`sm_broadcast` 4/4；audit passed | 证明选择器能对 Rust 内联生产源触发完整相关回归；同时验证新增系统 harness |
 | 2026-08-01 | 非沙箱 macOS 进程内最终 `npm run test:full` | `PASS`：前端 21 files / 457 tests；Rust lib 263/263；`core_chain` 4/4；`sm_broadcast` 4/4 | 本次治理闭合后的完整自动化基线；不替代真实 WKWebView 与 provider 验证 |
+| 2026-08-08 | AG 1.0 定向验证 | `PASS`：AG Rust 136；AG 前端 3 files / 92 tests；`core_chain` 5/5；TypeScript 通过 | Intent/Context/Prompt/Grant/取消/唯一终态与空基准新建提案；不贯穿真实 provider/WKWebView |
+| 2026-08-08 | 非沙箱 `npm run test:related`（AG changed_files） | `PASS`：前端 26 files / 552 tests；Rust lib 295/295、`core_chain` 5/5、`sm_broadcast` 4/4；TypeScript、governance audit 通过 | AG 与全部直接/间接消费者回归；同一 LibreOffice E2E 在非沙箱通过 |
+| 2026-08-08 | 非沙箱最终 `npm run test:full` | `PASS`：前端 26 files / 552 tests；Rust lib 295/295、`core_chain` 5/5、`sm_broadcast` 4/4 | 当前完整自动化基线；不替代真实账号/网关/模型、WKWebView 与人工 Diff 审阅 |
+| 2026-08-13 | AG-STRATEGY-05 定向回归 | `PASS`：`edOperations + deRuntime + agRuntime` 3 files / 115 tests；TypeScript 通过 | 同锚点 block_ops、reverse、预览状态、无正文 trace 与 proposal 投影；不经过真实 WKWebView |
+| 2026-08-13 | BDocx / Prompt Rust 定向回归 | `PASS`：`bdocx_` 16/16、`ag::prompts::tests` 6/6 | 动态 replace_document 路由、受保护结构 guard、提示词与工具结果诚实性；不调用真实 provider |
+| 2026-08-13 | AG-STRATEGY-05 全量相关回归 | `PASS`：前端 26 files / 562 tests；Rust lib 319/319、`core_chain` 5/5、`sm_broadcast` 4/4；TypeScript、治理审计通过 | 选择器覆盖 AG/DE/ED 与直接消费者；LibreOffice E2E 在非沙箱 macOS 环境通过，不替代真实 WKWebView/provider |
 
 ## 6. 缺口、责任与退出条件
 
 | 编号 | 分类 | 缺口 | owner | 目标 | 退出条件 | 状态 |
 |---|---|---|---|---|---|---|
 | AUTOMATION_GAP-01 | system harness | 前端 command 信封与 Tauri Mock Webview→生产注册/路由→真实文件→第二次读取已按稳定契约组合；真实 UI 单列验证 | ED / DE / WS / SYS | G5 | Mock Webview InvokeRequest 命中生产注册/共享路由，断言 accepted/saved、DiskState 和第二次读取；真实 WKWebView 留在 VALIDATION_ONLY-01 | resolved |
-| AUTOMATION_GAP-02 | Agent integration | `agRuntime` 验证 projection，但没有真实 Agent 回合→工具→DE→前端 DiffCard 的确定性集成链 | AG / DE / SYS | G5 | 建立可重复的确定性 Agent 测试供给并跑通建议生成，不依赖不稳定外部模型输出 | open |
+| AUTOMATION_GAP-02 | Agent integration | AG 1.0 已覆盖 Runtime Profile、Intent/Context/Prompt/Grant、取消/唯一终态、proposal 与前端 projection；仍没有单一 harness 贯穿真实 `ag_start_turn`→确定性网关流→工具→DE→前端 DiffCard | AG / DE / SYS | G5 | 建立可重复的确定性 Agent 测试供给并跑通完整建议生成，不依赖不稳定外部模型输出 | open |
 | AUTOMATION_GAP-03 | rejection integration | 前端 LogicalState 回滚与 Mock Webview rejection→DiskState/重开不变→无时间轴节点按稳定 command 契约组合 | DE / ED / WS | G5 | 两侧契约和后端真实边界均有确定性断言；真实 UI 观察留在 VALIDATION_ONLY-01 | resolved |
 | VALIDATION_ONLY-01 | WKWebView interaction | Diff 挂载位置、真实焦点/按钮交互、状态反馈需要真实应用观察 | ED / DE | G5 | 在 §3.2 环境执行 S1–S5，记录实际结果或缺陷 | open |
 | VALIDATION_ONLY-02 | real provider | 真实账号、订阅、网关与模型输出属于更大的 AI 系统链，当前证据不能覆盖 | AG / ENT / CLOUD | G5/G6 | 对接相应系统验证卡；本卡只消费其“可生成确定性修改建议”前置结论 | blocked_by_cloud |
+| AUTOMATION_GAP-04 | BDocx UI integration | 同锚点块事务、动态改写 guard 与前端状态已各有确定性单元/服务证据，但没有真实 WKWebView 串起 Agent proposal→编辑器 preview→拒绝/保存的单一 harness | AG / DE / ED / SYS | G5 | 在真实 WKWebView 或等价可重复 UI harness 执行 S6，并记录标题、残句、卡片状态、日志与重开结果 | open |
 | VAL-G5-REG-001 | regression environment | 受控沙箱禁止 macOS AppKit 应用注册，导致 DOCX→PDF 真转换 worker signal 6；同一测试在非沙箱环境通过 | DOC / PRV / CORE | G5 | 非沙箱定向真转换与 `test:full` 通过，并登记执行环境约束 | resolved |
 
 `AUTOMATION_GAP-01`、`AUTOMATION_GAP-03` 已关闭。下一项是以确定性 Agent 供给关闭
@@ -176,3 +197,5 @@ G5 缺口关闭，且自动化回归、治理审计与相关 NFR 均通过后，
 | 2026-08-01 | v1.0 | VAL-CORE-EDIT-DIFF-SAVE-01：建立首个 G5 场景卡，拆分五类核心子场景、自动化证据、真实环境观察项与退出条件；定向证据通过，但全量回归发现 VAL-G5-REG-001，当前结论为 BLOCKED/NOT_READY |
 | 2026-08-01 | v1.1 | VAL-G5-REG-001：保留沙箱内 signal 6 原始失败，非沙箱复跑同一 LibreOffice E2E 与 test:full 全过，确认 AppKit 执行环境限制并解除回归阻断；真实系统验证缺口仍保持 NOT_READY |
 | 2026-08-01 | v1.2 | VAL-CORE-EDIT-DIFF-SAVE-AUTOMATION-01：新增 Tauri Mock Webview→生产注册/共享路由→真实文件→第二次读取系统 harness，关闭 AUTOMATION_GAP-01/03 的确定性自动化部分；真实 WKWebView 与 Agent/provider 缺口保持 NOT_READY |
+| 2026-08-08 | v1.3 | AG-1.0-IMPLEMENTATION-01：登记 AG Runtime/Intent/Context/Prompt/CapabilityGrant、唯一终态、真实取消与新建空基准提案证据；非沙箱 related/full 全绿；AUTOMATION_GAP-02 因尚无单一确定性 Agent→DiffCard harness 继续 open，G5 结论保持 NOT_READY |
+| 2026-08-13 | v1.4 | AG-STRATEGY-05：新增 S6，登记同锚点 block_ops 插入/替换与精确 reverse、动态 BDocx 整篇改写 guard、proposal→preview→accept→save 状态和无正文预览 trace 的定向自动化证据；新增真实 WKWebView 串联缺口 AUTOMATION_GAP-04，G5 结论仍为 NOT_READY。 |

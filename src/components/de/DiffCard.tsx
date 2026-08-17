@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
-import { acceptDiff, rejectDiff, generateSampleDiff } from "../../services/deService";
+import { acceptDiff, rejectDiff, generateSampleDiff, applyDeleteDiff } from "../../services/deService";
 import { revealBlock } from "../../services/edLocate";
 import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
@@ -30,6 +30,12 @@ function previewText(text: string): string {
 
 function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone: "ok" | "warn" | "err" | "muted" } | null {
   if (locateFailed) return { text: "目标块已不可定位，建议重新生成", tone: "warn" };
+  if (diff.state === "pending" && diff.draftPreviewState === "queued") {
+    return { text: "待确认建议已生成，正在等待编辑器预览；尚未写入文件", tone: "muted" };
+  }
+  if (diff.state === "pending" && diff.draftPreviewState === "applied") {
+    return { text: "编辑器预览已显示；接受将确认，保存后才写入文件", tone: "warn" };
+  }
   if (diff.state === "validating") return { text: "校验原文匹配中…", tone: "muted" };
   if (diff.state === "applying") return { text: "写入中…", tone: "warn" };
   if (diff.effectStatus === "discarded_on_abnormal_exit") {
@@ -55,6 +61,9 @@ function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone
       : { text: `与 ${diff.conflictWith ?? "其他修改"} 范围重叠，接受已禁用`, tone: "warn" };
   }
   if (diff.state === "expired" && diff.expiredReason) return { text: EXPIRED_REASON_TEXT[diff.expiredReason], tone: "warn" };
+  if (diff.state === "error" && diff.draftPreviewState === "failed") {
+    return { text: `编辑器预览未应用，文档未因该建议改变（${diff.errorCode ?? "未知错误"}）`, tone: "err" };
+  }
   if (diff.state === "error") return { text: diff.errorCode ?? "写入失败", tone: "err" };
   return null;
 }
@@ -189,13 +198,43 @@ function nodeText(value: unknown): string {
   return nodeText(node.content);
 }
 
-function blockOperationDetails(diff: DiffView): Array<{ blockId: string; nodeType: string; before: string; after: string }> {
-  return diff.blockOpsPayload?.operations.map((operation) => ({
-    blockId: operation.blockId,
-    nodeType: operation.expectedNodeType,
-    before: nodeText(operation.beforeNode),
-    after: nodeText(operation.afterNode),
-  })) ?? [];
+function nodeBlockId(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const attrs = (value as Record<string, unknown>).attrs;
+  if (!attrs || typeof attrs !== "object") return null;
+  const blockId = (attrs as Record<string, unknown>).blockId;
+  return typeof blockId === "string" && blockId ? blockId : null;
+}
+
+function blockOperationDetails(diff: DiffView): Array<{
+  key: string;
+  blockId: string;
+  nodeType: string;
+  before: string;
+  after: string;
+  op: string;
+  placement?: string;
+}> {
+  return diff.blockOpsPayload?.operations.map((operation, index) => {
+    const insertion = operation.op === "insert_before" || operation.op === "insert_after" || operation.op === "append";
+    const insertedId = insertion ? nodeBlockId(operation.afterNode) : null;
+    const placement = operation.op === "insert_before"
+      ? `插入到 ${operation.blockId} 之前`
+      : operation.op === "insert_after"
+        ? `插入到 ${operation.blockId} 之后`
+        : operation.op === "append"
+          ? "追加到文档末尾"
+          : undefined;
+    return {
+      key: `${index}:${operation.op}:${operation.blockId}:${insertedId ?? ""}`,
+      blockId: insertedId ?? operation.blockId,
+      nodeType: operation.expectedNodeType,
+      before: nodeText(operation.beforeNode),
+      after: operation.op === "delete_node" ? "【已删除】" : nodeText(operation.afterNode),
+      op: operation.op,
+      placement,
+    };
+  }) ?? [];
 }
 
 /**
@@ -209,6 +248,8 @@ function blockOperationDetails(diff: DiffView): Array<{ blockId: string; nodeTyp
  */
 export function DiffCard({ diff }: { diff: DiffView }) {
   const { diffId, title, before, after, state } = diff;
+  // AG-DELETE-01：删除确认卡（patchKind=delete_doc/delete_folder）——红色高亮，接受走 apply_delete_diff。
+  const isDelete = diff.patchKind === "delete_doc" || diff.patchKind === "delete_folder";
   const busy = state === "validating" || state === "applying";
   const readonly = Boolean(diff.readonly);
   const [expanded, setExpanded] = useState(false);
@@ -239,7 +280,7 @@ export function DiffCard({ diff }: { diff: DiffView }) {
   const detail = statusText(diff, locateFailed);
   const styleSummary = hasStyleOps ? `样式 ${diff.styleOps?.length ?? 0} 项` : "";
   const blockSummary = hasBlockOps
-    ? `独立内容块 ${diff.blockOpsPayload?.operations.length ?? 0} 项`
+    ? `结构化操作 ${diff.blockOpsPayload?.operations.length ?? 0} 项`
     : "";
   const tableSummary = hasTableOps ? `表格操作 ${diff.tableOps?.length ?? 0} 项` : "";
   const imageSummary = hasImageOps
@@ -247,6 +288,7 @@ export function DiffCard({ diff }: { diff: DiffView }) {
     : "";
   const inlineStatus = [detail?.text, blockSummary, styleSummary, tableSummary, imageSummary].filter(Boolean).join(" · ");
   const canRetryError = state === "error" && Boolean(diff.draftApplied);
+  const previewQueued = state === "pending" && diff.draftPreviewState === "queued";
 
   useEffect(() => {
     setLocateFailed(false);
@@ -259,10 +301,10 @@ export function DiffCard({ diff }: { diff: DiffView }) {
   // DiffCard 右键菜单（仅 pending 且非 readonly：接受/拒绝；动作复用 de.accept/reject_diff）。
   const onContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
-    if (state !== "pending" || readonly) return;
+    if (state !== "pending" || readonly || previewQueued) return;
     setCtxMenu({ x: event.clientX, y: event.clientY });
   };
-  const ctxMenuItems: ContextMenuDef[] | null = ctxMenu && state === "pending" && !readonly
+  const ctxMenuItems: ContextMenuDef[] | null = ctxMenu && state === "pending" && !readonly && !previewQueued
     ? [
         { type: "item", id: "accept", label: "接受", onSelect: () => void acceptDiff(diffId) },
         { type: "item", id: "reject", label: "拒绝", onSelect: () => void rejectDiff(diffId) },
@@ -271,11 +313,17 @@ export function DiffCard({ diff }: { diff: DiffView }) {
 
   return (
     <div
-      className={`diffcard diffcard-${state}${expanded ? " diffcard-expanded" : ""}`}
+      className={`diffcard diffcard-${state}${expanded ? " diffcard-expanded" : ""}${isDelete ? " diffcard-delete" : ""}`}
       onContextMenu={onContextMenu}
     >
       <div className="diffcard-row diffcard-row-title">
         <span className="diffcard-title" title={title}>{title}</span>
+        {/* AG-TASK-01 F1b：批次徽标（第 x/y 批）。 */}
+        {diff.batch && (
+          <span className="diffcard-badge diffcard-batch" title={`批次 ${diff.batch.id}`}>
+            第 {diff.batch.index}/{diff.batch.total} 批
+          </span>
+        )}
         <span className="diffcard-badge">{STATE_BADGE[state]}</span>
       </div>
       <div className="diffcard-row diffcard-row-location">
@@ -300,7 +348,16 @@ export function DiffCard({ diff }: { diff: DiffView }) {
         <div className="diffcard-actions">
           {state === "pending" && !readonly && (
             <>
-              <button className="diffcard-accept" onClick={() => void acceptDiff(diffId)}>接受 ⏎</button>
+              {isDelete
+                ? <button className="diffcard-accept diffcard-accept-delete" onClick={() => void applyDeleteDiff(diffId)}>确认删除 ⏎</button>
+                : <button
+                    className="diffcard-accept"
+                    disabled={previewQueued}
+                    title={previewQueued ? "等待编辑器完成预览后才能接受" : undefined}
+                    onClick={() => void acceptDiff(diffId)}
+                  >
+                    {previewQueued ? "预览准备中…" : "接受 ⏎"}
+                  </button>}
               <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝 ⌫</button>
             </>
           )}
@@ -358,15 +415,19 @@ export function DiffCard({ diff }: { diff: DiffView }) {
           {hasBlockOps && (
             <div className="diffcard-block-ops">
               {blockDetails.map((operation) => (
-                <div key={operation.blockId} className="diffcard-block-operation">
-                  <strong>{operation.blockId} · {operation.nodeType}</strong>
+                <div key={operation.key} className="diffcard-block-operation">
+                  <strong>
+                    {operation.blockId} · {operation.nodeType}
+                    {operation.op === "delete_node" ? "（删除）" : ""}
+                    {operation.placement ? `（${operation.placement}）` : ""}
+                  </strong>
                   <div className="diffcard-detail-line diffcard-detail-before">
                     <span className="diffcard-mark">-</span>
                     <pre>{operation.before || "（空）"}</pre>
                   </div>
                   <div className="diffcard-detail-line diffcard-detail-after">
                     <span className="diffcard-mark">+</span>
-                    <pre>{operation.after || "（空）"}</pre>
+                    <pre className={operation.op === "delete_node" ? "diffcard-deleted" : undefined}>{operation.after || "（空）"}</pre>
                   </div>
                 </div>
               ))}

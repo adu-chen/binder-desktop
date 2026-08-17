@@ -81,7 +81,7 @@ import {
   type ImageOperationApplyResult,
 } from "../../services/edImageOps";
 import { applyStructuredBlockOperations } from "../../services/edBlockOps";
-import { persistImageDiffSnapshots } from "../../services/deService";
+import { persistImageDiffSnapshots, promotePendingDiffOnOpen } from "../../services/deService";
 import { outlineStore, extractOutline } from "../../store/outlineStore";
 import { modelStore } from "../../store/modelStore";
 import { finishAssist, requestAssist, type AssistFinishEvent } from "../../services/agService";
@@ -449,12 +449,12 @@ export function applyPendingImageDiffToEditor(
     || session.sessionVersion !== payload.base.sessionVersion
     || session.contentHash !== payload.base.contentHash
   ) {
-    deStore.setLocalView(diff.diffId, "error", { errorCode: "ED_IMAGE_SNAPSHOT_STALE" });
+    deStore.markDraftPreviewFailed(diff.diffId, "ED_IMAGE_SNAPSHOT_STALE");
     return null;
   }
   const applied = applyImageOperations(editor, payload);
   if (!applied) {
-    deStore.setLocalView(diff.diffId, "error", { errorCode: "ED_IMAGE_OPERATION_FAILED" });
+    deStore.markDraftPreviewFailed(diff.diffId, "ED_IMAGE_OPERATION_FAILED");
     return null;
   }
   deStore.setImageSnapshots(diff.diffId, applied.before, applied.after, applied.affectedBlockIds);
@@ -1711,6 +1711,14 @@ export function Editor() {
     );
   };
 
+  /**
+   * @GOV
+   * codes:    BR-CORE-STATE-001-EFFECT-ED-ED-EDIT-001, BR-CORE-STATE-003-EFFECT-ED-ED-EDIT-001
+   * type:     EFFECT
+   * chain:    DE-DIFF, ED-EDIT, ED-DECOR
+   * rules:    BR-CORE-STATE-001, BR-CORE-STATE-003
+   * boundary: in=PendingDiffForOpenedLogicalState | out=ControlledLogicalStatePreviewAndGreenReview(noDiffCardLifecycleTransition)
+   */
   // Pending diff 到达当前编辑器时先成为 ED 草稿内容；GreenReview 只标绿当前 after 内容。
   // 三态链路标注（A-CORE-C-T-01 §5.1）：
   //   deStore 变更（LogicalCandidate 投影层）→ 触发本 effect
@@ -1733,13 +1741,13 @@ export function Editor() {
       const baseContent = serialize(editor, editFormat, contentFormat, open);
       const syntheticAfter = isSyntheticAfter(d.after);
       if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && syntheticAfter) {
-        deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_CONTENT_MISSING" });
+        deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_CONTENT_MISSING");
         continue;
       }
       if (hasBlockOps && d.blockOpsPayload) {
         const session = open ? ed.sessions[open] : undefined;
         if (!session) {
-          deStore.setLocalView(d.diffId, "error", { errorCode: "ED_BLOCK_OPERATION_SESSION_MISSING" });
+          deStore.markDraftPreviewFailed(d.diffId, "ED_BLOCK_OPERATION_SESSION_MISSING");
           continue;
         }
         const blockApplied = applyStructuredBlockOperations(
@@ -1752,7 +1760,7 @@ export function Editor() {
           },
         );
         if (!blockApplied.ok) {
-          deStore.setLocalView(d.diffId, "error", { errorCode: blockApplied.reason });
+          deStore.markDraftPreviewFailed(d.diffId, blockApplied.reason);
           continue;
         }
       } else if (hasImageOps && d.imageOpsPayload) {
@@ -1772,30 +1780,30 @@ export function Editor() {
       } else if (hasTableOps && d.tableOpsPayload) {
         const tableApplied = applyTableOperations(d.tableOpsPayload);
         if (!tableApplied.ok) {
-          deStore.setLocalView(d.diffId, "error", { errorCode: tableApplied.reason });
+          deStore.markDraftPreviewFailed(d.diffId, tableApplied.reason);
           continue;
         }
         deStore.setTableSnapshots(d.diffId, tableApplied.before, tableApplied.after);
       } else if (d.blockId && !syntheticAfter) {
         const applied = applyEditOps([{ op: "replace_block", blockId: d.blockId, text: d.after }]);
         if (!applied.ok) {
-          deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_ANCHOR_LOST" });
+          deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_ANCHOR_LOST");
           continue;
         }
       } else if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && d.patchKind === "replace_document" && !syntheticAfter) {
         const applied = applyEditOps([{ op: "replace_document", content: d.after, format: editFormat, contentFormat }]);
         if (!applied.ok) {
-          deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_REPLACE_FAILED" });
+          deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_REPLACE_FAILED");
           continue;
         }
       } else if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && !syntheticAfter) {
-        deStore.setLocalView(d.diffId, "error", { errorCode: "ED_DRAFT_TARGET_MISSING" });
+        deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_TARGET_MISSING");
         continue;
       }
       if (hasStyleOps && d.styleOpsPayload) {
         const styled = applyStyleOps(d.styleOpsPayload);
         if (!styled.ok) {
-          deStore.setLocalView(d.diffId, "error", { errorCode: styled.reason });
+          deStore.markDraftPreviewFailed(d.diffId, styled.reason);
           continue;
         }
       }
@@ -1837,18 +1845,17 @@ export function Editor() {
     applyGreenReview(editor.view, map);
   }, [editor, diffs, editFormat, contentFormat, tabState, openPath, loadSeq]);
 
-  // 审计修复（2026-07-26 · D3）：background diff 在文档被打开时自动映射到逻辑状态。
-  // 当文档通过 loadDoc 获得逻辑状态后，将基于磁盘快照的 block_index 映射为编辑器当前 blockId。
+  // BR-CORE-STATE-003：background PendingDiff 在目标文档打开后立即迁移到 LogicalState 分流。
+  // 迁移不裁决 DiffCard；紧随其后的预览 effect 把同一 payload 应用并显示绿色增量。
   useEffect(() => {
     if (!editor || !openPath || loadSeq === 0) return;
-    const isCurrent = openPath === edStore.getSnapshot().activePath;
-    const mode: "current_editor" | "open_session" = isCurrent ? "current_editor" : "open_session";
     for (const d of deStore.getSnapshot().diffs) {
       if (d.relPath !== openPath || d.draftMode !== "background" || d.state !== "pending") continue;
-      if (typeof d.blockIndex !== "number") continue;
-      const snapshot = getActiveBlockSnapshotByIndex(d.blockIndex);
-      if (!snapshot?.blockId) continue;
-      deStore.migrateDraftMode(d.diffId, snapshot.blockId, mode);
+      const snapshot = typeof d.blockIndex === "number"
+        ? getActiveBlockSnapshotByIndex(d.blockIndex)
+        : null;
+      if (d.patchKind === "replace_block" && !snapshot?.blockId && !d.blockId) continue;
+      void promotePendingDiffOnOpen(d.diffId, snapshot?.blockId ?? d.blockId);
     }
   }, [editor, openPath, loadSeq]);
 

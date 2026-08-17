@@ -45,7 +45,7 @@ X-SEQ-002（前端不跨层直连 FS）  →  本文件（三态单向数据流�
 | **定义** | 文件在磁盘文件系统上的原始字节内容。编辑器"获取文件信息"时读取它；用户执行"保存"操作后它才被修改。磁盘态是持久化、断电不丢的物理数据 |
 | **唯一持有者** | 文件系统（OS 文件系统 + workspace 目录） |
 | **谁有权修改** | **仅** `save_atomic()`（[save.rs:L60-80](file:///Users/imatstarbucks/binder/src-tauri/src/workspace/save.rs#L60-L80)）、`create_doc()`（[fileops.rs:L26-40](file:///Users/imatstarbucks/binder/src-tauri/src/workspace/fileops.rs#L26-L40)）、`rename_doc()`（[fileops.rs:L53-70](file:///Users/imatstarbucks/binder/src-tauri/src/workspace/fileops.rs#L53-L70)）三个物理写入口 |
-| **修改触发器** | 用户 ⌘S 保存、AI diff accepted 后落盘（`ws.apply_diff`）、文件 CRUD（创建/重命名/删除） |
+| **修改触发器** | 已存在 LogicalState 时的用户 ⌘S 保存；不存在 LogicalState 的 PendingDiff 经用户接受后由 `ws.apply_diff` 原子落盘；文件 CRUD（创建/重命名/删除） |
 | **修改路径必须经过** | Rust 后端（X-SEQ-002），前端不直接触达文件系统 |
 | **读取触发器** | 打开文档、外部变更检测、重载 |
 
@@ -61,9 +61,9 @@ X-SEQ-002（前端不跨层直连 FS）  →  本文件（三态单向数据流�
 | 项目 | 内容 |
 |------|------|
 | **正式中英文名** | 逻辑态 / LogicalState |
-| **定义** | 编辑器加载磁盘态后建立的内存结构化模型与持久化控制态，是所有"真实编辑内容"的权威层。用户交互（含 AI 交互、diff 接受/拒绝）修改的都是这一层。只有执行保存时，才把"保存那一刻的逻辑态"写回磁盘，从而修改磁盘态 |
+| **定义** | 编辑器加载磁盘态、或由新建预览/打开迁移建立的内存结构化模型与持久化控制态，是所有"真实编辑内容"的权威层。存在 LogicalState 时，AI diff 的受控预览直接修改这一层；显式接受或对仍有效的 pending diff 执行保存，都会改变其裁决生命周期。只有执行保存时，才把"保存那一刻的逻辑态"写回磁盘，从而修改磁盘态 |
 | **唯一持有者** | **ProseMirror `doc` 结构化模型**（激活文档权威真源） + `edStore.EditSession`（已打开非激活文档的序列化 LogicalState，激活文档为派生缓存） + workspace.db 中的 `ed_open_tabs`/`ed_session_snapshots`/`pending_diffs`/`timeline`/`diff_payloads`（持久化控制态） |
-| **谁有权修改** | 用户编辑操作（经受控 editor command）、AI diff 受控转正后的内容替换（人类裁决或已打开非激活文档自动应用 → ED 受控接口）、样式操作（StyleOp 经受控接口）；**显示层不得直接修改**（见 §1.4） |
+| **谁有权修改** | 用户编辑操作（经受控 editor command）、存在 LogicalState 时 AI diff 的受控预览或打开迁移（均经 ED 受控接口）、样式操作（StyleOp 经受控接口）；**显示层不得直接修改**（见 §1.4） |
 | **修改路径必须经过** | ED 受控编辑接口（`editor.chain().command()`、`insertContentAt`、`setContent` 等，X-FORBID-005） |
 | **保存写入磁盘的前提** | 必须触发 SM-WS-01 保存动作（`save_atomic`），不绕过 |
 
@@ -127,7 +127,7 @@ DiffCard 失效，不允许用 DiskState 或旧快照兜底。
        │    │   ↓                    │
        │  逻辑态(LogicalState) ──────┘
        │       ↑    │
-       │       │    │ 编辑/裁决
+       │       │    │ 编辑/预览
        │       │    ↓
        │   显示态(DisplayState)
        │       │
@@ -137,31 +137,62 @@ DiffCard 失效，不允许用 DiskState 或旧快照兜底。
 **三条单向约束（不可逆违反）：**
 
 1. **显示态 → 逻辑态：禁止**。显示态的任何计算/交互不得直接或间接修改逻辑态的持有者（ProseMirror doc / edStore.content 等）。逻辑态的修改必须经受控接口（editor command / insertContentAt / setContent 等，X-FORBID-005）
-2. **逻辑态 → 磁盘态：仅通过保存动作**。逻辑态向磁盘态的转换只能由保存动作（`save_atomic` 或其等价路径）触发，不得绕过保存链直接写盘
+2. **逻辑态 → 磁盘态：仅通过保存动作**。已经存在的 LogicalState 向 DiskState 的转换只能由保存动作（`save_atomic` 或其等价路径）触发，不得绕过保存链直接写盘；不存在 LogicalState 的 PendingDiff 不发生这条转换，只有用户接受后才可由 `WS-DIFF-APPLY` 原子写入 DiskState
 3. **磁盘态 → 逻辑态：仅通过加载/重载**。磁盘态变为逻辑态的唯一路径是文档打开/重载（`read_doc` / `open_for_edit`），加载后的编辑全部在逻辑态层面，不影响磁盘态直到保存
 
 ---
 
 ## §2 全局强制规则
 
+### 2.1 Diff 罗盘三分流规则
+
+<!-- RULE
+rule_id: BR-CORE-STATE-001
+主链路: DE-DIFF, ED-EDIT, WS-SAVE
+域: STATE
+-->
+**已有 LogicalState 的受控预览与保存**：目标文档已经拥有 LogicalState 时，DE 返回的 PendingDiff 必须经 ED
+受控接口直接把 diff 内容投影到该 LogicalState，并以 GreenReview 等 DisplayState 标示增量。用户显式接受不得再次
+应用、回滚或写入内容，只能推进 DiffCard 的裁决生命周期；用户保存当前 LogicalState 时，若该 pending diff 的 after
+基准仍有效，保存动作等同接受，必须先把卡置为 `Accepted/awaiting_save` 再写入 DiskState。用户编辑、后续预览、
+外部变更或超时推进基准时，旧 DiffCard 必须先失效且不可再接受/拒绝；此后的保存只写当前 LogicalState，不得误裁决旧卡。
+
+<!-- RULE
+rule_id: BR-CORE-STATE-002
+主链路: DE-DIFF, WS-DIFF-APPLY
+域: STATE
+-->
+**无 LogicalState 的卡片挂载与接受落盘**：目标文档尚无 LogicalState 时，PendingDiff 只能由 DiffCard 临时挂载
+DiffPayload/前后对比，不得提前建立或修改 LogicalState，也不得提前写 DiskState。用户接受该仍为后台分支的
+PendingDiff 时，DE 必须驱动 WS-DIFF-APPLY 原子写入 DiskState；拒绝、过期或落盘失败均不得写入文件。
+
+<!-- RULE
+rule_id: BR-CORE-STATE-003
+主链路: DE-DIFF, ED-EDIT, ED-DECOR, WS-SAVE
+域: STATE
+-->
+**pending 后打开文档的迁移**：无 LogicalState 的 PendingDiff 在 pending 期间若用户打开目标文档，ED 必须以
+同一 DiffPayload 和基准建立该文档的 LogicalState，把 diff 修改继承进内容并显示绿色增量；该 DiffCard 随即
+切换为已有 LogicalState 的路径。之后显式接受只改变卡片生命周期；对仍有效 pending 卡执行保存则同时表达接受意图并写入 DiskState。不得再走后台接受落盘。
+
 <!-- CONSTRAINT
 constraint_id: X-FORBID-008
-摘要: 三态单向数据流——显示态不得直接或间接修改逻辑态持有者（ProseMirror doc / edStore.content 等），逻辑态的修改必须经受控接口（X-FORBID-005）；逻辑态向磁盘态的转换只能由保存动作（save_atomic 或其等价路径）触发，不得绕过保存链直接写盘（X-SEQ-002 / BR-WS-STATE-001）
+摘要: 三态单向数据流——显示态不得直接或间接修改逻辑态持有者（ProseMirror doc / edStore.content 等），逻辑态的修改必须经受控接口（X-FORBID-005）；已有 LogicalState 向 DiskState 的转换只能由保存动作触发。无 LogicalState 的 PendingDiff 仅可按 BR-CORE-STATE-002 在用户接受后经 WS-DIFF-APPLY 原子落盘
 涉及模块: ALL（SYS, WS, ED, DE, AG, CBT, DOC, PRV, REF, AST, KB, TPL, ACCT, ENT）
 链路影响: IPC-CALL, ED-EDIT, ED-DECOR, DE-DIFF, WS-FS, WS-SAVE, WS-DIFF-APPLY, WS-TIMELINE, AG-TURN, AG-ASSIST, AG-TOOL, CBT-BUILD, DOC-CONVERT
 -->
 
 <!-- CONSTRAINT
 constraint_id: X-FORBID-009
-摘要: AI 生成内容默认属于"逻辑态候选（LogicalCandidate）"，不属于逻辑态本身；候选转正只能经过 DE/ED 受控路径：激活文档由 userAccept 或 inline-assist apply 触发，已打开非激活文档由基线校验通过后的自动应用事务触发；AI 产出不得绕过该事务直接写入逻辑态持有者（ProseMirror doc 或 edStore.content 或 workspace.db ed_session_snapshots/pending_diffs）
+摘要: AI 生成内容默认属于"逻辑态候选（LogicalCandidate）"；存在 LogicalState 时候选须经 DE/ED 受控预览或打开迁移进入 LogicalState，显式接受或对仍有效 pending 卡保存都会裁决；不存在 LogicalState 时候选保持 DiffCard 挂载，只有用户接受才可经 WS-DIFF-APPLY 写入 DiskState。AI 产出不得绕过三分流受控路径直写逻辑态持有者或磁盘
 涉及模块: DE, AG, ED, CBT
 链路影响: DE-DIFF, AG-TURN, AG-ASSIST, ED-EDIT, CBT-BUILD
 -->
 
 > X-FORBID-009 覆盖审计 D2/D5：
-> - deStore 是**逻辑候选态的前端投影**（不是显示态），其变化通过 ED 受控接口驱动 ProseMirror doc 修改
-> - AI diff 的激活文档路径对应"候选转正→等待保存"；已打开非激活文档路径对应"基线校验→自动转正→等待保存"；未打开文档路径对应"候选转正→同步落盘"
-> - 路径选择判断表见 A-DE-M-S-01 §5（D5 决议落地）
+> - deStore 是**逻辑候选态的前端投影**（不是 DisplayState），其投影必须按 BR-CORE-STATE-001~003 经 ED/WS 受控接口产生副作用
+> - 已有 LogicalState 的路径是“预览进入 LogicalState → 接受仅裁决 → 保存”；未打开文档路径是“卡片挂载 → 接受后原子落盘”；pending 后打开文档必须从后者迁移至前者
+> - 路径选择判断表见 A-DE-M-S-01 §4
 
 ---
 
@@ -174,7 +205,7 @@ zh: 磁盘态
 en: DiskState
 forbidden: 文件内容, 原始内容, 磁盘内容, 字节态, 物理态
 -->
-文件在磁盘文件系统上的原始字节内容。唯一持有者：文件系统，仅 save_atomic / create_doc / rename_doc 三个入口可修改。逻辑态转化为磁盘态的唯一路径是保存动作（§1.1）。
+文件在磁盘文件系统上的原始字节内容。唯一持有者：文件系统，仅 save_atomic / create_doc / rename_doc 三个入口可修改。已有 LogicalState 转化为 DiskState 的唯一路径是保存动作；无 LogicalState 的 PendingDiff 仅按 BR-CORE-STATE-002 在接受后原子落盘（§1.1）。
 
 <!-- TERM
 term_id: TERM-CORE-002
@@ -201,7 +232,7 @@ zh: 逻辑态候选
 en: LogicalCandidate
 forbidden: AI建议, 修改提议, 待定编辑, 提案态, 候选内容, 草案内容
 -->
-AI 产出在转正前的内容分类。不属于逻辑态本身，是"等待裁决或受控自动应用转正的提议"。激活文档由接受动作（userAccept / inline-assist apply）转正；已打开非激活文档由基线校验通过后的自动应用事务转正。deStore 是逻辑候选态的前端投影层（§1.4 X-FORBID-009）。
+AI 产出在进入受控路径前的内容分类。存在 LogicalState 时，受控预览或 pending 后打开迁移使其进入 LogicalState，接受仅裁决；不存在 LogicalState 时，它保留为 DiffCard 临时挂载的内容，接受后直接原子写入 DiskState。deStore 是逻辑候选态的前端投影层（§2.1、X-FORBID-009）。
 
 ---
 
@@ -217,15 +248,15 @@ AI 产出在转正前的内容分类。不属于逻辑态本身，是"等待裁�
 | `ed_session_snapshots` | `LogicalState` 持久化镜像 §1.2 | 已打开文档 LogicalState 的内部持久化镜像，用于恢复、AG 轮次基线校验和防止非激活文档自动应用后丢失 |
 | `ed_open_tabs` | `LogicalState` 控制态元数据 §1.2 | 记录关闭前打开的文档集合、顺序和当前文档；不保存正文内容。启动恢复以它限定打开集合，再恢复对应 `ed_session_snapshots` |
 | `applyEditOps()` / `applyStyleOps()` / ED session apply | `LogicalState` 受控修改入口 | AI 草稿应用、已打开非激活文档自动应用、reject 回滚、显式局部修改都经受控入口修改 LogicalState |
-| `pending_diffs` 行 status=pending（+ `DiffPayload`） | `LogicalCandidate` §3 | 持久化的未裁决 diff，accepted 前不属于 LogicalState 本身 |
+| `pending_diffs` 行 status=pending（+ `DiffPayload`） | `LogicalCandidate` §3 | 持久化的未裁决 diff；已有 LogicalState 时可被预览投影，无 LogicalState 时只由 DiffCard 临时挂载 |
 | `pending_diffs` 行 status=accepted | `LogicalState` 持久化控制态 §1.2 | 已完成裁决的记录，已失去候选语义 |
 | `TabState` 枚举（`dirty/normal/saving/saved/pending_diff`） | `LogicalState` 的裁决态投影 | 编辑会话的逻辑态裁决投影（是否偏离落盘内容），不是显示态。由 edStore 管理，经 SM-WS-01 广播驱动 |
 | `deStore`（`DiffView[]` + `DiffCardState`） | `LogicalCandidate` 前端投影 §3 | 逻辑候选态的前端投影层（X-FORBID-007），不是显示态。其变化通过 ED 受控接口驱动 ProseMirror doc 修改 |
 | `DiffDecorationExtension`（GreenReview） | `DisplayState` §1.3 | 只读 `tr.doc`，输出 `DecorationSet`。不替换 DOM、不阻挡编辑（X-FORBID-005） |
 | `PaginationExtension`（分页缝） | `DisplayState` §1.3 | 纯呈现层 decoration，不修改文档模型、不产生脏态（BR-ED-DATA-003） |
 | `ResizableImage` 拖拽中 DOM 预览 | `DisplayState` 临时态 §1.3 | `ignoreMutation` 阻止 ProseMirror 回灌；commit 时经受控 command 落属性转逻辑态 |
-| AI 生成的 diff（未转正） | `LogicalCandidate` | 处于 `pending` 状态的 `PendingDiff`。不是逻辑态本身，激活文档 accepted 或已打开非激活文档自动应用成功后才能转正（X-FORBID-009） |
-| `DiffPayload.after_content` | `LogicalCandidate` 内容载荷 | DE 持久化的 after 内容，在转正前是候选内容；转正后成为 LogicalState 内容 |
+| AI 生成的 diff（未转正） | `LogicalCandidate` | 处于 `pending` 状态的 `PendingDiff`。已有 LogicalState 时由预览进入 LogicalState；无 LogicalState 时仅挂载于 DiffCard，接受后经后台分支写入 DiskState（X-FORBID-009） |
+| `DiffPayload.after_content` | `LogicalCandidate` 内容载荷 | DE 持久化的 after 内容；已有 LogicalState 时经预览成为其内容，无 LogicalState 时由接受后的后台分支写入 DiskState |
 | `edViewPrefsStore`（纸张/缩放） | 视图偏好（非三态） | 视图偏好（localStorage）不反映三态中任何一态的数据——它不是磁盘态（不是文件内容）、不是逻辑态（不编辑）、不是显示态（不叠加渲染）。单独归类为"视图层用户偏好" |
 | `outlineStore`（大纲树） | `LogicalState` 派生投影 | 从 ProseMirror doc 提取的标题树，是逻辑态的只读投影。仅用于导航，不容许反向写回逻辑态 |
 | `TabStrip` 标签栏上的脏点（`tab-dot`） | `LogicalState` 裁决态投影 → `DisplayState` 视觉标记 | 数据源是 `edStore.tabState`（逻辑态裁决态投影），渲染为红点（显示态）。显示态不反向修改 tabState |
@@ -268,12 +299,18 @@ AI 产出在转正前的内容分类。不属于逻辑态本身，是"等待裁�
 
 ### D5（AI diff 双路径缺乏统一说明）
 
-**决议**：在 A-DE-M-S-01 追加三路径判断表，使路径选择规则可追溯。
+**决议**：以 `BR-CORE-STATE-001~003` 注册三条独立规则，并在 DE-DIFF、ED-EDIT、WS-SAVE/
+WS-DIFF-APPLY 链路共同引用；路径选择不得再由单一 `draft_mode` 文案隐含。
 
 **路径定义**：
-- **激活草稿路径**：LogicalCandidate → LogicalState（内容进入激活 ProseMirror doc 草稿），不触发保存。accepted 只确认裁决态，等待后续用户 ⌘S 触发保存 → DiskState
-- **已打开非激活自动应用路径**：LogicalCandidate → 基线校验 → LogicalState（内容进入对应 ED session），不触发保存；DiffCard 进入已应用且不可裁决状态，等待后续用户保存 → DiskState
-- **未打开后台路径**：LogicalCandidate → LogicalState（accepted 确认）→ 直接触发 SM-WS-02 apply → DiskState
+- **已有 LogicalState 路径（BR-CORE-STATE-001）**：PendingDiff → 受控预览 → LogicalState（内容进入
+  激活 ProseMirror doc 或已打开非激活 ED session），不触发保存。用户可显式接受后再保存；也可直接 ⌘S，
+  此时保存把仍有效 pending 卡先裁决为 Accepted/awaiting_save，再写入 DiskState。
+- **无 LogicalState 路径（BR-CORE-STATE-002）**：PendingDiff 仅挂载在 DiffCard，不产生 LogicalState
+  或 DiskState；用户接受才直接触发 SM-WS-02 apply → DiskState。
+- **pending 后打开路径（BR-CORE-STATE-003）**：背景 PendingDiff → 打开目标文档 → 基线校验 → 同一 payload
+  受控预览进入新建 LogicalState（绿色增量、卡片仍 pending）→ 回到已有 LogicalState 路径。它不是自动
+  接受，也不再具备后台直接落盘资格。
 
 **判断规则表已追加至 A-DE-M-S-01 §5**（见 §7 设计文档更新）。
 
@@ -290,7 +327,7 @@ AI 产出在转正前的内容分类。不属于逻辑态本身，是"等待裁�
 | `ws.save_doc` | `content` | `LogicalState` 序列化载荷 | 前端逻辑态序列化结果，后端接收后写回磁盘转为新 DiskState |
 | `ws.save_doc` | `baseline` | `DiskState` 校验指纹 | 用于 SM-WS-01 的加载基线校验；磁盘哈希不一致时返回保存冲突 |
 | `ws.save_doc` | `override` | 用户裁决信号（非三态数据） | `true` 表示用户显式确认覆盖外部修改；无确认不得置 `true` |
-| `ws.apply_diff` | `after_content` | `LogicalState` 序列化载荷 | accepted 后已转正为逻辑态内容，调用时刻即将写盘转为新 DiskState；可带加载基线兜底校验 |
+| `ws.apply_diff` | `after_content` | `DiffPayload` 的候选内容 | 仅 BR-CORE-STATE-002 的无 LogicalState 分支在用户接受后消费；它不先转为 LogicalState，而是在同一原子操作中写成新 DiskState；可带加载基线兜底校验 |
 | `de.generate_diff` | `afterContent` | `LogicalCandidate` 候选内容 | AG 产出的候选内容，持久化为 DiffPayload。裁决前不是 LogicalState |
 | `ag_start_turn` | `open_doc_snapshots` | 已打开文档 `LogicalState` 快照 | 前端在发起 AgentTurn 前采集所有已打开文档的当前 LogicalState；AG 只读工具和 ReferencePayload 校验必须优先使用该集合 |
 | `DiffProjection` | `snapshot_source`, `base_session_version`, `base_content_hash` | `LogicalState` 基线元数据 | 标识候选内容基于 active/open/disk 哪个源生成；`active_editor_session` 表示当前文档在 ProseMirror binding 未就绪时读取 ED session LogicalState；已打开文档自动应用必须用这些字段校验基线 |
@@ -312,3 +349,5 @@ AI 产出在转正前的内容分类。不属于逻辑态本身，是"等待裁�
 | 2026-07-18 | v1.3 | 细化 active 文档读取协议：`active_editor` 为实时 ProseMirror 快照，`active_editor_session` 为当前文档 ED session LogicalState 快照；二者均属 LogicalState，不依赖 DisplayState 反向定义 |
 | 2026-07-18 | v1.4 | 补充 `ed_open_tabs` 三态归属：打开集合、顺序和当前文档属于 LogicalState 控制态元数据；启动恢复以其限定打开文档集合 |
 | 2026-07-20 | v1.5 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：补充异常退出后的可信度边界——持久化 LogicalState/pending diff 只在上次为正常关闭时可信，异常退出必须先经启动清算（BR-SYS-STATE-005）才能进入恢复 |
+| 2026-08-13 | v1.6 | DIFF-STATE-COMPASS-01：新增 BR-CORE-STATE-001~003 并注册到 DE-DIFF、ED-EDIT、WS-SAVE/WS-DIFF-APPLY；D5、IPC 载荷与单向约束同步为三分流：已有 LogicalState 预览后保存、无 LogicalState 挂载后接受原子落盘、pending 打开后迁移为预览。 |
+| 2026-08-13 | v1.7 | 人类复核：保存仍有效 pending 逻辑预览即表达接受；保存编排先裁决为 accepted/awaiting_save 再写盘。若预览基线已推进，旧卡 expired，保存只提交当前 LogicalState。 |

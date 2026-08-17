@@ -4,7 +4,7 @@
 负责模块：CORE
 文档职责：Binder 1.0 Experience Preview 发布切片范围与验收计划——定义早期上线体验版的发布阻断项、非阻断项、模块映射、云端模型策略、验收门禁与体验数据闭环
 上游约束：A-CORE-C-P-01_APC.md、A-CORE-X-L-01_总体开发路线图.md、A-CORE-X-L-02_总开发实施计划.md、A-CORE-X-L-05_项目进度跟踪台账.md、A-CLOUD-C-D-01_云端产品概述.md、A-GW-M-D-01_AI网关功能需求描述.md
-直接承接：1.0 Experience Preview 发布排期、G5/G6 前的发布阻断项判断、云端 DeepSeek 托管模型与 BYOK 路线、体验反馈闭环
+直接承接：1.0 Experience Preview 发布排期、G5/G6 前的发布阻断项判断、A-AG-X-L-03 的 agent-edit-1.0 Runtime Profile、云端 DeepSeek 托管模型与 BYOK 路线、体验反馈闭环
 使用边界：本文是 L3 发布切片视图，不定义产品需求、技术规则、注册术语或代码规则来源；所有功能规则仍以各模块 L1/L2/L3 为准，代码 @GOV 不得追溯本文
 变更要求：1.0 体验版发布阻断项、模型策略、验收线或非阻断项变化时同步更新；若变化影响完整功能地图或产品边界，须先回写 APC 与总体路线图
 治理成熟度：draft
@@ -34,7 +34,7 @@
 | 验证主题 | 说明 |
 |---|---|
 | 核心工作流 | 用户能否在本地 workspace 内完成打开、编辑、Agent 建议、Diff 审阅、接受/拒绝、保存 |
-| 人类裁决链 | AI 生成内容保持 LogicalCandidate 语义，用户接受前不得直接写入 LogicalState 或 DiskState |
+| 人类裁决链 | 已有 LogicalState 时 AI 预览经 ED 受控写入 LogicalState，显式接受只裁决，而保存有效 pending 预览会一并裁决并写 DiskState；无 LogicalState 时卡片只挂载候选，接受后才写 DiskState；pending 后打开必须迁移为前者 |
 | 模型体验 | DeepSeek 托管模型能否支撑早期写作/编辑体验；BYOK 是否能覆盖高阶用户偏好 |
 | 专业短板暴露 | 通过真实任务反馈识别模型在专业文档、风格、逻辑、结构和措辞上的短板 |
 | 商业化闭环 | 账号、SubscriptionGate、AiGateway、用量、管理员端最小能力是否足以支撑早期运营 |
@@ -48,8 +48,8 @@
 | workspace 生命周期与文件边界 | WS / SYS | WS L1/L2/L3、SYS 契约 | 可打开/切换/关闭 workspace；文件访问限定在当前 workspace；越界访问被拒绝 |
 | 编辑器核心编辑 | ED / WS | ED L1/L2/L3、WS 保存链 | 可打开、编辑、保存文本/Markdown；脏状态、保存失败、关闭/切换保护可用 |
 | DOCX 基础链路 | DOC / ED / PRV | DOC L1/L2/L3、PRV L1/L2/L3 | DOCX 预览与基础编辑链路可用于常见文档；失败态明确；不丢失原文件 |
-| Agent 面板 | AG / ENT / WS | AG L1/L2/L3、ENT 契约 | 可基于当前文档/选区/workspace 片段发起对话式编辑；失败不破坏文档 |
-| Diff Edit | DE / WS / ED | DE L1/L2/L3、三态模型 | AI 修改建议以 ChangeProposal/PendingDiff 呈现；用户可接受/拒绝；接受后才落盘 |
+| Agent 面板 | AG / ENT / WS | AG L1/L2、A-AG-X-L-03、ENT 契约 | `agent-edit-1.0` 可理解当前 LogicalState/选区/显式只读引用，完成回答、分析、当前文档编辑和空基准新建提案；每轮有最小工具允许集，使用真实 GateOutcome/取消/唯一终态；所有写意图进入 Diff，失败不破坏文档 |
+| Diff Edit | DE / WS / ED | DE L1/L2/L3、三态模型 | AI 修改建议以 ChangeProposal/PendingDiff 呈现；已有 LogicalState 走预览→裁决→保存，无 LogicalState 走卡片挂载→接受落盘，pending 后打开必须迁移 |
 | AiGateway 托管模型 | CLOUD / GW / ENT / AG | 云端 L1、GW L1、A-SYS-I-P-03 | 1.0 默认经 AiGateway 调用 DeepSeek 官方 API；客户端不直连 provider、不持平台密钥 |
 | BYOK | GW / ENT / PORTAL | 云端 L1、GW L1、ENT 设计 | BYOK 密钥经 AiGateway 加密代持；BYOK 调用仍经 SubscriptionGate；客户端不持 provider 密钥 |
 | 账号与订阅门禁 | AUTH / LIC / ACCT / ENT | 云端 L1、ACCT/ENT 设计 | 用户可登录；AI 调用前可执行 SubscriptionGate；无有效订阅拒绝托管模型与 BYOK 调用 |
@@ -64,6 +64,7 @@
 | 能力 | 负责模块 | 1.0 EP 处置 | 后续方向 |
 |---|---|---|---|
 | 构建（Build） | CBT | 非阻断，继续开发 | 作为 1.1+ 多文件项目构建能力进入发布切片 |
+| AG 高级能力 | AG / DE / ED / WS | 跨文档写入、文件自动整理、复杂 Planning、参考风格/排版、多 Agent 默认关闭；辅助续写/局部修改和高级 BDocx 编辑可保留但不阻断发布 | 先完成 A-AG-X-L-03 的可靠当前文档编辑闭环，再按独立 Runtime Profile、权限与审阅模型逐项开放 |
 | 记忆协同 | AST | 非阻断，继续开发 | 基于真实反馈决定写入策略、可见性与召回形式 |
 | 知识库 | KB | 非阻断，继续开发 | 结合专业场景反馈设计本地知识组织和检索供给 |
 | 模板/工作流 | TPL | 非阻断，继续开发 | 先收集用户高频文档类型，再沉淀模板体系 |
@@ -102,7 +103,8 @@
 | 门禁 | 验收要求 |
 |---|---|
 | 核心链路 | workspace → editor → Agent → Diff → accept/reject → save 连续可用 |
-| 数据安全 | AI 失败、Diff 应用失败、保存失败均不破坏原文件；用户接受前不落盘 |
+| Agent Runtime | `agent-edit-1.0` 的 IntentResult、可信 Context/Prompt、逐回合工具授权、真实门禁、后端取消和唯一终态成立；回答/分析不产生写调用，新建文档也须先经空基准 Diff |
+| 数据安全 | AI 失败、Diff 应用失败、保存失败均不破坏原文件；无 LogicalState 的后台分支在用户接受前不落盘，已有 LogicalState 的分支仅保存可写盘 |
 | 模型链路 | AiGateway + DeepSeek 托管模型生产配置可用；BYOK 可用；错误码明确 |
 | 账号订阅 | 登录、会话、SubscriptionGate、用量展示可用；无订阅拒绝调用 |
 | 管理员端 | 可定位用户、订阅、调用错误、网关状态，并支持早期运营处理 |
@@ -152,3 +154,5 @@
 |------|------|---------|
 | 2026-07-17 | v1.0 | 初版：基于人类确认的早期发布决策，建立 1.0 EP 发布切片；明确发布阻断项（WS/ED/DOC/PRV/AG/DE/AiGateway/BYOK/账号订阅/管理员端/反馈/DMG）、非阻断项（CBT/AST/KB/TPL/自部署预设模型/多模态/模型矩阵等）、DeepSeek 托管模型 + BYOK 策略、验收门禁、与完整功能开发的关系和后续版本迁移路线 |
 | 2026-08-06 | v1.1 | 记录人类决策：1.0 版本不单独实现应用原生菜单栏（§4 非阻断项补充；右键菜单体系改按 SYS 统一 ContextMenu 简化方案推进，不并入菜单栏） |
+| 2026-08-08 | v1.2 | 同步 AG 1.0 落地基线：Agent 发布阻断项收敛为 agent-edit-1.0 可靠当前文档编辑闭环；补充 IntentResult、可信 Context/Prompt、逐回合工具授权、真实门禁/取消/唯一终态和空基准新建提案验收；跨文档写入、文件自动整理、复杂 Planning、参考风格/排版与多 Agent 明确为非阻断且默认关闭 |
+| 2026-08-13 | v1.3 | DIFF-STATE-COMPASS-01：发布验收中的 Diff/保存主链按 BR-CORE-STATE-001~003 收敛；无 LogicalState 的挂载卡在接受前不得落盘，已有或打开后迁移出的 LogicalState 只能经保存写盘。 |

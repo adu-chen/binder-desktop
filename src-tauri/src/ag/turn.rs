@@ -9,7 +9,51 @@
 
 use crate::ipc::IpcError;
 use rusqlite::Connection;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Binder AG 1.0 唯一开放的主回合运行配置。
+pub const AGENT_EDIT_1_0_PROFILE: &str = "agent-edit-1.0";
+
+/// 校验主回合运行配置。未知配置默认拒绝，避免未验证能力落入 1.0 主链。
+pub fn ensure_runtime_profile(profile: &str) -> Result<(), IpcError> {
+    if profile == AGENT_EDIT_1_0_PROFILE {
+        Ok(())
+    } else {
+        Err(IpcError::new(
+            "AG_RUNTIME_PROFILE_UNSUPPORTED",
+            &format!("不支持的 Agent Runtime Profile: {profile}"),
+            false,
+            false,
+        ))
+    }
+}
+
+/// 回合 wire 终态。值固定用于原子锁存，不承载展示文案。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TerminalKind {
+    Completed = 1,
+    Cancelled = 2,
+    Denied = 3,
+    Error = 4,
+}
+
+/// 首个终态获胜的原子锁存器；后续终态及其副作用必须被拒绝。
+#[derive(Debug, Default)]
+pub struct TerminalLatch(AtomicU8);
+
+impl TerminalLatch {
+    pub fn try_set(&self, terminal: TerminalKind) -> bool {
+        self.0
+            .compare_exchange(0, terminal as u8, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.0.load(Ordering::Acquire) != 0
+    }
+}
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -18,7 +62,8 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// SM-AG-01 状态（A-AG-M-S-01 §2）。Completed/Cancelled/Denied/HandedOver 为终态。
+/// SM-AG-01 状态（A-AG-M-S-01 §2）。TurnError/Completed/Cancelled/Denied/HandedOver 为终态；
+/// AwaitingClarification 为等待用户输入的非终态（BR-SYS-STATE-007，澄清不终结回合）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnState {
     Idle,
@@ -26,6 +71,8 @@ pub enum TurnState {
     AwaitingGate,
     Streaming,
     HandingOff,
+    /// 澄清等待：IntentResult.ambiguity=blocking 时等待用户输入的非终态（BR-SYS-STATE-007）。
+    AwaitingClarification,
     TurnError,
     Completed,
     Cancelled,
@@ -39,6 +86,7 @@ pub enum TurnEvent {
     Send,
     FallbackIn,
     Assembled,
+    ClarificationRequired,
     AssembleFail,
     GatePassed,
     GateDenied,
@@ -63,7 +111,11 @@ pub enum GateState {
 pub fn is_terminal(state: TurnState) -> bool {
     matches!(
         state,
-        TurnState::Completed | TurnState::Cancelled | TurnState::Denied | TurnState::HandedOver
+        TurnState::TurnError
+            | TurnState::Completed
+            | TurnState::Cancelled
+            | TurnState::Denied
+            | TurnState::HandedOver
     )
 }
 
@@ -72,17 +124,21 @@ pub fn is_terminal(state: TurnState) -> bool {
  * codes:    BR-AG-STATE-001-RB-AG-AG-TURN-001
  * type:     RB
  * chain:    AG-TURN
- * rules:    BR-AG-STATE-001
- * boundary: in=TurnEvent | out=TurnState(gateGatedToStreamingDeniedTerminalCancelNoHalfPersist)
+ * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
+ * boundary: in=TurnEvent | out=TurnState(clarificationNonTerminalGateGatedToStreamingDeniedTerminalCancelNoHalfPersist)
  */
-/// SM-AG-01 转移引擎（BR-AG-STATE-001）：**Streaming（模型调用）仅经 AwaitingGate+gatePassed 可达**
-/// （门禁前置无绕过）；gateDenied→Denied 终态不可绕过；cancel→Cancelled 无半落盘；takeover 须用户确认
-/// →HandedOver；handoffOk→Completed（交 DE 完毕）。返回 `None` = 无合法转移（含全部 forbidden）。
+/// SM-AG-01 转移引擎（BR-AG-STATE-001 / BR-SYS-STATE-007）：**Streaming（模型调用）仅经
+/// AwaitingGate+gatePassed 可达**（门禁前置无绕过）；gateDenied→Denied 终态不可绕过；cancel→Cancelled
+/// 无半落盘；takeover 须用户确认→HandedOver；handoffOk→Completed（交 DE 完毕）；**澄清
+/// （ClarificationRequired）→AwaitingClarification 非终态，不终结回合**。返回 `None` = 无合法转移
+/// （含全部 forbidden）。
 pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
     use TurnEvent::*;
     use TurnState::*;
     let next = match (state, event) {
         (Idle, Send) | (Idle, FallbackIn) => Assembling,
+        // 澄清是等待用户输入的非终态（BR-SYS-STATE-007），不终结回合。
+        (Assembling, ClarificationRequired) => AwaitingClarification,
         (Assembling, Assembled) => AwaitingGate,
         (Assembling, AssembleFail) => TurnError,
         // 门禁前置：唯一通往 Streaming 的路径。
@@ -97,9 +153,10 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
         ) => HandedOver,
         (Streaming, StreamFail) => TurnError,
         (Streaming, Cancel) => Cancelled,
+        // 澄清等待是活动阶段：取消可在此生效（BR-SYS-STATE-007 任一活动阶段取消）。
+        (AwaitingClarification, Cancel) => Cancelled,
         (HandingOff, HandoffOk) => Completed,
         (HandingOff, HandoffFail) => TurnError,
-        (TurnError, Retry) => Assembling,
         // 其余无合法转移（终态冻结；无 gatePassed 不得 Streaming；takeover 未确认不移交）。
         _ => return None,
     };
@@ -200,6 +257,10 @@ mod tests {
     fn lifecycle_streaming_only_reachable_through_gate() {
         assert_eq!(transition(Idle, Send), Some(Assembling));
         assert_eq!(transition(Assembling, Assembled), Some(AwaitingGate));
+        assert_eq!(
+            transition(Assembling, ClarificationRequired),
+            Some(AwaitingClarification)
+        );
         assert_eq!(transition(AwaitingGate, GatePassed), Some(Streaming));
         assert_eq!(transition(Streaming, StreamEnd), Some(HandingOff));
         assert_eq!(transition(HandingOff, HandoffOk), Some(Completed));
@@ -207,7 +268,8 @@ mod tests {
         assert_eq!(transition(AwaitingGate, GateDenied), Some(Denied));
         // 结构性门禁前置：除 AwaitingGate+gatePassed 外无任何状态可达 Streaming
         for from in [
-            Idle, Assembling, Streaming, HandingOff, TurnError, Completed, Denied,
+            Idle, Assembling, AwaitingClarification, Streaming, HandingOff, TurnError, Completed,
+            Denied,
         ] {
             assert_eq!(
                 transition(from, GatePassed),
@@ -220,7 +282,24 @@ mod tests {
     }
 
     // covers: BR-AG-STATE-001
-    // 取消无半落盘终态；takeover 须确认；TurnError 可重试；终态冻结。
+    // covers: BR-SYS-STATE-007
+    // 澄清是等待用户输入的非终态：不终结回合；澄清等待阶段取消仍可到达 Cancelled 终态。
+    #[test]
+    fn clarification_is_non_terminal_and_cancelable() {
+        // 澄清 → AwaitingClarification（非终态）
+        let s = transition(Assembling, ClarificationRequired).unwrap();
+        assert_eq!(s, AwaitingClarification);
+        assert!(!is_terminal(s), "AwaitingClarification 不得判定为终态");
+        // 澄清等待阶段取消 → Cancelled（任一活动阶段取消生效）
+        assert_eq!(transition(AwaitingClarification, Cancel), Some(Cancelled));
+        // 澄清不产生模型调用/产出：澄清态无通往 Streaming/HandingOff 的转移
+        assert_eq!(transition(AwaitingClarification, GatePassed), None);
+        assert_eq!(transition(AwaitingClarification, StreamEnd), None);
+        assert_eq!(transition(AwaitingClarification, HandoffOk), None);
+    }
+
+    // covers: BR-AG-STATE-001
+    // 取消无半落盘终态；takeover 须确认；TurnError 终态冻结，重试须创建新回合。
     #[test]
     fn cancel_takeover_retry_and_terminals_frozen() {
         assert_eq!(transition(Streaming, Cancel), Some(Cancelled));
@@ -244,14 +323,34 @@ mod tests {
             "未确认不移交"
         );
         assert_eq!(transition(Streaming, StreamFail), Some(TurnError));
-        assert_eq!(transition(TurnError, Retry), Some(Assembling));
+        assert_eq!(transition(TurnError, Retry), None);
         for ev in [Send, GatePassed, StreamEnd, HandoffOk, Cancel] {
             assert_eq!(transition(Completed, ev), None);
             assert_eq!(transition(Cancelled, ev), None);
             assert_eq!(transition(Denied, ev), None);
             assert_eq!(transition(HandedOver, ev), None);
         }
-        assert!(is_terminal(Denied) && is_terminal(HandedOver) && !is_terminal(Streaming));
+        assert!(
+            is_terminal(Denied)
+                && is_terminal(HandedOver)
+                && is_terminal(TurnError)
+                && !is_terminal(Streaming)
+        );
+    }
+
+    #[test]
+    fn runtime_profile_and_terminal_latch_fail_closed() {
+        assert!(ensure_runtime_profile(AGENT_EDIT_1_0_PROFILE).is_ok());
+        assert_eq!(
+            ensure_runtime_profile("build-1.0").unwrap_err().code,
+            "AG_RUNTIME_PROFILE_UNSUPPORTED"
+        );
+
+        let latch = TerminalLatch::default();
+        assert!(latch.try_set(TerminalKind::Error));
+        assert!(latch.is_set());
+        assert!(!latch.try_set(TerminalKind::Completed));
+        assert!(!latch.try_set(TerminalKind::Cancelled));
     }
 
     // covers: BR-AG-VERIFY-001

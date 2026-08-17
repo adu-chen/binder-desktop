@@ -2,8 +2,8 @@
 文档编号：ED-M-D-01
 文档状态：A
 负责模块：ED
-文档职责：ED 编辑器模块级功能需求描述——声明模块级 REQ-ED-*，承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009，界定富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层（供 diff 呈现）
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/004/009）、A-CORE-C-P-01_APC.md（§4.1 ED 职责「编辑器运行时 TipTap，md/docx 富文本编辑」、§9 离线边界）、A-SYS-C-T-01_系统总体架构.md（§3 ED 职责、§4 ED→WS 依赖）、A-WS-M-T-01_工作台技术设计.md（文件 I/O 经 WS 物理边界、WS-FS）、A-SYS-M-S-01_状态机总图.md（autocomplete/inline-assist 归属待确认）、A-CORE-X-L-01_总体开发路线图.md（P2）、ADU.md（§3.2 REQ 规范）
+文档职责：ED 编辑器模块级功能需求描述——声明模块级 REQ-ED-*，承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009/010/011/013/014/015，界定 HTML/Markdown/纯文本与 BDocx 处理副本的富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层（供 diff 预览）/ 未保存新建与转换目标文档会话 / Agent 只读会话事实
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/004/009/010/011/013/014/015）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§2、§5.3、§5.10 D-NEW-001~008、§5.11.1、§5.13、§5.14）、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§9 离线边界）、A-SYS-C-T-01_系统总体架构.md（§3 ED 职责、§4 ED→WS 依赖）、A-WS-M-T-01_工作台技术设计.md（文件 I/O 经 WS 物理边界、WS-FS）、A-CORE-X-L-01_总体开发路线图.md（P2）、ADU.md（§3.2 REQ 规范）
 直接承接：ED L2 技术设计（编辑器运行时选型 / block 模型与 blockId / 分页 / 媒体 / decoration 接口）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；decoration 层供 DE（diff 呈现/审阅）与 AG（局部修改）消费
 使用边界：本文是 L1 功能需求描述层，仅声明模块级 REQ-ED-*，**不定义技术规则**（RULE/CHAIN/CONSTRAINT/TERM/STATE_MACHINE 见 ED L2）；**代码不得直接映射 REQ**（ADU §3.2）；编辑器框架版本/扩展选型、blockId 生成策略、分页实现、decoration 接口归 ED L2；DOCX/Pandoc 转换归 DOC、diff 生成与终态归 DE、文件 I/O 归 WS、预览导出归 PRV
 变更要求：ED 职责或编辑运行时边界变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2 req_id 规则（序号不复用，废弃改 superseded）
@@ -40,11 +40,17 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 
 | # | 职责 | 锚定 |
 |---|---|---|
-| E-J1 | 富文本编辑运行时：md / docx 内容的富文本编辑（基于 TipTap） | APC §4.1、REQ-CORE-004/009 |
+| E-J1 | 富文本编辑运行时：Markdown、纯文本、HTML 与 BDocx 处理副本的富文本编辑（基于 TipTap）；原生 DOCX 不进入编辑会话 | APC §4.1、REQ-CORE-004/009 |
 | E-J2 | block 模型与稳定 blockId 定位（结构化内容锚，供 diff/引用/分页） | APC §4.1、REQ-CORE-002 |
 | E-J3 | 分页系统与布局（分页模式、光标与遮罩、打印友好呈现） | APC §4.1、REQ-CORE-004 |
 | E-J4 | 图文媒体能力（图片等媒体的插入、呈现与处理） | APC §4.1 |
 | E-J5 | 编辑器装饰层（decoration）：承载 diff 呈现/审阅与局部修改 | REQ-CORE-002 |
+| E-J6 | 未保存文档会话：承载新建提案预览生成的 LogicalState、自动打开标签、后续编辑及关闭提醒 | REQ-CORE-010 |
+| E-J7 | Agent 只读会话事实：向受限回合如实投影活动/打开文档、选区、脏态、保存基准、LogicalState 和关联 Proposal | REQ-CORE-011 |
+| E-J8 | 文件树结构暂存下的标签路径呈现：保留打开内容/脏态、显示暂定路径并传达内容 Proposal 失效 | REQ-CORE-012 |
+| E-J9 | 最小格式转换目标会话：预览成功后打开目标副本标签，承接继续编辑、卡片失效与未保存提示 | REQ-CORE-013 |
+| E-J10 | 可恢复删除前置：受影响已打开脏会话必须保存或明确关闭并丢弃；删除成功后标签按真实存储状态关闭或转为只读恢复入口 | REQ-CORE-014 |
+| E-J11 | 多既有文档逐项会话：已确认冻结目标清单内的标签、LogicalState、预览和失败状态相互隔离 | REQ-CORE-015 |
 
 > 边界澄清：ED **提供编辑面与 decoration 承载机制**，但 diff 的**生成与"接受/拒绝/过期"终态语义归
 > DE**、局部修改（inline-assist）/辅助续写（autocomplete）的**业务归属待确认**（A-SYS-M-S-01 §3，
@@ -58,7 +64,12 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 - 内容的 block 结构化模型与稳定 blockId 定位（供 diff 定位、@mention 引用锚、分页切分）。
 - 分页系统：分页布局、光标与遮罩、打印友好呈现。
 - 图文媒体：图片等媒体的插入、呈现与处理。
-- 编辑器装饰层（decoration）：为 DE 的 diff 呈现/审阅、AG 的局部修改提供呈现承载面。
+- 编辑器装饰层（decoration）：为 DE 的 diff 受控预览/审阅、AG 的局部修改提供呈现承载面。
+- 未保存文档会话：新建提案预览成功后自动打开可编辑标签；未保存文档尚不属于 workspace 文件树。
+- Agent 只读会话事实：对所属 workspace/AgentSession 的受限任务投影真实编辑器会话，不提供写入能力。
+- 原生 DOCX 只读边界与 BDocx 编辑副本呈现：原生 DOCX 由 PRV 只读预览；其副本才转为 HTML 编辑模型，并以模拟 Word 分页呈现。
+- TXT↔Markdown 转换目标会话：转换成功后的目标副本进入未保存 LogicalState 与标签，来源不进入编辑或写回路径。
+- 可恢复删除前置与多既有文档逐项会话：删除不丢弃未保存内容；已确认目标清单内的各会话独立预览、失效、保存与呈现。
 
 **OUT（非 ED）**：
 - DOCX / Pandoc 格式转换——归 DOC；ED 承接转换后内容的编辑呈现。
@@ -75,7 +86,7 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 
 | step | actor | input | action | output | next | exception |
 |---|---|---|---|---|---|---|
-| 1 | WS | workspace 内文档内容 | ED 按磁盘格式解析为富文本编辑模型（Markdown 经 Markdown Codec，b-docx 经 DOC） | 可编辑文档 | 2 | 内容无法无损解析→提示并进入源码保护/只读降级，不静默丢失 |
+| 1 | WS/DOC | workspace 内 Markdown、纯文本、HTML 或 BDocx 编辑副本 | ED 按其编辑路径装载富文本模型（Markdown 经 Markdown Codec；BDocx 副本由 DOC 转为 HTML） | 可编辑文档 | 2 | 内容无法安全装载→提示并进入源码保护/只读降级，不静默丢失；原生 DOCX 不进入本流程 |
 | 2 | 用户 | 编辑操作 | ED 更新编辑模型并标记脏 | 脏编辑态 | 3 | 离线时编辑照常可用（REQ-CORE-009） |
 | 3 | 用户/ED | save 触发 | ED 交 WS 落盘（A-WS-M-T-01 SM-WS-01） | 已保存 | 终态 | 落盘失败由 WS 回报，ED 保持脏态可重试 |
 
@@ -83,11 +94,11 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 
 | step | actor | input | action | output | next | exception |
 |---|---|---|---|---|---|---|
-| 1 | DE | 生成的 diff | ED 在 decoration 层按 blockId 定位呈现 diff | 可视 diff 呈现 | 2 | 定位锚失效→回报 DE，不静默错位呈现 |
-| 2 | 用户 | 接受/拒绝 | 由 DE 终态机裁决（ED 仅呈现与转达交互） | accepted/rejected/expired | 3 | 终态归 DE |
-| 3 | DE→WS | accepted 信号 | WS 落盘（SM-WS-02），ED 清除该 diff decoration | 已落盘 + 呈现复位 | 终态 | rejected/expired→ED 清除装饰，文档不变 |
+| 1 | DE | 生成的 diff | ED 校验 blockId/提案基准后，在受控预览中把候选内容投影到 LogicalState，并呈现差异 | 可编辑预览 + 可视 diff | 2 | 定位锚或基准失效→回报 DE，不静默错位呈现 |
+| 2 | 用户 | 接受/拒绝 | 由 DE 裁决提案；接受不重复应用，拒绝仅在原始基准有效时恢复对应预览 | accepted/rejected/expired | 3 | 手动编辑、后续预览或外部变更→expired，控件不可用 |
+| 3 | 用户→WS | 显式保存 | WS 将当前 LogicalState 写入磁盘；ED 按 DE 状态同步审阅呈现 | 已落盘 + 呈现复位 | 终态 | 保存失败→保留脏态与可编辑内容 |
 
-> E2 在 L1 仅锁边界：ED 提供 decoration 呈现面与 blockId 定位，diff 终态归 DE、落盘归 WS；
+> E2 在 L1 锁定：ED 是受控预览进入 LogicalState 的编辑面，DE 拥有提案裁决、WS 拥有显式保存落盘；
 > decoration 与 DE/AG 的具体接口契约归 ED L2 + DE/AG 联合（§7 ED-05）。
 
 **E3 · 分页与媒体呈现**（E-J3/E-J4，承接 REQ-CORE-004）
@@ -105,12 +116,12 @@ ED 是 Binder 写作产品的**富文本编辑运行时**（APC §4.1：TipTap�
 
 <!-- REQ
 req_id: REQ-ED-001
-title: 富文本编辑运行时（md/docx）
+title: 富文本编辑运行时（Markdown/纯文本/HTML/BDocx 编辑副本）
 owner_module: ED
 status: active
-summary: 提供基于 TipTap 的富文本编辑运行时，支持 workspace 内 Markdown/b-docx 内容按格式解析为结构化 LogicalState、以终态样式编辑并安全序列化，编辑能力离线可用；落盘经 WS
+summary: 提供基于 TipTap 的富文本编辑运行时，支持 workspace 内 Markdown、纯文本、HTML 与 BDocx 编辑副本按处理路径解析为结构化 LogicalState、以终态富文本呈现并进行内容与基础结构编辑，编辑能力离线可用；HTML/BDocx 的字符基础样式为 P0，颜色/突出显示、段落对齐/间距/缩进、字号与字体族为 P1 受控实现。原生 DOCX 只读，不建立编辑会话；落盘经 WS
 source_doc: APC §4.1、REQ-CORE-004、REQ-CORE-009
-acceptance: Markdown 的 H1-H6、强调、列表、引用、代码、链接、图片、表格、分隔线等受支持语法加载后以终态富文本呈现且源码标记不作为正文显示；未编辑 Markdown 不改写，编辑后保存保持支持子集语义等价，无法无损处理时不得静默保存；b-docx 可加载为富文本并编辑；纯文本（.txt 等）提供段落级结构内容编辑工具栏（引用/代码块/分隔线，内容可保存），文字级样式（字体/字号/颜色等）不展示（txt 保存为纯文本不持久化，ED-TXT-TOOLBAR-01）；离线编辑可用；save 经 WS 可靠落盘（A-WS-M-T-01）
+acceptance: Markdown 的 H1-H6、强调、列表、引用、代码、链接、图片、表格、分隔线等受支持语法加载后以终态富文本呈现且源码标记不作为正文显示；未编辑 Markdown 不改写，编辑后保存保持支持子集语义等价，无法无损处理时不得静默保存；HTML 与 BDocx 编辑副本可加载为富文本并编辑，且均支持 P0 加粗/斜体/下划线/删除线，以及 P1 文字颜色/突出显示、段落左中右两端对齐、行距/段前后/首行与左右缩进、固定字号档位和字体族切换；所有 P0/P1 项均须在实现后以真实样例完成保存重开验证，未验证前不对外开放；纯文本（.txt 等）提供段落级结构内容编辑工具栏（引用/代码块/分隔线，内容可保存），文字级样式（字体/字号/颜色等）不展示（txt 保存为纯文本不持久化，ED-TXT-TOOLBAR-01）；原生 DOCX 不生成编辑器标签；离线编辑可用；save 经 WS 可靠落盘（A-WS-M-T-01）
 open_issues: Markdown 扩展仍为 Beta，具体兼容范围与非标准语法降级由 ED L2 及 fixtures 门禁锁定；docx 富文本编辑与 DOC 转换边界归 ED/DOC L2（ED-04）
 -->
 
@@ -138,12 +149,12 @@ open_issues: 分页实现（光标/遮罩方案）与大文档分页性能归 ED
 
 <!-- REQ
 req_id: REQ-ED-004
-title: 图文媒体能力
+title: HTML 与 BDocx 处理路径的图文媒体能力
 owner_module: ED
 status: active
-summary: 支持图片等媒体在编辑器内的插入、呈现与处理，媒体资源经 WS 限定在 workspace 内
+summary: 支持 HTML 编辑文档与 BDocx 处理副本中的图片等媒体插入、呈现与处理，媒体资源经 WS 限定在 workspace 内；该能力为 P1 受控开放，原生 DOCX 不直接编辑
 source_doc: APC §4.1、REQ-CORE-001（workspace 边界）
-acceptance: 可在编辑器内呈现和选择图片；图片宽度可通过可见手柄按固有比例调整；独立图片段落可经邻近控件在文档流内上移、下移或删除，混排文字中的行内图片不得被当作整块重排；代理可把经校验的 workspace 项目图片插入稳定 Block 前后，或对当前文档图片实例执行删除、受限宽度缩放、上下移动和独立段落左/中/右对齐，操作经结构化 Diff 裁决且不改写项目源文件；同图缩放/对齐/移动可单批原子组合，删除独占；用户从项目树、Finder 拖入或粘贴的 PNG/JPEG 经受控复制/复用后插入独立图片段落；成功操作产生脏态，BDocx 保存重开后图片资源、alt、尺寸、顺序、对齐和删除结果保持；媒体资源不越出 workspace（WS X-FORBID-004）
+acceptance: HTML 编辑文档与 BDocx 处理副本可在编辑器内呈现和选择图片；图片宽度可通过可见手柄按固有比例调整；独立图片段落可经邻近控件在文档流内上移、下移或删除，混排文字中的行内图片不得被当作整块重排；代理可把经校验的 workspace 项目图片插入稳定 Block 前后，或对当前文档图片实例执行删除、受限宽度缩放、上下移动和独立段落左/中/右对齐，操作经结构化 Diff 裁决且不改写项目源文件；同图缩放/对齐/移动可单批原子组合，删除独占；用户从项目树、Finder 拖入或粘贴的 PNG/JPEG 经受控复制/复用后插入独立图片段落；成功操作产生脏态，BDocx 副本保存重开后图片资源、alt、尺寸、顺序、对齐和删除结果保持；原生 DOCX 不直接开放图片编辑；媒体资源不越出 workspace（WS X-FORBID-004）
 open_issues: 图片视觉识别/OCR、文字环绕、行内混排重排、浮动或绝对定位、任意坐标布局、裁剪、旋转和独立高度不在当前支持子集；Pandoc 不保留自定义 data-display，故不把 inline/block 按钮声明为 BDocx 持久能力
 -->
 
@@ -152,10 +163,10 @@ req_id: REQ-ED-005
 title: 编辑器装饰层（供 diff 呈现与局部修改）
 owner_module: ED
 status: active
-summary: 提供编辑器装饰层（decoration），按 blockId 承载 diff 呈现/审阅与局部修改的可视呈现；diff 终态归 DE、局部修改业务归属待确认，ED 只保证装饰面可承载
-source_doc: REQ-CORE-002、A-SYS-M-S-01（autocomplete/inline-assist 归属待确认）
-acceptance: decoration 可按 blockId 定位呈现 diff 与局部修改；裁决终态由 DE 驱动，ED 据信号呈现/复位
-open_issues: decoration 与 DE diff/AG inline-assist 的接口契约归 ED L2 + DE/AG 联合（ED-05）；inline-assist/autocomplete 归属待人类确认（A-SYS-M-S-01 §3）
+summary: 提供编辑器装饰层（decoration），按 blockId 承载 diff 的受控预览、审阅与局部修改的可视呈现；已有 LogicalState 的预览成功后候选内容进入该 LogicalState，背景 pending 在打开目标文档时也必须以同一 payload 建立并进入 LogicalState，提案裁决归 DE，ED 不直接写 DiskState
+source_doc: REQ-CORE-002/010、A-AG-M-D-02 §2
+acceptance: decoration 可按 blockId 定位呈现 diff；成功预览准确投影到已有或 pending 打开后新建的 LogicalState 并显示绿色增量；卡片在预览/迁移后仍为 pending，显式接受不重复应用预览内容，保存有效 pending 预览会一并裁决为接受，拒绝只在基准有效时复原；基准推进后旧提案不得错位回滚或继续裁决
+open_issues: decoration 与 DE diff/AG inline-assist 的接口契约归 ED L2 + DE/AG 联合（ED-05）
 -->
 
 <!-- REQ
@@ -171,12 +182,12 @@ open_issues: 跨会话字符锚（内容哈希重建）显式延后（D-2 + PI-E
 
 <!-- REQ
 req_id: REQ-ED-007
-title: agent 可读可编辑的样式协议
+title: agent 可读样式投影与受控编辑边界
 owner_module: ED
 status: active
-summary: 文档样式（字符 marks / 块属性）以机器可读结构投影供 agent 读取；样式修改以受控样式操作进入编辑模型，agent 落盘路径按裁定 D-3 分流（回合产出经 DE diff 裁决、显式局部修改视为用户编辑）
+summary: 文档样式（字符 marks / 块属性）可提供机器可读结构投影供 agent 读取；HTML/BDocx 的已确认操作集合为：P0 加粗、斜体、下划线、删除线，P1 颜色/突出显示、段落对齐/间距/缩进、字号与字体族。样式修改仅以受控操作进入编辑模型；投影不构成原始 HTML、CSS 或 OOXML 写入授权；agent 落盘路径按裁定 D-3 分流（回合产出经 DE diff 裁决、显式局部修改视为用户编辑）
 source_doc: REQ-CORE-002、2026-07-03 人类需求 #3 与裁定 D-3（A-ED-X-L-02 §2：A 默认 + B 限内联）
-acceptance: agent 可读到结构化样式投影；样式 diff 经 DiffCard 可裁决落盘；显式内联样式操作即改即脏；不存在绕过裁决的回合直改路径（X-FORBID-006）
+acceptance: agent 可读到结构化样式投影；仅已确认操作可生成 HTML/BDocx 的样式 Proposal，字符基础样式按 P0 授权，P1 项按动态能力开关授权；样式 diff 经 DiffCard 可裁决落盘，显式内联样式操作即改即脏；所有 P0/P1 项实现后须经真实保存重开验证才可对外开放；不存在绕过裁决的回合直改路径（X-FORBID-006）
 open_issues: 样式 op 集与投影 schema 归 ED L2（BR-ED-DATA-005）+ ED/DE/AG I-P 联合；DiffCard 样式呈现归 DE
 -->
 
@@ -193,30 +204,108 @@ open_issues: 统一模型扩展归 ED L2（BR-ED-DATA-002 修订）；.html 的 
 
 <!-- REQ
 req_id: REQ-ED-009
-title: BDocx 表格语义编辑与单元格底纹
+title: HTML 与 BDocx 处理路径的表格语义编辑与单元格底纹
 owner_module: ED
 status: active
-summary: BDocx 表格的人工交互与代理修改共用受控表格操作协议；支持基础结构操作和单元格纯色底纹，代理建议必须进入 Diff Edit 裁决
+summary: HTML 编辑文档与 BDocx 处理副本的表格人工交互与代理修改共用受控表格操作协议；支持基础结构操作和单元格纯色底纹，代理建议必须进入 Diff Edit 裁决；该能力为 P1 受控开放，原生 DOCX 不直接编辑
 source_doc: REQ-CORE-002、REQ-CORE-004、2026-07-28 人类确认课题 A/B
-acceptance: 表格可执行行列增删、表头、合并拆分、文档流移动和列边界拖拽；所选一个或多个单元格可设置或清除纯色底纹；代理可经 list_tables→table_ops 产生结构化建议，底纹差异按坐标和前后色值准确呈现；富内容单元格设置底纹时内容树不变；保存并重开 BDocx 后受支持底纹保持
+acceptance: HTML 编辑文档与 BDocx 处理副本的表格可执行行列增删、表头、合并拆分、文档流移动和列边界拖拽；所选一个或多个单元格可设置或清除纯色底纹；代理可经 list_tables→table_ops 产生结构化建议，底纹差异按坐标和前后色值准确呈现；富内容单元格设置底纹时内容树不变；保存并重开 BDocx 副本后受支持底纹保持；原生 DOCX 不直接开放表格编辑
 open_issues: 列宽数值输入/均分列、行高、浮动或绝对定位、渐变/主题/图案填充、嵌套表格和列宽 DOCX 往返保证不在当前范围
+-->
+
+<!-- REQ
+req_id: REQ-ED-010
+title: 未保存新建文档的编辑器会话
+owner_module: ED
+status: active
+summary: 新建文档提案受控预览成功后，ED 自动打开对应编辑器标签并承载可继续编辑的未保存 LogicalState；该会话不是磁盘文件树节点，原提案失效不关闭标签，手动关闭时按普通未保存内容提示
+source_doc: REQ-CORE-010、A-AG-M-D-02 §5.10（D-NEW-001~008）
+acceptance: 新建预览后用户可手动编辑或继续代理编辑；原提案基准推进后标签和 LogicalState 保留、接受/拒绝不可用；基准有效的拒绝关闭标签并丢弃逻辑文档；未保存关闭有提示，保存失败仍保留标签和内容
+open_issues: 标签、文档 LogicalState、提案与保存状态的详细状态机归 ED/DE/WS G2 联合定义
+-->
+
+<!-- REQ
+req_id: REQ-ED-011
+title: Agent 可感知的编辑器会话事实
+owner_module: ED
+status: active
+summary: 为 Agent 1.0 的 P0 阅读、分析和提案提供受限编辑器会话事实：当前 workspace 内的活动文档、已打开标签、每个标签的格式/脏态/保存基准、任务所需的选区或焦点、当前 LogicalState 版本以及关联 Proposal 状态。ED 只提供真实会话投影，不把显示态或磁盘旧内容伪装成当前编辑内容
+source_doc: REQ-CORE-011、A-AG-M-D-02 §5.3（CAP-03）、REQ-AG-009
+acceptance: 用户在 A 文档产生未保存修改、切换至 B 后，Agent 仍可按任务读取 A 的 LogicalState、脏态和保存基准，且不会把 B 或 A 的 DiskState 混入；选区仅在任务需要时供给并带所属文档/锚；关联 Proposal 的 pending、冲突、失效与保存状态可被如实呈现；跨 workspace 或跨 AgentSession 不泄露标签、选区或未保存内容
+open_issues: 会话快照字段、刷新时机和跨模块事件归 ED/AG/SYS DESIGN Scope；本 L1 不定义 store、IPC 或序列化结构
+-->
+
+<!-- REQ
+req_id: REQ-ED-012
+title: 原生 DOCX 只读与 BDocx 编辑副本呈现
+owner_module: ED
+status: active
+summary: 原生 DOCX 只经 PRV 进入只读预览、读取和分析，不建立 ED 编辑会话。用户或 Agent 请求编辑时，系统只对新 BDocx 编辑副本生成 Proposal；预览成功后 ED 才以 HTML 编辑模型打开该副本，并以模拟 Word 分页呈现，保存目标仍为新的 DOCX
+source_doc: REQ-CORE-004、A-AG-M-D-02 §6
+acceptance: 原生 DOCX 没有可编辑标签、样式/表格/图片写入工具或原地 save；创建副本 Proposal 成功预览后才出现可编辑 LogicalState 和标签；副本编辑时呈现模拟 Word 分页，保存不改变原生 DOCX；拒绝或失效副本 Proposal 时遵循 D-NEW-001~008
+open_issues: 副本命名、来源关联、处理身份和 Pandoc/HTML/分页实现契约归 ED/DOC/WS DESIGN Scope；已确认样式操作的技术映射、能力开关与真实验证矩阵归 ED/DOC DESIGN Scope
+-->
+
+<!-- REQ
+req_id: REQ-ED-013
+title: 文件树结构暂存下的标签路径呈现
+owner_module: ED
+status: active
+summary: 当逻辑文件树中的单文件重命名或移动预览成功时，ED 保留受影响已打开标签的当前内容与 LogicalState，并将标签显示路径更新为暂定路径；该显示不代表磁盘已写入。结构基线继续推进时，关联待审阅内容 Proposal 必须失效
+source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-WS-M-D-01（REQ-WS-008）
+acceptance: 文件树预览后，打开标签不关闭、不丢失脏态或内容，并清晰呈现暂定路径；接受结构卡不将暂定路径伪报为磁盘路径；结构保存失败时标签和逻辑内容保留；受影响待审阅内容 Proposal 失效且不可裁决；跨 workspace/会话不得泄露暂定路径或内容
+open_issues: 标签身份与路径分离、路径切换时机、结构保存失败后的同步、与 AG/WS/REF/DE 的失效事件归 ED/WS/AG/REF/SYS DESIGN Scope；本 L1 不定义状态字段或 UI 细节
+-->
+
+<!-- REQ
+req_id: REQ-ED-014
+title: 最小格式转换目标副本的编辑器会话
+owner_module: ED
+status: active
+summary: TXT→Markdown、Markdown→TXT 的转换提案预览成功后，ED 自动打开新的目标副本标签并承载可继续编辑的未保存 LogicalState；来源文档不被转换过程改写或关闭。目标标签清晰呈现输入/输出格式、目标路径和 Markdown→TXT 的有损提示；接受只裁决转换卡，目标后续编辑或后续成功预览推进基准时旧卡失效
+source_doc: REQ-CORE-013、A-AG-M-D-02 §5.13（CAP-13）、A-DE-M-D-01（REQ-DE-006）、A-DOC-M-D-01（REQ-DOC-006）
+acceptance: 转换预览前失败时不出现目标标签；预览成功后用户可编辑目标，接受不创建文件，保存成功才显示为已保存目标；Markdown→TXT 的有损边界对用户可见且不伪称可逆；目标手动编辑或后续代理编辑后旧转换卡不可接受/拒绝但目标标签/LogicalState 保留；保存冲突/失败保留标签和当前内容；HTML、通用 DOCX、批量或原地转换不产生本会话，BDocx 继续遵循 REQ-ED-012
+open_issues: 转换目标的标签标识、格式/路径/损失提示、来源快照呈现、提案失效事件与保存失败同步归 ED/DE/DOC/WS/AG/SYS DESIGN Scope；本 L1 不定义 UI、状态字段或接口
+-->
+
+<!-- REQ
+req_id: REQ-ED-015
+title: 可恢复删除前置与受影响标签处理
+owner_module: ED
+status: active
+summary: 对已保存文件/文件夹的可恢复删除，ED 在逻辑文件树红色暂存时保持受影响打开标签的内容与 LogicalState；若任一受影响会话有未保存内容，删除保存前必须要求用户逐项保存，或关闭并明确丢弃。删除显式保存成功后，ED 不保留把已移入可恢复存储的文件伪装为仍可正常编辑的标签；恢复预览成功后按真实 LogicalState/标签状态呈现
+source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-DE-M-D-01（REQ-DE-007）
+acceptance: 删除预览或接受不关闭标签、不丢脏内容且明确显示待删除状态；任何未保存会话未决时不得静默执行删除保存；用户选择保存失败则继续阻断，选择丢弃才可继续；删除保存成功后标签、路径和可编辑性不伪装为原磁盘文件仍存在；恢复冲突不由 ED 自动覆盖或替换当前会话；新建未保存标签的拒绝/关闭继续按 REQ-ED-010
+open_issues: 受影响标签识别、脏会话确认交互、删除后标签终态、恢复后的会话重建、与 DE/WS/REF/AG 的失效事件归 ED/DE/WS/REF/AG/SYS DESIGN Scope；本 L1 不定义 UI、状态字段或接口
+-->
+
+<!-- REQ
+req_id: REQ-ED-016
+title: 多个既有文档的独立编辑器会话
+owner_module: ED
+status: active
+summary: 对已确认并冻结的多既有文档目标清单，ED 为每个已打开目标独立承载 LogicalState、受控预览、绿色差异、脏态、卡片失效和显式保存结果；ED 不因一个目标冲突、外部变化、结构变化或删除而改写、关闭或阻断其他目标会话。背景目标打开后仍按其自身三分流迁移为 LogicalState 预览
+source_doc: REQ-CORE-015、A-AG-M-D-02 §5.14（CAP-15）、A-DE-M-D-01（REQ-DE-008）
+acceptance: 编辑器只为确认冻结清单中的可编辑目标显示多文档写入预览；每个目标的绿增、脏态、保存基准、Proposal 终态与失败提示可独立识别；任一目标失效仅禁用该目标卡，不静默跳过、回滚或污染其他目标；不提供跨文档一键接受、一键保存或共同事务呈现；原生 DOCX 与删除/文件树整理/格式转换混合操作不进入本会话
+open_issues: 多目标标签/卡片关联、并发预览与排序、背景目标迁移、逐项保存回执、独立失败/恢复和跨模块事件归 ED/DE/AG/WS/REF/SYS DESIGN Scope；本 L1 不定义 UI、状态字段、批处理或事务接口
 -->
 
 ## §6 模块边界与约束（边界闭合）
 
-- **职责边界**：ED 只承载富文本编辑运行时 / block 与 blockId / 分页 / 媒体 / decoration 呈现面
-  （§2 E-J1–E-J5），不做格式转换、diff 生成、文件 I/O、预览导出、chat/agent；越界即范围外
+- **职责边界**：ED 只承载富文本编辑运行时 / block 与 blockId / 分页 / 媒体 / decoration 呈现面 / 未保存文档会话
+  （§2 E-J1–E-J11），不做格式转换、diff 生成、文件 I/O、预览导出、chat/agent；原生 DOCX 只读，越界即范围外
   （CLAUDE.md §1 范围纪律）。
 - **L1/L2 边界**：本文只定契约**边界**；编辑器框架选型、blockId 策略、分页实现、decoration 接口归
   ED L2，代码只追溯 L2（ADU §3.2、APC §2）。
 - **与 WS 的边界**：文件读写、save 落盘、workspace 边界守护归 WS（A-WS-M-T-01 WS-FS / SM-WS-01）；
   ED 经 WS 进行 I/O，不直接触达文件系统（X-SEQ-002 / X-FORBID-004）。
-- **与 DE 的边界**：diff 生成与终态转移语义归 DE；ED 提供 decoration 呈现面与 blockId 定位，按 DE
-  信号呈现/复位（E2）。
+- **与 DE 的边界**：diff 生成与提案裁决语义归 DE；ED 提供受控预览、decoration 呈现面、blockId 定位
+  与未保存文档标签，按 DE 信号呈现/复位（E2）；面向 AG 的会话事实只读投影归 REQ-ED-011，不授予写入。
 - **与 DOC 的边界**：DOCX/Pandoc 格式转换归 DOC；ED 承接转换后内容的富文本编辑呈现（往返协作，
   细节边界 ED-04 延 ED/DOC L2）。
 - **与 AG 的边界**：chat/agent 回合归 AG；inline-assist/autocomplete 业务**归属待确认**
   （A-SYS-M-S-01 §3），ED 不抢定，仅提供 decoration 承载（ED-05）。
+- **删除与多文档边界**：ED 只呈现删除前置、标签/LogicalState 与逐目标会话隔离；删除/恢复 Proposal 终态归 DE、可恢复存储与保存归 WS、目标计划/工具授权归 AG。ED 不提供永久删除、批量接受、批量保存或跨文档事务。
 - **数据结构边界**：ED 编辑模型若需跨模块传递（如 blockId 供 DE 定位、供 REF 引用锚），其跨模块共享
   结构须经 SYS 数据结构契约层（X-SHARED-001，A-SYS-I-P-01），ED 不私自定义跨模块结构（细节 ED L2）。
 - **L4 原料边界**：取材见台账 §4.5（ED：编辑器架构 / block 模型 / 分页系统 / 图文媒体 / docx 能力等，
@@ -236,6 +325,10 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | ED-04 | BOUNDARY_OPEN | 显式延期 | docx 富文本编辑与 DOC 格式转换的往返边界细节归 ED/DOC L2 联合 |
 | ED-05 | BOUNDARY_OPEN | 显式延期 | decoration 与 DE diff/AG inline-assist 接口契约归 ED L2 + DE/AG；inline-assist/autocomplete 归属待人类确认（A-SYS-M-S-01 §3） |
 | ED-06 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5 各 REQ-ED-*；量化指标（编辑响应延迟、大文档分页性能）延 G5 NFR 标定（APC §9） |
+| ED-07 | FLOW_INCOMPLETE | 已识别，待 G2 | 未保存新建文档的标签、LogicalState、提案失效、拒绝丢弃及保存失败恢复须按 REQ-ED-010 / D-NEW-001~008 与 DE/WS 建立状态机，不得以文件树节点替代逻辑文档 |
+| ED-08 | FLOW_INCOMPLETE | 已识别，待 G2 | TXT↔Markdown 转换目标副本的标签、来源快照提示、损失呈现、提案失效与保存失败恢复须按 REQ-ED-014 联合 AG/DE/DOC/WS/SYS 设计；不得把来源或 BDocx 专用路径误作目标会话。 |
+| ED-09 | DESIGN_RISK | 已识别，待 G2 | 可恢复删除的受影响标签/脏会话前置、删除后终态、恢复会话和现有直接关闭标签路径的迁移，须按 REQ-ED-015 联合 DE/AG/WS/REF/SYS 设计；不得以关闭标签丢失 LogicalState。 |
+| ED-10 | DESIGN_RISK | 已识别，待 G2 | 多既有文档目标冻结后的标签/卡片关联、逐目标预览/失效/保存和背景目标迁移，须按 REQ-ED-016 联合 DE/AG/WS/REF/SYS 设计；不得提供批量裁决或事务。 |
 
 > 术语：编辑 block、blockId、分页、decoration 等 ED 主责核心概念将在 ED L2 评估注册 TERM（block /
 > blockId 作为跨模块定位锚，跨 session 易漂移且代码有实体承载，候选 TERM），本文 L1 不注册 TERM
@@ -248,7 +341,9 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
    - block 模型与 blockId 稳定定位（承接 REQ-ED-002，解除 ED-02，与 DE diff 定位联动）；
    - 分页系统与布局（承接 REQ-ED-003，解除 ED-03，取材台账 §4.5 分页四件）；
    - 图文媒体能力（承接 REQ-ED-004）；
-   - 编辑器装饰层接口契约（承接 REQ-ED-005，与 DE/AG 联合解除 ED-05）。
+   - 编辑器装饰层接口契约（承接 REQ-ED-005，与 DE/AG 联合解除 ED-05）；
+   - 未保存新建与转换目标文档会话、提案预览协同（承接 REQ-ED-010/014，与 DE/DOC/WS 联合解除 ED-07/08）；
+   - 可恢复删除前置与多既有文档逐项会话（承接 REQ-ED-015/016，与 DE/AG/WS/REF 联合解除 ED-09/10）。
 2. G2 各文档经 REQ_MAP 把 REQ-ED-* 映射为 RULE/CHAIN/CONSTRAINT/TERM；如有状态化编辑链路（如 docx
    编辑态切换），入 ED M-S 并登记 A-SYS-M-S-01 总图。
 3. ED 职责或编辑运行时边界变更先经 APC 授权再回写本文（APC §13）。
@@ -266,3 +361,13 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 2026-07-29 | v1.6 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-ED-004 纳入 workspace 项目图片的代理插入与当前图片实例删除、结构化 Diff、源文件保护和保存重开验收；继续排除外部导入、代理缩放/移动及自由布局。 |
 | 2026-07-30 | v1.7 | 图片编辑闭合审计：REQ-ED-004 同步代理缩放/上下移动/独立段落对齐、同图组合操作，以及项目树/Finder/粘贴受控导入；排除项收敛为视觉识别和高级布局。 |
 | 2026-08-07 | v1.8 | DOC-SYNC-01 落地说明：ED-SELECTION-PERSIST-01 选区失焦持久化与 ED-SELECTION-DRAG-01 选区拖动不错位，为 REQ-ED-006「字符级定位与选区引用」的交互落地（技术细节见 A-ED-M-T-01 v1.59/v1.61）；失焦持久化不改变锚语义、跨文档生命周期不残留，拖动不篡改原选区、拖出编辑器保持引用语义。 |
+| 2026-08-13 | v1.9 | 依据 REQ-CORE-010 与 D-NEW-001~008，新增 E-J6/REQ-ED-010；将 diff 呈现明确为受控预览进入 LogicalState，接受不再写盘，补齐新建预览自动开标签、提案失效不关标签、拒绝丢弃与未保存关闭提醒的需求边界。 |
+| 2026-08-13 | v1.10 | DIFF-STATE-COMPASS-01：REQ-ED-005 增加背景 pending 打开后的同 payload 绿色预览迁移；预览后卡片保持 pending，由 DE 保留用户裁决入口。 |
+| 2026-08-13 | v1.11 | AG-1.0-R2-REQUIREMENTS-01：新增 REQ-ED-011，冻结 CAP-03 的 P0 会话事实边界：活动/打开标签、脏态、保存基准、任务所需选区、LogicalState 与关联 Proposal 可被受限读取，且严格隔离 workspace/AgentSession。 |
+| 2026-08-13 | v1.12 | AG-1.0-R3-REQUIREMENTS-01：新增 REQ-ED-012，原生 DOCX 改为只读预览/分析，编辑只创建 BDocx 处理副本；表格与图片限定为 HTML/BDocx 的 P1 受控能力，BDocx 明确不是文件格式。 |
+| 2026-08-13 | v1.13 | R3 自检收紧：REQ-ED-001 与 REQ-ED-007 不再把 HTML/BDocx 的任一具体样式操作表述为已开放；样式投影可读不等于可写授权。 |
+| 2026-08-14 | v1.14 | AG-1.0-R3-STYLE-REQUIREMENTS-01：确认 HTML/BDocx 的字符基础样式 P0，以及颜色/突出显示、段落样式、字号与字体族 P1；字体族含 BDocx，真实验证是实现后的开放门槛。 |
+| 2026-08-14 | v1.15 | R3 语义收紧：REQ-ED-001/007 明确全部确认的 P0/P1 样式项均须在实现后真实保存重开验证，不能只验证 P1。 |
+| 2026-08-14 | v1.16 | AG-1.0-R4-STRUCTURE-REQUIREMENTS-01：新增 REQ-ED-013，单文件重命名/移动先更新逻辑文件树与标签暂定路径，保留内容/脏态；结构基线推进使关联内容 Proposal 失效，显式保存前不得伪报磁盘路径。 |
+| 2026-08-14 | v1.17 | AG-1.0-R4-CONVERSION-REQUIREMENTS-01：新增 REQ-ED-014；TXT→Markdown、Markdown→TXT 的目标副本预览成功后打开未保存标签，接受不写盘、目标继续编辑使旧卡失效；Markdown→TXT 的有损提示可见，HTML 与通用 DOCX 转换不进入会话。 |
+| 2026-08-14 | v1.18 | AG-1.0-R4-DELETE-MULTIDOC-REQUIREMENTS-01：新增 REQ-ED-015/016；删除保存前保留并逐项解决受影响脏会话，删除/恢复后标签不伪装磁盘状态；多个既有文档只在确认冻结目标清单后逐项承载独立 LogicalState、预览、失效和保存，不提供批量裁决或事务。 |

@@ -180,9 +180,11 @@ rule_id: BR-ED-STATE-001
 域: STATE
 -->
 文档编辑会话必须经完整生命周期管理：内容加载与 save 落盘全部经 WS（ED 无直接文件 I/O 路径，
-X-SEQ-002/X-FORBID-004）；用户编辑或 DE 草稿 diff 应用都属于编辑操作，必须产生脏态并驱动 WS save 保存机（SM-WS-01 Idle→Dirty，X-INTER-001
-转移点）；已打开但非激活文档的 DE 自动应用属于同等编辑操作，必须经 ED session 受控事务修改
-`EditSession.content`、递增 session 版本、刷新内容哈希并持久化 `ed_session_snapshots`；有脏态的会话不得静默关闭或丢失，关闭前须保存或经用户显式确认丢弃；内容解析失败降级只读
+X-SEQ-002/X-FORBID-004）；用户编辑、已有 LogicalState 的 DE 草稿 diff 预览，以及 pending 后打开文档的
+DiffPayload 迁移都属于编辑操作，必须产生脏态并驱动 WS save 保存机（SM-WS-01 Idle→Dirty，X-INTER-001
+转移点）。已打开但非激活文档的预览必须经 ED session 受控事务修改 `EditSession.content`、递增 session
+版本、刷新内容哈希并持久化 `ed_session_snapshots`；预览成功后 DiffCard 仍由用户接受/拒绝裁决，不得自动
+accepted。有脏态的会话不得静默关闭或丢失，关闭前须保存或经用户显式确认丢弃；内容解析失败降级只读
 而非静默丢内容；编辑功能离线可用，不依赖在线鉴权。状态转移归 SM-ED-01（A-ED-M-S-01）。
 
 <!-- RULE
@@ -668,12 +670,24 @@ target_type: RULE
 target_id: BR-ED-DATA-007
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-ED-010
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-010
+target_type: RULE
+target_id: BR-CORE-STATE-003
+status: mapped
+-->
 
 ## §10 测试与验收
 
 - **会话生命周期**（BR-ED-STATE-001 / SM-ED-01，REQ-ED-001 验收）：md/docx 可打开/编辑/关闭；
   脏态关闭须保存或确认丢弃；解析失败降级只读；断网时编辑可用；ED 无直接文件 I/O 调用路径（静态可查）。
-  已打开非激活文档自动应用 diff 后 session content/version/hash 更新、置脏并持久化，切回该文档时不重复应用；
+  已有或 pending 后打开文档预览 diff 后 session content/version/hash 更新、置脏并持久化，卡片仍可裁决，切回该文档时不重复应用；
   重启恢复继承关闭前打开的文档标签、顺序和当前文档，孤立 `ed_session_snapshots` 不恢复为打开文档，恢复后的当前文档可进入 AG 工作序列。
 - **blockId 稳定**（BR-ED-DATA-001，REQ-ED-002 验收）：普通编辑后既有 blockId 不变；删除块后定位
   该 blockId 收到失效信号；不存在静默错位。
@@ -856,3 +870,4 @@ status: mapped
 | 2026-08-07 | v1.63 | ED-HIGHLIGHT-BACKGROUND-01（DOC-SYNC-01）：§3.2 高亮正文口径收敛为「文字背景」（与文字颜色同款取色器、移除五色预设/清除独立入口），与 A-ED-X-R-03 v1.4 一致；覆盖本行之前的 v1.52「预设色板+清除入口」旧描述。 |
 | 2026-08-06 | v1.60 | ED-FONT-LOCAL-LIBRARY-01 锁死缺陷修复：fontService.listLocalFonts 移除 attempted 永久锁死——dev 启动期 Rust backend 未就绪的瞬时 IPC 失败只影响当次调用，下次调用自动重试；仅成功结果进入 cachedFamilies 缓存（此前一次失败后本会话永远回退常用子集，表现为"本地字体突然消失"）。观测定位：Rust CoreText 枚举 212 族、document.fonts.check 全通过，唯一失败点即该锁死。 |
 | 2026-07-30 | v1.49 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：活动富文档块投影直接来自 ProseMirror 层级节点；容器/原子块只读，内容子块独立写；BlockOperation 批原子应用及 fingerprint 冲突安全的 exact node 回滚取代 HTML 字符串替换。 |
+| 2026-08-13 | v1.64 | DIFF-STATE-COMPASS-01：BR-ED-STATE-001 与 REQ-ED-010 映射 BR-CORE-STATE-001/003；已有或 pending 后打开迁移的同一 payload 都经受控预览进入 LogicalState、显示绿色增量并保留卡片裁决。 |

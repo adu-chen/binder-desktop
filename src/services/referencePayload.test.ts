@@ -13,12 +13,15 @@ import {
   dataTransferHasAnyType,
   dataTransferHasType,
   fileNameFromFileUrl,
+  makeMemoryReference,
   makeReferenceToken,
   promptTextFromParts,
   readReferencePayloadData,
   referenceFromPlainTextPaste,
   referenceKey,
   referenceLabel,
+  registerReferenceInsertHandler,
+  requestReferenceInsert,
   writeReferencePayloadData,
   type ReferencePayload,
 } from "./referencePayload";
@@ -145,6 +148,41 @@ describe("referencePayload", () => {
     });
     expect(fileNameFromFileUrl("https://example.com/x.pdf")).toBeNull();
     expect(referenceFromPlainTextPaste("plain text")).toBeNull();
+  });
+
+  // covers: BR-SYS-DATA-007
+  // ExternalContentRef（TERM-REF-005）：可读内容随 file 引用保留（data-only）；无内容保持元数据。
+  it("keeps external read content on file reference (data-only)", () => {
+    const read: ReferencePayload = { kind: "file", name: "notes.txt", size: 9, readContent: "外部内容" };
+    expect(coerceReferencePayload(read)).toEqual(read);
+    expect(referenceKey(read)).toContain("file:notes.txt");
+    // 无 readContent：保持元数据、未读取（coerce 不伪造内容）
+    const meta: ReferencePayload = { kind: "file", name: "photo.png", size: 1024 };
+    expect(coerceReferencePayload(meta)).toEqual(meta);
+    // MIME roundtrip 保留 readContent（发送后一次性命中当前回合）
+    const dt = dataTransfer();
+    writeReferencePayloadData(dt, read);
+    expect(readReferencePayloadData(dt)).toEqual(read);
+  });
+
+  // covers: BR-SYS-DATA-007
+  // MemorySelectionRef（TERM-AST-002）：显式选择构造 memory 引用（data-only 快照）；注入总线直达 handler。
+  it("constructs memory reference and routes through insert bus", () => {
+    const mem = makeMemoryReference("entry-1", "preference", "用户偏好简洁");
+    expect(mem).toEqual({
+      kind: "memory",
+      entryId: "entry-1",
+      title: "preference",
+      content: "用户偏好简洁",
+    });
+    expect(coerceReferencePayload(mem)).toEqual(mem);
+
+    // 注入总线：requestReferenceInsert 直达 Composer 注册的 handler（无全局 store 槽）。
+    const received: ReferencePayload[] = [];
+    registerReferenceInsertHandler((p) => received.push(p));
+    requestReferenceInsert(mem);
+    expect(received).toEqual([mem]);
+    registerReferenceInsertHandler(() => {});
   });
 });
 

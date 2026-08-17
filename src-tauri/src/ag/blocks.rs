@@ -47,6 +47,7 @@ pub struct DocBlock {
 
 /// AgentEdit 统一可消费块投影：`block_index` 是当前快照内 0 起块号；`block_id` 是 HTML/BDocx
 /// 的稳定锚，text 文档可为空。marks/block_attrs 仅 HTML 快照有语义。
+/// AG-CTX-01 F5：序列化瘦身——空 marks/block_attrs 省略，减小工具结果体积。
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct AgentEditableBlock {
     pub block_id: Option<String>,
@@ -58,11 +59,17 @@ pub struct AgentEditableBlock {
     pub depth: usize,
     pub ordinal: usize,
     pub text: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "is_empty_object")]
     pub block_attrs: serde_json::Value,
     pub node_json: serde_json::Value,
     pub fingerprint: Option<String>,
     pub capabilities: Vec<String>,
+}
+
+fn is_empty_object(value: &serde_json::Value) -> bool {
+    value.as_object().map(|map| map.is_empty()).unwrap_or(false)
 }
 
 /// 当前 ProseMirror LogicalState 的层级块投影。字段名与前端 OpenDocSnapshot 协议一致。
@@ -235,6 +242,7 @@ impl AgentReadContext {
                 open.baseline,
                 Some(open.session_version),
                 Some(open.content_hash.clone()),
+                None,
             ));
         }
         let abs = crate::workspace::resolve_in_workspace(&self.root, rel_path)?;
@@ -306,6 +314,9 @@ fn snapshot_from_content(
     baseline: Option<u64>,
     session_version: Option<u64>,
     content_hash: Option<String>,
+    // AG-DOCX-RO-01：原生 docx 只读投影时覆盖 editable_kind（"html" 而非 "bdocx"），
+    // 使 bdocx_capabilities 不注入编辑能力声明、结构性排除写入。
+    editable_kind_override: Option<&str>,
 ) -> AgentEditableSnapshot {
     let content_is_html = content_format_hint
         .map(|format| format == "html")
@@ -314,7 +325,9 @@ fn snapshot_from_content(
     let blocks = project_blocks(content, content_is_html);
     AgentEditableSnapshot {
         rel_path: rel_path.to_string(),
-        editable_kind: editable_kind(rel_path, content_is_html),
+        editable_kind: editable_kind_override
+            .map(str::to_string)
+            .unwrap_or_else(|| editable_kind(rel_path, content_is_html)),
         source: source.to_string(),
         content_format,
         content: content.to_string(),
@@ -424,18 +437,14 @@ pub fn read_editable_snapshot(
             active_format.map(str::to_string),
         )
     } else if is_docx_rel_path(rel_path) {
-        if !crate::workspace::listing::is_bdocx(root, rel_path) {
-            return Err(IpcError::new(
-                "DOC_NOT_BDOCX",
-                "原生 docx 不能作为 AgentEdit 编辑模型读取，请先创建 b-docx",
-                false,
-                false,
-            ));
-        }
+        // AG-DOCX-RO-01：原生 docx 也复用 DOC 转换链只读读取（pandoc 只读源文件、写临时 work_dir），
+        // 与 b-docx 转换同链路，不新增解析器；源文件不变。原生 docx 标记 doc_convert_readonly 且
+        // editable_kind 覆盖为 "html"（≠bdocx）→ 不注入 BDocx 编辑能力声明、无 replace_node → 结构性只读。
+        let is_native_docx = !crate::workspace::listing::is_bdocx(root, rel_path);
         let bytes = std::fs::read(abs).map_err(|e| {
             IpcError::new(
                 "DOC_READ_FAILED",
-                &format!("读 b-docx 失败: {e}"),
+                &format!("读 docx 失败: {e}"),
                 true,
                 false,
             )
@@ -446,7 +455,11 @@ pub fn read_editable_snapshot(
             .join(format!("{baseline:x}"));
         (
             crate::doc::edit_chain::docx_to_html(abs, &work_dir)?,
-            "doc_convert".to_string(),
+            if is_native_docx {
+                "doc_convert_readonly".to_string()
+            } else {
+                "doc_convert".to_string()
+            },
             Some(baseline),
             Some("html".to_string()),
         )
@@ -468,6 +481,8 @@ pub fn read_editable_snapshot(
         baseline,
         None,
         None,
+        // 原生 docx 只读投影：editable_kind 覆盖为 "html"（≠bdocx），不进入 BDocx 编辑能力判定。
+        if source == "doc_convert_readonly" { Some("html") } else { None },
     ))
 }
 
@@ -939,6 +954,39 @@ mod tests {
     fn text_blocks_split_by_editor_lines_including_empty_blocks() {
         let b = block_texts("第一行\n\n第三行", false);
         assert_eq!(b, vec!["第一行", "", "第三行"]);
+    }
+
+    // covers: BR-DOC-DATA-002, X-FORBID-004
+    // AG-DOCX-RO-01：原生 .docx（非 b-docx）可只读读取——复用 DOC 转换链，
+    // editable_kind≠"bdocx"、source=doc_convert_readonly、capabilities=[]（无 replace_node）。
+    #[test]
+    fn native_docx_reads_as_readonly_projection_without_bdocx_capabilities() {
+        use crate::doc::edit_chain::html_to_docx;
+        if crate::doc::pandoc_runtime::pandoc_available() {
+            let root = std::env::temp_dir()
+                .join(format!("ag-native-docx-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&root);
+            let docx_bytes =
+                html_to_docx("<h1>第二章</h1><p>正文内容</p>", None).expect("生成测试 docx");
+            std::fs::write(root.join("原版.docx"), &docx_bytes).expect("写入原生 docx");
+
+            let snapshot =
+                read_editable_snapshot(&root, "原版.docx", &root.join("原版.docx"), None, None)
+                    .expect("原生 docx 应可只读读取");
+            assert_ne!(snapshot.editable_kind, "bdocx");
+            assert_eq!(snapshot.source, "doc_convert_readonly");
+            assert_eq!(snapshot.content_format, "html");
+            // 只读投影：所有块无 replace_node 能力。
+            assert!(
+                snapshot.blocks.iter().all(|b| !b.capabilities.contains(&"replace_node".to_string())),
+                "原生 docx 只读投影不得暴露 replace_node"
+            );
+            assert!(
+                snapshot.blocks.iter().any(|b| b.text.contains("第二章")),
+                "转换内容应包含正文"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 
     #[test]

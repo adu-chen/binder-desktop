@@ -7,11 +7,10 @@ import {
   agStore,
   emptyComposerDraft,
   useAgStore,
-  type AgMode,
   type AgentComposerDraft,
 } from "../../store/agStore";
 import { modelKey, modelStore, useModelStore } from "../../store/modelStore";
-import { setAgentMode, startTurn } from "../../services/agService";
+import { cancelActiveTurn, startTurn } from "../../services/agService";
 import { useWsStore } from "../../store/wsStore";
 import {
   DOC_REF_MIME,
@@ -29,6 +28,7 @@ import {
   promptTextFromParts,
   referenceFromPlainTextPaste,
   referenceKey,
+  registerReferenceInsertHandler,
   type MessageContentPart,
   type ReferencePayload,
   type ReferenceTokenAttrs,
@@ -112,10 +112,6 @@ interface MentionQuery {
   to: number;
 }
 
-const MODES: { id: AgMode; label: string; hint: string }[] = [
-  { id: "edit", label: "edit", hint: "编辑 · 精确修改当前内容（diff 裁决）" },
-  { id: "build", label: "build", hint: "代理构建 · 项目蓝图与整体构建" },
-];
 const REFERENCE_DRAG_TYPES = [
   REFERENCE_MIME,
   DRAG_SESSION_MIME,
@@ -205,21 +201,43 @@ function safeFocusEditor(editor: TipTapEditor) {
   }
 }
 
-function fileReferenceFromTransfer(dataTransfer: DataTransfer): ReferencePayload | null {
+// F7：@ 候选仅可读文档（md/markdown/docx/doc/html/txt/rtf），资源文件不进入引用候选。
+const READABLE_DOC_EXT = new Set(["md", "markdown", "docx", "doc", "html", "htm", "txt", "rtf"]);
+// ExternalContentRef（TERM-REF-005 / BR-SYS-DATA-007）：有可用只读解析路径（Web File API 纯文本）的扩展名。
+const EXTERNAL_READABLE_EXT = new Set(["md", "markdown", "txt", "html", "htm", "rtf"]);
+/** 外部文件内容注入上限（防御性截断；仅当前回合 data-only，不落盘/不转存）。 */
+const EXTERNAL_CONTENT_CAP = 20000;
+
+function isReadableExternalFileName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return EXTERNAL_READABLE_EXT.has(name.slice(dot + 1).toLowerCase());
+}
+
+function fileReferenceFromTransfer(dataTransfer: DataTransfer): Promise<ReferencePayload | null> {
   const files = Array.from(dataTransfer.files ?? []);
-  if (files.length === 0) return null;
+  if (files.length === 0) return Promise.resolve(null);
   const file = files[0];
-  // F5：仅取文件名与大小元数据，不携带绝对路径（X-FORBID-004，外部文件不读内容）。
-  return { kind: "file", name: file.name, size: file.size };
+  const base: ReferencePayload = { kind: "file", name: file.name, size: file.size };
+  // ExternalContentRef（BR-SYS-DATA-007 / TERM-REF-005）：可读纯文本扩展名经 Web File API 只读解析内容
+  // 进当前回合（data-only、不扫描目录/不写盘/不转存）；不可读扩展名仅取元数据，不伪称已读。
+  if (!isReadableExternalFileName(file.name)) return Promise.resolve(base);
+  return file
+    .text()
+    .then((text) =>
+      text.length > EXTERNAL_CONTENT_CAP
+        ? { ...base, readContent: text.slice(0, EXTERNAL_CONTENT_CAP) }
+        : { ...base, readContent: text },
+    )
+    .catch(() => base); // 读取失败：保留元数据，不伪称已读
 }
 
 function payloadFromTransfer(dataTransfer: DataTransfer): ReferencePayload | null {
   // REF-REFERENCE-REPAIR-01 F1：优先解析统一 drag session 通道（REFERENCE_MIME → DRAG_SESSION_MIME →
-  // text/plain marker，命中即消费清理），再回落外部文件/旧 selection/doc MIME 与 uri/plain 分类。
+  // text/plain marker，命中即消费清理），再回落旧 selection/doc MIME 与 uri/plain 分类。
+  // 外部文件（含内容读取）由 onPaste/onDrop 的独立异步路径处理，不在此同步链。
   const sessionResolved = resolveReferenceDrag(dataTransfer);
   if (sessionResolved) return sessionResolved;
-  const externalFile = fileReferenceFromTransfer(dataTransfer);
-  if (externalFile) return externalFile;
   const selection = readSelectionRefData(dataTransfer);
   if (selection) return makeSelectionReference(selection);
   const doc = readDocRefData(dataTransfer);
@@ -238,16 +256,15 @@ export function Composer() {
   const agState = useAgStore();
   const { sending } = agState;
   const session = activeSession(agState);
-  const mode = session.mode;
   const { models, selectedKey } = useModelStore();
   const currentModel = modelStore.current();
   const { docs } = useWsStore();
 
   const [draft, setDraft] = useState<AgentComposerDraft>(() => session.composerDraft ?? emptyComposerDraft());
   const [atQuery, setAtQuery] = useState<MentionQuery | null>(null);
-  const [modePop, setModePop] = useState(false);
   const [modelPop, setModelPop] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+  const [gateNotice, setGateNotice] = useState(false);
   const draftSessionIdRef = useRef(session.id);
   const applyingSessionDraftRef = useRef(false);
 
@@ -286,12 +303,14 @@ export function Composer() {
     draftSessionIdRef.current = session.id;
     setDraft(nextDraft);
     setAtQuery(activeMentionQuery(editor));
-    setModePop(false);
     setModelPop(false);
   }, [editor, session.id]);
 
-  // F7：@ 候选仅可读文档（md/markdown/docx/doc/html/txt/rtf），资源文件不进入引用候选。
-  const READABLE_DOC_EXT = new Set(["md", "markdown", "docx", "doc", "html", "htm", "txt", "rtf"]);
+  useEffect(() => {
+    if (session.mode === "build") agStore.setMode("edit");
+  }, [session.id, session.mode]);
+
+  // F7：@ 候选仅可读文档（见模块级 READABLE_DOC_EXT），资源文件不进入引用候选。
   const isReadableReferenceDoc = (relPath: string): boolean => {
     const dot = relPath.lastIndexOf(".");
     if (dot < 0) return false;
@@ -312,6 +331,13 @@ export function Composer() {
     chain.insertContent([tokenNode(token), { type: "text", text: " " }]).run();
     setAtQuery(null);
   };
+
+  // 侧栏面板（记忆库等）经引用注入总线注入引用（BR-SYS-DATA-007 / TERM-AST-002，data-only）。
+  useEffect(() => {
+    if (!editor) return;
+    registerReferenceInsertHandler(insertReferencePayload);
+    return () => registerReferenceInsertHandler(() => {});
+  }, [editor, insertReferencePayload]);
 
   const selectAtMention = (relPath: string) => {
     if (!atQuery) return;
@@ -336,10 +362,15 @@ export function Composer() {
 
   const send = () => {
     if (!editor || sending) return;
+    // AG-1.0-DECISION-CARD-01：存在待裁决的任务级请求时，输入门控——不发起新回合，
+    // 必须先完成裁决（DecisionBar 按钮），避免"确认"等文本被当作新编辑请求（AG_EDIT_TOOL_REQUIRED 死循环）。
+    if (agStore.getSnapshot().pendingDecision) {
+      setGateNotice(true);
+      return;
+    }
     const snapshot = serializeEditor(editor);
     if (!snapshot.prompt.trim() && snapshot.references.length === 0) return;
-    // 调用模型按能力偏好解析（BR-AG-DATA-007）：编辑模式=agentEdit，代理构建=build（人类确认：代理构建归 AG）。
-    const sendModel = modelStore.resolveFor(mode === "build" ? "build" : "agentEdit");
+    const sendModel = modelStore.resolveFor("agentEdit");
     void startTurn(snapshot.prompt, {
       references: snapshot.references,
       displayParts: snapshot.parts,
@@ -372,7 +403,18 @@ export function Composer() {
   };
 
   const onPaste = (e: ClipboardEvent<HTMLDivElement>) => {
-    const payload = payloadFromTransfer(e.clipboardData);
+    const data = e.clipboardData;
+    if (!data) return;
+    // 含外部文件：先阻止默认粘贴，再异步只读解析（ExternalContentRef，BR-SYS-DATA-007）。
+    if ((data.files?.length ?? 0) > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      void fileReferenceFromTransfer(data).then((payload) => {
+        if (payload) insertReferencePayload(payload);
+      });
+      return;
+    }
+    const payload = payloadFromTransfer(data);
     if (!payload) return;
     e.preventDefault();
     e.stopPropagation();
@@ -389,10 +431,6 @@ export function Composer() {
 
   const onDrop = (e: React.DragEvent) => {
     if (!editor) return;
-    const payload = payloadFromTransfer(e.dataTransfer);
-    if (!payload) return;
-    e.preventDefault();
-    e.stopPropagation();
     let pos: number | undefined;
     if (typeof document.elementFromPoint === "function") {
       try {
@@ -401,6 +439,20 @@ export function Composer() {
         pos = undefined;
       }
     }
+    const data = e.dataTransfer;
+    // 含外部文件：先阻止默认拖放，再异步只读解析（ExternalContentRef，BR-SYS-DATA-007）。
+    if ((data?.files?.length ?? 0) > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      void fileReferenceFromTransfer(data).then((payload) => {
+        if (payload) insertReferencePayload(payload, undefined, pos);
+      });
+      return;
+    }
+    const payload = payloadFromTransfer(data);
+    if (!payload) return;
+    e.preventDefault();
+    e.stopPropagation();
     insertReferencePayload(payload, undefined, pos);
   };
 
@@ -412,6 +464,11 @@ export function Composer() {
 
   return (
     <div className="composer" onDragOverCapture={onDragOver} onDropCapture={onDrop}>
+      {gateNotice && (
+        <div className="composer-gate">
+          存在待你决策的任务项：请先在上方裁决区完成决策（确认并继续 / 取消），完成后才能继续对话。
+        </div>
+      )}
       {draft.tokens.length > 0 && (
         <div className="composer-mentions" aria-label="草稿引用">
           {visibleTokens.map((token) => (
@@ -450,37 +507,7 @@ export function Composer() {
         </div>
         <div className="composer-bar">
           <div className="composer-bar-left">
-            <div className="cbar-wrap">
-              <button
-                className="cbar-btn"
-                title="模式：edit 编辑 / build 代理构建"
-                aria-haspopup="menu"
-                onClick={() => {
-                  setModePop((v) => !v);
-                  setModelPop(false);
-                }}
-              >
-                {mode} <span className="cbar-caret">▾</span>
-              </button>
-              {modePop && (
-                <div className="cbar-pop" role="menu">
-                  {MODES.map((m) => (
-                    <button
-                      key={m.id}
-                      className={`cbar-pop-item${mode === m.id ? " selected" : ""}`}
-                      onClick={() => {
-                        setAgentMode(m.id);
-                        setModePop(false);
-                      }}
-                    >
-                      {mode === m.id ? "✓ " : ""}
-                      {m.label}
-                      <span className="label cbar-pop-hint">{m.hint}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <span className="cbar-btn" title="agent-edit-1.0 · 文档编辑模式">edit</span>
 
             <div className="cbar-wrap">
               <button
@@ -489,7 +516,6 @@ export function Composer() {
                 aria-haspopup="menu"
                 onClick={() => {
                   setModelPop((v) => !v);
-                  setModePop(false);
                 }}
               >
                 {currentModel.label}{" "}
@@ -532,11 +558,11 @@ export function Composer() {
 
           <button
             className={`composer-send ${sendCls}`}
-            onClick={send}
-            disabled={!canSend}
-            title={sending ? "AI 回复中…" : canSend ? "发送（Enter）" : "输入内容或引用后可发送"}
+            onClick={sending ? () => void cancelActiveTurn() : send}
+            disabled={!sending && !canSend}
+            title={sending ? "停止当前 Agent 回合" : canSend ? "发送（Enter）" : "输入内容或引用后可发送"}
           >
-            {sending ? "生成中" : "发送"}
+            {sending ? "停止" : "发送"}
           </button>
         </div>
       </div>

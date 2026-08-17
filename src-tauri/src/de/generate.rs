@@ -64,26 +64,19 @@ pub fn build_payload(proposal: &ChangeProposal) -> DiffPayload {
  * rules:    BR-AG-DATA-003
  * boundary: in=proposalTargetAndDeclaredTargetSet | out=declaredTargetVerdict(rejectUndeclaredExistingDocBeforeDiffGen)
  */
-/// DE 侧目标声明校验（BR-AG-DATA-003「DE 侧协同复核」，2026-07-04 版，与 AG `guard_target_set` 双侧
-/// 把守）：模型驱动的 ChangeProposal 在 diff 生成前须校验 target 属回合声明的目标集（当前文档 ∪ 用户
-/// 显式指向集）；不存在的路径视为新建放行（diff 裁决卡为人类闸门）；**未声明的既有文档拒绝**，不产出
-/// 越集 diff。CBT 构建路径不经本函数——其目标由用户已确认的任务计划声明（BR-CBT-DATA-001 绑定）。
-pub fn ensure_target_declared(
+/// DE 侧目标声明判定（BR-AG-DATA-003「DE 侧协同复核」，2026-07-04 版；AG-DELETE-01 放宽）：
+/// 返回目标是否属回合声明的目标集（当前文档 ∪ 用户显式指向集）；不存在的路径视为新建放行。
+/// **不再硬拒未声明的既有文档**——由 AG 层标注 cross_doc + DiffCard「跨文档目标」确认承担安全，
+/// 多文档联动（参考 A 改 B 等）不再被锁死。CBT 构建路径不经本函数（BR-CBT-DATA-001 绑定）。
+pub fn target_declared(
     target_rel: &str,
     current_rel: Option<&str>,
     declared_rels: &[String],
     target_exists: bool,
-) -> Result<(), IpcError> {
-    let declared = current_rel == Some(target_rel) || declared_rels.iter().any(|d| d == target_rel);
-    if declared || !target_exists {
-        return Ok(());
-    }
-    Err(IpcError::new(
-        "DE_TARGET_UNDECLARED",
-        &format!("目标文档 {target_rel} 不在本回合声明的目标集内（当前文档/显式引用），已拒绝生成 diff；请用户显式 @引用该文档后重试"),
-        false,
-        false,
-    ))
+) -> bool {
+    !target_exists
+        || current_rel == Some(target_rel)
+        || declared_rels.iter().any(|d| d == target_rel)
 }
 
 /**
@@ -196,15 +189,15 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-003
-    // DE 侧协同复核（2026-07-04 版双侧把守之 DE 侧）：当前文档/声明集内/新建放行；未声明既有文档拒绝。
+    // DE 侧协同判定（AG-DELETE-01 放宽）：当前文档/声明集内/新建放行；未声明既有 → false
+    //（由 AG 层标注 cross_doc + DiffCard「跨文档目标」确认承担安全，不再硬拒）。
     #[test]
-    fn de_side_rejects_undeclared_existing_target() {
+    fn de_side_flags_undeclared_existing_target() {
         let declared = vec!["ref.md".to_string()];
-        assert!(ensure_target_declared("a.md", Some("a.md"), &declared, true).is_ok());
-        assert!(ensure_target_declared("ref.md", Some("a.md"), &declared, true).is_ok());
-        assert!(ensure_target_declared("new.md", Some("a.md"), &declared, false).is_ok()); // 新建放行
-        let err = ensure_target_declared("other.md", Some("a.md"), &declared, true).unwrap_err();
-        assert_eq!(err.code, "DE_TARGET_UNDECLARED"); // 未声明既有 → 拒
-        assert!(ensure_target_declared("other.md", None, &[], true).is_err());
+        assert!(target_declared("a.md", Some("a.md"), &declared, true));
+        assert!(target_declared("ref.md", Some("a.md"), &declared, true));
+        assert!(target_declared("new.md", Some("a.md"), &declared, false)); // 新建放行
+        assert!(!target_declared("other.md", Some("a.md"), &declared, true)); // 未声明既有 → 跨文档标注
+        assert!(!target_declared("other.md", None, &[], true));
     }
 }

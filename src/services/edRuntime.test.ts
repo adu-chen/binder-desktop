@@ -249,17 +249,17 @@ beforeEach(() => {
 });
 
 describe("edService 保存契约", () => {
-  function addAppliedPendingDiff(relPath = "a.md") {
+  function addAppliedPendingDiff(relPath = "a.md", after = "after") {
     deStore.addDiff({
       diffId: "d-save",
       blockId: "b1",
       relPath,
       title: "待保存修改",
       before: "before",
-      after: "after",
+      after,
       state: "pending",
     });
-    deStore.markDraftApplied("d-save", "before", "dirty", "after");
+    deStore.markDraftApplied("d-save", "before", "dirty", after);
   }
 
   function commandNames() {
@@ -319,6 +319,7 @@ describe("edService 保存契约", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  // covers: BR-CORE-STATE-001
   it("保存即接受：先持久化 accepted，再写盘，成功后才显示已保存", async () => {
     addAppliedPendingDiff();
     invokeMock.mockImplementation((_command, args) => {
@@ -328,7 +329,7 @@ describe("edService 保存契约", () => {
       return Promise.resolve(ok({}));
     });
 
-    await expect(saveDocument("new content")).resolves.toEqual({ ok: true });
+    await expect(saveDocument("after")).resolves.toEqual({ ok: true });
     expect(commandNames().slice(0, 2)).toEqual(["de.accept_draft_diff", "ws.save_doc"]);
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({ state: "accepted", draftSaved: true });
   });
@@ -342,8 +343,29 @@ describe("edService 保存契约", () => {
       return Promise.resolve(ok({}));
     });
 
-    await expect(saveDocument("new content")).resolves.toMatchObject({ ok: false, conflict: true });
+    await expect(saveDocument("after")).resolves.toMatchObject({ ok: false, conflict: true });
+    expect(commandNames().slice(0, 2)).toEqual(["de.accept_draft_diff", "ws.save_doc"]);
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({ state: "accepted", draftSaved: false });
+  });
+
+  // covers: BR-CORE-STATE-001
+  it("保存当前手动编辑时使旧 pending Diff 失效，而非把旧卡误裁决为接受", async () => {
+    addAppliedPendingDiff();
+    invokeMock.mockImplementation((_command, args) => {
+      const command = (args as { request: { command: string } }).request.command;
+      if (command === "de.expire_diff") return Promise.resolve(ok({ status: "expired" }));
+      if (command === "ws.save_doc") return Promise.resolve(ok({ baseline: 200 }));
+      return Promise.resolve(ok({}));
+    });
+
+    await expect(saveDocument("用户在预览后继续修改")).resolves.toEqual({ ok: true });
+
+    expect(commandNames().slice(0, 2)).toEqual(["de.expire_diff", "ws.save_doc"]);
+    expect(commandNames()).not.toContain("de.accept_draft_diff");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "expired",
+      expiredReason: "document_revision_advanced",
+    });
   });
 
   it("Markdown 与 DOCX 保存同样先接受已应用 pending Diff", async () => {
@@ -356,14 +378,14 @@ describe("edService 保存契约", () => {
 
     addAppliedPendingDiff();
     invokeMock.mockImplementation(reply);
-    await expect(saveMarkdownDocument("# disk", "<h1>logical</h1>", "html")).resolves.toEqual({ ok: true });
+    await expect(saveMarkdownDocument("# disk", "after", "html")).resolves.toEqual({ ok: true });
     expect(commandNames().slice(0, 2)).toEqual(["de.accept_draft_diff", "ws.save_doc"]);
 
     invokeMock.mockReset();
     edStore.reset();
     deStore.reset();
     edStore.loadDoc("a.draft.docx", "<p>content</p>", 101, null, "html", "html");
-    addAppliedPendingDiff("a.draft.docx");
+    addAppliedPendingDiff("a.draft.docx", "<p>saved</p>");
     deStore.attachMeta("d-save", {
       patchKind: "image_ops",
       imageOpsPayload: {

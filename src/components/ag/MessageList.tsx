@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useRef } from "react";
-import { activeSession, useAgStore } from "../../store/agStore";
+import { activeSession, useAgStore, type TurnCurrentAction } from "../../store/agStore";
 import { useDeStore } from "../../store/deStore";
 import type { MessageContentPart, ReferencePayload } from "../../services/referencePayload";
 import { DiffList } from "../de/DiffList";
 import { ToolCallCard } from "./ToolCallCard";
+import { PlanCard } from "./PlanCard";
 import { MessageFlow } from "./MessageFlow";
 import { startTurn } from "../../services/agService";
 
@@ -105,9 +106,39 @@ export function MessageList() {
         </div>
       )}
 
+      {/* AG-1.0-TASKRUN-REWORK-CONTINUE-01：任务计划呈现（TERM-AG-018，可展示操作计划；最近计划）。 */}
+      {session.taskPlans && session.taskPlans.length > 0 && (
+        <PlanCard key={session.taskPlans[0].planId} plan={session.taskPlans[0]} />
+      )}
+
+      {/* AG-1.0-DECISION-CARD-01：任务级裁决已迁移至 Composer 上方的 DecisionBar（独立固定区），
+          信息流内不再渲染裁决卡；此处仅保留实时当前动作状态条。 */}
+      {state.currentAction && !state.pendingDecision && (
+        <div className="turn-statusbar">
+          <span className="turn-statusbar-spinner" aria-hidden />
+          <span className="turn-statusbar-label">{currentActionLabel(state.currentAction)}</span>
+        </div>
+      )}
+
       <div ref={endRef} />
     </div>
   );
+}
+
+/** 实时当前动作人读文案（step_progress action → 中文）。 */
+function currentActionLabel(action: TurnCurrentAction): string {
+  switch (action.action) {
+    case "reading":
+      return `正在读取 ${action.label}`;
+    case "tool":
+      return `正在执行工具 ${action.label}`;
+    case "generating":
+      return "正在生成回复…";
+    case "proposing":
+      return `正在生成修改建议 ${action.label}`;
+    case "deciding":
+      return action.label || "等待裁决…";
+  }
 }
 
 function referencesFromParts(parts?: MessageContentPart[]): ReferencePayload[] {

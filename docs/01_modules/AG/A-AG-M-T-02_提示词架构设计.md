@@ -2,7 +2,7 @@
 文档编号：AG-M-T-02
 文档状态：A
 负责模块：AG
-文档职责：AG 提示词架构 L3 专项设计——M-T-01 §5.1 组装骨架的深度拆解：多层分层、装配顺序与缓存边界、当前轮次原则与意图沿用判定、补强层污染隔离与分层截断序、三类回合结构示例
+文档职责：AG 提示词架构 L3 专项设计——定义分层装配、当前轮意图、数据可信边界、上下文截断与 1.0 Prompt Runtime 最小契约
 上游约束：A-AG-M-T-01_代理技术设计.md（§5/§5.1 BR-AG-DATA-001/002 组装骨架与来源裁剪、AG-TURN 链路、TERM-AG-001~004）、A-CORE-C-P-01_APC.md（云薄端、§13 不绕门禁）、A-SYS-I-P-03_云接口契约.md（X-SEQ-001 门禁前置）
 直接承接：本文 RULE/TERM 为提示词架构 SSOT，PI-AG-07~09（A-AG-X-L-02）承接实现；调研依据见 R-AG-X-R-01（仅参考，不约束）
 使用边界：本文是 M-T-01 §5.1 的 L3 细化，不重定义组装骨架（归 BR-AG-DATA-002）与来源裁剪语义（归 BR-AG-DATA-001）；不锁定提示词文本/措辞/模型档（实现期运营配置）；不定义门禁/网关契约（归 SYS I-P-03）、diff 生成（归 DE）、@mention 解析（归 REF）；§6 结构示例为非规范说明，不构成被锁文本
@@ -70,7 +70,7 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 | 任务状态层 | 上下文注入层 | 当前 Agent 任务 + 阶段 + artifacts（仅 active） | AG | P1 | BR-AG-STATE-004 |
 | 当前文档/编辑器层 | 上下文注入层 | 当前文件 + 分级块列表 + 选区/光标 + revision/baseline + pending diffs | WS/ED/DE | **P0 当前轮主事实** | BR-AG-DATA-001 |
 | 引用层 | 上下文注入层 | 显式 @mention（精确锚点可编辑 / 阅读上下文仅理解） | REF | P1 最高保留 | BR-AG-DATA-001（@mention 优先） |
-| 当前对话层 | 用户输入层 | 当前轮 user 输入（+ 意图沿用判定结果） | AG | P0 信号源 | BR-AG-DATA-004（本文） |
+| 当前对话层 | 用户输入层 | 当前轮 user 输入 + IntentResult（结构化决策不替代原文） | AG | P0 信号源 | BR-AG-DATA-004（本文） |
 | 历史对话层 | （由 messages[] 承载） | 既往轮次，默认弱化 | AG | P1/弱 | BR-AG-DATA-004（本文） |
 | 记忆补强层 | 上下文注入层 | 长期记忆检索结果，带权重声明 | AST | P2 先截 | BR-AG-DATA-005（本文） |
 | 知识补强层 | 上下文注入层 | 知识库自动检索切片（带 citation/provenance），经触发门控 | KB | P2 先截 | BR-AG-DATA-005（本文） |
@@ -95,6 +95,10 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 [messages[] 数组·与 system 分离]
   历史对话层(默认弱化) … 当前对话层(末条，含意图沿用结果)
 ```
+
+1.0 必须落地统一 Prompt Runtime 和 `runtime_version`，但 provider prompt cache 命中率不是 1.0 发布
+阻断项：没有可靠缓存时允许每轮完整装配，不能为了缓存复用而混淆系统规则、文档数据和用户输入。
+稳定区、动态区、工具 manifest hash、IntentResult id 与 Context trace id 必须可观测，以支持同一回合复现。
 
 **两条布局设计依据**（调研支撑见 R-AG-X-R-01 §3.1/§3.4）：
 1. **稳定层在前并进缓存边界**：角色/工具/格式跨轮不变，置于缓存边界前以复用 prompt cache。
@@ -133,6 +137,36 @@ rule_id: BR-AG-DATA-004
 历史污染当前轮。判定维度的具体识别规则与阈值属实现期，本规则锁「当前轮为主、历史默认弱化、显式
 沿用才提权、不污染当前轮事实」的机制语义。本规则承接 BR-AG-DATA-001/002 的来源与注入顺序，不重
 定义组装骨架。
+
+在选择上下文和开放工具前，同一步骤必须形成版本化 IntentResult（TERM-AG-012），至少包含
+`intent_type(answer/inspect/search/analyze/edit/create_document/organize_workspace/clarify)`、`target`、
+`mutation`、`ambiguity`、`required_context`、`allowed_tools`。显式目标、否定约束（如“不要修改”）、
+ReferencePayload 与当前编辑器状态优先由确定性规则解析；低置信或存在多个高风险目标时输出
+`ambiguity=blocking` 并进入澄清，不得凭模型猜测执行。IntentResult 必须同时约束 Context 选择、
+Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user 内容保留，IntentResult 不替代原文、不保存
+模型隐藏推理。1.0 不要求通用规划器或小模型分类器，允许规则优先实现，但不得退化为单一“是否编辑”布尔值。
+
+**实现登记（2026-08-12，AG-STRATEGY-05 提示词按改动范围分流编辑操作）**：编辑操作选择由「文件类型一刀切」改为「改动范围」分流——整篇重写/大幅重排 → 纯文本可用 `replace_document`；当前 BDocx 仅当同轮 LogicalState 明确**无表格且无图片**时可用 `replace_document` 提交完整 HTML，后端同时拒绝既有或新引入的表格/图片；局部修改 → `replace_block`（纯文本）/ `block_ops`（富文档）；表格/图片 → `table_ops`/`image_ops`。结构状态不明时先读取运行时声明或 `list_tables`/`list_images`，不得从段落列表猜测。这样既不把无受保护结构的整篇改写错误拆为易残留的块操作，也不允许整篇替换绕过受保护结构。
+
+**实现登记（2026-08-12，AG-STRATEGY-04 放开整篇替换 + insert 新块唯一 id）**：当前 BDocx 在动态声明确认无表格、无图片时才放开 `replace_document` 整篇替换（identity 漂移校验 + 服务端表格/图片守卫兜底；既有块局部改动仍须 `block_ops`）；insert/append 新块 afterNode 结构改为 type/attrs/content（attrs 含 blockId，对齐 replace_node），后端兜底生成唯一 attrs.blockId（new_block_{uuid}），前端 nodeFromJSON 生成的新块可跨批锚定，根治多块重写"新块无 id/标题同 id"错乱。
+
+**实现登记（2026-08-13，AG-STRATEGY-05 事务安全与状态语义闭合）**：同锚点的 `insert_before`/`insert_after` 与 `replace_node`/`delete_node` 改为单事务内先处理既有锚点、再插入新块；同坐标多插入按提案阅读顺序稳定落位。forward 先作最终节点、节点 id 与数量后置校验，失败不 dispatch；reverse 按 `afterNode.attrs.blockId` 定位并删除实际插入节点，绝不把插入操作的空 `beforeNode` 当作可解析节点。提示词、能力声明和工具结果统一为三段事实：`propose_edit` 只确认待审建议生成；客户端预览另有 applied/failed 回执；用户接受只确认，保存成功才落盘。前端日志以 `[de-draft-preview]` 输出 `diff_id`、`preview_state` 与可选错误码，不记录正文；卡片在 queued/applied/failed 状态分别显示真实边界并阻止 queued 直接接受。
+
+**实现登记（2026-08-11，AG-STRATEGY-03 文档感知 + 块 id + 排版意识 + 确认去重）**：Edit 动词表补「丰富/扩写/充实/重排/排版/美化」、文档指涉词补「故事/寓言/童话/小说」；非寒暄 Answer/Inspect/Analyze 意图且打开文档时兜底注入当前文档（只读，纯寒暄不注入）；insert/append 新块 afterNode 允许可选 blockId（模型显式给新块 id）；block_ops 投影 after 侧对 insert/append 新块用独立 id 标注（不再复用锚点 id，修复标题块与正文块同 id 错乱）；prompt 补排版映射（style_ops + heading）、确认去重（默认直接 propose_edit）、生成后自检（list_blocks 核对 + 删残句）。修复「丰富故事」被判零工具 Answer 导致模型看不到内容、insert 新块无 id、无排版意识、反复文字确认 4 类问题。
+
+**实现登记（2026-08-11，AG-STRATEGY-02 运行时注入同步 + 新建 b-docx 指导）**：parameterConstraints 移除 `proposal_target_must_match_intent`（目标硬锁已下沉调用时刻），替换为提示性 `proposal_applies_on_user_confirm`；prompt 明确新建 word 文档（.b-docx）= propose_edit 新路径 + base=empty + replace_document + content 富 HTML（无需额外 BDocx 能力声明）；同步跨文档目标（DiffCard 标注确认）与删除能力（delete_doc/delete_folder 确认卡）语义。修复模型读到旧约束与"无 BDocx 声明无法建富文档"推断而放弃 propose_edit 的 AG_EDIT_TOOL_REQUIRED 拦截。
+
+**实现登记（2026-08-11，AG-DELETE-01 删除能力 + 跨文档目标放行）**：`propose_edit` 扩展 `operation=delete_doc/delete_folder` → 删除确认卡（PendingDiff origin_module='AG_DELETE'，payload 含 action/recursive/cascade 级联计数）→ `ws.apply_delete_diff` 用户接受后执行 fileops 删除 + timeline 节点（HITL 不降级）。目标声明放宽：guard_target_set 增 AcceptCrossDocument，ensure_target_declared 改 target_declared(bool)——未声明既有文档放行并标注 crossDoc（DiffCard「跨文档目标」+ 用户确认承担安全，延续词/多文档联动不再被锁死）。删除限 workspace 内，禁删根目录（WS_DELETE_ROOT_DENIED）。
+
+**实现登记（2026-08-11，AG-STRATEGY-01 意图边界重构 + 工具全量 + 调用时刻校验）**：意图判定降级为 4 档强信号边界——chat（寒暄零工具）/ read-only（用户声明"不修改/只分析"冻结写）/ create（Create 强词+文档目标）/ general（其余全量，模型自决）。Search/Analyze/Inspect 细分并入 general（工具集相同）。allowed_tools 按 profile 全量（只读 6 + 提案 2 + workspace_glob），不再按意图收窄；propose_edit 取消 targetScope 硬锁，安全下沉调用时刻（workspace 边界 + base 有效 + 新建检测 + DiffCard 确认）。新增 workspace_glob 工具（文件名通配定位）。arguments JSON 解析失败回传 AG_TOOL_ARGUMENTS_INVALID 明确错误（修复"缺少目标 path"误导导致的 5 轮空转）。
+
+**实现登记（2026-08-11，AG-INTENT-COMPOSITE-01 复合请求意图优先级）**：`resolve_intent_result` 新增 `create_requested` 前置判定——非否定 ∧ 文本含 Create 强词（创建/新建/生成/建立/制作）∧ 目标为 Document/Workspace 时，CreateDocument 优先于 `verb == Edit` 分支。修复真实案例「新建一个word文档，…并优化排版」被判 Edit 当前文档而无法新建（detect_verb 按 Edit→Create 首命中，「优化」掩盖「新建」）。detect_verb 首命中机制与 V2/V3 语义不变；补复合意图回归测试（复合/存量编辑/单动作/否定）。
+
+**实现登记（2026-08-11，AG-WS-LAYERED-01 模型分层感知工作区）**：`list_docs` 不再全量返回文件树——无参数返回工作区概览（顶层目录+文件计数+总文件数，mode=overview；工作区 ≤30 文件且 ≤4KB 时豁免返回全量 mode=full）；`path` 参数返回该目录直接子项（一层，mode=children）。树枚举只含索引（路径/类型/计数），**永不携带正文**（正文唯一入口 read_doc / search_text）。prompt 增加分层感知引导（先概览→按需展开→内容才读取）+ CreateDocument 专项（概览判断落点后直接 propose_edit，不逐目录遍历）。前端 ws.list_docs 与 search_text 内部遍历保持全量语义。
+
+**实现登记（2026-08-11，AG-TASK-01 多提案批次衔接 + block_ops 删除）**：①`block_ops` 新增 `delete_node` 操作——仅删除 capabilities 含 delete_node 的 content 原子块（删除后块整体移除不留占位），容器/原子块拒绝 AG_BLOCK_OPERATION_TARGET_READONLY（不级联子树）；删除后同批后续操作引用已删块 → stale 回注（F4）。②放开同回合多提案——AG_PROPOSAL_ALREADY_CREATED 改为按批放行，单回合 ≤5 批（AG_TOO_MANY_PROPOSALS 超限），同轮可并行多 tool_calls，每批 base 递增。③批次元数据——propose_edit 支持可选 `batch={id,index,total}` 参数（1≤index≤total），随 style_ops `_batch` 键落库；接受路由返回 batch_remaining 衔接提示（F1c）。④前端——DiffCard 批次徽标（第 x/y 批）、删除块渲染（before=内容/after=【已删除】删除样式）、edBlockOps 支持 delete_node 原子应用与 reverse 精确恢复（记录删除位置重建）。⑤提示词——block_ops 描述补 delete_node、单批上限 24→32、批次衔接引导。语义详见 A-AG-M-T-01 §5.1。
+
+**实现登记（2026-08-11，AG-CTX-01 上下文管理重构）**：上下文控制从"事后截断"改为"源头轻量投影+按需读取"（Claude Code Tool Result Budget 同思路）——①`list_blocks` 轻量投影：只返回块目录（block_id/block_index/node_type/role/parent/depth/text 前40字/fingerprint/capabilities），省略 node_json/全文/marks/attrs；②`read_doc` 支持 `blocks` 范围参数：只返回指定块完整投影（含 node_json 供 block_ops 提案），省略整篇 content，向后兼容（不传则全量）；③移除工具结果截断（trim_tool_results_to_budget 删除，曾导致提案关键数据丢失）；④查询动词补齐（列出/列举/显示/展示/有哪些 → Search 只读组），修复「列出文件树」被误判 Edit；⑤整篇对齐任务检测（`detect_sync_from_reference`）：「改成和 X 一样」注入能力边界提示（block_ops 单批 ≤24 块，引导分批/关键章节），不阻断；⑥AG_EDIT_TOOL_REQUIRED 文案区分「已读未提案」与「零工具调用」；⑦快照序列化空 marks/attrs 省略（`skip_serializing_if`）。
 
 实现约束补充（2026-07-18）：历史消息必须携带所属 `relPath/turnId`。存在当前文档时，AG
 装配必须先按当前 `active_doc_path` 分流历史：同文档历史可进入同文档 P1 背景；跨文档或无归属历史
@@ -173,6 +207,31 @@ rule_id: BR-AG-DATA-005
 超过内联预算时，AG 必须注入可追踪块目录/manifest，并要求模型先调用 `read_doc` 或 `list_blocks`
 读取当前文档目标内容；若模型在未读取前直接对当前文档 `propose_edit`，工具层返回可恢复错误，不生成
 diff。未打开文档仍按 DiskState 读取规则处理。
+
+### §5.1 Prompt 数据可信边界与最小运行包
+
+> 本节细化 BR-AG-DATA-002 的 Prompt 可信边界，并由 BR-AG-DATA-004 的 IntentResult 与
+> BR-AG-DATA-005 的分层预算共同约束，不新增平行规则。
+
+Prompt Runtime 必须把系统约束与不可信数据物理分层：只有产品不变量、运行策略和经本轮允许的工具契约
+可进入 system instruction；当前文档、显式引用、历史、记忆、知识和工具结果必须封装为 data-only
+PromptDataEnvelope，携 `source_kind/provenance/freshness/content_hash/trust_level/token_estimate`，不得因其
+内容包含“忽略规则/调用工具/修改文件”等文字而获得指令权限。每次调用产出版本化 PromptPackage，
+至少记录 `runtime_version/intent_id/context_trace_id/tool_manifest_hash/estimated_tokens`；发送前校验总预算、
+角色边界与 workspace 作用域。调试追踪默认只保存层元数据、哈希、选择/裁剪原因，不保存用户正文、密钥
+或会话令牌。
+
+`agent-edit-1.0` 的装配顺序固定为：系统不变量与输出格式 → 本轮工具允许集 → IntentResult → 当前文档
+data-only envelope → 显式引用 data-only envelope → 同文档必要历史 → 当前 user 原文。AST/KB/TPL 自动
+补强关闭；后续 profile 启用时按 BR-AG-DATA-005 的 P2 门控插入，不得改变系统/数据可信边界。
+
+**实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举为唯一真源，
+固定层序 `System → RuntimeControl → IntentHint → CurrentDocument → Reference → History →
+CrossDocHistory → User`（CrossDocHistory 仅显式沿用时注入）。其中 `RuntimeControl`（AG RUNTIME CONTROL
+结构化 system 消息）与自然语言提示词分离为两条独立消息；`History` 聚合为单块 DATA-ONLY 消息并保留
+role 序列；`system_prompt_version` 由提示词内容 hash 派生；预算 gate 使用序列化 messages+tools 统一口径；
+审计直接读取 `message.layer` 字段。本登记为 §2/§5.1 分层与截断序的实现映射，不改变 BR-AG-DATA-004/005
+与 M-T-01 §5.1 骨架语义。
 
 ## §6 三类回合结构示例（非规范说明）
 
@@ -219,8 +278,9 @@ messages[]: 任务计划上下文 → [当前对话] 本步指令
 
 - `SYSTEM_PROMPT_CHAT`：Agent 编辑回合，允许工具调用，文档内容修改必须经 `propose_edit` → DiffCard；
   系统常量只保留稳定行为边界。当前文档为 BDocx 时，格式、manifestId/version/sha256、StyleOp/
-  TableOperation/ImageOperation、人工专属能力、Diff 等级和 DOCX 往返风险必须由 A-SYS-I-P-04
-  BDocxCapabilityManifest 动态投影，禁止在系统常量中维护第二套 mark/op 清单。
+  TableOperation/ImageOperation、人工专属能力、Diff 等级、DOCX 往返风险与当前表格/图片存在性必须由
+  A-SYS-I-P-04 BDocxCapabilityManifest 与同轮运行时声明动态投影；后端以同一结构状态守卫
+  `replace_document`，禁止在系统常量中维护第二套 mark/op 清单。
 - `SYSTEM_PROMPT_AUTOCOMPLETE`：辅助续写，禁止改写既有内容，禁止解释，唯一合法输出为正好 3 项 JSON 字符串数组；提示词需明确不要 markdown fenced block、不要对象包装、不要解释文字，降低模型偏航概率。
 - `SYSTEM_PROMPT_INLINE_ASSIST`：局部修改，禁止 JSON 数组，唯一合法输出为单一候选正文。
 
@@ -238,7 +298,6 @@ target_type: RULE
 target_id: BR-AG-DATA-005
 status: mapped
 -->
-
 ## §8 测试与验收
 
 - **当前轮次原则**（BR-AG-DATA-004）：构造「无沿用」轮 → 历史不进事实层（可查装配产物不含历史正文，
@@ -247,6 +306,13 @@ status: mapped
 - **补强层隔离**（BR-AG-DATA-005）：记忆/知识/模板注入串含权重声明字样；知识门控在编辑上下文/显式
   引用充分时不触发（reason 可观测）；超预算时 P2 补强层先于 P0/P1 被截，P0 永不截（确定性可复现）。
 - **分层映射一致性**：§2 各层来源与 M-T-01 §5.1 骨架层一一对应，无层越权直写文件（X-FORBID-006）。
+- **本轮意图结果**（BR-AG-DATA-004）：否定编辑、显式编辑、新建、分析、目标不明等样本产生稳定
+  IntentResult；blocking ambiguity 不开放副作用工具；Context 与工具允许集消费同一 intent_id。
+- **数据可信边界**（BR-AG-DATA-002/005）：含提示注入文字的文档/引用仍为 data-only；PromptPackage 可查
+  runtime/version/hash/token/trace，超预算或 envelope 越出 workspace 时在网关调用前拒绝。
+- **BDocx 改写路由与状态诚实性**：无表格、无图片的当前 BDocx 可提交完整 HTML `replace_document`；已有或
+  新引入表格/图片时服务端返回结构化操作拒绝。`propose_edit` 工具结果必须只称建议已生成，并显式区分
+  `pending_user_review`、未回报的编辑器预览和未保存的文件状态；前端预览 applied/failed 事件不记录正文。
 - 提示词文本/措辞/预算数值不在验收范围（实现期运营配置）。
 
 ## §9 技术债务与盲区（诚实声明）
@@ -282,3 +348,12 @@ status: mapped
 | 2026-07-30 | v1.11 | 图片代理编辑闭合审计：明确 SYSTEM_PROMPT_CHAT 的 BDocx 动态投影同时包含 ImageOperation；组合操作、受控导入与非视觉识别继续由 manifest 单一来源注入。 |
 | 2026-07-30 | v1.12 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：当前富文档层注入 ProseMirror 层级块、动态写能力和 node_json；提示词只允许 capability 驱动的 block_ops，多块同批，禁止用 HTML replace_block/replace_document。 |
 | 2026-08-07 | v1.13 | AG-MSG-RENDER-01：格式层输出格式约束由「纯文本」改为「GFM Markdown 子集」，声明当前无图表/流程图（Mermaid）渲染能力；展示层承接 BR-AG-UI-001（消息流渲染与时序契约） |
+| 2026-08-08 | v1.14 | 定义 1.0 Prompt Runtime 最小闭环：将版本化 IntentResult 收敛进 BR-AG-DATA-004，将 PromptDataEnvelope/PromptPackage 可信边界收敛进 BR-AG-DATA-002/005；锁定 agent-edit-1.0 装配顺序、版本/trace 字段，明确 provider cache 非发布阻断项、AST/KB/TPL 自动补强关闭 |
+| 2026-08-09 | v1.15 | AG-PROMPT-STRUCTURE-FIX-01：§5.1 登记生产装配以 LayerKind 枚举为唯一真源（System→RuntimeControl→IntentHint→CurrentDocument→Reference→History→CrossDocHistory→User），RuntimeControl 独立消息、历史聚合单块、版本 hash 派生、预算统一口径、审计读 layer；不改变 BR-AG-DATA-004/005 语义 |
+| 2026-08-11 | v1.21 | AG-TASK-01：§4 登记多提案批次衔接 + block_ops 删除——delete_node（content 原子块）、单回合 ≤5 批、batch 元数据落库/接受衔接、DiffCard 批次徽标/删除渲染、单批上限 24→32 |
+| 2026-08-13 | v1.22 | AG-STRATEGY-05：纠正 BDocx 整篇改写边界为「同轮无表格且无图片」并由服务端拒绝受保护/新引入结构；登记同锚点 block_ops 原子排序、后置校验、稳定 id reverse，以及 proposal→预览→接受→保存的可观察状态和无正文前端 trace。 |
+| 2026-08-11 | v1.20 | AG-CTX-01：§4 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、查询动词→Search、整篇对齐检测提示、AG_EDIT_TOOL_REQUIRED 文案区分、序列化瘦身 |
+| 2026-08-11 | v1.19 | AG-DOCX-RO-01：§4 登记原生 docx 只读——复用 pandoc 转换链，source=doc_convert_readonly、editable_kind 覆盖 html（≠bdocx），结构性只读；propose_edit 仍拒绝，编辑器路径保持 DOC_NOT_BDOCX；提示词补充只读边界 |
+| 2026-08-11 | v1.18 | AG-R2-01：§4 登记整理复原综合修复——预算（工具结果历史压缩 + block_ops 单批上限 24）、意图（纠错语义词 + 疑问文档指涉→只读）、提示词（编辑当轮提案 + 顺序自查）、范围（workspace 内只读放宽 + 锚点矛盾校验） |
+| 2026-08-10 | v1.17 | AG-INTENT-V3-01：§4 登记乐观授权——工具授予三分类固定（只读组无条件 + 提案组不落盘），意图识别退化为上下文注入器，识别失败不再零工具瘫痪；寒暄零工具、只读只读、疑问无动作 Answer；BR-AG-STATE-002 allowed_tools 语义逐字满足 |
+| 2026-08-09 | v1.16 | AG-INTENT-V2-01：§4 登记 resolve_intent_result 内部升级为 Parsing→Adjudication 语义化判定（动词×目标×修饰语 + 确定性优先级链），修复「改为红色」「创建md文档」被误判 Answer；IntentResultV1 契约不变，IntentSignal 为私有结构，沿用复用 carryover |

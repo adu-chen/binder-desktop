@@ -5,8 +5,10 @@ import { edStore } from "../store/edStore";
 import {
   acceptDiff,
   applyOpenSessionDiff,
+  expireStalePendingForPath,
   generateSampleDiff,
   persistImageDiffSnapshots,
+  promotePendingDiffOnOpen,
   rejectDiff,
 } from "./deService";
 import type { DocumentImageSnapshot } from "./edImageOps";
@@ -211,7 +213,8 @@ describe("deService 草稿 diff 裁决", () => {
     expect(arg.request.params.afterContent).not.toContain("缓存内容");
   });
 
-  // covers: BR-DE-STATE-001, BR-ED-STATE-001
+  // covers: BR-CORE-STATE-001
+  // 有 LogicalState：接受卡片只推进生命周期，内容已在预览时进入会话，绝不重复落盘。
   it("acceptDiff：当前编辑器草稿 diff 只确认 accepted，不调用旧落盘重开路径", async () => {
     edStore.loadDoc("a.md", "旧", 1);
     deStore.addDiff({
@@ -230,6 +233,29 @@ describe("deService 草稿 diff 裁决", () => {
 
     expect(lastCommand()).toBe("de.accept_draft_diff");
     expect(edServiceMock.openDocument).not.toHaveBeenCalled();
+  });
+
+  it("acceptDiff：当前编辑器预览尚在排队时不允许绕过预览直接写盘", async () => {
+    edStore.loadDoc("a.md", "旧", 1);
+    deStore.addDiff({
+      diffId: "d-preview-queued",
+      blockId: "b1",
+      relPath: "a.md",
+      title: "等待预览",
+      before: "旧",
+      after: "新",
+      state: "pending",
+      draftMode: "current_editor",
+      draftPreviewState: "queued",
+    });
+
+    await acceptDiff("d-preview-queued");
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "pending",
+      draftPreviewState: "queued",
+    });
   });
 
   it("acceptDiff：BlockOperation 被后置编辑时进入冲突且不确认 accepted", async () => {
@@ -301,6 +327,7 @@ describe("deService 草稿 diff 裁决", () => {
     expect(edServiceMock.openDocument).not.toHaveBeenCalled();
   });
 
+  // covers: BR-CORE-STATE-002
   it("acceptDiff：未打开文档保留 de.accept_diff 后台路径", async () => {
     deStore.addDiff({
       diffId: "d2",
@@ -381,7 +408,6 @@ describe("deService 草稿 diff 裁决", () => {
       snapshotSource: "open_editor_session",
       baseSessionVersion: target.sessionVersion,
       baseContentHash: target.contentHash,
-      readonly: true,
     });
     await applyOpenSessionDiff("d-open");
 
@@ -399,9 +425,101 @@ describe("deService 草稿 diff 裁决", () => {
     expect(invokeMock).not.toHaveBeenCalled();
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({
       state: "pending",
-      readonly: true,
       draftApplied: true,
     });
+  });
+
+  // covers: BR-CORE-STATE-001
+  it("acceptDiff：非活动 LogicalState 预览后仍可由用户显式接受", async () => {
+    edStore.loadDoc("target.md", "一\n旧", 1);
+    edStore.loadDoc("active.md", "当前", 2);
+    const target = edStore.getSnapshot().sessions["target.md"];
+    deStore.addDiff({
+      diffId: "d-open-accept",
+      blockId: "",
+      blockIndex: 1,
+      relPath: "target.md",
+      title: "修改非激活文档",
+      before: "旧",
+      after: "新",
+      state: "pending",
+      patchKind: "replace_block",
+      draftMode: "open_session",
+      snapshotSource: "open_editor_session",
+      baseSessionVersion: target.sessionVersion,
+      baseContentHash: target.contentHash,
+    });
+    await applyOpenSessionDiff("d-open-accept");
+    invokeMock.mockResolvedValue({ result: { accepted: true } });
+
+    await acceptDiff("d-open-accept");
+
+    expect(lastCommand()).toBe("de.accept_draft_diff");
+    expect(invokeMock).toHaveBeenLastCalledWith("dispatch", expect.objectContaining({
+      request: expect.objectContaining({
+        params: expect.objectContaining({ applyContext: "open_session" }),
+      }),
+    }));
+    expect(edStore.getSnapshot().sessions["target.md"]?.content).toBe("一\n新");
+  });
+
+  // covers: BR-CORE-STATE-003
+  it("promotePendingDiffOnOpen：目标打开后只迁移到 LogicalState 路径，保持 pending", async () => {
+    deStore.addDiff({
+      diffId: "d-promote",
+      blockId: "block-2",
+      relPath: "target.md",
+      title: "后台建议",
+      before: "旧",
+      after: "新",
+      state: "pending",
+      draftMode: "background",
+      snapshotSource: "disk_snapshot",
+    });
+    invokeMock.mockResolvedValue({ result: { diff_id: "d-promote", pending: true } });
+
+    await promotePendingDiffOnOpen("d-promote", "block-live");
+
+    expect(lastCommand()).toBe("de.promote_pending_diff_on_open");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "pending",
+      blockId: "block-live",
+      draftMode: "current_editor",
+    });
+  });
+
+  // covers: BR-CORE-STATE-003
+  it("rejectDiff：打开后迁移的非活动 LogicalState 可回滚且卡片仍可拒绝", async () => {
+    edStore.loadDoc("target.md", "旧", 1);
+    edStore.loadDoc("active.md", "当前", 2);
+    edStore.updateContent("target.md", "新");
+    deStore.addDiff({
+      diffId: "d-promote-reject",
+      blockId: "",
+      relPath: "target.md",
+      title: "迁移建议",
+      before: "旧",
+      after: "新",
+      state: "pending",
+      draftMode: "current_editor",
+      draftApplied: true,
+      draftBaseContent: "旧",
+      draftBaseTabState: "normal",
+      draftAfterContent: "新",
+    });
+    invokeMock.mockResolvedValue({ result: { rejected: true } });
+
+    await rejectDiff("d-promote-reject");
+
+    expect(lastCommand()).toBe("de.reject_diff");
+    expect(edStore.getSnapshot().sessions["target.md"]).toMatchObject({
+      content: "旧",
+      tabState: "normal",
+    });
+    expect(edServiceMock.persistSessionSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      relPath: "target.md",
+      content: "旧",
+    }));
   });
 
   it("applyOpenSessionDiff：目标 LogicalState 已推进时过期，不覆盖新内容", async () => {
@@ -745,9 +863,10 @@ describe("deStore 状态投影（SM-DE-01）", () => {
 
   // covers: A-CORE-C-T-01 §5.4（D4 缺陷修复）
   it("D4 修复：markDraftApplied 记录 draftBaseDirty 和 draftAfterContent", () => {
-    deStore.addDiff({ ...mk("d", "pending"), relPath: "a.md", blockId: "b1" });
+    deStore.addDiff({ ...mk("d", "pending"), relPath: "a.md", blockId: "b1", draftPreviewState: "queued" });
     deStore.markDraftApplied("d", "base", "dirty", "afterContent");
     expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      draftPreviewState: "applied",
       draftApplied: true,
       draftBaseContent: "base",
       draftBaseTabState: "dirty",
@@ -759,6 +878,31 @@ describe("deStore 状态投影（SM-DE-01）", () => {
     deStore.markDraftApplied("d2", "clean", "normal", "cleanAfter");
     expect(deStore.getSnapshot().diffs[0].draftBaseDirty).toBe(false);
     expect(deStore.getSnapshot().diffs[0].draftAfterContent).toBe("cleanAfter");
+  });
+
+  it("编辑器预览失败保留 pending proposal 的未应用事实和错误码", () => {
+    deStore.addDiff({ ...mk("d-preview-failed", "pending"), draftPreviewState: "queued" });
+    deStore.markDraftPreviewFailed("d-preview-failed", "ED_BLOCK_OPERATION_RESULT_MISMATCH");
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      state: "error",
+      draftPreviewState: "failed",
+      errorCode: "ED_BLOCK_OPERATION_RESULT_MISMATCH",
+    });
+    expect(deStore.getSnapshot().diffs[0].draftApplied).toBeUndefined();
+  });
+
+  it("编辑器预览结果写入可检索的最小运行日志，不记录建议正文", () => {
+    const trace = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      deStore.addDiff({ ...mk("d-preview-trace", "pending"), draftPreviewState: "queued", after: "不应出现在日志中" });
+      deStore.markDraftPreviewFailed("d-preview-trace", "ED_BLOCK_OPERATION_RESULT_MISMATCH");
+
+      expect(trace).toHaveBeenCalledWith(expect.stringContaining('"diff_id":"d-preview-trace"'));
+      expect(trace).toHaveBeenCalledWith(expect.stringContaining('"preview_state":"failed"'));
+      expect(trace).toHaveBeenCalledWith(expect.not.stringContaining("不应出现在日志中"));
+    } finally {
+      trace.mockRestore();
+    }
   });
 
   it("草稿 diff：应用到编辑器后保留标记，accepted 保存后清理 GreenReview 标记", () => {
@@ -830,6 +974,77 @@ describe("deStore 状态投影（SM-DE-01）", () => {
       "apply_replace_failed",
     ] as const;
     for (const r of reasons) expect(EXPIRED_REASON_TEXT[r]).toBeTruthy();
+  });
+});
+
+describe("连续 Proposal 前卡失效（BR-SYS-STATE-008 · REQ-DE-009）", () => {
+  function pendingDiff(id: string, relPath: string, opts: { version?: number; hash?: string; mode?: string }) {
+    deStore.addDiff({
+      diffId: id,
+      blockId: "",
+      relPath,
+      title: id,
+      before: "",
+      after: "",
+      state: "pending",
+      draftMode: opts.mode as DiffView["draftMode"],
+      baseSessionVersion: opts.version,
+      baseContentHash: opts.hash,
+    });
+  }
+
+  // covers: BR-SYS-STATE-008
+  it("后续 Proposal 基准推进使同文档旧 pending 卡失效（document_revision_advanced）", async () => {
+    vi.mocked(invoke).mockResolvedValue({ correlation_id: "c1", result: { expired: true } });
+    pendingDiff("diff-1", "notes/a.md", { version: 1, hash: "h1", mode: "open_session" });
+    pendingDiff("diff-2", "notes/a.md", { version: 3, hash: "h3", mode: "open_session" });
+
+    await expireStalePendingForPath("notes/a.md", "diff-2", { sessionVersion: 3, contentHash: "h3" });
+
+    const diffs = deStore.getSnapshot().diffs;
+    expect(diffs.find((d) => d.diffId === "diff-1")).toMatchObject({ state: "expired", readonly: true });
+    expect(diffs.find((d) => d.diffId === "diff-2")?.state).toBe("pending"); // 新卡不被误失效
+    // 保留历史不可裁决：本地未覆盖为 accepted/rejected
+    expect(deStore.getSnapshot().diffs.find((d) => d.diffId === "diff-1")?.expiredReason).toBe("document_revision_advanced");
+  });
+
+  // covers: BR-SYS-STATE-008
+  it("并行同基准 pending 卡不失效（不构成基准推进）", async () => {
+    vi.mocked(invoke).mockResolvedValue({ correlation_id: "c1", result: { expired: true } });
+    pendingDiff("diff-1", "notes/a.md", { version: 2, hash: "h2", mode: "open_session" });
+    pendingDiff("diff-2", "notes/a.md", { version: 2, hash: "h2", mode: "open_session" });
+
+    await expireStalePendingForPath("notes/a.md", "diff-2", { sessionVersion: 2, contentHash: "h2" });
+
+    const diffs = deStore.getSnapshot().diffs;
+    expect(diffs.find((d) => d.diffId === "diff-1")?.state).toBe("pending");
+    expect(diffs.find((d) => d.diffId === "diff-2")?.state).toBe("pending");
+  });
+
+  // covers: BR-SYS-STATE-008
+  it("background pending 卡（无 LogicalState 基准）不参与失效", async () => {
+    vi.mocked(invoke).mockResolvedValue({ correlation_id: "c1", result: { expired: true } });
+    pendingDiff("diff-bg", "notes/a.md", { mode: "background" }); // 无 base 版本/哈希
+    pendingDiff("diff-2", "notes/a.md", { version: 3, hash: "h3", mode: "open_session" });
+
+    await expireStalePendingForPath("notes/a.md", "diff-2", { sessionVersion: 3, contentHash: "h3" });
+
+    const diffs = deStore.getSnapshot().diffs;
+    expect(diffs.find((d) => d.diffId === "diff-bg")?.state).toBe("pending");
+    expect(diffs.find((d) => d.diffId === "diff-2")?.state).toBe("pending");
+  });
+
+  // covers: BR-SYS-STATE-008
+  it("不同文档的 pending 卡互不影响", async () => {
+    vi.mocked(invoke).mockResolvedValue({ correlation_id: "c1", result: { expired: true } });
+    pendingDiff("diff-a", "notes/a.md", { version: 1, hash: "h1", mode: "open_session" });
+    pendingDiff("diff-b", "notes/b.md", { version: 1, hash: "h1", mode: "open_session" });
+
+    await expireStalePendingForPath("notes/a.md", "diff-b", { sessionVersion: 5, contentHash: "h5" });
+
+    const diffs = deStore.getSnapshot().diffs;
+    expect(diffs.find((d) => d.diffId === "diff-a")?.state).toBe("expired");
+    expect(diffs.find((d) => d.diffId === "diff-b")?.state).toBe("pending");
   });
 });
 }

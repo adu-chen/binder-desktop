@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAgStore } from "../../store/agStore";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
+import { DecisionBar } from "./DecisionBar";
 import { DiffAllActionsBar } from "../de/DiffAllActionsBar";
 import { startReferenceDrag } from "../../services/referenceDrag";
 import { closeAgentSession, deleteAgentSession, newAgentSession, switchAgentSession } from "../../services/agService";
@@ -154,6 +155,9 @@ export function AgentPanel() {
       <div className="chatpanel-scroll">
         <MessageList />
       </div>
+
+      {/* AG-1.0-DECISION-CARD-01：任务级裁决独立固定区（Composer 上方，待裁决时呈现）。 */}
+      <DecisionBar />
 
       {/* diffedit 批量裁决条（PI-AG-UI-01 需求3）：仅在有待裁决/应用中呈现，组件内自隐藏。 */}
       <DiffAllActionsBar />

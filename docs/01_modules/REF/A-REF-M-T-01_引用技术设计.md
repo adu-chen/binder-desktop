@@ -55,6 +55,18 @@ forbidden: 引用标签, 输入标签, inline ref chip, 引用片
 ReferencePayload 在输入流和已发送消息中的原子可见标记；发送前与草稿 chip/tray 同步，发送后保留
 同形态可读表现，作为消息内容的一部分参与回放。
 
+<!-- TERM
+term_id: TERM-REF-005
+chains: REF-INJECT, AG-TURN
+zh: 外部内容引用
+en: ExternalContentRef
+forbidden: 外部文件引用, 外部读取引用, 外部内容令牌, 外部分片引用, 附加文件引用
+-->
+用户显式附加、且有可用只读解析路径的外部文件内容，作为当前 AgentTurn/TaskRun 当前任务的一次性
+data-only 内容引用；不支持/不可读只保留元数据不伪称已读；不得扫描目录、自动复读、导入、编辑或默认
+持久化；任务结束、重启、跨会话/跨 workspace 不自动恢复或转存为项目记忆（A-SYS-I-P-01 §3.1，
+BR-SYS-DATA-007）。
+
 ## §1 文档定位
 
 ```
@@ -167,6 +179,30 @@ rule_id: BR-REF-VERIFY-001
 
 **豁免失效触发条件**（任一出现须建机并登记总图）：引入异步批量解析/索引重建编排；引入引用锚的
 后台失效扫描与自动修复流程；KB/AST 纳入后出现跨模块检索会话状态。届时按 X-SEQ-003 先建机后实现。
+
+### 6.1 外部内容引用契约（ExternalContentRef，2026-08-14 D3 登记）
+
+承接 R5-C（A-CORE-X-D-02 §4.5）与 BR-SYS-DATA-007（D1）：外部文件内容仅在用户显式附加且存在可用
+只读解析路径时，作为当前任务的一次性 data-only 内容引用。REF 侧契约：
+
+| 契约项 | 语义 | 承接 |
+|---|---|---|
+| 显式附加 | 用户拖入/选择外部文件形成 `file` 引用；REF 先保留元数据（name/path?/size?），不自动读内容 | ReferencePayload.file（A-SYS-I-P-01 §3） |
+| 只读解析 | 系统具备可用只读解析路径时，才形成内容引用（ExternalContentRef）；不支持/不可读只保留元数据、明确未读 | BR-SYS-DATA-007 |
+| 一次性 data-only | 内容只在当前 AgentTurn/TaskRun 当前任务内可用；任务结束、重启、跨会话/跨 workspace 不自动恢复、复读、导入、编辑或默认持久化 | BR-SYS-DATA-007、TERM-REF-005 |
+| 暂存与清除 | 解析内容经当前任务暂存（来源令牌 + 读取时点），任务结束或取消时清除；不写入会话历史或长期记忆 | 暂存/清除实现归 REF/AG（D3） |
+| 不自动转存 | 外部内容、会话历史、编辑历史均不得自动转存为项目记忆 | BR-SYS-DATA-007 |
+
+<!-- REQ_MAP
+req_id: REQ-REF-009
+target_type: RULE
+target_id: BR-SYS-DATA-007
+status: mapped
+-->
+
+> 迁移债务：REF-07（§9）登记的「外部文件内容受控快照」为候选路径（ref.snapshot_external_file 快照、
+> 会话生命周期缓存）；本契约将 R5-C 边界固定为一次性 data-only、当前任务范围、任务结束即清除，
+> 实现时须按本契约落地，不得把外部内容持久化为会话资产或项目记忆（BR-SYS-DATA-007）。
 
 ## §7 需求到规则映射（REQ_MAP）
 
@@ -330,3 +366,5 @@ status: mapped
 | 2026-07-08 | v1.5 | 扩展拖拽引用债务登记为 REF-06：记录全部拖拽引用入口的尝试、现状、预计根因与后续重启条件；明确未完成真实 Tauri/WebKit 事件观测前不再继续优化拖拽引用 |
 | 2026-08-07 | v1.6 | REF-REFERENCE-REPAIR-01：§2 目标模型扩至外部文件（file 仅元数据）；BR-REF-VERIFY-001 补失效信号双形态澄清（回合内标注注入 / command Err）；§4 登记选区 UTF-16 偏移校验基准（BR-ED-DATA-004 对齐） |
 | 2026-08-07 | v1.7 | 登记审计延伸债务（§9）：REF-07 外部文件内容受控快照（会话生命周期缓存路径）、REF-08 样式上下文投影（AgentEdit 前置，块快照 marks 注入 prompt）、REF-09 URL 内容抓取（AG 工具层 fetch_url，待安全模型决策）；REF-06 状态同步为「已修复·待观测确认」 |
+| 2026-08-14 | v1.8 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：注册 TERM-REF-005 ExternalContentRef；新增 §6.1 外部内容引用契约（R5-C / BR-SYS-DATA-007）——显式附加、只读解析、一次性 data-only、暂存与清除、不自动转存；REQ-REF-009 REQ_MAP；REF-07 债务按 R5-C 边界固定。 |
+| 2026-08-14 | v1.9 | AG-1.0-IMP-EXTERNAL-CONTENT-01：§6.1 契约落地——file 引用可读扩展名（md/markdown/txt/html/htm/rtf）经 Web File API 只读解析内容进当前回合（readContent，前端截断 20000 字符），不可读保持元数据不伪称已读；后端 ReferencePayload::File 扩展 read_content + context.rs File 分支分叉（有内容 data-only 注入/无内容保留"未读取内容"）；内容仅当前回合 payload 消逝，不落库/不转存；BR-SYS-DATA-007 进入代码 @GOV 引用与测试 covers，audit 全绿。 |

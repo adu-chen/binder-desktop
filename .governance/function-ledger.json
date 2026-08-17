@@ -1315,9 +1315,9 @@
    "l4": "会话标签",
    "l5": "新建会话",
    "detail": "新建 Agent 会话；新会话不混入旧上下文。",
-   "status": "待审计 · EP",
-   "acceptance": "新会话不混入旧上下文。",
-   "note": "REQ-AG-001。"
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "新会话拥有独立 session id，消息、活动回合和历史不混入旧会话。",
+   "note": "REQ-AG-001；WP-AG10-07；本地自动化已接线，真实 App G5 待完成。"
   },
   {
    "id": "F-AG-013",
@@ -1327,9 +1327,9 @@
    "l4": "会话标签",
    "l5": "切换会话",
    "detail": "在 Agent 会话标签间切换；切换后消息流正确。",
-   "status": "待审计 · EP",
-   "acceptance": "切换后消息流正确。",
-   "note": "REQ-AG-001；拆分自 F-AG-001。"
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "切换后只显示目标 session 的消息、工具卡、Diff 引用和活动状态。",
+   "note": "REQ-AG-001；拆分自 F-AG-001；WP-AG10-07。"
   },
   {
    "id": "F-AG-014",
@@ -1338,10 +1338,34 @@
    "l3": "会话管理",
    "l4": "会话标签",
    "l5": "查看会话历史",
-   "detail": "查看会话历史；会话与当前工作区、文档上下文的绑定需可识别。",
-   "status": "待审计 · EP",
-   "acceptance": "历史可读，绑定关系可识别。",
-   "note": "REQ-AG-001；拆分自 F-AG-001；具体历史存储待专项核验。"
+   "detail": "按当前工作区和 session 查看已持久化的消息、工具摘要、Diff 引用和回合状态。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "历史可读且 workspace/session/文档绑定可识别，不加载其他工作区历史。",
+   "note": "REQ-AG-001；拆分自 F-AG-001；WP-AG10-07。"
+  },
+  {
+   "id": "F-AG-030",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "会话管理",
+   "l4": "历史恢复",
+   "l5": "持久化并恢复回合状态",
+   "detail": "持久化 draft、completed、error、cancelled、gate_rejected 及 incomplete reason；切换或重启后恢复真实状态。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "五种状态和中断草稿可恢复；失败、取消或门禁拒绝不会恢复为成功。",
+   "note": "REQ-AG-001；WP-AG10-07；真实 Tauri 重启恢复 G5 待完成。"
+  },
+  {
+   "id": "F-AG-031",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "会话管理",
+   "l4": "历史恢复",
+   "l5": "以引用关联 Diff",
+   "detail": "Agent 历史只保存 diff id、目标路径和消息锚等引用，Diff 正文与裁决真值由 DE 持有。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "重载会话后可通过引用读取 DE 当前 Diff；AG 历史中不存在 Diff 正文副本。",
+   "note": "REQ-AG-001 / REQ-DE-001；WP-AG10-07。"
   },
   {
    "id": "F-AG-015",
@@ -1351,9 +1375,9 @@
    "l4": "会话维护",
    "l5": "重命名会话",
    "detail": "重命名 Agent 会话标签；不影响会话内容与上下文绑定。",
-   "status": "待审计 · EP",
+   "status": "规划 · V1+",
    "acceptance": "重命名后标签与历史一致，内容不变。",
-   "note": "REQ-AG-001；补全候选。"
+   "note": "REQ-AG-001；不属于 agent-edit-1.0 发布阻断能力。"
   },
   {
    "id": "F-AG-016",
@@ -1363,9 +1387,9 @@
    "l4": "会话维护",
    "l5": "删除会话",
    "detail": "删除会话及其历史；删除有确认与明确反馈，不误删其他会话。",
-   "status": "待审计 · EP",
+   "status": "已实现 · 待核验 · EP",
    "acceptance": "确认后会话移除，其他会话与工作区不受影响。",
-   "note": "REQ-AG-001；补全候选。"
+   "note": "REQ-AG-001；WP-AG10-07；待裁决 Diff 不随会话误删。"
   },
   {
    "id": "F-AG-002",
@@ -1375,9 +1399,45 @@
    "l4": "消息输入",
    "l5": "发送编辑请求",
    "detail": "输入框发送 Agent 编辑请求，默认目标为当前文档；用户显式指定时才允许跨文档/新建。",
-   "status": "待审计 · EP",
-   "acceptance": "未明确指定不跨文档；输入内容进入正确会话。",
-   "note": "REQ-AG-001。"
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "未明确指定不跨文档；输入内容和引用进入正确 session，并携带 agent-edit-1.0 profile。",
+   "note": "REQ-AG-001；WP-AG10-00 / WP-AG10-07。"
+  },
+  {
+   "id": "F-AG-018",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "会话交互",
+   "l4": "运行模式",
+   "l5": "使用文档编辑 Runtime Profile",
+   "detail": "1.0 主回合固定使用 agent-edit-1.0；未知 profile 拒绝，Build/CBT、多 Agent、开放命令和自动知识召回不进入该模式。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "合法 profile 进入统一主链；未知或 Build profile 在模型调用前稳定拒绝，Composer 不展示 Build 入口。",
+   "note": "A-AG-X-L-03 / A-AG-X-L-04；WP-AG10-00。"
+  },
+  {
+   "id": "F-AG-019",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "会话交互",
+   "l4": "当前轮意图",
+   "l5": "解析任务类型与目标",
+   "detail": "每轮形成版本化意图结果，区分问答、搜索、检查、分析、编辑、新建和澄清，并记录目标、操作、约束、置信度、歧义、所需工具和上下文。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "同一输入产生确定意图；当前轮明确否定和目标优先于历史，结果被 Context、Prompt、Tool 和 Diff 共用。",
+   "note": "REQ-AG-001 / REQ-AG-002；WP-AG10-02。"
+  },
+  {
+   "id": "F-AG-020",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "会话交互",
+   "l4": "当前轮意图",
+   "l5": "在目标歧义时请求澄清",
+   "detail": "编辑请求缺少安全执行所需目标或目标冲突时，先向用户请求确认，不调用写工具、不生成提案。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "歧义编辑返回 clarification_required；provider 写调用、propose_edit 和 Diff 数量均为 0。",
+   "note": "REQ-AG-001 / REQ-AG-002；WP-AG10-02。"
   },
   {
    "id": "F-AG-003",
@@ -1387,9 +1447,9 @@
    "l4": "流式回显",
    "l5": "显示模型输出过程",
    "detail": "模型输出以流式信息流呈现，并正确终止于成功、失败或取消状态。",
-   "status": "待审计 · EP",
-   "acceptance": "流式内容持续更新，终态不重复、不悬置。",
-   "note": "REQ-AG-001 / REQ-ENT-002。"
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "流式内容持续更新；完成、失败、取消和门禁拒绝互斥，只有第一个终态生效。",
+   "note": "REQ-AG-001 / REQ-ENT-002；WP-AG10-01 / WP-AG10-07。"
   },
   {
    "id": "F-AG-004",
@@ -1399,9 +1459,9 @@
    "l4": "回合控制",
    "l5": "中断或取消回合",
    "detail": "用户可中断 Agent 或工具调用回合；中断不应绕过已产生 proposal 的裁决规则。",
-   "status": "待审计 · EP",
-   "acceptance": "中断后界面进入明确终态，未写入的建议不会直接落盘。",
-   "note": "REQ-AG-001 / REQ-AG-002。"
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "停止作用于精确 active turn；取消后无新增 token、工具或提案，未接受建议不落盘。",
+   "note": "REQ-AG-001 / REQ-AG-002；WP-AG10-01 / WP-AG10-07。"
   },
   {
    "id": "F-AG-017",
@@ -1423,9 +1483,9 @@
    "l4": "@mention",
    "l5": "触发并选择引用对象",
    "detail": "在对话/构建输入中以 @ 触发候选，解析工作区文档、内容块或资源为引用锚；不可达目标明确失败。",
-   "status": "规划 · V1+",
+   "status": "已实现 · 待核验 · EP",
    "acceptance": "选择目标后建立可读引用；不可达时不形成悬空引用。",
-   "note": "REQ-REF-001 / REQ-REF-004。"
+   "note": "REQ-REF-001 / REQ-REF-004；agent-edit-1.0 显式引用通道已接线，真实 App G5 待完成。"
   },
   {
    "id": "F-REF-002",
@@ -1435,9 +1495,9 @@
    "l4": "引用令牌",
    "l5": "显示输入 token 与引用 chip",
    "detail": "发送前输入流 ReferenceToken 与草稿 chip/tray 必须一致；超过 5 条折叠，发送后草稿 token 生命周期结束。",
-   "status": "规划 · V1+",
+   "status": "已实现 · 待核验 · EP",
    "acceptance": "token、chip 和已发送消息呈现一致，折叠不丢引用。",
-   "note": "REQ-REF-006。"
+   "note": "REQ-REF-006；agent-edit-1.0 显式引用通道已接线。"
   },
   {
    "id": "F-REF-003",
@@ -1447,9 +1507,9 @@
    "l4": "引用有效性",
    "l5": "感知目标或锚点失效",
    "detail": "文档移动、删除或块失效必须可感知并显式报失效，不能静默注入过期或错位内容。",
-   "status": "规划 · V1+",
+   "status": "已实现 · 待核验 · EP",
    "acceptance": "失效引用被标记，调用不会带入错位内容。",
-   "note": "REQ-REF-003。"
+   "note": "REQ-REF-003；选区/块引用消费前重新校验，真实 App G5 待完成。"
   },
   {
    "id": "F-AG-005",
@@ -1458,10 +1518,58 @@
    "l3": "上下文组装",
    "l4": "本地上下文",
    "l5": "组装当前文档和资产上下文",
-   "detail": "Agent 从工作区读取当前文档、引用、记忆、知识等；读取限定在工作区内，来源必须可识别。",
-   "status": "待审计 · EP",
-   "acceptance": "回合上下文不越界，含引用来源与预算裁剪边界。",
-   "note": "REQ-AG-004；AST/KB 规划能力不等于当前已接线。"
+   "detail": "1.0 只自动组装当前文档、用户显式引用和必要会话历史；读取限定在活动工作区，自动 AST/KB/TPL 召回关闭。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "上下文不越 workspace；来源、可信等级、新鲜度、哈希和预算可识别；自动 AST/KB/TPL 调用数为 0。",
+   "note": "REQ-AG-004；WP-AG10-03；不把规划中的记忆/知识能力写成 1.0 已开放。"
+  },
+  {
+   "id": "F-AG-021",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "上下文组装",
+   "l4": "当前文档",
+   "l5": "读取最新编辑器 LogicalState",
+   "detail": "当前打开文档必须从 active editor 快照读取未保存的最新 LogicalState；缺失、来源不符或格式/内容不一致时阻断。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "未保存编辑能进入模型上下文；磁盘旧内容不覆盖编辑器快照，异常快照在 provider 调用前失败。",
+   "note": "REQ-AG-004；WP-AG10-03。"
+  },
+  {
+   "id": "F-AG-022",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "上下文组装",
+   "l4": "历史选择",
+   "l5": "按文档归属选择必要历史",
+   "detail": "默认只保留同 session、同文档的近期必要历史；跨文档历史降级为弱背景，只有用户显式沿用时辅助解析回指。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "新请求不被旧意图覆盖；跨文档内容不替代当前 LogicalState，裁剪结果对固定输入保持确定。",
+   "note": "REQ-AG-001 / REQ-AG-004；WP-AG10-03。"
+  },
+  {
+   "id": "F-AG-023",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "上下文组装",
+   "l4": "Prompt Runtime",
+   "l5": "按信任层组装模型输入",
+   "detail": "模型输入固定为系统权威/运行控制、当前意图、当前文档、显式引用、必要历史、当前用户；文档、引用、历史和工具结果均为 DATA-ONLY。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "当前用户输入最后注入；数据中的越权或提示注入文本不能改变系统权威和本轮工具权限。",
+   "note": "REQ-AG-002 / REQ-AG-004；WP-AG10-04。"
+  },
+  {
+   "id": "F-AG-024",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "上下文组装",
+   "l4": "Prompt Runtime",
+   "l5": "执行预算与版本前置检查",
+   "detail": "调用 provider 前记录 Runtime、系统提示、工具清单、Intent 和 Context 版本/哈希，并对可信上下文执行预算检查。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "超预算时 provider 调用数为 0；实际模型可见工具清单与 manifest hash 一致。",
+   "note": "REQ-AG-002 / REQ-AG-004；WP-AG10-04；token 估算当前为字符近似。"
   },
   {
    "id": "F-AG-006",
@@ -1471,9 +1579,33 @@
    "l4": "变更提案",
    "l5": "生成 pending diff",
    "detail": "Agent 的文档写入意图交由 Diff 评审产生 pending diff；Agent 无直接写盘路径。",
-   "status": "待审计 · EP",
+   "status": "已实现 · 待核验 · EP",
    "acceptance": "一次编辑请求后生成可识别提案，原文件未在裁决前变更。",
-   "note": "REQ-AG-001 / REQ-DE-001。"
+   "note": "REQ-AG-001 / REQ-DE-001；WP-AG10-06；真实 DiffCard 人工审阅 G5 待完成。"
+  },
+  {
+   "id": "F-AG-028",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "提案评审",
+   "l4": "新建提案",
+   "l5": "以空基准提出新文档",
+   "detail": "用户明确新建意图和目标路径后，只允许对不存在目标生成 base=empty 的整文替换提案；接受前不创建文件。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "目标已存在或操作不是整文替换时拒绝；合法新建在 Accept 前 LogicalState 和磁盘均无目标文件。",
+   "note": "REQ-AG-001 / REQ-DE-001；WP-AG10-06。"
+  },
+  {
+   "id": "F-AG-029",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "提案评审",
+   "l4": "变更保护",
+   "l5": "在目标或版本冲突时阻断",
+   "detail": "提案目标必须属于当前文档、显式声明目标或合法新建目标；selection、session version 或内容哈希过期时失败关闭。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "越界目标、过期选区和版本/hash 冲突均不生成可应用修改，也不静默覆盖当前文档。",
+   "note": "REQ-AG-001 / REQ-DE-005；WP-AG10-06。"
   },
   {
    "id": "F-DE-001",
@@ -1531,9 +1663,45 @@
    "l4": "工具卡",
    "l5": "呈现工具调用与结果",
    "detail": "模型工具调用须校验注册与权限、执行、回注结果；循环可中断且有上限。",
-   "status": "待审计 · EP",
+   "status": "已实现 · 待核验 · EP",
    "acceptance": "工具调用状态可见；失败/取消不伪装成成功。",
-   "note": "REQ-AG-002。"
+   "note": "REQ-AG-002；WP-AG10-05；真实 provider 工具调用 G5 待完成。"
+  },
+  {
+   "id": "F-AG-025",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "工具调用",
+   "l4": "逐回合授权",
+   "l5": "按意图授予最小工具集",
+   "detail": "工具注册不等于授权；Runtime Profile、Intent、turn、读取范围和修改目标共同生成本轮 CapabilityGrant，模型只看到允许项。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "问答/澄清无工具，搜索只获搜索读取，分析只获读取，编辑/新建只获对应读取与提案工具。",
+   "note": "REQ-AG-002；WP-AG10-05。"
+  },
+  {
+   "id": "F-AG-026",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "工具调用",
+   "l4": "文档读取",
+   "l5": "列出、搜索、读取文档和块",
+   "detail": "1.0 提供 list_docs、search_text、read_doc、list_blocks；读取限定活动 workspace，打开文档优先 LogicalState。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "授权意图能读取所需信息；跨 workspace、未获授权或超出 readable scope 的读取稳定拒绝。",
+   "note": "REQ-AG-002 / REQ-AG-004；WP-AG10-05。"
+  },
+  {
+   "id": "F-AG-027",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "工具调用",
+   "l4": "执行保护",
+   "l5": "二次校验并限制恢复循环",
+   "detail": "执行端再次校验注册、grant、turn、目标和参数；拒绝/失败作为数据回注，不自动扩权，工具循环有上限且可取消。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "伪造未授权调用、错误 turn、越界目标和非法参数均拒绝；达到上限或取消进入唯一失败终态。",
+   "note": "REQ-AG-002；WP-AG10-01 / WP-AG10-05。"
   },
   {
    "id": "F-AG-008",
@@ -1542,10 +1710,10 @@
    "l3": "模型调用",
    "l4": "订阅门禁",
    "l5": "在调用前检查资格",
-   "detail": "每次模型调用必须独立经过订阅门禁；被拒绝时显示不可绕过的原因与订阅引导。",
-   "status": "待审计 · EP",
-   "acceptance": "无有效订阅或断网时不发起模型调用，界面给出明确反馈。",
-   "note": "REQ-AG-003 / REQ-ENT-001。"
+   "detail": "首次模型调用和工具结果后的每次续调均独立经过账号/订阅/Gateway 门禁；拒绝原因不能由客户端常量绕过。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "门禁拒绝或断网时 provider/tool 调用数为 0 或立即停止续调，界面给出明确失败而非成功。",
+   "note": "REQ-AG-003 / REQ-ENT-001；WP-AG10-01；真实账号/订阅/AiGateway G5 待完成。"
   },
   {
    "id": "F-AG-009",
@@ -1570,6 +1738,18 @@
    "status": "已实现 · 待核验 · EP",
    "acceptance": "密钥提交后本地清除；无订阅不可借 BYOK 绕门禁。",
    "note": "REQ-ENT-003；MODEL-CONFIG-01（BYOK 管理，网关代持）。"
+  },
+  {
+   "id": "F-AG-032",
+   "l1": "WB-01",
+   "l2": "Agent 面板",
+   "l3": "运行观测",
+   "l4": "脱敏追踪",
+   "l5": "记录可关联的回合元数据",
+   "detail": "记录 profile、turn/session、Intent、Context trace/hash、工具授权/manifest、预算和最终状态等元数据，不记录文档、引用、历史正文或凭证。",
+   "status": "已实现 · 待核验 · EP",
+   "acceptance": "同一回合可关联关键决策与终态；日志隐私扫描找不到正文、密钥、认证头和完整敏感工具结果。",
+   "note": "REQ-AG-002 / REQ-SYS-005；WP-AG10-07；当前为结构化日志，持久化 AgentTrace 属后续演进。"
   },
   {
    "id": "F-CBT-001",

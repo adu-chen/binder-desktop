@@ -53,18 +53,39 @@ function isSaveConflict(e: IpcLikeError): boolean {
 }
 
 /**
- * 保存即接受：人类已决定任意保存动作都是对该文档已应用草稿 Diff 的接受。
+ * @GOV
+ * codes:    BR-CORE-STATE-001-EFFECT-ED-WS-SAVE-001, BR-CORE-STATE-003-EFFECT-ED-WS-SAVE-001
+ * type:     EFFECT
+ * chain:    DE-DIFF, ED-EDIT, WS-SAVE
+ * rules:    BR-CORE-STATE-001, BR-CORE-STATE-003
+ * boundary: in=SaveRequestForLogicalStateWithAppliedPendingDiff | out=AcceptedDiffLifecycleAwaitingDiskWrite
+ */
+/**
+ * 保存有效预览即接受：只有当前 LogicalState 仍等于该 pending Diff 的 after 基准时，保存才表达接受。
  *
  * 必须先调用后端 `de.accept_draft_diff`，使持久化控制态成为 accepted + awaiting_save；随后真实保存成功时，
  * `ws.save_doc` / `doc.save_from_edit` 已有回调负责将 effect_status 翻转为 saved。保存失败时不回退
  * accepted——用户的接受意图已明确，但效果仍停留 awaiting_save，等待下一次保存。
  */
-async function acceptAppliedPendingDiffsForSave(relPath: string): Promise<void> {
+async function acceptAppliedPendingDiffsForSave(relPath: string, currentLogicalContent: string): Promise<void> {
   const pendingDrafts = deStore
     .getSnapshot()
     .diffs
     .filter((diff) => diff.relPath === relPath && diff.draftApplied && diff.state === "pending");
   for (const diff of pendingDrafts) {
+    // 已有后续手动/代理编辑时，当前待保存内容不再是该 diff 预览刚落入 LogicalState 的 after 基准。
+    // 保存仍可继续写入当前内容，但旧卡必须先失效，不能被保存误裁决为 Accepted。
+    if (diff.draftAfterContent !== undefined && diff.draftAfterContent !== currentLogicalContent) {
+      await callCommand("de.expire_diff", {
+        diffId: diff.diffId,
+        reason: "ED_DRAFT_BASE_ADVANCED",
+      });
+      deStore.expireLocal(diff.diffId, {
+        expiredReason: "document_revision_advanced",
+        errorCode: "ED_DRAFT_BASE_ADVANCED",
+      });
+      continue;
+    }
     await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId: diff.diffId });
     // 状态广播通常会同步到达；此处在 command 成功后补投影，避免保存返回前卡片仍显示 pending。
     deStore.applyBackendState(diff.diffId, "Accepted", true);
@@ -259,15 +280,13 @@ export type SaveOutcome = { ok: true } | { ok: false; message: string; conflict?
  */
 /// 保存冲突守则（BR-ED-STATE-003）：WS 报保存冲突时保持当前编辑为 dirty，返回 conflict 信号给 UI；
 /// 只有用户显式确认覆盖时才以 override=true 重试，不静默覆盖磁盘、不静默重载丢弃本地编辑。
-/**
- * 保存当前文档（⌘S）：ws.save_doc。失败回脏态。
- */
+/** 保存当前文档（⌘S）：ws.save_doc。失败回脏态。 */
 export async function saveDocument(content: string, override = false): Promise<SaveOutcome> {
   const { openPath, baseline } = edStore.getSnapshot();
   if (!openPath) return { ok: false, message: "无打开的文档" };
   const path = openPath;
   try {
-    await acceptAppliedPendingDiffsForSave(path);
+    await acceptAppliedPendingDiffsForSave(path, content);
     const newBaseline = await saveDoc(path, content, baseline, override);
     edStore.updateContent(path, content);
     edStore.setBaseline(path, newBaseline);
@@ -305,7 +324,7 @@ export async function saveMarkdownDocument(
   if (!openPath) return { ok: false, message: "无打开的文档" };
   const path = openPath;
   try {
-    await acceptAppliedPendingDiffsForSave(path);
+    await acceptAppliedPendingDiffsForSave(path, logicalContent);
     const newBaseline = await saveDoc(path, markdown, baseline, override);
     edStore.updateContent(path, logicalContent);
     edStore.setBaseline(path, newBaseline);
@@ -333,7 +352,7 @@ export async function saveDocxDocument(html: string, override = false): Promise<
   if (!openPath) return { ok: false, message: "无打开的文档" };
   const path = openPath;
   try {
-    await acceptAppliedPendingDiffsForSave(path);
+    await acceptAppliedPendingDiffsForSave(path, html);
     const restored = restoreMediaSrc(html);
     const newBaseline = await saveDocxFromEdit(path, restored, baseline, override);
     edStore.updateContent(path, html);

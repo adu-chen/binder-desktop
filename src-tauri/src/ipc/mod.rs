@@ -135,7 +135,36 @@ pub enum AgTurnEvent {
         turn_id: String,
         diff_id: String,
         rel_path: String,
+        /// 受限任务实例关联（TERM-AG-015 · BR-SYS-STATE-008，UNC-09）：DiffCard 可经此关联 TaskRun。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_run_id: Option<String>,
     },
+    /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01 · 实时当前动作（A-AG-M-T-01 §7.2.2）：
+    /// 信息流底部状态条数据源，不伪造（BR-SYS-STATE-008）。
+    StepProgress {
+        turn_id: String,
+        /// action：reading / tool / generating / proposing / deciding。
+        action: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// 任务级裁决请求（TERM-AG-017）：proposed → 等待确认（确认点唯一来源，三层分离）。
+    DecisionRequestProposed {
+        turn_id: String,
+        request_id: String,
+        kind: String,
+        payload: Value,
+    },
+    /// 任务级裁决结果（confirm / cancel → TaskRun UserConfirm/UserCancel）。
+    DecisionRequestResolved {
+        turn_id: String,
+        request_id: String,
+        outcome: String,
+    },
+    /// 澄清等待：IntentResult.ambiguity=blocking 时等待用户输入的非终态事件（BR-SYS-STATE-007）。
+    /// 回合不终结、不锁存终态；用户补充输入后经新回合继续，或在此阶段取消。
+    ClarificationRequired { turn_id: String, text: String },
     /// 回合正常完成（含 stop_reason:"cancelled" 中断终态）。
     Done {
         turn_id: String,
@@ -250,6 +279,7 @@ mod tests {
             turn_id: "t1".into(),
             diff_id: "d1".into(),
             rel_path: "a.md".into(),
+            task_run_id: None,
         };
         assert!(serde_json::to_string(&diff)
             .unwrap()

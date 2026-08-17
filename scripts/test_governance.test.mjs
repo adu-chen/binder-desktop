@@ -128,7 +128,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.ED.frontend_owned).toBe(11);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'ED')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(234);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(240);
     expect(inventory.modules.SYS.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'SYS')
@@ -140,11 +140,11 @@ describe('Test Governance', () => {
     expect(inventory.modules.DE.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'DE')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(61);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(73); // AG-1.0-IMP-CONSECUTIVE-PROPOSAL-01：deRuntime +4（连续 Proposal 前卡失效，BR-SYS-STATE-008，人类批准基线调整 69→73）
     expect(inventory.modules.AG.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'AG')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(92); // AG-MSG-RENDER-01：AgentUI +10（Markdown 渲染/时序）、agRuntime +2（消息片段时序）
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(104); // AG-MSG-RENDER-01：AgentUI +10（Markdown 渲染/时序）、agRuntime +2（消息片段时序）；AG-1.0-IMP-CLARIFICATION-01：agRuntime +2（澄清非终态，BR-SYS-STATE-007，人类批准基线调整 92→94）；AG-1.0-IMP-TASKRUN-UI-01：agRuntime +2（TaskRun 查询/失败保持，BR-SYS-STATE-008，人类批准基线调整 94→96）；AG-1.0-TASKRUN-REWORK-IMP-UI-01：agRuntime +2（回合实时事件，96→98）；AG-1.0-TASKRUN-REWORK-CONTINUE-01：agRuntime +3（auto-continue 等，98→101）；AG-1.0-TASKRUN-REWORK-INTENT-01：agRuntime +1（刷新会话任务计划，101→102）；AG-1.0-DECISION-CARD-01：agRuntime +2（决策门控/auto-continue 绕过），人类批准基线调整 102→104
     expect(inventory.modules.PRV.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'PRV')

@@ -52,7 +52,15 @@ export type ReferencePayload =
   | { kind: "template"; templateId?: string; name: string; content: string; label?: string }
   | { kind: "url"; url: string; title?: string; label?: string }
   | { kind: "long_text"; text: string; charCount: number; label?: string }
-  | { kind: "file"; name: string; path?: string; size?: number; label?: string };
+  | {
+      kind: "file";
+      name: string;
+      path?: string;
+      size?: number;
+      label?: string;
+      /** ExternalContentRef（TERM-REF-005）：可读扩展名的外部文件内容，仅当前回合 data-only；缺省 = 未读取 */
+      readContent?: string;
+    };
 
 export interface ReferenceTokenAttrs {
   refId: string;
@@ -265,6 +273,8 @@ export function coerceReferencePayload(value: unknown): ReferencePayload | null 
             path: str(value.path),
             size: num(value.size),
             label: str(value.label),
+            // ExternalContentRef（TERM-REF-005）：可读扩展名的外部文件内容（仅当前回合 data-only）。
+            readContent: typeof value.readContent === "string" ? value.readContent : undefined,
           }
         : null;
     }
@@ -275,6 +285,28 @@ export function coerceReferencePayload(value: unknown): ReferencePayload | null 
 
 export function makeDocReference(relPath: string, label?: string): ReferencePayload {
   return { kind: "doc", relPath, ...(label ? { label } : {}) };
+}
+
+/**
+ * MemorySelectionRef（TERM-AST-002 / BR-SYS-DATA-007）：用户显式选择的记忆条目 → data-only 引用快照，
+ * 仅当前回合 payload（不写回 AST、跨会话不串）。title 缺省用 kind 语义兜底。
+ */
+export function makeMemoryReference(entryId: string, title: string, content: string): ReferencePayload {
+  return { kind: "memory", entryId, title: title || "记忆条目", content };
+}
+
+/**
+ * 引用注入总线（轻量模块级回调，无全局 store 槽）：侧栏面板（如记忆库）构造 ReferencePayload 后
+ * 经 requestReferenceInsert 注入 Composer 输入区（Composer 挂载时 registerReferenceInsertHandler）。
+ */
+let referenceInsertHandler: ((payload: ReferencePayload) => void) | null = null;
+
+export function registerReferenceInsertHandler(handler: (payload: ReferencePayload) => void): void {
+  referenceInsertHandler = handler;
+}
+
+export function requestReferenceInsert(payload: ReferencePayload): void {
+  referenceInsertHandler?.(payload);
 }
 
 export function makeSelectionReference(ref: {

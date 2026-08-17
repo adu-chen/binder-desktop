@@ -8,6 +8,16 @@
 use crate::types::MemoryInjection;
 use rusqlite::Connection;
 
+/// 管理面可见的记忆条目（含 content，供用户显式选择浏览；BR-SYS-DATA-007 / TERM-AST-002）。
+#[derive(Debug, Clone)]
+pub struct MemoryManageEntry {
+    pub entry_id: String,
+    pub memory_kind: String,
+    pub content: String,
+    pub status: String,
+    pub origin_turn: String,
+}
+
 /**
  * @GOV
  * codes:    BR-AST-DATA-001-QUERY-AST-AST-MEMORY-001
@@ -55,6 +65,38 @@ pub fn list_for_management(
          WHERE workspace_id=?1 ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([workspace_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    rows.collect()
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-DATA-007-QUERY-AST-AST-MEMORY-003
+ * type:     QUERY
+ * chain:    AST-MEMORY, REF-INJECT
+ * rules:    BR-SYS-DATA-007, BR-AST-DATA-001
+ * term_ref: TERM-AST-002
+ * boundary: in=workspaceId | out=activeManageableMemoryEntriesWithContent(scopedExplicitSelectionDataOnlyNeverAutoInject)
+ */
+/// 显式记忆选择供给（BR-SYS-DATA-007 / TERM-AST-002）：当前 workspace 的 **active** 记忆条目含 content
+/// 供浏览/选择（构造 MemorySelectionRef 快照进当前回合）。workspace 作用域隔离、纯本地不上云
+/// （BR-AST-DATA-001）。仅显式选择进入回合，本查询不自动供给、不自动注入（1.0 关闭自动链路）。
+pub fn list_manageable(
+    conn: &Connection,
+    workspace_id: &str,
+) -> rusqlite::Result<Vec<MemoryManageEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT entry_id, memory_kind, content, status, origin_turn FROM memory_entries \
+         WHERE workspace_id=?1 AND status='active' ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map([workspace_id], |r| {
+        Ok(MemoryManageEntry {
+            entry_id: r.get(0)?,
+            memory_kind: r.get(1)?,
+            content: r.get(2)?,
+            status: r.get(3)?,
+            origin_turn: r.get(4)?,
+        })
+    })?;
     rows.collect()
 }
 
@@ -106,5 +148,26 @@ mod tests {
         let revoked: Vec<_> = mgmt.iter().filter(|(_, _, s)| s == "revoked").collect();
         assert_eq!(revoked.len(), 1);
         assert_eq!(revoked[0].0, id2);
+    }
+
+    // covers: BR-SYS-DATA-007
+    // 显式记忆选择供给（TERM-AST-002）：active 条目含 content 供选择；revoked/跨 workspace 不可见。
+    #[test]
+    fn manageable_listing_serves_explicit_selection() {
+        let conn = fresh();
+        let id1 = capture::capture_memory(&conn, "ws1", "fact", "选择A", "t1").unwrap();
+        let id2 = capture::capture_memory(&conn, "ws1", "preference", "选择B", "t2").unwrap();
+        capture::capture_memory(&conn, "ws2", "fact", "他ws", "t1").unwrap();
+        capture::revoke_memory(&conn, &id2).unwrap();
+
+        let list = list_manageable(&conn, "ws1").unwrap();
+        // revoked（id2）与跨 workspace（ws2）不可见；active 含 entry_id + content 供构造 MemorySelectionRef。
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].entry_id, id1);
+        assert_eq!(list[0].memory_kind, "fact");
+        assert_eq!(list[0].content, "选择A");
+        assert_eq!(list[0].status, "active");
+        // 不存在 workspace → 空集（作用域隔离）
+        assert!(list_manageable(&conn, "wsX").unwrap().is_empty());
     }
 }

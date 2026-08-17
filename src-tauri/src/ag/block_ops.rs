@@ -44,7 +44,9 @@ struct RequestedBlockOperation {
     fingerprint: String,
     #[serde(default)]
     expected_node_type: String,
-    after_node: Value,
+    // AG-TASK-01 F2：delete_node 无 afterNode（删除标记 null）。
+    #[serde(default)]
+    after_node: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -210,7 +212,10 @@ fn validate_after_node(
     operation: &RequestedBlockOperation,
     target: &AgentEditableBlock,
 ) -> Result<(), IpcError> {
-    let node = object(&operation.after_node, "afterNode")?;
+    let after_node = operation.after_node.as_ref().ok_or_else(|| {
+        invalid("replace_node 必须提供 afterNode")
+    })?;
+    let node = object(after_node, "afterNode")?;
     exact_keys(node, &["type", "attrs", "content"], "afterNode")?;
     let node_type = node
         .get("type")
@@ -265,6 +270,28 @@ fn target_for<'a>(
                 false,
             )
         })
+}
+
+/// AG-STRATEGY-04：为 insert/append 新块兜底生成唯一 attrs.blockId（模型未显式给时）。
+/// 使前端 nodeFromJSON 生成的新块自带稳定 id，可被跨批/后续操作锚定，根治"新块无 id 错乱"。
+fn ensure_new_block_id(after_node: Value) -> Value {
+    let mut node = after_node;
+    if let Some(obj) = node.as_object_mut() {
+        let block_id = obj
+            .get("attrs")
+            .and_then(|attrs| attrs.get("blockId"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("new_block_{}", uuid::Uuid::new_v4()));
+        let attrs = obj
+            .entry("attrs")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(attrs_obj) = attrs.as_object_mut() {
+            attrs_obj.insert("blockId".to_string(), Value::String(block_id));
+        }
+    }
+    node
 }
 
 /**
@@ -366,7 +393,7 @@ pub fn validate_and_build(
                     fingerprint: operation.fingerprint,
                     expected_node_type: operation.expected_node_type,
                     before_node: target.node_json.clone(),
-                    after_node: operation.after_node,
+                    after_node: operation.after_node.unwrap_or(Value::Null),
                 });
             }
             "insert_before" | "insert_after" => {
@@ -398,7 +425,10 @@ pub fn validate_and_build(
                     ));
                 }
                 // 校验 afterNode 结构（节点类型和内容）
-                let node = object(&operation.after_node, "afterNode")?;
+                let after_node = operation.after_node.as_ref().ok_or_else(|| {
+                    invalid("insert_before/insert_after 必须提供 afterNode")
+                })?;
+                let node = object(after_node, "afterNode")?;
                 let node_type = node
                     .get("type")
                     .and_then(Value::as_str)
@@ -409,7 +439,7 @@ pub fn validate_and_build(
                         node_type
                     )));
                 }
-                // 新块不需要 attrs（blockId 等由前端分配）
+                // 新块 attrs 可含 blockId；缺省由后端兜底生成唯一 id（AG-STRATEGY-04）。
                 let mut text_utf16 = 0usize;
                 if let Some(content) = node.get("content") {
                     let content = content
@@ -429,12 +459,15 @@ pub fn validate_and_build(
                     fingerprint: String::new(),
                     expected_node_type: node_type.to_string(),
                     before_node: empty_before,
-                    after_node: operation.after_node,
+                    after_node: ensure_new_block_id(operation.after_node.unwrap_or(Value::Null)),
                 });
             }
             "append" => {
                 // 校验 afterNode 结构
-                let node = object(&operation.after_node, "afterNode")?;
+                let after_node = operation.after_node.as_ref().ok_or_else(|| {
+                    invalid("append 必须提供 afterNode")
+                })?;
+                let node = object(after_node, "afterNode")?;
                 let node_type = node
                     .get("type")
                     .and_then(Value::as_str)
@@ -464,7 +497,54 @@ pub fn validate_and_build(
                     fingerprint: String::new(),
                     expected_node_type: node_type.to_string(),
                     before_node: empty_before,
-                    after_node: operation.after_node,
+                    after_node: ensure_new_block_id(operation.after_node.unwrap_or(Value::Null)),
+                });
+            }
+            // AG-TASK-01 F2：删除块。仅允许 role=content 且 capabilities 含 delete_node 的原子块；
+            // 容器/原子块（含子块）拒绝级联删除。删除不需要 afterNode/fingerprint（无 after 节点）。
+            "delete_node" => {
+                if operation.block_id.trim().is_empty() {
+                    return Err(invalid("delete_node 必须提供 blockId"));
+                }
+                if !seen.insert(operation.block_id.clone()) {
+                    return Err(invalid(format!(
+                        "同一批操作重复命中 blockId {}",
+                        operation.block_id
+                    )));
+                }
+                let target = target_for(snapshot, &operation.block_id)?;
+                if target.role != "content"
+                    || !target
+                        .capabilities
+                        .iter()
+                        .any(|capability| capability == "delete_node")
+                {
+                    return Err(IpcError::new(
+                        "AG_BLOCK_OPERATION_TARGET_READONLY",
+                        &format!(
+                            "块 {} 是容器、原子块或受保护块，不能删除（1.0 不级联删除子树）",
+                            operation.block_id
+                        ),
+                        false,
+                        false,
+                    ));
+                }
+                if target.node_json.is_null() {
+                    return Err(IpcError::new(
+                        "AG_BLOCK_OPERATION_TARGET_READONLY",
+                        &format!("块 {} 缺少 node_json", operation.block_id),
+                        false,
+                        false,
+                    ));
+                }
+                // 删除块：beforeNode 为被删块完整节点，afterNode 置 null 标记删除（前端渲染删除线）。
+                canonical.push(StructuredBlockOperation {
+                    op: operation.op,
+                    block_id: operation.block_id,
+                    fingerprint: operation.fingerprint,
+                    expected_node_type: operation.expected_node_type,
+                    before_node: target.node_json.clone(),
+                    after_node: Value::Null,
                 });
             }
             _ => {
@@ -559,6 +639,93 @@ mod tests {
         assert_eq!(payload.operations.len(), 1);
         assert_eq!(node_text(&payload.operations[0].before_node), "第一条");
         assert_eq!(node_text(&payload.operations[0].after_node), "新第一条");
+    }
+
+    // covers: BR-AG-DATA-002
+    // AG-STRATEGY-04：insert/append 新块缺省时后端兜底生成唯一 attrs.blockId（跨批可锚定）。
+    #[test]
+    fn insert_new_block_gets_fallback_unique_block_id() {
+        let params = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": [{
+                "op": "insert_before",
+                "blockId": "p-1",
+                "afterNode": {
+                    "type": "heading",
+                    "content": [{"type": "text", "text": "寒冬路上"}]
+                }
+            }]
+        });
+        let payload = validate_and_build(&params, &snapshot()).unwrap();
+        assert_eq!(payload.operations.len(), 1);
+        let block_id = payload.operations[0].after_node["attrs"]["blockId"]
+            .as_str()
+            .expect("insert 新块应有兜底 attrs.blockId")
+            .to_string();
+        assert!(
+            block_id.starts_with("new_block_"),
+            "兜底 id 应为 new_block_ 前缀，实际 {block_id}"
+        );
+        // 显式给 blockId 时保留模型值，不覆盖。
+        let params_explicit = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": [{
+                "op": "append",
+                "afterNode": {
+                    "type": "paragraph",
+                    "attrs": {"blockId": "my-title"},
+                    "content": [{"type": "text", "text": "教训"}]
+                }
+            }]
+        });
+        let explicit = validate_and_build(&params_explicit, &snapshot()).unwrap();
+        assert_eq!(
+            explicit.operations[0].after_node["attrs"]["blockId"],
+            "my-title"
+        );
+    }
+
+    // covers: BR-AG-DATA-002
+    // AG-TASK-01 F2：delete_node——content 块可删（beforeNode 为被删块，afterNode=null 标记）；
+    // 容器/受保护块拒绝（不级联删除子树）。
+    #[test]
+    fn delete_node_allows_content_block_and_rejects_container() {
+        let mut current = snapshot();
+        current.blocks[0].capabilities = vec!["delete_node".into()];
+        let ok = validate_and_build(
+            &serde_json::json!({
+                "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+                "operations": [{
+                    "op": "delete_node",
+                    "blockId": "p-1",
+                    "expectedNodeType": "paragraph"
+                }]
+            }),
+            &current,
+        )
+        .unwrap();
+        assert_eq!(ok.operations.len(), 1);
+        assert_eq!(ok.operations[0].op, "delete_node");
+        assert_eq!(ok.operations[0].after_node, serde_json::Value::Null);
+        assert_eq!(node_text(&ok.operations[0].before_node), "第一条");
+
+        // 容器块（无 delete_node 能力）→ 拒绝。
+        let mut container = snapshot();
+        container.blocks[0].role = "container".into();
+        container.blocks[0].capabilities.clear();
+        let err = validate_and_build(
+            &serde_json::json!({
+                "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+                "operations": [{
+                    "op": "delete_node",
+                    "blockId": "p-1",
+                    "expectedNodeType": "paragraph"
+                }]
+            }),
+            &container,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AG_BLOCK_OPERATION_TARGET_READONLY");
     }
 
     #[test]

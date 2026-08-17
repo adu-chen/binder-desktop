@@ -10,7 +10,7 @@ import {
 } from "@tiptap/pm/state";
 import { TableMap, tableNodes } from "@tiptap/pm/tables";
 import { buildEditorExtensions } from "../components/ed/extensions";
-import type { StructuredBlockEditPayload } from "../store/edStore";
+import type { StructuredBlockEditPayload, StructuredBlockOperation } from "../store/edStore";
 import {
   applyStructuredBlockOperations,
   fingerprintBlockNode,
@@ -78,6 +78,54 @@ function payloadFor(
   };
 }
 
+function insertedHeading(
+  op: "insert_before" | "insert_after",
+  anchorId: string,
+  blockId: string,
+  text: string,
+): StructuredBlockOperation {
+  return {
+    op,
+    blockId: anchorId,
+    fingerprint: "",
+    expectedNodeType: "heading",
+    beforeNode: {},
+    afterNode: {
+      type: "heading",
+      attrs: { blockId, level: 2, textAlign: null },
+      content: [{ type: "text", text }],
+    },
+  };
+}
+
+function deleteOperation(editor: Editor, blockId: string): StructuredBlockOperation {
+  const block = projectAgentEditableBlocks(editor).find((item) => item.blockId === blockId);
+  if (!block) throw new Error(`missing ${blockId}`);
+  return {
+    op: "delete_node",
+    blockId,
+    fingerprint: block.fingerprint,
+    expectedNodeType: block.nodeType,
+    beforeNode: block.nodeJson,
+    afterNode: null,
+  };
+}
+
+function appendParagraph(blockId: string, text: string): StructuredBlockOperation {
+  return {
+    op: "append",
+    blockId: "",
+    fingerprint: "",
+    expectedNodeType: "paragraph",
+    beforeNode: {},
+    afterNode: {
+      type: "paragraph",
+      attrs: { blockId, textAlign: null },
+      content: [{ type: "text", text }],
+    },
+  };
+}
+
 describe("projectAgentEditableBlocks", () => {
   it("projects list containers as readonly context and list paragraphs as independent writable blocks", () => {
     const editor = editorWith(`
@@ -100,7 +148,8 @@ describe("projectAgentEditableBlocks", () => {
       role: "content",
       parentBlockId: "item-1",
       text: "第一条",
-      capabilities: ["replace_node", "style_ops"],
+      // AG-TASK-01 F2：可写 content 块附带 delete_node 能力。
+      capabilities: ["replace_node", "style_ops", "delete_node"],
     });
     expect(blocks.find((block) => block.blockId === "p-2")?.blockIndex)
       .not.toBe(blocks.find((block) => block.blockId === "p-1")?.blockIndex);
@@ -153,6 +202,157 @@ describe("applyStructuredBlockOperations", () => {
     editor.destroy();
   });
 
+  it("keeps each inserted heading and removes every old tail when insert_before and replace_node share anchors", () => {
+    const editor = editorWith(`
+      <p data-block-id="p-1">旧段一。残尾一</p>
+      <p data-block-id="p-2">旧段二。残尾二</p>
+      <p data-block-id="p-3">旧段三。残尾三</p>
+      <p data-block-id="p-4">旧段四。残尾四</p>
+    `);
+    const before = editor.getJSON();
+    const operations: StructuredBlockOperation[] = [];
+    for (const [index, blockId] of ["p-1", "p-2", "p-3", "p-4"].entries()) {
+      operations.push(
+        insertedHeading("insert_before", blockId, `heading-${index + 1}`, `第 ${index + 1} 幕`),
+        payloadFor(editor, blockId, `新正文${index + 1}`).operations[0],
+      );
+    }
+    const payload: StructuredBlockEditPayload = {
+      payloadVersion: 1,
+      base: { sessionVersion: 7, contentHash: "base-hash" },
+      operations,
+    };
+
+    expect(applyStructuredBlockOperations(
+      editor,
+      payload,
+      "forward",
+      { sessionVersion: 7, contentHash: "base-hash" },
+    ).ok).toBe(true);
+    const text = editor.getText();
+    for (const index of [1, 2, 3, 4]) {
+      expect(projectAgentEditableBlocks(editor).find((block) => block.blockId === `heading-${index}`)?.text)
+        .toBe(`第 ${index} 幕`);
+      expect(text).toContain(`新正文${index}`);
+      expect(text).not.toContain(`残尾${index}`);
+    }
+
+    expect(validateStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(applyStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(editor.getJSON()).toEqual(before);
+    editor.destroy();
+  });
+
+  it("keeps insert_after in reading order and reverses the actual inserted node", () => {
+    const editor = editorWith('<p data-block-id="p-1">旧正文。残尾</p>');
+    const before = editor.getJSON();
+    const payload: StructuredBlockEditPayload = {
+      payloadVersion: 1,
+      base: { sessionVersion: 7, contentHash: "base-hash" },
+      operations: [
+        payloadFor(editor, "p-1", "新正文").operations[0],
+        insertedHeading("insert_after", "p-1", "heading-after", "尾声"),
+      ],
+    };
+    expect(applyStructuredBlockOperations(
+      editor,
+      payload,
+      "forward",
+      { sessionVersion: 7, contentHash: "base-hash" },
+    ).ok).toBe(true);
+    expect(editor.getText()).toContain("新正文");
+    expect(editor.getText()).toContain("尾声");
+    expect(editor.getText()).not.toContain("残尾");
+    expect(validateStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(applyStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(editor.getJSON()).toEqual(before);
+    editor.destroy();
+  });
+
+  it("reverses insert_before plus delete_node without parsing the empty beforeNode", () => {
+    const editor = editorWith(`
+      <p data-block-id="p-1">待删除正文</p>
+      <p data-block-id="p-2">保留正文</p>
+    `);
+    const before = editor.getJSON();
+    const payload: StructuredBlockEditPayload = {
+      payloadVersion: 1,
+      base: { sessionVersion: 7, contentHash: "base-hash" },
+      operations: [
+        insertedHeading("insert_before", "p-1", "heading-delete", "章节标题"),
+        deleteOperation(editor, "p-1"),
+      ],
+    };
+    expect(applyStructuredBlockOperations(
+      editor,
+      payload,
+      "forward",
+      { sessionVersion: 7, contentHash: "base-hash" },
+    ).ok).toBe(true);
+    expect(editor.getText()).toContain("章节标题");
+    expect(editor.getText()).not.toContain("待删除正文");
+    expect(validateStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(applyStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(editor.getJSON()).toEqual(before);
+    editor.destroy();
+  });
+
+  it("reverses appended blocks by their stable afterNode blockId", () => {
+    const editor = editorWith('<p data-block-id="p-1">正文</p>');
+    const before = editor.getJSON();
+    const payload: StructuredBlockEditPayload = {
+      payloadVersion: 1,
+      base: { sessionVersion: 7, contentHash: "base-hash" },
+      operations: [appendParagraph("append-1", "附录")],
+    };
+    expect(applyStructuredBlockOperations(
+      editor,
+      payload,
+      "forward",
+      { sessionVersion: 7, contentHash: "base-hash" },
+    ).ok).toBe(true);
+    expect(editor.getText()).toContain("附录");
+    expect(validateStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(applyStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(editor.getJSON()).toEqual(before);
+    editor.destroy();
+  });
+
+  // AG-TASK-01 F2：delete_node 前端原子应用——删除块后段落移除、列表保留；reverse 精确恢复。
+  it("applies delete_node by removing the block and restores it on reverse", () => {
+    const editor = editorWith(`
+      <ul data-block-id="list">
+        <li data-block-id="item-1"><p data-block-id="p-1">第一条</p></li>
+        <li data-block-id="item-2"><p data-block-id="p-2">第二条</p></li>
+      </ul>
+    `);
+    const payload: StructuredBlockEditPayload = {
+      payloadVersion: 1,
+      base: { sessionVersion: 7, contentHash: "base-hash" },
+      operations: [{
+        op: "delete_node",
+        blockId: "p-1",
+        fingerprint: "",
+        expectedNodeType: "paragraph",
+        beforeNode: projectAgentEditableBlocks(editor)
+          .find((block) => block.blockId === "p-1")!.nodeJson,
+        afterNode: null,
+      }],
+    };
+    expect(applyStructuredBlockOperations(
+      editor,
+      payload,
+      "forward",
+      { sessionVersion: 7, contentHash: "base-hash" },
+    )).toEqual({ ok: true, affectedBlockIds: ["p-1"] });
+    expect(editor.getText()).toContain("第二条");
+    expect(editor.getText()).not.toContain("第一条");
+    // reverse 精确恢复。
+    expect(applyStructuredBlockOperations(editor, payload, "reverse").ok).toBe(true);
+    expect(editor.getText()).toContain("第一条");
+    editor.destroy();
+  });
+
   it("rejects the entire batch before dispatch when one fingerprint is stale", () => {
     const editor = editorWith(`
       <p data-block-id="p-1">第一条</p>
@@ -196,7 +396,7 @@ describe("applyStructuredBlockOperations", () => {
     editor.commands.setContent('<p data-block-id="p-1">用户后改</p>');
     expect(fingerprintBlockNode(
       projectAgentEditableBlocks(editor).find((block) => block.blockId === "p-1")!.nodeJson,
-    )).not.toBe(fingerprintBlockNode(refreshed.operations[0].afterNode));
+    )).not.toBe(fingerprintBlockNode(refreshed.operations[0].afterNode as Record<string, unknown>));
     expect(validateStructuredBlockOperations(editor, refreshed, "reverse"))
       .toEqual({ ok: false, reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED" });
     editor.destroy();

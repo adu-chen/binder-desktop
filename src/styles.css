@@ -1114,6 +1114,60 @@ button:disabled { opacity: 0.5; cursor: default; }
 .toolcard-skipped { opacity: 0.55; }
 .toolcard-executing { border-color: var(--gold); }
 
+/* AG-1.0-TASKRUN-REWORK-IMP-UI-01 · 回合实时当前动作状态条（step_progress，BR-SYS-STATE-008）。 */
+.turn-statusbar {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2); margin-top: var(--sp-2);
+  border: 0.5px solid var(--gold); border-radius: var(--r-1);
+  background: var(--gold-bg); font-size: 12px; color: var(--ink-2);
+}
+.turn-statusbar-spinner {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--gold-bg); border-top-color: var(--gold); animation: ed-spin 0.7s linear infinite;
+}
+.turn-statusbar-label { color: var(--ink-3); }
+
+/* AG-1.0-DECISION-CARD-01 · 任务级裁决独立固定区（Composer 上方；任务暂停等决策）。 */
+.decisionbar {
+  border: 0.5px solid var(--gold); border-radius: var(--r-1);
+  margin: 0 var(--sp-2) var(--sp-1); padding: var(--sp-2);
+  background: var(--gold-bg); font-size: 12px;
+}
+.decisionbar-permission { border-color: var(--rust); background: var(--rust-bg); }
+.decisionbar-head { display: flex; align-items: center; gap: var(--sp-2); }
+.decisionbar-title { font-weight: 600; color: var(--ink-2); }
+.decisionbar-kind { margin-left: auto; text-transform: uppercase; font-size: 10px; color: var(--ink-4); }
+.decisionbar-summary { color: var(--ink-3); margin-top: var(--sp-1); }
+.decisionbar-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.decisionbar-actions button { padding: var(--sp-1) var(--sp-2); font-size: 11px; }
+.decisionbar-primary { border-color: var(--rust); color: var(--rust); }
+.decisionbar-note { margin-top: var(--sp-1); font-size: 10px; color: var(--ink-4); }
+.composer-gate {
+  border: 0.5px dashed var(--gold); border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2); margin-bottom: var(--sp-1);
+  font-size: 11px; color: var(--ink-3); background: var(--gold-bg);
+}
+
+/* AG-1.0-TASKRUN-REWORK-CONTINUE-01 · 任务计划卡（TERM-AG-018，可展示操作计划，非思维链）。 */
+.plancard {
+  border: 0.5px solid var(--rule); border-radius: var(--r-1);
+  padding: var(--sp-2); margin-top: var(--sp-2);
+  background: var(--bg-card); font-size: 12px;
+}
+.plancard-head { display: flex; align-items: center; gap: var(--sp-2); }
+.plancard-title { font-weight: 600; color: var(--ink-2); }
+.plancard-cursor { margin-left: auto; font-family: var(--font-mono); font-size: 9px; color: var(--ink-4); }
+.plancard-steps { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.planstep { display: flex; align-items: center; gap: var(--sp-2); color: var(--ink-3); font-size: 11px; }
+.planstep-kind { font-family: var(--font-mono); font-size: 9px; color: var(--ink-4); text-transform: uppercase; min-width: 32px; }
+.planstep-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planstep-confirm { color: var(--gold); font-size: 10px; }
+.planstep-grant { font-family: var(--font-mono); font-size: 9px; color: var(--ink-4); }
+.planstep-deps { font-size: 9px; color: var(--ink-4); }
+.planstep-active .planstep-label { color: var(--gold); }
+.planstep-ok .planstep-label::after { content: " ✓"; color: var(--forest); }
+.planstep-failed .planstep-label::after { content: " ✕"; color: var(--rust); }
+
 .composer { border-top: 0.5px solid var(--rule); padding: var(--sp-2) var(--sp-3); background: var(--bg-elevated); }
 /* 输入框体（PI-AG-UI-01 需求4）：textarea 与底部功能条同框。 */
 .composer-box {
@@ -1360,6 +1414,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .diffcard-actions button { padding: var(--sp-1) var(--sp-3); font-size: 12px; }
 .diffcard-accept { border-color: var(--forest); color: var(--forest); }
+/* AG-DELETE-01：删除确认卡（红色高亮，HITL 强确认）。 */
+.diffcard-delete { border-color: var(--danger, #c0392b); }
+.diffcard-accept-delete { border-color: #c0392b; color: #c0392b; }
 .diffcard-status {
   flex: 1 1 auto;
   text-align: right;

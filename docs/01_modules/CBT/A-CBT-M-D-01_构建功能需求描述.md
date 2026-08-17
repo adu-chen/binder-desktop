@@ -30,13 +30,14 @@ CBT 是 **构建模块**（Build；旧称「Chat Build」2026-07-04 弃用）：
 | # | 职责 | 锚定 |
 |---|---|---|
 | C-J1 | 多文件构建回合：跨 ≥2 文件的文档项目产物构建（任务分解→逐步产出） | REQ-CORE-003 |
-| C-J2 | 产物 diff 化落盘：构建产物经 DE 裁决后由 WS 落盘，不旁路直写 | X-FORBID-006、REQ-CORE-002 |
+| C-J2 | 产物提案与显式保存：构建产物经 DE/ED 受控预览和人类裁决后，由用户显式保存写盘，不旁路直写 | X-FORBID-006、REQ-CORE-002/010 |
 | C-J3 | 构建中断与恢复：构建过程可中断，中断不残留半成品，控制态可恢复 | REQ-CORE-003 |
 | C-J4 | 构建移交/回落：编辑模式代理回合与构建回合间的接管/中断对接 | REQ-CORE-003、总图 §5 转移点 |
 
 > 边界澄清：CBT **复用 AG 基建**——模型调用、门禁前置、工具循环均经 AG（SM-AG-01/02），CBT 在其上
-> 编排多文件构建任务；产物落盘语义与编辑模式一致：**生成 ChangeProposal 交 DE**（批量裁决形态联动
-> DE 批量债务），accepted 后 WS 落盘。CBT 不自带模型调用通道、不自带写盘通道。
+> 编排多文件构建任务；产物落盘语义与编辑模式一致：**生成 ChangeProposal 交 DE/ED 受控预览**（批量
+> 审阅形态联动 DE），裁决不直接写盘，用户显式保存当前 LogicalState 后才由 WS 落盘。CBT 不自带模型调用
+> 通道、不自带写盘通道。
 
 ## §3 能力范围（CBT v1）
 
@@ -46,6 +47,13 @@ CBT 是 **构建模块**（Build；旧称「Chat Build」2026-07-04 弃用）：
 **OUT**：模型调用与门禁（AG）；diff 裁决终态（DE）；文件 I/O 与落盘（WS）；编辑模式回合（AG）；
 模板化工作流定义（TPL，CBT 可消费）；构建任务分解算法与编排模型细节（CBT L2）。
 
+### §3.1 Agent 1.0 Profile 边界
+
+CBT 仍是产品路线中的有效模块需求（REQ-CORE-003），但不属于 `agent-edit-1.0` 默认 Runtime Profile，
+也不构成该 Profile 的发布验收条件。1.0 不得以“多文档修改”自动切入构建模式，或把尚未完成计划确认、
+状态机、逐文档审阅和恢复设计的构建入口伪装为可用。后续启用 CBT 时，所有产物须继承 REQ-CORE-010：
+先受控预览进入各自 LogicalState，再由用户显式保存写入 DiskState；不得沿用“accepted 即批量落盘”。
+
 ## §4 代表性流程（契约级，APC §7）
 
 **C1 · 多文件构建**（C-J1/J2/J3）
@@ -54,7 +62,7 @@ CBT 是 **构建模块**（Build；旧称「Chat Build」2026-07-04 弃用）：
 |---|---|---|---|---|---|---|
 | 1 | 用户 | 项目蓝图（对话阶段产物）+ 显式触发 | CBT 承接蓝图分解为构建任务计划（计划呈现用户确认） | 已确认任务计划 | 2 | 蓝图不充分→回落对话澄清 |
 | 2 | CBT | 已确认任务计划 | 逐任务经 AG 回合基建产出（过门禁；任务内可调研/检索知识库；产出后轻量自查；期间不可发起对话） | 产物 ChangeProposal 集 | 3 | 无订阅/断网→明确拒绝；用户中断→中断终态，无半成品落盘 |
-| 3 | DE/用户 | ChangeProposal 集 | diff 化裁决（批量形态联动 DE） | accepted 落盘 / rejected 不落 | 终态 | 部分接受→仅 accepted 部分落盘 |
+| 3 | DE/ED/用户 | ChangeProposal 集 | 受控预览并逐项/批量裁决；用户按目标显式保存 | 已保存 / 未保存 / rejected / expired | 终态 | 部分裁决不直接落盘；保存失败保留各 LogicalState |
 
 **C2 · 构建移交/回落**（C-J4）
 
@@ -81,10 +89,10 @@ req_id: REQ-CBT-002
 title: 构建产物 diff 化落盘
 owner_module: CBT
 status: active
-summary: 构建产物（新建/修改文档）一律生成 ChangeProposal 交 DE 裁决，accepted 后经 WS 落盘；CBT 无旁路写盘路径；支持按条/批量裁决（批量形态联动 DE）
-source_doc: X-FORBID-006、REQ-CORE-002、A-DE-M-T-01（§11 批量裁决债务）
-acceptance: 构建产物在用户接受前不写入文件；部分接受时仅 accepted 部分落盘；无旁路直写
-open_issues: 批量裁决交互形态联动 DE-04 / DE G2 债务（§7 CBT-02）；新建文档的 diff 表达（无 before 基准）归 CBT/DE G2 联合
+summary: 构建产物（新建/修改文档）一律生成 ChangeProposal 交 DE/ED 受控预览和裁决；接受不直接写盘，用户显式保存各目标的当前 LogicalState 后由 WS 落盘；CBT 无旁路写盘路径；支持按条/批量审阅
+source_doc: X-FORBID-006、REQ-CORE-002/010、A-AG-M-D-02 §2
+acceptance: 构建产物在用户显式保存前不写入文件；部分裁决不直接落盘；各目标保存失败保留对应 LogicalState；无旁路直写
+open_issues: 批量审阅与逐目标保存交互形态联动 DE G2；新建文档的多目标预览/保存表达归 CBT/DE/ED/WS G2 联合
 -->
 
 <!-- REQ
@@ -111,7 +119,8 @@ open_issues: 接管协议（事件/回执语义）归 CBT G2 联合 AG（§7 CBT
 
 ## §6 模块边界与约束（边界闭合）
 
-- **基建复用**：模型调用/门禁/工具循环经 AG（无独立通道）；落盘经 DE→WS diff 路径
+- **基建复用**：模型调用/门禁/工具循环经 AG（无独立通道）；产物经 DE/ED 受控预览、裁决和用户显式保存
+  才由 WS 落盘
   （X-FORBID-006）；文件边界 X-FORBID-004。
 - **状态机边界**（APC §6）：CBT 构建为状态化核心链（总图 planned，owner=CBT），CBT G2 建机
   （X-SEQ-003）并登记 构建移交/回落转移点（X-INTER-001）。
@@ -122,7 +131,7 @@ open_issues: 接管协议（事件/回执语义）归 CBT G2 联合 AG（§7 CBT
 | 编号 | 分类 | 状态 | 处置 |
 |---|---|---|---|
 | CBT-01 | BOUNDARY_OPEN | 显式延期 | 构建任务分解与编排模型归 CBT G2 |
-| CBT-02 | DESIGN_RISK | 显式延期 | 批量 diff 裁决形态联动 DE-04 与 DE G2 批量债务；新建文档 diff 表达（无 before 基准）联合 DE G2 |
+| CBT-02 | DESIGN_RISK | 显式延期 | 批量提案的逐目标预览、裁决和显式保存形态联动 DE/ED/WS G2；新建文档的多目标表达（无 before 基准）联合定义 |
 | CBT-03 | BOUNDARY_OPEN | 显式延期 | 构建移交/回落协议（事件/回执）归 CBT G2 联合 AG |
 | CBT-04 | BOUNDARY_OPEN | 显式延期 | 构建控制态持久化结构归 CBT G2 联合 WS/SYS |
 | CBT-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5；量化指标（构建吞吐/中断响应）延 G5 NFR |
@@ -141,3 +150,4 @@ open_issues: 接管协议（事件/回执语义）归 CBT G2 联合 AG（§7 CBT
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（P4 首件）：CBT 构建模块级 L1；声明 REQ-CBT-001~004（多文件构建回合 / 产物 diff 化落盘 / 中断与恢复 / Chat↔Build 接管），承接 REQ-CORE-003，复用 AG 门禁基建与 DE→WS diff 路径（X-FORBID-006）；代表性流程 C1/C2；G1 暴露清单 CBT-01~05 |
 | 2026-07-04 | v2.0 | 构建模式定义回写（人类裁决）：模块正式名「构建（Build）」弃用 Chat Build；§1 补全流程（对话阶段→蓝图→触发→计划确认→执行→回落编辑）；REQ-CBT-001 补蓝图承接/调研/自查/执行期禁对话；REQ-CBT-004 更名「构建移交/回落」并换轴触发判据（显式触发即确认/项目级意图提议经确认，多文件意图废止）；C1/C2 流程表重写 |
+| 2026-08-13 | v2.1 | 对齐 Agent 1.0 能力基线：CBT 保留为产品路线需求但不进入 `agent-edit-1.0` 默认 Profile；后续启用时须继承 REQ-CORE-010 的受控预览与显式保存语义，不得以 accepted 直接批量落盘。 |

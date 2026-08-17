@@ -51,7 +51,7 @@ interface PendingDiffDto {
 
 export interface DiffDetailDto extends PendingDiffDto {
   projection?: {
-    patch_kind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
+    patch_kind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops" | "delete_doc" | "delete_folder";
     block_id?: string | null;
     block_index?: number | null;
     before_text?: string;
@@ -100,6 +100,39 @@ async function expireDiff(diffId: string, reason: ExpiredReason, errorCode: stri
     console.error(`de.expire_diff failed ${errMsg(e)}`);
   }
   deStore.expireLocal(diffId, { expiredReason: reason, errorCode });
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-DE-DE-DIFF-001
+ * type:     EFFECT
+ * chain:    DE-DIFF, ED-EDIT
+ * rules:    BR-SYS-STATE-008
+ * boundary: in=NewProposalBaseAdvanced | out=PriorStalePendingCardsExpired(documentRevisionAdvanced) | does_not=rollback_or_touch_disk
+ */
+/** 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：后续 Proposal 基于最新 LogicalState 生成/预览
+ * 成功后，使同文档所有基于旧基准的 pending 卡失效（document_revision_advanced）。旧卡保留历史、不可再
+ * 裁决；不构成补丁栈、无任务级回滚、不触碰磁盘内容。并行同基准卡（同版本同哈希）不受影响；background
+ * pending 卡（无 LogicalState 基准）不参与。 */
+export async function expireStalePendingForPath(
+  relPath: string,
+  exceptDiffId: string,
+  base: { sessionVersion?: number | null; contentHash?: string | null } | null,
+): Promise<void> {
+  const diffs = deStore.getSnapshot().diffs;
+  for (const d of diffs) {
+    if (d.diffId === exceptDiffId) continue;
+    if (d.relPath !== relPath) continue;
+    if (d.state !== "pending") continue;
+    const stale =
+      (typeof base?.sessionVersion === "number" &&
+        typeof d.baseSessionVersion === "number" &&
+        d.baseSessionVersion < base.sessionVersion) ||
+      (base?.contentHash != null && d.baseContentHash != null && d.baseContentHash !== base.contentHash);
+    if (stale) {
+      await expireDiff(d.diffId, "document_revision_advanced", "DE_CONSECUTIVE_PROPOSAL_ADVANCED");
+    }
+  }
 }
 
 export async function loadDiffDetails(diffIds: string[]): Promise<DiffDetailDto[]> {
@@ -154,6 +187,14 @@ export async function loadPersistedDiffs(): Promise<void> {
   }
 }
 
+/**
+ * @GOV
+ * codes:    BR-CORE-STATE-001-EFFECT-DE-ED-EDIT-001
+ * type:     EFFECT
+ * chain:    DE-DIFF, ED-EDIT
+ * rules:    BR-CORE-STATE-001
+ * boundary: in=PendingDiffForExistingInactiveLogicalState | out=ControlledLogicalStatePreviewWithoutAcceptanceOrDiskWrite
+ */
 export async function applyOpenSessionDiff(diffId: string): Promise<void> {
   const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
   if (!diff || diff.draftMode !== "open_session" || diff.state !== "pending") return;
@@ -197,6 +238,34 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
   // 不调用 de.accept_draft_diff。accept 由后续用户操作驱动。
   await persistSessionSnapshot(applied.snapshot);
   deStore.markDraftApplied(diffId, session.content, session.tabState, nextContent);
+  // 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：本卡成功预览推进 session 基准，
+  // 使同文档基于旧基准的 pending 卡失效（保留历史、不可裁决；不产生任务级回滚）。
+  await expireStalePendingForPath(diff.relPath, diffId, {
+    sessionVersion: applied.snapshot.sessionVersion,
+    contentHash: applied.snapshot.contentHash,
+  });
+}
+
+/**
+ * @GOV
+ * codes:    BR-CORE-STATE-003-EFFECT-DE-ED-EDIT-001
+ * type:     EFFECT
+ * chain:    DE-DIFF, ED-EDIT, ED-DECOR, WS-SAVE
+ * rules:    BR-CORE-STATE-003
+ * boundary: in=PendingBackgroundDiffAfterTargetOpenCreatesLogicalState | out=PendingDiffCardRoutedToLogicalStatePreviewAndSavePath
+ */
+/** 背景 PendingDiff 的目标在卡片待裁决期间被打开后，编辑器已先建立 LogicalState。
+ * 此处只迁移 DiffCard 的分流归属，保持 pending；后续预览、接受/拒绝均按 LogicalState 路径执行。 */
+export async function promotePendingDiffOnOpen(diffId: string, blockId = ""): Promise<void> {
+  const diff = deStore.getSnapshot().diffs.find((item) => item.diffId === diffId);
+  if (!diff || diff.draftMode !== "background" || diff.state !== "pending") return;
+  try {
+    await callCommand<{ pending: boolean }>("de.promote_pending_diff_on_open", { diffId });
+    deStore.migrateDraftMode(diffId, blockId || diff.blockId, "current_editor");
+  } catch (e) {
+    deStore.setLocalView(diffId, "error", { errorCode: (e as { code?: string }).code ?? "DE_PROMOTE_ON_OPEN_FAILED" });
+    console.error(`de.promote_pending_diff_on_open failed ${errMsg(e)}`);
+  }
 }
 
 /**
@@ -235,8 +304,15 @@ export async function generateSampleDiff(): Promise<void> {
 }
 
 /**
- * 接受单条：已应用到打开编辑器的草稿 diff 只确认裁决态，不再触发 WS apply；保存由普通 ⌘S/save 链落盘。
- * 非当前编辑器草稿的 text/html diff 保留旧 de.accept_diff→ws.apply_diff 路径；BDocx 必须先进入编辑器草稿。
+ * @GOV
+ * codes:    BR-CORE-STATE-001-API-DE-DE-DIFF-001, BR-CORE-STATE-002-API-DE-DE-DIFF-001, BR-CORE-STATE-003-API-DE-DE-DIFF-001
+ * type:     API
+ * chain:    DE-DIFF, ED-EDIT, WS-SAVE, WS-DIFF-APPLY
+ * rules:    BR-CORE-STATE-001, BR-CORE-STATE-002, BR-CORE-STATE-003
+ * boundary: in=UserDiffCardAccept | out=LogicalStateLifecycleOnlyOrBackgroundAtomicDiskApply
+ */
+/** 接受单条：已应用到打开编辑器的草稿 diff 只确认裁决态，不再触发 WS apply；保存由普通 ⌘S/save 链落盘。
+ * 无 LogicalState 的后台 diff 才保留 de.accept_diff→ws.apply_diff 路径；BDocx 必须先进入编辑器草稿。
  *
  * D5 路径选择表见 A-DE-M-S-01 §4（A-CORE-C-T-01 §5.5 决议落地）：
  *   draftApplied=true → 草稿路径（de.accept_draft_diff）
@@ -246,6 +322,8 @@ export async function generateSampleDiff(): Promise<void> {
 export async function acceptDiff(diffId: string): Promise<void> {
   try {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
+    // 当前编辑器预览尚未完成时，不能把 pending proposal 误走成后台写盘接受。
+    if (diff?.draftPreviewState === "queued") return;
     if (diff?.state === "error" && !diff.draftApplied) return;
     const { openPath } = edStore.getSnapshot();
     if (diff?.draftApplied && diff.blockOpsPayload) {
@@ -265,16 +343,20 @@ export async function acceptDiff(diffId: string): Promise<void> {
       }
     }
     if (diff?.draftMode === "open_session") {
-      // D1：open_session diff 不再 auto-accept。apply 已在 diff_proposed 后用户触发时调用，
-      // 此处仅确认 accept（状态变更）
+      // open_session 在 diff 返回时已受控预览；此处仅由用户显式确认卡片。
       await applyOpenSessionDiff(diffId);
       if (deStore.getSnapshot().diffs.find((d) => d.diffId === diffId)?.draftApplied) {
-        await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId });
+        await callCommand<{ accepted: boolean }>("de.accept_draft_diff", {
+          diffId,
+          applyContext: "open_session",
+          baseSessionVersion: diff.baseSessionVersion,
+          baseContentHash: diff.baseContentHash,
+        });
       }
       return;
     }
     if (diff?.draftApplied && diff.relPath === openPath) {
-      await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId });
+      await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId, applyContext: "current_editor" });
       return;
     }
     if (diff?.relPath && edStore.getSnapshot().sessions[diff.relPath]) {
@@ -298,7 +380,21 @@ export async function acceptDiff(diffId: string): Promise<void> {
 export async function rejectDiff(diffId: string): Promise<void> {
   try {
     const diff = deStore.getSnapshot().diffs.find((d) => d.diffId === diffId);
-    if (diff?.draftMode === "open_session" || diff?.readonly) return;
+    if (diff?.readonly) return;
+    const inactiveDraft = diff?.draftApplied && diff.relPath && diff.relPath !== edStore.getSnapshot().openPath
+      ? {
+          relPath: diff.relPath,
+          afterContent: diff.draftAfterContent,
+          baseContent: diff.draftBaseContent,
+          baseDirty: diff.draftBaseDirty,
+          baseTabState: diff.draftBaseTabState,
+        }
+      : undefined;
+    const inactiveSession = inactiveDraft ? edStore.getSnapshot().sessions[inactiveDraft.relPath] : undefined;
+    if (inactiveSession && inactiveDraft?.afterContent !== undefined && inactiveSession.content !== inactiveDraft.afterContent) {
+      deStore.setLocalView(diffId, "conflict", { errorCode: "ED_OPEN_SESSION_AFTER_MISMATCH" });
+      return;
+    }
     const activeEditor = diff?.draftApplied && diff.blockOpsPayload ? getActiveEditor() : null;
     if (diff?.draftApplied && diff.blockOpsPayload) {
       if (!activeEditor || diff.relPath !== edStore.getSnapshot().openPath) {
@@ -317,6 +413,28 @@ export async function rejectDiff(diffId: string): Promise<void> {
     }
     await callCommand("de.reject_diff", { diffId });
     const { openPath, editFormat, contentFormat } = edStore.getSnapshot();
+    if (inactiveSession && inactiveDraft?.baseContent !== undefined) {
+      edStore.updateContent(inactiveDraft.relPath, inactiveDraft.baseContent);
+      edStore.setTabState(
+        inactiveDraft.relPath,
+        inactiveDraft.baseDirty ? "dirty" : (inactiveDraft.baseTabState ?? "normal"),
+      );
+      const restored = edStore.getSnapshot().sessions[inactiveDraft.relPath];
+      if (restored?.content !== null) {
+        await persistSessionSnapshot({
+          relPath: inactiveDraft.relPath,
+          content: restored.content,
+          editFormat: restored.editFormat,
+          contentFormat: restored.contentFormat,
+          source: "open_editor_session",
+          dirty: restored.tabState === "dirty",
+          sessionVersion: restored.sessionVersion,
+          contentHash: restored.contentHash,
+          capturedAt: Date.now(),
+        });
+      }
+      return;
+    }
     if (
       diff?.draftApplied
       && diff.blockOpsPayload
@@ -417,4 +535,12 @@ export async function rejectAllDiffs(): Promise<void> {
     await rejectDiff(d.diffId);
   }
   deStore.setBatch("idle");
+}
+
+/**
+ * AG-DELETE-01：接受删除确认卡 → 后端执行删除（ws.apply_delete_diff，HITL 已过）。
+ * 删除提案 origin_module=AG_DELETE，不接受内容 diff 路径（不写 after_content）。
+ */
+export async function applyDeleteDiff(diffId: string): Promise<void> {
+  await invoke("ws.apply_delete_diff", { diffId });
 }

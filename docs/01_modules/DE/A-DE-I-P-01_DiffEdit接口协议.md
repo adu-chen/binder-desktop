@@ -16,12 +16,13 @@
 
 ```
 A-SYS-I-P-02（骨架）→ 本文（DE 生成/裁决/过期接口）→ 实现 + @GOV(追溯 A-DE-M-T-01)
-上游：AG/CBT(ChangeProposal) → de.generate_diff；下游：current/open session → ED LogicalState，未打开文档 accept → ws.apply_diff、呈现 → ed.mount_decoration
+上游：AG/CBT(ChangeProposal) → de.generate_diff；下游：已有或 pending 后打开的文档 → ED LogicalState，持续未打开文档 accept → ws.apply_diff、呈现 → ed.mount_decoration
 ```
 
 DE 是「代理回合→diff→LogicalState/落盘」链的中枢：接 AG/CBT 的 ChangeProposal 生成 PendingDiff，经 ED
-装饰层或 DiffCard 呈现审阅；激活文档和已打开非激活文档进入 ED LogicalState 后等待保存，未打开文档
-accepted 后才驱动 WS 落盘，rejected/expired 不写文件。
+装饰层或 DiffCard 呈现审阅；已有 LogicalState 的目标立即受控预览并等待保存，持续未打开的目标只由卡片
+临时挂载、accepted 后驱动 WS 落盘。后台 pending 在用户打开文档时必须迁移到前一条路径，rejected/expired
+不写文件。
 
 ## §2 diff 生成接口（DE-DIFF / SM-DE-01 / BR-DE-DATA-001）
 
@@ -54,15 +55,17 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `de.accept_draft_diff` | diff_id、apply_context(current_editor/open_session)、base_session_version?、base_content_hash? | Accepted（不可逆）；仅确认已进入 LogicalState，不触发 `ws.apply_diff`。可由 DiffCard 的“接受”或当前文档的任意保存动作调用 | open_session 基线不匹配 → 拒绝，调用方应转 `de.expire_diff`；终态后再调用 → 协议错误 | SM-DE-01 Accepted → ED/WS save 路径 |
-| `de.accept_diff` | diff_id | Accepted（不可逆）→ 仅当目标文档未打开时触发 `ws.apply_diff`，回 Applied + 装饰复位 | 目标文档已打开 → `DE_OPEN_DOC_REQUIRES_LOGICAL_STATE`；apply 失败 → 终态保持 Accepted、WS 侧重试（不回退） | SM-DE-01 Accepted → SM-WS-02（X-INTER-001，未打开文档后台落盘触发） |
-| `de.reject_diff` | diff_id | Rejected（不可逆）→ `ws.discard_diff` + 装饰复位 | `draft_mode=open_session` 已自动应用/失效 → 协议错误（卡片无拒绝入口） | 不写文件 |
+| `de.accept_draft_diff` | diff_id、apply_context(current_editor/open_session)、base_session_version?、base_content_hash? | Accepted（不可逆）；仅确认已进入 LogicalState，不触发 `ws.apply_diff`；可由 DiffCard 的显式“接受”或对仍有效 pending 预览执行的保存调用 | 基线不匹配 → 拒绝，调用方应转 `de.expire_diff`；终态后再调用 → 协议错误 | SM-DE-01 Accepted → ED/WS save 路径 |
+| `de.accept_diff` | diff_id | Accepted（不可逆）→ 仅当目标持续没有 LogicalState 时触发 `ws.apply_diff`，回 Applied + 卡片复位 | 目标已打开或已迁移 → `DE_OPEN_DOC_REQUIRES_LOGICAL_STATE`；apply 失败 → 终态保持 Accepted、WS 侧重试（不回退） | SM-DE-01 Accepted → SM-WS-02（X-INTER-001，未打开文档后台落盘触发） |
+| `de.reject_diff` | diff_id | Rejected（不可逆）→ 有 LogicalState 时由 ED 精确回滚并复位；无 LogicalState 时解除卡片临时挂载 | 已推进基线 → `DE_DIFF_BASE_ADVANCED`，调用方应先 expire；终态后再调用 → 协议错误 | 不写文件 |
+| `de.promote_pending_diff_on_open` | diff_id（ED 已用同一 DiffPayload 建立 LogicalState 并应用绿色预览后调用） | 保持 Pending；校验卡片仍可迁移，并使其退出后台路径 | 已 accepted/rejected/expired → 协议错误 | BR-CORE-STATE-003，ED-EDIT |
 | `de.expire_diff` | diff_id、reason | Expired（不可逆）→ `ws.discard_diff` + 装饰复位 | 终态后再调用 → 协议错误 | 自动应用失败、超时或外部变更关闭 |
 
 > 终态互斥不可逆：accept/reject/expire 后再裁决 → 协议错误（终态不可转移，BR-DE-STATE-001）。
 > 用户裁决交互经 ED 装饰层 `ed.on_decoration_action` 或 DiffCard 转达至此（ED 不代裁，X-FORBID-005）。
-> `draft_mode=open_session` 不提供用户裁决入口：前端必须在 DiffProjection 到达后先执行 ED session
-> 自动应用事务，成功调用 `de.accept_draft_diff`，失败调用 `de.expire_diff` 或投错误卡；不得调用
+> `draft_mode=open_session` 或由 background 迁移成 `current_editor` 的卡片在 DiffProjection 到达后先执行 ED session 受控预览事务，
+> 成功后仍保持 Pending 并保留用户裁决入口；用户可显式接受，也可保存仍有效的预览，二者均调用
+> `de.accept_draft_diff`。预览失败或基准已推进时调用 `de.expire_diff` 或投错误卡；这些路径都不得调用
 > `de.accept_diff` 触发后台落盘。
 
 ## §4 过期与冲突重检接口（DE-DIFF / BR-DE-STATE-002 / BR-DE-DATA-003）
@@ -78,13 +81,15 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 |---|---|---|
 | 接 AG 产出 | AG HandingOff → `de.generate_diff` | A-AG-M-S-01 §3 |
 | 锚校验/呈现/自动应用 | `ed.locate_block` / `ed.apply_session_diff` / `ed.mount_decoration` / `ed.dismiss_decoration` | A-ED-I-P-01 §3/§4 |
-| 未打开文档落盘/丢弃 | `ws.apply_diff` / `ws.discard_diff` | A-WS-I-P-01 §4 |
+| 未打开文档落盘/丢弃 | `ws.apply_diff` / `ws.discard_diff` | A-WS-I-P-01 §4；仅 BR-CORE-STATE-002 分支 |
 | 外部变更 | 订阅 `ws.external_change` → check_expiry | A-WS-I-P-01 §6 |
 
 ## §6 测试与验收
 
-- `de.generate_diff` 锚有效→Pending、锚失效→GenFailed 回报 AG；`de.accept_diff` 只对未打开文档触发
-  `ws.apply_diff`、ApplyError 不回退终态；`de.accept_draft_diff(open_session)` 不触发 `ws.apply_diff`；
+- `de.generate_diff` 锚有效→Pending、锚失效→GenFailed 回报 AG；`de.accept_diff` 只对持续无
+  LogicalState 的文档触发 `ws.apply_diff`、ApplyError 不回退终态；`de.accept_draft_diff` 不触发
+  `ws.apply_diff`；保存仍有效 pending 预览时必须裁决为 accepted/awaiting_save，基准已推进时必须先失效；
+  `de.promote_pending_diff_on_open` 后不得再调用后台 accept；
   reject/expire 不写文件 + 装饰复位；终态后再裁决被拒；
   过期保守性（检测不可得不误杀）；重叠重检（先序落盘后陈旧者 Expired）；全链与 AG/ED/WS G5 联调。
 
@@ -95,10 +100,11 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 - ~~payload 序列化与 before_snapshot 存储形态延实现期~~ → **已解除（PI-BE-02，2026-06-23）**：
   DiffPayload（TERM-DE-004）持久化于 workspace.db `diff_payloads` 表（payload_ref 主键，after_content
   BLOB、before_snapshot TEXT、is_new_doc），经 PendingDiff.payload_ref 关联；`de.accept_diff` 经此取回
-  after_content 触发 `ws.apply_diff` 落盘。DE 拥有载荷形状、WS db 承载持久化（A-DE-M-T-01 §1）。
+  after_content 在无 LogicalState 的 accepted 分支触发 `ws.apply_diff` 落盘；已有或迁移后的
+  LogicalState 分支只经 ED 预览与 save 落盘。DE 拥有载荷形状、WS db 承载持久化（A-DE-M-T-01 §1）。
 - `de.check_expiry` 的触发驱动（定时 vs 呈现时 vs 裁决时）延实现期，本文只定接口语义。
-- `open_session` 自动应用后的 DiffCard 当前不提供独立撤销接口；撤销能力需后续设计 `de.undo_applied_diff`
-  或文档级回滚协议，本轮只保证禁用二次裁决和不触发后台落盘。
+- 已打开或迁移后的预览卡必须支持现有 `de.reject_diff` 的精确回滚；跨会话长期撤销、文档级回滚等额外
+  能力仍需后续设计 `de.undo_applied_diff` 或时间轴协议，本轮不得以禁用裁决替代回滚。
 
 ## 变更记录
 
@@ -112,3 +118,5 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 | 2026-07-29 | v1.5 | BDOCX-IMAGE-AGENT-EDIT-01：新增 patch_kind=image_ops 的 ImageOperation、项目来源/锚、current_editor 与 structured DiffCard 契约；补充 `de.update_image_diff_snapshots` 一次性幂等持久化以及历史查询返回前后 ImageSnapshot 的闭环。 |
 | 2026-07-30 | v1.6 | 图片代理编辑闭合审计：image_ops 接口同步同图 resize/layout/move 组合、delete 独占，并明确五类图片操作均须由真实前后快照结构化呈现。 |
 | 2026-07-30 | v1.7 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：新增 patch_kind=block_ops 的 exact node before/after、活动草稿限定与逐块结构化审阅；文本摘要不再承担执行或回滚。 |
+| 2026-08-13 | v1.11 | DIFF-STATE-COMPASS-01：`de.accept_draft_diff` 固定为显式卡片接受，`de.accept_diff` 固定为持续无 LogicalState 的原子落盘；`open_session/migrated_open` 预览后保持 pending 并支持接受/拒绝，不再自动 accepted 或禁用裁决。 |
+| 2026-08-13 | v1.12 | 人类复核：保存有效 pending 预览同样调用 `de.accept_draft_diff`，先写 accepted/awaiting_save 再交给保存链；基线推进时调用方改走 `de.expire_diff`，不得接受旧卡。 |

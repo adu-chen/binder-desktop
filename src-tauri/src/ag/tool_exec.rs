@@ -204,8 +204,28 @@ pub fn exec_read_only(
 ) -> Result<String, IpcError> {
     match name {
         "list_docs" => {
-            let docs = crate::workspace::listing::list_docs(ctx.root())?;
-            Ok(serde_json::to_string(&docs).unwrap_or_else(|_| "[]".into()))
+            // AG-WS-LAYERED-01：无 path → L0 概览（豁免时全量）；path → L1 一层展开。
+            // 树枚举只含索引（路径/类型/计数），永不携带正文；正文仅经 read_doc。
+            let rel_dir = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if rel_dir.trim().is_empty() {
+                crate::workspace::listing::list_docs_overview_json(ctx.root())
+            } else {
+                crate::workspace::listing::list_docs_children_json(ctx.root(), rel_dir)
+            }
+        }
+        "workspace_glob" => {
+            // AG-STRATEGY-01：按文件名通配模式定位文档（只读，不含正文）。
+            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            if pattern.trim().is_empty() {
+                return Err(IpcError::new(
+                    "WS_GLOB_PATTERN_MISSING",
+                    "workspace_glob 缺少 pattern 参数（如 pattern=\"*寓言*.txt\"）",
+                    false,
+                    false,
+                ));
+            }
+            let hits = crate::workspace::listing::glob_files(ctx.root(), pattern)?;
+            Ok(serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into()))
         }
         "search_text" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
@@ -244,17 +264,113 @@ pub fn exec_read_only(
         "read_doc" => {
             let rel = path_arg(args, "read_doc")?;
             let snapshot = ctx.snapshot(&rel)?;
+            // AG-CTX-01：read_doc 支持 blocks 范围参数（可选）——只返回指定块的完整投影
+            // （含 node_json，供 block_ops 提案从 node_json 复制节点构造 afterNode）；
+            // 省略 blocks 参数时返回完整内容（向后兼容）。轻量索引走 list_blocks。
+            if let Some(blocks) = args
+                .get("blocks")
+                .and_then(|value| value.as_array())
+            {
+                let wanted: Vec<&str> = blocks
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect();
+                if wanted.is_empty() {
+                    return Err(IpcError::new(
+                        "AG_TOOL_ARG",
+                        "read_doc blocks 参数必须是块 id/索引数组且不能为空",
+                        false,
+                        false,
+                    ));
+                }
+                let filtered = snapshot
+                    .blocks
+                    .iter()
+                    .filter(|block| {
+                        let id = block.block_id.as_deref().unwrap_or("");
+                        wanted.contains(&id)
+                            || wanted.contains(&block.block_index.to_string().as_str())
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let mut slim = serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null);
+                if let Some(object) = slim.as_object_mut() {
+                    object["blocks"] = serde_json::to_value(&filtered)
+                        .unwrap_or(serde_json::Value::Array(Vec::new()));
+                    // 只返回目标块时省略整篇 content（块投影已含 text/node_json）。
+                    object.remove("content");
+                }
+                return Ok(slim.to_string());
+            }
             Ok(serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".into()))
         }
         "list_blocks" => {
             let rel = path_arg(args, "list_blocks")?;
             let snapshot = ctx.snapshot(&rel)?;
+            // AG-CTX-01：list_blocks 轻量投影——只返回块目录（无 node_json/全文/marks/attrs），
+            // 结构性压缩（Claude Code Tool Result Budget 同思路），模型提案时经 read_doc(blocks) 按需取完整块。
+            let directory = snapshot
+                .blocks
+                .iter()
+                .map(|block| {
+                    let mut entry = serde_json::Map::new();
+                    entry.insert(
+                        "block_id".to_string(),
+                        serde_json::Value::String(
+                            block.block_id.clone().unwrap_or_default(),
+                        ),
+                    );
+                    entry.insert(
+                        "block_index".to_string(),
+                        serde_json::json!(block.block_index),
+                    );
+                    if let Some(node_type) = &block.node_type {
+                        entry.insert(
+                            "node_type".to_string(),
+                            serde_json::Value::String(node_type.clone()),
+                        );
+                    }
+                    entry.insert(
+                        "role".to_string(),
+                        serde_json::Value::String(block.role.clone()),
+                    );
+                    if let Some(parent) = &block.parent_block_id {
+                        entry.insert(
+                            "parent_block_id".to_string(),
+                            serde_json::Value::String(parent.clone()),
+                        );
+                    }
+                    entry.insert("depth".to_string(), serde_json::json!(block.depth));
+                    let text: String = block.text.chars().take(40).collect();
+                    entry.insert(
+                        "text".to_string(),
+                        serde_json::Value::String(text),
+                    );
+                    if let Some(fingerprint) = &block.fingerprint {
+                        entry.insert(
+                            "fingerprint".to_string(),
+                            serde_json::Value::String(fingerprint.clone()),
+                        );
+                    }
+                    entry.insert(
+                        "capabilities".to_string(),
+                        serde_json::Value::Array(
+                            block
+                                .capabilities
+                                .iter()
+                                .map(|c| serde_json::Value::String(c.clone()))
+                                .collect(),
+                        ),
+                    );
+                    serde_json::Value::Object(entry)
+                })
+                .collect::<Vec<_>>();
             Ok(serde_json::to_string(&serde_json::json!({
                 "rel_path": snapshot.rel_path,
                 "editable_kind": snapshot.editable_kind,
                 "content_format": snapshot.content_format,
                 "source": snapshot.source,
-                "blocks": snapshot.blocks,
+                "blocks": directory,
             }))
             .unwrap_or_else(|_| "{}".into()))
         }
@@ -369,6 +485,29 @@ mod tests {
         .unwrap();
         assert!(out.contains("\"block_index\":0"));
         assert!(out.contains("\"text\":\"一\""));
+        // AG-CTX-01 F1：list_blocks 轻量投影不得包含 node_json/完整 marks。
+        assert!(!out.contains("node_json"), "轻量投影应省略 node_json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // covers: BR-AG-DATA-005
+    // AG-CTX-01 F1：read_doc 支持 blocks 范围参数——只返回指定块完整投影，省略整篇 content。
+    #[test]
+    fn read_doc_blocks_scope_returns_only_selected_blocks_without_full_content() {
+        let dir = std::env::temp_dir().join(format!("ag-toolexec-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 无 data-block-id 的文本文件：块索引 0/1。
+        std::fs::write(dir.join("a.md"), "第一行\n第二行").unwrap();
+        let out = exec_read_only(
+            &ctx(&dir),
+            "read_doc",
+            &serde_json::json!({ "path": "a.md", "blocks": ["1"] }),
+        )
+        .unwrap();
+        assert!(out.contains("第二行"), "应返回索引 1 的块: {out}");
+        assert!(!out.contains("第一行"), "不应包含未选中的块 0");
+        assert!(!out.contains("\"content\":"), "范围读取应省略整篇 content: {out}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -379,6 +518,77 @@ mod tests {
         std::fs::write(dir.join("a.md"), "# hi").unwrap();
         let out = exec_read_only(&ctx(&dir), "list_docs", &serde_json::Value::Null).unwrap();
         assert!(out.contains("a.md"), "list_docs 应含 a.md: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // AG-WS-LAYERED-01：list_docs 无参数 → 大工作区返回概览（mode=overview，不含 entries/正文）；
+    // path 参数 → 该目录一层直接子项（mode=children）。
+    #[test]
+    fn list_docs_layered_overview_and_children() {
+        let dir = std::env::temp_dir().join(format!("ag-toolexec-layer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("docs/sub")).unwrap();
+        std::fs::write(dir.join("root.md"), "r").unwrap();
+        for i in 0..35 {
+            std::fs::write(dir.join(format!("docs/f{i}.txt")), "content").unwrap();
+        }
+        // 无 path：36 文件 > 30 豁免 → overview。
+        let overview =
+            exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({})).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&overview).unwrap();
+        assert_eq!(value["mode"], "overview");
+        assert_eq!(value["total_files"], 36);
+        assert!(value.get("entries").is_none(), "概览不得携带全量 entries");
+        assert!(
+            value["top_level_dirs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["rel_path"] == "docs" && d["file_count"] == 35)
+        );
+        // path="docs"：一层直接子项（35 文件 + sub 目录，不递归）。
+        let children =
+            exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({ "path": "docs" }))
+                .unwrap();
+        let child_value: serde_json::Value = serde_json::from_str(&children).unwrap();
+        assert_eq!(child_value["mode"], "children");
+        assert_eq!(child_value["total_items"], 36); // docs/f0..34 + docs/sub
+        assert!(
+            child_value["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["rel_path"] == "docs/sub" && i["file_count"] == 0)
+        );
+        // 不存在目录 → 明确错误码。
+        let err = exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({ "path": "nope" }))
+            .unwrap_err();
+        assert_eq!(err.code, "WS_LIST_DIR_MISSING");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // AG-STRATEGY-01：workspace_glob 按模式返回匹配文件；缺 pattern → 明确错误。
+    #[test]
+    fn workspace_glob_lists_matching_files() {
+        let dir = std::env::temp_dir().join(format!("ag-toolexec-glob-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("寓言")).unwrap();
+        std::fs::write(dir.join("寓言/小马过河.txt"), "x").unwrap();
+        std::fs::write(dir.join("readme.md"), "x").unwrap();
+        let out = exec_read_only(
+            &ctx(&dir),
+            "workspace_glob",
+            &serde_json::json!({ "pattern": "*寓言*" }),
+        )
+        .unwrap();
+        assert!(
+            out.contains("寓言/小马过河.txt"),
+            "glob 应命中寓言文件: {out}"
+        );
+        assert!(!out.contains("readme.md"), "不应命中无关文件: {out}");
+        let err = exec_read_only(&ctx(&dir), "workspace_glob", &serde_json::json!({}))
+            .unwrap_err();
+        assert_eq!(err.code, "WS_GLOB_PATTERN_MISSING");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

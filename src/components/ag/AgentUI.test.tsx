@@ -39,6 +39,7 @@ const agServiceMock = vi.hoisted(() => ({
   switchAgentSession: vi.fn(),
   closeAgentSession: vi.fn(),
   setAgentMode: vi.fn(),
+  cancelActiveTurn: vi.fn(),
 }));
 
 vi.mock("../../services/agService", () => ({
@@ -49,6 +50,7 @@ vi.mock("../../services/agService", () => ({
   switchAgentSession: agServiceMock.switchAgentSession,
   closeAgentSession: agServiceMock.closeAgentSession,
   setAgentMode: agServiceMock.setAgentMode,
+  cancelActiveTurn: agServiceMock.cancelActiveTurn,
 }));
 
 vi.mock("../../services/deService", () => ({
@@ -119,6 +121,7 @@ function renderComposer() {
 beforeEach(() => {
   agServiceMock.startTurn.mockReset();
   agServiceMock.uploadByok.mockReset();
+  agServiceMock.cancelActiveTurn.mockReset();
   agStore.reset();
   agStore.applyTurnState("test-turn", "Completed");
   wsStore.reset();
@@ -131,6 +134,8 @@ describe("Composer · 引用令牌", () => {
   // SelectionRef 粘贴必须生成输入流内 ReferenceToken，并同步显示草稿引用。
   it("粘贴编辑器 SelectionRef 时在输入流和草稿区同时生成引用", async () => {
     const { input, editor } = renderComposer();
+    expect(screen.queryByText("build")).toBeNull();
+    expect(screen.getByTitle("agent-edit-1.0 · 文档编辑模式").textContent).toBe("edit");
     const ref = selectionRef();
 
     fireEvent.paste(input, {
@@ -142,6 +147,10 @@ describe("Composer · 引用令牌", () => {
     });
     expect(screen.queryByLabelText("草稿引用")).not.toBeNull();
     expect(screen.getAllByText("选区 a.md#abcdef[2-5]").length).toBeGreaterThanOrEqual(1);
+
+    act(() => agStore.setActiveTurn("session-1", "turn-1"));
+    fireEvent.click(screen.getByTitle("停止当前 Agent 回合"));
+    expect(agServiceMock.cancelActiveTurn).toHaveBeenCalledTimes(1);
   });
 
   // covers: BR-REF-DATA-004

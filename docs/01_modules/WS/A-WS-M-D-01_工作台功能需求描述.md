@@ -2,8 +2,8 @@
 文档编号：WS-M-D-01
 文档状态：A
 负责模块：WS
-文档职责：WS 工作台模块级功能需求描述——声明模块级 REQ-WS-*，承接产品级 REQ-CORE-001/002/007，界定 workspace 生命周期 / 文件 I/O 与 save / pending_diffs 持久化与落盘 / 文档级时间轴回溯 / 控制态缓存与重启可恢复
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/002/007）、A-CORE-C-P-01_APC.md（§4.1 WS 职责、§6 save 状态机、§9 文件系统安全边界）、A-SYS-I-P-01_数据结构定义.md（WorkspaceRef/DocRef/PendingDiff/TimelineEntry、workspace.db schema 基线、BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-M-S-01_状态机总图.md（save 核心链、SY-04）、A-CORE-X-L-01_总体开发路线图.md（P2）、ADU.md（§3.2 REQ 规范）
+文档职责：WS 工作台模块级功能需求描述——声明模块级 REQ-WS-*，承接产品级 REQ-CORE-001/002/004/007/010/011/012/013/014/015，界定 workspace 生命周期 / 文件 I/O 与显式 save / 工作区概览与受限 DiskState 读取 / 文件树结构 LogicalState 与逐项保存 / 可恢复删除与恢复 / 多文档逐项保存 / 原生 DOCX 来源保护与 BDocx 编辑副本落盘 / TXT↔Markdown 目标副本保存 / 提案控制态 / 文档级时间轴回溯 / 未保存文档的逻辑状态边界 / 控制态缓存与重启可恢复
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/002/004/007/010/011/012/013/014/015）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§2、§5.2、§5.10 D-NEW-001~008、§5.11、§5.11.1、§5.13、§5.14、§6）、A-CORE-C-P-01_APC.md（§4.1 WS 职责、§6 save 状态机、§9 文件系统安全边界）、A-SYS-I-P-01_数据结构定义.md（WorkspaceRef/DocRef/PendingDiff/TimelineEntry、workspace.db schema 基线、BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-M-S-01_状态机总图.md（save 核心链、SY-04）、A-CORE-X-L-01_总体开发路线图.md（P2）、ADU.md（§3.2 REQ 规范）
 直接承接：WS L2 技术设计（workspace 模型 / 文件系统 / 时间轴 / workspace.db 完整 schema / save·落盘·还原状态机）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；解除 SYS 侧 SY-03（workspace.db 完整列）与 SY-04（save 状态机）
 使用边界：本文是 L1 功能需求描述层，仅声明模块级 REQ-WS-*，**不定义技术规则**（RULE/CHAIN/CONSTRAINT/TERM/STATE_MACHINE 见 WS L2）；**代码不得直接映射 REQ**（ADU §3.2）；workspace.db 具体表结构、时间轴存储模型、状态机枚举、缓存策略归 WS L2；diff 终态转移语义归 DE（WS 只负责持久化与落盘执行）
 变更要求：WS 职责或 workspace 边界变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2 req_id 规则（序号不复用，废弃改 superseded）
@@ -20,8 +20,8 @@
 产品概述(REQ-CORE-*) → 本文(REQ-WS-*) → REQ_MAP → WS L2 规则(SSOT) → 代码(@GOV)
 ```
 
-WS 是 Binder 本地优先写作的**工作台底座**：管理 workspace 生命周期与文件 I/O，持久化 pending_diffs，
-落盘人类已裁决的修改，并提供文档级时间轴与历史回溯（APC §4.1）。WS 被 ED/DE/AG/CBT/REF/AST/KB/
+WS 是 Binder 本地优先写作的**工作台底座**：管理 workspace 生命周期与文件 I/O，持久化提案控制态，
+仅在显式保存时落盘当前 LogicalState，并提供文档级时间轴与历史回溯（APC §4.1）。WS 被 ED/DE/AG/CBT/REF/AST/KB/
 TPL/DOC/PRV 等模块依赖（A-SYS-C-T-01 §4：`ED→WS`、`DE→ED,WS,AG` 等）。本文只声明 WS 模块级需求，
 不写技术方案、不定义规则、代码不得追溯本文；具体表结构、时间轴模型、状态机枚举、缓存策略一律归
 WS L2。未被 APC / 产品概述 / SYS 契约支撑的判断一律进 §7 暴露清单，不杜撰。
@@ -37,12 +37,19 @@ WS L2。未被 APC / 产品概述 / SYS 契约支撑的判断一律进 §7 暴�
 |---|---|---|
 | W-J1 | workspace 生命周期：打开 / 切换 / 关闭，作为文件/搜索/diff/上下文唯一边界 | REQ-CORE-001、APC §9 |
 | W-J2 | 文件 I/O、save 保存与跨文档资源操作（限定 workspace 内） | REQ-CORE-001/002、APC §4.1/§6 |
-| W-J3 | pending_diffs 持久化与人类裁决后落盘（接受才写文件） | REQ-CORE-002、A-SYS-I-P-01 |
+| W-J3 | 提案控制态持久化与分流写盘：已有 LogicalState 的裁决不写文件；无 LogicalState 的接受原子写盘 | REQ-CORE-002/010、A-SYS-I-P-01 |
 | W-J4 | 文档级时间轴与历史回溯 / 还原 | REQ-CORE-007 |
 | W-J5 | 控制态缓存与重启可恢复（workspace.db，联合 SYS） | A-SYS-I-P-01 BR-SYS-PERSIST-001 |
+| W-J6 | 原生 DOCX 来源保护与 BDocx 编辑副本落盘：原文件只读，新副本仅在显式保存时创建 | REQ-CORE-004 |
+| W-J7 | 文件树结构操作暂存与逐项保存：逻辑文件树预览、基线核验、失败保留与磁盘提交 | REQ-CORE-012 |
+| W-J8 | 最小格式转换目标副本保存：转换来源不变，目标 LogicalState 仅在显式保存后写入目标文件 | REQ-CORE-013 |
+| W-J9 | 可恢复删除与恢复：红色逻辑暂存、递归清单/再核验、单项保存进入或离开可恢复存储 | REQ-CORE-014 |
+| W-J10 | 多既有文档逐项保存：确认冻结目标清单后，各目标独立基准、保存、失败与时间轴结果 | REQ-CORE-015 |
 
-> 边界澄清：WS **持久化并落盘** diff，但 diff 的生成与"接受/拒绝/过期"**终态转移语义归 DE**
-> （A-SYS-M-S-01 中 diff 终态机 owner=DE）；WS 在 `accepted` 触发后执行写文件与时间轴记节点。
+> 边界澄清：WS 持久化提案控制态。已有 LogicalState 的提案由用户**显式保存**把 LogicalState 写入
+> DiskState；保存仍有效 pending 预览时同时将卡裁决为 accepted/awaiting_save，显式接受/拒绝仍属 DE 的卡片裁决；没有 LogicalState 的背景提案只临时挂载于 DiffCard，用户
+> 接受后才可由 WS 原子写入 DiskState。pending 期间打开目标文档时必须迁移为前一分支。新建预览的
+> LogicalState 在保存前也不进入 workspace 文件树。
 > workspace.db 的 schema 基线与迁移契约归 SYS（A-SYS-I-P-01），WS 承接其完整列定义（解除 SY-03）。
 
 ## §3 能力范围（WS v1）
@@ -50,9 +57,13 @@ WS L2。未被 APC / 产品概述 / SYS 契约支撑的判断一律进 §7 暴�
 **IN（WS 承载）**：
 - workspace 打开/切换/关闭与边界守护（路径不越出 workspace root，APC §9）。
 - workspace 内文档/资源的读、写、列举、跨文档操作；编辑内容的 save 保存。
-- pending_diffs 持久化（A-SYS-I-P-01 PendingDiff），人类 `accepted` 后落盘、`rejected/expired` 不写。
+- 提案控制态持久化（共享结构由 SYS 定义）；受控预览和人类裁决不写盘，显式 save 才落盘。
 - 文档级时间轴记录与历史回溯 / 还原（A-SYS-I-P-01 TimelineEntry）。
 - 控制态缓存与重启恢复（workspace.db 持久化，遵守 SYS BR-SYS-PERSIST-001）。
+- P1 文件树结构操作：创建文件夹、单文件重命名/移动先进入逻辑文件树，用户逐项显式保存后才写入磁盘。
+- P1 最小格式转换：TXT→Markdown、Markdown→TXT 的目标副本预览后进入未保存 LogicalState，显式保存才创建目标文件。
+- P1 可恢复删除与恢复：已保存文件/文件夹先进入红色逻辑暂存，单项显式保存才移入或移出可恢复存储，永久删除不在 1.0。
+- P1 多既有文档逐项保存：确认冻结目标清单后，每个目标独立保存、失败与时间轴，不提供批量保存或跨文档事务。
 
 **OUT（非 WS）**：
 - 富文本编辑运行时（TipTap）——归 ED；WS 提供其底层文件 I/O。
@@ -72,15 +83,16 @@ WS L2。未被 APC / 产品概述 / SYS 契约支撑的判断一律进 §7 暴�
 | 2 | WS | 文件操作请求 | 校验路径在 workspace root 内后执行 | I/O 结果 | 3 | 越界路径→拒绝（APC §9 边界） |
 | 3 | 用户 | 切换/关闭 | 切换活动 workspace 或关闭 | 新活动态/已关闭 | 终态 | 有未落盘控制态→持久化后再切换 |
 
-**W2 · diff 落盘链**（W-J3，承接 REQ-CORE-002）
+**W2 · 提案与显式保存链**（W-J3，承接 REQ-CORE-002/010）
 
 | step | actor | input | action | output | next | exception |
 |---|---|---|---|---|---|---|
-| 1 | DE | 生成的 diff | WS 持久化为 pending_diff（A-SYS-I-P-01） | 持久化 pending_diff | 2 | 持久化失败→统一错误形状（A-SYS-I-P-02） |
-| 2 | 用户 | 接受/拒绝 | 由 DE 终态机裁决 | accepted / rejected / expired | 3 | 超时/外部变更→expired（终态，不落盘） |
-| 3 | WS | accepted 信号 | 写入目标文件并记一个时间轴节点 | 已落盘 + 时间轴节点 | 终态 | 写盘失败→不记节点，回报错误，控制态可重试 |
+| 1 | DE | 生成的提案 | WS 持久化提案控制态（共享结构由 SYS 定义） | 可恢复提案 | 2 | 持久化失败→统一错误形状（A-SYS-I-P-02） |
+| 2 | DE/ED/用户 | 受控预览与裁决 | 有 LogicalState 时 ED 预览、DE 只裁决卡片；无 LogicalState 时卡片临时挂载，接受才交 WS 原子写盘；pending 打开迁移为前者 | 当前逻辑文档，或背景待裁决卡片 | 3 | 基准推进→提案失效，逻辑文档保留 |
+| 3 | 用户 | 显式 save（仅已有 LogicalState） | WS 校验范围后将当前 LogicalState 写入目标文件并记时间轴节点 | 已落盘 + 时间轴节点 | 终态 | 写盘失败→不记节点，保留 LogicalState、标签和可重试保存 |
 
-> W2 在 L1 仅锁边界与"接受才落盘"顺序；diff 终态机归 DE，WS 的 save/落盘状态机归 WS L2（解除 SY-04）。
+> W2 在 L1 锁定三分流：已有 LogicalState 的预览/裁决不写盘、无 LogicalState 的背景卡只在接受后原子写盘、
+> pending 打开迁移为已有 LogicalState；提案裁决归 DE，WS 的 save/落盘状态机归 WS L2（解除 SY-04）。
 
 **W3 · 时间轴回溯还原**（W-J4，承接 REQ-CORE-007）
 
@@ -111,21 +123,21 @@ req_id: REQ-WS-002
 title: 文件 I/O、save 保存与跨文档资源操作
 owner_module: WS
 status: active
-summary: 提供 workspace 内文档/资源的读写、列举与跨文档操作，以及编辑内容的 save 保存；包含供代理只读发现的项目图片资源，AI 文件操作限定在 workspace 内
-source_doc: REQ-CORE-001、REQ-CORE-002、APC §4.1、§6
-acceptance: workspace 内可读写/列举/跨文档操作；项目图片发现只返回未越界、未跟随符号链接的相对普通文件；save 保存可靠落盘；AI 文件操作不越出 workspace
+summary: 提供 workspace 内已保存文档/资源的读写、列举与跨文档操作，以及把当前 LogicalState 写入磁盘的显式 save；为 Agent 1.0 项目分析先提供结构概览（路径、类型、数量、可访问范围），正文仅按任务最小化读取。未打开文档读取 DiskState 并返回读取时点/新鲜度，已打开文档的当前事实不由 WS 磁盘旧内容替代；AI 文件操作限定在 workspace 内
+source_doc: REQ-CORE-001/002/010/011、APC §4.1、§6
+acceptance: workspace 内已保存文件可读写/列举/跨文档操作；项目分析可先得到结构概览且不把目录列表误称为正文；按需正文读取不越出 workspace 并可标识 DiskState 读取时点/新鲜度；项目图片发现只返回未越界、未跟随符号链接的相对普通文件；显式 save 将当前 LogicalState 可靠落盘；AI 文件操作不越出 workspace
 open_issues: save 保存状态机（APC §6 核心链）归 WS L2（M-S，解除 SY-04）；并发写入边界归 WS L2
 -->
 
 <!-- REQ
 req_id: REQ-WS-003
-title: pending_diffs 持久化与裁决后落盘
+title: 提案控制态持久化与分流落盘
 owner_module: WS
 status: active
-summary: 持久化由 DE 生成的 pending_diffs（A-SYS-I-P-01 PendingDiff），仅在人类 accepted 后写入目标文件并记时间轴节点；rejected/expired 不写文件
-source_doc: REQ-CORE-002、A-SYS-I-P-01（PendingDiff、workspace.db）
-acceptance: pending_diffs 可持久化且重启可恢复；仅 accepted 触发落盘；rejected/expired 文件保持不变
-open_issues: diff 终态转移语义归 DE；WS 侧落盘状态机归 WS L2
+summary: 持久化由 DE 生成的 ChangeProposal/diff 控制态；已有 LogicalState 的受控预览、显式接受、拒绝或失效不直接写文件，保存才落盘并记时间轴节点；其中保存仍有效的 pending 预览必须先将卡片裁决为 accepted/awaiting_save；无 LogicalState 的背景卡只临时挂载，用户接受后由 WS 原子写入目标文件；pending 打开目标文档时迁移为已有 LogicalState 分支
+source_doc: REQ-CORE-002/010、A-SYS-I-P-01（共享结构、workspace.db）
+acceptance: 提案控制态可持久化且重启可恢复；已有 LogicalState 的显式接受不触发写盘，保存有效 pending 预览则先裁决为 accepted/awaiting_save 后落盘，基线已推进时只保存当前逻辑内容并使旧卡失效；无 LogicalState 的接受原子落盘；背景 pending 打开后不再具备后台写盘资格；拒绝/失效不误写文件；保存失败保留当前 LogicalState
+open_issues: 提案裁决语义归 DE；WS 侧保存状态机与跨模块转移归 WS L2
 -->
 
 <!-- REQ
@@ -150,9 +162,75 @@ acceptance: 重启后未裁决 pending_diffs 与时间轴可恢复；workspace.d
 open_issues: workspace.db 完整列/索引与缓存策略归 WS L2（联合 SYS，解除 SY-03）
 -->
 
+<!-- REQ
+req_id: REQ-WS-006
+title: 未保存文档的逻辑状态与目录边界
+owner_module: WS
+status: active
+summary: 新建提案预览成功后产生的未保存 LogicalState 允许在编辑器会话内继续编辑或被当前任务再次代理编辑，但在显式保存前不创建 DiskState、不列入 workspace 文件树，也不默认作为其他会话的 workspace 可读文件
+source_doc: REQ-CORE-010、A-AG-M-D-02 §2、§5.10（D-NEW-001~008）
+acceptance: 预览新建文档后文件树无物理节点；显式保存后创建目标文件并纳入文件树；保存失败保留 LogicalState；除明确关联的当前任务外，未保存文档不得被其他会话当作 workspace 文件读取
+open_issues: 未保存文档元数据、重启/异常退出处理与跨会话可见性详细规则归 WS/SYS/ED/DE G2 联合定义
+-->
+
+<!-- REQ
+req_id: REQ-WS-007
+title: 原生 DOCX 来源保护与 BDocx 编辑副本保存
+owner_module: WS
+status: active
+summary: 原生 DOCX 仅作为预览、读取、分析和创建 BDocx 编辑副本的只读来源；创建副本 Proposal 在预览成功后仅产生未保存 LogicalState，用户显式保存才在 workspace 中生成新的 DOCX。任何编辑、接受、拒绝、失效或保存失败都不得改写原生 DOCX
+source_doc: REQ-CORE-004、REQ-CORE-010、A-AG-M-D-02 §6
+acceptance: 编辑原生 DOCX 的请求没有原地写盘路径；副本 Proposal 的接受不创建物理文件，保存成功才创建新的 DOCX 并记入时间轴；拒绝有效 Proposal 或关闭未保存副本不影响原文件；转换/保存失败保留副本 LogicalState 且原文件、既有副本均不变
+open_issues: 副本命名、来源关联、冲突策略及 DOC 转换与 WS 保存的状态机/接口归 DOC/WS/DE/ED DESIGN Scope
+-->
+
+<!-- REQ
+req_id: REQ-WS-008
+title: 文件树结构逻辑状态与逐项保存
+owner_module: WS
+status: active
+summary: 对 Agent 或用户在文件树发起的创建文件夹、单个已保存文件重命名和单个已保存文件移动，维护逻辑文件树与磁盘文件树的分离：结构 Proposal 预览成功先更新逻辑文件树和可见树，接受不写盘；用户显式保存文件树更改时才重新核验并提交该单项结构操作。复制、删除、目录移动、批量提交和格式转换不在本要求
+source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-AG-M-D-01（REQ-AG-011）
+acceptance: 保存前磁盘路径保持不变且逻辑文件树可明确显示暂存差异；接受不改变 DiskState；每次保存仅处理一个结构操作，提交前重新核验源、目标和文件树基线，不覆盖冲突目标；保存失败或冲突时磁盘既有内容不被伪报为成功，逻辑文件树和可重试操作保留；受影响打开标签维持内容并获得暂定路径，关联待审阅内容 Proposal 失效；结构操作不得越出 workspace
+open_issues: 结构 Proposal/逻辑文件树的共享对象、保存入口、路径与基线快照、失败后同步、标签/引用/内容 Proposal 失效事件、重启恢复和现有直写操作的迁移归 WS/AG/ED/REF/SYS DESIGN Scope；本 L1 不定义状态机或接口
+-->
+
+<!-- REQ
+req_id: REQ-WS-009
+title: 最小格式转换目标副本的显式保存
+owner_module: WS
+status: active
+summary: 对 TXT→Markdown、Markdown→TXT 的转换目标副本，来源文件或来源 LogicalState 不被 WS 改写；转换预览成功后目标沿未保存新建文档的 LogicalState/标签链存在，接受只裁决转换 Proposal，只有用户显式保存当前目标才可创建目标 DiskState 并写入时间轴。转换预览前失败不产生目标；保存冲突或失败不覆盖既有目标且保留当前目标 LogicalState
+source_doc: REQ-CORE-013、A-AG-M-D-02 §5.13（CAP-13）、A-DOC-M-D-01（REQ-DOC-006）、A-DE-M-D-01（REQ-DE-006）
+acceptance: 打开来源取当前 LogicalState、未打开来源取有读取时点的 DiskState 的选择由上游如实传递，WS 不以磁盘旧内容覆盖打开来源；显式接受不写盘；保存成功后仅目标副本成为文件树/DiskState 节点并记录时间轴，来源不变；目标后续编辑使旧转换卡失效但仍可保存当前内容；保存路径冲突、外部变化或写盘失败时不自动覆盖、不伪报成功，保留可重试的目标 LogicalState 与标签；HTML、通用 DOCX、批量或原地转换不进入本保存路径
+open_issues: 转换目标的未保存元数据、源/目标基线、格式/路径校验、冲突时机、时间轴关系、重启恢复与错误形状归 WS/DOC/DE/ED/AG/SYS DESIGN Scope；本 L1 不定义状态机、接口或 I/O 算法
+-->
+
+<!-- REQ
+req_id: REQ-WS-010
+title: 可恢复删除与恢复的单项显式保存
+owner_module: WS
+status: active
+summary: 对已保存文件/文件夹的删除与恢复，WS 维护磁盘文件树与红色逻辑文件树暂存的分离。删除/恢复 Proposal 的预览或接受均不改 DiskState；只有用户对该单项显式保存后，WS 才在重新核验影响清单、来源基线和受影响未保存会话均已解决的前提下，把目标移入可恢复存储或恢复到安全目标。永久删除不属于 Agent 1.0
+source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-DE-M-D-01（REQ-DE-007）
+acceptance: 保存前磁盘目标保持原状，逻辑文件树明确显示待删除/待恢复；非空文件夹的递归范围、数量和来源快照在确认后冻结且保存前重新核验，任一变化或核验失败均不执行物理变更；脏会话未保存或未明确丢弃时阻断；删除/恢复保存失败不覆盖、不伪报成功并保留可重试逻辑状态；恢复冲突不自动覆盖；成功后记录适当时间轴/可恢复身份，后续引用和待审阅 Proposal 收到失效或历史快照事件
+open_issues: 可恢复存储位置/保留期/容量、目录移动原子性、递归清单与再核验数据、脏会话协调、恢复命名/冲突、时间轴、重启恢复与跨模块事件归 WS/DE/ED/AG/REF/SYS DESIGN Scope；本 L1 不定义文件 API、状态机或垃圾回收策略
+-->
+
+<!-- REQ
+req_id: REQ-WS-011
+title: 多个既有文档的独立保存与失败隔离
+owner_module: WS
+status: active
+summary: 在 AG 已确认并冻结的多既有文档目标清单内，WS 对每个目标独立持久化 Proposal 控制态、执行其自身 LogicalState/DiskState 分流、接受后的背景原子写盘或显式保存、失败保留和时间轴结果；不得把多个目标合并为批量保存、全有或全无事务或共同回滚
+source_doc: REQ-CORE-015、A-AG-M-D-02 §5.14（CAP-15）、A-DE-M-D-01（REQ-DE-008）
+acceptance: WS 只接收冻结目标清单中的逐目标保存请求；每个目标保存前各自核验路径、基准和外部变化，单一目标冲突/删除/结构变化/写盘失败不写入该目标且不影响其他目标；有 LogicalState 的目标仅在其显式保存时写盘，背景目标仅在其自身卡接受时原子写盘并在打开后失去该资格；每个成功、失败和未保存状态可独立追溯；原生 DOCX、删除/文件树整理/格式转换混合操作不进入本保存路径
+open_issues: 冻结目标身份、逐目标队列/并发、控制态持久化、跨目标事件排序、时间轴/重启恢复、失败形状与 Trace 归 WS/DE/ED/AG/REF/SYS DESIGN Scope；本 L1 不定义批处理或事务接口
+-->
+
 ## §6 模块边界与约束（边界闭合）
 
-- **职责边界**：WS 只承载 workspace/文件/持久化/时间轴（§2 W-J1–W-J5），不做编辑运行时、diff 生成、
+- **职责边界**：WS 只承载 workspace/文件/持久化/时间轴（§2 W-J1–W-J10），不做编辑运行时、diff 生成、
   格式转换、预览；越界即范围外（CLAUDE.md §1 范围纪律）。
 - **L1/L2 边界**：本文只定契约**边界**；表结构、时间轴存储模型、状态机枚举、缓存策略归 WS L2，
   代码只追溯 L2（ADU §3.2、APC §2）。
@@ -160,7 +238,12 @@ open_issues: workspace.db 完整列/索引与缓存策略归 WS L2（联合 SYS�
   （APC §9）。
 - **数据结构边界**：WS 复用 A-SYS-I-P-01 的 WorkspaceRef/DocRef/PendingDiff/TimelineEntry 与
   workspace.db schema 基线，遵守 X-SHARED-001（不私自重定义跨模块共享结构）、BR-SYS-PERSIST-001。
-- **与 DE 的边界**：diff 生成与终态转移语义归 DE；WS 仅持久化 pending_diffs 并在 accepted 后落盘。
+- **与 DE 的边界**：diff 生成与提案裁决语义归 DE；WS 持久化提案控制态，并仅在显式 save 时落盘。
+- **与 AG 的读取边界**：WS 供给工作区概览和未打开文档的受限 DiskState；读取不等同写权限，也不得用磁盘内容替代 ED 已打开文档的 LogicalState（REQ-WS-002）。
+- **结构落盘边界**：创建文件夹、单文件重命名/移动的结构 Proposal 不复用内容 Diff 的直接写盘分支；只有 REQ-WS-008 的逐项显式保存可改变磁盘文件树。
+- **转换落盘边界**：TXT↔Markdown 转换只保存新的目标副本；预览/接受不写盘，显式保存当前目标才可创建目标文件。来源不被改写；HTML、通用 DOCX、批量和原地转换不属于 REQ-WS-009。
+- **删除/恢复落盘边界**：删除和恢复只按 REQ-WS-010 在红色逻辑暂存、单项显式保存与再核验后改变磁盘；不直接永久删除、不在接受时执行、不用关闭标签代替解决未保存会话。
+- **多文档落盘边界**：多个既有文档只按已确认冻结的目标清单逐项保存；每项独立核验、失败与时间轴，不提供批量保存、共同回滚或跨文档事务。
 - **状态机边界**（APC §6）：save 保存、diff 落盘、时间轴还原为状态化核心链，须先建状态机方可实现
   （X-SEQ-003，A-SYS-M-S-01），WS G2 在其 M-S 定义并登记总图。
 - **L4 原料边界**：取材见台账 §4.3（WS：workspace 模型/生命周期/文件系统/跨文档/时间轴四件等，均
@@ -179,6 +262,11 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | WS-03 | DESIGN_RISK | 显式延期 | 时间轴节点准入规则 / 存储模型 / 还原执行链取材旧文档四件，归 WS G2 |
 | WS-04 | NEEDS_HUMAN_DECISION | 显式延期 | 缓存策略与多 workspace 控制态隔离属 L2 技术选型，延 WS G2 |
 | WS-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5 各 REQ-WS-*；量化指标（I/O 延迟、恢复耗时）延 G5 NFR 标定（APC §9） |
+| WS-06 | FLOW_INCOMPLETE | 已识别，待 G2 | 未保存 LogicalState 的元数据、文件树隔离、显式保存建文件、保存失败保留和异常退出处理需按 REQ-WS-006 / D-NEW-001~008 建立跨模块状态机 |
+| WS-07 | DESIGN_RISK | 已识别，待 G2 | 逻辑文件树、结构 Proposal、逐项保存、基线核验与现有直接文件操作的迁移，需按 REQ-WS-008 联合 AG/ED/REF/SYS 设计；不得以现有 `ws.create_folder`/`ws.rename_doc` 的直写语义绕过 |
+| WS-08 | DESIGN_RISK | 已识别，待 G2 | TXT↔Markdown 转换目标的来源快照、未保存元数据、显式保存、冲突/失败、时间轴与恢复需按 REQ-WS-009 联合 AG/DE/DOC/ED/SYS 设计；不得改写来源或由现有直接文件工具绕过。 |
+| WS-09 | DESIGN_RISK | 已识别，待 G2 | 可恢复删除/恢复的红色逻辑树、递归清单/再核验、脏会话协调、恢复冲突、时间轴/重启恢复与现有直接物理删除路径迁移，须按 REQ-WS-010 联合 DE/ED/AG/REF/SYS 设计；不得由接受或直写工具绕过。 |
+| WS-10 | DESIGN_RISK | 已识别，待 G2 | 多既有文档冻结目标清单后的逐目标控制态、分流保存、失败隔离、事件排序和无批量事务边界，须按 REQ-WS-011 联合 DE/ED/AG/REF/SYS 设计。 |
 
 > 术语：workspace、文档时间轴等 WS 主责核心概念将在 WS L2 注册 TERM（解除 A-SYS-I-P-01 §6 的延期），
 > 本文 L1 不注册 TERM（ADU §3.2，TERM 在 L2 技术设计层注册）。
@@ -187,7 +275,7 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 
 1. 待人类宣布 WS 模块级 G1 闭合后，进入 WS G2（L2 技术设计，规则 SSOT），按路线图：
    - workspace 模型与生命周期、文件系统与跨文档操作（承接 REQ-WS-001/002）；
-   - pending_diffs 持久化与落盘、save/落盘/还原状态机（承接 REQ-WS-003，解除 SY-04）；
+   - 提案控制态与显式保存、save/落盘/还原状态机（承接 REQ-WS-003/006/009/010/011，解除 SY-04）；
    - 文档级时间轴存储模型与还原执行链（承接 REQ-WS-004，取材台账 §4.3 时间轴四件）；
    - workspace.db 完整 schema 与 SYS 联合（承接 REQ-WS-005，解除 SY-03）；
    - 在 WS L2 注册 workspace / 时间轴相关 TERM。
@@ -201,3 +289,10 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 2026-06-10 | v1.0 | 初版：WS 工作台模块级 L1；声明 REQ-WS-001~005（workspace 生命周期与边界 / 文件 I/O 与 save / pending_diffs 持久化与落盘 / 文档级时间轴回溯 / 控制态缓存与重启可恢复），承接 REQ-CORE-001/002/007 与 A-SYS-I-P-01 契约；代表性流程 W1–W3；边界闭合（含与 DE/SYS 边界）与 G1 暴露清单（WS-01~05 显式延期/部分关闭，对接 SY-03/SY-04） |
 | 2026-07-29 | v1.1 | BDOCX-IMAGE-AGENT-EDIT-01：REQ-WS-002 增加 workspace 项目图片只读发现、相对普通文件与符号链接/越界保护验收。 |
 | 2026-08-07 | v1.2 | DOC-SYNC-01 回填（L1 口径，承接 L2/接口）：WS-NEW-BUTTON-01「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口，落地 REQ-WS-002 新建语义，命令见 A-WS-I-P-01）；WS-DIR-DELETE-01 文件夹删除两级语义（空快速删/非空确认递归，`ws.delete_folder` 见 A-WS-I-P-01 §3）；WS-SAVE-TIMELINE-01 保存成功记时间轴节点（REQ-WS-004 验收口径：保存成功且内容变化时记节点，A-WS-M-T-01 v1.7 已定档）。 |
+| 2026-08-13 | v1.3 | 依据 REQ-CORE-010 与 D-NEW-001~008，将 W-J3/W2/REQ-WS-003 从“accepted 落盘”改为“提案控制态 + 显式保存落盘”；新增 REQ-WS-006，锁定未保存 LogicalState 不进文件树、默认不跨会话可读及保存失败保留边界。 |
+| 2026-08-13 | v1.4 | DIFF-STATE-COMPASS-01：WS L1 对齐 BR-CORE-STATE-001~003，明确已有 LogicalState 仅保存写盘、无 LogicalState 接受原子写盘、pending 打开迁移至前者。 |
+| 2026-08-13 | v1.5 | AG-1.0-R2-REQUIREMENTS-01：REQ-WS-002 承接项目感知 P0 的两阶段读取——先结构概览，正文按任务最小化读取；未打开文档标识 DiskState 新鲜度，已打开 LogicalState 不得被磁盘旧内容替代。 |
+| 2026-08-13 | v1.6 | AG-1.0-R3-REQUIREMENTS-01：新增 REQ-WS-007，原生 DOCX 收敛为只读来源，编辑请求的 BDocx 副本仅在显式保存时创建为新的 DOCX；原文件全程不可被编辑或写回。 |
+| 2026-08-14 | v1.7 | AG-1.0-R4-STRUCTURE-REQUIREMENTS-01：新增 REQ-WS-008，建目录、单文件重命名/移动改为逻辑文件树预览与逐项显式保存；现有直写文件操作登记为后续迁移债务。 |
+| 2026-08-14 | v1.8 | AG-1.0-R4-CONVERSION-REQUIREMENTS-01：新增 REQ-WS-009；TXT→Markdown、Markdown→TXT 的目标副本预览后走未保存 LogicalState 与显式保存链，来源不改写；保存冲突/失败保留目标，HTML 与通用 DOCX 转换继续排除。 |
+| 2026-08-14 | v1.9 | AG-1.0-R4-DELETE-MULTIDOC-REQUIREMENTS-01：新增 REQ-WS-010/011；删除/恢复先进入红色逻辑暂存，单项显式保存且递归/来源/脏会话再核验后才改变磁盘，永久删除不纳入；多个既有文档按确认冻结目标清单逐项保存并隔离失败，不提供批量保存或事务。 |

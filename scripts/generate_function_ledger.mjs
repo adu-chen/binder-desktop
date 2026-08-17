@@ -32,11 +32,11 @@ const ROOT = resolve(SCRIPT_DIR, '..');
 const esc = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 
 const STATUS_STYLES = {
-  '待审计 · EP': 's3',
-  '已实现 · 待核验 · EP': 's4',
-  '规划 · V1+': 's5',
-  '明确不提供 · V1': 's6',
-  '概念 · VNext': 's7',
+  '待审计 · EP': '3',
+  '已实现 · 待核验 · EP': '4',
+  '规划 · V1+': '5',
+  '明确不提供 · V1': '6',
+  '概念 · VNext': '7',
 };
 
 const COLUMNS = ['id', 'l1', 'l2', 'l3', 'l4', 'l5', 'detail', 'status', 'acceptance', 'note'];
@@ -49,10 +49,10 @@ function buildSheet(ledger) {
   const cell = (ref, value, style = '') => `<c r="${ref}"${style ? ` s="${style}"` : ''} t="inlineStr"><is><t>${esc(value)}</t></is></c>`;
 
   let rows = '';
-  rows += `<row r="1" ht="28" customHeight="1">${cell('A1', ledger.title, 's1')}</row>`;
-  rows += `<row r="2" ht="27" customHeight="1">${cell('A2', ledger.description, 's1')}</row>`;
-  rows += `<row r="3" ht="46" customHeight="1">${cell('A3', '状态说明：状态为文档盘点口径，不把「已实现」写成「已验收」。「已实现 · 待核验 · EP」表示 UI 入口与代码已实现，仍待测试/验证证据更新；其他状态需以测试/验证证据更新。H 列底色 = 状态分区。', 's1')}</row>`;
-  rows += `<row r="4" ht="34" customHeight="1">${HEADERS.map((h, i) => cell(`${colLetters[i]}4`, h, 's2')).join('')}</row>`;
+  rows += `<row r="1" ht="28" customHeight="1">${cell('A1', ledger.title, '1')}</row>`;
+  rows += `<row r="2" ht="27" customHeight="1">${cell('A2', ledger.description, '1')}</row>`;
+  rows += `<row r="3" ht="46" customHeight="1">${cell('A3', '状态说明：状态为文档盘点口径，不把「已实现」写成「已验收」。「已实现 · 待核验 · EP」表示 UI 入口与代码已实现，仍待测试/验证证据更新；其他状态需以测试/验证证据更新。H 列底色 = 状态分区。', '1')}</row>`;
+  rows += `<row r="4" ht="34" customHeight="1">${HEADERS.map((h, i) => cell(`${colLetters[i]}4`, h, '2')).join('')}</row>`;
 
   ledger.rows.forEach((row, idx) => {
     const r = idx + 5;

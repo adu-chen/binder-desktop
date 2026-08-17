@@ -219,6 +219,73 @@ const MIGRATIONS: &[Migration] = &[
             UPDATE pending_diffs SET effect_status = 'saved' WHERE status = 'accepted';
         "#,
     },
+    Migration {
+        version: 11,
+        // 受限 TaskRun 持久化（AG-1.0-IMP-TASKRUN-01 / BR-SYS-STATE-008）：task_runs 表承载
+        // SM-AG-04 生命周期（Planned/Executing/WaitingConfirm/WaitingClarification/Completed/Failed/
+        // Cancelled/Interrupted）与步骤态（pending/running/waiting_confirm/ok/failed/cancelled）；
+        // agent_turns 加 task_run_id 关联（回合→TaskRun，DiffCard 可经此关联，UNC-09）。
+        // 不跨重启续跑：恢复仅为展示 Interrupted，retry 创建新回合（BR-SYS-STATE-008）。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS task_runs (
+                task_run_id  TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                session_id   TEXT NOT NULL,
+                status       TEXT NOT NULL,
+                intent_summary TEXT,
+                steps_json   TEXT NOT NULL DEFAULT '[]',
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_runs_session
+                ON task_runs(workspace_id, session_id, updated_at);
+            ALTER TABLE agent_turns ADD COLUMN task_run_id TEXT;
+        "#,
+    },
+    Migration {
+        version: 12,
+        // TaskRun 编排重构（AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01 · A-AG-M-T-01 §7.2.1）：
+        // 三层分离数据层——task_plans（可展示操作计划，非思维链）、task_plan_steps（步骤/依赖/授权/
+        // 确认点）、decision_requests（任务级裁决项 proposed→resolved，confirm/cancel 驱动 TaskRun）。
+        // 语义修正：waiting_confirm 仅由 DecisionRequest 产生；新消息不绕过未决确认。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS task_plans (
+                plan_id     TEXT PRIMARY KEY,
+                task_run_id TEXT NOT NULL,
+                plan_json   TEXT NOT NULL,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_plans_run ON task_plans(task_run_id);
+
+            CREATE TABLE IF NOT EXISTS task_plan_steps (
+                step_id        TEXT PRIMARY KEY,
+                plan_id        TEXT NOT NULL,
+                seq            INTEGER NOT NULL,
+                kind           TEXT NOT NULL,
+                label          TEXT NOT NULL,
+                deps_json      TEXT NOT NULL DEFAULT '[]',
+                required_grant TEXT,
+                confirm_point  INTEGER NOT NULL DEFAULT 0,
+                status         TEXT NOT NULL DEFAULT 'pending',
+                updated_at     INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON task_plan_steps(plan_id, seq);
+
+            CREATE TABLE IF NOT EXISTS decision_requests (
+                request_id   TEXT PRIMARY KEY,
+                task_run_id  TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'proposed',
+                outcome      TEXT,
+                proposed_at  INTEGER NOT NULL,
+                resolved_at  INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_decision_run
+                ON decision_requests(task_run_id, status);
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

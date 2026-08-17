@@ -24,6 +24,17 @@ forbidden: 记忆点, 记忆项, 记忆片段, memory条目
 AST 沉淀的跨回合事实单元：含类型（分级依据）、内容、来源回合（AgentTurn 溯源）、状态
 （active/revoked）；workspace 级隔离存储，自动写入、可见、可撤销（REQ-AST-001/002）。
 
+<!-- TERM
+term_id: TERM-AST-002
+chains: REF-INJECT, AST-MEMORY
+zh: 显式项目记忆引用
+en: MemorySelectionRef
+forbidden: 记忆引用, 记忆选择, 记忆注入引用, 记忆条目引用, 记忆选中项
+-->
+用户管理的 workspace 本地项目记忆条目，经用户明确选择以 data-only 引用进入当前回合；Agent 1.0
+不自动写入、不提议写入、不自动检索或注入；普通发送、附件、会话/编辑历史不自动转存为记忆；跨会话
+不串选择事实（A-SYS-I-P-01 §3.1，BR-SYS-DATA-007）。
+
 ## §1 文档定位
 
 ```
@@ -94,6 +105,31 @@ origin_turn（消费方可溯源）；无相关记忆供给空集，不注入噪
 A-SYS-I-P-01（X-SHARED-001，参照 RefInjection 模式另立 MemoryInjection 基线，不复用 RefInjection
 ——其 target 为 DocRef 语义不符）。预算与裁剪归 AG（BR-AG-DATA-001）。
 
+### 4.1 显式记忆选择契约与 1.0 不自动写入边界（2026-08-14 D3 登记）
+
+承接 R5-C（A-CORE-X-D-02 §4.6）与 BR-SYS-DATA-007（D1）：项目长期记忆是用户管理的 workspace 本地
+资产，Agent 1.0 **只允许用户显式选择的条目进入当前回合**（MemorySelectionRef）：
+
+| 契约项 | 1.0 语义 | 承接 |
+|---|---|---|
+| 显式选择 | 仅用户明确选择的记忆条目经 REF 以 data-only 进入当前回合（MemorySelectionRef） | BR-SYS-DATA-007、TERM-AST-002 |
+| 不自动写入/提议 | Agent 1.0 不自动写入记忆、不生成写入提议 | BR-SYS-DATA-007；BR-AST-STATE-001 自动写入在 1.0 关闭 |
+| 不自动检索/注入 | 普通回合不按相关性自动检索或注入记忆 | BR-AST-DATA-002 自动供给在 1.0 关闭 |
+| 不自动转存 | 外部内容、会话历史、编辑历史不得自动转存为项目记忆 | BR-SYS-DATA-007 |
+| 隔离与失效 | workspace 隔离；条目删除/关闭后引用失效或明确标记；跨会话不串选择事实 | BR-AST-DATA-001、BR-SYS-DATA-007 |
+
+<!-- REQ_MAP
+req_id: REQ-AST-001
+target_type: RULE
+target_id: BR-SYS-DATA-007
+status: mapped
+-->
+
+> **迁移债务**：现有 BR-AST-STATE-001（自动写入无需确认）与 BR-AST-DATA-002（相关性自动供给）为
+> 2026-06-11 人类决策落库（P2 记忆能力）；R5-C 冻结基线要求 Agent 1.0 关闭自动写入/提议/检索/注入。
+> D3 只登记边界：1.0 入口仅显式选择（MemorySelectionRef），自动能力保留为 P2 路线；具体关闭策略与
+> feature gate 由实现 Scope 承接，不得以「自动写入已关闭」之外的 Prompt 文案掩盖。
+
 ## §5 跨模块约束（复用，不新增）
 
 X-SHARED-001（供给结构经 SYS）、X-FORBID-004（workspace 边界）、X-SEQ-003/X-INTER-001
@@ -160,3 +196,5 @@ status: mapped
 |------|------|---------|
 | 2026-06-11 | v1.0 | 初版（AST G2）：两项人类决策落规则——workspace 级隔离（BR-AST-DATA-001）、自动写入+类型分级（BR-AST-STATE-001，保持可见/可溯源/可撤销三要素）；v1 记忆类型基线（preference/style/project_fact/session_context）；注入供给契约（BR-AST-DATA-002，MemoryInjection 结构延实现前登记 SYS）；注册链路 AST-MEMORY、术语 MemoryEntry；REQ_MAP（REQ-AST-001~004） |
 | 2026-07-04 | v1.1 | 上游约束文件名指针更新（A-AG-*/A-DE-* 文件更名为 代理*/DiffEdit*，2026-07-04 人类确认；文档编号不变，无语义变更） |
+| 2026-08-14 | v1.2 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：注册 TERM-AST-002 MemorySelectionRef；新增 §4.1 显式记忆选择契约与 1.0 不自动写入边界（R5-C / BR-SYS-DATA-007）——仅显式选择进入当前回合、不自动写入/提议/检索/注入、不自动转存；登记 BR-AST-STATE-001/BR-AST-DATA-002 自动能力在 1.0 关闭的漂移债务；补 REQ-AST-001 REQ_MAP。 |
+| 2026-08-14 | v1.3 | AG-1.0-IMP-MEMORY-SELECTION-01：§4.1 供给端落地——AST 新增 list_manageable（workspace 作用域、active 条目含 content）经 ast.list_entries 路由暴露；前端记忆库面板（MemoryPanel，浏览/显式选择）构造 MemorySelectionRef 快照经引用注入总线进 Composer 输入区；data-only 不写回 AST、跨会话不串；自动写入/自动供给保持关闭（memory_link/supply 未接线）；BR-SYS-DATA-007 记忆半进入代码 @GOV 引用与测试 covers，audit 维持全绿。 |

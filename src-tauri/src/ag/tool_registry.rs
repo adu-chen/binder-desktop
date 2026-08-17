@@ -9,6 +9,190 @@
 //! PI-AG-08B（与模型循环 PI-AG-11 配套，避免重复 lib.rs 既有 route_*）。本模块只持有注册与权限数据。
 
 use super::tool::{validate_tool, ToolDecision};
+use super::{
+    context::{IntentResultV1, IntentTargetKindV1, IntentTypeV1},
+    turn::AGENT_EDIT_1_0_PROFILE,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityGrantV1 {
+    pub version: String,
+    pub profile: String,
+    pub intent_id: String,
+    pub turn_id: String,
+    pub allowed_tools: Vec<String>,
+    pub target_scope: Vec<String>,
+    pub readable_scope: Vec<String>,
+    pub parameter_constraints: Vec<String>,
+    pub grant_hash: String,
+}
+
+impl CapabilityGrantV1 {
+    pub fn allows(&self, tool_name: &str) -> bool {
+        self.allowed_tools
+            .iter()
+            .any(|allowed| allowed == tool_name)
+    }
+}
+
+/// IntentResult 只提出候选能力，本函数结合 1.0 profile 生成最终逐回合授权。
+pub fn resolve_capability_grant(
+    profile: &str,
+    turn_id: &str,
+    intent: &IntentResultV1,
+    explicit_read_targets: &[String],
+) -> CapabilityGrantV1 {
+    // AG-STRATEGY-01：工具授予档位化——chat 零工具；read-only 声明（mutation_forbidden，
+    // 用户显式"不修改/只分析"）→ 只读全量；其余（edit/create/general）→ 全量工具
+    // （只读 + 提案 + glob）。意图不再按类型收窄工具，模型自决具体工具；
+    // 安全由调用时刻校验 + DiffCard 确认承担（targetScope 仅作 prompt/前端提示，不再硬拒）。
+    let read_only_declared = intent
+        .constraints
+        .iter()
+        .any(|c| c == "mutation_forbidden_by_current_turn");
+    let profile_tools: &[&str] = match intent.intent_type {
+        IntentTypeV1::Answer | IntentTypeV1::Clarify => &[],
+        _ if read_only_declared => &[
+            "read_doc",
+            "list_docs",
+            "search_text",
+            "list_blocks",
+            "list_tables",
+            "list_images",
+            "workspace_glob",
+        ],
+        _ => &[
+            "read_doc",
+            "list_docs",
+            "search_text",
+            "list_blocks",
+            "list_tables",
+            "list_images",
+            "workspace_glob",
+            "propose_edit",
+            "edit_blocked",
+        ],
+    };
+    let allowed_tools = if profile == AGENT_EDIT_1_0_PROFILE {
+        profile_tools
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let target_scope = match intent.target.kind {
+        IntentTargetKindV1::CurrentDocument | IntentTargetKindV1::Selection => {
+            intent.target.rel_path.iter().cloned().collect()
+        }
+        IntentTargetKindV1::NewDocument => vec!["new_document_only".to_string()],
+        IntentTargetKindV1::None => Vec::new(),
+    };
+    let mut readable_scope = explicit_read_targets.to_vec();
+    if let Some(current) = intent.target.rel_path.as_ref() {
+        if !readable_scope.contains(current) {
+            readable_scope.push(current.clone());
+        }
+    }
+    if intent.intent_type == IntentTypeV1::Search {
+        readable_scope.push("workspace_search".to_string());
+    }
+    // P4 修复（AG-R2-01）：非寒暄意图下，只读范围放宽到 workspace 内全部文件（只读不授写）。
+    // X-FORBID-004 本即限定"只读工具限定 workspace 内"——此前实现收得过窄（仅当前文档），
+    // 导致用户"找原文本比对"等合法只读请求被拒。target_scope 仍仅当前文档，写入不受影响。
+    if !matches!(intent.intent_type, IntentTypeV1::Answer | IntentTypeV1::Clarify) {
+        readable_scope.push("workspace_read_all".to_string());
+    }
+    // 逐回合授权内容 hash（P8 修复）：由 profile + intent_type + 允许工具集 + 目标集派生，
+    // 工具集/目标变化即产生新 grant_hash，供审计与回归对比区分"同版本但不同授权"的回合。
+    let grant_hash = super::context::sha256_text(
+        &serde_json::to_string(&[
+            profile,
+            &format!("{:?}", intent.intent_type),
+            &allowed_tools.join(","),
+            &target_scope.join(","),
+        ])
+        .unwrap_or_default(),
+    );
+    CapabilityGrantV1 {
+        version: "capability-grant-v1".to_string(),
+        profile: profile.to_string(),
+        intent_id: intent.intent_id.clone(),
+        turn_id: turn_id.to_string(),
+        allowed_tools,
+        target_scope,
+        readable_scope,
+        parameter_constraints: vec![
+            "active_workspace_only".to_string(),
+            "no_direct_document_write".to_string(),
+            // AG-STRATEGY-02：目标硬锁已下沉调用时刻（workspace 边界 + base 有效 + DiffCard 确认），
+            // 移除旧硬约束 "proposal_target_must_match_intent"（模型不再自我设限跨文档/新建目标），
+            // 以提示性约束声明写入均须经用户确认。
+            "proposal_applies_on_user_confirm".to_string(),
+        ],
+        grant_hash,
+    }
+}
+
+pub fn validate_requested_tool_for_grant(
+    name: &str,
+    params: &serde_json::Value,
+    grant: &CapabilityGrantV1,
+    turn_id: &str,
+) -> ToolDecision {
+    if grant.profile != AGENT_EDIT_1_0_PROFILE || grant.turn_id != turn_id {
+        return ToolDecision::Reject("工具授权已过期或不属于当前回合".to_string());
+    }
+    let registered = is_registered(name);
+    if !registered {
+        return validate_tool(false, false, false);
+    }
+    if !grant.allows(name) {
+        return ToolDecision::Reject(format!("工具 {name} 未获本轮 CapabilityGrant 授权"));
+    }
+    if matches!(
+        name,
+        "read_doc" | "list_blocks" | "list_tables" | "list_images"
+    ) {
+        let target = params
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !grant.readable_scope.iter().any(|allowed| allowed == target)
+            && !grant
+                .readable_scope
+                .iter()
+                .any(|allowed| allowed == "workspace_search")
+            // P4 修复（AG-R2-01）：workspace 内只读放行（X-FORBID-004 限定 workspace 内，
+            // 仅影响读取，不授写；exec 层仍校验实际路径在 workspace 内）。
+            && !grant.readable_scope.iter().any(|allowed| allowed == "workspace_read_all")
+        {
+            return ToolDecision::Reject("只读工具目标未在本轮可读范围内".to_string());
+        }
+    }
+    if name == "propose_edit" {
+        let target = params
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if target.trim().is_empty() {
+            return ToolDecision::Reject("propose_edit 缺少目标 path".to_string());
+        }
+        if matches!(
+            params.get("operation").and_then(|value| value.as_str()),
+            Some("table_ops") | Some("image_ops")
+        ) {
+            return ToolDecision::Reject(
+                "agent-edit-1.0 尚未授权表格或图片高级编辑提案".to_string(),
+            );
+        }
+        // AG-STRATEGY-01：targetScope 硬锁取消——安全下沉到调用时刻校验（workspace 边界 +
+        // base 有效性 + 新建检测 base=empty，见 ag_propose_edit）+ DiffCard 确认；跨文档/新建
+        // 目标由执行层标注确认，不再按意图预判锁目标（延续词/复合意图/多文档联动不再被锁死）。
+    }
+    validate_tool(true, true, false)
+}
 
 /// 工具权限分级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +232,10 @@ pub const TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "list_blocks",
+        permission: ToolPermission::ReadOnly,
+    },
+    ToolDef {
+        name: "workspace_glob",
         permission: ToolPermission::ReadOnly,
     },
     ToolDef {
@@ -113,9 +301,36 @@ pub fn tool_definitions_json(
         {
             "type": "function",
             "function": {
+                "name": "workspace_glob",
+                "description": "按文件名模式在工作区内定位文档（通配：* 匹配任意字符序列，? 匹配单个字符）。如 workspace_glob(pattern=\"**/寓言*.txt\") 返回匹配的文件路径列表（不含正文）。用于替代逐目录展开 list_docs，快速定位目标文件。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "文件名通配模式（相对 workspace 根，支持 * 与 ?；如 \"*寓言*.txt\"、\"文档/*.docx\"）。"
+                        }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "list_docs",
-                "description": "列出当前工作区（workspace）内的所有文档（相对路径与类型）。需要了解工作区有哪些文件时调用。",
-                "parameters": { "type": "object", "properties": {} }
+                "description": "感知当前工作区（workspace）结构。不传 path：返回工作区概览——顶层目录及各自文件数、根级文件列表、总文件数（工作区较小时直接返回全部文件，属豁免）；传 path（目录相对路径）：返回该目录的直接子项（一层，不递归）。文件内容一律用 read_doc 按需读取（本工具永不返回正文）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "可选。目录相对路径（如 \"文学作品\"）；传此参数时返回该目录的直接子项。"
+                        }
+                    },
+                    "additionalProperties": false
+                }
             }
         },
         {
@@ -180,10 +395,13 @@ pub fn tool_definitions_json(
             "type": "function",
             "function": {
                 "name": "read_doc",
-                "description": "读取当前工作区内指定相对路径文档的完整内容。注意：当前编辑器打开的文档已在上下文提供，无需用本工具重复读取。",
+                "description": "读取当前工作区内指定相对路径文档的内容。省略 blocks 时返回完整内容；传入 blocks（块 id 或块索引数组）时只返回指定块的完整投影（含 node_json，供 propose_edit block_ops 从 node_json 复制节点构造 afterNode）。注意：当前编辑器打开的文档已在上下文提供，无需用本工具重复读取。",
                 "parameters": {
                     "type": "object",
-                    "properties": { "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" } },
+                    "properties": {
+                        "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" },
+                        "blocks": { "type": "array", "items": { "type": "string" }, "description": "可选：需要读取的块 id 或块索引数组（如 [\"b_xxx\", \"0\"]），只返回这些块的完整投影" }
+                    },
                     "required": ["path"]
                 }
             }
@@ -204,7 +422,7 @@ pub fn tool_definitions_json(
             "type": "function",
             "function": {
                 "name": "list_blocks",
-                "description": "读取指定文档的块列表。当前富文档直接返回 ProseMirror 层级投影：block_id/block_index/block_type/node_type/role/parent_block_id/depth/text/marks/block_attrs/node_json/fingerprint/capabilities；只有 capabilities 含 replace_node 的 content 块可用于 block_ops，容器与原子块只读。BDocx 使用 DOC 编辑模型，原生 docx 会拒绝。",
+                "description": "读取指定文档的块目录（轻量投影，不含 node_json/完整文本）。返回 block_id/block_index/node_type/role/parent_block_id/depth/text(前40字)/fingerprint/capabilities；需要某块完整投影（node_json）时调用 read_doc 并传入 blocks 参数。当前富文档直接返回 ProseMirror 层级投影；只有 capabilities 含 replace_node 的 content 块可用于 block_ops，容器与原子块只读。",
                 "parameters": {
                     "type": "object",
                     "properties": { "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" } },
@@ -255,11 +473,31 @@ pub fn tool_definitions_json(
             "type": "function",
             "function": {
                 "name": "propose_edit",
-                "description": "对文档提出修改建议（不直接写盘，生成待用户裁决的修改卡片；活动编辑器草稿可先应用到 LogicalState，但接受或保存才确认，拒绝精确恢复）。纯文本局部编辑使用 replace_block。富文档内容编辑必须使用 block_ops + base + operations，只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交；在指定块前/后插入新块使用 insert_before/insert_after（blockId 为锚点块），文档末尾追加使用 append（无需 blockId）。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档结构化操作。",
+                "description": "对文档提出待用户裁决的修改建议，不直接写盘。工具成功只表示 pending 建议卡已生成，不表示编辑器预览已应用、用户已接受或文件已保存；没有客户端状态回执时，回复只能说「已提出建议，待确认」。纯文本局部编辑使用 replace_block。当前 BDocx 的整篇重写只有运行时声明确认无表格且无图片时才可用 replace_document + 完整 HTML；否则 replace_document 会被后端拒绝，既有文字内容用 block_ops，表格/图片分别用 table_ops/image_ops。block_ops 只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交。可用 insert_before/insert_after/append 插入一个新的 heading 块；replace_node 必须保留既有块类型，不能把既有段落转换为标题。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档受保护结构。",
                 "parameters": propose_edit_parameters
             }
         }
     ]))
+}
+
+/// 只把逐回合授权的工具暴露给模型。注册表可以包含未来能力，但 1.0 模型不可枚举未授权项。
+pub fn tool_definitions_json_for_grant(
+    grant: &CapabilityGrantV1,
+) -> Result<serde_json::Value, super::bdocx_capabilities::CapabilityValidationError> {
+    let all = tool_definitions_json()?;
+    let filtered = all
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|definition| {
+            definition["function"]["name"]
+                .as_str()
+                .map(|name| grant.allows(name))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(serde_json::Value::Array(filtered))
 }
 
 #[cfg(test)]
@@ -268,13 +506,14 @@ mod tests {
 
     #[test]
     fn tools_registered_with_expected_permissions() {
-        assert_eq!(TOOLS.len(), 12);
+        assert_eq!(TOOLS.len(), 13);
         assert!(is_registered("read_doc"));
         assert!(is_registered("list_docs"));
         assert!(is_registered("search_text"));
         assert!(is_registered("list_blocks"));
         assert!(is_registered("list_tables"));
         assert!(is_registered("list_images"));
+        assert!(is_registered("workspace_glob"));
         assert!(is_registered("move_doc"));
         assert!(is_registered("create_folder"));
         assert!(is_registered("import_image_asset"));
@@ -342,6 +581,127 @@ mod tests {
     }
 
     #[test]
+    fn capability_grant_is_minimal_and_registered_does_not_mean_authorized() {
+        let analyze = super::super::context::resolve_intent_result(
+            "t-analyze",
+            "只分析当前文档，不要修改",
+            Some("a.md"),
+            false,
+        );
+        let analyze_grant =
+            resolve_capability_grant(AGENT_EDIT_1_0_PROFILE, "t-analyze", &analyze, &[]);
+        assert!(analyze_grant.allows("read_doc"));
+        assert!(!analyze_grant.allows("propose_edit"));
+        assert!(!analyze_grant.allows("create_doc"));
+        assert!(!analyze_grant.allows("move_doc"));
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "propose_edit",
+                &serde_json::json!({"path":"a.md"}),
+                &analyze_grant,
+                "t-analyze"
+            ),
+            ToolDecision::Reject(_)
+        ));
+
+        let defs = tool_definitions_json_for_grant(&analyze_grant).unwrap();
+        let names = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|definition| definition["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"read_doc"));
+        assert!(!names.contains(&"propose_edit"));
+        assert!(!names.contains(&"create_doc"));
+
+        // P4 修复（AG-R2-01）：非寒暄意图 readable_scope 含 workspace_read_all，
+        // read_doc 可读取 workspace 内其他文件（只读不授写）。
+        assert!(analyze_grant
+            .readable_scope
+            .contains(&"workspace_read_all".to_string()));
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "read_doc",
+                &serde_json::json!({"path":"文学作品/白鹿原/白鹿原小说章节策划.docx"}),
+                &analyze_grant,
+                "t-analyze"
+            ),
+            ToolDecision::Allow
+        ));
+        // 只读放宽不影响写范围：propose_edit 目标仍是当前文档范围。
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "propose_edit",
+                &serde_json::json!({"path":"other.md","operation":"replace_document","content":"x"}),
+                &analyze_grant,
+                "t-analyze"
+            ),
+            ToolDecision::Reject(_)
+        ));
+    }
+
+    #[test]
+    fn create_document_grant_allows_only_empty_base_proposal() {
+        let intent = super::super::context::resolve_intent_result(
+            "t-create",
+            "新建一份会议纪要",
+            None,
+            false,
+        );
+        let grant = resolve_capability_grant(AGENT_EDIT_1_0_PROFILE, "t-create", &intent, &[]);
+        // AG-STRATEGY-01：CreateDocument 授予全量工具集（只读全量 + 提案组 + glob）；
+        // create_doc 是结构工具，创建文档走 propose_edit base=empty，不授予。
+        assert_eq!(
+            grant.allowed_tools,
+            vec![
+                "read_doc",
+                "list_docs",
+                "search_text",
+                "list_blocks",
+                "list_tables",
+                "list_images",
+                "workspace_glob",
+                "propose_edit",
+                "edit_blocked"
+            ]
+        );
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "propose_edit",
+                &serde_json::json!({
+                    "path":"meeting.md",
+                    "operation":"replace_document",
+                    "content":"# 会议纪要"
+                }),
+                &grant,
+                "t-create"
+            ),
+            ToolDecision::Allow
+        ));
+        // AG-STRATEGY-01：targetScope 硬锁取消——workspace 内任意 path 可通过调用时刻校验
+        //（base 有效性 + 新建检测 + DiffCard 确认由执行层承担），不再按意图预判锁目标。
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "propose_edit",
+                &serde_json::json!({"path":"meeting.md","operation":"replace_block"}),
+                &grant,
+                "t-create"
+            ),
+            ToolDecision::Allow
+        ));
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "create_doc",
+                &serde_json::json!({"path":"meeting.md"}),
+                &grant,
+                "t-create"
+            ),
+            ToolDecision::Reject(_)
+        ));
+    }
+
+    #[test]
     fn propose_edit_schema_exposes_style_ops() {
         let defs = tool_definitions_json().unwrap();
         let propose = defs
@@ -367,6 +727,13 @@ mod tests {
         assert!(schema.contains("allOf"));
         assert!(schema.contains("oneOf"));
         let description = propose["function"]["description"].as_str().unwrap();
+        assert!(description.contains("pending 建议卡已生成"));
+        assert!(description.contains("不表示编辑器预览已应用"));
+        assert!(description.contains("无表格且无图片"));
+        assert!(description.contains("replace_document 会被后端拒绝"));
+        assert!(description.contains("插入一个新的 heading 块"));
+        assert!(description.contains("不能把既有段落转换为标题"));
+        assert!(!description.contains("草稿可先应用到 LogicalState"));
         assert!(description.contains("缩放"));
         assert!(description.contains("上下移动"));
         assert!(description.contains("独立段落对齐"));

@@ -121,7 +121,7 @@ describe("DiffCard 结构化块摘要", () => {
         ],
       },
     });
-    expect(screen.getByText("独立内容块 2 项")).toBeTruthy();
+    expect(screen.getByText("结构化操作 2 项")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "展开" }));
     expect(screen.getByText("p-1 · paragraph")).toBeTruthy();
     expect(screen.getByText("p-2 · paragraph")).toBeTruthy();
@@ -360,6 +360,27 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
     expect(screen.getByText("PENDING")).toBeTruthy();
     expect((screen.getByRole("button", { name: /接受/ }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByRole("button", { name: /拒绝/ })).toBeTruthy();
+  });
+
+  it("pending 预览排队：明确尚未应用，接受按钮和右键裁决均不可用", () => {
+    const { container } = renderCard({ state: "pending", draftPreviewState: "queued" });
+
+    expect(screen.getByText(/正在等待编辑器预览；尚未写入文件/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "预览准备中…" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.contextMenu(container.querySelector(".diffcard") as HTMLElement, { clientX: 5, clientY: 6 });
+    expect(screen.queryByRole("menuitem", { name: "接受" })).toBeNull();
+  });
+
+  it("已应用和未应用失败预览分别说明接受/保存边界与未改动事实", () => {
+    const { rerender } = render(<DiffCard diff={card({ state: "pending", draftPreviewState: "applied" })} />);
+    expect(screen.getByText(/编辑器预览已显示；接受将确认，保存后才写入文件/)).toBeTruthy();
+
+    rerender(<DiffCard diff={card({
+      state: "error",
+      draftPreviewState: "failed",
+      errorCode: "ED_BLOCK_OPERATION_RESULT_MISMATCH",
+    })} />);
+    expect(screen.getByText(/编辑器预览未应用，文档未因该建议改变/)).toBeTruthy();
   });
 
   it("conflict：接受禁用 + 显示冲突对象", () => {

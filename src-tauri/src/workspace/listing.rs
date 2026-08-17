@@ -190,6 +190,161 @@ pub fn list_docs(root: &Path) -> Result<Vec<FsEntry>, IpcError> {
     Ok(out)
 }
 
+// AG-WS-LAYERED-01：分层感知豁免阈值——工作区文件数 ≤30 且全量序列化 ≤4KB 时，
+// list_docs() 返回全量扁平列表（mode=full），否则返回概览（mode=overview）。
+const OVERVIEW_FULL_FILE_LIMIT: usize = 30;
+const OVERVIEW_FULL_BYTES_LIMIT: usize = 4096;
+
+/// 工作区概览（AG-WS-LAYERED-01 L0）：顶层目录 + 文件计数 + 总文件数；不含正文。
+/// 豁免：文件数 ≤30 且全量序列化 ≤4KB → 返回全量扁平列表（mode=full）。
+/// 返回 JSON 字符串（AG list_docs 工具无 path 参数时直接注入）。
+pub fn list_docs_overview_json(root: &Path) -> Result<String, IpcError> {
+    let docs = list_docs(root)?;
+    let files: Vec<&FsEntry> = docs.iter().filter(|e| !e.is_dir).collect();
+    let total_files = files.len();
+    let full_json = serde_json::to_string(&docs).unwrap_or_default();
+    if total_files <= OVERVIEW_FULL_FILE_LIMIT && full_json.len() <= OVERVIEW_FULL_BYTES_LIMIT {
+        return Ok(serde_json::json!({
+            "mode": "full",
+            "total_files": total_files,
+            "entries": docs,
+        })
+        .to_string());
+    }
+    // 根级文件（顶层，非目录）+ 顶层目录（各自子树文件计数）。
+    let root_files: Vec<&FsEntry> = files
+        .iter()
+        .filter(|e| !e.rel_path.contains('/'))
+        .copied()
+        .collect();
+    let top_level_dirs: Vec<serde_json::Value> = docs
+        .iter()
+        .filter(|e| e.is_dir && !e.rel_path.contains('/'))
+        .map(|dir| {
+            let prefix = format!("{}/", dir.rel_path);
+            let sub_files: Vec<&FsEntry> = files
+                .iter()
+                .filter(|e| e.rel_path.starts_with(&prefix))
+                .copied()
+                .collect();
+            serde_json::json!({
+                "rel_path": dir.rel_path,
+                "file_count": sub_files.len(),
+                "docx_count": sub_files.iter().filter(|e| e.doc_type == "docx").count(),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "mode": "overview",
+        "total_files": total_files,
+        "root_files": root_files,
+        "top_level_dirs": top_level_dirs,
+    })
+    .to_string())
+}
+
+/// 目录一层展开（AG-WS-LAYERED-01 L1）：返回 rel_dir 的直接子项（不递归，不含正文）。
+/// rel_dir 为空 = 根级直接子项；不存在或为文件 → 明确 IpcError 回报。
+pub fn list_docs_children_json(root: &Path, rel_dir: &str) -> Result<String, IpcError> {
+    let rel_dir = rel_dir.trim().trim_matches('/');
+    let dir_path = root.join(rel_dir);
+    let meta = std::fs::metadata(&dir_path).map_err(|_| {
+        IpcError::new(
+            "WS_LIST_DIR_MISSING",
+            &format!("目录不存在：{rel_dir}；请先用 list_docs() 查看概览或 list_docs(path=...) 逐层展开"),
+            false,
+            false,
+        )
+    })?;
+    if !meta.is_dir() {
+        return Err(IpcError::new(
+            "WS_LIST_DIR_NOT_DIR",
+            &format!("{rel_dir} 不是目录，不能展开；内容请用 read_doc 读取"),
+            false,
+            false,
+        ));
+    }
+    let docs = list_docs(root)?;
+    let prefix = if rel_dir.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", rel_dir)
+    };
+    let is_direct_child = |rel: &str| -> bool {
+        if prefix.is_empty() {
+            !rel.contains('/')
+        } else {
+            rel.strip_prefix(&prefix)
+                .map(|rest| !rest.contains('/'))
+                .unwrap_or(false)
+        }
+    };
+    let items: Vec<serde_json::Value> = docs
+        .iter()
+        .filter(|e| is_direct_child(&e.rel_path))
+        .map(|e| {
+            if e.is_dir {
+                let sub = format!("{}/", e.rel_path);
+                let file_count = docs
+                    .iter()
+                    .filter(|x| !x.is_dir && x.rel_path.starts_with(&sub))
+                    .count();
+                serde_json::json!({
+                    "rel_path": e.rel_path,
+                    "is_dir": true,
+                    "file_count": file_count,
+                })
+            } else {
+                serde_json::json!({
+                    "rel_path": e.rel_path,
+                    "doc_type": e.doc_type,
+                    "is_bdocx": e.is_bdocx,
+                })
+            }
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "mode": "children",
+        "path": rel_dir,
+        "total_items": items.len(),
+        "items": items,
+    })
+    .to_string())
+}
+
+/// AG-STRATEGY-01：按文件名通配模式定位文档（* 匹配任意字符序列含 `/`，? 匹配单个字符）。
+/// 只返回文件（非目录），限 workspace 内（复用 list_docs 全量枚举，隐藏项已跳过）。
+pub fn glob_files(root: &Path, pattern: &str) -> Result<Vec<FsEntry>, IpcError> {
+    let docs = list_docs(root)?;
+    Ok(docs
+        .into_iter()
+        .filter(|e| !e.is_dir && wildcard_match(pattern, &e.rel_path))
+        .collect())
+}
+
+/// 简单通配匹配（DP）：`*` 匹配任意字符序列（含空与 `/`），`?` 匹配单个字符。
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let mut dp = vec![vec![false; t.len() + 1]; p.len() + 1];
+    dp[0][0] = true;
+    for i in 1..=p.len() {
+        if p[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+    for i in 1..=p.len() {
+        for j in 1..=t.len() {
+            dp[i][j] = match p[i - 1] {
+                '*' => dp[i - 1][j] || dp[i][j - 1],
+                '?' => dp[i - 1][j - 1],
+                c => c == t[j - 1] && dp[i - 1][j - 1],
+            };
+        }
+    }
+    dp[p.len()][t.len()]
+}
+
 fn walk(
     root: &Path,
     dir: &Path,
@@ -642,6 +797,115 @@ mod tests {
         let err = list_docs(&missing).unwrap_err();
         assert_eq!(err.code, "WS_LIST_READ_FAILED");
         assert!(err.retriable);
+    }
+
+    // AG-WS-LAYERED-01：小工作区（≤30 文件且 ≤4KB）豁免——list_docs() 返回全量扁平列表（mode=full）。
+    #[test]
+    fn overview_small_workspace_returns_full() {
+        let tmp = std::env::temp_dir().join(format!("binder_ov_small_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("a_dir")).unwrap();
+        fs::write(tmp.join("a.md"), b"x").unwrap();
+        fs::write(tmp.join("a_dir/b.txt"), b"y").unwrap();
+        let json = list_docs_overview_json(&tmp).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["mode"], "full");
+        assert_eq!(value["total_files"], 2);
+        assert_eq!(value["entries"].as_array().unwrap().len(), 3); // a.md + a_dir + a_dir/b.txt
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // AG-WS-LAYERED-01：大工作区（>30 文件）list_docs() 返回概览——顶层+计数，不含正文。
+    #[test]
+    fn overview_large_workspace_returns_summary() {
+        let tmp = std::env::temp_dir().join(format!("binder_ov_large_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        // 35 个文件（>30 豁免阈值）触发 overview。
+        fs::create_dir_all(tmp.join("docs")).unwrap();
+        for i in 0..30 {
+            fs::write(tmp.join(format!("docs/f{i}.txt")), b"content").unwrap();
+        }
+        fs::write(tmp.join("root.md"), b"root").unwrap();
+        for i in 0..5 {
+            fs::write(tmp.join(format!("r{i}.txt")), b"x").unwrap();
+        }
+        let json = list_docs_overview_json(&tmp).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["mode"], "overview");
+        assert_eq!(value["total_files"], 36);
+        // 顶层目录 docs 带 file_count=30；根级文件包含 root.md 与 r*.txt。
+        let dirs = value["top_level_dirs"].as_array().unwrap();
+        let docs_dir = dirs.iter().find(|d| d["rel_path"] == "docs").unwrap();
+        assert_eq!(docs_dir["file_count"], 30);
+        let roots = value["root_files"].as_array().unwrap();
+        assert!(roots.iter().any(|f| f["rel_path"] == "root.md"));
+        // 概览不含正文内容（无 entries 数组）。
+        assert!(value.get("entries").is_none());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // AG-WS-LAYERED-01：list_docs(path=...) 返回一层直接子项（不递归）；目录带 file_count。
+    #[test]
+    fn children_returns_direct_children_only() {
+        let tmp = std::env::temp_dir().join(format!("binder_ch_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("top/sub/deep")).unwrap();
+        fs::write(tmp.join("top/a.md"), b"a").unwrap();
+        fs::write(tmp.join("top/sub/b.md"), b"b").unwrap();
+        fs::write(tmp.join("top/sub/deep/c.md"), b"c").unwrap();
+        let json = list_docs_children_json(&tmp, "top").unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["mode"], "children");
+        assert_eq!(value["total_items"], 2); // top/a.md + top/sub（一层，不含 deep）
+        let items = value["items"].as_array().unwrap();
+        assert!(items.iter().any(|i| i["rel_path"] == "top/a.md"));
+        let sub = items.iter().find(|i| i["rel_path"] == "top/sub").unwrap();
+        assert_eq!(sub["is_dir"], true);
+        assert_eq!(sub["file_count"], 2); // b.md + c.md 子树
+        // 根级（空 path 语义在 tool_exec 处理；此处验证目录一层不递归）不包含 deep。
+        assert!(!items.iter().any(|i| i["rel_path"] == "top/sub/deep"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // AG-WS-LAYERED-01：path 不存在或为文件 → 明确错误回报。
+    #[test]
+    fn children_rejects_missing_or_file_path() {
+        let tmp = std::env::temp_dir().join(format!("binder_ch_err_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("a.md"), b"a").unwrap();
+        let missing = list_docs_children_json(&tmp, "no_such_dir").unwrap_err();
+        assert_eq!(missing.code, "WS_LIST_DIR_MISSING");
+        let not_dir = list_docs_children_json(&tmp, "a.md").unwrap_err();
+        assert_eq!(not_dir.code, "WS_LIST_DIR_NOT_DIR");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // AG-STRATEGY-01：workspace_glob 按通配匹配文件名（* 含 `/`，? 单字符），只返回文件。
+    #[test]
+    fn glob_files_matches_wildcard_patterns() {
+        let tmp = std::env::temp_dir().join(format!("binder_glob_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("寓言/寓言故事")).unwrap();
+        fs::create_dir_all(tmp.join(".binder")).unwrap();
+        fs::write(tmp.join("a.md"), b"x").unwrap();
+        fs::write(tmp.join("寓言/小马.txt"), b"x").unwrap();
+        fs::write(tmp.join("寓言/寓言故事/井底之光.txt"), b"x").unwrap();
+        fs::write(tmp.join(".binder/secret.md"), b"x").unwrap();
+
+        // 通配语义：* 匹配任意序列（含 /），? 匹配单字符。
+        assert!(wildcard_match("*.md", "a.md"));
+        assert!(wildcard_match("*寓言*", "文学作品/寓言故事/小马过河.txt"));
+        assert!(wildcard_match("?.md", "a.md"));
+        assert!(!wildcard_match("?.md", "ab.md"));
+
+        let all_txt = glob_files(&tmp, "*.txt").unwrap();
+        assert_eq!(all_txt.len(), 2, "txt 文件应匹配 2 个（跳隐藏）: {all_txt:?}");
+        assert!(all_txt.iter().all(|e| !e.is_dir));
+        let fable = glob_files(&tmp, "*寓言*").unwrap();
+        assert!(fable.iter().any(|e| e.rel_path == "寓言/小马.txt"));
+        assert!(fable.iter().any(|e| e.rel_path == "寓言/寓言故事/井底之光.txt"));
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     // covers: BR-WS-DATA-001

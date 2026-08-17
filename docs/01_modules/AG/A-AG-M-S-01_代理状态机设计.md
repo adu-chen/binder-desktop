@@ -34,30 +34,31 @@ status: active
 summary: 一次代理回合的完整生命周期（组装→门禁→流式→产出交 DE；可中断、无半落盘）
 source_type: design
 chain: AG-TURN
-rules: BR-AG-STATE-001, BR-AG-VERIFY-001, BR-AG-DATA-001, BR-AG-PERSIST-001
+rules: BR-AG-STATE-001, BR-AG-VERIFY-001, BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-PERSIST-001
 initial_state: Idle
 terminal_states: Completed, Cancelled, Denied, HandedOver
 -->
 
 - **machine_id**：SM-AG-01　**owner_module**：AG
 - **scope**：一次代理回合（用户发起→产出处置完成/中断/拒绝/移交构建；目标边界按 BR-AG-DATA-003 2026-07-04 版）
-- **context**：回合输入（session_id + prompt + 注入载荷 + open_doc_snapshots）、AgentReadContext、组装后上下文、门禁结果、流式缓冲、产出（回复/修改建议）、移交上下文、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
+- **context**：回合输入（session_id + runtime_profile + prompt + 注入载荷 + open_doc_snapshots）、IntentResult、AgentReadContext、PromptPackage、真实 GateOutcome、CancellationToken、terminal_latch、流式缓冲、产出（回复/修改建议）、移交上下文、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
 - **states**：Idle、Assembling、AwaitingGate、Streaming、HandingOff、Completed、Cancelled、Denied、TurnError、**HandedOver**
-- **events**：send、assembled、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail、retry、**takeover、fallbackIn**
+- **events**：send、assembled、clarificationRequired、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail、retry、**takeover、fallbackIn**
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
-| Idle | send | open_doc_snapshots 覆盖全部已打开文档且每项含 session_version/content_hash；active live 序列化成功 | Assembling | 写入/更新 AgentSession；创建 AgentTurn `draft` payload，记录 userMessage（BR-AG-PERSIST-001）；构建 AgentReadContext；组装上下文（BR-AG-DATA-001：限界/裁剪优先级） |
+| Idle | send | open_doc_snapshots 覆盖全部已打开文档且每项含 session_version/content_hash；active live 序列化成功；同 session 无其他活动回合 | Assembling | 写入/更新 AgentSession；创建 AgentTurn `draft` payload，记录 userMessage（BR-AG-PERSIST-001）；形成 IntentResult；构建 AgentReadContext、ContextBundle 与 PromptPackage |
 | Idle | fallbackIn | CBT 构建完成/中断回落（cbt.fallback，X-INTER-001） | Assembling | 以回落上下文起新 代理回合；回 fallbackAck（无双死） |
-| Assembling | assembled | 已打开文档引用和 selection 均基于 AgentReadContext 校验通过 | AwaitingGate | 提交 SM-SYS-01 门禁（X-INTER-001 转移点） |
+| Assembling | clarificationRequired | IntentResult.ambiguity=blocking | Completed | 输出结构化澄清问题并锁定 completed；不调用门禁、网关或工具，不产生修改建议 |
+| Assembling | assembled | IntentResult 非阻断；已打开文档引用和 selection 均基于 AgentReadContext 校验通过；PromptPackage 角色/预算/作用域校验通过 | AwaitingGate | 提交 SM-SYS-01 门禁（X-INTER-001 转移点） |
 | Assembling | assembleFail | OpenDocSnapshot 缺失/版本缺失/active live 序列化失败/注入锚失效 | TurnError | 统一错误形状；不得用 DiskState 或 loadedContent 旧快照兜底 |
-| AwaitingGate | gatePassed | SM-SYS-01 达 GatePassed | Streaming | 经 AiGateway 发起流式调用 |
+| AwaitingGate | gatePassed | 本次服务端 GateOutcome=GatePassed 且 verdict_id 可追踪 | Streaming | 经 AiGateway 发起流式调用；本地常量/缓存/桩值不得触发本转移 |
 | AwaitingGate | gateDenied | SM-SYS-01 GateDenied / 断网 | Denied | 明确拒绝（终态，不可绕过）；AgentTurn status=`gate_rejected` |
 | Streaming | streamEnd | — | HandingOff | 产出处置：修改建议交 DE，纯回复直接完成 |
 | Streaming | takeover | 构建触发（2026-07-04 判据换轴，BR-CBT-STATE-002）：用户显式触发（明确指令/构建按钮，触发即视为确认）或 AI 识别**项目级构建意图**提议经用户确认；多文件修改本身不再是判据 | HandedOver | 移交 CBT（cbt.takeover，上下文含项目蓝图随移交）；回 takeoverAck；本回合移交终结（无双活）；构建在原对话窗口呈现 |
 | Streaming | streamFail | — | TurnError | 统一错误形状（含可重试标记）；AgentTurn status=`error` |
-| Streaming | cancel | — | Cancelled | 中断终态；无半落盘副作用（BR-SYS-STATE-002）；AgentTurn status=`cancelled` |
+| Streaming | cancel | terminal_latch 尚未锁定 | Cancelled | 触发 CancellationToken，终止流式请求、阻止新工具启动并锁定唯一终态；无半落盘副作用；AgentTurn status=`cancelled` |
 | HandingOff | handoffOk | 修改建议已交 DE 生成 pending_diff / 无修改建议 | Completed | AgentTurn status=`completed`；异步触发记忆写入（BR-AG-STATE-004） |
 | HandingOff | handoffFail | — | TurnError | DE 生成失败（如锚失效）回报，可重试；AgentTurn status=`error` |
 | TurnError | retry | — | Assembling | 重试回合 |
@@ -72,19 +73,158 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
   - 任意态 → 直接写盘（本机无写盘动作，X-FORBID-006）
   - takeover 无显式触发/确认（构建移交须用户显式触发或确认提议，BR-CBT-STATE-002）
   - HandedOver → 任意活动态（移交终结后本回合不得继续，无双活）
+  - Completed / Cancelled / Denied / HandedOver / 已持久化 error → 任意其他终态（terminal_latch 只允许首次锁定）
+  - `runtime_profile=agent-edit-1.0` → takeover / HandedOver（1.0 不启用代理构建）
 - **persistence_projection**：`send` 后先持久化 `draft`；`handoffOk`→`completed`；
   `streamFail/handoffFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
   应用崩溃/关闭/流式中断未收到终态时保持 `draft`，重启后只能显示未完成/可重试。
-- **acceptance_criteria**：不存在不经 gatePassed 通往 Streaming 的路径；Denied 为终态且不可达
+- **acceptance_criteria**：不存在不经真实服务端 gatePassed 通往 Streaming 的路径；Denied 为终态且不可达
   Streaming；修改建议唯一出口经 HandingOff 交 DE；cancel 后无半落盘副作用；takeover 须显式触发
   或经确认且移交后本回合终结（HandedOver 终态，无双活）；fallbackIn 起新回合时回 fallbackAck（无双死）
-  ；completed/error/cancelled/gate_rejected/draft 五类历史状态均可重启恢复。
+  ；completed/error/cancelled/gate_rejected/draft 五类历史状态均可重启恢复；每个 turn 最多锁定一个
+  用户可见终态，网关 Error/Denied/Cancelled 后不得再出现 Done/Completed；blocking ambiguity 不发起模型调用。
 - **test_matrix**：见 §5
 - **构建移交/回落（旧称 Chat↔Build 接管；B-3 补齐 2026-06-12，判据 2026-07-04 换轴）**：takeover
   （显式触发或项目级构建意图经确认→HandedOver 终态，移交 CBT，蓝图随移交）/ fallbackIn（CBT 构建
   完成/中断回落起新回合）与 SM-CBT-01（A-CBT-M-S-01 §3）双向回执对接（takeoverAck/fallbackAck），
   登记 A-SYS-M-S-01 §5。构建执行期间（SM-CBT-01 活动态）不得发起新代理回合（仅中断），由前端
   按 X-FORBID-007 投影门控。
+
+### 2.1 澄清非终态与首终态契约（REQ-AG-007 / BR-SYS-STATE-007，2026-08-14 D3 登记）
+
+承接冻结基线 R5-A（A-CORE-X-D-02 §4.2）与 BR-SYS-STATE-007（D1，A-SYS-I-P-01 §3.1）：
+
+| 场景 | SM-AG-01 语义 | 说明 |
+|---|---|---|
+| 澄清等待 | `IntentResult.ambiguity=blocking` 时回合进入**等待用户输入的非终态**（AwaitingClarification），**不是 Completed** | 澄清期间不调用门禁/网关/工具、不产生修改建议、不锁定终态事件（BR-SYS-STATE-007） |
+| 澄清后继续 | 用户补充输入后重新组装（回 Assembling）并再次收敛 IntentResult；或按新目标生成新回合 | 不把澄清伪装为完成（BR-AG-STATE-001） |
+| 任一活动阶段取消 | 取消可在澄清等待、组装、门禁、流式等任一活动阶段生效 | 无半落盘副作用 |
+| 首终态锁存 | 完成/失败/拒绝/取消互斥，`terminal_latch` 首个终态获胜 | 首终态后到达的迟到事件/工具不得产生文档、卡片或落盘副作用 |
+| 结构化可见事件 | 用户只见意图结论、读取/工具、提案卡、等待确认与终态原因等结构化事件 | 不展示模型内部推理（StructuredVisibleEvent，A-SYS-I-P-01 §3.1） |
+
+> **迁移债务（已解决 · AG-1.0-IMP-CLARIFICATION-01 落地）**：既有 SM-AG-01 主表曾将
+> `clarificationRequired → Completed`（澄清被终结为终态），与冻结基线「澄清是等待用户输入的非终态」
+> 不一致；AgentTurnStatus 亦无澄清等待非终态值。实现 Scope（turn.rs `AwaitingClarification` 非终态 +
+> 前端 `AgentTurnStatus.clarifying` + agRuntime 澄清非终态测试）已将该债务关闭：澄清建模为
+> AwaitingClarification 非终态，澄清期间不调用门禁/网关/工具、不锁定终态事件（BR-SYS-STATE-007）。
+
+### 2.2 SM-AG-04 · TaskRun 编排机（REQ-AG-015 / BR-SYS-STATE-008，2026-08-14 D3 登记）
+
+<!-- STATE_MACHINE
+machine_id: SM-AG-04
+owner_module: AG
+status: active
+summary: 受限任务实例（TaskRun）生命周期——同一用户目标内组织有依赖步骤/回合，非后台队列；真实工作状态由步骤/回合/工具事件驱动
+source_type: design
+chain: AG-TURN
+rules: BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
+initial_state: Planned
+terminal_states: Completed, Failed, Cancelled, Interrupted
+-->
+
+- **machine_id**：SM-AG-04　**owner_module**：AG
+- **scope**：一个复杂用户目标被组织为 TaskRun 后的受限编排生命周期（目标计划→逐步执行→确认点→终态）
+- **context**：task_run_id、AgentSession、当前用户目标、计划步骤集合、每步 CapabilityGrant、确认点、
+  关联 AgentTurn/Proposal、中断与重试状态
+- **states**：Planned、Executing、WaitingConfirm、WaitingClarification、Completed、Failed、Cancelled、Interrupted
+- **steps**（步骤态，单步内）：pending、running、waiting_confirm、ok、failed、cancelled
+- **events**：planApproved、stepStarted、stepOk、stepFail、waitingConfirm、userConfirm、clarificationNeeded、
+  userCancel、interrupt、retry、finish
+- **transitions（主表）**：
+
+| from | event | guard | to | action |
+|---|---|---|---|---|
+| Planned | planApproved | 用户确认目标计划；目标/范围/确认点明确 | Executing | 逐步骤调度；每步取得当前最小授权（CapabilityGrant） |
+| Executing | stepStarted | 步骤属于当前目标且已授权 | Executing | 真实工作状态由回合/步骤/工具事件驱动（BR-SYS-STATE-008） |
+| Executing | stepOk | 步骤只读/研究完成 | Executing | 可连续推进只读步骤 |
+| Executing | waitingConfirm | 步骤进入 W1/W2/W3（提案/写入）需用户裁决 | WaitingConfirm | 等待卡片裁决；不伪装为执行 |
+| Executing | clarificationNeeded | 目标/范围/副作用不明 | WaitingClarification | 等待用户补充（非终态，复用 SM-AG-01 澄清语义） |
+| WaitingConfirm | userConfirm | 用户裁决继续 | Executing | 继续后续步骤 |
+| WaitingConfirm | userCancel | 任一活动阶段取消 | Cancelled | 停止未开始步骤；保留已成功预览内容，不产生任务级回滚 |
+| Executing | stepFail | 步骤失败 | Failed | 不自动重试；如实报告失败原因 |
+| Executing | interrupt | 应用中断/重启 | Interrupted | 显示中断可重试；**不跨重启续跑** |
+| Interrupted | retry | 用户显式重试 | Planned | 创建新回合并重新校验（不沿用旧上下文） |
+| Executing | finish | 所有步骤完成 | Completed | 终态 |
+- **forbidden_transitions**：Executing → Completed 未经 finish；WaitingConfirm/WaitingClarification → 执行（无用户裁决/补充不得推进 W1/W2/W3 步骤）；Interrupted → Executing 无用户重试（不自动续跑）；任一态 → 后台队列（TaskRun 非后台队列，BR-SYS-STATE-008）
+- **acceptance_criteria**：TaskRun 只组织当前用户目标内的已授权步骤；不自动重试、不跨重启续跑、不越确认点；
+  连续 Proposal 以最新 LogicalState 接力（A-DE-M-S-01 §2.1）；取消不回滚已成功预览内容；重试创建新回合
+- **test_matrix**：见 §5 增补
+- **总图登记**：machine_id 登记 A-SYS-M-S-01 §3.1（D1 已将 TaskRun 登记为 planned，D3 回填 active）
+
+#### 2.2.1 语义纠偏（2026-08-15 · AG-1.0-TASKRUN-REWORK-REQ-01，替代上文中的实现性表述）
+
+> 落地审计确认：SM-AG-04 被实现收窄为"每回合事后事件记录"（确认点=提案卡、无任务级裁决入口、新消息绕回
+> executing）。本节冻结纠偏语义，设计/实现以此为准；与 2.2 表冲突处以本节优先。
+
+- **WaitingConfirm 唯一来源 = DecisionRequest（任务级裁决项）**：不再由 propose_edit 直接产生；
+  propose_edit 产生的 Diff 仅属内容层（DiffCard 裁决不驱动 TaskRun 状态）。
+- **userConfirm / userCancel 真实入口 = DecisionRequest 裁决**（permission / plan_choice / scope / manual_confirm）：
+  由前端裁决动作发 TaskRun 事件，不再是"下一条任意用户消息"。
+- **新消息 gate**：存在未决 DecisionRequest 时，新回合入口不得绕过确认（拒绝或仅接受带明确裁决语义的输入）；
+  澄清走 SM-AG-01 澄清路径不受此 gate 影响。
+- **TaskPlan**：IntentResult 判定复杂目标后创建（可展示操作计划，非模型思维链），保存步骤/依赖/当前游标/
+  所需授权/确认点/阶段结果；简单目标单 AgentTurn 直行不建 TaskPlan。
+- **执行片段**：TaskRun 跨多执行片段/AgentTurn；每片段按 profile+intent+capability+目标+上下文+既有确认点
+  重新收窄；任务级确认后自动开始下一片段，不后台续跑。
+- **同文档连续 Diff**：片段内可连续多 Proposal；Diff2 基于 Diff1 成功预览后 LogicalState；Diff1 因基准推进失效。
+
+#### 2.2.2 SM-AG-04 重构设计（2026-08-15 · AG-1.0-TASKRUN-REWORK-DESIGN-01，承接 §2.2.1）
+
+**状态**（保留 8 态；WaitingConfirm 唯一来源 = DecisionRequest）：
+`Planned`（可携带 TaskPlan）→ `Executing`（执行片段内推进）→ 确认/完成/失败/中断。
+
+**事件**（增补/语义修正）：
+
+| 事件 | 语义 |
+|---|---|
+| planApproved | TaskPlan 确认，进入首片段（计划确认可选：复杂目标首片段前可发 DecisionRequest(plan_choice)） |
+| segmentStarted | 片段开始；**每片段重新授权**（profile+intent+capability+目标+上下文+既有确认点收窄） |
+| decisionProposed | DecisionRequest proposed → WaitingConfirm（唯一进入确认等待的路径） |
+| userConfirm / userCancel | DecisionRequest 裁决（真实入口，前端裁决动作发 TaskRun 事件） |
+| stepStarted / stepOk / stepFail | 步骤真实事件（保留，驱动真实进度） |
+| interrupt / retry / finish | 保留；finish=阶段收敛（有阶段结果）→ Completed |
+
+**转移（重构主表）**：
+
+| from | event | guard | to | action |
+|---|---|---|---|---|
+| Planned | planApproved | 计划（若有）已确认；目标/范围/授权明确 | Executing | 首片段开始；逐步骤当前最小授权 |
+| Executing | segmentStarted | 片段内步骤属于当前目标且已重新授权 | Executing | 真实事件驱动进度（BR-SYS-STATE-008） |
+| Executing | decisionProposed | 任务级裁决项（权限/方案/范围/人工确认） | WaitingConfirm | 等待 DecisionRequest 裁决；不伪装工作中 |
+| WaitingConfirm | userConfirm | 裁决确认（confirm） | Executing | 自动开始下一执行片段（无需新聊天消息；重新授权；不后台续跑） |
+| WaitingConfirm | userCancel | 裁决取消（cancel） | Cancelled | 停止未开始步骤；保留已成功预览内容 |
+| Executing | stepFail | 步骤失败 | Failed | 不自动重试；如实报告 |
+| Executing | interrupt | 应用中断/重启 | Interrupted | 显示可重试；不跨重启续跑 |
+| Interrupted | retry | 用户显式重试 | Planned | 新回合重新校验 |
+| Executing | finish | 片段完成/无更多步骤 | Completed | 阶段收敛终态（有阶段结果） |
+
+**forbidden_transitions（重构）**：Executing → Completed 未经 finish；WaitingConfirm → 执行（无 DecisionRequest
+裁决不得推进——**任意新聊天消息不得绕过待确认**，澄清除外）；Interrupted → Executing 无显式重试；任一态 → 后台队列。
+
+**guard 重点**：
+1. **新消息 gate**：存在未决 DecisionRequest 时，新回合入口拒绝（或仅接受带明确裁决语义的输入）；
+2. **每片段重新授权**：capability 收窄在 segmentStarted 前执行；
+3. **三层分离**：DiffCard 接受/拒绝只走内容三态链路，不产生 TaskRun 事件；propose_edit 不再直接置
+   waiting_confirm（确认点只由 decisionProposed 产生）。
+
+<!-- REQ_MAP
+req_id: REQ-AG-007
+target_type: RULE
+target_id: BR-SYS-STATE-007
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-015
+target_type: RULE
+target_id: BR-SYS-STATE-008
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-015
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
 
 ## §3 SM-AG-02 · 工具调用循环机
 
@@ -105,7 +245,7 @@ terminal_states: LoopCompleted, LoopAborted
 
 - **machine_id**：SM-AG-02　**owner_module**：AG
 - **scope**：一次代理回合内的工具调用循环（首个工具请求出现→终轮答复/中止）
-- **context**：工具注册清单、权限边界、AgentReadContext、循环计数与上限、当前工具请求/结果、取消信号
+- **context**：工具注册清单、本轮 IntentResult.allowed_tools、权限边界、AgentReadContext、循环计数与上限、当前工具请求/结果、CancellationToken
 - **states**：ModelStreaming、ToolValidating、ToolExecuting、ResultInjecting、LoopCompleted、LoopAborted
 - **events**：toolRequest、validateOk、validateFail、execOk、execFail、injected、finalAnswer、loopLimit、cancel
 - **transitions（主表）**：
@@ -114,8 +254,8 @@ terminal_states: LoopCompleted, LoopAborted
 |---|---|---|---|---|
 | ModelStreaming | toolRequest | — | ToolValidating | 校验注册清单与权限边界 |
 | ModelStreaming | finalAnswer | — | LoopCompleted | 终轮答复，回归 SM-AG-01 streamEnd |
-| ToolValidating | validateOk | 工具已注册且在权限边界内 | ToolExecuting | 执行（只读经 AgentReadContext：已打开文档读 LogicalState，未打开文档才读 DiskState；写意图产出 diff 建议不直写） |
-| ToolValidating | validateFail | 未注册/越权 | ResultInjecting | 拒绝原因回注模型 |
+| ToolValidating | validateOk | 工具已注册、属于本轮 allowed_tools 且目标/参数/权限有效 | ToolExecuting | 先广播真实 ToolExecuting，再执行；只读经 AgentReadContext，写意图只生成 diff 建议 |
+| ToolValidating | validateFail | 未注册/未获本轮允许/越权/目标或参数失效 | ResultInjecting | 拒绝原因回注模型，不执行副作用 |
 | ToolExecuting | execOk | — | ResultInjecting | 结果回注 |
 | ToolExecuting | execFail | — | ResultInjecting | 失败信息回注（不中断循环） |
 | ResultInjecting | injected | 循环计数 < 上限 | ModelStreaming | 续调模型（仍在已过门禁的回合内） |
@@ -127,10 +267,11 @@ terminal_states: LoopCompleted, LoopAborted
 - **recovery_paths**：LoopAborted→SM-AG-01 TurnError/Cancelled 路径处置
 - **forbidden_transitions**：
   - ToolValidating → ToolExecuting 无 validateOk（未注册/越权不得执行）
+  - 已注册工具 → ToolExecuting 当其不在 IntentResult.allowed_tools（注册不等于本轮获权）
   - ToolExecuting → 直接文件写入（写意图必须产出 diff 建议，X-FORBID-006）
   - ToolExecuting → DiskState 读取，当目标文档已打开且 AgentReadContext 中应存在 OpenDocSnapshot
   - ResultInjecting → ModelStreaming 当循环已达上限（不得无限循环）
-- **acceptance_criteria**：未注册/越权工具不可达 ToolExecuting；循环上限强制生效；任何工具执行
+- **acceptance_criteria**：未注册、未获本轮允许或越权工具不可达 ToolExecuting；循环上限强制生效；任何工具执行
   不产生直接文件写入；read_doc/search_text/list_blocks 对已打开文档命中 OpenDocSnapshot，缺失时拒绝；
   cancel 随时可达 LoopAborted
 - **test_matrix**：见 §5
@@ -204,9 +345,14 @@ terminal_states: Accepted, Dismissed
   streamFail→TurnError→retry；禁止 Idle/Assembling→Streaming 旁路；持久化投影覆盖
   completed/error/cancelled/gate_rejected/draft，draft 重启后不得显示为完成态；已打开文档缺
   OpenDocSnapshot 或 selection 校验失败时 assembleFail，不得进入 AwaitingGate。
+- **SM-AG-01 1.0 加固**：本地 Passed 常量不得触发 Streaming；blocking ambiguity 走
+  clarificationRequired→Completed 且网关调用为零；Gateway Error 后不得出现 Completed；cancel 必须触发
+  CancellationToken 且后续工具调用数为零；terminal_latch 拒绝第二终态；agent-edit-1.0 禁止 takeover。
 - **SM-AG-02**：toolRequest→校验→执行→回注→续调循环；validateFail 回注拒绝；loopLimit 强制
   中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）；
   read_doc/search_text/list_blocks 已打开文档覆盖 LogicalState，未打开文档读取 DiskState。
+  已注册但不在本轮 allowed_tools 的工具必须 validateFail；状态事件顺序必须先 ToolExecuting、后真实执行、
+  再 ResultInjecting，不得在工具完成后补发状态。
 - **SM-AG-03**：重复 trigger 下 throttleDrop 或 latest-wins 覆盖生效；无订阅/断网 throttlePass 后静默回
   Idle；过期 requestId 的 candidateOk 被丢弃；候选不足 3 条 candidateUnderflow 且记录 parse_underflow；candidateOk→Presenting→accept→Accepted
   驱动 SM-ED-01 edit；辅助续写 3 候选采纳；局部修改光标插入；Presenting→refine→Requesting 多轮循环（只传上一轮
@@ -264,3 +410,11 @@ terminal_states: Accepted, Dismissed
 | 2026-07-17 | v2.8 | 清理 SM-AG-03 状态分叉：候选不足改用 candidateUnderflow 独立事件进入 Presenting，普通 requestFail 仅表示静默回 Idle |
 | 2026-07-17 | v2.9 | 补齐 SM-AG-01 历史持久化投影：send 先写 draft，handoffOk→completed，streamFail/handoffFail→error，cancel→cancelled，gateDenied→gate_rejected；崩溃/关闭遗留 draft 重启后不得伪装完成 |
 | 2026-07-18 | v2.10 | 加固 SM-AG-01/02 已打开文档门禁：send 阶段必须携 open_doc_snapshots 并构建 AgentReadContext；只读工具对已打开文档禁止 DiskState 兜底 |
+| 2026-08-08 | v2.11 | 对齐 agent-edit-1.0：SM-AG-01 context 增 IntentResult/PromptPackage/CancellationToken/terminal_latch，GatePassed 限本次服务端 GateOutcome，新增 blocking ambiguity 无模型澄清路径与唯一终态；SM-AG-02 按 BR-AG-STATE-002 增本轮 allowed_tools 守卫和真实执行时序；1.0 profile 禁止 takeover |
+| 2026-08-14 | v2.12 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：新增 §2.1 澄清非终态与首终态契约（REQ-AG-007 / BR-SYS-STATE-007——澄清为等待输入的非终态 AwaitingClarification、任一活动阶段取消、terminal_latch 首终态、迟到事件无副作用），登记 clarificationRequired→Completed 迁移债务；新增 §2.2 SM-AG-04 TaskRun 编排机（REQ-AG-015 / BR-SYS-STATE-008，Planned/Executing/WaitingConfirm/WaitingClarification/Completed/Failed/Cancelled/Interrupted，非后台队列、不自动重试/续跑/越确认点、中断可重试）；补 REQ-AG-007/015 的 REQ_MAP。 |
+| 2026-08-14 | v2.13 | AG-1.0-DOC-CLOSURE-DCLOSURE-01：§2.1 迁移债务标记关闭（已解决 · IMP-CLARIFICATION-01 落地——turn.rs AwaitingClarification 非终态 + 前端 clarifying + agRuntime 澄清非终态测试）。 |
+| 2026-08-14 | v2.14 | AG-1.0-IMP-TASKRUN-01：SM-AG-04 落地（运行时/数据层）——ag/task.rs 转移引擎（Planned/Executing/WaitingConfirm/WaitingClarification/Completed/Failed/Cancelled/Interrupted + steps 六级态，主表正路 + forbidden）+ TaskRun 生命周期（begin_turn 每回合建/沿用、提案卡=W1/W2/W3 确认点、settle 回合终态映射、mark_stale 重启置 Interrupted 不续跑）+ task_runs 表持久化（db v11）+ agent_turns.task_run_id 关联 + DiffProposed 事件带 task_run_id（UNC-09 数据层）；前端 DiffView.taskRunId 透传无 UI；5 个测试。 |
+| 2026-08-15 | v2.15 | AG-1.0-IMP-TASKRUN-UI-01：SM-AG-04 前端呈现——ag.list_task_runs 查询 IPC（按会话倒序含步骤）+ agService listSessionTaskRuns/refreshSessionTaskRuns（回合 done/error 后 + 历史恢复刷新）+ agStore.taskRuns 投影 + TaskRunCard（状态徽标/步骤/确认点高亮/进度，只读不伪造，BR-SYS-STATE-008）挂 MessageList 顶部；3 测试。 |
+| 2026-08-15 | v2.16 | AG-1.0-TASKRUN-REWORK-REQ-01：§2.2.1 语义纠偏——三层分离（DiffCard 内容层 / DecisionRequest 任务级裁决 / TaskRun 只响应明确任务裁决）、WaitingConfirm 唯一来源=DecisionRequest、userConfirm/userCancel 真实裁决入口、新消息不绕过确认 gate、TaskPlan（复杂目标，可展示计划）、执行片段每步重新授权 + 确认后自动下一片段、同文档连续 Diff 前卡失效。 |
+| 2026-08-15 | v2.17 | AG-1.0-TASKRUN-REWORK-DESIGN-01：§2.2.2 SM-AG-04 重构设计——转移主表重构（planApproved/segmentStarted/decisionProposed/userConfirm/userCancel/finish）、forbidden 重构（新消息 gate、WaitingConfirm 仅 DecisionRequest 裁决推进、propose_edit 不再置 waiting_confirm）、每片段重新授权 guard。 |
+| 2026-08-15 | v2.18 | AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：SM-AG-04 重构落地（运行时/数据层）——settle 按未决 DecisionRequest 判定 WaitingConfirm（去除 has_pending_proposal）、begin_turn 不绕回 waiting_confirm、回合入口 gate（AG_DECISION_PENDING）、propose_decision/resolve_decision 生命周期与 IPC、TaskPlan 持久化、StepProgress 实时事件。 |

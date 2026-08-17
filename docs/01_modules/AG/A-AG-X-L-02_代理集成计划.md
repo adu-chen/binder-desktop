@@ -21,6 +21,12 @@ A-AG-X-L-01（PI-AG-01~06 G4 完成）→ 本计划（PI-AG-07~11 集成）
 PI-AG-11 →聚合← PI-AG-07~10 + PI-GW-01~05
 ```
 
+**1.0 发布切片说明（2026-08-08）**：本计划描述 AG 完整集成范围；A-AG-X-L-03 是 1.0 的执行基线。
+因此，PI-AG-08 已注册的结构写工具不自动进入 `agent-edit-1.0` 的本轮工具允许集；PI-AG-09 的自动
+AST/KB/TPL 供给和记忆写回在该 profile 中关闭；Build/CBT 不进入 1.0 主回合。本文的 G4/集成完成
+标记不能替代 A-AG-X-L-03 的真实 GateOutcome、取消、唯一终态、可信 Prompt Runtime、ChangeProposal
+与 G5 发布退出条件。
+
 骨架已就绪（turn/tool/assist/context/memory_link 全部 G4）。本阶段把每个占位/桩替换为真实实现：
 
 | 骨架位置 | 当前状态 | 本阶段目标 |
@@ -470,3 +476,4 @@ npm run governance:audit（无新增 RULE_MISSING / BOUNDARY_ABSTRACT）
 | 2026-07-17 | v1.6 | 新增 PI-AG-12 代理编辑历史持久化：会话标签元数据全恢复、回合内容懒加载、五类 status 保留、工具摘要只读、Diff 仅引用、app data workspace.db 与 200MB 软归档 |
 | 2026-07-18 | v1.7 | 补齐 PI-AG-12 用户删除历史会话入口：历史菜单每个会话行调用 `ag.delete_session(session_id)` 删除指定 AG 会话历史，保留 DE 待裁决修改 |
 | 2026-07-29 | v1.8 | BDOCX-IMAGE-AGENT-EDIT-01：PI-AG-08 增加 list_images 与 image_ops，明确活动 BDocx、workspace 项目图片 hash、结构化 Diff 和源文件保护边界。 |
+| 2026-08-08 | v1.9 | 增补 1.0 发布切片覆盖规则：A-AG-X-L-03 为 agent-edit-1.0 执行基线；已注册结构工具不等于本轮授权，自动 AST/KB/TPL 与 Build/CBT 在 1.0 profile 中关闭，既有 G4/集成标记不得替代真实运行与 G5 退出条件 |

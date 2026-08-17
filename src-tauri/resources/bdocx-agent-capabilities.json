@@ -1,6 +1,6 @@
 {
   "manifestId": "binder.bdocx.agent-edit",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "editableKind": "bdocx",
   "contentFormat": "html",
   "documentOperations": [
@@ -10,6 +10,13 @@
       "agentAvailability": "available",
       "diffFidelity": "structured",
       "constraint": "Active ProseMirror LogicalState only. Target only blocks declaring replace_node; preserve blockId, node type and attrs; use base sessionVersion/contentHash and exact fingerprint."
+    },
+    {
+      "capabilityId": "bdocx.document.replace_document_without_protected_structure",
+      "operation": "replace_document",
+      "agentAvailability": "dynamic",
+      "diffFidelity": "block",
+      "constraint": "Only when the current BDocx snapshot contains neither tables nor images. Submit complete HTML for a broad rewrite; the server rejects protected or newly introduced table/image structure."
     }
   ],
   "styleOps": {
@@ -373,8 +380,8 @@
     },
     {
       "capabilityId": "bdocx.manual.block_structure",
-      "label": "标题、列表、引用与代码块结构切换",
-      "reason": "No agent node-structure operation is registered."
+      "label": "既有块的标题、列表、引用与代码块类型转换",
+      "reason": "The agent may insert a new heading with block_ops, but it cannot convert an existing block type or structural role."
     },
     {
       "capabilityId": "bdocx.manual.delete_table",
@@ -390,7 +397,7 @@
   "diffFidelity": {
     "replaceBlock": "none",
     "blockOps": "structured",
-    "replaceDocument": "none",
+    "replaceDocument": "block",
     "styleOps": "summary",
     "tableOps": "structured",
     "imageOps": "structured"

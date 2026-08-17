@@ -130,6 +130,54 @@ fn rejected_proposal_does_not_land() {
     assert_eq!(list_timeline(&conn, &target).unwrap().len(), 0); // 未落盘无节点
 }
 
+// covers: BR-AG-DATA-003, BR-DE-DATA-001, BR-DE-DATA-002
+// 新建文档必须先形成空基准 proposal；接受前目标文件不存在，拒绝也不创建，只有 accept 才落盘。
+#[test]
+fn new_document_empty_base_proposal_waits_for_acceptance() {
+    let conn = fresh_ws_db();
+    let target = doc("new/report.md");
+    let proposal = ChangeProposal {
+        origin_task: "turn_create".into(),
+        target: target.clone(),
+        after_content: b"# Report\n\nDraft\n".to_vec(),
+        before_snapshot: None,
+        style_ops: None,
+    };
+    let diff = generate_diff(
+        &proposal,
+        "d-new",
+        "AG",
+        "payload-new",
+        1_000,
+        LocateResult::Located,
+    )
+    .unwrap();
+    persist_diff(&conn, &diff).unwrap();
+
+    let root = std::env::temp_dir().join(format!(
+        "binder_new_doc_itest_{}_{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let target_path = root.join("new/report.md");
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(!target_path.exists(), "proposal 阶段不得提前创建文件");
+
+    std::fs::create_dir_all(target_path.parent().unwrap()).unwrap();
+    apply_diff(
+        &conn,
+        "d-new",
+        &target,
+        &target_path,
+        &proposal.after_content,
+        None,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&target_path).unwrap(), proposal.after_content);
+    assert_eq!(status_of(&conn, "d-new"), "accepted");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // 生命周期：超时 pending diff 经扫描 + WS discard 落 expired，不再出现在 pending 列举。
 #[test]
 fn lifecycle_sweep_expires_stale_pending() {

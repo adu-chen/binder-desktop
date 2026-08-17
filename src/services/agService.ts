@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ToolCallView, type TurnSegment } from "../store/agStore";
+import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
 import { listActiveTables, parseTableEditPayload, summarizeTableOperation, type TableEditPayload } from "./edTableOps";
@@ -32,7 +32,7 @@ function sanitizeInlineHtml(html: string): string {
 }
 import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditor, getActiveEditorBinding } from "./edLocate";
 import { loadDocs } from "./wsService";
-import { loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
+import { applyOpenSessionDiff, expireStalePendingForPath, loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
 import { parseStyleOps, type StyleOp } from "./edStyleOps";
 import {
@@ -52,9 +52,15 @@ export type AgTurnEvent =
   | { type: "chunk"; turn_id: string; text: string }
   | { type: "tool_request"; turn_id: string; tool_name: string; params: unknown }
   | { type: "tool_result"; turn_id: string; tool_name: string; result: string; success: boolean }
-  | { type: "diff_proposed"; turn_id: string; diff_id: string; rel_path: string }
+  | { type: "diff_proposed"; turn_id: string; diff_id: string; rel_path: string; task_run_id?: string }
+  | { type: "step_progress"; turn_id: string; action: string; label: string; detail?: string }
+  | { type: "decision_request_proposed"; turn_id: string; request_id: string; kind: string; payload: unknown }
+  | { type: "decision_request_resolved"; turn_id: string; request_id: string; outcome: string }
+  | { type: "clarification_required"; turn_id: string; text: string }
   | { type: "done"; turn_id: string; stop_reason: string }
   | { type: "error"; turn_id: string; code: string; message: string; retriable: boolean };
+
+export const AGENT_EDIT_RUNTIME_PROFILE = "agent-edit-1.0" as const;
 
 type AgentEditPatchKind = "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
 
@@ -75,9 +81,13 @@ interface AgentDiffProjection {
   block_ops?: unknown;
   table_ops?: unknown;
   image_ops?: unknown;
+  // AG-TASK-01 F1b：批次元数据（整篇对齐分批）。
+  batch?: { id: string; index: number; total: number };
 }
 
 let seq = 0;
+/** 当前处于澄清等待（非终态）的回合，供用户补充输入发起新回合前先取消（BR-SYS-STATE-007）。 */
+let clarifyingTurn: { sessionId: string; turnId: string } | null = null;
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -672,6 +682,124 @@ export async function persistAgentSessionsMetadata(): Promise<void> {
   );
 }
 
+/** AG-1.0-IMP-TASKRUN-UI-01 · 后端 `ag.list_task_runs` DTO（snake_case，与 TaskRunV1 对齐）。 */
+export interface TaskStepDto {
+  step_id: string;
+  kind: string;
+  label: string;
+  status: TaskStepViewStatus;
+}
+
+export interface TaskRunDto {
+  task_run_id: string;
+  status: TaskRunViewStatus;
+  intent_summary?: string | null;
+  steps: TaskStepDto[];
+  created_at: number;
+  updated_at: number;
+}
+
+/** 查询会话受限任务实例（SM-AG-04 状态/步骤，倒序）；映射为 TaskRunView 投影到 agStore。 */
+export async function listSessionTaskRuns(sessionId: string): Promise<TaskRunView[]> {
+  const runs = await dispatchCall<TaskRunDto[]>("ag.list_task_runs", { sessionId });
+  return runs.map((r) => ({
+    taskRunId: r.task_run_id,
+    status: r.status,
+    intentSummary: r.intent_summary ?? undefined,
+    steps: r.steps.map((s) => ({ stepId: s.step_id, kind: s.kind, label: s.label, status: s.status })),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+}
+
+/** 刷新会话 TaskRun 摘要（回合 done/error 后 + 历史恢复时；查询失败不阻塞，best-effort）。 */
+export async function refreshSessionTaskRuns(sessionId: string): Promise<void> {
+  try {
+    const runs = await listSessionTaskRuns(sessionId);
+    agStore.hydrateSessionTaskRuns(sessionId, runs);
+  } catch {
+    // 保持上次状态或空；不伪造进度（BR-SYS-STATE-008）。
+  }
+}
+
+/** AG-1.0-TASKRUN-REWORK-IMP-UI-01：任务级裁决（TERM-AG-017，三层分离）——
+ *  confirm → TaskRun Executing（可自动下一片段）；cancel → Cancelled。返回裁决后 run 状态。 */
+export async function resolveDecision(requestId: string, outcome: "confirm" | "cancel"): Promise<string> {
+  return dispatchCall<string>("ag.resolve_decision", { requestId, outcome });
+}
+
+/** AG-1.0-TASKRUN-REWORK-CONTINUE-01：连续 auto-continue 计数（防死循环；用户手动发送重置）。 */
+let autoContinueCount = 0;
+const MAX_AUTO_CONTINUE = 3;
+
+/** AG-1.0-TASKRUN-REWORK-CONTINUE-01：任务级裁决后自动续片段——confirm 自动发起下一执行片段
+ * （沿用同 task_run_id，无需用户再输入聊天消息）；cancel 终止。连续续片段达到上限后停止（由用户手动继续）。 */
+export async function resolveDecisionAndContinue(
+  requestId: string,
+  outcome: "confirm" | "cancel",
+): Promise<string> {
+  const status = await resolveDecision(requestId, outcome);
+  if (outcome === "confirm" && autoContinueCount < MAX_AUTO_CONTINUE) {
+    autoContinueCount += 1;
+    await startTurn("（任务继续）已确认任务级裁决，请继续执行当前任务。", {
+      autoContinue: true,
+    });
+  }
+  return status;
+}
+
+interface TaskPlanStepDto {
+  step_id: string;
+  seq: number;
+  kind: string;
+  label: string;
+  deps: string[];
+  required_grant?: string | null;
+  confirm_point: boolean;
+  status: string;
+}
+
+interface TaskPlanDto {
+  plan_id: string;
+  task_run_id: string;
+  steps: TaskPlanStepDto[];
+  cursor: number;
+}
+
+/** AG-1.0-TASKRUN-REWORK-CONTINUE-01：按 task_run_id 列出任务计划（TERM-AG-018；snake→camel）。 */
+export async function listPlansByRun(taskRunId: string): Promise<TaskPlanView[]> {
+  const plans = await dispatchCall<TaskPlanDto[]>("ag.list_plans", { taskRunId });
+  return plans.map((p) => ({
+    planId: p.plan_id,
+    taskRunId: p.task_run_id,
+    cursor: p.cursor,
+    steps: p.steps.map((s) => ({
+      stepId: s.step_id,
+      seq: s.seq,
+      kind: s.kind,
+      label: s.label,
+      deps: s.deps,
+      requiredGrant: s.required_grant ?? undefined,
+      confirmPoint: s.confirm_point,
+      status: s.status,
+    })),
+  }));
+}
+
+/** AG-1.0-TASKRUN-REWORK-INTENT-01：刷新会话任务计划（回合 done/error 后；查询失败不阻塞，best-effort）。 */
+export async function refreshSessionPlans(sessionId: string): Promise<void> {
+  try {
+    const runs = await listSessionTaskRuns(sessionId);
+    const latest = runs[0];
+    if (latest) {
+      const plans = await listPlansByRun(latest.taskRunId);
+      agStore.hydrateSessionPlans(sessionId, plans);
+    }
+  } catch {
+    // 保持上次状态；不伪造计划（BR-SYS-STATE-008）。
+  }
+}
+
 export async function ensureAgentSessionTurns(sessionId: string): Promise<void> {
   const session = agStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (!session || session.turnsLoaded) return;
@@ -679,6 +807,7 @@ export async function ensureAgentSessionTurns(sessionId: string): Promise<void> 
   const projected = projectTurns(turns);
   await hydrateDiffRefsForTurns(turns);
   agStore.hydrateSessionTurns(sessionId, projected.messages, projected.toolCalls);
+  await refreshSessionTaskRuns(sessionId);
 }
 
 export async function hydrateAgentHistory(): Promise<void> {
@@ -933,11 +1062,20 @@ export async function startTurn(
     blockRefs?: { relPath: string; blockId: string; text: string; start?: number; end?: number }[];
     references?: ReferencePayload[];
     displayParts?: MessageContentPart[];
+    /** AG-1.0-TASKRUN-REWORK-CONTINUE-01：auto-continue 续片段（任务级确认后自动发起，不计入用户手动发送）。 */
+    autoContinue?: boolean;
   },
 ): Promise<void> {
   const trimmed = prompt.trim();
   const references = opts?.references ?? [];
   if (!trimmed && references.length === 0) return;
+  // AG-1.0-TASKRUN-REWORK-CONTINUE-01：用户手动发送重置连续 auto-continue 计数。
+  if (!opts?.autoContinue) autoContinueCount = 0;
+  // AG-1.0-DECISION-CARD-01：存在待裁决任务级请求时，手动发送被门控（auto-continue 除外）；
+  // 必须先完成裁决（DecisionBar），避免"确认"等文本被当作新编辑请求触发 AG_EDIT_TOOL_REQUIRED。
+  if (!opts?.autoContinue && agStore.getSnapshot().pendingDecision) {
+    return;
+  }
 
   // 关闭屏障（BR-SYS-STATE-004，APP-CLOSE-DIFF-LIFECYCLE-01）：关闭请求建立后拒绝新回合，
   // 避免清点后又产生新的待裁决 diff。
@@ -971,6 +1109,17 @@ export async function startTurn(
       turnId: m.turnId ?? null,
     }));
 
+  // 澄清等待（非终态，BR-SYS-STATE-007）：用户补充输入 = 先取消澄清回合（释放后端单活守卫），
+  // 再发起新回合；取消失败不阻断发送（后端注册守卫允许已取消回合被新回合取代）。
+  if (clarifyingTurn) {
+    const pending = clarifyingTurn;
+    clarifyingTurn = null;
+    await invoke("ag_cancel_turn", {
+      sessionId: pending.sessionId,
+      turnId: pending.turnId,
+    }).catch(() => {});
+  }
+
   agStore.pushMessage(sessionId, {
     id: uid(),
     role: "user",
@@ -981,7 +1130,7 @@ export async function startTurn(
     turnStatus: "draft",
   });
   agStore.clearToolCalls(sessionId); // 新回合清空旧工具卡（PI-AG-08D）
-  agStore.setSending(true); // 乐观置 true 即时门控防双发；活动/释放由 SM-AG-01 广播投影（Task 2-E）
+  agStore.setActiveTurn(sessionId, turnId); // 后端同 session 单活仍是权威守卫；前端只做即时交互门控。
 
   const assistantId = uid();
   agStore.pushMessage(sessionId, {
@@ -1005,13 +1154,17 @@ export async function startTurn(
 
   await new Promise<void>((resolve) => {
     let settled = false;
+    let terminalSeen = false;
     const finish = () => {
       if (settled) return;
       settled = true;
+      agStore.clearActiveTurn(turnId);
       // sending 的释放由 SM-AG-01 终态广播驱动（Completed/TurnError，Task 2-E）；此处仅结束等待。
       resolve();
     };
     const failStart = (e: unknown) => {
+      if (terminalSeen) return;
+      terminalSeen = true;
       const err = e as { code?: string; message?: string };
       agStore.finishMessage(sessionId, assistantId);
       agStore.setTurnStatus(sessionId, turnId, err?.code?.includes("GATE") ? "gate_rejected" : "error");
@@ -1035,18 +1188,28 @@ export async function startTurn(
           retriable: true,
         },
       );
-      agStore.setSending(false);
+      agStore.clearActiveTurn(turnId);
       finish();
     };
 
     let eventWork = Promise.resolve();
     onEvent.onmessage = (ev) => {
       eventWork = eventWork.then(async () => {
+        if (terminalSeen) return;
         switch (ev.type) {
         case "chunk":
           agStore.appendToMessage(sessionId, assistantId, ev.text);
           break;
+        case "clarification_required":
+          // 澄清是等待用户输入的非终态（BR-SYS-STATE-007）：不终结回合、不锁存终态。
+          // 回合保持 clarifying 等待态；用户补充输入时先取消本回合再发起新回合。
+          agStore.appendToMessage(sessionId, assistantId, ev.text);
+          agStore.setTurnStatus(sessionId, turnId, "clarifying");
+          clarifyingTurn = { sessionId, turnId };
+          break;
         case "done":
+          terminalSeen = true;
+          if (clarifyingTurn?.turnId === turnId) clarifyingTurn = null;
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.stop_reason === "cancelled" ? "cancelled" : "completed");
           void enqueueTurnSave(
@@ -1055,9 +1218,16 @@ export async function startTurn(
             ev.stop_reason === "cancelled" ? "cancelled" : "completed",
             turnActiveDocPath,
           );
+          // AG-1.0-IMP-TASKRUN-UI-01：回合终态后刷新 TaskRun 摘要（SM-AG-04 settle 已落库）。
+          void refreshSessionTaskRuns(sessionId);
+          // AG-1.0-TASKRUN-REWORK-INTENT-01：回合终态后刷新任务计划（复杂目标已建 plan）。
+          void refreshSessionPlans(sessionId);
+          agStore.setCurrentAction(null);
           finish();
           break;
         case "error":
+          terminalSeen = true;
+          if (clarifyingTurn?.turnId === turnId) clarifyingTurn = null;
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error");
           agStore.pushMessage(sessionId, {
@@ -1076,7 +1246,34 @@ export async function startTurn(
             turnActiveDocPath,
             { code: ev.code, message: ev.message, retriable: ev.retriable },
           );
+          // AG-1.0-IMP-TASKRUN-UI-01：回合失败后刷新 TaskRun 摘要（Failed 终态已落库）。
+          void refreshSessionTaskRuns(sessionId);
+          // AG-1.0-TASKRUN-REWORK-INTENT-01：回合失败后刷新任务计划。
+          void refreshSessionPlans(sessionId);
+          agStore.setCurrentAction(null);
           finish();
+          break;
+        case "step_progress":
+          // AG-1.0-TASKRUN-REWORK-IMP-UI-01：实时当前动作（信息流底部状态条，BR-SYS-STATE-008 不伪造）。
+          agStore.setCurrentAction({
+            action: (["reading", "tool", "generating", "proposing", "deciding"].includes(ev.action)
+              ? ev.action
+              : "tool") as "reading" | "tool" | "generating" | "proposing" | "deciding",
+            label: ev.label,
+            detail: ev.detail,
+          });
+          break;
+        case "decision_request_proposed":
+          // AG-1.0-TASKRUN-REWORK-IMP-UI-01：任务级裁决请求（TERM-AG-017，三层分离）。
+          agStore.setPendingDecision({
+            requestId: ev.request_id,
+            kind: ev.kind,
+            payload: ev.payload,
+          });
+          break;
+        case "decision_request_resolved":
+          agStore.setPendingDecision(null);
+          agStore.setCurrentAction(null);
           break;
         case "diff_proposed": {
           // AI 经 propose_edit 生成了待裁决修改（PI-AG-08C）：投影为 diff 卡片；
@@ -1157,6 +1354,7 @@ export async function startTurn(
             diffId: ev.diff_id,
             sessionId,
             turnId,
+            taskRunId: ev.task_run_id,
             anchorMessageId: assistantId,
             createdAt: Date.now(),
             blockId: mappedBlockId,
@@ -1173,19 +1371,43 @@ export async function startTurn(
             after: sanitizeInlineHtml(projection?.after_text ?? ""),
             state,
             errorCode,
-            readonly: projection?.draft_mode === "open_session",
+            // propose_edit 只创建 pending proposal；已有 LogicalState 的预览成功后才会记录已投影。
+            draftPreviewState: projection?.draft_mode === "current_editor"
+              ? (state === "pending" ? "queued" : "failed")
+              : undefined,
+            // 已打开非激活会话的预览同样保留用户接受/拒绝，不能以 readonly 代替卡片裁决。
+            readonly: false,
             styleOps: styleOpsPayload.length ? styleOpsPayload.map(summarizeStyleOp) : undefined,
             styleOpsPayload: styleOpsPayload.length ? styleOpsPayload : undefined,
             blockOpsPayload,
             blockOps: blockOpsPayload?.operations.map((operation) => (
               `${operation.blockId} · ${operation.expectedNodeType}`
             )),
+            // AG-TASK-01 F1b：批次元数据透传（DiffCard 批次徽标）。
+            batch: projection?.batch
+              ? {
+                  id: String(projection.batch.id ?? ""),
+                  index: Number(projection.batch.index ?? 1),
+                  total: Number(projection.batch.total ?? 1),
+                }
+              : undefined,
             tableOpsPayload,
             tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),
             imageOpsPayload,
             imageOps: imageOpsPayload?.operations.map(summarizeImageOperation),
           });
-          // 审计修复（2026-07-26 · D1）：open_session diff 不再 auto-accept，等用户裁决
+          // 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：新 Proposal 基于最新 LogicalState，
+          // 使同文档基于旧基准的 pending 卡失效（保留历史、不可裁决；不构成补丁栈/任务级回滚）。
+          if (projection?.base_session_version != null || projection?.base_content_hash != null) {
+            void expireStalePendingForPath(ev.rel_path, ev.diff_id, {
+              sessionVersion: projection.base_session_version,
+              contentHash: projection.base_content_hash,
+            });
+          }
+          // 已打开非激活文档在 diff 返回时即受控预览到其 LogicalState；预览不自动接受。
+          if (projection?.draft_mode === "open_session" && state === "pending") {
+            void applyOpenSessionDiff(ev.diff_id);
+          }
           // 消息片段（TERM-AG-011）：DiffCard 内嵌于回合内时序位置（紧随其产出工具/正文）。
           agStore.addDiffSegment(sessionId, assistantId, ev.diff_id);
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
@@ -1244,6 +1466,7 @@ export async function startTurn(
       invoke("ag_start_turn", {
         turnId,
         sessionId,
+        runtimeProfile: AGENT_EDIT_RUNTIME_PROFILE,
         prompt: trimmed,
         provider: opts?.provider,
         model: opts?.model,
@@ -1259,4 +1482,20 @@ export async function startTurn(
       }).catch(failStart);
     })();
   });
+}
+
+/** 取消后端真实活动回合；成功返回只表示取消信号已送达，最终状态以 Channel 终态为准。 */
+export async function cancelActiveTurn(): Promise<void> {
+  const active = agStore.getSnapshot().activeTurn;
+  if (!active) return;
+  try {
+    await invoke("ag_cancel_turn", {
+      sessionId: active.sessionId,
+      turnId: active.turnId,
+    });
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code !== "AG_TURN_NOT_ACTIVE") throw error;
+    agStore.clearActiveTurn(active.turnId);
+  }
 }

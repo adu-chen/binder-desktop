@@ -72,6 +72,55 @@ terminal_states: Saved, SaveError
   越界路径不存在进入 Saving 的路径；外部修改后无显式覆盖确认不存在通往 Saved 的路径
 - **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions，含冲突路）
 
+### 2.1 保存协调与未保存新文档保存契约（REQ-WS-003/006，2026-08-14 D2 登记）
+
+承接 REQ-WS-003/006 与冻结基线三分流。SM-WS-01（save 保存机）按以下协调契约执行，**不感知卡片
+裁决语义本身**（裁决归 DE），只承接落盘执行与创建文件：
+
+| 场景 | SM-WS-01 承接 | 说明 |
+|---|---|---|
+| 保存有效 pending 预览 | 用户保存当前文档时，DE 先检查仍有效 pending 卡：当前 LogicalState 等于其 after 基准 → 先裁决为 `accepted/awaiting_save`（effect_status），再驱动 SM-WS-01 落盘；基线已推进 → 旧卡失效，只保存当前 LogicalState | A-WS-M-S-01 只消费已裁决的 save 请求；awaiting_save 效果态归 PendingDiff.effect_status（BR-SYS-DATA-005，A-SYS-M-T-02 §4） |
+| 未保存新文档保存＝创建文件 | 目标无 DocRef（未保存新建/转换目标）时，save 事件携带「创建」语义：校验目标路径/格式后原子创建文件、记时间轴节点、建立 DocRef；失败保留未保存会话不伪报已创建 | D-NEW-002/004/007、REQ-ED-010 §2.1 |
+| 保存失败/冲突 | 沿用 SM-WS-01 既有路径：saveFail→SaveError 可重试；saveConflict 不覆盖外部修改、需 overrideConfirmed；未保存新文档不产生半节点 | 既有转移不变 |
+| 连续 Proposal 接力中的保存 | 连续接力中保存当前 LogicalState 仍按上表：仍有效 pending 卡先裁决再落盘；已失效卡不得被误裁决 | BR-SYS-STATE-008（A-DE-M-S-01 §2.1） |
+
+<!-- REQ_MAP
+req_id: REQ-WS-003
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-WS-003
+target_type: RULE
+target_id: BR-CORE-STATE-002
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-WS-003
+target_type: RULE
+target_id: BR-CORE-STATE-003
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-WS-006
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-WS-006
+target_type: RULE
+target_id: BR-SYS-PERSIST-001
+status: mapped
+-->
+
+> 迁移债务：现有 SM-WS-01 的 scope 以「已存在 DocRef 的文档保存」为默认，未显式区分「创建」语义；
+> 现有代码（ws.save_doc / ws.create_doc 直写路径）与未保存新文档的保存即创建存在语义差，实现时须按
+> D-NEW-002 收敛为「先未保存 LogicalState、显式保存才建文件」，不得复用旧直写路径绕过（REQ-WS-006）。
+> 「保存有效 pending 预览先裁决」的协调入口（DE 先裁决再驱动 save）已由 A-DE-M-S-01 §2/§2.1 建模，
+> 本文只承接落盘执行。
+
 ## §3 SM-WS-02 · diff 落盘机
 
 > 本机自 DE 终态机的裁决信号入场：diff 的 pending→accepted/rejected/expired **转移语义归 DE**，
@@ -81,10 +130,10 @@ terminal_states: Saved, SaveError
 machine_id: SM-WS-02
 owner_module: WS
 status: active
-summary: pending_diff 裁决后 WS 侧落盘生命周期（仅 accepted 写文件 + 记一个时间轴节点）
+summary: 无 LogicalState 的 pending_diff 裁决后 WS 侧落盘生命周期（仅 accepted 写文件 + 记一个时间轴节点）
 source_type: design
 chain: WS-DIFF-APPLY
-rules: BR-WS-STATE-001, BR-WS-DATA-002
+rules: BR-WS-STATE-001, BR-WS-DATA-002, BR-CORE-STATE-002
 initial_state: AwaitingDecision
 terminal_states: Applied, Discarded, ApplyError
 -->
@@ -98,7 +147,7 @@ terminal_states: Applied, Discarded, ApplyError
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
-| AwaitingDecision | accepted | DE 终态机裁决 accepted（X-INTER-001 入口） | Applying | 启动落盘 |
+| AwaitingDecision | accepted | DE 终态机裁决 accepted，且目标持续无 LogicalState（X-INTER-001 入口） | Applying | 启动落盘 |
 | AwaitingDecision | rejected | — | Discarded | 不写文件（终态） |
 | AwaitingDecision | expired | 超时/外部变更 | Discarded | 不写文件（终态） |
 | Applying | applyOk | 路径在 workspace root 内 | Applied | 写目标文件 + 记一个时间轴节点（version_seq+1） |
@@ -109,13 +158,15 @@ terminal_states: Applied, Discarded, ApplyError
 - **recovery_paths**：ApplyError→retry→Applying；失败不留半节点，原文件不被破坏
 - **forbidden_transitions**：
   - AwaitingDecision → Applied（未经 Applying 不得落盘）
+  - AwaitingDecision → Applying（目标已建立 LogicalState；必须迁移至 ED/WS save 路径）
   - Discarded → Applying（rejected/expired 不得绕过裁决再落盘）
   - Applying → Applied（仅 applyOk 且路径合法触发；applyFail 不得记节点）
-- **acceptance_criteria**：仅 accepted→Applying→applyOk 可达 Applied 并记恰好一个节点；rejected/expired
-  永不写文件；applyFail 不留半节点；落盘原子无半落盘（对齐 BR-SYS-STATE-002）
+- **acceptance_criteria**：仅“accepted 且无 LogicalState”→Applying→applyOk 可达 Applied 并记恰好一个
+  节点；rejected/expired 永不写文件；目标在 pending 期间打开后不得触发本机落盘；applyFail 不留半节点；
+  落盘原子无半落盘（对齐 BR-SYS-STATE-002）
 - **test_matrix**：见 §5
 - **跨模块转移契约（X-INTER-001）**：`accepted` 信号来自 DE diff 终态机，须与 DE 侧对接一致——
-  信号语义（accepted 唯一触发落盘）、落盘确认回执（Applied/ApplyError 回传 DE）双侧约定，登记
+  信号语义（仅无 LogicalState 的 accepted 触发落盘）、落盘确认回执（Applied/ApplyError 回传 DE）双侧约定，登记
   A-SYS-M-S-01 §5。
 
 ## §4 SM-WS-03 · 时间轴还原机
@@ -182,7 +233,7 @@ terminal_states: Restored, RestoreError
 | 核心链 | machine_id | 本文状态 | 总图回填动作 |
 |---|---|---|---|
 | save 保存 | SM-WS-01 | active | §3「save 保存\|WS」行 planned→active，machine_id=SM-WS-01（回填 SY-04） |
-| diff 落盘（WS 侧） | SM-WS-02 | active | 总图 §5 X-INTER-001 转移点「diff accepted→落盘」owner 侧机登记 SM-WS-02 |
+| diff 落盘（WS 侧） | SM-WS-02 | active | 总图 §5 X-INTER-001 转移点「持续无 LogicalState 的 diff accepted→落盘」owner 侧机登记 SM-WS-02 |
 | 时间轴还原 | SM-WS-03 | active | 总图清单新增 WS 时间轴还原行，machine_id=SM-WS-03 |
 
 > 总图回填由本文落地后同步编辑 A-SYS-M-S-01 §3/§5 完成（owner 模块 G2 登记总图，A-SYS-M-S-01
@@ -217,3 +268,6 @@ terminal_states: Restored, RestoreError
 |------|------|---------|
 | 2026-06-10 | v1.0 | 初版（WS G2 状态机件）：定义 SM-WS-01 save 保存机 / SM-WS-02 diff 落盘机 / SM-WS-03 时间轴还原机，含 APC §6 全部必备字段（states/transitions/guards/actions/error_states/recovery_paths/forbidden_transitions/acceptance_criteria/test_matrix）；承载 A-WS-M-T-01 规则（BR-WS-PERSIST-001/STATE-001/STATE-002/DATA-001/002）；满足 X-SEQ-003 注册前置；SM-WS-02 accepted 入口登记 X-INTER-001 跨模块转移（对接 DE diff 终态机）；流式/中断终态对齐 BR-SYS-STATE-002；§6 登记 A-SYS-M-S-01 总图（save 行 planned→active，回填 SY-04）；债务（X-INTER-001 单侧就绪待 DE G2、save 节点准入待定、并发隔离延实现期） |
 | 2026-06-12 | v1.1 | Q2 缺口补遗：SM-WS-01 扩展保存冲突路径——context 增加载基线；新增 saveConflict/overrideConfirmed 事件与转移；forbidden 增「磁盘≠基线不得达 Saved」「冲突覆盖必须 overrideConfirmed」；acceptance/test_matrix 同步（承载 BR-WS-OBS-001） |
+| 2026-08-13 | v1.2 | DIFF-STATE-COMPASS-01：SM-WS-02 rules 增 BR-CORE-STATE-002，入口 guard 固定为“accepted 且持续无 LogicalState”；目标 pending 期间打开后不得进入本机。 |
+| 2026-08-14 | v1.3 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 保存协调与未保存新文档保存契约（REQ-WS-003/006）——保存有效 pending 预览由 DE 先裁决为 accepted/awaiting_save 再驱动 SM-WS-01 落盘、未保存新文档保存＝创建文件（D-NEW-002/004/007）；补 REQ-WS-003/006 的 REQ_MAP（BR-CORE-STATE-001~003、BR-SYS-PERSIST-001）；登记未保存新文档创建语义与旧直写路径的迁移债务。 |
+| 2026-08-14 | v1.4 | AG-1.0-IMP-AGENT-CREATE-SAVE-01：§2.1 契约落地（仅代理新建生效，手动新建保持 ws.create_doc 立即建文件不变）——route_save_doc 对 baseline=null（未保存新文档身份）目标不存在时 create_dir_all 父目录 + 原子落盘 + 时间轴节点（V-N2 恰一）+ docx 补 mark_bdocx 身份；目标已存在 → WS_EXISTS 冲突（V-N4 不覆盖外部创建，保留未保存内容）；失败经既有保存机 SaveError 传播不伪报已创建；route_save_doc 补 @GOV（BR-WS-PERSIST-001/OBS-001/DATA-001）+ 2 测试。 |

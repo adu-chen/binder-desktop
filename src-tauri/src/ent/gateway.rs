@@ -293,13 +293,15 @@ pub struct GwToolCall {
 
 /// 一轮 GW 调用的结果：模型给出最终内容（Done）或请求执行工具（ToolCalls，需客户端执行后再续轮）。
 pub enum RoundOutcome {
-    Done,
+    Done { stop_reason: String },
     ToolCalls(Vec<GwToolCall>),
+    Failed(IpcError),
 }
 
 /// 调 dev GW `/invoke/stream` **一轮**：content 分片 emit `Chunk`；收到 `tool_calls` → 返回 ToolCalls
-/// （**不** emit Done，交客户端执行工具后续轮）；`done` 且无工具 → emit Done。密钥不经客户端
-/// （GW 用 env/BYOK，X-FORBID-001）；错误以 AgTurnEvent::Error 回传并按 Done 收尾（不 panic）。
+/// （**不** emit Done，交客户端执行工具后续轮）。本边界只发送非终态 Chunk；完成或错误作为
+/// `RoundOutcome` 返回，由 AG Runtime 的 terminal latch 统一发送唯一终态。密钥不经客户端
+/// （GW 用 env/BYOK，X-FORBID-001）。
 pub async fn stream_round(
     turn_id: &str,
     provider: &str,
@@ -326,13 +328,12 @@ pub async fn stream_round(
         Ok(r) => r,
         Err(e) => {
             eprintln!("[ag-gw] ✗ unreachable {url}: {e}");
-            let _ = channel.send(AgTurnEvent::Error {
-                turn_id: turn_id.to_string(),
-                code: "AG_GW_UNREACHABLE".into(),
-                message: format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
-                retriable: true,
-            });
-            return Ok(RoundOutcome::Done);
+            return Ok(RoundOutcome::Failed(IpcError::new(
+                "AG_GW_UNREACHABLE",
+                &format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
+                true,
+                false,
+            )));
         }
     };
 
@@ -360,31 +361,29 @@ pub async fn stream_round(
         } else {
             body
         };
-        let _ = channel.send(AgTurnEvent::Error {
-            turn_id: turn_id.to_string(),
-            code: format!("AG_GW_HTTP_{code}"),
-            message,
-            retriable: code >= 500 || code == 401, // 401 可重试（重登录）
-        });
-        return Ok(RoundOutcome::Done);
+        return Ok(RoundOutcome::Failed(IpcError::new(
+            &format!("AG_GW_HTTP_{code}"),
+            &message,
+            code >= 500 || code == 401,
+            code == 401,
+        )));
     }
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let mut tool_calls: Vec<GwToolCall> = Vec::new();
-    let mut done_sent = false;
+    let mut final_stop_reason: Option<String> = None;
 
     while let Some(item) = stream.next().await {
         let bytes = match item {
             Ok(b) => b,
             Err(e) => {
-                let _ = channel.send(AgTurnEvent::Error {
-                    turn_id: turn_id.to_string(),
-                    code: "AG_GW_STREAM".into(),
-                    message: format!("流式中断：{e}"),
-                    retriable: true,
-                });
-                return Ok(RoundOutcome::Done);
+                return Ok(RoundOutcome::Failed(IpcError::new(
+                    "AG_GW_STREAM",
+                    &format!("流式中断：{e}"),
+                    true,
+                    false,
+                )));
             }
         };
         buf.push_str(&String::from_utf8_lossy(&bytes));
@@ -424,39 +423,27 @@ pub async fn stream_round(
                     }
                 }
                 "done" => {
-                    // 仅当本轮无工具请求时，done 才是真正完成终态。
+                    // 仅记录 provider stop reason；唯一 wire 终态由上层 Runtime 发射。
                     if tool_calls.is_empty() {
-                        let stop = json
-                            .get("stop_reason")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("stop")
-                            .to_string();
-                        let _ = channel.send(AgTurnEvent::Done {
-                            turn_id: turn_id.to_string(),
-                            stop_reason: stop,
-                        });
-                        done_sent = true;
+                        final_stop_reason = Some(
+                            json.get("stop_reason")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("stop")
+                                .to_string(),
+                        );
                     }
                 }
                 "error" => {
-                    let _ = channel.send(AgTurnEvent::Error {
-                        turn_id: turn_id.to_string(),
-                        code: json
-                            .get("code")
+                    return Ok(RoundOutcome::Failed(IpcError::new(
+                        json.get("code")
                             .and_then(|c| c.as_str())
-                            .unwrap_or("AG_GW_ERR")
-                            .to_string(),
-                        message: json
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        retriable: json
-                            .get("retriable")
+                            .unwrap_or("AG_GW_ERR"),
+                        json.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+                        json.get("retriable")
                             .and_then(|r| r.as_bool())
                             .unwrap_or(false),
-                    });
-                    return Ok(RoundOutcome::Done);
+                        false,
+                    )));
                 }
                 _ => {}
             }
@@ -466,14 +453,9 @@ pub async fn stream_round(
     if !tool_calls.is_empty() {
         return Ok(RoundOutcome::ToolCalls(tool_calls));
     }
-    // 流自然结束但未收到 done：补完成终态（BR-SYS-STATE-002 三终态闭合）。
-    if !done_sent {
-        let _ = channel.send(AgTurnEvent::Done {
-            turn_id: turn_id.to_string(),
-            stop_reason: "stop".into(),
-        });
-    }
-    Ok(RoundOutcome::Done)
+    Ok(RoundOutcome::Done {
+        stop_reason: final_stop_reason.unwrap_or_else(|| "stop".to_string()),
+    })
 }
 
 /// 单次辅助产出（SM-AG-03 Requesting · 无工具 · 对外非流式）：POST dev GW `/invoke/stream`，累积 chunk

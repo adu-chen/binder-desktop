@@ -7,6 +7,8 @@ import type {
 } from "../store/edStore";
 
 const BLOCK_OP_CAPABILITY = "replace_node";
+// AG-TASK-01 F2：删除能力位（与 replace_node 同条件——可写 content 块可删）。
+const BLOCK_DELETE_CAPABILITY = "delete_node";
 const PROTECTED_ANCESTOR_TYPES = new Set([
   "table",
   "tableRow",
@@ -146,7 +148,9 @@ export function projectAgentEditableBlocks(editor: Editor | null): AgentEditable
       marks: projectMarks(node),
       nodeJson,
       fingerprint: fingerprintBlockNode(node),
-      capabilities: writable ? [BLOCK_OP_CAPABILITY, "style_ops"] : [],
+      capabilities: writable
+        ? [BLOCK_OP_CAPABILITY, "style_ops", BLOCK_DELETE_CAPABILITY]
+        : [],
     });
     return true;
   });
@@ -160,7 +164,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseStructuredBlockOperation(value: unknown): StructuredBlockOperation | null {
   if (!isRecord(value)) return null;
   const op = value.op;
-  if (op !== "replace_node" && op !== "insert_before" && op !== "insert_after" && op !== "append") return null;
+  if (
+    op !== "replace_node"
+    && op !== "insert_before"
+    && op !== "insert_after"
+    && op !== "append"
+    && op !== "delete_node"
+  ) {
+    return null;
+  }
 
   if (op === "replace_node") {
     if (
@@ -182,6 +194,26 @@ function parseStructuredBlockOperation(value: unknown): StructuredBlockOperation
       expectedNodeType: value.expectedNodeType,
       beforeNode: value.beforeNode,
       afterNode: value.afterNode,
+    };
+  }
+
+  // AG-TASK-01 F2：delete_node——afterNode 为 null（删除标记），只需 blockId + beforeNode。
+  if (op === "delete_node") {
+    if (
+      typeof value.blockId !== "string"
+      || !value.blockId
+      || !isRecord(value.beforeNode)
+      || value.afterNode !== null
+    ) {
+      return null;
+    }
+    return {
+      op: "delete_node",
+      blockId: value.blockId,
+      fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : "",
+      expectedNodeType: typeof value.expectedNodeType === "string" ? value.expectedNodeType : "",
+      beforeNode: value.beforeNode,
+      afterNode: null,
     };
   }
 
@@ -216,17 +248,19 @@ export function parseStructuredBlockEditPayload(value: unknown): StructuredBlock
   };
 }
 
-function findBlock(doc: PMNode, blockId: string): { node: PMNode; pos: number } | null {
-  let found: { node: PMNode; pos: number } | null = null;
+function findBlocks(doc: PMNode, blockId: string): Array<{ node: PMNode; pos: number }> {
+  const found: Array<{ node: PMNode; pos: number }> = [];
   doc.descendants((node, pos) => {
-    if (found) return false;
     if (node.attrs?.blockId === blockId) {
-      found = { node, pos };
-      return false;
+      found.push({ node, pos });
     }
     return true;
   });
   return found;
+}
+
+function findBlock(doc: PMNode, blockId: string): { node: PMNode; pos: number } | null {
+  return findBlocks(doc, blockId)[0] ?? null;
 }
 
 function sameAttrs(left: PMNode, right: PMNode): boolean {
@@ -242,8 +276,83 @@ interface PreparedReplacement {
   pos: number;
   current: PMNode;
   replacement: PMNode;
+  /** 原 proposal 中的稳定顺序；同坐标插入倒序执行才能保留提案中的阅读顺序。 */
+  index: number;
   /** 插入操作不使用 replaceWith，而是 insert */
   insertOnly?: boolean;
+  /** reverse 的 insert/append：按 afterNode 的稳定 blockId 删除实际插入节点。 */
+  reverseInsertedNodeDelete?: boolean;
+  /** AG-TASK-01 F2：删除操作——pos 处整块移除 */
+  deleteOnly?: boolean;
+  /** AG-TASK-01 F2：reverse 重建时插入（按记录的删除位置） */
+  restoreOnly?: boolean;
+}
+
+// AG-TASK-01 F2：forward 应用删除块时记录"删除位置"，供同一编辑器 reverse（拒绝回滚）按原位置重建。
+const deleteRestorePositions = new WeakMap<Editor, Map<string, number>>();
+
+function rememberDeletePosition(editor: Editor, blockId: string, pos: number): void {
+  let map = deleteRestorePositions.get(editor);
+  if (!map) {
+    map = new Map();
+    deleteRestorePositions.set(editor, map);
+  }
+  map.set(blockId, pos);
+}
+
+function insertedNodeId(operation: StructuredBlockOperation): string | null {
+  const attrs = operation.afterNode && isRecord(operation.afterNode.attrs)
+    ? operation.afterNode.attrs
+    : null;
+  const blockId = attrs?.blockId;
+  return typeof blockId === "string" && blockId ? blockId : null;
+}
+
+function nodeMatchesJson(node: PMNode, expected: Record<string, unknown> | null): boolean {
+  return Boolean(expected) && stableJson(node.toJSON()) === stableJson(expected);
+}
+
+function countAddressableBlocks(doc: PMNode): number {
+  let count = 0;
+  doc.descendants((node) => {
+    if (typeof node.attrs?.blockId === "string" && node.attrs.blockId) count += 1;
+    return true;
+  });
+  return count;
+}
+
+function validateForwardPostcondition(
+  doc: PMNode,
+  payload: StructuredBlockEditPayload,
+  beforeBlockCount: number,
+): string | null {
+  const inserts = payload.operations.filter((operation) => (
+    operation.op === "insert_before" || operation.op === "insert_after" || operation.op === "append"
+  )).length;
+  const hasDelete = payload.operations.some((operation) => operation.op === "delete_node");
+  // 无删除时，任何额外的孤儿块都意味着事务没有得到 proposal 所描述的最终结构。
+  if (!hasDelete && countAddressableBlocks(doc) !== beforeBlockCount + inserts) {
+    return "ED_BLOCK_OPERATION_RESULT_MISMATCH";
+  }
+  for (const operation of payload.operations) {
+    if (operation.op === "delete_node") {
+      if (findBlocks(doc, operation.blockId).length !== 0) return "ED_BLOCK_OPERATION_RESULT_MISMATCH";
+      continue;
+    }
+    if (operation.op === "insert_before" || operation.op === "insert_after" || operation.op === "append") {
+      const blockId = insertedNodeId(operation);
+      const matches = blockId ? findBlocks(doc, blockId) : [];
+      if (matches.length !== 1 || !nodeMatchesJson(matches[0].node, operation.afterNode)) {
+        return "ED_BLOCK_OPERATION_RESULT_MISMATCH";
+      }
+      continue;
+    }
+    const matches = findBlocks(doc, operation.blockId);
+    if (matches.length !== 1 || !nodeMatchesJson(matches[0].node, operation.afterNode)) {
+      return "ED_BLOCK_OPERATION_RESULT_MISMATCH";
+    }
+  }
+  return null;
 }
 
 function prepareStructuredBlockOperations(
@@ -264,16 +373,31 @@ function prepareStructuredBlockOperations(
   }
   const unique = new Set<string>();
   const prepared: PreparedReplacement[] = [];
-  for (const operation of payload.operations) {
-    // insert/append 操作：不需要 fingerprint / expectedNodeType 校验
+  for (const [index, operation] of payload.operations.entries()) {
+    // forward 以 base 的锚点执行；reverse 则必须定位实际插入的新块，而不是解析空 beforeNode。
     if (operation.op === "insert_before" || operation.op === "insert_after") {
+      if (direction === "reverse") {
+        const insertedId = insertedNodeId(operation);
+        const matches = insertedId ? findBlocks(editor.state.doc, insertedId) : [];
+        if (matches.length !== 1 || !nodeMatchesJson(matches[0].node, operation.afterNode)) {
+          return { reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED" };
+        }
+        prepared.push({
+          operation,
+          pos: matches[0].pos,
+          current: matches[0].node,
+          replacement: matches[0].node,
+          index,
+          reverseInsertedNodeDelete: true,
+        });
+        continue;
+      }
       if (!operation.blockId) return { reason: "ED_BLOCK_OPERATION_ANCHOR_LOST" };
       const anchor = findBlock(editor.state.doc, operation.blockId);
       if (!anchor) return { reason: "ED_BLOCK_OPERATION_ANCHOR_LOST" };
-      const afterNode = direction === "forward" ? operation.afterNode : operation.beforeNode;
       let replacement: PMNode;
       try {
-        replacement = editor.schema.nodeFromJSON(afterNode);
+        replacement = editor.schema.nodeFromJSON(operation.afterNode);
       } catch {
         return { reason: "ED_BLOCK_OPERATION_NODE_INVALID" };
       }
@@ -283,15 +407,30 @@ function prepareStructuredBlockOperations(
       const insertPos = operation.op === "insert_before"
         ? anchor.pos
         : anchor.pos + anchor.node.nodeSize;
-      prepared.push({ operation, pos: insertPos, current: anchor.node, replacement, insertOnly: true });
+      prepared.push({ operation, pos: insertPos, current: anchor.node, replacement, index, insertOnly: true });
       continue;
     }
 
     if (operation.op === "append") {
-      const afterNode = direction === "forward" ? operation.afterNode : operation.beforeNode;
+      if (direction === "reverse") {
+        const insertedId = insertedNodeId(operation);
+        const matches = insertedId ? findBlocks(editor.state.doc, insertedId) : [];
+        if (matches.length !== 1 || !nodeMatchesJson(matches[0].node, operation.afterNode)) {
+          return { reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED" };
+        }
+        prepared.push({
+          operation,
+          pos: matches[0].pos,
+          current: matches[0].node,
+          replacement: matches[0].node,
+          index,
+          reverseInsertedNodeDelete: true,
+        });
+        continue;
+      }
       let replacement: PMNode;
       try {
-        replacement = editor.schema.nodeFromJSON(afterNode);
+        replacement = editor.schema.nodeFromJSON(operation.afterNode);
       } catch {
         return { reason: "ED_BLOCK_OPERATION_NODE_INVALID" };
       }
@@ -300,12 +439,66 @@ function prepareStructuredBlockOperations(
       }
       const insertPos = editor.state.doc.content.size;
       const docNode = editor.state.doc;
-      prepared.push({ operation, pos: insertPos, current: docNode, replacement, insertOnly: true });
+      prepared.push({ operation, pos: insertPos, current: docNode, replacement, index, insertOnly: true });
+      continue;
+    }
+    // AG-TASK-01 F2：delete_node reverse（拒绝回滚）——被删块已不存在，须在 findBlock 之前
+    // 按记录的原位置重建（forward 应用时 rememberDeletePosition 记录）。
+    if (operation.op === "delete_node" && direction === "reverse") {
+      if (!operation.blockId) return { reason: "ED_BLOCK_OPERATION_ANCHOR_LOST" };
+      if (!unique.add(operation.blockId)) return { reason: "ED_BLOCK_OPERATION_DUPLICATE_TARGET" };
+      const restorePos = deleteRestorePositions.get(editor)?.get(operation.blockId);
+      if (restorePos === undefined) {
+        return { reason: "ED_BLOCK_OPERATION_ANCHOR_LOST" };
+      }
+      let replacement: PMNode;
+      try {
+        replacement = editor.schema.nodeFromJSON(operation.beforeNode);
+      } catch {
+        return { reason: "ED_BLOCK_OPERATION_NODE_INVALID" };
+      }
+      if (!replacement.isTextblock || containsProtectedDescendant(replacement)) {
+        return { reason: "ED_BLOCK_OPERATION_NODE_INVALID" };
+      }
+      const docNode = editor.state.doc;
+      prepared.push({
+        operation,
+        pos: restorePos,
+        current: docNode,
+        replacement,
+        index,
+        restoreOnly: true,
+      });
       continue;
     }
     if (!unique.add(operation.blockId)) return { reason: "ED_BLOCK_OPERATION_DUPLICATE_TARGET" };
     const found = findBlock(editor.state.doc, operation.blockId);
     if (!found) return { reason: "ED_BLOCK_OPERATION_ANCHOR_LOST" };
+    // AG-TASK-01 F2：delete_node forward——校验目标为可删 textblock。
+    if (operation.op === "delete_node") {
+      if (
+        !found.node.isTextblock
+        || hasProtectedAncestor(editor.state.doc, found.pos)
+        || containsProtectedDescendant(found.node)
+      ) {
+        return { reason: "ED_BLOCK_OPERATION_TARGET_READONLY" };
+      }
+      if (found.node.type.name !== operation.expectedNodeType && operation.expectedNodeType) {
+        return { reason: "ED_BLOCK_OPERATION_NODE_TYPE_CHANGED" };
+      }
+      if (fingerprintBlockNode(found.node) !== operation.fingerprint && operation.fingerprint) {
+        return { reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED" };
+      }
+      let replacement: PMNode;
+      try {
+        // forward：deleteOnly 不使用 replacement（delete 空替换），构造空 textblock 占位即可。
+        replacement = editor.schema.nodes.paragraph.create();
+      } catch {
+        return { reason: "ED_BLOCK_OPERATION_NODE_INVALID" };
+      }
+      prepared.push({ operation, pos: found.pos, current: found.node, replacement, index, deleteOnly: true });
+      continue;
+    }
     if (
       !found.node.isTextblock
       || hasProtectedAncestor(editor.state.doc, found.pos)
@@ -318,7 +511,8 @@ function prepareStructuredBlockOperations(
     }
     const expectedFingerprint = direction === "forward"
       ? operation.fingerprint
-      : fingerprintBlockNode(operation.afterNode);
+      // 此处仅 replace_node 分支可达（delete_node 已提前 continue），afterNode 必为 Record。
+      : fingerprintBlockNode(operation.afterNode as Record<string, unknown>);
     if (fingerprintBlockNode(found.node) !== expectedFingerprint) {
       return { reason: "ED_BLOCK_OPERATION_FINGERPRINT_CHANGED" };
     }
@@ -338,9 +532,30 @@ function prepareStructuredBlockOperations(
     ) {
       return { reason: "ED_BLOCK_OPERATION_NODE_INVALID" };
     }
-    prepared.push({ operation, pos: found.pos, current: found.node, replacement });
+    prepared.push({ operation, pos: found.pos, current: found.node, replacement, index });
   }
   return prepared;
+}
+
+function comparePreparedOperations(
+  left: PreparedReplacement,
+  right: PreparedReplacement,
+  direction: "forward" | "reverse",
+): number {
+  if (left.pos !== right.pos) return right.pos - left.pos;
+  if (direction === "forward") {
+    // replace/delete 必须先占用旧锚点；随后 insert_before 才能稳定落在新节点之前。
+    const leftPriority = left.insertOnly ? 1 : 0;
+    const rightPriority = right.insertOnly ? 1 : 0;
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+    // 多个同坐标 insert 反序写入，最终文档才保留 proposal 的正序阅读顺序。
+    return right.index - left.index;
+  }
+  // 同坐标回滚时先删除实际插入节点，再恢复被删节点，避免恢复内容被误删。
+  const leftPriority = left.reverseInsertedNodeDelete ? 0 : left.restoreOnly ? 1 : 2;
+  const rightPriority = right.reverseInsertedNodeDelete ? 0 : right.restoreOnly ? 1 : 2;
+  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+  return right.index - left.index;
 }
 
 /** 只读预检；拒绝前用于在后端进入 rejected 终态之前报告结构冲突。 */
@@ -379,13 +594,30 @@ export function applyStructuredBlockOperations(
 ): StructuredBlockApplyResult {
   const prepared = prepareStructuredBlockOperations(editor, payload, direction, currentBase);
   if (!Array.isArray(prepared)) return { ok: false, reason: prepared.reason };
+  const beforeBlockCount = countAddressableBlocks(editor.state.doc);
   const transaction = editor.state.tr;
-  for (const item of [...prepared].sort((left, right) => right.pos - left.pos)) {
-    if (item.insertOnly) {
+  // StarterKit 的 TrailingNode 会在末尾标题后自动补空段落；结构化 proposal 必须只产生 payload
+  // 明示的节点，否则 accepted/reject 都无法做到精确往返。
+  transaction.setMeta("skipTrailingNode", true);
+  for (const item of [...prepared].sort((left, right) => comparePreparedOperations(left, right, direction))) {
+    if (item.reverseInsertedNodeDelete) {
+      transaction.delete(item.pos, item.pos + item.current.nodeSize);
+    } else if (item.insertOnly) {
+      transaction.insert(item.pos, item.replacement);
+    } else if (item.deleteOnly) {
+      // AG-TASK-01 F2：删除 = 空替换（当前块整体移除）；记录位置供 reverse 恢复。
+      rememberDeletePosition(editor, item.operation.blockId, item.pos);
+      transaction.delete(item.pos, item.pos + item.current.nodeSize);
+    } else if (item.restoreOnly) {
+      // AG-TASK-01 F2：reverse 重建被删块（按记录位置插入）。
       transaction.insert(item.pos, item.replacement);
     } else {
       transaction.replaceWith(item.pos, item.pos + item.current.nodeSize, item.replacement);
     }
+  }
+  if (direction === "forward") {
+    const postconditionError = validateForwardPostcondition(transaction.doc, payload, beforeBlockCount);
+    if (postconditionError) return { ok: false, reason: postconditionError };
   }
   editor.view.dispatch(transaction);
   return { ok: true, affectedBlockIds: prepared.map((item) => item.operation.blockId) };

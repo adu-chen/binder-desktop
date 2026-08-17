@@ -66,12 +66,13 @@ export interface AgentEditableBlockSnapshot {
 }
 
 export interface StructuredBlockOperation {
-  op: "replace_node" | "insert_before" | "insert_after" | "append";
+  op: "replace_node" | "insert_before" | "insert_after" | "append" | "delete_node";
   blockId: string;
   fingerprint: string;
   expectedNodeType: string;
   beforeNode: Record<string, unknown>;
-  afterNode: Record<string, unknown>;
+  // AG-TASK-01 F2：delete_node 时 afterNode 为 null（删除标记）。
+  afterNode: Record<string, unknown> | null;
 }
 
 export interface StructuredBlockEditPayload {

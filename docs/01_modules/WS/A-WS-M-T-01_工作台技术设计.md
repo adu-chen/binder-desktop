@@ -55,7 +55,7 @@ REQ-CORE-001/002/007 → REQ-WS-001~005（WS L1）→ 本文 RULE/CHAIN/CONSTRAI
   归 A-WS-M-S-01（本文只声明其存在与所承载规则）。
 - 跨模块共享结构（WorkspaceRef/DocRef/PendingDiff/TimelineEntry）字段与枚举集合归 A-SYS-I-P-01，
   本文**引用不重定义**（X-SHARED-001）；diff 的"接受/拒绝/过期"**终态转移语义归 DE**，WS 仅消费
-  `accepted` 信号执行落盘。
+  无 LogicalState 分支的 `accepted` 信号执行落盘；已有 LogicalState 的写入由 SM-WS-01 保存执行。
 - 具体序列化格式、标量类型、不透明 ID 生成算法（ULID/UUID 等）属实现选型，延编码期与 G5。
 
 ## §2 模块技术分层与边界
@@ -64,7 +64,7 @@ REQ-CORE-001/002/007 → REQ-WS-001~005（WS L1）→ 本文 RULE/CHAIN/CONSTRAI
 WS 物理边界层（本文 SSOT）
   ├─ workspace 模型与生命周期（§3）            打开/切换/关闭 + root 边界守护
   ├─ 文件 I/O 与跨文档操作（§4）               读/写/列举/跨文档，限定 workspace 内
-  ├─ pending_diffs 持久化与落盘（§5）          持久化 + accepted 后写文件 + 记节点
+  ├─ pending_diffs 持久化与落盘（§5）          持久化 + 无 LogicalState 的 accepted 后写文件 + 记节点
   ├─ 文档级时间轴存储与还原（§6）              节点准入 / 存储模型 / 还原执行
   └─ workspace.db 完整 schema（§7，解除 SY-03） 控制态持久化 + 版本化迁移（承 BR-SYS-PERSIST-001）
 ```
@@ -140,7 +140,8 @@ WS 必须感知 workspace 内文档的外部变更：对处于打开会话中的
 
 WS 持久化由 DE/AG/CBT 生成的 pending_diff（A-SYS-I-P-01 PendingDiff）到 workspace.db，使未裁决
 diff 重启可恢复（§7）。裁决终态（pending→accepted/rejected/expired）由 **DE 终态机**裁定；WS 仅在
-收到 `accepted` 信号时执行落盘：写入目标文档并记**一个**时间轴节点；`rejected`/`expired` 不写文件。
+目标持续没有 LogicalState 的 `accepted` 信号时执行落盘：写入目标文档并记**一个**时间轴节点；已有
+LogicalState 的写入只经 SM-WS-01 保存。`rejected`/`expired` 不写文件。
 
 <!-- CHAIN
 chain_id: WS-DIFF-APPLY
@@ -154,13 +155,14 @@ rule_id: BR-WS-STATE-001
 主链路: WS-DIFF-APPLY
 域: STATE
 -->
-pending_diff 落盘仅由 DE 终态机的 `accepted` 信号触发：WS 在 accepted 时将 diff 写入目标文档并记
-恰好一个时间轴节点；`rejected`/`expired` 一律不写文件。写盘失败时不记时间轴节点、回统一错误形状
+无 LogicalState 的 pending_diff 落盘仅由 DE 终态机的 `accepted` 信号触发：WS 在 accepted 时将 diff
+写入目标文档并记恰好一个时间轴节点；若 pending 期间文档已打开，WS 必须拒绝本路径并由 ED/DE 迁移到
+LogicalState 保存路径。`rejected`/`expired` 一律不写文件。写盘失败时不记时间轴节点、回统一错误形状
 （BR-SYS-OBS-002），控制态保持可重试且原文件不被破坏（不产生半落盘副作用，对齐 BR-SYS-STATE-002）。
 diff 的终态转移语义归 DE，本规则只约束 WS 侧的落盘触发与原子性。
 
-> 跨模块转移点：`DE.diff终态(accepted) → WS.WS-DIFF-APPLY(落盘)` 须在 A-SYS-M-S-01 §5 登记为
-> X-INTER-001 转移契约，两侧对接一致（accepted 信号语义、落盘确认回执）。
+> 跨模块转移点：`DE.diff终态(accepted 且无 LogicalState) → WS.WS-DIFF-APPLY(落盘)` 须在
+> A-SYS-M-S-01 §5 登记为 X-INTER-001 转移契约，两侧对接一致（分流前提、accepted 信号语义、落盘确认回执）。
 
 ## §6 文档级时间轴存储模型与还原（WS-TIMELINE）
 
@@ -279,7 +281,8 @@ constraint_id: X-FORBID-004
   SYS 契约层定义，WS 引用不重定义。
 - **X-SEQ-003**（A-SYS-M-S-01）：WS save/diff 落盘/时间轴还原为状态化核心链，须先建状态机并登记总图
   方可实现——本文 §5/§6 与 A-WS-M-S-01 满足之。
-- **X-INTER-001**（A-SYS-M-S-01）：`DE.diff终态(accepted)→WS 落盘` 跨模块转移点须双侧对接一致。
+- **X-INTER-001**（A-SYS-M-S-01）：仅 `DE.diff终态(accepted 且持续无 LogicalState)→WS 落盘` 是本模块
+  跨模块转移点；已有或 pending 后打开迁移的 LogicalState 一律走 ED→WS-SAVE，三分流须双侧对接一致。
 
 ## §9 需求到规则映射（REQ_MAP）
 
@@ -329,6 +332,12 @@ status: mapped
 req_id: REQ-WS-003
 target_type: RULE
 target_id: BR-WS-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-WS-003
+target_type: RULE
+target_id: BR-CORE-STATE-002
 status: mapped
 -->
 <!-- REQ_MAP
@@ -440,3 +449,4 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-08-04 | v1.7 | WS-TIMELINE save 准入定档（人类决策）：§6 节点准入与 BR-WS-DATA-002 将保存成功纳入节点准入——每次保存成功且内容与最近节点快照不同时记 `save` 节点，内容未变跳过；§12 债务「save 节点准入策略待定」改为已定档，解除 WS-03 该子项 |
 | 2026-08-07 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder`（mode=empty\|recursive）——fileops::delete_folder 实现两级删除语义（empty 非空拒 WS_NOT_EMPTY / recursive 递归删除），listing::cleanup_bdocx_under 清洗删除目录前缀下的 BDocx 清单路径（empty 无命中不写）；目标越界经 resolve_active 守界。 |
 | 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）复用 WS-FS `create_doc` / `create_folder`，前端激活区域与文件夹入口为 UI 层组合，无后端命令面变化。 |
+| 2026-08-13 | v1.10 | DIFF-STATE-COMPASS-01：WS-DIFF-APPLY/BR-WS-STATE-001 与 REQ-WS-003 显式承接 BR-CORE-STATE-002；仅持续无 LogicalState 的接受可写盘，pending 打开后的迁移必须改走 ED→WS-SAVE。 |

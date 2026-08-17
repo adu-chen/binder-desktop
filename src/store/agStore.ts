@@ -37,7 +37,7 @@ export type TurnSegment =
   | { kind: "tool"; toolCallId: string }
   | { kind: "diff"; diffId: string };
 
-export type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft";
+export type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft" | "clarifying";
 
 export interface AgentComposerDraft {
   doc: JSONContent;
@@ -71,6 +71,7 @@ export type RustTurnState =
   | "AwaitingGate"
   | "Streaming"
   | "HandingOff"
+  | "AwaitingClarification"
   | "TurnError"
   | "Completed"
   | "Cancelled"
@@ -83,7 +84,81 @@ const ACTIVE_TURN_STATES: ReadonlySet<RustTurnState> = new Set([
   "AwaitingGate",
   "Streaming",
   "HandingOff",
+  // AwaitingClarification 不在其中：澄清是等待用户输入的非终态（BR-SYS-STATE-007），
+  // 不阻塞输入门控——用户可回复（前端先取消澄清回合再发起新回合）或直接取消。
 ]);
+
+/** 任务步骤态（TERM-AG-016 · SM-AG-04 steps）。 */
+export type TaskStepViewStatus =
+  | "pending"
+  | "running"
+  | "waiting_confirm"
+  | "ok"
+  | "failed"
+  | "cancelled";
+
+/** 受限任务实例步骤（TERM-AG-016）。 */
+export interface TaskStepView {
+  stepId: string;
+  kind: string; // tool / propose / read / confirm
+  label: string;
+  status: TaskStepViewStatus;
+}
+
+/** 受限任务实例状态（TERM-AG-015 · SM-AG-04）。 */
+export type TaskRunViewStatus =
+  | "planned"
+  | "executing"
+  | "waiting_confirm"
+  | "waiting_clarification"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+/** 受限任务实例（TERM-AG-015 · SM-AG-04）：会话内任务进度/步骤/确认点（只读呈现）。 */
+export interface TaskRunView {
+  taskRunId: string;
+  status: TaskRunViewStatus;
+  intentSummary?: string;
+  steps: TaskStepView[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 回合实时当前动作（AG-1.0-TASKRUN-REWORK-IMP-UI-01 · step_progress，BR-SYS-STATE-008）。 */
+export interface TurnCurrentAction {
+  action: "reading" | "tool" | "generating" | "proposing" | "deciding";
+  label: string;
+  detail?: string;
+}
+
+/** 任务级裁决请求（TERM-AG-017）：待用户裁决（confirm/cancel → ag.resolve_decision）。 */
+export interface PendingDecisionView {
+  requestId: string;
+  kind: string;
+  payload?: unknown;
+}
+
+/** 任务计划步骤（TERM-AG-018 · TaskPlan）。 */
+export interface TaskPlanStepView {
+  stepId: string;
+  seq: number;
+  kind: string;
+  label: string;
+  deps: string[];
+  requiredGrant?: string;
+  confirmPoint: boolean;
+  status: string;
+}
+
+/** 任务计划（TERM-AG-018 · TaskPlan）：可展示操作计划（步骤/依赖/游标/确认点）。 */
+export interface TaskPlanView {
+  planId: string;
+  taskRunId: string;
+  steps: TaskPlanStepView[];
+  cursor: number;
+}
 
 /** 一个标签会话（呈现层组织；持久化形状预留）。 */
 export interface AgSession {
@@ -100,6 +175,10 @@ export interface AgSession {
   turnsLoaded: boolean;
   /** 输入框草稿是标签级运行时状态，不随历史元数据持久化。 */
   composerDraft?: AgentComposerDraft;
+  /** 会话受限任务实例（TERM-AG-015）：最近 TaskRun 倒序，供会话摘要卡呈现（只读）。 */
+  taskRuns?: TaskRunView[];
+  /** 任务计划（TERM-AG-018）：会话最近 run 的可展示操作计划（步骤/依赖/确认点）。 */
+  taskPlans?: TaskPlanView[];
 }
 
 interface AgState {
@@ -107,6 +186,11 @@ interface AgState {
   activeSessionId: string;
   /** 回合级全局门控（后端 SM-AG-01 单回合投影；一次仅一个活动回合）。 */
   sending: boolean;
+  activeTurn: { sessionId: string; turnId: string } | null;
+  /** 回合实时当前动作（step_progress；null=无活动回合动作）。 */
+  currentAction: TurnCurrentAction | null;
+  /** 待用户裁决的任务级请求（DecisionRequest；null=无待裁决项）。 */
+  pendingDecision: PendingDecisionView | null;
 }
 
 const sid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -148,7 +232,14 @@ function blankSession(): AgSession {
 }
 
 const initial = blankSession();
-let state: AgState = { sessions: [initial], activeSessionId: initial.id, sending: false };
+let state: AgState = {
+  sessions: [initial],
+  activeSessionId: initial.id,
+  sending: false,
+  activeTurn: null,
+  currentAction: null,
+  pendingDecision: null,
+};
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -178,7 +269,14 @@ export const agStore = {
 
   reset() {
     const fresh = blankSession();
-    setState({ sessions: [fresh], activeSessionId: fresh.id, sending: false });
+    setState({
+      sessions: [fresh],
+      activeSessionId: fresh.id,
+      sending: false,
+      activeTurn: null,
+      currentAction: null,
+      pendingDecision: null,
+    });
   },
 
   hydrateSessions(sessions: AgSession[], activeSessionId?: string) {
@@ -187,7 +285,14 @@ export const agStore = {
       (activeSessionId && next.some((s) => s.id === activeSessionId) && activeSessionId) ||
       next.find((s) => !s.archived)?.id ||
       next[0].id;
-    setState({ sessions: next, activeSessionId: active, sending: false });
+    setState({
+      sessions: next,
+      activeSessionId: active,
+      sending: false,
+      activeTurn: null,
+      currentAction: null,
+      pendingDecision: null,
+    });
   },
 
   hydrateSessionTurns(sessionId: string, messages: ChatMessage[], toolCalls: ToolCallView[]) {
@@ -240,6 +345,22 @@ export const agStore = {
         : state.activeSessionId;
     setState({ sessions, activeSessionId });
   },
+  /** AG-1.0-IMP-TASKRUN-UI-01：投影会话受限任务实例（只读，不伪造进度，BR-SYS-STATE-008）。 */
+  hydrateSessionTaskRuns(sessionId: string, taskRuns: TaskRunView[]) {
+    mapSession(sessionId, (s) => ({ ...s, taskRuns }));
+  },
+  /** AG-1.0-TASKRUN-REWORK-CONTINUE-01：投影会话任务计划（TERM-AG-018，可展示操作计划）。 */
+  hydrateSessionPlans(sessionId: string, taskPlans: TaskPlanView[]) {
+    mapSession(sessionId, (s) => ({ ...s, taskPlans }));
+  },
+  /** AG-1.0-TASKRUN-REWORK-IMP-UI-01：回合实时当前动作（step_progress 驱动）。 */
+  setCurrentAction(action: TurnCurrentAction | null) {
+    setState({ currentAction: action });
+  },
+  /** AG-1.0-TASKRUN-REWORK-IMP-UI-01：待裁决任务级请求（DecisionRequest proposed）。 */
+  setPendingDecision(decision: PendingDecisionView | null) {
+    setState({ pendingDecision: decision });
+  },
   /** 设定活动会话模式（编辑/代理构建，TERM-AG-006/007）。 */
   setMode(mode: AgMode) {
     mapSession(state.activeSessionId, (s) => ({ ...s, mode }));
@@ -256,13 +377,24 @@ export const agStore = {
   setSending(sending: boolean) {
     setState({ sending });
   },
+  setActiveTurn(sessionId: string, turnId: string) {
+    setState({ activeTurn: { sessionId, turnId }, sending: true });
+  },
+  clearActiveTurn(turnId?: string) {
+    if (turnId && state.activeTurn?.turnId !== turnId) return;
+    setState({ activeTurn: null, sending: false });
+  },
   /**
    * 投影后端 SM-AG-01 回合机转移（A-CORE-X-L-04 Task 2-E · X-FORBID-007）：由 smListeners 监听
    * `sm:SM-AG-01:state_changed` 调用。sending（输入门控）= 回合处于活动态（Assembling/AwaitingGate/
    * Streaming/HandingOff）；到达任一终态或 TurnError 即释放。消息流/工具卡仍由 Channel 投影（互不替代）。
    */
   applyTurnState(_turnId: string, turnState: RustTurnState) {
-    setState({ sending: ACTIVE_TURN_STATES.has(turnState) });
+    const sending = ACTIVE_TURN_STATES.has(turnState);
+    setState({
+      sending,
+      activeTurn: sending || state.activeTurn?.turnId !== _turnId ? state.activeTurn : null,
+    });
   },
 
   // ── 消息 / 工具卡（按会话定位：流式期间切标签不串会话） ───────────

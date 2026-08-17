@@ -1,7 +1,9 @@
 //! PI-DE-02 · diff 终态机 SM-DE-01 · DE-DIFF / BR-DE-STATE-001
 //!
 //! 承接 A-DE-M-S-01 SM-DE-01：单条待裁决修改自生成到终态闭合。三终态（Accepted/Rejected/Expired）
-//! 互斥不可逆；accepted 是 WS 落盘的唯一触发（驱动 SM-WS-02，X-INTER-001）；ApplyError 不回退终态。
+//! 互斥不可逆；无 LogicalState 的后台分支中 accepted 触发 WS 落盘，已有 LogicalState 的分支中
+//! accepted 只确认卡片生命周期、写盘仍等待 save；显式接受或保存有效 pending 预览均可进入 Accepted
+//! （BR-CORE-STATE-001/002）；ApplyError 不回退终态。
 //! 过期的保守判定（超时/外部变更检测，BR-DE-STATE-002）与冲突重检（BR-DE-DATA-003）归 PI-DE-03；
 //! 本机 transition 仅承接 timeout/externalChange 的终态转移（判定是否触发由 PI-DE-03 决定）。
 
@@ -28,7 +30,8 @@ pub enum DiffState {
     GenFailed,
 }
 
-/// SM-DE-01 事件。userAccept 是通往落盘的唯一触发；appliedOk/applyFail 为 WS 落盘回执。
+/// SM-DE-01 事件。userAccept 是唯一可进入 Accepted 的状态机事件；已有 LogicalState 中显式接受或保存
+/// 有效 pending 预览都会发出它。仅无 LogicalState 的后台分支再由它驱动落盘；appliedOk/applyFail 为 WS 回执。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffEvent {
     GenOk,
@@ -78,7 +81,7 @@ pub fn transition(state: DiffState, event: DiffEvent) -> Option<DiffState> {
     let next = match (state, event) {
         (Generating, GenOk) => Pending,
         (Generating, GenFail) => GenFailed,
-        (Pending, UserAccept) => Accepted, // 唯一触发 SM-WS-02 落盘
+        (Pending, UserAccept) => Accepted, // 唯一可进入 Accepted 的裁决；是否落盘由三分流决定
         (Pending, UserReject) => Rejected,
         (Pending, Timeout) => Expired,
         (Pending, ExternalChange) => Expired,

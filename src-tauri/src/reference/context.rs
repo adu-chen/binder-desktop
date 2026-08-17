@@ -101,13 +101,14 @@ pub fn validate_selection(payload: &ReferencePayload, block_text: Option<&str>) 
  * codes:    BR-REF-DATA-003-DATA-REF-REF-INJECT-002
  * type:     DATA
  * chain:    REF-INJECT
- * rules:    BR-REF-DATA-003, BR-REF-VERIFY-001
- * term_ref: TERM-REF-003
- * boundary: in=referencePayloadAndReadOutcome | out=injectionContextBlock(traceableExplicitReferenceHighPriority)
+ * rules:    BR-REF-DATA-003, BR-REF-VERIFY-001, BR-SYS-DATA-007
+ * term_ref: TERM-REF-003, TERM-REF-005
+ * boundary: in=referencePayloadAndReadOutcome | out=injectionContextBlock(traceableExplicitReferenceHighPriorityExternalContentDataOnly)
  */
 /// 注入上下文格式化（BR-REF-DATA-003）：doc/selection 内容与校验结果由调用方（AG）传入；
 /// session/memory/knowledge/template/url/long_text 快照直接格式化；失效选区输出统一「引用锚已
-/// 失效」前缀（F6），不静默注入当前内容。
+/// 失效」前缀（F6），不静默注入当前内容。File 分支按 ExternalContentRef（BR-SYS-DATA-007 /
+/// TERM-REF-005）：有只读解析内容 → 一次性 data-only 注入；无 → 保留"未读取内容"（不伪称已读）。
 pub fn format_payload_context(
     payload: &ReferencePayload,
     doc: Option<DocRead<'_>>,
@@ -208,13 +209,27 @@ pub fn format_payload_context(
             let capped = cap_text(text, cap, "[引用长文本较长，已截取前部]");
             format!("引用长文本（{char_count} 字）：\n{capped}")
         }
-        ReferencePayload::File { name, path, size, .. } => {
+        ReferencePayload::File {
+            name,
+            path,
+            size,
+            read_content,
+            ..
+        } => {
             let origin = path
                 .as_deref()
                 .map(|p| format!("（来源：{p}）"))
                 .unwrap_or_default();
             let size_label = size.map(|s| format!("，大小 {s} 字节")).unwrap_or_default();
-            format!("引用文件「{name}」{origin}{size_label}：仅文件引用，未读取内容")
+            // ExternalContentRef（BR-SYS-DATA-007 / TERM-REF-005）：有可用只读解析路径的内容进当前回合
+            // （一次性 data-only）；None = 仅元数据，不伪称已读。
+            match read_content {
+                Some(content) => {
+                    let capped = cap_text(content, cap, "[引用文件较长，已截取前部]");
+                    format!("引用文件「{name}」{origin}{size_label}：\n{capped}")
+                }
+                None => format!("引用文件「{name}」{origin}{size_label}：仅文件引用，未读取内容"),
+            }
         }
     }
 }
@@ -374,12 +389,62 @@ mod tests {
             path: Some("Downloads/report.pdf".to_string()),
             size: Some(2048),
             label: None,
+            read_content: None,
         };
         let out = format_payload_context(&file, None, None, 1000);
         assert!(out.contains("引用文件「report.pdf」"));
         assert!(out.contains("来源：Downloads/report.pdf"));
         assert!(out.contains("大小 2048 字节"));
         assert!(out.contains("仅文件引用，未读取内容"));
+    }
+
+    // covers: BR-SYS-DATA-007
+    // ExternalContentRef（TERM-REF-005）：可读只读解析内容 → 一次性 data-only 注入当前回合。
+    #[test]
+    fn file_payload_injects_external_content_when_read() {
+        let read = ReferencePayload::File {
+            name: "notes.txt".to_string(),
+            path: Some("/tmp/notes.txt".to_string()),
+            size: Some(9),
+            label: None,
+            read_content: Some("外部内容".to_string()),
+        };
+        let out = format_payload_context(&read, None, None, 1000);
+        assert!(out.contains("引用文件「notes.txt」"));
+        assert!(out.contains("外部内容"));
+        assert!(!out.contains("未读取内容"));
+    }
+
+    // covers: BR-SYS-DATA-007
+    // 不可读（无 read_content）：保留元数据，不伪称已读。
+    #[test]
+    fn file_payload_without_content_stays_metadata_only() {
+        let meta = ReferencePayload::File {
+            name: "photo.png".to_string(),
+            path: None,
+            size: Some(1024),
+            label: None,
+            read_content: None,
+        };
+        let out = format_payload_context(&meta, None, None, 1000);
+        assert!(out.contains("仅文件引用，未读取内容"));
+        assert!(!out.contains("外部内容"));
+    }
+
+    // covers: BR-SYS-DATA-007
+    // 内容容量受控（cap 截断），不注入无界文本。
+    #[test]
+    fn file_external_content_is_capped() {
+        let read = ReferencePayload::File {
+            name: "big.md".to_string(),
+            path: None,
+            size: None,
+            label: None,
+            read_content: Some("x".repeat(5000)),
+        };
+        let out = format_payload_context(&read, None, None, 100);
+        assert!(out.contains("[引用文件较长，已截取前部]"));
+        assert!(out.len() < 500);
     }
 
     // covers: BR-REF-DATA-003

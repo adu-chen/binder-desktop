@@ -152,6 +152,10 @@ pub enum ReferencePayload {
         #[serde(default)]
         size: Option<u64>,
         label: Option<String>,
+        /// ExternalContentRef（TERM-REF-005）：可读扩展名的外部文件内容，仅当前回合 data-only 传递
+        /// （mention_block 一次性，不落库/不转存）；None = 仅元数据、未读取内容（不伪称已读）。
+        #[serde(default, rename = "readContent")]
+        read_content: Option<String>,
     },
 }
 
@@ -170,6 +174,109 @@ pub struct MemoryInjection {
     pub content: String,
     /// 来源回合标识，消费方可溯源（AgentTurn）。
     pub origin_turn: String,
+}
+
+/// 受限任务实例状态（TERM-AG-015 · SM-AG-04，BR-SYS-STATE-008）。
+/// 非后台队列：不自动重试、不跨重启续跑、不越过确认点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRunStatus {
+    Planned,
+    Executing,
+    WaitingConfirm,
+    WaitingClarification,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
+/// 任务步骤状态（TERM-AG-016 · SM-AG-04 steps）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStepStatus {
+    Pending,
+    Running,
+    WaitingConfirm,
+    Ok,
+    Failed,
+    Cancelled,
+}
+
+/// 任务步骤（TERM-AG-016）：TaskRun 内有依赖的受限步骤。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskStepV1 {
+    pub step_id: String,
+    /// 步骤类别：tool（工具调用）/ propose（提案＝W1/W2/W3 确认点）/ read / confirm。
+    pub kind: String,
+    pub label: String,
+    pub status: TaskStepStatus,
+}
+
+/// 受限任务实例（TERM-AG-015 · SM-AG-04）：同一用户目标内组织步骤/回合的编排实例。
+/// 真实工作状态只由回合/步骤/工具事件驱动；DiffCard 可经 task_run_id 关联（UNC-09）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRunV1 {
+    pub task_run_id: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub status: TaskRunStatus,
+    pub intent_summary: Option<String>,
+    pub steps: Vec<TaskStepV1>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 任务级裁决请求状态（TERM-AG-017 · DecisionRequest）：proposed → resolved。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRequestStatus {
+    Proposed,
+    Resolved,
+}
+
+/// 任务级裁决请求（TERM-AG-017 · A-AG-M-D-01 §5b）：与内容裁决分离；
+/// confirm/cancel 驱动 TaskRun 的 UserConfirm/UserCancel 事件，Diff 接受/拒绝不驱动 TaskRun。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionRequestV1 {
+    pub request_id: String,
+    pub task_run_id: String,
+    /// 裁决类型：permission（权限）/ plan_choice（方案）/ scope（范围）/ manual_confirm（人工确认）。
+    pub kind: String,
+    pub payload: serde_json::Value,
+    pub status: DecisionRequestStatus,
+    /// 裁决结果：confirm / cancel（resolved 时有值）。
+    pub outcome: Option<String>,
+    pub proposed_at: i64,
+    pub resolved_at: Option<i64>,
+}
+
+/// 任务计划步骤（TERM-AG-018 · TaskPlan）：可展示操作计划的组成步骤。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPlanStepV1 {
+    pub step_id: String,
+    pub seq: i32,
+    pub kind: String,
+    pub label: String,
+    /// 依赖的前置步骤 id 列表。
+    pub deps: Vec<String>,
+    /// 本步所需授权（capability 声明）；confirm_point 标记确认点。
+    pub required_grant: Option<String>,
+    pub confirm_point: bool,
+    pub status: TaskStepStatus,
+}
+
+/// 任务计划（TERM-AG-018 · TaskPlan）：IntentResult 判定复杂目标后创建的可展示操作计划（非模型思维链）；
+/// 保存步骤/依赖/当前游标/所需授权/确认点/阶段结果；执行按片段推进，每片段重新授权。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPlanV1 {
+    pub plan_id: String,
+    pub task_run_id: String,
+    pub steps: Vec<TaskPlanStepV1>,
+    /// 当前游标（下一步 seq；0 起）。
+    pub cursor: i32,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 /// 知识召回载荷基线（主责 KB；KB→AG 传递）。
@@ -263,12 +370,13 @@ mod tests {
             path: None,
             size: Some(2048),
             label: None,
+            read_content: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"kind\":\"file\""));
         let back: ReferencePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
-        // 缺省字段（size/path）兼容前端拖入。
+        // 缺省字段（size/path/readContent）兼容前端拖入。
         let minimal: ReferencePayload =
             serde_json::from_str(r#"{"kind":"file","name":"a.pdf"}"#).unwrap();
         assert!(matches!(minimal, ReferencePayload::File { size: None, .. }));

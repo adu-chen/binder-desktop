@@ -102,6 +102,8 @@ export type ExpiredReason =
 
 export type DiffDraftMode = "current_editor" | "open_session" | "background";
 export type DiffSnapshotSource = "active_editor" | "active_editor_session" | "open_editor_session" | "disk_snapshot";
+/** 当前编辑器草稿的本地预览状态；与后端 pending/accepted/rejected 裁决态分离。 */
+export type DraftPreviewState = "queued" | "applied" | "failed";
 
 export const EXPIRED_REASON_TEXT: Record<ExpiredReason, string> = {
   document_revision_advanced: "原文已被手动编辑，建议重新生成",
@@ -117,6 +119,8 @@ export interface DiffView {
   sessionId?: string;
   /** 归属的 AgentTurn；用于审计与同回合批量组织。 */
   turnId?: string;
+  /** 受限任务实例关联（TERM-AG-015 · UNC-09 数据层）：DiffCard 归属的 TaskRun。 */
+  taskRunId?: string;
   /** DiffCard 在消息流中的锚点消息 id，通常为本回合 assistant 消息。 */
   anchorMessageId?: string;
   /** 前端生成顺序；同一消息下多张卡按此稳定排序。 */
@@ -129,7 +133,7 @@ export interface DiffView {
   /** 人读位置摘要（如“Block 3”或“整篇”），与 blockId 一起用于 DiffCard 定位呈现。 */
   locationLabel?: string;
   /** AgentEdit 修改类型；Editor 只允许显式 replace_document 执行整篇草稿替换。 */
-  patchKind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
+  patchKind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops" | "delete_doc" | "delete_folder";
   /** DiffProjection 分流路径：active 草稿 / open session 自动应用 / 未打开后台路径。 */
   draftMode?: DiffDraftMode;
   /** DiffProjection 生成基线来源。 */
@@ -151,6 +155,8 @@ export interface DiffView {
   blockOps?: string[];
   blockOpsPayload?: StructuredBlockEditPayload;
   blockAffectedIds?: string[];
+  /** AG-TASK-01 F1b：批次元数据（整篇对齐分批；展示"第 x/y 批"徽标）。 */
+  batch?: { id: string; index: number; total: number };
   /** 表格结构操作与其前后结构快照；table_ops 不得回退为 HTML 块替换。 */
   tableOps?: string[];
   tableOpsPayload?: TableEditPayload;
@@ -162,10 +168,10 @@ export interface DiffView {
   imageBefore?: DocumentImageSnapshot[];
   imageAfter?: DocumentImageSnapshot[];
   imageAffectedBlockIds?: string[];
+  /** 当前编辑器草稿预览的实际结果。queued 仅表示客户端尚待应用，并不代表文档已改变。 */
+  draftPreviewState?: DraftPreviewState;
   /** 已将 after 应用到当前编辑器草稿；accept 只确认，save 才落盘。 */
   draftApplied?: boolean;
-  /** 已自动应用到已打开非激活文档 LogicalState；DiffCard 禁用裁决。 */
-  openSessionApplied?: boolean;
   /** 草稿应用前的完整编辑器内容，用于 reject 后判断是否可恢复原标签态。 */
   draftBaseContent?: string;
   /** 草稿应用后（刚应用完那一刻）的编辑器内容快照，用于 D4 后置编辑检测：
@@ -210,6 +216,19 @@ function setDiffs(diffs: DiffView[], patch: Partial<DeState> = {}) {
 }
 function mapDiff(id: string, fn: (d: DiffView) => DiffView) {
   setDiffs(state.diffs.map((d) => (d.diffId === id ? fn(d) : d)));
+}
+
+/**
+ * 前端草稿预览的最小审计事件。只记录 proposal 身份和结果，不记录正文，便于从运行日志区分
+ * 「已生成建议」与「编辑器实际应用结果」。
+ */
+function traceDraftPreview(id: string, state: Exclude<DraftPreviewState, "queued">, errorCode?: string) {
+  console.info(`[de-draft-preview] ${JSON.stringify({
+    event: "draft_preview_result",
+    diff_id: id,
+    preview_state: state,
+    error_code: errorCode ?? null,
+  })}`);
 }
 
 /** DiffCardState → GreenReview 4 态（rejected/error → 无装饰）。 */
@@ -321,34 +340,38 @@ export const deStore = {
     mapDiff(id, (d) => ({ ...d, imageBefore, imageAfter, imageAffectedBlockIds }));
   },
 
+  /** 编辑器无法应用 pending 草稿时记录明确的本地预览失败；不把失败误说成已显示或已写入。 */
+  markDraftPreviewFailed(id: string, errorCode: string) {
+    let transitioned = false;
+    mapDiff(id, (d) => {
+      if (["accepted", "rejected", "expired"].includes(d.state)) return d;
+      transitioned = d.state !== "error" || d.draftPreviewState !== "failed" || d.errorCode !== errorCode;
+      return { ...d, state: "error", draftPreviewState: "failed", errorCode };
+    });
+    if (transitioned) traceDraftPreview(id, "failed", errorCode);
+  },
+
   /** 标记草稿已应用到编辑器。记录 baseContent/baseTabState/baseDirty 及 afterContent（D4 修复，
    *  A-CORE-C-T-01 §5.4），使 reject 后可通过比较当前内容与 afterContent 准确判断是否有后置编辑。
    *  baseContent/baseTabState 从 edStore 活动会话取；baseDirty 取该时的 tabState === "dirty"；
    *  afterContent 为 diff 应用后的编辑器内容快照。 */
   markDraftApplied(id: string, baseContent?: string, baseTabState?: TabState, afterContent?: string) {
     const baseDirty = baseTabState === "dirty";
-    mapDiff(id, (d) => ({
-      ...d,
-      draftApplied: true,
-      draftBaseContent: baseContent,
-      draftBaseTabState: baseTabState,
-      draftBaseDirty: baseDirty,
-      draftAfterContent: afterContent,
-      draftSaved: false,
-    }));
-  },
-
-  markOpenSessionApplied(id: string, baseContent?: string, afterContent?: string) {
-    mapDiff(id, (d) => ({
-      ...d,
-      state: "accepted",
-      readonly: true,
-      draftApplied: true,
-      openSessionApplied: true,
-      draftBaseContent: baseContent,
-      draftAfterContent: afterContent,
-      draftSaved: false,
-    }));
+    let transitioned = false;
+    mapDiff(id, (d) => {
+      transitioned = d.draftPreviewState !== "applied" || !d.draftApplied;
+      return {
+        ...d,
+        draftPreviewState: "applied",
+        draftApplied: true,
+        draftBaseContent: baseContent,
+        draftBaseTabState: baseTabState,
+        draftBaseDirty: baseDirty,
+        draftAfterContent: afterContent,
+        draftSaved: false,
+      };
+    });
+    if (transitioned) traceDraftPreview(id, "applied");
   },
 
   markDraftSaved(relPath: string) {

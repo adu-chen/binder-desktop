@@ -23,11 +23,11 @@ zh: 待裁决修改
 en: PendingDiff
 forbidden: 修改提案, 变更请求, 待定diff, 修改单, 待审修改
 -->
-由 AG 修改建议生成、经 WS 持久化、等待裁决或受控自动应用的修改单元（共享结构归 A-SYS-I-P-01）；
-status 枚举 pending/accepted/rejected/expired，终态互斥不可逆。当前编辑器命中的块级 PendingDiff
-生成后先由 ED 应用为草稿内容，accepted 只确认裁决态，后续由 ED/WS save 落盘；已打开非激活文档的
-PendingDiff 在基线校验通过后自动应用到对应 ED session LogicalState 并转 accepted；未打开文档的
-后台 PendingDiff 可保留 accepted→WS apply 的旧落盘路径。
+由 AG 修改建议生成、经 WS 持久化、等待裁决的修改单元（共享结构归 A-SYS-I-P-01）；status 枚举
+pending/accepted/rejected/expired，终态互斥不可逆。其副作用严格按 BR-CORE-STATE-001~003 分流：已有
+LogicalState 时 pending 预览直接应用内容但保持可裁决；无 LogicalState 时只作为 DiffCard 挂载；pending
+期间打开目标文档则建立带绿色增量的 LogicalState 并迁移为前者。只有无 LogicalState 分支的 accepted
+才进入 WS apply。
 
 <!-- TERM
 term_id: TERM-DE-002
@@ -147,22 +147,21 @@ rule_id: BR-DE-STATE-001
 域: STATE
 -->
 待裁决修改的终态转移必须满足：pending→accepted/rejected/expired 三终态互斥且不可逆（终态后
-不得再转移、不得复活）。当前打开编辑器且可定位的块级 diff、显式 `replace_document` 整篇 diff、
-StyleOp diff 在 pending 时即经 ED 受控接口把 after/样式操作应用为草稿并产生脏态；当前文档的任意 save
-动作都必须先将已应用 pending Diff 经 `de.accept_draft_diff` 确认为 accepted（不依赖额外点击“接受”），再触发
-SM-WS-01；save 成功后 ED 复位 GreenReview，save 失败则 accepted 保持 awaiting_save。已打开非激活文档的 `draft_mode=open_session`
-diff 必须在 pending 后立即经 ED session 事务应用到目标 LogicalState：基线匹配则自动 accepted、DiffCard
-禁用接受/拒绝；基线不匹配、事务不支持或应用失败则 expired/error 投影，不允许用户继续裁决该卡。
-未打开文档的后台 diff 可继续走 accepted→SM-WS-02 apply 路径，但该路径仅适用于文本/.html 等可直接应用载荷的文档。既有 BDocx 的磁盘
-权威是 docx 字节，DiffPayload 中的 HTML/Block 投影不得经后台 raw apply 写入 `.docx`；未在当前编辑器
-HTML 草稿中成功应用的 BDocx diff 必须进入 error（如 `DE_BDOCX_DRAFT_REQUIRED`），等待用户打开目标
-BDocx 后重新生成。
+不得再转移、不得复活）。已有 LogicalState 的当前或非激活打开文档中，块级、整篇和 StyleOp diff 在
+pending 时即经 ED 受控接口把 after/样式操作应用为草稿并产生脏态，DiffCard 继续保持可接受/拒绝；显式接受
+不得再次应用内容或写盘；保存仍有效的 pending 预览时，必须先裁决为 accepted/awaiting_save，再经保存链写盘。若保存前
+基线已推进，必须将旧卡置 expired，保存当前 LogicalState 但不得把旧卡裁决为 accepted。pending 后打开的后台目标必须以同一 DiffPayload 建立
+LogicalState、显示 GreenReview 并切换到这一路径。无 LogicalState 的后台 diff 才可走 accepted→SM-WS-02
+apply 路径，且仅适用于文本/.html 等可直接应用载荷。既有 BDocx 的磁盘权威是 docx 字节，DiffPayload
+中的 HTML/Block 投影不得经后台 raw apply 写入 `.docx`；未在当前编辑器 HTML 草稿中成功应用的 BDocx
+diff 必须进入 error（如 `DE_BDOCX_DRAFT_REQUIRED`），等待用户打开目标 BDocx 后由 BR-CORE-STATE-003
+迁移或重新生成。
 rejected/expired 不写文件；若普通文本草稿已应用，rejected 经 ED 受控接口按 before 回滚；若
 block_ops 草稿已应用，拒绝前必须验证当前目标仍匹配 afterNode fingerprint，再在一个事务中恢复
 exact beforeNode。指纹已变化则投 conflict 并停止后端拒绝，不得整篇覆盖后置人工编辑。用户裁决交互经
 ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。DiffCard 显式接受 block_ops
 也必须先验证 afterNode fingerprint；已变化则保持 Pending 并投 conflict，不确认不可逆终态。保存动作
-仍按既定“保存即接受”决策确认当前文档全部已应用 pending Diff，该产品语义不被显式接受门禁改写。
+只写入当前 LogicalState，不得替代 `userAccept` 或改写 DiffCard 生命周期。
 状态转移归 SM-DE-01。
 
 ### §5.1 效果态（解除审计发现：accepted 不等于已落盘的历史不一致，2026-07-20 新增）
@@ -170,13 +169,13 @@ ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。D
 `pending_diffs` 新增 `effect_status`（`not_applicable`/`awaiting_save`/`saved`/
 `discarded_on_abnormal_exit`）与 `terminal_reason`（可空）两列，字段形状单一来源为 A-SYS-I-P-01，
 语义规则 SSOT 为 `BR-SYS-DATA-005`（A-SYS-M-T-02 §4，APP-CLOSE-DIFF-LIFECYCLE-01）。核心动机：
-`status=accepted` 只代表裁决结果，`current_editor`/`open_session` 路径的 accepted 在用户实际保存
+`status=accepted` 只代表裁决结果，已有 LogicalState 路径的 accepted 在用户实际保存
 成功前不代表内容已落盘（本文 §5 已锁定该语义），历史展示必须能区分"裁决同意"与"内容生效"两个
 维度，不得笼统显示为完成态。
 
-DE 侧责任：`de.accept_diff`/`de.accept_draft_diff` 成功时按路径写入 `effect_status`——`background`
-路径与 `ws.apply_diff` 同一事务原子完成，写 `saved`；`current_editor`/`open_session` 路径写
-`awaiting_save`。当前文档的保存编排将“保存”映射为先发生的 `de.accept_draft_diff`；真实保存成功（SM-ED-01 saved 事件）时由 ED/WS 侧按 `rel_path` 批量把该文档下
+DE 侧责任：`de.accept_diff`/`de.accept_draft_diff` 成功时按路径写入 `effect_status`——无 LogicalState 的
+`background` 路径与 `ws.apply_diff` 同一事务原子完成，写 `saved`；已有 LogicalState 路径写
+`awaiting_save`。真实保存成功（SM-ED-01 saved 事件）时由 ED/WS 侧按 `rel_path` 批量把该文档下
 `awaiting_save` 的 accepted 行翻转为 `saved`（DE 不直接监听保存事件，由调用方在保存成功回调中
 调用 DE 提供的批量翻转接口，避免 DE 反向依赖 ED/WS 内部状态机）。`awaiting_save` 的另一去向是
 关闭流程内用户显式放弃或 `BR-SYS-STATE-005` 启动清算转 `discarded_on_abnormal_exit`（归 SYS 侧编排，
@@ -228,8 +227,9 @@ rule_id: BR-DE-DATA-003
 before。DiffCard 是 PendingDiff 在代理回合信息流中的视图投影：应锚定到触发它的会话、AgentTurn 和
 assistant 消息后方，不得把多轮修改统一沉底为会话级全局列表；未带历史锚点的 legacy diff 可进入
 “未归属修改建议”fallback 区以避免丢失。接受/拒绝/过期等终态仍以 SM-DE-01 和 BR-DE-STATE-001 为准。
-`draft_mode=open_session` 的 DiffCard 在自动应用成功后必须显示为已应用到 LogicalState 且禁用接受/拒绝；
-自动应用失败时显示失效/错误原因并禁用接受/拒绝。该卡不得提供会触发二次应用的裁决入口。
+已有 LogicalState（包括 `open_session` 与 pending 后打开迁移）的 DiffCard 在预览成功后必须显示为已应用到
+LogicalState，但仍保留接受/拒绝；这些操作只能裁决卡片，不得二次应用内容。预览失败、基准推进或超时后
+才显示失效/错误原因并禁用裁决。
 批量裁决条是全局操作控件，可继续放在输入框上方；侧栏/内联整体布局仍属 DE-04 剩余 UI 债务，不在
 本局部闭合范围内。
 
@@ -257,6 +257,24 @@ status: mapped
 req_id: REQ-DE-003
 target_type: RULE
 target_id: BR-DE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-003
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-003
+target_type: RULE
+target_id: BR-CORE-STATE-002
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-003
+target_type: RULE
+target_id: BR-CORE-STATE-003
 status: mapped
 -->
 <!-- REQ_MAP
@@ -323,17 +341,18 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
   锚失效生成失败回报 AG；无错位/无锚 diff。
 - **载荷往返**（BR-DE-DATA-002，REQ-DE-004 验收）：持久化→重启→恢复后审阅呈现完整重建（对比
   基准一致）；payload_version 迁移不丢载荷。
-- **终态语义**（BR-DE-STATE-001 / SM-DE-01，REQ-DE-002/003 验收）：三终态互斥不可逆；当前编辑器
-  草稿路径 accepted 不直接落盘，save 成功后复位 GreenReview；后台文本/.html 路径可由 accepted 触发 apply，
-  既有 BDocx 未进当前编辑器草稿时不得 raw apply；已打开非激活文档 `open_session` 自动应用成功后
-  status=accepted 但不触发后台落盘，DiffCard 接受/拒绝禁用；基线不匹配时不得应用、不得继续裁决；
+- **终态语义**（BR-DE-STATE-001 / SM-DE-01，REQ-DE-002/003 验收）：三终态互斥不可逆；已有
+  LogicalState 的草稿路径在 pending 即预览、用户显式接受不直接落盘，而保存有效 pending 预览会先转 accepted/awaiting_save；后台文本/.html 路径仅在
+  持续无 LogicalState 时可由 accepted 触发 apply。已打开非激活文档或 pending 后打开迁移预览成功后保持
+  pending 且接受/拒绝可用，基线不匹配时不得应用、不得继续裁决；既有 BDocx 未进编辑器草稿时不得 raw apply；
   rejected/expired 文件不变，草稿已应用时 rejected 回滚；ApplyError 不回退终态。
 - **过期保守性**（BR-DE-STATE-002，REQ-DE-005 验收）：超时/外部变更转 expired；检测不可得不误杀。
 - **冲突**（BR-DE-DATA-003）：重叠 diff 在先序草稿应用、open session 自动应用或后台落盘后重检，陈旧者 expired；
   不重叠者独立裁决；无并发应用/落盘同一块。
 - **DiffCard 紧凑态**（TERM-DE-003，DE-04 局部闭合）：默认渲染为标题/位置/红删/绿增/操作五行；
   长内容、状态提示与样式摘要不无界撑高默认卡片，展开后可查看详情；多轮 DiffCard 按各自
-  AgentTurn/assistant 消息锚点插入消息流，不沉底汇总；`open_session` 已应用/失效卡不可接受或拒绝。
+  AgentTurn/assistant 消息锚点插入消息流，不沉底汇总；已有或 pending 后打开迁移的预览卡仍可接受或拒绝，
+  只有失效/错误卡不可裁决。
   BDocx 底纹 Diff 必须同时显示精确逻辑坐标、前后色块与色值/清除态。
   BDocx 图片 Diff 必须分别显示插入来源/位置/alt/width 或删除目标前后状态，不得退化为“修改图片”
   摘要；非活动会话不产生 image_ops 卡。
@@ -345,9 +364,8 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
 
 - **审阅 UI 形态剩余项**（DE-04）：逐条 DiffCard 默认紧凑形态已在 §8.1 局部闭合；批量裁决、侧栏/
   内联整体布局仍属产品体验，延实现期人类确认。
-- **open_session DiffCard 视觉债务**：当前安全线是准确修改 LogicalState、禁用二次裁决并防止基线偏移；
-  DiffCard 视觉仍可能只有绿增预览、缺少红删效果。后续需要补完整红删/绿增对比、DiffCard 失效态视觉和
-  非激活文档撤销/回滚能力。
+- **非激活/迁移预览的视觉债务**：必须保留用户裁决入口并防止二次内容应用；DiffCard 视觉仍可能只有绿增
+  预览、缺少完整红删效果。后续需要补完整红删/绿增对比和 DiffCard 失效态视觉，不得借此禁用接受/拒绝。
 - **超时时长与检测触发时机**（DE-03 数值部分）：判定条件已锁，数值与触发时机延实现期标定。
 - **diff 拆分策略**：多块修改拆分为可独立裁决单条的具体算法（语义自洽边界判定）延实现期，与 AG
   生成侧联合调优。
@@ -387,3 +405,5 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
 | 2026-07-29 | v1.17 | BDOCX-IMAGE-ADVANCED-AGENT-OPS-01：图片结构化 Diff 扩展缩放宽度、文档流移动与段落对齐的精确前后快照。 |
 | 2026-07-30 | v1.18 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：新增 §9.1.1 block_ops 结构化 Diff；exact beforeNode/afterNode 成为应用/审阅/回滚共同真值，列表子块逐项展示，fingerprint 变化转 conflict 而非全文恢复。 |
 | 2026-07-30 | v1.19 | AG-RICH-BLOCK-STRUCTURED-EDIT-01 闭合补强：DiffCard 显式接受 block_ops 增 afterNode fingerprint 前置校验；后置编辑时不提交 accepted，并明确保存即接受仍按既有产品决策执行。 |
+| 2026-08-13 | v1.20 | DIFF-STATE-COMPASS-01：BR-DE-STATE-001 与审阅/验收口径对齐 BR-CORE-STATE-001~003；移除 open_session 自动 accepted/禁用裁决及保存隐式接受，明确已有或迁移 LogicalState 预览后卡片仍 pending。 |
+| 2026-08-13 | v1.21 | 人类复核更正：保留“预览后仍 pending”，但保存仍有效 pending 预览即裁决为 accepted/awaiting_save 后写盘；仅基准已推进时使旧卡 expired，不得误裁决。 |

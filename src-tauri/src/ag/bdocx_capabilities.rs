@@ -904,17 +904,25 @@ fn image_operations_schema(value: &BDocxCapabilityManifest) -> Value {
  */
 pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationError> {
     let value = manifest()?;
-    // propose_edit 是跨格式工具：replace_block/replace_document 保留给 text LogicalState；
-    // BDocx manifest 的 documentOperations 只声明富文档可用的 block_ops。
+    // propose_edit 是跨格式工具。replace_document 在 BDocx 中也可由 manifest 动态开放，
+    // 但其是否可用由当前快照的表格/图片保护状态和后端守卫决定；enum 只声明工具形状，
+    // 不替代运行时路由校验。
     let mut operations = vec![
         Value::String("replace_block".to_string()),
         Value::String("replace_document".to_string()),
     ];
+    // AG-DELETE-01：删除能力——delete_doc（文件）/ delete_folder（目录，recursive 默认 true）
+    // 生成删除确认卡（PendingDiff origin_module=AG_DELETE），用户接受后才执行删除（HITL）。
+    operations.push(Value::String("delete_doc".to_string()));
+    operations.push(Value::String("delete_folder".to_string()));
     operations.extend(
         value
             .document_operations
             .iter()
-            .filter(|capability| active_availability(capability.agent_availability))
+            .filter(|capability| {
+                active_availability(capability.agent_availability)
+                    && capability.operation != "replace_document"
+            })
             .map(|capability| Value::String(capability.operation.clone())),
     );
     operations.push(Value::String(value.style_ops.operation.clone()));
@@ -994,6 +1002,20 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                     "required": ["op", "blockId", "fingerprint", "expectedNodeType", "afterNode"],
                     "additionalProperties": false
                 },
+                // AG-TASK-01 F2：delete_node——删除 content 原子块（afterNode 为 null 删除标记）。
+                {
+                    "type": "object",
+                    "properties": {
+                        "op": { "const": "delete_node" },
+                        "blockId": { "type": "string", "minLength": 1, "description": "要删除的块ID（role=content 且 capabilities 含 delete_node 的可删；容器/原子块不可删）" },
+                        "expectedNodeType": {
+                            "type": "string",
+                            "enum": ["paragraph", "heading", "codeBlock"]
+                        }
+                    },
+                    "required": ["op", "blockId", "expectedNodeType"],
+                    "additionalProperties": false
+                },
                 {
                     "type": "object",
                     "properties": {
@@ -1005,6 +1027,12 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                                 "type": {
                                     "type": "string",
                                     "enum": ["paragraph", "heading", "codeBlock"]
+                                },
+                                // AG-STRATEGY-04：新块 attrs（含可选 blockId）——缺省由后端兜底生成唯一 id；
+                                // 结构对齐 replace_node 的 afterNode.attrs，使前端 nodeFromJSON 生成带 id 的新块。
+                                "attrs": {
+                                    "type": "object",
+                                    "description": "新块属性（可选 blockId；缺省由后端生成 new_block_{uuid}）"
                                 },
                                 "content": {
                                     "type": "array",
@@ -1048,6 +1076,10 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                                     "type": "string",
                                     "enum": ["paragraph", "heading", "codeBlock"]
                                 },
+                                "attrs": {
+                                    "type": "object",
+                                    "description": "新块属性（可选 blockId；缺省由后端生成 new_block_{uuid}）"
+                                },
                                 "content": {
                                     "type": "array",
                                     "items": {
@@ -1089,6 +1121,10 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                                     "type": "string",
                                     "enum": ["paragraph", "heading", "codeBlock"]
                                 },
+                                "attrs": {
+                                    "type": "object",
+                                    "description": "新块属性（可选 blockId；缺省由后端生成 new_block_{uuid}）"
+                                },
                                 "content": {
                                     "type": "array",
                                     "items": {
@@ -1129,12 +1165,12 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
             "operation": {
                 "type": "string",
                 "enum": operations,
-                "description": "replace_block=纯文本块替换；block_ops=富文档受控内容节点替换；replace_document=纯文本显式整篇重写；style_ops=文本/块样式；table_ops=受限表格结构与单元格属性；image_ops=受限图片操作"
+                "description": "replace_block=纯文本块替换；block_ops=富文档受控内容节点替换；replace_document=完整文档重写（BDocx 仅当前快照无表格且无图片时可用，后端强制校验）；style_ops=文本/块样式；table_ops=受限表格结构与单元格属性；image_ops=受限图片操作"
             },
             "block_id": { "type": "string", "minLength": 1, "description": "块列表 [id=…] 的完整稳定锚" },
             "block_index": { "type": "integer", "minimum": 0, "description": "没有 block_id 时使用的 0 起块号" },
             "new_text": { "type": "string", "description": "replace_block 的块内新内容" },
-            "content": { "type": "string", "description": "replace_document 的完整文档内容" },
+            "content": { "type": "string", "description": "replace_document 的完整文档内容；获准的 BDocx 整篇重写必须提供完整 HTML，且不得引入表格或图片" },
             "style_ops": style_operation_schema(value),
             "base": {
                 "type": "object",
@@ -1156,6 +1192,17 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
             },
             "operations": {
                 "oneOf": [block_operations.clone(), table_operations.clone(), image_operations.clone()]
+            },
+            // AG-TASK-01 F1b：可选批次元数据（整篇对齐分批提交；1<=index<=total）。
+            "batch": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "index": { "type": "integer", "minimum": 1 },
+                    "total": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["id", "index", "total"],
+                "additionalProperties": false
             }
         },
         "required": ["path", "operation"],
@@ -1229,6 +1276,26 @@ fn roundtrip_summary(value: &BDocxCapabilityManifest) -> String {
     })
     .collect::<Vec<_>>()
     .join("；")
+}
+
+/// 从当前 BDocx 快照的结构保护状态投影整篇改写路由。
+///
+/// 清单说明可用操作的静态形状；表格和图片的存在性属于同轮 LogicalState 的动态事实，
+/// 因此必须由调用方传入，且后端会用同一条件再次拒绝不安全的 `replace_document`。
+pub fn bdocx_rewrite_route_instruction(has_tables: bool, has_images: bool) -> String {
+    let protected = match (has_tables, has_images) {
+        (true, true) => "表格和图片",
+        (true, false) => "表格",
+        (false, true) => "图片",
+        (false, false) => "",
+    };
+    if protected.is_empty() {
+        "[当前 BDocx 重写路由] 当前快照未检测到表格或图片。用户要求整篇重写或大幅重排时，可用 propose_edit operation=replace_document 并提交完整 HTML；不得提交片段，也不得在新内容中引入 table 或 img。局部文字修改仍使用 block_ops。新增小标题可用 block_ops 的 insert_before/insert_after/append 插入 afterNode.type=heading；replace_node 必须保留既有块的 node type，不能把既有段落转换成标题，既有块的类型转换为人工专属。".to_string()
+    } else {
+        format!(
+            "[当前 BDocx 重写路由] 当前快照检测到{protected}。replace_document 已被禁止，后端会拒绝该操作；包括大幅改写在内的既有文字内容只能用 block_ops，表格只能用 table_ops，图片只能用 image_ops。新增小标题仍可用 block_ops 的 insert_before/insert_after/append 插入 afterNode.type=heading；replace_node 必须保留既有块的 node type，不能把既有段落转换成标题，既有块的类型转换为人工专属。"
+        )
+    }
 }
 
 /**
@@ -1330,7 +1397,7 @@ pub fn prompt_projection() -> Result<String, CapabilityValidationError> {
         .collect::<Vec<_>>()
         .join("；");
     Ok(format!(
-        "[当前 BDocx 编辑能力声明]\nmanifestId={} version={} sha256={}\n格式：editable_kind={} content_format={}。\n文档操作：{}。富文档内容编辑只能使用 block_ops：必须基于活动 ProseMirror LogicalState，只命中 capabilities=replace_node 的内容块，原样带回 sessionVersion/contentHash、blockId、fingerprint、expectedNodeType 与 node attrs；容器/原子块只读，多块同批原子提交。不得使用 replace_block/replace_document 或文本/原始 HTML 绕过结构化编辑。\nStyleOp（range 为块内纯文本半开区间，单位={}，批内原子）：marks={}；blockAttrs={}；最多 {} 项。\nTableOperation（必须先 list_tables，并原样带回 sessionVersion/contentHash/tableId/fingerprint；还须服从当前 capabilities 与 moveDirections）：{}。\nImageOperation（必须先 list_images，并原样带回 sessionVersion/contentHash、稳定 imageId/当前 fingerprint、动态 capabilities/resizeBounds/moveDirections；插入还须带回 assetId/sourcePath/sourceHash；允许插入、删除、按宽度缩放、独立图片段落上下移动与 left/center/right 对齐；同一图片单批可各含至多一个 {}，{} 必须独占；禁止远程/绝对/越界来源且不得删除项目源文件）：{}。\n图片理解边界：list_images 只提供图片元数据与相邻文本语境，不提供图片像素、OCR 或视觉识别；不得把语境推断表述为看懂图片画面。workspace 内非受控图片先调用 import_image_asset 复制准备，不能用 move_doc 破坏源引用；确实无法安全提案时调用 edit_blocked 说明原因。\n人工专属、代理不可调用：{}。\nDiff 等级：replace_block={}；block_ops={}；replace_document={}；style_ops={}；table_ops={}；image_ops={}。\nDOCX 往返等级：{}。非 verified 项保存重开后可能变化；不得向用户声称完全保真。",
+        "[当前 BDocx 编辑能力声明]\nmanifestId={} version={} sha256={}\n格式：editable_kind={} content_format={}。\n文档操作：{}。整篇改写路由以同一条当前文档运行时声明中的表格/图片状态为准：两者都不存在时，才可用 replace_document 提交完整 HTML；任一存在时，replace_document 被禁止，既有文字内容使用 block_ops，表格/图片分别使用 table_ops/image_ops。block_ops 必须基于活动 ProseMirror LogicalState，只命中 capabilities=replace_node 的内容块，原样带回 sessionVersion/contentHash、blockId、fingerprint、expectedNodeType 与 node attrs；容器/原子块只读，多块同批原子提交。新增 heading 块可用 insert_before/insert_after/append；replace_node 必须保留既有块类型，既有块的类型转换是人工专属。不得使用 replace_block 或原始 HTML 绕过受保护结构。\nStyleOp（range 为块内纯文本半开区间，单位={}，批内原子）：marks={}；blockAttrs={}；最多 {} 项。\nTableOperation（必须先 list_tables，并原样带回 sessionVersion/contentHash/tableId/fingerprint；还须服从当前 capabilities 与 moveDirections）：{}。\nImageOperation（必须先 list_images，并原样带回 sessionVersion/contentHash、稳定 imageId/当前 fingerprint、动态 capabilities/resizeBounds/moveDirections；插入还须带回 assetId/sourcePath/sourceHash；允许插入、删除、按宽度缩放、独立图片段落上下移动与 left/center/right 对齐；同一图片单批可各含至多一个 {}，{} 必须独占；禁止远程/绝对/越界来源且不得删除项目源文件）：{}。\n图片理解边界：list_images 只提供图片元数据与相邻文本语境，不提供图片像素、OCR 或视觉识别；不得把语境推断表述为看懂图片画面。workspace 内非受控图片先调用 import_image_asset 复制准备，不能用 move_doc 破坏源引用；确实无法安全提案时调用 edit_blocked 说明原因。\n人工专属、代理不可调用：{}。\nDiff 等级：replace_block={}；block_ops={}；replace_document={}；style_ops={}；table_ops={}；image_ops={}。\nDOCX 往返等级：{}。非 verified 项保存重开后可能变化；不得向用户声称完全保真。",
         value.manifest_id,
         value.version,
         manifest_sha256(),
@@ -1955,9 +2022,14 @@ mod tests {
     fn bundled_manifest_is_valid_versioned_and_matches_doc_tiers() {
         let value = manifest().unwrap();
         assert_eq!(value.manifest_id, "binder.bdocx.agent-edit");
-        assert_eq!(value.version, "1.5.0");
+        assert_eq!(value.version, "1.6.0");
         assert_eq!(value.editable_kind, "bdocx");
         assert_eq!(value.content_format, "html");
+        assert!(value.document_operations.iter().any(|capability| {
+            capability.operation == "replace_document"
+                && capability.agent_availability == AgentAvailability::Dynamic
+                && capability.diff_fidelity == DiffFidelity::Block
+        }));
         assert_eq!(manifest_sha256().len(), 64);
         assert!(value
             .roundtrip
@@ -1969,8 +2041,11 @@ mod tests {
     #[test]
     fn prompt_projection_uses_real_mark_names_and_discloses_limits() {
         let prompt = prompt_projection().unwrap();
-        assert!(prompt.contains("version=1.5.0"));
+        assert!(prompt.contains("version=1.6.0"));
         assert!(prompt.contains("block_ops"));
+        assert!(prompt.contains("两者都不存在时，才可用 replace_document"));
+        assert!(prompt.contains("新增 heading 块"));
+        assert!(prompt.contains("既有块的类型转换是人工专属"));
         assert!(prompt.contains("utf16_code_unit"));
         assert!(prompt.contains("subscript"));
         assert!(prompt.contains("superscript"));
@@ -2011,6 +2086,23 @@ mod tests {
         assert!(serialized.contains("assetId"));
         assert!(serialized.contains("sourceHash"));
         assert!(serialized.contains("additionalProperties"));
+        assert!(serialized.contains("当前快照无表格且无图片时可用"));
+    }
+
+    #[test]
+    fn bdocx_rewrite_route_is_explicit_about_snapshot_protection_and_heading_insertion() {
+        let unprotected = bdocx_rewrite_route_instruction(false, false);
+        assert!(unprotected.contains("未检测到表格或图片"));
+        assert!(unprotected.contains("replace_document"));
+        assert!(unprotected.contains("新增小标题"));
+        assert!(unprotected.contains("不能把既有段落转换成标题"));
+
+        let protected = bdocx_rewrite_route_instruction(true, true);
+        assert!(protected.contains("检测到表格和图片"));
+        assert!(protected.contains("replace_document 已被禁止"));
+        assert!(protected.contains("文字内容只能用 block_ops"));
+        assert!(protected.contains("表格只能用 table_ops"));
+        assert!(protected.contains("图片只能用 image_ops"));
     }
 
     // covers: BR-SYS-DATA-006, BR-ED-DATA-005

@@ -34,7 +34,7 @@ status: active
 summary: 单文档编辑会话生命周期（加载经 WS / 编辑或 open session diff 脏态驱动 SM-WS-01 / 解析失败降级只读 / 脏态不静默关闭）
 source_type: design
 chain: ED-EDIT
-rules: BR-ED-STATE-001, BR-ED-DATA-001, BR-ED-DATA-002, BR-ED-DATA-006, BR-ED-VERIFY-001
+rules: BR-ED-STATE-001, BR-ED-DATA-001, BR-ED-DATA-002, BR-ED-DATA-006, BR-ED-VERIFY-001, BR-CORE-STATE-001, BR-CORE-STATE-003
 initial_state: Closed
 terminal_states: Closed
 -->
@@ -43,7 +43,7 @@ terminal_states: Closed
 - **scope**：单个 workspace 内文档一次编辑会话（打开→编辑→保存协同→关闭）的完整生命周期
 - **context**：目标 DocRef（A-SYS-I-P-01）、编辑模型（内容块树或非激活 session 序列化 LogicalState）、脏态标记、sessionVersion、contentHash、加载/解析结果
 - **states**：Closed、Loading、Ready、Editing、ReadOnly、Conflicted
-- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、sessionDiffApplied、sessionApplyFail、serializeFail、saved、close、confirmDiscard、retry、
+- **events**：open、loadOk、parseFail、loadFail、edit、draftDiffApplied、sessionDiffApplied、pendingDiffPromoted、sessionApplyFail、serializeFail、saved、close、confirmDiscard、retry、
   externalChange、saveConflict、conflictKeepMine、conflictReload
 - **transitions（主表）**：
 
@@ -55,12 +55,13 @@ terminal_states: Closed
 | Loading | loadFail | — | Closed | 统一错误形状，会话不建立 |
 | Ready | edit | — | Editing | 更新编辑模型；驱动 SM-WS-01 Idle→Dirty（X-INTER-001） |
 | Ready | draftDiffApplied | DE pending diff 命中当前编辑器块 | Editing | after 替换进目标 Block，GreenReview 标绿，驱动 SM-WS-01 Dirty |
-| Ready | sessionDiffApplied | `draft_mode=open_session` 且 base_session_version/base_content_hash 匹配 | Editing | 更新非激活 session LogicalState，递增版本、刷新哈希、持久化 `ed_session_snapshots`，驱动 SM-WS-01 Dirty；不挂载当前编辑器 GreenReview |
+| Ready | sessionDiffApplied | 已有 LogicalState 且 base_session_version/base_content_hash 匹配 | Editing | 更新非激活 session LogicalState，递增版本、刷新哈希、持久化 `ed_session_snapshots`，驱动 SM-WS-01 Dirty；DiffCard 保持 pending 可裁决 |
+| Ready | pendingDiffPromoted | 本次 open 后发现同路径 background PendingDiff，且同一 DiffPayload/基准可投影 | Editing | 在新建 LogicalState 中应用 after、GreenReview 标绿、取消后台落盘资格，驱动 SM-WS-01 Dirty |
 | Ready | sessionApplyFail | 基线不匹配/锚失效/事务不支持 | Ready | 不修改 LogicalState；回 DE autoApplyFail |
 | Ready | externalChange | 无脏态（BR-ED-STATE-003） | Loading | 自动重载磁盘内容 + 非阻断提示 |
 | Editing | edit | — | Editing | 持续编辑，脏态保持 |
 | Editing | draftDiffApplied | — | Editing | 持续草稿编辑，脏态保持；重叠 diff 由 DE 冲突规则约束 |
-| Editing | sessionDiffApplied | `draft_mode=open_session` 且 base_session_version/base_content_hash 匹配 | Editing | 更新非激活 session LogicalState，递增版本、刷新哈希、持久化 `ed_session_snapshots`；重叠 diff 由 DE 冲突规则约束 |
+| Editing | sessionDiffApplied / pendingDiffPromoted | 已有 LogicalState 或刚打开迁移，且基线匹配 | Editing | 经受控事务应用预览、保留用户裁决入口；重叠 diff 由 DE 冲突规则约束 |
 | Editing | sessionApplyFail | 基线不匹配/锚失效/事务不支持 | Editing | 不修改 LogicalState；回 DE autoApplyFail |
 | Editing | saved | SM-WS-01 达 Saved（X-INTER-001 回执） | Ready | 脏态清除；已 accepted 的 GreenReview 复位 |
 | Editing | serializeFail | Markdown 序列化、语义校验或能力检查失败 | Editing | 禁止写盘、保持 dirty 与原 DiskState，提示可恢复错误 |
@@ -81,24 +82,69 @@ terminal_states: Closed
   - Loading → Editing（加载未完成不得编辑）
   - ReadOnly → Editing（只读降级态不得编辑，须 retry 重载成功后方可）
   - Editing → Closed 且无 saved/confirmDiscard（脏态不得静默关闭，BR-ED-STATE-001）
-  - Ready/Editing → sessionDiffApplied 无 session 基线匹配（不得应用陈旧 DiffProjection）
+  - Ready/Editing → sessionDiffApplied/pendingDiffPromoted 无 session 基线匹配（不得应用陈旧 DiffProjection）
   - sessionApplyFail → 任何内容修改（失败必须无半应用状态）
   - serializeFail → Ready/Closed（未保存成功不得清脏或关闭；必须修复内容、切换源码保护或显式丢弃）
   - Markdown 非支持节点/样式 → saved（未经能力检查和语义往返校验不得写盘）
   - Editing（收到 externalChange）→ Loading 直达（**有脏态不得静默重载**，必经 Conflicted 显式裁决）
   - Conflicted → Ready/Editing/Loading 无用户显式选择（冲突不得自动消解，BR-ED-STATE-003）
 - **acceptance_criteria**：唯一进入 Editing 的路径经 Ready；脏态会话关闭必经 saved 或显式
-  confirmDiscard；parseFail 不丢内容（ReadOnly 可见）；loadFail 不建立会话；`sessionDiffApplied`
-  在基线匹配时修改 LogicalState 并持久化镜像，基线不匹配时不修改；Markdown serializeFail 保持 Editing/dirty 且 DiskState 不变；离线时 open/edit/close
+  confirmDiscard；parseFail 不丢内容（ReadOnly 可见）；loadFail 不建立会话；`sessionDiffApplied` 与
+  `pendingDiffPromoted` 在基线匹配时修改 LogicalState 并持久化镜像、保留卡片裁决入口，基线不匹配时不修改；Markdown serializeFail 保持 Editing/dirty 且 DiskState 不变；离线时 open/edit/close
   全链可用（不依赖在线鉴权）；外部变更下两个方向的内容损失（覆盖外部修改/丢弃己方脏态）均必经
   用户显式选择
 - **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions）
+
+### 2.1 未保存新建文档与转换目标会话承接（REQ-ED-010/014 / D-NEW-001~008，2026-08-14 D2 登记）
+
+承接 D-NEW-001~008 与 REQ-ED-010/014。未保存新建文档与转换目标副本**复用 SM-ED-01 会话机**，
+以「未保存新文档身份」扩展，不新增独立状态机：
+
+| 场景 | SM-ED-01 承接 | 说明 |
+|---|---|---|
+| 预览成功开标签 | 新建/转换 Proposal 预览成功后，以**未保存新文档身份**进入 Ready（无 DocRef、无 DiskState、无文件树节点），ED 自动打开可编辑标签 | D-NEW-001/002；身份与目标路径/格式元数据归 WS 未保存元数据设计 |
+| 接受只裁决 | 用户接受由 DE 裁决（不重复应用内容），ED 不改变 LogicalState | D-NEW-001；三分流 BR-CORE-STATE-001 |
+| 拒绝（基准未变） | close + discard：丢弃逻辑文档与临时身份并关闭标签；非普通脏态关闭 | D-NEW-006 |
+| 基准推进 | 手动编辑或后续 Proposal 成功预览推进基准 → 原卡失效（DE），会话保留、可继续编辑/保存 | D-NEW-005；BR-CORE-STATE-001/003 |
+| 保存才建文件 | 用户保存时由 WS 以「创建」语义建立 DocRef 与磁盘文件（A-WS-M-S-01 §2.1），会话转入普通已保存会话 | D-NEW-002/004 |
+| 保存失败 | 保留未保存会话与内容、标签，不伪报已创建；路径冲突保留可重试 | D-NEW-007 |
+| 转换目标副本 | TXT→Markdown、Markdown→TXT 目标副本同样以未保存会话打开；来源不改写，Markdown→TXT 有损提示可见；HTML 与通用 DOCX 转换不产生本会话 | REQ-ED-014、REQ-WS-009 |
+
+<!-- REQ_MAP
+req_id: REQ-ED-010
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-010
+target_type: RULE
+target_id: BR-SYS-STATE-008
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-014
+target_type: RULE
+target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-014
+target_type: RULE
+target_id: BR-CORE-STATE-003
+status: mapped
+-->
+
+> 迁移债务：现有 SM-ED-01 的 scope/context 以「已有 DocRef 的目标文档」为默认，未显式承载未保存新文档
+> 身份（无 DocRef、保存即创建）；实现时须扩展会话身份字段与保存入口，不得把未保存新文档伪装成
+> 文件树节点（REQ-ED-010 / D-NEW-002）。转换目标、多文档逐项（REQ-ED-016）与删除前置（REQ-ED-015）
+> 的专项状态机留待各自 P1 开放时建模，本文只登记本处语义承接点。
 
 ## §3 跨模块转移契约（X-INTER-001：ED ↔ WS）
 
 | 转移点 | 方向 | 契约 |
 |---|---|---|
-| 脏态产生 | SM-ED-01（Ready→Editing 的 edit/draftDiffApplied/sessionDiffApplied）→ SM-WS-01（Idle→Dirty） | 用户编辑、DE 当前编辑器草稿应用、已打开非激活文档自动应用都是 Dirty 驱动源；语义为"LogicalState 已偏离落盘内容" |
+| 脏态产生 | SM-ED-01（Ready→Editing 的 edit/draftDiffApplied/sessionDiffApplied/pendingDiffPromoted）→ SM-WS-01（Idle→Dirty） | 用户编辑、DE 已有 LogicalState 预览、pending 后打开迁移都是 Dirty 驱动源；语义为"LogicalState 已偏离落盘内容" |
 | 保存回执 | SM-WS-01（Saving→Saved）→ SM-ED-01（Editing→Ready 的 saved） | WS 落盘成功回执驱动 ED 清脏态；SaveError 不发 saved，ED 停留 Editing 可重试 |
 | 关闭前批量保存 | SM-SYS-02 Resolving → SM-ED-01（edit 会话触发 save） | 应用关闭决策入口"保存全部脏文档"逐个驱动既有保存链，不新增 ED 事件（BR-SYS-STATE-004，2026-07-20 新增） |
 | 启动异常退出清算 | SM-SYS-02（启动期）→ ed_session_snapshots dirty=1 行 | 先于任何会话恢复执行：清算发现的 dirty 持久化镜像一律删除，不作为可信 LogicalState 装载源；对应文档改走 SM-ED-01 正常 `open`（Closed→Loading→loadOk，从磁盘态重建），不使用 `restoreSessionSnapshots` 路径（BR-SYS-STATE-005，2026-07-20 新增） |
@@ -134,8 +180,7 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 - **离线验收**（REQ-CORE-009）：断网下 open/edit/save（本地落盘）/close 全链可用。
 - decoration 挂载/复位（非状态机项）：按 blockId 挂载、终态复位不残留，入 ED-DECOR 集成测试
   （BR-ED-STATE-002）。
-- **open session 自动应用**：基线匹配时 `sessionDiffApplied` 更新 content/version/hash 并持久化；
-  基线不匹配、锚失效、StyleOp 不支持时 `sessionApplyFail`，原 LogicalState 不变。
+- **已有/后打开会话预览**：基线匹配时 `sessionDiffApplied` 或 `pendingDiffPromoted` 更新 content/version/hash 并持久化、显示绿色增量且保留裁决；基线不匹配、锚失效、StyleOp 不支持时 `sessionApplyFail`，原 LogicalState 不变。
 
 ## §6 总图登记（A-SYS-M-S-01）
 
@@ -180,3 +225,5 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 | 2026-07-18 | v1.4 | 增加 sessionDiffApplied/sessionApplyFail：已打开非激活文档 diff 基线匹配后修改 session LogicalState、递增版本/哈希并持久化，失败不得半应用；脏态转移接入 SM-WS-01 |
 | 2026-07-18 | v1.5 | ED-MARKDOWN-RICH-ROUNDTRIP-01：SM-ED-01 复用既有状态，增加 BR-ED-DATA-006/BR-ED-VERIFY-001、serializeFail 事件、Markdown 解析/源码保护 Guard 与禁止有损保存转移；不新建规则链或状态机 |
 | 2026-07-20 | v1.6 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：§3 新增「关闭前批量保存」「启动异常退出清算」两条 SYS→ED 跨模块转移点（均双侧就绪）；补充恢复顺序边界——异常退出清算先于会话恢复，dirty 持久化镜像不可信时改走磁盘态重建 |
+| 2026-08-13 | v1.7 | DIFF-STATE-COMPASS-01：SM-ED-01 增 `pendingDiffPromoted` 并承接 BR-CORE-STATE-001/003；已打开与 pending 后打开迁移的 diff 都在预览后保持 pending、绿色增量和用户裁决入口。 |
+| 2026-08-14 | v1.8 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 未保存新建文档与转换目标会话承接（D-NEW-001~008 / REQ-ED-010/014）——预览开标签、接受只裁决、拒绝丢弃、保存才建文件、保存失败保留；补 REQ-ED-010/014 的 REQ_MAP（BR-CORE-STATE-001/003、BR-SYS-STATE-008）；登记未保存身份迁移债务。 |
