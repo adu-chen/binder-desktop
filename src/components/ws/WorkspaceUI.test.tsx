@@ -28,6 +28,7 @@ vi.mock("../../services/agService", () => ({
 }));
 
 import { createDoc, createFolder, deleteFolder } from "../../services/wsService";
+import { openDocument } from "../../services/edService";
 import { resolveDecisionAndContinue } from "../../services/agService";
 import { agStore } from "../../store/agStore";
 import { DecisionBar } from "../ag/DecisionBar";
@@ -233,6 +234,22 @@ describe("FileTreeNode 状态与只读预览模式标记", () => {
     expect(btn.disabled).toBe(false); // 预览类型可点击触发只读预览（PI-FE-22）
   });
 
+  it("pdf（原生 PDF）走只读预览，不误当文本打开（2026-08-22：修复 WS_NOT_UTF8 误开二进制）", () => {
+    const open = vi.fn();
+    const preview = vi.fn();
+    const { container } = renderNode({
+      node: fileNode("pdf", { name: "a.pdf", path: "a.pdf" }),
+      onOpenFile: open,
+      onPreviewFile: preview,
+    });
+    const btn = container.querySelector(".ftn-file") as HTMLButtonElement;
+    expect(btn.className).toContain("ftn-preview_only");
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(preview).toHaveBeenCalledWith("a.pdf");
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("原生 docx 走只读预览，BDocx 走编辑打开", () => {
     const open = vi.fn();
     const preview = vi.fn();
@@ -422,6 +439,7 @@ const doc = (relPath: string, docType = "md"): DocRefView => ({ relPath, docType
 const mockedCreateDoc = vi.mocked(createDoc);
 const mockedCreateFolder = vi.mocked(createFolder);
 const mockedDeleteFolder = vi.mocked(deleteFolder);
+const mockedOpenDocument = vi.mocked(openDocument);
 
 /** ContextMenu 菜单项用 onMouseDown 触发选择（ContextMenu.tsx），fireEvent.mouseDown 模拟。 */
 function clickMenuItem(container: HTMLElement, label: string) {
@@ -521,6 +539,28 @@ describe("FileTree「＋」新建下拉（WS-NEW-BUTTON-01）", () => {
     assertUnsavedTabCloseGuard();
     cleanup();
     await assertWorkspaceOperationDecisionProjection();
+  });
+});
+
+describe("FileTree 文档打开失败日志", () => {
+  it("文件树打开失败时捕获 Promise，并记录可诊断的错误字段", async () => {
+    edStore.reset();
+    tabsStore.reset();
+    mockedOpenDocument.mockRejectedValueOnce({ code: "WS_NOT_FOUND", message: "文件不存在" });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { container } = renderFileTree([doc("gone.md")]);
+
+    fireEvent.click(container.querySelector(".ftn-file") as HTMLButtonElement);
+    await act(async () => {});
+
+    expect(errorSpy).toHaveBeenCalledWith("[ws-file-tree]", expect.objectContaining({
+      event: "document_open_failed",
+      source: "file_tree",
+      rel_path: "gone.md",
+      error_code: "WS_NOT_FOUND",
+      error_message: "文件不存在",
+    }));
+    errorSpy.mockRestore();
   });
 });
 }

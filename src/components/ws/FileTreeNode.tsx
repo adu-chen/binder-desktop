@@ -24,10 +24,11 @@ export interface TreeNode {
 }
 
 /** 仅预览不可编辑的类型（APC §1：Excel/PPT 仅预览；2026-07-03 #1 补 csv/tsv——表格式只读预览，
- *  修复 csv 误入编辑态）。点击 → PRV 预览（xlsx/csv 走 TablePreview，pptx 走 PDF）。
+ *  修复 csv 误入编辑态；2026-08-22 补 pdf——原生 PDF 是二进制，点击走 PRV 只读预览，杜绝 WS_NOT_UTF8 误当文本打开）。
+ *  点击 → PRV 预览（xlsx/csv 走 TablePreview，pptx 走 PDF 转换；pdf 原生直出 asset 供 WKWebView 查看）。
  *  注：docx/doc 可编辑——经 DOC 编辑链（doc.open_for_edit/save_from_edit）打开进 TipTap，点击 → 编辑。
  *  导出供 FileTree 新建后按类型分流（WS-NEW-BUTTON-01，单一来源）。 */
-export const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt", "csv", "tsv"]);
+export const PREVIEW_ONLY = new Set(["xlsx", "xls", "pptx", "ppt", "csv", "tsv", "pdf"]);
 
 /** 音视频/图片类型（asset 协议预览）；可点击预览。 */
 const MEDIA_TYPES = new Set([
@@ -54,6 +55,8 @@ function typeGlyph(docType?: string): string {
     case "pptx":
     case "ppt":
       return "PPT";
+    case "pdf":
+      return "PDF";
     case "html":
       return "<>";
     default:

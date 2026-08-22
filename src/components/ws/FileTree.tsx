@@ -133,11 +133,31 @@ export function FileTree() {
 
   // 点击文件：开/激活文档标签 + 经 ws.read_doc 载入编辑器（X-SEQ-002）。
   // 已有会话（文档已打开）→ 仅切活动标签（openDoc 内 setActivePath），不重新读盘，保留未保存编辑。
+  const reportDocumentOpenFailure = (source: "file_tree" | "search_result", path: string, error: unknown) => {
+    const ipcError = error as { code?: string; message?: string };
+    console.error("[ws-file-tree]", {
+      event: "document_open_failed",
+      source,
+      rel_path: path,
+      error_code: ipcError?.code ?? "UNKNOWN",
+      error_message: ipcError?.message ?? String(error),
+      error,
+    });
+  };
+
   const handleOpenFile = (path: string) => {
     setOpenPath(path);
     const already = edStore.getSnapshot().sessions[path];
     tabsStore.openDoc(path);
-    if (!already) void openDocument(path);
+    if (!already) {
+      void openDocument(path).catch((error: unknown) => {
+        reportDocumentOpenFailure("file_tree", path, error);
+        // 打开失败且本次新建标签（already=false）→ 关闭僵尸标签，避免空标签被持久化，
+        // 下次启动 hydrateEditorState 因无 session 快照跳过并告警（workspaceService.ts）。
+        const tab = tabsStore.getSnapshot().tabs.find((t) => t.kind === "doc" && t.path === path);
+        if (tab) tabsStore.close(tab.id, { force: true });
+      });
+    }
   };
   // 点击预览类型文件：开/激活预览标签（office/媒体/图片，多标签共存）。
   const handlePreviewFile = (path: string) => {
@@ -466,7 +486,9 @@ export function FileTree() {
           className="ftn-result"
           onClick={() => {
             setOpenPath(h.rel_path);
-            void openDocument(h.rel_path, h.line); // 打开并跳到命中行
+            void openDocument(h.rel_path, h.line).catch((error: unknown) => {
+              reportDocumentOpenFailure("search_result", h.rel_path, error);
+            }); // 打开并跳到命中行
           }}
         >
           <span className="ftn-result-path">{h.rel_path}:{h.line}</span>

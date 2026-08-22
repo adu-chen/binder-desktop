@@ -22,6 +22,18 @@ interface IpcLikeError {
   message?: string;
 }
 
+function logDocumentOpenFailure(relPath: string, requestId: number, error: unknown): void {
+  const ipcError = error as IpcLikeError;
+  console.error("[ed-document-open]", {
+    event: "document_open_failed",
+    rel_path: relPath,
+    request_id: requestId,
+    error_code: ipcError?.code ?? "UNKNOWN",
+    error_message: ipcError?.message ?? String(error),
+    error,
+  });
+}
+
 interface CommandResponse<T> {
   correlation_id: string;
   result?: T;
@@ -273,6 +285,8 @@ export async function openDocument(relPath: string, jumpLine: number | null = nu
     }
   } catch (e) {
     const err = e as IpcLikeError;
+    // 保留原始 IPC 对象，避免 WebKit 把它折叠成无上下文的 “[object Object]”。
+    logDocumentOpenFailure(relPath, requestId, e);
     // 审计修复（2026-07-24）：hadSession 为 true 时不关闭会话，保留脏态内容；
     // 仅在新建会话失败时清理空占位会话。
     if (!hadSession && isLatestOpenRequest(relPath, requestId)) edStore.discardOpenPlaceholder(relPath);

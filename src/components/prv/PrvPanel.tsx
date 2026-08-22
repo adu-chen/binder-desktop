@@ -31,6 +31,12 @@ function modeOf(path: string): Mode {
   return "pdf";
 }
 
+/** 原生 PDF（非 office 转换产物）：已是 PDF，无需 LibreOffice 预览链，asset 直出交由 iframe 内
+ *  WKWebView 原生查看器渲染（2026-08-22：修复原生 pdf 误入文本编辑/预览转换双死路）。 */
+function isNativePdf(path: string): boolean {
+  return path.toLowerCase().endsWith(".pdf");
+}
+
 /**
  * @GOV
  * codes:    BR-PRV-DATA-001-GUARD-PRV-PRV-VIEW-003
@@ -131,7 +137,7 @@ export function PrvPanel({ path }: { path: string }) {
     if (mode === "table") return; // 表格式预览由 TablePreview 自管数据加载
     setStatus("loading");
     setUrl(null);
-    const loader = mode === "pdf" ? previewDoc(path) : mediaSrc(path);
+    const loader = isNativePdf(path) ? mediaSrc(path) : mode === "pdf" ? previewDoc(path) : mediaSrc(path);
     loader
       .then((u) => {
         if (!alive) return;
@@ -166,7 +172,7 @@ export function PrvPanel({ path }: { path: string }) {
       <div ref={bodyRef} className="prv-body" style={{ "--prv-zoom": String(zoom) } as React.CSSProperties}>
         {mode === "table" && <TablePreview path={path} />}
         {mode !== "table" && status === "loading" && (
-          <p className="muted">{mode === "pdf" ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载中…"}</p>
+          <p className="muted">{mode === "pdf" && !isNativePdf(path) ? "渲染预览中…（首次启动 LibreOffice 可能稍慢）" : "加载中…"}</p>
         )}
         {status === "error" && (
           <p className="prv-error">

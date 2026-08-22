@@ -507,10 +507,17 @@ describe("edService openDocument 路由（BR-ED-DATA-002 md/docx 统一编辑模
 
   it("打开失败 → 撤销占位会话（不留假空文档）", async () => {
     edStore.reset();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     invokeMock.mockResolvedValue(fail("WS_NOT_FOUND"));
     await expect(openDocument("gone.md")).rejects.toMatchObject({ code: "WS_NOT_FOUND" });
     expect(edStore.getSnapshot().sessions["gone.md"]).toBeUndefined();
     expect(edStore.getSnapshot().openPath).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith("[ed-document-open]", expect.objectContaining({
+      event: "document_open_failed",
+      rel_path: "gone.md",
+      error_code: "WS_NOT_FOUND",
+    }));
+    errorSpy.mockRestore();
   });
 
   it("迟到的打开结果只补全原会话，不能抢回当前编辑器", async () => {
