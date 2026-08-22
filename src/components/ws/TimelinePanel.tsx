@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useEdStore } from "../../store/edStore";
 import { listTimeline, previewNode, restoreNode, type TimelineEntryDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
+import { activeSession, agStore } from "../../store/agStore";
 
 /**
  * 时间轴面板（A-SYS-C-T-02 §3 时间轴归 WS · DocumentTimeline/TERM-WS-002 · PI-FE-16）。
@@ -16,7 +17,6 @@ export function TimelinePanel() {
   const [preview, setPreview] = useState<string>("");
 
   const load = useCallback(async () => {
-    if (!openPath) return;
     setStatus("loading");
     try {
       const list = await listTimeline(openPath);
@@ -54,10 +54,24 @@ export function TimelinePanel() {
     }
   };
 
-  const restore = async (entryId: string) => {
-    if (!window.confirm("还原到此版本？当前内容将被该版本覆盖（会记录一个新的时间轴节点，历史不丢失）。")) return;
+  const restore = async (node: TimelineEntryDto) => {
+    if (node.entry_kind === "document" && !window.confirm("还原到此版本？当前内容将被该版本覆盖（会记录一个新的时间轴节点，历史不丢失）。")) return;
     try {
-      await restoreNode(entryId);
+      const result = await restoreNode(
+        node.entry_id,
+        node.entry_kind === "workspace_operation"
+          ? activeSession(agStore.getSnapshot()).id
+          : undefined,
+      );
+      if (result.decision_request) {
+        agStore.setPendingDecision({
+          requestId: result.decision_request.request_id,
+          kind: result.decision_request.kind,
+          payload: result.decision_request.payload,
+        });
+        setPreview("已生成资源恢复确认；确认后系统会重新核验并执行，历史不会被覆盖。");
+        return;
+      }
       if (openPath) await openDocument(openPath); // 重载编辑器为还原后内容
       await load();
     } catch (e) {
@@ -66,19 +80,10 @@ export function TimelinePanel() {
     }
   };
 
-  if (!openPath) {
-    return (
-      <>
-        <div className="filetree-hd"><span className="label">时间轴</span></div>
-        <p className="muted ftn-hint">打开文档以查看历史版本</p>
-      </>
-    );
-  }
-
   return (
     <>
       <div className="filetree-hd">
-        <span className="label">时间轴 · {openPath.split("/").pop()}</span>
+        <span className="label">{openPath ? `时间轴 · ${openPath.split("/").pop()}` : "工作区时间轴"}</span>
         <button className="ghost ftn-refresh" onClick={() => void load()} title="刷新">↻</button>
       </div>
       {status === "loading" && <p className="muted ftn-hint">加载中…</p>}
@@ -91,7 +96,7 @@ export function TimelinePanel() {
             className={`tl-node${selected === n.entry_id ? " active" : ""}`}
             onClick={() => void select(n.entry_id)}
           >
-            <span className="tl-seq">#{n.version_seq}</span>
+            <span className="tl-seq">{n.entry_kind === "workspace_operation" ? "资源" : `#${n.version_seq}`}</span>
             <span className="tl-label">{n.label ?? "落盘"}</span>
             <span className="tl-time">{new Date(n.created_at).toLocaleTimeString()}</span>
           </button>
@@ -101,7 +106,18 @@ export function TimelinePanel() {
         <div className="tl-preview">
           <div className="tl-preview-hd">
             <span className="label">版本预览</span>
-            <button className="tl-restore" onClick={() => void restore(selected)}>还原此版本</button>
+            <button
+              className="tl-restore"
+              disabled={nodes.find((node) => node.entry_id === selected)?.recoverable === false}
+              onClick={() => {
+                const node = nodes.find((candidate) => candidate.entry_id === selected);
+                if (node) void restore(node);
+              }}
+            >
+              {nodes.find((node) => node.entry_id === selected)?.entry_kind === "workspace_operation"
+                ? "生成恢复确认"
+                : "还原此版本"}
+            </button>
           </div>
           <pre className="tl-preview-body">{preview}</pre>
         </div>

@@ -286,6 +286,113 @@ const MIGRATIONS: &[Migration] = &[
                 ON decision_requests(task_run_id, status);
         "#,
     },
+    Migration {
+        version: 13,
+        // 连续 Diff 预览回执（AG-1.0-DIFF-PREVIEW-ACK-CHAIN-01）：LogicalState Diff 的模型
+        // 片段在卡片生成后停止；编辑器只有在真实受控预览成功后才记录一次性 checkpoint，随后前端
+        // 明确启动下一片段。该表只保存控制态/基线标识，不保存用户正文，也不构成后台队列。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS task_preview_checkpoints (
+                diff_id         TEXT PRIMARY KEY,
+                task_run_id     TEXT NOT NULL,
+                workspace_id    TEXT NOT NULL,
+                session_id      TEXT NOT NULL,
+                turn_id         TEXT NOT NULL,
+                rel_path        TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'awaiting_ack',
+                session_version INTEGER,
+                content_hash    TEXT,
+                created_at      INTEGER NOT NULL,
+                acknowledged_at INTEGER,
+                consumed_at     INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_preview_checkpoint_run_status
+                ON task_preview_checkpoints(task_run_id, status);
+            CREATE INDEX IF NOT EXISTS idx_preview_checkpoint_session_status
+                ON task_preview_checkpoints(workspace_id, session_id, status);
+        "#,
+    },
+    Migration {
+        version: 14,
+        // WorkspaceOperation / WorkspaceTimeline 资源历史 / CreateDocumentBundle（WS-OPERATION-IMPLEMENTATION-01）。
+        // 计划载荷与恢复载荷分离；计划状态可推进，但冻结的 operation_items/baseline 不得原地替换。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS workspace_operation_plans (
+                plan_id             TEXT PRIMARY KEY,
+                workspace_id        TEXT NOT NULL,
+                task_run_id         TEXT,
+                source_turn_id      TEXT,
+                plan_json           TEXT NOT NULL,
+                decision_request_id TEXT,
+                idempotency_key     TEXT NOT NULL UNIQUE,
+                status              TEXT NOT NULL,
+                operation_id        TEXT,
+                outcome_json        TEXT,
+                created_at          INTEGER NOT NULL,
+                updated_at          INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_workspace_operation_plans_ws_status
+                ON workspace_operation_plans(workspace_id, status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_workspace_operation_plans_task_run
+                ON workspace_operation_plans(task_run_id, updated_at);
+
+            CREATE TABLE IF NOT EXISTS workspace_operation_payloads (
+                payload_ref TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                payload_kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_operation_snapshots (
+                snapshot_ref TEXT NOT NULL,
+                rel_path TEXT NOT NULL,
+                resource_kind TEXT NOT NULL,
+                content BLOB,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY(snapshot_ref, rel_path)
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_operation_entries (
+                operation_id TEXT PRIMARY KEY,
+                entry_id TEXT NOT NULL UNIQUE,
+                plan_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                before_ref TEXT NOT NULL,
+                after_ref TEXT NOT NULL,
+                receipts_ref TEXT NOT NULL,
+                restore_kind TEXT NOT NULL,
+                restore_payload_ref TEXT,
+                final_status TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_workspace_operation_entries_ws_time
+                ON workspace_operation_entries(workspace_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS create_document_bundles (
+                plan_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                target_rel_path TEXT NOT NULL,
+                initial_content_ref TEXT NOT NULL,
+                operation_id TEXT,
+                initial_diff_id TEXT,
+                guard_ref TEXT,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_create_document_bundles_operation
+                ON create_document_bundles(operation_id);
+        "#,
+    },
+    Migration {
+        version: 15,
+        // WorkspaceOperation crash journal：逐项执行/补偿回执在文件系统副作用前后持续落库，
+        // 使异常退出后的 Interrupted 计划可以依据真实进度生成新的恢复计划。
+        sql: r#"
+            ALTER TABLE workspace_operation_plans ADD COLUMN progress_json TEXT;
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

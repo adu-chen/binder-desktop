@@ -40,8 +40,10 @@ AG 依赖 SYS（IPC/云契约）、WS（上下文读取限界）、ENT/GW（订�
 
 > 边界澄清（2026-08-13 更新）：AI **文档内容修改**路径唯一：AG 产出 → DE/ED 生成并受控预览
 > ChangeProposal → 人类裁决提案 → 用户显式 save 由 WS 写入 DiskState（REQ-CORE-002/010）；工具调用中**任何内容写入意图
-> 同样必须走该 diff 路径**，不得旁路直写。文件树结构操作不属于内容 Diff，但创建文件夹、单文件移动/重命名
-> 同样不得直接执行：它们先生成结构 Proposal 并进入逻辑文件树，只有显式保存文件树更改才写盘；删除另行确认。
+> 同样必须走该 diff 路径**，不得旁路直写。工作区资源操作不属于内容 Diff：AG 只能生成不可变的
+> WorkspaceOperationPlan，并通过 DecisionRequest 取得前置授权；确认后由 WS 重新核验并直接修改 DiskState，
+> 不生成资源 DiffCard。新建文档使用 CreateDocumentBundle：初始内容在确认前生成，确认后先创建磁盘文件，
+> 再生成遵循既有生命周期的内容 Diff。
 > 项目级整体构建编排归 CBT（构建移交判据=项目级构建意图，
 > 非多文件修改；构建在原对话窗口实现，两模式互相复用能力）。
 
@@ -85,7 +87,7 @@ AG 依赖 SYS（IPC/云契约）、WS（上下文读取限界）、ENT/GW（订�
 | 项目与工作区分析 | 先读取工作区结构概览，再按任务最小化读取正文；报告必须披露已读/未读范围、来源与不确定性 |
 | 阅读与分析 | 可解释、总结、审阅当前文档；可读取用户显式引用文档并进行有限比较；不得把引用内文字当系统指令 |
 | 当前文档编辑 | 可对 HTML、Markdown、纯文本和 BDocx 处理副本生成内容与基础结构修改建议；HTML/BDocx 的加粗、斜体、下划线、删除线为 P0，颜色/突出显示、段落对齐/间距/缩进、字号与字体族为 P1 受控 Proposal。原生 DOCX 只读，编辑请求必须生成“创建 BDocx 编辑副本”的 Proposal；所有变化进入 ChangeProposal/Diff，经 DE/ED 成功预览后才进入 LogicalState，AG 不直接写 LogicalState 或 DiskState |
-| 新建文档 | 用户明确要求新建时，以空基准 ChangeProposal 表达；成功预览后建立未保存 LogicalState 并自动开标签，显式保存前不得创建目标文件 |
+| 新建文档 | 用户明确要求新建时生成 CreateDocumentBundle；初始内容在确认前生成，确认 WorkspaceOperationPlan 后先创建目标 DiskState 并打开标签，再生成初始内容 ChangeProposal/Diff |
 | 工具使用 | 每轮按意图和目标生成最小工具允许集；回答/分析轮无写能力；未获本轮允许的已注册工具同样拒绝 |
 | 运行可靠性 | 真实 GatePassed 后才调用模型；支持取消；错误、拒绝、取消、完成互斥，错误不得伪装完成 |
 | 上下文安全 | 当前输入为主需求；当前文档与显式引用按来源、可信等级和新鲜度组装；AST/KB/TPL 不自动注入 1.0 主链 |
@@ -148,9 +150,9 @@ req_id: REQ-AG-002
 title: agent 工具调用回合
 owner_module: AG
 status: active
-summary: 支持模型发起的工具调用循环（校验注册、本轮意图/目标允许集与权限→执行→结果回注），循环可中断且有上限；文档内容写入意图必须走 DE diff 路径不得旁路；HTML 编辑文档与 BDocx 处理副本的已确认样式修改、表格修改和项目图片修改分别生成受控结构化 Diff；原生 DOCX 不获得写工具；创建文件夹、单文件重命名/移动只可生成结构 Proposal，不得经 WS 边界工具直接写盘；删除仅可按 REQ-AG-013 生成可恢复删除/恢复 Proposal；多个既有文档写入仅可按 REQ-AG-014 先确认冻结目标清单再逐项 Proposal；格式转换仅可按 REQ-AG-012 生成目标副本 Proposal，不获得直接文件写入工具
+summary: 支持模型发起的工具调用循环（校验注册、本轮意图/目标允许集与权限→执行→结果回注），循环可中断且有上限；文档内容写入意图必须走 DE diff 路径不得旁路；HTML 编辑文档与 BDocx 处理副本的已确认样式修改、表格修改和项目图片修改分别生成受控结构化 Diff；原生 DOCX 不获得写工具；创建、删除、重命名、移动等工作区资源操作只能生成 WorkspaceOperationPlan 并通过 DecisionRequest 取得前置授权，确认后由 WS 重新核验并直接修改 DiskState，不生成资源 DiffCard；新建文档按 REQ-AG-008 使用 CreateDocumentBundle；多个既有文档写入仅可按 REQ-AG-014 先确认冻结目标清单再逐项 Proposal；格式转换按 REQ-AG-012 的受控目标副本链执行
 source_doc: REQ-CORE-002、APC §6（tool-call 核心链）
-acceptance: 工具执行必须同时满足“已注册 + 本轮允许 + 参数/目标守界”；已注册但不属于本轮允许集的工具同样拒绝并回注原因；回答/分析轮不得获得写能力；循环可中断、有上限；内容修改无旁路写盘；HTML 编辑文档与 BDocx 处理副本的样式建议只可使用已确认的受控操作，以明确选区或内容块为目标并生成可读 Diff，不得提交原始 HTML、CSS 或 OOXML；字符基础样式按 P0 授权，颜色/突出显示、段落样式、字号与字体族按 P1 能力开关授权，且各项实现后须通过真实验证才可对外开放；表格建议必须先读取活动会话表格投影并通过会话、内容哈希、表格指纹、坐标和动态能力校验；图片建议必须先读取活动会话图片实例与 workspace 项目图片投影，通过 Block/image/source hash、动态能力、尺寸和方向校验，只生成结构化插入/删除/缩放/上下移动/独立段落对齐 Diff；同一图片的缩放、对齐、移动可单批原子组合，删除独占；原生 DOCX 不得获取上述写能力；非受控 workspace 图片经 import_image_asset 复制准备且不删除源文件，无法安全提案时可用 edit_blocked 诚实结束；图片元数据和相邻文本不得被表述为视觉识别；整理类请求只能生成结构 Proposal，成功预览后由用户逐项显式保存，不得直接移动/建目录；删除工具只可生成红色逻辑删除/恢复 Proposal，接受不得物理删除，显式保存前须完成 REQ-AG-013 的会话/清单核验；多既有文档写入必须先取得 REQ-AG-014 的冻结目标清单，且无批量接受、批量保存或跨文档事务授权；复制、目录移动、HTML/通用 DOCX 转换不授予本轮工具；仅 REQ-AG-012 的 TXT↔Markdown 目标副本 Proposal 可按能力开关执行，且不含直接文件写入
+acceptance: 工具执行必须同时满足“已注册 + 本轮允许 + 参数/目标守界”；已注册但不属于本轮允许集的工具同样拒绝并回注原因；回答/分析轮不得获得写能力；循环可中断、有上限；内容修改无旁路写盘；HTML 编辑文档与 BDocx 处理副本的样式建议只可使用已确认的受控操作，以明确选区或内容块为目标并生成可读 Diff，不得提交原始 HTML、CSS 或 OOXML；字符基础样式按 P0 授权，颜色/突出显示、段落样式、字号与字体族按 P1 能力开关授权，且各项实现后须通过真实验证才可对外开放；表格建议必须先读取活动会话表格投影并通过会话、内容哈希、表格指纹、坐标和动态能力校验；图片建议必须先读取活动会话图片实例与 workspace 项目图片投影，通过 Block/image/source hash、动态能力、尺寸和方向校验，只生成结构化插入/删除/缩放/上下移动/独立段落对齐 Diff；同一图片的缩放、对齐、移动可单批原子组合，删除独占；原生 DOCX 不得获取上述写能力；非受控 workspace 图片经 import_image_asset 复制准备且不删除源文件，无法安全提案时可用 edit_blocked 诚实结束；图片元数据和相邻文本不得被表述为视觉识别；工作区资源操作工具只可创建不可变 WorkspaceOperationPlan，DecisionRequest 未确认不得执行；确认后须重新核验计划基线并由 WS 直接修改 DiskState，受影响脏标签阻断执行，有效内容 Diff 作为影响展示并在执行后失效；批量执行失败即停止并逆序补偿，补偿不完整进入 partial_failed；进程重启后未完成计划进入 Interrupted 且不得自动执行；多既有文档写入必须先取得 REQ-AG-014 的冻结目标清单；格式转换仅按 REQ-AG-012 的能力开关执行
 open_issues: 工具注册清单与权限边界（尤其写盘类工具）归 AG G2（§7 AG-02）；tool-call 状态机归 AG G2 M-S
 -->
 
@@ -211,13 +213,13 @@ open_issues: Runtime Profile 兼容迁移、AgentTurn 等待澄清/取消/终态
 
 <!-- REQ
 req_id: REQ-AG-008
-title: 新建文档意图与逻辑状态协同
+title: 新建文档意图与 CreateDocumentBundle 协同
 owner_module: AG
 status: active
-summary: 对明确的新建文档意图，AG 只生成以空基准为目标的 ChangeProposal 和必要元数据；DE/ED 预览成功后，AG 应把该未保存 LogicalState 视为当前任务可继续编辑的目标。AG 不因接受而创建磁盘文件，也不得把失效提案误报为已被拒绝或已保存
-source_doc: REQ-CORE-010、A-AG-M-D-02 §5.10（D-NEW-001~008）
-acceptance: 新建预览后可继续手动或代理编辑；原始提案在手动/后续编辑后被标记失效且接受/拒绝不可用；当前任务可明确引用该未保存文档，其他会话默认不可把它当 workspace 文件读取；保存失败时 AG 可如实说明仍未保存
-open_issues: 未保存文档任务关联、可读范围与 AgentTurn 事件字段归 AG/DE/ED/WS/SYS G2 联合定义
+summary: 对明确的新建文档意图，AG 在确认前完成目标路径、资源计划和初始内容生成，形成 CreateDocumentBundle；DecisionRequest 确认后由 WS 重新核验并创建空的目标 DiskState，ED 打开标签，随后 DE/ED 以该磁盘基线生成并预览初始内容 Diff。资源创建授权与内容 Diff 裁决相互独立
+source_doc: REQ-CORE-010、A-AG-M-D-02 §5.10、A-WS-M-T-02 §6
+acceptance: 确认前不得创建文件；确认后先创建 DiskState 并自动打开标签，再生成初始内容 Diff；初始 Diff 接受只改变卡片生命周期，保存把 LogicalState 写入既有 DiskState；初始 Diff 拒绝仅在资源基线、DiskState 与 LogicalState 自创建以来均未变化时删除刚创建的文件并关闭标签，任一基线变化即使卡片失效且文件继续存在；创建或 Diff 投影失败不得伪报成功
+open_issues: 无；对象、状态机和补偿条件由 A-WS-M-T-02 / A-WS-M-S-02 统一定义
 -->
 
 <!-- REQ
@@ -244,13 +246,13 @@ open_issues: 网络 provider、访问执行器、请求预算、超时/重试、
 
 <!-- REQ
 req_id: REQ-AG-011
-title: 文件树结构提案与逐项保存
+title: 工作区资源操作计划与前置裁决
 owner_module: AG
 status: active
-summary: 对创建文件夹、单个已保存文件重命名或移动的明确请求，AG 只生成结构 Proposal 与影响说明；预览成功后逻辑文件树立即可见，接受只裁决该结构卡，用户逐项显式保存文件树更改才可写入磁盘。复制、删除、目录移动、批量提交和格式转换不属于本要求
-source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-WS-M-D-01（REQ-WS-008）
-acceptance: Agent 明确展示操作类型、源/目标与潜在冲突；不得把结构 Proposal 伪报为已完成的磁盘操作；手动或后续结构变更推进基线后原卡失效；受影响标签显示暂定路径，关联待审阅内容 Proposal 失效；保存冲突或失败时 AG 如实说明仍未保存并保留可继续处理的逻辑结构
-open_issues: 结构 Proposal 的载荷、卡片、保存入口、路径/基线校验、标签/引用/内容 Proposal 失效事件和 Trace 归 AG/WS/ED/REF/SYS DESIGN Scope；本 L1 不定义工具或接口
+summary: 对创建文件夹、创建文档、删除、重命名、移动等明确的工作区资源整理请求，AG 只生成不可变 WorkspaceOperationPlan 与影响说明，并以 DecisionRequest 请求前置授权；确认后由 WS 对目标、来源、冲突、递归清单、脏会话和基线重新核验，再直接修改 DiskState。工作区资源操作不生成内容 DiffCard，也不等待后续“保存文件树”
+source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-WS-M-T-02
+acceptance: DecisionRequest 明确展示操作类型、冻结目标清单、源/目标、递归数量、潜在冲突、影响的打开标签和内容 Diff；拒绝不改变 DiskState；确认后先重新核验，脏标签阻断删除/重命名/移动；执行成功后真实更新磁盘与文件树，并使受影响有效内容 Diff 失效；批量失败即停止并逆序补偿，补偿不完整进入 partial_failed；重启后未完成计划进入 Interrupted，不自动续跑
+open_issues: 无；共享对象、状态机、执行与恢复契约由 A-WS-M-T-02 / A-WS-M-S-02 定义
 -->
 
 <!-- REQ
@@ -258,21 +260,21 @@ req_id: REQ-AG-012
 title: 最小格式转换提案
 owner_module: AG
 status: active
-summary: 对用户明确提出的 TXT→Markdown 或 Markdown→TXT 请求，AG 只生成新的目标副本转换 Proposal；已打开来源以当前 LogicalState 为输入，未打开来源以标明读取时点的 DiskState 为输入。Proposal 必须展示来源、输入/输出格式、目标路径和保真或损失说明，AG 不改写来源或目标 DiskState
+summary: 对用户明确提出的 TXT→Markdown 或 Markdown→TXT 请求，AG 先以冻结来源生成转换结果，并将目标资源创建与初始内容绑定为 CreateDocumentBundle；已打开来源以当前 LogicalState 为输入，未打开来源以标明读取时点的 DiskState 为输入。DecisionRequest 必须展示来源、输入/输出格式、目标路径和保真或损失说明，AG 不改写来源
 source_doc: REQ-CORE-013、A-AG-M-D-02 §5.13（CAP-13）、A-DOC-M-D-01（REQ-DOC-006）
-acceptance: TXT→Markdown 不被表述为自动语义结构化；Markdown→TXT 在提案中明示有损且不承诺样式、结构、表格、图片或可逆往返；预览成功后目标进入新建 LogicalState 链，接受只裁决卡片、保存才落盘，目标继续编辑使旧卡失效；预览前失败不伪称创建目标，保存冲突/失败如实说明仍未保存并保留可继续处理的目标；HTML、通用 DOCX、批量或原地转换不产生工具授权，BDocx 不被作为通用转换入口
+acceptance: TXT→Markdown 不被表述为自动语义结构化；Markdown→TXT 在裁决信息中明示有损且不承诺样式、结构、表格、图片或可逆往返；确认后先创建真实目标 DiskState，再打开标签并投影转换结果初始内容 Diff；内容卡接受不重复创建文件，保存写入已存目标，目标继续编辑使旧卡失效且文件保留；生成/资源创建失败不伪称目标可用；HTML、通用 DOCX、批量或原地转换不产生工具授权，BDocx 不被作为通用转换入口
 open_issues: 转换意图、格式能力开关、Proposal 载荷、来源快照、目标命名、错误形状、Trace 和工具/运行时授权归 AG/DE/DOC/ED/WS/SYS DESIGN Scope；本 L1 不定义工具或接口
 -->
 
 <!-- REQ
 req_id: REQ-AG-013
-title: 可恢复删除与恢复 Proposal
+title: 删除与恢复的前置裁决
 owner_module: AG
 status: active
-summary: 对用户明确提出的已保存文件或文件夹删除/恢复请求，AG 只生成可见影响清单、红色逻辑文件树暂存和可恢复删除/恢复 Proposal；接受只裁决卡片，用户逐项显式保存才可移入或移出可恢复存储。非空文件夹必须先冻结递归清单/数量，保存前重新核验；受影响的未保存会话必须先由用户保存或明确关闭并丢弃
-source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-WS-M-D-01（REQ-WS-010）
-acceptance: Agent 在预览和接受时不报告已删除；删除/恢复 Proposal 明确显示目标、影响范围、递归数量、可恢复性质和保存前仍未落盘；保存前范围、来源或脏会话不满足条件时诚实阻断，不执行或伪报成功；恢复冲突不自动覆盖；未保存新建文档只按 REQ-AG-008/D-NEW 丢弃；有关目标的后续引用和待审阅内容 Proposal 以失效或历史快照如实呈现
-open_issues: 删除/恢复意图与工具授权、影响清单表达、递归再核验、未保存会话决策、恢复命名/冲突、Trace 和与 DE/ED/WS/REF/SYS 的事件契约归 DESIGN Scope；本 L1 不定义工具、恢复存储或文件 API
+summary: 对用户明确提出的已保存文件或文件夹删除/恢复请求，AG 生成包含冻结影响清单、递归数量、来源快照和恢复信息的 WorkspaceOperationPlan，并通过 DecisionRequest 取得前置授权；确认后 WS 重新核验并直接修改 DiskState，同时写入统一 WorkspaceTimeline。永久清理不属于 Agent 1.0
+source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-WS-M-T-02
+acceptance: 决策卡明确显示目标、影响范围、递归数量、不可逆风险与可恢复来源；拒绝不改盘；确认后若范围、来源、冲突或脏会话不满足条件则阻断且不伪报成功；成功删除后相关有效内容 Diff 失效、标签关闭或按真实状态处理、后续引用明确失效；WorkspaceTimeline 可按类型恢复资源且恢复冲突不自动覆盖；CreateDocumentBundle 初始 Diff 的安全拒绝只按 REQ-AG-008 的专用补偿条件执行
+open_issues: 无；删除、恢复与 WorkspaceTimeline 由 A-WS-M-T-02 / A-WS-M-S-02 统一定义
 -->
 
 <!-- REQ
@@ -359,7 +361,7 @@ open_issues: 记忆选择入口、来源令牌、更新/关闭/删除传播、�
 - **云薄端硬边界**（APC §4.3/§13）：AG 不持密钥、不内置 provider SDK、不绕过订阅门禁；一切模型
   调用经 SYS I-P-03 契约（CLOUD-AUTH/GATE/INVOKE）。
 - **唯一落盘路径**：AG 产出的文档内容修改必经 DE/ED 提案预览与人类裁决 → 用户显式 save → WS 落盘；工具调用不得旁路直写内容。
-  文件树结构整理不是内容写入，但建目录、单文件移动/重命名先进入逻辑文件树，只有用户逐项显式保存才经 WS 写盘；删除/恢复只生成可恢复 Proposal，接受不删除、单项显式保存才改变磁盘；多既有文档编辑先确认冻结目标清单并逐目标执行，不存在批量裁决或事务。TXT↔Markdown 转换只创建目标副本并同样经预览/裁决/显式保存，AG 不直写来源或目标。
+  工作区资源整理不是内容写入：AG 只生成 WorkspaceOperationPlan 和 DecisionRequest，确认后由 WS 重新核验并直接修改 DiskState，不生成资源 DiffCard，也不存在后置“保存文件树”。新建文档使用 CreateDocumentBundle，资源创建完成后初始内容仍走普通 Diff 生命周期。多既有文档编辑仍先确认冻结目标清单并逐目标执行。
 - **职责边界**：代理回合归 AG，项目级构建编排归 CBT（构建移交/回落，BR-CBT-STATE-002）；解析归 REF、存储归
   AST/KB、呈现归 ED。
 - **状态机边界**（APC §6）：代理回合、tool-call、autocomplete、inline-assist 四条状态化
@@ -380,11 +382,11 @@ open_issues: 记忆选择入口、来源令牌、更新/关闭/删除传播、�
 | AG-04 | BOUNDARY_OPEN | 显式延期 | 构建移交/回落边界（与 CBT 的状态机对接 X-INTER-001）联合 CBT G2 |
 | AG-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5；量化指标（首 token 延迟、补全延迟）延 G5 NFR 标定 |
 | AG-06 | FLOW_INCOMPLETE | 已识别，待 G2 | `agent-edit-1.0` 强制入参迁移、AgentTurn 的等待澄清/全活动态取消/首终态锁存、IntentResult/CapabilityGrant 最小授权、非推理可见事件、AgentSession 持久化隔离与恢复需按 REQ-AG-007 建模，并与 SYS 事件/持久化契约对齐；当前缺 profile 默认、澄清终结、受限取消和 workspace 级恢复均为迁移债务。 |
-| AG-07 | FLOW_INCOMPLETE | 已识别，待 G2 | 新建提案预览后的未保存目标、提案失效与保存反馈需按 REQ-AG-008 / D-NEW-001~008 对接 DE/ED/WS，不得以“accepted 已建文件”替代 |
+| AG-07 | FLOW_INCOMPLETE | 已识别，待实现 | CreateDocumentBundle 的确认、先建盘、初始内容 Diff 与安全拒绝补偿需按 REQ-AG-008 和 A-WS-M-T-02 / M-S-02 实现，不得复用旧“未保存逻辑新文档”链 |
 | AG-08 | DESIGN_RISK | 已识别，待 G2 | 受控网络研究的 provider、请求预算、公开地址校验、来源快照/失败形状与注入隔离需按 REQ-AG-010 联合 REF/SYS 设计；不得用通用浏览器或爬虫绕过此边界 |
-| AG-09 | DESIGN_RISK | 已识别，待 G2 | 结构 Proposal、逻辑文件树、单项保存、标签/引用/内容 Proposal 失效与现有直接结构工具的迁移，须按 REQ-AG-011 联合 WS/ED/REF/SYS 设计；不得以当前直写工具绕过 |
+| AG-09 | IMPLEMENTATION_GAP | 设计已闭合，待实现 | WorkspaceOperationPlan、DecisionRequest 前置裁决、确认时核验、直接 DiskState 执行、脏标签阻断和内容 Diff 失效须按 A-WS-M-T-02 / M-S-02 迁移；不得保留资源 DiffCard 或后置保存链 |
 | AG-10 | DESIGN_RISK | 已识别，待 G2 | TXT↔Markdown 转换的意图授权、来源快照、目标副本 Proposal、保真/损失告知和现有转换工具的迁移，须按 REQ-AG-012 联合 DE/DOC/ED/WS/SYS 设计；不得由通用文件工具或 BDocx 路径绕过 |
-| AG-11 | DESIGN_RISK | 已识别，待 G2 | 可恢复删除/恢复的 Proposal、红色逻辑树、递归清单与再核验、未保存会话阻断、恢复冲突以及现有直接物理删除工具的迁移，须按 REQ-AG-013 联合 DE/ED/WS/REF/SYS 设计；不得由接受或现有直写工具绕过。 |
+| AG-11 | IMPLEMENTATION_GAP | 设计已闭合，待实现 | 删除/恢复须迁移到 WorkspaceOperationPlan 前置裁决与 WorkspaceTimeline 类型化恢复；现有资源 DiffCard 和不完整删除快照均不得作为最终实现。 |
 | AG-12 | DESIGN_RISK | 已识别，待 G2 | 多既有文档的目标计划确认/冻结、逐目标授权、独立 Proposal/基准/失效/保存与现有宽松 `cross_doc` 的迁移，须按 REQ-AG-014 联合 DE/ED/WS/REF/SYS 设计；不得动态扩展目标或引入批量裁决/事务。 |
 | AG-13 | FLOW_INCOMPLETE | 已识别，待 G2 | REQ-AG-015 的 TaskRun/步骤、同文档连续 Proposal、真实工作状态、继续澄清、取消后保留预览、中断/新回合重试、并发与现有 L2 的澄清终结/原回合 Retry 迁移，须联合 DE/SYS 设计；不得用后台队列、自动重试或聊天文案替代。 |
 | AG-14 | DESIGN_RISK | 已识别，待 G2 | REQ-AG-016/017 的外部内容一次性消费、可读格式判定、快照/清除、来源/失败呈现和用户选择记忆的消费/隔离，须联合 REF/AST/SYS 设计；不得从附件、历史或相似主题自动读取、写入或注入项目记忆。 |
@@ -435,3 +437,4 @@ open_issues: 记忆选择入口、来源令牌、更新/关闭/删除传播、�
 | 2026-08-14 | v2.26 | AG-1.0-R5A-RUNTIME-REQUIREMENTS-01：扩展 REQ-AG-007，承接 REQ-CORE-016 的唯一 profile、澄清等待、全活动态取消/首终态锁存、IntentResult 最小授权、非推理可见事件、AgentSession 隔离和本地事实历史；当前运行时差异只登记为 DESIGN/实现迁移债务。 |
 | 2026-08-14 | v2.27 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-AG-015，承接受限 TaskRun、复杂目标多步骤/多 AgentTurn、真实工作状态、同文档连续 Proposal 的 LogicalState 接力、前卡失效、背景 pending 限制、取消与中断新回合重试；队列/自动续跑/事务均明确排除。 |
 | 2026-08-14 | v2.28 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：新增 REQ-AG-016/017；外部文件仅在用户显式附加且有可用只读解析路径时作为当前任务 data-only 内容消费，项目记忆仅由用户显式选择引用；Agent 1.0 不自动读盘、复读、写入、提议、检索或注入长期记忆。 |
+| 2026-08-21 | v2.29 | 工作区资源操作基线重构：REQ-AG-002/008/011/013 改为 WorkspaceOperationPlan + DecisionRequest 前置裁决、确认后 WS 直接修改 DiskState；新建文档采用 CreateDocumentBundle，资源创建后初始内容继续遵循 Diff 生命周期；统一恢复入口为 WorkspaceTimeline。 |

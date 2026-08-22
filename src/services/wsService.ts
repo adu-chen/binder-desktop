@@ -103,15 +103,17 @@ export async function searchDocs(query: string): Promise<SearchHitDto[]> {
 
 export interface TimelineEntryDto {
   entry_id: string;
+  entry_kind: "document" | "workspace_operation";
   target: { rel_path: string; doc_type: string };
   version_seq: number;
   label: string | null;
   created_at: number;
+  recoverable?: boolean;
 }
 
 /** 列文档时间轴节点（ws.list_timeline，version_seq 升序，BR-WS-DATA-002）。 */
-export async function listTimeline(relPath: string): Promise<TimelineEntryDto[]> {
-  return callCommand<TimelineEntryDto[]>("ws.list_timeline", { relPath });
+export async function listTimeline(relPath?: string | null): Promise<TimelineEntryDto[]> {
+  return callCommand<TimelineEntryDto[]>("ws.list_timeline", relPath ? { relPath } : {});
 }
 
 /** 预览节点版本内容（ws.preview_node，SM-WS-03 Previewing）。 */
@@ -121,8 +123,13 @@ export async function previewNode(entryId: string): Promise<string> {
 }
 
 /** 还原到节点版本（ws.restore_node，写回 + 前进式记新节点，BR-WS-STATE-002）。 */
-export async function restoreNode(entryId: string): Promise<void> {
-  await callCommand("ws.restore_node", { entryId });
+export async function restoreNode(
+  entryId: string,
+  sessionId?: string,
+): Promise<{
+  decision_request?: { request_id: string; kind: string; payload: unknown };
+}> {
+  return callCommand("ws.restore_node", { entryId, ...(sessionId ? { sessionId } : {}) });
 }
 
 /** 拉取当前活动 workspace 文件列表（裸调用，不投影）；供 loadDocs 与启动探测复用。 */

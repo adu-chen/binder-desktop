@@ -59,10 +59,10 @@ AI 的所有文档修改以提案（diff）形式呈现，用户始终保有裁�
 | @mention 引用解析与注入 | REF | REQ-CORE-006 |
 | 用户显式附加的外部文件内容读取 | REF/AG/SYS | REQ-CORE-018 |
 | 用户管理的本地项目长期记忆 | AST/REF/AG/SYS | REQ-CORE-019 |
-| 文档级时间轴 / 历史回溯 | WS | REQ-CORE-007 |
+| 统一 WorkspaceTimeline：文档历史与资源操作历史回溯 | WS | REQ-CORE-007/014 |
 | 账号认证 + 订阅门控 + AI 网关（云薄端） | ACCT/ENT + 云 | REQ-CORE-008 |
 | 离线边界（本地功能离线可用，AI 在线鉴权+有效订阅） | 跨模块 | REQ-CORE-009 |
-| 文档逻辑状态优先、未保存新建文档生命周期 | AG/DE/ED/WS/SYS | REQ-CORE-010 |
+| 文档逻辑状态优先、CreateDocumentBundle 新建生命周期 | AG/DE/ED/WS/SYS | REQ-CORE-010 |
 
 **v1 OUT（明确不做，APC §1 + 本次确认）**：多人实时协同、内容云同步、插件市场、
 脱离写作场景的通用聊天助手、**Excel/PPT 编辑**。
@@ -81,21 +81,21 @@ AI 的所有文档修改以提案（diff）形式呈现，用户始终保有裁�
 | 4 | 用户 | 接受/拒绝，或在 pending 时打开目标文档 | 已有 LogicalState 时显式接受只裁决卡片；无 LogicalState 时接受触发受控落盘；打开动作使其建立带绿色增量的 LogicalState 并迁移到前者 | 接受、拒绝、失效或迁移决定 | 5 | 超时/外部变更/后续编辑→diff 过期终态 |
 | 5 | 用户/WS | 显式保存（仅已有 LogicalState 分支） | 将当前文档逻辑状态写入文件并持久化；仍有效的 pending 卡由保存一并裁决为接受 | 文件落盘 + 历史节点 + 已接受卡片 | 终态 | 写入竞态或失败→保留可编辑逻辑状态并提示 |
 
-**S1a 新建文档（S1 的特例）**：新建提案的受控预览成功后，系统创建未保存的文档逻辑状态并自动打开
-编辑器标签；该标签可被用户或后续代理继续编辑，但 workspace 文件树尚无物理节点。原始提案在基准未变时
-可接受或拒绝；若用户手动编辑或后续提案已成功投影，原提案失效并不可再裁决，未保存文档仍继续存在。仅在
-用户显式保存时，WS 才创建目标文件；关闭未保存标签走普通未保存提示。详见 AG-M-D-02 §2、§5.10。
+**S1a 新建文档（S1 的特例）**：系统在确认前生成 WorkspaceOperationPlan 与初始内容，形成
+CreateDocumentBundle；用户通过 DecisionRequest 前置授权后，WS 重新核验并创建空的目标磁盘文件，ED 自动打开
+标签，DE/ED 再把初始内容作为普通 Diff 投影。初始 Diff 接受只改变卡片生命周期，保存写入既有文件；仅在
+资源、DiskState、LogicalState 基线均未推进时，拒绝可补偿删除新建文件并关闭标签，否则卡片失效且文件保留。
 
 **S2 多文件文档构建（CBT）**：用户描述目标 → agent 规划并跨文件构建 → 可中断/接管 →
 产物写入 workspace（构建状态机，APC §6）。详见 CBT 模块 M-D/M-S。
 
 **S3 原生 DOCX 预览与创建编辑副本**：打开原生 DOCX → 只读预览与分析；如用户请求编辑 →
-生成新 BDocx 编辑副本 Proposal → 预览成功后在 HTML 编辑器中以模拟 Word 分页编辑 → 显式保存为新的 DOCX；
+通过 CreateDocumentBundle 创建新的 BDocx 编辑副本 → 在 HTML 编辑器中投影初始内容 Diff 并以模拟 Word 分页编辑 → 保存为新的 DOCX；
 原文件始终不被编辑或写回。Excel/PPT/音视频仍只有预览与输出。
 
 **S3a 最小格式转换副本**：用户请求 `TXT → Markdown` 或 `Markdown → TXT` → 系统读取打开来源的
 LogicalState，或读取未打开来源的 DiskState 并标明读取时点 → 生成标明输入/输出格式、目标路径与保真/损失的
-转换 Proposal → 预览成功后建立新的目标 LogicalState 与标签 → 接受只裁决卡片 → 用户显式保存目标副本。
+CreateDocumentBundle → 前置确认后创建目标副本并打开标签 → 投影转换结果内容 Diff → 用户裁决并保存。
 来源始终不被改写；Markdown→TXT 必须明示有损。HTML 互转与通用 DOCX 转换不在本路径。
 
 **S4 商业化门控**：用户经官网门户购买订阅 → 桌面端登录 → 调 AI 前校验有效订阅（硬门）→
@@ -198,12 +198,12 @@ acceptance: 断网时编辑/预览/打印/本地功能可用；AI 功能在断�
 
 <!-- REQ
 req_id: REQ-CORE-010
-title: 文档逻辑状态优先与未保存新建文档生命周期
+title: 文档逻辑状态优先与新建文档绑定生命周期
 owner_module: CORE
 status: active
-summary: 文档修改首先作用于可编辑的 LogicalState；提案、编辑器会话与磁盘文件是相互关联但不等同的状态。新建提案预览成功即产生未保存文档 LogicalState 和编辑器标签，不产生磁盘文件或 workspace 文件树节点；保存才把当前 LogicalState 写入 DiskState。
-source_doc: 2026-08-13 人类确认、A-AG-M-D-02 §2、§5.10（D-NEW-001~008）
-acceptance: 新建预览后可立即继续手动或代理编辑；未编辑且原基准有效时拒绝会丢弃该逻辑文档并关闭标签；基准推进后旧提案必须失效且不能再接受/拒绝；保存失败时逻辑文档和标签保留；未保存文档默认不作为其他会话的 workspace 可读文件
+summary: 普通文档内容修改仍首先作用于 LogicalState 并遵守内容 Diff 后置裁决。Agent 新建文档是受前置裁决的 WorkspaceOperation：初始内容在确认前生成并冻结，用户确认后先创建 DiskState 空文件并记录资源操作历史，再打开标签、建立 LogicalState 并投影绑定初始内容 Diff。绑定初始 Diff 遵守普通内容 Diff 生命周期；只有文件身份、空文件磁盘基线和 LogicalState 版本均未推进时，拒绝才可补偿删除本次创建文件
+source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-AG-M-D-02 §5.10
+acceptance: 未确认或初始内容生成失败时不创建文件；确认后文件立即存在且初始内容以独立 DiffCard 审阅；接受只裁决内容卡、保存才写入初始内容；安全拒绝会删除本次创建文件并记录补偿历史，任何人工/后续 Agent/外部/路径基线推进都会使旧卡失效并禁止删除；普通内容 Diff 永远不能删除文件
 -->
 
 <!-- REQ
@@ -218,12 +218,12 @@ acceptance: 回答、分析、Proposal 与文件操作具有可区分结果，�
 
 <!-- REQ
 req_id: REQ-CORE-012
-title: 文件树逻辑状态与结构操作暂存
+title: 工作区资源操作的前置裁决与磁盘提交
 owner_module: CORE
 status: active
-summary: Agent 或用户在文件树发起的创建文件夹、单个已保存文件重命名和单个已保存文件移动为 P1 受控结构操作。操作先投影到逻辑文件树及其显示状态；接受只裁决结构 Proposal，用户显式保存文件树更改才写入 DiskState。复制、删除、目录移动、批量原子提交和格式转换不属于本要求
-source_doc: 2026-08-14 人类 R4-B 确认、A-AG-M-D-02 §5.11（CAP-11）
-acceptance: 结构预览成功后逻辑文件树立即可见，接受不改变磁盘；保存前重新核验源、目标和文件树基线，冲突或失败不静默覆盖且保留暂存结构；受影响的已打开标签保持内容并显示暂定路径，关联待审阅内容 Proposal 失效；每次显式保存只提交一个结构操作，不承诺批量提交原子性或自动回滚
+summary: 创建文档/文件夹、重命名、移动、删除和恢复统一属于 WorkspaceOperation。系统先只读统计目标、影响和基线并冻结 WorkspaceOperationPlan，由 DecisionRequest 前置裁决；用户确认且执行前再核验成功后，WS 直接改变 DiskState，不生成资源 DiffCard或再次等待接受。批量操作采用失败即停和反向补偿，不承诺文件系统级严格事务
+source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-AG-M-D-02 §5.11（CAP-11/12）
+acceptance: 未确认、拒绝、过期或再核验失败均零磁盘副作用；确认只执行一次且重复事件幂等；卡片显示完整目标、顺序、递归范围、内容 Diff/标签影响和失败策略；dirty 目标先阻断；资源操作成功后文件树、标签、引用和关联内容 Diff 状态同步；批量失败逐项记录执行与补偿结果，补偿不完整不得伪报成功
 -->
 
 <!-- REQ
@@ -238,13 +238,13 @@ acceptance: 转换 Proposal 展示来源身份/状态时点、输入输出格式
 
 <!-- REQ
 req_id: REQ-CORE-014
-title: 可恢复删除与恢复生命周期
+title: 工作区时间轴中的资源删除与恢复
 owner_module: CORE
 status: active
-summary: Agent 1.0 P1 对已保存文件或文件夹的删除一律先形成可见的红色逻辑文件树暂存与影响 Proposal；接受只裁决该 Proposal，不删除磁盘内容。用户显式保存该单项删除时，目标才进入可恢复存储，1.0 不提供永久删除。非空文件夹递归删除必须先冻结完整影响清单/数量，保存前重新核验来源基线；受影响的未保存编辑会话须先由用户保存或关闭并丢弃。恢复同样先预览、再经显式保存，且不得覆盖既有目标
-source_doc: 2026-08-14 人类 R4-D 确认、A-AG-M-D-02 §5.11.1（CAP-12）
-acceptance: 删除预览不改变 DiskState，且文件树明确呈现待删除状态与影响范围；接受不改变 LogicalState 或 DiskState；保存成功后目标可从可恢复存储中恢复，保存失败/来源变化时不删除或伪报删除成功；非空文件夹的递归范围不可在用户确认后静默扩大；恢复冲突不自动覆盖；新建但未保存文档的拒绝/关闭仍按 REQ-CORE-010，不被伪称为磁盘删除；删除影响的后续引用和待审阅 Proposal 必须明确失效或冻结历史快照
-open_issues: 可恢复存储位置/保留期/容量、删除与恢复 Proposal 形状、递归清单/再核验、脏会话处理、恢复命名和冲突、时间轴/重启恢复、引用与卡片失效事件归 AG/DE/ED/WS/REF/SYS DESIGN Scope；本 L1 不定义删除 API、状态机或文件系统算法
+summary: 删除与恢复是 WorkspaceOperation：完整影响清单和资源快照在确认前冻结，DecisionRequest 前置裁决后重新核验并直接改变 DiskState。产品不建设第二套撤销入口，而将现有文档时间轴扩展为统一 WorkspaceTimeline；资源节点保存前后路径、目录清单、内容/元数据快照和逐项执行回执，由类型化还原器前进式恢复。永久清理历史快照不属于 Agent 1.0
+source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-AG-M-D-02 §5.11.1（CAP-12）
+acceptance: 删除确认卡显示完整目标、递归数量、可恢复性和受影响会话；确认时来源或清单变化则卡片过期且不删除；dirty 会话先保存或明确放弃；删除成功生成可取回的 WorkspaceOperationEntry，恢复仍需新的前置裁决且不覆盖冲突目标；文件、空目录和非空目录均可由统一时间轴恢复；新建文档绑定初始 Diff 的安全拒绝按 REQ-CORE-010 记录补偿资源节点
+open_issues: 历史快照容量和永久清理策略后置；不阻断 1.0 的追加式资源历史与类型化恢复
 -->
 
 <!-- REQ
@@ -309,11 +309,11 @@ open_issues: 记忆条目模型、手工管理/关闭交互、来源模型、显
 - **文件系统边界**：AI 文件操作限定在 workspace 内（APC §9 安全模型）。
 - **安全/计费边界**：密钥服务端持有；订阅门禁客户端不可绕过；用量计量防篡改（APC §9）。
 - **离线边界**：见 REQ-CORE-009。
-- **写入边界**：AI 修改一律以可见提案供人类裁决；受控预览可更新 LogicalState，但接受/拒绝不直接写盘，只有用户显式保存才进入 DiskState（REQ-CORE-002/010）。
+- **写入边界**：AI 文档内容修改一律以可见提案供人类后置裁决；受控预览可更新 LogicalState，显式接受/拒绝不直接写盘，只有保存写入 DiskState。工作区资源操作走独立的前置裁决链，确认后直接修改 DiskState（REQ-CORE-002/010/012/014）。
 - **读取与上下文边界**：项目报告先概览、后按任务最小化读取正文；已打开文档只读 LogicalState，未打开文档只读受限 DiskState 并披露新鲜度；显式引用均为 data-only，不自动扩大写权限（REQ-CORE-006/011）。
 - **原生 DOCX 边界**：原生 DOCX 只读预览、读取和分析；其编辑请求必须创建新的 BDocx 编辑副本，原文件不进入编辑会话且不被写回。BDocx 是“DOCX → HTML 编辑模型 → DOCX”的处理路径，不是格式（REQ-CORE-004）。
-- **最小转换边界**：通用转换在 1.0 仅限 REQ-CORE-013 的 TXT→Markdown 与 Markdown→TXT 目标副本；来源不被改写，转换目标遵循新建 LogicalState、卡片裁决与显式保存链。HTML 与通用 DOCX 互转、批量和原地转换不属于 1.0。
-- **删除与恢复边界**：已保存文件/文件夹的删除只按 REQ-CORE-014 形成可恢复的逻辑删除 Proposal；接受不删除，单项显式保存才移入可恢复存储。永久删除、自动清空、接受即物理删除和未核验的递归删除不属于 1.0。
+- **最小转换边界**：通用转换在 1.0 仅限 REQ-CORE-013 的 TXT→Markdown 与 Markdown→TXT 目标副本；来源不被改写，目标资源使用 CreateDocumentBundle，初始内容继续走普通 Diff 生命周期。HTML 与通用 DOCX 互转、批量和原地转换不属于 1.0。
+- **删除与恢复边界**：已保存文件/文件夹的删除按 REQ-CORE-014 生成 WorkspaceOperationPlan 和 DecisionRequest；确认后重新核验并直接修改磁盘，同时写入可恢复的 WorkspaceTimeline 条目。脏标签阻断执行，永久清理、自动清空和未核验递归删除不属于 1.0。
 - **多文档写入边界**：多个既有文档的写入只按 REQ-CORE-015 的已确认冻结目标清单逐项进行；每项独立预览、裁决和保存，不因“多文档”获得批量接受、批量保存或跨文档事务授权。
 - **Agent 运行边界**：仅 REQ-CORE-016 的 agent-edit-1.0 可启动；profile、意图、目标、副作用、上下文、工具与确认点逐层收窄。澄清等待、取消、终态、可见事件和 AgentSession 隔离必须如实表现；模型内部推理、长期记忆自动写入及 Build/CBT 不属于 1.0 主链。
 - **复合任务与连续 Proposal 边界**：REQ-CORE-017 的 TaskRun 只能组织当前用户目标内的受限步骤，不能成为后台队列或跨确认点自动执行。同文档后续 Proposal 只可基于最新 LogicalState；基准推进使前卡失效，禁止补丁叠加、任务级自动回滚或背景 pending payload 续编。
@@ -360,3 +360,4 @@ open_issues: 记忆条目模型、手工管理/关闭交互、来源模型、显
 | 2026-08-14 | v2.1 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-CORE-017；复杂目标可由受限 TaskRun 组织多步骤/多 AgentTurn，真实工作状态进入 P0；明确同文档连续 Proposal 必须以最新 LogicalState 接力、前卡基准推进失效，禁止背景 payload 续编、任务级回滚、后台队列与自动跨重启续跑。 |
 | 2026-08-14 | v2.2 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：新增 REQ-CORE-018/019；外部文件实际读取进入 P1 的显式、一次性 data-only 路径，未读格式退回元数据；长期项目记忆进入 P1 的 workspace 本地用户管理路径，Agent 1.0 不自动写入、提议或注入，外部内容不自动转存为记忆。 |
 | 2026-08-14 | v2.3 | AG-1.0-R6-BASELINE-FREEZE-01：R1–R5-C 的 Agent 1.0 已确认需求范围冻结；新增冻结记录入口，声明后续设计不得隐式改变产品行为、权限、档位或状态语义，需求冻结不等于实现或发布完成。 |
+| 2026-08-21 | v2.4 | WORKSPACE-OPERATION-BASELINE-01：人类确认八项新决策，REQ-CORE-010/012/014 改为 WorkspaceOperationPlan 前置裁决后直接写 DiskState；统一 WorkspaceTimeline 承载资源恢复；新建文档采用 CreateDocumentBundle，绑定初始 Diff 仅在基线未推进时可补偿删除。 |

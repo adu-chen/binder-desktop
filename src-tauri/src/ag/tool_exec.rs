@@ -1,5 +1,5 @@
 //! PI-AG-08B · 工具执行（只读：list_docs / read_doc / search_text / list_blocks / list_tables /
-//! list_images；结构：move_doc / create_folder）。
+//! list_images；受控复制：import_image_asset）。
 //!
 //! 经 WS 在 **active workspace** 内执行（X-FORBID-004 边界守卫），结果回注模型（SM-AG-02 ResultInjecting）。
 //! 文档内容读取统一走 AgentEditableSnapshot；权限/注册校验归 tool_registry::validate_requested_tool
@@ -114,41 +114,13 @@ fn exec_list_images(
     .unwrap_or_else(|_| "{}".into()))
 }
 
-/// 执行非破坏性文件树结构工具。此类工具只改变 workspace 内文件树结构，不修改文档内容，不走 DE diff。
+/// 执行白名单资源准备工具。普通创建、删除、重命名与移动必须走 WorkspaceOperationPlan，不能进入此执行器。
 pub fn exec_structure_tool(
     root: &Path,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, IpcError> {
     match name {
-        "move_doc" => {
-            let from_path = string_arg(args, "from_path", "move_doc")?;
-            let to_path = string_arg(args, "to_path", "move_doc")?;
-            let from_abs = crate::workspace::resolve_in_workspace(root, &from_path)?;
-            let to_abs = crate::workspace::resolve_in_workspace(root, &to_path)?;
-            crate::workspace::fileops::rename_doc(&from_abs, &to_abs)?;
-            Ok(serde_json::to_string(&serde_json::json!({
-                "operation": "move_doc",
-                "from_path": from_path,
-                "to_path": to_path,
-                "summary": format!("已移动 {from_path} -> {to_path}")
-            }))
-            .unwrap_or_else(|_| "已移动文件".into()))
-        }
-        "create_folder" => {
-            let path = path_arg(args, "create_folder")?;
-            let abs = crate::workspace::resolve_in_workspace(root, &path)?;
-            let existed = abs.is_dir();
-            crate::workspace::fileops::create_folder(&abs)?;
-            Ok(serde_json::to_string(&serde_json::json!({
-                "operation": "create_folder",
-                "path": path,
-                "created": !existed,
-                "existed": existed,
-                "summary": if existed { "目录已存在" } else { "目录已创建" }
-            }))
-            .unwrap_or_else(|_| "目录已存在或已创建".into()))
-        }
         "import_image_asset" => {
             let source_path = string_arg(args, "source_path", "import_image_asset")?;
             let source = crate::workspace::resolve_in_workspace(root, &source_path)?;
@@ -771,51 +743,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn create_folder_structure_tool_creates_directory() {
-        let dir = std::env::temp_dir().join(format!("ag-structure-folder-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = exec_structure_tool(
-            &dir,
-            "create_folder",
-            &serde_json::json!({ "path": "分类/文学作品" }),
-        )
-        .unwrap();
-        assert!(dir.join("分类/文学作品").is_dir());
-        assert!(out.contains("create_folder"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn move_doc_structure_tool_moves_without_overwrite() {
-        let dir = std::env::temp_dir().join(format!("ag-structure-move-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.md"), "hello").unwrap();
-        let out = exec_structure_tool(
-            &dir,
-            "move_doc",
-            &serde_json::json!({ "from_path": "a.md", "to_path": "分类/a.md" }),
-        )
-        .unwrap();
-        assert!(!dir.join("a.md").exists());
-        assert_eq!(
-            std::fs::read_to_string(dir.join("分类/a.md")).unwrap(),
-            "hello"
-        );
-        assert!(out.contains("move_doc"));
-        std::fs::write(dir.join("b.md"), "b").unwrap();
-        assert_eq!(
-            exec_structure_tool(
-                &dir,
-                "move_doc",
-                &serde_json::json!({ "from_path": "b.md", "to_path": "分类/a.md" }),
-            )
-            .unwrap_err()
-            .code,
-            "WS_EXISTS"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

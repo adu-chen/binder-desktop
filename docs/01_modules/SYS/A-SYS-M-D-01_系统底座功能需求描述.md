@@ -112,9 +112,9 @@ req_id: REQ-SYS-002
 title: 跨模块共享数据结构与持久化 schema 基线
 owner_module: SYS
 status: active
-summary: 定义跨模块传递的共享实体/类型与 workspace.db 持久化 schema 基线及迁移契约框架，支撑提案、时间轴、LogicalState、未保存文档元数据、AgentTurn、编辑器会话事实和引用快照等跨模块协作
-source_doc: REQ-CORE-001/002/007/010/011、APC §4.1、§9、A-AG-M-D-02 §2/§4/§5.2~§5.5
-acceptance: 跨模块共享类型有单一契约来源；LogicalState、ProposalState、未保存文档元数据、AgentTurn/IntentResult/CapabilityGrant、编辑器会话事实与引用快照的职责边界可追溯；已打开文档事实与未打开 DiskState 读取事实不得混淆；workspace.db schema 有版本化迁移契约；重启后可恢复的控制态明确，不可恢复态有明确清算语义
+summary: 定义跨模块传递的共享实体/类型与 workspace.db 持久化 schema 基线及迁移契约框架，支撑内容提案、LogicalState、WorkspaceOperationPlan、WorkspaceOperationEntry、CreateDocumentBundle、统一 WorkspaceTimeline、AgentTurn、编辑器会话事实和引用快照等跨模块协作
+source_doc: REQ-CORE-001/002/007/010/011/012/014、APC §4.1、§9、A-AG-M-D-02 §2~§5、A-WS-M-T-02
+acceptance: 跨模块共享类型有单一契约来源；LogicalState、ProposalState、WorkspaceOperationPlan/Entry、CreateDocumentBundle、AgentTurn/IntentResult/CapabilityGrant、编辑器会话事实与引用快照职责可追溯；内容 Diff 与资源操作状态不得混用；workspace.db schema 有版本化迁移契约；重启后未完成资源操作进入 Interrupted 且不自动执行，partial_failed 收据和 WorkspaceTimeline 恢复载荷可取回
 open_issues: 具体字段、表结构、可恢复范围与 WS/AG/DE/ED/REF 协作确定，归 A-SYS-I-P-01 + 各 owner G2
 -->
 
@@ -123,9 +123,9 @@ req_id: REQ-SYS-003
 title: 状态机总图与注册
 owner_module: SYS
 status: active
-summary: 提供 APC §6 核心链状态机的总图框架与注册入口，汇总跨模块转移契约；须覆盖 AgentTurn、提案预览/裁决/失效、未保存新建文档与显式保存链路，具体状态机由各 owner 模块在其 M-S 定义
+summary: 提供 APC §6 核心链状态机的总图框架与注册入口，汇总跨模块转移契约；须覆盖 AgentTurn、内容 Diff 预览/裁决/失效、WorkspaceOperation 前置裁决/重新核验/磁盘执行/补偿、CreateDocumentBundle 及显式保存链路，具体状态机由各 owner 模块在其 M-S 定义
 source_doc: REQ-CORE-002/003/010、APC §6、A-AG-M-D-02 §2/§4
-acceptance: 核心链状态机可在总图注册并可追溯 owner；提案预览、基准推进失效、拒绝丢弃、显式保存和保存失败保留等跨模块转移点有契约登记；未注册状态机的状态化链路被阻断进入实现
+acceptance: 核心链状态机可在总图注册并可追溯 owner；内容 Diff 预览、基准推进失效、裁决与显式保存，以及 WorkspaceOperation 前置裁决、dirty 阻断、fail-fast 补偿、Interrupted 恢复和 CreateDocumentBundle 安全拒绝均有跨模块契约登记；未注册状态机的状态化链路被阻断进入实现
 open_issues: 总图清单完整枚举依赖各模块 G2 暴露真实链路，SYS 提供框架并随后回填
 -->
 
@@ -281,3 +281,4 @@ NEEDS_HUMAN_DECISION/DESIGN_RISK）。各项均**显式延期**至 G2/G5 并记�
 | 2026-08-14 | v1.5 | AG-1.0-R5A-RUNTIME-REQUIREMENTS-01：新增 REQ-SYS-010，承接唯一 `agent-edit-1.0`、缺失/未知 profile 失败关闭、AgentTurn 澄清/取消/首终态、IntentResult/CapabilityGrant、非推理可见事件、AgentSession 持久化隔离和本地事实历史；具体状态机、字段、IPC 与迁移留待 DESIGN Scope。 |
 | 2026-08-14 | v1.6 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-SYS-011，承接受限 TaskRun、步骤/回合/Proposal 关联、真实工作状态、连续 Proposal 的 LogicalState 接力与前卡失效、中断新回合重试和隔离；队列、事务、自动续跑及字段/状态机留待 DESIGN Scope。 |
 | 2026-08-14 | v1.7 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：新增 REQ-SYS-012，承接外部文件一次性 data-only 内容引用的当前任务/会话/重启隔离，以及项目记忆的 workspace 本地、显式选择、无自动写入/提议/注入边界；具体格式、暂存、字段与状态机留待 DESIGN Scope。 |
+| 2026-08-21 | v1.8 | 工作区资源操作基线重构：扩展 REQ-SYS-002/003，纳入 WorkspaceOperationPlan/Entry、CreateDocumentBundle、统一 WorkspaceTimeline、SM-WS-04 前置裁决/补偿与重启 Interrupted/partial_failed 跨模块边界。 |

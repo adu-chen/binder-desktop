@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
-import { acceptDiff, rejectDiff, generateSampleDiff, applyDeleteDiff } from "../../services/deService";
+import { acceptDiff, rejectDiff, generateSampleDiff } from "../../services/deService";
 import { revealBlock } from "../../services/edLocate";
 import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 
@@ -248,8 +248,6 @@ function blockOperationDetails(diff: DiffView): Array<{
  */
 export function DiffCard({ diff }: { diff: DiffView }) {
   const { diffId, title, before, after, state } = diff;
-  // AG-DELETE-01：删除确认卡（patchKind=delete_doc/delete_folder）——红色高亮，接受走 apply_delete_diff。
-  const isDelete = diff.patchKind === "delete_doc" || diff.patchKind === "delete_folder";
   const busy = state === "validating" || state === "applying";
   const readonly = Boolean(diff.readonly);
   const [expanded, setExpanded] = useState(false);
@@ -313,7 +311,7 @@ export function DiffCard({ diff }: { diff: DiffView }) {
 
   return (
     <div
-      className={`diffcard diffcard-${state}${expanded ? " diffcard-expanded" : ""}${isDelete ? " diffcard-delete" : ""}`}
+      className={`diffcard diffcard-${state}${expanded ? " diffcard-expanded" : ""}`}
       onContextMenu={onContextMenu}
     >
       <div className="diffcard-row diffcard-row-title">
@@ -348,16 +346,14 @@ export function DiffCard({ diff }: { diff: DiffView }) {
         <div className="diffcard-actions">
           {state === "pending" && !readonly && (
             <>
-              {isDelete
-                ? <button className="diffcard-accept diffcard-accept-delete" onClick={() => void applyDeleteDiff(diffId)}>确认删除 ⏎</button>
-                : <button
-                    className="diffcard-accept"
-                    disabled={previewQueued}
-                    title={previewQueued ? "等待编辑器完成预览后才能接受" : undefined}
-                    onClick={() => void acceptDiff(diffId)}
-                  >
-                    {previewQueued ? "预览准备中…" : "接受 ⏎"}
-                  </button>}
+              <button
+                className="diffcard-accept"
+                disabled={previewQueued}
+                title={previewQueued ? "等待编辑器完成预览后才能接受" : undefined}
+                onClick={() => void acceptDiff(diffId)}
+              >
+                {previewQueued ? "预览准备中…" : "接受 ⏎"}
+              </button>
               <button className="ghost" onClick={() => void rejectDiff(diffId)}>拒绝 ⌫</button>
             </>
           )}

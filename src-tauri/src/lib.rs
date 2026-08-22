@@ -162,7 +162,7 @@ pub mod acct; // PI-ACCT-* 账号会话
 pub mod ent; // PI-ENT-* 订阅门控
 
 use ipc::{AgTurnEvent, CommandRegistry, CommandRequest, CommandResponse, IpcError};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use types::ReferencePayload;
 #[cfg(test)]
 use types::ReferenceSessionMessage;
@@ -300,6 +300,76 @@ fn ag_cancel_turn(
     cancel_active_agent_turn(&state, &session_id, &turn_id)
 }
 
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003
+ * type:     API
+ * chain:    AG-TURN, DE-DIFF, ED-EDIT
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
+ * term_ref: TERM-AG-015, TERM-ED-008
+ * boundary: in=EditorAppliedLogicalStatePreviewIdentity | out=PreviewContinuationCheckpointAcknowledged(noModelCallNoDiffDecisionNoDiskWrite)
+ */
+/// 编辑器只在受控预览已真实写入 LogicalState 后回报基线。该命令不接受 DiffCard、不写盘，也不
+/// 自行调用模型；下一 AgentTurn 必须由前端显式发起。
+#[tauri::command]
+fn ag_ack_preview(
+    task_run_id: String,
+    session_id: String,
+    turn_id: String,
+    diff_id: String,
+    rel_path: String,
+    session_version: u64,
+    content_hash: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, IpcError> {
+    if task_run_id.is_empty()
+        || session_id.is_empty()
+        || turn_id.is_empty()
+        || diff_id.is_empty()
+        || rel_path.is_empty()
+        || content_hash.is_empty()
+    {
+        return Err(IpcError::new(
+            "AG_PREVIEW_ACK_INVALID",
+            "预览回执缺少任务、回合、Diff、路径或内容基线标识",
+            false,
+            false,
+        ));
+    }
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+    let workspace = workspace::lifecycle::active_workspace(&conn)
+        .map_err(|error| IpcError::new("WS_ACTIVE_FAILED", &error.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
+    let checkpoint = ag::task::PreviewCheckpoint {
+        diff_id,
+        task_run_id: task_run_id.clone(),
+        workspace_id: workspace.workspace_id,
+        session_id,
+        turn_id,
+        rel_path,
+        session_version,
+        content_hash,
+    };
+    ag::task::acknowledge_preview_checkpoint(&conn, &checkpoint).map_err(|error| {
+        IpcError::new(
+            "AG_PREVIEW_ACK_REJECTED",
+            &format!("预览回执未通过身份或状态校验：{error}"),
+            false,
+            false,
+        )
+    })?;
+    workspace::operation::acknowledge_create_document_preview(
+        &conn,
+        &checkpoint.diff_id,
+        checkpoint.session_version,
+        &checkpoint.content_hash,
+    )?;
+    Ok(serde_json::json!({ "task_run_id": task_run_id, "ready": true }))
+}
+
 fn cancel_active_agent_turn(
     state: &AppState,
     session_id: &str,
@@ -377,18 +447,6 @@ mod ag_execution_kernel_tests {
         );
     }
 
-    // covers: BR-AG-DATA-003
-    #[test]
-    fn create_document_target_must_not_already_exist() {
-        assert!(ensure_new_document_target(false, true, "existing.md").is_ok());
-        assert!(ensure_new_document_target(true, false, "new.md").is_ok());
-        assert_eq!(
-            ensure_new_document_target(true, true, "existing.md")
-                .unwrap_err()
-                .code,
-            "AG_CREATE_TARGET_EXISTS"
-        );
-    }
 }
 
 /// 已注册 command 清单（实现期各模块在此登记；未注册即按 BR-SYS-DATA-003 拒绝）。
@@ -406,7 +464,6 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.persist_diff");
     reg.register("ws.list_pending_diffs");
     reg.register("ws.apply_diff");
-    reg.register("ws.apply_delete_diff"); // AG-DELETE-01：接受删除确认卡后执行删除
     reg.register("ws.discard_diff");
     reg.register("ws.discard_unsaved_sessions");
     reg.register("sys.inspect_close");
@@ -415,6 +472,14 @@ fn build_registry() -> CommandRegistry {
     reg.register("ws.rename_doc");
     reg.register("ws.delete_doc");
     reg.register("ws.delete_folder");
+    reg.register("ws.plan_operation");
+    reg.register("ws.get_operation_plan");
+    reg.register("ws.execute_operation");
+    reg.register("ws.cancel_operation");
+    reg.register("ws.list_operations");
+    reg.register("ws.project_create_document_bundle");
+    reg.register("ws.compensate_create_document_open_failure");
+    reg.register("ws.compensate_create_document_preview_failure");
     reg.register("prv.preview");
     reg.register("prv.export");
     reg.register("prv.media_src");
@@ -528,7 +593,6 @@ fn dispatch(
             "ws.persist_diff" => route_persist_diff(&request, &state),
             "ws.list_pending_diffs" => route_list_pending_diffs(&request, &state),
             "ws.apply_diff" => route_apply_diff(&request, &state, &app),
-            "ws.apply_delete_diff" => route_apply_delete_diff(&request, &state, &app), // AG-DELETE-01
             "ws.discard_diff" => route_discard_diff(&request, &state, &app),
             "ws.discard_unsaved_sessions" => route_discard_unsaved_sessions(&state),
             "sys.inspect_close" => route_inspect_close(&state),
@@ -537,6 +601,20 @@ fn dispatch(
             "ws.rename_doc" => route_rename_doc(&request, &state),
             "ws.delete_doc" => route_delete_doc(&request, &state),
             "ws.delete_folder" => route_delete_folder(&request, &state),
+            "ws.plan_operation" => route_plan_workspace_operation(&request, &state),
+            "ws.get_operation_plan" => route_get_workspace_operation_plan(&request, &state),
+            "ws.execute_operation" => route_execute_workspace_operation(&request, &state),
+            "ws.cancel_operation" => route_cancel_workspace_operation(&request, &state),
+            "ws.list_operations" => route_list_workspace_operations(&request, &state),
+            "ws.project_create_document_bundle" => {
+                route_project_create_document_bundle(&request, &state)
+            }
+            "ws.compensate_create_document_open_failure" => {
+                route_compensate_create_document_open_failure(&request, &state)
+            }
+            "ws.compensate_create_document_preview_failure" => {
+                route_compensate_create_document_preview_failure(&request, &state)
+            }
             "prv.preview" => route_preview(&request, &state, &app),
             "prv.export" => route_export(&request, &state),
             "prv.media_src" => route_media_src(&request, &state, &app),
@@ -888,6 +966,14 @@ fn route_save_doc<R: tauri::Runtime>(
             )
         },
     )?;
+    workspace::operation::mark_create_document_bundles_saved_for_path(
+        &conn,
+        &doc.workspace_id,
+        &doc.rel_path,
+    )
+    .map_err(|error| {
+        IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+    })?;
     Ok(serde_json::json!({ "baseline": saved.baseline.to_string() }))
 }
 
@@ -968,93 +1054,6 @@ fn route_apply_diff(
         baseline,
     )?;
     ws_json(&entry)
-}
-
-/// AG-DELETE-01：接受删除确认卡 → 执行删除（fileops）+ 状态 accepted + timeline 节点。
-/// 仅接受 origin_module='AG_DELETE' 的提案（SM-DE-01 守护：非 Pending 不得接受）。
-fn route_apply_delete_diff(
-    request: &CommandRequest,
-    state: &AppState,
-    app: &tauri::AppHandle,
-) -> Result<serde_json::Value, IpcError> {
-    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
-    let ws = active_ws(state)?;
-    let conn = lock_db(state)?;
-    // SM-DE-01 守护：仅 Pending 可接受（三终态不可逆）。
-    let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
-    let _next = crate::de::transition(cur, crate::de::DiffEvent::UserAccept).ok_or_else(|| {
-        IpcError::new(
-            "DE_ILLEGAL_TRANSITION",
-            &format!("删除提案当前态 {cur:?} 不可接受（SM-DE-01 三终态不可逆）"),
-            false,
-            false,
-        )
-    })?;
-    // 仅 AG_DELETE 来源 + 取删除载荷（action/recursive）。
-    let (rel_path, payload_ref): (String, String) = conn
-        .query_row(
-            "SELECT rel_path, payload_ref FROM pending_diffs \
-             WHERE diff_id=?1 AND origin_module='AG_DELETE'",
-            [&diff_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| {
-            IpcError::new(
-                "DE_DIFF_NOT_FOUND",
-                "删除提案不存在或非 AG_DELETE 来源",
-                false,
-                false,
-            )
-        })?;
-    let payload: serde_json::Value = serde_json::from_str(&payload_ref).unwrap_or_default();
-    let action = payload
-        .get("action")
-        .and_then(|v| v.as_str())
-        .unwrap_or("delete_doc");
-    let recursive = payload
-        .get("recursive")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    // 路径守界（X-FORBID-004）后执行删除（HITL 已过：用户接受删除确认卡）。
-    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
-    if action == "delete_folder" {
-        workspace::fileops::delete_folder(&abs, recursive)?;
-    } else {
-        workspace::fileops::delete_doc(&abs)?;
-    }
-
-    // 落盘 accepted + timeline 节点（删除视作文档终态节点）。
-    conn.execute(
-        "UPDATE pending_diffs SET status='accepted', effect_status='saved' WHERE diff_id=?1",
-        [&diff_id],
-    )
-    .map_err(|e| {
-        crate::ipc::IpcError::new("WS_DIFF_STATUS_UPDATE_FAILED", &e.to_string(), false, false)
-    })?;
-    let doc = crate::types::DocRef {
-        workspace_id: ws.workspace_id,
-        doc_type: doc_type_of(&rel_path),
-        rel_path: rel_path.clone(),
-    };
-    let entry = crate::workspace::timeline::append_node(
-        &conn,
-        &doc,
-        "delete",
-        "deleted",
-        Some(&format!("AG 删除：{action}")),
-    )
-    .map_err(|e| {
-        crate::ipc::IpcError::new("WS_TIMELINE_APPEND_FAILED", &e.to_string(), false, false)
-    })?;
-    drop(conn);
-    let _ = app;
-    Ok(serde_json::json!({
-        "ok": true,
-        "diffId": diff_id,
-        "relPath": rel_path,
-        "timelineEntryId": entry.entry_id,
-    }))
 }
 
 /// 路由 `ws.create_doc`：workspace 内新建文档（守界，已存在拒绝；BR-WS-DATA-001）。
@@ -1760,6 +1759,14 @@ fn route_save_from_edit(
                         false,
                     )
                 })?;
+            workspace::operation::mark_create_document_bundles_saved_for_path(
+                &conn,
+                &doc.workspace_id,
+                &doc.rel_path,
+            )
+            .map_err(|error| {
+                IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+            })?;
             Ok(serde_json::json!({
                 "baseline": saved.baseline.to_string(),
                 "media_base": next_media_dir.to_string_lossy(),
@@ -1775,22 +1782,84 @@ fn route_save_from_edit(
     }
 }
 
-/// 路由 `ws.list_timeline`：回文档时间轴节点（version_seq 升序，BR-WS-DATA-002）。
+/// 路由 `ws.list_timeline`：统一投影文档内容节点与命中当前路径的资源操作条目。
 fn route_list_timeline(
     request: &CommandRequest,
     state: &AppState,
 ) -> Result<serde_json::Value, IpcError> {
-    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
     let ws = active_ws(state)?;
-    let doc = crate::types::DocRef {
-        workspace_id: ws.workspace_id,
-        doc_type: doc_type_of(&rel_path),
-        rel_path,
-    };
+    let rel_path = request
+        .params
+        .get("relPath")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned);
     let conn = lock_db(state)?;
-    let list = workspace::timeline::list_timeline(&conn, &doc)
+    let mut unified = Vec::new();
+    if let Some(rel_path) = rel_path.as_deref() {
+        let doc = crate::types::DocRef {
+            workspace_id: ws.workspace_id.clone(),
+            doc_type: doc_type_of(rel_path),
+            rel_path: rel_path.to_string(),
+        };
+        let document_entries = workspace::timeline::list_timeline(&conn, &doc)
+            .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
+        unified.extend(document_entries.into_iter().map(|entry| {
+            serde_json::json!({
+                "entry_id": entry.entry_id,
+                "entry_kind": "document",
+                "target": entry.target,
+                "version_seq": entry.version_seq,
+                "label": entry.label,
+                "created_at": entry.created_at,
+                "recoverable": true,
+            })
+        }));
+    }
+    let operation_entries = workspace::operation::list_operation_entries(&conn, &ws.workspace_id)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?;
-    ws_json(&list)
+    unified.extend(
+        operation_entries
+            .into_iter()
+            .filter(|entry| {
+                rel_path
+                    .as_deref()
+                    .map(|path| workspace::operation::entry_affects_path(entry, path))
+                    .unwrap_or(true)
+            })
+            .map(|entry| {
+                let recoverable = workspace::operation::restore_intents_from_entry(&conn, &entry)
+                    .map(|intents| !intents.is_empty())
+                    .unwrap_or(false);
+                let status = serde_json::to_value(entry.final_status)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unknown".into());
+                let target_path = entry
+                    .after_manifest
+                    .iter()
+                    .chain(entry.before_manifest.iter())
+                    .map(|baseline| baseline.rel_path.as_str())
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                serde_json::json!({
+                    "entry_id": entry.entry_id,
+                    "entry_kind": "workspace_operation",
+                    "target": {
+                        "workspace_id": ws.workspace_id,
+                        "doc_type": doc_type_of(&target_path),
+                        "rel_path": target_path,
+                    },
+                    "version_seq": 0,
+                    "label": format!("资源操作 · {status}"),
+                    "created_at": entry.created_at,
+                    "recoverable": recoverable,
+                })
+            }),
+    );
+    unified.sort_by_key(|entry| entry["created_at"].as_i64().unwrap_or(0));
+    Ok(serde_json::Value::Array(unified))
 }
 
 /// 路由 `ws.preview_node`：经节点 snapshot_ref 取回该版本内容（SM-WS-03 Previewing，快照不可取回则 guard 拒）。
@@ -1799,9 +1868,35 @@ fn route_preview_node(
     state: &AppState,
 ) -> Result<serde_json::Value, IpcError> {
     let entry_id = str_param(request, "entryId", "WS_ENTRY_ID_REQUIRED")?;
+    let ws = active_ws(state)?;
     let conn = lock_db(state)?;
+    if let Some(entry) = workspace::operation::load_operation_entry_by_entry_id(&conn, &entry_id)
+        .map_err(|error| IpcError::new("WS_DB_ERROR", &error.to_string(), true, false))?
+    {
+        if entry.workspace_id != ws.workspace_id {
+            return Err(IpcError::new(
+                "WS_OPERATION_WORKSPACE_MISMATCH",
+                "资源历史条目不属于当前 workspace",
+                false,
+                false,
+            ));
+        }
+        return Ok(serde_json::json!({
+            "content": serde_json::to_string_pretty(&serde_json::json!({
+                "before": entry.before_manifest,
+                "after": entry.after_manifest,
+                "receipts": entry.item_receipts,
+                "compensations": entry.compensation_receipts,
+                "status": entry.final_status,
+            })).unwrap_or_default(),
+            "entry_kind": "workspace_operation",
+        }));
+    }
     let bytes = workspace::timeline::preview_node(&conn, &entry_id)?;
-    Ok(serde_json::json!({ "content": String::from_utf8_lossy(&bytes) }))
+    Ok(serde_json::json!({
+        "content": String::from_utf8_lossy(&bytes),
+        "entry_kind": "document",
+    }))
 }
 
 /// 广播 SM-WS-03 时间轴还原机转移（entry_id 为实例，A-CORE-X-L-04 Task 2-W3）。
@@ -1828,6 +1923,39 @@ fn route_restore_node(
     let entry_id = str_param(request, "entryId", "WS_ENTRY_ID_REQUIRED")?;
     let ws = active_ws(state)?;
     let conn = lock_db(state)?;
+    if let Some(operation_entry) =
+        workspace::operation::load_operation_entry_by_entry_id(&conn, &entry_id)
+            .map_err(|error| IpcError::new("WS_DB_ERROR", &error.to_string(), true, false))?
+    {
+        if operation_entry.workspace_id != ws.workspace_id {
+            return Err(IpcError::new(
+                "WS_OPERATION_WORKSPACE_MISMATCH",
+                "资源历史条目不属于当前 workspace",
+                false,
+                false,
+            ));
+        }
+        let session_id = str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?;
+        let task_run_id = ag::task::begin_turn(
+            &conn,
+            &ws.workspace_id,
+            &session_id,
+            Some("恢复工作区资源历史"),
+        )
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let intents = workspace::operation::restore_intents_from_entry(&conn, &operation_entry)?;
+        drop(conn);
+        let synthetic = CommandRequest {
+            command: "ws.plan_operation".into(),
+            correlation_id: request.correlation_id.clone(),
+            params: serde_json::json!({
+                "taskRunId": task_run_id,
+                "sourceTurnId": format!("timeline-restore-{entry_id}"),
+                "operations": intents,
+            }),
+        };
+        return route_plan_workspace_operation(&synthetic, state);
+    }
     let (rel_path, snapshot_ref) = workspace::timeline::node_locator(&conn, &entry_id)
         .map_err(|e| IpcError::new("WS_DB_ERROR", &e.to_string(), true, false))?
         .ok_or_else(|| IpcError::new("WS_NODE_NOT_FOUND", "时间轴节点不存在", false, false))?;
@@ -2290,7 +2418,8 @@ struct AgentDiffProjection {
     image_ops: Option<serde_json::Value>,
     // AG-TASK-01 F1b：批次元数据随 projection 透传前端（DiffCard 批次徽标）。
     batch: Option<serde_json::Value>,
-    // AG-DELETE-01：跨文档目标标注（未声明既有文档 → true，DiffCard 提示确认）。
+    preview_checkpoint_required: bool,
+    // 跨文档内容目标标注（未声明既有文档 → true，DiffCard 提示确认）。
     cross_doc: Option<bool>,
 }
 
@@ -3534,7 +3663,53 @@ fn route_accept_draft_diff<R: tauri::Runtime>(
             ));
         }
     }
+    let ws = active_ws(state)?;
     let conn = lock_db(state)?;
+    if workspace::operation::load_create_document_bundle_by_diff(&conn, &diff_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+        .is_some()
+    {
+        let logical_session_version = request
+            .params
+            .get("logicalSessionVersion")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "WS_CREATE_BUNDLE_LOGICAL_BASE_REQUIRED",
+                    "接受新建文档初始内容必须携带当前 LogicalState 版本",
+                    false,
+                    false,
+                )
+            })?;
+        let logical_content_hash = str_param(
+            request,
+            "logicalContentHash",
+            "WS_CREATE_BUNDLE_LOGICAL_BASE_REQUIRED",
+        )?;
+        match workspace::operation::validate_create_document_diff_guard(
+            &conn,
+            &ws,
+            &diff_id,
+            logical_session_version,
+            &logical_content_hash,
+        ) {
+            Ok(true) => {}
+            Ok(false) => {}
+            Err(error) if error.code == "WS_CREATE_BUNDLE_BASELINE_ADVANCED" => {
+                discard_diff_sm(app, &conn, &diff_id, "expired", Some(&error.code))?;
+                sm_events::emit_sm_state(
+                    app,
+                    sm_events::SmStatePayload::new("SM-DE-01", &diff_id, "Expired", true),
+                );
+                return Ok(serde_json::json!({
+                    "accepted": false,
+                    "expired": true,
+                    "reason": error.code,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
     let next = crate::de::transition(cur, crate::de::DiffEvent::UserAccept).ok_or_else(|| {
         IpcError::new(
@@ -3558,6 +3733,14 @@ fn route_accept_draft_diff<R: tauri::Runtime>(
             true,
             false,
         )
+    })?;
+    workspace::operation::set_create_document_bundle_status_by_diff(
+        &conn,
+        &diff_id,
+        "initial_diff_accepted",
+    )
+    .map_err(|error| {
+        IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
     })?;
     sm_events::emit_sm_state(
         app,
@@ -3787,7 +3970,71 @@ fn route_reject_diff<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<serde_json::Value, IpcError> {
     let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let ws = active_ws(state)?;
     let conn = lock_db(state)?;
+    let create_bundle = workspace::operation::load_create_document_bundle_by_diff(&conn, &diff_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+    if create_bundle.is_some() {
+        let logical_session_version = request
+            .params
+            .get("logicalSessionVersion")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "WS_CREATE_BUNDLE_LOGICAL_BASE_REQUIRED",
+                    "拒绝新建文档初始内容必须携带当前 LogicalState 版本",
+                    false,
+                    false,
+                )
+            })?;
+        let logical_content_hash = str_param(
+            request,
+            "logicalContentHash",
+            "WS_CREATE_BUNDLE_LOGICAL_BASE_REQUIRED",
+        )?;
+        match workspace::operation::discard_created_resource_if_guard_matches(
+            &conn,
+            &ws,
+            &diff_id,
+            logical_session_version,
+            &logical_content_hash,
+        ) {
+            Ok(Some(entry)) => {
+                discard_diff_sm(app, &conn, &diff_id, "rejected", None)?;
+                sm_events::emit_sm_state(
+                    app,
+                    sm_events::SmStatePayload::new("SM-DE-01", &diff_id, "Rejected", true),
+                );
+                return Ok(serde_json::json!({
+                    "diff_id": diff_id,
+                    "status": "rejected",
+                    "resource_discarded": true,
+                    "workspace_timeline_entry_id": entry.entry_id,
+                }));
+            }
+            Ok(None) => {}
+            Err(error) if error.code == "WS_CREATE_BUNDLE_BASELINE_ADVANCED" => {
+                discard_diff_sm(
+                    app,
+                    &conn,
+                    &diff_id,
+                    "expired",
+                    Some(&error.code),
+                )?;
+                sm_events::emit_sm_state(
+                    app,
+                    sm_events::SmStatePayload::new("SM-DE-01", &diff_id, "Expired", true),
+                );
+                return Ok(serde_json::json!({
+                    "diff_id": diff_id,
+                    "status": "expired",
+                    "resource_discarded": false,
+                    "reason": error.code,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     // ① 集成：经 SM-DE-01 守护当前态——已终态不得重复拒绝。
     let cur = crate::de::state_from_status(workspace::diff_apply::current_status(&conn, &diff_id)?);
     let next = crate::de::transition(cur, crate::de::DiffEvent::UserReject).ok_or_else(|| {
@@ -4586,6 +4833,583 @@ fn route_propose_decision(
     ws_json(&decision)
 }
 
+/**
+ * @GOV
+ * codes:    BR-WS-STATE-003-API-WS-WS-OPERATION-002, BR-WS-OBS-002-API-WS-WS-OPERATION-002
+ * type:     API
+ * chain:    WS-OPERATION
+ * rules:    BR-WS-STATE-003, BR-WS-DATA-003, BR-WS-OBS-002
+ * term_ref: TERM-WS-003, TERM-WS-004
+ * boundary: in=WorkspaceOperationIntentListAndExecutingTaskRun | out=WorkspaceOperationPlanBoundToDecisionRequest(noDiskMutationBeforeDecision)
+ */
+fn route_plan_workspace_operation(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let task_run_id = str_param(request, "taskRunId", "AG_TASK_RUN_ID_REQUIRED")?;
+    let source_turn_id = request.params.get("sourceTurnId").and_then(|value| value.as_str());
+    let supplied_initial_content_ref = request
+        .params
+        .get("initialContentRef")
+        .and_then(|value| value.as_str());
+    let initial_content = request
+        .params
+        .get("initialContent")
+        .and_then(|value| value.as_str());
+    let generated_initial_content_ref = initial_content.map(|_| {
+        format!(
+            "wop-initial-{}-{}",
+            source_turn_id.unwrap_or(&task_run_id),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or(0)
+        )
+    });
+    let initial_content_ref = supplied_initial_content_ref
+        .map(str::to_owned)
+        .or(generated_initial_content_ref);
+    let intents: Vec<workspace::operation::WorkspaceOperationIntent> = request
+        .params
+        .get("operations")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| {
+            IpcError::new(
+                "WS_OPERATION_INTENTS_INVALID",
+                "operations 必须是受支持的 WorkspaceOperation 意图数组",
+                false,
+                false,
+            )
+        })?;
+    let conn = lock_db(state)?;
+    let tx = conn.unchecked_transaction().map_err(|error| {
+        IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+    })?;
+    let task_workspace: Option<String> = tx
+        .query_row(
+            "SELECT workspace_id FROM task_runs WHERE task_run_id=?1",
+            [&task_run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+    if task_workspace.as_deref() != Some(ws.workspace_id.as_str()) {
+        return Err(IpcError::new(
+            "WS_OPERATION_WORKSPACE_MISMATCH",
+            "TaskRun 与当前 workspace 不匹配",
+            false,
+            false,
+        ));
+    }
+    if let (Some(payload_ref), Some(content)) = (initial_content_ref.as_deref(), initial_content) {
+        workspace::operation::store_payload(
+            &tx,
+            payload_ref,
+            &ws.workspace_id,
+            "initial_document_content",
+            &content.to_string(),
+        )
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+    }
+    let plan = workspace::operation::plan_operation(
+        &tx,
+        &ws,
+        &intents,
+        Some(&task_run_id),
+        source_turn_id,
+        initial_content_ref.as_deref(),
+    )?;
+    if let Some(initial_content_ref) = plan.initial_content_ref.as_ref() {
+        let create_item = plan
+            .operation_items
+            .iter()
+            .find(|item| item.kind == crate::types::WorkspaceOperationKind::CreateDocument)
+            .ok_or_else(|| {
+                IpcError::new(
+                    "WS_CREATE_BUNDLE_INVALID",
+                    "initialContent 只能绑定 create_document 操作",
+                    false,
+                    false,
+                )
+            })?;
+        let rel_path = create_item
+            .target_rel_path
+            .as_ref()
+            .expect("validated create target")
+            .clone();
+        let bundle = crate::types::CreateDocumentBundle {
+            plan_id: plan.plan_id.clone(),
+            workspace_id: ws.workspace_id.clone(),
+            target: crate::types::DocRef {
+                workspace_id: ws.workspace_id.clone(),
+                doc_type: doc_type_of(&rel_path),
+                rel_path,
+            },
+            initial_content_ref: initial_content_ref.clone(),
+            operation_id: None,
+            initial_diff_id: None,
+            rejection_guard_ref: None,
+            status: "waiting_confirm".into(),
+        };
+        workspace::operation::upsert_create_document_bundle(&tx, &bundle).map_err(|error| {
+            IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+        })?;
+    }
+    let operation_summary = plan
+        .operation_items
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "itemId": item.item_id,
+                "kind": item.kind,
+                "sourcePath": item.source_rel_path,
+                "targetPath": item.target_rel_path,
+                "resourceKind": item.resource_kind,
+                "recursive": item.recursive,
+            })
+        })
+        .collect::<Vec<_>>();
+    let decision = ag::task::propose_decision(
+        &tx,
+        &task_run_id,
+        "permission",
+        serde_json::json!({
+            "workspaceOperationPlanId": plan.plan_id,
+            "summary": format!("确认执行 {} 项工作区资源操作", plan.operation_items.len()),
+            "detail": "确认后系统将重新核验目标；核验通过后直接修改磁盘，不会再生成资源 DiffCard。",
+            "operations": operation_summary,
+            "consequences": plan.consequences,
+            "failurePolicy": plan.compensation_policy,
+            "recoverable": plan.consequences.recoverable,
+        }),
+    )
+    .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+    let plan = workspace::operation::bind_decision_request(&tx, &plan.plan_id, &decision.request_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+    tx.commit().map_err(|error| {
+        IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+    })?;
+    eprintln!(
+        "[workspace-operation] {}",
+        serde_json::json!({
+            "event": "decision_proposed",
+            "plan_id": &plan.plan_id,
+            "request_id": &decision.request_id,
+            "item_count": plan.operation_items.len(),
+        })
+    );
+    Ok(serde_json::json!({ "plan": plan, "decision_request": decision }))
+}
+
+fn route_get_workspace_operation_plan(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    let plan = workspace::operation::load_plan(&conn, &plan_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("WS_OPERATION_NOT_FOUND", "资源操作计划不存在", false, false))?;
+    if plan.workspace_id != ws.workspace_id {
+        return Err(IpcError::new(
+            "WS_OPERATION_WORKSPACE_MISMATCH",
+            "资源操作计划不属于当前 workspace",
+            false,
+            false,
+        ));
+    }
+    ws_json(&plan)
+}
+
+fn route_execute_workspace_operation(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
+    let request_id = str_param(request, "requestId", "AG_DECISION_REQUEST_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    let receipt = workspace::operation::execute_operation_plan(&conn, &ws, &plan_id, &request_id)?;
+    ws_json(&receipt)
+}
+
+fn route_cancel_workspace_operation(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
+    let request_id = str_param(request, "requestId", "AG_DECISION_REQUEST_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    let plan = workspace::operation::cancel_operation_plan(
+        &conn,
+        &ws.workspace_id,
+        &plan_id,
+        &request_id,
+    )?;
+    ws_json(&plan)
+}
+
+fn route_list_workspace_operations(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let status = request
+        .params
+        .get("status")
+        .and_then(|value| value.as_str())
+        .map(|value| {
+            serde_json::from_value::<crate::types::WorkspaceOperationStatus>(
+                serde_json::Value::String(value.to_string()),
+            )
+            .map_err(|_| {
+                IpcError::new(
+                    "WS_OPERATION_STATUS_INVALID",
+                    "未知的 WorkspaceOperation 状态",
+                    false,
+                    false,
+                )
+            })
+        })
+        .transpose()?;
+    let conn = lock_db(state)?;
+    let plans = workspace::operation::list_plans(&conn, &ws.workspace_id, status)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+    ws_json(&plans)
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-STATE-003-API-WS-WS-OPERATION-004, BR-WS-DATA-003-EFFECT-WS-WS-OPERATION-004
+ * type:     API
+ * chain:    WS-OPERATION, DE-DIFF, ED-EDIT
+ * rules:    BR-WS-STATE-003, BR-WS-DATA-003, BR-WS-OBS-002
+ * term_ref: TERM-WS-003, TERM-WS-007, TERM-ED-008, TERM-DE-003
+ * boundary: in=CompletedCreateDocumentOperationAndOpenedLogicalStateIdentity | out=BoundInitialContentPendingDiffWithRejectionGuard(noSecondResourceDecisionOrDiskContentWrite)
+ */
+fn route_project_create_document_bundle(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
+    use crate::types::{CreateDocumentRejectionGuard, LocateResult, WorkspaceOperationStatus};
+
+    let ws = active_ws(state)?;
+    let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
+    let session_id = str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?;
+    let rel_path = str_param(request, "relPath", "WS_REL_PATH_REQUIRED")?;
+    let before_snapshot = str_param(request, "beforeSnapshot", "WS_CONTENT_REQUIRED")?;
+    let base_session_version = request
+        .params
+        .get("baseSessionVersion")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            IpcError::new(
+                "DE_OPEN_SESSION_BASE_REQUIRED",
+                "新建文档内容投影缺少 LogicalState 版本",
+                false,
+                false,
+            )
+        })?;
+    let base_content_hash = str_param(
+        request,
+        "baseContentHash",
+        "DE_OPEN_SESSION_BASE_REQUIRED",
+    )?;
+    let conn = lock_db(state)?;
+    let bundle = workspace::operation::load_create_document_bundle(&conn, &plan_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+        .ok_or_else(|| {
+            IpcError::new(
+                "WS_CREATE_BUNDLE_NOT_FOUND",
+                "新建文档组合不存在",
+                false,
+                false,
+            )
+        })?;
+    if bundle.workspace_id != ws.workspace_id || bundle.target.rel_path != rel_path {
+        return Err(IpcError::new(
+            "WS_CREATE_BUNDLE_IDENTITY_MISMATCH",
+            "新建文档组合与当前 workspace 或目标路径不匹配",
+            false,
+            false,
+        ));
+    }
+    if let Some(diff_id) = bundle.initial_diff_id.as_deref() {
+        return Ok(serde_json::json!({
+            "bundle": bundle,
+            "diff_id": diff_id,
+            "already_projected": true,
+        }));
+    }
+    let plan = workspace::operation::load_plan(&conn, &plan_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+        .ok_or_else(|| {
+            IpcError::new("WS_OPERATION_NOT_FOUND", "资源操作计划不存在", false, false)
+        })?;
+    if plan.status != WorkspaceOperationStatus::Completed {
+        return Err(IpcError::new(
+            "WS_CREATE_BUNDLE_OPERATION_INCOMPLETE",
+            "只有已完成的创建资源操作可以投影初始内容",
+            false,
+            false,
+        ));
+    }
+    let operation_id = bundle.operation_id.clone().ok_or_else(|| {
+        IpcError::new(
+            "WS_CREATE_BUNDLE_OPERATION_MISSING",
+            "新建文档组合缺少资源操作身份",
+            false,
+            false,
+        )
+    })?;
+    let task_run_id = plan.task_run_id.as_deref().ok_or_else(|| {
+        IpcError::new(
+            "AG_TASK_RUN_ID_REQUIRED",
+            "新建文档组合缺少 TaskRun 身份",
+            false,
+            false,
+        )
+    })?;
+    let source_turn_id = plan.source_turn_id.as_deref().ok_or_else(|| {
+        IpcError::new(
+            "AG_TURN_ID_REQUIRED",
+            "新建文档组合缺少来源回合身份",
+            false,
+            false,
+        )
+    })?;
+    let initial_content: String = workspace::operation::load_payload(
+        &conn,
+        &bundle.initial_content_ref,
+    )
+    .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+    .ok_or_else(|| {
+        IpcError::new(
+            "WS_CREATE_BUNDLE_CONTENT_MISSING",
+            "确认前冻结的初始内容不存在",
+            false,
+            false,
+        )
+    })?;
+    let disk_baseline = workspace::operation::capture_baseline(
+        std::path::Path::new(&ws.root_path),
+        &rel_path,
+    )?;
+    if !disk_baseline.exists {
+        return Err(IpcError::new(
+            "WS_CREATE_BUNDLE_TARGET_MISSING",
+            "资源创建完成后目标文件不存在",
+            false,
+            false,
+        ));
+    }
+
+    let proposal = ChangeProposal {
+        origin_task: task_run_id.to_string(),
+        target: bundle.target.clone(),
+        after_content: initial_content.as_bytes().to_vec(),
+        before_snapshot: Some(before_snapshot.clone()),
+        style_ops: None,
+    };
+    let diff_id = gen_id("diff");
+    let payload_ref = format!("pl_{diff_id}");
+    let guard_ref = format!("wop-create-guard-{plan_id}");
+    let guard = CreateDocumentRejectionGuard {
+        plan_id: plan_id.clone(),
+        operation_id,
+        target: bundle.target.clone(),
+        disk_baseline,
+        logical_session_version: base_session_version,
+        logical_content_hash: base_content_hash.clone(),
+        created_at: now_millis(),
+    };
+    workspace::operation::store_payload(
+        &conn,
+        &guard_ref,
+        &ws.workspace_id,
+        "create_document_rejection_guard",
+        &guard,
+    )
+    .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+    let mut guarded_bundle = bundle.clone();
+    guarded_bundle.rejection_guard_ref = Some(guard_ref.clone());
+    guarded_bundle.status = "projecting_initial_diff".into();
+    workspace::operation::upsert_create_document_bundle(&conn, &guarded_bundle)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+
+    let projection_write = (|| -> Result<crate::types::CreateDocumentBundle, IpcError> {
+        let pending = generate_diff(
+            &proposal,
+            &diff_id,
+            "AG",
+            &payload_ref,
+            now_millis(),
+            LocateResult::Located,
+        )?;
+        let payload = build_payload(&proposal);
+        let tx = conn.unchecked_transaction().map_err(|error| {
+            IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+        })?;
+        crate::de::store::persist_payload(&tx, &payload_ref, &payload)
+            .map_err(|error| IpcError::new("DE_DB_ERROR", &error.to_string(), true, false))?;
+        workspace::diff_apply::persist_diff(&tx, &pending)
+            .map_err(|error| IpcError::new("DE_DB_ERROR", &error.to_string(), true, false))?;
+        ag::task::create_preview_checkpoint(
+            &tx,
+            task_run_id,
+            &ws.workspace_id,
+            &session_id,
+            source_turn_id,
+            &diff_id,
+            &rel_path,
+        )
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let mut updated_bundle = guarded_bundle.clone();
+        updated_bundle.initial_diff_id = Some(diff_id.clone());
+        updated_bundle.status = "initial_diff_pending".into();
+        workspace::operation::upsert_create_document_bundle(&tx, &updated_bundle).map_err(
+            |error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false),
+        )?;
+        tx.commit().map_err(|error| {
+            IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+        })?;
+        Ok(updated_bundle)
+    })();
+    let updated_bundle = match projection_write {
+        Ok(bundle) => bundle,
+        Err(projection_error) => {
+            match workspace::operation::compensate_create_document_projection_failure(
+                &conn,
+                &ws,
+                &plan_id,
+                base_session_version,
+                &base_content_hash,
+            ) {
+                Ok(entry) => {
+                    let _ = ag::task::settle_turn(
+                        &conn,
+                        task_run_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
+                    return Ok(serde_json::json!({
+                        "bundle": workspace::operation::load_create_document_bundle(&conn, &plan_id)
+                            .ok().flatten(),
+                        "projection_failed_compensated": true,
+                        "workspace_timeline_entry_id": entry.entry_id,
+                        "error": projection_error,
+                    }));
+                }
+                Err(compensation_error) => return Err(compensation_error),
+            }
+        }
+    };
+    let projection = AgentDiffProjection {
+        diff_id: diff_id.clone(),
+        rel_path: rel_path.clone(),
+        patch_kind: "replace_document".into(),
+        block_id: None,
+        block_index: None,
+        before_text: before_snapshot,
+        after_text: initial_content,
+        location_label: "新文档初始内容".into(),
+        draft_mode: "current_editor".into(),
+        snapshot_source: "active_editor_session".into(),
+        base_session_version: Some(base_session_version),
+        base_content_hash: Some(base_content_hash),
+        style_ops: None,
+        block_ops: None,
+        table_ops: None,
+        image_ops: None,
+        batch: None,
+        preview_checkpoint_required: true,
+        cross_doc: Some(false),
+    };
+    Ok(serde_json::json!({
+        "bundle": updated_bundle,
+        "diff_id": diff_id,
+        "projection": projection,
+        "task_run_id": task_run_id,
+        "source_turn_id": source_turn_id,
+        "already_projected": false,
+    }))
+}
+
+fn route_compensate_create_document_open_failure(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
+    let conn = lock_db(state)?;
+    let entry = workspace::operation::compensate_create_document_open_failure(
+        &conn,
+        &ws,
+        &plan_id,
+    )?;
+    if let Some(plan) = workspace::operation::load_plan(&conn, &plan_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+    {
+        if let Some(task_run_id) = plan.task_run_id.as_deref() {
+            let _ = ag::task::settle_turn(&conn, task_run_id, ag::task::TurnOutcome::Failed);
+        }
+    }
+    ws_json(&entry)
+}
+
+fn route_compensate_create_document_preview_failure(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let diff_id = str_param(request, "diffId", "WS_DIFF_ID_REQUIRED")?;
+    let logical_session_version = request
+        .params
+        .get("logicalSessionVersion")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            IpcError::new(
+                "WS_CREATE_BUNDLE_LOGICAL_BASE_REQUIRED",
+                "新建文档预览失败补偿缺少 LogicalState 版本",
+                false,
+                false,
+            )
+        })?;
+    let logical_content_hash = str_param(
+        request,
+        "logicalContentHash",
+        "WS_CREATE_BUNDLE_LOGICAL_BASE_REQUIRED",
+    )?;
+    let conn = lock_db(state)?;
+    let Some(bundle) = workspace::operation::load_create_document_bundle_by_diff(&conn, &diff_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+    else {
+        return Ok(serde_json::json!({ "compensated": false, "not_create_bundle": true }));
+    };
+    let entry = workspace::operation::compensate_create_document_projection_failure(
+        &conn,
+        &ws,
+        &bundle.plan_id,
+        logical_session_version,
+        &logical_content_hash,
+    )?;
+    if let Some(plan) = workspace::operation::load_plan(&conn, &bundle.plan_id)
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
+    {
+        if let Some(task_run_id) = plan.task_run_id.as_deref() {
+            let _ = ag::task::settle_turn(&conn, task_run_id, ag::task::TurnOutcome::Failed);
+        }
+    }
+    Ok(serde_json::json!({
+        "compensated": true,
+        "workspace_timeline_entry_id": entry.entry_id,
+    }))
+}
+
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.resolve_decision` —— 任务级裁决
 /// （userConfirm/userCancel 真实入口；confirm → Executing，cancel → Cancelled）。
 fn route_resolve_decision(
@@ -4602,10 +5426,100 @@ fn route_resolve_decision(
             false,
         ));
     }
+    let ws = active_ws(state)?;
     let conn = lock_db(state)?;
-    let status = ag::task::resolve_decision(&conn, &request_id, &outcome)
+    let decision_payload: serde_json::Value = conn
+        .query_row(
+            "SELECT payload_json FROM decision_requests WHERE request_id=?1 AND status='proposed'",
+            [&request_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let operation_plan_id = decision_payload
+        .get("workspaceOperationPlanId")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    let (task_run_id, mut status) = ag::task::resolve_decision(&conn, &request_id, &outcome)
         .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
-    ws_json(&status)
+    if let Some(plan_id) = operation_plan_id.as_deref() {
+        eprintln!(
+            "[workspace-operation] {}",
+            serde_json::json!({
+                "event": "decision_resolved",
+                "plan_id": plan_id,
+                "request_id": &request_id,
+                "outcome": &outcome,
+            })
+        );
+    }
+    let mut operation_receipt = None;
+    let mut workspace_operation_items = None;
+    let mut create_document_bundle = None;
+    if let Some(plan_id) = operation_plan_id {
+        if outcome == "confirm" {
+            match workspace::operation::execute_operation_plan(&conn, &ws, &plan_id, &request_id) {
+                Ok(receipt) => {
+                    if receipt.final_status != crate::types::WorkspaceOperationStatus::Completed {
+                        status = ag::task::settle_turn(
+                            &conn,
+                            &task_run_id,
+                            ag::task::TurnOutcome::Failed,
+                        )
+                        .map_err(|e| {
+                            IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false)
+                        })?;
+                    }
+                    workspace_operation_items = workspace::operation::load_plan(&conn, &plan_id)
+                        .map_err(|error| {
+                            IpcError::new(
+                                "WS_OPERATION_DB_ERROR",
+                                &error.to_string(),
+                                true,
+                                false,
+                            )
+                        })?
+                        .map(|plan| plan.operation_items);
+                    if receipt.final_status == crate::types::WorkspaceOperationStatus::Completed {
+                        if let Some(bundle) = workspace::operation::load_create_document_bundle(
+                            &conn,
+                            &plan_id,
+                        )
+                        .map_err(|error| {
+                            IpcError::new(
+                                "WS_OPERATION_DB_ERROR",
+                                &error.to_string(),
+                                true,
+                                false,
+                            )
+                        })? {
+                            create_document_bundle = Some(bundle);
+                        }
+                    }
+                    operation_receipt = Some(ws_json(&receipt)?);
+                }
+                Err(error) => {
+                    let _ = ag::task::settle_turn(&conn, &task_run_id, ag::task::TurnOutcome::Failed);
+                    return Err(error);
+                }
+            }
+        } else {
+            workspace::operation::cancel_operation_plan(
+                &conn,
+                &ws.workspace_id,
+                &plan_id,
+                &request_id,
+            )?;
+        }
+    }
+    ws_json(&serde_json::json!({
+        "task_run_id": task_run_id,
+        "status": status,
+        "workspace_operation_receipt": operation_receipt,
+        "workspace_operation_items": workspace_operation_items,
+        "create_document_bundle": create_document_bundle,
+    }))
 }
 
 /// AG-1.0-TASKRUN-REWORK-CONTINUE-01：`ag.list_plans` —— 按 task_run_id 列出任务计划
@@ -6749,6 +7663,23 @@ mod ag_turn_prompt_tests {
         // provides a deterministic, complete example without calling a real provider.
         emit_prompt_audit(&audit);
     }
+
+    // covers: BR-AG-DATA-002, BR-SYS-STATE-008
+    // RuntimeControl 只注入可审计的执行计划事实，明确当前就绪步骤，不注入模型推理或伪造完成态。
+    #[test]
+    fn task_plan_runtime_projection_exposes_only_current_ready_step() {
+        let plan = build_task_plan("task-runtime", &["a.md".to_string(), "b.md".to_string()]);
+        let projection = task_plan_runtime_projection(&plan);
+        assert_eq!(projection["planId"], "plan-task-runtime-1");
+        assert_eq!(projection["cursor"], 0);
+        assert_eq!(projection["currentReadyStep"]["stepId"], "read-0");
+        assert_eq!(projection["currentReadyStep"]["requiredTool"], "read_doc");
+        assert_eq!(projection["steps"].as_array().unwrap().len(), 4);
+        assert!(projection["executionRule"]
+            .as_str()
+            .unwrap()
+            .contains("Tool success or failure"));
+    }
 }
 
 /// PI-BYOK-DEV-01 · BYOK 客户端入口：用户 provider 密钥一次性上送 dev 网关代持（零残留，客户端不持久化，
@@ -6782,26 +7713,10 @@ async fn byok_delete_key(provider: String) -> Result<(), IpcError> {
 /// PI-AG-08C/08E/08F + PI-AG-SEM-01 · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///
 /// AI 修改建议经 DE 生成 pending diff，**不直写文件**（X-FORBID-006）；限 active workspace（X-FORBID-004）；
-/// target 须属回合声明目标集或为新建路径（BR-AG-DATA-003 2026-07-04 版，AG guard + DE 校验双侧把守）。
+/// target 须属 workspace；资源新建不进入本函数，统一由 WorkspaceOperationPlan 前置裁决。
 /// 操作模式：纯文本块级（replace_block）、整篇（replace_document）、富文档块（block_ops）、
 /// 样式（style_ops）、表格（table_ops）与图片（image_ops）。
 /// 返回后端权威 DiffProjection；前端不得再从 tool_request 预测 before/after。
-fn ensure_new_document_target(
-    require_new_target: bool,
-    target_exists: bool,
-    rel_path: &str,
-) -> Result<(), IpcError> {
-    if require_new_target && target_exists {
-        return Err(IpcError::new(
-            "AG_CREATE_TARGET_EXISTS",
-            &format!("新建文档目标 {rel_path} 已存在，已拒绝覆盖；请选择一个尚不存在的路径"),
-            false,
-            false,
-        ));
-    }
-    Ok(())
-}
-
 fn ag_propose_edit(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -6809,7 +7724,6 @@ fn ag_propose_edit(
     read_ctx: &ag::blocks::AgentReadContext,
     current_rel: Option<&str>,
     declared_targets: &[String],
-    require_new_target: bool,
 ) -> Result<AgentProposeEditResult, IpcError> {
     use crate::de::generate::{
         build_payload, generate_diff, ChangeProposal,
@@ -6860,8 +7774,7 @@ fn ag_propose_edit(
     // 目标集双守（BR-AG-DATA-003，2026-07-04 版）：当前文档/显式声明集/新建放行，未声明既有文档拒绝
     // （错误回注模型，模型可提示用户显式 @引用后重试）。AG guard 与 DE 协同校验两侧均须通过。
     let target_exists = abs.exists();
-    ensure_new_document_target(require_new_target, target_exists, &rel_path)?;
-    // AG-DELETE-01：目标双守放宽——未声明既有文档放行（AcceptCrossDocument），标注 cross_doc
+    // 未声明既有文档放行（AcceptCrossDocument），标注 cross_doc
     // 由 DiffCard「跨文档目标」+ 用户确认承担安全；不再硬拒（延续词/多文档联动不再被锁死）。
     let cross_doc = match crate::ag::context::guard_target_set(
         current_rel,
@@ -7529,7 +8442,8 @@ fn ag_propose_edit(
                 "total": b.total,
             })
         }),
-        // AG-DELETE-01：跨文档目标标注（DiffCard「跨文档目标」提示 + 用户确认）。
+        preview_checkpoint_required: target_is_current_editor || target_is_open_session,
+        // 跨文档内容目标标注（DiffCard「跨文档目标」提示 + 用户确认）。
         cross_doc: Some(cross_doc),
     };
     Ok(AgentProposeEditResult {
@@ -7537,156 +8451,6 @@ fn ag_propose_edit(
         rel_path,
         projection,
         batch,
-    })
-}
-
-/// AG-DELETE-01：删除提案——propose_edit(operation=delete_doc/delete_folder) 生成删除确认卡。
-/// 删除不产内容 payload，经 PendingDiff(origin_module='AG_DELETE') 持久化，DiffCard 人工裁决；
-/// 接受方（route_apply_delete_diff）才执行 fileops 删除（HITL 不降级，X-FORBID-006）。
-fn ag_delete_proposal(
-    state: &AppState,
-    app: &tauri::AppHandle,
-    params: &serde_json::Value,
-    read_ctx: &ag::blocks::AgentReadContext,
-    _current_rel: Option<&str>,
-    _declared_targets: &[String],
-) -> Result<AgentProposeEditResult, IpcError> {
-    let operation = params
-        .get("operation")
-        .and_then(|v| v.as_str())
-        .filter(|op| *op == "delete_doc" || *op == "delete_folder")
-        .unwrap_or("delete_doc");
-    let recursive = params
-        .get("recursive")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let rel_path = params
-        .get("path")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            IpcError::new("AG_TOOL_ARG", "删除提案缺 path 参数", false, false)
-        })?
-        .trim()
-        .trim_matches('/')
-        .to_string();
-    if rel_path.is_empty() {
-        return Err(IpcError::new(
-            "WS_DELETE_ROOT_DENIED",
-            "不允许删除 workspace 根目录",
-            false,
-            false,
-        ));
-    }
-    let ws = active_ws(state)?;
-    let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
-    if !abs.exists() {
-        return Err(IpcError::new(
-            "WS_NOT_FOUND",
-            &format!("删除目标不存在：{rel_path}"),
-            false,
-            false,
-        ));
-    }
-    // 类型匹配：delete_doc → 文件；delete_folder → 目录。
-    if operation == "delete_doc" && !abs.is_file() {
-        return Err(IpcError::new(
-            "WS_EXISTS",
-            "delete_doc 目标不是文件（目录请用 delete_folder）",
-            false,
-            false,
-        ));
-    }
-    if operation == "delete_folder" && !abs.is_dir() {
-        return Err(IpcError::new(
-            "WS_EXISTS",
-            "delete_folder 目标不是目录（文件请用 delete_doc）",
-            false,
-            false,
-        ));
-    }
-    // 级联清单：目录删除统计子项（供确认卡展示影响范围）。
-    let cascade = if operation == "delete_folder" {
-        let mut count = 0usize;
-        let mut stack = vec![abs.clone()];
-        while let Some(dir) = stack.pop() {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    }
-                    count += 1;
-                }
-            }
-        }
-        count
-    } else {
-        0
-    };
-
-    let diff_id = gen_id("diff");
-    let conn = lock_db(state)?;
-    let payload_ref = serde_json::json!({
-        "action": operation,
-        "recursive": recursive,
-        "cascade": cascade,
-    })
-    .to_string();
-    let target = crate::types::DocRef {
-        workspace_id: ws.workspace_id,
-        doc_type: doc_type_of(&rel_path),
-        rel_path: rel_path.clone(),
-    };
-    let pending = crate::types::PendingDiff {
-        diff_id: diff_id.clone(),
-        target,
-        origin_module: "AG_DELETE".to_string(),
-        status: crate::types::DiffStatus::Pending,
-        created_at: now_millis(),
-        payload_ref,
-    };
-    workspace::diff_apply::persist_diff(&conn, &pending).map_err(|e| {
-        crate::ipc::IpcError::new("WS_DIFF_PERSIST_FAILED", &e.to_string(), false, false)
-    })?;
-    drop(conn);
-    let _ = app;
-
-    let location_label = if operation == "delete_folder" {
-        format!("删除文件夹（递归：{}，子项 {cascade}）", if recursive { "是" } else { "否" })
-    } else {
-        "删除文档".to_string()
-    };
-    let projection = AgentDiffProjection {
-        diff_id: diff_id.clone(),
-        rel_path: rel_path.clone(),
-        patch_kind: operation.to_string(),
-        block_id: None,
-        block_index: None,
-        before_text: if operation == "delete_folder" {
-            format!("{rel_path}（{cascade} 个子项）")
-        } else {
-            rel_path.clone()
-        },
-        after_text: String::new(),
-        location_label,
-        draft_mode: "background".to_string(),
-        snapshot_source: "disk_snapshot".to_string(),
-        base_session_version: None,
-        base_content_hash: None,
-        style_ops: None,
-        block_ops: None,
-        table_ops: None,
-        image_ops: None,
-        batch: None,
-        cross_doc: None,
-    };
-    let _ = read_ctx;
-    Ok(AgentProposeEditResult {
-        diff_id,
-        rel_path,
-        projection,
-        batch: None,
     })
 }
 
@@ -8365,7 +9129,7 @@ fn settle_task_run(
 
 /// AG-1.0-TASKRUN-REWORK-INTENT-01：按目标文档构造可展示 TaskPlan（TERM-AG-018）。
 /// 每文档一对步骤：读取（read_doc）→ 生成修改建议（propose_edit，确认点）；步骤依赖 read→propose。
-/// 计划不预授权、不驱动执行；真实进度由回合事件驱动。
+/// 计划不预授权；执行顺序和真实进度由工具调用/ToolResult 驱动。
 fn build_task_plan(
     task_run_id: &str,
     paths: &[String],
@@ -8409,6 +9173,37 @@ fn build_task_plan(
     }
 }
 
+/// 将持久化 TaskPlan 投影到受信 RuntimeControl：只提供步骤、cursor 和当前可执行步骤，
+/// 不包含模型思维链，也不产生 CapabilityGrant 或文档状态变化。
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-002-DATA-AG-AG-TURN-017
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-002, BR-SYS-STATE-008
+ * term_ref: TERM-AG-018
+ * boundary: in=PersistedTaskPlan | out=RuntimeControlTaskPlanProjection(currentReadyStepOnly)
+ */
+fn task_plan_runtime_projection(plan: &crate::types::TaskPlanV1) -> serde_json::Value {
+    let current_ready_step = ag::task::current_ready_plan_step(plan).map(|step| {
+        serde_json::json!({
+            "stepId": step.step_id,
+            "seq": step.seq,
+            "kind": step.kind,
+            "label": step.label,
+            "requiredTool": step.required_grant,
+            "confirmPoint": step.confirm_point,
+        })
+    });
+    serde_json::json!({
+        "planId": plan.plan_id,
+        "cursor": plan.cursor,
+        "steps": plan.steps,
+        "currentReadyStep": current_ready_step,
+        "executionRule": "Only the currentReadyStep may advance the plan. Tool success or failure is the only source of step state; do not claim completion in text.",
+    })
+}
+
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
 /// 驱动 SM-AG-01 门禁前置（X-SEQ-001：唯一经 AwaitingGate+本次服务端 gatePassed 达 Streaming）
@@ -8432,6 +9227,9 @@ async fn ag_start_turn(
     mentions: Vec<String>,
     block_refs: Vec<BlockRef>,
     references: Vec<ReferencePayload>,
+    continuation_task_run_id: Option<String>,
+    continuation_decision_request_id: Option<String>,
+    continuation_preview_diff_id: Option<String>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -8455,7 +9253,7 @@ async fn ag_start_turn(
         register_active_agent_turn(&state, &session_id, &turn_id)?;
     let terminal_latch = ag::turn::TerminalLatch::default();
 
-    let (_workspace_id_for_turn, workspace_root_path) = {
+    let (workspace_id_for_turn, workspace_root_path) = {
         let conn = state
             .db
             .lock()
@@ -8496,7 +9294,8 @@ async fn ag_start_turn(
     };
 
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：回合开始驱动受限 TaskRun——
-    // 置陈旧活动态为 Interrupted（重启不续跑），再新建/沿用本会话当前回合的 task_run_id。
+    // 应用启动时已清理陈旧活动态（重启不续跑）；此处仅新建/沿用本会话当前目标的 task_run_id，
+    // 不得中断同一进程内 DecisionRequest 确认后的续片段。
     // 真实进度只由回合/步骤/工具事件驱动；DiffCard 经 task_run_id 关联（UNC-09）。
     // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：新消息 gate——存在未决 DecisionRequest 时拒绝新回合
     // （不得绕过待确认，A-AG-M-S-01 §2.2.2；三层分离）。
@@ -8508,26 +9307,105 @@ async fn ag_start_turn(
         let ws = workspace::lifecycle::active_workspace(&conn)
             .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?
             .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
-        ag::task::mark_stale_as_interrupted(&conn, &ws.workspace_id)
-            .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
-        if let Some(request_id) = ag::task::latest_pending_decision_for_session(
-            &conn,
-            &ws.workspace_id,
-            &session_id,
-        )
-        .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
-        {
-            return Err(IpcError::new(
-                "AG_DECISION_PENDING",
-                &format!(
-                    "存在待确认的任务级裁决项（{request_id}），请先完成确认；确认后自动继续下一执行片段。"
-                ),
-                false,
-                false,
-            ));
-        }
-        ag::task::begin_turn(&conn, &ws.workspace_id, &session_id, Some("agent 回合"))
+        if let Some(task_run_id) = continuation_task_run_id.as_deref() {
+            match (
+                continuation_decision_request_id.as_deref(),
+                continuation_preview_diff_id.as_deref(),
+            ) {
+                (Some(decision_request_id), None) => ag::task::begin_confirmed_continuation(
+                    &conn,
+                    &ws.workspace_id,
+                    &session_id,
+                    task_run_id,
+                    decision_request_id,
+                )
+                .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+                .ok_or_else(|| {
+                    IpcError::new(
+                        "AG_TASK_CONTINUATION_INVALID",
+                        "裁决确认已失效，无法继续原任务；请重新发起任务。",
+                        false,
+                        false,
+                    )
+                })?,
+                (None, Some(diff_id)) => {
+                    let checkpoint = ag::task::acknowledged_preview_checkpoint(
+                        &conn,
+                        task_run_id,
+                        &ws.workspace_id,
+                        &session_id,
+                        diff_id,
+                    )
+                    .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+                    .ok_or_else(|| {
+                        IpcError::new(
+                            "AG_PREVIEW_CONTINUATION_INVALID",
+                            "编辑器预览回执已失效或已被消费，无法继续原任务。",
+                            false,
+                            false,
+                        )
+                    })?;
+                    let fresh_snapshot = open_doc_snapshots.iter().any(|snapshot| {
+                        snapshot.rel_path == checkpoint.rel_path
+                            && snapshot.session_version == checkpoint.session_version
+                            && snapshot.content_hash == checkpoint.content_hash
+                    });
+                    if !fresh_snapshot {
+                        return Err(IpcError::new(
+                            "AG_PREVIEW_CONTINUATION_STALE",
+                            "续片段未携带编辑器预览后的最新 LogicalState，已拒绝继续。",
+                            true,
+                            false,
+                        ));
+                    }
+                    ag::task::begin_preview_continuation(&conn, &checkpoint)
+                        .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+                        .ok_or_else(|| {
+                            IpcError::new(
+                                "AG_PREVIEW_CONTINUATION_INVALID",
+                                "编辑器预览回执身份或基线不匹配，无法继续原任务。",
+                                false,
+                                false,
+                            )
+                        })?
+                }
+                _ => {
+                    return Err(IpcError::new(
+                        "AG_TASK_CONTINUATION_INVALID",
+                        "续片段必须且只能提供已确认裁决或已确认预览回执之一。",
+                        false,
+                        false,
+                    ));
+                }
+            }
+        } else {
+            if continuation_decision_request_id.is_some() || continuation_preview_diff_id.is_some() {
+                return Err(IpcError::new(
+                    "AG_TASK_CONTINUATION_INVALID",
+                    "续片段标识不能脱离 TaskRun 使用",
+                    false,
+                    false,
+                ));
+            }
+            if let Some(request_id) = ag::task::latest_pending_decision_for_session(
+                &conn,
+                &ws.workspace_id,
+                &session_id,
+            )
             .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+            {
+                return Err(IpcError::new(
+                    "AG_DECISION_PENDING",
+                    &format!(
+                        "存在待确认的任务级裁决项（{request_id}），请先完成确认；确认后自动继续下一执行片段。"
+                    ),
+                    false,
+                    false,
+                ));
+            }
+            ag::task::begin_turn(&conn, &ws.workspace_id, &session_id, Some("agent 回合"))
+                .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+        }
     };
 
     let read_ctx = ag::blocks::AgentReadContext::new(
@@ -8599,10 +9477,9 @@ async fn ag_start_turn(
         has_selection,
     );
     // AG-1.0-TASKRUN-REWORK-INTENT-01：IntentResult 复杂目标 → 自动创建 TaskPlan（TERM-AG-018）。
-    // 计划为可展示操作计划（读取→生成建议/确认点），不预授权、不驱动执行（执行仍由回合事件驱动）；
+    // 计划为可展示的受控步骤（读取→生成建议）；实际 ToolResult 才推进计划状态和 cursor。
     // 简单单文档局部编辑直行不建；同一 run 已有计划时不重复建。
     {
-        let mut target_paths: Vec<String> = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         if let Some(p) = active_doc_path.as_deref() {
             seen.insert(p.to_string());
@@ -8615,7 +9492,7 @@ async fn ag_start_turn(
                 seen.insert(rel_path.clone());
             }
         }
-        target_paths = seen.into_iter().collect();
+        let target_paths: Vec<String> = seen.into_iter().collect();
         let is_write = matches!(
             intent_result.intent_type,
             ag::context::IntentTypeV1::Edit | ag::context::IntentTypeV1::CreateDocument
@@ -8877,6 +9754,12 @@ async fn ag_start_turn(
     );
     let tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;
+    let task_plan_runtime = state.db.lock().ok().and_then(|conn| {
+        ag::task::active_plan_by_run(&conn, &task_run_id)
+            .ok()
+            .flatten()
+            .map(|plan| task_plan_runtime_projection(&plan))
+    });
     let tool_manifest_hash = ag::context::sha256_text(
         &serde_json::to_string(&tools).map_err(|error| {
             IpcError::new(
@@ -8958,6 +9841,7 @@ async fn ag_start_turn(
             "tokenCount": envelope.token_count,
         })).collect::<Vec<_>>(),
         "capabilityGrant": capability_grant,
+        "taskPlan": task_plan_runtime,
         "estimatedTokens": prompt_package.estimated_tokens,
         "tokenBudget": prompt_package.token_budget,
     });
@@ -9111,6 +9995,47 @@ async fn ag_start_turn(
                 return Ok(());
             }
             ent::gateway::RoundOutcome::Done { stop_reason } => {
+                let plan_incomplete = match state.db.lock() {
+                    Ok(conn) => ag::task::has_incomplete_plan(&conn, &task_run_id).map_err(|error| {
+                        IpcError::new(
+                            "AG_TASK_PLAN_STATE_UNAVAILABLE",
+                            &format!("无法读取 TaskPlan 收束状态：{error}"),
+                            true,
+                            false,
+                        )
+                    }),
+                    Err(_) => Err(IpcError::new(
+                        "AG_TASK_PLAN_STATE_UNAVAILABLE",
+                        "TaskPlan 状态读取失败，不能将任务标记为完成",
+                        true,
+                        false,
+                    )),
+                };
+                match plan_incomplete {
+                    Ok(true) => {
+                        let error = IpcError::new(
+                            "AG_TASK_PLAN_INCOMPLETE",
+                            "复杂任务的 TaskPlan 仍有未完成步骤；任务未被标记为完成。请按 RuntimeControl 的当前步骤继续执行。",
+                            true,
+                            false,
+                        );
+                        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                        if let Ok(conn) = state.db.lock() {
+                            settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                        }
+                        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                        return Ok(());
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                        if let Ok(conn) = state.db.lock() {
+                            settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                        }
+                        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                        return Ok(());
+                    }
+                }
                 if requires_edit_tool
                     && !edit_intent_has_terminal_tool_result(proposed_diff, edit_blocked_reported)
                 {
@@ -9195,24 +10120,62 @@ async fn ag_start_turn(
                     // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
                     let _ = on_event.send(AgTurnEvent::StepProgress {
                         turn_id: turn_id.clone(),
-                        action: "tool".to_string(),
+                        action: if c.name == "propose_decision"
+                            || c.name == "plan_workspace_operation"
+                        {
+                            "deciding".to_string()
+                        } else {
+                            "tool".to_string()
+                        },
                         label: c.name.clone(),
                         detail: None,
                     });
                     let mut diff_event_after_tool: Option<(String, String)> = None;
+                    let mut decision_event_after_tool = None;
+                    let mut preview_checkpoint_after_tool = false;
+                    let mut end_after_diff_proposal = false;
                     let mut mutation_guard = None;
-                    // 注册 + 本轮 CapabilityGrant + target/params 校验后方可执行。
-                    let (result, success) = if let Some(error_msg) = arg_parse_error {
+                    // 注册 + 本轮 CapabilityGrant + 计划就绪步骤校验后方可执行。TaskPlan 只约束其
+                    // 自己登记的工具步骤；辅助工具仍由 CapabilityGrant 决定且不会推进 cursor。
+                    let tool_decision = arg_parse_error.is_none().then(|| {
+                        ag::tool_registry::validate_requested_tool_for_grant(
+                            &c.name,
+                            &params,
+                            &capability_grant,
+                            &turn_id,
+                        )
+                    });
+                    let mut plan_step_start = None;
+                    let plan_guard_error = if matches!(
+                        tool_decision.as_ref(),
+                        Some(ag::tool::ToolDecision::Allow)
+                    ) {
+                        match state.db.lock() {
+                            Ok(conn) => match ag::task::start_next_plan_step_for_tool(
+                                &conn,
+                                &task_run_id,
+                                &c.name,
+                            ) {
+                                Ok(ag::task::PlanToolStart::Untracked) => None,
+                                Ok(start @ ag::task::PlanToolStart::Started { .. }) => {
+                                    plan_step_start = Some(start);
+                                    None
+                                }
+                                Err(error) => Some(format!(
+                                    "TaskPlan 阻止本次工具调用：{error}"
+                                )),
+                            },
+                            Err(_) => Some("TaskPlan 状态读取失败，已拒绝执行工具".to_string()),
+                        }
+                    } else {
+                        None
+                    };
+                    let (mut result, mut success) = if let Some(error_msg) = arg_parse_error {
+                        (error_msg, false)
+                    } else if let Some(error_msg) = plan_guard_error {
                         (error_msg, false)
                     } else {
-                        match
-                            ag::tool_registry::validate_requested_tool_for_grant(
-                                &c.name,
-                                &params,
-                                &capability_grant,
-                                &turn_id,
-                            )
-                        {
+                        match tool_decision.expect("parsed tool arguments must have a validation decision") {
                         ag::tool::ToolDecision::Reject(reason) => (reason, false),
                         ag::tool::ToolDecision::Allow if c.name == "edit_blocked" => {
                             match ag::tool_exec::exec_edit_blocked(&params) {
@@ -9221,6 +10184,126 @@ async fn ag_start_turn(
                                     (result, true)
                                 }
                                 Err(error) => (format!("阻断报告无效：{}", error.message), false),
+                            }
+                        }
+                        // 任务级确认只创建 DecisionRequest，不修改文档或 Diff。成功后当前执行片段必须结束，
+                        // 由下方事件分派统一发送确认卡和 Done，禁止进入下一轮模型循环。
+                        ag::tool::ToolDecision::Allow if c.name == "propose_decision" => {
+                            let kind = params.get("kind").and_then(|value| value.as_str());
+                            let summary = params.get("summary").and_then(|value| value.as_str());
+                            let detail_is_valid = params
+                                .get("detail")
+                                .map(|value| value.is_string())
+                                .unwrap_or(true);
+                            let options_are_valid = params
+                                .get("options")
+                                .map(|value| {
+                                    value.as_array().is_some_and(|options| {
+                                        options.iter().all(|option| {
+                                            option
+                                                .as_str()
+                                                .is_some_and(|option| !option.trim().is_empty())
+                                        })
+                                    })
+                                })
+                                .unwrap_or(true);
+                            match (kind, summary) {
+                                (Some(kind), Some(summary))
+                                    if !kind.trim().is_empty()
+                                        && !summary.trim().is_empty()
+                                        && detail_is_valid
+                                        && options_are_valid =>
+                                {
+                                    let payload = serde_json::json!({
+                                        "summary": summary,
+                                        "detail": params.get("detail").cloned(),
+                                        "options": params.get("options").cloned(),
+                                    });
+                                    match state.db.lock() {
+                                        Ok(conn) => match ag::task::propose_decision(
+                                            &conn,
+                                            &task_run_id,
+                                            kind,
+                                            payload,
+                                        ) {
+                                            Ok(decision) => {
+                                                decision_event_after_tool = Some(decision.clone());
+                                                (
+                                                    serde_json::json!({
+                                                        "summary": "已创建任务级确认请求；当前执行片段已结束，正在等待用户确认或取消。",
+                                                        "request_id": decision.request_id,
+                                                        "status": "waiting_confirm",
+                                                    })
+                                                    .to_string(),
+                                                    true,
+                                                )
+                                            }
+                                            Err(error) => (
+                                                format!("创建任务级确认请求失败：{error}"),
+                                                false,
+                                            ),
+                                        },
+                                        Err(_) => (
+                                            "数据库连接繁忙，无法创建任务级确认请求".to_string(),
+                                            false,
+                                        ),
+                                    }
+                                }
+                                _ => (
+                                    "propose_decision 参数无效：kind、summary 必须为非空字符串；detail 必须为字符串；options 必须是非空字符串数组。".to_string(),
+                                    false,
+                                ),
+                            }
+                        }
+                        // WorkspaceOperation 工具只冻结计划并创建独立 DecisionRequest。成功后与
+                        // propose_decision 一样结束当前片段；真实磁盘副作用只能由确认入口触发。
+                        ag::tool::ToolDecision::Allow if c.name == "plan_workspace_operation" => {
+                            let mut operation_params = params.clone();
+                            if let Some(object) = operation_params.as_object_mut() {
+                                object.insert(
+                                    "taskRunId".into(),
+                                    serde_json::Value::String(task_run_id.clone()),
+                                );
+                                object.insert(
+                                    "sourceTurnId".into(),
+                                    serde_json::Value::String(turn_id.clone()),
+                                );
+                            }
+                            let operation_request = CommandRequest {
+                                command: "ws.plan_operation".into(),
+                                correlation_id: format!("ag-wop-{turn_id}"),
+                                params: operation_params,
+                            };
+                            match route_plan_workspace_operation(&operation_request, &state) {
+                                Ok(value) => {
+                                    match value
+                                        .get("decision_request")
+                                        .cloned()
+                                        .and_then(|decision| serde_json::from_value(decision).ok())
+                                    {
+                                        Some(decision) => {
+                                            decision_event_after_tool = Some(decision);
+                                            (
+                                                serde_json::json!({
+                                                    "summary": "已生成工作区资源操作确认卡；确认前未修改磁盘，当前执行片段已结束。",
+                                                    "plan_id": value.get("plan").and_then(|plan| plan.get("plan_id")),
+                                                    "status": "waiting_confirm",
+                                                })
+                                                .to_string(),
+                                                true,
+                                            )
+                                        }
+                                        None => (
+                                            "资源操作计划已创建，但 DecisionRequest 回执缺失，已停止执行"
+                                                .to_string(),
+                                            false,
+                                        ),
+                                    }
+                                }
+                                Err(error) => (
+                                    format!("生成工作区资源操作计划失败：{}", error.message),
+                                    false,
+                                ),
                             }
                         }
                         // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
@@ -9260,40 +10343,58 @@ async fn ag_start_turn(
                                 ) {
                                     Ok(guard) => {
                                         mutation_guard = Some(guard);
-                                        // AG-DELETE-01：operation=delete_doc/delete_folder →
-                                        // 删除提案（删除确认卡），不走内容 diff 链路。
-                                        if matches!(
-                                            params
-                                                .get("operation")
-                                                .and_then(|v| v.as_str()),
-                                            Some("delete_doc") | Some("delete_folder")
-                                        ) {
-                                            ag_delete_proposal(
-                                                &state,
-                                                &app,
-                                                &params,
-                                                &read_ctx,
-                                                active_doc_path.as_deref(),
-                                                &declared_targets,
-                                            )
-                                        } else {
-                                            ag_propose_edit(
-                                                &state,
-                                                &app,
-                                                &params,
-                                                &read_ctx,
-                                                active_doc_path.as_deref(),
-                                                &declared_targets,
-                                                intent_result.intent_type
-                                                    == ag::context::IntentTypeV1::CreateDocument,
-                                            )
-                                        }
+                                        ag_propose_edit(
+                                            &state,
+                                            &app,
+                                            &params,
+                                            &read_ctx,
+                                            active_doc_path.as_deref(),
+                                            &declared_targets,
+                                        )
                                     }
                                     Err(error) => Err(error),
                                 };
                                 match guarded_result {
-                                    Ok(edit_result) => {
+                                    Ok(mut edit_result) => {
+                                        let needs_preview_checkpoint = matches!(
+                                            edit_result.projection.draft_mode.as_str(),
+                                            "current_editor" | "open_session"
+                                        );
+                                        if needs_preview_checkpoint {
+                                            let checkpoint_result = match state.db.lock() {
+                                                Ok(conn) => ag::task::create_preview_checkpoint(
+                                                    &conn,
+                                                    &task_run_id,
+                                                    &workspace_id_for_turn,
+                                                    &session_id,
+                                                    &turn_id,
+                                                    &edit_result.diff_id,
+                                                    &edit_result.rel_path,
+                                                ),
+                                                Err(_) => Err(rusqlite::Error::InvalidQuery),
+                                            };
+                                            match checkpoint_result {
+                                                Ok(()) => {
+                                                    preview_checkpoint_after_tool = true;
+                                                }
+                                                Err(error) => {
+                                                    edit_result.projection.preview_checkpoint_required = false;
+                                                    // Diff 已经持久化。此处不得把它变成前端不可见的孤儿
+                                                    // 提案，也绝不能在没有 checkpoint 的情况下续用旧 read_ctx。
+                                                    // 因此降级为普通待审 Diff：仍终止本片段，由用户之后显式
+                                                    // 发起新回合；不会 Ack、不会自动续编、不会写盘。
+                                                    eprintln!(
+                                                        "[ag-preview] checkpoint unavailable for diff {}: {error}",
+                                                        edit_result.diff_id
+                                                    );
+                                                }
+                                            }
+                                        }
                                         proposed_diff = true;
+                                        // 无 LogicalState 的 background Diff 同样不得让模型在同一份旧 read_ctx
+                                        // 上继续续编；它没有 PreviewAck checkpoint，需经既有迁移或裁决后由
+                                        // 人类下一次显式操作开启新片段。
+                                        end_after_diff_proposal = true;
                                         proposal_count += 1;
                                         diff_event_after_tool = Some((
                                             edit_result.diff_id.clone(),
@@ -9308,6 +10409,7 @@ async fn ag_start_turn(
                                             "proposal_status": "pending_user_review",
                                             "editor_preview_status": "not_reported",
                                             "disk_persistence_status": "not_saved",
+                                            "preview_checkpoint_required": preview_checkpoint_after_tool,
                                         });
                                         if let Some(batch) = &edit_result.batch {
                                             result["batch"] = serde_json::json!({
@@ -9338,6 +10440,31 @@ async fn ag_start_turn(
                         },
                         }
                     };
+                    if let Some(ag::task::PlanToolStart::Started { plan_id, step_id }) =
+                        plan_step_start.take()
+                    {
+                        match state.db.lock() {
+                            Ok(conn) => {
+                                if let Err(error) = ag::task::finish_plan_step_for_tool(
+                                    &conn,
+                                    &task_run_id,
+                                    &plan_id,
+                                    &step_id,
+                                    success,
+                                ) {
+                                    result = format!(
+                                        "工具执行结果无法收束到 TaskPlan，已停止将其计为计划完成：{error}"
+                                    );
+                                    success = false;
+                                }
+                            }
+                            Err(_) => {
+                                result = "TaskPlan 状态写入失败，已停止将本次工具结果计为计划完成"
+                                    .to_string();
+                                success = false;
+                            }
+                        }
+                    }
                     if success
                         && is_current_doc_read_tool(&c.name, &params, active_doc_path.as_deref())
                     {
@@ -9388,6 +10515,49 @@ async fn ag_start_turn(
                             rel_path,
                             task_run_id: Some(task_run_id.clone()),
                         });
+                    }
+                    if end_after_diff_proposal && success {
+                        // 每张 Diff 都终止当前模型片段，避免在旧 read_ctx 上产生补丁栈。LogicalState
+                        // 分支等待真实预览 Ack；background 分支等待既有迁移/裁决，均不改 DiffCard 或磁盘。
+                        drop(mutation_guard);
+                        if let Ok(conn) = state.db.lock() {
+                            let _ = ag::task::link_turn(&conn, &turn_id, &task_run_id);
+                        }
+                        emit_ag02(&app, &turn_id, TlSt::LoopCompleted);
+                        emit_ag_turn_done(
+                            &on_event,
+                            &terminal_latch,
+                            &app,
+                            &turn_id,
+                            if preview_checkpoint_after_tool { "waiting_preview" } else { "waiting_diff_review" },
+                        );
+                        return Ok(());
+                    }
+                    if let Some(decision) = decision_event_after_tool {
+                        let _ = on_event.send(AgTurnEvent::DecisionRequestProposed {
+                            turn_id: turn_id.clone(),
+                            request_id: decision.request_id,
+                            kind: decision.kind,
+                            payload: decision.payload,
+                        });
+                        emit_ag02(&app, &turn_id, TlSt::LoopCompleted);
+                        if let Ok(conn) = state.db.lock() {
+                            // propose_decision 已将 TaskRun 置 WaitingConfirm；settle 只做同一真实状态的收束。
+                            settle_task_run(
+                                &conn,
+                                &task_run_id,
+                                &turn_id,
+                                ag::task::TurnOutcome::Completed,
+                            );
+                        }
+                        emit_ag_turn_done(
+                            &on_event,
+                            &terminal_latch,
+                            &app,
+                            &turn_id,
+                            "waiting_confirm",
+                        );
+                        return Ok(());
                     }
                     drop(mutation_guard);
                     // 结果回注模型（SM-AG-02 ResultInjecting）。
@@ -10126,6 +11296,19 @@ pub fn run() {
                     );
                 }
             }
+            let interrupted_task_runs = ag::task::mark_all_stale_as_interrupted(&conn)?;
+            if interrupted_task_runs > 0 {
+                eprintln!(
+                    "[agent-task] startup cleanup: interrupted_task_runs={interrupted_task_runs}"
+                );
+            }
+            let interrupted_workspace_operations =
+                workspace::operation::interrupt_nonterminal_plans(&conn)?;
+            if interrupted_workspace_operations > 0 {
+                eprintln!(
+                    "[workspace-operation] startup cleanup: interrupted_plans={interrupted_workspace_operations}"
+                );
+            }
             app.manage(AppState {
                 db: Mutex::new(conn),
                 registry: build_registry(),
@@ -10138,6 +11321,7 @@ pub fn run() {
             dispatch,
             ag_start_turn,
             ag_cancel_turn,
+            ag_ack_preview,
             byok_upload,
             byok_list_providers,
             byok_delete_key,

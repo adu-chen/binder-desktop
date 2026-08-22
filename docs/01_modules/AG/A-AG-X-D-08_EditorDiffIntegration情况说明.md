@@ -13,19 +13,20 @@
 
 ## 1. 模块定位与当前裁决
 
-Editor/Diff Integration 是 Binder 文档代理安全性的最终执行边界：模型生成的内容变化不能直接写进编辑器或
-磁盘，必须先转换为 `ChangeProposal`，由 DE 生成 PendingDiff，交给用户接受或拒绝，再由既有 ED/WS 链处理。
+Editor/Diff Integration 是 Binder 文档内容代理的受控边界：模型生成的内容变化不能直接写入 DiskState，
+必须先转换为 `ChangeProposal`，由 DE 生成 PendingDiff，再由 DE/ED 受控预览进入 LogicalState。
+用户接受只裁决卡片，拒绝在基准有效时精确回滚，保存才把当前 LogicalState 写入 DiskState。
 
-当前等级：`Integrated（自动化边界）`。既有文档编辑、新建空基准、目标守卫、Diff 生成和核心接受/保存链
-已有自动化验证；真实 Tauri/WKWebView 中从 Agent 回合到人工审阅 DiffCard 的 G5 尚未执行。
+当前等级：`Migration Pending`。既有文档内容 Diff 的基准、预览、裁决和保存链已有自动化证据；
+但旧的空基准新建链已被 CreateDocumentBundle 取代，且真实 Tauri/WKWebView 中从 Agent 回合到人工审阅 DiffCard 的 G5 尚未执行。
 
 ## 2. 职责、输入与输出
 
 职责：
 
 - 把获授权的 `propose_edit` 参数转换为 DE 拥有的 `ChangeProposal`。
-- 区分既有文档与新建文档的基准和目标守卫。
-- 保证提案前不改 LogicalState/磁盘，用户裁决后才进入应用链。
+- 既有文档只使用最新 LogicalState 基准；CreateDocumentBundle 只在 WS 已创建真实目标后绑定初始内容 Diff。
+- 保证提案生成本身不直接写 DiskState；受控预览可修改 LogicalState，卡片裁决不重复应用内容。
 - 将 Diff 引用关联到本轮消息，而不是把 Diff 正文复制进会话历史。
 - 对版本过期、内容哈希变化、selection 失效和应用冲突失败关闭。
 
@@ -34,7 +35,7 @@ Editor/Diff Integration 是 Binder 文档代理安全性的最终执行边界：
 - `IntentResultV1` 的目标、操作和约束。
 - 已通过 `CapabilityGrantV1` 校验的 `propose_edit` 参数。
 - 当前 `AgentEditableSnapshot`、块锚、session version/content hash。
-- 新建目标存在性与 Active Workspace 约束。
+- CreateDocumentBundle 的 operation_id、创建后 DiskState 基准与 ED session 基准。
 
 输出：
 
@@ -65,32 +66,32 @@ Intent 解析目标，Context 从最新 LogicalState 读取，Tool grant 授权 
 ↓
 目标、参数、读取前置、session version/content hash 校验
 ↓
-ChangeProposal → DE PendingDiff → DiffCard
+ChangeProposal → DE PendingDiff → ED 受控预览进入 LogicalState → DiffCard
 ↓
 用户 Accept / Reject
 ↓
-Accept：冲突校验后应用到 LogicalState，再由用户/既有流程保存；Reject：文档不变
+Accept：只改卡片生命周期，不重复应用；Reject：基准有效时精确回滚；Save：写入 DiskState
 ```
 
 新建文档：
 
 ```text
-用户明确新建文档与目标路径
+用户明确新建文档，系统在确认前生成目标路径、WorkspaceOperationPlan 与初始内容
 ↓
-目标必须不存在，operation 必须为 replace_document
+用户确认 DecisionRequest，WS 重新核验并创建空的真实目标 DiskState
 ↓
-ChangeProposal(base=None / empty baseline) → PendingDiff
+系统打开目标标签，以 operation_id + 创建后空基准投影普通初始内容 Diff
 ↓
-用户审核后接受或拒绝；接受前不得创建目标文件
+接受只裁决内容卡；三重基线未变时拒绝由 WS 补偿删除本次创建文件，否则卡失效且文件保留
 ```
 
 ## 5. 必须冻结与允许变化
 
 必须冻结：
 
-- 用户接受前，AG 和 Tool 均不得直接改变 LogicalState 或磁盘文档内容。
+- AG 和 Tool 不得直接写入 DiskState；内容只能经 DE/ED 受控预览改变 LogicalState。
 - 1.0 每个提案只能针对一个明确目标；目标必须属于当前文档、显式声明目标或合法新建目标。
-- 既有文档基准来自最新 LogicalState；新建文档基准必须为空且目标必须不存在。
+- 既有文档基准来自最新 LogicalState；新建初始内容 Diff 的基准来自 CreateDocumentBundle 创建后真实空目标与 ED session，不得再使用无 DiskState 空基准创建链。
 - 同一回合的修改目标和授权范围一致；未读长文档、过期 selection、版本/hash 冲突失败关闭。
 - `ChangeProposal` / PendingDiff schema 由 DE 单一拥有，AG 不复制定义。
 - Accept、Reject、Conflict、Save 是不同状态；生成 Diff 不等于已修改或已保存。
@@ -114,9 +115,9 @@ ChangeProposal(base=None / empty baseline) → PendingDiff
 
 至少验证：
 
-1. 修改既有文档生成 Diff 前后，LogicalState 和磁盘内容均不变；Accept 后才发生预期变化。
-2. Reject 后 LogicalState、磁盘和 dirty/save 状态符合既有 ED/WS 契约。
-3. 新建目标存在时拒绝；合法新建以空基准生成 Diff，接受前文件不存在。
+1. 修改既有文档生成 Diff 后，受控预览修改 LogicalState 但 DiskState 不变；Accept 不重复应用，Save 才写入。
+2. Reject 在基准有效时精确恢复 LogicalState；基准已推进时卡失效，不覆盖后续编辑。
+3. CreateDocumentBundle 确认前无磁盘副作用；确认后先建真实目标再投影初始内容 Diff；安全拒绝的三重 guard 与补偿结果可验证。
 4. 未声明目标、跨 workspace 路径、过期 selection、session version/hash 变化分别失败关闭。
 5. 一个回合不能产出多个越界目标提案；同一提案不能同时修改多个文档。
 6. DiffCard 使用 DE 的 diff id/内容，AG 历史只保存 reference；重载会话后仍能正确关联。
@@ -127,7 +128,7 @@ ChangeProposal(base=None / empty baseline) → PendingDiff
 
 ## 8. 下一治理会话入口
 
-必读顺序：A-AG-M-T-01 编辑/Diff 部分 → A-AG-I-P-01 → DE 技术设计 → ED/WS 相关设计 →
+必读顺序：A-AG-M-T-01 编辑/Diff 部分 → A-AG-I-P-01 → A-WS-M-T-02 / A-WS-M-S-02 → DE 技术设计 → ED/WS 相关设计 →
 `lib.rs` 的 `ag_propose_edit` → `de/generate.rs` → Diff store/apply → 前端 DiffCard 与核心链测试。
 
 候选修改范围：AG 提案适配和集成测试。若改变 `ChangeProposal`、PendingDiff、应用或保存状态，必须建立
@@ -135,8 +136,8 @@ AG+DE/ED/WS 跨模块 Scope；不得在 AG 文件内复制或旁路下游契约�
 
 建议会话任务描述：
 
-> 治理 WP-AG10-06 Editor/Diff Integration。核验所有文档修改在用户接受前只形成 DE 修改建议，既有文档
-> 使用最新 LogicalState、新建使用空基准，目标/版本/冲突失败关闭，会话只保存 Diff reference。若修改，
+> 治理 WP-AG10-06 Editor/Diff Integration。核验所有文档内容修改只经 DE/ED 受控预览进入 LogicalState，既有文档
+> 使用最新 LogicalState，新建经 CreateDocumentBundle 先创建真实目标再投影初始内容 Diff，目标/版本/冲突失败关闭，会话只保存 Diff reference。若修改，
 > 先确认是否跨 AG/DE/ED/WS，并用写入前后快照和真实 App 审阅链证明收口。
 
 ## 变更记录
@@ -144,3 +145,4 @@ AG+DE/ED/WS 跨模块 Scope；不得在 AG 文件内复制或旁路下游契约�
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-08 | v1.0 | 建立 Editor/Diff 集成的提案边界、目标与基准规则、跨模块风险和独立验证入口 |
+| 2026-08-21 | v1.1 | 同步三态罗盘与 CreateDocumentBundle：内容 Diff 预览可受控修改 LogicalState，接受只裁决、保存才写盘；旧空基准新建链改为先创建真实目标、再投影初始内容 Diff。当前等级转为 Migration Pending。 |

@@ -89,6 +89,20 @@ pub enum TurnOutcome {
     Cancelled,
 }
 
+/// 已确认的编辑器预览基线。它只作为 AgentTurn 续片段的控制态，绝不携带正文、Diff payload
+/// 或用户裁决结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewCheckpoint {
+    pub diff_id: String,
+    pub task_run_id: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub turn_id: String,
+    pub rel_path: String,
+    pub session_version: u64,
+    pub content_hash: String,
+}
+
 /// 回合开始：返回当前回合的 task_run_id。
 /// - 会话内最近存在**非终态** TaskRun → 沿用（同一目标接力；如上一回合 WaitingConfirm 待裁决后继续）；
 /// - 否则新建（Planned→Executing）。
@@ -125,6 +139,193 @@ pub fn begin_turn(
         rusqlite::params![id, workspace_id, session_id, intent_summary, now],
     )?;
     Ok(id)
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-004, BR-AG-DATA-001-EFFECT-AG-AG-TURN-004
+ * type:     EFFECT
+ * chain:    AG-TURN, DE-DIFF, ED-EDIT
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
+ * term_ref: TERM-AG-015, TERM-ED-008
+ * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite)
+ */
+/// 为一个会改变已有 LogicalState 的 pending Diff 建立续片段检查点。创建卡片不等于预览成功：
+/// checkpoint 只能处于 awaiting_ack，直到编辑器回报实际 sessionVersion/contentHash。
+pub fn create_preview_checkpoint(
+    conn: &Connection,
+    task_run_id: &str,
+    workspace_id: &str,
+    session_id: &str,
+    turn_id: &str,
+    diff_id: &str,
+    rel_path: &str,
+) -> rusqlite::Result<()> {
+    let run_matches: Option<String> = conn
+        .query_row(
+            "SELECT task_run_id FROM task_runs WHERE task_run_id=?1 AND workspace_id=?2 AND session_id=?3 AND status='executing'",
+            rusqlite::params![task_run_id, workspace_id, session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if run_matches.is_none() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "preview checkpoint requires the active task run".to_string(),
+        ));
+    }
+    conn.execute(
+        "INSERT INTO task_preview_checkpoints \
+         (diff_id, task_run_id, workspace_id, session_id, turn_id, rel_path, status, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'awaiting_ack', ?7)",
+        rusqlite::params![
+            diff_id,
+            task_run_id,
+            workspace_id,
+            session_id,
+            turn_id,
+            rel_path,
+            now_millis()
+        ],
+    )?;
+    Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005
+ * type:     GUARD
+ * chain:    AG-TURN, DE-DIFF, ED-EDIT
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
+ * term_ref: TERM-AG-015, TERM-ED-008
+ * boundary: in=EditorAppliedLogicalStateVersionHash | out=AcknowledgedPreviewCheckpoint(rejectsWrongSessionTurnDiffPathOrTerminalDiff)
+ */
+/// 接收真实 ED LogicalState 预览回执。只接受对应 pending Diff 的第一份回执；模型文本、卡片显示态
+/// 和旧快照均不能伪造此转移。
+pub fn acknowledge_preview_checkpoint(
+    conn: &Connection,
+    checkpoint: &PreviewCheckpoint,
+) -> rusqlite::Result<()> {
+    let pending_diff: Option<String> = conn
+        .query_row(
+            "SELECT d.diff_id FROM pending_diffs d \
+             JOIN task_runs r ON r.workspace_id=d.workspace_id \
+             WHERE d.diff_id=?1 AND d.status='pending' AND r.task_run_id=?2",
+            rusqlite::params![checkpoint.diff_id, checkpoint.task_run_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if pending_diff.is_none() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "preview acknowledgement requires a pending diff".to_string(),
+        ));
+    }
+    let changed = conn.execute(
+        "UPDATE task_preview_checkpoints SET status='acknowledged', session_version=?1, content_hash=?2, acknowledged_at=?3 \
+         WHERE diff_id=?4 AND task_run_id=?5 AND workspace_id=?6 AND session_id=?7 AND turn_id=?8 AND rel_path=?9 \
+         AND status='awaiting_ack'",
+        rusqlite::params![
+            checkpoint.session_version as i64,
+            checkpoint.content_hash,
+            now_millis(),
+            checkpoint.diff_id,
+            checkpoint.task_run_id,
+            checkpoint.workspace_id,
+            checkpoint.session_id,
+            checkpoint.turn_id,
+            checkpoint.rel_path,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "preview acknowledgement does not match an awaiting checkpoint".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 读取已确认但尚未消费的 checkpoint，供续片段入口先比对新采集的 OpenDocSnapshot。
+pub fn acknowledged_preview_checkpoint(
+    conn: &Connection,
+    task_run_id: &str,
+    workspace_id: &str,
+    session_id: &str,
+    diff_id: &str,
+) -> rusqlite::Result<Option<PreviewCheckpoint>> {
+    conn.query_row(
+        "SELECT diff_id, task_run_id, workspace_id, session_id, turn_id, rel_path, session_version, content_hash \
+         FROM task_preview_checkpoints WHERE diff_id=?1 AND task_run_id=?2 AND workspace_id=?3 AND session_id=?4 \
+         AND status='acknowledged'",
+        rusqlite::params![diff_id, task_run_id, workspace_id, session_id],
+        |row| {
+            Ok(PreviewCheckpoint {
+                diff_id: row.get(0)?,
+                task_run_id: row.get(1)?,
+                workspace_id: row.get(2)?,
+                session_id: row.get(3)?,
+                turn_id: row.get(4)?,
+                rel_path: row.get(5)?,
+                session_version: row.get::<_, i64>(6)? as u64,
+                content_hash: row.get(7)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006
+ * type:     GUARD
+ * chain:    AG-TURN, ED-EDIT
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
+ * term_ref: TERM-AG-015, TERM-ED-008
+ * boundary: in=FreshOpenDocSnapshotMatchingAcknowledgedPreviewCheckpoint | out=SameTaskRunContinuationIdentity(consumedExactlyOnceNoBackgroundQueue)
+ */
+/// 消费一次已确认预览检查点，授权同一 TaskRun 的下一 AgentTurn。必须再次传入和 Ack 完全一致的
+/// fresh LogicalState 基线；这切断旧 AgentReadContext 与新 Diff 的联系。
+pub fn begin_preview_continuation(
+    conn: &Connection,
+    checkpoint: &PreviewCheckpoint,
+) -> rusqlite::Result<Option<String>> {
+    let changed = conn.execute(
+        "UPDATE task_preview_checkpoints SET status='consumed', consumed_at=?1 \
+         WHERE diff_id=?2 AND task_run_id=?3 AND workspace_id=?4 AND session_id=?5 AND turn_id=?6 AND rel_path=?7 \
+         AND session_version=?8 AND content_hash=?9 AND status='acknowledged' \
+         AND EXISTS (SELECT 1 FROM task_runs r WHERE r.task_run_id=?3 AND r.workspace_id=?4 AND r.session_id=?5 AND r.status='executing')",
+        rusqlite::params![
+            now_millis(),
+            checkpoint.diff_id,
+            checkpoint.task_run_id,
+            checkpoint.workspace_id,
+            checkpoint.session_id,
+            checkpoint.turn_id,
+            checkpoint.rel_path,
+            checkpoint.session_version as i64,
+            checkpoint.content_hash,
+        ],
+    )?;
+    if changed == 1 {
+        conn.execute(
+            "UPDATE task_runs SET updated_at=?1 WHERE task_run_id=?2",
+            rusqlite::params![now_millis(), checkpoint.task_run_id],
+        )?;
+        Ok(Some(checkpoint.task_run_id.clone()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 仅供正常回合收束使用：存在未消耗的预览检查点时，TaskRun 仍在等待本地事实，不能被标为 Completed。
+pub fn has_pending_preview_checkpoint(
+    conn: &Connection,
+    task_run_id: &str,
+) -> rusqlite::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM task_preview_checkpoints WHERE task_run_id=?1 AND status IN ('awaiting_ack','acknowledged')",
+        rusqlite::params![task_run_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 fn latest_non_terminal_id(
@@ -224,6 +425,9 @@ pub fn settle_turn(
     outcome: TurnOutcome,
 ) -> rusqlite::Result<TaskRunStatus> {
     let status = match outcome {
+        TurnOutcome::Completed if has_pending_preview_checkpoint(conn, task_run_id)? => {
+            TaskRunStatus::Executing
+        }
         TurnOutcome::Completed if has_pending_decision(conn, task_run_id)? => {
             TaskRunStatus::WaitingConfirm
         }
@@ -286,12 +490,36 @@ pub fn latest_pending_decision_for_session(
 
 /// 发起任务级裁决请求（TERM-AG-017）：INSERT + 置 task_run 为 waiting_confirm。
 /// 仅此处可将 TaskRun 置 WaitingConfirm（confirm_point 唯一来源）。
+pub const DECISION_KINDS: &[&str] = &["permission", "plan_choice", "scope", "manual_confirm"];
+
+pub fn is_supported_decision_kind(kind: &str) -> bool {
+    DECISION_KINDS.contains(&kind)
+}
+
 pub fn propose_decision(
     conn: &Connection,
     task_run_id: &str,
     kind: &str,
     payload: serde_json::Value,
 ) -> rusqlite::Result<DecisionRequestV1> {
+    if !is_supported_decision_kind(kind) {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "unsupported decision kind: {kind}"
+        )));
+    }
+    let run = load_task_run(conn, task_run_id)?.ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName(format!("unknown task run: {task_run_id}"))
+    })?;
+    if run.status != TaskRunStatus::Executing {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "task run is not executing: {task_run_id}"
+        )));
+    }
+    if has_pending_decision(conn, task_run_id)? {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "task run already has a pending decision: {task_run_id}"
+        )));
+    }
     let request_id = format!(
         "decision-{}-{}",
         task_run_id,
@@ -320,12 +548,12 @@ pub fn propose_decision(
 }
 
 /// 裁决任务级请求（userConfirm/userCancel 真实入口）：confirm → Executing（可自动下一片段），
-/// cancel → Cancelled。返回裁决后的 task_run 状态。
+/// cancel → Cancelled。返回已裁决的 TaskRun 身份及其状态，供受控续片段绑定。
 pub fn resolve_decision(
     conn: &Connection,
     request_id: &str,
     outcome: &str,
-) -> rusqlite::Result<TaskRunStatus> {
+) -> rusqlite::Result<(String, TaskRunStatus)> {
     let task_run_id: String = conn.query_row(
         "SELECT task_run_id FROM decision_requests WHERE request_id=?1 AND status='proposed'",
         rusqlite::params![request_id],
@@ -349,7 +577,36 @@ pub fn resolve_decision(
             task_run_id
         ],
     )?;
-    Ok(status)
+    Ok((task_run_id, status))
+}
+
+/// 受控续片段入口：只允许使用刚刚确认的 DecisionRequest 继续其所属 TaskRun。
+/// 不依赖“最近活动任务”排序，避免同会话存在其他任务时接错身份。
+pub fn begin_confirmed_continuation(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    task_run_id: &str,
+    decision_request_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    let matched: Option<String> = conn
+        .query_row(
+            "SELECT r.task_run_id FROM task_runs r \
+             JOIN decision_requests d ON d.task_run_id=r.task_run_id \
+             WHERE r.task_run_id=?1 AND r.workspace_id=?2 AND r.session_id=?3 \
+             AND r.status='executing' AND d.request_id=?4 \
+             AND d.status='resolved' AND d.outcome='confirm'",
+            rusqlite::params![task_run_id, workspace_id, session_id, decision_request_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(ref id) = matched {
+        conn.execute(
+            "UPDATE task_runs SET updated_at=?1 WHERE task_run_id=?2",
+            rusqlite::params![now_millis(), id],
+        )?;
+    }
+    Ok(matched)
 }
 
 fn decision_row(
@@ -374,14 +631,24 @@ fn decision_row(
     })
 }
 
-/// 应用启动清理（不跨重启续跑，BR-SYS-STATE-008）：把 workspace 内所有非终态 TaskRun 置
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-002
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
+ * term_ref: TERM-AG-015
+ * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation)
+ */
+/// 应用启动清理（不跨重启续跑，BR-SYS-STATE-008）：把所有 workspace 的非终态 TaskRun 置
 /// Interrupted（展示"中断可重试"）；新回合 begin_turn 将新建（retry 创建新回合）。
-pub fn mark_stale_as_interrupted(conn: &Connection, workspace_id: &str) -> rusqlite::Result<usize> {
+/// 此函数只能由应用启动恢复路径调用，不能在每个 AgentTurn 入口调用，否则会中断同一进程内的续片段。
+pub fn mark_all_stale_as_interrupted(conn: &Connection) -> rusqlite::Result<usize> {
     let n = conn.execute(
         "UPDATE task_runs SET status='interrupted', updated_at=?1 \
-         WHERE workspace_id=?2 AND status NOT IN \
+         WHERE status NOT IN \
          ('completed','failed','cancelled','interrupted')",
-        rusqlite::params![now_millis(), workspace_id],
+        rusqlite::params![now_millis()],
     )?;
     Ok(n)
 }
@@ -524,6 +791,203 @@ pub fn create_plan(conn: &Connection, plan: &TaskPlanV1) -> rusqlite::Result<()>
         )?;
     }
     Ok(())
+}
+
+/// 当前 TaskRun 的唯一执行计划。复杂任务创建时保证至多一份；查询层仍保留 list 接口供历史展示。
+pub fn active_plan_by_run(conn: &Connection, task_run_id: &str) -> rusqlite::Result<Option<TaskPlanV1>> {
+    Ok(list_plans_by_run(conn, task_run_id)?.into_iter().next())
+}
+
+/// 计划工具入口的结果：未追踪工具不推进计划；已启动步骤必须在真实 ToolResult 后收束。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanToolStart {
+    Untracked,
+    Started { plan_id: String, step_id: String },
+}
+
+fn is_plan_step_success(status: TaskStepStatus) -> bool {
+    status == TaskStepStatus::Ok
+}
+
+fn is_plan_step_terminal(status: TaskStepStatus) -> bool {
+    matches!(status, TaskStepStatus::Ok | TaskStepStatus::Failed | TaskStepStatus::Cancelled)
+}
+
+fn first_ready_plan_step_index(plan: &TaskPlanV1) -> Option<usize> {
+    let mut ordered = plan.steps.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(_, step)| step.seq);
+    ordered.into_iter().find_map(|(index, step)| {
+        if step.status != TaskStepStatus::Pending || step.seq < plan.cursor {
+            return None;
+        }
+        let deps_ready = step.deps.iter().all(|dep_id| {
+            plan.steps
+                .iter()
+                .find(|candidate| candidate.step_id == *dep_id)
+                .map(|candidate| is_plan_step_success(candidate.status))
+                .unwrap_or(false)
+        });
+        deps_ready.then_some(index)
+    })
+}
+
+fn plan_next_cursor(plan: &TaskPlanV1) -> i32 {
+    plan.steps
+        .iter()
+        .filter(|step| is_plan_step_terminal(step.status))
+        .map(|step| step.seq + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+fn persist_plan_state(
+    tx: &rusqlite::Transaction<'_>,
+    plan: &TaskPlanV1,
+    updated_at: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE task_plans SET plan_json=?1, updated_at=?2 WHERE plan_id=?3 AND task_run_id=?4",
+        rusqlite::params![
+            serde_json::to_string(plan).unwrap_or_else(|_| "{}".to_string()),
+            updated_at,
+            plan.plan_id,
+            plan.task_run_id,
+        ],
+    )?;
+    for step in &plan.steps {
+        tx.execute(
+            "UPDATE task_plan_steps SET status=?1, updated_at=?2 WHERE step_id=?3 AND plan_id=?4",
+            rusqlite::params![
+                serde_json::to_string(&step.status)
+                    .unwrap_or_else(|_| "\"pending\"".to_string()),
+                updated_at,
+                step.step_id,
+                plan.plan_id,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn plan_error(message: impl Into<String>) -> rusqlite::Error {
+    rusqlite::Error::InvalidParameterName(message.into())
+}
+
+/// 只允许启动当前依赖已满足的计划步骤。计划以 required_grant 对齐工具名；未登记在计划中的辅助工具
+/// 不推进 cursor，但仍由既有 CapabilityGrant 决定是否能调用。
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001
+ * type:     GUARD
+ * chain:    AG-TURN
+ * rules:    BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
+ * term_ref: TERM-AG-018
+ * boundary: in=TaskPlanCurrentCursorDependenciesAndRequestedTool | out=PlanToolStart(rejectOutOfOrderOrTerminalStep)
+ */
+pub fn start_next_plan_step_for_tool(
+    conn: &Connection,
+    task_run_id: &str,
+    tool_name: &str,
+) -> rusqlite::Result<PlanToolStart> {
+    let Some(mut plan) = active_plan_by_run(conn, task_run_id)? else {
+        return Ok(PlanToolStart::Untracked);
+    };
+    if plan.steps.iter().any(|step| step.status == TaskStepStatus::Running) {
+        return Err(plan_error("TaskPlan 已有运行中步骤，不能并行推进"));
+    }
+    if plan
+        .steps
+        .iter()
+        .any(|step| step.status == TaskStepStatus::Failed || step.status == TaskStepStatus::Cancelled)
+    {
+        return Err(plan_error("TaskPlan 已有失败或取消步骤，不能继续执行"));
+    }
+    let tracked_tool = plan
+        .steps
+        .iter()
+        .any(|step| step.required_grant.as_deref() == Some(tool_name));
+    if !tracked_tool {
+        return Ok(PlanToolStart::Untracked);
+    }
+    let ready_index = first_ready_plan_step_index(&plan).ok_or_else(|| {
+        plan_error("TaskPlan 没有依赖已满足的待执行步骤")
+    })?;
+    let ready_step = &plan.steps[ready_index];
+    if ready_step.required_grant.as_deref() != Some(tool_name) {
+        return Err(plan_error(format!(
+            "TaskPlan 当前应先执行 {}（{}），不能执行 {tool_name}",
+            ready_step.label,
+            ready_step.required_grant.as_deref().unwrap_or("未声明工具"),
+        )));
+    }
+    let step_id = ready_step.step_id.clone();
+    plan.steps[ready_index].status = TaskStepStatus::Running;
+    plan.updated_at = now_millis();
+    let tx = conn.unchecked_transaction()?;
+    persist_plan_state(&tx, &plan, plan.updated_at)?;
+    tx.commit()?;
+    Ok(PlanToolStart::Started {
+        plan_id: plan.plan_id,
+        step_id,
+    })
+}
+
+/// 将已启动步骤收束到真实 ToolResult。成功才推进 cursor；失败保持 cursor 并成为计划终止边界。
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
+ * term_ref: TERM-AG-018
+ * boundary: in=StartedTaskPlanStepAndToolResult | out=PersistedTaskPlanStepStatusAndCursor
+ */
+pub fn finish_plan_step_for_tool(
+    conn: &Connection,
+    task_run_id: &str,
+    plan_id: &str,
+    step_id: &str,
+    success: bool,
+) -> rusqlite::Result<TaskPlanV1> {
+    let mut plan = active_plan_by_run(conn, task_run_id)?.ok_or_else(|| {
+        plan_error(format!("TaskRun 不存在 TaskPlan: {task_run_id}"))
+    })?;
+    if plan.plan_id != plan_id {
+        return Err(plan_error("TaskPlan 身份不匹配，拒绝收束步骤"));
+    }
+    let step = plan
+        .steps
+        .iter_mut()
+        .find(|candidate| candidate.step_id == step_id)
+        .ok_or_else(|| plan_error(format!("TaskPlan 不存在步骤: {step_id}")))?;
+    if step.status != TaskStepStatus::Running {
+        return Err(plan_error(format!("TaskPlan 步骤未处于运行中状态: {step_id}")));
+    }
+    step.status = if success {
+        TaskStepStatus::Ok
+    } else {
+        TaskStepStatus::Failed
+    };
+    if success {
+        plan.cursor = plan_next_cursor(&plan);
+    }
+    plan.updated_at = now_millis();
+    let tx = conn.unchecked_transaction()?;
+    persist_plan_state(&tx, &plan, plan.updated_at)?;
+    tx.commit()?;
+    Ok(plan)
+}
+
+/// 当前计划是否还有未成功收束步骤。无计划的简单任务返回 false。
+pub fn has_incomplete_plan(conn: &Connection, task_run_id: &str) -> rusqlite::Result<bool> {
+    Ok(active_plan_by_run(conn, task_run_id)?
+        .map(|plan| plan.steps.iter().any(|step| step.status != TaskStepStatus::Ok))
+        .unwrap_or(false))
+}
+
+/// 供 RuntimeControl 使用的当前就绪步骤（非模型思维链，只公开结构化计划事实）。
+pub fn current_ready_plan_step(plan: &TaskPlanV1) -> Option<&TaskPlanStepV1> {
+    first_ready_plan_step_index(plan).and_then(|index| plan.steps.get(index))
 }
 
 /// 按 run 列出 TaskPlan（updated_at 倒序）。
@@ -679,10 +1143,22 @@ mod tests {
         // 任意新消息不绕回：begin_turn 不沿用 waiting_confirm → 新建
         let id2 = begin_turn(&conn, "ws1", "s1", Some("继续")).unwrap();
         assert_ne!(id, id2);
-        // 裁决 confirm → Executing（可自动下一片段）
-        let st2 = resolve_decision(&conn, &dr.request_id, "confirm").unwrap();
+        // 裁决 confirm → Executing（可自动下一片段）；续片段必须沿用同一 TaskRun，不能新建身份。
+        let (resolved_run_id, st2) = resolve_decision(&conn, &dr.request_id, "confirm").unwrap();
         assert_eq!(st2, Executing);
+        assert_eq!(resolved_run_id, id);
         assert!(!has_pending_decision(&conn, &id).unwrap());
+        let continuation_id = begin_confirmed_continuation(
+            &conn,
+            "ws1",
+            "s1",
+            &resolved_run_id,
+            &dr.request_id,
+        )
+        .unwrap();
+        assert_eq!(continuation_id.as_deref(), Some(id.as_str()));
+        // 最近任务是后来的 id2；受控续片段仍必须绑定确认来源所属的 id。
+        assert_ne!(continuation_id.as_deref(), Some(id2.as_str()));
     }
 
     // covers: BR-SYS-STATE-008
@@ -692,10 +1168,87 @@ mod tests {
         let conn = fresh();
         let id = begin_turn(&conn, "ws1", "s1", None).unwrap();
         let dr = propose_decision(&conn, &id, "permission", serde_json::json!({})).unwrap();
-        let st = resolve_decision(&conn, &dr.request_id, "cancel").unwrap();
+        let (_, st) = resolve_decision(&conn, &dr.request_id, "cancel").unwrap();
         assert_eq!(st, Cancelled);
         // 已 resolved 的 request 不可再裁决
         assert!(resolve_decision(&conn, &dr.request_id, "confirm").is_err());
+    }
+
+    // covers: BR-SYS-STATE-008, BR-AG-DATA-001
+    // 连续 Diff 的下一片段只可由真实 LogicalState 回执授权：卡片生成不等于预览，身份/基线不符或
+    // 重复消费均失败关闭；等待 Ack 时 TaskRun 不得被 settle 为 completed。
+    #[test]
+    fn preview_checkpoint_requires_pending_diff_ack_and_consumes_once() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)",
+            [],
+        )
+        .unwrap();
+        let task_run_id = begin_turn(&conn, "ws1", "s-preview", Some("连续编辑")).unwrap();
+        conn.execute(
+            "INSERT INTO pending_diffs (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at) \
+             VALUES ('diff-preview','ws1','notes/a.md','AG','pending','payload-preview',1)",
+            [],
+        )
+        .unwrap();
+        create_preview_checkpoint(
+            &conn,
+            &task_run_id,
+            "ws1",
+            "s-preview",
+            "turn-preview",
+            "diff-preview",
+            "notes/a.md",
+        )
+        .unwrap();
+        assert!(has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
+        assert_eq!(
+            settle_turn(&conn, &task_run_id, TurnOutcome::Completed).unwrap(),
+            Executing,
+            "等待真实预览时不得把 TaskRun 伪装为 completed"
+        );
+
+        let valid = PreviewCheckpoint {
+            diff_id: "diff-preview".to_string(),
+            task_run_id: task_run_id.clone(),
+            workspace_id: "ws1".to_string(),
+            session_id: "s-preview".to_string(),
+            turn_id: "turn-preview".to_string(),
+            rel_path: "notes/a.md".to_string(),
+            session_version: 9,
+            content_hash: "hash-after-preview".to_string(),
+        };
+        let mut wrong_session = valid.clone();
+        wrong_session.session_id = "s-other".to_string();
+        assert!(acknowledge_preview_checkpoint(&conn, &wrong_session).is_err());
+        acknowledge_preview_checkpoint(&conn, &valid).unwrap();
+        assert!(acknowledge_preview_checkpoint(&conn, &valid).is_err());
+        assert!(has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
+
+        let mut stale = valid.clone();
+        stale.content_hash = "old-hash".to_string();
+        assert_eq!(begin_preview_continuation(&conn, &stale).unwrap(), None);
+        assert_eq!(begin_preview_continuation(&conn, &valid).unwrap(), Some(task_run_id.clone()));
+        assert_eq!(begin_preview_continuation(&conn, &valid).unwrap(), None);
+        assert!(!has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
+    }
+
+    // covers: BR-SYS-STATE-008, BR-AG-STATE-002
+    // 模型/IPC 都必须经过同一个裁决守卫：仅受支持 kind、仅 executing、每个任务当前只可有一个 pending。
+    #[test]
+    fn decision_request_rejects_invalid_kind_and_duplicate_without_state_change() {
+        let conn = fresh();
+        let id = begin_turn(&conn, "ws1", "s1", None).unwrap();
+
+        assert!(propose_decision(&conn, &id, "unknown", serde_json::json!({})).is_err());
+        assert_eq!(load_task_run(&conn, &id).unwrap().unwrap().status, Executing);
+
+        let decision = propose_decision(&conn, &id, "scope", serde_json::json!({})).unwrap();
+        assert_eq!(decision.kind, "scope");
+        assert_eq!(load_task_run(&conn, &id).unwrap().unwrap().status, WaitingConfirm);
+        assert!(propose_decision(&conn, &id, "permission", serde_json::json!({})).is_err());
+        assert_eq!(pending_decision(&conn, &id).unwrap().unwrap().request_id, decision.request_id);
     }
 
     // covers: BR-SYS-STATE-008
@@ -743,6 +1296,117 @@ mod tests {
         assert_eq!(plans[0].cursor, 2);
     }
 
+    // covers: BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
+    // 复杂任务的计划只由真实工具结果推进：依赖、running、成功 cursor 与失败终止均由持久计划状态决定。
+    #[test]
+    fn task_plan_executor_advances_only_the_next_ready_tool_result() {
+        let conn = fresh();
+        let task_run_id = begin_turn(&conn, "ws1", "s-plan", Some("读取并修改两份文档")).unwrap();
+        let plan = TaskPlanV1 {
+            plan_id: "plan-executor".to_string(),
+            task_run_id: task_run_id.clone(),
+            steps: vec![
+                TaskPlanStepV1 {
+                    step_id: "read-0".to_string(),
+                    seq: 0,
+                    kind: "read".to_string(),
+                    label: "读取 a.md".to_string(),
+                    deps: vec![],
+                    required_grant: Some("read_doc".to_string()),
+                    confirm_point: false,
+                    status: TaskStepStatus::Pending,
+                },
+                TaskPlanStepV1 {
+                    step_id: "propose-0".to_string(),
+                    seq: 1,
+                    kind: "propose".to_string(),
+                    label: "提案 a.md".to_string(),
+                    deps: vec!["read-0".to_string()],
+                    required_grant: Some("propose_edit".to_string()),
+                    confirm_point: true,
+                    status: TaskStepStatus::Pending,
+                },
+            ],
+            cursor: 0,
+            created_at: 1,
+            updated_at: 1,
+        };
+        create_plan(&conn, &plan).unwrap();
+
+        // 非计划工具可由既有 CapabilityGrant 单独决定，但绝不推进计划。
+        assert_eq!(
+            start_next_plan_step_for_tool(&conn, &task_run_id, "list_docs").unwrap(),
+            PlanToolStart::Untracked
+        );
+        assert_eq!(active_plan_by_run(&conn, &task_run_id).unwrap().unwrap().cursor, 0);
+        // 依赖未满足时，不可跳过 read 直接提案。
+        assert!(start_next_plan_step_for_tool(&conn, &task_run_id, "propose_edit").is_err());
+
+        let read_start = start_next_plan_step_for_tool(&conn, &task_run_id, "read_doc").unwrap();
+        let PlanToolStart::Started { plan_id, step_id } = read_start else {
+            panic!("read_doc 应启动当前就绪步骤");
+        };
+        assert_eq!(
+            active_plan_by_run(&conn, &task_run_id).unwrap().unwrap().steps[0].status,
+            TaskStepStatus::Running
+        );
+        let after_read = finish_plan_step_for_tool(
+            &conn,
+            &task_run_id,
+            &plan_id,
+            &step_id,
+            true,
+        )
+        .unwrap();
+        assert_eq!(after_read.cursor, 1);
+        assert_eq!(after_read.steps[0].status, TaskStepStatus::Ok);
+        assert_eq!(current_ready_plan_step(&after_read).unwrap().step_id, "propose-0");
+
+        let propose_start = start_next_plan_step_for_tool(&conn, &task_run_id, "propose_edit").unwrap();
+        let PlanToolStart::Started { plan_id, step_id } = propose_start else {
+            panic!("propose_edit 应在 read 成功后启动");
+        };
+        let after_propose = finish_plan_step_for_tool(
+            &conn,
+            &task_run_id,
+            &plan_id,
+            &step_id,
+            true,
+        )
+        .unwrap();
+        assert_eq!(after_propose.cursor, 2);
+        assert!(current_ready_plan_step(&after_propose).is_none());
+        assert!(!has_incomplete_plan(&conn, &task_run_id).unwrap());
+        // 已收束的计划不得被重复工具调用推进。
+        assert!(start_next_plan_step_for_tool(&conn, &task_run_id, "read_doc").is_err());
+
+        let failed_task_run = begin_turn(&conn, "ws1", "s-failed-plan", Some("失败计划")).unwrap();
+        let mut failed_plan = plan.clone();
+        failed_plan.plan_id = "plan-failed".to_string();
+        failed_plan.task_run_id = failed_task_run.clone();
+        failed_plan.cursor = 0;
+        for step in &mut failed_plan.steps {
+            step.status = TaskStepStatus::Pending;
+        }
+        create_plan(&conn, &failed_plan).unwrap();
+        let PlanToolStart::Started { plan_id, step_id } =
+            start_next_plan_step_for_tool(&conn, &failed_task_run, "read_doc").unwrap()
+        else {
+            panic!("read_doc 应启动失败案例的首步");
+        };
+        let after_failure = finish_plan_step_for_tool(
+            &conn,
+            &failed_task_run,
+            &plan_id,
+            &step_id,
+            false,
+        )
+        .unwrap();
+        assert_eq!(after_failure.steps[0].status, TaskStepStatus::Failed);
+        assert!(has_incomplete_plan(&conn, &failed_task_run).unwrap());
+        assert!(start_next_plan_step_for_tool(&conn, &failed_task_run, "read_doc").is_err());
+    }
+
     // covers: BR-SYS-STATE-008
     // AG-1.0-TASKRUN-REWORK-INTENT-01：复杂目标判定（多文档 / 单文档整篇信号建计划；简单局部编辑直行）。
     #[test]
@@ -762,22 +1426,25 @@ mod tests {
     }
 
     // covers: BR-SYS-STATE-008
-    // 重启不续跑：陈旧活动态置 Interrupted；新回合新建（retry 创建新回合）。
+    // 重启不续跑：应用启动时陈旧活动态置 Interrupted；新回合新建（retry 创建新回合）。
     #[test]
     fn stale_active_runs_become_interrupted_on_startup() {
         let conn = fresh();
         let id = begin_turn(&conn, "ws1", "s1", None).unwrap();
+        let other_workspace_id = begin_turn(&conn, "ws2", "s2", None).unwrap();
         assert_eq!(
-            mark_stale_as_interrupted(&conn, "ws1").unwrap(),
-            1,
-            "活动态应置 Interrupted"
+            mark_all_stale_as_interrupted(&conn).unwrap(),
+            2,
+            "启动恢复必须清理所有 workspace 的活动态"
         );
         let run = load_task_run(&conn, &id).unwrap().unwrap();
         assert_eq!(run.status, Interrupted);
+        let other_workspace_run = load_task_run(&conn, &other_workspace_id).unwrap().unwrap();
+        assert_eq!(other_workspace_run.status, Interrupted);
         // 中断后新回合不沿用（新建）
         let id2 = begin_turn(&conn, "ws1", "s1", None).unwrap();
         assert_ne!(id, id2);
-        assert_eq!(mark_stale_as_interrupted(&conn, "ws1").unwrap(), 1);
+        assert_eq!(mark_all_stale_as_interrupted(&conn).unwrap(), 1);
     }
 
     // covers: BR-SYS-STATE-008

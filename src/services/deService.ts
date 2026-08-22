@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { deStore, type DiffView, type ExpiredReason } from "../store/deStore";
 import { edStore } from "../store/edStore";
 import { closeStore } from "../store/closeStore";
+import { tabsStore } from "../store/tabsStore";
 import { openDocument, persistSessionSnapshot } from "./edService";
+import { loadDocs } from "./wsService";
 import { applyEditOps, getActiveDocumentContent, getActiveEditor } from "./edLocate";
 import type { DocumentImageSnapshot } from "./edImageOps";
 import {
@@ -51,7 +53,7 @@ interface PendingDiffDto {
 
 export interface DiffDetailDto extends PendingDiffDto {
   projection?: {
-    patch_kind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops" | "delete_doc" | "delete_folder";
+    patch_kind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
     block_id?: string | null;
     block_index?: number | null;
     before_text?: string;
@@ -356,7 +358,23 @@ export async function acceptDiff(diffId: string): Promise<void> {
       return;
     }
     if (diff?.draftApplied && diff.relPath === openPath) {
-      await callCommand<{ accepted: boolean }>("de.accept_draft_diff", { diffId, applyContext: "current_editor" });
+      const session = edStore.getSnapshot().sessions[diff.relPath];
+      const result = await callCommand<{ accepted: boolean; expired?: boolean; reason?: string }>("de.accept_draft_diff", {
+        diffId,
+        applyContext: "current_editor",
+        ...(session
+          ? {
+              logicalSessionVersion: session.sessionVersion,
+              logicalContentHash: session.contentHash,
+            }
+          : {}),
+      });
+      if (result.expired) {
+        deStore.expireLocal(diffId, {
+          expiredReason: "document_revision_advanced",
+          errorCode: result.reason ?? "WS_CREATE_BUNDLE_BASELINE_ADVANCED",
+        });
+      }
       return;
     }
     if (diff?.relPath && edStore.getSnapshot().sessions[diff.relPath]) {
@@ -411,7 +429,35 @@ export async function rejectDiff(diffId: string): Promise<void> {
         return;
       }
     }
-    await callCommand("de.reject_diff", { diffId });
+    const bundleSession = diff?.relPath ? edStore.getSnapshot().sessions[diff.relPath] : undefined;
+    const result = await callCommand<{
+      status: "rejected" | "expired";
+      resource_discarded?: boolean;
+      reason?: string;
+    }>("de.reject_diff", {
+      diffId,
+      ...(bundleSession
+        ? {
+            logicalSessionVersion: bundleSession.sessionVersion,
+            logicalContentHash: bundleSession.contentHash,
+          }
+        : {}),
+    });
+    if (result.status === "expired") {
+      deStore.expireLocal(diffId, {
+        expiredReason: "document_revision_advanced",
+        errorCode: result.reason ?? "WS_CREATE_BUNDLE_BASELINE_ADVANCED",
+      });
+      return;
+    }
+    if (result.resource_discarded && diff?.relPath) {
+      const tab = tabsStore.getSnapshot().tabs.find((candidate) => (
+        candidate.kind === "doc" && candidate.path === diff.relPath
+      ));
+      if (tab) tabsStore.close(tab.id, { force: true });
+      await loadDocs();
+      return;
+    }
     const { openPath, editFormat, contentFormat } = edStore.getSnapshot();
     if (inactiveSession && inactiveDraft?.baseContent !== undefined) {
       edStore.updateContent(inactiveDraft.relPath, inactiveDraft.baseContent);
@@ -535,12 +581,4 @@ export async function rejectAllDiffs(): Promise<void> {
     await rejectDiff(d.diffId);
   }
   deStore.setBatch("idle");
-}
-
-/**
- * AG-DELETE-01：接受删除确认卡 → 后端执行删除（ws.apply_delete_diff，HITL 已过）。
- * 删除提案 origin_module=AG_DELETE，不接受内容 diff 路径（不写 after_content）。
- */
-export async function applyDeleteDiff(diffId: string): Promise<void> {
-  await invoke("ws.apply_delete_diff", { diffId });
 }

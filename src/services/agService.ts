@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
+import { activeSession, agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
 import { listActiveTables, parseTableEditPayload, summarizeTableOperation, type TableEditPayload } from "./edTableOps";
@@ -15,6 +15,9 @@ import {
   projectDocumentMediaDisplaySrc,
 } from "./docService";
 import { closeStore } from "../store/closeStore";
+import { tabsStore } from "../store/tabsStore";
+import { flushOpenEditorSessionSnapshots, openDocument } from "./edService";
+import { parseMarkdownForEditing } from "../components/ed/markdown/markdownCodec";
 
 /** 审计修复（2026-07-26 · D10）：HTML sanitize — 保留内联安全标签，剥离 script/iframe/on* 等。
  *  用于 replace_block 的 new_html 在进入后端前清洗。 */
@@ -81,6 +84,7 @@ interface AgentDiffProjection {
   block_ops?: unknown;
   table_ops?: unknown;
   image_ops?: unknown;
+  preview_checkpoint_required?: boolean;
   // AG-TASK-01 F1b：批次元数据（整篇对齐分批）。
   batch?: { id: string; index: number; total: number };
 }
@@ -132,6 +136,7 @@ function parseDiffProjectionResult(result: string): AgentDiffProjection | null {
       block_ops: p.block_ops,
       table_ops: p.table_ops,
       image_ops: p.image_ops,
+      preview_checkpoint_required: parsed.preview_checkpoint_required === true,
     };
   } catch {
     return null;
@@ -723,29 +728,366 @@ export async function refreshSessionTaskRuns(sessionId: string): Promise<void> {
 }
 
 /** AG-1.0-TASKRUN-REWORK-IMP-UI-01：任务级裁决（TERM-AG-017，三层分离）——
- *  confirm → TaskRun Executing（可自动下一片段）；cancel → Cancelled。返回裁决后 run 状态。 */
-export async function resolveDecision(requestId: string, outcome: "confirm" | "cancel"): Promise<string> {
-  return dispatchCall<string>("ag.resolve_decision", { requestId, outcome });
+ * confirm → TaskRun Executing（可自动下一片段）；cancel → Cancelled。返回已裁决的 run 身份。 */
+export async function resolveDecision(
+  requestId: string,
+  outcome: "confirm" | "cancel",
+): Promise<{
+  taskRunId: string;
+  status: string;
+  workspaceOperationReceipt?: WorkspaceOperationReceiptDto;
+  createDocumentDiffId?: string;
+}> {
+  const pendingDecision = agStore.getSnapshot().pendingDecision;
+  const pendingPayload = pendingDecision?.requestId === requestId
+    && pendingDecision.payload
+    && typeof pendingDecision.payload === "object"
+    ? pendingDecision.payload as Record<string, unknown>
+    : null;
+  if (outcome === "confirm" && typeof pendingPayload?.workspaceOperationPlanId === "string") {
+    await flushOpenEditorSessionSnapshots();
+  }
+  const result = await dispatchCall<{
+    task_run_id: string;
+    status: string;
+    workspace_operation_receipt?: WorkspaceOperationReceiptDto | null;
+    workspace_operation_items?: WorkspaceOperationItemDto[] | null;
+    create_document_bundle?: CreateDocumentBundleDto | null;
+  }>("ag.resolve_decision", {
+    requestId,
+    outcome,
+  });
+  let createDocumentDiffId: string | undefined;
+  if (result.workspace_operation_receipt) await loadDocs();
+  for (const diffId of result.workspace_operation_receipt?.invalidated_diff_ids ?? []) {
+    deStore.expireLocal(diffId, {
+      expiredReason: "document_revision_advanced",
+      errorCode: "resource_baseline_changed",
+    });
+  }
+  if (result.workspace_operation_items) {
+    const completed = new Set(
+      result.workspace_operation_receipt?.item_receipts
+        .filter((receipt) => receipt.status === "completed")
+        .map((receipt) => receipt.item_id) ?? [],
+    );
+    for (const receipt of result.workspace_operation_receipt?.compensation_receipts ?? []) {
+      if (receipt.status === "compensated") completed.delete(receipt.item_id);
+    }
+    const effectiveItems = result.workspace_operation_items.filter((item) => completed.has(item.item_id));
+    agStore.reconcileResourceReferences(effectiveItems);
+    await reconcileWorkspaceOperationTabs(
+      effectiveItems,
+      Boolean(result.create_document_bundle),
+    );
+  }
+  if (result.create_document_bundle) {
+    createDocumentDiffId = await projectCreateDocumentBundle(result.create_document_bundle);
+  }
+  return {
+    taskRunId: result.task_run_id,
+    status: result.status,
+    workspaceOperationReceipt: result.workspace_operation_receipt ?? undefined,
+    createDocumentDiffId,
+  };
+}
+
+interface CreateDocumentBundleDto {
+  plan_id: string;
+  target: { rel_path: string };
+  status: string;
+}
+
+interface WorkspaceOperationItemDto {
+  item_id: string;
+  seq: number;
+  kind: "create_document" | "create_folder" | "rename_resource" | "move_resource" | "delete_resource" | "restore_resource" | "discard_created_resource";
+  source_rel_path?: string | null;
+  target_rel_path?: string | null;
+  resource_kind: "file" | "folder";
+}
+
+async function reconcileWorkspaceOperationTabs(
+  items: WorkspaceOperationItemDto[],
+  hasCreateBundle: boolean,
+): Promise<void> {
+  for (const item of [...items].sort((left, right) => left.seq - right.seq)) {
+    const source = item.source_rel_path ?? "";
+    const target = item.target_rel_path ?? "";
+    const matchingTabs = tabsStore.getSnapshot().tabs.filter((tab) => (
+      tab.kind === "doc"
+      && source
+      && (tab.path === source || (item.resource_kind === "folder" && tab.path.startsWith(`${source}/`)))
+    ));
+    if (item.kind === "delete_resource" || item.kind === "discard_created_resource") {
+      for (const tab of matchingTabs) tabsStore.close(tab.id, { force: true });
+      continue;
+    }
+    if (item.kind === "rename_resource" || item.kind === "move_resource") {
+      const reopenTargets = matchingTabs.map((tab) => (
+        item.resource_kind === "folder"
+          ? `${target}${tab.path.slice(source.length)}`
+          : target
+      ));
+      for (const tab of matchingTabs) tabsStore.close(tab.id, { force: true });
+      for (const relPath of reopenTargets) {
+        tabsStore.openDoc(relPath);
+        await openDocument(relPath);
+      }
+      continue;
+    }
+    if (item.kind === "create_document" && target && !hasCreateBundle) {
+      tabsStore.openDoc(target);
+      await openDocument(target);
+    }
+  }
+}
+
+interface CreateDocumentProjectionResult {
+  diff_id?: string;
+  task_run_id?: string;
+  source_turn_id?: string;
+  already_projected?: boolean;
+  projection_failed_compensated?: boolean;
+  projection?: AgentDiffProjection;
+}
+
+async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Promise<string | undefined> {
+  const relPath = bundle.target.rel_path;
+  tabsStore.openDoc(relPath);
+  try {
+    await openDocument(relPath);
+  } catch (openError) {
+    try {
+      await dispatchCall("ws.compensate_create_document_open_failure", { planId: bundle.plan_id });
+      const tab = tabsStore.getSnapshot().tabs.find((candidate) => candidate.kind === "doc" && candidate.path === relPath);
+      if (tab) tabsStore.close(tab.id, { force: true });
+      await loadDocs();
+    } catch (compensationError) {
+      throw {
+        code: "WS_CREATE_BUNDLE_PARTIAL_FAILED",
+        message: `新文档已创建但编辑器打开失败，自动补偿也失败：${String(compensationError)}`,
+        cause: openError,
+      };
+    }
+    throw { code: "ED_CREATE_BUNDLE_OPEN_FAILED_COMPENSATED", message: "新文档打开失败，已安全撤销创建", cause: openError };
+  }
+  const session = edStore.getSnapshot().sessions[relPath];
+  if (!session || session.content === null) {
+    throw { code: "ED_CREATE_BUNDLE_SESSION_MISSING", message: "新文档已创建，但编辑器未建立 LogicalState" };
+  }
+  let projected: CreateDocumentProjectionResult;
+  try {
+    projected = await dispatchCall<CreateDocumentProjectionResult>("ws.project_create_document_bundle", {
+      planId: bundle.plan_id,
+      sessionId: activeSession(agStore.getSnapshot()).id,
+      relPath,
+      beforeSnapshot: session.content,
+      baseSessionVersion: session.sessionVersion,
+      baseContentHash: session.contentHash,
+    });
+  } catch (projectionError) {
+    try {
+      await dispatchCall("ws.compensate_create_document_open_failure", { planId: bundle.plan_id });
+      const tab = tabsStore.getSnapshot().tabs.find((candidate) => candidate.kind === "doc" && candidate.path === relPath);
+      if (tab) tabsStore.close(tab.id, { force: true });
+      await loadDocs();
+    } catch (compensationError) {
+      throw {
+        code: "WS_CREATE_BUNDLE_PARTIAL_FAILED",
+        message: `初始内容投影失败，自动补偿也失败：${String(compensationError)}`,
+        cause: projectionError,
+      };
+    }
+    throw { code: "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED", message: "初始内容投影失败，已安全撤销创建", cause: projectionError };
+  }
+  if (projected.projection_failed_compensated) {
+    const tab = tabsStore.getSnapshot().tabs.find((candidate) => (
+      candidate.kind === "doc" && candidate.path === relPath
+    ));
+    if (tab) tabsStore.close(tab.id, { force: true });
+    await loadDocs();
+    return "projection-failed-compensated";
+  }
+  if (!projected.diff_id) {
+    throw { code: "WS_CREATE_BUNDLE_DIFF_MISSING", message: "新文档初始内容未生成可审阅 Diff" };
+  }
+  if (projected.already_projected || !projected.projection) return projected.diff_id;
+  const projection = projected.projection;
+  const logicalAfter = session.editFormat === "markdown"
+    ? (() => {
+        const parsed = parseMarkdownForEditing(projection.after_text);
+        if (!parsed.ok) return projection.after_text;
+        edStore.setContentFormat(relPath, "html");
+        return parsed.html;
+      })()
+    : projection.after_text;
+  deStore.addDiff({
+    diffId: projected.diff_id,
+    sessionId: activeSession(agStore.getSnapshot()).id,
+    turnId: projected.source_turn_id,
+    taskRunId: projected.task_run_id,
+    createdAt: Date.now(),
+    blockId: "",
+    blockIndex: null,
+    relPath,
+    locationLabel: projection.location_label,
+    patchKind: "replace_document",
+    draftMode: "current_editor",
+    snapshotSource: projection.snapshot_source,
+    baseSessionVersion: projection.base_session_version ?? session.sessionVersion,
+    baseContentHash: projection.base_content_hash ?? session.contentHash,
+    previewContinuationRequired: true,
+    title: `AI 建议新建 ${relPath}`,
+    before: projection.before_text,
+    // 初始内容是完整文档载荷，不能按块内文本清洗，否则标题、段落和列表结构会丢失。
+    after: logicalAfter,
+    state: "pending",
+    draftPreviewState: "queued",
+    readonly: false,
+  });
+  return projected.diff_id;
+}
+
+export async function compensateCreateDocumentPreviewFailure(diffId: string): Promise<boolean> {
+  const diff = deStore.getSnapshot().diffs.find((candidate) => candidate.diffId === diffId);
+  const session = diff?.relPath ? edStore.getSnapshot().sessions[diff.relPath] : undefined;
+  if (!diff || !session) return false;
+  try {
+    const result = await dispatchCall<{ compensated?: boolean; not_create_bundle?: boolean }>(
+      "ws.compensate_create_document_preview_failure",
+      {
+        diffId,
+        logicalSessionVersion: session.sessionVersion,
+        logicalContentHash: session.contentHash,
+      },
+    );
+    if (!result.compensated) return false;
+    const tab = tabsStore.getSnapshot().tabs.find((candidate) => candidate.kind === "doc" && candidate.path === diff.relPath);
+    if (tab) tabsStore.close(tab.id, { force: true });
+    await loadDocs();
+    deStore.expireLocal(diffId, {
+      expiredReason: "apply_replace_failed",
+      errorCode: "WS_CREATE_BUNDLE_PREVIEW_FAILED_COMPENSATED",
+    });
+    return true;
+  } catch (error) {
+    console.error("[workspace-operation] create document preview compensation failed", error);
+    return false;
+  }
+}
+
+export interface WorkspaceOperationItemReceiptDto {
+  item_id: string;
+  seq: number;
+  status: "attempted" | "completed" | "compensated" | "failed";
+  error_code?: string | null;
+  error_message?: string | null;
+}
+
+export interface WorkspaceOperationReceiptDto {
+  operation_id: string;
+  plan_id: string;
+  final_status:
+    | "completed"
+    | "failed_compensated"
+    | "partial_failed"
+    | "expired"
+    | "interrupted";
+  item_receipts: WorkspaceOperationItemReceiptDto[];
+  compensation_receipts: WorkspaceOperationItemReceiptDto[];
+  entry_id?: string | null;
+  invalidated_diff_ids?: string[];
 }
 
 /** AG-1.0-TASKRUN-REWORK-CONTINUE-01：连续 auto-continue 计数（防死循环；用户手动发送重置）。 */
 let autoContinueCount = 0;
 const MAX_AUTO_CONTINUE = 3;
+const previewAckInFlight = new Set<string>();
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-006, BR-AG-DATA-001-EFFECT-AG-AG-TURN-006
+ * type:     EFFECT
+ * chain:    AG-TURN, DE-DIFF, ED-EDIT
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
+ * term_ref: TERM-AG-015, TERM-ED-008
+ * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckThenFreshSnapshotContinuation(noDiffAcceptNoDiskWriteNoBackgroundCall)
+ */
+/** 只有 ED/DE 已成功标记 draftApplied 后才回报 PreviewAck，并由前端明确启动下一执行片段。
+ * 此处不从 Diff payload 推断内容，也不会对 background Diff 或无 checkpoint 的卡片续编。 */
+export async function acknowledgePreviewAndContinue(diffId: string): Promise<void> {
+  if (previewAckInFlight.has(diffId)) return;
+  const diff = deStore.getSnapshot().diffs.find((candidate) => candidate.diffId === diffId);
+  if (
+    !diff?.previewContinuationRequired
+    || !diff.draftApplied
+    || diff.state !== "pending"
+    || !diff.taskRunId
+    || !diff.turnId
+    || !diff.sessionId
+    || !diff.relPath
+  ) return;
+  const session = edStore.getSnapshot().sessions[diff.relPath];
+  if (!session || session.content === null) return;
+  if (diff.draftAfterContent !== undefined && session.content !== diff.draftAfterContent) {
+    await dispatchCall("de.expire_diff", {
+      diffId,
+      reason: "ED_DRAFT_BASE_ADVANCED",
+    });
+    deStore.expireLocal(diffId, {
+      expiredReason: "document_revision_advanced",
+      errorCode: "ED_DRAFT_BASE_ADVANCED",
+    });
+    return;
+  }
+
+  previewAckInFlight.add(diffId);
+  try {
+    agStore.setCurrentAction({ action: "previewing", label: "已应用预览，正在校验最新文档状态" });
+    await invoke<{ task_run_id: string; ready: boolean }>("ag_ack_preview", {
+      taskRunId: diff.taskRunId,
+      sessionId: diff.sessionId,
+      turnId: diff.turnId,
+      diffId,
+      relPath: diff.relPath,
+      sessionVersion: session.sessionVersion,
+      contentHash: session.contentHash,
+    });
+    await startTurn("（编辑器预览已完成）请基于最新文档状态继续当前任务；若目标已完成，请直接给出简短结果。", {
+      autoContinue: true,
+      mentions: [diff.relPath],
+      continuation: { taskRunId: diff.taskRunId, previewDiffId: diffId },
+    });
+  } catch (error) {
+    // Ack 被拒绝意味着基线已变化/卡片终态/身份不匹配；不重试、更不以旧快照续编。
+    console.error("[ag-preview] continuation acknowledgement rejected", error);
+    agStore.setCurrentAction(null);
+  } finally {
+    previewAckInFlight.delete(diffId);
+  }
+}
 
 /** AG-1.0-TASKRUN-REWORK-CONTINUE-01：任务级裁决后自动续片段——confirm 自动发起下一执行片段
  * （沿用同 task_run_id，无需用户再输入聊天消息）；cancel 终止。连续续片段达到上限后停止（由用户手动继续）。 */
 export async function resolveDecisionAndContinue(
   requestId: string,
   outcome: "confirm" | "cancel",
-): Promise<string> {
-  const status = await resolveDecision(requestId, outcome);
-  if (outcome === "confirm" && autoContinueCount < MAX_AUTO_CONTINUE) {
+): Promise<Awaited<ReturnType<typeof resolveDecision>>> {
+  const resolution = await resolveDecision(requestId, outcome);
+  if (
+    outcome === "confirm"
+    && resolution.status === "executing"
+    && !resolution.createDocumentDiffId
+    && autoContinueCount < MAX_AUTO_CONTINUE
+  ) {
     autoContinueCount += 1;
     await startTurn("（任务继续）已确认任务级裁决，请继续执行当前任务。", {
       autoContinue: true,
+      continuation: { taskRunId: resolution.taskRunId, decisionRequestId: requestId },
     });
   }
-  return status;
+  return resolution;
 }
 
 interface TaskPlanStepDto {
@@ -1064,6 +1406,8 @@ export async function startTurn(
     displayParts?: MessageContentPart[];
     /** AG-1.0-TASKRUN-REWORK-CONTINUE-01：auto-continue 续片段（任务级确认后自动发起，不计入用户手动发送）。 */
     autoContinue?: boolean;
+    /** 已确认的 DecisionRequest 所属任务；仅 auto-continue 续片段使用。 */
+    continuation?: { taskRunId: string; decisionRequestId?: string; previewDiffId?: string };
   },
 ): Promise<void> {
   const trimmed = prompt.trim();
@@ -1071,6 +1415,15 @@ export async function startTurn(
   if (!trimmed && references.length === 0) return;
   // AG-1.0-TASKRUN-REWORK-CONTINUE-01：用户手动发送重置连续 auto-continue 计数。
   if (!opts?.autoContinue) autoContinueCount = 0;
+  if (opts?.continuation && !opts.autoContinue) {
+    throw new Error("任务续片段只能由已确认的任务级裁决自动启动");
+  }
+  if (
+    opts?.continuation
+    && Boolean(opts.continuation.decisionRequestId) === Boolean(opts.continuation.previewDiffId)
+  ) {
+    throw new Error("任务续片段必须且只能关联已确认裁决或已确认预览回执之一");
+  }
   // AG-1.0-DECISION-CARD-01：存在待裁决任务级请求时，手动发送被门控（auto-continue 除外）；
   // 必须先完成裁决（DecisionBar），避免"确认"等文本被当作新编辑请求触发 AG_EDIT_TOOL_REQUIRED。
   if (!opts?.autoContinue && agStore.getSnapshot().pendingDecision) {
@@ -1222,7 +1575,11 @@ export async function startTurn(
           void refreshSessionTaskRuns(sessionId);
           // AG-1.0-TASKRUN-REWORK-INTENT-01：回合终态后刷新任务计划（复杂目标已建 plan）。
           void refreshSessionPlans(sessionId);
-          agStore.setCurrentAction(null);
+          if (ev.stop_reason === "waiting_preview") {
+            agStore.setCurrentAction({ action: "previewing", label: "等待编辑器应用修改建议" });
+          } else {
+            agStore.setCurrentAction(null);
+          }
           finish();
           break;
         case "error":
@@ -1366,6 +1723,7 @@ export async function startTurn(
             snapshotSource: projection?.snapshot_source,
             baseSessionVersion: projection?.base_session_version ?? undefined,
             baseContentHash: projection?.base_content_hash ?? undefined,
+            previewContinuationRequired: projection?.preview_checkpoint_required === true,
             title,
             before: projection?.before_text ?? "",
             after: sanitizeInlineHtml(projection?.after_text ?? ""),
@@ -1406,7 +1764,7 @@ export async function startTurn(
           }
           // 已打开非激活文档在 diff 返回时即受控预览到其 LogicalState；预览不自动接受。
           if (projection?.draft_mode === "open_session" && state === "pending") {
-            void applyOpenSessionDiff(ev.diff_id);
+            void applyOpenSessionDiff(ev.diff_id).then(() => void acknowledgePreviewAndContinue(ev.diff_id));
           }
           // 消息片段（TERM-AG-011）：DiffCard 内嵌于回合内时序位置（紧随其产出工具/正文）。
           agStore.addDiffSegment(sessionId, assistantId, ev.diff_id);
@@ -1432,9 +1790,6 @@ export async function startTurn(
           if (ev.tool_name === "propose_edit" && ev.success) {
             const projection = parseDiffProjectionResult(r);
             if (projection) pendingDiffProjections.set(projection.diff_id, projection);
-          }
-          if ((ev.tool_name === "move_doc" || ev.tool_name === "create_folder") && ev.success) {
-            void loadDocs();
           }
           const toolCallId = pendingToolIds.shift();
           if (toolCallId) {
@@ -1478,6 +1833,9 @@ export async function startTurn(
         mentions: references.length ? [] : (opts?.mentions ?? []), // 兼容旧路径；新路径走 references 防重复注入
         blockRefs: references.length ? [] : (opts?.blockRefs ?? []), // 兼容旧路径；新路径走 references 防重复注入
         references, // 用户显式 ReferencePayload（A-AG-I-P-01 v1.6）
+        continuationTaskRunId: opts?.continuation?.taskRunId,
+        continuationDecisionRequestId: opts?.continuation?.decisionRequestId,
+        continuationPreviewDiffId: opts?.continuation?.previewDiffId,
         onEvent,
       }).catch(failStart);
     })();

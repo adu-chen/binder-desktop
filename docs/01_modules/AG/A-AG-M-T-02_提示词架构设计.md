@@ -154,6 +154,16 @@ Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user �
 
 **实现登记（2026-08-11，AG-STRATEGY-03 文档感知 + 块 id + 排版意识 + 确认去重）**：Edit 动词表补「丰富/扩写/充实/重排/排版/美化」、文档指涉词补「故事/寓言/童话/小说」；非寒暄 Answer/Inspect/Analyze 意图且打开文档时兜底注入当前文档（只读，纯寒暄不注入）；insert/append 新块 afterNode 允许可选 blockId（模型显式给新块 id）；block_ops 投影 after 侧对 insert/append 新块用独立 id 标注（不再复用锚点 id，修复标题块与正文块同 id 错乱）；prompt 补排版映射（style_ops + heading）、确认去重（默认直接 propose_edit）、生成后自检（list_blocks 核对 + 删残句）。修复「丰富故事」被判零工具 Answer 导致模型看不到内容、insert 新块无 id、无排版意识、反复文字确认 4 类问题。
 
+**当前 Prompt 约束（2026-08-21，WorkspaceOperation 基线）**：
+
+- `organize_workspace` 及创建/重命名/移动/删除/恢复意图只能产生 `WorkspaceOperationPlan`，并由独立 `DecisionRequest` 前置裁决；不得调用 `propose_edit(operation=...)`、生成资源 DiffCard 或在确认后等待第二次保存。
+- 新建文档必须在确认前同时准备目标路径、初始内容和 `CreateDocumentBundle`；确认后由 WS 创建真实磁盘目标，系统再打开标签并以普通内容 Diff 投影已冻结内容。
+- Prompt 只描述意图、允许工具和上述边界；确认身份、幂等、路径/基线核验、dirty 阻断、补偿和重启 Interrupted 由运行时强制，不以模型文字作为授权证据。
+- `userConfirm` 恢复原 TaskRun 并立即调用 WS 执行冻结 plan；不新增 `WaitingUserCommit`。重启后旧运行进入 Interrupted，再次执行必须重新生成 plan 和 DecisionRequest。
+
+> 以下 2026-08-11 段落仅记录当时实现事实，不再是 Prompt 设计权威。其中“新路径 base=empty”和
+> `propose_edit(delete_doc/delete_folder)` 均是待迁移旧链，实现不得继续依赖。
+
 **实现登记（2026-08-11，AG-STRATEGY-02 运行时注入同步 + 新建 b-docx 指导）**：parameterConstraints 移除 `proposal_target_must_match_intent`（目标硬锁已下沉调用时刻），替换为提示性 `proposal_applies_on_user_confirm`；prompt 明确新建 word 文档（.b-docx）= propose_edit 新路径 + base=empty + replace_document + content 富 HTML（无需额外 BDocx 能力声明）；同步跨文档目标（DiffCard 标注确认）与删除能力（delete_doc/delete_folder 确认卡）语义。修复模型读到旧约束与"无 BDocx 声明无法建富文档"推断而放弃 propose_edit 的 AG_EDIT_TOOL_REQUIRED 拦截。
 
 **实现登记（2026-08-11，AG-DELETE-01 删除能力 + 跨文档目标放行）**：`propose_edit` 扩展 `operation=delete_doc/delete_folder` → 删除确认卡（PendingDiff origin_module='AG_DELETE'，payload 含 action/recursive/cascade 级联计数）→ `ws.apply_delete_diff` 用户接受后执行 fileops 删除 + timeline 节点（HITL 不降级）。目标声明放宽：guard_target_set 增 AcceptCrossDocument，ensure_target_declared 改 target_declared(bool)——未声明既有文档放行并标注 crossDoc（DiffCard「跨文档目标」+ 用户确认承担安全，延续词/多文档联动不再被锁死）。删除限 workspace 内，禁删根目录（WS_DELETE_ROOT_DENIED）。
@@ -352,6 +362,7 @@ status: mapped
 | 2026-08-09 | v1.15 | AG-PROMPT-STRUCTURE-FIX-01：§5.1 登记生产装配以 LayerKind 枚举为唯一真源（System→RuntimeControl→IntentHint→CurrentDocument→Reference→History→CrossDocHistory→User），RuntimeControl 独立消息、历史聚合单块、版本 hash 派生、预算统一口径、审计读 layer；不改变 BR-AG-DATA-004/005 语义 |
 | 2026-08-11 | v1.21 | AG-TASK-01：§4 登记多提案批次衔接 + block_ops 删除——delete_node（content 原子块）、单回合 ≤5 批、batch 元数据落库/接受衔接、DiffCard 批次徽标/删除渲染、单批上限 24→32 |
 | 2026-08-13 | v1.22 | AG-STRATEGY-05：纠正 BDocx 整篇改写边界为「同轮无表格且无图片」并由服务端拒绝受保护/新引入结构；登记同锚点 block_ops 原子排序、后置校验、稳定 id reverse，以及 proposal→预览→接受→保存的可观察状态和无正文前端 trace。 |
+| 2026-08-21 | v1.23 | WorkspaceOperation 基线同步：增加当前 Prompt 约束，资源意图只生成 WorkspaceOperationPlan + DecisionRequest，新建经 CreateDocumentBundle 先创建真实目标再投影内容 Diff；明确 2026-08-11 资源 Diff/空基准新建段落只作历史实现记录。 |
 | 2026-08-11 | v1.20 | AG-CTX-01：§4 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、查询动词→Search、整篇对齐检测提示、AG_EDIT_TOOL_REQUIRED 文案区分、序列化瘦身 |
 | 2026-08-11 | v1.19 | AG-DOCX-RO-01：§4 登记原生 docx 只读——复用 pandoc 转换链，source=doc_convert_readonly、editable_kind 覆盖 html（≠bdocx），结构性只读；propose_edit 仍拒绝，编辑器路径保持 DOC_NOT_BDOCX；提示词补充只读边界 |
 | 2026-08-11 | v1.18 | AG-R2-01：§4 登记整理复原综合修复——预算（工具结果历史压缩 + block_ops 单批上限 24）、意图（纠错语义词 + 疑问文档指涉→只读）、提示词（编辑当轮提案 + 顺序自查）、范围（workspace 内只读放宽 + 锚点矛盾校验） |

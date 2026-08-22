@@ -138,6 +138,8 @@ function currentActionLabel(action: TurnCurrentAction): string {
       return `正在生成修改建议 ${action.label}`;
     case "deciding":
       return action.label || "等待裁决…";
+    case "previewing":
+      return action.label || "正在等待编辑器预览…";
   }
 }
 

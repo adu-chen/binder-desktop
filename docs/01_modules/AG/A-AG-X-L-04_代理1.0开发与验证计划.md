@@ -3,10 +3,10 @@
 文档状态：A
 负责模块：AG
 文档职责：Binder AG 1.0 开发与验证执行计划——将 agent-edit-1.0 目标架构拆成可独立开发、独立验证和阶段收口的工作包，定义阶段依赖、实施边界、验证方案、证据要求与发布退出门禁
-上游约束：A-AG-X-L-03、A-AG-M-D-01、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-CORE-X-L-06、A-VAL-X-V-01、A-SYS-I-P-03
+上游约束：A-AG-M-D-01、A-AG-M-D-02、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-WS-M-T-02、A-WS-M-S-02、A-CORE-X-L-06、A-VAL-X-V-01、A-SYS-I-P-03
 直接承接：AG 1.0 后续 CODE_CHANGE Issue Trace/Scope Lock、测试影响计划、AG/DE/ED/WS/ENT/GW 联调、G5 系统验证与发布裁决
-使用边界：本文只规划 agent-edit-1.0；不重新审计当前实现，不把 G4 骨架标记视为完成，不纳入 Build/CBT、自动 AST/KB/TPL、跨文档写入、文件自动整理、参考风格/排版、复杂 Planning 或多 Agent
-变更要求：工作包边界、阶段依赖、冻结契约、验证矩阵或退出条件变化时，须先回写 A-AG-X-L-03 和对应 AG L1/L2；实际开发按 ADP 为每个工作包建立独立 Scope，本文不得替代 Runtime Report
+使用边界：本文只规划 agent-edit-1.0；不重新审计当前实现，不把 G4 骨架标记视为完成，不纳入 Build/CBT、自动 AST/KB/TPL、未冻结的跨文档写入、参考风格/排版、开放式 Planning 或多 Agent；WorkspaceOperation 只按已冻结的 WS 契约接入
+变更要求：工作包边界、阶段依赖、冻结契约、验证矩阵或退出条件变化时，须先回写对应 AG/WS L1/L2 与验证卡；实际开发按 ADP 为每个工作包建立独立 Scope，本文不得替代 Runtime Report
 治理成熟度：draft
 ---
 
@@ -56,8 +56,8 @@
 | WP-AG10-02 | Intent Layer | 识别当前轮目标、变更意图和歧义 | 用户原文、显式目标、编辑器焦点、必要历史 | `IntentResultV1` | WP-AG10-00 | 是 |
 | WP-AG10-03 | Context Layer | 选择、校验、裁剪文档上下文 | IntentResult、LogicalState、选区、引用、历史 | ContextBundle / PromptDataEnvelope 清单 | WP-AG10-02 | 是 |
 | WP-AG10-04 | Prompt Runtime | 按信任层和版本装配模型输入 | IntentResult、ContextBundle、工具 manifest | `PromptPackageV1` + trace 元数据 | WP-AG10-02、WP-AG10-03 | 是 |
-| WP-AG10-05 | Tool Capability Layer | 注册、逐回合授权、参数校验、执行与恢复 | IntentResult、Runtime Profile、工具请求 | `CapabilityGrantV1`、ToolResult | WP-AG10-01、WP-AG10-02、WP-AG10-04 | 是 |
-| WP-AG10-06 | Editor/Diff Integration | 将创建/修改变成可审阅 ChangeProposal | IntentResult、LogicalState revision、模型/工具产出 | PendingDiff、审阅/应用/冲突回执 | WP-AG10-01、WP-AG10-03、WP-AG10-05 | 是 |
+| WP-AG10-05 | Tool Capability Layer | 注册、逐回合授权、参数校验与执行；资源意图只能生成 WorkspaceOperationPlan，确认后由 TaskRun 调用 WS | IntentResult、Runtime Profile、工具请求、DecisionRequest 回执 | `CapabilityGrantV1`、ToolResult、plan_id/operation receipt | WP-AG10-01、WP-AG10-02、WP-AG10-04、SM-WS-04 | 是 |
+| WP-AG10-06 | Editor/Diff Integration | 只将文档内容修改变成可审阅 ChangeProposal；CreateDocumentBundle 在资源创建成功后投影普通初始内容 Diff | IntentResult、LogicalState revision、模型/工具产出、operation_id | PendingDiff、审阅/应用/冲突回执 | WP-AG10-01、WP-AG10-03、WP-AG10-05、SM-WS-04 | 是 |
 | WP-AG10-07 | Session、UI 与 Trace | 会话隔离、消息呈现、恢复、脱敏追踪 | Turn 事件、proposal、session/workspace 归属 | 可恢复消息流、AgentTrace、反馈元数据 | WP-AG10-01；完整收口依赖 WP-AG10-06 | 是 |
 
 每个工作包独立开发时只能修改其职责范围和必要契约适配；发现其他模块缺陷时记录为依赖，不得顺手扩大 Scope。
@@ -279,14 +279,15 @@ WP-AG10-06 把模型产出的写意图统一转换为可定位、可审阅、可
 |---|---|---|---|
 | 当前全文编辑 | 当前 LogicalState + base revision | 当前文档 PendingDiff | 直接替换编辑器/磁盘 |
 | 当前选区编辑 | selection anchor + revision + before context | 可定位块/区间 Diff | 锚失效后猜测应用 |
-| 新建文档 | target metadata + `base=empty` | 完整新文档 PendingDiff | 接受前创建文件 |
+| 新建文档 | CreateDocumentBundle（目标计划 + 预生成初始内容） | DecisionRequest；确认后真实文件/标签 + 初始内容 PendingDiff | 确认前创建文件；内容 Diff 承担资源授权 |
+| 工作区资源操作 | WorkspaceOperation intent + 当前磁盘/标签/Diff/引用事实 | 不可变 plan + DecisionRequest；确认后 WS 回执 | 直接调用低层文件命令；生成资源 DiffCard；确认后等待第二次保存 |
 | 用户拒绝 | pending proposal | Rejected，文档不变 | 保留隐式待应用写入 |
 | 基准冲突 | proposal base ≠ 当前 revision/hash | Conflicted/重新确认 | 静默覆盖用户新编辑 |
 | 保存失败 | apply 成功、save 失败 | LogicalState 脏态 + 明确失败 | 声明 DiskState 已更新 |
 
 ### §9.3 验证方案
 
-1. **模块测试**：proposal schema、状态互斥、base/hash 校验、空基准、新建目标合法性。
+1. **模块测试**：proposal schema、状态互斥、base/hash 校验；WorkspaceOperation plan/confirm/receipt；CreateDocumentBundle 关联和三重基线。
 2. **前后端集成**：DiffProposed 事件、DiffCard 状态、接受/拒绝回执、消息 proposal 关联。
 3. **真实编辑器集成**：未保存内容、selection 锚、用户继续编辑后的冲突、apply transaction。
 4. **保存链集成**：LogicalState 更新与 DiskState 保存分开断言；保存失败可重试。
@@ -295,7 +296,7 @@ WP-AG10-06 把模型产出的写意图统一转换为可定位、可审阅、可
 ### §9.4 阶段收口条件
 
 - AG1-V-05、V-06、V-10、V-14 通过；
-- 当前文档修改、新建、拒绝、冲突、保存失败均有自动化和至少一次真实编辑器验证；
+- 当前文档修改继续按内容三态验证；新建需覆盖确认前零副作用、先建盘再投影、安全拒绝与基线推进；资源操作需覆盖 dirty 阻断、补偿、重启中断和统一恢复；
 - 用户接受前 LogicalState/DiskState 不发生 AI 写入；
 - 一个 proposal 只写一个目标文档，显式引用保持只读；
 - 原文件在错误、取消、冲突和保存失败路径中可恢复。
@@ -349,7 +350,8 @@ AG 1.0 发布闭环。Mock、局部单测和前端演示不能替代本阶段。
 |---|---|---|
 | Read/Analyze | 回答、审阅、比较、只分析不修改 | 内容相关；写工具和 Diff 为零 |
 | Edit | 全文、选区、未保存内容、显式引用辅助 | 目标正确；先 Diff；接受/拒绝符合预期 |
-| Create | 根据要点新建文档 | 空基准 Diff；接受前无文件 |
+| Create | 根据要点新建文档 | 确认前无文件；确认后先出现真实文件/标签，再出现初始内容 Diff；安全拒绝受三重基线约束 |
+| Resource Ops | 创建/删除/重命名/移动/恢复与批量故障 | DecisionRequest 前置裁决、确认后直接磁盘执行、dirty 阻断、fail-fast 补偿、WorkspaceTimeline 可恢复 |
 | Safety | gate denied、cancel、provider/tool error、提示注入、越权工具 | 无旁路、无伪成功、无原文破坏 |
 | Conflict/Recovery | proposal 后继续编辑、保存失败、重启恢复 | 冲突明确；不覆盖；状态可恢复 |
 | Isolation | 多 session/workspace 切换 | 上下文、历史、proposal、trace 不串线 |
@@ -448,8 +450,8 @@ test:related 结果：
 | WP-AG10-02 Intent Layer | 生成版本化 `IntentResultV1`；当前轮否定约束优先；缺编辑目标阻断澄清；非文档问答不自动注入当前文档 | answer/analyze/edit/create/clarify 与目标/上下文选择断言 | Module Ready |
 | WP-AG10-03 Context Layer | 当前 LogicalState 为主事实；显式引用 data-only；历史按文档归属和显式沿用确定性选择；1.0 自动 AST/KB/TPL 为零 | context、reference、history 与 Prompt 装配测试 | Integrated |
 | WP-AG10-04 Prompt Runtime | 固定系统→意图→当前文档→引用→历史→用户顺序；记录 provenance/freshness/hash/trust/token、context trace 与真实 tool manifest hash；trace 不记录正文 | PromptPackage、层序、注入隔离与历史 trace 一致性测试 | Module Ready |
-| WP-AG10-05 Tool Capability | 模型只看到本轮 grant 工具；执行时再次校验 registry + grant + target + parameters；回答/分析无写权；高级工具在 1.0 不可见 | Intent×grant、注册不等于授权、新建仅提案测试 | Integrated |
-| WP-AG10-06 Editor/Diff | 当前编辑与新建均走 `ChangeProposal`；新建目标必须不存在且使用空基准；同回合最多一个 proposal；接受前不创建文件 | `core_chain` 5 项、DE/ED/WS 全量回归 | Integrated（自动化边界） |
+| WP-AG10-05 Tool Capability | 内容工具仍按 grant→Diff；资源工具需迁移为 plan_workspace_operation/execute_workspace_operation，禁止直调文件命令和资源 Diff | Intent×grant、DecisionRequest 真实确认、幂等/重启 | **Resource-operation migration pending** |
+| WP-AG10-06 Editor/Diff | 普通内容编辑三态保持；新建需改为 CreateDocumentBundle，资源创建后初始内容进入普通 Diff | V-C1~C3 + V-R1/R2 + 既有 core_chain | **New baseline migration pending** |
 | WP-AG10-07 Session/UI/Trace | 前后端活动回合一致；停止按钮调用真实取消；Error/Cancelled 不被 Done 覆盖；Build 不呈现；脱敏 trace 可关联 intent/context/manifest/terminal | AG 前端 92 项、全量前端 552 项、治理审计 | Integrated（本地） |
 
 ### §15.1 最终自动化证据
@@ -458,7 +460,7 @@ test:related 结果：
 |---|---|---|
 | AG Rust 定向 | `PASS`：136 passed | Intent、Context、Prompt、Tool、终态、取消和 proposal 守卫 |
 | AG 前端定向 | `PASS`：3 files / 92 tests | Runtime Profile、唯一终态、取消、会话/UI 投影 |
-| Core chain | `PASS`：5 passed | PendingDiff、拒绝、接受落盘及新建空基准 |
+| Core chain | 旧基线自动化曾通过；新资源基线未验证 | 普通 PendingDiff 证据可复用；旧“新建空基准/资源删除 Diff”证据不计入新基线 |
 | `test:plan` | `PASS` | 选择前端全量、TypeScript、Rust 全量、治理审计 |
 | 非沙箱 `test:related` | `PASS`：前端 552；Rust 295 + 5 + 4；TypeScript 与 audit 通过 | changed_files 直接/间接消费者完整回归 |
 | 非沙箱 `test:full` | `PASS`：前端 552；Rust 295 + 5 + 4 | 项目完整自动化基线；LibreOffice 真转换通过 |
@@ -475,7 +477,7 @@ test:related 结果：
 - 项目级 `cargo fmt -- --check` 仍会报告本次 Scope 外既有文件及 `lib.rs` 旧区域的格式差异；它不是当前
   测试选择器门禁，本轮只格式化了新增 AG 小模块代码，没有用范围扩张制造全库格式变更。
 
-当前阶段裁决：`LOCAL_INTEGRATED / G5_PENDING`。
+当前阶段裁决：普通内容/Runtime 子链维持 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceOperation、WorkspaceTimeline 与 CreateDocumentBundle 为 `DESIGNED / IMPLEMENTATION_PENDING`，不得用旧集成证据宣称已完成。
 
 ## 变更记录
 
@@ -483,3 +485,4 @@ test:related 结果：
 |------|------|---------|
 | 2026-08-08 | v1.0 | 初版：基于 A-AG-X-L-03 将 agent-edit-1.0 拆为 8 个独立工作包和 Stage 0～6；定义依赖与并行边界、Contract Ready/Module Ready/Integrated/G5/Release 五级完成标准；为 Runtime Profile、Execution、Intent、Context、Prompt、Tool、Editor/Diff、Session/Trace 分别建立开发范围、验证方案和独立收口条件；补充真实 G5 环境、场景组、发布门禁、统一证据模板与阻断回退规则 |
 | 2026-08-08 | v1.1 | AG-1.0-IMPLEMENTATION-01：记录 WP-AG10-00～07 的实际实现状态与独立收口证据；非沙箱 test:related/test:full、TypeScript、ADUS 和治理审计通过；阶段裁决为 LOCAL_INTEGRATED / G5_PENDING，不以自动化冒充真实 provider/WKWebView G5 |
+| 2026-08-21 | v1.2 | 工作区资源操作基线重构：Stage 4/G5 改为 WorkspaceOperation + DecisionRequest、CreateDocumentBundle 和 WorkspaceTimeline；旧资源 Diff/空基准新建证据不再计入新基线，相关工作包状态改为 IMPLEMENTATION_PENDING。 |

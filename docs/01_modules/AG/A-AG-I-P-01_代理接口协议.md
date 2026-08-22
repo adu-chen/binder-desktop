@@ -335,19 +335,20 @@ CapabilityGrantV1
 
 > 工具执行在回合内编排：只读类工具（读/搜/块读取）经 workspace 限界后统一产出
 > `AgentEditableSnapshot`，BDocx 走 DOC 编辑模型而非 WS UTF-8 文本读取；
-> 非破坏性结构工具（`move_doc` / `create_folder` / `import_image_asset`）经 WS/DOC 边界直接执行，只改变文件树结构，不修改文档
-> 内容、不生成 DiffCard；目标冲突拒绝，不覆盖；
+> 工作区资源工具（创建文档/文件夹、删除、重命名、移动、恢复）只调用 `ws.plan_operation` 生成
+> WorkspaceOperationPlan，并通过 DecisionRequest 请求前置授权；确认后 TaskRun 调用 `ws.execute_operation`。
+> 它们不生成 DiffCard，也不得直接调用低层 `ws.create_* / delete_* / rename_doc`；
 > **写意图工具不直写**——产出修改建议走 `de.generate_diff`（X-FORBID-006）；循环上限/中断由
 > SM-AG-02 管理，达上限 LoopAborted。确有资产/锚/动态能力阻断时，`edit_blocked` 返回
 > `{status,code,reason,documentModified:false}`，可诚实结束编辑回合而不追加 `AG_EDIT_TOOL_REQUIRED`。
-> 删除类工具需独立用户确认回路，未落地前不得注册给模型。
-> 用户明确新建文档时同样经 `de.generate_diff` 生成 `base=empty` 的 ChangeProposal；任何直接创建并
-> 写入 AI 初始内容的 `create_doc` 形态不属于 agent-edit-1.0 合法工具契约。
+> DecisionRequest 必须引用 plan_id、冻结摘要、影响和基线，模型参数不能伪造确认。
+> 用户明确新建文档时生成 CreateDocumentBundle：初始内容在确认前生成；确认后先执行资源创建，再以
+> operation_id/origin 调用 `de.generate_diff` 投影初始内容。
 
 | 工具 | 参数（语义） | 结果 | 权限 | 约束 |
 |---|---|---|---|---|
-| `move_doc` | from_path、to_path | operation/from_path/to_path/summary | StructureWrite | workspace 内移动/重命名；目标已存在拒绝；不覆盖 |
-| `create_folder` | path | operation/path/summary | StructureWrite | workspace 内建目录；目标已是目录幂等成功；目标为文件拒绝 |
+| `plan_workspace_operation` | operation intents（create/delete/rename/move/restore）、目标与来源 | plan_id/summary/impact/baselines | StructureWrite | 只生成不可变计划与 DecisionRequest，不执行磁盘操作 |
+| `execute_workspace_operation` | plan_id、resolved DecisionRequest identity | receipt/final_state/timeline_entry_id | StructureWrite | 仅 TaskRun 在真实 confirm 后调用；WS 重验、幂等、fail-fast 补偿；重启不自动执行 |
 | `import_image_asset` | source_path | assetId/sourcePath/sourceHash/mediaType/byteSize/sourceFilePreserved | StructureWrite | 仅 workspace 相对 PNG/JPEG；受控根内复用，否则复制到图片根 imported 子目录；不得移动或删除源文件 |
 | `edit_blocked` | code、reason | 结构化阻断结果 | WriteIntent | 仅真实无法安全提案时使用；不修改文档、不生成 Diff |
 
@@ -507,3 +508,4 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 | 2026-08-07 | v1.31 | AG-MSG-RENDER-01：§2.1 注明事件到达顺序即时序契约（Chunk→ToolRequest→ToolResult→DiffProposed→下一轮 Chunk，Channel FIFO）；`ag.save_turn` payload 的 `assistantMessage` 可含可选 `segments[]`（additive，恢复时序交错，旧记录降级） |
 | 2026-08-08 | v1.32 | 对齐 agent-edit-1.0：ag_start_turn 增显式 runtime_profile 且 1.0 只允许 agent-edit；cancel 绑定后端 CancellationToken；基于 BR-AG-DATA-002/004/005 与 BR-AG-STATE-002 冻结 IntentResultV1/PromptDataEnvelopeV1/PromptPackageV1/CapabilityGrantV1 内部契约；终态首次锁定；新建文档统一 base=empty ChangeProposal，BuildMode 未接独立 Runtime 时拒绝 |
 | 2026-08-14 | v1.33 | AG-1.0-IMP-CLARIFICATION-01：AgTurnEvent 增 ClarificationRequired 非终态事件（BR-SYS-STATE-007）；AgentTurnStatus 增 clarifying；SM-AG-01 澄清语义同步（澄清不锁存终态/不发 Done，用户补充经新回合、澄清等待可取消）。 |
+| 2026-08-21 | v1.34 | 工作区资源操作基线重构：结构/删除工具统一为 plan_workspace_operation + DecisionRequest + execute_workspace_operation；禁止 Agent 直调低层 WS 文件命令或生成资源 DiffCard；新建使用 CreateDocumentBundle。 |

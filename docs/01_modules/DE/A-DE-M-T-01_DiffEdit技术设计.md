@@ -233,6 +233,13 @@ LogicalState，但仍保留接受/拒绝；这些操作只能裁决卡片，不�
 批量裁决条是全局操作控件，可继续放在输入框上方；侧栏/内联整体布局仍属 DE-04 剩余 UI 债务，不在
 本局部闭合范围内。
 
+### §8.2 WorkspaceOperation 与 CreateDocumentBundle 边界（2026-08-21）
+
+- 创建、删除、重命名、移动、恢复等资源操作不属于 ChangeProposal，不得形成 `delete_doc/delete_folder` patch_kind、空 before/after 投影或资源 DiffCard。
+- 资源操作由 WS-OPERATION / SM-WS-04 承载；DE 仅提供受影响 PendingDiff 清单，并在资源执行成功后以 `resource_baseline_changed` 使相关内容卡失效。
+- CreateDocumentBundle 的资源创建成功后，DE 才接收带 `operation_id` 与 `origin=create_document_bundle` 的初始内容 ChangeProposal；其 PendingDiff 使用普通 SM-DE-01。
+- 初始内容 Diff 的拒绝若请求删除本次创建资源，DE 只发出裁决结果；WS 必须独立校验资源、DiskState 与 LogicalState 三重基线，DE 不直接删文件。
+
 ## §9 需求到规则映射（REQ_MAP）
 
 <!-- REQ_MAP
@@ -293,6 +300,30 @@ status: mapped
 req_id: REQ-DE-005
 target_type: RULE
 target_id: BR-DE-STATE-002
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-006
+target_type: RULE
+target_id: BR-WS-STATE-003
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-006
+target_type: RULE
+target_id: BR-DE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-007
+target_type: CONSTRAINT
+target_id: X-FORBID-006
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-DE-007
+target_type: RULE
+target_id: BR-WS-OBS-002
 status: mapped
 -->
 
@@ -407,3 +438,4 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
 | 2026-07-30 | v1.19 | AG-RICH-BLOCK-STRUCTURED-EDIT-01 闭合补强：DiffCard 显式接受 block_ops 增 afterNode fingerprint 前置校验；后置编辑时不提交 accepted，并明确保存即接受仍按既有产品决策执行。 |
 | 2026-08-13 | v1.20 | DIFF-STATE-COMPASS-01：BR-DE-STATE-001 与审阅/验收口径对齐 BR-CORE-STATE-001~003；移除 open_session 自动 accepted/禁用裁决及保存隐式接受，明确已有或迁移 LogicalState 预览后卡片仍 pending。 |
 | 2026-08-13 | v1.21 | 人类复核更正：保留“预览后仍 pending”，但保存仍有效 pending 预览即裁决为 accepted/awaiting_save 后写盘；仅基准已推进时使旧卡 expired，不得误裁决。 |
+| 2026-08-21 | v1.22 | 工作区资源操作基线重构：新增 §8.2，禁止资源操作进入 ChangeProposal/DiffCard；CreateDocumentBundle 仅在资源创建后接入普通 SM-DE-01，安全拒绝删除由 WS 三重基线 guard 执行；补 REQ-DE-006/007 映射。 |

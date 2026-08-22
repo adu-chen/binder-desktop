@@ -133,7 +133,7 @@ export interface DiffView {
   /** 人读位置摘要（如“Block 3”或“整篇”），与 blockId 一起用于 DiffCard 定位呈现。 */
   locationLabel?: string;
   /** AgentEdit 修改类型；Editor 只允许显式 replace_document 执行整篇草稿替换。 */
-  patchKind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops" | "delete_doc" | "delete_folder";
+  patchKind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
   /** DiffProjection 分流路径：active 草稿 / open session 自动应用 / 未打开后台路径。 */
   draftMode?: DiffDraftMode;
   /** DiffProjection 生成基线来源。 */
@@ -142,6 +142,8 @@ export interface DiffView {
   baseSessionVersion?: number;
   /** 生成时内容哈希；open session 必填。 */
   baseContentHash?: string;
+  /** 此卡对应一个后端一次性 PreviewAck checkpoint；只有真实 LogicalState 预览成功后才可续片段。 */
+  previewContinuationRequired?: boolean;
   title: string;
   before: string;
   after: string;

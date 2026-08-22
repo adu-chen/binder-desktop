@@ -122,6 +122,15 @@ status: mapped
 > 但「后续 Proposal 成功预览主动推进基准使前卡失效」的检测源未显式建模；实现时须以 `nextProposalPreviewApplied`
 > 驱动前卡失效，不得依赖旧 payload 续编或补丁叠加（BR-SYS-STATE-008）。
 
+### 2.2 WorkspaceOperation 与 CreateDocumentBundle 边界
+
+SM-DE-01 只承载文档内容 Diff。创建、重命名、移动、删除和恢复不得进入本机，不得伪造
+PendingDiff、空 before/after 投影或资源 DiffCard。这些状态与副作用唯一归 A-WS-M-S-02 SM-WS-04。
+
+CreateDocumentBundle 只在 WorkspaceOperation 已成功创建真实目标后，才向 SM-DE-01 提交一张普通初始内容 Diff。
+该 Diff 的接受、失效和保存仍按本机处理；拒绝触发的安全删除是 SM-WS-04 的类型化补偿，
+必须校验 operation_id、资源身份、DiskState 与 LogicalState 三重基线，不是 SM-DE-01 新终态。
+
 ## §3 跨模块转移契约（X-INTER-001，本文闭合双侧）
 
 | 转移点 | 方向 | 契约 | 双侧状态 |
@@ -215,3 +224,4 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
 | 2026-08-13 | v1.10 | 人类复核：保存有效 pending 预览应映射为 `userSave → Accepted/awaiting_save → save`；只有基线推进时 `userSave → Expired`，随后继续保存当前 LogicalState。 |
 | 2026-08-14 | v1.11 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 连续 Proposal 接力契约（REQ-DE-009 / BR-SYS-STATE-008）——Diff2/3 以最新 LogicalState 为基准、后预览推进基准使前卡 Expired(document_revision_advanced)、非补丁栈/任务级回滚、background pending 先迁移或裁决；补 REQ-DE-009 的 REQ_MAP（BR-SYS-STATE-008、BR-CORE-STATE-001/003）。 |
 | 2026-08-14 | v1.12 | AG-1.0-IMP-CONSECUTIVE-PROPOSAL-01：§2.1 契约落地——前端 deService.expireStalePendingForPath（同文档旧 pending 卡按 base 版本/哈希比较失效 document_revision_advanced，并行同基准卡不失效、background 卡不参与），在 applyOpenSessionDiff 成功预览后与 diff_proposed 新卡加入后触发；deRuntime +4 用例；BR-SYS-STATE-008 进入代码 @GOV 引用与测试 covers。 |
+| 2026-08-21 | v1.13 | WorkspaceOperation 基线同步：新增 §2.2，锁定资源操作不得进入 SM-DE-01；CreateDocumentBundle 只在磁盘目标创建后投影普通初始内容 Diff，安全拒绝删除归 SM-WS-04 补偿。 |

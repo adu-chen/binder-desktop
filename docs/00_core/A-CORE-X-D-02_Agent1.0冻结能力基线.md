@@ -40,14 +40,14 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 
 | 档位 | 已冻结范围 | 解释 |
 |---|---|---|
-| P0 主链 | 三态模型与 Diff 生命周期；新建文档的 LogicalState/显式保存；工作区内显式引用；基础聊天、项目/编辑器感知、受限阅读分析；原生 DOCX 只读与 BDocx 副本路径；`agent-edit-1.0` Runtime Profile、AgentTurn、IntentResult、最小授权、结构化可见事件、AgentSession 隔离与本地事实历史；受限 TaskRun、真实进度、连续 Proposal 接力 | 不具备则不能宣称 Agent 1.0 主链闭环可用；仍须经过 DESIGN 和真实验证 |
-| P1 受控开放 | HTML/BDocx 的颜色/突出显示、段落样式、字号、字体族、表格/图片；显式公开网页研究；创建文件夹、单文件重命名/移动；可恢复删除/恢复；TXT→Markdown、Markdown→TXT 目标副本转换；确认冻结清单后的多个既有文档逐项编辑；用户显式外部文件的一次性只读内容引用；用户管理且显式选择的本地项目记忆 | 每项必须按具体子能力、格式/解析能力、最小授权、确认/保存/恢复语义与真实验证独立开放，不能一并默认开启 |
+| P0 主链 | 三态模型与内容 Diff 生命周期；CreateDocumentBundle；工作区内显式引用；基础聊天、项目/编辑器感知、受限阅读分析；原生 DOCX 只读与 BDocx 副本路径；`agent-edit-1.0` Runtime Profile、AgentTurn、IntentResult、最小授权、结构化可见事件、AgentSession 隔离与本地事实历史；受限 TaskRun、真实进度、连续 Proposal 接力 | 不具备则不能宣称 Agent 1.0 主链闭环可用；仍须经过 DESIGN 和真实验证 |
+| P1 受控开放 | HTML/BDocx 的颜色/突出显示、段落样式、字号、字体族、表格/图片；显式公开网页研究；WorkspaceOperation 的创建/重命名/移动/删除/恢复与 WorkspaceTimeline 类型化恢复；TXT→Markdown、Markdown→TXT 目标副本转换；确认冻结清单后的多个既有文档逐项编辑；用户显式外部文件的一次性只读内容引用；用户管理且显式选择的本地项目记忆 | 每项必须按具体子能力、格式/解析能力、最小授权、确认、基线再核验、补偿、恢复语义与真实验证独立开放，不能一并默认开启 |
 | P2 后续 Profile | Build/CBT、Agent 记忆提议/自动写入/自动检索/自动注入、自动知识召回、模板工作流、开放式自主规划、多 Agent、任务队列、任务级事务/回滚 | 保留产品路线，不进入 `agent-edit-1.0` 默认 Profile 或 1.0 发布验收 |
 
 ## §4 不可突破的产品边界
 
-1. 所有文档修改先作用于 LogicalState；显式保存才写入 DiskState。Proposal 的预览、接受、拒绝、失效和保存
-   必须遵循已确认三态分流，不能被工具直接写盘绕过。
+1. 文档正文、样式、表格和图片修改先作用于 LogicalState，继续遵循内容 Diff 三态分流；WorkspaceOperation
+   不属于内容修改，必须先由 DecisionRequest 前置裁决，确认且再核验后直接改变 DiskState，不产生资源 Diff。
 2. Profile、IntentResult、CapabilityGrant、当前目标、上下文和确认点逐层收窄；已注册工具、Prompt、前端参数
    或兼容默认值都不构成当轮授权。
 3. TaskRun 只组织当前用户目标内的受限步骤，不是后台队列；同文档连续 Proposal 以最新 LogicalState 接力，
@@ -55,6 +55,10 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 4. 可见“工作中”只来自真实回合、步骤或工具事件；不展示模型内部推理，也不把等待、失败、取消或中断伪装为执行。
 5. 外部文件内容仅在用户显式附加且有可用只读解析路径时，作为当前任务的一次性 data-only 引用；不得扫描、自动复读、默认持久化或转存为项目记忆。
 6. 项目长期记忆是用户管理、本地 workspace 隔离的 P1 资产；只有用户明确选择才进入当前回合。Agent 1.0 不自动写入、提议、检索或注入。
+7. WorkspaceOperation 批量失败即停并反向补偿，补偿不完整如实进入 partial_failed；统一 WorkspaceTimeline
+   保存内容节点和资源节点，但按类型化还原器执行，不以文档快照冒充文件树恢复。
+8. CreateDocumentBundle 的绑定初始 Diff 只有在资源、DiskState 与 LogicalState 基线均未推进时，拒绝才可删除
+   本次创建文件；普通 Diff 永远不得删除资源。
 
 ## §5 冻结后的变更规则
 
@@ -67,7 +71,7 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 ## §6 进入 DESIGN 的有序输入
 
 1. SYS：定义共享对象与事件边界——Runtime Profile、AgentTurn、AgentSession、TaskRun、Proposal 链、外部内容与显式记忆隔离；不先锁定实现细节。
-2. DE + ED + WS：定义三态分流、预览/裁决/基准推进失效、连续 Proposal、显式保存、失败与关闭的状态机和接口。
+2. DE + ED + WS：保持内容三态分流；资源操作按 A-WS-M-T-02/A-WS-M-S-02 定义前置裁决、再核验、直接写盘、补偿、统一时间轴和 CreateDocumentBundle 接口。
 3. AG + REF + AST：定义 IntentResult/CapabilityGrant、受限工具消费、引用快照、外部内容暂存/清除、显式记忆选择和 Trace 契约。
 4. 为每项状态化链路和 P1 开放条件建立验证卡；只有存在可执行证据，才进入 IMPLEMENTATION Scope。
 
@@ -86,3 +90,4 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-14 | v1.0 | AG-1.0-R6-BASELINE-FREEZE-01：人类确认冻结 Agent 1.0 已确认需求范围；汇总 R1–R5-C 的 P0/P1/P2、不可突破边界、变更入口、DESIGN 顺序与需求确认/实现验证的真值区分。 |
+| 2026-08-21 | v1.1 | WORKSPACE-OPERATION-BASELINE-01：人类确认 WorkspaceOperation 八项决策；冻结前置裁决直接写盘、统一 WorkspaceTimeline、CreateDocumentBundle、安全拒绝补偿、fail-fast 补偿和 dirty 阻断。 |

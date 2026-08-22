@@ -2,7 +2,7 @@
 文档编号：WS-M-T-01
 文档状态：A
 负责模块：WS
-文档职责：WS 工作台模块级 L2 技术设计（规则 SSOT）——workspace 模型与生命周期、文件 I/O 与跨文档操作的边界、pending_diffs 持久化与裁决后落盘、文档级时间轴存储模型与还原、workspace.db 完整 schema（解除 SY-03）；承接 REQ-WS-001~005
+文档职责：WS 工作台内容保存与基础文件 I/O 的 L2 技术设计（规则 SSOT）——workspace 模型与生命周期、低层文件 I/O、pending_diffs 持久化与内容裁决后落盘、文档内容时间轴分支、workspace.db 基础 schema；工作区资源计划/执行/补偿与统一 WorkspaceTimeline 的增量 SSOT 为 A-WS-M-T-02
 上游约束：A-WS-M-D-01_工作台功能需求描述.md（REQ-WS-001~005）、A-CORE-C-P-01_APC.md（§4.1 WS 职责、§6 save 状态机、§9 文件系统安全边界）、A-SYS-I-P-01_数据结构定义.md（WorkspaceRef/DocRef/PendingDiff/TimelineEntry、workspace.db schema 基线、BR-SYS-PERSIST-001、X-SHARED-001）、A-SYS-I-P-02_IPC协议.md（统一错误形状 BR-SYS-OBS-002、流式终态 BR-SYS-STATE-002）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003 注册前置、X-INTER-001 跨模块转移、SY-04）、ADU.md（§3 RULE/CHAIN/CONSTRAINT/TERM 格式）
 直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 WS 规则 SSOT，代码经 @GOV 映射；save/diff 落盘/时间轴还原状态机在 A-WS-M-S-01 定义并登记 A-SYS-M-S-01 总图；workspace.db 完整 schema 联合解除 SY-03
 使用边界：本文是 WS 规则 SSOT；不重定义跨模块共享结构（WorkspaceRef/DocRef/PendingDiff/TimelineEntry 字段集合归 A-SYS-I-P-01，本文引用不抢定）、不定义 diff 终态转移语义（归 DE）、不定义 IPC 报文/命名（归 A-SYS-I-P-02）、不锁定具体序列化/标量类型/ID 生成算法（延实现期）、状态机内部 states/transitions 归 A-WS-M-S-01
@@ -39,6 +39,11 @@ forbidden: 历史记录, 版本历史, 历史栈, 版本栈, 历史链
 支撑历史回溯与还原到先前版本（REQ-WS-004 / REQ-CORE-007）；version_seq 在同一文档内单调递增。
 
 ## §1 文档定位
+
+> **资源操作边界（2026-08-21）**：本文的 `create_doc/create_folder/delete_folder/rename_doc/delete_doc`
+> 只作为 WS 内部原子执行器或人工文件树入口，不构成 Agent 授权链。Agent 资源操作唯一权威路径见
+> A-WS-M-T-02 / A-WS-M-S-02：WorkspaceOperationPlan → DecisionRequest → 重验 → 直接 DiskState。
+> 本文的 DocumentTimeline 作为统一 WorkspaceTimeline 的“文档内容条目”分支保留，不承担资源恢复。
 
 本文是 **WS 模块**的 L2 技术设计，是 WS 规则的唯一来源（SSOT，APC §2/§3.2），承接 WS L1
 （REQ-WS-001~005）：
@@ -450,3 +455,4 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-08-07 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder`（mode=empty\|recursive）——fileops::delete_folder 实现两级删除语义（empty 非空拒 WS_NOT_EMPTY / recursive 递归删除），listing::cleanup_bdocx_under 清洗删除目录前缀下的 BDocx 清单路径（empty 无命中不写）；目标越界经 resolve_active 守界。 |
 | 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）复用 WS-FS `create_doc` / `create_folder`，前端激活区域与文件夹入口为 UI 层组合，无后端命令面变化。 |
 | 2026-08-13 | v1.10 | DIFF-STATE-COMPASS-01：WS-DIFF-APPLY/BR-WS-STATE-001 与 REQ-WS-003 显式承接 BR-CORE-STATE-002；仅持续无 LogicalState 的接受可写盘，pending 打开后的迁移必须改走 ED→WS-SAVE。 |
+| 2026-08-21 | v1.11 | 工作区资源操作基线重构：明确本文只保留内容保存、文档内容时间轴分支和低层原子 I/O；Agent 资源操作与统一 WorkspaceTimeline 增量 SSOT 迁移至 A-WS-M-T-02，旧直接文件命令不得作为 Agent 授权路径。 |

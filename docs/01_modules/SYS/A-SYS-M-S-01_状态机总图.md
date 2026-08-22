@@ -80,6 +80,7 @@ APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` 
 | 工具调用循环 | AG | AG | SM-AG-02 | active | 既有；按 CapabilityGrant 收窄（BR-SYS-STATE-007） |
 | Proposal 链（连续 Proposal 接力/失效） | DE（既有 SM-DE-01，D2 扩展接力语义） | DE | SM-DE-01 | active（D2 调整） | 以最新 LogicalState 接力、前卡基准推进失效、不形成补丁栈（BR-SYS-STATE-008） |
 | 受限任务实例（TaskRun）与步骤 | AG 编排（同一用户目标内组织步骤/回合） | AG | SM-AG-04 | active（D3 建机） | 非后台队列、不自动重试/续跑、不越确认点；真实工作状态由回合/步骤/工具事件驱动（BR-SYS-STATE-008） |
+| 工作区资源操作（WorkspaceOperation） | WS 承载计划、重验、磁盘执行、补偿与恢复；AG/TaskRun 只负责意图、DecisionRequest 与调用 | WS | SM-WS-04 | active（设计已登记，待实现） | 前置裁决；确认后直接 DiskState；无资源 DiffCard；fail-fast 逆序补偿；重启 Interrupted |
 | 代理会话（AgentSession）生命周期 | AG（展示/持久化/恢复隔离键） | AG | —（已判定：无独立状态机） | 已判定（D3） | 判定为按 X-FORBID-007 投影 + history 双作用域（workspace+session）持久化/恢复，不建独立状态机 |
 | 外部内容引用（ExternalContentRef）暂存/清除 | REF（读取路径）+ AG（当前任务消费） | REF/AG | —（已判定：无独立状态机） | 已判定（D3） | 一次性 data-only、当前任务范围、不自动持久化；payload 随发送即弃（BR-SYS-DATA-007，IMP-EXTERNAL-CONTENT-01 落地） |
 | 显式项目记忆引用（MemorySelectionRef） | AST（用户管理）+ REF（选择注入） | AST/REF | —（已判定：无独立状态机） | 已判定（D3） | 仅显式选择进入当前回合、不自动写入/检索/注入（BR-SYS-DATA-007，IMP-MEMORY-SELECTION-01 落地） |
@@ -147,6 +148,11 @@ constraint_id: X-SEQ-003
   三分流交给 SM-ED-01（已有 LogicalState 预览）/ SM-WS-02（无 LogicalState 接受落盘）；连续 Proposal
   必须以最新 LogicalState 为基准接力，前卡基准推进失效且不可再裁决（BR-SYS-STATE-008）。TaskRun 状态机
   （AG）D3 建机后登记本总图；取消只停止未开始步骤、保留已成功预览内容，不形成任务级回滚。
+- **TaskRun ↔ DecisionRequest ↔ WorkspaceOperation 链**（2026-08-21 登记）：资源步骤由 AG 生成
+  WorkspaceOperationPlan，并以 DecisionRequest 进入 SM-AG-04 WaitingConfirm；确认后 TaskRun 立即调用
+  SM-WS-04 Revalidating/Executing，拒绝零磁盘副作用。WS 完成或补偿终态回传 TaskRun 后才可推进依赖步骤。
+  资源卡不进入 SM-DE-01；受影响内容 Diff 仅在资源执行成功后因基线推进失效。CreateDocumentBundle 在
+  资源创建成功后再进入 SM-DE-01 投影初始内容 Diff。重启使两侧未终态都进入 Interrupted，旧确认不得重放。
 - **AgentTurn 澄清等待（非终态）**（2026-08-14 D1 登记，R5-A）：澄清是等待用户输入的非终态，不是
   SM-AG-01 的 Completed；取消可在任一活动阶段进入终态，首终态后迟到事件/工具不得产生文档、卡片或落盘
   副作用（BR-SYS-STATE-007）。D3 调整 SM-AG-01 时须与 IPC 流式终态契约（BR-SYS-STATE-002）对齐。
@@ -284,3 +290,4 @@ status: mapped
 | 2026-08-13 | v1.11 | DIFF-STATE-COMPASS-01：总图将 diff 跨模块转移收敛为 BR-CORE-STATE-001~003 三分流——已有 LogicalState 直接预览且卡片 pending、无 LogicalState 临时挂载后接受才经 SM-WS-02 落盘、pending 打开目标文档迁移至 SM-ED-01；移除 “open_session 自动 accepted” 语义。 |
 | 2026-08-14 | v1.12 | AG-1.0-D1-SYS-SHARED-CONTRACT-01：新增 §3.1 Agent 1.0 运行时与任务链状态机归属（AgentTurn=SM-AG-01、Proposal 链=SM-DE-01，TaskRun/步骤、AgentSession、ExternalContentRef、MemorySelectionRef 为 planned 待 D3）；§5 新增 TaskRun↔AgentTurn↔Proposal 链、澄清等待非终态、外部内容/显式记忆引用三个跨模块转移契约；REQ_MAP 补齐 REQ-SYS-010/011/012；§10 登记状态机待建债务。 |
 | 2026-08-14 | v1.13 | AG-1.0-DOC-CLOSURE-DCLOSURE-01：§3.1 回填——TaskRun 行 planned→active（machine_id=SM-AG-04，D3 建机）；AgentSession/ExternalContentRef/MemorySelectionRef 三行判定为无独立状态机（投影契约+history 双作用域 / payload 一次性 data-only）并注明落地 Scope；§10 D1 债务状态更新为已回填。 |
+| 2026-08-21 | v1.14 | 工作区资源操作基线重构：总图登记 SM-WS-04；新增 TaskRun→DecisionRequest→WorkspaceOperation 跨模块转移，明确资源操作不进入 SM-DE-01、CreateDocumentBundle 仅在资源创建后衔接初始内容 Diff、重启双方 Interrupted。 |

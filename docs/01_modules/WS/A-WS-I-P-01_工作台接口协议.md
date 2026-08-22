@@ -2,8 +2,8 @@
 文档编号：WS-I-P-01
 文档状态：A
 负责模块：WS
-文档职责：WS 工作台模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 命名/信封/错误/流式骨架声明 WS 全部 Tauri command 的语义级签名（workspace 生命周期 / 文件 I/O 与 save / pending_diffs / 时间轴 / 外部变更事件）
-上游约束：A-SYS-I-P-02_IPC协议.md（命名约定 `模块前缀.动作`、请求-响应信封、统一错误形状、流式逻辑契约——本文全部 command 在该骨架上承接，不重定义信封/错误/流式语义）、A-SYS-I-P-01_数据结构定义.md（WorkspaceRef/DocRef/PendingDiff/TimelineEntry 载荷结构）、A-WS-M-T-01_工作台技术设计.md（BR-WS-* 规则、X-FORBID-004）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01/02/03 状态机归属）、ADU.md
+文档职责：WS 工作台模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 命名/信封/错误/流式骨架声明 WS command 的语义级签名（workspace 生命周期 / 文件 I/O 与 save / WorkspaceOperation 计划与执行 / pending_diffs / WorkspaceTimeline / 外部变更事件）
+上游约束：A-SYS-I-P-02_IPC协议.md、A-SYS-I-P-01_数据结构定义.md、A-WS-M-T-01_工作台技术设计.md、A-WS-M-S-01_工作台状态机设计.md、A-WS-M-T-02_工作区资源操作技术设计.md（BR-WS-STATE-003/BR-WS-DATA-003/BR-WS-PERSIST-003）、A-WS-M-S-02_工作区资源操作状态机设计.md（SM-WS-04）、ADU.md
 直接承接：实现期 Rust command 注册表按本文清单注册（未注册即协议错误，BR-SYS-DATA-003）；ED/DE/AG/CBT 等调用方按本文签名经 Service 层调用；@GOV 标注落在实现代码（追溯 A-WS-M-T-01 规则，本文为签名契约）
 使用边界：本文声明 command 的**语义级签名**（参数/结果的字段语义），不锁定序列化格式与具体标量类型（延实现，承 I-P-02 边界）；不新增 RULE/CHAIN/CONSTRAINT/TERM（命令行为已由 A-WS-M-T-01 规则覆盖，本文是契约细化非规则源）；错误仅列**特有错误类**（通用错误形状归 I-P-02）
 变更要求：command 增删改须同步更新实现注册表与调用方；签名变更属接口变更，须复核全部调用方模块；涉及共享结构变更回写 A-SYS-I-P-01
@@ -48,6 +48,24 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.save_doc` | DocRef、内容、**基线哈希**（十进制字符串或兼容数字）、override（默认 false） | 新基线哈希（十进制字符串） | **WS_SAVE_CONFLICT / save_conflict 语义**（磁盘≠基线且未 override，SM-WS-01 saveConflict）；写入失败 | SM-WS-01 / BR-WS-PERSIST-001 / BR-WS-OBS-001 / BR-WS-DATA-002（保存成功且内容与最近节点快照不同时记一个 `save` 时间轴节点）；override=true 即 overrideConfirmed 语义，必须源自用户显式确认 |
 | `ws.search` | workspace_id、查询 | 命中列表（DocRef + 定位） | — | 限界 X-FORBID-004 |
 
+> `ws.create_doc/create_folder/delete_folder/rename_doc/delete_doc` 是 WS 内部原子执行器或人工文件树入口的
+> 低层能力，不是 Agent 资源授权接口。Agent、TaskRun 与模型工具不得直接调用这些 command；必须使用下节
+> WorkspaceOperation 计划与执行接口。既有直接调用属于迁移债务。
+
+### §3.1 WorkspaceOperation（WS-OPERATION / SM-WS-04）
+
+| command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
+|---|---|---|---|---|
+| `ws.plan_operation` | workspace_id、受限 operation intents、TaskRun/AgentTurn 来源 | WorkspaceOperationPlan（不可变 items、影响清单、基线、补偿策略、idempotency_key） | 越界/不支持操作/无法冻结清单/目标冲突 | Planning；BR-WS-STATE-003 / BR-WS-DATA-003 |
+| `ws.get_operation_plan` | plan_id | 完整计划 + 当前状态 + DecisionRequest 关联 | 不存在/跨 workspace | BR-WS-DATA-003 |
+| `ws.execute_operation` | plan_id、resolved DecisionRequest identity、outcome=confirm | WorkspaceOperationReceipt + WorkspaceOperationEntry | 未确认、确认不匹配、计划过期、基线变化、dirty target、幂等冲突、补偿失败 | Revalidating→Executing/Compensating；BR-WS-STATE-003 / BR-WS-PERSIST-003 |
+| `ws.cancel_operation` | plan_id、resolved DecisionRequest identity、outcome=cancel | Rejected 回执，零磁盘副作用 | 已执行/终态 | Rejected |
+| `ws.list_operations` | workspace_id、状态过滤 | 计划与执行摘要 | — | 可观测与恢复 |
+
+`ws.execute_operation` 只能接受真实已解决 DecisionRequest 的身份；布尔 `confirmed=true`、模型参数、Prompt 文本或
+前端任意字段均不是授权。重复 confirm/execute 由 idempotency_key 返回同一终态回执，不重复执行。重启恢复时
+Planning/WaitingConfirm/Executing/Compensating 一律投影为 Interrupted，接口不得自动调用 execute。
+
 ## §4 pending_diffs（WS-DIFF-APPLY）
 
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
@@ -57,13 +75,13 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.apply_diff` | diff_id | Applied 回执 + 时间轴 entry_id | apply 失败（不留半节点，可重试） | SM-WS-02（仅 DE accepted 信号方可调用——调用方约束，BR-WS-STATE-001） |
 | `ws.discard_diff` | diff_id、终态（rejected/expired） | Discarded 回执 | — | SM-WS-02（不写文件） |
 
-## §5 时间轴（WS-TIMELINE）
+## §5 统一 WorkspaceTimeline（WS-TIMELINE）
 
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
 |---|---|---|---|---|
-| `ws.list_timeline` | DocRef | TimelineEntry 列表（version_seq 序） | — | BR-WS-DATA-002 |
-| `ws.preview_node` | entry_id | 该版本内容（快照重建） | 快照不可取回（guard 对应 SM-WS-03） | SM-WS-03 Previewing |
-| `ws.restore_node` | entry_id | Restored 回执 + 新 entry_id | 还原失败（保持现状） | SM-WS-03 / BR-WS-STATE-002 |
+| `ws.list_timeline` | workspace_id、可选 DocRef/entry_kind 过滤 | 文档内容 TimelineEntry 与 WorkspaceOperationEntry 的统一序列 | — | BR-WS-DATA-002 / BR-WS-DATA-003 |
+| `ws.preview_node` | entry_id | 按 entry_kind 返回内容快照或资源操作/恢复清单 | 快照不可取回 | SM-WS-03 或 SM-WS-04 Planning |
+| `ws.restore_node` | entry_id | 文档内容还原回执，或新的 WorkspaceOperationPlan（资源条目） | 还原失败/资源冲突/不可恢复条目 | 内容走 SM-WS-03；资源恢复必须新建计划并重新 DecisionRequest，不直接执行 |
 
 ## §6 事件回传（流式逻辑契约，I-P-02 §5）
 
@@ -108,3 +126,4 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | 2026-08-04 | v1.7 | `ws.save_doc` 副作用补充（人类决策，A-WS-M-T-01 v1.7）：保存成功且内容与最近节点快照不同时记一个 `save` 时间轴节点，规则归属补 BR-WS-DATA-002 |
 | 2026-08-06 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder` command（镜像 `ws.create_folder`）：两级语义——mode=empty 仅删空目录（非空拒 WS_NOT_EMPTY）、mode=recursive 递归删除；缺失/目标为文件拒绝；删除后由实现侧清洗 bdocx_manifest。文件删除 `ws.delete_doc` 语义不变 |
 | 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）为前端入口组合，复用既有 `ws.create_doc` / `ws.create_folder` command，无新增命令面；登记本行避免前端入口与协议脱节。 |
+| 2026-08-21 | v1.10 | 工作区资源操作基线重构：新增 ws.plan/get/execute/cancel/list_operation 语义接口；Agent 资源操作不得直接调用低层文件 command；统一 WorkspaceTimeline 支持类型化资源条目，资源恢复返回新的前置裁决计划。 |

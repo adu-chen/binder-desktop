@@ -28,7 +28,7 @@ DE 是「代理回合→diff→LogicalState/落盘」链的中枢：接 AG/CBT �
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `de.generate_diff` | ChangeProposal（target_blocks: DocRef+blockId、修改内容、origin: 模块/回合、DiffProjection 基线元数据） | diff_id（SM-DE-01 Pending）+ 呈现就绪 | **anchor_lost**（blockId 失效→GenFailed，回报 AG handoffFail）；已打开文档缺 session 基线；持久化失败 | 经 `ed.locate_block`/AgentReadContext 校验锚 + `ws.persist_diff` 持久化 + `ed.mount_decoration` 或 DiffCard 呈现 |
+| `de.generate_diff` | ChangeProposal（target_blocks: DocRef+blockId、修改内容、origin: 模块/回合、DiffProjection 基线元数据；CreateDocumentBundle 初始内容必须附 operation_id/origin=create_document_bundle） | diff_id（SM-DE-01 Pending）+ 呈现就绪 | **anchor_lost**；已打开文档缺 session 基线；CreateDocumentBundle 目标 DiskState/operation 不存在或不匹配；持久化失败 | 经 `ed.locate_block`/AgentReadContext 校验锚 + `ws.persist_diff` 持久化 + `ed.mount_decoration` 或 DiffCard 呈现 |
 | `de.get_diff` | diff_id | PendingDiff + payload（含 before_snapshot 对比基准） | 不存在 | BR-DE-DATA-002（重启恢复可重建审阅） |
 | `de.list_diffs` | DocRef（可空 → workspace 全量） | PendingDiff 列表（按创建序） | — | 多 diff 并存呈现（BR-DE-DATA-003） |
 | `de.update_image_diff_snapshots` | diff_id、before/after ImageSnapshot、affectedBlockIds | 将 ED 实际应用结果补入既有 ImageOperation DiffPayload；首次写入后只接受同值幂等重试 | workspace/diff 不匹配、非 image_ops、快照字段/路径/hash 无效、已写值冲突 | BR-DE-DATA-002；只补审阅载荷，不修改文档内容或 diff 终态 |
@@ -67,6 +67,11 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 > 成功后仍保持 Pending 并保留用户裁决入口；用户可显式接受，也可保存仍有效的预览，二者均调用
 > `de.accept_draft_diff`。预览失败或基准已推进时调用 `de.expire_diff` 或投错误卡；这些路径都不得调用
 > `de.accept_diff` 触发后台落盘。
+
+工作区资源操作不得进入本协议：`delete_doc/delete_folder/create_doc/create_folder/rename/move/restore` 不是合法
+patch_kind，也不得用空 `before/after` 或“删除文档”投影伪造成 ChangeProposal。它们只走 A-WS-I-P-01 的
+WorkspaceOperation 接口。CreateDocumentBundle 是唯一例外，但 DE 只接收资源创建成功后的“初始内容”部分；
+`de.reject_diff` 对该卡返回内容裁决请求，实际安全删除由 WS 按 operation_id 和三重基线执行。
 
 ## §4 过期与冲突重检接口（DE-DIFF / BR-DE-STATE-002 / BR-DE-DATA-003）
 
@@ -120,3 +125,4 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 | 2026-07-30 | v1.7 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：新增 patch_kind=block_ops 的 exact node before/after、活动草稿限定与逐块结构化审阅；文本摘要不再承担执行或回滚。 |
 | 2026-08-13 | v1.11 | DIFF-STATE-COMPASS-01：`de.accept_draft_diff` 固定为显式卡片接受，`de.accept_diff` 固定为持续无 LogicalState 的原子落盘；`open_session/migrated_open` 预览后保持 pending 并支持接受/拒绝，不再自动 accepted 或禁用裁决。 |
 | 2026-08-13 | v1.12 | 人类复核：保存有效 pending 预览同样调用 `de.accept_draft_diff`，先写 accepted/awaiting_save 再交给保存链；基线推进时调用方改走 `de.expire_diff`，不得接受旧卡。 |
+| 2026-08-21 | v1.13 | 工作区资源操作基线重构：de.generate_diff 对 CreateDocumentBundle 初始内容增加 operation_id/origin 校验；资源创建/删除/重命名/移动/恢复禁止作为 patch_kind 或空投影 DiffCard；安全拒绝删除由 WS 三重基线补偿。 |

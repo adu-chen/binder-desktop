@@ -2,7 +2,7 @@
 文档编号：WS-M-S-01
 文档状态：A
 负责模块：WS
-文档职责：WS 工作台模块级状态机设计——save 保存机（SM-WS-01）、diff 落盘机（SM-WS-02）、时间轴还原机（SM-WS-03），含 APC §6 必备字段；登记 A-SYS-M-S-01 总图（save 行 planned→active，回填 SY-04），登记 X-INTER-001 跨模块转移契约
+文档职责：WS 文档内容状态机设计——save 保存机（SM-WS-01）、背景内容 diff 落盘机（SM-WS-02）、文档内容时间轴还原机（SM-WS-03）；工作区资源操作状态机为 A-WS-M-S-02 的 SM-WS-04
 上游约束：A-WS-M-T-01_工作台技术设计.md（WS-SAVE/WS-DIFF-APPLY/WS-TIMELINE 链路、BR-WS-PERSIST-001/BR-WS-STATE-001/BR-WS-STATE-002 规则）、A-CORE-C-P-01_APC.md（§6 状态机必备字段与强制阈值）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003 注册前置、X-INTER-001 跨模块转移、§3 总图清单、SY-04）、A-SYS-I-P-01_数据结构定义.md（PendingDiff/TimelineEntry 字段契约）、A-SYS-I-P-02_IPC协议.md（BR-SYS-STATE-002 流式终态、统一错误形状）、ADU.md（§3.1 STATE_MACHINE 格式）
 直接承接：本文三机经 rules 字段承载 A-WS-M-T-01 规则；machine_id 登记 A-SYS-M-S-01 总图；diff 落盘机的 accepted 入口对接 DE diff 终态机（X-INTER-001）
 使用边界：本文定义 WS 状态机内部（states/transitions/guards/actions/error/recovery/forbidden）；不重定义规则（归 A-WS-M-T-01）、不定义 diff 终态转移（归 DE 状态机）、不重定义 SM-SYS-01（归 A-SYS-I-P-03）；流式终态与 BR-SYS-STATE-002 对齐
@@ -72,52 +72,24 @@ terminal_states: Saved, SaveError
   越界路径不存在进入 Saving 的路径；外部修改后无显式覆盖确认不存在通往 Saved 的路径
 - **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions，含冲突路）
 
-### 2.1 保存协调与未保存新文档保存契约（REQ-WS-003/006，2026-08-14 D2 登记）
+### 2.1 保存协调与 CreateDocumentBundle 边界（REQ-WS-003/006）
 
-承接 REQ-WS-003/006 与冻结基线三分流。SM-WS-01（save 保存机）按以下协调契约执行，**不感知卡片
-裁决语义本身**（裁决归 DE），只承接落盘执行与创建文件：
+SM-WS-01 只保存已经存在 DiskState 的文档 LogicalState；它不再承担“保存时创建新文件”。新建文档由
+SM-WS-04 的 CreateDocumentBundle 子链先完成资源创建，再打开标签并投影初始内容 Diff。
 
-| 场景 | SM-WS-01 承接 | 说明 |
+固定协同：
+
+| 场景 | 状态机归属 | 结果 |
 |---|---|---|
-| 保存有效 pending 预览 | 用户保存当前文档时，DE 先检查仍有效 pending 卡：当前 LogicalState 等于其 after 基准 → 先裁决为 `accepted/awaiting_save`（effect_status），再驱动 SM-WS-01 落盘；基线已推进 → 旧卡失效，只保存当前 LogicalState | A-WS-M-S-01 只消费已裁决的 save 请求；awaiting_save 效果态归 PendingDiff.effect_status（BR-SYS-DATA-005，A-SYS-M-T-02 §4） |
-| 未保存新文档保存＝创建文件 | 目标无 DocRef（未保存新建/转换目标）时，save 事件携带「创建」语义：校验目标路径/格式后原子创建文件、记时间轴节点、建立 DocRef；失败保留未保存会话不伪报已创建 | D-NEW-002/004/007、REQ-ED-010 §2.1 |
-| 保存失败/冲突 | 沿用 SM-WS-01 既有路径：saveFail→SaveError 可重试；saveConflict 不覆盖外部修改、需 overrideConfirmed；未保存新文档不产生半节点 | 既有转移不变 |
-| 连续 Proposal 接力中的保存 | 连续接力中保存当前 LogicalState 仍按上表：仍有效 pending 卡先裁决再落盘；已失效卡不得被误裁决 | BR-SYS-STATE-008（A-DE-M-S-01 §2.1） |
+| 初始内容 Diff 仍有效时保存 | DE 先裁决 accepted/awaiting_save，再由 SM-WS-01 写入既有目标 | 保存成功后内容条目进入 WorkspaceTimeline |
+| 初始内容 Diff 接受但不保存 | DE 内容卡生命周期 | DiskState 仍为空文件，LogicalState 保持预览内容 |
+| 初始内容 Diff 安全拒绝 | SM-WS-04 校验 operation_id、资源/DiskState/LogicalState 三重基线 | 全部未推进才补偿删除目标并关闭标签 |
+| 初始内容 Diff 已失效 | DE expired，SM-WS-04 不补偿删除 | 文件与当前 LogicalState 保留，可正常保存 |
+| 保存失败 | SM-WS-01 SaveError | 保留 LogicalState、标签与 accepted/awaiting_save 效果态，不伪报 saved |
 
-<!-- REQ_MAP
-req_id: REQ-WS-003
-target_type: RULE
-target_id: BR-CORE-STATE-001
-status: mapped
--->
-<!-- REQ_MAP
-req_id: REQ-WS-003
-target_type: RULE
-target_id: BR-CORE-STATE-002
-status: mapped
--->
-<!-- REQ_MAP
-req_id: REQ-WS-003
-target_type: RULE
-target_id: BR-CORE-STATE-003
-status: mapped
--->
-<!-- REQ_MAP
-req_id: REQ-WS-006
-target_type: RULE
-target_id: BR-CORE-STATE-001
-status: mapped
--->
-<!-- REQ_MAP
-req_id: REQ-WS-006
-target_type: RULE
-target_id: BR-SYS-PERSIST-001
-status: mapped
--->
-
-> 迁移债务：现有 SM-WS-01 的 scope 以「已存在 DocRef 的文档保存」为默认，未显式区分「创建」语义；
-> 现有代码（ws.save_doc / ws.create_doc 直写路径）与未保存新文档的保存即创建存在语义差，实现时须按
-> D-NEW-002 收敛为「先未保存 LogicalState、显式保存才建文件」，不得复用旧直写路径绕过（REQ-WS-006）。
+`baseline=null 且目标不存在时由 save 创建文件` 的历史实现是迁移债务；新基线下必须拒绝该 Agent 路径，
+不能绕过 WorkspaceOperationPlan 与 DecisionRequest。手动“新建空文件”入口是否直接创建属于独立人工 UI
+权限，不得被 Agent 工具复用。
 > 「保存有效 pending 预览先裁决」的协调入口（DE 先裁决再驱动 save）已由 A-DE-M-S-01 §2/§2.1 建模，
 > 本文只承接落盘执行。
 
@@ -271,3 +243,4 @@ terminal_states: Restored, RestoreError
 | 2026-08-13 | v1.2 | DIFF-STATE-COMPASS-01：SM-WS-02 rules 增 BR-CORE-STATE-002，入口 guard 固定为“accepted 且持续无 LogicalState”；目标 pending 期间打开后不得进入本机。 |
 | 2026-08-14 | v1.3 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 保存协调与未保存新文档保存契约（REQ-WS-003/006）——保存有效 pending 预览由 DE 先裁决为 accepted/awaiting_save 再驱动 SM-WS-01 落盘、未保存新文档保存＝创建文件（D-NEW-002/004/007）；补 REQ-WS-003/006 的 REQ_MAP（BR-CORE-STATE-001~003、BR-SYS-PERSIST-001）；登记未保存新文档创建语义与旧直写路径的迁移债务。 |
 | 2026-08-14 | v1.4 | AG-1.0-IMP-AGENT-CREATE-SAVE-01：§2.1 契约落地（仅代理新建生效，手动新建保持 ws.create_doc 立即建文件不变）——route_save_doc 对 baseline=null（未保存新文档身份）目标不存在时 create_dir_all 父目录 + 原子落盘 + 时间轴节点（V-N2 恰一）+ docx 补 mark_bdocx 身份；目标已存在 → WS_EXISTS 冲突（V-N4 不覆盖外部创建，保留未保存内容）；失败经既有保存机 SaveError 传播不伪报已创建；route_save_doc 补 @GOV（BR-WS-PERSIST-001/OBS-001/DATA-001）+ 2 测试。 |
+| 2026-08-21 | v1.5 | 工作区资源操作基线重构：本文限定为文档内容 SM-WS-01/02/03；§2.1 旧未保存新建链降为历史实现证据；新建、资源执行、补偿与资源恢复统一由 A-WS-M-S-02 的 SM-WS-04 承载。 |

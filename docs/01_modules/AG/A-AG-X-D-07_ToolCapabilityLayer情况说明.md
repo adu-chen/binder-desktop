@@ -16,8 +16,9 @@
 Tool Capability Layer 把“系统具有某种工具实现”与“本轮允许模型使用什么”分开。注册表描述可能能力，
 Runtime Profile 与 Intent 共同产生逐回合 `CapabilityGrantV1`；任何调用都必须再次校验工具、回合、目标和参数。
 
-当前等级：`Integrated`。1.0 的读工具和 `propose_edit` 已进入真实工具循环，未授权工具会从模型可见清单
-过滤并在执行端再次拒绝。高级表格、图片、结构操作虽可能存在注册或底层实现，但不属于 agent-edit-1.0 grant。
+当前等级：`Migration Pending`。1.0 的读工具和内容 `propose_edit` 已进入真实工具循环，未授权工具会从模型可见清单
+过滤并在执行端再次拒绝；但 WorkspaceOperationPlan/DecisionRequest 资源链尚未按 A-WS-M-T-02 / M-S-02 实现，
+不得以旧的低层文件命令或资源 DiffCard 证据声称本工作包已收口。
 
 ## 2. 职责、输入与输出
 
@@ -40,7 +41,7 @@ Runtime Profile 与 Intent 共同产生逐回合 `CapabilityGrantV1`；任何调
 - `CapabilityGrantV1`：profile、intent/turn、allowed tools、target/readable scope、参数约束。
 - 过滤后的模型工具 definitions。
 - Allow/Reject 决策及结构化原因。
-- 只读 ToolResult，或经 `ChangeProposal → DE` 的修改建议结果。
+- 只读 ToolResult、经 `ChangeProposal → DE` 的内容修改建议，或不发生磁盘副作用的 WorkspaceOperationPlan + DecisionRequest。
 
 ## 3. agent-edit-1.0 最小授权矩阵
 
@@ -50,11 +51,12 @@ Runtime Profile 与 Intent 共同产生逐回合 `CapabilityGrantV1`；任何调
 | Search | `list_docs`、`search_text`、`read_doc` |
 | Inspect / Analyze | `read_doc`、`list_blocks` |
 | Edit | `read_doc`、`list_blocks`、`propose_edit`、`edit_blocked` |
-| CreateDocument | `propose_edit`、`edit_blocked` |
+| CreateDocument | 按需读取工具、`plan_workspace_operation`、`edit_blocked` |
+| OrganizeWorkspace | `list_docs`、按需读取工具、`plan_workspace_operation`、`edit_blocked` |
 
-`propose_edit` 是 WriteIntent，不是直接写文档；新建文档只允许 `base=empty` 的整文替换提案。表格和图片高级
-编辑操作在 1.0 参数校验阶段拒绝。注册表中的结构移动、建目录、图片导入等未来能力不能因“已经存在”而进入
-agent-edit-1.0 模型清单。
+`propose_edit` 是内容 WriteIntent，不是工作区资源授权工具。`plan_workspace_operation` 只冻结计划并生成
+DecisionRequest，不执行磁盘操作；`execute_workspace_operation` 不对模型授权，只能在真实确认回执后由 TaskRun 调用。
+新建文档使用 CreateDocumentBundle：初始内容在确认前生成并绑定，确认后先创建真实磁盘目标，再由系统投影普通内容 Diff。
 
 ## 4. 当前实现地图
 
@@ -79,9 +81,10 @@ resolve_capability_grant 生成逐回合最小授权
 ↓
 校验 profile/turn → 注册状态 → grant → readable/target scope → 参数约束
 ↓
-只读工具经 AgentReadContext 执行；propose_edit 经 ChangeProposal → DE；拒绝原因回注模型
+只读工具经 AgentReadContext 执行；内容 propose_edit 经 ChangeProposal → DE；
+资源意图经 plan_workspace_operation → WorkspaceOperationPlan → DecisionRequest；拒绝原因回注模型
 ↓
-模型续调或输出最终结果；达到上限、取消或错误则失败关闭
+普通工具续调或输出最终结果；DecisionRequest 确认则 TaskRun 调用 WS 重验与执行；达到上限、取消或错误则失败关闭
 ```
 
 ## 6. 必须冻结与允许变化
@@ -118,7 +121,7 @@ resolve_capability_grant 生成逐回合最小授权
 2. 未注册、已注册但未授权、错误 turn、错误 profile、目标越界和非法参数分别返回可区分的 Reject。
 3. 模型 definitions 与 grant 完全一致；被过滤工具即使由伪造模型响应请求，也在执行端被拒绝。
 4. 当前打开文档读取命中 LogicalState；workspace 越界、过期 selection 和未声明目标失败关闭。
-5. `propose_edit` 不直接改变 LogicalState/磁盘，只产生可审阅 Diff；新建基准为空。
+5. `propose_edit` 不直接改变 DiskState，只产生内容 Diff；资源意图不能进入该工具。CreateDocumentBundle 只有在真实目标创建后才投影初始内容 Diff。
 6. 工具失败会作为数据反馈给模型，不能自动扩权；达到最大轮数、取消或 gate 拒绝产生唯一失败终态。
 7. 工具结果包含提示注入文本时仍以 DATA-ONLY 回注，不改变 Runtime Control。
 
@@ -127,7 +130,7 @@ resolve_capability_grant 生成逐回合最小授权
 
 ## 9. 下一治理会话入口
 
-必读顺序：A-AG-M-T-01 工具体系 → A-AG-I-P-01 → A-AG-X-D-04 → `tool_registry.rs` → `tool.rs` →
+必读顺序：A-AG-M-T-01 工具体系 → A-AG-I-P-01 → A-WS-M-T-02 / A-WS-M-S-02 → A-AG-X-D-04 → `tool_registry.rs` → `tool.rs` →
 `tool_exec.rs` → `lib.rs` 工具循环与提案路径 → DE 修改建议契约。
 
 候选修改范围：工具注册/授权/校验/执行和对应测试。若新增 1.0 可见工具、扩大可读范围或改变
@@ -144,3 +147,4 @@ resolve_capability_grant 生成逐回合最小授权
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-08 | v1.0 | 建立 Tool Capability 的最小授权矩阵、双重校验、写入边界、风险与独立验证入口 |
+| 2026-08-21 | v1.1 | WorkspaceOperation 基线同步：当前等级改为 Migration Pending；新增 CreateDocument/OrganizeWorkspace 计划工具授权，执行工具仅由真实确认后的 TaskRun 调用；新建改用 CreateDocumentBundle。 |

@@ -19,8 +19,8 @@
 
 本轮已确认并已进入 L1 需求层的基线有十二组：
 
-1. `D-NEW-001`~`008`：新建文档预览成功即存在可编辑的 `LogicalState` 与标签；接受/拒绝只裁决提案；
-   显式保存才写入 `DiskState`；基准推进使旧提案失效。
+1. 新建文档绑定链：初始内容在确认前生成，WorkspaceOperationPlan 经前置裁决后创建磁盘空文件；随后打开标签、
+   建立 `LogicalState` 并投影绑定初始 Diff。接受只裁决内容卡；仅资源、磁盘和逻辑基线均未推进时，拒绝可补偿删除本次创建文件。
 2. `CAP-00`：Agent Runtime Foundation 作为 1.0 P0 前提，覆盖 AgentTurn、IntentResult、按需工具授权、
    会话隔离、事件呈现、恢复与 Trace。
 3. `CAP-20` 的工作区内引用：编辑器选区、文件树/编辑器标签、会话标签等显式引用进入可见令牌并在发送时
@@ -31,9 +31,11 @@
 5. R3 的编辑边界：原生 DOCX 只读预览/分析，编辑请求创建新 BDocx 编辑副本；BDocx 是 DOCX→HTML
    编辑与模拟 Word 分页→DOCX 的处理路径而非格式；纯文本/Markdown 边界不变；HTML/BDocx 的字符基础样式为 P0，颜色/突出显示、段落样式、字号、字体族、表格和图片为 P1，页面和复杂布局为 P2。
 6. R4-A 的网络研究边界：`CAP-14` 为 P1，只有用户明确要求搜索/核验或提供 URL 时才检索和有限读取公开网页；默认仅发送查询或用户提供的 URL，资料以含标题、域名、URL、获取时间的 data-only 来源供给，禁止爬虫、认证/交互、下载/导入和内网访问。
-7. R4-B 的文件树边界：`CAP-11` 的创建文件夹、单个已保存文件重命名/移动为 P1，先进入逻辑文件树与显示状态；接受只裁决结构 Proposal，用户逐项显式保存才改变磁盘文件树。复制、删除、目录移动、批量提交不在 R4-B；格式转换由 R4-C 另行确认。
+7. 工作区资源操作边界：`CAP-11/12` 的创建、重命名、移动、删除与恢复统一先生成不可变 WorkspaceOperationPlan，
+   经 DecisionRequest 前置裁决和确认时再核验后直接改变 DiskState；不生成资源 DiffCard。批量失败即停并反向补偿，dirty 目标先阻断。
 8. R4-C 的最小格式转换：`CAP-13` 为 P1，只有 TXT→Markdown、Markdown→TXT 两个方向，且均创建目标副本；来源不改写，预览成功建立目标 LogicalState 与标签，接受不写盘、保存才落盘。TXT→Markdown 不推断语义；Markdown→TXT 明示有损。HTML 与通用 DOCX 转换仍未确认。
-9. R4-D 的删除与多个既有文档编辑：`CAP-12` 为 P1 的可恢复删除/恢复，红色逻辑暂存与接受都不改磁盘，单项显式保存才移入或移出可恢复存储，永久删除不纳入；`CAP-15` 为 P1，必须先确认并冻结目标清单，再逐文档独立 Proposal、裁决与保存，不提供批量接受、批量保存或跨文档事务。
+9. R4-D 的删除与多个既有文档编辑：`CAP-12` 为 P1 的前置裁决删除/恢复，确认后直接写盘并由统一
+   WorkspaceTimeline 记录可取回资源快照和类型化恢复；永久清理历史快照不纳入。`CAP-15` 仍须先确认并冻结目标清单，再逐文档独立 Proposal、裁决与保存。
 10. R5-A 的运行底座：`agent-edit-1.0` 是唯一可启动的 1.0 profile，未知或缺失 profile 均在 Gate、provider、工具和 Proposal 前失败关闭；一个用户发送对应一个 AgentTurn，澄清等待、任一活动阶段取消、首终态锁存与迟到副作用抑制均为 P0。IntentResult 固定任务类型、目标、预期副作用、所需上下文、允许工具和确认点；用户只见结构化任务事件，不见模型内部推理。workspace / AgentSession / AgentTurn 三层隔离，其中 AgentSession 是展示、持久化和恢复边界；本地事实历史进入 P0，长期项目记忆仍后置。
 11. R5-B 的受限复合任务：IntentResult 将复杂目标组织为 TaskRun 的多个受限步骤/AgentTurn，不是后台队列；用户可辨别真实执行、等待补充、等待卡片裁决、中断可重试与终态。明确的同文档复合目标可以连续生成 Proposal，但每张后续 Proposal 只以最新 LogicalState 为基准，后预览使前卡失效，禁止旧 payload 续编、补丁堆叠和任务级回滚；background pending 必须迁移或裁决后才可继续。
 12. R5-C 的受控外部内容与项目记忆：外部文件读取为 P1，只有用户显式附加且存在可用只读解析路径时才作为当前任务的一次性 data-only 内容引用；不支持格式退回元数据，禁止扫描、自动复读或默认持久化。项目长期记忆为 P1 的本地 workspace 用户资产，只有明确选择才进入当前回合；Agent 1.0 不自动写入、提议、检索或注入，外部内容不自动转存。
@@ -66,7 +68,7 @@ APC（项目边界与授权）
 
 | 层级 | 进入 `agent-edit-1.0` 的含义 | 本轮状态 |
 |---|---|---|
-| P0 主链 | 未具备就不能宣称 Agent 1.0 闭环可用 | 已确认：CAP-00（含 R5-A 的唯一 profile、回合/意图/最小授权、结构化事件、AgentSession 隔离和本地事实历史）及 R5-B 的受限 TaskRun、真实工作状态和连续 Proposal 接力；D-NEW、工作区内引用、CAP-01~04；原生 DOCX 只读与 BDocx 编辑副本路径；HTML/BDocx 的加粗、斜体、下划线、删除线 |
+| P0 主链 | 未具备就不能宣称 Agent 1.0 闭环可用 | 已确认：CAP-00（含 R5-A 的唯一 profile、回合/意图/最小授权、结构化事件、AgentSession 隔离和本地事实历史）及 R5-B 的受限 TaskRun、真实工作状态和连续 Proposal 接力；CreateDocumentBundle、工作区内引用、CAP-01~04；原生 DOCX 只读与 BDocx 编辑副本路径；HTML/BDocx 的加粗、斜体、下划线、删除线 |
 | P1 受控开放 | 可纳入 1.0，必须实现；按子能力、格式和真实验证独立开放 | HTML/BDocx 的颜色/突出显示、段落样式、字号、字体族、表格/图片；用户显式触发的公开网页研究；可用只读解析路径上的外部文件一次性内容读取；用户管理且显式选择的本地项目记忆；创建文件夹、单文件重命名/移动；可恢复删除/恢复；TXT→Markdown、Markdown→TXT 的目标副本转换；确认冻结目标清单后的多个既有文档逐项编辑 |
 | P2 后续 Profile | 保留产品路线，不进入默认 Runtime Profile 或发布验收 | 构建、Agent 记忆提议/自动写入/自动注入、自动知识召回、模板工作流、复杂自主规划、多 Agent 等 |
 
@@ -77,12 +79,12 @@ APC（项目边界与授权）
 
 | 文档 / 模块 | 1.0 关系 | 本轮处理 | 后续责任 |
 |---|---|---|---|
-| [产品概述](A-CORE-C-D-01_产品概述.md) / CORE | 产品级根 | REQ-CORE-010/011 锁定生命周期与 R2 感知主链；REQ-CORE-004 锁定原生 DOCX 只读与 BDocx 副本编辑；REQ-CORE-012/013 锁定逻辑文件树与最小转换；REQ-CORE-014/015 锁定可恢复删除与确认冻结清单后的逐文档编辑；REQ-CORE-016 锁定 R5-A 运行时；REQ-CORE-017 锁定 R5-B 复合任务；REQ-CORE-018/019 锁定 R5-C 外部内容与项目记忆 | 维持产品级边界；范围变化先经 APC |
-| [能力基线](../01_modules/AG/A-AG-M-D-02_代理1.0能力基线与需求分解.md) / AG | 1.0 基线 | 已有 D-NEW、CAP-00、CAP-20、CAP-01~04、R3 编辑边界、R4-A 网络研究、R4-B 文件树、R4-C 最小格式矩阵、R4-D 可恢复删除与逐文档多既有编辑；R5-A 运行时、R5-B 受限 TaskRun、R5-C 外部内容与用户管理记忆边界 | 进入 R6 冻结基线后再向 L2/验证传播 |
+| [产品概述](A-CORE-C-D-01_产品概述.md) / CORE | 产品级根 | REQ-CORE-010/012/014 锁定 CreateDocumentBundle、WorkspaceOperation 前置裁决直接写盘与 WorkspaceTimeline；REQ-CORE-011 锁定 R2 感知主链；REQ-CORE-004 锁定原生 DOCX 只读与 BDocx 副本编辑；REQ-CORE-013/015 保持最小转换与逐文档编辑；REQ-CORE-016~019 保持运行时、复合任务、外部内容与项目记忆 | 维持产品级边界；范围变化先经 APC |
+| [能力基线](../01_modules/AG/A-AG-M-D-02_代理1.0能力基线与需求分解.md) / AG | 1.0 基线 | CreateDocumentBundle、WorkspaceOperationPlan、WorkspaceTimeline 与 CAP-00/20/01~04；R3 编辑边界、R4-A 网络研究、R4-C 最小格式矩阵、CAP-15 逐文档编辑；R5-A 运行时、R5-B 受限 TaskRun、R5-C 外部内容与用户管理记忆边界 | 新资源基线向 L2/验证传播后进入实现 Scope |
 | [代理](../01_modules/AG/A-AG-M-D-01_代理功能需求描述.md) / AG | P0/P1 主链 owner | REQ-AG-007 承接 R5-A 的 Runtime、IntentResult、最小授权、结构化事件、AgentSession 隔离与本地事实历史；REQ-AG-015 承接 R5-B 的 TaskRun、复合步骤、真实工作状态与连续 Proposal；REQ-AG-016/017 承接 R5-C 的外部内容消费与显式项目记忆引用；REQ-AG-008/009 承接新建与项目/文档分析；010~014 承接 R4 P1 能力 | AG L2：Runtime / TaskRun / Intent / Tool / Session / Trace |
-| [Diff Edit](../01_modules/DE/A-DE-M-D-01_DiffEdit功能需求描述.md) / DE | P0 主链 owner | REQ-DE-006 承接新建及转换目标；REQ-DE-007 承接删除/恢复卡的预览与裁决；REQ-DE-008 承接多文档目标计划与逐项独立审阅；REQ-DE-009 承接连续 Proposal 的 LogicalState 接力、前卡失效与背景 pending 限制 | DE L2：提案状态机、基准比较、审阅契约 |
-| [编辑器](../01_modules/ED/A-ED-M-D-01_编辑器功能需求描述.md) / ED | P0 主链 owner | REQ-ED-010/011 未保存标签和会话事实；013 结构暂定路径；014 转换目标标签；015 删除脏会话前置与标签处理；016 多文档逐项会话隔离 | ED L2：标签/逻辑文档/关闭提醒协同 |
-| [工作台](../01_modules/WS/A-WS-M-D-01_工作台功能需求描述.md) / WS | P0 主链 owner | REQ-WS-002/006 两阶段读取、显式保存、目录隔离与可见性；008 逻辑文件树；009 转换副本保存；010 删除/恢复的单项保存；011 多文档独立保存与失败隔离 | WS L2：保存、文件树、异常退出与恢复 |
+| [Diff Edit](../01_modules/DE/A-DE-M-D-01_DiffEdit功能需求描述.md) / DE | P0 主链 owner | REQ-DE-006 承接 CreateDocumentBundle 创建目标后的初始内容 Diff；REQ-DE-007 明确资源操作不生成 DiffCard，只提供影响清单和失效；REQ-DE-008/009 保持多文档与连续 Proposal | DE L2：初始内容关联、基准比较、资源影响失效 |
+| [编辑器](../01_modules/ED/A-ED-M-D-01_编辑器功能需求描述.md) / ED | P0 主链 owner | REQ-ED-010/012/014 承接确认后真实目标标签与初始内容投影；013/015 承接脏标签阻断、资源执行后路径/关闭同步；016 保持多文档隔离 | ED L2：标签事实、脏态前置、执行回执同步 |
+| [工作台](../01_modules/WS/A-WS-M-D-01_工作台功能需求描述.md) / WS | P0/P1 主链 owner | REQ-WS-006 承接 CreateDocumentBundle；008 承接 WorkspaceOperation 前置裁决与直接磁盘执行；009 对齐转换目标；010 承接 WorkspaceTimeline 删除/恢复；011 保持多文档独立保存 | WS L2：A-WS-M-T-02 / M-S-02、接口、持久化与恢复 |
 | [引用](../01_modules/REF/A-REF-M-D-01_引用功能需求描述.md) / REF | P0（工作区内）/P1（外部来源） | 冻结发送时引用快照、来源/新鲜度与 data-only；REQ-REF-009 承接 R5-C 的外部文件受控内容引用；用户选中项目记忆可作为引用；R4-A 公开网页来源可追溯；R4-B 路径基线推进；R4-D 删除失效与多文档目标清单身份不构成写权 | REF L2：引用身份/锚/范围/版本校验 |
 | [系统底座](../01_modules/SYS/A-SYS-M-D-01_系统底座功能需求描述.md) / SYS | P0/P1 支撑 | REQ-SYS-008/009 共享生命周期与只读上下文边界；REQ-SYS-010 承接 R5-A 运行底座；REQ-SYS-011 承接 R5-B 的 TaskRun/步骤/Proposal 关联、真实进度与恢复隔离；REQ-SYS-012 承接 R5-C 的外部内容/记忆隔离与保留契约 | SYS L2：共享字段、事件、持久化与总图 |
 | [构建](../01_modules/CBT/A-CBT-M-D-01_构建功能需求描述.md) / CBT | P2 | 明确退出默认 Profile，保留路线 | 未来按多文档预览/显式保存重新设计 |
@@ -103,9 +105,10 @@ APC（项目边界与授权）
 - R2：CAP-01~04 的 P0 档位、项目分析两阶段读取、LogicalState/DiskState 新鲜度、M1/M2/M4 与 data-only 引用边界。
 - R3：原生 DOCX 只读、BDocx 编辑副本路径、纯文本/Markdown 边界；HTML/BDocx 字符基础样式 P0，颜色/突出显示、段落样式、字号、字体族、表格和图片 P1；页面级布局、页眉页脚、复杂样式继承和任意定位为 P2。
 - R4-A：用户显式触发的公开网页检索与有限读取为 P1；默认仅发送查询，来源可追溯且为 data-only；自动/批量爬虫、认证/交互、下载/导入和内网访问不纳入 1.0。
-- R4-B：创建文件夹、单文件重命名/移动为 P1；先进入逻辑文件树，接受不写盘，用户逐项显式保存才写盘；受影响标签显示暂定路径，关联待审阅内容 Proposal 失效；复制、删除、目录移动、批量提交和格式转换不在本子项。
+- WorkspaceOperation：创建文档/文件夹、单文件重命名/移动、删除/恢复为 P1；先冻结操作计划并前置裁决，确认时再核验后直接写盘；资源操作不产生 DiffCard，dirty 目标阻断，关联内容 Diff 在确认后失效。
 - R4-C：TXT→Markdown、Markdown→TXT 为 P1 的目标副本转换；来源不改写，预览建立目标 LogicalState 与标签，接受不写盘、保存才落盘；TXT→Markdown 不推断语义，Markdown→TXT 明示有损；HTML 与通用 DOCX 转换不在本子项。
-- R4-D：已保存文件/文件夹删除为 P1 的红色逻辑暂存与可恢复保存；接受不删除，单项显式保存才移入可恢复存储，恢复同样预览/保存，永久删除不纳入；多个既有文档为 P1，必须先确认并冻结目标清单，再逐文档独立 Proposal、裁决、保存与失败隔离，不提供批量接受、批量保存或跨文档事务。
+- WorkspaceTimeline：现有 DocumentTimeline 保留内容分支，新增 WorkspaceOperationEntry 记录路径、目录、快照和执行回执；删除/恢复均经新的前置裁决，统一时间轴负责类型化前进式恢复，不另建撤销入口。
+- CreateDocumentBundle：确认前冻结初始内容，确认后创建空文件并显示绑定初始 Diff；安全拒绝可补偿删除，任何基线推进使旧卡失效并禁止删除。
 - R5-A：`agent-edit-1.0` 是唯一可启动的 P0 profile，缺失/未知 profile 在 Gate、provider、工具和 Proposal 前失败关闭；澄清等待、任一活动阶段取消、首终态锁存、IntentResult 最小授权、非推理结构化事件、AgentSession 隔离和本地事实历史均已由 CORE/AG/SYS 直接 L1 承接。
 - R5-B：复杂目标由受限 TaskRun 组织步骤和 AgentTurn，真实工作状态必须可见；同文档后续 Proposal 只以当前 LogicalState 接力，后预览使前卡失效，背景 pending 不可直接续编；取消不回滚既有预览，中断不自动续跑、显式重试创建新回合。CORE/AG/DE/SYS 已完成直接 L1 承接。
 - R5-C：外部文件的实际内容读取确认仅为用户显式附加、可用只读解析格式的 P1 一次性 data-only 路径；未读内容不伪装为已读，不扫描、自动复读或默认持久化。长期项目记忆确认是 P1 的本地 workspace 用户资产，只有用户选择才作为引用进入当前回合；Agent 1.0 的自动写入、提议、检索和注入保持 P2。CORE/AG/REF/AST/SYS 已完成直接 L1 承接。
@@ -113,21 +116,20 @@ APC（项目边界与授权）
 
 **本轮刻意未做：**
 
-- 不修改现有 L2 技术设计、接口协议、状态机、验证卡或代码；其中仍出现“accepted 直接落盘”的内容，
-  是明确的设计同步债务，而非当前基线。
+- 不以现有直接删除、资源 Diff 或文档级内容时间轴实现反向定义新基线；相关实现进入独立迁移 Scope。
 - 不宣布任何 P0 能力“已冻结”或“已发布”；L1 承接完成不等于接口、实现或验证已完成。
 - 不调整不受本轮语义影响的 DOC、PRV、ACCT、ENT 需求文本，避免为“全覆盖”制造无意义变更。
 
 ## §6 后续需求与设计同步顺序
 
-R3、R4-A 网络研究、R4-B 文件树、R4-C 最小格式转换、R4-D 可恢复删除/多既有文档、R5-A 运行底座、R5-B 受限复合任务及 R5-C 外部内容/项目记忆的产品需求均已确认，并在 R6 冻结为 Agent 1.0 Baseline v1.0。每项样式的技术映射、保真等级、失败告知与真实验证矩阵，网络研究的 provider、请求边界、来源快照和异常形状，逻辑文件树、删除/恢复 Proposal、递归再核验、逐项保存与失效事件，转换来源快照、目标副本、文本 Codec、损失告知与保存错误，多文档目标计划、逐项基准与独立保存，R5-A/R5-B 的 profile 强制入参、TaskRun/步骤/回合/Proposal 链状态机、共享字段、真实进度、持久化与恢复，以及 R5-C 的外部内容解析/暂存/清除、记忆管理/显式引用/隔离，仍须在 DESIGN Scope 定义。不得因需求冻结就跳入实现。
+R3、网络研究、格式转换、多既有文档、运行底座、受限复合任务及外部内容/项目记忆保持既有冻结边界。2026-08-21 人类进一步确认：文件树相关能力统一改为 WorkspaceOperation 前置裁决直接写盘，恢复统一进入 WorkspaceTimeline，新建采用 CreateDocumentBundle。技术 SSOT 见 A-WS-M-T-02 与 A-WS-M-S-02；实现不得继续使用资源 Diff 或“接受后等待文件树保存”的旧链。
 
 R6 形成完整冻结基线后，再以一个独立的设计同步任务，严格按以下顺序推进并可逐项验收：
 
 1. SYS：确定 TaskRun/步骤/AgentTurn/Proposal、会话与真实进度的共享对象边界和跨模块事件，不先锁具体数据库字段；
 2. DE + ED + WS：完成“预览 / 裁决 / 基准推进失效 / 连续 Proposal 接力 / 显式保存 / 保存失败 / 关闭”状态机和接口契约；
 3. AG + REF + AST：完成 TaskRun、AgentTurn、IntentResult、CapabilityGrant、会话隔离、引用快照、外部内容暂存/清除、显式记忆引用、澄清/中断/新回合重试的运行时契约；
-4. 针对已完成的状态机写验证卡，至少覆盖 D-NEW 的 N1–N4 及多会话引用隔离；
+4. 针对已完成的状态机写验证卡，至少覆盖 CreateDocumentBundle 的确认/投影/安全拒绝/失效、WorkspaceOperation 的拒绝/重验/补偿/重启中断，以及多会话引用隔离；
 5. 仅在以上设计和验证入口完成后，再修改实现、提示词组装或工具清单。
 
 每一步的“完成”必须有对应的 REQ_MAP、状态机/接口引用和可执行验证证据；任何新增 Profile 能力都要回到
@@ -150,3 +152,4 @@ AG-M-D-02 先确认，再进入本索引和模块 M-D。
 | 2026-08-14 | v1.10 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：R5-B 确认 CAP-16 的受限 TaskRun、复杂目标多步骤/多 AgentTurn、真实工作状态和同文档连续 Proposal 接力；REQ-CORE-017、REQ-AG-015、REQ-DE-009、REQ-SYS-011 完成直接 L1 承接。前卡基准推进失效、background pending 限制、取消不回滚、重启不自动续跑进入基线；仅 R5-C 及 DESIGN/实现继续后置。 |
 | 2026-08-14 | v1.11 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：R5-C 确认外部文件为 P1 的显式、一次性 data-only 内容读取，未读格式退回元数据；项目长期记忆为 P1 的 workspace 本地用户资产，只有显式选择才能进入回合。REQ-CORE-018/019、REQ-AG-016/017、REQ-REF-009、REQ-SYS-012 与 AST 1.0 边界完成直接 L1 承接；自动记忆能力仍为 P2。 |
 | 2026-08-14 | v1.12 | AG-1.0-R6-BASELINE-FREEZE-01：R1–R5-C 的十二组已确认需求冻结为 Agent 1.0 Baseline v1.0；索引、产品根、能力基线同向引用冻结记录。后续仅可按有序 DESIGN Scope 细化，需求变化必须另开 REQUIREMENT Scope；冻结不宣称实现、验证或发布完成。 |
+| 2026-08-21 | v1.13 | WORKSPACE-OPERATION-BASELINE-01：以人类确认的八项决策替代 R4-B/R4-D 旧逻辑树暂存语义；登记 WorkspaceOperation 前置裁决直接写盘、WorkspaceTimeline 统一恢复、CreateDocumentBundle 与失败补偿边界。 |

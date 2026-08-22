@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { edStore } from "./edStore";
+import { edStore, isDirtyTabState } from "./edStore";
 
 /**
  * center 标签栏状态（视图层导航态 · X-FORBID-007）。
@@ -99,19 +99,31 @@ export const tabsStore = {
   },
 
   /** 关闭标签；激活相邻。关闭文档标签 → 销毁其编辑会话；若相邻激活的是文档标签则切其活动会话。 */
-  close(id: string) {
+  close(id: string, options: { force?: boolean } = {}): boolean {
     const idx = state.tabs.findIndex((t) => t.id === id);
-    if (idx === -1) return;
+    if (idx === -1) return false;
     const closing = state.tabs[idx];
+    const session = closing.kind === "doc" ? edStore.getSnapshot().sessions[closing.path] : undefined;
+    if (!options.force && session && isDirtyTabState(session.tabState)) {
+      const accepted = globalThis.confirm(`“${closing.path}”有未保存修改，关闭将丢失这些修改。仍要关闭吗？`);
+      if (!accepted) return false;
+    }
     const wasActive = state.activeTabId === id;
     const tabs = state.tabs.filter((t) => t.id !== id);
     const activeTabId = wasActive ? neighborId(tabs, idx) : state.activeTabId;
     setState({ tabs, activeTabId });
-    if (closing.kind === "doc") edStore.closeSession(closing.path);
+    if (closing.kind === "doc") {
+      if (options.force || (session && isDirtyTabState(session.tabState))) {
+        edStore.discardSession(closing.path);
+      } else {
+        edStore.closeSession(closing.path);
+      }
+    }
     if (wasActive && activeTabId) {
       const next = tabs.find((t) => t.id === activeTabId);
       if (next?.kind === "doc") edStore.setActivePath(next.path);
     }
+    return true;
   },
 
   /** 拖动排序（PI-ED-07 #5）：把 fromId 标签移到 toId 标签之前（toId=null → 移到末尾）。

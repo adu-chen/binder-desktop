@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：CORE
 文档职责：三态模型（DiskState / LogicalState / DisplayState）跨模块权威定义——三态命名与正式中英文定义、每一态的唯一持有者与转换触发条件、单向数据流契约、术语映射表、审计发现 D2~D5 的决议与落地约束
-上游约束：A-CORE-C-P-01_APC.md（§6 状态机阈值）、A-SYS-C-T-01_系统总体架构.md（§2 分层、X-SEQ-002）、A-SYS-C-T-02_前端交互架构与流程总图.md（X-FORBID-007 前端投影）、A-ED-M-T-01_编辑器技术设计.md（ED-EDIT/ED-DECOR）、A-WS-M-T-01_工作台技术设计.md（WS-FS/WS-SAVE）、A-DE-M-T-01_DiffEdit技术设计.md（DE-DIFF）、A-DE-M-S-01_DiffEdit状态机设计.md（SM-DE-01）、A-ED-M-S-01_编辑器状态机设计.md（SM-ED-01）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01/02）、A-CORE-X-R-03_需求实现对齐审计与补全计划.md
+上游约束：A-CORE-C-P-01_APC.md（§6 状态机阈值）、A-SYS-C-T-01_系统总体架构.md（§2 分层、X-SEQ-002）、A-SYS-C-T-02_前端交互架构与流程总图.md（X-FORBID-007 前端投影）、A-ED-M-T-01_编辑器技术设计.md（ED-EDIT/ED-DECOR）、A-WS-M-T-01_工作台技术设计.md（WS-FS/WS-SAVE）、A-WS-M-T-02_工作区资源操作技术设计.md（WS-OPERATION）、A-DE-M-T-01_DiffEdit技术设计.md（DE-DIFF）、A-DE-M-S-01_DiffEdit状态机设计.md（SM-DE-01）、A-ED-M-S-01_编辑器状态机设计.md（SM-ED-01）、A-WS-M-S-01_工作台状态机设计.md（SM-WS-01/02）、A-WS-M-S-02_工作区资源操作状态机设计.md（SM-WS-04）、A-CORE-X-R-03_需求实现对齐审计与补全计划.md
 直接承接：三态全局规则 X-FORBID-008 经本文件定义，供下游 ALL 模块引用；TERM-CORE-001/002/003 术语供全模块 @GOV term_ref 引用；所有涉及"保存/脏态/缓存/渲染/装饰/落盘"的代码与设计文档以此文档为权威命名与约束源
 使用边界：本文是跨模块公共概念定义层（L2.5），定义三态契约与术语映射，不替代各模块 L2 状态机/规则细节（SM-* 内部转移仍归各 M-S，本文只标注每态归属）；不新增模块级业务规则；不定义具体 IPC payload 字段
 变更要求：三态任一态的持有者或转换触发条件变更须架构评审；TERM 一经被 term_ref 引用其 en 不可更改（ADU §3.0）
@@ -42,10 +42,10 @@ X-SEQ-002（前端不跨层直连 FS）  →  本文件（三态单向数据流�
 | 项目 | 内容 |
 |------|------|
 | **正式中英文名** | 磁盘态 / DiskState |
-| **定义** | 文件在磁盘文件系统上的原始字节内容。编辑器"获取文件信息"时读取它；用户执行"保存"操作后它才被修改。磁盘态是持久化、断电不丢的物理数据 |
+| **定义** | 文件在磁盘文件系统上的原始字节内容与资源存在事实。文档内容由保存或无 LogicalState Diff 接受后的原子落盘修改；路径、文件/目录存在性由已前置裁决的 WorkspaceOperation 直接修改。磁盘态是持久化、断电不丢的物理事实 |
 | **唯一持有者** | 文件系统（OS 文件系统 + workspace 目录） |
-| **谁有权修改** | **仅** `save_atomic()`（[save.rs:L60-80](file:///Users/imatstarbucks/binder/src-tauri/src/workspace/save.rs#L60-L80)）、`create_doc()`（[fileops.rs:L26-40](file:///Users/imatstarbucks/binder/src-tauri/src/workspace/fileops.rs#L26-L40)）、`rename_doc()`（[fileops.rs:L53-70](file:///Users/imatstarbucks/binder/src-tauri/src/workspace/fileops.rs#L53-L70)）三个物理写入口 |
-| **修改触发器** | 已存在 LogicalState 时的用户 ⌘S 保存；不存在 LogicalState 的 PendingDiff 经用户接受后由 `ws.apply_diff` 原子落盘；文件 CRUD（创建/重命名/删除） |
+| **谁有权修改** | 仅 WS 后端受控物理入口：内容保存/`ws.apply_diff` 原子写入，以及 SM-WS-04 核验后调用的 WorkspaceOperation 低层原子执行器；前端、AG 和 DiffCard 均无直接写权 |
+| **修改触发器** | 已存在 LogicalState 时的用户保存；不存在 LogicalState 的 PendingDiff 经用户接受后由 `ws.apply_diff` 原子落盘；WorkspaceOperationPlan 经 DecisionRequest 确认并在执行前重新核验成功 |
 | **修改路径必须经过** | Rust 后端（X-SEQ-002），前端不直接触达文件系统 |
 | **读取触发器** | 打开文档、外部变更检测、重载 |
 
@@ -61,7 +61,7 @@ X-SEQ-002（前端不跨层直连 FS）  →  本文件（三态单向数据流�
 | 项目 | 内容 |
 |------|------|
 | **正式中英文名** | 逻辑态 / LogicalState |
-| **定义** | 编辑器加载磁盘态、或由新建预览/打开迁移建立的内存结构化模型与持久化控制态，是所有"真实编辑内容"的权威层。存在 LogicalState 时，AI diff 的受控预览直接修改这一层；显式接受或对仍有效的 pending diff 执行保存，都会改变其裁决生命周期。只有执行保存时，才把"保存那一刻的逻辑态"写回磁盘，从而修改磁盘态 |
+| **定义** | 编辑器加载磁盘态、pending 后打开迁移，或打开 CreateDocumentBundle 已创建真实目标后建立的内存结构化模型与持久化控制态，是所有"真实编辑内容"的权威层。存在 LogicalState 时，AI diff 的受控预览直接修改这一层；显式接受或对仍有效的 pending diff 执行保存，都会改变其裁决生命周期。只有执行内容保存时，才把"保存那一刻的逻辑态"写回已存目标的磁盘态 |
 | **唯一持有者** | **ProseMirror `doc` 结构化模型**（激活文档权威真源） + `edStore.EditSession`（已打开非激活文档的序列化 LogicalState，激活文档为派生缓存） + workspace.db 中的 `ed_open_tabs`/`ed_session_snapshots`/`pending_diffs`/`timeline`/`diff_payloads`（持久化控制态） |
 | **谁有权修改** | 用户编辑操作（经受控 editor command）、存在 LogicalState 时 AI diff 的受控预览或打开迁移（均经 ED 受控接口）、样式操作（StyleOp 经受控接口）；**显示层不得直接修改**（见 §1.4） |
 | **修改路径必须经过** | ED 受控编辑接口（`editor.chain().command()`、`insertContentAt`、`setContent` 等，X-FORBID-005） |
@@ -205,7 +205,7 @@ zh: 磁盘态
 en: DiskState
 forbidden: 文件内容, 原始内容, 磁盘内容, 字节态, 物理态
 -->
-文件在磁盘文件系统上的原始字节内容。唯一持有者：文件系统，仅 save_atomic / create_doc / rename_doc 三个入口可修改。已有 LogicalState 转化为 DiskState 的唯一路径是保存动作；无 LogicalState 的 PendingDiff 仅按 BR-CORE-STATE-002 在接受后原子落盘（§1.1）。
+文件系统中的原始字节内容与资源存在事实。唯一持有者是文件系统，仅 WS 后端受控物理入口可修改。已有 LogicalState 的内容转化为 DiskState 的唯一路径是保存；无 LogicalState 的 PendingDiff 仅按 BR-CORE-STATE-002 在接受后原子落盘；工作区资源存在性与路径只能由已前置裁决且重新核验通过的 WorkspaceOperation 改变（§1.1）。
 
 <!-- TERM
 term_id: TERM-CORE-002
@@ -241,7 +241,7 @@ AI 产出在进入受控路径前的内容分类。存在 LogicalState 时，受
 | 旧概念/载体 | 所属新术语 | 说明 |
 |---|---|---|
 | 磁盘文件内容（file on disk） | `DiskState` §1.1 | 唯一持有者：文件系统 |
-| `save_atomic()` / `create_doc()` / `rename_doc()` | `DiskState` 写入口 | 仅此三处允许物理写盘 |
+| `save_atomic()` / `ws.apply_diff` / WorkspaceOperation 低层原子执行器 | `DiskState` 写入口 | 内容写入与资源写入分流；资源执行器只能由 SM-WS-04 在前置裁决和重新核验后调用 |
 | `save_with_baseline_guard()` | `DiskState` 保存前 guard | 比对当前磁盘哈希与加载基线；冲突时不进入 `save_atomic()`，避免静默覆盖 |
 | TipTap ProseMirror `doc`（`editor.state.doc`） | `LogicalState` 权威真源 §1.2 | 逻辑态的唯一权威形态，任何人取内容真值必须从此取 |
 | `edStore.EditSession.content` | `LogicalState` 序列化持有者 §1.2 | 激活文档为 ProseMirror `doc` 的派生缓存；已打开非激活文档为当前 LogicalState 的序列化持有者，必须携带 session 版本与内容哈希 |
@@ -351,3 +351,4 @@ WS-DIFF-APPLY 链路共同引用；路径选择不得再由单一 `draft_mode` �
 | 2026-07-20 | v1.5 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：补充异常退出后的可信度边界——持久化 LogicalState/pending diff 只在上次为正常关闭时可信，异常退出必须先经启动清算（BR-SYS-STATE-005）才能进入恢复 |
 | 2026-08-13 | v1.6 | DIFF-STATE-COMPASS-01：新增 BR-CORE-STATE-001~003 并注册到 DE-DIFF、ED-EDIT、WS-SAVE/WS-DIFF-APPLY；D5、IPC 载荷与单向约束同步为三分流：已有 LogicalState 预览后保存、无 LogicalState 挂载后接受原子落盘、pending 打开后迁移为预览。 |
 | 2026-08-13 | v1.7 | 人类复核：保存仍有效 pending 逻辑预览即表达接受；保存编排先裁决为 accepted/awaiting_save 再写盘。若预览基线已推进，旧卡 expired，保存只提交当前 LogicalState。 |
+| 2026-08-21 | v1.8 | WorkspaceOperation 基线同步：DiskState 扩展为内容与资源存在事实；工作区资源只由 SM-WS-04 在 DecisionRequest 前置裁决与重新核验后直接修改；CreateDocumentBundle 先有真实磁盘目标再建立 LogicalState。 |

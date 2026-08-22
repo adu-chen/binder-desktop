@@ -84,7 +84,13 @@ import { applyStructuredBlockOperations } from "../../services/edBlockOps";
 import { persistImageDiffSnapshots, promotePendingDiffOnOpen } from "../../services/deService";
 import { outlineStore, extractOutline } from "../../store/outlineStore";
 import { modelStore } from "../../store/modelStore";
-import { finishAssist, requestAssist, type AssistFinishEvent } from "../../services/agService";
+import {
+  acknowledgePreviewAndContinue,
+  compensateCreateDocumentPreviewFailure,
+  finishAssist,
+  requestAssist,
+  type AssistFinishEvent,
+} from "../../services/agService";
 import { InlineAssistPopover } from "../ag/InlineAssistPopover";
 import { AutocompleteOverlay } from "../ag/AutocompleteOverlay";
 import { EditorToolbar } from "./EditorToolbar";
@@ -666,7 +672,7 @@ export function imagePasteAnchorAtSelection(editor: TiptapEditor): ImageDropAnch
   return anchorBlockId ? { anchorBlockId, position: "after" } : null;
 }
 
-let sessionSnapshotPersistTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+const sessionSnapshotPersistTimers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
 
 function isDirtySessionState(tabState: string): boolean {
   return tabState === "dirty" || tabState === "pending_diff" || tabState === "saving";
@@ -690,11 +696,13 @@ function persistEditorSessionSnapshot(path: string): void {
 }
 
 function scheduleEditorSessionSnapshotPersist(path: string): void {
-  if (sessionSnapshotPersistTimer) globalThis.clearTimeout(sessionSnapshotPersistTimer);
-  sessionSnapshotPersistTimer = globalThis.setTimeout(() => {
-    sessionSnapshotPersistTimer = null;
+  const existing = sessionSnapshotPersistTimers.get(path);
+  if (existing) globalThis.clearTimeout(existing);
+  const timer = globalThis.setTimeout(() => {
+    sessionSnapshotPersistTimers.delete(path);
     persistEditorSessionSnapshot(path);
   }, 500);
+  sessionSnapshotPersistTimers.set(path, timer);
 }
 
 function currentBlockIds(editor: NonNullable<ReturnType<typeof useEditor>>): string[] {
@@ -1740,14 +1748,20 @@ export function Editor() {
       if (d.relPath !== open || d.state !== "pending" || d.draftApplied || d.draftSaved) continue;
       const baseContent = serialize(editor, editFormat, contentFormat, open);
       const syntheticAfter = isSyntheticAfter(d.after);
+      const failDraftPreview = (reason: string) => {
+        deStore.markDraftPreviewFailed(d.diffId, reason);
+        if (d.previewContinuationRequired && d.patchKind === "replace_document") {
+          void compensateCreateDocumentPreviewFailure(d.diffId);
+        }
+      };
       if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && syntheticAfter) {
-        deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_CONTENT_MISSING");
+        failDraftPreview("ED_DRAFT_CONTENT_MISSING");
         continue;
       }
       if (hasBlockOps && d.blockOpsPayload) {
         const session = open ? ed.sessions[open] : undefined;
         if (!session) {
-          deStore.markDraftPreviewFailed(d.diffId, "ED_BLOCK_OPERATION_SESSION_MISSING");
+          failDraftPreview("ED_BLOCK_OPERATION_SESSION_MISSING");
           continue;
         }
         const blockApplied = applyStructuredBlockOperations(
@@ -1760,7 +1774,7 @@ export function Editor() {
           },
         );
         if (!blockApplied.ok) {
-          deStore.markDraftPreviewFailed(d.diffId, blockApplied.reason);
+          failDraftPreview(blockApplied.reason);
           continue;
         }
       } else if (hasImageOps && d.imageOpsPayload) {
@@ -1780,30 +1794,30 @@ export function Editor() {
       } else if (hasTableOps && d.tableOpsPayload) {
         const tableApplied = applyTableOperations(d.tableOpsPayload);
         if (!tableApplied.ok) {
-          deStore.markDraftPreviewFailed(d.diffId, tableApplied.reason);
+          failDraftPreview(tableApplied.reason);
           continue;
         }
         deStore.setTableSnapshots(d.diffId, tableApplied.before, tableApplied.after);
       } else if (d.blockId && !syntheticAfter) {
         const applied = applyEditOps([{ op: "replace_block", blockId: d.blockId, text: d.after }]);
         if (!applied.ok) {
-          deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_ANCHOR_LOST");
+          failDraftPreview("ED_DRAFT_ANCHOR_LOST");
           continue;
         }
       } else if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && d.patchKind === "replace_document" && !syntheticAfter) {
         const applied = applyEditOps([{ op: "replace_document", content: d.after, format: editFormat, contentFormat }]);
         if (!applied.ok) {
-          deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_REPLACE_FAILED");
+          failDraftPreview("ED_DRAFT_REPLACE_FAILED");
           continue;
         }
       } else if (!d.blockId && !hasStyleOps && !hasBlockOps && !hasTableOps && !hasImageOps && !syntheticAfter) {
-        deStore.markDraftPreviewFailed(d.diffId, "ED_DRAFT_TARGET_MISSING");
+        failDraftPreview("ED_DRAFT_TARGET_MISSING");
         continue;
       }
       if (hasStyleOps && d.styleOpsPayload) {
         const styled = applyStyleOps(d.styleOpsPayload);
         if (!styled.ok) {
-          deStore.markDraftPreviewFailed(d.diffId, styled.reason);
+          failDraftPreview(styled.reason);
           continue;
         }
       }
@@ -1814,6 +1828,19 @@ export function Editor() {
           tabState,
           serialize(editor, editFormat, contentFormat, open),
         );
+      }
+      // applyEditOps/结构化操作可能同步触发 onUpdate；显式写回同一序列化结果确保 Ack 所携带的
+      // sessionVersion/contentHash 必定来自已完成的 LogicalState，而非 DiffProjection 的旧基线。
+      const appliedContent = serialize(editor, editFormat, contentFormat, open);
+      edStore.updateContent(open, appliedContent);
+      const appliedSession = edStore.getSnapshot().sessions[open];
+      const appliedDiff = deStore.getSnapshot().diffs.find((candidate) => candidate.diffId === d.diffId);
+      if (
+        appliedDiff?.previewContinuationRequired
+        && appliedDiff.draftApplied
+        && appliedSession?.content === appliedContent
+      ) {
+        void acknowledgePreviewAndContinue(d.diffId);
       }
     }
 

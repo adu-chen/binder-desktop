@@ -31,7 +31,8 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 |---|---|---|---|
 | 三态三分流：已有 LogicalState 预览/保存、无 LogicalState 接受落盘、pending 打开迁移 | REQ-CORE-002/010、REQ-DE-003、REQ-ED-005、REQ-WS-003 | BR-CORE-STATE-001~003、X-FORBID-008/009 | SM-DE-01、SM-ED-01、SM-WS-01/02 |
 | 连续 Proposal 以最新 LogicalState 接力、前卡失效、非补丁栈 | REQ-DE-009、REQ-AG-015、REQ-SYS-011 | BR-SYS-STATE-008 | SM-DE-01、SM-AG-04 |
-| 未保存新建文档：预览开标签、接受只裁决、拒绝丢弃、保存才建文件 | REQ-ED-010、REQ-WS-006、D-NEW-001~008 | BR-CORE-STATE-001、BR-SYS-STATE-008 | SM-ED-01、SM-WS-01 |
+| CreateDocumentBundle：确认前零副作用、确认后先建盘再投影、三重基线安全拒绝 | REQ-CORE-010、REQ-ED-010、REQ-WS-006 | BR-WS-STATE-003、BR-WS-DATA-003 | SM-WS-04、SM-DE-01、SM-ED-01 |
+| WorkspaceOperation：前置裁决、重验、直接磁盘执行、补偿、统一恢复 | REQ-CORE-012/014、REQ-WS-008/010、REQ-AG-011/013 | BR-WS-STATE-003、BR-WS-PERSIST-003 | SM-WS-04、SM-AG-04 |
 | AgentTurn：澄清非终态、任一阶段取消、首终态锁存、迟到事件无副作用 | REQ-AG-007、REQ-SYS-010 | BR-SYS-STATE-007 | SM-AG-01 |
 | TaskRun：非后台队列、确认点、中断可重试、不跨重启续跑 | REQ-AG-015、REQ-SYS-011 | BR-SYS-STATE-008 | SM-AG-04 |
 | 外部内容一次性 data-only、显式记忆选择 | REQ-REF-009、REQ-AST-001、REQ-SYS-012 | BR-SYS-DATA-007 | ExternalContentRef / MemorySelectionRef |
@@ -46,6 +47,7 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | WS-SAVE / WS-DIFF-APPLY | V-S1/S2/S5 | 保存先裁决、无 LogicalState 原子落盘、失败保留 | 自动化（edRuntime/rust 落盘）+ 真实环境 |
 | AG-TURN（AgentTurn） | V-S6 | 澄清/取消/首终态 | 自动化（agRuntime）+ 真实环境 |
 | AG-TURN（TaskRun） | V-S7 | 编排/确认点/中断重试 | 自动化 + 真实环境 |
+| WS-OPERATION | V-C1/C2/C3/R1/R2 | 前置裁决、先建盘、三重基线拒绝、dirty 阻断、补偿/恢复 | Rust/IPC/前端自动化 + 真实 workspace |
 | REF-INJECT / AST-MEMORY | V-S8 | 外部内容/记忆 data-only | 自动化 + 真实环境 |
 | 会话隔离 | V-S9 | 多会话/多 workspace 不串线 | 自动化 + 真实环境 |
 
@@ -53,50 +55,60 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 
 > 状态值：`DESIGNED`（已设计待执行）｜`PASS`（自动化+真实证据闭合，未经执行不得填报）。
 
-### 4.1 V-N1 · 新建文档：生成、预览、拒绝（D-NEW N1）
+### 4.1 V-C1 · CreateDocumentBundle：拒绝资源计划
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | 打开 workspace；请求"新建一份会议纪要" |
-| 完整操作 | Agent 生成新文档 Proposal；预览成功自动打开可编辑标签；不编辑即拒绝 |
-| 期望结果 | 预览成功后出现待保存标签与可编辑 LogicalState；文件树/磁盘无该文件；拒绝后标签关闭、逻辑文档清除，磁盘与文件树仍无文件（D-NEW-001/002/006） |
-| 自动化证据设计 | deRuntime：空基准 Proposal→预览建 LogicalState→reject→丢弃；edRuntime：标签自动打开与关闭；rust：无 create_doc 调用 |
-| 人类观察项 | 标签是否自动打开、拒绝后标签关闭、文件树无节点 |
-| 状态 | `DESIGNED` |
+| 前置条件 | 打开 workspace；请求“新建一份会议纪要”；系统已生成初始内容和 WorkspaceOperationPlan |
+| 完整操作 | 查看 DecisionRequest 后拒绝 |
+| 期望结果 | 确认前没有文件、标签或内容 Diff；拒绝后计划为 Rejected，DiskState 不变，TaskRun 不再执行该步骤 |
+| 自动化证据设计 | WS：plan→cancel 零文件副作用；AG：DecisionRequest cancel→TaskRun 终态；UI：无 DiffCard/标签 |
+| 人类观察项 | 决策卡与资源影响清楚；拒绝后文件树无目标 |
+| 状态 | DESIGNED |
 
-### 4.2 V-N2 · 新建文档：生成、接受、编辑、保存（D-NEW N2）
-
-| 字段 | 内容 |
-|---|---|
-| 前置条件 | V-N1 的 Proposal 已预览，未裁决 |
-| 完整操作 | 接受；继续编辑；保存；关闭重开 |
-| 期望结果 | 接受不重复插入内容、不写盘；保存成功后才在真实文件树出现文件；重开内容等于保存时内容（D-NEW-004、REQ-WS-006） |
-| 自动化证据设计 | deRuntime：accept 只裁决；edRuntime：保存信封；rust：create 落盘 + 第二次读取；时间轴节点恰一个 |
-| 人类观察项 | 接受后内容不变、保存后文件出现、重开一致 |
-| 状态 | `DESIGNED` |
-
-### 4.3 V-N3 · 新建文档：预览后编辑，原 Proposal 失效（D-NEW N3）
+### 4.2 V-C2 · CreateDocumentBundle：确认后先建盘再投影
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | V-N1 的 Proposal 已预览 |
-| 完整操作 | 手动编辑待保存新文档，或再次请求 Agent 编辑该文档；查看原卡片 |
-| 期望结果 | 原卡显示"文档基准已变化"且接受/拒绝禁用；标签与当前 LogicalState 保留；保存当前草稿可进行但不得接受旧卡（D-NEW-005、BR-SYS-STATE-008） |
-| 自动化证据设计 | deRuntime：revision advanced→expired；edRuntime：编辑后卡失效、会话保留；agRuntime：再次编辑以最新 LogicalState 为基准 |
-| 人类观察项 | 卡片失效提示、标签与内容保留、保存行为 |
-| 状态 | `DESIGNED` |
+| 前置条件 | V-C1 同类计划，目标不存在且基线有效 |
+| 完整操作 | 确认 DecisionRequest；观察文件树/标签/初始内容 Diff；接受内容卡并保存 |
+| 期望结果 | WS 先创建空的目标 DiskState 并写资源条目，ED 再打开真实标签，DE 再显示初始内容 Diff；内容卡接受不再次创建/写入文件，保存后重开内容一致 |
+| 自动化证据设计 | Rust/IPC 验证调用顺序与幂等；DE 验证 operation_id/origin；ED 验证标签对应真实 DocRef；WorkspaceTimeline 同时有资源与内容类型条目 |
+| 人类观察项 | 确认后文件立即出现；随后才出现绿色初始内容和 DiffCard |
+| 状态 | DESIGNED |
 
-### 4.4 V-N4 · 新建文档：保存冲突/失败（D-NEW N4）
+### 4.3 V-C3 · CreateDocumentBundle：安全拒绝与基线推进
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | V-N2 的已接受未保存状态；目标路径被外部创建或磁盘写入失败 |
-| 完整操作 | 保存；观察错误；重试或改路径 |
-| 期望结果 | 显示失败原因；保留未保存 LogicalState 与标签；不显示成功节点、不丢内容（D-NEW-007） |
-| 自动化证据设计 | rust：saveConflict/saveFail→SaveError；edRuntime：失败后保留 dirty；无时间轴节点 |
-| 人类观察项 | 错误提示、内容保留、可重试 |
-| 状态 | `DESIGNED` |
+| 前置条件 | V-C2 已投影初始内容 Diff |
+| 完整操作 | A：不做其他修改直接拒绝；B：重新创建后先手动/代理编辑、外部修改或重命名，再尝试裁决旧卡 |
+| 期望结果 | A：资源/DiskState/LogicalState 三重基线未变，WS 补偿删除本次文件并关闭标签；B：旧卡失效且不可接受/拒绝，文件、标签和当前内容保留 |
+| 自动化证据设计 | 三重 guard 参数化测试；补偿删除写 WorkspaceOperationEntry；任一基线推进均拒绝补偿 |
+| 人类观察项 | 安全拒绝确实删除空目标；继续编辑后旧卡失效且不误删文件 |
+| 状态 | DESIGNED |
 
+### 4.4 V-R1 · WorkspaceOperation：dirty 阻断与内容 Diff 失效
+
+| 字段 | 内容 |
+|---|---|
+| 前置条件 | 删除/重命名/移动目标存在打开标签；分别构造 dirty 与 clean+pending content Diff |
+| 完整操作 | 生成资源计划并确认 |
+| 期望结果 | dirty 标签使执行在 Revalidating 阶段阻断且磁盘不变；clean 目标确认前内容 Diff 仍有效，资源执行成功后内容 Diff 以 resource_baseline_changed 失效，标签/引用按真实结果同步 |
+| 自动化证据设计 | WS/ED/DE/REF 联调：影响清单、dirty guard、执行回执、失效事件与路径重绑定 |
+| 人类观察项 | 决策卡列出受影响标签/Diff；阻断和成功后的显示都与磁盘一致 |
+| 状态 | DESIGNED |
+
+### 4.4a V-R2 · WorkspaceOperation：批量补偿、重启中断与时间轴恢复
+
+| 字段 | 内容 |
+|---|---|
+| 前置条件 | 三项批量计划；第 2 项注入失败；另构造补偿失败与执行中重启 |
+| 完整操作 | 确认执行；观察 fail-fast/逆序补偿；从 WorkspaceTimeline 发起恢复 |
+| 期望结果 | 第 2 项失败后第 3 项不执行；第 1 项逆序补偿成功则 FailedCompensated，补偿失败则 PartialFailed 并保留逐项收据；重启后 Interrupted 且不自动执行；资源恢复生成新的 WorkspaceOperationPlan 和 DecisionRequest，冲突不覆盖 |
+| 自动化证据设计 | SM-WS-04 全转移矩阵、幂等重复确认、补偿故障注入、重启恢复、文件/空目录/非空目录类型化恢复 |
+| 人类观察项 | partial_failed 明确列出实际状态；恢复仍先确认；无第二套撤销 UI |
+| 状态 | DESIGNED |
 ### 4.5 V-S1 · 已有 LogicalState：预览、接受、保存（BR-CORE-STATE-001）
 
 | 字段 | 内容 |
@@ -194,11 +206,11 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 
 | P1 能力 | 独立开放条件 | 验证卡（设计） |
 |---|---|---|
-| TXT→Markdown / Markdown→TXT 目标副本转换 | 来源不改写、预览建目标 LogicalState、接受不写盘、保存才落盘、损失告知、保存冲突/失败保留 | V-P1-01 |
+| TXT→Markdown / Markdown→TXT 目标副本转换 | 来源不改写、CreateDocumentBundle 先创建目标、初始内容 Diff、损失告知与三重基线拒绝 | V-P1-01 |
 | 外部文件内容读取 | 显式附加 + 可用只读解析 → 一次性 data-only；任务结束清除；不支持格式退回元数据 | V-P1-02（=V-S8 数据面） |
 | 显式项目记忆选择 | workspace 本地用户管理；仅显式选择进入回合；不自动写入/提议/检索/注入 | V-P1-03（=V-S8 记忆面） |
-| 文件树：建目录/单文件重命名/移动 | 逻辑文件树暂存、接受不写盘、逐项显式保存、保存前再核验、标签暂定路径 | V-P1-04 |
-| 可恢复删除/恢复 | 红色逻辑暂存、递归清单/再核验、单项显式保存、脏会话前置、无永久删除 | V-P1-05 |
+| WorkspaceOperation：创建/重命名/移动 | DecisionRequest 前置裁决、确认时重验、直接磁盘执行、dirty 阻断、内容 Diff 失效、幂等与补偿 | V-P1-04（=V-R1/R2） |
+| 删除/恢复 | 冻结递归清单、dirty 阻断、类型化快照、WorkspaceTimeline 恢复、冲突不覆盖、无永久清理 | V-P1-05（=V-R1/R2） |
 | 多既有文档逐项编辑 | 确认冻结目标清单、逐目标独立 Proposal/基准/裁决/保存、无批量裁决/事务 | V-P1-06 |
 | 样式 P1（颜色/突出显示/段落/字号/字体族）、表格、图片 | 受控操作、动态能力、保存重开真实验证逐项通过后开放 | V-P1-07 |
 
@@ -216,3 +228,4 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-08-14 | v1.0 | AG-1.0-D4-VALIDATION-CARDS-01：建立 Agent 1.0 验证卡设计——追溯矩阵、状态化链路验证矩阵、核心场景卡 V-N1~N4（D-NEW）与 V-S1~S9（三态分流/连续接力/保存/澄清终态/TaskRun/外部内容记忆/会话隔离）、P1 独立开放条件清单（V-P1-01~07）与进入 IMPLEMENTATION 的门禁规则；卡状态一律 DESIGNED，未执行不填报通过。 |
+| 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |

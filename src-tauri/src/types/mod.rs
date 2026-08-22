@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
  * type:     DATA
  * chain:    DATA-MIGRATE
  * rules:    BR-SYS-DATA-002
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,TimelineEntry,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -68,6 +68,202 @@ pub struct TimelineEntry {
     /// 文档版本序，单调递增。
     pub version_seq: u64,
     pub label: Option<String>,
+    pub created_at: i64,
+}
+
+/// 工作区资源操作状态（TERM-WS-003 · SM-WS-04）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceOperationStatus {
+    Planning,
+    WaitingConfirm,
+    Revalidating,
+    Executing,
+    Compensating,
+    Completed,
+    Rejected,
+    Expired,
+    FailedCompensated,
+    PartialFailed,
+    Interrupted,
+}
+
+impl WorkspaceOperationStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed
+                | Self::Rejected
+                | Self::Expired
+                | Self::FailedCompensated
+                | Self::PartialFailed
+        )
+    }
+}
+
+/// WorkspaceOperation 支持的资源副作用集合。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceOperationKind {
+    CreateDocument,
+    CreateFolder,
+    RenameResource,
+    MoveResource,
+    DeleteResource,
+    RestoreResource,
+    DiscardCreatedResource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceResourceKind {
+    File,
+    Folder,
+}
+
+/// 冻结在 WorkspaceOperationPlan 内的单项资源操作。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOperationItem {
+    pub item_id: String,
+    pub seq: u32,
+    pub kind: WorkspaceOperationKind,
+    pub source_rel_path: Option<String>,
+    pub target_rel_path: Option<String>,
+    pub resource_kind: WorkspaceResourceKind,
+    pub recursive: bool,
+    pub restore_payload_ref: Option<String>,
+}
+
+/// 计划生成时冻结、确认时重新采集并逐字段比对的资源基线。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceResourceBaseline {
+    pub rel_path: String,
+    pub exists: bool,
+    pub resource_kind: Option<WorkspaceResourceKind>,
+    pub size: Option<u64>,
+    pub modified_at: Option<i64>,
+    pub content_hash: Option<String>,
+    pub manifest_hash: Option<String>,
+}
+
+/// 前置确认卡与执行消费者需要显示的真实影响清单。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WorkspaceOperationConsequences {
+    pub affected_sessions: Vec<String>,
+    pub affected_diffs: Vec<String>,
+    pub affected_references: Vec<String>,
+    pub recursive_count: u64,
+    pub recoverable: bool,
+}
+
+/// TERM-WS-004：落库后操作项、清单、基线与影响不可原地替换；仅生命周期字段推进。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOperationPlan {
+    pub plan_id: String,
+    pub operation_id: Option<String>,
+    pub idempotency_key: String,
+    pub workspace_id: String,
+    pub task_run_id: Option<String>,
+    pub source_turn_id: Option<String>,
+    pub operation_items: Vec<WorkspaceOperationItem>,
+    pub frozen_manifest: Vec<WorkspaceResourceBaseline>,
+    pub baseline_set: Vec<WorkspaceResourceBaseline>,
+    pub consequences: WorkspaceOperationConsequences,
+    pub compensation_policy: String,
+    pub initial_content_ref: Option<String>,
+    pub decision_request_id: Option<String>,
+    pub status: WorkspaceOperationStatus,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceOperationItemStatus {
+    Attempted,
+    Completed,
+    Compensated,
+    Failed,
+}
+
+/// WorkspaceOperation 的逐项真实执行/补偿回执。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOperationItemReceipt {
+    pub item_id: String,
+    pub seq: u32,
+    pub status: WorkspaceOperationItemStatus,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub snapshot_ref: Option<String>,
+    pub completed_at: i64,
+}
+
+/// TERM-WS-006：资源操作历史载荷；历史条目只追加、不覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOperationEntry {
+    pub entry_id: String,
+    pub operation_id: String,
+    pub plan_id: String,
+    pub workspace_id: String,
+    pub before_manifest: Vec<WorkspaceResourceBaseline>,
+    pub after_manifest: Vec<WorkspaceResourceBaseline>,
+    pub item_receipts: Vec<WorkspaceOperationItemReceipt>,
+    pub compensation_receipts: Vec<WorkspaceOperationItemReceipt>,
+    pub restore_kind: String,
+    pub restore_payload_ref: Option<String>,
+    pub final_status: WorkspaceOperationStatus,
+    pub created_at: i64,
+}
+
+/// 一次 execute 的幂等结果；重复执行返回同一回执而不重复写 DiskState。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOperationReceipt {
+    pub operation_id: String,
+    pub plan_id: String,
+    pub final_status: WorkspaceOperationStatus,
+    pub item_receipts: Vec<WorkspaceOperationItemReceipt>,
+    pub compensation_receipts: Vec<WorkspaceOperationItemReceipt>,
+    pub entry_id: Option<String>,
+    #[serde(default)]
+    pub invalidated_diff_ids: Vec<String>,
+}
+
+/// WorkspaceTimeline 的统一跨模块投影；payload_ref 决定类型化预览/恢复器。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTimelineEntry {
+    pub entry_id: String,
+    pub workspace_id: String,
+    pub entry_kind: String,
+    pub target_refs: Vec<DocRef>,
+    pub version_seq: u64,
+    pub label: Option<String>,
+    pub payload_ref: String,
+    pub created_at: i64,
+}
+
+/// TERM-WS-007：资源创建与后置普通内容 Diff 的持久绑定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateDocumentBundle {
+    pub plan_id: String,
+    pub workspace_id: String,
+    pub target: DocRef,
+    pub initial_content_ref: String,
+    pub operation_id: Option<String>,
+    pub initial_diff_id: Option<String>,
+    pub rejection_guard_ref: Option<String>,
+    pub status: String,
+}
+
+/// CreateDocumentBundle 初始内容 Diff 的拒绝补偿基线。三层身份必须同时保持不变，
+/// 否则只允许把 Diff 置为过期，不得删除已经继续编辑或被外部改动的真实文件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateDocumentRejectionGuard {
+    pub plan_id: String,
+    pub operation_id: String,
+    pub target: DocRef,
+    pub disk_baseline: WorkspaceResourceBaseline,
+    pub logical_session_version: u64,
+    pub logical_content_hash: String,
     pub created_at: i64,
 }
 

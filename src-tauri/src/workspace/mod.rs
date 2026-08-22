@@ -27,6 +27,9 @@ pub mod listing;
 /// PI-BE-04 · workspace 内文件 CRUD（create/rename/delete，BR-WS-DATA-001 / X-FORBID-004）。
 pub mod fileops;
 
+/// PI-WS-06 · WorkspaceOperation 前置裁决、执行、补偿与 WorkspaceTimeline 资源条目。
+pub mod operation;
+
 fn escape_error(rel_path: &str) -> IpcError {
     IpcError::new(
         "WS_PATH_ESCAPE",

@@ -303,8 +303,8 @@ pub fn detect_sync_from_reference(text: &str) -> Option<String> {
  * boundary: in=currentUserInputAndEditorTarget | out=IntentResult(currentTurnWinsBlockingAmbiguityStopsMutation)
  */
 /// 1.0 当前轮意图解析（V3 乐观授权，AG-INTENT-V3-01）：工具授予不再按意图枚举收窄——只读组
-/// 无条件授予（workspace 限定）、写入组（propose_edit/edit_blocked/create_doc）授予但绝不落盘
-/// （X-FORBID-006 提案+人工确认）。意图识别退化为上下文注入器：仅寒暄/疑问/只读例外降权，
+/// 无条件授予（workspace 限定）、内容写入组通过 propose_edit 生成后置裁决、资源写入组通过
+/// plan_workspace_operation 生成前置裁决。意图识别退化为上下文注入器：仅寒暄/疑问/只读例外降权，
 /// 其余（含识别失败）默认按文档状态授予工具。输出统一结构供 Context/Prompt/Tool 消费。
 pub fn resolve_intent_result(
     turn_id: &str,
@@ -442,8 +442,7 @@ pub fn resolve_intent_result(
     // V3 乐观授权：工具集按三分类固定授予（不再按意图枚举细分）。
     // - Answer/Clarify：零工具（寒暄/澄清不调工具）
     // - Analyze/Inspect/Search：只读组（workspace 限定，无副作用）
-    // - Edit/CreateDocument：全量（只读组 + 提案组；写入组绝不落盘，X-FORBID-006；
-    //   创建文档走 propose_edit base=empty，不授予结构工具 create_doc）
+    // - Edit/CreateDocument：全量（只读组 + 内容提案 + 资源操作计划；模型不直接写 DiskState）
     // AG-STRATEGY-01：工具授予档位化——chat 零工具；read-only 声明（mutation_forbidden）只读全量；
     // 其余（edit/create/general）全量（只读 + 提案 + glob）。意图不再按类型收窄工具。
     const READ_TOOLS: &[&str] = &[
@@ -455,7 +454,11 @@ pub fn resolve_intent_result(
         "list_images",
         "workspace_glob",
     ];
-    const WRITE_PROPOSAL_TOOLS: &[&str] = &["propose_edit", "edit_blocked"];
+    const WRITE_PROPOSAL_TOOLS: &[&str] = &[
+        "propose_edit",
+        "plan_workspace_operation",
+        "edit_blocked",
+    ];
     let required_tools = if mutation_forbidden {
         READ_TOOLS.iter().map(|tool| (*tool).to_string()).collect()
     } else {
@@ -966,12 +969,12 @@ pub fn scope_history_for_current_doc(
     }
 }
 
-/// 目标边界裁决结果（BR-AG-DATA-003，2026-07-04 版；AG-DELETE-01 放宽跨文档）。
+/// 目标边界裁决结果（BR-AG-DATA-003，允许标注后的跨文档内容提案）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetDecision {
     /// 当前文档 / 显式声明集内 / 新建文档（新建的人类闸门=diff 裁决卡，接受方落盘）。
     Accept,
-    /// AG-DELETE-01：未声明的**既有**文档——放行但标注 cross_doc（DiffCard「跨文档目标」
+    /// 未声明的**既有**文档——放行但标注 cross_doc（DiffCard「跨文档目标」
     /// 提示 + 用户确认承担安全，取代硬拒；延续词/多文档联动不再被锁死）。
     AcceptCrossDocument,
 }
@@ -1004,7 +1007,7 @@ pub fn guard_target_set(
     if !target_exists {
         return TargetDecision::Accept; // 新建：diff 裁决卡为人类确认闸门
     }
-    // AG-DELETE-01：未声明既有文档 → 放行 + cross_doc 标注（确认卡兜底，取代硬拒）。
+    // 未声明既有文档 → 放行 + cross_doc 标注（内容 DiffCard 裁决兜底，取代硬拒）。
     TargetDecision::AcceptCrossDocument
 }
 
@@ -1082,7 +1085,7 @@ mod tests {
             guard_target_set(Some("a.md"), &declared, "new.md", false),
             TargetDecision::Accept
         );
-        // ④ 未声明的既有文档：AG-DELETE-01 放宽——放行但标注 AcceptCrossDocument（DiffCard
+        // ④ 未声明的既有文档：放行但标注 AcceptCrossDocument（DiffCard
         // 「跨文档目标」+ 用户确认承担安全，不再硬拒；多文档联动不再被锁死）。
         assert_eq!(
             guard_target_set(Some("a.md"), &declared, "other.md", true),
@@ -1499,7 +1502,7 @@ mod tests {
     #[test]
     fn intent_general_full_tools_for_continuation_and_query() {
         // 延续词「再试一下呢」（历史为新建请求）→ general 全量（含 propose_edit/glob），
-        // 不再被 Edit 目标锁死——模型可自决新建（调用时刻 base=empty 检测兜底）。
+        // 不再被 Edit 目标锁死——模型可按当前目标选择内容 Diff 或资源操作计划。
         let cont = resolve_intent_result(
             "s-cont",
             "再试一下呢",

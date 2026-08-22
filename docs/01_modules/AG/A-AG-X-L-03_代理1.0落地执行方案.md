@@ -1,6 +1,6 @@
 ---
 文档编号：AG-X-L-03
-文档状态：A
+文档状态：X
 负责模块：AG
 文档职责：Binder AG 1.0 Experience Preview 落地执行方案——把 AG 完整能力地图收敛为 agent-edit-1.0 Runtime Profile，定义发布能力边界、冻结契约、依赖顺序、验证矩阵与发布退出条件
 上游约束：A-CORE-X-L-06、A-AG-M-D-01、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-DE-M-T-01、A-ED-M-T-01、A-SYS-I-P-03、A-AG-X-L-01、A-AG-X-L-02
@@ -11,6 +11,11 @@
 ---
 
 # Binder AG 1.0 落地执行方案
+
+> **已被取代（2026-08-21）**：本文保留为 2026-08-08 的历史执行切片，不再是当前实现基线。
+> Agent 1.0 的当前计划权威为 `A-AG-X-L-04_代理1.0开发与验证计划.md`；工作区资源操作的设计与实施
+> 权威为 `A-WS-M-T-02_工作区资源操作技术设计.md`、`A-WS-M-S-02_工作区资源操作状态机设计.md`
+> 与 `A-WS-X-L-01_工作台开发计划.md`。本文中 `base=empty` 新建、资源工具后置裁决及能力后置结论均不得用于新 Scope。
 
 ## §1 决策结论
 
@@ -404,3 +409,4 @@ agent-edit-1.0
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-08-08 | v1.0 | 初版：将 Binder AG 1.0 定位为可靠当前文档编辑 Agent；定义 agent-edit-1.0 发布阻断/非阻断/后置能力、最小目标架构、五条确定性路由、IntentResult/PromptDataEnvelope/PromptPackage/CapabilityGrant/ChangeProposal/执行追踪冻结契约、按架构依赖排序的 Phase AG1-0~6、15 项系统验证矩阵和发布退出条件 |
+| 2026-08-21 | v1.1 | 文档转为 X：已被 A-AG-X-L-04 和 WorkspaceOperation/CreateDocumentBundle 新基线取代；保留旧正文作历史证据，禁止作为新实现 Scope 依据。 |

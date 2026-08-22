@@ -21,6 +21,7 @@ const edLocateMock = vi.hoisted(() => ({
   locateBlock: vi.fn(),
 }));
 const docServiceMock = vi.hoisted(() => ({
+  isDocxEditable: vi.fn(() => false),
   ensureDocumentMediaDisplayBase: vi.fn(async () => undefined),
   projectDocumentMediaDisplaySrc: vi.fn(
     (relPath: string, mediaRef: string) => `asset://document/${relPath}/${mediaRef}`,
@@ -40,15 +41,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { agStore, activeSession, emptyComposerDraft } from "../store/agStore";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
+import { tabsStore } from "../store/tabsStore";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
 import {
   AGENT_EDIT_RUNTIME_PROFILE,
+  acknowledgePreviewAndContinue,
   cancelActiveTurn,
   deleteAgentSession,
   finishAssist,
   hydrateAgentHistory,
   refreshSessionTaskRuns,
   refreshSessionPlans,
+  resolveDecision,
   requestAssist,
   resolveDecisionAndContinue,
   startTurn,
@@ -64,7 +68,11 @@ function completeTurn(arg: unknown) {
 
 function dispatchOk(arg: unknown) {
   const command = (arg as { request?: { command?: string } }).request?.command;
-  return { correlation_id: "ag-test", result: command === "ws.list_docs" ? [] : { ok: true } };
+  if (command === "ws.list_docs") return { correlation_id: "ag-test", result: [] };
+  if (command === "ag.resolve_decision") {
+    return { correlation_id: "ag-test", result: { task_run_id: "task-confirmed", status: "executing" } };
+  }
+  return { correlation_id: "ag-test", result: { ok: true } };
 }
 
 function mockTurnInvoke(handler: (arg: unknown) => void) {
@@ -111,6 +119,8 @@ function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   invokeMock.mockReset();
   docServiceMock.ensureDocumentMediaDisplayBase.mockClear();
+  docServiceMock.isDocxEditable.mockClear();
+  docServiceMock.isDocxEditable.mockReturnValue(false);
   docServiceMock.projectDocumentMediaDisplaySrc.mockClear();
   edLocateMock.getActiveEditor.mockReset();
   edLocateMock.getActiveEditor.mockReturnValue(null);
@@ -135,6 +145,7 @@ beforeEach(() => {
   edStore.reset();
   deStore.reset();
   agStore.reset();
+  tabsStore.reset();
 });
 
 describe("requestAssist 契约", () => {
@@ -1154,36 +1165,6 @@ describe("agService ReferencePayload 发送契约", () => {
     });
   });
 
-  it("结构工具成功后刷新文件树", async () => {
-    invokeMock.mockImplementation(async (command, arg) => {
-      if (command === "ag_start_turn") {
-        const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
-        onEvent.onmessage?.({
-          type: "tool_result",
-          turn_id: "t",
-          tool_name: "move_doc",
-          result: JSON.stringify({ operation: "move_doc", from_path: "a.md", to_path: "分类/a.md" }),
-          success: true,
-        });
-        completeTurn(arg);
-        return undefined;
-      }
-      if (command === "dispatch") {
-        return { correlation_id: "ws-test", result: [] };
-      }
-      return undefined;
-    });
-
-    await startTurn("把文件整理到分类目录");
-    await Promise.resolve();
-
-    expect(invokeMock).toHaveBeenCalledWith(
-      "dispatch",
-      expect.objectContaining({
-        request: expect.objectContaining({ command: "ws.list_docs" }),
-      }),
-    );
-  });
 });
 
 // Migrated intact from agStore.test.ts.
@@ -1622,6 +1603,230 @@ describe("agService 回合实时事件（AG-1.0-TASKRUN-REWORK-IMP-UI-01）", ()
 });
 
 describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
+  // covers: BR-WS-STATE-003
+  // covers: BR-WS-OBS-002
+  // 资源裁决由同一个 resolve 命令执行并刷新真实文件树，不另起模型续片段。
+  it("workspace operation confirmation returns receipt and refreshes the file tree", async () => {
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const dispatched = arg as { request: { command: string } };
+      if (dispatched.request.command === "ag.resolve_decision") {
+        return {
+          correlation_id: "ag-test",
+          result: {
+            task_run_id: "task-resource",
+            status: "completed",
+            workspace_operation_receipt: {
+              operation_id: "operation-1",
+              plan_id: "plan-1",
+              final_status: "completed",
+              item_receipts: [{ item_id: "item-1", seq: 0, status: "completed" }],
+              compensation_receipts: [],
+              entry_id: "entry-1",
+            },
+          },
+        };
+      }
+      if (dispatched.request.command === "ws.list_docs") {
+        return { correlation_id: "ws-test", result: [] };
+      }
+      return { correlation_id: "test", result: { ok: true } };
+    });
+
+    const result = await resolveDecision("decision-resource", "confirm");
+
+    expect(result.workspaceOperationReceipt).toMatchObject({ operation_id: "operation-1" });
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "dispatch",
+      expect.objectContaining({ request: expect.objectContaining({ command: "ws.list_docs" }) }),
+    );
+
+    // 同一资源裁决用例继续验证：确认前同步所有 LogicalState；成功回执同步 Diff 失效与引用重绑。
+    edStore.loadDoc("notes/dirty.md", "disk", 1);
+    edStore.updateContent("notes/dirty.md", "unsaved logical state");
+    edStore.setTabState("notes/dirty.md", "dirty");
+    const sessionId = activeSession(agStore.getSnapshot()).id;
+    const reference = {
+      refId: "ref-a",
+      kind: "doc" as const,
+      label: "a.md",
+      payload: { kind: "doc" as const, relPath: "notes/a.md", label: "a.md" },
+    };
+    agStore.setComposerDraft(sessionId, {
+      prompt: "整理引用",
+      tokens: [reference],
+      doc: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "referenceToken", attrs: reference }] }],
+      },
+    });
+    deStore.addDiff({
+      diffId: "diff-stale",
+      sessionId,
+      relPath: "notes/a.md",
+      blockId: "b1",
+      title: "旧建议",
+      before: "a",
+      after: "b",
+      state: "pending",
+    });
+    agStore.setPendingDecision({
+      requestId: "decision-rename",
+      kind: "permission",
+      payload: { workspaceOperationPlanId: "plan-rename" },
+    });
+    const dispatchedCommands: string[] = [];
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const request = (arg as { request: { command: string } }).request;
+      dispatchedCommands.push(request.command);
+      if (request.command === "ag.resolve_decision") {
+        return {
+          correlation_id: "ag-test",
+          result: {
+            task_run_id: "task-rename",
+            status: "completed",
+            workspace_operation_receipt: {
+              operation_id: "operation-rename",
+              plan_id: "plan-rename",
+              final_status: "completed",
+              item_receipts: [{ item_id: "item-rename", seq: 0, status: "completed" }],
+              compensation_receipts: [],
+              entry_id: "entry-rename",
+              invalidated_diff_ids: ["diff-stale"],
+            },
+            workspace_operation_items: [{
+              item_id: "item-rename",
+              seq: 0,
+              kind: "rename_resource",
+              source_rel_path: "notes/a.md",
+              target_rel_path: "notes/b.md",
+              resource_kind: "file",
+            }],
+          },
+        };
+      }
+      if (request.command === "ws.list_docs") return { correlation_id: "ws-test", result: [] };
+      return { correlation_id: "test", result: { ok: true } };
+    });
+
+    await resolveDecision("decision-rename", "confirm");
+
+    expect(dispatchedCommands.indexOf("ed.persist_session_snapshot"))
+      .toBeLessThan(dispatchedCommands.indexOf("ag.resolve_decision"));
+    const persistedDirty = invokeMock.mock.calls.find(([, payload]) => (
+      (payload as { request?: { command?: string } })?.request?.command === "ed.persist_session_snapshot"
+    ));
+    expect(persistedDirty?.[1]).toEqual(expect.objectContaining({
+      request: expect.objectContaining({
+        params: expect.objectContaining({ snapshot: expect.objectContaining({ dirty: true }) }),
+      }),
+    }));
+    expect(deStore.getSnapshot().diffs.find((diff) => diff.diffId === "diff-stale")?.state).toBe("expired");
+    const draft = agStore.getSnapshot().sessions.find((session) => session.id === sessionId)?.composerDraft;
+    expect(draft?.tokens[0]).toMatchObject({ label: "b.md", payload: { relPath: "notes/b.md" } });
+    expect(draft?.doc.content?.[0].content?.[0].attrs).toMatchObject({
+      label: "b.md",
+      payload: { relPath: "notes/b.md" },
+    });
+  });
+
+  // covers: BR-WS-DATA-003
+  // covers: BR-WS-PERSIST-003
+  // 新建文档确认后必须先读取真实目标建立 LogicalState，再把冻结初始内容投影为普通内容 Diff。
+  it("create document confirmation opens the real file before projecting its initial content diff", async () => {
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const dispatched = arg as { request: { command: string } };
+      switch (dispatched.request.command) {
+        case "ag.resolve_decision":
+          return {
+            correlation_id: "ag-test",
+            result: {
+              task_run_id: "task-create",
+              status: "executing",
+              workspace_operation_receipt: {
+                operation_id: "operation-create",
+                plan_id: "plan-create",
+                final_status: "completed",
+                item_receipts: [{ item_id: "item-create", seq: 0, status: "completed" }],
+                compensation_receipts: [],
+                entry_id: "entry-create",
+              },
+              workspace_operation_items: [{
+                seq: 0,
+                kind: "create_document",
+                source_rel_path: null,
+                target_rel_path: "draft.md",
+                resource_kind: "file",
+              }],
+              create_document_bundle: {
+                plan_id: "plan-create",
+                target: { rel_path: "draft.md" },
+                status: "created",
+              },
+            },
+          };
+        case "ws.list_docs":
+          return { correlation_id: "ws-test", result: [] };
+        case "ws.read_doc":
+          return { correlation_id: "ws-test", result: { content: "", baseline: "disk-empty" } };
+        case "ed.persist_session_snapshot":
+          return { correlation_id: "ed-test", result: { ok: true } };
+        case "ws.project_create_document_bundle":
+          return {
+            correlation_id: "ws-test",
+            result: {
+              diff_id: "diff-create",
+              task_run_id: "task-create",
+              source_turn_id: "turn-create",
+              already_projected: false,
+              projection: {
+                diff_id: "diff-create",
+                rel_path: "draft.md",
+                patch_kind: "replace_document",
+                block_id: null,
+                block_index: null,
+                before_text: "",
+                after_text: "# 初稿\n\n正文",
+                location_label: "整篇",
+                draft_mode: "current_editor",
+                snapshot_source: "active_editor_session",
+                base_session_version: 1,
+                base_content_hash: "logical-empty",
+              },
+            },
+          };
+        default:
+          return { correlation_id: "test", result: { ok: true } };
+      }
+    });
+
+    const result = await resolveDecision("decision-create", "confirm");
+
+    expect(result.createDocumentDiffId).toBe("diff-create");
+    expect(tabsStore.getSnapshot().tabs).toEqual([
+      expect.objectContaining({ kind: "doc", path: "draft.md" }),
+    ]);
+    expect(edStore.getSnapshot().sessions["draft.md"]).toBeDefined();
+    expect(deStore.getSnapshot().diffs).toEqual([
+      expect.objectContaining({
+        diffId: "diff-create",
+        relPath: "draft.md",
+        patchKind: "replace_document",
+        state: "pending",
+        before: "",
+        after: "# 初稿\n\n正文",
+        previewContinuationRequired: true,
+      }),
+    ]);
+    const commands = invokeMock.mock.calls
+      .filter(([command]) => command === "dispatch")
+      .map(([, payload]) => (payload as { request: { command: string } }).request.command);
+    expect(commands.indexOf("ws.read_doc")).toBeLessThan(commands.indexOf("ws.project_create_document_bundle"));
+  });
+
   // covers: BR-SYS-STATE-008
   // 任务级确认 confirm 后自动发起下一执行片段（同一 startTurn 链路，无手动输入）。
   it("confirm triggers an automatic continuation turn", async () => {
@@ -1632,6 +1837,62 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
     });
     await resolveDecisionAndContinue("decision-1", "confirm");
     expect(turnCount).toBe(1);
+    expect(agStartArg()).toMatchObject({
+      continuationTaskRunId: "task-confirmed",
+      continuationDecisionRequestId: "decision-1",
+    });
+  });
+
+  // covers: BR-SYS-STATE-008, BR-AG-DATA-001
+  // 只有 editor 已把 Diff 应用到 LogicalState 后，才向后端确认 checkpoint 并以新快照启动续片段。
+  it("preview acknowledgement starts exactly one fresh-snapshot continuation", async () => {
+    edStore.loadDoc("notes/current.md", "预览前", 101);
+    edStore.updateContent("notes/current.md", "预览后");
+    const session = edStore.getSnapshot().sessions["notes/current.md"];
+    deStore.addDiff({
+      diffId: "diff-preview",
+      sessionId: activeSession(agStore.getSnapshot()).id,
+      turnId: "turn-preview",
+      taskRunId: "task-preview",
+      relPath: "notes/current.md",
+      blockId: "b1",
+      title: "预览建议",
+      before: "预览前",
+      after: "预览后",
+      state: "pending",
+      draftApplied: true,
+      previewContinuationRequired: true,
+    });
+    let turns = 0;
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "ag_ack_preview") return { task_run_id: "task-preview", ready: true };
+      if (command === "ag_start_turn") {
+        turns += 1;
+        completeTurn(arg);
+        return undefined;
+      }
+      if (command === "dispatch") return dispatchOk(arg);
+      return undefined;
+    });
+
+    await acknowledgePreviewAndContinue("diff-preview");
+
+    expect(turns).toBe(1);
+    expect(invokeMock).toHaveBeenCalledWith("ag_ack_preview", expect.objectContaining({
+      taskRunId: "task-preview",
+      turnId: "turn-preview",
+      diffId: "diff-preview",
+      relPath: "notes/current.md",
+      sessionVersion: session.sessionVersion,
+      contentHash: session.contentHash,
+    }));
+    expect(agStartArg()).toMatchObject({
+      continuationTaskRunId: "task-preview",
+      continuationPreviewDiffId: "diff-preview",
+      continuationDecisionRequestId: undefined,
+    });
+    expect((agStartArg().openDocSnapshots as Array<{ content: string; sessionVersion: number; contentHash: string }>)[0])
+      .toMatchObject({ content: "预览后", sessionVersion: session.sessionVersion, contentHash: session.contentHash });
   });
 
   // covers: BR-SYS-STATE-008

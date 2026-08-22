@@ -207,6 +207,14 @@ terminal_states: Completed, Failed, Cancelled, Interrupted
 3. **三层分离**：DiffCard 接受/拒绝只走内容三态链路，不产生 TaskRun 事件；propose_edit 不再直接置
    waiting_confirm（确认点只由 decisionProposed 产生）。
 
+#### 2.2.3 WorkspaceOperation 确认后的执行语义（2026-08-21）
+
+- WorkspaceOperationPlan 通过 DecisionRequest 进入 WaitingConfirm；资源操作的完整状态由 SM-WS-04 承载，SM-AG-04 不复制其 Planning/Revalidating/Executing/Compensating 状态。
+- `userConfirm` 后 TaskRun 回到 Executing，并立即调用 WS 执行冻结 plan_id；这不是后台续跑，而是本次明确裁决触发的同一任务片段。不存在 `WaitingUserCommit`、资源 DiffCard 或后置保存裁决。
+- WS 返回 Completed 后，TaskRun 才可进入下一片段；返回 FailedCompensated / PartialFailed 时该步骤失败并如实收敛，不能继续依赖步骤。
+- CreateDocumentBundle 的资源创建成功后，初始内容 Diff 投影不驱动 WaitingConfirm；DiffCard 仅管理内容卡生命周期。
+- 应用重启使未完成资源计划和 TaskRun 均进入 Interrupted；用户显式重试必须重新计划、重新核验并产生新的 DecisionRequest，旧确认不得复用。
+
 <!-- REQ_MAP
 req_id: REQ-AG-007
 target_type: RULE
@@ -418,3 +426,4 @@ terminal_states: Accepted, Dismissed
 | 2026-08-15 | v2.16 | AG-1.0-TASKRUN-REWORK-REQ-01：§2.2.1 语义纠偏——三层分离（DiffCard 内容层 / DecisionRequest 任务级裁决 / TaskRun 只响应明确任务裁决）、WaitingConfirm 唯一来源=DecisionRequest、userConfirm/userCancel 真实裁决入口、新消息不绕过确认 gate、TaskPlan（复杂目标，可展示计划）、执行片段每步重新授权 + 确认后自动下一片段、同文档连续 Diff 前卡失效。 |
 | 2026-08-15 | v2.17 | AG-1.0-TASKRUN-REWORK-DESIGN-01：§2.2.2 SM-AG-04 重构设计——转移主表重构（planApproved/segmentStarted/decisionProposed/userConfirm/userCancel/finish）、forbidden 重构（新消息 gate、WaitingConfirm 仅 DecisionRequest 裁决推进、propose_edit 不再置 waiting_confirm）、每片段重新授权 guard。 |
 | 2026-08-15 | v2.18 | AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：SM-AG-04 重构落地（运行时/数据层）——settle 按未决 DecisionRequest 判定 WaitingConfirm（去除 has_pending_proposal）、begin_turn 不绕回 waiting_confirm、回合入口 gate（AG_DECISION_PENDING）、propose_decision/resolve_decision 生命周期与 IPC、TaskPlan 持久化、StepProgress 实时事件。 |
+| 2026-08-21 | v2.19 | 工作区资源操作基线重构：SM-AG-04 增加 WorkspaceOperation 集成语义；DecisionRequest 确认后立即调用 SM-WS-04 执行，不增加 WaitingUserCommit 或资源 DiffCard；CreateDocumentBundle 初始内容 Diff 不驱动 TaskRun 等待；重启中断不得复用旧确认。 |

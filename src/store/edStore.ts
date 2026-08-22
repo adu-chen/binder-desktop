@@ -325,6 +325,12 @@ export const edStore = {
     if (!cur || cur.editFormat !== "markdown") return;
     patchSession(path, { sourceView });
   },
+  /** 新建 Markdown 的初始内容首次成功解析后，把占位 text 会话提升为结构化 HTML LogicalState。 */
+  setContentFormat(path: string, contentFormat: ContentFormat) {
+    const cur = state.sessions[path];
+    if (!cur || cur.contentFormat === contentFormat) return;
+    patchSession(path, { contentFormat });
+  },
   /** 暂存某会话的当前编辑内容（切换标签前由编辑器序列化回写 → 不丢草稿）；不触发 loadSeq/不改脏态。 */
   updateContent(path: string, content: string) {
     const cur = state.sessions[path];
@@ -495,6 +501,18 @@ export const edStore = {
   closeSession(path: string) {
     if (!state.sessions[path]) return;
     const sessions = { ...state.sessions };
+    commit({
+      sessions,
+      activePath: state.activePath === path ? null : state.activePath,
+      loadSeq: state.loadSeq,
+      jumpLine: state.jumpLine,
+    });
+  },
+  /** 用户明确丢弃未保存内容或资源操作已改变磁盘身份时，彻底移除旧 LogicalState。 */
+  discardSession(path: string) {
+    if (!state.sessions[path]) return;
+    const sessions = { ...state.sessions };
+    delete sessions[path];
     commit({
       sessions,
       activePath: state.activePath === path ? null : state.activePath,

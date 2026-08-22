@@ -20,8 +20,8 @@
 | owner / participants | CORE / AG、DE、ED、WS、SYS |
 | 当前状态 | `active` |
 | 自动化程度 | `partial` |
-| 本轮裁决 | `IN_PROGRESS`：`AUTOMATION_GAP-01`、`AUTOMATION_GAP-03` 已在确定性自动化边界关闭；AG 1.0 Runtime、CapabilityGrant 与新建空基准提案的模块/消费者回归已通过；真实 WKWebView、完整确定性 Agent 回合和 provider 验证仍未闭合，不得表述为 G5 通过 |
-| G5 退出条件 | §6 的 `AUTOMATION_GAP` 关闭，§4 真实环境观察完成且无阻断缺陷，相关回归与治理硬门通过 |
+| 本轮裁决 | `IN_PROGRESS`：既有文档内容 Diff 与保存自动化证据继续有效；2026-08-08 的“空基准新建提案”是历史链证据，不满足当前 CreateDocumentBundle 与 WorkspaceOperation 基线。新基线必须按 A-VAL-X-V-04 的 V-C1~C3/V-R1~R2 重新建立自动化和真实环境证据；未完成前不得表述为 G5 通过 |
+| G5 退出条件 | §6 的 `AUTOMATION_GAP` 关闭，A-VAL-X-V-04 的 WorkspaceOperation/CreateDocumentBundle 核心卡完成，§4 真实环境观察完成且无阻断缺陷，相关回归与治理硬门通过 |
 
 本卡验证的是用户可观察的完整工作流，而不是把多个测试文件的绿色结果拼成“端到端”。当前项目已有
 服务编排、组件交互和 Rust 后端落盘证据，但前端自动化 mock 了 Tauri，Rust 集成没有运行真实
@@ -199,3 +199,4 @@ G5 缺口关闭，且自动化回归、治理审计与相关 NFR 均通过后，
 | 2026-08-01 | v1.2 | VAL-CORE-EDIT-DIFF-SAVE-AUTOMATION-01：新增 Tauri Mock Webview→生产注册/共享路由→真实文件→第二次读取系统 harness，关闭 AUTOMATION_GAP-01/03 的确定性自动化部分；真实 WKWebView 与 Agent/provider 缺口保持 NOT_READY |
 | 2026-08-08 | v1.3 | AG-1.0-IMPLEMENTATION-01：登记 AG Runtime/Intent/Context/Prompt/CapabilityGrant、唯一终态、真实取消与新建空基准提案证据；非沙箱 related/full 全绿；AUTOMATION_GAP-02 因尚无单一确定性 Agent→DiffCard harness 继续 open，G5 结论保持 NOT_READY |
 | 2026-08-13 | v1.4 | AG-STRATEGY-05：新增 S6，登记同锚点 block_ops 插入/替换与精确 reverse、动态 BDocx 整篇改写 guard、proposal→preview→accept→save 状态和无正文预览 trace 的定向自动化证据；新增真实 WKWebView 串联缺口 AUTOMATION_GAP-04，G5 结论仍为 NOT_READY。 |
+| 2026-08-21 | v1.5 | WorkspaceOperation 基线证据裁决：2026-08-08 空基准新建证据降为历史链证据，不满足 CreateDocumentBundle；新建与资源操作必须按 A-VAL-X-V-04 V-C1~C3/V-R1~R2 重新验证，G5 仍为 NOT_READY。 |

@@ -32,25 +32,23 @@ propose_edit 只生成待用户审阅的修改建议。
 需要了解某目录内部时 list_docs(path=...) 展开其直接子项（一层）；按文件名定位可用 workspace_glob(pattern=...)；\
 文档正文一律用 read_doc（可带 blocks 按块读取）或 search_text，\
 列表工具永不返回正文。工作区较小时 list_docs() 会直接给出全部文件，属正常豁免。\
-新建文档等需要落点的任务：先用 list_docs() 概览判断目标位置，再 propose_edit 新建，不逐目录遍历。
-- 工具边界必须如实遵守：只能读取 workspace 内文件；写入必须通过 propose_edit 生成 DiffCard。若目标已有编辑器逻辑状态，\
+新建文档或调整资源结构的任务：先用 list_docs() 概览判断目标位置，再调用 plan_workspace_operation 生成不可变计划和独立确认卡，不逐目录遍历。
+- 工具边界必须如实遵守：只能读取 workspace 内文件；文档内容修改必须通过 propose_edit 生成 DiffCard，工作区资源创建/删除/重命名/移动必须通过 plan_workspace_operation 前置裁决。若目标已有编辑器逻辑状态，\
 客户端会先受控预览：用户显式接受只裁决卡片；保存仍有效的 pending 预览会先裁决为接受、再写入文件。若预览基线已变化，旧卡必须失效而不能被该保存误判为接受；若目标没有逻辑状态，卡片只临时挂载，用户接受才会原子写入文件。\
-新建文档也必须使用 propose_edit 形成 base=empty 的完整文档 DiffCard；预览成功会打开未保存逻辑文档，但用户保存前不得创建文件。\
-新建 word 文档（以 .docx 结尾）：propose_edit(path=新路径.docx, base=空基准（sessionVersion=0, contentHash 为空）, operation=replace_document, content=富 HTML（如 h1/p/ul 等）)，\
-无需额外 BDocx 能力声明——当前文档没有 BDocx 声明不影响新建富文档；\
-路径后缀必须为 .docx（勿用 .b-docx 等其他后缀），预览成功后编辑器打开，保存会转换为标准 Word 文档。\
-未声明的既有文档可作为跨文档修改目标：DiffCard 会标注「跨文档目标」提示你，用户确认后生效（AG-DELETE-01）。\
+新建文档必须调用 plan_workspace_operation(operations=[{kind:create_document,targetPath,resourceKind:file}], initialContent=完整初始内容)。初始内容须在确认前生成并冻结；确认前不创建文件、不显示内容 DiffCard。用户确认后系统先创建真实磁盘文件，再打开标签并把初始内容投影为普通内容 Diff。\
+新建 word 文档的 targetPath 必须以 .docx 结尾（勿用 .b-docx 等其他后缀），initialContent 使用富 HTML（如 h1/p/ul 等）；资源创建完成后才进入 BDocx 内容 Diff 链。\
+未声明的既有文档可作为跨文档内容修改目标：DiffCard 会标注「跨文档目标」提示你，用户确认后生效。\
 - 工作区内原生 .docx 文件可只读读取（read_doc/list_blocks/search_text 经转换投影返回内容），但不可作为编辑目标；编辑文档需先创建 b-docx 副本。
-- 删除能力（AG-DELETE-01）：用户要求删除文档/文件夹时，调用 propose_edit(operation=delete_doc/delete_folder, path=目标路径, recursive=true) 生成删除确认卡，用户接受后才执行删除；删除不可恢复，应提示影响范围。\
-  **删除整个文档/文件一律用 delete_doc/delete_folder，绝不可以用 replace_document 清空内容代替删除**（清空≠删除，且会因无载荷生成失败）；只有「保留文件、清空/重写内容」才用 replace_document。\
-- agent-edit-1.0 不提供文件移动、重命名、建目录、命令或开放网络工具。遇到这些请求应说明边界，\
-不得尝试枚举或调用未授权工具。
+- 删除、建目录、重命名、移动均使用 plan_workspace_operation；工具成功只表示已生成确认卡并等待裁决，不得声称已删除、已创建或已移动。删除整个文档/文件绝不可以用 replace_document 清空内容代替删除；只有「保留文件、清空/重写内容」才使用内容 Diff。\
+- plan_workspace_operation 调用成功后立即结束当前执行片段，等待用户确认或取消；不得再调用 propose_decision，也不得继续生成资源操作或内容 Diff。\
+- agent-edit-1.0 不提供命令或开放网络工具；不得尝试枚举或调用未授权工具。
 - 用户要求改写、插入、删除、调整样式、加粗、改颜色、改标题、改段落、整理、修复文档时，必须调用 propose_edit；\
 仅口头回复「已修改」无效。P3 强约束（AG-R2-01）：编辑/整理/修复类请求必须在**当轮**输出 propose_edit 工具调用；\
 若需先读内容，先调用 read_doc/list_blocks 获取后仍必须在同一轮继续调用 propose_edit 生成修改建议，不得只输出方案文本。\
 AG-STRATEGY-03：编辑/写作/排版类请求（含「丰富」「扩写」「重排」「排版」「优化节奏」）默认直接生成 propose_edit 修改建议卡，\
 **DiffCard 只确认修改内容**（接受后应用预览、保存后落盘）；不要先用文字征求「方向/是否认可/是否开始」，也不要等用户再说「修/认可」才出卡。\
 任务级确认（权限、方案选择、范围、人工确认）走独立的 DecisionRequest 卡，不得用文本询问代替，也不得用 DiffCard 承担任务裁决。\
+只有当前执行必须停下等待用户裁决时，才调用 propose_decision(kind、summary，可选 detail/options) 创建该卡；调用成功后立即结束本执行片段，不得继续读取、生成 Diff 或调用其他工具，等用户 confirm/cancel 后由系统开始下一片段。\
 除非目标确实不唯一且必须澄清（多个文档/多义路径），才问一句；否则直接出建议卡让用户审阅。
 编辑操作按「改动范围」选择，不要按文件类型一刀切：\
 - 整篇重写/大幅重排（丰富故事、扩写、重写全文、整体重排，改动涉及大部分内容）→ 纯文本可使用 operation=replace_document + 完整内容。当前 BDocx 只能在运行时声明明确「无表格且无图片」时使用 operation=replace_document + 完整 HTML；任一表格或图片存在时，后端会拒绝整篇替换，既有文字内容改用 block_ops，表格/图片分别用 table_ops/image_ops。\
@@ -159,11 +157,13 @@ mod tests {
             "search_text",
             "list_blocks",
             "propose_edit",
+            "plan_workspace_operation",
         ] {
             assert!(SYSTEM_PROMPT_CHAT.contains(tool), "缺工具能力声明: {tool}");
         }
         assert!(SYSTEM_PROMPT_CHAT.contains("CapabilityGrant"));
-        assert!(SYSTEM_PROMPT_CHAT.contains("base=empty"));
+        assert!(!SYSTEM_PROMPT_CHAT.contains("base=empty"));
+        assert!(SYSTEM_PROMPT_CHAT.contains("确认前不创建文件"));
         assert!(!SYSTEM_PROMPT_CHAT.contains("create_doc 直接创建"));
         assert!(SYSTEM_PROMPT_CHAT.contains("无表格且无图片"));
         assert!(SYSTEM_PROMPT_CHAT.contains("既有块类型转换为人工专属"));

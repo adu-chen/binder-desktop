@@ -280,7 +280,7 @@ export function FileTree() {
       await deleteFolder(path, isEmpty ? "empty" : "recursive");
       const prefix = `${path}/`;
       for (const t of tabsStore.getSnapshot().tabs) {
-        if (t.path.startsWith(prefix)) tabsStore.close(t.id);
+        if (t.path.startsWith(prefix)) tabsStore.close(t.id, { force: true });
       }
       edStore.closeDocsUnder(path);
       await loadDocs();

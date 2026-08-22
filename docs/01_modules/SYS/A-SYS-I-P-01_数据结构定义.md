@@ -92,15 +92,53 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 > `effect_status` 才是"内容是否已生效"的权威字段，区分裁决态与落盘效果两个维度（解除历史审计
 > 发现的"accepted 即完成"歧义）。
 
-**TimelineEntry · 文档级时间轴条目（基线）**（REQ-CORE-007，主责 WS）
+**WorkspaceTimelineEntry · 统一工作区时间轴条目（基线）**（REQ-CORE-007/014，主责 WS）
 
 | 字段 | 语义 | 备注 |
 |---|---|---|
 | entry_id | 条目不透明标识 | 标识符 |
-| target | 目标文档引用 | DocRef |
-| version_seq | 文档版本序 | 单调递增 |
-| label | 版本标注 | 可空 |
+| workspace_id | 所属 workspace | 隔离键 |
+| entry_kind | 条目类型 | document_snapshot / workspace_operation |
+| target_refs | 目标引用集合 | 文档内容条目通常为单 DocRef；资源条目可为冻结清单 |
+| version_seq | 工作区时间轴序 | 单调递增；文档视图可再按 DocRef 投影 |
+| label | 版本或操作标注 | 可空 |
+| payload_ref | 类型化载荷引用 | document_snapshot 或 WorkspaceOperationEntry；不得用 label 反推恢复数据 |
 | created_at | 创建时间 | — |
+
+**WorkspaceOperationPlan · 工作区资源操作计划**（REQ-CORE-010/012/014，主责 WS）
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| plan_id / workspace_id | 不可变计划身份与隔离键 | 计划落库后 items/基线不得就地修改 |
+| operation_items | 有序 create/delete/rename/move/restore 项 | 每项含来源、目标、资源类型和顺序 |
+| frozen_manifest | 递归清单、资源身份、内容/元数据快照摘要 | 决策卡与执行前重验共同真值 |
+| affected_sessions / affected_diffs / affected_references | 标签、内容 Diff 与引用影响清单 | dirty 会话阻断；有效内容 Diff 在成功后失效 |
+| baseline_set | 磁盘、路径、资源、LogicalState 等执行基线 | 任何推进均过期或阻断 |
+| compensation_policy | fail_fast_compensate | 完成项逆序补偿；不承诺严格文件系统事务 |
+| idempotency_key | 重复确认/执行幂等键 | 同键返回同一终态，不重复变更磁盘 |
+| decision_request_id | 前置裁决关联 | 只能绑定真实 DecisionRequest |
+| status | 计划/执行状态 | planning/waiting_confirm/revalidating/executing/compensating/completed/rejected/expired/failed_compensated/partial_failed/interrupted |
+
+**WorkspaceOperationEntry · 资源操作历史与恢复载荷**
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| operation_id / plan_id | 执行身份与来源计划 | 一次确认只产生一次执行身份 |
+| before_manifest / after_manifest | 执行前后路径、目录清单、内容/元数据快照 | 类型化恢复真值；删除必须可取回实际字节/目录结构 |
+| item_receipts | 每项执行结果 | 含完成顺序、失败与错误 |
+| compensation_receipts | 每项补偿结果 | 补偿不完整决定 partial_failed |
+| restore_kind / restore_payload_ref | 类型化恢复器与载荷 | restore 不直接执行，而生成新的 WorkspaceOperationPlan |
+| final_status | completed/failed_compensated/partial_failed | 不得用通用 success 布尔压缩 |
+
+**CreateDocumentBundle · 新建文档复合对象**
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| plan_id / operation_id | 资源创建计划与执行身份 | operation_id 仅确认执行后存在 |
+| target | 新文档 DocRef | 确认后成为真实 DiskState 节点 |
+| initial_content_ref | 确认前生成并冻结的初始内容 | 资源创建失败不得投影 |
+| initial_diff_id | 资源创建后生成的内容 Diff | 使用普通 PendingDiff 生命周期 |
+| rejection_guard | 资源身份、空文件 DiskState、路径与 LogicalState 基线 | 全部未推进才允许补偿删除 |
 
 **RefInjection · 引用注入载荷（基线）**（REQ-CORE-006，主责 REF，2026-06-11 随 REF G2 登记）
 
@@ -323,15 +361,16 @@ rule_id: BR-SYS-DATA-007
 进入当前回合；Agent 1.0 不自动写入、不提议写入、不自动检索或注入。外部内容、会话历史与编辑历史均不得
 自动转存为项目记忆。
 
-> 边界：本文只给 TimelineEntry 跨模块共享**字段基线**；时间轴**回溯/还原语义**与完整模型归 WS
-> （REQ-CORE-007，PO-05 已改归 WS-G2 技术核对）。
+> 边界：本文只给统一时间轴与资源操作对象的跨模块共享**字段基线**；计划/执行/补偿/恢复转移语义归
+> A-WS-M-T-02 / A-WS-M-S-02。文档内容 Diff 三态仍由 DE/ED/WS 既有状态机负责。
 
 <!-- RULE
 rule_id: BR-SYS-DATA-002
 主链路: DATA-MIGRATE
 域: DATA
 -->
-跨模块传递的共享实体（WorkspaceRef / DocRef / PendingDiff / TimelineEntry / ReferencePayload / OpenDocSnapshot / DiffProjection 等）及其枚举值集合
+跨模块传递的共享实体（WorkspaceRef / DocRef / PendingDiff / WorkspaceTimelineEntry / WorkspaceOperationPlan /
+WorkspaceOperationEntry / CreateDocumentBundle / ReferencePayload / OpenDocSnapshot / DiffProjection 等）及其枚举值集合
 （如 PendingDiff.status 的 pending/accepted/rejected/expired）以本文为唯一契约来源；任何模块不得
 在本文之外私自重定义跨模块共享结构的字段或枚举集合。状态转移语义、guard 与终态不可逆性不属本规则，
 归各 owner 模块状态机（A-SYS-M-S-01 及各模块 M-S）。
@@ -347,7 +386,10 @@ rule_id: BR-SYS-DATA-002
 |---|---|---|---|
 | schema_meta | schema_version（整数，单调递增）、applied_at | 记录当前 schema 版本，驱动迁移 | SYS（本文） |
 | pending_diffs | diff_id(PK)、workspace_id、rel_path、origin_module、status、created_at、payload_ref、effect_status（2026-07-20 新增）、terminal_reason（2026-07-20 新增，可空） | 持久化待裁决或已自动应用 diff；重启仅可恢复只读终态审阅：pending 必须 expired，awaiting_save 必须 discarded_on_abnormal_exit，裁决权与未确认效果均不得跨会话 | 基线 SYS / 完整列 WS·DE G2 |
-| timeline | entry_id(PK)、workspace_id、rel_path、version_seq、label、created_at | 持久化文档级时间轴 | 基线 SYS / 完整列 WS G2 |
+| timeline | entry_id(PK)、workspace_id、entry_kind、target_refs、version_seq、label、payload_ref、created_at | 持久化统一 WorkspaceTimeline | 基线 SYS / 完整列 WS G2 |
+| workspace_operation_plans | plan_id(PK)、workspace_id、plan_json、decision_request_id、idempotency_key、status、created_at、updated_at | 持久化不可变计划与状态；重启未终态统一 Interrupted | WS |
+| workspace_operation_entries | operation_id(PK)、plan_id、workspace_id、before_ref、after_ref、receipts_ref、restore_kind、final_status、created_at | 类型化资源操作历史与恢复入口 | WS |
+| create_document_bundles | plan_id(PK)、workspace_id、target_rel_path、initial_content_ref、operation_id、initial_diff_id、guard_ref、status | 关联资源创建、初始内容 Diff 与安全拒绝 guard | WS/DE/ED |
 
 **控制态扩展表（基线，2026-06-12 实现前置批量登记；均含 workspace_id 外键——workspace 级隔离，
 2026-06-11 人类决策；payload/定义载荷形状归各 owner 模块；列随实现期微调，迁移受
@@ -371,7 +413,7 @@ BR-SYS-PERSIST-001 约束）**
 
 - `schema_version` 单调递增，是迁移的唯一驱动；每次结构变更必须配一次版本递增 + 迁移步骤。
 - 迁移必须保持既有 `ed_open_tabs` / `ed_session_snapshots` / `pending_diffs` / `timeline` 持久化态不被破坏（向前迁移不丢数据）。
-- 应用重启后，已持久化的控制态（含已打开文档 LogicalState 镜像、未裁决 pending_diffs、时间轴）必须可恢复（REQ-SYS-002 验收）。
+- 应用重启后，已持久化的控制态必须按真实语义恢复：文档会话/时间轴可恢复；WorkspaceOperation 未终态统一 Interrupted，绝不自动执行；partial_failed 保留逐项收据供诊断与人工恢复。
 
 <!-- CHAIN
 chain_id: DATA-MIGRATE
@@ -579,3 +621,4 @@ status: mapped
 | 2026-07-30 | v1.11 | AG-RICH-BLOCK-STRUCTURED-EDIT-01：OpenDocSnapshot 增同次 ProseMirror `block_snapshots`；登记 AgentEditableBlockSnapshot 与 StructuredBlockEditPayload，锁定层级结构不展平、动态写能力、基线/指纹/节点 Schema 批原子应用及冲突安全的精确反向恢复。 |
 | 2026-08-13 | v1.13 | DIFF-STATE-COMPASS-01：PendingDiff 共享契约同步 BR-CORE-STATE-001~003——已有 LogicalState 预览但卡片仍 pending、无 LogicalState 仅挂载后接受原子落盘、pending 期间打开文档迁移为前者；移除“open_session 自动 accepted”的旧语义。 |
 | 2026-08-14 | v1.14 | AG-1.0-D1-SYS-SHARED-CONTRACT-01：新增 §3.1 Agent 1.0 共享运行时对象契约（RuntimeProfile/AgentSession/AgentTurn/IntentResult/CapabilityGrant/TaskRun/TaskStep/StructuredVisibleEvent/ExternalContentRef/MemorySelectionRef 的职责、身份、事件真值、隔离与迁移边界，不锁实现细节）；注册 BR-SYS-STATE-007/008、BR-SYS-DATA-007 与 X-SHARED-002；REQ_MAP 补齐 REQ-SYS-008~012；§9.1 登记冻结基线漂移债务（澄清终态、AgentSession 隔离键、意图/授权收窄、TaskRun 契约、外部内容/记忆引用）；§10 明确 D2/D3 设计输入。 |
+| 2026-08-21 | v1.15 | 工作区资源操作基线重构：共享契约新增 WorkspaceTimelineEntry、WorkspaceOperationPlan、WorkspaceOperationEntry、CreateDocumentBundle；schema 基线新增资源计划/历史/新建绑定表；重启未终态资源操作统一 Interrupted 且不自动执行。 |

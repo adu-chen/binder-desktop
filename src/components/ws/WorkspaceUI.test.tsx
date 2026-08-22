@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { REFERENCE_MIME } from "../../services/referencePayload";
 import { workspaceShell } from "../../store/workspaceShell";
 import { wsStore, type DocRefView } from "../../store/wsStore";
+import { edStore } from "../../store/edStore";
+import { tabsStore } from "../../store/tabsStore";
 import { buildTree } from "./FileTree";
 import { FileTreeNode, type TreeNode, type FileNodeState } from "./FileTreeNode";
 
@@ -20,9 +22,94 @@ vi.mock("../../services/wsService", () => ({
 vi.mock("../../services/edService", () => ({
   openDocument: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../../services/agService", () => ({
+  resolveDecision: vi.fn().mockResolvedValue({ taskRunId: "task", status: "cancelled" }),
+  resolveDecisionAndContinue: vi.fn(),
+}));
 
 import { createDoc, createFolder, deleteFolder } from "../../services/wsService";
+import { resolveDecisionAndContinue } from "../../services/agService";
+import { agStore } from "../../store/agStore";
+import { DecisionBar } from "../ag/DecisionBar";
 import { FileTree } from "./FileTree";
+
+function assertUnsavedTabCloseGuard() {
+  tabsStore.reset();
+  edStore.reset();
+  tabsStore.openDoc("draft.md");
+  edStore.loadDoc("draft.md", "尚未保存", "new-file");
+  edStore.setTabState("draft.md", "dirty");
+  const tab = tabsStore.getSnapshot().tabs[0];
+  const confirm = vi.spyOn(globalThis, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+  expect(tabsStore.close(tab.id)).toBe(false);
+  expect(tabsStore.getSnapshot().tabs).toHaveLength(1);
+  expect(edStore.getSnapshot().sessions["draft.md"]).toBeDefined();
+  expect(tabsStore.close(tab.id)).toBe(true);
+  expect(tabsStore.getSnapshot().tabs).toHaveLength(0);
+  expect(edStore.getSnapshot().sessions["draft.md"]).toBeUndefined();
+  expect(confirm).toHaveBeenCalledTimes(2);
+  confirm.mockRestore();
+}
+
+async function assertWorkspaceOperationDecisionProjection() {
+  agStore.reset();
+  agStore.setPendingDecision({
+      requestId: "decision-partial",
+      kind: "permission",
+      payload: {
+        workspaceOperationPlanId: "plan-partial",
+        summary: "删除资料目录",
+        operations: [{ itemId: "item-1", kind: "delete_resource", sourcePath: "资料", resourceKind: "folder" }],
+        consequences: {
+          recursive_count: 6,
+          affected_sessions: ["资料/a.md"],
+          affected_diffs: ["diff-1"],
+          affected_references: ["资料引用"],
+          recoverable: true,
+        },
+        recoverable: true,
+        failurePolicy: "fail_fast_compensate",
+      },
+  });
+  vi.mocked(resolveDecisionAndContinue).mockResolvedValue({
+      taskRunId: "task-partial",
+      status: "failed",
+      workspaceOperationReceipt: {
+        operation_id: "operation-partial",
+        plan_id: "plan-partial",
+        final_status: "partial_failed",
+        item_receipts: [{
+          item_id: "item-2",
+          seq: 1,
+          status: "failed",
+          error_message: "目标被外部占用",
+        }],
+        compensation_receipts: [{ item_id: "item-1", seq: 0, status: "compensated" }],
+      },
+  });
+
+  const view = render(<DecisionBar />);
+  expect(view.getByText("递归影响：6 个资源")).toBeTruthy();
+  expect(view.getByText(/受影响标签：资料\/a\.md/)).toBeTruthy();
+  expect(view.getByText(/受影响引用：资料引用/)).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(view.getByRole("button", { name: "确认并执行" }));
+  });
+
+  const messages = agStore.getSnapshot().sessions.flatMap((session) => session.messages);
+  const lastMessage = messages[messages.length - 1];
+  expect(lastMessage).toMatchObject({
+      role: "assistant",
+      error: true,
+      content: expect.stringContaining("partial_failed"),
+  });
+  expect(lastMessage?.content).toContain("目标被外部占用");
+  expect(agStore.getSnapshot().pendingDecision).toBeNull();
+  view.unmount();
+  agStore.reset();
+  vi.mocked(resolveDecisionAndContinue).mockReset();
+}
 
 // Migrated intact from src/components/ws/buildTree.test.ts.
 {
@@ -423,7 +510,7 @@ describe("FileTree「＋」新建下拉（WS-NEW-BUTTON-01）", () => {
     confirmSpy.mockRestore();
   });
 
-  it("目录右键「删除」：非空目录确认后递归删（mode=recursive）", () => {
+  it("目录右键「删除」：非空目录确认后递归删（mode=recursive）", async () => {
     const { container } = renderFileTree([dir("notes"), doc("notes/b.md"), doc("a.md")]);
     fireEvent.contextMenu(container.querySelector(".ftn-dir-row")!, { clientX: 1, clientY: 2 });
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -431,6 +518,9 @@ describe("FileTree「＋」新建下拉（WS-NEW-BUTTON-01）", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(mockedDeleteFolder).toHaveBeenCalledWith("notes", "recursive");
     confirmSpy.mockRestore();
+    assertUnsavedTabCloseGuard();
+    cleanup();
+    await assertWorkspaceOperationDecisionProjection();
   });
 });
 }

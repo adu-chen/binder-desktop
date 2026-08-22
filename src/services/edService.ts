@@ -117,6 +117,22 @@ export async function persistSessionSnapshot(snapshot: OpenDocSnapshot): Promise
   await callCommand("ed.persist_session_snapshot", { snapshot: normalized });
 }
 
+/** WorkspaceOperation 确认前的同步屏障：把所有内存 LogicalState 快照先落入控制库，
+ * 避免编辑器防抖窗口让后端把刚编辑的 dirty 目标误判为 clean。 */
+export async function flushOpenEditorSessionSnapshots(): Promise<void> {
+  const snapshots = edStore.getOpenSnapshots("active_editor_session");
+  await Promise.all(snapshots.map((snapshot) => persistSessionSnapshot(
+    makePersistedSnapshot(
+      snapshot.relPath,
+      snapshot.content,
+      snapshot.editFormat,
+      snapshot.dirty,
+      snapshot.sessionVersion,
+      snapshot.contentFormat,
+    ),
+  )));
+}
+
 export async function restoreSessionSnapshots(): Promise<OpenDocSnapshot[]> {
   const res = await callCommand<{ snapshots: OpenDocSnapshot[] }>("ed.list_session_snapshots", {});
   return Promise.all(res.snapshots.map(async (snapshot) => {

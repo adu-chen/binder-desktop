@@ -45,6 +45,62 @@ export interface AgentComposerDraft {
   prompt: string;
 }
 
+export interface WorkspaceReferenceMutation {
+  kind: "rename_resource" | "move_resource" | "delete_resource" | "discard_created_resource" | string;
+  source_rel_path?: string | null;
+  target_rel_path?: string | null;
+  resource_kind: "file" | "folder";
+}
+
+function resourcePathMatches(candidate: string, source: string, resourceKind: string): boolean {
+  return candidate === source || (resourceKind === "folder" && candidate.startsWith(`${source}/`));
+}
+
+function rewriteReferenceToken(
+  token: ReferenceTokenAttrs,
+  mutations: WorkspaceReferenceMutation[],
+): ReferenceTokenAttrs | null {
+  if (token.payload.kind !== "doc" && token.payload.kind !== "selection") return token;
+  let next = token;
+  for (const mutation of mutations) {
+    const source = mutation.source_rel_path ?? "";
+    const payload = next.payload;
+    if (payload.kind !== "doc" && payload.kind !== "selection") return next;
+    if (!source || !resourcePathMatches(payload.relPath, source, mutation.resource_kind)) continue;
+    if (mutation.kind === "delete_resource" || mutation.kind === "discard_created_resource") return null;
+    if ((mutation.kind === "rename_resource" || mutation.kind === "move_resource") && mutation.target_rel_path) {
+      const relPath = mutation.resource_kind === "folder"
+        ? `${mutation.target_rel_path}${payload.relPath.slice(source.length)}`
+        : mutation.target_rel_path;
+      const label = relPath.split("/").filter(Boolean).pop() ?? relPath;
+      next = {
+        ...next,
+        label,
+        payload: { ...payload, relPath, label },
+      } as ReferenceTokenAttrs;
+    }
+  }
+  return next;
+}
+
+function rewriteReferenceDocument(
+  node: JSONContent,
+  tokenById: Map<string, ReferenceTokenAttrs>,
+): JSONContent | null {
+  if (node.type === "referenceToken") {
+    const refId = typeof node.attrs?.refId === "string" ? node.attrs.refId : "";
+    const token = tokenById.get(refId);
+    return token ? { ...node, attrs: token } : null;
+  }
+  if (!node.content) return node;
+  return {
+    ...node,
+    content: node.content
+      .map((child) => rewriteReferenceDocument(child, tokenById))
+      .filter((child): child is JSONContent => Boolean(child)),
+  };
+}
+
 /** ToolCall 6 状态（参考稿 §6.2，视觉互斥）。 */
 export type ToolState =
   | "pending"
@@ -128,7 +184,7 @@ export interface TaskRunView {
 
 /** 回合实时当前动作（AG-1.0-TASKRUN-REWORK-IMP-UI-01 · step_progress，BR-SYS-STATE-008）。 */
 export interface TurnCurrentAction {
-  action: "reading" | "tool" | "generating" | "proposing" | "deciding";
+  action: "reading" | "tool" | "generating" | "proposing" | "deciding" | "previewing";
   label: string;
   detail?: string;
 }
@@ -371,6 +427,22 @@ export const agStore = {
   },
   clearComposerDraft(sessionId: string) {
     mapSession(sessionId, (s) => ({ ...s, composerDraft: emptyComposerDraft() }));
+  },
+  /** WorkspaceOperation 成功回执驱动引用同步：重命名/移动重绑路径，删除移除失效引用。 */
+  reconcileResourceReferences(mutations: WorkspaceReferenceMutation[]) {
+    if (!mutations.length) return;
+    setState({
+      sessions: state.sessions.map((session) => {
+        const draft = session.composerDraft;
+        if (!draft?.tokens.length) return session;
+        const tokens = draft.tokens
+          .map((token) => rewriteReferenceToken(token, mutations))
+          .filter((token): token is ReferenceTokenAttrs => Boolean(token));
+        const tokenById = new Map(tokens.map((token) => [token.refId, token]));
+        const doc = rewriteReferenceDocument(draft.doc, tokenById) ?? emptyComposerDraft().doc;
+        return { ...session, composerDraft: { ...draft, doc, tokens } };
+      }),
+    });
   },
 
   // ── 回合门控（SM-AG-01 投影，全局） ───────────────────────────────

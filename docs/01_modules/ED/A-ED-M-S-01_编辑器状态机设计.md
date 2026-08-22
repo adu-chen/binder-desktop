@@ -95,25 +95,32 @@ terminal_states: Closed
   用户显式选择
 - **test_matrix**：见 §5（强制覆盖上述 transitions 与 forbidden_transitions）
 
-### 2.1 未保存新建文档与转换目标会话承接（REQ-ED-010/014 / D-NEW-001~008，2026-08-14 D2 登记）
+### 2.1 CreateDocumentBundle 与转换目标会话（REQ-ED-010/014）
 
-承接 D-NEW-001~008 与 REQ-ED-010/014。未保存新建文档与转换目标副本**复用 SM-ED-01 会话机**，
-以「未保存新文档身份」扩展，不新增独立状态机：
+承接 REQ-ED-010/014 与 A-WS-M-S-02 SM-WS-04。新建文档和最小转换目标副本**复用 SM-ED-01 会话机**，
+但 ED 只在 WorkspaceOperation 已确认、重新核验成功且目标 DiskState 已创建后打开会话。
+不再存在“无 DocRef/无 DiskState 的未保存新文档身份”：
 
 | 场景 | SM-ED-01 承接 | 说明 |
 |---|---|---|
-| 预览成功开标签 | 新建/转换 Proposal 预览成功后，以**未保存新文档身份**进入 Ready（无 DocRef、无 DiskState、无文件树节点），ED 自动打开可编辑标签 | D-NEW-001/002；身份与目标路径/格式元数据归 WS 未保存元数据设计 |
-| 接受只裁决 | 用户接受由 DE 裁决（不重复应用内容），ED 不改变 LogicalState | D-NEW-001；三分流 BR-CORE-STATE-001 |
-| 拒绝（基准未变） | close + discard：丢弃逻辑文档与临时身份并关闭标签；非普通脏态关闭 | D-NEW-006 |
-| 基准推进 | 手动编辑或后续 Proposal 成功预览推进基准 → 原卡失效（DE），会话保留、可继续编辑/保存 | D-NEW-005；BR-CORE-STATE-001/003 |
-| 保存才建文件 | 用户保存时由 WS 以「创建」语义建立 DocRef 与磁盘文件（A-WS-M-S-01 §2.1），会话转入普通已保存会话 | D-NEW-002/004 |
-| 保存失败 | 保留未保存会话与内容、标签，不伪报已创建；路径冲突保留可重试 | D-NEW-007 |
-| 转换目标副本 | TXT→Markdown、Markdown→TXT 目标副本同样以未保存会话打开；来源不改写，Markdown→TXT 有损提示可见；HTML 与通用 DOCX 转换不产生本会话 | REQ-ED-014、REQ-WS-009 |
+| 创建成功开标签 | SM-WS-04 已创建空的真实目标后，ED 以 DocRef + DiskState 基线进入 Ready，自动打开可编辑标签 | TERM-WS-007；BR-WS-STATE-003 |
+| 初始内容投影 | DE 以创建后空内容与当前 session 版本为基准投影普通 Diff；成功后进入 Editing/dirty | BR-CORE-STATE-001；CreateDocumentBundle.operation_id 绑定 |
+| 接受只裁决 | 用户接受初始内容 Diff 时，DE 只改变卡片生命周期；ED 不重复应用内容，也不重复创建文件 | BR-CORE-STATE-001 |
+| 安全拒绝 | operation_id、资源身份、空文件 DiskState 与 LogicalState 版本均未推进时，WS 补偿删除本次创建文件；成功后 ED 关闭标签 | BR-WS-STATE-003 |
+| 基准推进 | 手动编辑、后续 Proposal、外部修改、重命名或移动任一发生 → 原卡失效，会话与真实文件保留 | BR-WS-STATE-003；BR-CORE-STATE-001/003 |
+| 保存 | 用户保存时按普通已存文档链写入目标 DiskState，不执行创建语义 | SM-WS-01 |
+| 转换目标副本 | TXT→Markdown、Markdown→TXT 也必须经 CreateDocumentBundle 先创建磁盘目标，再投影转换结果 Diff；来源不改写，Markdown→TXT 有损提示可见 | REQ-ED-014、REQ-WS-009 |
 
 <!-- REQ_MAP
 req_id: REQ-ED-010
 target_type: RULE
 target_id: BR-CORE-STATE-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-010
+target_type: RULE
+target_id: BR-WS-STATE-003
 status: mapped
 -->
 <!-- REQ_MAP
@@ -134,11 +141,15 @@ target_type: RULE
 target_id: BR-CORE-STATE-003
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-ED-014
+target_type: RULE
+target_id: BR-WS-STATE-003
+status: mapped
+-->
 
-> 迁移债务：现有 SM-ED-01 的 scope/context 以「已有 DocRef 的目标文档」为默认，未显式承载未保存新文档
-> 身份（无 DocRef、保存即创建）；实现时须扩展会话身份字段与保存入口，不得把未保存新文档伪装成
-> 文件树节点（REQ-ED-010 / D-NEW-002）。转换目标、多文档逐项（REQ-ED-016）与删除前置（REQ-ED-015）
-> 的专项状态机留待各自 P1 开放时建模，本文只登记本处语义承接点。
+> 迁移债务：删除旧的无 DocRef/无 DiskState 新建会话分支；打开与关闭必须由
+> SM-WS-04 的真实资源执行或补偿回执驱动。多文档逐项（REQ-ED-016）继续复用普通会话隔离语义。
 
 ## §3 跨模块转移契约（X-INTER-001：ED ↔ WS）
 
@@ -227,3 +238,4 @@ SM-WS-01 内部（Idle/Dirty/Saving/Saved/SaveError）归 A-WS-M-S-01，本文�
 | 2026-07-20 | v1.6 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：§3 新增「关闭前批量保存」「启动异常退出清算」两条 SYS→ED 跨模块转移点（均双侧就绪）；补充恢复顺序边界——异常退出清算先于会话恢复，dirty 持久化镜像不可信时改走磁盘态重建 |
 | 2026-08-13 | v1.7 | DIFF-STATE-COMPASS-01：SM-ED-01 增 `pendingDiffPromoted` 并承接 BR-CORE-STATE-001/003；已打开与 pending 后打开迁移的 diff 都在预览后保持 pending、绿色增量和用户裁决入口。 |
 | 2026-08-14 | v1.8 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 未保存新建文档与转换目标会话承接（D-NEW-001~008 / REQ-ED-010/014）——预览开标签、接受只裁决、拒绝丢弃、保存才建文件、保存失败保留；补 REQ-ED-010/014 的 REQ_MAP（BR-CORE-STATE-001/003、BR-SYS-STATE-008）；登记未保存身份迁移债务。 |
+| 2026-08-21 | v1.9 | WorkspaceOperation 基线同步：§2.1 替换为 CreateDocumentBundle 真实磁盘目标会话；确认后先创建、再开标签并投影初始内容 Diff，安全拒绝由 WS 补偿，保存不再承担创建语义。 |

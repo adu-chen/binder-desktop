@@ -4,7 +4,7 @@
 //! 必须在注册清单内且通过权限校验方可执行。清单 v1 覆盖文档列表/读取/搜索/块读取 + 非破坏性结构操作 + 修改建议。
 //!
 //! **执行实现**（read_doc/list_docs/search_text/list_blocks 调统一 AgentEditableSnapshot；
-//! move_doc/create_folder 经 WS 边界执行；import_image_asset 经 DOC/WS 受控复制；
+//! plan_workspace_operation 只生成 WorkspaceOperationPlan + DecisionRequest；import_image_asset 经 DOC/WS 受控复制；
 //! edit_blocked 结构化结束不可安全执行的编辑请求；propose_edit 产出 ChangeProposal→DE）归
 //! PI-AG-08B（与模型循环 PI-AG-11 配套，避免重复 lib.rs 既有 route_*）。本模块只持有注册与权限数据。
 
@@ -61,6 +61,7 @@ pub fn resolve_capability_grant(
             "list_tables",
             "list_images",
             "workspace_glob",
+            "propose_decision",
         ],
         _ => &[
             "read_doc",
@@ -72,6 +73,8 @@ pub fn resolve_capability_grant(
             "workspace_glob",
             "propose_edit",
             "edit_blocked",
+            "propose_decision",
+            "plan_workspace_operation",
         ],
     };
     let allowed_tools = if profile == AGENT_EDIT_1_0_PROFILE {
@@ -115,6 +118,14 @@ pub fn resolve_capability_grant(
         ])
         .unwrap_or_default(),
     );
+    let mut parameter_constraints = vec![
+        "active_workspace_only".to_string(),
+        "no_direct_document_write".to_string(),
+        "proposal_applies_on_user_confirm".to_string(),
+    ];
+    if intent.intent_type == IntentTypeV1::CreateDocument {
+        parameter_constraints.push("new_document_requires_workspace_operation_plan".to_string());
+    }
     CapabilityGrantV1 {
         version: "capability-grant-v1".to_string(),
         profile: profile.to_string(),
@@ -123,14 +134,7 @@ pub fn resolve_capability_grant(
         allowed_tools,
         target_scope,
         readable_scope,
-        parameter_constraints: vec![
-            "active_workspace_only".to_string(),
-            "no_direct_document_write".to_string(),
-            // AG-STRATEGY-02：目标硬锁已下沉调用时刻（workspace 边界 + base 有效 + DiffCard 确认），
-            // 移除旧硬约束 "proposal_target_must_match_intent"（模型不再自我设限跨文档/新建目标），
-            // 以提示性约束声明写入均须经用户确认。
-            "proposal_applies_on_user_confirm".to_string(),
-        ],
+        parameter_constraints,
         grant_hash,
     }
 }
@@ -172,6 +176,16 @@ pub fn validate_requested_tool_for_grant(
         }
     }
     if name == "propose_edit" {
+        if grant
+            .parameter_constraints
+            .iter()
+            .any(|constraint| constraint == "new_document_requires_workspace_operation_plan")
+        {
+            return ToolDecision::Reject(
+                "新建文档必须使用 plan_workspace_operation；确认后才建立真实资源并投影初始内容 Diff"
+                    .to_string(),
+            );
+        }
         let target = params
             .get("path")
             .and_then(|value| value.as_str())
@@ -187,9 +201,38 @@ pub fn validate_requested_tool_for_grant(
                 "agent-edit-1.0 尚未授权表格或图片高级编辑提案".to_string(),
             );
         }
-        // AG-STRATEGY-01：targetScope 硬锁取消——安全下沉到调用时刻校验（workspace 边界 +
-        // base 有效性 + 新建检测 base=empty，见 ag_propose_edit）+ DiffCard 确认；跨文档/新建
-        // 目标由执行层标注确认，不再按意图预判锁目标（延续词/复合意图/多文档联动不再被锁死）。
+        // targetScope 硬锁取消：内容安全由 workspace 边界、LogicalState 基线与 DiffCard 裁决承担；
+        // 资源新建/删除/重命名/移动不进入 propose_edit，统一走 WorkspaceOperationPlan 前置裁决。
+    }
+    if name == "plan_workspace_operation" {
+        let operations = params
+            .get("operations")
+            .and_then(|value| value.as_array())
+            .filter(|items| !items.is_empty());
+        let Some(operations) = operations else {
+            return ToolDecision::Reject(
+                "plan_workspace_operation.operations 必须是非空数组".to_string(),
+            );
+        };
+        let create_count = operations
+            .iter()
+            .filter(|item| item.get("kind").and_then(|value| value.as_str()) == Some("create_document"))
+            .count();
+        let initial_content = params
+            .get("initialContent")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty());
+        if create_count > 0 && (create_count != 1 || initial_content.is_none()) {
+            return ToolDecision::Reject(
+                "新建文档计划必须且只能包含一个 create_document，并提供确认前冻结的完整 initialContent"
+                    .to_string(),
+            );
+        }
+        if create_count == 0 && params.get("initialContent").is_some() {
+            return ToolDecision::Reject(
+                "initialContent 只能与单个 create_document 操作绑定".to_string(),
+            );
+        }
     }
     validate_tool(true, true, false)
 }
@@ -203,6 +246,8 @@ pub enum ToolPermission {
     StructureWrite,
     /// 写意图：产出修改建议走 DE diff（X-FORBID-006）；**非直接写盘**。
     WriteIntent,
+    /// 任务控制意图：只创建任务级确认点，不改变文档、Diff 或文件树。
+    TaskControl,
 }
 
 /// 工具定义（注册项）。
@@ -215,8 +260,8 @@ pub struct ToolDef {
 /// v1 工具集（A-AG-X-L-02 PI-AG-08）。
 ///
 /// propose_edit 标记 WriteIntent 表示其**执行**走 DE 修改建议路径，但它本身不直写盘
-/// （`direct_write_intent=false`）；move_doc/create_folder/import_image_asset 是文件树结构操作，
-/// 不直接修改文档内容。
+/// （`direct_write_intent=false`）；plan_workspace_operation 只生成前置裁决计划，不直写磁盘；
+/// import_image_asset 是受控复制白名单，不直接修改文档内容。
 pub const TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "read_doc",
@@ -247,12 +292,8 @@ pub const TOOLS: &[ToolDef] = &[
         permission: ToolPermission::ReadOnly,
     },
     ToolDef {
-        name: "move_doc",
-        permission: ToolPermission::StructureWrite,
-    },
-    ToolDef {
-        name: "create_folder",
-        permission: ToolPermission::StructureWrite,
+        name: "plan_workspace_operation",
+        permission: ToolPermission::TaskControl,
     },
     ToolDef {
         name: "import_image_asset",
@@ -267,8 +308,8 @@ pub const TOOLS: &[ToolDef] = &[
         permission: ToolPermission::WriteIntent,
     },
     ToolDef {
-        name: "create_doc",
-        permission: ToolPermission::StructureWrite,
+        name: "propose_decision",
+        permission: ToolPermission::TaskControl,
     },
 ];
 
@@ -336,29 +377,31 @@ pub fn tool_definitions_json(
         {
             "type": "function",
             "function": {
-                "name": "move_doc",
-                "description": "移动或重命名当前 workspace 内的文件。用于按内容分类整理文件、改名、移动到子目录。只改变文件树结构，不修改文档内容，不生成 DiffCard；目标已存在会失败，不覆盖。不得用于删除。",
+                "name": "plan_workspace_operation",
+                "description": "为工作区资源创建、建目录、重命名、移动或删除生成不可变操作计划和独立确认卡。工具成功只表示正在等待用户确认；确认前不修改磁盘，也不生成 DiffCard。确认后系统重新核验目标并直接执行。新建文档时必须同时提供 initialContent；系统确认后先创建真实文件，再把初始内容作为普通内容 Diff 投影。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "from_path": { "type": "string", "description": "源文件相对路径（相对 workspace 根）" },
-                        "to_path": { "type": "string", "description": "目标文件相对路径（相对 workspace 根）" }
+                        "operations": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "type": "string", "enum": ["create_document", "create_folder", "rename_resource", "move_resource", "delete_resource"] },
+                                    "sourcePath": { "type": "string", "description": "删除/重命名/移动的源资源相对路径" },
+                                    "targetPath": { "type": "string", "description": "创建/重命名/移动的目标资源相对路径" },
+                                    "resourceKind": { "type": "string", "enum": ["file", "folder"] },
+                                    "recursive": { "type": "boolean", "description": "删除目录时是否递归" }
+                                },
+                                "required": ["kind", "resourceKind"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "initialContent": { "type": "string", "description": "仅 create_document：确认前生成并冻结的新文档完整初始内容" }
                     },
-                    "required": ["from_path", "to_path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_folder",
-                "description": "在当前 workspace 内创建目录。用于文件整理前建立分类目录。目标已是目录时视为成功；目标为文件时失败。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "目录相对路径（相对 workspace 根）" }
-                    },
-                    "required": ["path"]
+                    "required": ["operations"],
+                    "additionalProperties": false
                 }
             }
         },
@@ -388,6 +431,38 @@ pub fn tool_definitions_json(
                         "reason": { "type": "string", "description": "面向用户的具体阻断原因与下一步" }
                     },
                     "required": ["code", "reason"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "propose_decision",
+                "description": "当且仅当任务无法在当前执行片段继续、且确实需要用户作权限授予、方案选择、范围确认或人工确认时，提出任务级确认卡。成功后当前执行片段立即结束并等待用户 confirm/cancel；它不修改文档、Diff 或文件树。不要用它替代普通编辑 DiffCard，也不要在调用成功后继续调用其他工具。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["permission", "plan_choice", "scope", "manual_confirm"],
+                            "description": "需要用户裁决的类别"
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "面向用户的简短裁决标题或问题"
+                        },
+                        "detail": {
+                            "type": "string",
+                            "description": "可选：作出裁决所需的具体上下文"
+                        },
+                        "options": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "可选：用户可选方案；未提供时使用确认/取消"
+                        }
+                    },
+                    "required": ["kind", "summary"],
+                    "additionalProperties": false
                 }
             }
         },
@@ -457,21 +532,6 @@ pub fn tool_definitions_json(
         {
             "type": "function",
             "function": {
-                "name": "create_doc",
-                "description": "在 workspace 内新建文档并写入初始内容，支持所有格式（.md / .txt / .docx / .html 等）。目标路径不存在则创建；已存在则报错不覆盖。.docx 文件会自动将内容转为 BDocx 富文档格式（纯文本按段落自动换行，HTML 内容保留结构化），创建后用户可在编辑器中打开直接使用 BDocx 编辑能力。.md/.txt 等纯文本格式直接写入。用于用户明确要求「新建文件」「创建文档」时直接创建，不经过 DiffCard 审阅。对已有文档的修改仍必须使用 propose_edit。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "新文档相对路径（相对 workspace 根）。扩展名决定格式：.md 为 Markdown，.docx 为 BDocx 富文档，.txt 为纯文本" },
-                        "content": { "type": "string", "description": "新文档的初始内容。.docx 格式支持 HTML 结构化内容（以 < 开头）或纯文本（自动按段落换行）；.md 格式写 Markdown 文本；.txt 格式写纯文本" }
-                    },
-                    "required": ["path", "content"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "propose_edit",
                 "description": "对文档提出待用户裁决的修改建议，不直接写盘。工具成功只表示 pending 建议卡已生成，不表示编辑器预览已应用、用户已接受或文件已保存；没有客户端状态回执时，回复只能说「已提出建议，待确认」。纯文本局部编辑使用 replace_block。当前 BDocx 的整篇重写只有运行时声明确认无表格且无图片时才可用 replace_document + 完整 HTML；否则 replace_document 会被后端拒绝，既有文字内容用 block_ops，表格/图片分别用 table_ops/image_ops。block_ops 只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交。可用 insert_before/insert_after/append 插入一个新的 heading 块；replace_node 必须保留既有块类型，不能把既有段落转换为标题。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档受保护结构。",
                 "parameters": propose_edit_parameters
@@ -506,7 +566,7 @@ mod tests {
 
     #[test]
     fn tools_registered_with_expected_permissions() {
-        assert_eq!(TOOLS.len(), 13);
+        assert_eq!(TOOLS.len(), 12);
         assert!(is_registered("read_doc"));
         assert!(is_registered("list_docs"));
         assert!(is_registered("search_text"));
@@ -514,12 +574,13 @@ mod tests {
         assert!(is_registered("list_tables"));
         assert!(is_registered("list_images"));
         assert!(is_registered("workspace_glob"));
-        assert!(is_registered("move_doc"));
-        assert!(is_registered("create_folder"));
+        assert!(!is_registered("move_doc"));
+        assert!(!is_registered("create_folder"));
         assert!(is_registered("import_image_asset"));
         assert!(is_registered("edit_blocked"));
         assert!(is_registered("propose_edit"));
-        assert!(is_registered("create_doc"));
+        assert!(is_registered("propose_decision"));
+        assert!(is_registered("plan_workspace_operation"));
         assert!(!is_registered("delete_file"));
         assert_eq!(
             lookup("read_doc").unwrap().permission,
@@ -534,16 +595,16 @@ mod tests {
             ToolPermission::ReadOnly
         );
         assert_eq!(
-            lookup("move_doc").unwrap().permission,
-            ToolPermission::StructureWrite
-        );
-        assert_eq!(
-            lookup("create_folder").unwrap().permission,
-            ToolPermission::StructureWrite
+            lookup("plan_workspace_operation").unwrap().permission,
+            ToolPermission::TaskControl
         );
         assert_eq!(
             lookup("propose_edit").unwrap().permission,
             ToolPermission::WriteIntent
+        );
+        assert_eq!(
+            lookup("propose_decision").unwrap().permission,
+            ToolPermission::TaskControl
         );
     }
 
@@ -556,8 +617,8 @@ mod tests {
     }
 
     #[test]
-    fn all_registered_tools_pass_validation_including_propose_edit() {
-        // 工具均合法放行：只读工具 + 结构操作 + propose_edit（产出修改建议，非直写文档内容，合法）。
+    fn all_registered_tools_pass_validation_including_task_decision() {
+        // 工具均合法放行：只读工具 + 结构操作 + 修改建议 + 任务级确认（均不直写文档内容）。
         for t in [
             "read_doc",
             "list_docs",
@@ -565,12 +626,11 @@ mod tests {
             "list_blocks",
             "list_tables",
             "list_images",
-            "move_doc",
-            "create_folder",
+            "plan_workspace_operation",
             "import_image_asset",
             "edit_blocked",
             "propose_edit",
-            "create_doc",
+            "propose_decision",
         ] {
             assert_eq!(
                 validate_requested_tool(t),
@@ -591,9 +651,9 @@ mod tests {
         let analyze_grant =
             resolve_capability_grant(AGENT_EDIT_1_0_PROFILE, "t-analyze", &analyze, &[]);
         assert!(analyze_grant.allows("read_doc"));
+        assert!(analyze_grant.allows("propose_decision"));
         assert!(!analyze_grant.allows("propose_edit"));
-        assert!(!analyze_grant.allows("create_doc"));
-        assert!(!analyze_grant.allows("move_doc"));
+        assert!(!analyze_grant.allows("plan_workspace_operation"));
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "propose_edit",
@@ -613,7 +673,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"read_doc"));
         assert!(!names.contains(&"propose_edit"));
-        assert!(!names.contains(&"create_doc"));
+        assert!(names.contains(&"propose_decision"));
+        assert!(!names.contains(&"plan_workspace_operation"));
 
         // P4 修复（AG-R2-01）：非寒暄意图 readable_scope 含 workspace_read_all，
         // read_doc 可读取 workspace 内其他文件（只读不授写）。
@@ -639,10 +700,29 @@ mod tests {
             ),
             ToolDecision::Reject(_)
         ));
+
+        let answer = super::super::context::resolve_intent_result(
+            "t-answer",
+            "你好",
+            None,
+            false,
+        );
+        let answer_grant =
+            resolve_capability_grant(AGENT_EDIT_1_0_PROFILE, "t-answer", &answer, &[]);
+        assert!(!answer_grant.allows("propose_decision"));
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "propose_decision",
+                &serde_json::json!({"kind":"manual_confirm", "summary":"确认"}),
+                &answer_grant,
+                "t-answer"
+            ),
+            ToolDecision::Reject(_)
+        ));
     }
 
     #[test]
-    fn create_document_grant_allows_only_empty_base_proposal() {
+    fn create_document_grant_uses_workspace_operation_plan_not_empty_base_proposal() {
         let intent = super::super::context::resolve_intent_result(
             "t-create",
             "新建一份会议纪要",
@@ -650,8 +730,7 @@ mod tests {
             false,
         );
         let grant = resolve_capability_grant(AGENT_EDIT_1_0_PROFILE, "t-create", &intent, &[]);
-        // AG-STRATEGY-01：CreateDocument 授予全量工具集（只读全量 + 提案组 + glob）；
-        // create_doc 是结构工具，创建文档走 propose_edit base=empty，不授予。
+        // CreateDocument 获得资源计划工具；初始内容在确认前冻结，不能再走 base=empty 提案。
         assert_eq!(
             grant.allowed_tools,
             vec![
@@ -663,37 +742,28 @@ mod tests {
                 "list_images",
                 "workspace_glob",
                 "propose_edit",
-                "edit_blocked"
+                "edit_blocked",
+                "propose_decision",
+                "plan_workspace_operation"
             ]
         );
         assert!(matches!(
             validate_requested_tool_for_grant(
-                "propose_edit",
+                "plan_workspace_operation",
                 &serde_json::json!({
-                    "path":"meeting.md",
-                    "operation":"replace_document",
-                    "content":"# 会议纪要"
+                    "operations":[{"kind":"create_document","targetPath":"meeting.md","resourceKind":"file"}],
+                    "initialContent":"# 会议纪要"
                 }),
                 &grant,
                 "t-create"
             ),
             ToolDecision::Allow
         ));
-        // AG-STRATEGY-01：targetScope 硬锁取消——workspace 内任意 path 可通过调用时刻校验
-        //（base 有效性 + 新建检测 + DiffCard 确认由执行层承担），不再按意图预判锁目标。
+        // 新建不能退回普通内容提案的空基准路径。
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "propose_edit",
-                &serde_json::json!({"path":"meeting.md","operation":"replace_block"}),
-                &grant,
-                "t-create"
-            ),
-            ToolDecision::Allow
-        ));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "create_doc",
-                &serde_json::json!({"path":"meeting.md"}),
+                &serde_json::json!({"path":"meeting.md","operation":"replace_document","content":"x"}),
                 &grant,
                 "t-create"
             ),
@@ -751,20 +821,39 @@ mod tests {
     }
 
     #[test]
-    fn structure_tool_schema_exposes_move_and_create_folder() {
+    fn propose_decision_schema_is_task_control_not_document_write() {
+        let defs = tool_definitions_json().unwrap();
+        let decision = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["function"]["name"] == "propose_decision")
+            .unwrap();
+        let parameters = &decision["function"]["parameters"];
+        assert_eq!(parameters["required"], serde_json::json!(["kind", "summary"]));
+        assert!(parameters["properties"]["kind"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("manual_confirm")));
+        assert!(decision["function"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("不修改文档、Diff 或文件树"));
+    }
+
+    #[test]
+    fn workspace_operation_schema_replaces_direct_structure_tools() {
         let defs = tool_definitions_json().unwrap();
         let arr = defs.as_array().unwrap();
-        let move_doc = arr
+        let operation = arr
             .iter()
-            .find(|d| d["function"]["name"] == "move_doc")
+            .find(|d| d["function"]["name"] == "plan_workspace_operation")
             .unwrap();
-        assert!(move_doc["function"]["parameters"]["properties"]["from_path"].is_object());
-        assert!(move_doc["function"]["parameters"]["properties"]["to_path"].is_object());
-        let create_folder = arr
-            .iter()
-            .find(|d| d["function"]["name"] == "create_folder")
-            .unwrap();
-        assert!(create_folder["function"]["parameters"]["properties"]["path"].is_object());
+        assert!(operation["function"]["parameters"]["properties"]["operations"].is_object());
+        assert!(operation["function"]["parameters"]["properties"]["initialContent"].is_object());
+        assert!(!arr.iter().any(|d| d["function"]["name"] == "move_doc"));
+        assert!(!arr.iter().any(|d| d["function"]["name"] == "create_folder"));
+        assert!(!arr.iter().any(|d| d["function"]["name"] == "create_doc"));
         let import_image = arr
             .iter()
             .find(|d| d["function"]["name"] == "import_image_asset")

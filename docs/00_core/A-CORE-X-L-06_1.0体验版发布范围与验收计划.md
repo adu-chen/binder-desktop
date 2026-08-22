@@ -48,7 +48,7 @@
 | workspace 生命周期与文件边界 | WS / SYS | WS L1/L2/L3、SYS 契约 | 可打开/切换/关闭 workspace；文件访问限定在当前 workspace；越界访问被拒绝 |
 | 编辑器核心编辑 | ED / WS | ED L1/L2/L3、WS 保存链 | 可打开、编辑、保存文本/Markdown；脏状态、保存失败、关闭/切换保护可用 |
 | DOCX 基础链路 | DOC / ED / PRV | DOC L1/L2/L3、PRV L1/L2/L3 | DOCX 预览与基础编辑链路可用于常见文档；失败态明确；不丢失原文件 |
-| Agent 面板 | AG / ENT / WS | AG L1/L2、A-AG-X-L-03、ENT 契约 | `agent-edit-1.0` 可理解当前 LogicalState/选区/显式只读引用，完成回答、分析、当前文档编辑和空基准新建提案；每轮有最小工具允许集，使用真实 GateOutcome/取消/唯一终态；所有写意图进入 Diff，失败不破坏文档 |
+| Agent 面板 | AG / ENT / WS | AG L1/L2、A-AG-X-L-04、A-WS-M-T-02/M-S-02、ENT 契约 | `agent-edit-1.0` 可理解当前 LogicalState/选区/显式只读引用，完成回答、分析和当前文档编辑；WorkspaceOperation 经独立 DecisionRequest 前置裁决，新建文档经 CreateDocumentBundle 先建真实目标再投影初始内容 Diff；每轮有最小工具允许集，使用真实 GateOutcome/取消/唯一终态；内容写意图进入 Diff，资源写意图进入 WorkspaceOperationPlan，失败不伪报成功 |
 | Diff Edit | DE / WS / ED | DE L1/L2/L3、三态模型 | AI 修改建议以 ChangeProposal/PendingDiff 呈现；已有 LogicalState 走预览→裁决→保存，无 LogicalState 走卡片挂载→接受落盘，pending 后打开必须迁移 |
 | AiGateway 托管模型 | CLOUD / GW / ENT / AG | 云端 L1、GW L1、A-SYS-I-P-03 | 1.0 默认经 AiGateway 调用 DeepSeek 官方 API；客户端不直连 provider、不持平台密钥 |
 | BYOK | GW / ENT / PORTAL | 云端 L1、GW L1、ENT 设计 | BYOK 密钥经 AiGateway 加密代持；BYOK 调用仍经 SubscriptionGate；客户端不持 provider 密钥 |
@@ -103,7 +103,7 @@
 | 门禁 | 验收要求 |
 |---|---|
 | 核心链路 | workspace → editor → Agent → Diff → accept/reject → save 连续可用 |
-| Agent Runtime | `agent-edit-1.0` 的 IntentResult、可信 Context/Prompt、逐回合工具授权、真实门禁、后端取消和唯一终态成立；回答/分析不产生写调用，新建文档也须先经空基准 Diff |
+| Agent Runtime | `agent-edit-1.0` 的 IntentResult、可信 Context/Prompt、逐回合工具授权、真实门禁、后端取消和唯一终态成立；回答/分析不产生写调用；WorkspaceOperation 只经 DecisionRequest 前置裁决后执行，新建文档按 CreateDocumentBundle 先建真实目标、再投影初始内容 Diff |
 | 数据安全 | AI 失败、Diff 应用失败、保存失败均不破坏原文件；无 LogicalState 的后台分支在用户接受前不落盘，已有 LogicalState 的分支仅保存可写盘 |
 | 模型链路 | AiGateway + DeepSeek 托管模型生产配置可用；BYOK 可用；错误码明确 |
 | 账号订阅 | 登录、会话、SubscriptionGate、用量展示可用；无订阅拒绝调用 |
@@ -156,3 +156,4 @@
 | 2026-08-06 | v1.1 | 记录人类决策：1.0 版本不单独实现应用原生菜单栏（§4 非阻断项补充；右键菜单体系改按 SYS 统一 ContextMenu 简化方案推进，不并入菜单栏） |
 | 2026-08-08 | v1.2 | 同步 AG 1.0 落地基线：Agent 发布阻断项收敛为 agent-edit-1.0 可靠当前文档编辑闭环；补充 IntentResult、可信 Context/Prompt、逐回合工具授权、真实门禁/取消/唯一终态和空基准新建提案验收；跨文档写入、文件自动整理、复杂 Planning、参考风格/排版与多 Agent 明确为非阻断且默认关闭 |
 | 2026-08-13 | v1.3 | DIFF-STATE-COMPASS-01：发布验收中的 Diff/保存主链按 BR-CORE-STATE-001~003 收敛；无 LogicalState 的挂载卡在接受前不得落盘，已有或打开后迁移出的 LogicalState 只能经保存写盘。 |
+| 2026-08-21 | v1.4 | WorkspaceOperation 发布验收同步：资源操作经 DecisionRequest 前置裁决、重新核验后直接写盘；新建改为 CreateDocumentBundle，废止空基准接受后创建链。 |

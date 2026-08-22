@@ -911,10 +911,6 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
         Value::String("replace_block".to_string()),
         Value::String("replace_document".to_string()),
     ];
-    // AG-DELETE-01：删除能力——delete_doc（文件）/ delete_folder（目录，recursive 默认 true）
-    // 生成删除确认卡（PendingDiff origin_module=AG_DELETE），用户接受后才执行删除（HITL）。
-    operations.push(Value::String("delete_doc".to_string()));
-    operations.push(Value::String("delete_folder".to_string()));
     operations.extend(
         value
             .document_operations
@@ -1397,7 +1393,7 @@ pub fn prompt_projection() -> Result<String, CapabilityValidationError> {
         .collect::<Vec<_>>()
         .join("；");
     Ok(format!(
-        "[当前 BDocx 编辑能力声明]\nmanifestId={} version={} sha256={}\n格式：editable_kind={} content_format={}。\n文档操作：{}。整篇改写路由以同一条当前文档运行时声明中的表格/图片状态为准：两者都不存在时，才可用 replace_document 提交完整 HTML；任一存在时，replace_document 被禁止，既有文字内容使用 block_ops，表格/图片分别使用 table_ops/image_ops。block_ops 必须基于活动 ProseMirror LogicalState，只命中 capabilities=replace_node 的内容块，原样带回 sessionVersion/contentHash、blockId、fingerprint、expectedNodeType 与 node attrs；容器/原子块只读，多块同批原子提交。新增 heading 块可用 insert_before/insert_after/append；replace_node 必须保留既有块类型，既有块的类型转换是人工专属。不得使用 replace_block 或原始 HTML 绕过受保护结构。\nStyleOp（range 为块内纯文本半开区间，单位={}，批内原子）：marks={}；blockAttrs={}；最多 {} 项。\nTableOperation（必须先 list_tables，并原样带回 sessionVersion/contentHash/tableId/fingerprint；还须服从当前 capabilities 与 moveDirections）：{}。\nImageOperation（必须先 list_images，并原样带回 sessionVersion/contentHash、稳定 imageId/当前 fingerprint、动态 capabilities/resizeBounds/moveDirections；插入还须带回 assetId/sourcePath/sourceHash；允许插入、删除、按宽度缩放、独立图片段落上下移动与 left/center/right 对齐；同一图片单批可各含至多一个 {}，{} 必须独占；禁止远程/绝对/越界来源且不得删除项目源文件）：{}。\n图片理解边界：list_images 只提供图片元数据与相邻文本语境，不提供图片像素、OCR 或视觉识别；不得把语境推断表述为看懂图片画面。workspace 内非受控图片先调用 import_image_asset 复制准备，不能用 move_doc 破坏源引用；确实无法安全提案时调用 edit_blocked 说明原因。\n人工专属、代理不可调用：{}。\nDiff 等级：replace_block={}；block_ops={}；replace_document={}；style_ops={}；table_ops={}；image_ops={}。\nDOCX 往返等级：{}。非 verified 项保存重开后可能变化；不得向用户声称完全保真。",
+        "[当前 BDocx 编辑能力声明]\nmanifestId={} version={} sha256={}\n格式：editable_kind={} content_format={}。\n文档操作：{}。整篇改写路由以同一条当前文档运行时声明中的表格/图片状态为准：两者都不存在时，才可用 replace_document 提交完整 HTML；任一存在时，replace_document 被禁止，既有文字内容使用 block_ops，表格/图片分别使用 table_ops/image_ops。block_ops 必须基于活动 ProseMirror LogicalState，只命中 capabilities=replace_node 的内容块，原样带回 sessionVersion/contentHash、blockId、fingerprint、expectedNodeType 与 node attrs；容器/原子块只读，多块同批原子提交。新增 heading 块可用 insert_before/insert_after/append；replace_node 必须保留既有块类型，既有块的类型转换是人工专属。不得使用 replace_block 或原始 HTML 绕过受保护结构。\nStyleOp（range 为块内纯文本半开区间，单位={}，批内原子）：marks={}；blockAttrs={}；最多 {} 项。\nTableOperation（必须先 list_tables，并原样带回 sessionVersion/contentHash/tableId/fingerprint；还须服从当前 capabilities 与 moveDirections）：{}。\nImageOperation（必须先 list_images，并原样带回 sessionVersion/contentHash、稳定 imageId/当前 fingerprint、动态 capabilities/resizeBounds/moveDirections；插入还须带回 assetId/sourcePath/sourceHash；允许插入、删除、按宽度缩放、独立图片段落上下移动与 left/center/right 对齐；同一图片单批可各含至多一个 {}，{} 必须独占；禁止远程/绝对/越界来源且不得删除项目源文件）：{}。\n图片理解边界：list_images 只提供图片元数据与相邻文本语境，不提供图片像素、OCR 或视觉识别；不得把语境推断表述为看懂图片画面。workspace 内非受控图片先调用 import_image_asset 复制准备，不得移动或删除源引用；确实无法安全提案时调用 edit_blocked 说明原因。\n人工专属、代理不可调用：{}。\nDiff 等级：replace_block={}；block_ops={}；replace_document={}；style_ops={}；table_ops={}；image_ops={}。\nDOCX 往返等级：{}。非 verified 项保存重开后可能变化；不得向用户声称完全保真。",
         value.manifest_id,
         value.version,
         manifest_sha256(),
