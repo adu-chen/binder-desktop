@@ -20,7 +20,7 @@ pub struct MemoryManageEntry {
 
 /**
  * @GOV
- * codes:    BR-AST-DATA-001-QUERY-AST-AST-MEMORY-001
+ * codes:    BR-AST-DATA-001-QUERY-AST-AST-MEMORY-004
  * type:     QUERY
  * chain:    AST-MEMORY
  * rules:    BR-AST-DATA-001
@@ -70,7 +70,7 @@ pub fn list_for_management(
 
 /**
  * @GOV
- * codes:    BR-SYS-DATA-007-QUERY-AST-AST-MEMORY-003
+ * codes:    BR-SYS-DATA-007-QUERY-AST-AST-MEMORY-003, BR-AST-DATA-001-QUERY-AST-AST-MEMORY-003
  * type:     QUERY
  * chain:    AST-MEMORY, REF-INJECT
  * rules:    BR-SYS-DATA-007, BR-AST-DATA-001

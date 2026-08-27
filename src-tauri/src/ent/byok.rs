@@ -107,7 +107,12 @@ pub async fn list_providers() -> Result<Vec<serde_json::Value>, IpcError> {
         ));
     }
     let body: serde_json::Value = resp.json().await.map_err(|e| {
-        IpcError::new("ENT_BYOK_GW_BAD_RESPONSE", &format!("BYOK 状态响应无法解析：{e}"), true, false)
+        IpcError::new(
+            "ENT_BYOK_GW_BAD_RESPONSE",
+            &format!("BYOK 状态响应无法解析：{e}"),
+            true,
+            false,
+        )
     })?;
     Ok(body
         .get("providers")
@@ -119,15 +124,22 @@ pub async fn list_providers() -> Result<Vec<serde_json::Value>, IpcError> {
 /// 删除指定 provider 的 BYOK 密钥（立即生效，A-GW-M-D-01 PI-GW-02）：客户端仅传 provider 标识
 /// （值域受限：deepseek/openai/anthropic，直接路径拼接，不引入额外依赖）。
 pub async fn delete_key(provider: &str) -> Result<(), IpcError> {
-    let url = format!("{}/byok/keys/{provider}", crate::ent::gateway::gw_base_url());
-    let resp = reqwest::Client::new().delete(&url).send().await.map_err(|e| {
-        IpcError::new(
-            "ENT_BYOK_GW_UNREACHABLE",
-            &format!("BYOK 删除失败：dev 网关不可达（{e}）。请先启动 cloud/dev-gateway。"),
-            true,
-            false,
-        )
-    })?;
+    let url = format!(
+        "{}/byok/keys/{provider}",
+        crate::ent::gateway::gw_base_url()
+    );
+    let resp = reqwest::Client::new()
+        .delete(&url)
+        .send()
+        .await
+        .map_err(|e| {
+            IpcError::new(
+                "ENT_BYOK_GW_UNREACHABLE",
+                &format!("BYOK 删除失败：dev 网关不可达（{e}）。请先启动 cloud/dev-gateway。"),
+                true,
+                false,
+            )
+        })?;
     if !resp.status().is_success() {
         return Err(IpcError::new(
             "ENT_BYOK_GW_HTTP",

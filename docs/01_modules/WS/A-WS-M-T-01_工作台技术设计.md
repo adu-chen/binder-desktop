@@ -44,6 +44,10 @@ forbidden: 历史记录, 版本历史, 历史栈, 版本栈, 历史链
 > 只作为 WS 内部原子执行器或人工文件树入口，不构成 Agent 授权链。Agent 资源操作唯一权威路径见
 > A-WS-M-T-02 / A-WS-M-S-02：WorkspaceOperationPlan → DecisionRequest → 重验 → 直接 DiskState。
 > 本文的 DocumentTimeline 作为统一 WorkspaceTimeline 的“文档内容条目”分支保留，不承担资源恢复。
+>
+> **人工文件树安全底线（2026-08-22，WS-RESOURCE-WRITE-GUARD-01）**：人工文件树入口保持直写，但删除/重命名
+> 必须遵守 BR-WS-STATE-009（dirty 会话阻断、删除快照 + WorkspaceTimeline 可恢复、受影响内容 Diff 失效）；
+> 低层 `delete_doc/delete_folder/rename_doc` 由安全记录器（workspace::operation::record_manual_*）编排。
 
 本文是 **WS 模块**的 L2 技术设计，是 WS 规则的唯一来源（SSOT，APC §2/§3.2），承接 WS L1
 （REQ-WS-001~005）：
@@ -96,6 +100,7 @@ chain_id: WS-FS
 主责模块: WS
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -153,6 +158,7 @@ chain_id: WS-DIFF-APPLY
 主责模块: WS
 status: active
 risk_tier: P1
+integration_test: src-tauri/tests/core_chain.rs::accepted_proposal_flows_through_de_to_ws_landing
 -->
 
 <!-- RULE
@@ -188,6 +194,7 @@ chain_id: WS-TIMELINE
 主责模块: WS
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -383,6 +390,7 @@ chain_id: WS-SAVE
 主责模块: WS
 status: active
 risk_tier: P1
+integration_test: src-tauri/src/ipc/system_tests.rs::accepted_draft_saves_to_disk_and_reopens_through_tauri_ipc
 -->
 
 <!-- RULE
@@ -456,3 +464,4 @@ save 保存必须原子可靠地写入活动 workspace 内的目标文档（路�
 | 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）复用 WS-FS `create_doc` / `create_folder`，前端激活区域与文件夹入口为 UI 层组合，无后端命令面变化。 |
 | 2026-08-13 | v1.10 | DIFF-STATE-COMPASS-01：WS-DIFF-APPLY/BR-WS-STATE-001 与 REQ-WS-003 显式承接 BR-CORE-STATE-002；仅持续无 LogicalState 的接受可写盘，pending 打开后的迁移必须改走 ED→WS-SAVE。 |
 | 2026-08-21 | v1.11 | 工作区资源操作基线重构：明确本文只保留内容保存、文档内容时间轴分支和低层原子 I/O；Agent 资源操作与统一 WorkspaceTimeline 增量 SSOT 迁移至 A-WS-M-T-02，旧直接文件命令不得作为 Agent 授权路径。 |
+| 2026-08-22 | v1.12 | WS-RESOURCE-WRITE-GUARD-01：§1 增补人工文件树安全底线——删除/重命名经 record_manual_* 安全记录器（dirty 阻断、快照/时间轴可恢复、Diff 失效），规则 SSOT 见 A-WS-M-T-02 BR-WS-STATE-009。 |

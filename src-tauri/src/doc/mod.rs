@@ -42,3 +42,6 @@ pub mod font_trace;
 
 /// DOC-BUNDLED-RUNTIME-01 · 包内 Pandoc / LibreOffice 的唯一资源解析与完整性校验。
 pub mod tool_runtime;
+
+/// Tauri command 适配与转换链编排。
+pub mod routes;

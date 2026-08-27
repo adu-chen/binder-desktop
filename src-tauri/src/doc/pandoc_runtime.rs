@@ -30,7 +30,7 @@ pub fn pandoc_available() -> bool {
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-002
+ * codes:    BR-DOC-DATA-001-DATA-DOC-DOC-CONVERT-012
  * type:     DATA
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-001

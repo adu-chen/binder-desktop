@@ -137,7 +137,7 @@ pub enum WorkspaceOperationEvent {
 
 /**
  * @GOV
- * codes:    BR-WS-STATE-003-RB-WS-WS-OPERATION-001
+ * codes:    BR-WS-STATE-003-RB-WS-WS-OPERATION-001, BR-WS-PERSIST-003-RB-WS-WS-OPERATION-001
  * type:     RB
  * chain:    WS-OPERATION
  * rules:    BR-WS-STATE-003, BR-WS-PERSIST-003
@@ -340,7 +340,7 @@ pub fn replace_payload<T: serde::Serialize>(
 
 /**
  * @GOV
- * codes:    BR-WS-DATA-003-EFFECT-WS-WS-TIMELINE-003
+ * codes:    BR-WS-DATA-003-EFFECT-WS-WS-TIMELINE-003, BR-WS-PERSIST-003-EFFECT-WS-WS-TIMELINE-003
  * type:     EFFECT
  * chain:    WS-TIMELINE
  * rules:    BR-WS-DATA-003, BR-WS-PERSIST-003
@@ -397,6 +397,122 @@ pub fn append_operation_entry(
         ],
     )?;
     Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-STATE-009-EFFECT-WS-WS-FS-009
+ * type:     EFFECT
+ * chain:    WS-FS, WS-TIMELINE
+ * rules:    BR-WS-STATE-009
+ * term_ref: TERM-WS-003, TERM-WS-006
+ * boundary: in=ManualDeleteTargetAndWorkspaceIdentity | out=RecoverableWorkspaceOperationEntry(rejectedWhenDirtySession)
+ *           | does_not=enter_decision_request
+ */
+/// WS-RESOURCE-WRITE-GUARD-01（F2，BR-WS-STATE-009）：人工文件树删除的安全记录器。
+/// 命中 dirty 会话 → 阻断（WS_DELETE_DIRTY_TARGET）；否则采集快照与基线 → 删除 → 写
+/// WorkspaceTimeline 条目（restore_kind=manual_delete，可恢复）→ 失效受影响内容 Diff。
+pub fn record_manual_delete(
+    conn: &Connection,
+    root: &Path,
+    workspace_id: &str,
+    rel_path: &str,
+    kind: WorkspaceResourceKind,
+    recursive: bool,
+) -> Result<WorkspaceOperationEntry, IpcError> {
+    let targets = vec![rel_path.to_string()];
+    if let Some(dirty) = has_dirty_affected_session(conn, workspace_id, &targets)? {
+        return Err(operation_error(
+            "WS_DELETE_DIRTY_TARGET",
+            &format!("目标存在未保存编辑的打开会话: {dirty}；请先保存或放弃后再删除"),
+            true,
+        ));
+    }
+    let operation_id = generated_id("wop-manual");
+    let snapshot_ref = format!("wop-snapshot-{operation_id}");
+    snapshot_resource(conn, root, rel_path, &snapshot_ref)?;
+    let before_manifest = capture_baseline(root, rel_path).ok();
+    let abs = super::resolve_in_workspace(root, rel_path)?;
+    if kind == WorkspaceResourceKind::Folder {
+        super::fileops::delete_folder(&abs, recursive)?;
+    } else {
+        super::fileops::delete_doc(&abs)?;
+    }
+    super::listing::cleanup_bdocx_under(root, rel_path)?;
+    let entry = WorkspaceOperationEntry {
+        entry_id: generated_id("wop-entry"),
+        operation_id,
+        plan_id: String::new(),
+        workspace_id: workspace_id.to_string(),
+        before_manifest: before_manifest.into_iter().collect(),
+        after_manifest: Vec::new(),
+        item_receipts: Vec::new(),
+        compensation_receipts: Vec::new(),
+        restore_kind: "manual_delete".into(),
+        restore_payload_ref: Some(snapshot_ref),
+        final_status: WorkspaceOperationStatus::Completed,
+        created_at: now_millis(),
+    };
+    append_operation_entry(conn, &entry)
+        .map_err(|error| db_error("记录人工删除时间轴条目失败", error))?;
+    invalidate_affected_diffs(conn, workspace_id, &targets, &entry.operation_id)?;
+    Ok(entry)
+}
+
+/**
+ * @GOV
+ * codes:    BR-WS-STATE-009-EFFECT-WS-WS-FS-010
+ * type:     EFFECT
+ * chain:    WS-FS, WS-TIMELINE
+ * rules:    BR-WS-STATE-009
+ * term_ref: TERM-WS-003, TERM-WS-006
+ * boundary: in=ManualRenameTargetAndWorkspaceIdentity | out=ReversableWorkspaceOperationEntry(rejectedWhenDirtySource)
+ *           | does_not=enter_decision_request
+ */
+/// WS-RESOURCE-WRITE-GUARD-01（F2，BR-WS-STATE-009）：人工文件树重命名/移动的安全记录器。
+/// 源路径命中 dirty 会话 → 阻断（WS_RENAME_DIRTY_TARGET）；否则执行重命名 → 写
+/// WorkspaceTimeline 条目（restore_kind=manual_rename）→ 失效源路径受影响内容 Diff。
+pub fn record_manual_rename(
+    conn: &Connection,
+    root: &Path,
+    workspace_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<WorkspaceOperationEntry, IpcError> {
+    let targets = vec![from.to_string()];
+    if let Some(dirty) = has_dirty_affected_session(conn, workspace_id, &targets)? {
+        return Err(operation_error(
+            "WS_RENAME_DIRTY_TARGET",
+            &format!("源目标存在未保存编辑的打开会话: {dirty}；请先保存或放弃后再重命名"),
+            true,
+        ));
+    }
+    let before_manifest = capture_baseline(root, from).ok();
+    super::fileops::rename_doc(
+        &super::resolve_in_workspace(root, from)?,
+        &super::resolve_in_workspace(root, to)?,
+    )?;
+    super::listing::update_bdocx_for_rename(root, from, to)?;
+    let after_manifest = capture_baseline(root, to).ok();
+    let operation_id = generated_id("wop-manual");
+    let entry = WorkspaceOperationEntry {
+        entry_id: generated_id("wop-entry"),
+        operation_id,
+        plan_id: String::new(),
+        workspace_id: workspace_id.to_string(),
+        before_manifest: before_manifest.into_iter().collect(),
+        after_manifest: after_manifest.into_iter().collect(),
+        item_receipts: Vec::new(),
+        compensation_receipts: Vec::new(),
+        restore_kind: "manual_rename".into(),
+        restore_payload_ref: None,
+        final_status: WorkspaceOperationStatus::Completed,
+        created_at: now_millis(),
+    };
+    append_operation_entry(conn, &entry)
+        .map_err(|error| db_error("记录人工重命名时间轴条目失败", error))?;
+    invalidate_affected_diffs(conn, workspace_id, &targets, &entry.operation_id)?;
+    Ok(entry)
 }
 
 pub fn load_operation_entry(
@@ -496,11 +612,12 @@ pub fn restore_intents_from_entry(
             false,
         ));
     }
-    let plan = load_plan(conn, &entry.plan_id)
-        .map_err(|error| db_error("读取历史资源操作计划失败", error))?
-        .ok_or_else(|| {
-            operation_error("WS_OPERATION_NOT_FOUND", "历史资源操作计划不存在", false)
-        })?;
+    // WS-RESOURCE-WRITE-GUARD-01（F2）：人工文件树条目（plan_id 为空）不依赖计划，
+    // 仅凭 before/after_manifest 与 restore_payload_ref 构造反向意图。
+    let plan = match load_plan(conn, &entry.plan_id) {
+        Ok(Some(plan)) => plan,
+        Ok(None) | Err(_) => return manual_restore_intents(entry),
+    };
     let compensated = entry
         .compensation_receipts
         .iter()
@@ -649,6 +766,66 @@ pub fn restore_intents_from_entry(
             WorkspaceOperationKind::DiscardCreatedResource => continue,
         };
         intents.push(intent);
+    }
+    if intents.is_empty() {
+        return Err(operation_error(
+            "WS_OPERATION_NOT_RECOVERABLE",
+            "该资源操作没有可生成的新恢复计划",
+            false,
+        ));
+    }
+    Ok(intents)
+}
+
+/// WS-RESOURCE-WRITE-GUARD-01（F2）：人工文件树条目的反向恢复意图构造。
+/// manual_delete → RestoreResource（按 before_manifest + 快照）；manual_rename → 反向 RenameResource。
+fn manual_restore_intents(
+    entry: &WorkspaceOperationEntry,
+) -> Result<Vec<WorkspaceOperationIntent>, IpcError> {
+    let mut intents = Vec::new();
+    match entry.restore_kind.as_str() {
+        "manual_delete" => {
+            let snapshot_ref = entry.restore_payload_ref.clone().ok_or_else(|| {
+                operation_error(
+                    "WS_OPERATION_NOT_RECOVERABLE",
+                    "人工删除条目缺少恢复快照",
+                    false,
+                )
+            })?;
+            for baseline in &entry.before_manifest {
+                intents.push(WorkspaceOperationIntent {
+                    kind: WorkspaceOperationKind::RestoreResource,
+                    source_path: None,
+                    target_path: Some(baseline.rel_path.clone()),
+                    resource_kind: baseline.resource_kind,
+                    recursive: baseline.resource_kind == Some(WorkspaceResourceKind::Folder),
+                    restore_payload_ref: Some(snapshot_ref.clone()),
+                });
+            }
+        }
+        "manual_rename" => {
+            for (before, after) in entry
+                .before_manifest
+                .iter()
+                .zip(entry.after_manifest.iter())
+            {
+                intents.push(WorkspaceOperationIntent {
+                    kind: WorkspaceOperationKind::RenameResource,
+                    source_path: Some(after.rel_path.clone()),
+                    target_path: Some(before.rel_path.clone()),
+                    resource_kind: after.resource_kind,
+                    recursive: false,
+                    restore_payload_ref: None,
+                });
+            }
+        }
+        _ => {
+            return Err(operation_error(
+                "WS_OPERATION_NOT_RECOVERABLE",
+                "该历史条目不提供资源恢复",
+                false,
+            ))
+        }
     }
     if intents.is_empty() {
         return Err(operation_error(
@@ -885,6 +1062,42 @@ pub fn compensate_create_document_open_failure(
     workspace: &WorkspaceRef,
     plan_id: &str,
 ) -> Result<WorkspaceOperationEntry, IpcError> {
+    compensate_create_document_preprojection_failure(
+        conn,
+        workspace,
+        plan_id,
+        "open-failed",
+        "open_failed_compensated",
+        "discard_created_resource",
+        "打开失败",
+    )
+}
+
+pub fn compensate_create_document_projection_preflight_failure(
+    conn: &Connection,
+    workspace: &WorkspaceRef,
+    plan_id: &str,
+) -> Result<WorkspaceOperationEntry, IpcError> {
+    compensate_create_document_preprojection_failure(
+        conn,
+        workspace,
+        plan_id,
+        "projection-preflight-failed",
+        "projection_failed_compensated",
+        "create_document_projection_failure",
+        "投影前置失败",
+    )
+}
+
+fn compensate_create_document_preprojection_failure(
+    conn: &Connection,
+    workspace: &WorkspaceRef,
+    plan_id: &str,
+    failure_suffix: &str,
+    terminal_bundle_status: &str,
+    restore_kind: &str,
+    failure_label: &str,
+) -> Result<WorkspaceOperationEntry, IpcError> {
     let mut bundle = load_create_document_bundle(conn, plan_id)
         .map_err(|error| db_error("读取新建文档组合失败", error))?
         .ok_or_else(|| {
@@ -898,7 +1111,7 @@ pub fn compensate_create_document_open_failure(
     {
         return Err(operation_error(
             "WS_CREATE_BUNDLE_IDENTITY_MISMATCH",
-            "新建文档打开失败补偿只允许处理本 workspace 刚创建的资源",
+            format!("新建文档{failure_label}补偿只允许处理本 workspace 刚创建的资源"),
             false,
         ));
     }
@@ -929,7 +1142,7 @@ pub fn compensate_create_document_open_failure(
     if &current != expected {
         return Err(operation_error(
             "WS_CREATE_BUNDLE_BASELINE_ADVANCED",
-            "新建文档打开失败后磁盘基线已变化，不能自动删除",
+            format!("新建文档{failure_label}后磁盘基线已变化，不能自动删除"),
             false,
         ));
     }
@@ -959,7 +1172,7 @@ pub fn compensate_create_document_open_failure(
         )?;
         return Err(error);
     }
-    let compensation_operation_id = format!("{operation_id}-open-failed");
+    let compensation_operation_id = format!("{operation_id}-{failure_suffix}");
     let entry = WorkspaceOperationEntry {
         entry_id: generated_id("wop-entry"),
         operation_id: compensation_operation_id,
@@ -971,7 +1184,7 @@ pub fn compensate_create_document_open_failure(
             &bundle.target.rel_path,
         )?],
         item_receipts: vec![WorkspaceOperationItemReceipt {
-            item_id: format!("{}-open-failed", bundle.plan_id),
+            item_id: format!("{}-{failure_suffix}", bundle.plan_id),
             seq: 0,
             status: WorkspaceOperationItemStatus::Compensated,
             error_code: None,
@@ -980,26 +1193,29 @@ pub fn compensate_create_document_open_failure(
             completed_at: now_millis(),
         }],
         compensation_receipts: Vec::new(),
-        restore_kind: "discard_created_resource".into(),
+        restore_kind: restore_kind.into(),
         restore_payload_ref: None,
         final_status: WorkspaceOperationStatus::FailedCompensated,
         created_at: now_millis(),
     };
-    bundle.status = "open_failed_compensated".into();
+    bundle.status = terminal_bundle_status.into();
     if let Err(error) =
         persist_bundle_compensation(conn, &entry, &bundle, bundle.initial_diff_id.as_deref())
     {
         std::fs::write(&abs, rollback_bytes).map_err(|restore_error| {
             operation_error(
                 "WS_CREATE_BUNDLE_PARTIAL_FAILED",
-                format!("记录打开失败补偿历史失败且恢复文件失败: {error}; {restore_error}"),
+                format!("记录{failure_label}补偿历史失败且恢复文件失败: {error}; {restore_error}"),
                 false,
             )
         })?;
         if was_bdocx {
             super::listing::mark_bdocx(Path::new(&workspace.root_path), &bundle.target.rel_path)?;
         }
-        return Err(db_error("记录打开失败补偿历史失败，文件已恢复", error));
+        return Err(db_error(
+            &format!("记录{failure_label}补偿历史失败，文件已恢复"),
+            error,
+        ));
     }
     Ok(entry)
 }
@@ -1737,7 +1953,7 @@ fn validate_intent(
 
 /**
  * @GOV
- * codes:    BR-WS-STATE-003-API-WS-WS-OPERATION-001, BR-WS-OBS-002-API-WS-WS-OPERATION-001
+ * codes:    BR-WS-STATE-003-API-WS-WS-OPERATION-001, BR-WS-DATA-003-API-WS-WS-OPERATION-001, BR-WS-OBS-002-API-WS-WS-OPERATION-001
  * type:     API
  * chain:    WS-OPERATION
  * rules:    BR-WS-STATE-003, BR-WS-DATA-003, BR-WS-OBS-002
@@ -1911,7 +2127,9 @@ fn decision_identity(
     Ok(())
 }
 
-fn has_dirty_affected_session(
+/// WS-RESOURCE-WRITE-GUARD-01（F2，BR-WS-STATE-009）：人工文件树资源操作复用的脏会话核验。
+/// 返回命中的第一个 dirty 会话 rel_path（None 表示无 dirty 会话）。
+pub fn has_dirty_affected_session(
     conn: &Connection,
     workspace_id: &str,
     targets: &[String],
@@ -1936,7 +2154,8 @@ fn current_baselines(
         .collect()
 }
 
-fn snapshot_resource(
+/// WS-RESOURCE-WRITE-GUARD-01（F2，BR-WS-STATE-009）：采集单个资源的可恢复快照到 snapshot_ref。
+pub fn snapshot_resource(
     conn: &Connection,
     root: &Path,
     rel_path: &str,
@@ -2241,7 +2460,9 @@ fn load_outcome(
         .transpose()
 }
 
-fn invalidate_affected_diffs(
+/// WS-RESOURCE-WRITE-GUARD-01（F2，BR-WS-STATE-009）：使目标路径下有效内容 Diff 失效，
+/// 返回失效 diff_id 列表。
+pub fn invalidate_affected_diffs(
     conn: &Connection,
     workspace_id: &str,
     targets: &[String],
@@ -2314,7 +2535,7 @@ fn entry_from_receipts(
 
 /**
  * @GOV
- * codes:    BR-WS-STATE-003-EFFECT-WS-WS-OPERATION-003, BR-WS-PERSIST-003-EFFECT-WS-WS-OPERATION-003, BR-WS-OBS-002-EFFECT-WS-WS-OPERATION-002
+ * codes:    BR-WS-STATE-003-EFFECT-WS-WS-OPERATION-003, BR-WS-DATA-003-EFFECT-WS-WS-OPERATION-003, BR-WS-OBS-002-EFFECT-WS-WS-OPERATION-003, BR-WS-PERSIST-003-EFFECT-WS-WS-OPERATION-003
  * type:     EFFECT
  * chain:    WS-OPERATION
  * rules:    BR-WS-STATE-003, BR-WS-DATA-003, BR-WS-OBS-002, BR-WS-PERSIST-003
@@ -3223,6 +3444,68 @@ mod tests {
         assert!(load_operation_entry(&conn, &compensation.operation_id)
             .unwrap()
             .is_some());
+
+        std::fs::write(root.join("project.md"), b"").unwrap();
+        let projection_baseline = capture_baseline(&root, "project.md").unwrap();
+        let projection_entry = WorkspaceOperationEntry {
+            entry_id: "entry-create-projection".into(),
+            operation_id: "operation-create-projection".into(),
+            plan_id: "plan-create-projection".into(),
+            workspace_id: workspace.workspace_id.clone(),
+            before_manifest: vec![WorkspaceResourceBaseline {
+                rel_path: "project.md".into(),
+                exists: false,
+                resource_kind: None,
+                size: None,
+                modified_at: None,
+                content_hash: None,
+                manifest_hash: None,
+            }],
+            after_manifest: vec![projection_baseline],
+            item_receipts: Vec::new(),
+            compensation_receipts: Vec::new(),
+            restore_kind: "workspace_operation".into(),
+            restore_payload_ref: None,
+            final_status: WorkspaceOperationStatus::Completed,
+            created_at: now_millis(),
+        };
+        append_operation_entry(&conn, &projection_entry).unwrap();
+        upsert_create_document_bundle(
+            &conn,
+            &CreateDocumentBundle {
+                plan_id: "plan-create-projection".into(),
+                workspace_id: workspace.workspace_id.clone(),
+                target: DocRef {
+                    workspace_id: workspace.workspace_id.clone(),
+                    rel_path: "project.md".into(),
+                    doc_type: "md".into(),
+                },
+                initial_content_ref: "initial-content".into(),
+                operation_id: Some("operation-create-projection".into()),
+                initial_diff_id: None,
+                rejection_guard_ref: None,
+                status: "resource_created".into(),
+            },
+        )
+        .unwrap();
+        let projection_compensation = compensate_create_document_projection_preflight_failure(
+            &conn,
+            &workspace,
+            "plan-create-projection",
+        )
+        .unwrap();
+        assert!(!root.join("project.md").exists());
+        assert_eq!(
+            projection_compensation.restore_kind,
+            "create_document_projection_failure"
+        );
+        assert_eq!(
+            load_create_document_bundle(&conn, "plan-create-projection")
+                .unwrap()
+                .unwrap()
+                .status,
+            "projection_failed_compensated"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3272,6 +3555,109 @@ mod tests {
             !root.join("a.md").exists(),
             "读取历史只生成新计划输入，不得直接恢复磁盘"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // covers: BR-WS-STATE-009
+    // WS-RESOURCE-WRITE-GUARD-01（F2）：人工删除 dirty 会话阻断；非 dirty 时写可恢复快照 +
+    // WorkspaceTimeline 条目（manual_delete，plan_id 空），恢复生成 RestoreResource 意图。
+    #[test]
+    fn manual_delete_blocks_dirty_and_writes_recoverable_entry() {
+        let (conn, ws, root) = temp_workspace("manual-delete");
+        std::fs::write(root.join("a.md"), "内容").unwrap();
+        conn.execute(
+            "INSERT INTO ed_session_snapshots \
+             (workspace_id,rel_path,content,edit_format,dirty,session_version,content_hash,updated_at) \
+             VALUES ('ws-1','a.md','内容','markdown',1,1,'h1',0)",
+            [],
+        )
+        .unwrap();
+        let err = record_manual_delete(
+            &conn,
+            &root,
+            &ws.workspace_id,
+            "a.md",
+            WorkspaceResourceKind::File,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "WS_DELETE_DIRTY_TARGET");
+        assert!(root.join("a.md").exists(), "dirty 阻断不得删除文件");
+
+        conn.execute("DELETE FROM ed_session_snapshots", [])
+            .unwrap();
+        let entry = record_manual_delete(
+            &conn,
+            &root,
+            &ws.workspace_id,
+            "a.md",
+            WorkspaceResourceKind::File,
+            false,
+        )
+        .unwrap();
+        assert!(!root.join("a.md").exists(), "非 dirty 删除成功");
+        assert_eq!(entry.restore_kind, "manual_delete");
+        assert!(entry.plan_id.is_empty(), "人工条目不绑定 plan");
+        assert!(
+            entry.restore_payload_ref.is_some(),
+            "删除必须保存可恢复快照"
+        );
+        let loaded = load_operation_entry(&conn, &entry.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.entry_id, entry.entry_id);
+        let intents = restore_intents_from_entry(&conn, &entry).unwrap();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].kind, WorkspaceOperationKind::RestoreResource);
+        assert_eq!(intents[0].target_path.as_deref(), Some("a.md"));
+        assert!(intents[0].restore_payload_ref.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // covers: BR-WS-STATE-009
+    // WS-RESOURCE-WRITE-GUARD-01（F2）：人工重命名源 dirty 阻断；成功写 manual_rename 条目、
+    // 失效受影响内容 Diff，恢复生成反向重命名意图。
+    #[test]
+    fn manual_rename_blocks_dirty_and_invalidates_affected_diffs() {
+        let (conn, ws, root) = temp_workspace("manual-rename");
+        std::fs::write(root.join("a.md"), "内容").unwrap();
+        conn.execute(
+            "INSERT INTO ed_session_snapshots \
+             (workspace_id,rel_path,content,edit_format,dirty,session_version,content_hash,updated_at) \
+             VALUES ('ws-1','a.md','内容','markdown',1,1,'h1',0)",
+            [],
+        )
+        .unwrap();
+        let err = record_manual_rename(&conn, &root, &ws.workspace_id, "a.md", "b.md").unwrap_err();
+        assert_eq!(err.code, "WS_RENAME_DIRTY_TARGET");
+        assert!(root.join("a.md").exists(), "dirty 阻断不得重命名");
+
+        conn.execute("DELETE FROM ed_session_snapshots", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO pending_diffs \
+             (diff_id,workspace_id,rel_path,origin_module,status,payload_ref,created_at) \
+             VALUES ('d1','ws-1','a.md','AG','pending','pl1',0)",
+            [],
+        )
+        .unwrap();
+        let entry = record_manual_rename(&conn, &root, &ws.workspace_id, "a.md", "b.md").unwrap();
+        assert!(!root.join("a.md").exists());
+        assert!(root.join("b.md").exists());
+        assert_eq!(entry.restore_kind, "manual_rename");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM pending_diffs WHERE diff_id='d1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "expired", "重命名后受影响 Diff 必须失效");
+        let intents = restore_intents_from_entry(&conn, &entry).unwrap();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].kind, WorkspaceOperationKind::RenameResource);
+        assert_eq!(intents[0].source_path.as_deref(), Some("b.md"));
+        assert_eq!(intents[0].target_path.as_deref(), Some("a.md"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -104,7 +104,10 @@ pub fn resolve_capability_grant(
     // P4 修复（AG-R2-01）：非寒暄意图下，只读范围放宽到 workspace 内全部文件（只读不授写）。
     // X-FORBID-004 本即限定"只读工具限定 workspace 内"——此前实现收得过窄（仅当前文档），
     // 导致用户"找原文本比对"等合法只读请求被拒。target_scope 仍仅当前文档，写入不受影响。
-    if !matches!(intent.intent_type, IntentTypeV1::Answer | IntentTypeV1::Clarify) {
+    if !matches!(
+        intent.intent_type,
+        IntentTypeV1::Answer | IntentTypeV1::Clarify
+    ) {
         readable_scope.push("workspace_read_all".to_string());
     }
     // 逐回合授权内容 hash（P8 修复）：由 profile + intent_type + 允许工具集 + 目标集派生，
@@ -216,7 +219,9 @@ pub fn validate_requested_tool_for_grant(
         };
         let create_count = operations
             .iter()
-            .filter(|item| item.get("kind").and_then(|value| value.as_str()) == Some("create_document"))
+            .filter(|item| {
+                item.get("kind").and_then(|value| value.as_str()) == Some("create_document")
+            })
             .count();
         let initial_content = params
             .get("initialContent")
@@ -701,12 +706,7 @@ mod tests {
             ToolDecision::Reject(_)
         ));
 
-        let answer = super::super::context::resolve_intent_result(
-            "t-answer",
-            "你好",
-            None,
-            false,
-        );
+        let answer = super::super::context::resolve_intent_result("t-answer", "你好", None, false);
         let answer_grant =
             resolve_capability_grant(AGENT_EDIT_1_0_PROFILE, "t-answer", &answer, &[]);
         assert!(!answer_grant.allows("propose_decision"));
@@ -830,7 +830,10 @@ mod tests {
             .find(|d| d["function"]["name"] == "propose_decision")
             .unwrap();
         let parameters = &decision["function"]["parameters"];
-        assert_eq!(parameters["required"], serde_json::json!(["kind", "summary"]));
+        assert_eq!(
+            parameters["required"],
+            serde_json::json!(["kind", "summary"])
+        );
         assert!(parameters["properties"]["kind"]["enum"]
             .as_array()
             .unwrap()

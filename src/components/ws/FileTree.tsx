@@ -3,7 +3,7 @@ import { useWsStore, wsStore, type DocRefView } from "../../store/wsStore";
 import { loadDocs, createDoc, createFolder, renameDoc, deleteDoc, deleteFolder, searchDocs, type SearchHitDto } from "../../services/wsService";
 import { openDocument } from "../../services/edService";
 import { createDocxDraft } from "../../services/docService";
-import { edStore, useEdStore } from "../../store/edStore";
+import { edStore, isDirtyTabState, useEdStore } from "../../store/edStore";
 import { useDeStore } from "../../store/deStore";
 import { tabsStore } from "../../store/tabsStore";
 import { exportDoc } from "../../services/prvService";
@@ -51,6 +51,22 @@ export function buildTree(docs: DocRefView[]): TreeNode[] {
   }
   sortTree(root);
   return root.children!;
+}
+
+/**
+ * WS-RESOURCE-WRITE-GUARD-01（F3）：列出 path 前缀（含自身）下存在未保存修改（dirty）的
+ * 打开文档会话。删除/重命名前提示，配合后端 WS_DELETE_DIRTY_TARGET / WS_RENAME_DIRTY_TARGET 硬阻断。
+ */
+function dirtyDocTabsUnder(pathPrefix: string): string[] {
+  return tabsStore
+    .getSnapshot()
+    .tabs.filter((tab) => {
+      if (tab.kind !== "doc") return false;
+      if (tab.path !== pathPrefix && !tab.path.startsWith(`${pathPrefix}/`)) return false;
+      const session = edStore.getSnapshot().sessions[tab.path];
+      return !!session && isDirtyTabState(session.tabState);
+    })
+    .map((tab) => tab.path);
 }
 
 /** 同级排序：目录在前，再按名（mono 列表的稳定视觉）。 */
@@ -237,9 +253,17 @@ export function FileTree() {
   };
 
   // 重命名：ws.rename_doc → 刷新；若重命名的是当前打开文档则重开新路径。
+  // WS-RESOURCE-WRITE-GUARD-01（F3）：源路径存在 dirty 会话时先提示（未保存编辑将丢失）；后端另有硬阻断。
   const submitRename = async (from: string, name: string) => {
     const to = name.trim();
     if (!to || to === from) return closeOverlays();
+    const dirtyPaths = dirtyDocTabsUnder(from);
+    if (
+      dirtyPaths.length &&
+      !window.confirm(`「${from}」有未保存修改的会话：${dirtyPaths.join("、")}。重命名将丢失这些未保存修改，仍继续？`)
+    ) {
+      return;
+    }
     try {
       const renamed = await renameDoc(from, to);
       await loadDocs();
@@ -277,9 +301,15 @@ export function FileTree() {
   };
 
   // 删除：确认 → ws.delete_doc → 刷新；若删的是当前打开文档则清空编辑器。
+  // WS-RESOURCE-WRITE-GUARD-01（F3）：删除前提示 dirty 会话（未保存修改将丢失）；删除已记录
+  // 可恢复快照（后端写 WorkspaceTimeline），不再表述为"不可撤销"；后端另有 WS_DELETE_DIRTY_TARGET 硬阻断。
   const doDelete = async (path: string) => {
     setMenu(null);
-    if (!window.confirm(`删除「${path}」？此操作不可撤销。`)) return;
+    const dirtyPaths = dirtyDocTabsUnder(path);
+    const message = dirtyPaths.length
+      ? `删除「${path}」？有未保存修改的会话：${dirtyPaths.join("、")}，删除将丢失这些修改（文件快照会保留在时间轴）。`
+      : `删除「${path}」？此操作会记录到工作区时间轴，可从时间轴恢复。`;
+    if (!window.confirm(message)) return;
     try {
       await deleteDoc(path);
       if (edStore.getSnapshot().openPath === path) edStore.reset();
@@ -292,10 +322,15 @@ export function FileTree() {
 
   // 删除目录（WS-DIR-DELETE-01，两级）：空目录直接删（mode=empty，无需确认）；非空目录确认后递归删。
   // 空判断基于 docs 投影（无 dir/ 前缀条目）；删除后精确关闭被删目录下的标签与编辑器会话（不误伤其他目录未保存编辑）。
+  // WS-RESOURCE-WRITE-GUARD-01（F3）：删除前提示目录下 dirty 会话（未保存修改将丢失）；快照保留在时间轴。
   const doDeleteFolder = async (path: string) => {
     setMenu(null);
     const isEmpty = !docs.some((d) => d.relPath.startsWith(`${path}/`));
-    if (!isEmpty && !window.confirm(`将删除文件夹「${path}」及其中所有内容，此操作不可撤销。`)) return;
+    const dirtyPaths = dirtyDocTabsUnder(path);
+    const message = dirtyPaths.length
+      ? `将删除文件夹「${path}」及其中所有内容？有未保存修改的会话：${dirtyPaths.join("、")}，删除将丢失这些修改（快照保留在时间轴）。`
+      : `将删除文件夹「${path}」及其中所有内容？此操作会记录到工作区时间轴，可从时间轴恢复。`;
+    if ((!isEmpty || dirtyPaths.length) && !window.confirm(message)) return;
     try {
       await deleteFolder(path, isEmpty ? "empty" : "recursive");
       const prefix = `${path}/`;

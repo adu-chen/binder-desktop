@@ -86,7 +86,7 @@ pub fn resolve_resource(filename: &str) -> Option<PathBuf> {
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-003
+ * codes:    BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-016, BR-DOC-DATA-003-IO-DOC-DOC-CONVERT-016
  * type:     IO
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-002, BR-DOC-DATA-003

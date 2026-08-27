@@ -9,6 +9,9 @@
 
 use crate::ipc::IpcError;
 
+/// Tauri command 适配层。
+pub mod routes;
+
 /// 枚举本地已注册字体族名（只读）。
 ///
 /// - macOS：CTFontManagerCopyAvailableFontFamilyNames 返回全部已注册字体族（系统 + 用户安装）。

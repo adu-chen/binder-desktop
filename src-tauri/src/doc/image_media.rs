@@ -35,7 +35,7 @@ pub struct ProjectImageMaterialization {
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-009, BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-010
+ * codes:    BR-DOC-DATA-002-DATA-DOC-DOC-CONVERT-009, BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-009
  * type:     DATA
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-002, BR-DOC-DATA-003
@@ -332,7 +332,7 @@ fn read_project_image(
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-002-GUARD-DOC-DOC-CONVERT-011, BR-WS-DATA-001-GUARD-DOC-DOC-CONVERT-001
+ * codes:    BR-DOC-DATA-002-GUARD-DOC-DOC-CONVERT-011, BR-WS-DATA-001-GUARD-DOC-DOC-CONVERT-011
  * type:     GUARD
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-002, BR-WS-DATA-001
@@ -566,7 +566,7 @@ fn import_external_project_image(
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-015, BR-WS-DATA-001-GUARD-DOC-DOC-CONVERT-002
+ * codes:    BR-DOC-DATA-002-IO-DOC-DOC-CONVERT-015, BR-WS-DATA-001-IO-DOC-DOC-CONVERT-015
  * type:     IO
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-002, BR-WS-DATA-001
@@ -1178,6 +1178,48 @@ pub fn verify_docx_images(
                     ));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// 递归授权编辑媒体缓存中的文件进入 asset 协议 scope。只开放文件，不开放目录。
+pub(crate) fn authorize_media_files(
+    app: &tauri::AppHandle,
+    dir: &std::path::Path,
+) -> Result<(), IpcError> {
+    use tauri::Manager;
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        IpcError::new(
+            "DOC_IMAGE_MEDIA_AUTHORIZE_FAILED",
+            &format!("读取 BDocx 编辑媒体目录失败: {error}"),
+            true,
+            false,
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            IpcError::new(
+                "DOC_IMAGE_MEDIA_AUTHORIZE_FAILED",
+                &format!("枚举 BDocx 编辑媒体失败: {error}"),
+                true,
+                false,
+            )
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            authorize_media_files(app, &path)?;
+        } else if path.is_file() {
+            app.asset_protocol_scope()
+                .allow_file(&path)
+                .map_err(|error| {
+                    IpcError::new(
+                        "DOC_IMAGE_MEDIA_AUTHORIZE_FAILED",
+                        &format!("授权 BDocx 编辑媒体失败: {error}"),
+                        true,
+                        false,
+                    )
+                })?;
         }
     }
     Ok(())

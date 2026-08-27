@@ -82,7 +82,7 @@ pub fn ingest(
 
 /**
  * @GOV
- * codes:    BR-KB-DATA-001-QUERY-KB-KB-RETRIEVE-001
+ * codes:    BR-KB-DATA-001-QUERY-KB-KB-RETRIEVE-002
  * type:     QUERY
  * chain:    KB-RETRIEVE
  * rules:    BR-KB-DATA-001

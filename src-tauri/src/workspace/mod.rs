@@ -30,6 +30,9 @@ pub mod fileops;
 /// PI-WS-06 · WorkspaceOperation 前置裁决、执行、补偿与 WorkspaceTimeline 资源条目。
 pub mod operation;
 
+/// Tauri command 适配与 workspace 状态机编排。
+pub mod routes;
+
 fn escape_error(rel_path: &str) -> IpcError {
     IpcError::new(
         "WS_PATH_ESCAPE",

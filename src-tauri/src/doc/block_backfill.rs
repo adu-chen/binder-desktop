@@ -24,7 +24,7 @@ fn gen_block_id() -> String {
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-001
+ * codes:    BR-DOC-DATA-003-DATA-DOC-DOC-CONVERT-011
  * type:     DATA
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-003
@@ -257,7 +257,7 @@ pub enum AnchorDecision {
 
 /**
  * @GOV
- * codes:    BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-002
+ * codes:    BR-DOC-DATA-003-GUARD-DOC-DOC-CONVERT-015
  * type:     GUARD
  * chain:    DOC-CONVERT
  * rules:    BR-DOC-DATA-003

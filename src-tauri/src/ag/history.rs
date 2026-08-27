@@ -61,9 +61,17 @@ pub struct PersistedChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TurnSegment {
-    Text { text: String },
-    Tool { #[serde(rename = "toolCallId")] tool_call_id: String },
-    Diff { #[serde(rename = "diffId")] diff_id: String },
+    Text {
+        text: String,
+    },
+    Tool {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+    },
+    Diff {
+        #[serde(rename = "diffId")]
+        diff_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +161,7 @@ fn normalize_mode(mode: &str) -> &str {
 
 /**
  * @GOV
- * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-002
+ * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-030
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
@@ -386,7 +394,7 @@ pub fn list_turns(
 
 /**
  * @GOV
- * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-004
+ * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-031
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001

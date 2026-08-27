@@ -12,3 +12,6 @@ pub mod capture;
 
 /// PI-AST-03 · 记忆注入供给（BR-AST-DATA-002）。
 pub mod supply;
+
+/// Tauri command 适配层。
+pub mod routes;

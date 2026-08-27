@@ -4,6 +4,9 @@
 //! 物理传输机制（Channel<T> vs event，SY-02）与序列化标量为实现选型（A 类债务）。
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+mod system_tests;
 use serde_json::Value;
 use std::collections::HashSet;
 

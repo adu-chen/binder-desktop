@@ -112,7 +112,12 @@ pub fn delete_folder(abs_path: &Path, recursive: bool) -> Result<(), IpcError> {
         return Err(IpcError::new("WS_NOT_FOUND", "目录不存在", false, false));
     }
     if !abs_path.is_dir() {
-        return Err(IpcError::new("WS_EXISTS", "目标已存在且不是目录", false, false));
+        return Err(IpcError::new(
+            "WS_EXISTS",
+            "目标已存在且不是目录",
+            false,
+            false,
+        ));
     }
     if recursive {
         std::fs::remove_dir_all(abs_path).map_err(|e| io_err("删除目录", e))

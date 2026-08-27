@@ -42,6 +42,7 @@ import {
   parseStructuredBlockEditPayload,
   projectAgentEditableBlocks,
 } from "./edBlockOps";
+import type { DiffProjectionDto } from "../types/diffProjection";
 
 /**
  * AG 模块 Service 层。
@@ -65,30 +66,6 @@ export type AgTurnEvent =
 
 export const AGENT_EDIT_RUNTIME_PROFILE = "agent-edit-1.0" as const;
 
-type AgentEditPatchKind = "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
-
-interface AgentDiffProjection {
-  diff_id: string;
-  rel_path: string;
-  patch_kind: AgentEditPatchKind;
-  block_id?: string | null;
-  block_index?: number | null;
-  before_text: string;
-  after_text: string;
-  location_label: string;
-  draft_mode: "current_editor" | "open_session" | "background";
-  snapshot_source: "active_editor" | "active_editor_session" | "open_editor_session" | "disk_snapshot";
-  base_session_version?: number | null;
-  base_content_hash?: string | null;
-  style_ops?: unknown;
-  block_ops?: unknown;
-  table_ops?: unknown;
-  image_ops?: unknown;
-  preview_checkpoint_required?: boolean;
-  // AG-TASK-01 F1b：批次元数据（整篇对齐分批）。
-  batch?: { id: string; index: number; total: number };
-}
-
 let seq = 0;
 /** 当前处于澄清等待（非终态）的回合，供用户补充输入发起新回合前先取消（BR-SYS-STATE-007）。 */
 let clarifyingTurn: { sessionId: string; turnId: string } | null = null;
@@ -98,7 +75,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function parseDiffProjectionResult(result: string): AgentDiffProjection | null {
+function parseDiffProjectionResult(result: string): DiffProjectionDto | null {
   try {
     const parsed = JSON.parse(result);
     if (!isRecord(parsed) || !isRecord(parsed.projection)) return null;
@@ -136,7 +113,11 @@ function parseDiffProjectionResult(result: string): AgentDiffProjection | null {
       block_ops: p.block_ops,
       table_ops: p.table_ops,
       image_ops: p.image_ops,
-      preview_checkpoint_required: parsed.preview_checkpoint_required === true,
+      batch: isRecord(p.batch) && typeof p.batch.id === "string" && typeof p.batch.index === "number" && typeof p.batch.total === "number"
+        ? { id: p.batch.id, index: p.batch.index, total: p.batch.total }
+        : undefined,
+      preview_checkpoint_required: p.preview_checkpoint_required === true,
+      cross_doc: typeof p.cross_doc === "boolean" ? p.cross_doc : null,
     };
   } catch {
     return null;
@@ -727,6 +708,19 @@ export async function refreshSessionTaskRuns(sessionId: string): Promise<void> {
   }
 }
 
+function resolvedDecisionPostProcessingError(cause: unknown, taskRunId: string) {
+  const value = cause && typeof cause === "object"
+    ? cause as { code?: unknown; message?: unknown }
+    : null;
+  return {
+    code: typeof value?.code === "string" ? value.code : "AG_DECISION_POST_PROCESSING_FAILED",
+    message: typeof value?.message === "string" ? value.message : String(cause),
+    cause,
+    decisionResolved: true as const,
+    taskRunId,
+  };
+}
+
 /** AG-1.0-TASKRUN-REWORK-IMP-UI-01：任务级裁决（TERM-AG-017，三层分离）——
  * confirm → TaskRun Executing（可自动下一片段）；cancel → Cancelled。返回已裁决的 run 身份。 */
 export async function resolveDecision(
@@ -753,43 +747,48 @@ export async function resolveDecision(
     workspace_operation_receipt?: WorkspaceOperationReceiptDto | null;
     workspace_operation_items?: WorkspaceOperationItemDto[] | null;
     create_document_bundle?: CreateDocumentBundleDto | null;
+    already_resolved?: boolean;
   }>("ag.resolve_decision", {
     requestId,
     outcome,
   });
-  let createDocumentDiffId: string | undefined;
-  if (result.workspace_operation_receipt) await loadDocs();
-  for (const diffId of result.workspace_operation_receipt?.invalidated_diff_ids ?? []) {
-    deStore.expireLocal(diffId, {
-      expiredReason: "document_revision_advanced",
-      errorCode: "resource_baseline_changed",
-    });
-  }
-  if (result.workspace_operation_items) {
-    const completed = new Set(
-      result.workspace_operation_receipt?.item_receipts
-        .filter((receipt) => receipt.status === "completed")
-        .map((receipt) => receipt.item_id) ?? [],
-    );
-    for (const receipt of result.workspace_operation_receipt?.compensation_receipts ?? []) {
-      if (receipt.status === "compensated") completed.delete(receipt.item_id);
+  try {
+    let createDocumentDiffId: string | undefined;
+    if (result.workspace_operation_receipt) await loadDocs();
+    for (const diffId of result.workspace_operation_receipt?.invalidated_diff_ids ?? []) {
+      deStore.expireLocal(diffId, {
+        expiredReason: "document_revision_advanced",
+        errorCode: "resource_baseline_changed",
+      });
     }
-    const effectiveItems = result.workspace_operation_items.filter((item) => completed.has(item.item_id));
-    agStore.reconcileResourceReferences(effectiveItems);
-    await reconcileWorkspaceOperationTabs(
-      effectiveItems,
-      Boolean(result.create_document_bundle),
-    );
+    if (result.workspace_operation_items) {
+      const completed = new Set(
+        result.workspace_operation_receipt?.item_receipts
+          .filter((receipt) => receipt.status === "completed")
+          .map((receipt) => receipt.item_id) ?? [],
+      );
+      for (const receipt of result.workspace_operation_receipt?.compensation_receipts ?? []) {
+        if (receipt.status === "compensated") completed.delete(receipt.item_id);
+      }
+      const effectiveItems = result.workspace_operation_items.filter((item) => completed.has(item.item_id));
+      agStore.reconcileResourceReferences(effectiveItems);
+      await reconcileWorkspaceOperationTabs(
+        effectiveItems,
+        Boolean(result.create_document_bundle),
+      );
+    }
+    if (result.create_document_bundle) {
+      createDocumentDiffId = await projectCreateDocumentBundle(result.create_document_bundle);
+    }
+    return {
+      taskRunId: result.task_run_id,
+      status: result.status,
+      workspaceOperationReceipt: result.workspace_operation_receipt ?? undefined,
+      createDocumentDiffId,
+    };
+  } catch (cause) {
+    throw resolvedDecisionPostProcessingError(cause, result.task_run_id);
   }
-  if (result.create_document_bundle) {
-    createDocumentDiffId = await projectCreateDocumentBundle(result.create_document_bundle);
-  }
-  return {
-    taskRunId: result.task_run_id,
-    status: result.status,
-    workspaceOperationReceipt: result.workspace_operation_receipt ?? undefined,
-    createDocumentDiffId,
-  };
 }
 
 interface CreateDocumentBundleDto {
@@ -849,7 +848,8 @@ interface CreateDocumentProjectionResult {
   source_turn_id?: string;
   already_projected?: boolean;
   projection_failed_compensated?: boolean;
-  projection?: AgentDiffProjection;
+  error?: unknown;
+  projection?: DiffProjectionDto;
 }
 
 async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Promise<string | undefined> {
@@ -858,6 +858,12 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Pro
   try {
     await openDocument(relPath);
   } catch (openError) {
+    console.error("[create-document-trace]", {
+      phase: "open_document",
+      planId: bundle.plan_id,
+      relPath,
+      error: openError,
+    });
     try {
       await dispatchCall("ws.compensate_create_document_open_failure", { planId: bundle.plan_id });
       const tab = tabsStore.getSnapshot().tabs.find((candidate) => candidate.kind === "doc" && candidate.path === relPath);
@@ -887,8 +893,16 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Pro
       baseContentHash: session.contentHash,
     });
   } catch (projectionError) {
+    console.error("[create-document-trace]", {
+      phase: "project_initial_content",
+      planId: bundle.plan_id,
+      relPath,
+      error: projectionError,
+    });
     try {
-      await dispatchCall("ws.compensate_create_document_open_failure", { planId: bundle.plan_id });
+      await dispatchCall("ws.compensate_create_document_projection_preflight_failure", {
+        planId: bundle.plan_id,
+      });
       const tab = tabsStore.getSnapshot().tabs.find((candidate) => candidate.kind === "doc" && candidate.path === relPath);
       if (tab) tabsStore.close(tab.id, { force: true });
       await loadDocs();
@@ -907,7 +921,11 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Pro
     ));
     if (tab) tabsStore.close(tab.id, { force: true });
     await loadDocs();
-    return "projection-failed-compensated";
+    throw {
+      code: "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED",
+      message: "初始内容投影失败，已安全撤销创建",
+      cause: projected.error,
+    };
   }
   if (!projected.diff_id) {
     throw { code: "WS_CREATE_BUNDLE_DIFF_MISSING", message: "新文档初始内容未生成可审阅 Diff" };
@@ -1330,10 +1348,11 @@ export interface AssistResponse {
  * codes:    BR-AG-STATE-003-EFFECT-AG-AG-ASSIST-002
  * type:     EFFECT
  * chain:    AG-ASSIST
- * rules:    BR-AG-STATE-003, BR-AG-VERIFY-001
+ * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
  * boundary: in=AssistReq
  *           | out=AssistResponse(candidatesOrInternalFailureReasonPreserved)
+ *           | delegate=ag_request_assist
  *           | does_not=swallow_invoke_error_as_reasonless_empty_state
  */
 export async function requestAssist(req: AssistReq): Promise<AssistResponse> {
@@ -1500,7 +1519,7 @@ export async function startTurn(
 
   const onEvent = new Channel<AgTurnEvent>();
   // propose_edit 的权威投影来自后端 tool_result.projection；diff_proposed 只负责通知展示。
-  const pendingDiffProjections = new Map<string, AgentDiffProjection>();
+  const pendingDiffProjections = new Map<string, DiffProjectionDto>();
   // 同轮多个同名工具按事件到达顺序配对（AG-MSG-RENDER-01 · BR-AG-UI-001）：tool_request 入队 id，
   // tool_result 出队按 id 精确置终态，避免 name+executing 首配错乱。
   const pendingToolIds: string[] = [];

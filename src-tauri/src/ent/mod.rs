@@ -12,3 +12,6 @@ pub mod byok;
 
 /// PI-ENT-02 · 用量与订阅状态呈现，服务端唯一数据源（BR-ENT-DATA-002）。
 pub mod usage;
+
+/// Tauri BYOK 与模型目录 commands。
+pub mod commands;

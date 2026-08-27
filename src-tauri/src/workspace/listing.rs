@@ -251,7 +251,9 @@ pub fn list_docs_children_json(root: &Path, rel_dir: &str) -> Result<String, Ipc
     let meta = std::fs::metadata(&dir_path).map_err(|_| {
         IpcError::new(
             "WS_LIST_DIR_MISSING",
-            &format!("目录不存在：{rel_dir}；请先用 list_docs() 查看概览或 list_docs(path=...) 逐层展开"),
+            &format!(
+                "目录不存在：{rel_dir}；请先用 list_docs() 查看概览或 list_docs(path=...) 逐层展开"
+            ),
             false,
             false,
         )
@@ -862,7 +864,7 @@ mod tests {
         let sub = items.iter().find(|i| i["rel_path"] == "top/sub").unwrap();
         assert_eq!(sub["is_dir"], true);
         assert_eq!(sub["file_count"], 2); // b.md + c.md 子树
-        // 根级（空 path 语义在 tool_exec 处理；此处验证目录一层不递归）不包含 deep。
+                                          // 根级（空 path 语义在 tool_exec 处理；此处验证目录一层不递归）不包含 deep。
         assert!(!items.iter().any(|i| i["rel_path"] == "top/sub/deep"));
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -900,11 +902,17 @@ mod tests {
         assert!(!wildcard_match("?.md", "ab.md"));
 
         let all_txt = glob_files(&tmp, "*.txt").unwrap();
-        assert_eq!(all_txt.len(), 2, "txt 文件应匹配 2 个（跳隐藏）: {all_txt:?}");
+        assert_eq!(
+            all_txt.len(),
+            2,
+            "txt 文件应匹配 2 个（跳隐藏）: {all_txt:?}"
+        );
         assert!(all_txt.iter().all(|e| !e.is_dir));
         let fable = glob_files(&tmp, "*寓言*").unwrap();
         assert!(fable.iter().any(|e| e.rel_path == "寓言/小马.txt"));
-        assert!(fable.iter().any(|e| e.rel_path == "寓言/寓言故事/井底之光.txt"));
+        assert!(fable
+            .iter()
+            .any(|e| e.rel_path == "寓言/寓言故事/井底之光.txt"));
         let _ = fs::remove_dir_all(&tmp);
     }
 

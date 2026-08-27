@@ -60,7 +60,7 @@ fn blocks_overlap(a: &[String], b: &[String]) -> bool {
 
 /**
  * @GOV
- * codes:    BR-DE-DATA-003-GUARD-DE-DE-DIFF-001
+ * codes:    BR-DE-DATA-003-GUARD-DE-DE-DIFF-003
  * type:     GUARD
  * chain:    DE-DIFF
  * rules:    BR-DE-DATA-003

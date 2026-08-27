@@ -77,6 +77,7 @@ chain_id: IPC-CALL
 主责模块: SYS
 status: active
 risk_tier: P1
+integration_test: src-tauri/src/ipc/system_tests.rs::accepted_draft_saves_to_disk_and_reopens_through_tauri_ipc
 -->
 
 <!-- RULE

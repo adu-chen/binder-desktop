@@ -482,7 +482,11 @@ pub fn read_editable_snapshot(
         None,
         None,
         // 原生 docx 只读投影：editable_kind 覆盖为 "html"（≠bdocx），不进入 BDocx 编辑能力判定。
-        if source == "doc_convert_readonly" { Some("html") } else { None },
+        if source == "doc_convert_readonly" {
+            Some("html")
+        } else {
+            None
+        },
     ))
 }
 
@@ -963,8 +967,7 @@ mod tests {
     fn native_docx_reads_as_readonly_projection_without_bdocx_capabilities() {
         use crate::doc::edit_chain::html_to_docx;
         if crate::doc::pandoc_runtime::pandoc_available() {
-            let root = std::env::temp_dir()
-                .join(format!("ag-native-docx-{}", std::process::id()));
+            let root = std::env::temp_dir().join(format!("ag-native-docx-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&root);
             let docx_bytes =
                 html_to_docx("<h1>第二章</h1><p>正文内容</p>", None).expect("生成测试 docx");
@@ -978,7 +981,10 @@ mod tests {
             assert_eq!(snapshot.content_format, "html");
             // 只读投影：所有块无 replace_node 能力。
             assert!(
-                snapshot.blocks.iter().all(|b| !b.capabilities.contains(&"replace_node".to_string())),
+                snapshot
+                    .blocks
+                    .iter()
+                    .all(|b| !b.capabilities.contains(&"replace_node".to_string())),
                 "原生 docx 只读投影不得暴露 replace_node"
             );
             assert!(

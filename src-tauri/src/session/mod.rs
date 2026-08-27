@@ -74,7 +74,7 @@ pub fn transition(state: SessionState, event: SessionEvent) -> Option<SessionSta
 
 /**
  * @GOV
- * codes:    BR-SYS-VERIFY-001-GUARD-SYS-CLOUD-GATE-001, BR-SYS-DATA-001-GUARD-SYS-CLOUD-INVOKE-001
+ * codes:    BR-SYS-VERIFY-001-GUARD-SYS-CLOUD-GATE-001, BR-SYS-DATA-001-GUARD-SYS-CLOUD-GATE-001
  * type:     GUARD
  * chain:    CLOUD-GATE, CLOUD-INVOKE
  * rules:    BR-SYS-VERIFY-001, BR-SYS-DATA-001

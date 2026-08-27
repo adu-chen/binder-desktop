@@ -1,6 +1,6 @@
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-REF-REF-INJECT-005
+ * codes:    BR-REF-DATA-003-DATA-REF-REF-INJECT-005
  * type:     DATA
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003
@@ -47,7 +47,7 @@ function sweepExpired(now = Date.now()): void {
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-REF-REF-INJECT-005
+ * codes:    BR-REF-DATA-003-GUARD-REF-REF-INJECT-004
  * type:     GUARD
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003
@@ -69,7 +69,7 @@ export function startReferenceDrag(
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-REF-REF-INJECT-006
+ * codes:    BR-REF-DATA-003-GUARD-REF-REF-INJECT-005
  * type:     GUARD
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003

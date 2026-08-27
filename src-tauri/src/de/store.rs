@@ -63,7 +63,7 @@ pub fn persist_payload(
 
 /**
  * @GOV
- * codes:    BR-DE-DATA-002-QUERY-DE-DE-DIFF-001
+ * codes:    BR-DE-DATA-002-QUERY-DE-DE-DIFF-002
  * type:     QUERY
  * chain:    DE-DIFF
  * rules:    BR-DE-DATA-002

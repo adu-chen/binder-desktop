@@ -408,6 +408,7 @@ const annotationBlocks = docFiles.flatMap(parseAnnotationBlocks);
 const rules = new Set();
 const chains = new Set();
 const chainStatus = new Map(); // chain_id -> status（active | planned | superseded）
+const chainIntegrationTests = new Map(); // chain_id -> integration_test
 const modules = new Set();
 const constraints = new Set();
 
@@ -422,7 +423,14 @@ for (const block of annotationBlocks) {
   }
   if (block.kind === 'CHAIN') {
     const id = block.fields['chain_id'];
-    if (id) { chains.add(id); chainStatus.set(id, (block.fields['status'] || 'active').trim()); }
+    if (id) {
+      chains.add(id);
+      chainStatus.set(id, (block.fields['status'] || 'active').trim());
+      chainIntegrationTests.set(
+        id,
+        (getField(block.fields, 'integration_test', '集成测试', 'integration_tests') || '').trim(),
+      );
+    }
     if (!getField(block.fields, 'chain_id')) addFinding('OWNER_MISSING', 'CHAIN block missing chain_id', { file: block.file, line: block.line });
     if (!getField(block.fields, '主责模块', 'owner_module')) addFinding('OWNER_MISSING', 'CHAIN block missing 主责模块/owner_module', { file: block.file, line: block.line });
     if (!getField(block.fields, 'status')) addFinding('OWNER_MISSING', 'CHAIN block missing status', { file: block.file, line: block.line });
@@ -441,6 +449,38 @@ for (const block of annotationBlocks) {
     if (!getField(block.fields, '摘要', 'summary')) addFinding('OWNER_MISSING', 'CONSTRAINT block missing 摘要/summary', { file: block.file, line: block.line });
   }
 }
+
+const deferredChainIntegrationTests = [];
+for (const chainId of chains) {
+  const status = chainStatus.get(chainId) || 'active';
+  if (status === 'planned' || status === 'superseded') continue;
+  const integrationTest = chainIntegrationTests.get(chainId) || '';
+  if (!integrationTest) {
+    addFinding('CHAIN_INTEGRATION_TEST_MISSING', 'active CHAIN missing integration_test', { chain: chainId });
+    continue;
+  }
+  if (integrationTest.startsWith('deferred:')) {
+    deferredChainIntegrationTests.push({ chain: chainId, integration_test: integrationTest });
+    continue;
+  }
+  const separator = integrationTest.indexOf('::');
+  const testFile = separator === -1 ? '' : integrationTest.slice(0, separator).trim();
+  const testName = separator === -1 ? '' : integrationTest.slice(separator + 2).trim();
+  if (!testFile || !testName || !fileExists(testFile)) {
+    addFinding('CHAIN_INTEGRATION_TEST_INVALID', 'integration_test must resolve to an existing file and named test', {
+      chain: chainId,
+      integration_test: integrationTest,
+      test_file: testFile || null,
+    });
+  }
+}
+
+addCheck({
+  name: 'CHAIN integration_test declarations',
+  status: governance_findings.some(f => f.type === 'CHAIN_INTEGRATION_TEST_MISSING' || f.type === 'CHAIN_INTEGRATION_TEST_INVALID') ? 'failed' : 'passed',
+  chains: chains.size,
+  deferred: deferredChainIntegrationTests,
+});
 
 addCheck({
   name: 'ADU annotation blocks exist',
@@ -512,6 +552,9 @@ for (const block of govBlocks.filter(candidate => candidate.fields.rules === '[]
 }
 const referencedRules = new Set();
 const referencedChains = new Set();
+const codeBlockOwners = new Map();
+const CODE_MAPPING_RE = /^(BR-[A-Z0-9]+-[A-Z0-9]+-\d{3})-((DATA|GUARD|EFFECT|RB|API|UTIL|IO|QUERY)-[A-Z0-9]+-[A-Z0-9-]+-\d{3})$/;
+const UTIL_CODE_RE = /^(UTIL)-[A-Z0-9]+-[A-Z0-9-]+-\d{3}$/;
 
 for (const block of govBlocks) {
   for (const field of ['codes', 'type', 'chain', 'rules', 'boundary']) {
@@ -528,7 +571,77 @@ for (const block of govBlocks) {
     referencedRules.add(ruleId);
     if (!rules.has(ruleId)) addFinding('RULE_MISSING', '@GOV references unknown RULE', { file: block.file, line: block.line, rule: ruleId });
   }
+
+  // ADU §4.2/§4.4：一个 @GOV 块只有一个全局唯一代码块 ID；rules 与 codes 双向闭合，
+  // 且代码块 ID 的 TYPE 必须与 type 字段一致。该检查阻止拆分文件复制旧标注后形成多主责假象。
+  const declaredRuleIds = splitCsv(block.fields.rules).filter(ruleId => ruleId.startsWith('BR-'));
+  const mappedRuleIds = [];
+  const blockIds = new Set();
+  for (const code of splitCsv(block.fields.codes)) {
+    const mapping = CODE_MAPPING_RE.exec(code);
+    if (mapping) {
+      mappedRuleIds.push(mapping[1]);
+      blockIds.add(mapping[2]);
+      if (block.fields.type && mapping[3] !== block.fields.type) {
+        addFinding('CODE_BLOCK_TYPE_MISMATCH', 'code block ID type differs from @GOV type', {
+          file: block.file, line: block.line, code, code_type: mapping[3], declared_type: block.fields.type,
+        });
+      }
+      continue;
+    }
+    if (UTIL_CODE_RE.test(code)) {
+      blockIds.add(code);
+      if (block.fields.type !== 'UTIL') {
+        addFinding('CODE_BLOCK_TYPE_MISMATCH', 'UTIL code block ID requires type=UTIL', {
+          file: block.file, line: block.line, code, declared_type: block.fields.type,
+        });
+      }
+      continue;
+    }
+    addFinding('CODE_MAPPING_INVALID', 'codes contains an invalid composite mapping ID', {
+      file: block.file, line: block.line, code,
+    });
+  }
+  if (blockIds.size !== 1) {
+    addFinding('CODE_BLOCK_ID_MIXED', '@GOV block must use exactly one code block ID across all mappings', {
+      file: block.file, line: block.line, block_ids: [...blockIds],
+    });
+  }
+  for (const ruleId of declaredRuleIds) {
+    if (!mappedRuleIds.includes(ruleId)) {
+      addFinding('RULE_CODE_NOT_CLOSED', 'rules entry has no matching codes mapping', {
+        file: block.file, line: block.line, rule: ruleId,
+      });
+    }
+  }
+  for (const ruleId of mappedRuleIds) {
+    if (!declaredRuleIds.includes(ruleId)) {
+      addFinding('RULE_CODE_NOT_CLOSED', 'codes mapping is absent from rules', {
+        file: block.file, line: block.line, rule: ruleId,
+      });
+    }
+  }
+  for (const blockId of blockIds) {
+    const owner = codeBlockOwners.get(blockId);
+    if (owner && (owner.file !== block.file || owner.line !== block.line)) {
+      addFinding('CODE_BLOCK_ID_DUPLICATE', 'code block ID is assigned to more than one @GOV block', {
+        block_id: blockId, first_file: owner.file, first_line: owner.line,
+        file: block.file, line: block.line,
+      });
+    } else {
+      codeBlockOwners.set(blockId, { file: block.file, line: block.line });
+    }
+  }
 }
+
+addCheck({
+  name: '@GOV rule-code closure and code block uniqueness',
+  status: governance_findings.some(f => [
+    'CODE_MAPPING_INVALID', 'CODE_BLOCK_TYPE_MISMATCH', 'CODE_BLOCK_ID_MIXED',
+    'RULE_CODE_NOT_CLOSED', 'CODE_BLOCK_ID_DUPLICATE',
+  ].includes(f.type)) ? 'failed' : 'passed',
+  code_blocks: codeBlockOwners.size,
+});
 
 for (const ruleId of rules) {
   if (CLIENT_OUT_OF_SCOPE_RULES.has(ruleId)) continue;

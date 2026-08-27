@@ -75,6 +75,7 @@ chain_id: CBT-BUILD
 主责模块: CBT
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE

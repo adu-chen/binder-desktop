@@ -228,6 +228,7 @@ chain_id: DOC-CONVERT
 主责模块: DOC
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE

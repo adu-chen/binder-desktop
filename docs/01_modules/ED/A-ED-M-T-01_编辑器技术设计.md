@@ -172,6 +172,7 @@ chain_id: ED-EDIT
 主责模块: ED
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -542,6 +543,7 @@ chain_id: ED-DECOR
 主责模块: ED
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE

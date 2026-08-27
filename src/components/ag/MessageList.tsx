@@ -13,7 +13,7 @@ import { startTurn } from "../../services/agService";
  * codes:    BR-AG-UI-001-RB-AG-AG-TURN-014
  * type:     RB
  * chain:    AG-TURN
- * rules:    BR-AG-UI-001, BR-AG-STATE-001, BR-AG-PERSIST-001
+ * rules:    BR-AG-UI-001
  * term_ref: TERM-AG-011
  * boundary: in=ActiveSessionMessagesToolCallsAndAnchoredDiffs | out=orderedMessageStreamRender | effect=memory | caller_context=agentPanelMessageListRender | does_not=render_user_message_as_markdown_or_move_diffs_off_turn
  *

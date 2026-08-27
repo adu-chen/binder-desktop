@@ -99,12 +99,13 @@ DecisionRequest 是裁决身份和恢复游标；其 UI 可直接呈现 Workspac
 <!-- CHAIN
 chain_id: WS-OPERATION
 主责模块: WS
-status: planned
+status: active
 risk_tier: P1
+integration_test: src-tauri/src/workspace/operation.rs::plan_freezes_real_baseline_and_execute_requires_bound_resolved_decision
 -->
 
 ```text
-IntentResult / 用户文件树动作
+IntentResult（Agent 意图）
 → 只读预检并构造 WorkspaceOperationPlan
 → DecisionRequest(proposed)
 → 用户 reject：计划 rejected，不写盘
@@ -115,6 +116,10 @@ IntentResult / 用户文件树动作
 → 成功或真实 partial_failed 写 WorkspaceOperationEntry
 → 更新文件树、标签、引用、BDocx 身份和 TaskRun 可见事件
 ```
+
+> 用户文件树动作不进入 WS-OPERATION 链（2026-08-22，WS-RESOURCE-WRITE-GUARD-01）：人工直调
+> `ws.create_doc/create_folder/rename_doc/delete_doc/delete_folder` 保持直写，但删除/重命名必须遵守
+> BR-WS-STATE-009 安全底线（dirty 阻断、快照/时间轴可恢复、内容 Diff 失效）。
 
 <!-- RULE
 rule_id: BR-WS-STATE-003
@@ -150,6 +155,18 @@ rule_id: BR-WS-PERSIST-003
 一批操作采用 fail_fast_compensate：任一项失败立即停止，已完成项按反向顺序执行补偿；不得承诺文件系统级严格事务。
 补偿全部成功则终态 failed_compensated；任一补偿失败则终态 partial_failed，并保留逐项回执和可人工恢复的快照。
 应用重启不得自动继续旧授权；任何未完成状态统一进入 interrupted。用户显式恢复时必须基于真实磁盘与既有回执生成新的修复/重试计划和新的 DecisionRequest。
+
+<!-- RULE
+rule_id: BR-WS-STATE-009
+主链路: WS-FS, WS-TIMELINE
+域: STATE
+-->
+人工文件树（用户 UI 直调 ws.create_doc/create_folder/rename_doc/delete_doc/delete_folder）的删除与重命名
+必须复用与 Agent 资源操作一致的安全底线：命中 dirty 编辑会话阻断（WS_DELETE_DIRTY_TARGET /
+WS_RENAME_DIRTY_TARGET），不得静默丢弃未保存编辑；删除前保存可恢复快照并写 WorkspaceTimeline 条目
+（restore_kind=manual_delete/manual_rename），删除后可经时间轴生成新计划与 DecisionRequest 恢复；
+成功后使受影响的有效内容 Diff 失效。人工创建保持直写（低风险、无破坏性）；人工动作不进入
+DecisionRequest 前置裁决——WS-OPERATION 链仅限 Agent 意图（2026-08-22，WS-RESOURCE-WRITE-GUARD-01）。
 
 ## 4. 操作策略
 
@@ -263,9 +280,22 @@ target_type: RULE
 target_id: BR-WS-OBS-002
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-WS-008
+target_type: RULE
+target_id: BR-WS-STATE-009
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-WS-010
+target_type: RULE
+target_id: BR-WS-STATE-009
+status: mapped
+-->
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-21 | v1.0 | 根据人类确认的八项决策建立 WorkspaceOperation/WorkspaceOperationPlan、前置裁决直接写盘、统一 WorkspaceTimeline、CreateDocumentBundle、fail-fast 补偿、dirty 阻断与 TaskRun 边界。 |
+| 2026-08-22 | v1.1 | WS-RESOURCE-WRITE-GUARD-01：WS-OPERATION 链推进 active（integration_test=deferred: G5）并收窄为 Agent 意图；新增 BR-WS-STATE-009（人工文件树删除/重命名安全底线：dirty 阻断、快照/时间轴可恢复、内容 Diff 失效）；REQ-MAP REQ-WS-008/010 → BR-WS-STATE-009。 |

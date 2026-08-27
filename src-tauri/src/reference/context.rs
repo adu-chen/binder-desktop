@@ -66,7 +66,9 @@ pub fn validate_selection(payload: &ReferencePayload, block_text: Option<&str>) 
         start, end, text, ..
     } = payload
     else {
-        return SelectionCheck::Stale { reason: "非选区载荷" };
+        return SelectionCheck::Stale {
+            reason: "非选区载荷",
+        };
     };
     let Some(current_block) = block_text else {
         return SelectionCheck::Stale {
@@ -98,12 +100,12 @@ pub fn validate_selection(payload: &ReferencePayload, block_text: Option<&str>) 
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-DATA-REF-REF-INJECT-002
+ * codes:    BR-REF-DATA-003-DATA-REF-REF-INJECT-002, BR-REF-VERIFY-001-DATA-REF-REF-INJECT-002, BR-SYS-DATA-007-DATA-REF-REF-INJECT-002
  * type:     DATA
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003, BR-REF-VERIFY-001, BR-SYS-DATA-007
  * term_ref: TERM-REF-003, TERM-REF-005
- * boundary: in=referencePayloadAndReadOutcome | out=injectionContextBlock(traceableExplicitReferenceHighPriorityExternalContentDataOnly)
+ * boundary: in=referencePayloadAndReadOutcome | out=injectionContextBlock(traceableExplicitReferenceHighPriorityExternalContentDataOnly) | consumer=ReferencePayload
  */
 /// 注入上下文格式化（BR-REF-DATA-003）：doc/selection 内容与校验结果由调用方（AG）传入；
 /// session/memory/knowledge/template/url/long_text 快照直接格式化；失效选区输出统一「引用锚已
@@ -118,7 +120,11 @@ pub fn format_payload_context(
     match payload {
         ReferencePayload::Doc { rel_path, .. } => match doc {
             Some(DocRead::Loaded { content }) => {
-                let capped = cap_text(content, cap, "[引用文档较长，已截取前部；需要完整内容可用 read_doc]");
+                let capped = cap_text(
+                    content,
+                    cap,
+                    "[引用文档较长，已截取前部；需要完整内容可用 read_doc]",
+                );
                 format!("引用文档「{rel_path}」：\n{capped}")
             }
             Some(DocRead::Failed { code, message }) => {
@@ -128,9 +134,7 @@ pub fn format_payload_context(
                 format!("引用文档「{rel_path}」未读取：当前没有 active workspace")
             }
         },
-        ReferencePayload::Selection {
-            rel_path, text, ..
-        } => {
+        ReferencePayload::Selection { rel_path, text, .. } => {
             let stale = |reason: &'static str| {
                 let capped = cap_text(text, cap, "[引用选区较长，已截取前部]");
                 format!(
@@ -255,20 +259,14 @@ pub fn format_block_ref_context(
         (Some(start), Some(end)) if end > start => format!("字符区间 [{start}..{end}]"),
         _ => "字符区间未提供（按该块选中内容理解）".to_string(),
     };
-    format!(
-        "引用文档「{rel_path}」块 [{block_id}] 的选中内容，{range_label}：\n{capped_text}"
-    )
+    format!("引用文档「{rel_path}」块 [{block_id}] 的选中内容，{range_label}：\n{capped_text}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn selection_payload(
-        start: Option<usize>,
-        end: Option<usize>,
-        text: &str,
-    ) -> ReferencePayload {
+    fn selection_payload(start: Option<usize>, end: Option<usize>, text: &str) -> ReferencePayload {
         ReferencePayload::Selection {
             rel_path: "notes/a.md".to_string(),
             block_id: "block-1".to_string(),
@@ -490,8 +488,14 @@ mod tests {
             validate_selection(&payload, None),
             validate_selection(&payload, Some("短文本")),
             validate_selection(&selection_payload(None, None, "x"), Some("0123456789")),
-            validate_selection(&selection_payload(Some(8), Some(2), "x"), Some("0123456789")),
-            validate_selection(&selection_payload(Some(2), Some(99), "x"), Some("0123456789")),
+            validate_selection(
+                &selection_payload(Some(8), Some(2), "x"),
+                Some("0123456789"),
+            ),
+            validate_selection(
+                &selection_payload(Some(2), Some(99), "x"),
+                Some("0123456789"),
+            ),
         ] {
             let out = format_payload_context(&payload, None, Some(check), 1000);
             assert!(out.contains("[引用锚已失效"));
@@ -541,13 +545,19 @@ mod tests {
             Some(validate_selection(&payload, Some(block))),
             1000,
         );
-        assert!(out.contains("引用选区（已校验）"), "UTF-16 偏移应命中 emoji，不退化 stale");
+        assert!(
+            out.contains("引用选区（已校验）"),
+            "UTF-16 偏移应命中 emoji，不退化 stale"
+        );
 
         // 若误用 Unicode scalar 计数，[1..3] 会取到 "😀b" 之外的内容 → 校验失败，此处验证不退化。
         let stale = format_payload_context(
             &payload,
             None,
-            Some(validate_selection(&selection_payload(Some(1), Some(4), "😀b"), Some(block))),
+            Some(validate_selection(
+                &selection_payload(Some(1), Some(4), "😀b"),
+                Some(block),
+            )),
             1000,
         );
         assert!(!stale.contains("[引用锚已失效"));

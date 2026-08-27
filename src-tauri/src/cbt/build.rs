@@ -57,7 +57,7 @@ pub fn is_terminal(state: BuildState) -> bool {
 
 /**
  * @GOV
- * codes:    BR-CBT-STATE-001-RB-CBT-CBT-BUILD-001
+ * codes:    BR-CBT-STATE-001-RB-CBT-CBT-BUILD-002
  * type:     RB
  * chain:    CBT-BUILD
  * rules:    BR-CBT-STATE-001

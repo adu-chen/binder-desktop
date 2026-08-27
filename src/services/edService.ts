@@ -245,7 +245,7 @@ function applyOpenResult(
 
 /**
  * @GOV
- * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-DATA-ED-ED-EDIT-016
+ * codes:    BR-ED-DATA-002-RB-ED-ED-EDIT-012, BR-ED-DATA-006-RB-ED-ED-EDIT-012
  * type:     RB
  * chain:    ED-EDIT
  * rules:    BR-ED-DATA-002, BR-ED-DATA-006
@@ -336,7 +336,7 @@ export async function saveDocument(content: string, override = false): Promise<S
 
 /**
  * @GOV
- * codes:    BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016
+ * codes:    BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-016, BR-ED-DATA-006-GUARD-ED-ED-EDIT-016
  * type:     GUARD
  * chain:    ED-EDIT
  * rules:    BR-ED-VERIFY-001, BR-ED-DATA-006

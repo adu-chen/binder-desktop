@@ -1825,6 +1825,135 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
       .filter(([command]) => command === "dispatch")
       .map(([, payload]) => (payload as { request: { command: string } }).request.command);
     expect(commands.indexOf("ws.read_doc")).toBeLessThan(commands.indexOf("ws.project_create_document_bundle"));
+    const projectionRequest = invokeMock.mock.calls.find(([, payload]) => (
+      (payload as { request?: { command?: string } })?.request?.command === "ws.project_create_document_bundle"
+    ));
+    expect(projectionRequest?.[1]).toEqual(expect.objectContaining({
+      request: expect.objectContaining({
+        params: expect.objectContaining({ beforeSnapshot: "" }),
+      }),
+    }));
+
+    // 后端裁决已经成功后，投影 command 的前置失败必须走投影补偿，并把终态身份传给 UI。
+    invokeMock.mockReset();
+    edStore.reset();
+    deStore.reset();
+    tabsStore.reset();
+    const failureCommands: string[] = [];
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const request = (arg as { request: { command: string } }).request;
+      failureCommands.push(request.command);
+      if (request.command === "ag.resolve_decision") {
+        return {
+          correlation_id: "ag-test",
+          result: {
+            task_run_id: "task-create-failed",
+            status: "executing",
+            workspace_operation_receipt: {
+              operation_id: "operation-create-failed",
+              plan_id: "plan-create-failed",
+              final_status: "completed",
+              item_receipts: [{ item_id: "item-create-failed", seq: 0, status: "completed" }],
+              compensation_receipts: [],
+            },
+            workspace_operation_items: [{
+              item_id: "item-create-failed",
+              seq: 0,
+              kind: "create_document",
+              source_rel_path: null,
+              target_rel_path: "failed.md",
+              resource_kind: "file",
+            }],
+            create_document_bundle: {
+              plan_id: "plan-create-failed",
+              target: { rel_path: "failed.md" },
+              status: "resource_created",
+            },
+          },
+        };
+      }
+      if (request.command === "ws.list_docs") return { correlation_id: "ws-test", result: [] };
+      if (request.command === "ws.read_doc") {
+        return { correlation_id: "ws-test", result: { content: "", baseline: "disk-empty" } };
+      }
+      if (request.command === "ed.persist_session_snapshot") {
+        return { correlation_id: "ed-test", result: { ok: true } };
+      }
+      if (request.command === "ws.project_create_document_bundle") {
+        return {
+          correlation_id: "ws-test",
+          error: {
+            code: "WS_CONTENT_REQUIRED",
+            message: "模拟投影前置失败",
+            retriable: false,
+            reauth_required: false,
+          },
+        };
+      }
+      if (request.command === "ws.compensate_create_document_projection_preflight_failure") {
+        return { correlation_id: "ws-test", result: { final_status: "failed_compensated" } };
+      }
+      return { correlation_id: "test", result: { ok: true } };
+    });
+
+    await expect(resolveDecision("decision-create-failed", "confirm")).rejects.toMatchObject({
+      code: "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED",
+      decisionResolved: true,
+      taskRunId: "task-create-failed",
+    });
+    expect(failureCommands).toContain("ws.compensate_create_document_projection_preflight_failure");
+    expect(failureCommands).not.toContain("ws.compensate_create_document_open_failure");
+
+    // guard 已创建后的后端投影写失败会直接返回补偿终态，不得伪造成 diff id。
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const request = (arg as { request: { command: string } }).request;
+      if (request.command === "ag.resolve_decision") {
+        return {
+          correlation_id: "ag-test",
+          result: {
+            task_run_id: "task-create-compensated",
+            status: "failed",
+            workspace_operation_items: [{
+              item_id: "item-create-compensated",
+              seq: 0,
+              kind: "create_document",
+              source_rel_path: null,
+              target_rel_path: "compensated.md",
+              resource_kind: "file",
+            }],
+            create_document_bundle: {
+              plan_id: "plan-create-compensated",
+              target: { rel_path: "compensated.md" },
+              status: "resource_created",
+            },
+          },
+        };
+      }
+      if (request.command === "ws.list_docs") return { correlation_id: "ws-test", result: [] };
+      if (request.command === "ws.read_doc") {
+        return { correlation_id: "ws-test", result: { content: "", baseline: "disk-empty" } };
+      }
+      if (request.command === "ed.persist_session_snapshot") {
+        return { correlation_id: "ed-test", result: { ok: true } };
+      }
+      if (request.command === "ws.project_create_document_bundle") {
+        return {
+          correlation_id: "ws-test",
+          result: {
+            projection_failed_compensated: true,
+            error: { code: "DE_WRITE_FAILED", message: "模拟写入失败" },
+          },
+        };
+      }
+      return { correlation_id: "test", result: { ok: true } };
+    });
+
+    await expect(resolveDecision("decision-create-compensated", "confirm")).rejects.toMatchObject({
+      code: "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED",
+      decisionResolved: true,
+    });
   });
 
   // covers: BR-SYS-STATE-008

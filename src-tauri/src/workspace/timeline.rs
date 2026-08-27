@@ -152,7 +152,8 @@ pub fn record_save_node(
     content: &[u8],
 ) -> rusqlite::Result<Option<TimelineEntry>> {
     let snapshot_ref = format!("blob_{}", super::save::content_hash(content));
-    if latest_snapshot_ref(conn, &doc.workspace_id, &doc.rel_path)?.as_deref() == Some(&snapshot_ref)
+    if latest_snapshot_ref(conn, &doc.workspace_id, &doc.rel_path)?.as_deref()
+        == Some(&snapshot_ref)
     {
         return Ok(None);
     }
@@ -313,14 +314,18 @@ mod tests {
         .unwrap();
         let d = doc();
         // 首次保存记节点（version_seq=1，entry_kind=save）
-        let e1 = record_save_node(&conn, &d, b"v1").unwrap().expect("首次保存应记节点");
+        let e1 = record_save_node(&conn, &d, b"v1")
+            .unwrap()
+            .expect("首次保存应记节点");
         assert_eq!(e1.version_seq, 1);
         assert_eq!(list_timeline(&conn, &d).unwrap().len(), 1);
         // 内容相同 → 跳过，不产生空版本
         assert!(record_save_node(&conn, &d, b"v1").unwrap().is_none());
         assert_eq!(list_timeline(&conn, &d).unwrap().len(), 1);
         // 内容变化 → 记第二个节点，seq 递增，快照可取回
-        let e2 = record_save_node(&conn, &d, b"v2").unwrap().expect("内容变化应记节点");
+        let e2 = record_save_node(&conn, &d, b"v2")
+            .unwrap()
+            .expect("内容变化应记节点");
         assert_eq!(e2.version_seq, 2);
         assert_eq!(list_timeline(&conn, &d).unwrap().len(), 2);
         assert_eq!(preview_node(&conn, &e2.entry_id).unwrap(), b"v2");

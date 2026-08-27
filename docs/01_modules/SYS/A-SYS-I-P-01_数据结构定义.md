@@ -247,11 +247,15 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | patch_kind | 修改形态 | replace_block / block_ops / replace_document / style_ops / table_ops / image_ops |
 | before_text / after_text | 候选变更文本 | 内容在转正前属于 LogicalCandidate |
 | block_id / block_index | 块定位信息 | 块级替换至少应提供一种；锚语义归 ED |
+| location_label | 卡片位置说明 | 仅用于可见投影，不参与锚校验 |
 | draft_mode | 应用路径 | current_editor / open_session / background |
 | snapshot_source | 生成基线来源 | active_editor / active_editor_session / open_editor_session / disk_snapshot |
 | base_session_version | 生成时 ED session 版本 | 已打开文档必填；未打开文档为空 |
 | base_content_hash | 生成时内容哈希 | 已打开文档必填；未打开文档可使用 DiskState baseline |
-| block_ops | 可空 StructuredBlockEditPayload | patch_kind=block_ops 时必填；执行与详细 Diff 的唯一真值 |
+| style_ops / block_ops / table_ops / image_ops | 可空的类型化操作载荷 | 与 patch_kind 对应的字段必填；执行与详细 Diff 的唯一真值 |
+| batch | 可空批次元数据 | 同一批次的 id / index / total；无批次时为空 |
+| preview_checkpoint_required | 是否要求编辑器预览回执 | true 时必须完成预览检查点后才能续片段 |
+| cross_doc | 是否跨文档提案 | 可空兼容旧载荷；新载荷应显式给出 |
 
 > 边界：DiffProjection 是跨 AG/DE/ED 的最小互操作载荷。`draft_mode=open_session` 时，
 > ED 必须以 `base_session_version` 与 `base_content_hash` 校验当前 LogicalState；校验失败不得应用，
@@ -420,6 +424,7 @@ chain_id: DATA-MIGRATE
 主责模块: SYS
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -622,3 +627,4 @@ status: mapped
 | 2026-08-13 | v1.13 | DIFF-STATE-COMPASS-01：PendingDiff 共享契约同步 BR-CORE-STATE-001~003——已有 LogicalState 预览但卡片仍 pending、无 LogicalState 仅挂载后接受原子落盘、pending 期间打开文档迁移为前者；移除“open_session 自动 accepted”的旧语义。 |
 | 2026-08-14 | v1.14 | AG-1.0-D1-SYS-SHARED-CONTRACT-01：新增 §3.1 Agent 1.0 共享运行时对象契约（RuntimeProfile/AgentSession/AgentTurn/IntentResult/CapabilityGrant/TaskRun/TaskStep/StructuredVisibleEvent/ExternalContentRef/MemorySelectionRef 的职责、身份、事件真值、隔离与迁移边界，不锁实现细节）；注册 BR-SYS-STATE-007/008、BR-SYS-DATA-007 与 X-SHARED-002；REQ_MAP 补齐 REQ-SYS-008~012；§9.1 登记冻结基线漂移债务（澄清终态、AgentSession 隔离键、意图/授权收窄、TaskRun 契约、外部内容/记忆引用）；§10 明确 D2/D3 设计输入。 |
 | 2026-08-21 | v1.15 | 工作区资源操作基线重构：共享契约新增 WorkspaceTimelineEntry、WorkspaceOperationPlan、WorkspaceOperationEntry、CreateDocumentBundle；schema 基线新增资源计划/历史/新建绑定表；重启未终态资源操作统一 Interrupted 且不自动执行。 |
+| 2026-08-26 | v1.16 | CHAIN-INTEGRITY-REPAIR-01：补齐 DiffProjection 实际跨模块传输字段，明确设计文档为字段语义源，Rust 共享类型模块为唯一后端定义。 |

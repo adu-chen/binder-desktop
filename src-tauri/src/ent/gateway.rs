@@ -9,6 +9,16 @@
 
 use crate::ipc::IpcError;
 
+/// Provider 默认模型。显式模型参数始终优先；该表只服务未指定模型的运行时请求。
+pub(crate) fn default_model(provider: &str) -> String {
+    match provider {
+        "openai" => "gpt-4o-mini",
+        "anthropic" => "claude-sonnet-4-6",
+        _ => "deepseek-chat",
+    }
+    .to_string()
+}
+
 /// 调用通道状态。GateDenied/Completed/Interrupted/Errored 为终态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvokeState {
@@ -120,7 +130,7 @@ pub fn transition(state: InvokeState, event: InvokeEvent) -> Option<InvokeState>
 
 /**
  * @GOV
- * codes:    BR-ENT-VERIFY-001-GUARD-ENT-CLOUD-GATE-001
+ * codes:    BR-ENT-VERIFY-001-GUARD-ENT-CLOUD-GATE-002
  * type:     GUARD
  * chain:    CLOUD-GATE
  * rules:    BR-ENT-VERIFY-001
@@ -302,8 +312,123 @@ pub enum RoundOutcome {
 /// （**不** emit Done，交客户端执行工具后续轮）。本边界只发送非终态 Chunk；完成或错误作为
 /// `RoundOutcome` 返回，由 AG Runtime 的 terminal latch 统一发送唯一终态。密钥不经客户端
 /// （GW 用 env/BYOK，X-FORBID-001）。
+fn request_trace_enabled() -> bool {
+    std::env::var("BINDER_PROMPT_AUDIT")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn serialized_chars(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value)
+        .map(|serialized| serialized.chars().count())
+        .unwrap_or(0)
+}
+
+fn request_shape(messages: &serde_json::Value, tools: &serde_json::Value) -> serde_json::Value {
+    let messages_chars = serialized_chars(messages);
+    let tools_chars = serialized_chars(tools);
+    serde_json::json!({
+        "message_count": messages.as_array().map_or(0, Vec::len),
+        "tool_count": tools.as_array().map_or(0, Vec::len),
+        "serialized_messages_chars": messages_chars,
+        "serialized_tools_chars": tools_chars,
+        "estimated_input_tokens": (messages_chars + tools_chars + 3) / 4,
+    })
+}
+
+struct RequestLifecycleTrace {
+    enabled: bool,
+    turn_id: String,
+    round_index: usize,
+    started_at: std::time::Instant,
+    terminal_emitted: bool,
+}
+
+impl RequestLifecycleTrace {
+    fn new(turn_id: &str, round_index: usize) -> Self {
+        Self {
+            enabled: request_trace_enabled(),
+            turn_id: turn_id.to_string(),
+            round_index,
+            started_at: std::time::Instant::now(),
+            terminal_emitted: false,
+        }
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+    }
+
+    fn record(&self, phase: &str, details: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "trace_marker": "[REQUEST-TRACE]",
+            "turn_id": self.turn_id,
+            "model_call_round": self.round_index,
+            "phase": phase,
+            "elapsed_ms": self.elapsed_ms(),
+            "details": details,
+        })
+    }
+
+    fn emit(&self, phase: &str, details: serde_json::Value) {
+        if !self.enabled {
+            return;
+        }
+        let record = self.record(phase, details);
+        let output = serde_json::to_string(&record)
+            .unwrap_or_else(|error| format!("{{\"serialization_error\":\"{error}\"}}"));
+        eprintln!("[REQUEST-TRACE] {output}");
+    }
+
+    fn finish(&mut self, phase: &str, details: serde_json::Value) {
+        self.emit(phase, details);
+        self.terminal_emitted = true;
+    }
+}
+
+impl Drop for RequestLifecycleTrace {
+    fn drop(&mut self) {
+        if self.enabled && !self.terminal_emitted {
+            self.emit(
+                "request_future_dropped",
+                serde_json::json!({
+                    "outcome": "cancelled_or_aborted",
+                }),
+            );
+        }
+    }
+}
+
+#[derive(Default)]
+struct StreamTraceCounters {
+    network_chunk_count: usize,
+    received_bytes: usize,
+    sse_event_count: usize,
+    content_chunk_count: usize,
+    content_chars: usize,
+    tool_call_event_count: usize,
+    malformed_event_count: usize,
+    unknown_event_count: usize,
+}
+
+impl StreamTraceCounters {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "network_chunk_count": self.network_chunk_count,
+            "received_bytes": self.received_bytes,
+            "sse_event_count": self.sse_event_count,
+            "content_chunk_count": self.content_chunk_count,
+            "content_chars": self.content_chars,
+            "tool_call_event_count": self.tool_call_event_count,
+            "malformed_event_count": self.malformed_event_count,
+            "unknown_event_count": self.unknown_event_count,
+        })
+    }
+}
+
 pub async fn stream_round(
     turn_id: &str,
+    round_index: usize,
     provider: &str,
     model: &str,
     messages: &serde_json::Value,
@@ -313,12 +438,23 @@ pub async fn stream_round(
     use futures_util::StreamExt;
 
     let url = format!("{}/invoke/stream", gw_base_url());
+    let mut trace = RequestLifecycleTrace::new(turn_id, round_index);
+    trace.emit(
+        "request_started",
+        serde_json::json!({
+            "url": &url,
+            "provider": provider,
+            "model": model,
+            "request": request_shape(messages, tools),
+        }),
+    );
     // 门禁前置（X-SEQ-001）：随调用上送会话令牌（dev auto-login）；GW 必裁决（PI-AG-GATE-01）。
     let token = ensure_session_token().await;
-    // 诊断日志：出站请求落点 + 令牌是否取到（不记令牌值，X-FORBID-001 不外泄凭据）。
-    eprintln!(
-        "[ag-gw] → POST {url} provider={provider} model={model} token={}",
-        if token.is_some() { "present" } else { "none" },
+    trace.emit(
+        "auth_resolved",
+        serde_json::json!({
+            "token_present": token.is_some(),
+        }),
     );
     let body = serde_json::json!({
         "provider": provider, "model": model, "messages": messages, "tools": tools, "token": token
@@ -327,7 +463,16 @@ pub async fn stream_round(
     let resp = match reqwest::Client::new().post(&url).json(&body).send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[ag-gw] ✗ unreachable {url}: {e}");
+            trace.finish(
+                "http_send_failed",
+                serde_json::json!({
+                    "error": e.to_string(),
+                    "retriable": true,
+                }),
+            );
+            if !trace.enabled {
+                eprintln!("[ag-gw] ✗ unreachable {url}: {e}");
+            }
             return Ok(RoundOutcome::Failed(IpcError::new(
                 "AG_GW_UNREACHABLE",
                 &format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
@@ -337,22 +482,44 @@ pub async fn stream_round(
         }
     };
 
-    if !resp.status().is_success() {
-        let code = resp.status().as_u16();
+    let status = resp.status();
+    let response_content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    trace.emit(
+        "http_response_received",
+        serde_json::json!({
+            "status": status.as_u16(),
+            "content_type": &response_content_type,
+        }),
+    );
+
+    if !status.is_success() {
+        let code = status.as_u16();
         // 401 门禁拒绝/令牌失效 → 清令牌缓存，下轮自动重登录（X-FORBID-002：不缓存通过）。
         if code == 401 {
             clear_session_token();
         }
-        let ctype = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
         let body = resp.text().await.unwrap_or_default();
         // 诊断日志：状态 + content-type + 响应体片段（截 300 字符）——定位是谁回的（我方网关回 JSON，反代常回空/HTML）。
         let snippet: String = body.chars().take(300).collect();
-        eprintln!("[ag-gw] ✗ HTTP {code} from {url} content-type=\"{ctype}\" body=\"{snippet}\"");
+        trace.finish(
+            "http_error_response",
+            serde_json::json!({
+                "status": code,
+                "content_type": response_content_type,
+                "response_body_chars": body.chars().count(),
+                "response_body_preview": &snippet,
+            }),
+        );
+        if !trace.enabled {
+            eprintln!(
+                "[ag-gw] ✗ HTTP {code} from {url} content-type=\"{response_content_type}\" body=\"{snippet}\""
+            );
+        }
         // 空体（多为中间反代/上游 502）→ 给可操作提示，避免 UI 只见一个空白错误码。
         let message = if body.trim().is_empty() {
             format!(
@@ -373,11 +540,19 @@ pub async fn stream_round(
     let mut buf = String::new();
     let mut tool_calls: Vec<GwToolCall> = Vec::new();
     let mut final_stop_reason: Option<String> = None;
+    let mut counters = StreamTraceCounters::default();
 
     while let Some(item) = stream.next().await {
         let bytes = match item {
             Ok(b) => b,
             Err(e) => {
+                trace.finish(
+                    "stream_transport_failed",
+                    serde_json::json!({
+                        "error": e.to_string(),
+                        "counters": counters.to_json(),
+                    }),
+                );
                 return Ok(RoundOutcome::Failed(IpcError::new(
                     "AG_GW_STREAM",
                     &format!("流式中断：{e}"),
@@ -386,6 +561,16 @@ pub async fn stream_round(
                 )));
             }
         };
+        counters.network_chunk_count += 1;
+        counters.received_bytes += bytes.len();
+        if counters.network_chunk_count == 1 {
+            trace.emit(
+                "first_network_chunk",
+                serde_json::json!({
+                    "bytes": bytes.len(),
+                }),
+            );
+        }
         buf.push_str(&String::from_utf8_lossy(&bytes));
 
         // 按 SSE 事件块（以空行分隔）解析。
@@ -400,11 +585,44 @@ pub async fn stream_round(
                     data = r.trim().to_string();
                 }
             }
-            let json: serde_json::Value =
-                serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+            counters.sse_event_count += 1;
+            if counters.sse_event_count == 1 {
+                trace.emit(
+                    "first_sse_event",
+                    serde_json::json!({
+                        "event": &event,
+                        "data_chars": data.chars().count(),
+                    }),
+                );
+            }
+            let json: serde_json::Value = match serde_json::from_str(&data) {
+                Ok(json) => json,
+                Err(error) => {
+                    counters.malformed_event_count += 1;
+                    trace.emit(
+                        "malformed_sse_event",
+                        serde_json::json!({
+                            "event": &event,
+                            "data_chars": data.chars().count(),
+                            "error": error.to_string(),
+                        }),
+                    );
+                    serde_json::Value::Null
+                }
+            };
             match event.as_str() {
                 "chunk" => {
                     if let Some(text) = json.get("text").and_then(|t| t.as_str()) {
+                        counters.content_chunk_count += 1;
+                        counters.content_chars += text.chars().count();
+                        if counters.content_chunk_count == 1 {
+                            trace.emit(
+                                "first_content_chunk",
+                                serde_json::json!({
+                                    "text_chars": text.chars().count(),
+                                }),
+                            );
+                        }
                         let _ = channel.send(AgTurnEvent::Chunk {
                             turn_id: turn_id.to_string(),
                             text: text.to_string(),
@@ -412,14 +630,25 @@ pub async fn stream_round(
                     }
                 }
                 "tool_calls" => {
+                    counters.tool_call_event_count += 1;
                     if let Some(arr) = json.get("tool_calls").and_then(|t| t.as_array()) {
+                        let mut accepted_names = Vec::new();
                         for tc in arr {
                             if let Ok(call) = serde_json::from_value::<GwToolCall>(tc.clone()) {
                                 if !call.name.is_empty() {
+                                    accepted_names.push(call.name.clone());
                                     tool_calls.push(call);
                                 }
                             }
                         }
+                        trace.emit(
+                            "tool_calls_received",
+                            serde_json::json!({
+                                "event_tool_call_count": arr.len(),
+                                "accepted_tool_call_count": accepted_names.len(),
+                                "accepted_tool_names": accepted_names,
+                            }),
+                        );
                     }
                 }
                 "done" => {
@@ -432,30 +661,86 @@ pub async fn stream_round(
                                 .to_string(),
                         );
                     }
+                    trace.emit(
+                        "provider_done",
+                        serde_json::json!({
+                            "stop_reason": json
+                                .get("stop_reason")
+                                .and_then(|reason| reason.as_str())
+                                .unwrap_or("stop"),
+                            "pending_tool_call_count": tool_calls.len(),
+                        }),
+                    );
                 }
                 "error" => {
+                    let code = json
+                        .get("code")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("AG_GW_ERR");
+                    let message = json
+                        .get("message")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
+                    let retriable = json
+                        .get("retriable")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    trace.finish(
+                        "provider_error",
+                        serde_json::json!({
+                            "code": code,
+                            "message": message,
+                            "retriable": retriable,
+                            "counters": counters.to_json(),
+                        }),
+                    );
                     return Ok(RoundOutcome::Failed(IpcError::new(
-                        json.get("code")
-                            .and_then(|c| c.as_str())
-                            .unwrap_or("AG_GW_ERR"),
-                        json.get("message").and_then(|m| m.as_str()).unwrap_or(""),
-                        json.get("retriable")
-                            .and_then(|r| r.as_bool())
-                            .unwrap_or(false),
-                        false,
+                        code, message, retriable, false,
                     )));
                 }
-                _ => {}
+                _ => {
+                    counters.unknown_event_count += 1;
+                    trace.emit(
+                        "unknown_sse_event",
+                        serde_json::json!({
+                            "event": &event,
+                            "data_chars": data.chars().count(),
+                        }),
+                    );
+                }
             }
         }
     }
 
+    if !buf.trim().is_empty() {
+        trace.emit(
+            "trailing_stream_buffer",
+            serde_json::json!({
+                "buffer_chars": buf.chars().count(),
+            }),
+        );
+    }
     if !tool_calls.is_empty() {
+        trace.finish(
+            "request_completed",
+            serde_json::json!({
+                "outcome": "tool_calls",
+                "tool_call_count": tool_calls.len(),
+                "counters": counters.to_json(),
+            }),
+        );
         return Ok(RoundOutcome::ToolCalls(tool_calls));
     }
-    Ok(RoundOutcome::Done {
-        stop_reason: final_stop_reason.unwrap_or_else(|| "stop".to_string()),
-    })
+    let stop_reason = final_stop_reason.unwrap_or_else(|| "stop".to_string());
+    trace.finish(
+        "request_completed",
+        serde_json::json!({
+            "outcome": "done",
+            "stop_reason": &stop_reason,
+            "counters": counters.to_json(),
+        }),
+    );
+    Ok(RoundOutcome::Done { stop_reason })
 }
 
 /// 单次辅助产出（SM-AG-03 Requesting · 无工具 · 对外非流式）：POST dev GW `/invoke/stream`，累积 chunk
@@ -700,5 +985,48 @@ mod tests {
             assert!(!e.message.is_empty());
             assert!(e.retriable && e.reauth_required); // 四字段齐备
         }
+    }
+
+    // covers: BR-SYS-OBS-001
+    // 请求过程日志只记录可关联阶段与体量，不重复打印 prompt、工具参数或令牌。
+    #[test]
+    fn request_trace_records_shape_without_repeating_payload() {
+        let messages = serde_json::json!([
+            {"role": "system", "content": "SECRET_SYSTEM_PROMPT"},
+            {"role": "user", "content": "SECRET_USER_DOCUMENT"}
+        ]);
+        let tools = serde_json::json!([{
+            "type": "function",
+            "function": {
+                "name": "read_doc",
+                "description": "SECRET_TOOL_DESCRIPTION"
+            }
+        }]);
+        let trace = RequestLifecycleTrace {
+            enabled: false,
+            turn_id: "turn-trace".to_string(),
+            round_index: 2,
+            started_at: std::time::Instant::now(),
+            terminal_emitted: true,
+        };
+        let record = trace.record(
+            "request_started",
+            serde_json::json!({
+                "request": request_shape(&messages, &tools),
+                "token_present": true,
+            }),
+        );
+        let serialized = serde_json::to_string(&record).unwrap();
+
+        assert_eq!(record["trace_marker"], "[REQUEST-TRACE]");
+        assert_eq!(record["turn_id"], "turn-trace");
+        assert_eq!(record["model_call_round"], 2);
+        assert_eq!(record["phase"], "request_started");
+        assert_eq!(record["details"]["request"]["message_count"], 2);
+        assert_eq!(record["details"]["request"]["tool_count"], 1);
+        assert!(!serialized.contains("SECRET_SYSTEM_PROMPT"));
+        assert!(!serialized.contains("SECRET_USER_DOCUMENT"));
+        assert!(!serialized.contains("SECRET_TOOL_DESCRIPTION"));
+        assert_eq!(serialized.lines().count(), 1);
     }
 }

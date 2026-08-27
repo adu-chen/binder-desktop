@@ -1296,7 +1296,7 @@ pub fn bdocx_rewrite_route_instruction(has_tables: bool, has_images: bool) -> St
 
 /**
  * @GOV
- * codes:    BR-SYS-DATA-006-DATA-AG-AG-TURN-001
+ * codes:    BR-SYS-DATA-006-DATA-AG-AG-TOOL-032
  * type:     DATA
  * chain:    AG-TURN
  * rules:    BR-SYS-DATA-006
@@ -1564,7 +1564,7 @@ fn validate_style_attrs(
 
 /**
  * @GOV
- * codes:    BR-SYS-DATA-006-GUARD-AG-AG-TOOL-001, BR-ED-DATA-005-GUARD-AG-AG-TOOL-001
+ * codes:    BR-SYS-DATA-006-GUARD-AG-AG-TOOL-021, BR-ED-DATA-005-GUARD-AG-AG-TOOL-021
  * type:     GUARD
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006, BR-ED-DATA-005
@@ -1916,7 +1916,7 @@ fn validate_image_field(field: &TableFieldCapability, value: &Value) -> bool {
 
 /**
  * @GOV
- * codes:    BR-SYS-DATA-006-GUARD-AG-AG-TOOL-003, BR-ED-DATA-003-GUARD-AG-AG-TOOL-001
+ * codes:    BR-SYS-DATA-006-GUARD-AG-AG-TOOL-022, BR-ED-DATA-003-GUARD-AG-AG-TOOL-022
  * type:     GUARD
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006, BR-ED-DATA-003

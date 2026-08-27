@@ -110,6 +110,40 @@ async function assertWorkspaceOperationDecisionProjection() {
   view.unmount();
   agStore.reset();
   vi.mocked(resolveDecisionAndContinue).mockReset();
+
+  // 后端裁决成功、后处理失败时 DecisionRequest 已是终态：卡片必须清除，不能再次点击。
+  agStore.setPendingDecision({
+    requestId: "decision-projection-failed",
+    kind: "permission",
+    payload: {
+      workspaceOperationPlanId: "plan-projection-failed",
+      summary: "新建 draft.md",
+      operations: [{ itemId: "item-create", kind: "create_document", targetPath: "draft.md", resourceKind: "file" }],
+    },
+  });
+  vi.mocked(resolveDecisionAndContinue).mockRejectedValue({
+    code: "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED",
+    message: "初始内容投影失败，已安全撤销创建",
+    decisionResolved: true,
+  });
+
+  const failedView = render(<DecisionBar />);
+  await act(async () => {
+    fireEvent.click(failedView.getByRole("button", { name: "确认并执行" }));
+  });
+
+  expect(resolveDecisionAndContinue).toHaveBeenCalledTimes(1);
+  expect(agStore.getSnapshot().pendingDecision).toBeNull();
+  expect(failedView.queryByRole("button", { name: "确认并执行" })).toBeNull();
+  const failureMessages = agStore.getSnapshot().sessions.flatMap((session) => session.messages);
+  expect(failureMessages[failureMessages.length - 1]).toMatchObject({
+    role: "assistant",
+    error: true,
+    content: expect.stringContaining("WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED"),
+  });
+  failedView.unmount();
+  agStore.reset();
+  vi.mocked(resolveDecisionAndContinue).mockReset();
 }
 
 // Migrated intact from src/components/ws/buildTree.test.ts.
@@ -539,6 +573,25 @@ describe("FileTree「＋」新建下拉（WS-NEW-BUTTON-01）", () => {
     assertUnsavedTabCloseGuard();
     cleanup();
     await assertWorkspaceOperationDecisionProjection();
+  });
+
+  it("WS-RESOURCE-WRITE-GUARD-01：目录下存在 dirty 会话时空目录删除也须确认提示", () => {
+    tabsStore.reset();
+    edStore.reset();
+    tabsStore.openDoc("notes/x.md");
+    edStore.loadDoc("notes/x.md", "未保存", "new-file");
+    edStore.setTabState("notes/x.md", "dirty");
+    // notes 在磁盘投影中为空目录（无前缀条目）→ 旧逻辑不确认；dirty 会话存在 → 新逻辑必须提示。
+    const { container } = renderFileTree([dir("notes")]);
+    fireEvent.contextMenu(container.querySelector(".ftn-dir-row")!, { clientX: 1, clientY: 2 });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    clickMenuItem(container, "删除");
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain("未保存");
+    expect(mockedDeleteFolder).toHaveBeenCalledWith("notes", "empty");
+    confirmSpy.mockRestore();
+    tabsStore.reset();
+    edStore.reset();
   });
 });
 

@@ -78,6 +78,7 @@ chain_id: DE-DIFF
 主责模块: DE
 status: active
 risk_tier: P1
+integration_test: src-tauri/tests/core_chain.rs::accepted_proposal_flows_through_de_to_ws_landing
 -->
 
 <!-- RULE

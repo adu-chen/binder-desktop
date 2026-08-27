@@ -1,6 +1,6 @@
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-REF-REF-INJECT-001
+ * codes:    BR-REF-DATA-003-DATA-REF-REF-INJECT-006, BR-SYS-DATA-002-DATA-REF-REF-INJECT-006
  * type:     DATA
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003, BR-SYS-DATA-002
@@ -120,7 +120,7 @@ function parseMessages(value: unknown): ReferenceSessionMessage[] {
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-REF-REF-INJECT-004
+ * codes:    BR-REF-DATA-003-GUARD-REF-REF-INJECT-006
  * type:     GUARD
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003
@@ -181,7 +181,7 @@ export function dataTransferHasAnyType(dataTransfer: TransferTypesLike, types: r
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-003-REF-REF-INJECT-002
+ * codes:    BR-REF-DATA-003-GUARD-REF-REF-INJECT-007
  * type:     GUARD
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-003
@@ -437,8 +437,8 @@ export function referenceFromPlainTextPaste(text: string): ReferencePayload | nu
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-004-REF-REF-INJECT-003
- * type:     DATA
+ * codes:    BR-REF-DATA-004-RB-REF-REF-INJECT-001
+ * type:     RB
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-004
  * term_ref: TERM-REF-004, TERM-REF-003

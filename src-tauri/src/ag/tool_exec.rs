@@ -239,14 +239,8 @@ pub fn exec_read_only(
             // AG-CTX-01：read_doc 支持 blocks 范围参数（可选）——只返回指定块的完整投影
             // （含 node_json，供 block_ops 提案从 node_json 复制节点构造 afterNode）；
             // 省略 blocks 参数时返回完整内容（向后兼容）。轻量索引走 list_blocks。
-            if let Some(blocks) = args
-                .get("blocks")
-                .and_then(|value| value.as_array())
-            {
-                let wanted: Vec<&str> = blocks
-                    .iter()
-                    .filter_map(|value| value.as_str())
-                    .collect();
+            if let Some(blocks) = args.get("blocks").and_then(|value| value.as_array()) {
+                let wanted: Vec<&str> = blocks.iter().filter_map(|value| value.as_str()).collect();
                 if wanted.is_empty() {
                     return Err(IpcError::new(
                         "AG_TOOL_ARG",
@@ -288,9 +282,7 @@ pub fn exec_read_only(
                     let mut entry = serde_json::Map::new();
                     entry.insert(
                         "block_id".to_string(),
-                        serde_json::Value::String(
-                            block.block_id.clone().unwrap_or_default(),
-                        ),
+                        serde_json::Value::String(block.block_id.clone().unwrap_or_default()),
                     );
                     entry.insert(
                         "block_index".to_string(),
@@ -314,10 +306,7 @@ pub fn exec_read_only(
                     }
                     entry.insert("depth".to_string(), serde_json::json!(block.depth));
                     let text: String = block.text.chars().take(40).collect();
-                    entry.insert(
-                        "text".to_string(),
-                        serde_json::Value::String(text),
-                    );
+                    entry.insert("text".to_string(), serde_json::Value::String(text));
                     if let Some(fingerprint) = &block.fingerprint {
                         entry.insert(
                             "fingerprint".to_string(),
@@ -479,7 +468,10 @@ mod tests {
         .unwrap();
         assert!(out.contains("第二行"), "应返回索引 1 的块: {out}");
         assert!(!out.contains("第一行"), "不应包含未选中的块 0");
-        assert!(!out.contains("\"content\":"), "范围读取应省略整篇 content: {out}");
+        assert!(
+            !out.contains("\"content\":"),
+            "范围读取应省略整篇 content: {out}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -505,36 +497,38 @@ mod tests {
             std::fs::write(dir.join(format!("docs/f{i}.txt")), "content").unwrap();
         }
         // 无 path：36 文件 > 30 豁免 → overview。
-        let overview =
-            exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({})).unwrap();
+        let overview = exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({})).unwrap();
         let value: serde_json::Value = serde_json::from_str(&overview).unwrap();
         assert_eq!(value["mode"], "overview");
         assert_eq!(value["total_files"], 36);
         assert!(value.get("entries").is_none(), "概览不得携带全量 entries");
-        assert!(
-            value["top_level_dirs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|d| d["rel_path"] == "docs" && d["file_count"] == 35)
-        );
+        assert!(value["top_level_dirs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["rel_path"] == "docs" && d["file_count"] == 35));
         // path="docs"：一层直接子项（35 文件 + sub 目录，不递归）。
-        let children =
-            exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({ "path": "docs" }))
-                .unwrap();
+        let children = exec_read_only(
+            &ctx(&dir),
+            "list_docs",
+            &serde_json::json!({ "path": "docs" }),
+        )
+        .unwrap();
         let child_value: serde_json::Value = serde_json::from_str(&children).unwrap();
         assert_eq!(child_value["mode"], "children");
         assert_eq!(child_value["total_items"], 36); // docs/f0..34 + docs/sub
-        assert!(
-            child_value["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|i| i["rel_path"] == "docs/sub" && i["file_count"] == 0)
-        );
+        assert!(child_value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["rel_path"] == "docs/sub" && i["file_count"] == 0));
         // 不存在目录 → 明确错误码。
-        let err = exec_read_only(&ctx(&dir), "list_docs", &serde_json::json!({ "path": "nope" }))
-            .unwrap_err();
+        let err = exec_read_only(
+            &ctx(&dir),
+            "list_docs",
+            &serde_json::json!({ "path": "nope" }),
+        )
+        .unwrap_err();
         assert_eq!(err.code, "WS_LIST_DIR_MISSING");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -558,8 +552,7 @@ mod tests {
             "glob 应命中寓言文件: {out}"
         );
         assert!(!out.contains("readme.md"), "不应命中无关文件: {out}");
-        let err = exec_read_only(&ctx(&dir), "workspace_glob", &serde_json::json!({}))
-            .unwrap_err();
+        let err = exec_read_only(&ctx(&dir), "workspace_glob", &serde_json::json!({})).unwrap_err();
         assert_eq!(err.code, "WS_GLOB_PATTERN_MISSING");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -742,5 +735,4 @@ mod tests {
         assert_eq!(blocked["documentModified"], false);
         let _ = std::fs::remove_dir_all(dir);
     }
-
 }

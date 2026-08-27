@@ -58,7 +58,7 @@ pub fn build_payload(proposal: &ChangeProposal) -> DiffPayload {
 
 /**
  * @GOV
- * codes:    BR-AG-DATA-003-GUARD-DE-DE-DIFF-001
+ * codes:    BR-AG-DATA-003-GUARD-DE-DE-DIFF-004
  * type:     GUARD
  * chain:    DE-DIFF
  * rules:    BR-AG-DATA-003
@@ -81,7 +81,7 @@ pub fn target_declared(
 
 /**
  * @GOV
- * codes:    BR-DE-DATA-001-GUARD-DE-DE-DIFF-001
+ * codes:    BR-DE-DATA-001-GUARD-DE-DE-DIFF-005
  * type:     GUARD
  * chain:    DE-DIFF
  * rules:    BR-DE-DATA-001

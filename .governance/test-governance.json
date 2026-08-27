@@ -142,7 +142,7 @@
       "risk": "critical",
       "source_globs": [
         "src/components/ed/**", "src/services/ed*", "src/services/fontService*", "src/store/ed*", "src/store/outlineStore*",
-        "src-tauri/src/fonts/**", "docs/01_modules/ED/**"
+        "src-tauri/src/fonts/**", "src-tauri/src/ed/**", "docs/01_modules/ED/**"
       ],
       "test_globs": [
         "src/components/ed/**/*.test.ts", "src/components/ed/**/*.test.tsx",

@@ -94,6 +94,7 @@ chain_id: PCG-GENERATE
 主责模块: PCG
 status: active
 risk_tier: P1
+integration_test: scripts/test_governance.test.mjs::生成可点击的产品故事地图和格式矩阵
 -->
 
 <!-- RULE
@@ -115,6 +116,7 @@ chain_id: PCG-AUDIT
 主责模块: PCG
 status: active
 risk_tier: P1
+integration_test: scripts/test_governance.test.mjs::接受具有完整追溯、主链和独立状态的注册表
 -->
 
 <!-- RULE
@@ -144,6 +146,7 @@ rule_id: BR-PCG-VERIFY-002
 - `product-capability-atlas.html`：产品故事地图、详情、格式矩阵和缺口视图；
 - `product-capability-coverage.json`：机器可读汇总；
 - `product-capability-chain-audit.md`：唯一性与追溯审计报告；
+- `feature-status-tree.html`：功能状态树（人工审计与跟进视图）——L1–L4 层级 + L5 原子行为叶子，三态审计状态、链路/规则映射标签；数据源为 `function-ledger.json` 的 `feature_audit`（**L5 级**，key = 台账行 id），链路/规则引用经 ADUS 注册表只读校验，不进入 ADUS 索引、不参与 governance:generate。三态为**实现健康度**口径：设计=未实现；未闭合=已实现但半实现/有缺陷/有残留；已闭合=已实现且正常完整（默认按台账"已实现"状态，最终人工审计兜底）。L4 分支状态按最差进展聚合。`evidence` 为判定留痕（图谱自动化 / 测试通过 / 验证卡 / 人工确认），缺失时生成器仅告警不阻断；
 - ADUS 的产品能力索引。
 
 PCG 通过 REQ/RULE/CHAIN/TERM/测试/验证 ID 连接现有治理体系。代码仍以 RULE/CHAIN 的 `@GOV` 标注为准，不要求每段代码直接声明 ProductCapability。
@@ -157,3 +160,7 @@ PCG 通过 REQ/RULE/CHAIN/TERM/测试/验证 ID 连接现有治理体系。代�
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-02 | v1.0 | PCG-SPEC 首版：建立能力/变体模型、独立状态维度、主链唯一性、生成产物边界与 PCG-GENERATE/PCG-AUDIT 静态规则。 |
+| 2026-08-25 | v1.1 | 生成物边界变更：PCG-GENERATE 产物清单新增 `feature-status-tree.html`（功能状态树，人工审计人类友好视图）。数据源为 `function-ledger.json` 的 `feature_audit`（scripts/seed_function_audit.mjs 一次性种子化），生成器 scripts/generate_function_tree.mjs（npm `product:tree`）。该产物仅只读校验 ADUS 链路/规则注册表，不写入 ADUS、不参与 governance:generate，因此本变更未运行 governance:generate（经人工确认，保持 ADUS 逻辑零改动）。 |
+| 2026-08-25 | v1.2 | 三态语义修正为「实现健康度」口径：verified=已实现且正常完整（默认按台账"已实现"状态，人工审计兜底）；unclosed=已实现但半实现/有缺陷/有残留（台账缺陷信号命中）；designed=未实现。`evidence` 由硬性门槛放宽为判定留痕（缺失仅告警）。种子策略同步更新。 |
+| 2026-08-25 | v1.3 | 状态三展示名与字段值由 `verified`（已验证）更名为 `closed`（已闭合），与「未闭合」对称，字段枚举同步：`designed | unclosed | closed`。 |
+| 2026-08-25 | v1.4 | 审计粒度下沉到 L5 原子行为：`feature_audit` 每行对应一个 L5（key = 台账行 id），L4 为最差进展聚合分支，L5 为树叶子展示状态/链路/证据。 |

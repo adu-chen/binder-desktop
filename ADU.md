@@ -583,6 +583,7 @@ chain_id: [链路 ID]
 主责模块: [模块编码]
 status: active
 risk_tier: normal
+integration_test: [测试文件路径]::[测试名称]
 -->
 ```
 
@@ -591,6 +592,9 @@ status 合法值：active（默认）| planned（尚未实现，豁免 CHAIN_ENT
 risk_tier（可选）合法值：P0 | P1 | normal（默认）。
   P0 为高风险关键链路，P1 为次高风险链路，normal 为普通链路。
   用于 §5.5 日志覆盖分级；项目可由 APC 统一声明关键链路的 risk_tier。缺省视为 normal。
+
+integration_test（必填）使用单数字段名，合法值与校验规则见 §5.6。
+同一现有统一测试可被多条真实覆盖的 CHAIN 显式引用；该字段不要求测试文件或测试名称跨链唯一。
 
 链路权威源说明：
   `<!-- CHAIN -->` 标注块是链路的唯一事实来源。
@@ -1661,7 +1665,7 @@ ADUS 链路注册表中每条链路必须有 `integration_test` 字段，不允�
   `[测试文件路径]::[测试名称]`   — 已有集成测试，路径可验证
   `deferred: phase-N`             — 当前阶段有意推迟，N 为预计阶段编号
 
-audit 检测规则（enforcement: deferred — 当前引擎未实现 CHAIN_INTEGRATION_TEST_MISSING 检测）：
+audit 检测规则：
   `integration_test` 字段缺失或为空 → 报 `CHAIN_INTEGRATION_TEST_MISSING` warning
   `deferred` 值存在 → 通过 audit，但在 audit 报告中列出所有 deferred 条目供人类确认优先级
 
@@ -1866,3 +1870,4 @@ Issue Trace 完成后，必须产出文件范围结论，作为 ADP Scope Lock �
 | 2026-08-01 | v1.21 | TEST-GOVERNANCE-01：§0 接入 test_governance_path；§5.6 建立测试来源、模块 × 层级 × 风险模型、动态资产发现、变更影响选择、失败关闭与测试/验证分证据规则 |
 | 2026-06-09 | v1.21 | 结构性减负：§4.3 新增「@GOV 强制标注范围」分层（强制=CHAIN 入口 error / 应当=业务可执行块 BLOCK_UNANNOTATED warning / 不要求=纯展示组件、薄包装、纯类型），明确人类可显式豁免须留痕；§4.5 CHAIN_ENTRY_UNANNOTATED 改述为引擎已实现的覆盖式检测、入口函数粒度标 deferred，superseded 链路加入豁免 |
 | 2026-08-01 | v1.22 | triage 语义修复：§5.2 明确 BLOCK_UNANNOTATED 为负空间发现而非正式分类；§5.3 收紧为已有 `@GOV rules: []` 的七类分类记录；新增 §5.3.1 标注延期清单，以文件 + symbol 精确豁免，禁止决策记录和文本包含匹配混入 triage |
+| 2026-08-26 | v1.23 | CHAIN 集成测试契约闭环：§3.2 模板补充必填单数字段 `integration_test`，明确统一测试可被多条真实覆盖链路复用；§5.6 移除 deferred enforcement 说明，与生成器及只读 audit 的实际检测能力对齐。 |

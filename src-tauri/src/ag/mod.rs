@@ -27,6 +27,9 @@ pub mod memory_link;
 /// AG-1.0-IMP-TASKRUN-01 · 受限任务实例编排机 SM-AG-04（TERM-AG-015/016 · BR-SYS-STATE-008）。
 pub mod task;
 
+/// AG Prompt Runtime · 动态消息装配、当前文档投影、provider 投影与最终请求审计。
+pub mod prompt_runtime;
+
 /// PI-AG-07 · 系统提示词正文（三类回合，文本属实现期运营配置）。
 pub mod prompts;
 
@@ -44,3 +47,60 @@ pub mod blocks;
 
 /// 富文档结构化 BlockOperation 校验与 Diff 规范化。
 pub mod block_ops;
+
+/// AgentTurn command、流式回合与状态事件编排。
+pub mod turn_runtime;
+
+/// AgentTurn 单活注册、取消控制与预览回执。
+pub mod turn_control;
+
+/// AgentTurn 和 ToolLoop 的状态事件输出。
+pub mod turn_events;
+
+/// AgentTurn 显式目标集合与引用上下文装配。
+pub mod turn_reference;
+
+/// AgentTurn PromptPackage、消息和 CapabilityGrant 装配。
+pub mod turn_prompt;
+
+/// AgentTurn 模型续轮、工具执行与终态结算。
+pub mod turn_tool_loop;
+
+/// Agent 内容修改操作解析、结构校验与 PendingDiff 投影。
+pub mod edit_runtime;
+
+/// Agent 编辑操作的纯逻辑解析与结构保护。
+pub mod edit_support;
+
+/// ImageOperation 运行时校验与物化。
+pub mod edit_image_runtime;
+
+/// TableOperation 运行时校验。
+pub mod edit_table_runtime;
+
+/// Agent 编辑运行时内部类型。
+pub mod edit_types;
+
+/// 已校验编辑操作的内容与 DiffCard 展示投影构造。
+pub mod edit_projection;
+
+#[cfg(test)]
+mod edit_runtime_tests;
+
+/// TaskRun、DecisionRequest 与 TaskPlan 运行时编排。
+pub mod task_runtime;
+
+/// Agent 会话和回合历史 command 路由。
+pub mod history_routes;
+
+/// Agent block 查询与显式引用上下文适配。
+pub mod reference_runtime;
+
+/// AG-ASSIST command 与终态编排。
+pub mod assist_runtime;
+
+/// AG-ASSIST 轻量请求消息构造。
+pub mod assist_prompt;
+
+/// Agent runtime 兼容门面；实现由上述 owner 模块承载。
+pub mod runtime;

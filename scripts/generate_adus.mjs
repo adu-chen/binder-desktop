@@ -363,7 +363,7 @@ function buildChainRegistry(allChains) {
     c['chain_id'] ?? '',
     c['主责模块'] ?? c['owner_module'] ?? '',
     c['status'] ?? 'active',
-    c['集成测试'] ?? c['integration_tests'] ?? '',
+    c['integration_test'] ?? c['集成测试'] ?? c['integration_tests'] ?? '',
   ]);
   return mdTable(['chain_id', '主责模块', 'status', '集成测试'], rows);
 }

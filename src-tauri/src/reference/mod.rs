@@ -13,3 +13,6 @@ pub mod inject;
 /// REF-REFERENCE-REPAIR-01 F3/F4/F6 · 注入上下文格式化与选区锚校验（BR-REF-DATA-003 / VERIFY-001）。
 /// 纯函数层：doc/selection 读取由 AG 完成后传入，REF 不反向依赖 AG。
 pub mod context;
+
+/// Tauri command 适配层。
+pub mod routes;

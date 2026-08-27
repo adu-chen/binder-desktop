@@ -43,6 +43,7 @@ chain_id: KB-RETRIEVE
 主责模块: KB
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE

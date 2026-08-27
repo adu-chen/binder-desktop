@@ -85,6 +85,7 @@ chain_id: CLOUD-AUTH
 主责模块: SYS
 status: active
 risk_tier: P0
+integration_test: deferred: phase-5
 -->
 认证与会话续期链：客户端登录获取会话令牌 → 持有 → 过期续期 → 登出/失效回落未认证。
 
@@ -93,6 +94,7 @@ chain_id: CLOUD-GATE
 主责模块: SYS
 status: active
 risk_tier: P0
+integration_test: deferred: phase-5
 -->
 订阅门禁硬门链：模型调用前提交会话令牌 → 服务端裁决有效订阅 → 通过/拒绝；拒绝则不得发起模型调用。
 
@@ -101,6 +103,7 @@ chain_id: CLOUD-INVOKE
 主责模块: SYS
 status: active
 risk_tier: P0
+integration_test: deferred: phase-5
 -->
 网关调用链：通过门禁后经 AI 网关发起模型调用 → 套餐计量或 BYOK 透传 → 流式回显 → 完成/错误。
 

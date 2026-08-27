@@ -1,5 +1,5 @@
 {
- "schema_version": 1,
+ "schema_version": 2,
  "registry_id": "FL-BINDER-01",
  "title": "Binder 产品功能明细表（台账数据源）",
  "description": "功能明细表台账的机器可读数据源。一行登记一个可验收的 L5 原子行为；L1–L4 为重复层级字段。由 scripts/generate_function_ledger.mjs 生成 binder-product-function-ledger.xlsx。",
@@ -1966,6 +1966,1560 @@
    "status": "已实现 · 待核验 · EP",
    "acceptance": "二次打开预览走本地缓存；断网仍可打开已缓存预览；缩放与背景表现一致。",
    "note": "PRV-PREVIEW-OPT-01；关联 REQ-PRV-005。"
+  }
+ ],
+ "feature_audit": [
+  {
+   "key": "F-ACC-001",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-002",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-004",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-005",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-006",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-007",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ACC-008",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-003",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-004",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-005",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-006",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-007",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-008",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-009",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-010",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-011",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-012",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-013",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-014",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-015",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；规划项；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-016",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-017",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-018",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-019",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-020",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-021",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-022",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-023",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-024",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-025",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-026",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-027",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-028",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-029",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-030",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-031",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AG-032",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-AST-001",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-AST-002",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-AST-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-CBT-001",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-CBT-002",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-CBT-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-CBT-004",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-CBT-005",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-CBT-006",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-DE-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-DE-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-DE-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-DE-004",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-003",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-004",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-005",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-006",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-007",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-008",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-009",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-010",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-011",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-012",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-013",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-014",
+   "verify_state": "unclosed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；缺陷信号：待审计，需人工复核",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-015",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-016",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-017",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-018",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-019",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-020",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-021",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-022",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-023",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-024",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-025",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-026",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-027",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-028",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-029",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-030",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-031",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-032",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-033",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-034",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-035",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-036",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-037",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-038",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-AGENT-BDOCX-STRUCTURED-EDIT"
+    ]
+   },
+   "note": "种子；默认按已实现正常，请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-039",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-041",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-042",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-043",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-044",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-045",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-046",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-047",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-048",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-049",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-050",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-051",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-052",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-053",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-054",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-055",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；待审计项请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-056",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；待审计项请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-057",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；待审计项请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-058",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；待审计项请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-059",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-MARKDOWN-SAFE-SAVE",
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；待审计项请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-060",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-061",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-062",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-063",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-064",
+   "verify_state": "unclosed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；缺陷信号：残留，需人工复核",
+   "audited_at": null
+  },
+  {
+   "key": "F-ED-065",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ENT-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ENT-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ENT-003",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ENT-004",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ENT-005",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-ENT-006",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-KB-001",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-KB-002",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-KB-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-003",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-004",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-005",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-006",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-007",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-PRV-008",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-REF-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-REF-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-REF-003",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-TPL-001",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-TPL-002",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-TPL-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-TPL-004",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-003",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-004",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-005",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-006",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-007",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-008",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-009",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-010",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-011",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": {
+    "kind": "atlas_automation",
+    "refs": [
+     "VAR-EDIT-BDOCX-SUPPORTED-SUBSET"
+    ]
+   },
+   "note": "种子；待审计项请人工确认；图谱证据候选（见 evidence），确认后升已闭合",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-012",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-013",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-014",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
+  },
+  {
+   "key": "F-WB-015",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WS-001",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；默认按已实现正常，请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WS-002",
+   "verify_state": "closed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；待审计项请人工确认",
+   "audited_at": null
+  },
+  {
+   "key": "F-WS-003",
+   "verify_state": "designed",
+   "chain_ids": [],
+   "rule_ids": [],
+   "evidence": null,
+   "note": "种子；规划项",
+   "audited_at": null
   }
  ]
 }

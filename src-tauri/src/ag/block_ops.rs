@@ -212,9 +212,10 @@ fn validate_after_node(
     operation: &RequestedBlockOperation,
     target: &AgentEditableBlock,
 ) -> Result<(), IpcError> {
-    let after_node = operation.after_node.as_ref().ok_or_else(|| {
-        invalid("replace_node 必须提供 afterNode")
-    })?;
+    let after_node = operation
+        .after_node
+        .as_ref()
+        .ok_or_else(|| invalid("replace_node 必须提供 afterNode"))?;
     let node = object(after_node, "afterNode")?;
     exact_keys(node, &["type", "attrs", "content"], "afterNode")?;
     let node_type = node
@@ -425,9 +426,10 @@ pub fn validate_and_build(
                     ));
                 }
                 // 校验 afterNode 结构（节点类型和内容）
-                let after_node = operation.after_node.as_ref().ok_or_else(|| {
-                    invalid("insert_before/insert_after 必须提供 afterNode")
-                })?;
+                let after_node = operation
+                    .after_node
+                    .as_ref()
+                    .ok_or_else(|| invalid("insert_before/insert_after 必须提供 afterNode"))?;
                 let node = object(after_node, "afterNode")?;
                 let node_type = node
                     .get("type")
@@ -464,9 +466,10 @@ pub fn validate_and_build(
             }
             "append" => {
                 // 校验 afterNode 结构
-                let after_node = operation.after_node.as_ref().ok_or_else(|| {
-                    invalid("append 必须提供 afterNode")
-                })?;
+                let after_node = operation
+                    .after_node
+                    .as_ref()
+                    .ok_or_else(|| invalid("append 必须提供 afterNode"))?;
                 let node = object(after_node, "afterNode")?;
                 let node_type = node
                     .get("type")

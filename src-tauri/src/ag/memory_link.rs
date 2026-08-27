@@ -20,7 +20,7 @@ pub struct CaptureRequest {
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-004-GUARD-AG-AG-TURN-001
+ * codes:    BR-AG-STATE-004-GUARD-AG-AG-TURN-019
  * type:     GUARD
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-004
@@ -47,7 +47,7 @@ pub fn on_turn_terminal(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-004-EFFECT-AG-AG-TURN-002
+ * codes:    BR-AG-STATE-004-EFFECT-AG-AG-TURN-029
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-004

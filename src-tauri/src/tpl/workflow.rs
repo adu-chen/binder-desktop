@@ -107,7 +107,7 @@ pub fn transition(state: WorkflowState, event: WorkflowEvent) -> Option<Workflow
 
 /**
  * @GOV
- * codes:    BR-TPL-STATE-001-EFFECT-TPL-TPL-FLOW-001
+ * codes:    BR-TPL-STATE-001-EFFECT-TPL-TPL-FLOW-003
  * type:     EFFECT
  * chain:    TPL-FLOW
  * rules:    BR-TPL-STATE-001
@@ -136,7 +136,7 @@ pub fn save_run(
 
 /**
  * @GOV
- * codes:    BR-TPL-STATE-001-QUERY-TPL-TPL-FLOW-001
+ * codes:    BR-TPL-STATE-001-QUERY-TPL-TPL-FLOW-002
  * type:     QUERY
  * chain:    TPL-FLOW
  * rules:    BR-TPL-STATE-001

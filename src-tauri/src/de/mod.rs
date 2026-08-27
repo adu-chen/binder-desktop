@@ -19,6 +19,9 @@ pub mod lifecycle;
 /// PI-BE-02 · DiffPayload 持久化（diff_payloads，BR-DE-DATA-002）；accepted 落盘取回内容。
 pub mod store;
 
+/// Tauri command 适配与 Diff 生命周期编排。
+pub mod routes;
+
 /// SM-DE-01 状态（A-DE-M-S-01 §2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffState {

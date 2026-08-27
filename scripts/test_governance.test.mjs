@@ -136,7 +136,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.WS.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'WS')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(41); // 2026-08-22 PDF 预览路由回归 +1（WorkspaceUI：pdf 走只读预览，修复 WS_NOT_UTF8 误开二进制，人类批准基线调整 40→41）
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(42); // 2026-08-22 PDF 预览路由回归 +1（WorkspaceUI：pdf 走只读预览，修复 WS_NOT_UTF8 误开二进制，人类批准基线调整 40→41）；2026-08-24 WS-RESOURCE-WRITE-GUARD-01 +1（WorkspaceUI：BR-WS-STATE-009 dirty 会话空目录删除确认提示，人类批准基线调整 41→42）
     expect(inventory.modules.DE.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'DE')

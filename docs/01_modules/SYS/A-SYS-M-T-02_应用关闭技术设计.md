@@ -47,6 +47,7 @@ chain_id: APP-CLOSE
 主责模块: SYS
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 APP-CLOSE 覆盖：关闭请求触发（窗口关闭按钮 / Cmd+Q / Dock 退出 / 系统关机通知）→ 关闭屏障 → 清点

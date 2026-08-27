@@ -247,7 +247,7 @@ AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模�
 
 | 维度 | 1.0 激活策略 |
 |---|---|
-| 目标 | 当前活动文档/选区可读写；显式引用文档默认只读；新文档以空基准 ChangeProposal 创建 |
+| 目标 | 当前活动文档/选区可读写；显式引用文档默认只读；新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认后建盘并投影初始内容 Diff |
 | 工作策略 | `direct_response / read_only / edit_proposal / create_proposal / clarify` 五类确定性路由；不生成通用多步骤 Plan |
 | 工具 | 按 IntentResult 生成本轮最小允许集；文件移动/建目录、表格/图片高级操作仅在专项 G5 通过后启用 |
 | 上下文 | 当前 LogicalState + 当前输入 + 显式引用 + 同文档必要历史；AST/KB/TPL 自动供给关闭 |
@@ -266,6 +266,7 @@ chain_id: AG-TURN
 主责模块: AG
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -290,8 +291,9 @@ rule_id: BR-AG-DATA-003
 -->
 代理回合修改建议产出（ChangeProposal）的目标边界（2026-07-04 人类裁决，**取代原「单文档铁律」**）：
 target 一律限 active workspace 内（X-FORBID-004）；**默认目标为当前文档**；用户**显式指向**其他
-文档（@mention 引用/明示路径）或明确要求创建新文档时，可产出指向该文档/新文档的 ChangeProposal
-（新建以空基准表达，承 BR-DE-DATA-002）；一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
+文档（@mention 引用/明示路径）或明确要求创建新文档时，可产出指向该文档的 ChangeProposal
+（新建文档必须经 `plan_workspace_operation` 前置裁决，确认后创建真实资源并投影初始内容 Diff，
+承 A-WS-M-T-02 §6；内容 Diff 不得创建资源，X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）；一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
 LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot
 中的 LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。识别到
 **项目级整体构建意图**（从蓝图构建完整项目——多文件修改本身不再是升级判据）时提议触发构建
@@ -384,6 +386,7 @@ chain_id: AG-TOOL
 主责模块: AG
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -407,7 +410,8 @@ BR-WS-PERSIST-003 失败即停并逆序补偿，重启后的未完成计划进�
 再进入普通内容 Diff；不得使用 `create_doc` 或 `propose_edit(delete_*)` 绕过资源计划。状态转移归
 SM-AG-02（工具循环）与 SM-WS-04（资源执行）。
 本轮允许集必须从 IntentResult 派生：`answer/analyze` 只允许必要只读工具，`edit` 允许目标读取与
-`propose_edit/edit_blocked`，`create_document` 只允许空基准提案，`clarify` 不开放产生副作用的工具；
+`propose_edit/edit_blocked`，`create_document` 只允许 `plan_workspace_operation`（确认后建盘并投影初始内容
+Diff），`propose_edit` 目标必须已存在（内容 Diff 不得创建资源，WS-RESOURCE-WRITE-GUARD-01），`clarify` 不开放产生副作用的工具；
 结构操作或富文档高级工具只有在意图、目标、格式能力和 Runtime Profile feature gate 同时允许时才可
 进入清单。工具注册只表示系统拥有该能力，不等于当前回合获权；执行器必须再次校验本轮允许集，模型
 不得通过伪造工具名、参数或提示内容扩权。
@@ -561,6 +565,7 @@ chain_id: AG-ASSIST
 主责模块: AG
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE
@@ -627,6 +632,7 @@ A-ED-M-T-01 §5.1）经 ed.apply_edit 视为用户编辑直改；chat/agent **�
 chain_id: AG-MODEL-CATALOG
 主责模块: AG
 status: active
+integration_test: deferred: phase-5
 -->
 模型注册表维护与预设清单拉取、能力偏好配置与解析、调用前按能力偏好解析 provider/model。
 
@@ -948,6 +954,7 @@ status: mapped
 | 2026-08-15 | v2.45 | AG-1.0-TASKRUN-REWORK-INTENT-01：IntentResult 复杂目标 → 自动 TaskPlan——is_complex_target 判定（写意图 + 多文档 或 单文档整篇信号）；回合内 intent_result 后接线（build_task_plan：每文档读取→生成建议/确认点，read→propose 依赖；同 run 已有计划不重复建）；前端 listPlansByRun snake→camel 映射 + refreshSessionPlans（done/error 后刷新）。 |
 | 2026-08-15 | v2.46 | AG-1.0-DECISION-CARD-01：任务裁决卡重构——独立固定裁决区（DecisionBar，Composer 上方，任务暂停等决策；类型化选项：permission 允许本次/拒绝、plan_choice 等确认并继续/取消）；输入门控（pendingDecision 时手动发送拦截 + startTurn 前端 gate，auto-continue 除外）；纯确认/拒绝短词 intent 降权 Answer（不落入 general 档 Edit 强制工具）；提示词强化删除走 delete_doc/delete_folder（禁止 replace_document 清空代替删除）。 |
 | 2026-08-21 | v2.47 | 工作区资源操作基线重构：BR-AG-STATE-002、X-FORBID-006 与 TaskRun 契约改为 WorkspaceOperationPlan + DecisionRequest 前置裁决、确认后 WS 直接执行；资源操作不生成 DiffCard；CreateDocumentBundle 在资源创建后衔接普通内容 Diff；旧 AG_DELETE 链降为迁移债务。 |
+| 2026-08-22 | v2.48 | WS-RESOURCE-WRITE-GUARD-01：移除「新文档以空基准 ChangeProposal 创建」旧表述——新建文档唯一入口为 plan_workspace_operation（CreateDocumentBundle 确认后建盘并投影初始内容 Diff）；propose_edit 目标必须已存在（内容 Diff 不得创建资源，X-FORBID-006，工具层路径级拒绝）。 |
 | 2026-08-14 | v2.36 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：注册 TERM-AG-013~016（RuntimeProfile/CapabilityGrant/TaskRun/TaskStep）；新增 §7.1 Agent 1.0 运行时契约落地（REQ-AG-007/015）——RuntimeProfile 入口校验、CapabilityGrant 五因素收窄、IntentResult 收敛、TaskRun 接力、StructuredVisibleEvent 不含内部推理、授权非来源声明。 |
 | 2026-08-13 | v2.35 | AG-STRATEGY-05：BDocx 整篇改写收敛为无表格且无图片的动态条件并由服务端拒绝受保护/新引入结构；block_ops 同锚点顺序、后置校验与稳定 id reverse 闭合；proposal、编辑器预览、接受和保存的真实状态与最小运行事件对齐。 |
 | 2026-08-11 | v2.33 | AG-CTX-01：§5.1 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、AG_EDIT_TOOL_REQUIRED 文案区分、查询动词→Search、整篇对齐检测、序列化瘦身；语义详见 A-AG-M-T-02 §4 |

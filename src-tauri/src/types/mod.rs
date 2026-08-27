@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
  * type:     DATA
  * chain:    DATA-MIGRATE
  * rules:    BR-SYS-DATA-002
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -58,6 +58,31 @@ pub struct PendingDiff {
     pub created_at: i64,
     /// diff 内容载荷引用；内容形状归 DE，本结构仅占位。
     pub payload_ref: String,
+}
+
+/// AG 生产、DE 持有、WS/ED/前端消费的统一待裁决投影（A-SYS-I-P-01 §3）。
+/// 跨模块字段只允许在本共享契约中定义；各模块可持有或转换，不得复制结构体定义。
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DiffProjection {
+    pub(crate) diff_id: String,
+    pub(crate) rel_path: String,
+    pub(crate) patch_kind: String,
+    pub(crate) block_id: Option<String>,
+    pub(crate) block_index: Option<usize>,
+    pub(crate) before_text: String,
+    pub(crate) after_text: String,
+    pub(crate) location_label: String,
+    pub(crate) draft_mode: String,
+    pub(crate) snapshot_source: String,
+    pub(crate) base_session_version: Option<u64>,
+    pub(crate) base_content_hash: Option<String>,
+    pub(crate) style_ops: Option<serde_json::Value>,
+    pub(crate) block_ops: Option<serde_json::Value>,
+    pub(crate) table_ops: Option<serde_json::Value>,
+    pub(crate) image_ops: Option<serde_json::Value>,
+    pub(crate) batch: Option<serde_json::Value>,
+    pub(crate) preview_checkpoint_required: bool,
+    pub(crate) cross_doc: Option<bool>,
 }
 
 /// 文档级时间轴条目基线（REQ-CORE-007，主责 WS）。
@@ -535,6 +560,37 @@ mod tests {
         let back: PendingDiff = serde_json::from_str(&json).unwrap();
         assert_eq!(back, diff);
         assert_eq!(back.target, doc);
+    }
+
+    // covers: BR-SYS-DATA-002
+    // DiffProjection 的跨模块字段由共享类型一次性序列化，避免 AG/DE/WS 各自漂移。
+    #[test]
+    fn diff_projection_serializes_complete_shared_contract() {
+        let projection = DiffProjection {
+            diff_id: "diff-1".into(),
+            rel_path: "notes/a.md".into(),
+            patch_kind: "replace_document".into(),
+            block_id: None,
+            block_index: None,
+            before_text: String::new(),
+            after_text: "after".into(),
+            location_label: "整篇".into(),
+            draft_mode: "current_editor".into(),
+            snapshot_source: "active_editor_session".into(),
+            base_session_version: Some(2),
+            base_content_hash: Some("hash-2".into()),
+            style_ops: None,
+            block_ops: None,
+            table_ops: None,
+            image_ops: None,
+            batch: Some(serde_json::json!({ "id": "batch-1", "index": 1, "total": 2 })),
+            preview_checkpoint_required: true,
+            cross_doc: Some(false),
+        };
+        let json = serde_json::to_value(projection).unwrap();
+        assert_eq!(json["preview_checkpoint_required"], true);
+        assert_eq!(json["batch"]["id"], "batch-1");
+        assert_eq!(json["cross_doc"], false);
     }
 
     // covers: BR-SYS-DATA-002

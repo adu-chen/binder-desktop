@@ -168,7 +168,7 @@ export function normalizeMarkdownSemantic(node: JSONContent): JSONContent {
 
 /**
  * @GOV
- * codes:    BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-015
+ * codes:    BR-ED-VERIFY-001-GUARD-ED-ED-EDIT-015, BR-ED-DATA-005-GUARD-ED-ED-EDIT-015
  * type:     GUARD
  * chain:    ED-EDIT
  * rules:    BR-ED-VERIFY-001, BR-ED-DATA-005

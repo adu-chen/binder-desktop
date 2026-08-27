@@ -84,7 +84,7 @@ pub fn sweep_expiry(
 
 /**
  * @GOV
- * codes:    BR-DE-DATA-003-GUARD-DE-DE-DIFF-002
+ * codes:    BR-DE-DATA-003-GUARD-DE-DE-DIFF-006
  * type:     GUARD
  * chain:    DE-DIFF
  * rules:    BR-DE-DATA-003

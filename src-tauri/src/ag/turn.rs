@@ -121,7 +121,7 @@ pub fn is_terminal(state: TurnState) -> bool {
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TURN-001
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TURN-001, BR-SYS-STATE-007-RB-AG-AG-TURN-001
  * type:     RB
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
@@ -165,7 +165,7 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
 
 /**
  * @GOV
- * codes:    BR-AG-VERIFY-001-GUARD-AG-AG-TURN-001
+ * codes:    BR-AG-VERIFY-001-GUARD-AG-AG-TURN-020
  * type:     GUARD
  * chain:    AG-TURN
  * rules:    BR-AG-VERIFY-001
@@ -268,7 +268,13 @@ mod tests {
         assert_eq!(transition(AwaitingGate, GateDenied), Some(Denied));
         // 结构性门禁前置：除 AwaitingGate+gatePassed 外无任何状态可达 Streaming
         for from in [
-            Idle, Assembling, AwaitingClarification, Streaming, HandingOff, TurnError, Completed,
+            Idle,
+            Assembling,
+            AwaitingClarification,
+            Streaming,
+            HandingOff,
+            TurnError,
+            Completed,
             Denied,
         ] {
             assert_eq!(

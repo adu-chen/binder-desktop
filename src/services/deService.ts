@@ -106,7 +106,7 @@ async function expireDiff(diffId: string, reason: ExpiredReason, errorCode: stri
 
 /**
  * @GOV
- * codes:    BR-SYS-STATE-008-EFFECT-DE-DE-DIFF-001
+ * codes:    BR-SYS-STATE-008-EFFECT-DE-DE-DIFF-008
  * type:     EFFECT
  * chain:    DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008
@@ -145,7 +145,7 @@ export async function loadDiffDetails(diffIds: string[]): Promise<DiffDetailDto[
 
 /**
  * @GOV
- * codes:    BR-DE-DATA-002-EFFECT-DE-DE-DIFF-005
+ * codes:    BR-DE-DATA-002-EFFECT-DE-DE-DIFF-009
  * type:     EFFECT
  * chain:    DE-DIFF
  * rules:    BR-DE-DATA-002
@@ -191,7 +191,7 @@ export async function loadPersistedDiffs(): Promise<void> {
 
 /**
  * @GOV
- * codes:    BR-CORE-STATE-001-EFFECT-DE-ED-EDIT-001
+ * codes:    BR-CORE-STATE-001-EFFECT-DE-ED-EDIT-010
  * type:     EFFECT
  * chain:    DE-DIFF, ED-EDIT
  * rules:    BR-CORE-STATE-001
@@ -250,7 +250,7 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
 
 /**
  * @GOV
- * codes:    BR-CORE-STATE-003-EFFECT-DE-ED-EDIT-001
+ * codes:    BR-CORE-STATE-003-EFFECT-DE-ED-EDIT-011
  * type:     EFFECT
  * chain:    DE-DIFF, ED-EDIT, ED-DECOR, WS-SAVE
  * rules:    BR-CORE-STATE-003

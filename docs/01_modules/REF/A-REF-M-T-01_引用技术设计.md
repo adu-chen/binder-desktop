@@ -97,6 +97,7 @@ chain_id: REF-INJECT
 主责模块: REF
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE

@@ -10,6 +10,9 @@ use crate::doc::{
     tool_runtime,
 };
 use crate::ipc::IpcError;
+
+/// Tauri command 适配层。
+pub mod routes;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

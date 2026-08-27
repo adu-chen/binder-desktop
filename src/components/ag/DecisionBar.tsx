@@ -113,17 +113,22 @@ export function DecisionBar() {
       }
       agStore.setPendingDecision(null);
     } catch (cause) {
-      const value = cause as { code?: string; message?: string };
+      const value = cause as { code?: string; message?: string; decisionResolved?: boolean };
       setError(value?.message ? `[${value.code ?? "?"}] ${value.message}` : String(cause));
       if (
-        isWorkspaceOperation
-        && [
-          "WS_OPERATION_BASELINE_DRIFT",
-          "WS_OPERATION_DIRTY_TARGET",
-          "WS_OPERATION_TERMINAL",
-        ].includes(value.code ?? "")
+        value.decisionResolved === true
+        || (
+          isWorkspaceOperation
+          && [
+            "WS_OPERATION_BASELINE_DRIFT",
+            "WS_OPERATION_DIRTY_TARGET",
+            "WS_OPERATION_TERMINAL",
+          ].includes(value.code ?? "")
+        )
       ) {
-        appendOperationMessage(value?.message ? `[${value.code ?? "?"}] ${value.message}` : String(cause), true);
+        if (isWorkspaceOperation) {
+          appendOperationMessage(value?.message ? `[${value.code ?? "?"}] ${value.message}` : String(cause), true);
+        }
         agStore.setPendingDecision(null);
       }
     } finally {

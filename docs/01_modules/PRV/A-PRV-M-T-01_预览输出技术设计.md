@@ -42,6 +42,7 @@ chain_id: PRV-VIEW
 主责模块: PRV
 status: active
 risk_tier: P1
+integration_test: deferred: phase-5
 -->
 
 <!-- RULE

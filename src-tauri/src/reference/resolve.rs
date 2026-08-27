@@ -32,7 +32,7 @@ pub fn infer_doc_type(rel_path: &str) -> String {
 
 /**
  * @GOV
- * codes:    BR-REF-DATA-001-GUARD-REF-REF-INJECT-001
+ * codes:    BR-REF-DATA-001-GUARD-REF-REF-INJECT-003
  * type:     GUARD
  * chain:    REF-INJECT
  * rules:    BR-REF-DATA-001

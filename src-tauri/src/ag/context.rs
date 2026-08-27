@@ -130,20 +130,56 @@ struct Modifiers {
 }
 
 const EDIT_VERBS_STRONG: &[&str] = &[
-    "改为", "改成", "设为", "变成", "改写", "重写", "润色", "插入", "删除", "删掉",
-    "替换", "调整", "加粗", "改颜色", "改标题", "修正", "优化", "修复", "设置", "拆分",
-    "合并", "移动", "修改",
+    "改为",
+    "改成",
+    "设为",
+    "变成",
+    "改写",
+    "重写",
+    "润色",
+    "插入",
+    "删除",
+    "删掉",
+    "替换",
+    "调整",
+    "加粗",
+    "改颜色",
+    "改标题",
+    "修正",
+    "优化",
+    "修复",
+    "设置",
+    "拆分",
+    "合并",
+    "移动",
+    "修改",
     // AG-STRATEGY-03：补写作/排版类强动词——「丰富故事」「重排」「排版」等此前 verb=None 被判零工具。
-    "丰富", "扩写", "充实", "重排", "排版", "美化",
+    "丰富",
+    "扩写",
+    "充实",
+    "重排",
+    "排版",
+    "美化",
 ];
 const EDIT_VERBS_WEAK: &[&str] = &["改", "改得", "整理", "补充", "添加"];
 const CREATE_VERBS_STRONG: &[&str] = &["创建", "新建", "生成", "建立", "制作"];
 const CREATE_VERBS_WEAK: &[&str] = &["写一份", "出一份", "做一份"];
 const SEARCH_VERBS_STRONG: &[&str] = &[
-    "搜索", "查找", "检索", "找出", "列出", "列举", "显示", "展示", "有哪些", "看看有什么",
+    "搜索",
+    "查找",
+    "检索",
+    "找出",
+    "列出",
+    "列举",
+    "显示",
+    "展示",
+    "有哪些",
+    "看看有什么",
 ];
 const SEARCH_VERBS_WEAK: &[&str] = &["有没有", "在哪"];
-const ANALYZE_VERBS_STRONG: &[&str] = &["分析", "总结", "评估", "审阅", "比较", "检查", "解释", "提炼", "概述"];
+const ANALYZE_VERBS_STRONG: &[&str] = &[
+    "分析", "总结", "评估", "审阅", "比较", "检查", "解释", "提炼", "概述",
+];
 const ANALYZE_VERBS_WEAK: &[&str] = &["看看", "读一下", "建议"];
 const INSPECT_VERBS_STRONG: &[&str] = &["读取", "查看", "浏览", "打开"];
 const INSPECT_VERBS_WEAK: &[&str] = &["看下", "查一下"];
@@ -172,14 +208,22 @@ fn detect_verb(text: &str) -> (VerbKind, SignalStrength) {
 fn detect_target(text: &str, has_selection: bool) -> TargetKind {
     if text_contains_any(
         text,
-        &["标题", "段落", "颜色", "样式", "加粗", "表格", "图片", "字体", "内容", "结构", "选区"],
+        &[
+            "标题", "段落", "颜色", "样式", "加粗", "表格", "图片", "字体", "内容", "结构", "选区",
+        ],
     ) || has_selection
     {
         return TargetKind::DocElement;
     }
-    if text_contains_any(text, &["文档", "文件", "md", "文章", "这篇", "本文", "故事", "寓言", "童话", "小说", "稿件"])
-        || text_contains_any(text, &["一份", "一篇", "一个新", "一个md", "新建一", "创建一"])
-    {
+    if text_contains_any(
+        text,
+        &[
+            "文档", "文件", "md", "文章", "这篇", "本文", "故事", "寓言", "童话", "小说", "稿件",
+        ],
+    ) || text_contains_any(
+        text,
+        &["一份", "一篇", "一个新", "一个md", "新建一", "创建一"],
+    ) {
         return TargetKind::Document;
     }
     if text_contains_any(text, &["根目录", "目录", "文件夹"]) {
@@ -204,18 +248,20 @@ fn detect_modifiers(text: &str) -> Modifiers {
     }
 }
 
-const GREETING_WORDS: &[&str] = &["你好", "您好", "谢谢", "感谢", "再见", "hello", "hi", "嗨", "hey", "thanks", "thank", "bye"];
+const GREETING_WORDS: &[&str] = &[
+    "你好", "您好", "谢谢", "感谢", "再见", "hello", "hi", "嗨", "hey", "thanks", "thank", "bye",
+];
 const WORK_HINT_WORDS: &[&str] = &[
-    "文档", "文件", "标题", "段落", "修改", "编辑", "帮我", "给我", "翻译", "恢复",
-    "补齐", "重建", "清理", "创建", "新建", "查找", "搜索", "分析", "看看", "读取",
-    "怎么", "吗", "？", "请", "整理", "删除",
+    "文档", "文件", "标题", "段落", "修改", "编辑", "帮我", "给我", "翻译", "恢复", "补齐", "重建",
+    "清理", "创建", "新建", "查找", "搜索", "分析", "看看", "读取", "怎么", "吗", "？", "请",
+    "整理", "删除",
 ];
 // 疑问句中若含动作请求词（如「你能找到原内容…吗？」）→ 视为请求而非状态询问。
 // P2 修复（AG-R2-01）：扩展纠错/修订语义——用户指出缺陷（顺序/颠倒/搞错/不对/错）即隐含修改请求。
 const REQUEST_HINT_WORDS: &[&str] = &[
-    "找到", "恢复", "补齐", "重建", "清理", "修改", "改", "创建", "新建", "翻译",
-    "查找", "搜索", "分析", "看看", "读取", "整理", "删除", "编辑",
-    "发现", "顺序", "颠倒", "搞错", "错", "反", "重排", "位置", "不对", "问题",
+    "找到", "恢复", "补齐", "重建", "清理", "修改", "改", "创建", "新建", "翻译", "查找", "搜索",
+    "分析", "看看", "读取", "整理", "删除", "编辑", "发现", "顺序", "颠倒", "搞错", "错", "反",
+    "重排", "位置", "不对", "问题",
 ];
 
 /// 寒暄检测（AG-INTENT-V3-01 乐观授权）：仅当句子含寒暄词且不含任何工作/请求提示词时判为寒暄
@@ -259,8 +305,19 @@ fn detect_pure_decision(text: &str) -> bool {
 
 // 整篇对齐语义词（AG-CTX-01 F3）：把当前文档改成/替换成另一份文档的内容（如「和参考文档一样」）。
 const SYNC_REFERENCE_WORDS: &[&str] = &[
-    "和", "跟", "改成", "换成", "替换成", "按照", "参照", "照着",
-    "一样", "相同", "一致", "内容", "格式",
+    "和",
+    "跟",
+    "改成",
+    "换成",
+    "替换成",
+    "按照",
+    "参照",
+    "照着",
+    "一样",
+    "相同",
+    "一致",
+    "内容",
+    "格式",
 ];
 
 /// AG-CTX-01 F3：检测「整篇对齐/替换」任务——把当前文档改成与另一文档一致。
@@ -269,7 +326,20 @@ const SYNC_REFERENCE_WORDS: &[&str] = &[
 /// 需提示模型拆分批次或仅对齐关键章节，避免循环耗尽。
 pub fn detect_sync_from_reference(text: &str) -> Option<String> {
     // 必须有"对齐目标"信号（改成/替换成/参照…一样/一致）。
-    let has_align = text_contains_any(text, &["改成", "换成", "替换成", "按照", "参照", "照着", "一样", "相同", "一致"]);
+    let has_align = text_contains_any(
+        text,
+        &[
+            "改成",
+            "换成",
+            "替换成",
+            "按照",
+            "参照",
+            "照着",
+            "一样",
+            "相同",
+            "一致",
+        ],
+    );
     if !has_align {
         return None;
     }
@@ -331,7 +401,17 @@ pub fn resolve_intent_result(
         || target != TargetKind::None
         || text_contains_any(
             text,
-            &["当前文档", "这个文档", "这份文档", "这一段", "这段", "当前这篇", "这个故事", "这篇故事", "这个寓言"],
+            &[
+                "当前文档",
+                "这个文档",
+                "这份文档",
+                "这一段",
+                "这段",
+                "当前这篇",
+                "这个故事",
+                "这篇故事",
+                "这个寓言",
+            ],
         );
 
     let mut ambiguity = AmbiguityLevelV1::None;
@@ -379,7 +459,11 @@ pub fn resolve_intent_result(
         }
     } else if create_requested {
         // AG-INTENT-COMPOSITE-01：Create 强词 + Document/Workspace 目标 → 新建主导（先于 Edit 分支）。
-        (IntentTypeV1::CreateDocument, MutationV1::ProposeCreate, "create_document_proposal")
+        (
+            IntentTypeV1::CreateDocument,
+            MutationV1::ProposeCreate,
+            "create_document_proposal",
+        )
     } else if verb == VerbKind::Edit {
         if !has_active_doc {
             ambiguity = AmbiguityLevelV1::Blocking;
@@ -390,7 +474,11 @@ pub fn resolve_intent_result(
         }
     } else if matches!(verb, VerbKind::Create) {
         // 无文档目标的创建请求（如「帮我新建一个」）仍走新建语义。
-        (IntentTypeV1::CreateDocument, MutationV1::ProposeCreate, "create_document_proposal")
+        (
+            IntentTypeV1::CreateDocument,
+            MutationV1::ProposeCreate,
+            "create_document_proposal",
+        )
     } else if has_active_doc {
         // AG-STRATEGY-01：general 档——查询/分析/浏览等请求统一走全量工具 + 模型自决
         // （Search/Analyze/Inspect 细分并入；工具集相同，细分只徒增判定盲区）。单文档编辑
@@ -415,9 +503,7 @@ pub fn resolve_intent_result(
             },
             rel_path: active_doc_path.map(str::to_string),
         },
-        IntentTypeV1::Analyze
-        | IntentTypeV1::Inspect
-        | IntentTypeV1::Answer
+        IntentTypeV1::Analyze | IntentTypeV1::Inspect | IntentTypeV1::Answer
             if has_active_doc && !greeting =>
         {
             // AG-STRATEGY-03：非寒暄的 Answer/Inspect/Analyze 意图且已打开文档时，兜底注入当前文档
@@ -454,11 +540,8 @@ pub fn resolve_intent_result(
         "list_images",
         "workspace_glob",
     ];
-    const WRITE_PROPOSAL_TOOLS: &[&str] = &[
-        "propose_edit",
-        "plan_workspace_operation",
-        "edit_blocked",
-    ];
+    const WRITE_PROPOSAL_TOOLS: &[&str] =
+        &["propose_edit", "plan_workspace_operation", "edit_blocked"];
     let required_tools = if mutation_forbidden {
         READ_TOOLS.iter().map(|tool| (*tool).to_string()).collect()
     } else {
@@ -540,7 +623,10 @@ pub fn sha256_text(value: &str) -> String {
 
 /// 统一预算口径（BR-AG-DATA-002 预算结果）：以实际序列化 messages + tools 的字符数估算输入 token，
 /// 供 gate 与 audit 使用同一口径，避免仅信封之和导致的低估。估算为 ceil(chars / 4)（dev 近似）。
-pub fn estimate_serialized_input_tokens(messages: &[serde_json::Value], tools: &serde_json::Value) -> usize {
+pub fn estimate_serialized_input_tokens(
+    messages: &[serde_json::Value],
+    tools: &serde_json::Value,
+) -> usize {
     let messages_chars = serde_json::to_string(messages)
         .map(|value| value.chars().count())
         .unwrap_or(0);
@@ -1347,7 +1433,12 @@ mod tests {
             .contains(&"current_document_logical_state".to_string()));
 
         // 中文/英文任意表达均不瘫痪。
-        let english = resolve_intent_result("v3-en", "Restore the broken content please", Some("a.md"), false);
+        let english = resolve_intent_result(
+            "v3-en",
+            "Restore the broken content please",
+            Some("a.md"),
+            false,
+        );
         assert_eq!(english.intent_type, IntentTypeV1::Edit);
         assert!(english.required_tools.contains(&"propose_edit".to_string()));
 
@@ -1365,7 +1456,8 @@ mod tests {
         assert!(greeting_en.required_tools.is_empty());
 
         // 「你好，帮我改标题」含工作词 → 非寒暄 → Edit。
-        let greeting_plus_work = resolve_intent_result("v3-hi-work", "你好，帮我改标题", Some("a.md"), false);
+        let greeting_plus_work =
+            resolve_intent_result("v3-hi-work", "你好，帮我改标题", Some("a.md"), false);
         assert_eq!(greeting_plus_work.intent_type, IntentTypeV1::Edit);
 
         // AG-STRATEGY-01：疑问句 + 无动作动词 + 文档指涉 → Analyze（边界档），工具全量授予
@@ -1376,7 +1468,9 @@ mod tests {
         assert!(question
             .required_context
             .contains(&"current_document_logical_state".to_string()));
-        assert!(question.required_tools.contains(&"propose_edit".to_string()));
+        assert!(question
+            .required_tools
+            .contains(&"propose_edit".to_string()));
 
         // 疑问句 + 无动作动词 + 无文档指涉（如「改了吗」）→ Answer 零工具。
         let pure_question = resolve_intent_result("v3-pq", "改了吗", Some("a.md"), false);
@@ -1391,7 +1485,9 @@ mod tests {
             false,
         );
         assert_eq!(fix_request.intent_type, IntentTypeV1::Edit);
-        assert!(fix_request.required_tools.contains(&"propose_edit".to_string()));
+        assert!(fix_request
+            .required_tools
+            .contains(&"propose_edit".to_string()));
 
         // 只读信号 → Analyze 只读组（无 propose_edit）。
         let read_only = resolve_intent_result("v3-ro", "只分析不要修改", Some("a.md"), false);
@@ -1457,7 +1553,11 @@ mod tests {
     fn pure_decision_words_are_not_edit() {
         for word in ["确认", "接受", "取消", "拒绝", "好的", "可以"] {
             let r = resolve_intent_result("t-dec", word, Some("a.md"), false);
-            assert_eq!(r.intent_type, IntentTypeV1::Answer, "「{word}」应降权 Answer");
+            assert_eq!(
+                r.intent_type,
+                IntentTypeV1::Answer,
+                "「{word}」应降权 Answer"
+            );
             assert_eq!(r.mutation, MutationV1::None);
             assert!(!r.required_tools.contains(&"propose_edit".to_string()));
         }

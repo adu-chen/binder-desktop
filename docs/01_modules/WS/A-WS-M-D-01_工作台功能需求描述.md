@@ -192,7 +192,7 @@ owner_module: WS
 status: active
 summary: 对创建文件夹、创建文档、删除、重命名、移动等工作区资源操作，WS 接收不可变 WorkspaceOperationPlan；DecisionRequest 确认前不执行，确认后重新核验路径、冲突、递归清单、打开会话、内容 Diff 与磁盘基线，再直接修改 DiskState。资源操作不进入内容 DiffCard 生命周期，也不等待第二次“保存文件树”
 source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-AG-M-D-01（REQ-AG-011）、A-WS-M-T-02
-acceptance: 决策卡冻结并显示所有资源项和影响；拒绝不改盘；确认后脏标签阻断删除/重命名/移动，有效内容 Diff 作为影响展示并在成功执行后失效；每个执行结果与补偿收据可追溯；批量操作 fail-fast 并逆序补偿，补偿不完整进入 partial_failed；进程重启后未完成操作进入 Interrupted，绝不自动执行；所有路径保持在 workspace 内且不覆盖冲突目标
+acceptance: 决策卡冻结并显示所有资源项和影响；拒绝不改盘；确认后脏标签阻断删除/重命名/移动，有效内容 Diff 作为影响展示并在成功执行后失效；每个执行结果与补偿收据可追溯；批量操作 fail-fast 并逆序补偿，补偿不完整进入 partial_failed；进程重启后未完成操作进入 Interrupted，绝不自动执行；所有路径保持在 workspace 内且不覆盖冲突目标。人工文件树入口（用户 UI 直调）保持直写，但删除/重命名必须遵守 BR-WS-STATE-009 安全底线（dirty 阻断、快照/时间轴可恢复、Diff 失效）（WS-RESOURCE-WRITE-GUARD-01）。
 open_issues: 无；共享对象、接口与状态机见 A-WS-M-T-02 / A-WS-M-S-02
 -->
 
@@ -214,7 +214,7 @@ owner_module: WS
 status: active
 summary: 对已保存文件/文件夹的删除与恢复，WS 使用 WorkspaceOperationPlan + DecisionRequest 前置裁决；确认后重新核验冻结影响清单、来源基线、冲突与脏会话，直接修改 DiskState，并写入含类型化资源快照和恢复元数据的 WorkspaceOperationEntry。永久清理不属于 Agent 1.0
 source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-DE-M-D-01（REQ-DE-007）
-acceptance: 确认前磁盘目标保持原状；非空文件夹递归范围、数量和来源快照冻结并在执行前重验，任一变化或脏会话均阻断；成功后真实移除目标、使相关内容 Diff 失效、更新标签/引用并写入可恢复 WorkspaceTimeline 条目；恢复按条目类型执行且冲突不自动覆盖；失败或补偿不完整必须显示真实状态，不得伪报成功
+acceptance: 确认前磁盘目标保持原状；非空文件夹递归范围、数量和来源快照冻结并在执行前重验，任一变化或脏会话均阻断；成功后真实移除目标、使相关内容 Diff 失效、更新标签/引用并写入可恢复 WorkspaceTimeline 条目；恢复按条目类型执行且冲突不自动覆盖；失败或补偿不完整必须显示真实状态，不得伪报成功。人工文件树删除同样写入可恢复 WorkspaceTimeline 条目并受 dirty 阻断（BR-WS-STATE-009，WS-RESOURCE-WRITE-GUARD-01）
 open_issues: 永久清理和保留期不在 1.0；其余契约由 A-WS-M-T-02 / A-WS-M-S-02 定义
 -->
 
@@ -298,3 +298,4 @@ G1 具备闭合条件。晋级由人类宣布（APC §2，AI 不得自行宣布�
 | 2026-08-14 | v1.8 | AG-1.0-R4-CONVERSION-REQUIREMENTS-01：新增 REQ-WS-009；TXT→Markdown、Markdown→TXT 的目标副本预览后走未保存 LogicalState 与显式保存链，来源不改写；保存冲突/失败保留目标，HTML 与通用 DOCX 转换继续排除。 |
 | 2026-08-14 | v1.9 | AG-1.0-R4-DELETE-MULTIDOC-REQUIREMENTS-01：新增 REQ-WS-010/011；删除/恢复先进入红色逻辑暂存，单项显式保存且递归/来源/脏会话再核验后才改变磁盘，永久删除不纳入；多个既有文档按确认冻结目标清单逐项保存并隔离失败，不提供批量保存或事务。 |
 | 2026-08-21 | v1.10 | 工作区资源操作基线重构：REQ-WS-006/008/009/010 改为 CreateDocumentBundle、WorkspaceOperationPlan + DecisionRequest 前置裁决、确认后直接 DiskState 执行、fail-fast 逆序补偿与统一 WorkspaceTimeline。 |
+| 2026-08-22 | v1.11 | WS-RESOURCE-WRITE-GUARD-01：REQ-WS-008/010 acceptance 补充人工文件树入口口径——保持直写但删除/重命名遵守 BR-WS-STATE-009（dirty 阻断、快照/时间轴可恢复、Diff 失效）。 |
