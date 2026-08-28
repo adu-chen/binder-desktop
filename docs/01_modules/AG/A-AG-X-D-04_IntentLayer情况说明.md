@@ -69,6 +69,8 @@ Context、Prompt、CapabilityGrant、Diff 共同消费同一 intent_id
 - 当前轮原文是最高意图信号，历史不能覆盖本轮否定约束。
 - `mutation=None` 的 answer/analyze/inspect/search 不得获得 proposal 权限。
 - edit 缺少可写目标时进入 blocking clarify，不能猜测文档。
+- IntentResult 不从 ReferencePayload 正文、模型文字或历史路径推导目标授权；用户显式引用身份由
+  ExplicitEditTargetSet owner 消费，且成员资格不替代本层 mutation 判定。
 - IntentResult 必须保留原始输入之外的结构化决策，不得用摘要替代原文。
 - 下游不得各自重新猜测 allowed tools 或写入目标。
 
@@ -89,7 +91,8 @@ Context、Prompt、CapabilityGrant、Diff 共同消费同一 intent_id
 ## 7. 已知风险与待治理点
 
 - 当前语言识别主要是中文字符串信号，表达覆盖率有限，尚无评测数据集和混淆矩阵。
-- 显式引用目前主要作为只读上下文；“修改被引用但非当前文档”的目标语义在 1.0 被有意收窄。
+- 显式引用内容保持只读 data-only；其用户可见 workspace 文档身份可由 ExplicitEditTargetSet owner 作为目标
+  授权元数据消费，但 Intent Layer 不自行把引用正文变成 target，也不因此授予写工具。
 - create_document 的最终新路径由模型在工具参数中提出，IntentResult 只表达 `new_document`，不预先锁定路径。
 - `confidence` 目前是固定规则值，不代表经过校准的概率；UI 不应把它解释为统计置信度。
 - 当前 `required_tools` 是候选需求，最终授权仍由 CapabilityGrant 决定；两者需防止未来漂移。
@@ -113,3 +116,4 @@ Diff 消费者及接口文档。只增加关键词但不建立样本矩阵，不
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-08 | v1.0 | 建立 Intent Layer 输入输出、当前规则流程、冻结语义、样本矩阵、风险与独立治理入口 |
+| 2026-08-28 | v1.1 | AG-CONFORMANCE-DESIGN-S3D-COMPANION：区分 IntentResult 目标判定与 ExplicitEditTargetSet 身份授权；引用正文、模型文字和历史路径不得被 Intent Layer 用于扩权。 |

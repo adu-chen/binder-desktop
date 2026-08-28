@@ -25,7 +25,7 @@ AST/KB/TPL 召回关闭。上下文选择的部分编排仍位于 `src-tauri/src
 |---|---|
 | 输入 | IntentResult、OpenDocSnapshot/LogicalState、活动选区、ReferencePayload、session history、预算 |
 | 输出 | `PromptDataEnvelopeV1` 集合、当前文档 prompt context、确定性保留的历史、裁剪/来源 trace |
-| 负责 | 来源验证、workspace 限界、新鲜度、LogicalState 优先、引用只读、历史归属与预算 |
+| 负责 | 来源验证、workspace 限界、新鲜度、LogicalState 优先、引用内容 data-only 与规范化身份供给、历史归属及预算 |
 | 不负责 | system 指令、工具授权、知识检索算法、Diff 生成、模型回答 |
 
 Envelope 当前字段：source_type、source_id、provenance、freshness、content_hash、trust_level、token_count、payload。
@@ -60,7 +60,8 @@ IntentResult.required_context
 
 - 已打开文档 `LogicalState > DiskState`；当前快照缺失或不一致必须阻断，不能读取旧磁盘内容伪装当前事实。
 - 所有 workspace 路径限 active workspace。
-- 显式引用是只读数据，不自动改变写入 target；selection 失效不能猜测为当前事实。
+- 显式引用内容是只读 data-only；Context Layer 只供给用户可见、规范化的 workspace 文档身份，由
+  ExplicitEditTargetSet owner 决定成员资格，本层不自行授予写工具；selection 失效不能猜测为当前事实。
 - 历史默认弱化；跨文档历史只有当前轮显式沿用时才以弱标签进入。
 - 文档、引用、历史都是 data-only，不因正文含“调用工具/忽略规则”而成为指令。
 - `agent-edit-1.0` 自动 AST/KB/TPL 调用数为 0。
@@ -70,7 +71,8 @@ IntentResult.required_context
 ## 6. 已验证事实
 
 - 当前编辑器实时正文优先于 store 载入快照和磁盘内容。
-- 引用 A、当前文档 B 时，A 作为显式引用，B 仍是写目标。
+- 引用 A、当前文档 B 时，A 内容作为 data-only 引用，A/B 的规范化身份均可供 ExplicitEditTargetSet owner
+  消费；是否具备写工具仍由 IntentResult 与 CapabilityGrant 决定。
 - 无显式沿用时跨文档历史丢弃；显式“刚才/继续”时只作弱历史注入。
 - Prompt trace 的 history envelope 与实际进入模型的历史使用同一选择结果。
 - 长文档注入 manifest，编辑前必须 `read_doc/list_blocks`；自动补强为 None。
@@ -96,7 +98,7 @@ messages 或工具 readable_scope，须扩展到对应 owner，不得在 Context
 
 建议会话任务描述：
 
-> 治理 WP-AG10-03 Context Layer。核验什么进入模型、什么禁止进入、LogicalState 优先、引用只读、历史
+> 治理 WP-AG10-03 Context Layer。核验什么进入模型、什么禁止进入、LogicalState 优先、引用内容 data-only 与身份供给、历史
 > 归属、预算与 provenance。不要新增自动记忆/知识/模板召回。若修改，建立独立 Scope，并证明固定输入能
 > 产生确定的 envelope/裁剪结果，且模型调用前即可验证全部数据边界。
 
@@ -105,3 +107,4 @@ messages 或工具 readable_scope，须扩展到对应 owner，不得在 Context
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-08 | v1.0 | 建立 Context Layer 来源、选择流程、可信边界、验证条件、结构风险与独立治理入口 |
+| 2026-08-28 | v1.1 | AG-CONFORMANCE-DESIGN-S3D-COMPANION：分离引用内容的 data-only 信任边界与规范化引用身份供给；Context Layer 不授予写工具，ExplicitEditTargetSet owner 消费身份。 |

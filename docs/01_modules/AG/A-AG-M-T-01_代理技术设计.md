@@ -264,7 +264,7 @@ AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模�
 
 | 维度 | 1.0 激活策略 |
 |---|---|
-| 目标 | 当前活动文档/选区可读写；显式引用文档默认只读；新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认后建盘并投影初始内容 Diff |
+| 目标 | 当前活动文档与用户输入中指向 active workspace 既有文档的显式 ReferencePayload 身份可初始化 ExplicitEditTargetSet；引用内容保持 data-only，成员资格不单独授予写工具；工具发现目标另经 scope DecisionRequest 确认；新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认建盘后才追加目标并投影初始内容 Diff |
 | 工作策略 | 回答、只读、内容修改 Proposal、新建文档计划、澄清五类确定性路由；新建文档计划固定产出 CreateDocumentBundle，不产出空基准 ChangeProposal；简单目标只使用单个 AgentTurn，不创建 TaskRun/TaskPlan；复杂或跨执行片段目标才创建受限 TaskRun/TaskPlan，不启用开放式通用规划器 |
 | 工具 | 按 IntentResult 生成本轮最小允许集；文件移动/建目录、表格/图片高级操作仅在专项 G5 通过后启用 |
 | 上下文 | 当前 LogicalState + 当前输入 + 显式引用 + 同文档必要历史；AST/KB/TPL 自动供给关闭 |
@@ -991,6 +991,7 @@ status: mapped
 | 2026-08-22 | v2.48 | WS-RESOURCE-WRITE-GUARD-01：移除「新文档以空基准 ChangeProposal 创建」旧表述——新建文档唯一入口为 plan_workspace_operation（CreateDocumentBundle 确认后建盘并投影初始内容 Diff）；propose_edit 目标必须已存在（内容 Diff 不得创建资源，X-FORBID-006，工具层路径级拒绝）。 |
 | 2026-08-27 | v2.49 | AG-CONFORMANCE-GOVERNANCE-S1：收敛 AgentTurn 澄清为原回合 AwaitingClarification→Assembling，与 DecisionRequest、重试和 Assist 分界；明确新建文档唯一 CreateDocumentBundle 路径、简单目标不建 TaskRun/TaskPlan；资源意图可获得任务必要只读工具 + plan_workspace_operation，副作用路径不变；冲突旧实现登记移出 active 规范正文。 |
 | 2026-08-28 | v2.50 | AG-CONFORMANCE-GOVERNANCE-S3D：注册 TERM-AG-019 显式编辑目标集；按 HD-S3D-01 锁定初始来源、同 AgentTurn 澄清追加、工具发现目标经 scope DecisionRequest 确认追加、TaskRun continuation 继承、CreateDocumentBundle 建盘后追加及集合外硬拒；read/search 与 cross_doc 均不是授权来源。 |
+| 2026-08-28 | v2.51 | AG-CONFORMANCE-DESIGN-S3D-COMPANION：承接 HD-S3D-03 与需求提交 fed343a，修正 Runtime Profile 的显式引用只读旧概括；区分引用内容 data-only、用户引用身份目标授权元数据与写工具授权。 |
 | 2026-08-14 | v2.36 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：注册 TERM-AG-013~016（RuntimeProfile/CapabilityGrant/TaskRun/TaskStep）；新增 §7.1 Agent 1.0 运行时契约落地（REQ-AG-007/015）——RuntimeProfile 入口校验、CapabilityGrant 五因素收窄、IntentResult 收敛、TaskRun 接力、StructuredVisibleEvent 不含内部推理、授权非来源声明。 |
 | 2026-08-13 | v2.35 | AG-STRATEGY-05：BDocx 整篇改写收敛为无表格且无图片的动态条件并由服务端拒绝受保护/新引入结构；block_ops 同锚点顺序、后置校验与稳定 id reverse 闭合；proposal、编辑器预览、接受和保存的真实状态与最小运行事件对齐。 |
 | 2026-08-11 | v2.33 | AG-CTX-01：§5.1 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、AG_EDIT_TOOL_REQUIRED 文案区分、查询动词→Search、整篇对齐检测、序列化瘦身；语义详见 A-AG-M-T-02 §4 |

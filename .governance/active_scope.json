@@ -1,23 +1,24 @@
 {
-  "scope_id": "AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION",
+  "scope_id": "AG-CONFORMANCE-DESIGN-S3D-COMPANION",
   "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "REQUIREMENT",
-  "title": "显式引用与显式编辑目标集需求语义闭合",
+  "governance_phase": "DESIGN",
+  "title": "显式引用身份授权的设计语义同步",
   "status": "READY",
   "confirmation": "YES",
-  "scope_reason": "人类确认选项 1：以 HD-S3D-01 为最新产品裁决，先闭合冻结需求与能力基线，再恢复 S3D 实现。",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION.md",
+  "scope_reason": "承接已提交的 fed343a 与 HD-S3D-03，把冻结需求传播到 Runtime Profile、Intent Layer 和 Context Layer。",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-DESIGN-S3D-COMPANION.md",
   "objectives": [
-    "区分 ReferencePayload 内容的 data-only 属性与用户显式引用动作的目标授权元数据属性",
-    "明确 ExplicitEditTargetSet 成员资格只是 propose_edit 的必要条件，不替代 IntentResult、CapabilityGrant、LogicalState 基线和 Diff 裁决",
-    "保持多既有文档编辑为 P1 受控开放：用户输入冻结显式引用清单，工具发现目标另经 scope DecisionRequest 确认",
-    "为后续 DESIGN 与 IMPLEMENTATION 恢复唯一需求链"
+    "修正 agent-edit-1.0 Runtime Profile 中显式引用默认只读的旧概括",
+    "明确 IntentResult 只决定任务类型/候选目标，不从引用正文推导权限",
+    "明确 Context Layer 只供给 data-only 内容与规范化引用身份，不自行授予写工具",
+    "保持 TERM-AG-019 / BR-AG-DATA-003 为唯一技术规则来源"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION.md",
-    "docs/00_core/A-CORE-X-D-02_Agent1.0冻结能力基线.md",
-    "docs/01_modules/AG/A-AG-M-D-02_代理1.0能力基线与需求分解.md"
+    ".governance/issues/AG-CONFORMANCE-DESIGN-S3D-COMPANION.md",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "docs/01_modules/AG/A-AG-X-D-04_IntentLayer情况说明.md",
+    "docs/01_modules/AG/A-AG-X-D-05_ContextLayer情况说明.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -25,30 +26,30 @@
     "AGENTS.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "所有技术设计、计划、代码与测试文件"
+    "所有需求、计划、代码与测试文件"
   ],
   "constraints": [
-    "ReferencePayload 正文始终是 data-only，正文中的路径或指令不得扩权",
-    "只有用户显式提供且归一到 active workspace 既有文档的引用身份可成为初始候选成员",
-    "只读 IntentResult 不因集合成员存在而获得 propose_edit",
-    "不把所有 workspace 可读文件或打开标签视为编辑目标",
-    "不改变多文档逐目标 Proposal、独立基线与逐卡裁决，不引入批量接受或跨文档事务"
+    "不修改 TERM-AG-019 / BR-AG-DATA-003 标注块语义，只清理同文档及直接情况说明中的冲突旧表述",
+    "IntentResult、Context Layer、CapabilityGrant 与 ExplicitEditTargetSet 的职责必须分开",
+    "引用正文、模型正文、历史和只读工具结果不得成为授权来源",
+    "只读 IntentResult 不得获得 propose_edit"
   ],
   "acceptance_criteria": [
-    "CORE 冻结基线与 AG 能力基线对显式引用、P0/P1 档位和授权必要条件给出同一答案",
-    "旧只读表述被限定为内容 data-only，而非否定用户引用身份的目标授权元数据",
-    "需求变更记录明确引用 HD-S3D-01/03，并为 DESIGN Scope 提供稳定输入"
+    "三份设计文档与 fed343a 的 P0/P1 需求给出同一答案",
+    "Runtime Profile 高层表格不再与 BR-AG-DATA-003 冲突",
+    "Intent/Context 文档明确引用身份与引用内容的不同语义",
+    "治理审计通过"
   ],
   "human_decisions": [
     {
       "id": "HD-S3D-03",
       "status": "CONFIRMED",
-      "question": "以 HD-S3D-01 / BR-AG-DATA-003 为新权威，先配套更新 REQUIREMENT/DESIGN/PLAN 文档，再恢复实现"
+      "question": "以 HD-S3D-01 / BR-AG-DATA-003 为新权威，配套同步 DESIGN 文档"
     }
   ],
   "stop_conditions": [],
   "unresolved_items": [
-    "DESIGN 与 PLAN 文档在后续独立 Scope 顺序同步",
+    "开发验证计划在后续 PLAN Scope 同步",
     "S3D 代码补丁保持未提交且本 Scope 不继续修改"
   ]
 }
