@@ -5,7 +5,7 @@
 文档职责：Binder AG 1.0 开发与验证执行计划——将 agent-edit-1.0 目标架构拆成可独立开发、独立验证和阶段收口的工作包，定义阶段依赖、实施边界、验证方案、证据要求与发布退出门禁
 上游约束：A-AG-M-D-01、A-AG-M-D-02、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-WS-M-T-02、A-WS-M-S-02、A-CORE-X-L-06、A-VAL-X-V-01、A-SYS-I-P-03
 直接承接：AG 1.0 后续 CODE_CHANGE Issue Trace/Scope Lock、测试影响计划、AG/DE/ED/WS/ENT/GW 联调、G5 系统验证与发布裁决
-使用边界：本文只规划 agent-edit-1.0；不重新审计当前实现，不把 G4 骨架标记视为完成，不纳入 Build/CBT、自动 AST/KB/TPL、未冻结的跨文档写入、参考风格/排版、开放式 Planning 或多 Agent；WorkspaceOperation 只按已冻结的 WS 契约接入
+使用边界：本文只规划 agent-edit-1.0；不重新审计当前实现，不把 G4 骨架标记视为完成，不纳入 Build/CBT、自动 AST/KB/TPL、未进入 ExplicitEditTargetSet 的跨文档写入、参考风格/排版、开放式 Planning 或多 Agent；WorkspaceOperation 只按已冻结的 WS 契约接入
 变更要求：工作包边界、阶段依赖、冻结契约、验证矩阵或退出条件变化时，须先回写对应 AG/WS L1/L2 与验证卡；实际开发按 ADP 为每个工作包建立独立 Scope，本文不得替代 Runtime Report
 治理成熟度：draft
 ---
@@ -106,7 +106,7 @@ flowchart LR
 - `ag.start_turn` / 前端 `startTurn` 参数与兼容适配；
 - `runtime_profile=agent-edit-1.0` 的后端校验；
 - IntentResultV1、PromptDataEnvelopeV1、PromptPackageV1、CapabilityGrantV1、ChangeProposal 和回合事件的共享类型；
-- Build/CBT、跨文档写入、文件结构操作、自动 AST/KB/TPL 的 feature gate；
+- Build/CBT、ExplicitEditTargetSet 集合外写入、文件结构操作、自动 AST/KB/TPL 的 feature gate；
 - 旧入口只能适配到同一主链，不能保留第二条 provider 调用路径。
 
 **不在范围**：实现意图算法、Prompt 文本、工具执行或 Diff 应用。
@@ -180,7 +180,7 @@ Stage 2 内部分三步推进；Intent 先冻结，Context 与 Prompt 再依次�
 **验证样本矩阵**必须覆盖：
 
 - answer / inspect / search / analyze / edit / create_document / clarify；
-- 当前文档、选区、新文档、显式只读引用；
+- 当前文档、选区、新文档、显式引用的 data-only 内容与用户可见文档身份；
 - “只分析，不要修改”等否定变更约束；
 - 当前轮覆盖历史、明确沿用历史、跨文档历史不应沿用；
 - 单目标、多目标、目标缺失和高风险歧义；
@@ -197,7 +197,7 @@ Stage 2 内部分三步推进；Intent 先冻结，Context 与 Prompt 再依次�
 | 场景 | 必须断言 |
 |---|---|
 | 编辑器未保存、磁盘为旧内容 | 当前文档读取 LogicalState，不以 DiskState 覆盖 |
-| 引用 A、修改当前 B | A 为只读 envelope；target 仍为 B |
+| 引用 A、修改当前 B | A 内容为 data-only envelope；A/B 规范化身份供 ExplicitEditTargetSet owner 消费；本层不授予写工具 |
 | selection 锚过期 | 拒绝作为当前事实或进入澄清，不猜测位置 |
 | 上下文超预算 | 按 P0→P3 规则裁剪；显式来源与裁剪原因可追踪 |
 | session/workspace 切换 | 不注入其他 session/workspace 临时上下文 |
@@ -243,7 +243,7 @@ WP-AG10-05 只开放完成当前文档阅读、分析、修改提案和新建提
 | answer | 空或完成回答所需的最小只读工具 | proposal、结构写、删除 |
 | inspect/analyze | 当前文档/显式引用读取、必要 search/list_blocks | proposal，除非用户另有明确编辑要求 |
 | search | 受限 list_docs/search_text/read_doc | workspace 外读取、写工具 |
-| edit | 目标读取、propose_edit/edit_blocked | 跨文档写、直接保存、文件结构操作 |
+| edit | ExplicitEditTargetSet 成员目标读取、propose_edit/edit_blocked | 集合外写入、直接保存、文件结构操作 |
 | create_document | `base=empty` proposal | 带 AI 内容的直接 create_doc |
 | clarify | 无副作用工具 | 所有写工具 |
 
@@ -252,6 +252,8 @@ WP-AG10-05 只开放完成当前文档阅读、分析、修改提案和新建提
 - 对每个 Intent 生成 CapabilityGrant 快照，断言最小允许集；
 - 对每个工具执行 registry + grant + target + parameters 四重校验；
 - 覆盖未注册、已注册未授权、grant 过期、错误 target、参数越界、workspace 越界；
+- 覆盖当前文档/用户显式引用初始化、同 AgentTurn 澄清单调追加、只读工具零追加、scope DecisionRequest
+  confirm 追加/cancel 零追加、TaskRun continuation 继承与集合外 propose_edit 硬拒；
 - 权限拒绝重复调用不能升级权限；同类失败和总循环达到上限后结束；
 - 只读工具对已打开文档使用 LogicalState；
 - propose 工具只形成 ChangeProposal，不产生 LogicalState/DiskState 写入；
@@ -298,7 +300,7 @@ WP-AG10-06 把模型产出的写意图统一转换为可定位、可审阅、可
 - AG1-V-05、V-06、V-10、V-14 通过；
 - 当前文档修改继续按内容三态验证；新建需覆盖确认前零副作用、先建盘再投影、安全拒绝与基线推进；资源操作需覆盖 dirty 阻断、补偿、重启中断和统一恢复；
 - 用户接受前 LogicalState/DiskState 不发生 AI 写入；
-- 一个 proposal 只写一个目标文档，显式引用保持只读；
+- 一个 proposal 只写一个 ExplicitEditTargetSet 成员文档；引用内容保持 data-only，引用身份仅提供成员资格；
 - 原文件在错误、取消、冲突和保存失败路径中可恢复。
 
 ## §10 Stage 5：Session、UI、Trace 与体验收口
@@ -448,7 +450,7 @@ test:related 结果：
 | WP-AG10-00 Runtime Profile | `agent-edit-1.0` 为唯一主入口；未知 profile 默认拒绝；Build 入口物理关闭 | profile 单测、Composer/Service 契约测试 | Integrated |
 | WP-AG10-01 Execution Kernel | 本次服务端 GateOutcome、逐次续调门禁、后端单 session 单活、provider abort、工具前取消、唯一终态 | Rust AG 测试、前端 Error→Done 锁存测试、取消命令测试 | Integrated |
 | WP-AG10-02 Intent Layer | 生成版本化 `IntentResultV1`；当前轮否定约束优先；缺编辑目标阻断澄清；非文档问答不自动注入当前文档 | answer/analyze/edit/create/clarify 与目标/上下文选择断言 | Module Ready |
-| WP-AG10-03 Context Layer | 当前 LogicalState 为主事实；显式引用 data-only；历史按文档归属和显式沿用确定性选择；1.0 自动 AST/KB/TPL 为零 | context、reference、history 与 Prompt 装配测试 | Integrated |
+| WP-AG10-03 Context Layer | 当前 LogicalState 为主事实；显式引用内容 data-only、规范化身份供 ExplicitEditTargetSet owner 消费；历史按文档归属和显式沿用确定性选择；1.0 自动 AST/KB/TPL 为零 | context、reference、history 与 Prompt 装配测试 | Integrated |
 | WP-AG10-04 Prompt Runtime | 固定系统→意图→当前文档→引用→历史→用户顺序；记录 provenance/freshness/hash/trust/token、context trace 与真实 tool manifest hash；trace 不记录正文 | PromptPackage、层序、注入隔离与历史 trace 一致性测试 | Module Ready |
 | WP-AG10-05 Tool Capability | 内容工具仍按 grant→Diff；资源工具需迁移为 plan_workspace_operation/execute_workspace_operation，禁止直调文件命令和资源 Diff | Intent×grant、DecisionRequest 真实确认、幂等/重启 | **Resource-operation migration pending** |
 | WP-AG10-06 Editor/Diff | 普通内容编辑三态保持；新建需改为 CreateDocumentBundle，资源创建后初始内容进入普通 Diff | V-C1~C3 + V-R1/R2 + 既有 core_chain | **New baseline migration pending** |
@@ -486,3 +488,4 @@ test:related 结果：
 | 2026-08-08 | v1.0 | 初版：基于 A-AG-X-L-03 将 agent-edit-1.0 拆为 8 个独立工作包和 Stage 0～6；定义依赖与并行边界、Contract Ready/Module Ready/Integrated/G5/Release 五级完成标准；为 Runtime Profile、Execution、Intent、Context、Prompt、Tool、Editor/Diff、Session/Trace 分别建立开发范围、验证方案和独立收口条件；补充真实 G5 环境、场景组、发布门禁、统一证据模板与阻断回退规则 |
 | 2026-08-08 | v1.1 | AG-1.0-IMPLEMENTATION-01：记录 WP-AG10-00～07 的实际实现状态与独立收口证据；非沙箱 test:related/test:full、TypeScript、ADUS 和治理审计通过；阶段裁决为 LOCAL_INTEGRATED / G5_PENDING，不以自动化冒充真实 provider/WKWebView G5 |
 | 2026-08-21 | v1.2 | 工作区资源操作基线重构：Stage 4/G5 改为 WorkspaceOperation + DecisionRequest、CreateDocumentBundle 和 WorkspaceTimeline；旧资源 Diff/空基准新建证据不再计入新基线，相关工作包状态改为 IMPLEMENTATION_PENDING。 |
+| 2026-08-28 | v1.3 | AG-CONFORMANCE-PLAN-S3D-COMPANION：承接 fed343a/a0afdff，把工作包和验证边界统一到 ExplicitEditTargetSet；只读内容不扩权、用户引用身份可初始化成员、scope confirm 可追加、集合外提案硬拒。 |
