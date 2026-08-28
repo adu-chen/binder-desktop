@@ -87,6 +87,7 @@ pub enum TurnEvent {
     FallbackIn,
     Assembled,
     ClarificationRequired,
+    ClarificationProvided,
     AssembleFail,
     GatePassed,
     GateDenied,
@@ -125,13 +126,13 @@ pub fn is_terminal(state: TurnState) -> bool {
  * type:     RB
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
- * boundary: in=TurnEvent | out=TurnState(clarificationNonTerminalGateGatedToStreamingDeniedTerminalCancelNoHalfPersist)
+ * boundary: in=TurnEvent | out=TurnState(clarificationRequiredWaitsAndOnlyClarificationProvidedResumesSameAgentTurnGateGatedToStreaming)
  */
 /// SM-AG-01 转移引擎（BR-AG-STATE-001 / BR-SYS-STATE-007）：**Streaming（模型调用）仅经
 /// AwaitingGate+gatePassed 可达**（门禁前置无绕过）；gateDenied→Denied 终态不可绕过；cancel→Cancelled
 /// 无半落盘；takeover 须用户确认→HandedOver；handoffOk→Completed（交 DE 完毕）；**澄清
-/// （ClarificationRequired）→AwaitingClarification 非终态，不终结回合**。返回 `None` = 无合法转移
-/// （含全部 forbidden）。
+/// （ClarificationRequired）→AwaitingClarification 非终态，不终结回合；仅 ClarificationProvided 可使
+/// 同一 AgentTurn 回到 Assembling**。返回 `None` = 无合法转移（含全部 forbidden）。
 pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
     use TurnEvent::*;
     use TurnState::*;
@@ -139,6 +140,8 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
         (Idle, Send) | (Idle, FallbackIn) => Assembling,
         // 澄清是等待用户输入的非终态（BR-SYS-STATE-007），不终结回合。
         (Assembling, ClarificationRequired) => AwaitingClarification,
+        // 用户补充说明只恢复原 AgentTurn；不是 Retry，也不创建新回合身份。
+        (AwaitingClarification, ClarificationProvided) => Assembling,
         (Assembling, Assembled) => AwaitingGate,
         (Assembling, AssembleFail) => TurnError,
         // 门禁前置：唯一通往 Streaming 的路径。
@@ -289,19 +292,26 @@ mod tests {
 
     // covers: BR-AG-STATE-001
     // covers: BR-SYS-STATE-007
-    // 澄清是等待用户输入的非终态：不终结回合；澄清等待阶段取消仍可到达 Cancelled 终态。
+    // 澄清是等待用户输入的非终态：仅 ClarificationProvided 恢复同一回合；取消仍可到达终态。
     #[test]
     fn clarification_is_non_terminal_and_cancelable() {
         // 澄清 → AwaitingClarification（非终态）
         let s = transition(Assembling, ClarificationRequired).unwrap();
         assert_eq!(s, AwaitingClarification);
         assert!(!is_terminal(s), "AwaitingClarification 不得判定为终态");
+        assert_eq!(
+            transition(AwaitingClarification, ClarificationProvided),
+            Some(Assembling),
+            "补充说明必须恢复同一 AgentTurn"
+        );
         // 澄清等待阶段取消 → Cancelled（任一活动阶段取消生效）
         assert_eq!(transition(AwaitingClarification, Cancel), Some(Cancelled));
         // 澄清不产生模型调用/产出：澄清态无通往 Streaming/HandingOff 的转移
         assert_eq!(transition(AwaitingClarification, GatePassed), None);
         assert_eq!(transition(AwaitingClarification, StreamEnd), None);
         assert_eq!(transition(AwaitingClarification, HandoffOk), None);
+        assert_eq!(transition(TurnError, ClarificationProvided), None);
+        assert_eq!(transition(Completed, ClarificationProvided), None);
     }
 
     // covers: BR-AG-STATE-001

@@ -1,20 +1,31 @@
 {
-  "scope_id": "AG-CONFORMANCE-GOVERNANCE-S2",
-  "task_type": "GOVERNANCE_CHANGE",
+  "scope_id": "AG-CONFORMANCE-CODE-S3A",
+  "task_type": "CODE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "Agent 生产入口与规则注册精确映射审计",
+  "title": "同一 AgentTurn 澄清受控重入",
   "status": "READY",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S2.md",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S3A.md",
   "objectives": [
-    "仅从 ADUS 的 AG-TURN、AG-TOOL 与交叉链 WS-OPERATION 出发定位已注册生产块",
-    "完整读取每个纳入审计的 RULE 原文、@GOV 注册块及其直接承载实现",
-    "验证生产入口、状态生命周期、最小能力授权、TaskRun 边界与新建文档路径是否符合第一阶段唯一语义",
-    "把结构注册完整性与真实行为符合性分别记录，形成后续实现 Scope 的唯一输入"
+    "为 SM-AG-01 增加 ClarificationProvided 并实现 AwaitingClarification 到 Assembling 的同 turn_id 转移",
+    "使阻断澄清 command 返回非终态，后续 command 以原 turn_id 和受控澄清身份重入",
+    "保持单活、取消、终态锁存、历史身份和门禁前置不变量",
+    "补齐直接测试、真实 @GOV owner 注册并刷新 ADUS"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S2.md"
+    ".governance/issues/AG-CONFORMANCE-CODE-S3A.md",
+    "src-tauri/src/ag/turn.rs",
+    "src-tauri/src/ag/turn_control.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ipc/mod.rs",
+    "src/services/agService.ts",
+    "src/store/agStore.ts",
+    "src/services/agRuntime.test.ts",
+    "scripts/test_governance.test.mjs",
+    "src-tauri/tests/core_chain.rs",
+    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -22,52 +33,44 @@
     "AGENTS.md",
     "CLAUDE.md",
     "governance.config.json",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "所有需求、设计、计划、生产代码与测试文件",
-    "所有不在 allowed_files 中的文件"
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/task_runtime.rs",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/ag/edit_support.rs",
+    "所有未列入 allowed_files 的生产代码、设计和测试文件"
   ],
   "constraints": [
-    "审计证据只能由 ADUS 链路、规则、术语和代码块索引逐级映射取得，不使用业务关键词漫游代码库",
-    "每次读取必须覆盖完整 RULE 标注与正文、完整 @GOV 标注以及对应直接承载实现，不以局部行片段推断行为",
-    "AG-ASSIST 与 AG-MODEL-CATALOG 只做相邻影响检查，不把 AgentTurn 决策泛化到独立链路",
-    "本阶段不修改生产行为、静态规则、测试或 ADUS",
-    "任何无法由注册链唯一裁决的实现取舍进入 Stop Condition 并等待人类确认"
+    "补充澄清必须继续原 AgentTurn，不创建新 turn_id",
+    "重入只能匹配处于 AwaitingClarification 的原 turn_id、同 session 和 workspace",
+    "不得把澄清恢复泛化为失败重试、DecisionRequest 续片段或 Diff 预览续片段",
+    "不得改变简单 AgentTurn 的 TaskRun 现状；该偏差留给 S3-B",
+    "不得改变 IntentResult、CapabilityGrant、跨文档目标集或 CreateDocumentBundle 行为",
+    "配套测试必须验证错误 turn_id、错误 session、重复重入和终态重入失败关闭"
   ],
   "acceptance_criteria": [
-    "列出 AG-TURN、AG-TOOL 及所需 WS-OPERATION 交叉块的完整映射清单",
-    "对第一阶段六项唯一语义逐项给出符合、偏差或证据不足结论",
-    "识别重复主责、缺失入口、虚假 boundary、装饰性映射或链路归属漂移",
-    "形成精确到文件与注册块 ID 的后续候选修改范围，但不在本阶段实施",
-    "审计记录清楚区分已验证事实、推断、风险与待人类裁决项"
+    "SM-AG-01 只有 ClarificationProvided 可从 AwaitingClarification 回到 Assembling",
+    "阻断澄清不再通过 abort 伪造 Cancelled，也不产生新 AgentTurn",
+    "原 turn_id 的历史、事件和后续模型/工具执行保持单一身份",
+    "取消仍可终结等待澄清的 AgentTurn，其他会话或 turn_id 不能劫持恢复",
+    "相关 Rust/前端/集成测试、test:related、test:governance 与 governance:audit 通过",
+    "ADUS 清晰呈现澄清等待与恢复的生产入口和规则归属"
   ],
   "human_decisions": [
     {
-      "id": "HD-S2-01",
+      "id": "HD-S3A-01",
       "status": "CONFIRMED",
-      "question": "提交第一阶段并开启第二阶段生产入口—规则注册精确映射审计"
+      "question": "澄清 command 返回非终态，后续 command 以相同 turn_id 受控重入并触发 ClarificationProvided"
     },
     {
-      "id": "HD-S2-02",
+      "id": "HD-S3A-02",
       "status": "CONFIRMED",
-      "question": "同一 AgentTurn 的澄清续接采用挂起 command 输入通道，还是同 turn_id 受控重入"
-    },
-    {
-      "id": "HD-S2-03",
-      "status": "CONFIRMED",
-      "question": "确认简单 AgentTurn 不创建 TaskRun，并允许调整当前必填关联"
-    },
-    {
-      "id": "HD-S2-04",
-      "status": "CONFIRMED",
-      "question": "未声明既有跨文档目标应硬拒，还是先定义显式目标集追加规则"
+      "question": "扩大 Scope 更新 AG 前端测试治理基线 106→108，并登记 S3A 两项新增证据"
     }
   ],
   "unresolved_items": [
-    "S2-F01：同一 AgentTurn 澄清恢复缺失；HD-S2-02 已确认后续实现形态",
-    "S2-F03：简单 AgentTurn 无条件创建 TaskRun；HD-S2-03 已确认后续按需创建",
-    "S2-F04：SM-AG-04 注册实现与真实持久态 setter 漂移",
-    "S2-F05：IntentResult / CapabilityGrant 不满足最小允许集",
-    "S2-F06/S2-F07：关键 guard 与状态 setter 未注册，目标集 boundary 为假；HD-S2-04 已确认治理顺序",
-    "所有生产修改必须另开 Scope"
+    "真实 Tauri/WKWebView 与真实 provider 的端到端澄清交互未执行，A-VAL-X-V-04 V-S6 保持 DESIGNED",
+    "简单 AgentTurn 按需创建 TaskRun 留待已确认的后续 S3-B，不在本 Scope 修改",
+    "跨文档显式目标集扩展与目标集外拒绝留待已确认的后续独立 Scope"
   ]
 }

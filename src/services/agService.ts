@@ -67,9 +67,42 @@ export type AgTurnEvent =
 export const AGENT_EDIT_RUNTIME_PROFILE = "agent-edit-1.0" as const;
 
 let seq = 0;
-/** 当前处于澄清等待（非终态）的回合，供用户补充输入发起新回合前先取消（BR-SYS-STATE-007）。 */
-let clarifyingTurn: { sessionId: string; turnId: string } | null = null;
+interface ClarifyingTurnIdentity {
+  sessionId: string;
+  turnId: string;
+  assistantMessageId: string;
+  prompt: string;
+  references: ReferencePayload[];
+  mentions: string[];
+  blockRefs: { relPath: string; blockId: string; text: string; start?: number; end?: number }[];
+}
+/** 按 session 保留可受控重入的非终态 AgentTurn；不得按“最近回合”跨 session 猜测。 */
+const clarifyingTurns = new Map<string, ClarifyingTurnIdentity>();
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+function mergeReferencePayloads(...groups: ReferencePayload[][]): ReferencePayload[] {
+  const seen = new Set<string>();
+  const merged: ReferencePayload[] = [];
+  for (const reference of groups.flat()) {
+    const key = JSON.stringify(reference);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(reference);
+  }
+  return merged;
+}
+
+function mergeLegacyBlockRefs(
+  ...groups: ClarifyingTurnIdentity["blockRefs"][]
+): ClarifyingTurnIdentity["blockRefs"] {
+  const seen = new Set<string>();
+  return groups.flat().filter((reference) => {
+    const key = JSON.stringify(reference);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -1212,7 +1245,7 @@ export function setAgentMode(mode: AgMode): void {
 const turnSaveChain = new Map<string, Promise<void>>();
 
 export async function deleteAgentSession(sessionId: string): Promise<void> {
-  if (agStore.getSnapshot().sending) {
+  if (agStore.getSnapshot().sending || clarifyingTurns.has(sessionId)) {
     throw { code: "AG_TURN_ACTIVE", message: "代理回合进行中，暂不能删除会话" };
   }
   await Promise.allSettled([...turnSaveChain.values()]);
@@ -1409,6 +1442,15 @@ export async function finishAssist(requestId: string, event: AssistFinishEvent):
 }
 
 /**
+ * @GOV
+ * codes:    BR-SYS-STATE-007-EFFECT-AG-AG-TURN-035, BR-AG-STATE-001-EFFECT-AG-AG-TURN-035
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
+ * term_ref: TERM-AG-001
+ * boundary: in=UserPromptOrClarificationForCurrentSession | out=NewOrSameIdentityAgentTurnInvocationAndMessageProjection | effect=memory,IPC-ag_start_turn | consumer=Composer | does_not=cancelClarifyingTurnOrCreateNewTurnIdForClarificationOrCrossSessionResume
+ */
+/**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
  * 多标签会话（PI-AG-UI-01）：回合归属发起时的活动会话（sessionId 闭包定位），流式期间切换标签
  * 不串会话。需先启动 cloud/dev-gateway（localhost:8787）并配置 provider 密钥；否则回
@@ -1430,8 +1472,8 @@ export async function startTurn(
   },
 ): Promise<void> {
   const trimmed = prompt.trim();
-  const references = opts?.references ?? [];
-  if (!trimmed && references.length === 0) return;
+  const submittedReferences = opts?.references ?? [];
+  if (!trimmed && submittedReferences.length === 0) return;
   // AG-1.0-TASKRUN-REWORK-CONTINUE-01：用户手动发送重置连续 auto-continue 计数。
   if (!opts?.autoContinue) autoContinueCount = 0;
   if (opts?.continuation && !opts.autoContinue) {
@@ -1460,7 +1502,17 @@ export async function startTurn(
   const snap = agStore.getSnapshot();
   const sessionId = snap.activeSessionId;
   const session = snap.sessions.find((s) => s.id === sessionId);
-  const turnId = `t-${Date.now()}-${(seq += 1)}`;
+  const clarification = !opts?.autoContinue ? clarifyingTurns.get(sessionId) : undefined;
+  if (clarification && opts?.continuation) {
+    throw new Error("澄清恢复不能与任务裁决或预览续片段混用");
+  }
+  const turnId = clarification?.turnId ?? `t-${Date.now()}-${(seq += 1)}`;
+  const effectivePrompt = clarification
+    ? `${clarification.prompt}${trimmed ? `\n\n补充说明：${trimmed}` : ""}`
+    : trimmed;
+  const references = mergeReferencePayloads(clarification?.references ?? [], submittedReferences);
+  const mentions = [...new Set([...(clarification?.mentions ?? []), ...(opts?.mentions ?? [])])];
+  const blockRefs = mergeLegacyBlockRefs(clarification?.blockRefs ?? [], opts?.blockRefs ?? []);
   const turnEd = edStore.getSnapshot();
   const turnActiveDocTarget: ActiveDocTarget = {
     relPath: turnEd.openPath,
@@ -1472,7 +1524,7 @@ export async function startTurn(
 
   // 本轮之前的对话历史（PI-AG-09B）：传后端按预算保留最近（drop 最旧）。取本轮 user 入栈前的快照。
   const history = (session?.messages ?? [])
-    .filter((m) => !m.error && m.turnStatus !== "draft" && m.content.trim())
+    .filter((m) => m.turnId !== turnId && !m.error && m.turnStatus !== "draft" && m.content.trim())
     .slice(-30)
     .map((m) => ({
       role: m.role,
@@ -1481,39 +1533,42 @@ export async function startTurn(
       turnId: m.turnId ?? null,
     }));
 
-  // 澄清等待（非终态，BR-SYS-STATE-007）：用户补充输入 = 先取消澄清回合（释放后端单活守卫），
-  // 再发起新回合；取消失败不阻断发送（后端注册守卫允许已取消回合被新回合取代）。
-  if (clarifyingTurn) {
-    const pending = clarifyingTurn;
-    clarifyingTurn = null;
-    await invoke("ag_cancel_turn", {
-      sessionId: pending.sessionId,
-      turnId: pending.turnId,
-    }).catch(() => {});
+  let assistantId: string;
+  if (clarification) {
+    // 先合并补充上下文但保留等待身份；只有编辑器快照就绪、即将调用后端时才认领。
+    // 这样调用前失败仍能回到同一 AwaitingClarification，不会丢失原 AgentTurn。
+    clarifyingTurns.set(sessionId, {
+      ...clarification,
+      prompt: effectivePrompt,
+      references,
+      mentions,
+      blockRefs,
+    });
+    agStore.resumeClarifyingTurn(sessionId, turnId, trimmed, opts?.displayParts);
+    assistantId = clarification.assistantMessageId;
+  } else {
+    agStore.pushMessage(sessionId, {
+      id: uid(),
+      role: "user",
+      content: trimmed,
+      parts: opts?.displayParts,
+      turnId,
+      relPath: turnActiveDocPath ?? null,
+      turnStatus: "draft",
+    });
+    assistantId = uid();
+    agStore.pushMessage(sessionId, {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      streaming: true,
+      turnId,
+      relPath: turnActiveDocPath ?? null,
+      turnStatus: "draft",
+    });
   }
-
-  agStore.pushMessage(sessionId, {
-    id: uid(),
-    role: "user",
-    content: trimmed,
-    parts: opts?.displayParts,
-    turnId,
-    relPath: turnActiveDocPath ?? null,
-    turnStatus: "draft",
-  });
   agStore.clearToolCalls(sessionId); // 新回合清空旧工具卡（PI-AG-08D）
   agStore.setActiveTurn(sessionId, turnId); // 后端同 session 单活仍是权威守卫；前端只做即时交互门控。
-
-  const assistantId = uid();
-  agStore.pushMessage(sessionId, {
-    id: assistantId,
-    role: "assistant",
-    content: "",
-    streaming: true,
-    turnId,
-    relPath: turnActiveDocPath ?? null,
-    turnStatus: "draft",
-  });
   void persistAgentSessionsMetadata();
   void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
 
@@ -1527,17 +1582,32 @@ export async function startTurn(
   await new Promise<void>((resolve) => {
     let settled = false;
     let terminalSeen = false;
+    let pausedForClarification = false;
+    let backendInvocationStarted = false;
     const finish = () => {
       if (settled) return;
       settled = true;
       agStore.clearActiveTurn(turnId);
-      // sending 的释放由 SM-AG-01 终态广播驱动（Completed/TurnError，Task 2-E）；此处仅结束等待。
+      // 终态或 AwaitingClarification 都会释放输入门控；后端 SM 广播仍是权威状态来源。
       resolve();
     };
     const failStart = (e: unknown) => {
-      if (terminalSeen) return;
+      if (terminalSeen || pausedForClarification) return;
+      if (clarification && !backendInvocationStarted) {
+        // 快照/装配尚未越过后端入口：保持原回合非终态，允许用户修复编辑器状态后继续补充。
+        pausedForClarification = true;
+        agStore.setTurnStatus(sessionId, turnId, "clarifying");
+        agStore.clearActiveTurn(turnId);
+        finish();
+        return;
+      }
       terminalSeen = true;
       const err = e as { code?: string; message?: string };
+      if (clarification) {
+        clarifyingTurns.delete(sessionId);
+        // 后端入口一旦开始，调用失败时 best-effort 清除仍可能停放的同一回合，避免孤儿等待身份。
+        void invoke("ag_cancel_turn", { sessionId, turnId }).catch(() => undefined);
+      }
       agStore.finishMessage(sessionId, assistantId);
       agStore.setTurnStatus(sessionId, turnId, err?.code?.includes("GATE") ? "gate_rejected" : "error");
       agStore.pushMessage(sessionId, {
@@ -1567,21 +1637,32 @@ export async function startTurn(
     let eventWork = Promise.resolve();
     onEvent.onmessage = (ev) => {
       eventWork = eventWork.then(async () => {
-        if (terminalSeen) return;
+        if (terminalSeen || pausedForClarification) return;
         switch (ev.type) {
         case "chunk":
           agStore.appendToMessage(sessionId, assistantId, ev.text);
           break;
         case "clarification_required":
           // 澄清是等待用户输入的非终态（BR-SYS-STATE-007）：不终结回合、不锁存终态。
-          // 回合保持 clarifying 等待态；用户补充输入时先取消本回合再发起新回合。
+          // 保存同 session/turn 的恢复身份；当前 Channel 在事件后关闭，补充输入经新 command 受控重入。
           agStore.appendToMessage(sessionId, assistantId, ev.text);
           agStore.setTurnStatus(sessionId, turnId, "clarifying");
-          clarifyingTurn = { sessionId, turnId };
+          clarifyingTurns.set(sessionId, {
+            sessionId,
+            turnId,
+            assistantMessageId: assistantId,
+            prompt: effectivePrompt,
+            references,
+            mentions,
+            blockRefs,
+          });
+          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          pausedForClarification = true;
+          finish();
           break;
         case "done":
           terminalSeen = true;
-          if (clarifyingTurn?.turnId === turnId) clarifyingTurn = null;
+          if (clarifyingTurns.get(sessionId)?.turnId === turnId) clarifyingTurns.delete(sessionId);
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.stop_reason === "cancelled" ? "cancelled" : "completed");
           void enqueueTurnSave(
@@ -1603,7 +1684,7 @@ export async function startTurn(
           break;
         case "error":
           terminalSeen = true;
-          if (clarifyingTurn?.turnId === turnId) clarifyingTurn = null;
+          if (clarifyingTurns.get(sessionId)?.turnId === turnId) clarifyingTurns.delete(sessionId);
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error");
           agStore.pushMessage(sessionId, {
@@ -1837,11 +1918,13 @@ export async function startTurn(
         ? openDocSnapshots.find((s) => s.relPath === turnActiveDocPath)
         : undefined;
       const activeDocContent = activeSnapshot?.content;
+      backendInvocationStarted = true;
+      if (clarification) clarifyingTurns.delete(sessionId);
       invoke("ag_start_turn", {
         turnId,
         sessionId,
         runtimeProfile: AGENT_EDIT_RUNTIME_PROFILE,
-        prompt: trimmed,
+        prompt: effectivePrompt,
         provider: opts?.provider,
         model: opts?.model,
         activeDocPath: turnActiveDocPath,
@@ -1849,12 +1932,13 @@ export async function startTurn(
         activeDocFormat: activeSnapshot?.editFormat ?? turnActiveDocTarget.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
         openDocSnapshots,
         history, // 对话历史（PI-AG-09B，后端按预算保留最近）
-        mentions: references.length ? [] : (opts?.mentions ?? []), // 兼容旧路径；新路径走 references 防重复注入
-        blockRefs: references.length ? [] : (opts?.blockRefs ?? []), // 兼容旧路径；新路径走 references 防重复注入
+        mentions: references.length ? [] : mentions, // 兼容旧路径；新路径走 references 防重复注入
+        blockRefs: references.length ? [] : blockRefs, // 兼容旧路径；新路径走 references 防重复注入
         references, // 用户显式 ReferencePayload（A-AG-I-P-01 v1.6）
         continuationTaskRunId: opts?.continuation?.taskRunId,
         continuationDecisionRequestId: opts?.continuation?.decisionRequestId,
         continuationPreviewDiffId: opts?.continuation?.previewDiffId,
+        clarificationResume: Boolean(clarification),
         onEvent,
       }).catch(failStart);
     })();
@@ -1863,16 +1947,30 @@ export async function startTurn(
 
 /** 取消后端真实活动回合；成功返回只表示取消信号已送达，最终状态以 Channel 终态为准。 */
 export async function cancelActiveTurn(): Promise<void> {
-  const active = agStore.getSnapshot().activeTurn;
+  const snapshot = agStore.getSnapshot();
+  const clarification = clarifyingTurns.get(snapshot.activeSessionId);
+  const active = snapshot.activeTurn ?? clarification;
   if (!active) return;
   try {
     await invoke("ag_cancel_turn", {
       sessionId: active.sessionId,
       turnId: active.turnId,
     });
+    if (clarification?.turnId === active.turnId) {
+      clarifyingTurns.delete(clarification.sessionId);
+      agStore.finishMessage(clarification.sessionId, clarification.assistantMessageId);
+      agStore.setTurnStatus(clarification.sessionId, clarification.turnId, "cancelled");
+      void enqueueTurnSave(clarification.sessionId, clarification.turnId, "cancelled");
+    }
   } catch (error) {
     const code = (error as { code?: string })?.code;
     if (code !== "AG_TURN_NOT_ACTIVE") throw error;
+    if (clarification?.turnId === active.turnId) {
+      clarifyingTurns.delete(clarification.sessionId);
+      agStore.finishMessage(clarification.sessionId, clarification.assistantMessageId);
+      agStore.setTurnStatus(clarification.sessionId, clarification.turnId, "cancelled");
+      void enqueueTurnSave(clarification.sessionId, clarification.turnId, "cancelled");
+    }
     agStore.clearActiveTurn(active.turnId);
   }
 }

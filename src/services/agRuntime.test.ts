@@ -1434,9 +1434,8 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
 });
 
 describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
-  it("clarification_required 投影为 clarifying 且不终结回合、后续真实终态可达", async () => {
+  it("clarification_required 投影为 clarifying、释放 command 且不伪造终态", async () => {
     edStore.loadDoc("notes/current.md", "第一段", 101);
-    // 后端澄清分支不发 done：回合保持 clarifying 等待态（协程挂起等取消）。
     mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((m: AgTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
@@ -1444,44 +1443,115 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
         turn_id: "t",
         text: "需要你先确认：当前请求缺少安全执行所需的信息。",
       });
-      // 澄清不终结回合：稍后真实终态（done）仍可正常到达并清澄清追踪。
-      setTimeout(() => onEvent.onmessage?.({ type: "done", turn_id: "t", stop_reason: "stop" }), 80);
     });
-    // startTurn 因无 done 挂起，race 超时后检查澄清投影（done 尚未到达）。
-    await Promise.race([startTurn("修改文档"), new Promise((r) => setTimeout(r, 50))]);
-    await new Promise((r) => setTimeout(r, 10)); // flush 澄清 case
+    await startTurn("修改文档");
 
-    let assistant = activeSession(agStore.getSnapshot()).messages.find((m) => m.role === "assistant");
+    const snapshot = agStore.getSnapshot();
+    const assistant = activeSession(snapshot).messages.find((m) => m.role === "assistant");
     expect(assistant?.turnStatus).toBe("clarifying");
     expect(assistant?.content).toContain("需要你先确认");
-
-    // 等 done 到达后回合终结为 completed。
-    await new Promise((r) => setTimeout(r, 120));
-    assistant = activeSession(agStore.getSnapshot()).messages.find((m) => m.role === "assistant");
-    expect(assistant?.turnStatus).toBe("completed");
+    expect(snapshot.activeTurn).toBeNull();
+    expect(snapshot.sending).toBe(false);
   });
 
-  it("澄清回合存在时发送新回合先取消旧回合", async () => {
+  it("用户补充说明以同 turn_id 受控重入，不取消或创建第二个 AgentTurn", async () => {
     edStore.loadDoc("notes/current.md", "第一段", 101);
     invokeMock.mockClear();
-    // 第一轮：澄清挂起（设置 clarifyingTurn）
+    const turnInvocations: Record<string, unknown>[] = [];
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "dispatch") return dispatchOk(arg);
+      if (command !== "ag_start_turn") return undefined;
+      const invocation = arg as Record<string, unknown>;
+      turnInvocations.push(invocation);
+      const onEvent = invocation.onEvent as { onmessage: ((m: AgTurnEvent) => void) | null };
+      if (turnInvocations.length === 1) {
+        onEvent.onmessage?.({ type: "clarification_required", turn_id: "ignored", text: "澄清问题" });
+      } else {
+        onEvent.onmessage?.({ type: "chunk", turn_id: "ignored", text: "已按补充说明完成" });
+        onEvent.onmessage?.({ type: "done", turn_id: "ignored", stop_reason: "stop" });
+      }
+      return undefined;
+    });
+    await startTurn("修改文档", {
+      mentions: ["notes/legacy.md"],
+      blockRefs: [{ relPath: "notes/legacy.md", blockId: "b1", text: "旧引用" }],
+    });
+    await startTurn("目标是 notes/current.md");
+
+    expect(turnInvocations).toHaveLength(2);
+    expect(turnInvocations[1]?.turnId).toBe(turnInvocations[0]?.turnId);
+    expect(turnInvocations[0]?.clarificationResume).toBe(false);
+    expect(turnInvocations[1]?.clarificationResume).toBe(true);
+    expect(turnInvocations[1]?.prompt).toBe("修改文档\n\n补充说明：目标是 notes/current.md");
+    expect(turnInvocations[1]?.mentions).toEqual(["notes/legacy.md"]);
+    expect(turnInvocations[1]?.blockRefs).toEqual([
+      { relPath: "notes/legacy.md", blockId: "b1", text: "旧引用" },
+    ]);
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_cancel_turn")).toBe(false);
+
+    const messages = activeSession(agStore.getSnapshot()).messages;
+    expect(messages.filter((message) => message.turnId === turnInvocations[0]?.turnId)).toHaveLength(2);
+    expect(messages.find((message) => message.role === "user")?.content).toContain("补充说明：目标是 notes/current.md");
+    expect(messages.find((message) => message.role === "assistant")?.turnStatus).toBe("completed");
+  });
+
+  it("澄清补充在后端调用前快照失败时保留原 turn_id，修复后仍可受控重入", async () => {
+    edStore.loadDoc("notes/current.md", "第一段", 101);
+    const turnInvocations: Record<string, unknown>[] = [];
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "dispatch") return dispatchOk(arg);
+      if (command !== "ag_start_turn") return undefined;
+      const invocation = arg as Record<string, unknown>;
+      turnInvocations.push(invocation);
+      const onEvent = invocation.onEvent as { onmessage: ((m: AgTurnEvent) => void) | null };
+      if (turnInvocations.length === 1) {
+        onEvent.onmessage?.({ type: "clarification_required", turn_id: "ignored", text: "澄清问题" });
+      } else {
+        onEvent.onmessage?.({ type: "done", turn_id: "ignored", stop_reason: "stop" });
+      }
+      return undefined;
+    });
+
+    await startTurn("修改文档");
+    const originalTurnId = turnInvocations[0]?.turnId;
+    edLocateMock.getActiveDocumentContent.mockReturnValue(null);
+    await startTurn("目标是当前文档");
+
+    expect(turnInvocations).toHaveLength(1);
+    expect(activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "assistant")?.turnStatus)
+      .toBe("clarifying");
+
+    edLocateMock.getActiveDocumentContent.mockImplementation(() => edStore.getSnapshot().loadedContent);
+    await startTurn("并保持标题不变");
+
+    expect(turnInvocations).toHaveLength(2);
+    expect(turnInvocations[1]).toMatchObject({
+      turnId: originalTurnId,
+      clarificationResume: true,
+      prompt: "修改文档\n\n补充说明：目标是当前文档\n\n补充说明：并保持标题不变",
+    });
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_cancel_turn")).toBe(false);
+  });
+
+  it("等待澄清时取消使用原 turn_id 并投影 Cancelled", async () => {
+    edStore.loadDoc("notes/current.md", "第一段", 101);
     mockTurnInvoke((arg) => {
       const onEvent = (arg as { onEvent: { onmessage: ((m: AgTurnEvent) => void) | null } }).onEvent;
-      onEvent.onmessage?.({ type: "clarification_required", turn_id: "t1", text: "澄清问题" });
+      onEvent.onmessage?.({ type: "clarification_required", turn_id: "ignored", text: "澄清问题" });
     });
-    await Promise.race([startTurn("修改文档"), new Promise((r) => setTimeout(r, 50))]);
-    await new Promise((r) => setTimeout(r, 10)); // flush：澄清 case 已设置 clarifyingTurn
+    await startTurn("修改文档");
+    const turnId = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "user")?.turnId;
+    invokeMock.mockImplementation(async (command, arg) => (
+      command === "dispatch" ? dispatchOk(arg) : undefined
+    ));
 
-    // 第二轮：用户补充输入 → 发起新回合前先取消澄清回合
-    const secondInvoke = vi.fn(async (_cmd: string, _arg: unknown) => undefined);
-    invokeMock.mockImplementation(secondInvoke);
-    await Promise.race([startTurn("补充信息"), new Promise((r) => setTimeout(r, 50))]);
+    await cancelActiveTurn();
 
-    const cancelCalls = secondInvoke.mock.calls.filter(([cmd]) => cmd === "ag_cancel_turn");
-    expect(cancelCalls.length).toBe(1);
-    // 取消目标 = 澄清回合的真实 turn_id（startTurn 内部生成，非事件 mock 值）。
-    expect(cancelCalls[0]?.[1]).toHaveProperty("sessionId");
-    expect(String((cancelCalls[0]?.[1] as { turnId: string } | undefined)?.turnId ?? "")).toMatch(/^t-/);
+    const cancelCall = invokeMock.mock.calls.find(([command]) => command === "ag_cancel_turn");
+    expect(cancelCall?.[1]).toMatchObject({ turnId });
+    const assistant = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "assistant");
+    expect(assistant?.turnStatus).toBe("cancelled");
+    expect(assistant?.streaming).toBe(false);
   });
 });
 

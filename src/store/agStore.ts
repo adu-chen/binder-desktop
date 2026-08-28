@@ -141,7 +141,7 @@ const ACTIVE_TURN_STATES: ReadonlySet<RustTurnState> = new Set([
   "Streaming",
   "HandingOff",
   // AwaitingClarification 不在其中：澄清是等待用户输入的非终态（BR-SYS-STATE-007），
-  // 不阻塞输入门控——用户可回复（前端先取消澄清回合再发起新回合）或直接取消。
+  // 不阻塞输入门控——用户可回复并受控重入同一 AgentTurn，或直接取消。
 ]);
 
 /** 任务步骤态（TERM-AG-016 · SM-AG-04 steps）。 */
@@ -479,6 +479,37 @@ export const agStore = {
         s.title === "新对话" && msg.role === "user" && msg.content.trim()
           ? msg.content.trim().slice(0, 12)
           : s.title,
+    }));
+  },
+  /**
+   * 将用户补充说明并入原 AgentTurn 的 user message，并恢复原 assistant message 的流式投影。
+   * 只更新同 turnId 现有消息，不创建第二个 AgentTurn 或伪造新的 assistant 身份。
+   */
+  resumeClarifyingTurn(
+    sessionId: string,
+    turnId: string,
+    clarification: string,
+    clarificationParts?: MessageContentPart[],
+  ) {
+    const prefix = "\n\n补充说明：";
+    mapSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((message) => {
+        if (message.turnId !== turnId) return message;
+        if (message.role === "assistant") {
+          return { ...message, streaming: true, turnStatus: "draft" };
+        }
+        const content = `${message.content}${prefix}${clarification}`;
+        let parts = message.parts;
+        if (clarificationParts?.length) {
+          parts = message.parts?.length
+            ? [...message.parts, { type: "text", text: prefix }, ...clarificationParts]
+            : [{ type: "text", text: `${message.content}${prefix}` }, ...clarificationParts];
+        } else if (message.parts?.length) {
+          parts = [...message.parts, { type: "text", text: `${prefix}${clarification}` }];
+        }
+        return { ...message, content, parts, turnStatus: "draft" };
+      }),
     }));
   },
   /** 追加流式分片到指定会话的指定消息；同步追加到消息片段序列的最后一个 text 段（无则创建）。 */

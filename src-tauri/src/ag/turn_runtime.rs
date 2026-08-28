@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use super::edit_support::is_active_editor_snapshot_source;
 use super::reference_runtime::BlockRef;
 use super::task_runtime::{build_task_plan, settle_task_run};
-use super::turn_control::{install_agent_turn_abort_handle, register_active_agent_turn};
+use super::turn_control::{park_agent_turn_for_clarification, register_active_agent_turn};
 use super::turn_events::{
     emit_ag01, emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_error,
     settle_and_emit_ag_turn_error, sm_error,
@@ -20,12 +20,12 @@ use super::turn_tool_loop::run_turn_tool_loop;
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018
+ * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018
  * type:     API
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001
- * term_ref: TERM-AG-015, TERM-AG-016
- * boundary: in=AgentTurnRequestAndAgentReadContext | out=AgentTurnEventStreamAndPersistedTaskRunTransitions | effect=IPC-ag_start_turn | delegate=ag::turn::transition | does_not=bypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
+ * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016
+ * boundary: in=AgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndPersistedTaskRunTransitions | effect=IPC-ag_start_turn | delegate=ag::turn::transition,register_active_agent_turn | does_not=createNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
@@ -50,6 +50,7 @@ pub(crate) async fn ag_start_turn(
     continuation_task_run_id: Option<String>,
     continuation_decision_request_id: Option<String>,
     continuation_preview_diff_id: Option<String>,
+    clarification_resume: Option<bool>,
     on_event: tauri::ipc::Channel<AgTurnEvent>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -59,6 +60,7 @@ pub(crate) async fn ag_start_turn(
     let runtime_profile =
         runtime_profile.unwrap_or_else(|| ag::turn::AGENT_EDIT_1_0_PROFILE.to_string());
     ag::turn::ensure_runtime_profile(&runtime_profile)?;
+    let clarification_resume = clarification_resume.unwrap_or(false);
 
     if prompt.trim().is_empty() && references.is_empty() {
         return Err(IpcError::new(
@@ -69,10 +71,6 @@ pub(crate) async fn ag_start_turn(
         ));
     }
 
-    let (_active_turn_lease, cancelled) =
-        register_active_agent_turn(&state, &session_id, &turn_id)?;
-    let terminal_latch = ag::turn::TerminalLatch::default();
-
     let (workspace_id_for_turn, workspace_root_path) = {
         let conn = state
             .db
@@ -81,7 +79,39 @@ pub(crate) async fn ag_start_turn(
         let ws = workspace::lifecycle::active_workspace(&conn)
             .map_err(|e| IpcError::new("WS_ACTIVE_FAILED", &e.to_string(), true, false))?
             .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
-        ag::history::ensure_session_exists(&conn, &ws.workspace_id, &session_id)
+        (ws.workspace_id.clone(), ws.root_path.clone())
+    };
+
+    if clarification_resume
+        && (continuation_task_run_id.is_some()
+            || continuation_decision_request_id.is_some()
+            || continuation_preview_diff_id.is_some())
+    {
+        return Err(IpcError::new(
+            "AG_CLARIFICATION_CONTINUATION_CONFLICT",
+            "澄清恢复不能与任务裁决或预览续片段混用",
+            false,
+            false,
+        ));
+    }
+
+    let (_active_turn_lease, cancelled, clarification_task_run_id) = register_active_agent_turn(
+        &state,
+        &workspace_id_for_turn,
+        &session_id,
+        &turn_id,
+        clarification_resume,
+    )?;
+    let terminal_latch = ag::turn::TerminalLatch::default();
+
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+        // 澄清恢复先由活动回合注册表完成 session/workspace/turn 身份认领；只有认领成功后才允许
+        // 创建/更新持久化会话，错误身份不得留下空会话或草稿副作用。
+        ag::history::ensure_session_exists(&conn, &workspace_id_for_turn, &session_id)
             .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
         let draft_payload = ag::history::AgentTurnPayload {
             version: 1,
@@ -102,7 +132,7 @@ pub(crate) async fn ag_start_turn(
         };
         ag::history::save_turn(
             &conn,
-            &ws.workspace_id,
+            &workspace_id_for_turn,
             &session_id,
             &turn_id,
             active_doc_path.as_deref(),
@@ -110,8 +140,7 @@ pub(crate) async fn ag_start_turn(
             &draft_payload,
         )
         .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
-        (ws.workspace_id.clone(), ws.root_path.clone())
-    };
+    }
 
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：回合开始驱动受限 TaskRun——
     // 应用启动时已清理陈旧活动态（重启不续跑）；此处仅新建/沿用本会话当前目标的 task_run_id，
@@ -223,8 +252,20 @@ pub(crate) async fn ag_start_turn(
                     false,
                 ));
             }
-            ag::task::begin_turn(&conn, &ws.workspace_id, &session_id, Some("agent 回合"))
-                .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+            let task_run_id =
+                ag::task::begin_turn(&conn, &ws.workspace_id, &session_id, Some("agent 回合"))
+                    .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
+            if let Some(expected_task_run_id) = clarification_task_run_id.as_deref() {
+                if task_run_id != expected_task_run_id {
+                    return Err(IpcError::new(
+                        "AG_CLARIFICATION_TASK_MISMATCH",
+                        "澄清恢复未绑定原 TaskRun，已拒绝继续",
+                        false,
+                        false,
+                    ));
+                }
+            }
+            task_run_id
         };
         Ok(task_run_id)
     })();
@@ -233,7 +274,10 @@ pub(crate) async fn ag_start_turn(
         Err(error) => {
             // 已确认/已预览的续片段在身份核验阶段失败时，原 TaskRun 已可能处于 executing。
             // 必须使用请求携带的稳定身份收束，不能在建立局部 task_run_id 之前直接返回。
-            if let Some(task_run_id) = continuation_task_run_id.as_deref() {
+            if let Some(task_run_id) = continuation_task_run_id
+                .as_deref()
+                .or(clarification_task_run_id.as_deref())
+            {
                 settle_and_emit_ag_turn_error(
                     &state,
                     task_run_id,
@@ -322,8 +366,15 @@ pub(crate) async fn ag_start_turn(
 
     // 结构性门禁前置：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed（X-SEQ-001）。
     // 每步转移广播 SM-AG-01（A-CORE-X-L-04 Task 2-E）：sending 等回合视图据此投影（X-FORBID-007）。
-    let s =
-        started_turn_or_finish!(transition(TurnState::Idle, TurnEvent::Send).ok_or_else(sm_error)); // → Assembling
+    let s = if clarification_resume {
+        started_turn_or_finish!(transition(
+            TurnState::AwaitingClarification,
+            TurnEvent::ClarificationProvided,
+        )
+        .ok_or_else(sm_error))
+    } else {
+        started_turn_or_finish!(transition(TurnState::Idle, TurnEvent::Send).ok_or_else(sm_error))
+    }; // → Assembling
     emit_ag01(&app, &turn_id, s);
     let has_selection = active_doc_path.as_deref().is_some_and(|active_path| {
         block_refs
@@ -381,39 +432,23 @@ pub(crate) async fn ag_start_turn(
             .first()
             .map(String::as_str)
             .unwrap_or("当前请求缺少安全执行所需的信息");
-        let _ = on_event.send(AgTurnEvent::ClarificationRequired {
-            turn_id: turn_id.clone(),
-            text: format!("需要你先确认：{reason}。请打开或明确指定要修改的当前文档。"),
-        });
         // 澄清是等待用户输入的非终态（BR-SYS-STATE-007）：不锁存终态、不广播 Done。
         let s = started_turn_or_finish!(
             transition(s, TurnEvent::ClarificationRequired).ok_or_else(sm_error)
         ); // → AwaitingClarification
-        emit_ag01(&app, &turn_id, s);
-        // 澄清等待：活动阶段，取消可在此生效（任一活动阶段取消）。本分支位于流式 abort_handle
-        // 注册之前，取消命令只置 cancelled 并 abort 本挂起；Abortable 返回后广播 Cancelled 终态
-        // （terminal_latch 首终态锁存，不产生文档/卡片/落盘副作用）。
-        let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
-        started_turn_or_finish!(install_agent_turn_abort_handle(
+           // 先原子保留 session/workspace/turn/TaskRun 身份，再向前端公布可补充；command 返回后 lease
+           // 仍保留等待态，下一次只允许同 turn_id 的 clarificationResume 认领一次。
+        started_turn_or_finish!(park_agent_turn_for_clarification(
             &state,
             &session_id,
             &turn_id,
-            abort_handle,
+            &task_run_id,
         ));
-        let _ = futures_util::future::Abortable::new(
-            futures_util::future::pending::<()>(),
-            abort_registration,
-        )
-        .await;
-        if let Ok(conn) = state.db.lock() {
-            settle_task_run(
-                &conn,
-                &task_run_id,
-                &turn_id,
-                ag::task::TurnOutcome::Cancelled,
-            );
-        }
-        emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+        emit_ag01(&app, &turn_id, s);
+        let _ = on_event.send(AgTurnEvent::ClarificationRequired {
+            turn_id: turn_id.clone(),
+            text: format!("需要你先确认：{reason}。请打开或明确指定要修改的当前文档。"),
+        });
         return Ok(());
     }
     let s = started_turn_or_finish!(transition(s, TurnEvent::Assembled).ok_or_else(sm_error)); // → AwaitingGate

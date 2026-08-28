@@ -163,9 +163,9 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 写入歧义请求触发澄清；补充后继续；在流式中取消；观察首终态后到达的事件 |
-| 期望结果 | 澄清是等待输入的非终态（不伪装完成）；取消任一活动阶段生效且无半落盘；完成/失败/拒绝/取消互斥、首终态锁存；迟到事件/工具无文档/卡片/落盘副作用 |
-| 自动化证据设计 | agRuntime：澄清非终态、cancel、terminal_latch；rust：终态后迟到事件抑制 |
+| 完整操作 | 写入歧义请求触发澄清；以原 session/workspace/turn_id 补充后继续；分别尝试错误 session、workspace、turn_id、重复恢复与终态恢复；在等待态和流式中取消；观察首终态后到达的事件 |
+| 期望结果 | 澄清保持原 AgentTurn 的 AwaitingClarification 非终态（不伪装完成/取消、不创建新 turn_id）；只有匹配原身份的 ClarificationProvided 可回到 Assembling，错误、重复和终态重入失败关闭；取消任一活动阶段生效且无半落盘；完成/失败/拒绝/取消互斥、首终态锁存；迟到事件/工具无文档/卡片/落盘副作用 |
+| 自动化证据设计 | agRuntime：同 turn_id 补充、不调用 cancel、不产生第二组消息、调用前快照失败保留等待身份、等待态取消、terminal_latch；rust：状态机唯一恢复事件、session/workspace/turn/task 身份 guard、重复/终态重入失败、取消竞争与终态后迟到事件抑制 |
 | 人类观察项 | 澄清等待呈现、取消后无新工具/提案、终态原因 |
 | 状态 | `DESIGNED` |
 
@@ -228,4 +228,5 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-08-14 | v1.0 | AG-1.0-D4-VALIDATION-CARDS-01：建立 Agent 1.0 验证卡设计——追溯矩阵、状态化链路验证矩阵、核心场景卡 V-N1~N4（D-NEW）与 V-S1~S9（三态分流/连续接力/保存/澄清终态/TaskRun/外部内容记忆/会话隔离）、P1 独立开放条件清单（V-P1-01~07）与进入 IMPLEMENTATION 的门禁规则；卡状态一律 DESIGNED，未执行不填报通过。 |
+| 2026-08-27 | v1.1 | AG-CONFORMANCE-CODE-S3A：细化 V-S6 为同一 AgentTurn 澄清受控重入，补充身份 guard、调用前失败恢复与等待态取消证据设计；卡状态保持 DESIGNED。 |
 | 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |

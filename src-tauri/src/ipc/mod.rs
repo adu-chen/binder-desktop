@@ -166,7 +166,7 @@ pub enum AgTurnEvent {
         outcome: String,
     },
     /// 澄清等待：IntentResult.ambiguity=blocking 时等待用户输入的非终态事件（BR-SYS-STATE-007）。
-    /// 回合不终结、不锁存终态；用户补充输入后经新回合继续，或在此阶段取消。
+    /// 回合不终结、不锁存终态；用户补充输入后以同 turn_id 受控重入，或在此阶段取消。
     ClarificationRequired { turn_id: String, text: String },
     /// 回合正常完成（含 stop_reason:"cancelled" 中断终态）。
     Done {
