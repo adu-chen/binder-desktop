@@ -1,59 +1,54 @@
 {
-  "scope_id": "AG-CONFORMANCE-GOVERNANCE-S3D",
+  "scope_id": "AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION",
   "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "VALIDATION",
-  "title": "注册显式编辑目标集合及追加边界",
+  "governance_phase": "REQUIREMENT",
+  "title": "显式引用与显式编辑目标集需求语义闭合",
   "status": "READY",
   "confirmation": "YES",
-  "scope_reason": "人类已确认 HD-S2-04：先注册显式目标集追加规则，再硬拒集合之外的既有文档。",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S3D.md",
+  "scope_reason": "人类确认选项 1：以 HD-S3D-01 为最新产品裁决，先闭合冻结需求与能力基线，再恢复 S3D 实现。",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION.md",
   "objectives": [
-    "为当前未注册的编辑目标集合建立唯一正式术语",
-    "在 BR-AG-DATA-003 中定义集合初始来源、显式追加来源、作用域与 continuation 继承边界",
-    "明确 read/search 等模型自选行为不能自行扩大集合",
-    "为后续代码阶段的集合外硬拒提供完整 REQ→RULE→TERM→生产 owner 映射"
+    "区分 ReferencePayload 内容的 data-only 属性与用户显式引用动作的目标授权元数据属性",
+    "明确 ExplicitEditTargetSet 成员资格只是 propose_edit 的必要条件，不替代 IntentResult、CapabilityGrant、LogicalState 基线和 Diff 裁决",
+    "保持多既有文档编辑为 P1 受控开放：用户输入冻结显式引用清单，工具发现目标另经 scope DecisionRequest 确认",
+    "为后续 DESIGN 与 IMPLEMENTATION 恢复唯一需求链"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S3D.md",
-    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ".governance/issues/AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION.md",
+    "docs/00_core/A-CORE-X-D-02_Agent1.0冻结能力基线.md",
+    "docs/01_modules/AG/A-AG-M-D-02_代理1.0能力基线与需求分解.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
-    "CLAUDE.md",
     "governance.config.json",
-    "所有生产代码、测试、数据库迁移与未列入 allowed_files 的文档"
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "所有技术设计、计划、代码与测试文件"
   ],
   "constraints": [
-    "本 Scope 只注册静态设计，不实施集合外硬拒",
-    "显式引用、多文档请求、同一 AgentTurn 澄清恢复与显式 TaskRun continuation 不得被误伤",
-    "模型调用 read_doc、search_docs 或其他只读工具本身不得被默认解释为用户授权修改目标",
-    "新术语必须与 ReferencePayload、AgentTurn、TaskRun、TaskPlan 和 ChangeProposal 保持边界清晰"
+    "ReferencePayload 正文始终是 data-only，正文中的路径或指令不得扩权",
+    "只有用户显式提供且归一到 active workspace 既有文档的引用身份可成为初始候选成员",
+    "只读 IntentResult 不因集合成员存在而获得 propose_edit",
+    "不把所有 workspace 可读文件或打开标签视为编辑目标",
+    "不改变多文档逐目标 Proposal、独立基线与逐卡裁决，不引入批量接受或跨文档事务"
   ],
   "acceptance_criteria": [
-    "ADUS 术语注册表出现唯一正式术语及禁用别名",
-    "BR-AG-DATA-003 完整定义初始集合、追加事件、继承与拒绝语义",
-    "规则明确区分引用上下文、只读访问与内容修改授权",
-    "governance:generate、test:governance 与 governance:audit 通过"
+    "CORE 冻结基线与 AG 能力基线对显式引用、P0/P1 档位和授权必要条件给出同一答案",
+    "旧只读表述被限定为内容 data-only，而非否定用户引用身份的目标授权元数据",
+    "需求变更记录明确引用 HD-S3D-01/03，并为 DESIGN Scope 提供稳定输入"
   ],
   "human_decisions": [
     {
-      "id": "HD-S2-04",
+      "id": "HD-S3D-03",
       "status": "CONFIRMED",
-      "question": "先注册显式目标集追加规则，再硬拒集合之外的既有文档；不得误伤显式引用、多文档和延续语义"
-    },
-    {
-      "id": "HD-S3D-01",
-      "status": "CONFIRMED",
-      "question": "工具发现的新既有文档通过什么显式事件获得追加授权，以及该集合如何跨 continuation 继承"
+      "question": "以 HD-S3D-01 / BR-AG-DATA-003 为新权威，先配套更新 REQUIREMENT/DESIGN/PLAN 文档，再恢复实现"
     }
   ],
   "stop_conditions": [],
   "unresolved_items": [
-    "静态规则确认后另开 CODE_CHANGE Scope 实施生产 owner、持久化、硬拒与测试",
-    "CapabilityGrant 最小化仍是独立 S3C，不并入本 Scope"
+    "DESIGN 与 PLAN 文档在后续独立 Scope 顺序同步",
+    "S3D 代码补丁保持未提交且本 Scope 不继续修改"
   ]
 }

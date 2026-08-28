@@ -40,16 +40,17 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 
 | 档位 | 已冻结范围 | 解释 |
 |---|---|---|
-| P0 主链 | 三态模型与内容 Diff 生命周期；CreateDocumentBundle；工作区内显式引用；基础聊天、项目/编辑器感知、受限阅读分析；原生 DOCX 只读与 BDocx 副本路径；`agent-edit-1.0` Runtime Profile、AgentTurn、IntentResult、最小授权、结构化可见事件、AgentSession 隔离与本地事实历史；受限 TaskRun、真实进度、连续 Proposal 接力 | 不具备则不能宣称 Agent 1.0 主链闭环可用；仍须经过 DESIGN 和真实验证 |
-| P1 受控开放 | HTML/BDocx 的颜色/突出显示、段落样式、字号、字体族、表格/图片；显式公开网页研究；WorkspaceOperation 的创建/重命名/移动/删除/恢复与 WorkspaceTimeline 类型化恢复；TXT→Markdown、Markdown→TXT 目标副本转换；确认冻结清单后的多个既有文档逐项编辑；用户显式外部文件的一次性只读内容引用；用户管理且显式选择的本地项目记忆 | 每项必须按具体子能力、格式/解析能力、最小授权、确认、基线再核验、补偿、恢复语义与真实验证独立开放，不能一并默认开启 |
+| P0 主链 | 三态模型与内容 Diff 生命周期；CreateDocumentBundle；工作区内显式引用的 data-only 内容与用户可见身份；基础聊天、项目/编辑器感知、受限阅读分析；原生 DOCX 只读与 BDocx 副本路径；`agent-edit-1.0` Runtime Profile、AgentTurn、IntentResult、最小授权、结构化可见事件、AgentSession 隔离与本地事实历史；受限 TaskRun、真实进度、连续 Proposal 接力 | 用户显式引用身份可作为既有文档目标授权元数据，但正文仍是 data-only；成员资格不替代 IntentResult、CapabilityGrant、基线和 Diff 裁决；仍须经过 DESIGN 和真实验证 |
+| P1 受控开放 | HTML/BDocx 的颜色/突出显示、段落样式、字号、字体族、表格/图片；显式公开网页研究；WorkspaceOperation 的创建/重命名/移动/删除/恢复与 WorkspaceTimeline 类型化恢复；TXT→Markdown、Markdown→TXT 目标副本转换；确认冻结清单后的多个既有文档逐项编辑（用户输入显式引用清单，或工具发现目标经 scope DecisionRequest 确认）；用户显式外部文件的一次性只读内容引用；用户管理且显式选择的本地项目记忆 | 每项必须按具体子能力、格式/解析能力、最小授权、确认、基线再核验、补偿、恢复语义与真实验证独立开放，不能一并默认开启 |
 | P2 后续 Profile | Build/CBT、Agent 记忆提议/自动写入/自动检索/自动注入、自动知识召回、模板工作流、开放式自主规划、多 Agent、任务队列、任务级事务/回滚 | 保留产品路线，不进入 `agent-edit-1.0` 默认 Profile 或 1.0 发布验收 |
 
 ## §4 不可突破的产品边界
 
 1. 文档正文、样式、表格和图片修改先作用于 LogicalState，继续遵循内容 Diff 三态分流；WorkspaceOperation
    不属于内容修改，必须先由 DecisionRequest 前置裁决，确认且再核验后直接改变 DiskState，不产生资源 Diff。
-2. Profile、IntentResult、CapabilityGrant、当前目标、上下文和确认点逐层收窄；已注册工具、Prompt、前端参数
-   或兼容默认值都不构成当轮授权。
+2. Profile、IntentResult、CapabilityGrant、ExplicitEditTargetSet、当前上下文和确认点逐层收窄；用户显式提供且
+   归一到 active workspace 既有文档的 ReferencePayload 身份可初始化目标集合，但引用正文、已注册工具、Prompt、
+   模型/历史路径、只读工具结果、打开标签或兼容默认值都不构成当轮目标授权；集合成员资格也不单独授予写工具。
 3. TaskRun 只组织当前用户目标内的受限步骤，不是后台队列；同文档连续 Proposal 以最新 LogicalState 接力，
    不形成补丁栈或任务级自动回滚。
 4. 可见“工作中”只来自真实回合、步骤或工具事件；不展示模型内部推理，也不把等待、失败、取消或中断伪装为执行。
@@ -91,3 +92,4 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 |---|---|---|
 | 2026-08-14 | v1.0 | AG-1.0-R6-BASELINE-FREEZE-01：人类确认冻结 Agent 1.0 已确认需求范围；汇总 R1–R5-C 的 P0/P1/P2、不可突破边界、变更入口、DESIGN 顺序与需求确认/实现验证的真值区分。 |
 | 2026-08-21 | v1.1 | WORKSPACE-OPERATION-BASELINE-01：人类确认 WorkspaceOperation 八项决策；冻结前置裁决直接写盘、统一 WorkspaceTimeline、CreateDocumentBundle、安全拒绝补偿、fail-fast 补偿和 dirty 阻断。 |
+| 2026-08-28 | v1.2 | AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION：按 HD-S3D-03 分离显式引用内容的 data-only 属性与用户可见引用身份的目标授权元数据属性；多既有文档编辑仍为 P1，须由输入显式冻结清单或 scope DecisionRequest 确认。 |
