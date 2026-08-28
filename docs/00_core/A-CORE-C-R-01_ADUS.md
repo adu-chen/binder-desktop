@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-28T08:35:59.626Z -->
+<!-- 最后生成时间：2026-08-28T08:57:26.479Z -->
 
 ### 模块编码表
 
@@ -259,6 +259,7 @@
 | TERM-AG-016    | AG-TURN                                              | 任务步骤      | TaskStep                | 任务步骤, 步骤, 子步骤, step 单元, 执行步                          | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-017    | AG-TURN                                              | 任务级裁决请求   | DecisionRequest         | 确认卡, 裁决项, decision 实例, 确认请求                          | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-018    | AG-TURN                                              | 任务计划      | TaskPlan                | 计划, 任务计划清单, plan 单元, 执行计划                            | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
+| TERM-AG-019    | AG-TURN, AG-TOOL                                     | 显式编辑目标集   | ExplicitEditTargetSet   | 编辑白名单, 目标白名单, 跨文档白名单, 隐式目标集, 模型目标集                   | docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md          |
 | TERM-AG-005    | AG-TURN                                              | 意图沿用判定    | IntentCarryover         | 历史复用, 意图继承, 上下文继承, 意图沿袭, carryover                   | docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md         |
 | TERM-AST-001   | AST-MEMORY                                           | 记忆条目      | MemoryEntry             | 记忆点, 记忆项, 记忆片段, memory条目                             | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md      |
 | TERM-AST-002   | REF-INJECT, AST-MEMORY                               | 显式项目记忆引用  | MemorySelectionRef      | 记忆引用, 记忆选择, 记忆注入引用, 记忆条目引用, 记忆选中项                    | docs/01_modules/AST/A-AST-M-T-01_记忆协同技术设计.md      |

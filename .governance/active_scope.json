@@ -1,33 +1,22 @@
 {
-  "scope_id": "AG-CONFORMANCE-CODE-S3B",
-  "task_type": "CODE_CHANGE",
+  "scope_id": "AG-CONFORMANCE-GOVERNANCE-S3D",
+  "task_type": "GOVERNANCE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "TaskRun 按任务级产物创建",
+  "title": "注册显式编辑目标集合及追加边界",
   "status": "READY",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S3B.md",
+  "scope_reason": "人类已确认 HD-S2-04：先注册显式目标集追加规则，再硬拒集合之外的既有文档。",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S3D.md",
   "objectives": [
-    "使简单 AgentTurn 完全不创建或绑定 TaskRun",
-    "只在复杂目标计划、DecisionRequest、WorkspaceOperationPlan 或显式任务续片段需要时创建或沿用 TaskRun",
-    "解除简单局部编辑、澄清等待、提示词与工具循环对 TaskRun 必填身份的隐式依赖",
-    "保持任务级确认、复杂计划、预览续片段、取消与终态收束的既有安全边界",
-    "补齐直接测试、真实 @GOV owner 注册并刷新 ADUS"
+    "为当前未注册的编辑目标集合建立唯一正式术语",
+    "在 BR-AG-DATA-003 中定义集合初始来源、显式追加来源、作用域与 continuation 继承边界",
+    "明确 read/search 等模型自选行为不能自行扩大集合",
+    "为后续代码阶段的集合外硬拒提供完整 REQ→RULE→TERM→生产 owner 映射"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-CODE-S3B.md",
-    "src-tauri/src/ag/task.rs",
-    "src-tauri/src/ag/task_runtime.rs",
-    "src-tauri/src/ag/turn_control.rs",
-    "src-tauri/src/ag/turn_events.rs",
-    "src-tauri/src/ag/turn_prompt.rs",
-    "src-tauri/src/ag/turn_runtime.rs",
-    "src-tauri/src/ag/turn_tool_loop.rs",
-    "src/services/agService.ts",
-    "src/services/agRuntime.test.ts",
-    "scripts/test_governance.test.mjs",
-    "src-tauri/tests/core_chain.rs",
-    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+    ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S3D.md",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
@@ -36,50 +25,35 @@
     "AGENTS.md",
     "CLAUDE.md",
     "governance.config.json",
-    "src-tauri/src/db/mod.rs",
-    "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/tool_registry.rs",
-    "src-tauri/src/workspace/routes.rs",
-    "src-tauri/src/workspace/operation.rs",
-    "所有未列入 allowed_files 的生产代码、设计和测试文件"
+    "所有生产代码、测试、数据库迁移与未列入 allowed_files 的文档"
   ],
   "constraints": [
-    "简单回答、分析、检索与单文档局部修改不得创建 TaskRun",
-    "简单局部修改仍可生成 pending Diff，但没有 TaskRun 时不得伪造任务步骤、预览续片段或后台继续",
-    "复杂目标 TaskPlan、DecisionRequest 与 WorkspaceOperationPlan 必须先取得真实 TaskRun 身份",
-    "显式 DecisionRequest/Preview continuation 必须沿用并校验原 TaskRun，不得静默新建替代",
-    "澄清恢复允许原 AgentTurn 没有 TaskRun；若原回合已有 TaskRun，恢复后必须保持同一身份",
-    "不得提前实施 CapabilityGrant 最小化或跨文档目标集扩展规则"
+    "本 Scope 只注册静态设计，不实施集合外硬拒",
+    "显式引用、多文档请求、同一 AgentTurn 澄清恢复与显式 TaskRun continuation 不得被误伤",
+    "模型调用 read_doc、search_docs 或其他只读工具本身不得被默认解释为用户授权修改目标",
+    "新术语必须与 ReferencePayload、AgentTurn、TaskRun、TaskPlan 和 ChangeProposal 保持边界清晰"
   ],
   "acceptance_criteria": [
-    "普通简单 AgentTurn 的执行路径不写 task_runs 且 agent_turns.task_run_id 保持空",
-    "复杂目标在 TaskPlan 创建前按需创建 TaskRun，并在提示词、工具步骤与终态中保持同一身份",
-    "简单回合动态请求任务级确认或资源操作时，在产物落库前按需创建并绑定 TaskRun",
-    "无 TaskRun 的简单 Diff 事件携带空 task_run_id，且不创建 preview checkpoint 或触发自动续片段",
-    "任务级预览续片段、DecisionRequest、取消与失败收束仍失败关闭",
-    "相关 Rust/前端/集成测试、test:related、test:governance 与 governance:audit 通过",
-    "ADUS 清晰呈现 TaskRun 创建判据、生产入口与真实状态 owner"
+    "ADUS 术语注册表出现唯一正式术语及禁用别名",
+    "BR-AG-DATA-003 完整定义初始集合、追加事件、继承与拒绝语义",
+    "规则明确区分引用上下文、只读访问与内容修改授权",
+    "governance:generate、test:governance 与 governance:audit 通过"
   ],
   "human_decisions": [
     {
-      "id": "HD-S2-03",
+      "id": "HD-S2-04",
       "status": "CONFIRMED",
-      "question": "简单 AgentTurn 完全不创建 TaskRun；需要任务级产物时按需创建，并允许调整当前必填关联"
+      "question": "先注册显式目标集追加规则，再硬拒集合之外的既有文档；不得误伤显式引用、多文档和延续语义"
     },
     {
-      "id": "HD-S3B-01",
+      "id": "HD-S3D-01",
       "status": "CONFIRMED",
-      "question": "只有显式 continuation 才能复用非终态 TaskRun；无 continuation 时失败关闭，不静默合并目标或自行取消旧任务"
-    },
-    {
-      "id": "HD-S3B-02",
-      "status": "CONFIRMED",
-      "question": "同步 AG 前端测试治理基线 108→109，登记无 TaskRun 简单 Diff 不自动续片段证据"
+      "question": "工具发现的新既有文档通过什么显式事件获得追加授权，以及该集合如何跨 continuation 继承"
     }
   ],
+  "stop_conditions": [],
   "unresolved_items": [
-    "CapabilityGrant 当前仍可能向简单回合暴露任务级工具；S3B 仅保证调用时按需取得 TaskRun，最小授权留待 S3-C",
-    "跨文档显式目标集扩展与集合外拒绝留待已确认的后续独立 Scope",
-    "真实 Tauri/WKWebView 与真实 provider 的端到端链路待验证卡执行"
+    "静态规则确认后另开 CODE_CHANGE Scope 实施生产 owner、持久化、硬拒与测试",
+    "CapabilityGrant 最小化仍是独立 S3C，不并入本 Scope"
   ]
 }

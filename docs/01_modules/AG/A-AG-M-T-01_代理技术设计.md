@@ -214,6 +214,22 @@ IntentResult 判定复杂目标后创建的可展示操作计划（非模型思�
 授权、确认点标记与阶段结果；简单目标单 AgentTurn 直行不建 TaskPlan；执行按片段推进，每片段重新授权，
 任务级确认后自动开始下一片段且不后台续跑（A-AG-M-D-01 §5b，REQ-AG-015）。
 
+<!-- TERM
+term_id: TERM-AG-019
+chains: AG-TURN, AG-TOOL
+zh: 显式编辑目标集
+en: ExplicitEditTargetSet
+forbidden: 编辑白名单, 目标白名单, 跨文档白名单, 隐式目标集, 模型目标集
+-->
+当前 AgentTurn 被明确授权生成 ChangeProposal 的 active workspace 既有文档集合。初始成员仅来自当前
+文档和用户输入中指向文档的 ReferencePayload（兼容输入须先归一为同一语义）；同一 AgentTurn 的
+AwaitingClarification→Assembling 补充可单调追加新的显式引用。模型执行 read/search/list 或在正文中提到
+路径只产生读取事实，不产生修改授权。工具发现的新目标必须冻结为 DecisionRequest（kind=`scope`）路径清单，
+经用户确认后才追加到绑定 TaskRun 的权威集合；显式 TaskRun continuation 继承该冻结集合，不从模型输出或
+历史文本重建。经确认完成的 CreateDocumentBundle 只在真实资源建立后追加其目标。简单 AgentTurn 的集合仅在
+回合内持有，不因本术语创建 TaskRun。集合外既有文档在 ChangeProposal 生成前失败关闭；`cross_doc` 只能表示
+集合内非当前文档的展示属性，不是授权来源（BR-AG-DATA-003 / BR-SYS-STATE-007/008）。
+
 ## §1 文档定位
 
 ```
@@ -293,18 +309,30 @@ rule_id: BR-AG-DATA-003
 主链路: AG-TURN
 域: DATA
 -->
-代理回合修改建议产出（ChangeProposal）的目标边界（2026-07-04 人类裁决，**取代原「单文档铁律」**）：
-target 一律限 active workspace 内（X-FORBID-004）；**默认目标为当前文档**；用户**显式指向**其他
-既有文档（@mention 引用/明示路径）时，可产出指向该既有文档的 ChangeProposal。新建文档不以空基准
-ChangeProposal 进入目标集，必须先经 `plan_workspace_operation` 生成 CreateDocumentBundle 与 DecisionRequest，
-确认后由 WS 创建真实资源并打开编辑标签，再以该 DiskState 为基线投影初始内容 Diff（承 A-WS-M-T-02 §6；
-内容 Diff 不得创建资源，X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）。一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
-LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot
-中的 LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。识别到
+代理回合修改建议产出（ChangeProposal）的目标边界（2026-07-04 人类裁决，**取代原「单文档铁律」**；
+2026-08-28 HD-S3D-01 补齐追加语义）：target 一律限 active workspace 内（X-FORBID-004），并且必须属于
+显式编辑目标集（TERM-AG-019）。集合初始成员仅为当前文档与本次用户输入中指向既有文档的显式
+ReferencePayload（旧 mentions / blockRefs 须先归一到相同语义）；同一 AgentTurn 从 AwaitingClarification
+恢复 Assembling 时，可把补充输入中的显式文档引用单调追加到原集合，不创建新 AgentTurn。
+
+read_doc、search_docs、list_docs 等读取成功、模型正文提及路径或历史中出现路径都不得自行扩大集合。若模型根据
+工具结果发现新的既有目标，必须先生成 kind=`scope` 的 DecisionRequest，冻结待追加路径清单；只有用户确认后才
+把这些路径追加到绑定 TaskRun 的权威集合。显式 TaskRun continuation 继承该冻结集合，不重新从模型输出、历史或
+当前已打开标签推断；cancel、拒绝、失效裁决均不追加。简单 AgentTurn 的集合只在回合内持有，不得仅为保存集合
+创建 TaskRun。集合外既有文档必须在 ChangeProposal / PendingDiff 生成前失败关闭；`cross_doc` 仅可标识集合内
+非当前文档的展示位置，不能作为越权放行或人后裁决替代前置授权。
+
+新建文档不以空基准 ChangeProposal 进入集合，必须先经 `plan_workspace_operation` 生成 CreateDocumentBundle 与
+DecisionRequest，确认后由 WS 创建真实资源并打开编辑标签；只有真实资源建立成功后，目标才追加到绑定 TaskRun 的
+显式编辑目标集，再以该 DiskState 为基线投影初始内容 Diff（承 A-WS-M-T-02 §6；内容 Diff 不得创建资源，
+X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）。一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
+LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot 中的
+LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。识别到
 **项目级整体构建意图**（从蓝图构建完整项目——多文件修改本身不再是升级判据）时提议触发构建
 （判据归 BR-CBT-STATE-002），构建在**原对话窗口**内实现、不强制切换模式；编辑/构建两模式互相
 复用彼此能力。**DE 侧协同复核**同步调整：`de.generate_diff` 校验 target 在 workspace 内且属回合
-声明的目标集（当前文档 + 显式指向的既有文档；CreateDocumentBundle 建盘后目标才成为既有文档），越出者拒绝。
+显式编辑目标集（当前文档 + 显式指向的既有文档 + 经确认追加的既有文档；CreateDocumentBundle 建盘并追加后
+目标才可进入内容链路），越出者拒绝。
 （沿革：原文本限单文档、跨文档一律升级 CBT——2026-06-12 B-4 裁定；2026-07-04 人类澄清编辑模式
 含文件创建/整理/项目感知，原文本废止。）
 
@@ -962,6 +990,7 @@ status: mapped
 | 2026-08-21 | v2.47 | 工作区资源操作基线重构：BR-AG-STATE-002、X-FORBID-006 与 TaskRun 契约改为 WorkspaceOperationPlan + DecisionRequest 前置裁决、确认后 WS 直接执行；资源操作不生成 DiffCard；CreateDocumentBundle 在资源创建后衔接普通内容 Diff；旧 AG_DELETE 链降为迁移债务。 |
 | 2026-08-22 | v2.48 | WS-RESOURCE-WRITE-GUARD-01：移除「新文档以空基准 ChangeProposal 创建」旧表述——新建文档唯一入口为 plan_workspace_operation（CreateDocumentBundle 确认后建盘并投影初始内容 Diff）；propose_edit 目标必须已存在（内容 Diff 不得创建资源，X-FORBID-006，工具层路径级拒绝）。 |
 | 2026-08-27 | v2.49 | AG-CONFORMANCE-GOVERNANCE-S1：收敛 AgentTurn 澄清为原回合 AwaitingClarification→Assembling，与 DecisionRequest、重试和 Assist 分界；明确新建文档唯一 CreateDocumentBundle 路径、简单目标不建 TaskRun/TaskPlan；资源意图可获得任务必要只读工具 + plan_workspace_operation，副作用路径不变；冲突旧实现登记移出 active 规范正文。 |
+| 2026-08-28 | v2.50 | AG-CONFORMANCE-GOVERNANCE-S3D：注册 TERM-AG-019 显式编辑目标集；按 HD-S3D-01 锁定初始来源、同 AgentTurn 澄清追加、工具发现目标经 scope DecisionRequest 确认追加、TaskRun continuation 继承、CreateDocumentBundle 建盘后追加及集合外硬拒；read/search 与 cross_doc 均不是授权来源。 |
 | 2026-08-14 | v2.36 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：注册 TERM-AG-013~016（RuntimeProfile/CapabilityGrant/TaskRun/TaskStep）；新增 §7.1 Agent 1.0 运行时契约落地（REQ-AG-007/015）——RuntimeProfile 入口校验、CapabilityGrant 五因素收窄、IntentResult 收敛、TaskRun 接力、StructuredVisibleEvent 不含内部推理、授权非来源声明。 |
 | 2026-08-13 | v2.35 | AG-STRATEGY-05：BDocx 整篇改写收敛为无表格且无图片的动态条件并由服务端拒绝受保护/新引入结构；block_ops 同锚点顺序、后置校验与稳定 id reverse 闭合；proposal、编辑器预览、接受和保存的真实状态与最小运行事件对齐。 |
 | 2026-08-11 | v2.33 | AG-CTX-01：§5.1 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、AG_EDIT_TOOL_REQUIRED 文案区分、查询动词→Search、整篇对齐检测、序列化瘦身；语义详见 A-AG-M-T-02 §4 |
