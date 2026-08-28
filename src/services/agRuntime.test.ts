@@ -2094,6 +2094,31 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
       .toMatchObject({ content: "预览后", sessionVersion: session.sessionVersion, contentHash: session.contentHash });
   });
 
+  // covers: BR-SYS-STATE-008, BR-AG-DATA-001
+  // 简单局部编辑没有 TaskRun；即使旧投影误带 continuation 标记，前端也不得伪造任务身份自动续片段。
+  it("does not acknowledge or continue a simple diff without task run identity", async () => {
+    edStore.loadDoc("notes/current.md", "预览前", 101);
+    edStore.updateContent("notes/current.md", "预览后");
+    deStore.addDiff({
+      diffId: "diff-simple",
+      sessionId: activeSession(agStore.getSnapshot()).id,
+      turnId: "turn-simple",
+      relPath: "notes/current.md",
+      blockId: "b1",
+      title: "简单建议",
+      before: "预览前",
+      after: "预览后",
+      state: "pending",
+      draftApplied: true,
+      previewContinuationRequired: true,
+    });
+
+    await acknowledgePreviewAndContinue("diff-simple");
+
+    expect(invokeMock).not.toHaveBeenCalledWith("ag_ack_preview", expect.anything());
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
+  });
+
   // covers: BR-SYS-STATE-008
   // 连续 auto-continue 达到上限后停止（防死循环）；cancel 不续回合。
   it("stops auto-continue at MAX and never continues on cancel", async () => {

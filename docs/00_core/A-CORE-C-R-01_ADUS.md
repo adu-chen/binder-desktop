@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-28T07:52:31.032Z -->
+<!-- 最后生成时间：2026-08-28T08:35:59.626Z -->
 
 ### 模块编码表
 
@@ -174,7 +174,7 @@
 | BR-REF-DATA-004    | DATA    | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src/components/ag/AgentUI.test.tsx::file-level, src/services/referencePayload.test.ts::file-level                                                                                                                                                                                                                                                                           |
 | BR-REF-VERIFY-001  | VERIFY  | REF-INJECT                           | docs/01_modules/REF/A-REF-M-T-01_引用技术设计.md        | registered      | src-tauri/src/reference/context.rs::file-level, src-tauri/src/reference/inject.rs::file-level, src-tauri/src/reference/routes.rs::file-level                                                                                                                                                                                                                                |
 | BR-SYS-STATE-007   | STATE   | AG-TURN, IPC-CALL                    | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/ag/turn.rs::file-level, src-tauri/src/ag/turn_control.rs::file-level                                                                                                                                                                                                                                                                                          |
-| BR-SYS-STATE-008   | STATE   | AG-TURN, DE-DIFF                     | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/ag/task.rs::file-level, src-tauri/src/ag/task_runtime.rs::file-level, src/services/agRuntime.test.ts::file-level, src/services/deRuntime.test.ts::file-level                                                                                                                                                                                                  |
+| BR-SYS-STATE-008   | STATE   | AG-TURN, DE-DIFF                     | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/ag/task.rs::file-level, src-tauri/src/ag/task_runtime.rs::file-level, src-tauri/src/ag/turn_control.rs::file-level, src/services/agRuntime.test.ts::file-level, src/services/deRuntime.test.ts::file-level                                                                                                                                                    |
 | BR-SYS-DATA-007    | DATA    | REF-INJECT, AST-MEMORY               | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/ast/store.rs::file-level, src-tauri/src/reference/context.rs::file-level, src/services/referencePayload.test.ts::file-level                                                                                                                                                                                                                                   |
 | BR-SYS-DATA-002    | DATA    | DATA-MIGRATE                         | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/types/mod.rs::file-level                                                                                                                                                                                                                                                                                                                                      |
 | BR-SYS-PERSIST-001 | PERSIST | DATA-MIGRATE                         | docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md        | registered      | src-tauri/src/db/mod.rs::file-level                                                                                                                                                                                                                                                                                                                                         |
@@ -346,12 +346,14 @@
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-004, BR-ED-DATA-003-GUARD-AG-AG-TOOL-004                                                                                               | GUARD  | BR-SYS-DATA-006, BR-ED-DATA-001, BR-ED-DATA-003 term_ref: TERM-SYS-002, TERM-ED-008                                                  | src-tauri/src/ag/edit_image_runtime.rs | 8    |
 | BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017                                                                                                                                  | EFFECT | BR-AG-STATE-002, BR-AG-DATA-003                                                                                                      | src-tauri/src/ag/edit_runtime.rs       | 19   |
 | BR-ED-DATA-007-GUARD-AG-AG-TOOL-018                                                                                                                                                                          | GUARD  | BR-ED-DATA-007 term_ref: TERM-ED-007                                                                                                 | src-tauri/src/ag/edit_table_runtime.rs | 8    |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003 | src-tauri/src/ag/task_runtime.rs       | 65   |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASK-002                                                                                                                                                                       | EFFECT | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task.rs               | 110  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASK-003                                                                                                                                                                        | GUARD  | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task.rs               | 801  |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003 | src-tauri/src/ag/task_runtime.rs       | 77   |
 | BR-AG-STATE-002-RB-AG-AG-TOOL-001                                                                                                                                                                            | RB     | BR-AG-STATE-002 term_ref: TERM-AG-002                                                                                                | src-tauri/src/ag/tool.rs               | 50   |
 | BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                                                                                                                         | GUARD  | BR-AG-STATE-002                                                                                                                      | src-tauri/src/ag/tool.rs               | 84   |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012                                                                                               | QUERY  | BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001 term_ref: TERM-ED-008, TERM-WS-001                                                   | src-tauri/src/ag/tool_exec.rs          | 38   |
-| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018                                                                                                                                      | API    | BR-AG-STATE-001, BR-SYS-STATE-007 term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016                                                    | src-tauri/src/ag/turn_runtime.rs       | 22   |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018                                                                                                                                        | RB     | BR-AG-STATE-002, BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-016                                                                 | src-tauri/src/ag/turn_tool_loop.rs     | 24   |
+| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018                                                                                                                                      | API    | BR-AG-STATE-001, BR-SYS-STATE-007 term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016                                                    | src-tauri/src/ag/turn_runtime.rs       | 24   |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018                                                                                                                                        | RB     | BR-AG-STATE-002, BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-016                                                                 | src-tauri/src/ag/turn_tool_loop.rs     | 26   |
 
 #### AG-TURN
 
@@ -389,30 +391,32 @@
 | BR-AG-DATA-001-QUERY-AG-AG-TURN-029                                                                                                                                                                          | QUERY  | BR-AG-DATA-001                                                                                                                       | src-tauri/src/ag/reference_runtime.rs  | 10   |
 | BR-AG-DATA-001-RB-AG-AG-TURN-017                                                                                                                                                                             | RB     | BR-AG-DATA-001 term_ref: TERM-REF-003                                                                                                | src-tauri/src/ag/reference_runtime.rs  | 71   |
 | BR-SYS-STATE-008-RB-AG-AG-TASK-001, BR-AG-STATE-001-RB-AG-AG-TASK-001                                                                                                                                        | RB     | BR-SYS-STATE-008, BR-AG-STATE-001                                                                                                    | src-tauri/src/ag/task.rs               | 52   |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                                                                                                                 | EFFECT | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/task.rs               | 148  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                                                                                                                   | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/task.rs               | 197  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                                                                                                                   | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/task.rs               | 279  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASK-002                                                                                                                                                                       | EFFECT | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task.rs               | 110  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                                                                                                                 | EFFECT | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/task.rs               | 149  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                                                                                                                   | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/task.rs               | 198  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                                                                                                                   | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/task.rs               | 280  |
 | BR-SYS-STATE-008-EFFECT-AG-AG-TURN-033, BR-AG-STATE-001-EFFECT-AG-AG-TURN-033                                                                                                                                | EFFECT | BR-SYS-STATE-008, BR-AG-STATE-001 term_ref: TERM-AG-015                                                                              | src-tauri/src/ag/task.rs               | 658  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001                                                                                | GUARD  | BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002 term_ref: TERM-AG-018                                                             | src-tauri/src/ag/task.rs               | 919  |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001                                                                                                                        | EFFECT | BR-SYS-STATE-008, BR-AG-STATE-001 term_ref: TERM-AG-018                                                                              | src-tauri/src/ag/task.rs               | 978  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASK-003                                                                                                                                                                        | GUARD  | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task.rs               | 801  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001                                                                                | GUARD  | BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002 term_ref: TERM-AG-018                                                             | src-tauri/src/ag/task.rs               | 966  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001                                                                                                                        | EFFECT | BR-SYS-STATE-008, BR-AG-STATE-001 term_ref: TERM-AG-018                                                                              | src-tauri/src/ag/task.rs               | 1025 |
 | BR-SYS-STATE-008-QUERY-AG-AG-TURN-025                                                                                                                                                                        | QUERY  | BR-SYS-STATE-008 term_ref: TERM-AG-015                                                                                               | src-tauri/src/ag/task_runtime.rs       | 16   |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026                                                                                                                                                                       | EFFECT | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-017                                                                                  | src-tauri/src/ag/task_runtime.rs       | 37   |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003 | src-tauri/src/ag/task_runtime.rs       | 65   |
-| BR-SYS-STATE-008-QUERY-AG-AG-TURN-027                                                                                                                                                                        | QUERY  | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task_runtime.rs       | 207  |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028                                                                                                                                                                       | EFFECT | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task_runtime.rs       | 229  |
-| BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017                                                                                                                                     | DATA   | BR-AG-DATA-002, BR-SYS-STATE-008 term_ref: TERM-AG-018                                                                               | src-tauri/src/ag/task_runtime.rs       | 375  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026                                                                                                                                                                       | EFFECT | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-017                                                                                  | src-tauri/src/ag/task_runtime.rs       | 49   |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003 | src-tauri/src/ag/task_runtime.rs       | 77   |
+| BR-SYS-STATE-008-QUERY-AG-AG-TURN-027                                                                                                                                                                        | QUERY  | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task_runtime.rs       | 219  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028                                                                                                                                                                       | EFFECT | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                  | src-tauri/src/ag/task_runtime.rs       | 241  |
+| BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017                                                                                                                                     | DATA   | BR-AG-DATA-002, BR-SYS-STATE-008 term_ref: TERM-AG-018                                                                               | src-tauri/src/ag/task_runtime.rs       | 387  |
 | BR-AG-STATE-001-RB-AG-AG-TURN-001, BR-SYS-STATE-007-RB-AG-AG-TURN-001                                                                                                                                        | RB     | BR-AG-STATE-001, BR-SYS-STATE-007                                                                                                    | src-tauri/src/ag/turn.rs               | 124  |
 | BR-AG-VERIFY-001-GUARD-AG-AG-TURN-020                                                                                                                                                                        | GUARD  | BR-AG-VERIFY-001                                                                                                                     | src-tauri/src/ag/turn.rs               | 170  |
 | BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001                                                                                                                                                                      | EFFECT | BR-AG-PERSIST-001                                                                                                                    | src-tauri/src/ag/turn.rs               | 199  |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001                                                                                                                                                                       | QUERY  | BR-AG-PERSIST-001                                                                                                                    | src-tauri/src/ag/turn.rs               | 224  |
 | BR-SYS-STATE-007-GUARD-AG-AG-TURN-034, BR-AG-STATE-001-GUARD-AG-AG-TURN-034                                                                                                                                  | GUARD  | BR-SYS-STATE-007, BR-AG-STATE-001 term_ref: TERM-AG-001, TERM-AG-015                                                                 | src-tauri/src/ag/turn_control.rs       | 51   |
-| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034                                                                                                                                | EFFECT | BR-SYS-STATE-007, BR-AG-STATE-001 term_ref: TERM-AG-001, TERM-AG-015                                                                 | src-tauri/src/ag/turn_control.rs       | 172  |
-| BR-AG-STATE-001-API-AG-AG-TURN-019                                                                                                                                                                           | API    | BR-AG-STATE-001                                                                                                                      | src-tauri/src/ag/turn_control.rs       | 267  |
-| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                                                                                                       | API    | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/turn_control.rs       | 297  |
+| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034                                                                                                                                | EFFECT | BR-SYS-STATE-007, BR-AG-STATE-001 term_ref: TERM-AG-001, TERM-AG-015                                                                 | src-tauri/src/ag/turn_control.rs       | 165  |
+| BR-AG-STATE-001-API-AG-AG-TURN-019                                                                                                                                                                           | API    | BR-AG-STATE-001                                                                                                                      | src-tauri/src/ag/turn_control.rs       | 307  |
+| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                                                                                                       | API    | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                                                  | src-tauri/src/ag/turn_control.rs       | 337  |
 | BR-AG-DATA-002-DATA-AG-AG-TURN-031                                                                                                                                                                           | DATA   | BR-AG-DATA-002 term_ref: TERM-AG-005                                                                                                 | src-tauri/src/ag/turn_prompt.rs        | 23   |
 | BR-AG-DATA-003-DATA-AG-AG-TURN-030                                                                                                                                                                           | DATA   | BR-AG-DATA-003 term_ref: TERM-REF-003                                                                                                | src-tauri/src/ag/turn_reference.rs     | 14   |
-| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018                                                                                                                                      | API    | BR-AG-STATE-001, BR-SYS-STATE-007 term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016                                                    | src-tauri/src/ag/turn_runtime.rs       | 22   |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018                                                                                                                                        | RB     | BR-AG-STATE-002, BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-016                                                                 | src-tauri/src/ag/turn_tool_loop.rs     | 24   |
+| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018                                                                                                                                      | API    | BR-AG-STATE-001, BR-SYS-STATE-007 term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016                                                    | src-tauri/src/ag/turn_runtime.rs       | 24   |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018                                                                                                                                        | RB     | BR-AG-STATE-002, BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-016                                                                 | src-tauri/src/ag/turn_tool_loop.rs     | 26   |
 | BR-AG-PERSIST-001-QUERY-AG-AG-TURN-004                                                                                                                                                                       | QUERY  | BR-AG-PERSIST-001 term_ref: TERM-AG-001                                                                                              | src-tauri/src/de/routes.rs             | 652  |
 
 #### APP-CLOSE
@@ -518,9 +522,9 @@
 | BR-DE-STATE-001-RB-DE-DE-DIFF-002                                                                                      | RB     | BR-DE-STATE-001 term_ref: TERM-DE-001, TERM-DE-003                                                          | src/store/deStore.ts                   | 257  |
 | BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017                                            | EFFECT | BR-AG-STATE-002, BR-AG-DATA-003                                                                             | src-tauri/src/ag/edit_runtime.rs       | 19   |
 | BR-ED-DATA-007-GUARD-AG-AG-TOOL-018                                                                                    | GUARD  | BR-ED-DATA-007 term_ref: TERM-ED-007                                                                        | src-tauri/src/ag/edit_table_runtime.rs | 8    |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                           | EFFECT | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs               | 148  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                             | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs               | 197  |
-| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                 | API    | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/turn_control.rs       | 297  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                           | EFFECT | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs               | 149  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                             | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs               | 198  |
+| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                 | API    | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/turn_control.rs       | 337  |
 | BR-DE-STATE-002-GUARD-DE-DE-DIFF-001                                                                                   | GUARD  | BR-DE-STATE-002                                                                                             | src-tauri/src/de/expiry.rs             | 34   |
 | BR-DE-DATA-003-GUARD-DE-DE-DIFF-003                                                                                    | GUARD  | BR-DE-DATA-003                                                                                              | src-tauri/src/de/expiry.rs             | 62   |
 | BR-DE-DATA-002-DATA-DE-DE-DIFF-001                                                                                     | DATA   | BR-DE-DATA-002                                                                                              | src-tauri/src/de/generate.rs           | 40   |
@@ -628,10 +632,10 @@
 | BR-ED-DATA-005-QUERY-ED-ED-EDIT-009                                                                                    | QUERY  | BR-ED-DATA-005 term_ref: TERM-ED-006, TERM-ED-004                                                           | src-tauri/src/ag/blocks.rs                       | 751  |
 | BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017                                            | EFFECT | BR-AG-STATE-002, BR-AG-DATA-003                                                                             | src-tauri/src/ag/edit_runtime.rs                 | 19   |
 | BR-ED-DATA-007-GUARD-AG-AG-TOOL-018                                                                                    | GUARD  | BR-ED-DATA-007 term_ref: TERM-ED-007                                                                        | src-tauri/src/ag/edit_table_runtime.rs           | 8    |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                           | EFFECT | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs                         | 148  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                             | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs                         | 197  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                             | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs                         | 279  |
-| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                 | API    | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/turn_control.rs                 | 297  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                           | EFFECT | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs                         | 149  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                             | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs                         | 198  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                             | GUARD  | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/task.rs                         | 280  |
+| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                 | API    | BR-SYS-STATE-008, BR-AG-DATA-001 term_ref: TERM-AG-015, TERM-ED-008                                         | src-tauri/src/ag/turn_control.rs                 | 337  |
 | BR-CORE-STATE-001-EFFECT-DE-DE-DIFF-005                                                                                | EFFECT | BR-CORE-STATE-001                                                                                           | src-tauri/src/de/routes.rs                       | 123  |
 | BR-CORE-STATE-003-EFFECT-DE-DE-DIFF-006                                                                                | EFFECT | BR-CORE-STATE-003                                                                                           | src-tauri/src/de/routes.rs                       | 257  |
 | BR-WS-STATE-003-API-WS-WS-OPERATION-004, BR-WS-DATA-003-API-WS-WS-OPERATION-004, BR-WS-OBS-002-API-WS-WS-OPERATION-004 | API    | BR-WS-STATE-003, BR-WS-DATA-003, BR-WS-OBS-002 term_ref: TERM-WS-003, TERM-WS-007, TERM-ED-008, TERM-DE-003 | src-tauri/src/workspace/routes.rs                | 1413 |
@@ -754,7 +758,7 @@
 
 | codes                                                                                                                                                                                                        | type   | rules                                                                                                                                | 文件                                   | 行号   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ | ---- |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003 | src-tauri/src/ag/task_runtime.rs     | 65   |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003 | src-tauri/src/ag/task_runtime.rs     | 77   |
 | BR-WS-STATE-003-RB-WS-WS-OPERATION-001, BR-WS-PERSIST-003-RB-WS-WS-OPERATION-001                                                                                                                             | RB     | BR-WS-STATE-003, BR-WS-PERSIST-003 term_ref: TERM-WS-003, TERM-WS-004                                                                | src-tauri/src/workspace/operation.rs | 139  |
 | BR-WS-DATA-003-EFFECT-WS-WS-OPERATION-001                                                                                                                                                                    | EFFECT | BR-WS-DATA-003 term_ref: TERM-WS-004                                                                                                 | src-tauri/src/workspace/operation.rs | 169  |
 | BR-WS-PERSIST-003-EFFECT-WS-WS-OPERATION-002                                                                                                                                                                 | EFFECT | BR-WS-PERSIST-003 term_ref: TERM-WS-003                                                                                              | src-tauri/src/workspace/operation.rs | 1513 |
@@ -824,10 +828,10 @@
 | codes                                                                        | type   | chain                     | 文件                               | 行号   |
 | ---------------------------------------------------------------------------- | ------ | ------------------------- | -------------------------------- | ---- |
 | BR-SYS-STATE-008-EFFECT-AG-AG-TURN-006, BR-AG-DATA-001-EFFECT-AG-AG-TURN-006 | EFFECT | AG-TURN, DE-DIFF, ED-EDIT | src/services/agService.ts        | 1060 |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032 | EFFECT | AG-TURN, DE-DIFF, ED-EDIT | src-tauri/src/ag/task.rs         | 148  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005   | GUARD  | AG-TURN, DE-DIFF, ED-EDIT | src-tauri/src/ag/task.rs         | 197  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006   | GUARD  | AG-TURN, ED-EDIT          | src-tauri/src/ag/task.rs         | 279  |
-| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003       | API    | AG-TURN, DE-DIFF, ED-EDIT | src-tauri/src/ag/turn_control.rs | 297  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032 | EFFECT | AG-TURN, DE-DIFF, ED-EDIT | src-tauri/src/ag/task.rs         | 149  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005   | GUARD  | AG-TURN, DE-DIFF, ED-EDIT | src-tauri/src/ag/task.rs         | 198  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006   | GUARD  | AG-TURN, ED-EDIT          | src-tauri/src/ag/task.rs         | 280  |
+| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003       | API    | AG-TURN, DE-DIFF, ED-EDIT | src-tauri/src/ag/turn_control.rs | 337  |
 
 #### BR-AG-DATA-001 term_ref: TERM-DOC-003
 
@@ -848,7 +852,7 @@
 | BR-AG-DATA-002-DATA-AG-AG-ASSIST-011                                                                                                           | DATA | AG-ASSIST | src-tauri/src/ag/assist_prompt.rs  | 19  |
 | BR-AG-DATA-002-DATA-AG-AG-TURN-016                                                                                                             | DATA | AG-TURN   | src-tauri/src/ag/context.rs        | 811 |
 | BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011 | DATA | AG-TURN   | src-tauri/src/ag/prompt_runtime.rs | 256 |
-| BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017                                                                       | DATA | AG-TURN   | src-tauri/src/ag/task_runtime.rs   | 375 |
+| BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017                                                                       | DATA | AG-TURN   | src-tauri/src/ag/task_runtime.rs   | 387 |
 
 #### BR-AG-DATA-002 term_ref: TERM-AG-005
 
@@ -947,10 +951,10 @@
 | codes                                                                                                                         | type  | chain            | 文件                               | 行号  |
 | ----------------------------------------------------------------------------------------------------------------------------- | ----- | ---------------- | -------------------------------- | --- |
 | BR-SYS-STATE-008-RB-AG-AG-TASK-001, BR-AG-STATE-001-RB-AG-AG-TASK-001                                                         | RB    | AG-TURN          | src-tauri/src/ag/task.rs         | 52  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001 | GUARD | AG-TURN          | src-tauri/src/ag/task.rs         | 919 |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001 | GUARD | AG-TURN          | src-tauri/src/ag/task.rs         | 966 |
 | BR-AG-STATE-001-RB-AG-AG-TURN-001, BR-SYS-STATE-007-RB-AG-AG-TURN-001                                                         | RB    | AG-TURN          | src-tauri/src/ag/turn.rs         | 124 |
-| BR-AG-STATE-001-API-AG-AG-TURN-019                                                                                            | API   | AG-TURN          | src-tauri/src/ag/turn_control.rs | 267 |
-| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018                                                       | API   | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs | 22  |
+| BR-AG-STATE-001-API-AG-AG-TURN-019                                                                                            | API   | AG-TURN          | src-tauri/src/ag/turn_control.rs | 307 |
+| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018                                                       | API   | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs | 24  |
 
 #### BR-AG-STATE-001 term_ref: TERM-AG-001
 
@@ -958,7 +962,7 @@
 | ----------------------------------------------------------------------------- | ------ | ------- | -------------------------------- | ---- |
 | BR-SYS-STATE-007-EFFECT-AG-AG-TURN-035, BR-AG-STATE-001-EFFECT-AG-AG-TURN-035 | EFFECT | AG-TURN | src/services/agService.ts        | 1445 |
 | BR-SYS-STATE-007-GUARD-AG-AG-TURN-034, BR-AG-STATE-001-GUARD-AG-AG-TURN-034   | GUARD  | AG-TURN | src-tauri/src/ag/turn_control.rs | 51   |
-| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034 | EFFECT | AG-TURN | src-tauri/src/ag/turn_control.rs | 172  |
+| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034 | EFFECT | AG-TURN | src-tauri/src/ag/turn_control.rs | 165  |
 
 #### BR-AG-STATE-001 term_ref: TERM-AG-015
 
@@ -968,19 +972,19 @@
 
 #### BR-AG-STATE-001 term_ref: TERM-AG-018
 
-| codes                                                                                 | type   | chain   | 文件                       | 行号  |
-| ------------------------------------------------------------------------------------- | ------ | ------- | ------------------------ | --- |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001 | EFFECT | AG-TURN | src-tauri/src/ag/task.rs | 978 |
+| codes                                                                                 | type   | chain   | 文件                       | 行号   |
+| ------------------------------------------------------------------------------------- | ------ | ------- | ------------------------ | ---- |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001 | EFFECT | AG-TURN | src-tauri/src/ag/task.rs | 1025 |
 
 #### BR-AG-STATE-002
 
 | codes                                                                                                                                                                                                        | type   | chain                          | 文件                                 | 行号 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------ | ---------------------------------- | -- |
 | BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017                                                                                                                                  | EFFECT | AG-TOOL, DE-DIFF, ED-EDIT      | src-tauri/src/ag/edit_runtime.rs   | 19 |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs   | 65 |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs   | 77 |
 | BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                                                                                                                         | GUARD  | AG-TOOL                        | src-tauri/src/ag/tool.rs           | 84 |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012                                                                                               | QUERY  | AG-TOOL                        | src-tauri/src/ag/tool_exec.rs      | 38 |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018                                                                                                                                        | RB     | AG-TURN, AG-TOOL               | src-tauri/src/ag/turn_tool_loop.rs | 24 |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018                                                                                                                                        | RB     | AG-TURN, AG-TOOL               | src-tauri/src/ag/turn_tool_loop.rs | 26 |
 
 #### BR-AG-STATE-002 term_ref: TERM-AG-002
 
@@ -992,7 +996,7 @@
 
 | codes                                                                                                                         | type  | chain   | 文件                       | 行号  |
 | ----------------------------------------------------------------------------------------------------------------------------- | ----- | ------- | ------------------------ | --- |
-| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001 | GUARD | AG-TURN | src-tauri/src/ag/task.rs | 919 |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001 | GUARD | AG-TURN | src-tauri/src/ag/task.rs | 966 |
 
 #### BR-AG-STATE-003
 
@@ -1692,13 +1696,13 @@
 | BR-SYS-STATE-007-EFFECT-AG-AG-TURN-035, BR-AG-STATE-001-EFFECT-AG-AG-TURN-035 | EFFECT | AG-TURN | src/services/agService.ts        | 1445 |
 | BR-AG-STATE-001-RB-AG-AG-TURN-001, BR-SYS-STATE-007-RB-AG-AG-TURN-001         | RB     | AG-TURN | src-tauri/src/ag/turn.rs         | 124  |
 | BR-SYS-STATE-007-GUARD-AG-AG-TURN-034, BR-AG-STATE-001-GUARD-AG-AG-TURN-034   | GUARD  | AG-TURN | src-tauri/src/ag/turn_control.rs | 51   |
-| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034 | EFFECT | AG-TURN | src-tauri/src/ag/turn_control.rs | 172  |
+| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034 | EFFECT | AG-TURN | src-tauri/src/ag/turn_control.rs | 165  |
 
 #### BR-SYS-STATE-007 term_ref: TERM-AG-001
 
 | codes                                                                   | type | chain            | 文件                               | 行号 |
 | ----------------------------------------------------------------------- | ---- | ---------------- | -------------------------------- | -- |
-| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018 | API  | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs | 22 |
+| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018 | API  | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs | 24 |
 
 #### BR-SYS-STATE-008
 
@@ -1707,30 +1711,32 @@
 | BR-SYS-STATE-008-EFFECT-AG-AG-TURN-006, BR-AG-DATA-001-EFFECT-AG-AG-TURN-006                                                                                                                                 | EFFECT | AG-TURN, DE-DIFF, ED-EDIT      | src/services/agService.ts        | 1060 |
 | BR-SYS-STATE-008-EFFECT-DE-DE-DIFF-008                                                                                                                                                                       | EFFECT | DE-DIFF, ED-EDIT               | src/services/deService.ts        | 108  |
 | BR-SYS-STATE-008-RB-AG-AG-TASK-001, BR-AG-STATE-001-RB-AG-AG-TASK-001                                                                                                                                        | RB     | AG-TURN                        | src-tauri/src/ag/task.rs         | 52   |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                                                                                                                 | EFFECT | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs         | 148  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                                                                                                                   | GUARD  | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs         | 197  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                                                                                                                   | GUARD  | AG-TURN, ED-EDIT               | src-tauri/src/ag/task.rs         | 279  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                                                                                                                 | EFFECT | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs         | 149  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                                                                                                                   | GUARD  | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs         | 198  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                                                                                                                   | GUARD  | AG-TURN, ED-EDIT               | src-tauri/src/ag/task.rs         | 280  |
 | BR-SYS-STATE-008-EFFECT-AG-AG-TURN-033, BR-AG-STATE-001-EFFECT-AG-AG-TURN-033                                                                                                                                | EFFECT | AG-TURN                        | src-tauri/src/ag/task.rs         | 658  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001                                                                                | GUARD  | AG-TURN                        | src-tauri/src/ag/task.rs         | 919  |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001                                                                                                                        | EFFECT | AG-TURN                        | src-tauri/src/ag/task.rs         | 978  |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 65   |
-| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                                                                                                       | API    | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/turn_control.rs | 297  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001                                                                                | GUARD  | AG-TURN                        | src-tauri/src/ag/task.rs         | 966  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001                                                                                                                        | EFFECT | AG-TURN                        | src-tauri/src/ag/task.rs         | 1025 |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 77   |
+| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                                                                                                       | API    | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/turn_control.rs | 337  |
 
 #### BR-SYS-STATE-008 term_ref: TERM-AG-015
 
 | codes                                                                 | type   | chain            | 文件                                 | 行号  |
 | --------------------------------------------------------------------- | ------ | ---------------- | ---------------------------------- | --- |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASK-002                                | EFFECT | AG-TURN, AG-TOOL | src-tauri/src/ag/task.rs           | 110 |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASK-003                                 | GUARD  | AG-TURN, AG-TOOL | src-tauri/src/ag/task.rs           | 801 |
 | BR-SYS-STATE-008-QUERY-AG-AG-TURN-025                                 | QUERY  | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 16  |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026                                | EFFECT | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 37  |
-| BR-SYS-STATE-008-QUERY-AG-AG-TURN-027                                 | QUERY  | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 207 |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028                                | EFFECT | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 229 |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018 | RB     | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_tool_loop.rs | 24  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026                                | EFFECT | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 49  |
+| BR-SYS-STATE-008-QUERY-AG-AG-TURN-027                                 | QUERY  | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 219 |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028                                | EFFECT | AG-TURN          | src-tauri/src/ag/task_runtime.rs   | 241 |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018 | RB     | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_tool_loop.rs | 26  |
 
 #### BR-SYS-STATE-008 term_ref: TERM-AG-018
 
 | codes                                                                    | type | chain   | 文件                               | 行号  |
 | ------------------------------------------------------------------------ | ---- | ------- | -------------------------------- | --- |
-| BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017 | DATA | AG-TURN | src-tauri/src/ag/task_runtime.rs | 375 |
+| BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017 | DATA | AG-TURN | src-tauri/src/ag/task_runtime.rs | 387 |
 
 #### BR-SYS-VERIFY-001
 
@@ -1824,7 +1830,7 @@
 
 | codes                                                                                                                                                                                                        | type | chain                          | 文件                               | 行号 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------------ | -------------------------------- | -- |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API  | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 65 |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API  | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 77 |
 
 #### BR-WS-OBS-002 term_ref: TERM-WS-003
 
@@ -1861,7 +1867,7 @@
 
 | codes                                                                                                                                                                                                        | type | chain                          | 文件                               | 行号 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------------ | -------------------------------- | -- |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API  | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 65 |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API  | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 77 |
 
 #### BR-WS-PERSIST-003 term_ref: TERM-WS-003
 
@@ -1898,7 +1904,7 @@
 
 | codes                                                                                                                                                                                                        | type   | chain                          | 文件                                   | 行号   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------ | ------------------------------------ | ---- |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs     | 65   |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs     | 77   |
 | BR-WS-STATE-003-RB-WS-WS-OPERATION-001, BR-WS-PERSIST-003-RB-WS-WS-OPERATION-001                                                                                                                             | RB     | WS-OPERATION                   | src-tauri/src/workspace/operation.rs | 139  |
 | BR-WS-STATE-003-API-WS-WS-OPERATION-001, BR-WS-DATA-003-API-WS-WS-OPERATION-001, BR-WS-OBS-002-API-WS-WS-OPERATION-001                                                                                       | API    | WS-OPERATION                   | src-tauri/src/workspace/operation.rs | 1955 |
 | BR-WS-STATE-003-EFFECT-WS-WS-OPERATION-003, BR-WS-DATA-003-EFFECT-WS-WS-OPERATION-003, BR-WS-OBS-002-EFFECT-WS-WS-OPERATION-003, BR-WS-PERSIST-003-EFFECT-WS-WS-OPERATION-003                                | EFFECT | WS-OPERATION                   | src-tauri/src/workspace/operation.rs | 2537 |
@@ -1938,29 +1944,31 @@
 | codes                                                                         | type   | chain            | 文件                               | 行号  |
 | ----------------------------------------------------------------------------- | ------ | ---------------- | -------------------------------- | --- |
 | BR-SYS-STATE-007-GUARD-AG-AG-TURN-034, BR-AG-STATE-001-GUARD-AG-AG-TURN-034   | GUARD  | AG-TURN          | src-tauri/src/ag/turn_control.rs | 51  |
-| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034 | EFFECT | AG-TURN          | src-tauri/src/ag/turn_control.rs | 172 |
-| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018       | API    | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs | 22  |
+| BR-SYS-STATE-007-EFFECT-AG-AG-TURN-034, BR-AG-STATE-001-EFFECT-AG-AG-TURN-034 | EFFECT | AG-TURN          | src-tauri/src/ag/turn_control.rs | 165 |
+| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018       | API    | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs | 24  |
 
 #### TERM-AG-016
 
 | codes                                                                   | type | chain            | 文件                                 | 行号 |
 | ----------------------------------------------------------------------- | ---- | ---------------- | ---------------------------------- | -- |
-| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018 | API  | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs   | 22 |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018   | RB   | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_tool_loop.rs | 24 |
+| BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018 | API  | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_runtime.rs   | 24 |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018   | RB   | AG-TURN, AG-TOOL | src-tauri/src/ag/turn_tool_loop.rs | 26 |
 
 #### TERM-AG-017
 
 | codes                                                                                                                                                                                                        | type   | chain                          | 文件                               | 行号 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------ | -------------------------------- | -- |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026                                                                                                                                                                       | EFFECT | AG-TURN                        | src-tauri/src/ag/task_runtime.rs | 37 |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 65 |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026                                                                                                                                                                       | EFFECT | AG-TURN                        | src-tauri/src/ag/task_runtime.rs | 49 |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 77 |
 
 #### TERM-AG-018
 
-| codes                                  | type   | chain   | 文件                               | 行号  |
-| -------------------------------------- | ------ | ------- | -------------------------------- | --- |
-| BR-SYS-STATE-008-QUERY-AG-AG-TURN-027  | QUERY  | AG-TURN | src-tauri/src/ag/task_runtime.rs | 207 |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028 | EFFECT | AG-TURN | src-tauri/src/ag/task_runtime.rs | 229 |
+| codes                                  | type   | chain            | 文件                               | 行号  |
+| -------------------------------------- | ------ | ---------------- | -------------------------------- | --- |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TASK-002 | EFFECT | AG-TURN, AG-TOOL | src-tauri/src/ag/task.rs         | 110 |
+| BR-SYS-STATE-008-GUARD-AG-AG-TASK-003  | GUARD  | AG-TURN, AG-TOOL | src-tauri/src/ag/task.rs         | 801 |
+| BR-SYS-STATE-008-QUERY-AG-AG-TURN-027  | QUERY  | AG-TURN          | src-tauri/src/ag/task_runtime.rs | 219 |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028 | EFFECT | AG-TURN          | src-tauri/src/ag/task_runtime.rs | 241 |
 
 #### TERM-DE-003
 
@@ -2030,10 +2038,10 @@
 | BR-SYS-DATA-006-DATA-AG-AG-TOOL-002                                                                                    | DATA   | AG-TOOL                        | src-tauri/src/ag/bdocx_capabilities.rs | 897  |
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-022, BR-ED-DATA-003-GUARD-AG-AG-TOOL-022                                              | GUARD  | AG-TOOL                        | src-tauri/src/ag/bdocx_capabilities.rs | 1918 |
 | BR-SYS-DATA-006-GUARD-AG-AG-TOOL-004, BR-ED-DATA-001-GUARD-AG-AG-TOOL-004, BR-ED-DATA-003-GUARD-AG-AG-TOOL-004         | GUARD  | AG-TOOL                        | src-tauri/src/ag/edit_image_runtime.rs | 8    |
-| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                           | EFFECT | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs               | 148  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                             | GUARD  | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs               | 197  |
-| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                             | GUARD  | AG-TURN, ED-EDIT               | src-tauri/src/ag/task.rs               | 279  |
-| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                 | API    | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/turn_control.rs       | 297  |
+| BR-SYS-STATE-008-EFFECT-AG-AG-TURN-032, BR-AG-DATA-001-EFFECT-AG-AG-TURN-032                                           | EFFECT | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs               | 149  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-005, BR-AG-DATA-001-GUARD-AG-AG-TURN-005                                             | GUARD  | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/task.rs               | 198  |
+| BR-SYS-STATE-008-GUARD-AG-AG-TURN-006, BR-AG-DATA-001-GUARD-AG-AG-TURN-006                                             | GUARD  | AG-TURN, ED-EDIT               | src-tauri/src/ag/task.rs               | 280  |
+| BR-SYS-STATE-008-API-AG-AG-TURN-003, BR-AG-DATA-001-API-AG-AG-TURN-003                                                 | API    | AG-TURN, DE-DIFF, ED-EDIT      | src-tauri/src/ag/turn_control.rs       | 337  |
 | BR-DE-DATA-002-EFFECT-WS-DE-DIFF-004                                                                                   | EFFECT | DE-DIFF                        | src-tauri/src/workspace/diff_apply.rs  | 219  |
 | BR-WS-STATE-003-API-WS-WS-OPERATION-004, BR-WS-DATA-003-API-WS-WS-OPERATION-004, BR-WS-OBS-002-API-WS-WS-OPERATION-004 | API    | WS-OPERATION, DE-DIFF, ED-EDIT | src-tauri/src/workspace/routes.rs      | 1413 |
 
@@ -2062,7 +2070,7 @@
 
 | codes                                                                                                                                                                                                        | type | chain                          | 文件                               | 行号 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------------ | -------------------------------- | -- |
-| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API  | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 65 |
+| BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API  | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs | 77 |
 
 #### TERM-WS-004
 
@@ -2090,20 +2098,20 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 76；Rust 集成测试文件 2；测试用例约 945。
+动态发现：前端测试文件 26；Rust 内联测试文件 76；Rust 集成测试文件 2；测试用例约 948。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
 | CORE | high | 6 | 104 | governance:1, service:2, unit:3 | 1/1 → 1 |
-| SYS | critical | 31 | 318 | component:2, integration:2, service:5, state:1, unit:21 | 3/3 → 3 |
-| WS | critical | 21 | 268 | component:1, integration:1, service:4, unit:15 | 2/2 → 2 |
+| SYS | critical | 31 | 321 | component:2, integration:2, service:5, state:1, unit:21 | 3/3 → 3 |
+| WS | critical | 21 | 269 | component:1, integration:1, service:4, unit:15 | 2/2 → 2 |
 | ED | critical | 22 | 410 | component:4, service:6, state:1, unit:11 | 11/11 → 11 |
 | DE | critical | 18 | 225 | component:3, integration:1, service:2, unit:12 | 2/2 → 2 |
-| AG | critical | 30 | 273 | component:1, integration:1, service:1, state:1, unit:26 | 3/3 → 3 |
+| AG | critical | 30 | 276 | component:1, integration:1, service:1, state:1, unit:26 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
 | DOC | critical | 16 | 96 | service:1, unit:15 | 1/1 → 1 |
 | PRV | high | 4 | 24 | component:1, service:1, unit:2 | 2/2 → 2 |
-| REF | high | 9 | 137 | component:1, service:2, unit:6 | 1/1 → 1 |
+| REF | high | 9 | 138 | component:1, service:2, unit:6 | 1/1 → 1 |
 | AST | high | 4 | 10 | unit:4 | 0/0 → 0 |
 | KB | high | 2 | 5 | unit:2 | 0/0 → 0 |
 | TPL | high | 2 | 6 | unit:2 | 0/0 → 0 |

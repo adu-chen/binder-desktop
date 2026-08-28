@@ -173,9 +173,9 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 复杂目标经 IntentResult 形成可展示 TaskPlan（步骤/依赖/当前游标/所需授权/确认点）；执行片段内连续读取与多 Proposal；任务级确认（DecisionRequest：权限/方案/范围/人工）后自动下一片段；中断后显式重试 |
-| 期望结果 | **三层分离**：DiffCard 只确认内容（接受/拒绝不改变 TaskRun）；任务级确认走 DecisionRequest，confirm 后自动开始下一执行片段（无需新聊天消息、绝不后台续跑）；任意新消息不得绕过待确认（AG_DECISION_PENDING）；同文档连续 Diff 基于最新 LogicalState、前卡因基准推进失效；信息流底部实时当前动作（step_progress），回合终态（等待确认/等待补充/完成/失败/中断）来自运行事件 |
-| 自动化证据设计 | agRuntime SM-AG-04 转移矩阵（decision 驱动 waiting_confirm、resolve confirm/cancel）；task.rs 生命周期测试（gate/不绕回/plan 持久化） |
+| 完整操作 | 分别执行简单回答/分析/检索、单文档局部修改、复杂多目标修改与 CreateDocument；让简单回合动态请求任务级确认；复杂目标经 IntentResult 形成可展示 TaskPlan（步骤/依赖/当前游标/所需授权/确认点）；任务级确认后自动下一片段；存在非终态任务时尝试不带 continuation 的新任务级请求，再用稳定 task_run_id 显式续接 |
+| 期望结果 | 简单 AgentTurn 不创建/绑定 TaskRun；简单 pending Diff 可见但 task_run_id 为空，不生成任务预览 checkpoint 或自动续片段；TaskPlan、DecisionRequest、WorkspaceOperationPlan 在持久化前按需创建并绑定 TaskRun。**三层分离**：DiffCard 只确认内容（接受/拒绝不改变 TaskRun）；任务级确认走 DecisionRequest，confirm 后自动开始下一执行片段（无需新聊天消息、绝不后台续跑）；只有显式 continuation 可复用非终态 TaskRun，无身份请求失败关闭且不合并目标/自行取消旧任务；同文档连续 Diff 基于最新 LogicalState、前卡因基准推进失效；信息流底部实时当前动作来自运行事件 |
+| 自动化证据设计 | agRuntime：无 TaskRun 简单 Diff 不确认/不自动续片段，DecisionRequest/Preview continuation 保持稳定身份；task.rs：简单输入零 task_runs、复杂/任务级工具判据、非终态隐式复用拒绝、显式 continuation 与 plan 生命周期；turn_control：无 TaskRun 澄清同 turn_id 恢复 |
 | 人类观察项 | 底部实时状态、DecisionRequest 卡裁决、gate 拦截、片段内多卡；**手动执行材料见 A-VAL-X-V-05（修订版）** |
 | 状态 | `DESIGNED` |
 
@@ -229,4 +229,5 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 |------|------|---------|
 | 2026-08-14 | v1.0 | AG-1.0-D4-VALIDATION-CARDS-01：建立 Agent 1.0 验证卡设计——追溯矩阵、状态化链路验证矩阵、核心场景卡 V-N1~N4（D-NEW）与 V-S1~S9（三态分流/连续接力/保存/澄清终态/TaskRun/外部内容记忆/会话隔离）、P1 独立开放条件清单（V-P1-01~07）与进入 IMPLEMENTATION 的门禁规则；卡状态一律 DESIGNED，未执行不填报通过。 |
 | 2026-08-27 | v1.1 | AG-CONFORMANCE-CODE-S3A：细化 V-S6 为同一 AgentTurn 澄清受控重入，补充身份 guard、调用前失败恢复与等待态取消证据设计；卡状态保持 DESIGNED。 |
+| 2026-08-28 | v1.2 | AG-CONFORMANCE-CODE-S3B：细化 V-S7 为简单回合零 TaskRun、任务级产物按需创建、显式 continuation 唯一复用与无 TaskRun Diff 不自动续片段；卡状态保持 DESIGNED。 |
 | 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |

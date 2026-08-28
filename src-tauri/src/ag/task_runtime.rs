@@ -33,6 +33,18 @@ pub(crate) fn route_list_agent_task_runs(
     ws_json(&runs)
 }
 
+/// 简单 AgentTurn 没有 TaskRun；任务级路径存在时才收束对应持久态。
+pub(super) fn settle_optional_task_run(
+    conn: &rusqlite::Connection,
+    task_run_id: Option<&str>,
+    turn_id: &str,
+    outcome: ag::task::TurnOutcome,
+) {
+    if let Some(task_run_id) = task_run_id {
+        settle_task_run(conn, task_run_id, turn_id, outcome);
+    }
+}
+
 /**
  * @GOV
  * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026

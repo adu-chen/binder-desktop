@@ -106,9 +106,19 @@ pub struct PreviewCheckpoint {
     pub content_hash: String,
 }
 
-/// 回合开始：返回当前回合的 task_run_id。
-/// - 会话内最近存在**非终态** TaskRun → 沿用（同一目标接力；如上一回合 WaitingConfirm 待裁决后继续）；
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TASK-002
+ * type:     EFFECT
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-SYS-STATE-008
+ * term_ref: TERM-AG-015, TERM-AG-018
+ * boundary: in=TaskLevelProductRequirementAndAgentSessionIdentity | out=NewPersistedExecutingTaskRun(rejectsUnfinishedRunWithoutExplicitContinuation) | does_not=createTaskRunForSimpleAgentTurnOrSilentlyMergeUserGoals
+ */
+/// 为已经判定需要任务级产物的执行路径取得 task_run_id。
+/// - 会话内存在**非终态** TaskRun → 拒绝；复用只能经携带稳定 task_run_id 的显式 continuation；
 /// - 否则新建（Planned→Executing）。
+/// 调用方不得把普通 AgentTurn 开始本身当成创建依据，也不得凭 session 猜测两个请求属于同一目标。
 pub fn begin_turn(
     conn: &Connection,
     workspace_id: &str,
@@ -116,18 +126,9 @@ pub fn begin_turn(
     intent_summary: Option<&str>,
 ) -> rusqlite::Result<String> {
     if let Some(id) = latest_non_terminal_id(conn, workspace_id, session_id)? {
-        let now = now_millis();
-        conn.execute(
-            "UPDATE task_runs SET status=?1, updated_at=?2 WHERE task_run_id=?3",
-            rusqlite::params!["executing", now, id],
-        )?;
-        if let Some(summary) = intent_summary {
-            conn.execute(
-                "UPDATE task_runs SET intent_summary=?1 WHERE task_run_id=?2",
-                rusqlite::params![summary, id],
-            )?;
-        }
-        return Ok(id);
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "unfinished task run requires explicit continuation: {id}"
+        )));
     }
     let id = format!(
         "task-{}-{}-{}",
@@ -337,11 +338,10 @@ fn latest_non_terminal_id(
     session_id: &str,
 ) -> rusqlite::Result<Option<String>> {
     let mut stmt = conn.prepare(
-        // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：waiting_confirm 不沿用（不绕回 Executing）——
-        // 存在未决 DecisionRequest 时由回合入口 gate 拒绝新消息；此处在数据层双保险。
+        // 未完成任务只能经稳定 task_run_id 的显式 continuation 恢复；按 session 猜测复用会混合用户目标。
         "SELECT task_run_id, status FROM task_runs \
          WHERE workspace_id=?1 AND session_id=?2 AND status NOT IN \
-         ('completed','failed','cancelled','interrupted','waiting_confirm') \
+         ('completed','failed','cancelled','interrupted') \
          ORDER BY updated_at DESC LIMIT 1",
     )?;
     stmt.query_row(rusqlite::params![workspace_id, session_id], |r| r.get(0))
@@ -791,6 +791,53 @@ pub fn is_complex_target(is_write_intent: bool, target_paths: &[String], prompt:
     .any(|kw| prompt.contains(kw))
 }
 
+/// 只有会产生任务级持久产物的动态工具才要求在执行前取得 TaskRun。
+/// 内容提案（propose_edit）仍属于 AgentTurn 产物；简单局部编辑不能因此升级为任务编排。
+pub fn tool_requires_task_run(tool_name: &str) -> bool {
+    matches!(tool_name, "propose_decision" | "plan_workspace_operation")
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TASK-003
+ * type:     GUARD
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-SYS-STATE-008
+ * term_ref: TERM-AG-015, TERM-AG-018
+ * boundary: in=AgentTurnTargetOrAllowedToolProduct | out=OptionalTaskRunIdentity(onlyForComplexPlanDecisionRequestOrWorkspaceOperationPlan)
+ */
+pub fn begin_for_complex_target(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    is_write_intent: bool,
+    target_paths: &[String],
+    prompt: &str,
+) -> rusqlite::Result<Option<String>> {
+    if !is_complex_target(is_write_intent, target_paths, prompt) {
+        return Ok(None);
+    }
+    begin_turn(conn, workspace_id, session_id, Some("复杂目标计划")).map(Some)
+}
+
+pub fn begin_for_tool_product(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    tool_name: &str,
+) -> rusqlite::Result<Option<String>> {
+    if !tool_requires_task_run(tool_name) {
+        return Ok(None);
+    }
+    begin_turn(
+        conn,
+        workspace_id,
+        session_id,
+        Some(&format!("任务级工具 {tool_name}")),
+    )
+    .map(Some)
+}
+
 /// AG-1.0-TASKRUN-REWORK-INTENT-01 · 保存 TaskPlan（TERM-AG-018，可展示操作计划，非思维链）：
 /// task_plans 主行 + task_plan_steps 明细。
 pub fn create_plan(conn: &Connection, plan: &TaskPlanV1) -> rusqlite::Result<()> {
@@ -1143,9 +1190,9 @@ mod tests {
     }
 
     // covers: BR-SYS-STATE-008
-    // 每回合建/沿用 TaskRun：首次新建 executing；WaitingConfirm 延续沿用；终态后新建。
+    // 只有任务级产物入口才调用 begin_turn：首次新建 executing；非终态目标必须显式续接；终态后新建。
     #[test]
-    fn begin_turn_reuses_non_terminal_and_creates_new_after_terminal() {
+    fn task_level_product_rejects_implicit_reuse_and_creates_after_terminal() {
         let conn = fresh();
         let id1 = begin_turn(&conn, "ws1", "s1", Some("分析文档")).unwrap();
         assert!(
@@ -1157,9 +1204,9 @@ mod tests {
             .unwrap()
                 > 0
         );
-        // 沿用（非终态）
-        let id2 = begin_turn(&conn, "ws1", "s1", Some("继续")).unwrap();
-        assert_eq!(id1, id2);
+        // 不携带 continuation 身份时不得按 session 猜测沿用。
+        let error = begin_turn(&conn, "ws1", "s1", Some("继续")).unwrap_err();
+        assert!(error.to_string().contains("explicit continuation"));
         // 回合完成（无未决裁决）→ 终态 → 下次新建
         let st = settle_turn(&conn, &id1, TurnOutcome::Completed).unwrap();
         assert_eq!(st, Completed);
@@ -1197,9 +1244,13 @@ mod tests {
         // settle 保持 WaitingConfirm（有未决裁决）
         let st = settle_turn(&conn, &id, TurnOutcome::Completed).unwrap();
         assert_eq!(st, WaitingConfirm);
-        // 任意新消息不绕回：begin_turn 不沿用 waiting_confirm → 新建
-        let id2 = begin_turn(&conn, "ws1", "s1", Some("继续")).unwrap();
-        assert_ne!(id, id2);
+        // 任意新消息不绕回：没有显式 continuation 时拒绝，不创建第二个 TaskRun。
+        let error = begin_turn(&conn, "ws1", "s1", Some("继续")).unwrap_err();
+        assert!(error.to_string().contains("explicit continuation"));
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
         // 裁决 confirm → Executing（可自动下一片段）；续片段必须沿用同一 TaskRun，不能新建身份。
         let (resolved_run_id, st2, already_resolved) =
             resolve_decision(&conn, &dr.request_id, "confirm").unwrap();
@@ -1211,8 +1262,6 @@ mod tests {
             begin_confirmed_continuation(&conn, "ws1", "s1", &resolved_run_id, &dr.request_id)
                 .unwrap();
         assert_eq!(continuation_id.as_deref(), Some(id.as_str()));
-        // 最近任务是后来的 id2；受控续片段仍必须绑定确认来源所属的 id。
-        assert_ne!(continuation_id.as_deref(), Some(id2.as_str()));
     }
 
     // covers: BR-SYS-STATE-008
@@ -1492,6 +1541,38 @@ mod tests {
         assert!(!is_complex_target(false, &two, "总结两个文档"));
         // 无目标 → 不建
         assert!(!is_complex_target(true, &[], "你好"));
+        // 动态任务级产物 → 按需创建；普通读/写工具不创建。
+        assert!(tool_requires_task_run("propose_decision"));
+        assert!(tool_requires_task_run("plan_workspace_operation"));
+        assert!(!tool_requires_task_run("read_doc"));
+        assert!(!tool_requires_task_run("propose_edit"));
+    }
+
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn simple_turn_inputs_do_not_persist_task_run() {
+        let conn = fresh();
+        let one = vec!["a.md".to_string()];
+        assert_eq!(
+            begin_for_complex_target(&conn, "ws1", "s1", false, &one, "总结文档").unwrap(),
+            None
+        );
+        assert_eq!(
+            begin_for_complex_target(&conn, "ws1", "s1", true, &one, "把第一段加粗").unwrap(),
+            None
+        );
+        assert_eq!(
+            begin_for_tool_product(&conn, "ws1", "s1", "read_doc").unwrap(),
+            None
+        );
+        assert_eq!(
+            begin_for_tool_product(&conn, "ws1", "s1", "propose_edit").unwrap(),
+            None
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     // covers: BR-SYS-STATE-008

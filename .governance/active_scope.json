@@ -1,26 +1,29 @@
 {
-  "scope_id": "AG-CONFORMANCE-CODE-S3A",
+  "scope_id": "AG-CONFORMANCE-CODE-S3B",
   "task_type": "CODE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "同一 AgentTurn 澄清受控重入",
+  "title": "TaskRun 按任务级产物创建",
   "status": "READY",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S3A.md",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S3B.md",
   "objectives": [
-    "为 SM-AG-01 增加 ClarificationProvided 并实现 AwaitingClarification 到 Assembling 的同 turn_id 转移",
-    "使阻断澄清 command 返回非终态，后续 command 以原 turn_id 和受控澄清身份重入",
-    "保持单活、取消、终态锁存、历史身份和门禁前置不变量",
+    "使简单 AgentTurn 完全不创建或绑定 TaskRun",
+    "只在复杂目标计划、DecisionRequest、WorkspaceOperationPlan 或显式任务续片段需要时创建或沿用 TaskRun",
+    "解除简单局部编辑、澄清等待、提示词与工具循环对 TaskRun 必填身份的隐式依赖",
+    "保持任务级确认、复杂计划、预览续片段、取消与终态收束的既有安全边界",
     "补齐直接测试、真实 @GOV owner 注册并刷新 ADUS"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-CODE-S3A.md",
-    "src-tauri/src/ag/turn.rs",
+    ".governance/issues/AG-CONFORMANCE-CODE-S3B.md",
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/task_runtime.rs",
     "src-tauri/src/ag/turn_control.rs",
+    "src-tauri/src/ag/turn_events.rs",
+    "src-tauri/src/ag/turn_prompt.rs",
     "src-tauri/src/ag/turn_runtime.rs",
-    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/ag/turn_tool_loop.rs",
     "src/services/agService.ts",
-    "src/store/agStore.ts",
     "src/services/agRuntime.test.ts",
     "scripts/test_governance.test.mjs",
     "src-tauri/tests/core_chain.rs",
@@ -33,44 +36,50 @@
     "AGENTS.md",
     "CLAUDE.md",
     "governance.config.json",
-    "src-tauri/src/ag/task.rs",
-    "src-tauri/src/ag/task_runtime.rs",
+    "src-tauri/src/db/mod.rs",
     "src-tauri/src/ag/context.rs",
     "src-tauri/src/ag/tool_registry.rs",
-    "src-tauri/src/ag/edit_support.rs",
+    "src-tauri/src/workspace/routes.rs",
+    "src-tauri/src/workspace/operation.rs",
     "所有未列入 allowed_files 的生产代码、设计和测试文件"
   ],
   "constraints": [
-    "补充澄清必须继续原 AgentTurn，不创建新 turn_id",
-    "重入只能匹配处于 AwaitingClarification 的原 turn_id、同 session 和 workspace",
-    "不得把澄清恢复泛化为失败重试、DecisionRequest 续片段或 Diff 预览续片段",
-    "不得改变简单 AgentTurn 的 TaskRun 现状；该偏差留给 S3-B",
-    "不得改变 IntentResult、CapabilityGrant、跨文档目标集或 CreateDocumentBundle 行为",
-    "配套测试必须验证错误 turn_id、错误 session、重复重入和终态重入失败关闭"
+    "简单回答、分析、检索与单文档局部修改不得创建 TaskRun",
+    "简单局部修改仍可生成 pending Diff，但没有 TaskRun 时不得伪造任务步骤、预览续片段或后台继续",
+    "复杂目标 TaskPlan、DecisionRequest 与 WorkspaceOperationPlan 必须先取得真实 TaskRun 身份",
+    "显式 DecisionRequest/Preview continuation 必须沿用并校验原 TaskRun，不得静默新建替代",
+    "澄清恢复允许原 AgentTurn 没有 TaskRun；若原回合已有 TaskRun，恢复后必须保持同一身份",
+    "不得提前实施 CapabilityGrant 最小化或跨文档目标集扩展规则"
   ],
   "acceptance_criteria": [
-    "SM-AG-01 只有 ClarificationProvided 可从 AwaitingClarification 回到 Assembling",
-    "阻断澄清不再通过 abort 伪造 Cancelled，也不产生新 AgentTurn",
-    "原 turn_id 的历史、事件和后续模型/工具执行保持单一身份",
-    "取消仍可终结等待澄清的 AgentTurn，其他会话或 turn_id 不能劫持恢复",
+    "普通简单 AgentTurn 的执行路径不写 task_runs 且 agent_turns.task_run_id 保持空",
+    "复杂目标在 TaskPlan 创建前按需创建 TaskRun，并在提示词、工具步骤与终态中保持同一身份",
+    "简单回合动态请求任务级确认或资源操作时，在产物落库前按需创建并绑定 TaskRun",
+    "无 TaskRun 的简单 Diff 事件携带空 task_run_id，且不创建 preview checkpoint 或触发自动续片段",
+    "任务级预览续片段、DecisionRequest、取消与失败收束仍失败关闭",
     "相关 Rust/前端/集成测试、test:related、test:governance 与 governance:audit 通过",
-    "ADUS 清晰呈现澄清等待与恢复的生产入口和规则归属"
+    "ADUS 清晰呈现 TaskRun 创建判据、生产入口与真实状态 owner"
   ],
   "human_decisions": [
     {
-      "id": "HD-S3A-01",
+      "id": "HD-S2-03",
       "status": "CONFIRMED",
-      "question": "澄清 command 返回非终态，后续 command 以相同 turn_id 受控重入并触发 ClarificationProvided"
+      "question": "简单 AgentTurn 完全不创建 TaskRun；需要任务级产物时按需创建，并允许调整当前必填关联"
     },
     {
-      "id": "HD-S3A-02",
+      "id": "HD-S3B-01",
       "status": "CONFIRMED",
-      "question": "扩大 Scope 更新 AG 前端测试治理基线 106→108，并登记 S3A 两项新增证据"
+      "question": "只有显式 continuation 才能复用非终态 TaskRun；无 continuation 时失败关闭，不静默合并目标或自行取消旧任务"
+    },
+    {
+      "id": "HD-S3B-02",
+      "status": "CONFIRMED",
+      "question": "同步 AG 前端测试治理基线 108→109，登记无 TaskRun 简单 Diff 不自动续片段证据"
     }
   ],
   "unresolved_items": [
-    "真实 Tauri/WKWebView 与真实 provider 的端到端澄清交互未执行，A-VAL-X-V-04 V-S6 保持 DESIGNED",
-    "简单 AgentTurn 按需创建 TaskRun 留待已确认的后续 S3-B，不在本 Scope 修改",
-    "跨文档显式目标集扩展与目标集外拒绝留待已确认的后续独立 Scope"
+    "CapabilityGrant 当前仍可能向简单回合暴露任务级工具；S3B 仅保证调用时按需取得 TaskRun，最小授权留待 S3-C",
+    "跨文档显式目标集扩展与集合外拒绝留待已确认的后续独立 Scope",
+    "真实 Tauri/WKWebView 与真实 provider 的端到端链路待验证卡执行"
   ]
 }

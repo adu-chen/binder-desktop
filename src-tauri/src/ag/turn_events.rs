@@ -128,18 +128,18 @@ pub(super) fn emit_ag_turn_error(
     true
 }
 
-/// TaskRun 已进入活动态后的统一失败出口：先尽力收束持久态，再发送唯一回合终态。
-/// 调用方不得在 TaskRun 创建后直接用 `?` 绕过此出口。
+/// AgentTurn 的统一失败出口：存在 TaskRun 时先尽力收束持久态，再发送唯一回合终态。
+/// 调用方不得在 TaskRun 创建后直接用 `?` 绕过此出口；简单回合没有 TaskRun 时只收束回合。
 pub(super) fn settle_and_emit_ag_turn_error(
     state: &AppState,
-    task_run_id: &str,
+    task_run_id: Option<&str>,
     channel: &tauri::ipc::Channel<AgTurnEvent>,
     latch: &ag::turn::TerminalLatch,
     app: &tauri::AppHandle,
     turn_id: &str,
     error: &IpcError,
 ) {
-    if let Ok(conn) = state.db.lock() {
+    if let (Some(task_run_id), Ok(conn)) = (task_run_id, state.db.lock()) {
         settle_task_run(&conn, task_run_id, turn_id, ag::task::TurnOutcome::Failed);
     }
     emit_ag_turn_error(channel, latch, app, turn_id, error);

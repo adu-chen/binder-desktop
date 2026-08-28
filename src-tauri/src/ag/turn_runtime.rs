@@ -8,8 +8,10 @@ use std::sync::atomic::Ordering;
 
 use super::edit_support::is_active_editor_snapshot_source;
 use super::reference_runtime::BlockRef;
-use super::task_runtime::{build_task_plan, settle_task_run};
-use super::turn_control::{park_agent_turn_for_clarification, register_active_agent_turn};
+use super::task_runtime::{build_task_plan, settle_optional_task_run};
+use super::turn_control::{
+    bind_agent_turn_task_run, park_agent_turn_for_clarification, register_active_agent_turn,
+};
 use super::turn_events::{
     emit_ag01, emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_error,
     settle_and_emit_ag_turn_error, sm_error,
@@ -25,7 +27,7 @@ use super::turn_tool_loop::run_turn_tool_loop;
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016
- * boundary: in=AgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndPersistedTaskRunTransitions | effect=IPC-ag_start_turn | delegate=ag::turn::transition,register_active_agent_turn | does_not=createNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
+ * boundary: in=AgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndOptionalTaskRunTransitions | effect=IPC-ag_start_turn | delegate=ag::turn::transition,register_active_agent_turn | does_not=createTaskRunForSimpleAgentTurnOrCreateNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
@@ -142,13 +144,12 @@ pub(crate) async fn ag_start_turn(
         .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
     }
 
-    // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：回合开始驱动受限 TaskRun——
-    // 应用启动时已清理陈旧活动态（重启不续跑）；此处仅新建/沿用本会话当前目标的 task_run_id，
-    // 不得中断同一进程内 DecisionRequest 确认后的续片段。
-    // 真实进度只由回合/步骤/工具事件驱动；DiffCard 经 task_run_id 关联（UNC-09）。
+    // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：先校验显式 TaskRun 续片段；
+    // 普通 AgentTurn 此时不创建 TaskRun。只有后续确定需要 TaskPlan，或工具真实产生任务级产物时，
+    // 才按需创建并绑定。应用启动时已清理陈旧活动态（重启不续跑）。
     // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：新消息 gate——存在未决 DecisionRequest 时拒绝新回合
     // （不得绕过待确认，A-AG-M-S-01 §2.2.2；三层分离）。
-    let task_run_result = (|| -> Result<String, IpcError> {
+    let task_run_result = (|| -> Result<Option<String>, IpcError> {
         let conn = state
             .db
             .lock()
@@ -229,6 +230,7 @@ pub(crate) async fn ag_start_turn(
                     ));
                 }
             }
+            .into()
         } else {
             if continuation_decision_request_id.is_some() || continuation_preview_diff_id.is_some()
             {
@@ -252,24 +254,11 @@ pub(crate) async fn ag_start_turn(
                     false,
                 ));
             }
-            let task_run_id =
-                ag::task::begin_turn(&conn, &ws.workspace_id, &session_id, Some("agent 回合"))
-                    .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
-            if let Some(expected_task_run_id) = clarification_task_run_id.as_deref() {
-                if task_run_id != expected_task_run_id {
-                    return Err(IpcError::new(
-                        "AG_CLARIFICATION_TASK_MISMATCH",
-                        "澄清恢复未绑定原 TaskRun，已拒绝继续",
-                        false,
-                        false,
-                    ));
-                }
-            }
-            task_run_id
+            clarification_task_run_id.clone()
         };
         Ok(task_run_id)
     })();
-    let task_run_id = match task_run_result {
+    let mut task_run_id = match task_run_result {
         Ok(task_run_id) => task_run_id,
         Err(error) => {
             // 已确认/已预览的续片段在身份核验阶段失败时，原 TaskRun 已可能处于 executing。
@@ -280,7 +269,7 @@ pub(crate) async fn ag_start_turn(
             {
                 settle_and_emit_ag_turn_error(
                     &state,
-                    task_run_id,
+                    Some(task_run_id),
                     &on_event,
                     &terminal_latch,
                     &app,
@@ -293,8 +282,7 @@ pub(crate) async fn ag_start_turn(
         }
     };
 
-    // TaskRun 从这里开始已经进入活动态。任何后续装配失败都必须经同一出口收束 TaskRun
-    // 并发送 AgentTurn Error，禁止 `?` 直接返回造成持久态长期停留在 executing。
+    // 任何后续装配失败都经同一出口收束 AgentTurn；若已按需创建 TaskRun，同时收束其持久态。
     macro_rules! started_turn_or_finish {
         ($result:expr) => {
             match $result {
@@ -302,7 +290,7 @@ pub(crate) async fn ag_start_turn(
                 Err(error) => {
                     settle_and_emit_ag_turn_error(
                         &state,
-                        &task_run_id,
+                        task_run_id.as_deref(),
                         &on_event,
                         &terminal_latch,
                         &app,
@@ -313,6 +301,17 @@ pub(crate) async fn ag_start_turn(
                 }
             }
         };
+    }
+
+    if let Some(existing_task_run_id) = task_run_id.clone() {
+        started_turn_or_finish!((|| {
+            let conn = state
+                .db
+                .lock()
+                .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+            ag::task::link_turn(&conn, &turn_id, &existing_task_run_id)
+                .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))
+        })());
     }
 
     let read_ctx = started_turn_or_finish!(ag::blocks::AgentReadContext::new(
@@ -415,15 +414,72 @@ pub(crate) async fn ag_start_turn(
             ag::context::IntentTypeV1::Edit | ag::context::IntentTypeV1::CreateDocument
         );
         if ag::task::is_complex_target(is_write, &target_paths, &prompt) {
-            if let Ok(conn) = state.db.lock() {
-                let has_plan = ag::task::list_plans_by_run(&conn, &task_run_id)
-                    .map(|plans| !plans.is_empty())
-                    .unwrap_or(true);
-                if !has_plan {
-                    let plan = build_task_plan(&task_run_id, &target_paths);
-                    let _ = ag::task::create_plan(&conn, &plan);
-                }
+            if task_run_id.is_none() {
+                let created_task_run_id = started_turn_or_finish!((|| {
+                    let conn = state
+                        .db
+                        .lock()
+                        .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+                    ag::task::begin_for_complex_target(
+                        &conn,
+                        &workspace_id_for_turn,
+                        &session_id,
+                        is_write,
+                        &target_paths,
+                        &prompt,
+                    )
+                    .map_err(|error| {
+                        IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
+                    })
+                    .and_then(|task_run_id| {
+                        task_run_id.ok_or_else(|| {
+                            IpcError::new(
+                                "AG_TASK_REQUIREMENT_DRIFT",
+                                "复杂目标判据在 TaskRun 创建边界发生漂移",
+                                false,
+                                false,
+                            )
+                        })
+                    })
+                })());
+                task_run_id = Some(created_task_run_id.clone());
+                started_turn_or_finish!(bind_agent_turn_task_run(
+                    &state,
+                    &session_id,
+                    &turn_id,
+                    &created_task_run_id,
+                ));
+                started_turn_or_finish!((|| {
+                    let conn = state
+                        .db
+                        .lock()
+                        .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+                    ag::task::link_turn(&conn, &turn_id, &created_task_run_id).map_err(|error| {
+                        IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
+                    })
+                })());
             }
+            let current_task_run_id = task_run_id
+                .as_deref()
+                .expect("complex target must bind a task run before creating its plan");
+            started_turn_or_finish!((|| {
+                let conn = state
+                    .db
+                    .lock()
+                    .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+                let plan_missing = ag::task::list_plans_by_run(&conn, current_task_run_id)
+                    .map_err(|error| {
+                        IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
+                    })?
+                    .is_empty();
+                if plan_missing {
+                    let plan = build_task_plan(current_task_run_id, &target_paths);
+                    ag::task::create_plan(&conn, &plan).map_err(|error| {
+                        IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
+                    })?;
+                }
+                Ok::<(), IpcError>(())
+            })());
         }
     }
     if intent_result.is_blocking() {
@@ -442,7 +498,7 @@ pub(crate) async fn ag_start_turn(
             &state,
             &session_id,
             &turn_id,
-            &task_run_id,
+            task_run_id.as_deref(),
         ));
         emit_ag01(&app, &turn_id, s);
         let _ = on_event.send(AgTurnEvent::ClarificationRequired {
@@ -455,9 +511,9 @@ pub(crate) async fn ag_start_turn(
     emit_ag01(&app, &turn_id, s);
     if cancelled.load(Ordering::Acquire) {
         if let Ok(conn) = state.db.lock() {
-            settle_task_run(
+            settle_optional_task_run(
                 &conn,
-                &task_run_id,
+                task_run_id.as_deref(),
                 &turn_id,
                 ag::task::TurnOutcome::Cancelled,
             );
@@ -470,7 +526,12 @@ pub(crate) async fn ag_start_turn(
         Ok(ent::gateway::GateOutcome::Deny) => GateState::Denied,
         Err(error) => {
             if let Ok(conn) = state.db.lock() {
-                settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                settle_optional_task_run(
+                    &conn,
+                    task_run_id.as_deref(),
+                    &turn_id,
+                    ag::task::TurnOutcome::Failed,
+                );
             }
             emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
             return Ok(());
@@ -479,7 +540,12 @@ pub(crate) async fn ag_start_turn(
     if gate != GateState::Passed {
         let error = ensure_gate_passed(gate).expect_err("非 Passed 门禁必须被拒绝");
         if let Ok(conn) = state.db.lock() {
-            settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+            settle_optional_task_run(
+                &conn,
+                task_run_id.as_deref(),
+                &turn_id,
+                ag::task::TurnOutcome::Failed,
+            );
         }
         emit_ag_turn_denied(&on_event, &terminal_latch, &app, &turn_id, &error);
         return Ok(());
@@ -487,9 +553,9 @@ pub(crate) async fn ag_start_turn(
     started_turn_or_finish!(ensure_gate_passed(gate));
     if cancelled.load(Ordering::Acquire) {
         if let Ok(conn) = state.db.lock() {
-            settle_task_run(
+            settle_optional_task_run(
                 &conn,
-                &task_run_id,
+                task_run_id.as_deref(),
                 &turn_id,
                 ag::task::TurnOutcome::Cancelled,
             );
@@ -524,7 +590,12 @@ pub(crate) async fn ag_start_turn(
                 );
                 emit_ag02(&app, &turn_id, ag::tool::ToolLoopState::LoopAborted);
                 if let Ok(conn) = state.db.lock() {
-                    settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                    settle_optional_task_run(
+                        &conn,
+                        task_run_id.as_deref(),
+                        &turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
                 }
                 emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
@@ -542,7 +613,7 @@ pub(crate) async fn ag_start_turn(
         &runtime_profile,
         &turn_id,
         &session_id,
-        &task_run_id,
+        task_run_id.as_deref(),
         &intent_result,
         &declared_targets,
         &read_ctx,
@@ -563,7 +634,12 @@ pub(crate) async fn ag_start_turn(
             false,
         );
         if let Ok(conn) = state.db.lock() {
-            settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+            settle_optional_task_run(
+                &conn,
+                task_run_id.as_deref(),
+                &turn_id,
+                ag::task::TurnOutcome::Failed,
+            );
         }
         emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
         return Ok(());

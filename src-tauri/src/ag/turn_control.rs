@@ -54,7 +54,7 @@ impl Drop for ActiveAgentTurnLease {
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015
- * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,clarificationResume) | out=ExclusiveActiveAgentTurnLeaseAndOriginalTaskRunIdentity(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
+ * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,clarificationResume) | out=ExclusiveActiveAgentTurnLeaseAndOptionalOriginalTaskRunIdentity(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
  */
 pub(super) fn register_active_agent_turn(
     state: &AppState,
@@ -108,14 +108,7 @@ pub(super) fn register_active_agent_turn(
                 false,
             ));
         }
-        let task_run_id = active.task_run_id.clone().ok_or_else(|| {
-            IpcError::new(
-                "AG_CLARIFICATION_IDENTITY_INCOMPLETE",
-                "澄清等待回合缺少原 TaskRun 身份",
-                false,
-                false,
-            )
-        })?;
+        let task_run_id = active.task_run_id.clone();
         active.phase = ActiveAgentTurnPhase::Running;
         active.abort_handle = None;
         let cancelled = Arc::clone(&active.cancelled);
@@ -127,7 +120,7 @@ pub(super) fn register_active_agent_turn(
                 turn_id: turn_id.to_string(),
             },
             cancelled,
-            Some(task_run_id),
+            task_run_id,
         ));
     }
 
@@ -175,13 +168,13 @@ pub(super) fn register_active_agent_turn(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015
- * boundary: in=RunningAgentTurnWithBlockingIntentAndTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce)
+ * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce)
  */
 pub(super) fn park_agent_turn_for_clarification(
     state: &AppState,
     session_id: &str,
     turn_id: &str,
-    task_run_id: &str,
+    task_run_id: Option<&str>,
 ) -> Result<(), IpcError> {
     let mut turns = state
         .active_agent_turns
@@ -208,6 +201,53 @@ pub(super) fn park_agent_turn_for_clarification(
     }
     active.phase = ActiveAgentTurnPhase::AwaitingClarification;
     active.abort_handle = None;
+    active.task_run_id = task_run_id.map(str::to_string);
+    Ok(())
+}
+
+/// 在任务级产物首次出现时，把按需创建的 TaskRun 绑定到仍活动的原 AgentTurn。
+/// 重复绑定同一身份幂等；不同身份失败关闭，避免动态工具把任务挂到其他回合。
+pub(super) fn bind_agent_turn_task_run(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    task_run_id: &str,
+) -> Result<(), IpcError> {
+    let mut turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let active = turns
+        .get_mut(session_id)
+        .ok_or_else(|| IpcError::new("AG_TURN_NOT_ACTIVE", "Agent 回合已不再活动", false, false))?;
+    if active.turn_id != turn_id {
+        return Err(IpcError::new(
+            "AG_TURN_MISMATCH",
+            "TaskRun 绑定身份与当前活动回合不匹配",
+            false,
+            false,
+        ));
+    }
+    if active.cancelled.load(Ordering::Acquire) {
+        return Err(IpcError::new(
+            "AG_TURN_CANCELLED",
+            "已取消的 AgentTurn 不能绑定 TaskRun",
+            false,
+            false,
+        ));
+    }
+    if active
+        .task_run_id
+        .as_deref()
+        .is_some_and(|current| current != task_run_id)
+    {
+        return Err(IpcError::new(
+            "AG_TASK_IDENTITY_MISMATCH",
+            "AgentTurn 已绑定其他 TaskRun",
+            false,
+            false,
+        ));
+    }
     active.task_run_id = Some(task_run_id.to_string());
     Ok(())
 }
@@ -469,7 +509,7 @@ mod ag_execution_kernel_tests {
     fn clarification_resume_claims_same_turn_once_and_rejects_identity_drift() {
         let state = state();
         let (lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", "task-1").unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1")).unwrap();
         drop(lease);
 
         assert_eq!(
@@ -503,11 +543,27 @@ mod ag_execution_kernel_tests {
 
     // covers: BR-AG-STATE-001
     // covers: BR-SYS-STATE-007
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn simple_clarification_resumes_same_turn_without_task_run() {
+        let state = state();
+        let (lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
+        drop(lease);
+
+        let (resumed_lease, _, task_run_id) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
+        assert_eq!(task_run_id, None);
+        drop(resumed_lease);
+    }
+
+    // covers: BR-AG-STATE-001
+    // covers: BR-SYS-STATE-007
     #[test]
     fn cancelling_parked_clarification_removes_resume_identity_and_returns_task_run() {
         let state = state();
         let (lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", "task-1").unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1")).unwrap();
         drop(lease);
 
         assert_eq!(

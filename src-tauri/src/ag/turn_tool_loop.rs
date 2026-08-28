@@ -5,8 +5,10 @@ use super::prompt_runtime::{
     build_prompt_audit_record, current_doc_edit_requires_prior_read, is_current_doc_read_tool,
     prompt_audit_enabled, provider_messages_for_model, FinalPromptAuditLog,
 };
-use super::task_runtime::{edit_intent_has_terminal_tool_result, settle_task_run};
-use super::turn_control::{install_agent_turn_abort_handle, lock_agent_turn_effect};
+use super::task_runtime::{edit_intent_has_terminal_tool_result, settle_optional_task_run};
+use super::turn_control::{
+    bind_agent_turn_task_run, install_agent_turn_abort_handle, lock_agent_turn_effect,
+};
 use super::turn_events::{
     emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_done, emit_ag_turn_error,
     settle_and_emit_ag_turn_error,
@@ -27,7 +29,7 @@ use std::sync::{
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-016
- * boundary: in=PreparedPromptCapabilityGrantAndActiveAgentTurn | out=ToolResultsPendingDiffEventsAndSingleAgentTurnTerminal | delegate=ag::tool::transition | consumer=TaskRunStatus
+ * boundary: in=PreparedPromptCapabilityGrantAndActiveAgentTurnWithOptionalTaskRun | out=ToolResultsPendingDiffEventsAndSingleAgentTurnTerminalAndOnDemandTaskRunForTaskLevelProducts | delegate=ag::tool::transition | consumer=OptionalTaskRunStatus
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop(
@@ -38,7 +40,7 @@ pub(super) async fn run_turn_tool_loop(
     terminal_latch: ag::turn::TerminalLatch,
     turn_id: String,
     session_id: String,
-    task_run_id: String,
+    mut task_run_id: Option<String>,
     workspace_id_for_turn: String,
     provider: String,
     model: String,
@@ -75,9 +77,9 @@ pub(super) async fn run_turn_tool_loop(
         if cancelled.load(Ordering::Acquire) {
             emit_ag02(&app, &turn_id, TlSt::LoopAborted);
             if let Ok(conn) = state.db.lock() {
-                settle_task_run(
+                settle_optional_task_run(
                     &conn,
-                    &task_run_id,
+                    task_run_id.as_deref(),
                     &turn_id,
                     ag::task::TurnOutcome::Cancelled,
                 );
@@ -99,7 +101,12 @@ pub(super) async fn run_turn_tool_loop(
             if let Some(error) = gate_error {
                 emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                 if let Ok(conn) = state.db.lock() {
-                    settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                    settle_optional_task_run(
+                        &conn,
+                        task_run_id.as_deref(),
+                        &turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
                 }
                 emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
@@ -130,7 +137,7 @@ pub(super) async fn run_turn_tool_loop(
             emit_ag02(&app, &turn_id, TlSt::LoopAborted);
             settle_and_emit_ag_turn_error(
                 &state,
-                &task_run_id,
+                task_run_id.as_deref(),
                 &on_event,
                 &terminal_latch,
                 &app,
@@ -156,9 +163,9 @@ pub(super) async fn run_turn_tool_loop(
             Err(_) => {
                 emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                 if let Ok(conn) = state.db.lock() {
-                    settle_task_run(
+                    settle_optional_task_run(
                         &conn,
-                        &task_run_id,
+                        task_run_id.as_deref(),
                         &turn_id,
                         ag::task::TurnOutcome::Cancelled,
                     );
@@ -169,7 +176,12 @@ pub(super) async fn run_turn_tool_loop(
             Ok(Err(error)) => {
                 emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                 if let Ok(conn) = state.db.lock() {
-                    settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                    settle_optional_task_run(
+                        &conn,
+                        task_run_id.as_deref(),
+                        &turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
                 }
                 emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
@@ -180,29 +192,37 @@ pub(super) async fn run_turn_tool_loop(
             ent::gateway::RoundOutcome::Failed(error) => {
                 emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                 if let Ok(conn) = state.db.lock() {
-                    settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+                    settle_optional_task_run(
+                        &conn,
+                        task_run_id.as_deref(),
+                        &turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
                 }
                 emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
             }
             ent::gateway::RoundOutcome::Done { stop_reason } => {
-                let plan_incomplete = match state.db.lock() {
-                    Ok(conn) => {
-                        ag::task::has_incomplete_plan(&conn, &task_run_id).map_err(|error| {
-                            IpcError::new(
-                                "AG_TASK_PLAN_STATE_UNAVAILABLE",
-                                &format!("无法读取 TaskPlan 收束状态：{error}"),
-                                true,
-                                false,
-                            )
-                        })
-                    }
-                    Err(_) => Err(IpcError::new(
-                        "AG_TASK_PLAN_STATE_UNAVAILABLE",
-                        "TaskPlan 状态读取失败，不能将任务标记为完成",
-                        true,
-                        false,
-                    )),
+                let plan_incomplete = match task_run_id.as_deref() {
+                    None => Ok(false),
+                    Some(task_run_id) => match state.db.lock() {
+                        Ok(conn) => {
+                            ag::task::has_incomplete_plan(&conn, task_run_id).map_err(|error| {
+                                IpcError::new(
+                                    "AG_TASK_PLAN_STATE_UNAVAILABLE",
+                                    &format!("无法读取 TaskPlan 收束状态：{error}"),
+                                    true,
+                                    false,
+                                )
+                            })
+                        }
+                        Err(_) => Err(IpcError::new(
+                            "AG_TASK_PLAN_STATE_UNAVAILABLE",
+                            "TaskPlan 状态读取失败，不能将任务标记为完成",
+                            true,
+                            false,
+                        )),
+                    },
                 };
                 match plan_incomplete {
                     Ok(true) => {
@@ -214,9 +234,9 @@ pub(super) async fn run_turn_tool_loop(
                         );
                         emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                         if let Ok(conn) = state.db.lock() {
-                            settle_task_run(
+                            settle_optional_task_run(
                                 &conn,
-                                &task_run_id,
+                                task_run_id.as_deref(),
                                 &turn_id,
                                 ag::task::TurnOutcome::Failed,
                             );
@@ -228,9 +248,9 @@ pub(super) async fn run_turn_tool_loop(
                     Err(error) => {
                         emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                         if let Ok(conn) = state.db.lock() {
-                            settle_task_run(
+                            settle_optional_task_run(
                                 &conn,
-                                &task_run_id,
+                                task_run_id.as_deref(),
                                 &turn_id,
                                 ag::task::TurnOutcome::Failed,
                             );
@@ -251,9 +271,9 @@ pub(super) async fn run_turn_tool_loop(
                     let error = IpcError::new("AG_EDIT_TOOL_REQUIRED", message, true, false);
                     emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                     if let Ok(conn) = state.db.lock() {
-                        settle_task_run(
+                        settle_optional_task_run(
                             &conn,
-                            &task_run_id,
+                            task_run_id.as_deref(),
                             &turn_id,
                             ag::task::TurnOutcome::Failed,
                         );
@@ -263,9 +283,9 @@ pub(super) async fn run_turn_tool_loop(
                 }
                 emit_ag02(&app, &turn_id, TlSt::LoopCompleted); // ModelStreaming→FinalAnswer→LoopCompleted
                 if let Ok(conn) = state.db.lock() {
-                    settle_task_run(
+                    settle_optional_task_run(
                         &conn,
-                        &task_run_id,
+                        task_run_id.as_deref(),
                         &turn_id,
                         ag::task::TurnOutcome::Completed,
                     );
@@ -293,9 +313,9 @@ pub(super) async fn run_turn_tool_loop(
                     if cancelled.load(Ordering::Acquire) {
                         emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                         if let Ok(conn) = state.db.lock() {
-                            settle_task_run(
+                            settle_optional_task_run(
                                 &conn,
-                                &task_run_id,
+                                task_run_id.as_deref(),
                                 &turn_id,
                                 ag::task::TurnOutcome::Cancelled,
                             );
@@ -352,13 +372,85 @@ pub(super) async fn run_turn_tool_loop(
                             &turn_id,
                         )
                     });
+                    // 简单回合保持无 TaskRun。只有已获准的任务级工具真的到达执行边界时，
+                    // 才在创建 DecisionRequest / WorkspaceOperationPlan 之前取得并绑定 TaskRun。
+                    let task_run_prepare_error =
+                        if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
+                            && ag::task::tool_requires_task_run(&c.name)
+                            && task_run_id.is_none()
+                        {
+                            let created = match state.db.lock() {
+                                Ok(conn) => ag::task::begin_for_tool_product(
+                                    &conn,
+                                    &workspace_id_for_turn,
+                                    &session_id,
+                                    &c.name,
+                                )
+                                .map_err(|error| {
+                                    IpcError::new(
+                                        "AG_TASK_DB_ERROR",
+                                        &error.to_string(),
+                                        true,
+                                        false,
+                                    )
+                                })
+                                .and_then(|task_run_id| {
+                                    task_run_id.ok_or_else(|| {
+                                        IpcError::new(
+                                            "AG_TASK_REQUIREMENT_DRIFT",
+                                            "任务级工具判据在 TaskRun 创建边界发生漂移",
+                                            false,
+                                            false,
+                                        )
+                                    })
+                                }),
+                                Err(_) => Err(IpcError::new(
+                                    "WS_DB_BUSY",
+                                    "数据库连接繁忙，无法创建任务级产物",
+                                    true,
+                                    false,
+                                )),
+                            };
+                            match created {
+                                Ok(created_task_run_id) => {
+                                    task_run_id = Some(created_task_run_id.clone());
+                                    match bind_agent_turn_task_run(
+                                        &state,
+                                        &session_id,
+                                        &turn_id,
+                                        &created_task_run_id,
+                                    ) {
+                                        Ok(()) => {
+                                            if let Ok(conn) = state.db.lock() {
+                                                let _ = ag::task::link_turn(
+                                                    &conn,
+                                                    &turn_id,
+                                                    &created_task_run_id,
+                                                );
+                                            }
+                                            None
+                                        }
+                                        Err(error) => Some(format!(
+                                            "TaskRun 无法绑定当前 AgentTurn：{}",
+                                            error.message
+                                        )),
+                                    }
+                                }
+                                Err(error) => Some(error.message),
+                            }
+                        } else {
+                            None
+                        };
                     let mut plan_step_start = None;
-                    let plan_guard_error =
-                        if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow)) {
+                    let plan_guard_error = if task_run_prepare_error.is_some() {
+                        task_run_prepare_error
+                    } else if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
+                    {
+                        if let Some(task_run_id) = task_run_id.as_deref() {
                             match state.db.lock() {
                                 Ok(conn) => match ag::task::start_next_plan_step_for_tool(
                                     &conn,
-                                    &task_run_id,
+                                    task_run_id,
                                     &c.name,
                                 ) {
                                     Ok(ag::task::PlanToolStart::Untracked) => None,
@@ -374,7 +466,10 @@ pub(super) async fn run_turn_tool_loop(
                             }
                         } else {
                             None
-                        };
+                        }
+                    } else {
+                        None
+                    };
                     let (mut result, mut success) = if let Some(error_msg) = arg_parse_error {
                         (error_msg, false)
                     } else if let Some(error_msg) = plan_guard_error {
@@ -398,6 +493,9 @@ pub(super) async fn run_turn_tool_loop(
                             // 任务级确认只创建 DecisionRequest，不修改文档或 Diff。成功后当前执行片段必须结束，
                             // 由下方事件分派统一发送确认卡和 Done，禁止进入下一轮模型循环。
                             ag::tool::ToolDecision::Allow if c.name == "propose_decision" => {
+                                let current_task_run_id = task_run_id
+                                    .as_deref()
+                                    .expect("task-level decision tool must bind a TaskRun");
                                 let kind = params.get("kind").and_then(|value| value.as_str());
                                 let summary =
                                     params.get("summary").and_then(|value| value.as_str());
@@ -432,7 +530,7 @@ pub(super) async fn run_turn_tool_loop(
                                     match state.db.lock() {
                                         Ok(conn) => match ag::task::propose_decision(
                                             &conn,
-                                            &task_run_id,
+                                            current_task_run_id,
                                             kind,
                                             payload,
                                         ) {
@@ -470,11 +568,14 @@ pub(super) async fn run_turn_tool_loop(
                             ag::tool::ToolDecision::Allow
                                 if c.name == "plan_workspace_operation" =>
                             {
+                                let current_task_run_id = task_run_id
+                                    .as_deref()
+                                    .expect("workspace operation tool must bind a TaskRun");
                                 let mut operation_params = params.clone();
                                 if let Some(object) = operation_params.as_object_mut() {
                                     object.insert(
                                         "taskRunId".into(),
-                                        serde_json::Value::String(task_run_id.clone()),
+                                        serde_json::Value::String(current_task_run_id.to_string()),
                                     );
                                     object.insert(
                                         "sourceTurnId".into(),
@@ -571,37 +672,48 @@ pub(super) async fn run_turn_tool_loop(
                                                 "current_editor" | "open_session"
                                             );
                                             if needs_preview_checkpoint {
-                                                let checkpoint_result = match state.db.lock() {
-                                                    Ok(conn) => {
-                                                        ag::task::create_preview_checkpoint(
-                                                            &conn,
-                                                            &task_run_id,
-                                                            &workspace_id_for_turn,
-                                                            &session_id,
-                                                            &turn_id,
-                                                            &edit_result.diff_id,
-                                                            &edit_result.rel_path,
-                                                        )
+                                                if let Some(current_task_run_id) =
+                                                    task_run_id.as_deref()
+                                                {
+                                                    let checkpoint_result = match state.db.lock() {
+                                                        Ok(conn) => {
+                                                            ag::task::create_preview_checkpoint(
+                                                                &conn,
+                                                                current_task_run_id,
+                                                                &workspace_id_for_turn,
+                                                                &session_id,
+                                                                &turn_id,
+                                                                &edit_result.diff_id,
+                                                                &edit_result.rel_path,
+                                                            )
+                                                        }
+                                                        Err(_) => {
+                                                            Err(rusqlite::Error::InvalidQuery)
+                                                        }
+                                                    };
+                                                    match checkpoint_result {
+                                                        Ok(()) => {
+                                                            preview_checkpoint_after_tool = true;
+                                                        }
+                                                        Err(error) => {
+                                                            edit_result
+                                                                .projection
+                                                                .preview_checkpoint_required =
+                                                                false;
+                                                            // Diff 已经持久化。此处不得把它变成前端不可见的孤儿
+                                                            // 提案，也绝不能在没有 checkpoint 的情况下续用旧 read_ctx。
+                                                            eprintln!(
+                                                                "[ag-preview] checkpoint unavailable for diff {}: {error}",
+                                                                edit_result.diff_id
+                                                            );
+                                                        }
                                                     }
-                                                    Err(_) => Err(rusqlite::Error::InvalidQuery),
-                                                };
-                                                match checkpoint_result {
-                                                    Ok(()) => {
-                                                        preview_checkpoint_after_tool = true;
-                                                    }
-                                                    Err(error) => {
-                                                        edit_result
-                                                            .projection
-                                                            .preview_checkpoint_required = false;
-                                                        // Diff 已经持久化。此处不得把它变成前端不可见的孤儿
-                                                        // 提案，也绝不能在没有 checkpoint 的情况下续用旧 read_ctx。
-                                                        // 因此降级为普通待审 Diff：仍终止本片段，由用户之后显式
-                                                        // 发起新回合；不会 Ack、不会自动续编、不会写盘。
-                                                        eprintln!(
-                                                        "[ag-preview] checkpoint unavailable for diff {}: {error}",
-                                                        edit_result.diff_id
-                                                    );
-                                                    }
+                                                } else {
+                                                    // 简单局部编辑不创建 TaskRun，也不伪造依赖任务身份的
+                                                    // 自动续片段。Diff 仍作为当前 AgentTurn 的待审提案可见。
+                                                    edit_result
+                                                        .projection
+                                                        .preview_checkpoint_required = false;
                                                 }
                                             }
                                             proposed_diff = true;
@@ -664,7 +776,9 @@ pub(super) async fn run_turn_tool_loop(
                             Ok(conn) => {
                                 if let Err(error) = ag::task::finish_plan_step_for_tool(
                                     &conn,
-                                    &task_run_id,
+                                    task_run_id
+                                        .as_deref()
+                                        .expect("started plan step must retain its TaskRun"),
                                     &plan_id,
                                     &step_id,
                                     success,
@@ -690,9 +804,9 @@ pub(super) async fn run_turn_tool_loop(
                     if cancelled.load(Ordering::Acquire) {
                         emit_ag02(&app, &turn_id, TlSt::LoopAborted);
                         if let Ok(conn) = state.db.lock() {
-                            settle_task_run(
+                            settle_optional_task_run(
                                 &conn,
-                                &task_run_id,
+                                task_run_id.as_deref(),
                                 &turn_id,
                                 ag::task::TurnOutcome::Cancelled,
                             );
@@ -707,10 +821,11 @@ pub(super) async fn run_turn_tool_loop(
                         success,
                     });
                     // AG-1.0-IMP-TASKRUN-01：真实工具事件驱动步骤态（BR-SYS-STATE-008，best-effort）。
-                    if let Ok(conn) = state.db.lock() {
+                    if let (Some(task_run_id), Ok(conn)) = (task_run_id.as_deref(), state.db.lock())
+                    {
                         let _ = ag::task::record_tool_step(
                             &conn,
-                            &task_run_id,
+                            task_run_id,
                             &format!("tool-{}-{}", turn_id, c.id),
                             &c.name,
                             success,
@@ -718,10 +833,12 @@ pub(super) async fn run_turn_tool_loop(
                     }
                     if let Some((diff_id, rel_path)) = diff_event_after_tool {
                         // 提案＝W1/W2/W3 确认点（复用提案卡裁决，SM-AG-04 WaitingConfirm）。
-                        if let Ok(conn) = state.db.lock() {
+                        if let (Some(task_run_id), Ok(conn)) =
+                            (task_run_id.as_deref(), state.db.lock())
+                        {
                             let _ = ag::task::record_proposal_step(
                                 &conn,
-                                &task_run_id,
+                                task_run_id,
                                 &format!("propose-{diff_id}"),
                                 &format!("提案 {rel_path}"),
                             );
@@ -730,15 +847,17 @@ pub(super) async fn run_turn_tool_loop(
                             turn_id: turn_id.clone(),
                             diff_id,
                             rel_path,
-                            task_run_id: Some(task_run_id.clone()),
+                            task_run_id: task_run_id.clone(),
                         });
                     }
                     if end_after_diff_proposal && success {
                         // 每张 Diff 都终止当前模型片段，避免在旧 read_ctx 上产生补丁栈。LogicalState
                         // 分支等待真实预览 Ack；background 分支等待既有迁移/裁决，均不改 DiffCard 或磁盘。
                         drop(mutation_guard);
-                        if let Ok(conn) = state.db.lock() {
-                            let _ = ag::task::link_turn(&conn, &turn_id, &task_run_id);
+                        if let (Some(task_run_id), Ok(conn)) =
+                            (task_run_id.as_deref(), state.db.lock())
+                        {
+                            let _ = ag::task::link_turn(&conn, &turn_id, task_run_id);
                         }
                         emit_ag02(&app, &turn_id, TlSt::LoopCompleted);
                         emit_ag_turn_done(
@@ -764,9 +883,9 @@ pub(super) async fn run_turn_tool_loop(
                         emit_ag02(&app, &turn_id, TlSt::LoopCompleted);
                         if let Ok(conn) = state.db.lock() {
                             // propose_decision 已将 TaskRun 置 WaitingConfirm；settle 只做同一真实状态的收束。
-                            settle_task_run(
+                            settle_optional_task_run(
                                 &conn,
-                                &task_run_id,
+                                task_run_id.as_deref(),
                                 &turn_id,
                                 ag::task::TurnOutcome::Completed,
                             );
@@ -806,16 +925,21 @@ pub(super) async fn run_turn_tool_loop(
         let error = IpcError::new("AG_EDIT_TOOL_REQUIRED", message, true, false);
         emit_ag02(&app, &turn_id, TlSt::LoopAborted);
         if let Ok(conn) = state.db.lock() {
-            settle_task_run(&conn, &task_run_id, &turn_id, ag::task::TurnOutcome::Failed);
+            settle_optional_task_run(
+                &conn,
+                task_run_id.as_deref(),
+                &turn_id,
+                ag::task::TurnOutcome::Failed,
+            );
         }
         emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
         return Ok(());
     }
     emit_ag02(&app, &turn_id, TlSt::LoopAborted); // ResultInjecting→LoopLimit→LoopAborted
     if let Ok(conn) = state.db.lock() {
-        settle_task_run(
+        settle_optional_task_run(
             &conn,
-            &task_run_id,
+            task_run_id.as_deref(),
             &turn_id,
             ag::task::TurnOutcome::Completed,
         );
