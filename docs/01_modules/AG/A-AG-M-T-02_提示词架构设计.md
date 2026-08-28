@@ -145,6 +145,18 @@ ReferencePayload 与当前编辑器状态优先由确定性规则解析；低置
 `ambiguity=blocking` 并进入澄清，不得凭模型猜测执行。IntentResult 必须同时约束 Context 选择、
 Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user 内容保留，IntentResult 不替代原文、不保存
 模型隐藏推理。1.0 不要求通用规划器或小模型分类器，允许规则优先实现，但不得退化为单一“是否编辑”布尔值。
+当 `ambiguity=blocking` 时，原 AgentTurn 进入 AwaitingClarification，不调用门禁、模型或工具；
+用户补充所需信息后，补充内容并入原 AgentTurn，由 `clarificationProvided` 返回 Assembling 并
+重新形成 IntentResult。该继续语义不创建新 AgentTurn、不伪造取消，也不替代 DecisionRequest
+裁决、错误/中断重试或 Assist 的独立状态语义。
+
+`IntentResult.allowed_tools` 是当前 AgentTurn 的精确允许集，不是 Prompt 建议：
+
+- `answer` 在不需项目事实时为空集，需要事实时只给必要的只读工具；`inspect/search/analyze` 只给当前任务必要的只读工具。
+- `edit` 只给目标读取及当前格式/动态能力允许的内容 Proposal 工具；不得因为工具已注册而获得资源操作能力。
+- `create_document` / `organize_workspace` 只给当前任务必要的只读工具与 `plan_workspace_operation`；只读结果只能用于形成当前计划，资源副作用唯一仍是 CreateDocumentBundle/WorkspaceOperationPlan 前置裁决链。
+- `create_document` 的目标资源建立前不给 `propose_edit`；`clarify` 不开放模型、工具或 Proposal 副作用。
+- RuntimeProfile、工具注册、Prompt 文本、前端参数和历史回合都不得扩大该允许集；执行器仍须按 CapabilityGrant 二次校验。
 
 **实现登记（2026-08-12，AG-STRATEGY-05 提示词按改动范围分流编辑操作）**：编辑操作选择由「文件类型一刀切」改为「改动范围」分流——整篇重写/大幅重排 → 纯文本可用 `replace_document`；当前 BDocx 仅当同轮 LogicalState 明确**无表格且无图片**时可用 `replace_document` 提交完整 HTML，后端同时拒绝既有或新引入的表格/图片；局部修改 → `replace_block`（纯文本）/ `block_ops`（富文档）；表格/图片 → `table_ops`/`image_ops`。结构状态不明时先读取运行时声明或 `list_tables`/`list_images`，不得从段落列表猜测。这样既不把无受保护结构的整篇改写错误拆为易残留的块操作，也不允许整篇替换绕过受保护结构。
 
@@ -161,18 +173,9 @@ Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user �
 - Prompt 只描述意图、允许工具和上述边界；确认身份、幂等、路径/基线核验、dirty 阻断、补偿和重启 Interrupted 由运行时强制，不以模型文字作为授权证据。
 - `userConfirm` 恢复原 TaskRun 并立即调用 WS 执行冻结 plan；不新增 `WaitingUserCommit`。重启后旧运行进入 Interrupted，再次执行必须重新生成 plan 和 DecisionRequest。
 
-> 以下 2026-08-11 段落仅记录当时实现事实，不再是 Prompt 设计权威。其中“新路径 base=empty”和
-> `propose_edit(delete_doc/delete_folder)` 均是待迁移旧链，实现不得继续依赖。
-
-**实现登记（2026-08-11，AG-STRATEGY-02 运行时注入同步 + 新建 b-docx 指导）**：parameterConstraints 移除 `proposal_target_must_match_intent`（目标硬锁已下沉调用时刻），替换为提示性 `proposal_applies_on_user_confirm`；prompt 明确新建 word 文档（.b-docx）= propose_edit 新路径 + base=empty + replace_document + content 富 HTML（无需额外 BDocx 能力声明）；同步跨文档目标（DiffCard 标注确认）与删除能力（delete_doc/delete_folder 确认卡）语义。修复模型读到旧约束与"无 BDocx 声明无法建富文档"推断而放弃 propose_edit 的 AG_EDIT_TOOL_REQUIRED 拦截。
-
-**实现登记（2026-08-11，AG-DELETE-01 删除能力 + 跨文档目标放行）**：`propose_edit` 扩展 `operation=delete_doc/delete_folder` → 删除确认卡（PendingDiff origin_module='AG_DELETE'，payload 含 action/recursive/cascade 级联计数）→ `ws.apply_delete_diff` 用户接受后执行 fileops 删除 + timeline 节点（HITL 不降级）。目标声明放宽：guard_target_set 增 AcceptCrossDocument，ensure_target_declared 改 target_declared(bool)——未声明既有文档放行并标注 crossDoc（DiffCard「跨文档目标」+ 用户确认承担安全，延续词/多文档联动不再被锁死）。删除限 workspace 内，禁删根目录（WS_DELETE_ROOT_DENIED）。
-
-**实现登记（2026-08-11，AG-STRATEGY-01 意图边界重构 + 工具全量 + 调用时刻校验）**：意图判定降级为 4 档强信号边界——chat（寒暄零工具）/ read-only（用户声明"不修改/只分析"冻结写）/ create（Create 强词+文档目标）/ general（其余全量，模型自决）。Search/Analyze/Inspect 细分并入 general（工具集相同）。allowed_tools 按 profile 全量（只读 6 + 提案 2 + workspace_glob），不再按意图收窄；propose_edit 取消 targetScope 硬锁，安全下沉调用时刻（workspace 边界 + base 有效 + 新建检测 + DiffCard 确认）。新增 workspace_glob 工具（文件名通配定位）。arguments JSON 解析失败回传 AG_TOOL_ARGUMENTS_INVALID 明确错误（修复"缺少目标 path"误导导致的 5 轮空转）。
-
 **实现登记（2026-08-11，AG-INTENT-COMPOSITE-01 复合请求意图优先级）**：`resolve_intent_result` 新增 `create_requested` 前置判定——非否定 ∧ 文本含 Create 强词（创建/新建/生成/建立/制作）∧ 目标为 Document/Workspace 时，CreateDocument 优先于 `verb == Edit` 分支。修复真实案例「新建一个word文档，…并优化排版」被判 Edit 当前文档而无法新建（detect_verb 按 Edit→Create 首命中，「优化」掩盖「新建」）。detect_verb 首命中机制与 V2/V3 语义不变；补复合意图回归测试（复合/存量编辑/单动作/否定）。
 
-**实现登记（2026-08-11，AG-WS-LAYERED-01 模型分层感知工作区）**：`list_docs` 不再全量返回文件树——无参数返回工作区概览（顶层目录+文件计数+总文件数，mode=overview；工作区 ≤30 文件且 ≤4KB 时豁免返回全量 mode=full）；`path` 参数返回该目录直接子项（一层，mode=children）。树枚举只含索引（路径/类型/计数），**永不携带正文**（正文唯一入口 read_doc / search_text）。prompt 增加分层感知引导（先概览→按需展开→内容才读取）+ CreateDocument 专项（概览判断落点后直接 propose_edit，不逐目录遍历）。前端 ws.list_docs 与 search_text 内部遍历保持全量语义。
+**实现登记（2026-08-11，AG-WS-LAYERED-01 模型分层感知工作区）**：`list_docs` 不再全量返回文件树——无参数返回工作区概览（顶层目录+文件计数+总文件数，mode=overview；工作区 ≤30 文件且 ≤4KB 时豁免返回全量 mode=full）；`path` 参数返回该目录直接子项（一层，mode=children）。树枚举只含索引（路径/类型/计数），**永不携带正文**（正文唯一入口 read_doc / search_text）。该登记只证明分层读取现状，不授予新建或其他资源副作用；新建文档必须遵守本节 CreateDocumentBundle 约束。
 
 **实现登记（2026-08-11，AG-TASK-01 多提案批次衔接 + block_ops 删除）**：①`block_ops` 新增 `delete_node` 操作——仅删除 capabilities 含 delete_node 的 content 原子块（删除后块整体移除不留占位），容器/原子块拒绝 AG_BLOCK_OPERATION_TARGET_READONLY（不级联子树）；删除后同批后续操作引用已删块 → stale 回注（F4）。②放开同回合多提案——AG_PROPOSAL_ALREADY_CREATED 改为按批放行，单回合 ≤5 批（AG_TOO_MANY_PROPOSALS 超限），同轮可并行多 tool_calls，每批 base 递增。③批次元数据——propose_edit 支持可选 `batch={id,index,total}` 参数（1≤index≤total），随 style_ops `_batch` 键落库；接受路由返回 batch_remaining 衔接提示（F1c）。④前端——DiffCard 批次徽标（第 x/y 批）、删除块渲染（before=内容/after=【已删除】删除样式）、edBlockOps 支持 delete_node 原子应用与 reverse 精确恢复（记录删除位置重建）。⑤提示词——block_ops 描述补 delete_node、单批上限 24→32、批次衔接引导。语义详见 A-AG-M-T-01 §5.1。
 
@@ -363,6 +366,7 @@ status: mapped
 | 2026-08-11 | v1.21 | AG-TASK-01：§4 登记多提案批次衔接 + block_ops 删除——delete_node（content 原子块）、单回合 ≤5 批、batch 元数据落库/接受衔接、DiffCard 批次徽标/删除渲染、单批上限 24→32 |
 | 2026-08-13 | v1.22 | AG-STRATEGY-05：纠正 BDocx 整篇改写边界为「同轮无表格且无图片」并由服务端拒绝受保护/新引入结构；登记同锚点 block_ops 原子排序、后置校验、稳定 id reverse，以及 proposal→预览→接受→保存的可观察状态和无正文前端 trace。 |
 | 2026-08-21 | v1.23 | WorkspaceOperation 基线同步：增加当前 Prompt 约束，资源意图只生成 WorkspaceOperationPlan + DecisionRequest，新建经 CreateDocumentBundle 先创建真实目标再投影内容 Diff；明确 2026-08-11 资源 Diff/空基准新建段落只作历史实现记录。 |
+| 2026-08-27 | v1.24 | AG-CONFORMANCE-GOVERNANCE-S1：明确 `allowed_tools` 为当前 AgentTurn 精确最小允许集，注册/Profile/Prompt 不构成授权；资源意图可获得任务必要只读工具 + plan_workspace_operation，副作用路径不变；澄清补充回到原 AgentTurn 的 Assembling，与 DecisionRequest、重试和 Assist 分界；移除 active 正文中的全量工具、资源 Diff/跨文档宽放和空基准新建旧登记，唯一化 CreateDocumentBundle 路径。 |
 | 2026-08-11 | v1.20 | AG-CTX-01：§4 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、查询动词→Search、整篇对齐检测提示、AG_EDIT_TOOL_REQUIRED 文案区分、序列化瘦身 |
 | 2026-08-11 | v1.19 | AG-DOCX-RO-01：§4 登记原生 docx 只读——复用 pandoc 转换链，source=doc_convert_readonly、editable_kind 覆盖 html（≠bdocx），结构性只读；propose_edit 仍拒绝，编辑器路径保持 DOC_NOT_BDOCX；提示词补充只读边界 |
 | 2026-08-11 | v1.18 | AG-R2-01：§4 登记整理复原综合修复——预算（工具结果历史压缩 + block_ops 单批上限 24）、意图（纠错语义词 + 疑问文档指涉→只读）、提示词（编辑当轮提案 + 顺序自查）、范围（workspace 内只读放宽 + 锚点矛盾校验） |

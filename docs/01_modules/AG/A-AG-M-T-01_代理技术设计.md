@@ -178,8 +178,9 @@ zh: 受限任务实例
 en: TaskRun
 forbidden: 任务实例, 后台任务, 任务队列, 子任务集合, task 实例, 复合任务对象
 -->
-同一用户目标内组织多个受限步骤/AgentTurn 的编排实例，不是后台队列：不自动重试、不跨重启续跑、不越过
-确认点；“工作中”只能由真实回合、步骤或工具事件驱动（A-SYS-I-P-01 §3.1，BR-SYS-STATE-008）。
+复杂目标或必须跨执行片段继续的同一用户目标才建立的受限编排实例，用于组织多个受限步骤/
+AgentTurn；简单目标不建立 TaskRun。TaskRun 不是后台队列：不自动重试、不跨重启续跑、不越过确认点；
+“工作中”只能由真实回合、步骤或工具事件驱动（A-SYS-I-P-01 §3.1，BR-SYS-STATE-008）。
 
 <!-- TERM
 term_id: TERM-AG-016
@@ -248,13 +249,13 @@ AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模�
 | 维度 | 1.0 激活策略 |
 |---|---|
 | 目标 | 当前活动文档/选区可读写；显式引用文档默认只读；新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认后建盘并投影初始内容 Diff |
-| 工作策略 | `direct_response / read_only / edit_proposal / create_proposal / clarify` 五类确定性路由；不生成通用多步骤 Plan |
+| 工作策略 | 回答、只读、内容修改 Proposal、新建文档计划、澄清五类确定性路由；新建文档计划固定产出 CreateDocumentBundle，不产出空基准 ChangeProposal；简单目标只使用单个 AgentTurn，不创建 TaskRun/TaskPlan；复杂或跨执行片段目标才创建受限 TaskRun/TaskPlan，不启用开放式通用规划器 |
 | 工具 | 按 IntentResult 生成本轮最小允许集；文件移动/建目录、表格/图片高级操作仅在专项 G5 通过后启用 |
 | 上下文 | 当前 LogicalState + 当前输入 + 显式引用 + 同文档必要历史；AST/KB/TPL 自动供给关闭 |
 | Prompt | 统一 Prompt Runtime 装配；系统约束与 data-only 文档/引用分离；携 runtime version |
 | 产出 | 回答或 ChangeProposal；任何内容创建/修改均经 DE Diff 裁决 |
 | 会话 | workspace 隔离、本地恢复、单会话同一时刻一个活动回合 |
-| 延期 | BuildMode/CBT、自动记忆/知识、模板工作流、参考风格迁移、复杂规划、多 Agent |
+| 延期 | BuildMode/CBT、自动记忆/知识、模板工作流、参考风格迁移、开放式通用规划、多 Agent |
 
 前端可继续保存完整路线所需的 additive 字段，但 1.0 不得展示没有独立 Runtime Profile 的代理构建
 入口；延期能力未通过专项系统验证时必须 feature-gate，而不是依靠提示词声明“不要使用”。
@@ -277,12 +278,15 @@ rule_id: BR-AG-STATE-001
 代理回合必须经完整生命周期：上下文组装→门禁裁决→经网关流式调用→产出处置；回合可中断/取消，
 中断必须实际终止流式请求并阻止后续工具启动，中断为终态且不产生半落盘副作用（对齐
 BR-SYS-STATE-002）；同一回合只能锁定一个用户可见终态，错误/拒绝/取消后不得再广播完成；状态广播
-必须来自真实状态转移，不得在副作用完成后补发装饰性状态。含修改建议的产出唯一出口是交 DE 生成
+必须来自真实状态转移；当 IntentResult 存在 blocking ambiguity 时，原 AgentTurn 进入
+AwaitingClarification 非终态；用户补充澄清信息时，原 AgentTurn 回到 Assembling 重新收敛
+IntentResult，不新建 AgentTurn、不写入取消终态。该语义不代替 DecisionRequest 裁决、错误/中断重试或
+Assist 状态机的各自转移。状态广播不得在副作用完成后补发装饰性状态。含修改建议的产出唯一出口是交 DE 生成
 pending_diff（AG 无直接写盘路径，X-FORBID-006）；交 DE 生成待裁决修改时必须保留会话、回合和
 本轮 assistant 消息锚点，使 DiffCard 回到对应 AgentTurn 信息流内呈现，而不是作为会话底部全局列表
 沉底汇总；**回合内呈现时序（2026-08-07 细化，承接 BR-AG-UI-001）**：DiffCard 与 ToolCallCard 按
 事件到达顺序内嵌于 assistant 消息流（消息片段 TERM-AG-011），不整体沉到正文底部——模型正文、
-工具调用、修改建议按时间序交错呈现；回合失败回统一错误形状且可重试。状态转移归 SM-AG-01（A-AG-M-S-01）。
+工具调用、修改建议按时间序交错呈现；回合失败回统一错误形状并允许用户显式重试，但重试必须创建新 AgentTurn，原 error AgentTurn 保留审计。状态转移归 SM-AG-01（A-AG-M-S-01）。
 
 <!-- RULE
 rule_id: BR-AG-DATA-003
@@ -291,15 +295,16 @@ rule_id: BR-AG-DATA-003
 -->
 代理回合修改建议产出（ChangeProposal）的目标边界（2026-07-04 人类裁决，**取代原「单文档铁律」**）：
 target 一律限 active workspace 内（X-FORBID-004）；**默认目标为当前文档**；用户**显式指向**其他
-文档（@mention 引用/明示路径）或明确要求创建新文档时，可产出指向该文档的 ChangeProposal
-（新建文档必须经 `plan_workspace_operation` 前置裁决，确认后创建真实资源并投影初始内容 Diff，
-承 A-WS-M-T-02 §6；内容 Diff 不得创建资源，X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）；一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
+既有文档（@mention 引用/明示路径）时，可产出指向该既有文档的 ChangeProposal。新建文档不以空基准
+ChangeProposal 进入目标集，必须先经 `plan_workspace_operation` 生成 CreateDocumentBundle 与 DecisionRequest，
+确认后由 WS 创建真实资源并打开编辑标签，再以该 DiskState 为基线投影初始内容 Diff（承 A-WS-M-T-02 §6；
+内容 Diff 不得创建资源，X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）。一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
 LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot
 中的 LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。识别到
 **项目级整体构建意图**（从蓝图构建完整项目——多文件修改本身不再是升级判据）时提议触发构建
 （判据归 BR-CBT-STATE-002），构建在**原对话窗口**内实现、不强制切换模式；编辑/构建两模式互相
 复用彼此能力。**DE 侧协同复核**同步调整：`de.generate_diff` 校验 target 在 workspace 内且属回合
-声明的目标集（当前文档 + 显式指向/新建集），越出者拒绝。
+声明的目标集（当前文档 + 显式指向的既有文档；CreateDocumentBundle 建盘后目标才成为既有文档），越出者拒绝。
 （沿革：原文本限单文档、跨文档一律升级 CBT——2026-06-12 B-4 裁定；2026-07-04 人类澄清编辑模式
 含文件创建/整理/项目感知，原文本废止。）
 
@@ -410,8 +415,10 @@ BR-WS-PERSIST-003 失败即停并逆序补偿，重启后的未完成计划进�
 再进入普通内容 Diff；不得使用 `create_doc` 或 `propose_edit(delete_*)` 绕过资源计划。状态转移归
 SM-AG-02（工具循环）与 SM-WS-04（资源执行）。
 本轮允许集必须从 IntentResult 派生：`answer/analyze` 只允许必要只读工具，`edit` 允许目标读取与
-`propose_edit/edit_blocked`，`create_document` 只允许 `plan_workspace_operation`（确认后建盘并投影初始内容
-Diff），`propose_edit` 目标必须已存在（内容 Diff 不得创建资源，WS-RESOURCE-WRITE-GUARD-01），`clarify` 不开放产生副作用的工具；
+`propose_edit/edit_blocked`；`create_document` / `organize_workspace` 可获得当前任务必要的只读工具与
+`plan_workspace_operation`，但只读结果只能用于形成当前计划，资源副作用唯一仍是 CreateDocumentBundle/
+WorkspaceOperationPlan 前置裁决链；`propose_edit` 目标必须已存在（内容 Diff 不得创建资源，
+WS-RESOURCE-WRITE-GUARD-01），`clarify` 不开放模型、工具或 Proposal 副作用；
 结构操作或富文档高级工具只有在意图、目标、格式能力和 Runtime Profile feature gate 同时允许时才可
 进入清单。工具注册只表示系统拥有该能力，不等于当前回合获权；执行器必须再次校验本轮允许集，模型
 不得通过伪造工具名、参数或提示内容扩权。
@@ -499,12 +506,6 @@ CrossDocHistory → User`（CrossDocHistory 仅显式沿用时注入）；`Runti
 消息（与自然语言提示词分离，P2 修复）；历史聚合为单块 DATA-ONLY 消息并保留 role 序列（P5/P7 修复）；
 `system_prompt_version` 由提示词内容 hash 派生（P3 修复）；预算 gate 使用序列化 messages+tools 统一口径
 （P4 修复）；审计直接读取 `message.layer` 字段（P6 修复）。本登记不改变 BR-AG-DATA-002 组装骨架语义。
-
-**迁移债务登记（2026-08-21）**：2026-08-11 的 `propose_edit(delete_doc/delete_folder) → AG_DELETE DiffCard → ws.apply_delete_diff`
-实现与当前权威基线冲突，必须在独立实现 Scope 中迁移为 `WorkspaceOperationPlan → DecisionRequest → WS execute`。
-该旧链只作为现状证据，不再是设计依据；资源删除不得进入 `propose_edit`、DiffCard 或内容 Proposal 生命周期。
-
-**实现登记（2026-08-11，AG-STRATEGY-01 意图边界重构 + 工具全量 + 调用时刻校验）**：意图判定降级为 4 档强信号边界（chat/read-only/create/general）；allowed_tools 按 profile 全量（不再按意图收窄）；propose_edit 取消 targetScope 硬锁、安全下沉调用时刻（workspace 边界 + base 校验 + 新建检测 + DiffCard 确认）；新增 workspace_glob 只读工具；arguments JSON 解析失败回传明确错误。延续词/复合意图/多文档联动结构性解决。语义详见 A-AG-M-T-02 §4。
 
 **实现登记（2026-08-11，AG-INTENT-COMPOSITE-01 复合请求意图优先级）**：`resolve_intent_result` 新增 `create_requested` 前置判定（非否定 ∧ Create 强词 ∧ Document/Workspace 目标 → CreateDocument，先于 `verb==Edit` 分支）；修复「新建…文档，并优化排版」被判 Edit 的复合意图缺陷；detect_verb 首命中与 V2/V3 语义不变；补复合意图回归测试。语义详见 A-AG-M-T-02 §4。
 
@@ -673,9 +674,10 @@ constraint_id: X-FORBID-006
 | 对象 | AG 侧落地 | 承接 |
 |---|---|---|
 | RuntimeProfile | `ag_start_turn` 入口显式校验 `runtime_profile`（1.0 仅 `agent-edit-1.0`）；缺失/未知在 Gate、provider、工具与 Proposal 前失败关闭，不产生可执行事件 | BR-SYS-STATE-007、A-AG-I-P-01 §2.2 |
+| AgentTurn | blocking ambiguity 进入 AwaitingClarification；用户补充时原 AgentTurn 回到 Assembling 重新收敛，不新建 AgentTurn、不伪造取消。DecisionRequest 裁决、错误/中断重试与 Assist 不适用此转移 | BR-AG-STATE-001、SM-AG-01 |
 | IntentResult | IntentResultV1 收敛任务类型、目标、预期副作用、所需上下文、允许工具与确认点；“只分析不修改”不获得 Proposal；写入歧义只澄清或生成目标计划 | BR-SYS-STATE-007、TERM-AG-012 |
 | CapabilityGrant | 工具执行前经 SM-AG-02 按五因素收窄（RuntimeProfile ∩ 任务类型 ∩ 目标 ∩ 副作用等级 ∩ 格式/动态能力）校验；注册表存在 ≠ 本轮可调用；grant 仅当前回合有效 | BR-SYS-STATE-007、BR-AG-STATE-002 |
-| TaskRun/TaskStep | 复杂目标由 SM-AG-04 组织步骤/回合；每步重新取得最小授权；连续 Proposal 以最新 LogicalState 接力（A-DE-M-S-01 §2.1） | BR-SYS-STATE-008、TERM-AG-015/016 |
+| TaskRun/TaskStep | 简单目标不创建 TaskRun/TaskPlan；复杂或跨执行片段目标才由 SM-AG-04 组织步骤/回合；每步重新取得最小授权；连续 Proposal 以最新 LogicalState 接力（A-DE-M-S-01 §2.1） | BR-SYS-STATE-008、TERM-AG-015/016 |
 | StructuredVisibleEvent | 用户只见意图结论、读取/工具、提案卡、等待确认与终态原因等事件；不展示模型内部推理 | BR-SYS-STATE-007、SM-AG-01 §2.1 |
 
 > 授权非来源声明：已注册工具、Prompt、前端参数、兼容默认值、现有代码与测试绿灯均不构成当轮授权
@@ -685,7 +687,11 @@ constraint_id: X-FORBID-006
 X-FORBID-005（不绕过 ED 接口）、X-SHARED-001（共享结构经 SYS）、X-SEQ-003/X-INTER-001
 （建机前置与跨模块转移登记）。
 
-### 7.2 TaskRun 编排重构契约（2026-08-15 · AG-1.0-TASKRUN-REWORK-DESIGN-01，承接 A-AG-M-D-01 §5b / A-AG-M-S-01 §2.2.2）
+### 7.2 TaskRun 编排重构契约（2026-08-15 · AG-1.0-TASKRUN-REWORK-DESIGN-01，承接 A-AG-M-D-01 §5b / A-AG-M-S-01 §2.2）
+
+本节只适用于 IntentResult 判定为复杂目标或必须跨执行片段继续的目标。简单目标只创建单个 AgentTurn，
+不创建 `task_runs`、TaskPlan、TaskStep 或任务级状态投影。是否进入 TaskRun 必须在任何 TaskRun 持久化或
+任务级事件产生前确定，不得为了统一记录而给所有 AgentTurn 套用空 TaskRun。
 
 #### 7.2.1 数据契约（迁移 v12）
 
@@ -955,6 +961,7 @@ status: mapped
 | 2026-08-15 | v2.46 | AG-1.0-DECISION-CARD-01：任务裁决卡重构——独立固定裁决区（DecisionBar，Composer 上方，任务暂停等决策；类型化选项：permission 允许本次/拒绝、plan_choice 等确认并继续/取消）；输入门控（pendingDecision 时手动发送拦截 + startTurn 前端 gate，auto-continue 除外）；纯确认/拒绝短词 intent 降权 Answer（不落入 general 档 Edit 强制工具）；提示词强化删除走 delete_doc/delete_folder（禁止 replace_document 清空代替删除）。 |
 | 2026-08-21 | v2.47 | 工作区资源操作基线重构：BR-AG-STATE-002、X-FORBID-006 与 TaskRun 契约改为 WorkspaceOperationPlan + DecisionRequest 前置裁决、确认后 WS 直接执行；资源操作不生成 DiffCard；CreateDocumentBundle 在资源创建后衔接普通内容 Diff；旧 AG_DELETE 链降为迁移债务。 |
 | 2026-08-22 | v2.48 | WS-RESOURCE-WRITE-GUARD-01：移除「新文档以空基准 ChangeProposal 创建」旧表述——新建文档唯一入口为 plan_workspace_operation（CreateDocumentBundle 确认后建盘并投影初始内容 Diff）；propose_edit 目标必须已存在（内容 Diff 不得创建资源，X-FORBID-006，工具层路径级拒绝）。 |
+| 2026-08-27 | v2.49 | AG-CONFORMANCE-GOVERNANCE-S1：收敛 AgentTurn 澄清为原回合 AwaitingClarification→Assembling，与 DecisionRequest、重试和 Assist 分界；明确新建文档唯一 CreateDocumentBundle 路径、简单目标不建 TaskRun/TaskPlan；资源意图可获得任务必要只读工具 + plan_workspace_operation，副作用路径不变；冲突旧实现登记移出 active 规范正文。 |
 | 2026-08-14 | v2.36 | AG-1.0-D3-AG-REF-AST-RUNTIME-CONTRACT-01：注册 TERM-AG-013~016（RuntimeProfile/CapabilityGrant/TaskRun/TaskStep）；新增 §7.1 Agent 1.0 运行时契约落地（REQ-AG-007/015）——RuntimeProfile 入口校验、CapabilityGrant 五因素收窄、IntentResult 收敛、TaskRun 接力、StructuredVisibleEvent 不含内部推理、授权非来源声明。 |
 | 2026-08-13 | v2.35 | AG-STRATEGY-05：BDocx 整篇改写收敛为无表格且无图片的动态条件并由服务端拒绝受保护/新引入结构；block_ops 同锚点顺序、后置校验与稳定 id reverse 闭合；proposal、编辑器预览、接受和保存的真实状态与最小运行事件对齐。 |
 | 2026-08-11 | v2.33 | AG-CTX-01：§5.1 登记上下文管理重构——list_blocks 轻量投影、read_doc blocks 范围参数、移除工具结果截断、AG_EDIT_TOOL_REQUIRED 文案区分、查询动词→Search、整篇对齐检测、序列化瘦身；语义详见 A-AG-M-T-02 §4 |

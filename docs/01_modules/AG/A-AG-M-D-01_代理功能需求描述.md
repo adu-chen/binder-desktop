@@ -139,9 +139,9 @@ req_id: REQ-AG-001
 title: 代理编辑回合（编辑模式）
 owner_module: AG
 status: active
-summary: 提供代理多轮回合（编辑、回答与分析）：上下文组装、流式回显、任务澄清、回合中断/取消和重试；AI 修改建议交 DE 生成 pending_diff，AG 不直接写盘；默认目标当前文档，用户显式指向可跨文档/新建。原生 DOCX 只读，编辑请求转为创建 BDocx 编辑副本的 Proposal
+summary: 提供代理多轮回合（编辑、回答与分析）：上下文组装、流式回显、任务澄清、回合中断/取消和重试；AI 修改建议交 DE 生成 pending_diff，AG 不直接写盘；默认目标当前文档，用户显式指向可跨既有文档，新建文档统一按 REQ-AG-008 的 CreateDocumentBundle 前置裁决路径执行。原生 DOCX 只读，编辑请求转为创建 BDocx 编辑副本的受控新建流程
 source_doc: REQ-CORE-002/004/010/011、APC §4.1、A-AG-M-D-02 §5.1、§5.10
-acceptance: 可进行多轮对话并流式回显；可中断/取消；回答、只读分析、修改 Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；修改建议经 DE/ED 进入提案预览与裁决，AG 无直接 LogicalState 或 DiskState 写入路径；原生 DOCX 的编辑请求只以新 BDocx 编辑副本为目标，原文件不被修改；新建意图在成功预览后可继续编辑，保存前不创建物理文件
+acceptance: 可进行多轮对话并流式回显；可中断/取消；回答、只读分析、修改 Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；修改建议经 DE/ED 进入提案预览与裁决，AG 无直接 LogicalState 或 DiskState 写入路径；原生 DOCX 的编辑请求只以新 BDocx 编辑副本为目标，原文件不被修改；新建意图确认前不得创建物理文件，确认后按 REQ-AG-008 先创建目标 DiskState、打开编辑标签，再投影初始内容 Diff，成功预览后可继续编辑
 open_issues: 代理回合状态机归 AG G2 M-S；回合/对话历史持久化模型已由 AG G2 联合 SYS 回写（见 A-AG-M-T-01 BR-AG-PERSIST-001 / A-SYS-I-P-01）
 -->
 
@@ -207,8 +207,8 @@ owner_module: AG
 status: active
 summary: 提供可恢复、可观察的 Agent 运行时：仅 `agent-edit-1.0` 可启动，未知或缺失 profile 在 Gate、provider、工具和 Proposal 前失败关闭；每次用户发送形成独立 AgentTurn，澄清是等待用户输入的非终态，取消可在任一活动阶段生效且首个终态后迟到事件/工具无副作用。IntentResult 固定任务类型、目标、预期副作用、所需上下文、允许工具和确认点，并据此调用最小工具集合；AgentSession 是消息、任务事件、工具/DiffCard、引用与未保存上下文的展示、持久化和恢复隔离边界
 source_doc: REQ-CORE-002/006/008/016、A-AG-M-D-02 §4.2（CAP-00）、§5.15~§5.17
-acceptance: 缺失/未知 profile 不到达 Gate、provider、工具或 Proposal；每个 AgentTurn 的澄清等待、完成/取消/失败/拒绝互斥且不伪装完成，任一活动阶段取消和首终态后的迟到事件/工具均不破坏文档或卡片状态；IntentResult 驱动上下文和工具最小集，回答/分析回合不得获得写能力，写入目标或范围不明时只能澄清或生成目标计划；用户只见意图结论、读取/工具、Proposal/操作卡、等待确认和终态原因等结构化事件，不见模型内部推理；不同 workspace/AgentSession 不混入消息、活动回合、上下文、未保存引用或卡片事件，重启只恢复所属本地事实而不伪造成功；本要求不自动写入或注入长期项目记忆
-open_issues: Runtime Profile 兼容迁移、AgentTurn 等待澄清/取消/终态状态机、IntentResult/CapabilityGrant/AgentSession/结构化事件/Trace 的具体字段、本地历史恢复与会话管理归 AG/SYS DESIGN Scope；本 L1 不定义接口、数据字段、Prompt、UI 或实现算法
+acceptance: 缺失/未知 profile 不到达 Gate、provider、工具或 Proposal；每个 AgentTurn 的澄清等待、完成/取消/失败/拒绝互斥且不伪装完成，用户补充澄清信息时由原 AgentTurn 从 AwaitingClarification 回到 Assembling 并重新收敛 IntentResult，不新建 AgentTurn、不把补充伪装为取消；任一活动阶段取消和首终态后的迟到事件/工具均不破坏文档或卡片状态；IntentResult 驱动上下文和工具最小集，回答/分析回合不得获得写能力，写入目标或范围不明时只能澄清或生成目标计划；用户只见意图结论、读取/工具、Proposal/操作卡、等待确认和终态原因等结构化事件，不见模型内部推理；不同 workspace/AgentSession 不混入消息、活动回合、上下文、未保存引用或卡片事件，重启只恢复所属本地事实而不伪造成功；本要求不自动写入或注入长期项目记忆
+open_issues: 生产运行时对等待澄清原 AgentTurn 恢复、当轮最小授权与历史恢复的实现对齐和集成验证归后续 CODE_CHANGE/VALIDATION Scope；本 L1 不定义接口、数据字段、Prompt、UI 或实现算法
 -->
 
 <!-- REQ
@@ -293,10 +293,10 @@ req_id: REQ-AG-015
 title: 受限复合任务编排与真实工作状态
 owner_module: AG
 status: active
-summary: AG 将 IntentResult 作为任务编排入口：简单目标可由单个 AgentTurn 完成，复杂目标形成受限任务实例（TaskRun），在同一用户目标内组织多个 AgentTurn 和有依赖的读取、研究、分析、生成或 Proposal 步骤。每一步按当前 profile、意图、目标、上下文、允许工具和确认点重新收窄；TaskRun 不是后台队列，不预授权后续工具、不自动重试、不跨重启续跑。明确的同文档复合目标可连续生成 Proposal，但每张后续卡只以最新 LogicalState 为基准，前卡因基准推进失效；用户只见真实的当前任务/步骤状态，不见内部推理
+summary: AG 将 IntentResult 作为任务编排入口：简单目标只由单个 AgentTurn 完成，不创建 TaskRun 或 TaskPlan；复杂目标或必须跨执行片段继续的目标才形成受限任务实例（TaskRun），在同一用户目标内组织多个 AgentTurn 和有依赖的读取、研究、分析、生成或 Proposal 步骤。每一步按当前 profile、意图、目标、上下文、允许工具和确认点重新收窄；TaskRun 不是后台队列，不预授权后续工具、不自动重试、不跨重启续跑。明确的同文档复合目标可连续生成 Proposal，但每张后续卡只以最新 LogicalState 为基准，前卡因基准推进失效；用户只见真实的当前任务/步骤状态，不见内部推理
 source_doc: REQ-CORE-017、REQ-CORE-016、A-AG-M-D-02 §5.15（CAP-16）、A-DE-M-D-01（REQ-DE-009）
-acceptance: 创建→内容→排版、研究→大纲→内容等复合任务有可见目标、当前步骤、实际读取/工具、等待点和终态；同一 AgentSession 至多一个执行中 AgentTurn，等待补充或卡片裁决不伪装为工作中且不持有模型/工具执行；每一步仅获当前最小授权，多既有文档目标计划、删除、结构保存和其他既有确认点照常阻断；同文档 Diff2/3 读取成功预览后的最新 LogicalState，成功预览后前卡失效且不可再接受/拒绝，拒绝最新卡仅按其自身基准处理；背景 pending 卡不以 payload 续编，必须先迁移为 LogicalState 或完成背景分流；取消只停止未开始步骤并保留已预览内容/卡片事实，中断只显示可重试，用户显式重试创建新 AgentTurn 并重新校验
-open_issues: TaskRun/步骤/关联 AgentTurn、继续澄清、重试、进度、并发、计划呈现、Trace、恢复和上限的状态机、事件、存储与 UI 归 AG/DE/SYS DESIGN Scope；TaskRun 正式 TERM 注册待 L2；本 L1 不定义队列、接口、数据结构、Prompt、UI 或算法
+acceptance: 简单目标只产生单个 AgentTurn，不创建 TaskRun、TaskPlan 或任务级步骤状态；创建→内容→排版、研究→大纲→内容等复杂或跨执行片段任务才建立 TaskRun，并具有可见目标、当前步骤、实际读取/工具、等待点和终态；同一 AgentSession 至多一个执行中 AgentTurn，等待补充或卡片裁决不伪装为工作中且不持有模型/工具执行；每一步仅获当前最小授权，多既有文档目标计划、删除、结构保存和其他既有确认点照常阻断；同文档 Diff2/3 读取成功预览后的最新 LogicalState，成功预览后前卡失效且不可再接受/拒绝，拒绝最新卡仅按其自身基准处理；背景 pending 卡不以 payload 续编，必须先迁移为 LogicalState 或完成背景分流；取消只停止未开始步骤并保留已预览内容/卡片事实，中断只显示可重试，用户显式重试创建新 AgentTurn 并重新校验
+open_issues: 生产运行时对简单 AgentTurn 不建 TaskRun/TaskPlan、复杂或跨执行片段才建 TaskRun 以及真实步骤/裁决投影的实现对齐和集成验证归后续 CODE_CHANGE/VALIDATION Scope；本 L1 不定义队列、接口、数据结构、Prompt、UI 或算法
 -->
 
 <!-- REQ
@@ -324,7 +324,7 @@ open_issues: 记忆选择入口、来源令牌、更新/关闭/删除传播、�
 ## §5b REQ-AG-015 实现契约（2026-08-15 冻结 · AG-1.0-TASKRUN-REWORK-REQ-01）
 
 > 语义纠偏：TaskRun 落地不得收窄为"每回合事后事件记录"；本契约冻结三层分离与任务级裁决语义。
-> 简单目标由单个 AgentTurn 完成，不建 TaskPlan；复杂目标按本契约执行。
+> 简单目标由单个 AgentTurn 完成，不建 TaskRun 或 TaskPlan；复杂目标或必须跨执行片段继续的目标按本契约执行。
 
 ### 5b.1 三层分离（裁决与内容不混淆）
 
@@ -381,14 +381,14 @@ open_issues: 记忆选择入口、来源令牌、更新/关闭/删除传播、�
 | AG-03 | DESIGN_RISK | 显式延期 | autocomplete 触发节流与调用成本（高频触发 × 门禁/网关延迟与计量）归 AG G2 设计 |
 | AG-04 | BOUNDARY_OPEN | 显式延期 | 构建移交/回落边界（与 CBT 的状态机对接 X-INTER-001）联合 CBT G2 |
 | AG-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5；量化指标（首 token 延迟、补全延迟）延 G5 NFR 标定 |
-| AG-06 | FLOW_INCOMPLETE | 已识别，待 G2 | `agent-edit-1.0` 强制入参迁移、AgentTurn 的等待澄清/全活动态取消/首终态锁存、IntentResult/CapabilityGrant 最小授权、非推理可见事件、AgentSession 持久化隔离与恢复需按 REQ-AG-007 建模，并与 SYS 事件/持久化契约对齐；当前缺 profile 默认、澄清终结、受限取消和 workspace 级恢复均为迁移债务。 |
+| AG-06 | IMPLEMENTATION_GAP | 设计已闭合，待实现对齐 | `agent-edit-1.0` 强制入参、原 AgentTurn 等待/恢复澄清、全活动态取消/首终态锁存、IntentResult/CapabilityGrant 最小授权、非推理可见事件与 AgentSession 恢复的生产映射和集成验证归后续 Scope；不得以 profile 默认、新建 AgentTurn 或澄清终态绕过设计。 |
 | AG-07 | FLOW_INCOMPLETE | 已识别，待实现 | CreateDocumentBundle 的确认、先建盘、初始内容 Diff 与安全拒绝补偿需按 REQ-AG-008 和 A-WS-M-T-02 / M-S-02 实现，不得复用旧“未保存逻辑新文档”链 |
 | AG-08 | DESIGN_RISK | 已识别，待 G2 | 受控网络研究的 provider、请求预算、公开地址校验、来源快照/失败形状与注入隔离需按 REQ-AG-010 联合 REF/SYS 设计；不得用通用浏览器或爬虫绕过此边界 |
 | AG-09 | IMPLEMENTATION_GAP | 设计已闭合，待实现 | WorkspaceOperationPlan、DecisionRequest 前置裁决、确认时核验、直接 DiskState 执行、脏标签阻断和内容 Diff 失效须按 A-WS-M-T-02 / M-S-02 迁移；不得保留资源 DiffCard 或后置保存链 |
 | AG-10 | DESIGN_RISK | 已识别，待 G2 | TXT↔Markdown 转换的意图授权、来源快照、目标副本 Proposal、保真/损失告知和现有转换工具的迁移，须按 REQ-AG-012 联合 DE/DOC/ED/WS/SYS 设计；不得由通用文件工具或 BDocx 路径绕过 |
 | AG-11 | IMPLEMENTATION_GAP | 设计已闭合，待实现 | 删除/恢复须迁移到 WorkspaceOperationPlan 前置裁决与 WorkspaceTimeline 类型化恢复；现有资源 DiffCard 和不完整删除快照均不得作为最终实现。 |
 | AG-12 | DESIGN_RISK | 已识别，待 G2 | 多既有文档的目标计划确认/冻结、逐目标授权、独立 Proposal/基准/失效/保存与现有宽松 `cross_doc` 的迁移，须按 REQ-AG-014 联合 DE/ED/WS/REF/SYS 设计；不得动态扩展目标或引入批量裁决/事务。 |
-| AG-13 | FLOW_INCOMPLETE | 已识别，待 G2 | REQ-AG-015 的 TaskRun/步骤、同文档连续 Proposal、真实工作状态、继续澄清、取消后保留预览、中断/新回合重试、并发与现有 L2 的澄清终结/原回合 Retry 迁移，须联合 DE/SYS 设计；不得用后台队列、自动重试或聊天文案替代。 |
+| AG-13 | IMPLEMENTATION_GAP | 设计已闭合，待实现对齐 | 简单目标仅 AgentTurn、复杂或跨执行片段目标才建 TaskRun/TaskPlan；WaitingConfirm 只由 DecisionRequest 驱动，TaskRun 内澄清补充恢复其活动的原 AgentTurn。运行时、存储、事件、UI 和集成验证归后续 Scope；不得以空 TaskRun、DiffCard 裁决、后台队列或自动重试代替。 |
 | AG-14 | DESIGN_RISK | 已识别，待 G2 | REQ-AG-016/017 的外部内容一次性消费、可读格式判定、快照/清除、来源/失败呈现和用户选择记忆的消费/隔离，须联合 REF/AST/SYS 设计；不得从附件、历史或相似主题自动读取、写入或注入项目记忆。 |
 
 > 术语：回合、工具调用、局部修改等 AG 主责核心概念在 AG L2 评估注册 TERM；订阅门禁/AI网关/会话
@@ -438,3 +438,4 @@ open_issues: 记忆选择入口、来源令牌、更新/关闭/删除传播、�
 | 2026-08-14 | v2.27 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-AG-015，承接受限 TaskRun、复杂目标多步骤/多 AgentTurn、真实工作状态、同文档连续 Proposal 的 LogicalState 接力、前卡失效、背景 pending 限制、取消与中断新回合重试；队列/自动续跑/事务均明确排除。 |
 | 2026-08-14 | v2.28 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：新增 REQ-AG-016/017；外部文件仅在用户显式附加且有可用只读解析路径时作为当前任务 data-only 内容消费，项目记忆仅由用户显式选择引用；Agent 1.0 不自动读盘、复读、写入、提议、检索或注入长期记忆。 |
 | 2026-08-21 | v2.29 | 工作区资源操作基线重构：REQ-AG-002/008/011/013 改为 WorkspaceOperationPlan + DecisionRequest 前置裁决、确认后 WS 直接修改 DiskState；新建文档采用 CreateDocumentBundle，资源创建后初始内容继续遵循 Diff 生命周期；统一恢复入口为 WorkspaceTimeline。 |
+| 2026-08-27 | v2.30 | AG-CONFORMANCE-GOVERNANCE-S1：将新建文档唯一化为 REQ-AG-008 CreateDocumentBundle 路径；明确澄清补充继续原 AgentTurn；限定简单目标只使用 AgentTurn，复杂或跨执行片段目标才建立 TaskRun/TaskPlan；将实现对齐留给后续独立 Scope。 |

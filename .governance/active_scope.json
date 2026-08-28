@@ -1,84 +1,78 @@
 {
-  "scope_id": "CHAIN-INTEGRITY-REPAIR-01",
-  "task_type": "CODE_CHANGE",
-  "governance_phase": "VALIDATION",
-  "title": "拆分后链路完整性与唯一性治理",
+  "scope_id": "AG-CONFORMANCE-GOVERNANCE-S1",
+  "task_type": "GOVERNANCE_CHANGE",
+  "governance_phase": "DESIGN",
+  "title": "Agent 需求与设计语义唯一化治理",
   "status": "READY",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/CHAIN-INTEGRITY-REPAIR-01.md",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S1.md",
   "objectives": [
-    "统一 ADU 与生成器的 CHAIN integration_test 单数契约",
-    "保证 AgentTurn 创建 TaskRun 后的所有退出路径统一收束",
-    "将 DiffProjection 收归 SYS 共享代码契约并消除重复类型源",
-    "修复拆分逻辑的 rules/codes、代码块 ID 与 primary owner/delegate 关系",
-    "将现有统一测试显式继承到真实覆盖的 CHAIN，未覆盖项显式 deferred"
+    "使每个 active REQ、RULE 与 STATE_MACHINE 只有一个当前有效语义",
+    "消除澄清终态、TaskRun WaitingConfirm、工具最小授权和新建文档路径的新旧表述冲突",
+    "明确简单 AgentTurn 与复杂 TaskRun 的设计边界",
+    "刷新 ADUS 并验证需求到设计映射保持完整"
   ],
   "allowed_files": [
-    "ADU.md",
-    "scripts/generate_adus.mjs",
-    "scripts/audit_taskflow_governance.mjs",
-    "scripts/test_governance.test.mjs",
-    "docs/00_core/A-CORE-C-P-02_产品能力图谱规范.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "docs/01_modules/**",
-    "src-tauri/src/types/**",
-    "src-tauri/src/ag/**",
-    "src-tauri/src/de/**",
-    "src-tauri/src/workspace/**",
-    "src-tauri/src/doc/**",
-    "src-tauri/src/reference/**",
-    "src-tauri/src/ast/**",
-    "src-tauri/src/ent/**",
-    "src-tauri/src/session/**",
-    "src-tauri/src/cbt/**",
-    "src-tauri/src/tpl/**",
-    "src-tauri/src/kb/**",
-    "src-tauri/src/prv/**",
-    "src-tauri/src/ipc/**",
-    "src-tauri/tests/**",
-    "src/services/agService.ts",
-    "src/services/deService.ts",
-    "src/services/edService.ts",
-    "src/services/referenceDrag.ts",
-    "src/services/referencePayload.ts",
-    "src/components/ag/Composer.tsx",
-    "src/components/ag/MessageList.tsx",
-    "src/components/ed/markdown/markdownCodec.ts",
-    "src/types/**",
-    ".governance/test-governance.json",
-    ".governance/issues/CHAIN-INTEGRITY-REPAIR-01.md",
-    ".governance/active_scope.json"
+    ".governance/active_scope.json",
+    ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S1.md",
+    "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
+    "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
+    "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "CLAUDE.md",
     "governance.config.json",
+    "所有生产代码与测试文件",
     "所有不在 allowed_files 中的文件"
   ],
   "constraints": [
-    "不按前端/服务/后端技术层机械新增业务规则 ID",
-    "不改变现有 command 名、响应字段语义和正常状态事件顺序",
-    "不新建按链碎片测试文件，优先扩展或继承现有统一测试",
-    "不伪造 integration_test 覆盖；无真实证据时显式 deferred",
-    "保留当前工作区全部既有未提交改动"
+    "需求优先，设计不得为当前实现反向改写",
+    "不在本阶段修改生产行为、Prompt 内容或工具注册实现",
+    "历史实现事实不得继续与当前规范语义并列为 active 权威",
+    "ADUS 只通过 governance:generate 生成，不人工编辑自动生成区",
+    "任何需求边界取舍先由人类确认"
   ],
   "acceptance_criteria": [
-    "ADU CHAIN 模板、生成器和设计文档统一使用 integration_test",
-    "TaskRun 创建后的错误路径不会遗留 executing",
-    "DiffProjection 只有一个 Rust 共享类型源和一个前端共享 DTO 源",
-    "本次治理范围内 rules 与 codes 一一对应且代码块 ID 唯一",
-    "ADUS 链路集成测试列不再静默为空",
-    "相关测试与治理审计给出真实结果"
+    "SM-AG-01 对澄清状态只有 AwaitingClarification 非终态一种有效语义",
+    "SM-AG-04 对 WaitingConfirm 只有 DecisionRequest 一种有效来源",
+    "IntentResult 与 CapabilityGrant 统一承接按当前任务最小授权的需求",
+    "新建文档只有一条需求与设计路径",
+    "简单 AgentTurn 与复杂 TaskRun 的边界经人类确认后唯一化",
+    "governance:generate 与 governance:audit 通过且 ADUS 不再呈现冲突语义"
   ],
-  "out_of_scope": [
-    "修改模型提示词内容或工具能力策略",
-    "新增产品功能",
-    "修改数据库 schema",
-    "修复既有 LibreOffice 或 macOS 进程资源环境问题"
+  "human_decisions": [
+    {
+      "id": "HD-01",
+      "status": "CONFIRMED",
+      "question": "新建文档是否以 REQ-AG-008 的 CreateDocumentBundle 前置裁决路径为唯一权威，并修正 REQ-AG-001 中无物理文件预览的旧验收表述"
+    },
+    {
+      "id": "HD-02",
+      "status": "CONFIRMED",
+      "question": "TaskRun 是否只为复杂或跨执行片段目标建立，简单目标仅使用 AgentTurn"
+    },
+    {
+      "id": "HD-03",
+      "status": "CONFIRMED",
+      "question": "冲突的旧实现登记是否移出 active 规范正文，仅在 Issue Trace 与变更记录中保留历史"
+    },
+    {
+      "id": "HD-04",
+      "status": "CONFIRMED",
+      "question": "用户补充澄清信息时是否继续原 AgentTurn，由 AwaitingClarification 回到 Assembling"
+    },
+    {
+      "id": "HD-05",
+      "status": "CONFIRMED",
+      "question": "create_document 与 organize_workspace 是否可在 plan_workspace_operation 之外同时获得当前任务必要的只读工具"
+    }
   ],
   "unresolved_items": [
-    "前一 LIB-MODULE-OWNERSHIP-01 Scope 的 Rust 全量环境阻断证据继续保留，不改写为通过",
-    "2026-08-27 人类明确接受环境验证例外并要求闭合提交：Rust 全量 358/359 通过，LibreOffice Worker 在 docx_to_pdf_end_to_end_when_libreoffice_available 中 signal=6；该结果仍记录为未通过，不计入通过项"
+    "第一阶段只收敛需求与设计；关键生产入口映射、实现对齐、集成验证与审计收紧分别进入后续独立 Scope"
   ]
 }

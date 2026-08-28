@@ -36,21 +36,22 @@ source_type: design
 chain: AG-TURN
 rules: BR-AG-STATE-001, BR-AG-VERIFY-001, BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-PERSIST-001
 initial_state: Idle
-terminal_states: Completed, Cancelled, Denied, HandedOver
+terminal_states: Completed, Cancelled, Denied, TurnError, HandedOver
 -->
 
 - **machine_id**：SM-AG-01　**owner_module**：AG
 - **scope**：一次代理回合（用户发起→产出处置完成/中断/拒绝/移交构建；目标边界按 BR-AG-DATA-003 2026-07-04 版）
 - **context**：回合输入（session_id + runtime_profile + prompt + 注入载荷 + open_doc_snapshots）、IntentResult、AgentReadContext、PromptPackage、真实 GateOutcome、CancellationToken、terminal_latch、流式缓冲、产出（回复/修改建议）、移交上下文、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
-- **states**：Idle、Assembling、AwaitingGate、Streaming、HandingOff、Completed、Cancelled、Denied、TurnError、**HandedOver**
-- **events**：send、assembled、clarificationRequired、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail、retry、**takeover、fallbackIn**
+- **states**：Idle、Assembling、AwaitingClarification、AwaitingGate、Streaming、HandingOff、Completed、Cancelled、Denied、TurnError、**HandedOver**
+- **events**：send、assembled、clarificationRequired、clarificationProvided、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail、**takeover、fallbackIn**
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
 | Idle | send | open_doc_snapshots 覆盖全部已打开文档且每项含 session_version/content_hash；active live 序列化成功；同 session 无其他活动回合 | Assembling | 写入/更新 AgentSession；创建 AgentTurn `draft` payload，记录 userMessage（BR-AG-PERSIST-001）；形成 IntentResult；构建 AgentReadContext、ContextBundle 与 PromptPackage |
 | Idle | fallbackIn | CBT 构建完成/中断回落（cbt.fallback，X-INTER-001） | Assembling | 以回落上下文起新 代理回合；回 fallbackAck（无双死） |
-| Assembling | clarificationRequired | IntentResult.ambiguity=blocking | Completed | 输出结构化澄清问题并锁定 completed；不调用门禁、网关或工具，不产生修改建议 |
+| Assembling | clarificationRequired | IntentResult.ambiguity=blocking | AwaitingClarification | 输出结构化澄清问题；保持原 AgentTurn 非终态，不调用门禁、网关或工具，不产生修改建议 |
+| AwaitingClarification | clarificationProvided | 用户向原 AgentTurn 补充所需信息；同 session 无其他活动回合 | Assembling | 将补充输入并入原 AgentTurn，重新形成 IntentResult、AgentReadContext、ContextBundle 与 PromptPackage；不创建新 AgentTurn |
 | Assembling | assembled | IntentResult 非阻断；已打开文档引用和 selection 均基于 AgentReadContext 校验通过；PromptPackage 角色/预算/作用域校验通过 | AwaitingGate | 提交 SM-SYS-01 门禁（X-INTER-001 转移点） |
 | Assembling | assembleFail | OpenDocSnapshot 缺失/版本缺失/active live 序列化失败/注入锚失效 | TurnError | 统一错误形状；不得用 DiskState 或 loadedContent 旧快照兜底 |
 | AwaitingGate | gatePassed | 本次服务端 GateOutcome=GatePassed 且 verdict_id 可追踪 | Streaming | 经 AiGateway 发起流式调用；本地常量/缓存/桩值不得触发本转移 |
@@ -58,13 +59,11 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
 | Streaming | streamEnd | — | HandingOff | 产出处置：修改建议交 DE，纯回复直接完成 |
 | Streaming | takeover | 构建触发（2026-07-04 判据换轴，BR-CBT-STATE-002）：用户显式触发（明确指令/构建按钮，触发即视为确认）或 AI 识别**项目级构建意图**提议经用户确认；多文件修改本身不再是判据 | HandedOver | 移交 CBT（cbt.takeover，上下文含项目蓝图随移交）；回 takeoverAck；本回合移交终结（无双活）；构建在原对话窗口呈现 |
 | Streaming | streamFail | — | TurnError | 统一错误形状（含可重试标记）；AgentTurn status=`error` |
-| Streaming | cancel | terminal_latch 尚未锁定 | Cancelled | 触发 CancellationToken，终止流式请求、阻止新工具启动并锁定唯一终态；无半落盘副作用；AgentTurn status=`cancelled` |
+| Assembling / AwaitingClarification / AwaitingGate / Streaming / HandingOff | cancel | terminal_latch 尚未锁定 | Cancelled | 触发 CancellationToken，终止已启动的流式请求、阻止新模型/工具/Proposal 副作用并锁定唯一终态；无半落盘副作用；AgentTurn status=`cancelled` |
 | HandingOff | handoffOk | 修改建议已交 DE 生成 pending_diff / 无修改建议 | Completed | AgentTurn status=`completed`；异步触发记忆写入（BR-AG-STATE-004） |
 | HandingOff | handoffFail | — | TurnError | DE 生成失败（如锚失效）回报，可重试；AgentTurn status=`error` |
-| TurnError | retry | — | Assembling | 重试回合 |
-
-- **error_states**：TurnError（recovery：retry→Assembling）
-- **recovery_paths**：TurnError→retry；Denied 不可重试绕过（须恢复订阅/网络后重新 send）
+- **error_states**：TurnError（原 AgentTurn 终态）
+- **recovery_paths**：用户对 TurnError 显式重试时创建新 AgentTurn，由新状态机的 Idle→send→Assembling 启动；原 AgentTurn 保持 TurnError/error 用于审计。Denied 不可重试绕过（须恢复订阅/网络后新建 AgentTurn 并 send）
 - **forbidden_transitions**：
   - Idle / Assembling → Streaming（未过门禁不得调用，对齐 SM-SYS-01 forbidden）
   - Denied → Streaming（被拒不得绕过门禁，终态）
@@ -73,16 +72,18 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
   - 任意态 → 直接写盘（本机无写盘动作，X-FORBID-006）
   - takeover 无显式触发/确认（构建移交须用户显式触发或确认提议，BR-CBT-STATE-002）
   - HandedOver → 任意活动态（移交终结后本回合不得继续，无双活）
-  - Completed / Cancelled / Denied / HandedOver / 已持久化 error → 任意其他终态（terminal_latch 只允许首次锁定）
+  - Completed / Cancelled / Denied / TurnError / HandedOver → 任意其他状态或终态（terminal_latch 只允许首次锁定）
+  - AwaitingClarification → AwaitingGate / Streaming / Completed（未收到 clarificationProvided 并重新完成 Assembling，不得推进或伪装完成）
   - `runtime_profile=agent-edit-1.0` → takeover / HandedOver（1.0 不启用代理构建）
 - **persistence_projection**：`send` 后先持久化 `draft`；`handoffOk`→`completed`；
-  `streamFail/handoffFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
+  `clarificationRequired` 保持 `draft` 非终态；`streamFail/handoffFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
   应用崩溃/关闭/流式中断未收到终态时保持 `draft`，重启后只能显示未完成/可重试。
 - **acceptance_criteria**：不存在不经真实服务端 gatePassed 通往 Streaming 的路径；Denied 为终态且不可达
   Streaming；修改建议唯一出口经 HandingOff 交 DE；cancel 后无半落盘副作用；takeover 须显式触发
   或经确认且移交后本回合终结（HandedOver 终态，无双活）；fallbackIn 起新回合时回 fallbackAck（无双死）
   ；completed/error/cancelled/gate_rejected/draft 五类历史状态均可重启恢复；每个 turn 最多锁定一个
-  用户可见终态，网关 Error/Denied/Cancelled 后不得再出现 Done/Completed；blocking ambiguity 不发起模型调用。
+  用户可见终态，网关 Error/Denied/Cancelled 后不得再出现 Done/Completed；blocking ambiguity 不发起模型调用；
+  澄清补充只使原 AgentTurn 由 AwaitingClarification 回到 Assembling，不创建新 AgentTurn、不产生取消终态。
 - **test_matrix**：见 §5
 - **构建移交/回落（旧称 Chat↔Build 接管；B-3 补齐 2026-06-12，判据 2026-07-04 换轴）**：takeover
   （显式触发或项目级构建意图经确认→HandedOver 终态，移交 CBT，蓝图随移交）/ fallbackIn（CBT 构建
@@ -97,16 +98,10 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
 | 场景 | SM-AG-01 语义 | 说明 |
 |---|---|---|
 | 澄清等待 | `IntentResult.ambiguity=blocking` 时回合进入**等待用户输入的非终态**（AwaitingClarification），**不是 Completed** | 澄清期间不调用门禁/网关/工具、不产生修改建议、不锁定终态事件（BR-SYS-STATE-007） |
-| 澄清后继续 | 用户补充输入后重新组装（回 Assembling）并再次收敛 IntentResult；或按新目标生成新回合 | 不把澄清伪装为完成（BR-AG-STATE-001） |
+| 澄清后继续 | 用户补充输入后，原 AgentTurn 经 clarificationProvided 回到 Assembling，并再次收敛 IntentResult | 不新建 AgentTurn，不把正常补充伪装为完成或取消（BR-AG-STATE-001） |
 | 任一活动阶段取消 | 取消可在澄清等待、组装、门禁、流式等任一活动阶段生效 | 无半落盘副作用 |
 | 首终态锁存 | 完成/失败/拒绝/取消互斥，`terminal_latch` 首个终态获胜 | 首终态后到达的迟到事件/工具不得产生文档、卡片或落盘副作用 |
 | 结构化可见事件 | 用户只见意图结论、读取/工具、提案卡、等待确认与终态原因等结构化事件 | 不展示模型内部推理（StructuredVisibleEvent，A-SYS-I-P-01 §3.1） |
-
-> **迁移债务（已解决 · AG-1.0-IMP-CLARIFICATION-01 落地）**：既有 SM-AG-01 主表曾将
-> `clarificationRequired → Completed`（澄清被终结为终态），与冻结基线「澄清是等待用户输入的非终态」
-> 不一致；AgentTurnStatus 亦无澄清等待非终态值。实现 Scope（turn.rs `AwaitingClarification` 非终态 +
-> 前端 `AgentTurnStatus.clarifying` + agRuntime 澄清非终态测试）已将该债务关闭：澄清建模为
-> AwaitingClarification 非终态，澄清期间不调用门禁/网关/工具、不锁定终态事件（BR-SYS-STATE-007）。
 
 ### 2.2 SM-AG-04 · TaskRun 编排机（REQ-AG-015 / BR-SYS-STATE-008，2026-08-14 D3 登记）
 
@@ -114,7 +109,7 @@ terminal_states: Completed, Cancelled, Denied, HandedOver
 machine_id: SM-AG-04
 owner_module: AG
 status: active
-summary: 受限任务实例（TaskRun）生命周期——同一用户目标内组织有依赖步骤/回合，非后台队列；真实工作状态由步骤/回合/工具事件驱动
+summary: 复杂或跨执行片段目标的受限任务实例（TaskRun）生命周期——同一用户目标内组织有依赖步骤/回合，非后台队列；简单目标不创建 TaskRun；真实工作状态由步骤/回合/工具事件驱动
 source_type: design
 chain: AG-TURN
 rules: BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
@@ -123,91 +118,38 @@ terminal_states: Completed, Failed, Cancelled, Interrupted
 -->
 
 - **machine_id**：SM-AG-04　**owner_module**：AG
-- **scope**：一个复杂用户目标被组织为 TaskRun 后的受限编排生命周期（目标计划→逐步执行→确认点→终态）
+- **scope**：复杂目标或必须跨执行片段继续的目标被组织为 TaskRun 后的受限编排生命周期（目标计划→逐步执行→确认点→终态）；简单目标仅使用单个 AgentTurn，不进入本状态机
 - **context**：task_run_id、AgentSession、当前用户目标、计划步骤集合、每步 CapabilityGrant、确认点、
   关联 AgentTurn/Proposal、中断与重试状态
 - **states**：Planned、Executing、WaitingConfirm、WaitingClarification、Completed、Failed、Cancelled、Interrupted
 - **steps**（步骤态，单步内）：pending、running、waiting_confirm、ok、failed、cancelled
-- **events**：planApproved、stepStarted、stepOk、stepFail、waitingConfirm、userConfirm、clarificationNeeded、
-  userCancel、interrupt、retry、finish
+- **events**：planApproved、segmentStarted、stepStarted、stepOk、stepFail、decisionProposed、userConfirm、
+  clarificationNeeded、clarificationProvided、userCancel、interrupt、retry、finish
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
-| Planned | planApproved | 用户确认目标计划；目标/范围/确认点明确 | Executing | 逐步骤调度；每步取得当前最小授权（CapabilityGrant） |
+| Planned | planApproved | 计划已就绪；若存在 DecisionRequest(plan_choice) 则已确认；目标/范围/授权明确 | Executing | 开始首个执行片段；当前步骤取得最小 CapabilityGrant |
+| Executing | segmentStarted | 片段属于当前 TaskRun；profile、IntentResult、目标、上下文与既有确认点已重新校验 | Executing | 进入新的 AgentTurn 执行片段，不沿用旧授权 |
 | Executing | stepStarted | 步骤属于当前目标且已授权 | Executing | 真实工作状态由回合/步骤/工具事件驱动（BR-SYS-STATE-008） |
-| Executing | stepOk | 步骤只读/研究完成 | Executing | 可连续推进只读步骤 |
-| Executing | waitingConfirm | 步骤进入 W1/W2/W3（提案/写入）需用户裁决 | WaitingConfirm | 等待卡片裁决；不伪装为执行 |
-| Executing | clarificationNeeded | 目标/范围/副作用不明 | WaitingClarification | 等待用户补充（非终态，复用 SM-AG-01 澄清语义） |
-| WaitingConfirm | userConfirm | 用户裁决继续 | Executing | 继续后续步骤 |
-| WaitingConfirm | userCancel | 任一活动阶段取消 | Cancelled | 停止未开始步骤；保留已成功预览内容，不产生任务级回滚 |
+| Executing | stepOk | 当前步骤完成 | Executing | 记录阶段结果；仅在依赖满足时推进后续步骤 |
+| Executing | decisionProposed | 已创建任务级 DecisionRequest（permission / plan_choice / scope / manual_confirm） | WaitingConfirm | 等待 DecisionRequest 裁决；DiffCard 不触发本转移 |
+| Executing | clarificationNeeded | 当前 TaskRun 的目标/范围/副作用不明 | WaitingClarification | 等待用户补充；不持有模型或工具执行 |
+| WaitingConfirm | userConfirm | 对应 DecisionRequest 已确认 | Executing | 开始下一执行片段并重新授权；若为 WorkspaceOperation 则调用 WS 重验冻结计划 |
+| WaitingConfirm | userCancel | 对应 DecisionRequest 已取消 | Cancelled | 停止未开始步骤；保留已成功预览内容，不产生任务级回滚 |
+| WaitingClarification | clarificationProvided | 用户补充当前 TaskRun 中活动 AgentTurn 所需信息 | Executing | 同一 AgentTurn 从 AwaitingClarification 回到 Assembling 并重新校验；TaskRun 只投影恢复执行，不创建新 AgentTurn、不沿用旧授权 |
+| WaitingClarification | userCancel | 用户取消当前复杂目标 | Cancelled | 停止未开始步骤；保留已有事实与已预览内容 |
 | Executing | stepFail | 步骤失败 | Failed | 不自动重试；如实报告失败原因 |
-| Executing | interrupt | 应用中断/重启 | Interrupted | 显示中断可重试；**不跨重启续跑** |
-| Interrupted | retry | 用户显式重试 | Planned | 创建新回合并重新校验（不沿用旧上下文） |
-| Executing | finish | 所有步骤完成 | Completed | 终态 |
-- **forbidden_transitions**：Executing → Completed 未经 finish；WaitingConfirm/WaitingClarification → 执行（无用户裁决/补充不得推进 W1/W2/W3 步骤）；Interrupted → Executing 无用户重试（不自动续跑）；任一态 → 后台队列（TaskRun 非后台队列，BR-SYS-STATE-008）
-- **acceptance_criteria**：TaskRun 只组织当前用户目标内的已授权步骤；不自动重试、不跨重启续跑、不越确认点；
-  连续 Proposal 以最新 LogicalState 接力（A-DE-M-S-01 §2.1）；取消不回滚已成功预览内容；重试创建新回合
+| Planned / Executing / WaitingConfirm / WaitingClarification | interrupt | 应用中断/重启 | Interrupted | 显示中断可重试；不跨重启续跑 |
+| Interrupted | retry | 用户显式重试 | Planned | 创建新 AgentTurn，重新形成计划、目标、上下文与授权；不复用旧确认 |
+| Executing | finish | 所有必要步骤完成且无未决 DecisionRequest | Completed | 阶段收敛终态 |
+- **forbidden_transitions**：简单目标 → 创建 TaskRun；Executing → Completed 未经 finish；WaitingConfirm → Executing 无对应 DecisionRequest 裁决；WaitingClarification → Executing 无用户补充；DiffCard accept/reject → TaskRun 状态；Interrupted → Executing 无显式 retry；任一态 → 后台队列。
+- **acceptance_criteria**：简单目标只使用单个 AgentTurn，不创建 TaskRun/TaskPlan；TaskRun 只组织复杂或跨执行片段目标内的已授权步骤；WaitingConfirm 唯一来源是 DecisionRequest；不自动重试、不跨重启续跑、不越确认点；
+  连续 Proposal 以最新 LogicalState 接力（A-DE-M-S-01 §2.1）；取消不回滚已成功预览内容；重试创建新 AgentTurn 并重新校验
 - **test_matrix**：见 §5 增补
 - **总图登记**：machine_id 登记 A-SYS-M-S-01 §3.1（D1 已将 TaskRun 登记为 planned，D3 回填 active）
 
-#### 2.2.1 语义纠偏（2026-08-15 · AG-1.0-TASKRUN-REWORK-REQ-01，替代上文中的实现性表述）
-
-> 落地审计确认：SM-AG-04 被实现收窄为"每回合事后事件记录"（确认点=提案卡、无任务级裁决入口、新消息绕回
-> executing）。本节冻结纠偏语义，设计/实现以此为准；与 2.2 表冲突处以本节优先。
-
-- **WaitingConfirm 唯一来源 = DecisionRequest（任务级裁决项）**：不再由 propose_edit 直接产生；
-  propose_edit 产生的 Diff 仅属内容层（DiffCard 裁决不驱动 TaskRun 状态）。
-- **userConfirm / userCancel 真实入口 = DecisionRequest 裁决**（permission / plan_choice / scope / manual_confirm）：
-  由前端裁决动作发 TaskRun 事件，不再是"下一条任意用户消息"。
-- **新消息 gate**：存在未决 DecisionRequest 时，新回合入口不得绕过确认（拒绝或仅接受带明确裁决语义的输入）；
-  澄清走 SM-AG-01 澄清路径不受此 gate 影响。
-- **TaskPlan**：IntentResult 判定复杂目标后创建（可展示操作计划，非模型思维链），保存步骤/依赖/当前游标/
-  所需授权/确认点/阶段结果；简单目标单 AgentTurn 直行不建 TaskPlan。
-- **执行片段**：TaskRun 跨多执行片段/AgentTurn；每片段按 profile+intent+capability+目标+上下文+既有确认点
-  重新收窄；任务级确认后自动开始下一片段，不后台续跑。
-- **同文档连续 Diff**：片段内可连续多 Proposal；Diff2 基于 Diff1 成功预览后 LogicalState；Diff1 因基准推进失效。
-
-#### 2.2.2 SM-AG-04 重构设计（2026-08-15 · AG-1.0-TASKRUN-REWORK-DESIGN-01，承接 §2.2.1）
-
-**状态**（保留 8 态；WaitingConfirm 唯一来源 = DecisionRequest）：
-`Planned`（可携带 TaskPlan）→ `Executing`（执行片段内推进）→ 确认/完成/失败/中断。
-
-**事件**（增补/语义修正）：
-
-| 事件 | 语义 |
-|---|---|
-| planApproved | TaskPlan 确认，进入首片段（计划确认可选：复杂目标首片段前可发 DecisionRequest(plan_choice)） |
-| segmentStarted | 片段开始；**每片段重新授权**（profile+intent+capability+目标+上下文+既有确认点收窄） |
-| decisionProposed | DecisionRequest proposed → WaitingConfirm（唯一进入确认等待的路径） |
-| userConfirm / userCancel | DecisionRequest 裁决（真实入口，前端裁决动作发 TaskRun 事件） |
-| stepStarted / stepOk / stepFail | 步骤真实事件（保留，驱动真实进度） |
-| interrupt / retry / finish | 保留；finish=阶段收敛（有阶段结果）→ Completed |
-
-**转移（重构主表）**：
-
-| from | event | guard | to | action |
-|---|---|---|---|---|
-| Planned | planApproved | 计划（若有）已确认；目标/范围/授权明确 | Executing | 首片段开始；逐步骤当前最小授权 |
-| Executing | segmentStarted | 片段内步骤属于当前目标且已重新授权 | Executing | 真实事件驱动进度（BR-SYS-STATE-008） |
-| Executing | decisionProposed | 任务级裁决项（权限/方案/范围/人工确认） | WaitingConfirm | 等待 DecisionRequest 裁决；不伪装工作中 |
-| WaitingConfirm | userConfirm | 裁决确认（confirm） | Executing | 自动开始下一执行片段（无需新聊天消息；重新授权；不后台续跑） |
-| WaitingConfirm | userCancel | 裁决取消（cancel） | Cancelled | 停止未开始步骤；保留已成功预览内容 |
-| Executing | stepFail | 步骤失败 | Failed | 不自动重试；如实报告 |
-| Executing | interrupt | 应用中断/重启 | Interrupted | 显示可重试；不跨重启续跑 |
-| Interrupted | retry | 用户显式重试 | Planned | 新回合重新校验 |
-| Executing | finish | 片段完成/无更多步骤 | Completed | 阶段收敛终态（有阶段结果） |
-
-**forbidden_transitions（重构）**：Executing → Completed 未经 finish；WaitingConfirm → 执行（无 DecisionRequest
-裁决不得推进——**任意新聊天消息不得绕过待确认**，澄清除外）；Interrupted → Executing 无显式重试；任一态 → 后台队列。
-
-**guard 重点**：
-1. **新消息 gate**：存在未决 DecisionRequest 时，新回合入口拒绝（或仅接受带明确裁决语义的输入）；
-2. **每片段重新授权**：capability 收窄在 segmentStarted 前执行；
-3. **三层分离**：DiffCard 接受/拒绝只走内容三态链路，不产生 TaskRun 事件；propose_edit 不再直接置
-   waiting_confirm（确认点只由 decisionProposed 产生）。
-
-#### 2.2.3 WorkspaceOperation 确认后的执行语义（2026-08-21）
+#### 2.2.1 WorkspaceOperation 确认后的执行语义（2026-08-21）
 
 - WorkspaceOperationPlan 通过 DecisionRequest 进入 WaitingConfirm；资源操作的完整状态由 SM-WS-04 承载，SM-AG-04 不复制其 Planning/Revalidating/Executing/Compensating 状态。
 - `userConfirm` 后 TaskRun 回到 Executing，并立即调用 WS 执行冻结 plan_id；这不是后台续跑，而是本次明确裁决触发的同一任务片段。不存在 `WaitingUserCommit`、资源 DiffCard 或后置保存裁决。
@@ -350,11 +292,12 @@ terminal_states: Accepted, Dismissed
 
 - **SM-AG-01**：send→Assembling→AwaitingGate→gatePassed→Streaming→streamEnd→HandingOff→Completed
   正路；gateDenied→Denied 终态且不可达 Streaming；cancel→Cancelled 无半落盘；handoffFail/
-  streamFail→TurnError→retry；禁止 Idle/Assembling→Streaming 旁路；持久化投影覆盖
+  streamFail→TurnError 后原 AgentTurn 保持 error，用户显式重试须新建 AgentTurn 并从 Idle/send 启动；禁止 Idle/Assembling→Streaming 旁路；持久化投影覆盖
   completed/error/cancelled/gate_rejected/draft，draft 重启后不得显示为完成态；已打开文档缺
   OpenDocSnapshot 或 selection 校验失败时 assembleFail，不得进入 AwaitingGate。
 - **SM-AG-01 1.0 加固**：本地 Passed 常量不得触发 Streaming；blocking ambiguity 走
-  clarificationRequired→Completed 且网关调用为零；Gateway Error 后不得出现 Completed；cancel 必须触发
+  `clarificationRequired→AwaitingClarification`、网关调用为零，用户补充后须由原 AgentTurn 走
+  `clarificationProvided→Assembling`；Gateway Error 后不得出现 Completed；cancel 必须触发
   CancellationToken 且后续工具调用数为零；terminal_latch 拒绝第二终态；agent-edit-1.0 禁止 takeover。
 - **SM-AG-02**：toolRequest→校验→执行→回注→续调循环；validateFail 回注拒绝；loopLimit 强制
   中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）；
@@ -427,3 +370,4 @@ terminal_states: Accepted, Dismissed
 | 2026-08-15 | v2.17 | AG-1.0-TASKRUN-REWORK-DESIGN-01：§2.2.2 SM-AG-04 重构设计——转移主表重构（planApproved/segmentStarted/decisionProposed/userConfirm/userCancel/finish）、forbidden 重构（新消息 gate、WaitingConfirm 仅 DecisionRequest 裁决推进、propose_edit 不再置 waiting_confirm）、每片段重新授权 guard。 |
 | 2026-08-15 | v2.18 | AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：SM-AG-04 重构落地（运行时/数据层）——settle 按未决 DecisionRequest 判定 WaitingConfirm（去除 has_pending_proposal）、begin_turn 不绕回 waiting_confirm、回合入口 gate（AG_DECISION_PENDING）、propose_decision/resolve_decision 生命周期与 IPC、TaskPlan 持久化、StepProgress 实时事件。 |
 | 2026-08-21 | v2.19 | 工作区资源操作基线重构：SM-AG-04 增加 WorkspaceOperation 集成语义；DecisionRequest 确认后立即调用 SM-WS-04 执行，不增加 WaitingUserCommit 或资源 DiffCard；CreateDocumentBundle 初始内容 Diff 不驱动 TaskRun 等待；重启中断不得复用旧确认。 |
+| 2026-08-27 | v2.20 | AG-CONFORMANCE-GOVERNANCE-S1：将 SM-AG-01 澄清唯一化为 AwaitingClarification 非终态，用户补充后原 AgentTurn 回到 Assembling；TurnError 保持原 AgentTurn 终态，显式重试创建新 AgentTurn；同步测试矩阵。将 SM-AG-04 限定为复杂或跨执行片段目标，WaitingConfirm 唯一来源为 DecisionRequest；删除 active 正文中重复的旧语义修正段。 |

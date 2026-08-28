@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-08-26T16:18:20.509Z -->
+<!-- 最后生成时间：2026-08-27T16:09:15.365Z -->
 
 ### 模块编码表
 
@@ -665,9 +665,9 @@
 | codes                                                                             | type | rules                             | 文件                                            | 行号 |
 | --------------------------------------------------------------------------------- | ---- | --------------------------------- | --------------------------------------------- | -- |
 | BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-001, BR-PCG-STATE-001-RB-PCG-PCG-GENERATE-001 | RB   | BR-PCG-DATA-001, BR-PCG-STATE-001 | scripts/generate_function_ledger.mjs          | 14 |
-| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-004                                           | RB   | BR-PCG-DATA-001, BR-PCG-STATE-001 | scripts/generate_function_tree.mjs            | 21 |
+| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-004                                           | RB   | BR-PCG-DATA-001, BR-PCG-STATE-001 | scripts/generate_function_tree.mjs            | 22 |
 | BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-001, BR-PCG-STATE-001-RB-PCG-PCG-GENERATE-001 | RB   | BR-PCG-DATA-001, BR-PCG-STATE-001 | scripts/generate_product_capability_atlas.mjs | 11 |
-| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-003                                           | RB   | BR-PCG-DATA-001, BR-PCG-STATE-001 | scripts/seed_function_audit.mjs               | 26 |
+| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-003                                           | RB   | BR-PCG-DATA-001, BR-PCG-STATE-001 | scripts/seed_function_audit.mjs               | 28 |
 
 #### PRV-VIEW
 
@@ -1435,18 +1435,18 @@
 | codes                                                                             | type | chain        | 文件                                            | 行号 |
 | --------------------------------------------------------------------------------- | ---- | ------------ | --------------------------------------------- | -- |
 | BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-001, BR-PCG-STATE-001-RB-PCG-PCG-GENERATE-001 | RB   | PCG-GENERATE | scripts/generate_function_ledger.mjs          | 14 |
-| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-004                                           | RB   | PCG-GENERATE | scripts/generate_function_tree.mjs            | 21 |
+| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-004                                           | RB   | PCG-GENERATE | scripts/generate_function_tree.mjs            | 22 |
 | BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-001, BR-PCG-STATE-001-RB-PCG-PCG-GENERATE-001 | RB   | PCG-GENERATE | scripts/generate_product_capability_atlas.mjs | 11 |
-| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-003                                           | RB   | PCG-GENERATE | scripts/seed_function_audit.mjs               | 26 |
+| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-003                                           | RB   | PCG-GENERATE | scripts/seed_function_audit.mjs               | 28 |
 
 #### BR-PCG-STATE-001
 
 | codes                                                                             | type | chain        | 文件                                            | 行号 |
 | --------------------------------------------------------------------------------- | ---- | ------------ | --------------------------------------------- | -- |
 | BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-001, BR-PCG-STATE-001-RB-PCG-PCG-GENERATE-001 | RB   | PCG-GENERATE | scripts/generate_function_ledger.mjs          | 14 |
-| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-004                                           | RB   | PCG-GENERATE | scripts/generate_function_tree.mjs            | 21 |
+| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-004                                           | RB   | PCG-GENERATE | scripts/generate_function_tree.mjs            | 22 |
 | BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-001, BR-PCG-STATE-001-RB-PCG-PCG-GENERATE-001 | RB   | PCG-GENERATE | scripts/generate_product_capability_atlas.mjs | 11 |
-| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-003                                           | RB   | PCG-GENERATE | scripts/seed_function_audit.mjs               | 26 |
+| BR-PCG-DATA-001-RB-PCG-PCG-GENERATE-003                                           | RB   | PCG-GENERATE | scripts/seed_function_audit.mjs               | 28 |
 
 #### BR-PCG-VERIFY-001
 
