@@ -1,25 +1,20 @@
 {
-  "scope_id": "AG-CONFORMANCE-GOVERNANCE-S1",
+  "scope_id": "AG-CONFORMANCE-GOVERNANCE-S2",
   "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "DESIGN",
-  "title": "Agent 需求与设计语义唯一化治理",
+  "governance_phase": "VALIDATION",
+  "title": "Agent 生产入口与规则注册精确映射审计",
   "status": "READY",
   "confirmation": "YES",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S1.md",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S2.md",
   "objectives": [
-    "使每个 active REQ、RULE 与 STATE_MACHINE 只有一个当前有效语义",
-    "消除澄清终态、TaskRun WaitingConfirm、工具最小授权和新建文档路径的新旧表述冲突",
-    "明确简单 AgentTurn 与复杂 TaskRun 的设计边界",
-    "刷新 ADUS 并验证需求到设计映射保持完整"
+    "仅从 ADUS 的 AG-TURN、AG-TOOL 与交叉链 WS-OPERATION 出发定位已注册生产块",
+    "完整读取每个纳入审计的 RULE 原文、@GOV 注册块及其直接承载实现",
+    "验证生产入口、状态生命周期、最小能力授权、TaskRun 边界与新建文档路径是否符合第一阶段唯一语义",
+    "把结构注册完整性与真实行为符合性分别记录，形成后续实现 Scope 的唯一输入"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S1.md",
-    "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
-    "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
-    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
-    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ".governance/issues/AG-CONFORMANCE-GOVERNANCE-S2.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -27,52 +22,52 @@
     "AGENTS.md",
     "CLAUDE.md",
     "governance.config.json",
-    "所有生产代码与测试文件",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "所有需求、设计、计划、生产代码与测试文件",
     "所有不在 allowed_files 中的文件"
   ],
   "constraints": [
-    "需求优先，设计不得为当前实现反向改写",
-    "不在本阶段修改生产行为、Prompt 内容或工具注册实现",
-    "历史实现事实不得继续与当前规范语义并列为 active 权威",
-    "ADUS 只通过 governance:generate 生成，不人工编辑自动生成区",
-    "任何需求边界取舍先由人类确认"
+    "审计证据只能由 ADUS 链路、规则、术语和代码块索引逐级映射取得，不使用业务关键词漫游代码库",
+    "每次读取必须覆盖完整 RULE 标注与正文、完整 @GOV 标注以及对应直接承载实现，不以局部行片段推断行为",
+    "AG-ASSIST 与 AG-MODEL-CATALOG 只做相邻影响检查，不把 AgentTurn 决策泛化到独立链路",
+    "本阶段不修改生产行为、静态规则、测试或 ADUS",
+    "任何无法由注册链唯一裁决的实现取舍进入 Stop Condition 并等待人类确认"
   ],
   "acceptance_criteria": [
-    "SM-AG-01 对澄清状态只有 AwaitingClarification 非终态一种有效语义",
-    "SM-AG-04 对 WaitingConfirm 只有 DecisionRequest 一种有效来源",
-    "IntentResult 与 CapabilityGrant 统一承接按当前任务最小授权的需求",
-    "新建文档只有一条需求与设计路径",
-    "简单 AgentTurn 与复杂 TaskRun 的边界经人类确认后唯一化",
-    "governance:generate 与 governance:audit 通过且 ADUS 不再呈现冲突语义"
+    "列出 AG-TURN、AG-TOOL 及所需 WS-OPERATION 交叉块的完整映射清单",
+    "对第一阶段六项唯一语义逐项给出符合、偏差或证据不足结论",
+    "识别重复主责、缺失入口、虚假 boundary、装饰性映射或链路归属漂移",
+    "形成精确到文件与注册块 ID 的后续候选修改范围，但不在本阶段实施",
+    "审计记录清楚区分已验证事实、推断、风险与待人类裁决项"
   ],
   "human_decisions": [
     {
-      "id": "HD-01",
+      "id": "HD-S2-01",
       "status": "CONFIRMED",
-      "question": "新建文档是否以 REQ-AG-008 的 CreateDocumentBundle 前置裁决路径为唯一权威，并修正 REQ-AG-001 中无物理文件预览的旧验收表述"
+      "question": "提交第一阶段并开启第二阶段生产入口—规则注册精确映射审计"
     },
     {
-      "id": "HD-02",
+      "id": "HD-S2-02",
       "status": "CONFIRMED",
-      "question": "TaskRun 是否只为复杂或跨执行片段目标建立，简单目标仅使用 AgentTurn"
+      "question": "同一 AgentTurn 的澄清续接采用挂起 command 输入通道，还是同 turn_id 受控重入"
     },
     {
-      "id": "HD-03",
+      "id": "HD-S2-03",
       "status": "CONFIRMED",
-      "question": "冲突的旧实现登记是否移出 active 规范正文，仅在 Issue Trace 与变更记录中保留历史"
+      "question": "确认简单 AgentTurn 不创建 TaskRun，并允许调整当前必填关联"
     },
     {
-      "id": "HD-04",
+      "id": "HD-S2-04",
       "status": "CONFIRMED",
-      "question": "用户补充澄清信息时是否继续原 AgentTurn，由 AwaitingClarification 回到 Assembling"
-    },
-    {
-      "id": "HD-05",
-      "status": "CONFIRMED",
-      "question": "create_document 与 organize_workspace 是否可在 plan_workspace_operation 之外同时获得当前任务必要的只读工具"
+      "question": "未声明既有跨文档目标应硬拒，还是先定义显式目标集追加规则"
     }
   ],
   "unresolved_items": [
-    "第一阶段只收敛需求与设计；关键生产入口映射、实现对齐、集成验证与审计收紧分别进入后续独立 Scope"
+    "S2-F01：同一 AgentTurn 澄清恢复缺失；HD-S2-02 已确认后续实现形态",
+    "S2-F03：简单 AgentTurn 无条件创建 TaskRun；HD-S2-03 已确认后续按需创建",
+    "S2-F04：SM-AG-04 注册实现与真实持久态 setter 漂移",
+    "S2-F05：IntentResult / CapabilityGrant 不满足最小允许集",
+    "S2-F06/S2-F07：关键 guard 与状态 setter 未注册，目标集 boundary 为假；HD-S2-04 已确认治理顺序",
+    "所有生产修改必须另开 Scope"
   ]
 }
