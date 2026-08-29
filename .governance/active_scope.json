@@ -1,9 +1,9 @@
 {
   "scope_id": "AG-CONFORMANCE-CODE-S3D",
   "task_type": "CODE_CHANGE",
-  "governance_phase": "IMPLEMENTATION",
+  "governance_phase": "VALIDATION",
   "title": "显式编辑目标集运行时与集合外硬拒",
-  "status": "BLOCKED",
+  "status": "READY",
   "confirmation": "YES",
   "scope_reason": "承接 TERM-AG-019 / BR-AG-DATA-003、HD-S2-04/HD-S3D-01/02/03 及配套 REQUIREMENT/DESIGN/PLAN 提交，实现生产行为符合。",
   "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S3D.md",
@@ -95,12 +95,9 @@
       "question": "将范围外 LibreOffice 稳定失败登记为验证阻断项，不扩大 S3D 范围，继续完成治理证据并提交实现检查点"
     }
   ],
-  "stop_conditions": [
-    "SC-04 VALIDATION_BLOCKED：test:related 的完整 Rust 测试中既有 DOC LibreOffice DOCX→PDF 用例连续因外部子进程 signal 6 崩溃；当前 Scope 不包含 DOC 修复，S3D 不得标记 READY"
-  ],
+  "stop_conditions": [],
   "unresolved_items": [
     "CapabilityGrant 最小化保持独立 S3C",
-    "真实 Tauri/provider 多片段交互在自动化闭合后仍需验证卡执行",
-    "范围外 DOC LibreOffice DOCX→PDF 稳定失败需独立 Scope 调查并在修复后重跑本 Scope 的 test:related"
+    "真实 Tauri/provider 多片段交互在自动化闭合后仍需验证卡执行"
   ]
 }

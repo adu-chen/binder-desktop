@@ -2,8 +2,8 @@
 
 文档状态：A
 任务类型：CODE_CHANGE
-治理阶段：IMPLEMENTATION
-任务状态：BLOCKED（实现检查点可提交；SC-04 待独立 DOC 修复后解除）
+治理阶段：VALIDATION
+任务状态：READY
 创建时间：2026-08-28
 上游基线：`35fbf87`；TERM-AG-019、BR-AG-DATA-003；HD-S2-04 / HD-S3D-01。
 
@@ -88,8 +88,8 @@ TERM-AG-019 已注册，但尚无引用该术语的 @GOV 生产 owner。`tool_re
 ## Task Runtime Report — S3D ExplicitEditTargetSet 运行时
 
 task_type: CODE_CHANGE
-governance_phase: IMPLEMENTATION
-final_state: BLOCKED
+governance_phase: VALIDATION
+final_state: READY
 issue_trace: `.governance/issues/AG-CONFORMANCE-CODE-S3D.md`
 
 changed_files:
@@ -120,21 +120,20 @@ validation:
   - `cargo fmt --all -- --check`、`cargo check --lib`：passed。
   - S3D 直接 Rust 测试：passed；覆盖 ReferencePayload 身份/非身份隔离、集合归一与持久化、澄清单调性、scope confirm/cancel/replay、CreateDocumentBundle 建盘后追加、TaskRun workspace 身份及 DE 集合外拒绝。
   - `npm run test:plan -- --files [...]`：passed；选择 frontend-full + rust-full + governance:audit。
-  - `npm run test:related -- --files [...]`：failed；前端 26 文件 592/592 passed，Rust lib 368/369 passed，唯一失败为范围外 `doc::libreoffice_runtime::tests::docx_to_pdf_end_to_end_when_libreoffice_available`（连续单测复跑和全量复跑均为 `DOC_PREVIEW_WORKER_CRASH`, signal 6），因此选择器未继续治理审计。
+  - `npm run test:related -- --files [...]`：passed；在测试治理注册要求的非沙箱 macOS 进程中完整重跑，前端 26 文件 592/592 passed，Rust lib 369/369 passed，`core_chain` 5/5、`sm_broadcast` 4/4 与 doc-tests 全部通过，后续 `governance:audit` passed。
   - `cargo test --test core_chain`：5/5 passed；`cargo test --test sm_broadcast`：4/4 passed。
   - `npm run test:governance`：19/19 passed，954 个测试用例已发现、零未归属/skip/focus；`npm run governance:audit`：passed，无治理 finding。
   - `git diff --check`、禁用别名与旧 `declared_targets`/`AcceptCrossDocument` 负空间扫描：passed。
 
 stop_conditions:
-  - SC-04 VALIDATION_BLOCKED：完整 Rust 测试存在当前 Scope 内不可修复的 DOC LibreOffice 稳定失败；按 HD-S3D-04 允许提交实现检查点，但不得标记 READY。
+  - 无。原 SC-04 已按测试治理注册的环境裁决解除：受限沙箱中 LibreOffice signal 6 可复现，同一精确用例及完整 `test:related` 在非沙箱 macOS 进程中通过。
 
 recovery:
-  - 为 DOC LibreOffice 崩溃建立独立 Scope，修复并验证后以本 changed_files 重跑 `npm run test:related -- --files [...]`；全绿后解除 SC-04 并把 S3D 推进到 READY。
+  - 无；SC-04 已解除。
 
 unresolved_items:
   - CapabilityGrant 最小化保持独立 S3C。
   - 真实 Tauri/provider 多片段交互仍按 V-S10 执行，不以自动化冒充 G5。
-  - DOC LibreOffice DOCX→PDF signal 6 崩溃待独立治理。
 
 ## 变更记录
 
@@ -145,3 +144,4 @@ unresolved_items:
 | 2026-08-28 | v1.2 | 实现中按规则链复核发现四份当前 A 文档仍保留显式引用只读/跨文档写入未冻结语义，触发 SC-01 / SC-07；暂停代码推进，等待静态治理范围裁决。 |
 | 2026-08-28 | v1.3 | 人类确认 HD-S3D-03；需求、设计和计划配套治理分别提交，SC-01 / SC-07 解除，恢复 IMPLEMENTATION。 |
 | 2026-08-28 | v1.4 | 完成 ExplicitEditTargetSet 实现、ADUS 与 V-S10；关联验证前端 592/592、Rust 368/369，唯一范围外 LibreOffice 用例连续 signal 6。按 HD-S3D-04 记录 SC-04，允许提交实现检查点但保持 BLOCKED。 |
+| 2026-08-28 | v1.5 | 按测试治理环境裁决在非沙箱 macOS 进程重跑 S3D 完整 `test:related`；前端 592/592、Rust 369/369、集成与治理审计全绿，解除 SC-04 并进入 READY。 |
