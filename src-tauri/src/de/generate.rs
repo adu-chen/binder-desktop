@@ -6,6 +6,7 @@
 //! before_snapshot，**新建文档空基准 None**，BR-DE-DATA-002）。持久化经 ws.persist_diff、终态机归 PI-DE-02、
 //! 过期/冲突归 PI-DE-03。ChangeProposal 由 DE 单一拥有（AG/CBT 产出侧引用本类型）。
 
+use crate::ag::target_set::ExplicitEditTargetSet;
 use crate::ipc::IpcError;
 use crate::types::{DiffStatus, DocRef, LocateResult, PendingDiff};
 
@@ -62,21 +63,24 @@ pub fn build_payload(proposal: &ChangeProposal) -> DiffPayload {
  * type:     GUARD
  * chain:    DE-DIFF
  * rules:    BR-AG-DATA-003
- * boundary: in=proposalTargetAndDeclaredTargetSet | out=declaredTargetVerdict(rejectUndeclaredExistingDocBeforeDiffGen)
+ * term_ref: TERM-AG-019
+ * boundary: in=proposalTargetAndExplicitEditTargetSet | out=AuthorizedTargetOrStableRejection(beforePendingDiffGeneration)
  */
-/// DE 侧目标声明判定（BR-AG-DATA-003「DE 侧协同复核」，2026-07-04 版；AG-DELETE-01 放宽）：
-/// 返回目标是否属回合声明的目标集（当前文档 ∪ 用户显式指向集）；不存在的路径视为新建放行。
-/// **不再硬拒未声明的既有文档**——由 AG 层标注 cross_doc + DiffCard「跨文档目标」确认承担安全，
-/// 多文档联动（参考 A 改 B 等）不再被锁死。CBT 构建路径不经本函数（BR-CBT-DATA-001 绑定）。
-pub fn target_declared(
+/// DE 侧协同硬守：AG 产出的 ChangeProposal 必须属于 ExplicitEditTargetSet；集合外在 PendingDiff
+/// 生成前失败关闭。CBT 构建路径不经本函数（BR-CBT-DATA-001 绑定）。
+pub fn ensure_agent_target_authorized(
     target_rel: &str,
-    current_rel: Option<&str>,
-    declared_rels: &[String],
-    target_exists: bool,
-) -> bool {
-    !target_exists
-        || current_rel == Some(target_rel)
-        || declared_rels.iter().any(|d| d == target_rel)
+    targets: &ExplicitEditTargetSet,
+) -> Result<(), IpcError> {
+    if targets.contains(target_rel) {
+        return Ok(());
+    }
+    Err(IpcError::new(
+        "DE_EDIT_TARGET_NOT_AUTHORIZED",
+        &format!("ChangeProposal 目标 {target_rel} 不在 ExplicitEditTargetSet"),
+        false,
+        false,
+    ))
 }
 
 /**
@@ -189,15 +193,17 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-003
-    // DE 侧协同判定（AG-DELETE-01 放宽）：当前文档/声明集内/新建放行；未声明既有 → false
-    //（由 AG 层标注 cross_doc + DiffCard「跨文档目标」确认承担安全，不再硬拒）。
+    // DE 侧协同硬守：集合内放行，集合外在 PendingDiff 前拒绝。
     #[test]
-    fn de_side_flags_undeclared_existing_target() {
-        let declared = vec!["ref.md".to_string()];
-        assert!(target_declared("a.md", Some("a.md"), &declared, true));
-        assert!(target_declared("ref.md", Some("a.md"), &declared, true));
-        assert!(target_declared("new.md", Some("a.md"), &declared, false)); // 新建放行
-        assert!(!target_declared("other.md", Some("a.md"), &declared, true)); // 未声明既有 → 跨文档标注
-        assert!(!target_declared("other.md", None, &[], true));
+    fn de_side_rejects_target_outside_explicit_edit_target_set() {
+        let mut targets = ExplicitEditTargetSet::default();
+        targets.insert_authorized(
+            "a.md".to_string(),
+            crate::ag::target_set::SOURCE_CURRENT_DOCUMENT,
+            Some("turn-1".to_string()),
+        );
+        assert!(ensure_agent_target_authorized("a.md", &targets).is_ok());
+        let error = ensure_agent_target_authorized("other.md", &targets).unwrap_err();
+        assert_eq!(error.code, "DE_EDIT_TARGET_NOT_AUTHORIZED");
     }
 }

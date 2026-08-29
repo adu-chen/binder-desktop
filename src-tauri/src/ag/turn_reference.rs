@@ -1,23 +1,22 @@
 //! AgentTurn 显式目标集合与引用上下文装配。
 
 use super::prompt_runtime::MENTION_CAP;
-use super::reference_runtime::{format_reference_payload_context, reference_target_path, BlockRef};
+use super::reference_runtime::{format_reference_payload_context, BlockRef};
 use crate::ag;
 use crate::types::ReferencePayload;
 
 pub(super) struct TurnReferenceRuntime {
-    pub(super) declared_targets: Vec<String>,
     pub(super) mention_block: Option<String>,
 }
 
 /**
  * @GOV
- * codes:    BR-AG-DATA-003-DATA-AG-AG-TURN-030
+ * codes:    BR-AG-DATA-001-DATA-AG-AG-TURN-030
  * type:     DATA
  * chain:    AG-TURN
- * rules:    BR-AG-DATA-003
+ * rules:    BR-AG-DATA-001
  * term_ref: TERM-REF-003
- * boundary: in=ExplicitDocumentBlockAndReferencePayloads | out=DeclaredEditTargetsAndValidatedReferenceContext | delegate=format_reference_payload_context
+ * boundary: in=ExplicitDocumentBlockAndReferencePayloads | out=ValidatedReferenceContext | delegate=format_reference_payload_context | does_not=grantDocumentEditAuthorization
  */
 pub(super) fn build_turn_reference_runtime(
     mentions: &[String],
@@ -25,20 +24,6 @@ pub(super) fn build_turn_reference_runtime(
     references: &[ReferencePayload],
     read_ctx: &ag::blocks::AgentReadContext,
 ) -> TurnReferenceRuntime {
-    let mut declared_targets = mentions.to_vec();
-    for block_ref in block_refs {
-        if !declared_targets.contains(&block_ref.rel_path) {
-            declared_targets.push(block_ref.rel_path.clone());
-        }
-    }
-    for reference in references {
-        if let Some(rel_path) = reference_target_path(reference) {
-            if !declared_targets.iter().any(|path| path == rel_path) {
-                declared_targets.push(rel_path.to_string());
-            }
-        }
-    }
-
     let mut parts = Vec::new();
     for rel_path in mentions {
         match read_ctx.snapshot(rel_path) {
@@ -88,8 +73,5 @@ pub(super) fn build_turn_reference_runtime(
         )
     });
 
-    TurnReferenceRuntime {
-        declared_targets,
-        mention_block,
-    }
+    TurnReferenceRuntime { mention_block }
 }

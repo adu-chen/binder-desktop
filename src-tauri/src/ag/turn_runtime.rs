@@ -10,7 +10,8 @@ use super::edit_support::is_active_editor_snapshot_source;
 use super::reference_runtime::BlockRef;
 use super::task_runtime::{build_task_plan, settle_optional_task_run};
 use super::turn_control::{
-    bind_agent_turn_task_run, park_agent_turn_for_clarification, register_active_agent_turn,
+    bind_agent_turn_edit_target_set, bind_agent_turn_task_run, park_agent_turn_for_clarification,
+    register_active_agent_turn,
 };
 use super::turn_events::{
     emit_ag01, emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_error,
@@ -97,13 +98,14 @@ pub(crate) async fn ag_start_turn(
         ));
     }
 
-    let (_active_turn_lease, cancelled, clarification_task_run_id) = register_active_agent_turn(
-        &state,
-        &workspace_id_for_turn,
-        &session_id,
-        &turn_id,
-        clarification_resume,
-    )?;
+    let (_active_turn_lease, cancelled, clarification_task_run_id, registered_edit_target_set) =
+        register_active_agent_turn(
+            &state,
+            &workspace_id_for_turn,
+            &session_id,
+            &turn_id,
+            clarification_resume,
+        )?;
     let terminal_latch = ag::turn::TerminalLatch::default();
 
     {
@@ -363,6 +365,59 @@ pub(crate) async fn ag_start_turn(
         })
     })());
 
+    let TurnReferenceRuntime { mention_block } =
+        build_turn_reference_runtime(&mentions, &block_refs, &references, &read_ctx);
+    let workspace_root = std::path::Path::new(&workspace_root_path);
+    let mut explicit_edit_target_set = if let Some(task_run_id) = task_run_id.as_deref() {
+        started_turn_or_finish!((|| {
+            let conn = state
+                .db
+                .lock()
+                .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+            ag::target_set::load_for_task_run(&conn, task_run_id)
+                .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))
+        })())
+    } else if clarification_resume {
+        registered_edit_target_set
+    } else {
+        started_turn_or_finish!(ag::target_set::initial_for_turn(
+            workspace_root,
+            &turn_id,
+            active_doc_path.as_deref(),
+            &mentions,
+            &block_refs,
+            &references,
+        ))
+    };
+    if clarification_resume {
+        explicit_edit_target_set.merge(started_turn_or_finish!(
+            ag::target_set::explicit_references_for_turn(
+                workspace_root,
+                &turn_id,
+                &mentions,
+                &block_refs,
+                &references,
+            )
+        ));
+    }
+    started_turn_or_finish!(bind_agent_turn_edit_target_set(
+        &state,
+        &session_id,
+        &turn_id,
+        &explicit_edit_target_set,
+    ));
+    if let Some(task_run_id) = task_run_id.as_deref() {
+        started_turn_or_finish!((|| {
+            let conn = state
+                .db
+                .lock()
+                .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+            ag::target_set::persist_for_task_run(&conn, task_run_id, &explicit_edit_target_set)
+                .map(|_| ())
+                .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))
+        })());
+    }
+
     // 结构性门禁前置：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed（X-SEQ-001）。
     // 每步转移广播 SM-AG-01（A-CORE-X-L-04 Task 2-E）：sending 等回合视图据此投影（X-FORBID-007）。
     let s = if clarification_resume {
@@ -396,19 +451,7 @@ pub(crate) async fn ag_start_turn(
     // 计划为可展示的受控步骤（读取→生成建议）；实际 ToolResult 才推进计划状态和 cursor。
     // 简单单文档局部编辑直行不建；同一 run 已有计划时不重复建。
     {
-        let mut seen = std::collections::BTreeSet::new();
-        if let Some(p) = active_doc_path.as_deref() {
-            seen.insert(p.to_string());
-        }
-        for br in &block_refs {
-            seen.insert(br.rel_path.clone());
-        }
-        for r in &references {
-            if let ReferencePayload::Selection { rel_path, .. } = r {
-                seen.insert(rel_path.clone());
-            }
-        }
-        let target_paths: Vec<String> = seen.into_iter().collect();
+        let target_paths = explicit_edit_target_set.paths();
         let is_write = matches!(
             intent_result.intent_type,
             ag::context::IntentTypeV1::Edit | ag::context::IntentTypeV1::CreateDocument
@@ -454,7 +497,16 @@ pub(crate) async fn ag_start_turn(
                         .db
                         .lock()
                         .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
-                    ag::task::link_turn(&conn, &turn_id, &created_task_run_id).map_err(|error| {
+                    ag::task::link_turn(&conn, &turn_id, &created_task_run_id).map_err(
+                        |error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false),
+                    )?;
+                    ag::target_set::persist_for_task_run(
+                        &conn,
+                        &created_task_run_id,
+                        &explicit_edit_target_set,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
                         IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
                     })
                 })());
@@ -570,13 +622,9 @@ pub(crate) async fn ag_start_turn(
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| ent::gateway::default_model(&provider));
 
-    let TurnReferenceRuntime {
-        declared_targets,
-        mention_block,
-    } = build_turn_reference_runtime(&mentions, &block_refs, &references, &read_ctx);
-
     // agent-edit-1.0 不自动召回 AST/KB/TPL。显式引用仍由下方 REF 通道注入。
     let ws_root: Option<String> = Some(workspace_root_path.clone());
+    let explicit_edit_targets = explicit_edit_target_set.paths();
 
     let requires_edit_tool = intent_result.requires_proposal();
     if intent_result.intent_type == ag::context::IntentTypeV1::Edit {
@@ -615,7 +663,7 @@ pub(crate) async fn ag_start_turn(
         &session_id,
         task_run_id.as_deref(),
         &intent_result,
-        &declared_targets,
+        &explicit_edit_targets,
         &read_ctx,
         active_doc_path.as_deref(),
         active_snapshot.as_ref(),
@@ -677,7 +725,7 @@ pub(crate) async fn ag_start_turn(
         capability_grant,
         read_ctx,
         active_doc_path,
-        declared_targets,
+        explicit_edit_target_set,
         ws_root,
         requires_edit_tool,
         current_doc_requires_tool_read,

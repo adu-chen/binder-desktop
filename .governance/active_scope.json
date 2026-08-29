@@ -1,51 +1,106 @@
 {
-  "scope_id": "AG-CONFORMANCE-PLAN-S3D-COMPANION",
-  "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "PLAN",
-  "title": "显式编辑目标集开发验证计划同步",
-  "status": "READY",
+  "scope_id": "AG-CONFORMANCE-CODE-S3D",
+  "task_type": "CODE_CHANGE",
+  "governance_phase": "IMPLEMENTATION",
+  "title": "显式编辑目标集运行时与集合外硬拒",
+  "status": "BLOCKED",
   "confirmation": "YES",
-  "scope_reason": "承接 fed343a 与 a0afdff，把已确认需求/设计传播到当前 AG 1.0 开发验证计划。",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-PLAN-S3D-COMPANION.md",
+  "scope_reason": "承接 TERM-AG-019 / BR-AG-DATA-003、HD-S2-04/HD-S3D-01/02/03 及配套 REQUIREMENT/DESIGN/PLAN 提交，实现生产行为符合。",
+  "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S3D.md",
   "objectives": [
-    "把 Intent、Context、Tool Capability 与 Editor/Diff 工作包的目标集合职责同步到 ExplicitEditTargetSet",
-    "将跨文档禁止项收敛为集合外写入禁止，不误伤用户显式冻结的既有文档目标",
-    "增加目标集合正负验证边界，同时保留逐目标 Proposal 和独立裁决"
+    "建立 ExplicitEditTargetSet 唯一生产 owner，替代 declared_targets 与 AcceptCrossDocument 并行语义",
+    "简单 AgentTurn 在内存维护集合，同一 AgentTurn 澄清只追加显式输入目标",
+    "任务级集合冻结、scope DecisionRequest 确认追加并由显式 TaskRun continuation 继承",
+    "CreateDocumentBundle 真实建盘后追加目标",
+    "AG 与 DE 在 PendingDiff 前硬拒集合外既有文档",
+    "补齐真实 @GOV owner、直接测试与 ADUS 映射"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-PLAN-S3D-COMPANION.md",
-    "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md"
+    ".governance/issues/AG-CONFORMANCE-CODE-S3D.md",
+    "src-tauri/src/db/mod.rs",
+    "src-tauri/src/ag/mod.rs",
+    "src-tauri/src/ag/target_set.rs",
+    "src-tauri/src/ag/turn_reference.rs",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/task_runtime.rs",
+    "src-tauri/src/ag/turn_control.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ag/turn_prompt.rs",
+    "src-tauri/src/ag/turn_tool_loop.rs",
+    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/ag/edit_runtime.rs",
+    "src-tauri/src/de/generate.rs",
+    "src-tauri/src/ag/prompts.rs",
+    "src/services/agRuntime.test.ts",
+    "scripts/test_governance.test.mjs",
+    "src-tauri/tests/core_chain.rs",
+    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
+    "CLAUDE.md",
     "governance.config.json",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "所有需求、设计、代码与测试文件"
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "src-tauri/src/workspace/operation.rs",
+    "src-tauri/src/workspace/routes.rs",
+    "所有未列入 allowed_files 的生产代码、设计与测试"
   ],
   "constraints": [
-    "不把 data-only 引用内容描述成写权限",
-    "不把所有跨文档写入一概禁止，准确禁止 ExplicitEditTargetSet 集合外写入",
-    "多文档仍逐目标 Proposal、基线、审阅和失败结果",
-    "不更新本 Scope 无关的历史实现状态或 CreateDocumentBundle 旧债务"
+    "只读工具成功、模型正文和历史路径不得扩大 ExplicitEditTargetSet",
+    "简单 AgentTurn 不得为了持有集合创建 TaskRun",
+    "scope DecisionRequest 必须冻结非空、去重、workspace 内且当时存在的路径清单",
+    "confirm 才追加；cancel、失效、重复不同裁决不得追加",
+    "显式 continuation 只能继承其稳定 TaskRun 的权威集合",
+    "cross_doc 仅表示集合内非当前文档的展示属性，不得继续承担授权兜底",
+    "不得顺带实施 CapabilityGrant 最小化"
   ],
   "acceptance_criteria": [
-    "计划工作包与 REQUIREMENT/DESIGN 配套提交一致",
-    "验证方案同时覆盖只读引用不获得写工具、显式目标可提案和集合外硬拒",
-    "治理审计通过"
+    "当前文档、显式 ReferencePayload 与同 turn_id 澄清补充形成单调集合",
+    "任务级执行片段可加载并继承已冻结的 ExplicitEditTargetSet",
+    "scope DecisionRequest 确认后原子追加，取消或失败零追加",
+    "CreateDocumentBundle 仅在真实资源创建成功后追加",
+    "propose_edit 对集合外既有文档返回稳定错误且不生成 PendingDiff",
+    "显式引用、多文档、澄清、DecisionRequest/Preview continuation 与简单 Diff 既有测试不回退",
+    "相关测试、迁移测试、test:related、test:governance 与 governance:audit 通过"
   ],
   "human_decisions": [
     {
+      "id": "HD-S2-04",
+      "status": "CONFIRMED",
+      "question": "先注册显式目标集追加规则，再硬拒集合之外的既有文档"
+    },
+    {
+      "id": "HD-S3D-01",
+      "status": "CONFIRMED",
+      "question": "采用显式输入/澄清追加与 scope DecisionRequest 确认追加、TaskRun continuation 继承方案"
+    },
+    {
+      "id": "HD-S3D-02",
+      "status": "CONFIRMED",
+      "question": "TaskRun 权威集合采用 schema v16 独立关系表"
+    },
+    {
       "id": "HD-S3D-03",
       "status": "CONFIRMED",
-      "question": "配套同步 PLAN 后恢复 S3D IMPLEMENTATION"
+      "question": "以新裁决为权威，先闭合 REQUIREMENT/DESIGN/PLAN 再恢复实现"
+    },
+    {
+      "id": "HD-S3D-04",
+      "status": "CONFIRMED",
+      "question": "将范围外 LibreOffice 稳定失败登记为验证阻断项，不扩大 S3D 范围，继续完成治理证据并提交实现检查点"
     }
   ],
-  "stop_conditions": [],
+  "stop_conditions": [
+    "SC-04 VALIDATION_BLOCKED：test:related 的完整 Rust 测试中既有 DOC LibreOffice DOCX→PDF 用例连续因外部子进程 signal 6 崩溃；当前 Scope 不包含 DOC 修复，S3D 不得标记 READY"
+  ],
   "unresolved_items": [
-    "计划文档中的其他历史实现状态不在本 Scope 校正",
-    "S3D 代码补丁保持未提交且本 Scope 不继续修改"
+    "CapabilityGrant 最小化保持独立 S3C",
+    "真实 Tauri/provider 多片段交互在自动化闭合后仍需验证卡执行",
+    "范围外 DOC LibreOffice DOCX→PDF 稳定失败需独立 Scope 调查并在修复后重跑本 Scope 的 test:related"
   ]
 }

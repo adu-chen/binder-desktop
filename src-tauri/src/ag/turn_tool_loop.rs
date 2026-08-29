@@ -51,7 +51,7 @@ pub(super) async fn run_turn_tool_loop(
     capability_grant: ag::tool_registry::CapabilityGrantV1,
     read_ctx: ag::blocks::AgentReadContext,
     active_doc_path: Option<String>,
-    declared_targets: Vec<String>,
+    explicit_edit_target_set: ag::target_set::ExplicitEditTargetSet,
     ws_root: Option<String>,
     requires_edit_tool: bool,
     current_doc_requires_tool_read: bool,
@@ -372,10 +372,43 @@ pub(super) async fn run_turn_tool_loop(
                             &turn_id,
                         )
                     });
+                    let scope_candidates =
+                        if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
+                            && c.name == "propose_decision"
+                            && params.get("kind").and_then(|value| value.as_str()) == Some("scope")
+                        {
+                            let raw_paths = params
+                                .get("targetPaths")
+                                .and_then(|value| value.as_array())
+                                .map(|paths| {
+                                    paths
+                                        .iter()
+                                        .filter_map(|path| path.as_str().map(str::to_string))
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            match ws_root.as_deref() {
+                                Some(root) => ag::target_set::validated_scope_candidates(
+                                    std::path::Path::new(root),
+                                    &raw_paths,
+                                    &explicit_edit_target_set,
+                                )
+                                .map(Some),
+                                None => Err(IpcError::new(
+                                    "WS_NO_ACTIVE",
+                                    "缺少 active workspace，不能冻结范围追加目标",
+                                    false,
+                                    false,
+                                )),
+                            }
+                        } else {
+                            Ok(None)
+                        };
                     // 简单回合保持无 TaskRun。只有已获准的任务级工具真的到达执行边界时，
                     // 才在创建 DecisionRequest / WorkspaceOperationPlan 之前取得并绑定 TaskRun。
                     let task_run_prepare_error =
                         if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
+                            && scope_candidates.is_ok()
                             && ag::task::tool_requires_task_run(&c.name)
                             && task_run_id.is_none()
                         {
@@ -400,6 +433,22 @@ pub(super) async fn run_turn_tool_loop(
                                             "AG_TASK_REQUIREMENT_DRIFT",
                                             "任务级工具判据在 TaskRun 创建边界发生漂移",
                                             false,
+                                            false,
+                                        )
+                                    })
+                                })
+                                .and_then(|task_run_id| {
+                                    ag::target_set::persist_for_task_run(
+                                        &conn,
+                                        &task_run_id,
+                                        &explicit_edit_target_set,
+                                    )
+                                    .map(|_| task_run_id)
+                                    .map_err(|error| {
+                                        IpcError::new(
+                                            "AG_TASK_DB_ERROR",
+                                            &error.to_string(),
+                                            true,
                                             false,
                                         )
                                     })
@@ -442,7 +491,9 @@ pub(super) async fn run_turn_tool_loop(
                             None
                         };
                     let mut plan_step_start = None;
-                    let plan_guard_error = if task_run_prepare_error.is_some() {
+                    let plan_guard_error = if let Err(error) = &scope_candidates {
+                        Some(error.message.clone())
+                    } else if task_run_prepare_error.is_some() {
                         task_run_prepare_error
                     } else if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
                     {
@@ -526,6 +577,10 @@ pub(super) async fn run_turn_tool_loop(
                                         "summary": summary,
                                         "detail": params.get("detail").cloned(),
                                         "options": params.get("options").cloned(),
+                                        "targetPaths": scope_candidates
+                                            .as_ref()
+                                            .ok()
+                                            .and_then(|paths| paths.clone()),
                                     });
                                     match state.db.lock() {
                                         Ok(conn) => match ag::task::propose_decision(
@@ -660,7 +715,7 @@ pub(super) async fn run_turn_tool_loop(
                                                     &params,
                                                     &read_ctx,
                                                     active_doc_path.as_deref(),
-                                                    &declared_targets,
+                                                    &explicit_edit_target_set,
                                                 )
                                             }
                                             Err(error) => Err(error),

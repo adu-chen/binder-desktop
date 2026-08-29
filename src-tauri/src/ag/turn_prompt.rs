@@ -36,7 +36,7 @@ pub(super) fn prepare_turn_prompt(
     session_id: &str,
     task_run_id: Option<&str>,
     intent_result: &ag::context::IntentResultV1,
-    declared_targets: &[String],
+    explicit_edit_targets: &[String],
     read_ctx: &ag::blocks::AgentReadContext,
     active_doc_path: Option<&str>,
     active_snapshot: Option<&ag::blocks::AgentEditableSnapshot>,
@@ -99,7 +99,7 @@ pub(super) fn prepare_turn_prompt(
         &runtime_profile,
         &turn_id,
         &intent_result,
-        &declared_targets,
+        &explicit_edit_targets,
     );
     let tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;

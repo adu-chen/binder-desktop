@@ -504,6 +504,54 @@ pub fn is_supported_decision_kind(kind: &str) -> bool {
     DECISION_KINDS.contains(&kind)
 }
 
+fn frozen_scope_targets(
+    kind: &str,
+    payload: &serde_json::Value,
+) -> rusqlite::Result<Option<Vec<String>>> {
+    if kind != "scope" {
+        if payload
+            .get("targetPaths")
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "targetPaths requires kind=scope".to_string(),
+            ));
+        }
+        return Ok(None);
+    }
+    let paths = payload
+        .get("targetPaths")
+        .and_then(|value| value.as_array())
+        .filter(|paths| !paths.is_empty())
+        .ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName(
+                "scope decision requires frozen targetPaths".to_string(),
+            )
+        })?;
+    let mut normalized = std::collections::BTreeSet::new();
+    for path in paths {
+        let path = path
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+            .ok_or_else(|| {
+                rusqlite::Error::InvalidParameterName(
+                    "scope decision targetPaths must be non-empty strings".to_string(),
+                )
+            })?;
+        normalized.insert(path.to_string());
+    }
+    Ok(Some(normalized.into_iter().collect()))
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-DECISION-001, BR-AG-DATA-003-EFFECT-AG-AG-DECISION-001
+ * type:     EFFECT
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
+ * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
+ * boundary: in=ExecutingTaskRunAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingConfirmTaskRun | effect=workspaceDb | does_not=appendScopeTargetsBeforeConfirm
+ */
 pub fn propose_decision(
     conn: &Connection,
     task_run_id: &str,
@@ -515,6 +563,7 @@ pub fn propose_decision(
             "unsupported decision kind: {kind}"
         )));
     }
+    frozen_scope_targets(kind, &payload)?;
     let run = load_task_run(conn, task_run_id)?.ok_or_else(|| {
         rusqlite::Error::InvalidParameterName(format!("unknown task run: {task_run_id}"))
     })?;
@@ -555,37 +604,79 @@ pub fn propose_decision(
     })
 }
 
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-DECISION-002, BR-AG-DATA-003-EFFECT-AG-AG-DECISION-002
+ * type:     EFFECT
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
+ * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
+ * boundary: in=DecisionRequestOutcomeAndRevalidatedFrozenScopeTargets | out=ResolvedDecisionTaskRunStatusAndAtomicExplicitEditTargetSetAppend | effect=workspaceDb | does_not=appendOnCancelMismatchOrReplayWithDifferentOutcome
+ */
 /// 裁决任务级请求（userConfirm/userCancel 真实入口）：confirm → Executing（可自动下一片段），
-/// cancel → Cancelled。返回已裁决的 TaskRun 身份及其状态，供受控续片段绑定。
+/// cancel → Cancelled。scope confirm 与 ExplicitEditTargetSet 追加在同一事务内完成。
 pub fn resolve_decision(
     conn: &Connection,
     request_id: &str,
     outcome: &str,
 ) -> rusqlite::Result<(String, TaskRunStatus, bool)> {
-    let (task_run_id, decision_status, resolved_outcome): (String, String, Option<String>) = conn
-        .query_row(
-        "SELECT task_run_id, status, outcome FROM decision_requests WHERE request_id=?1",
+    resolve_decision_with_scope_targets(conn, request_id, outcome, None)
+}
+
+pub fn resolve_decision_with_scope_targets(
+    conn: &Connection,
+    request_id: &str,
+    outcome: &str,
+    confirmed_scope_targets: Option<&[String]>,
+) -> rusqlite::Result<(String, TaskRunStatus, bool)> {
+    if outcome != "confirm" && outcome != "cancel" {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "unsupported decision outcome: {outcome}"
+        )));
+    }
+    let tx = conn.unchecked_transaction()?;
+    let (task_run_id, kind, payload_json, decision_status, resolved_outcome): (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = tx.query_row(
+        "SELECT task_run_id, kind, payload_json, status, outcome FROM decision_requests WHERE request_id=?1",
         rusqlite::params![request_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
     if decision_status == "resolved" {
         if resolved_outcome.as_deref() != Some(outcome) {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let status: String = conn.query_row(
+        let status: String = tx.query_row(
             "SELECT status FROM task_runs WHERE task_run_id=?1",
-            rusqlite::params![task_run_id],
+            rusqlite::params![&task_run_id],
             |r| r.get(0),
         )?;
-        return parse_run_status(&status)
+        let result = parse_run_status(&status)
             .map(|status| (task_run_id, status, true))
-            .ok_or(rusqlite::Error::InvalidQuery);
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        tx.commit()?;
+        return Ok(result);
     }
     if decision_status != "proposed" {
         return Err(rusqlite::Error::InvalidQuery);
     }
+    let payload: serde_json::Value =
+        serde_json::from_str(&payload_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let frozen_scope_targets = frozen_scope_targets(&kind, &payload)?;
+    if kind == "scope" && outcome == "confirm" {
+        let confirmed = confirmed_scope_targets.ok_or(rusqlite::Error::InvalidQuery)?;
+        if frozen_scope_targets.as_deref() != Some(confirmed) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+    } else if confirmed_scope_targets.is_some() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     let now = now_millis();
-    conn.execute(
+    tx.execute(
         "UPDATE decision_requests SET status='resolved', outcome=?1, resolved_at=?2 WHERE request_id=?3",
         rusqlite::params![outcome, now, request_id],
     )?;
@@ -594,7 +685,18 @@ pub fn resolve_decision(
     } else {
         TaskRunStatus::Cancelled
     };
-    conn.execute(
+    if outcome == "confirm" {
+        if let Some(paths) = frozen_scope_targets.as_deref() {
+            super::target_set::append_task_run_targets(
+                &tx,
+                &task_run_id,
+                paths,
+                super::target_set::SOURCE_SCOPE_DECISION,
+                Some(request_id),
+            )?;
+        }
+    }
+    tx.execute(
         "UPDATE task_runs SET status=?1, updated_at=?2 WHERE task_run_id=?3",
         rusqlite::params![
             serde_json::to_string(&status).unwrap().trim_matches('"'),
@@ -602,6 +704,7 @@ pub fn resolve_decision(
             task_run_id
         ],
     )?;
+    tx.commit()?;
     Ok((task_run_id, status, false))
 }
 
@@ -1284,6 +1387,52 @@ mod tests {
         assert!(resolve_decision(&conn, &dr.request_id, "confirm").is_err());
     }
 
+    // covers: BR-AG-DATA-003
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn scope_decision_appends_frozen_targets_only_on_confirm() {
+        let conn = fresh();
+        let confirmed_id = begin_turn(&conn, "ws1", "scope-confirm", None).unwrap();
+        let confirmed = propose_decision(
+            &conn,
+            &confirmed_id,
+            "scope",
+            serde_json::json!({ "targetPaths": ["b.md", "b.md"] }),
+        )
+        .unwrap();
+        assert!(resolve_decision(&conn, &confirmed.request_id, "confirm").is_err());
+        let (_, status, already_resolved) = resolve_decision_with_scope_targets(
+            &conn,
+            &confirmed.request_id,
+            "confirm",
+            Some(&["b.md".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(status, Executing);
+        assert!(!already_resolved);
+        assert_eq!(
+            crate::ag::target_set::load_for_task_run(&conn, &confirmed_id)
+                .unwrap()
+                .paths(),
+            vec!["b.md"]
+        );
+
+        let cancelled_id = begin_turn(&conn, "ws1", "scope-cancel", None).unwrap();
+        let cancelled = propose_decision(
+            &conn,
+            &cancelled_id,
+            "scope",
+            serde_json::json!({ "targetPaths": ["c.md"] }),
+        )
+        .unwrap();
+        resolve_decision(&conn, &cancelled.request_id, "cancel").unwrap();
+        assert!(
+            crate::ag::target_set::load_for_task_run(&conn, &cancelled_id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     // covers: BR-SYS-STATE-008, BR-AG-DATA-001
     // 连续 Diff 的下一片段只可由真实 LogicalState 回执授权：卡片生成不等于预览，身份/基线不符或
     // 重复消费均失败关闭；等待 Ack 时 TaskRun 不得被 settle 为 completed。
@@ -1360,7 +1509,13 @@ mod tests {
             Executing
         );
 
-        let decision = propose_decision(&conn, &id, "scope", serde_json::json!({})).unwrap();
+        let decision = propose_decision(
+            &conn,
+            &id,
+            "scope",
+            serde_json::json!({ "targetPaths": ["notes/a.md"] }),
+        )
+        .unwrap();
         assert_eq!(decision.kind, "scope");
         assert_eq!(
             load_task_run(&conn, &id).unwrap().unwrap().status,

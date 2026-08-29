@@ -2,6 +2,7 @@
 
 use crate::ipc::IpcError;
 use crate::{ag, workspace, AppState};
+use ag::target_set::ExplicitEditTargetSet;
 #[cfg(test)]
 use rusqlite::Connection;
 use std::{
@@ -19,6 +20,7 @@ pub(crate) struct ActiveAgentTurn {
     abort_handle: Option<futures_util::future::AbortHandle>,
     phase: ActiveAgentTurnPhase,
     task_run_id: Option<String>,
+    edit_target_set: ExplicitEditTargetSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,8 +55,8 @@ impl Drop for ActiveAgentTurnLease {
  * type:     GUARD
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
- * term_ref: TERM-AG-001, TERM-AG-015
- * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,clarificationResume) | out=ExclusiveActiveAgentTurnLeaseAndOptionalOriginalTaskRunIdentity(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
+ * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-019
+ * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,clarificationResume) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
  */
 pub(super) fn register_active_agent_turn(
     state: &AppState,
@@ -62,7 +64,15 @@ pub(super) fn register_active_agent_turn(
     session_id: &str,
     turn_id: &str,
     clarification_resume: bool,
-) -> Result<(ActiveAgentTurnLease, Arc<AtomicBool>, Option<String>), IpcError> {
+) -> Result<
+    (
+        ActiveAgentTurnLease,
+        Arc<AtomicBool>,
+        Option<String>,
+        ExplicitEditTargetSet,
+    ),
+    IpcError,
+> {
     let mut turns = state
         .active_agent_turns
         .lock()
@@ -109,6 +119,7 @@ pub(super) fn register_active_agent_turn(
             ));
         }
         let task_run_id = active.task_run_id.clone();
+        let edit_target_set = active.edit_target_set.clone();
         active.phase = ActiveAgentTurnPhase::Running;
         active.abort_handle = None;
         let cancelled = Arc::clone(&active.cancelled);
@@ -121,6 +132,7 @@ pub(super) fn register_active_agent_turn(
             },
             cancelled,
             task_run_id,
+            edit_target_set,
         ));
     }
 
@@ -147,6 +159,7 @@ pub(super) fn register_active_agent_turn(
             abort_handle: None,
             phase: ActiveAgentTurnPhase::Running,
             task_run_id: None,
+            edit_target_set: ExplicitEditTargetSet::default(),
         },
     );
     drop(turns);
@@ -158,6 +171,7 @@ pub(super) fn register_active_agent_turn(
         },
         cancelled,
         None,
+        ExplicitEditTargetSet::default(),
     ))
 }
 
@@ -249,6 +263,56 @@ pub(super) fn bind_agent_turn_task_run(
         ));
     }
     active.task_run_id = Some(task_run_id.to_string());
+    Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-003-EFFECT-AG-AG-TURN-036, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-036
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-003, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-019
+ * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory
+ */
+pub(super) fn bind_agent_turn_edit_target_set(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    targets: &ExplicitEditTargetSet,
+) -> Result<(), IpcError> {
+    let mut turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let active = turns
+        .get_mut(session_id)
+        .ok_or_else(|| IpcError::new("AG_TURN_NOT_ACTIVE", "Agent 回合已不再活动", false, false))?;
+    if active.turn_id != turn_id {
+        return Err(IpcError::new(
+            "AG_TURN_MISMATCH",
+            "ExplicitEditTargetSet 与当前活动 AgentTurn 不匹配",
+            false,
+            false,
+        ));
+    }
+    if active.cancelled.load(Ordering::Acquire) {
+        return Err(IpcError::new(
+            "AG_TURN_CANCELLED",
+            "已取消的 AgentTurn 不能更新 ExplicitEditTargetSet",
+            false,
+            false,
+        ));
+    }
+    if !targets.is_superset_of(&active.edit_target_set) {
+        return Err(IpcError::new(
+            "AG_EDIT_TARGET_SET_SHRINK",
+            "同一 AgentTurn 的 ExplicitEditTargetSet 只能单调追加",
+            false,
+            false,
+        ));
+    }
+    active.edit_target_set = targets.clone();
     Ok(())
 }
 
@@ -468,7 +532,7 @@ mod ag_execution_kernel_tests {
     #[test]
     fn session_has_one_active_turn_and_cancel_reaches_backend_control() {
         let state = state();
-        let (lease, cancelled, _) =
+        let (lease, cancelled, _, _) =
             register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
         let second_error = match register_active_agent_turn(&state, "ws1", "s1", "t2", false) {
             Ok(_) => panic!("同 session 不得双活"),
@@ -481,14 +545,16 @@ mod ag_execution_kernel_tests {
         assert!(cancelled.load(Ordering::Acquire));
 
         drop(lease);
-        let (_next, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t2", false).unwrap();
+        let (_next, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t2", false).unwrap();
     }
 
     // covers: BR-AG-STATE-001
     #[test]
     fn cancel_rejects_wrong_or_missing_turn() {
         let state = state();
-        let (_lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let (_lease, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
         assert_eq!(
             cancel_active_agent_turn(&state, "s1", "wrong")
                 .unwrap_err()
@@ -508,7 +574,8 @@ mod ag_execution_kernel_tests {
     #[test]
     fn clarification_resume_claims_same_turn_once_and_rejects_identity_drift() {
         let state = state();
-        let (lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let (lease, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
         park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1")).unwrap();
         drop(lease);
 
@@ -527,7 +594,7 @@ mod ag_execution_kernel_tests {
             "AG_CLARIFICATION_WORKSPACE_MISMATCH"
         );
 
-        let (resumed_lease, _, task_run_id) =
+        let (resumed_lease, _, task_run_id, _) =
             register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
         assert_eq!(task_run_id.as_deref(), Some("task-1"));
         assert_eq!(
@@ -547,13 +614,42 @@ mod ag_execution_kernel_tests {
     #[test]
     fn simple_clarification_resumes_same_turn_without_task_run() {
         let state = state();
-        let (lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let (lease, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
         park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
         drop(lease);
 
-        let (resumed_lease, _, task_run_id) =
+        let (resumed_lease, _, task_run_id, _) =
             register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
         assert_eq!(task_run_id, None);
+        drop(resumed_lease);
+    }
+
+    // covers: BR-AG-DATA-003
+    // covers: BR-SYS-STATE-007
+    #[test]
+    fn clarification_keeps_a_monotonic_edit_target_set_without_creating_task_run() {
+        let state = state();
+        let (lease, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let mut initial = ExplicitEditTargetSet::default();
+        initial.insert_authorized(
+            "a.md".to_string(),
+            "current_document",
+            Some("t1".to_string()),
+        );
+        bind_agent_turn_edit_target_set(&state, "s1", "t1", &initial).unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
+        drop(lease);
+
+        let (resumed_lease, _, task_run_id, resumed_targets) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
+        assert_eq!(task_run_id, None);
+        assert_eq!(resumed_targets.paths(), vec!["a.md"]);
+
+        let empty = ExplicitEditTargetSet::default();
+        let error = bind_agent_turn_edit_target_set(&state, "s1", "t1", &empty).unwrap_err();
+        assert_eq!(error.code, "AG_EDIT_TARGET_SET_SHRINK");
         drop(resumed_lease);
     }
 
@@ -562,7 +658,8 @@ mod ag_execution_kernel_tests {
     #[test]
     fn cancelling_parked_clarification_removes_resume_identity_and_returns_task_run() {
         let state = state();
-        let (lease, _, _) = register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let (lease, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
         park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1")).unwrap();
         drop(lease);
 

@@ -393,6 +393,24 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE workspace_operation_plans ADD COLUMN progress_json TEXT;
         "#,
     },
+    Migration {
+        version: 16,
+        // 显式编辑目标集（AG-CONFORMANCE-CODE-S3D · TERM-AG-019 / BR-AG-DATA-003）：
+        // 简单 AgentTurn 只在内存持有；需要跨执行片段的 TaskRun 逐目标持久化授权来源，
+        // scope DecisionRequest confirm 与 CreateDocumentBundle 建盘后只做幂等追加。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS task_run_edit_targets (
+                task_run_id  TEXT NOT NULL,
+                rel_path     TEXT NOT NULL,
+                source_kind  TEXT NOT NULL,
+                source_ref   TEXT,
+                authorized_at INTEGER NOT NULL,
+                PRIMARY KEY(task_run_id, rel_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_run_edit_targets_run
+                ON task_run_edit_targets(task_run_id, authorized_at);
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {

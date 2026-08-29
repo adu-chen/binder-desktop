@@ -14,6 +14,35 @@ fn now_millis() -> i64 {
 
 /**
  * @GOV
+ * codes:    BR-AG-DATA-003-EFFECT-AG-AG-TURN-037
+ * type:     EFFECT
+ * chain:    AG-TURN, WS-OPERATION
+ * rules:    BR-AG-DATA-003
+ * term_ref: TERM-AG-015, TERM-AG-019, TERM-WS-003
+ * boundary: in=CompletedCreateDocumentBundleWithExistingWorkspaceResource | out=PersistedTaskRunExplicitEditTarget | effect=workspaceDb | does_not=authorizePlannedOrMissingResource
+ */
+fn persist_completed_create_document_target(
+    conn: &rusqlite::Connection,
+    workspace_root: &std::path::Path,
+    task_run_id: &str,
+    plan_id: &str,
+    bundle: &crate::types::CreateDocumentBundle,
+) -> Result<(), IpcError> {
+    let target =
+        ag::target_set::normalize_existing_target(workspace_root, &bundle.target.rel_path)?;
+    ag::target_set::append_task_run_targets(
+        conn,
+        task_run_id,
+        &[target],
+        ag::target_set::SOURCE_CREATE_DOCUMENT_BUNDLE,
+        Some(plan_id),
+    )
+    .map(|_| ())
+    .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))
+}
+
+/**
+ * @GOV
  * codes:    BR-SYS-STATE-008-QUERY-AG-AG-TURN-025
  * type:     QUERY
  * chain:    AG-TURN
@@ -47,12 +76,12 @@ pub(super) fn settle_optional_task_run(
 
 /**
  * @GOV
- * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-026, BR-AG-DATA-003-EFFECT-AG-AG-TURN-026
  * type:     EFFECT
  * chain:    AG-TURN
- * rules:    BR-SYS-STATE-008
- * term_ref: TERM-AG-015, TERM-AG-017
- * boundary: in=TaskRunDecisionRequestProposal | out=PersistedDecisionRequestAndWaitingConfirmTaskRun
+ * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
+ * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
+ * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingConfirmTaskRun | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargets
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.propose_decision` —— 发起任务级裁决请求
 /// （TERM-AG-017；kind：permission/plan_choice/scope/manual_confirm；置 run waiting_confirm）。
@@ -62,12 +91,79 @@ pub(crate) fn route_propose_decision(
 ) -> Result<serde_json::Value, IpcError> {
     let task_run_id = str_param(request, "taskRunId", "AG_TASK_RUN_ID_REQUIRED")?;
     let kind = str_param(request, "kind", "AG_DECISION_KIND_REQUIRED")?;
-    let payload = request
+    let mut payload = request
         .params
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let scope_workspace = if kind == "scope" {
+        Some(active_ws(state)?)
+    } else {
+        None
+    };
     let conn = lock_db(state)?;
+    if let Some(ws) = scope_workspace.as_ref() {
+        let run = ag::task::load_task_run(&conn, &task_run_id)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?
+            .ok_or_else(|| IpcError::new("AG_TASK_NOT_FOUND", "TaskRun 不存在", false, false))?;
+        if run.workspace_id != ws.workspace_id {
+            return Err(IpcError::new(
+                "AG_TASK_WORKSPACE_MISMATCH",
+                "scope DecisionRequest 的 TaskRun 不属于 active workspace",
+                false,
+                false,
+            ));
+        }
+        let raw_paths = payload
+            .get("targetPaths")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_EDIT_TARGET_SCOPE_INVALID",
+                    "scope DecisionRequest 缺少 targetPaths",
+                    false,
+                    false,
+                )
+            })?
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    IpcError::new(
+                        "AG_EDIT_TARGET_SCOPE_INVALID",
+                        "scope DecisionRequest 的 targetPaths 必须是字符串路径",
+                        false,
+                        false,
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let current = ag::target_set::load_for_task_run(&conn, &task_run_id)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let candidates = ag::target_set::validated_scope_candidates(
+            std::path::Path::new(&ws.root_path),
+            &raw_paths,
+            &current,
+        )?;
+        let object = payload.as_object_mut().ok_or_else(|| {
+            IpcError::new(
+                "AG_EDIT_TARGET_SCOPE_INVALID",
+                "scope DecisionRequest payload 必须是对象",
+                false,
+                false,
+            )
+        })?;
+        object.insert(
+            "targetPaths".to_string(),
+            serde_json::to_value(candidates).map_err(|error| {
+                IpcError::new(
+                    "AG_EDIT_TARGET_SCOPE_INVALID",
+                    &error.to_string(),
+                    false,
+                    false,
+                )
+            })?,
+        );
+    }
     let decision = ag::task::propose_decision(&conn, &task_run_id, &kind, payload)
         .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
     ws_json(&decision)
@@ -75,12 +171,12 @@ pub(crate) fn route_propose_decision(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005
+ * codes:    BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-AG-DATA-003-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005
  * type:     API
  * chain:    AG-TURN, AG-TOOL, WS-OPERATION
- * rules:    BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002
- * term_ref: TERM-AG-015, TERM-AG-017, TERM-WS-003
- * boundary: in=DecisionRequestOutcomeBoundToWorkspaceOperationPlan | out=TaskRunStatusAndWorkspaceOperationReceipt | does_not=executeUnconfirmedPlanOrTreatModelTextAsUserConfirmation
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002
+ * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019, TERM-WS-003
+ * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=TaskRunStatusWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanOrTreatModelTextAsUserConfirmation
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.resolve_decision` —— 任务级裁决
 /// （userConfirm/userCancel 真实入口；confirm → Executing，cancel → Cancelled）。
@@ -100,23 +196,36 @@ pub(crate) fn route_resolve_decision(
     }
     let ws = active_ws(state)?;
     let conn = lock_db(state)?;
-    let decision_row: Option<(String, String, Option<String>)> = conn
+    let decision_row: Option<(String, String, String, String, Option<String>)> = conn
         .query_row(
-            "SELECT payload_json, status, outcome FROM decision_requests WHERE request_id=?1",
+            "SELECT task_run_id, kind, payload_json, status, outcome FROM decision_requests WHERE request_id=?1",
             [&request_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()
         .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
-    let (decision_payload_json, decision_status, resolved_outcome) =
-        decision_row.ok_or_else(|| {
-            IpcError::new(
-                "AG_DECISION_NOT_FOUND",
-                "DecisionRequest 不存在",
-                false,
-                false,
-            )
-        })?;
+    let (
+        decision_task_run_id,
+        decision_kind,
+        decision_payload_json,
+        decision_status,
+        resolved_outcome,
+    ) = decision_row.ok_or_else(|| {
+        IpcError::new(
+            "AG_DECISION_NOT_FOUND",
+            "DecisionRequest 不存在",
+            false,
+            false,
+        )
+    })?;
     if decision_status == "resolved" && resolved_outcome.as_deref() != Some(outcome.as_str()) {
         return Err(IpcError::new(
             "AG_DECISION_ALREADY_RESOLVED",
@@ -135,9 +244,50 @@ pub(crate) fn route_resolve_decision(
         .get("workspaceOperationPlanId")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
+    let confirmed_scope_targets =
+        if decision_status != "resolved" && decision_kind == "scope" && outcome == "confirm" {
+            let raw_paths = decision_payload
+                .get("targetPaths")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| {
+                    IpcError::new(
+                        "AG_EDIT_TARGET_SCOPE_INVALID",
+                        "scope DecisionRequest 缺少冻结的 targetPaths",
+                        false,
+                        false,
+                    )
+                })?
+                .iter()
+                .map(|value| {
+                    value.as_str().map(str::to_owned).ok_or_else(|| {
+                        IpcError::new(
+                            "AG_EDIT_TARGET_SCOPE_INVALID",
+                            "scope DecisionRequest 的 targetPaths 必须是字符串路径",
+                            false,
+                            false,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let current = ag::target_set::load_for_task_run(&conn, &decision_task_run_id).map_err(
+                |error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false),
+            )?;
+            Some(ag::target_set::validated_scope_candidates(
+                std::path::Path::new(&ws.root_path),
+                &raw_paths,
+                &current,
+            )?)
+        } else {
+            None
+        };
     let (task_run_id, mut status, already_resolved) =
-        ag::task::resolve_decision(&conn, &request_id, &outcome)
-            .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
+        ag::task::resolve_decision_with_scope_targets(
+            &conn,
+            &request_id,
+            &outcome,
+            confirmed_scope_targets.as_deref(),
+        )
+        .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
     if let Some(plan_id) = operation_plan_id.as_deref() {
         eprintln!(
             "[workspace-operation] {}",
@@ -171,9 +321,7 @@ pub(crate) fn route_resolve_decision(
                             IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
                         })?
                         .map(|plan| plan.operation_items);
-                    if !already_resolved
-                        && receipt.final_status == crate::types::WorkspaceOperationStatus::Completed
-                    {
+                    if receipt.final_status == crate::types::WorkspaceOperationStatus::Completed {
                         if let Some(bundle) =
                             workspace::operation::load_create_document_bundle(&conn, &plan_id)
                                 .map_err(|error| {
@@ -185,7 +333,16 @@ pub(crate) fn route_resolve_decision(
                                     )
                                 })?
                         {
-                            create_document_bundle = Some(bundle);
+                            persist_completed_create_document_target(
+                                &conn,
+                                std::path::Path::new(&ws.root_path),
+                                &task_run_id,
+                                &plan_id,
+                                &bundle,
+                            )?;
+                            if !already_resolved {
+                                create_document_bundle = Some(bundle);
+                            }
                         }
                     }
                     operation_receipt = Some(ws_json(&receipt)?);
@@ -273,6 +430,135 @@ pub(crate) fn route_create_plan(
 #[cfg(test)]
 mod ag_task_plan_runtime_tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    // covers: BR-AG-DATA-003
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn scope_decision_route_freezes_normalized_existing_workspace_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "binder-scope-decision-route-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("b.md"), "b").unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES (?1,?2,1,0)",
+            rusqlite::params!["ws-runtime", root.to_string_lossy()],
+        )
+        .unwrap();
+        let task_run_id = ag::task::begin_turn(&conn, "ws-runtime", "session-scope", None).unwrap();
+        let invalid_task_run_id =
+            ag::task::begin_turn(&conn, "ws-runtime", "session-invalid-scope", None).unwrap();
+        let state = AppState {
+            db: Mutex::new(conn),
+            registry: crate::build_registry(),
+            assist_terminals: Mutex::new(HashMap::new()),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        let request = CommandRequest {
+            command: "ag.propose_decision".to_string(),
+            correlation_id: "scope-route".to_string(),
+            params: serde_json::json!({
+                "taskRunId": task_run_id,
+                "kind": "scope",
+                "payload": { "targetPaths": ["./b.md", "b.md"] }
+            }),
+        };
+        route_propose_decision(&request, &state).unwrap();
+        let conn = state.db.lock().unwrap();
+        let pending = ag::task::pending_decision(&conn, &task_run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.payload["targetPaths"], serde_json::json!(["b.md"]));
+        drop(conn);
+
+        let invalid = CommandRequest {
+            command: "ag.propose_decision".to_string(),
+            correlation_id: "scope-route-invalid".to_string(),
+            params: serde_json::json!({
+                "taskRunId": invalid_task_run_id,
+                "kind": "scope",
+                "payload": { "targetPaths": ["missing.md"] }
+            }),
+        };
+        assert_eq!(
+            route_propose_decision(&invalid, &state).unwrap_err().code,
+            "AG_EDIT_TARGET_NOT_FOUND"
+        );
+        let conn = state.db.lock().unwrap();
+        assert_eq!(
+            ag::task::load_task_run(&conn, &invalid_task_run_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            crate::types::TaskRunStatus::Executing
+        );
+        drop(conn);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // covers: BR-AG-DATA-003
+    #[test]
+    fn completed_create_document_bundle_authorizes_only_after_resource_exists() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
+        let task_run_id =
+            ag::task::begin_turn(&conn, "ws-runtime", "session-bundle", None).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "binder-completed-bundle-target-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let bundle = crate::types::CreateDocumentBundle {
+            plan_id: "plan-bundle".to_string(),
+            workspace_id: "ws-runtime".to_string(),
+            target: crate::types::DocRef {
+                workspace_id: "ws-runtime".to_string(),
+                rel_path: "new/report.md".to_string(),
+                doc_type: "md".to_string(),
+            },
+            initial_content_ref: "content-ref".to_string(),
+            operation_id: Some("operation-bundle".to_string()),
+            initial_diff_id: Some("diff-bundle".to_string()),
+            rejection_guard_ref: Some("guard-bundle".to_string()),
+            status: "completed".to_string(),
+        };
+
+        assert!(persist_completed_create_document_target(
+            &conn,
+            &root,
+            &task_run_id,
+            "plan-bundle",
+            &bundle,
+        )
+        .is_err());
+        assert!(ag::target_set::load_for_task_run(&conn, &task_run_id)
+            .unwrap()
+            .is_empty());
+
+        std::fs::create_dir_all(root.join("new")).unwrap();
+        std::fs::write(root.join("new/report.md"), "# Report").unwrap();
+        persist_completed_create_document_target(
+            &conn,
+            &root,
+            &task_run_id,
+            "plan-bundle",
+            &bundle,
+        )
+        .unwrap();
+        assert_eq!(
+            ag::target_set::load_for_task_run(&conn, &task_run_id)
+                .unwrap()
+                .paths(),
+            vec!["new/report.md"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     // covers: BR-SYS-STATE-008
     // TaskRun 创建后的统一失败出口必须把活动态收束为 Failed，不能遗留 executing。

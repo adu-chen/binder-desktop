@@ -60,6 +60,9 @@ pub mod turn_events;
 /// AgentTurn 显式目标集合与引用上下文装配。
 pub mod turn_reference;
 
+/// ExplicitEditTargetSet 的内存集合、TaskRun 持久化与授权守卫。
+pub mod target_set;
+
 /// AgentTurn PromptPackage、消息和 CapabilityGrant 装配。
 pub mod turn_prompt;
 

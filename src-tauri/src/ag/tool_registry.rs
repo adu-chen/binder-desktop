@@ -10,7 +10,7 @@
 
 use super::tool::{validate_tool, ToolDecision};
 use super::{
-    context::{IntentResultV1, IntentTargetKindV1, IntentTypeV1},
+    context::{IntentResultV1, IntentTypeV1},
     turn::AGENT_EDIT_1_0_PROFILE,
 };
 
@@ -41,12 +41,13 @@ pub fn resolve_capability_grant(
     profile: &str,
     turn_id: &str,
     intent: &IntentResultV1,
-    explicit_read_targets: &[String],
+    explicit_edit_targets: &[String],
 ) -> CapabilityGrantV1 {
     // AG-STRATEGY-01：工具授予档位化——chat 零工具；read-only 声明（mutation_forbidden，
     // 用户显式"不修改/只分析"）→ 只读全量；其余（edit/create/general）→ 全量工具
     // （只读 + 提案 + glob）。意图不再按类型收窄工具，模型自决具体工具；
-    // 安全由调用时刻校验 + DiffCard 确认承担（targetScope 仅作 prompt/前端提示，不再硬拒）。
+    // 工具最小化仍由独立治理项负责；内容写入同时受 ExplicitEditTargetSet 调用时成员校验与
+    // DiffCard 确认约束，不能把后置确认当作目标授权来源。
     let read_only_declared = intent
         .constraints
         .iter()
@@ -85,14 +86,8 @@ pub fn resolve_capability_grant(
     } else {
         Vec::new()
     };
-    let target_scope = match intent.target.kind {
-        IntentTargetKindV1::CurrentDocument | IntentTargetKindV1::Selection => {
-            intent.target.rel_path.iter().cloned().collect()
-        }
-        IntentTargetKindV1::NewDocument => vec!["new_document_only".to_string()],
-        IntentTargetKindV1::None => Vec::new(),
-    };
-    let mut readable_scope = explicit_read_targets.to_vec();
+    let target_scope = explicit_edit_targets.to_vec();
+    let mut readable_scope = explicit_edit_targets.to_vec();
     if let Some(current) = intent.target.rel_path.as_ref() {
         if !readable_scope.contains(current) {
             readable_scope.push(current.clone());
@@ -103,7 +98,7 @@ pub fn resolve_capability_grant(
     }
     // P4 修复（AG-R2-01）：非寒暄意图下，只读范围放宽到 workspace 内全部文件（只读不授写）。
     // X-FORBID-004 本即限定"只读工具限定 workspace 内"——此前实现收得过窄（仅当前文档），
-    // 导致用户"找原文本比对"等合法只读请求被拒。target_scope 仍仅当前文档，写入不受影响。
+    // 导致用户"找原文本比对"等合法只读请求被拒。target_scope 仍仅显式编辑目标集，写入不受影响。
     if !matches!(
         intent.intent_type,
         IntentTypeV1::Answer | IntentTypeV1::Clarify
@@ -125,6 +120,7 @@ pub fn resolve_capability_grant(
         "active_workspace_only".to_string(),
         "no_direct_document_write".to_string(),
         "proposal_applies_on_user_confirm".to_string(),
+        "propose_edit_requires_explicit_edit_target_set".to_string(),
     ];
     if intent.intent_type == IntentTypeV1::CreateDocument {
         parameter_constraints.push("new_document_requires_workspace_operation_plan".to_string());
@@ -157,6 +153,11 @@ pub fn validate_requested_tool_for_grant(
     }
     if !grant.allows(name) {
         return ToolDecision::Reject(format!("工具 {name} 未获本轮 CapabilityGrant 授权"));
+    }
+    if name == "propose_decision" {
+        if let Err(reason) = validate_scope_decision_parameters(params) {
+            return ToolDecision::Reject(reason);
+        }
     }
     if matches!(
         name,
@@ -204,8 +205,8 @@ pub fn validate_requested_tool_for_grant(
                 "agent-edit-1.0 尚未授权表格或图片高级编辑提案".to_string(),
             );
         }
-        // targetScope 硬锁取消：内容安全由 workspace 边界、LogicalState 基线与 DiffCard 裁决承担；
-        // 资源新建/删除/重命名/移动不进入 propose_edit，统一走 WorkspaceOperationPlan 前置裁决。
+        // 路径规范化及 targetScope 成员硬拒在 ag_propose_edit / DE 双层执行；本层只有参数，缺少
+        // workspace root，不能用原始字符串比较替代规范化成员判断。
     }
     if name == "plan_workspace_operation" {
         let operations = params
@@ -240,6 +241,38 @@ pub fn validate_requested_tool_for_grant(
         }
     }
     validate_tool(true, true, false)
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-003-GUARD-AG-AG-TOOL-033, BR-AG-STATE-002-GUARD-AG-AG-TOOL-033
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-DATA-003, BR-AG-STATE-002
+ * term_ref: TERM-AG-019, TERM-AG-017
+ * boundary: in=DecisionRequestToolParameters | out=ScopeDecisionWithFrozenNonEmptyTargetPathsOrRejection | does_not=appendTargetsOrTreatReadResultsAsAuthorization
+ */
+fn validate_scope_decision_parameters(params: &serde_json::Value) -> Result<(), String> {
+    let kind = params.get("kind").and_then(|value| value.as_str());
+    let target_paths = params.get("targetPaths");
+    if kind == Some("scope") {
+        let valid = target_paths
+            .and_then(|value| value.as_array())
+            .is_some_and(|paths| {
+                !paths.is_empty()
+                    && paths
+                        .iter()
+                        .all(|path| path.as_str().is_some_and(|path| !path.trim().is_empty()))
+            });
+        if !valid {
+            return Err(
+                "scope DecisionRequest 必须提供非空 targetPaths 既有文档路径清单".to_string(),
+            );
+        }
+    } else if target_paths.is_some() {
+        return Err("targetPaths 只能用于 kind=scope 的 DecisionRequest".to_string());
+    }
+    Ok(())
 }
 
 /// 工具权限分级。
@@ -464,6 +497,12 @@ pub fn tool_definitions_json(
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "可选：用户可选方案；未提供时使用确认/取消"
+                        },
+                        "targetPaths": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": { "type": "string" },
+                            "description": "仅 kind=scope：冻结的 active workspace 既有文档相对路径清单；read/search 结果不会自动获得修改授权"
                         }
                     },
                     "required": ["kind", "summary"],
@@ -695,7 +734,7 @@ mod tests {
             ),
             ToolDecision::Allow
         ));
-        // 只读放宽不影响写范围：propose_edit 目标仍是当前文档范围。
+        // 只读 IntentResult 即使具有候选目标成员，也不会获得 propose_edit 工具。
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "propose_edit",
@@ -705,6 +744,23 @@ mod tests {
             ),
             ToolDecision::Reject(_)
         ));
+
+        let edit = super::super::context::resolve_intent_result(
+            "t-edit-targets",
+            "修改当前文档并同步显式引用",
+            Some("a.md"),
+            false,
+        );
+        let edit_grant = resolve_capability_grant(
+            AGENT_EDIT_1_0_PROFILE,
+            "t-edit-targets",
+            &edit,
+            &["a.md".to_string(), "ref.md".to_string()],
+        );
+        assert_eq!(edit_grant.target_scope, vec!["a.md", "ref.md"]);
+        assert!(edit_grant
+            .parameter_constraints
+            .contains(&"propose_edit_requires_explicit_edit_target_set".to_string()));
 
         let answer = super::super::context::resolve_intent_result("t-answer", "你好", None, false);
         let answer_grant =
@@ -842,6 +898,27 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("不修改文档、Diff 或文件树"));
+        assert_eq!(
+            parameters["properties"]["targetPaths"]["minItems"],
+            serde_json::json!(1)
+        );
+        assert!(validate_scope_decision_parameters(&serde_json::json!({
+            "kind": "scope",
+            "summary": "允许修改",
+            "targetPaths": ["a.md"]
+        }))
+        .is_ok());
+        assert!(validate_scope_decision_parameters(&serde_json::json!({
+            "kind": "scope",
+            "summary": "允许修改"
+        }))
+        .is_err());
+        assert!(validate_scope_decision_parameters(&serde_json::json!({
+            "kind": "manual_confirm",
+            "summary": "确认",
+            "targetPaths": ["a.md"]
+        }))
+        .is_err());
     }
 
     #[test]

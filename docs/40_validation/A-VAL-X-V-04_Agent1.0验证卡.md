@@ -37,6 +37,7 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | TaskRun：非后台队列、确认点、中断可重试、不跨重启续跑 | REQ-AG-015、REQ-SYS-011 | BR-SYS-STATE-008 | SM-AG-04 |
 | 外部内容一次性 data-only、显式记忆选择 | REQ-REF-009、REQ-AST-001、REQ-SYS-012 | BR-SYS-DATA-007 | ExternalContentRef / MemorySelectionRef |
 | 多会话/多 workspace 隔离 | REQ-SYS-009/010、REQ-ED-011 | BR-SYS-STATE-007 | AgentSession / AgentTurn 隔离 |
+| 显式编辑目标：初始来源、澄清追加、scope 确认、TaskRun 继承与集合外硬拒 | REQ-AG-001、REQ-AG-015 | BR-AG-DATA-003、BR-SYS-STATE-007/008、BR-SYS-PERSIST-001 | ExplicitEditTargetSet / DecisionRequest / TaskRun |
 
 ## 3. 状态化链路验证矩阵
 
@@ -50,6 +51,7 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | WS-OPERATION | V-C1/C2/C3/R1/R2 | 前置裁决、先建盘、三重基线拒绝、dirty 阻断、补偿/恢复 | Rust/IPC/前端自动化 + 真实 workspace |
 | REF-INJECT / AST-MEMORY | V-S8 | 外部内容/记忆 data-only | 自动化 + 真实环境 |
 | 会话隔离 | V-S9 | 多会话/多 workspace 不串线 | 自动化 + 真实环境 |
+| AG-TURN / AG-TOOL / DE-DIFF（目标授权） | V-S10 | ExplicitEditTargetSet 单调来源、持久化、确认追加与 PendingDiff 前硬拒 | Rust 自动化 + 真实 workspace/provider |
 
 ## 4. 核心场景卡
 
@@ -199,6 +201,16 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 人类观察项 | 交错会话无串线、恢复正确 |
 | 状态 | `DESIGNED` |
 
+### 4.14 V-S10 · ExplicitEditTargetSet 授权闭环（REQ-AG-001 / BR-AG-DATA-003）
+
+| 字段 | 内容 |
+|---|---|
+| 完整操作 | A：以当前文档和显式 Doc/Selection 引用发起编辑；B：同一 AgentTurn 澄清补充显式文档引用；C：让工具发现集合外既有文档并发起 scope DecisionRequest，分别确认、取消和重放；D：显式续接绑定 TaskRun；E：尝试把模型文字、历史路径、只读工具结果、外部 File/LongText 内容或打开标签作为写入目标 |
+| 期望结果 | A/B：仅用户可见且归一到 active workspace 的既有文档身份进入单调集合，引用正文保持 data-only；C：请求冻结非空去重路径，只有 confirm 原子追加，cancel/失败/不同裁决重放零追加；D：只继承该 TaskRun 已持久化集合；E：`propose_edit` 在 ChangeProposal/PendingDiff 持久化前以稳定错误拒绝，且零 PendingDiff；集合成员资格不改变只读 IntentResult 的工具授权 |
+| 自动化证据设计 | Rust：初始集合与非身份引用隔离、澄清单调不缩减、v16 迁移和来源持久化、scope confirm/cancel/replay、CreateDocumentBundle 建盘后追加、TaskRun workspace 身份复核、AG/DE 双守；工具注册测试：target_scope 与参数约束；系统级检查拒绝前后 PendingDiff 计数不变 |
+| 人类观察项 | 显式引用目标可编辑；集合外目标提示先引用或确认范围；取消范围卡后无隐藏授权；continuation 不跨 TaskRun/workspace 串用 |
+| 状态 | `DESIGNED` |
+
 ## 5. P1 开放条件验证卡清单
 
 每项 P1 按子能力、格式/解析能力、权限、确认/保存/恢复语义与真实验证**独立开放**；对应子卡在各项 P1
@@ -230,4 +242,5 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 2026-08-14 | v1.0 | AG-1.0-D4-VALIDATION-CARDS-01：建立 Agent 1.0 验证卡设计——追溯矩阵、状态化链路验证矩阵、核心场景卡 V-N1~N4（D-NEW）与 V-S1~S9（三态分流/连续接力/保存/澄清终态/TaskRun/外部内容记忆/会话隔离）、P1 独立开放条件清单（V-P1-01~07）与进入 IMPLEMENTATION 的门禁规则；卡状态一律 DESIGNED，未执行不填报通过。 |
 | 2026-08-27 | v1.1 | AG-CONFORMANCE-CODE-S3A：细化 V-S6 为同一 AgentTurn 澄清受控重入，补充身份 guard、调用前失败恢复与等待态取消证据设计；卡状态保持 DESIGNED。 |
 | 2026-08-28 | v1.2 | AG-CONFORMANCE-CODE-S3B：细化 V-S7 为简单回合零 TaskRun、任务级产物按需创建、显式 continuation 唯一复用与无 TaskRun Diff 不自动续片段；卡状态保持 DESIGNED。 |
+| 2026-08-28 | v1.3 | AG-CONFORMANCE-CODE-S3D：新增 V-S10，覆盖 ExplicitEditTargetSet 初始来源、澄清单调追加、scope 确认追加、TaskRun 持久继承、CreateDocumentBundle 建盘后追加及集合外零 PendingDiff 硬拒；卡状态保持 DESIGNED。 |
 | 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |

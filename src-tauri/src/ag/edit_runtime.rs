@@ -36,7 +36,7 @@ pub(super) fn ag_propose_edit(
     params: &serde_json::Value,
     read_ctx: &ag::blocks::AgentReadContext,
     current_rel: Option<&str>,
-    declared_targets: &[String],
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
 ) -> Result<AgentProposeEditResult, IpcError> {
     use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
     use crate::types::LocateResult;
@@ -71,7 +71,7 @@ pub(super) fn ag_propose_edit(
         })
         .transpose()?;
 
-    let rel_path = params
+    let requested_rel_path = params
         .get("path")
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
@@ -79,34 +79,24 @@ pub(super) fn ag_propose_edit(
         .to_string();
 
     let ws = active_ws(state)?;
+    let rel_path = ag::target_set::normalize_existing_target(
+        std::path::Path::new(&ws.root_path),
+        &requested_rel_path,
+    )?;
     // 路径限 workspace 内（X-FORBID-004）。
     let abs = workspace::resolve_in_workspace(std::path::Path::new(&ws.root_path), &rel_path)?;
 
-    // 目标集双守（BR-AG-DATA-003，2026-07-04 版）：当前文档/显式声明集，未声明既有文档拒绝
-    // （错误回注模型，模型可提示用户显式 @引用后重试）。AG guard 与 DE 协同校验两侧均须通过。
+    // 目标集双守（BR-AG-DATA-003）：既有文档必须属于 ExplicitEditTargetSet；未授权目标稳定拒绝，
+    // 错误回注模型后只能由显式引用或 scope DecisionRequest 确认扩展。AG 与 DE 两侧均须通过。
     let target_exists = abs.exists();
     // WS-RESOURCE-WRITE-GUARD-01（F1，X-FORBID-006）：内容 Diff 不得创建资源。目标路径不存在即拒绝，
     // 与意图分类无关——此前 Edit/其他意图下 propose_edit 到不存在路径会经 ReplaceDocument + 接受
     // 落盘创建文件，已封闭；新建文档唯一入口是 plan_workspace_operation。
     guard_propose_edit_target(target_exists)?;
-    // 未声明既有文档放行（AcceptCrossDocument），标注 cross_doc
-    // 由 DiffCard「跨文档目标」+ 用户确认承担安全；不再硬拒（延续词/多文档联动不再被锁死）。
-    let cross_doc = match crate::ag::context::guard_target_set(
-        current_rel,
-        declared_targets,
-        &rel_path,
-        target_exists,
-    ) {
-        crate::ag::context::TargetDecision::AcceptCrossDocument => true,
-        crate::ag::context::TargetDecision::Accept => false,
-    };
-    let cross_doc = cross_doc
-        || !crate::de::generate::target_declared(
-            &rel_path,
-            current_rel,
-            declared_targets,
-            target_exists,
-        );
+    // ExplicitEditTargetSet 是修改授权 SSOT；cross_doc 只保留集合内非当前文档的展示属性。
+    ag::target_set::ensure_authorized(explicit_edit_target_set, &rel_path)?;
+    crate::de::generate::ensure_agent_target_authorized(&rel_path, explicit_edit_target_set)?;
+    let cross_doc = current_rel != Some(rel_path.as_str());
     let edit_operation = resolve_agent_edit_operation(params, target_exists)?;
 
     let target_is_current_editor = current_rel == Some(rel_path.as_str());

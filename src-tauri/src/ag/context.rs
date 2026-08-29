@@ -1055,48 +1055,6 @@ pub fn scope_history_for_current_doc(
     }
 }
 
-/// 目标边界裁决结果（BR-AG-DATA-003，允许标注后的跨文档内容提案）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TargetDecision {
-    /// 当前文档 / 显式声明集内 / 新建文档（新建的人类闸门=diff 裁决卡，接受方落盘）。
-    Accept,
-    /// 未声明的**既有**文档——放行但标注 cross_doc（DiffCard「跨文档目标」
-    /// 提示 + 用户确认承担安全，取代硬拒；延续词/多文档联动不再被锁死）。
-    AcceptCrossDocument,
-}
-
-/**
- * @GOV
- * codes:    BR-AG-DATA-003-GUARD-AG-AG-TURN-001
- * type:     GUARD
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-003
- * boundary: in=declaredTargetSetAndProposalTarget | out=TargetDecision(acceptCurrentDeclaredOrNewDocRejectUndeclaredExisting)
- */
-/// 回合目标集守卫（BR-AG-DATA-003，2026-07-04 人类裁决版，取代单文档铁律）：ChangeProposal target
-/// 须属回合声明的目标集——当前文档 ∪ 用户显式指向集（@mention / 块引用所在文档）；target 为**不存在
-/// 的路径**视为新建文档放行（仍经 DE diff 裁决、人类接受方落盘，X-FORBID-006 闸门即「明确要求」的
-/// 确认点）；指向**未声明的既有文档**一律拒绝，防模型游走改无关文件。workspace 限界（X-FORBID-004）
-/// 由调用方 resolve_in_workspace 前置保证。与 DE 侧 `ensure_target_declared` 双侧把守。
-pub fn guard_target_set(
-    current_rel: Option<&str>,
-    declared_rels: &[String],
-    target_rel: &str,
-    target_exists: bool,
-) -> TargetDecision {
-    if current_rel == Some(target_rel) {
-        return TargetDecision::Accept;
-    }
-    if declared_rels.iter().any(|d| d == target_rel) {
-        return TargetDecision::Accept;
-    }
-    if !target_exists {
-        return TargetDecision::Accept; // 新建：diff 裁决卡为人类确认闸门
-    }
-    // 未声明既有文档 → 放行 + cross_doc 标注（内容 DiffCard 裁决兜底，取代硬拒）。
-    TargetDecision::AcceptCrossDocument
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1149,43 +1107,6 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), names.len(), "layer 名不得重复");
-    }
-
-    // covers: BR-AG-DATA-003
-    // 目标集边界（2026-07-04 版）：当前文档/声明集内/新建 → Accept；未声明既有文档 → RejectUndeclared。
-    #[test]
-    fn target_set_accepts_current_declared_new_rejects_undeclared_existing() {
-        let declared = vec!["ref.md".to_string()];
-        // ① 当前文档。
-        assert_eq!(
-            guard_target_set(Some("a.md"), &declared, "a.md", true),
-            TargetDecision::Accept
-        );
-        // ② 用户显式声明集内（@mention / 块引用）。
-        assert_eq!(
-            guard_target_set(Some("a.md"), &declared, "ref.md", true),
-            TargetDecision::Accept
-        );
-        // ③ 新建文档（不存在的路径，diff 裁决卡为人类闸门）。
-        assert_eq!(
-            guard_target_set(Some("a.md"), &declared, "new.md", false),
-            TargetDecision::Accept
-        );
-        // ④ 未声明的既有文档：放行但标注 AcceptCrossDocument（DiffCard
-        // 「跨文档目标」+ 用户确认承担安全，不再硬拒；多文档联动不再被锁死）。
-        assert_eq!(
-            guard_target_set(Some("a.md"), &declared, "other.md", true),
-            TargetDecision::AcceptCrossDocument
-        );
-        // ⑤ 无当前文档（未打开编辑器）时，声明集与新建仍可用，未声明既有仍标注跨文档。
-        assert_eq!(
-            guard_target_set(None, &declared, "ref.md", true),
-            TargetDecision::Accept
-        );
-        assert_eq!(
-            guard_target_set(None, &[], "other.md", true),
-            TargetDecision::AcceptCrossDocument
-        );
     }
 
     // PI-AG-09B：文档层封顶（短不动、长截断 + 注记，不静默）。
