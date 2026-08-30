@@ -78,7 +78,6 @@ pub fn transition(state: TaskRunStatus, event: TaskRunEvent) -> Option<TaskRunSt
         (S::WaitingConfirm, Interrupt) | (S::WaitingClarification, Interrupt) => S::Interrupted,
         (S::Interrupted, Retry) => S::Planned,
         (S::Executing, Finish) => S::Completed,
-        (S::WaitingConfirm, Finish) => S::Completed,
         _ => return None,
     };
     Some(next)
@@ -1283,8 +1282,8 @@ mod tests {
         assert_eq!(transition(S::Executing, E::Interrupt), Some(S::Interrupted));
         assert_eq!(transition(S::Interrupted, E::Retry), Some(S::Planned));
         assert_eq!(transition(S::Executing, E::Finish), Some(S::Completed));
-        assert_eq!(transition(S::WaitingConfirm, E::Finish), Some(S::Completed));
         // forbidden：Executing 未经 finish 不得 Completed；WaitingConfirm 未经裁决不得推进；Interrupted 无重试不得执行
+        assert_eq!(transition(S::WaitingConfirm, E::Finish), None);
         assert_eq!(transition(S::WaitingConfirm, E::StepStarted), None);
         assert_eq!(transition(S::WaitingConfirm, E::StepFail), None);
         assert_eq!(transition(S::Interrupted, E::StepStarted), None);

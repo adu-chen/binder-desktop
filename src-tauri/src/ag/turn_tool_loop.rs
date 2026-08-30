@@ -22,14 +22,81 @@ use std::sync::{
     Arc,
 };
 
+fn terminal_tool_is_missing(
+    required_terminal_tool: Option<&str>,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+) -> bool {
+    match required_terminal_tool {
+        Some("propose_edit") => {
+            !edit_intent_has_terminal_tool_result(proposed_diff, edit_blocked_reported)
+        }
+        // 成功的资源计划会在 DecisionRequest 事件分支提前结束；仍在模型循环中即尚未满足。
+        Some("plan_workspace_operation") => true,
+        _ => false,
+    }
+}
+
+fn required_terminal_tool_error(
+    required_terminal_tool: Option<&str>,
+    any_tool_called: bool,
+) -> IpcError {
+    if required_terminal_tool == Some("plan_workspace_operation") {
+        return IpcError::new(
+            "AG_WORKSPACE_PLAN_TOOL_REQUIRED",
+            "本轮是工作区资源请求，但工具循环结束前未生成 WorkspaceOperationPlan；请调用 plan_workspace_operation 生成待确认计划。工作区没有被修改。",
+            true,
+            false,
+        );
+    }
+    IpcError::new(
+        "AG_EDIT_TOOL_REQUIRED",
+        if any_tool_called {
+            "本轮是编辑请求，模型读取了文档但未生成修改建议；请基于已读内容直接调用 propose_edit 生成 DiffCard，或明确说明为何无法修改。文档没有被修改。"
+        } else {
+            "本轮是编辑请求，但模型未调用任何工具；请直接调用 propose_edit 生成修改建议（可先调用 read_doc/list_blocks 读取目标内容，再在同一轮继续调用 propose_edit）。文档没有被修改，请重试。"
+        },
+        true,
+        false,
+    )
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038
+ * type:     EFFECT
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * term_ref: TERM-AG-002
+ * boundary: in=CurrentToolLoopStateAndToolLoopEvent | out=TransitionValidatedToolLoopStateBroadcast | effect=SM-AG-02-state_changed | delegate=ag::tool::transition | does_not=broadcastUnregisteredTransitionOrSettleAgentTurn
+ */
+fn advance_tool_loop(
+    app: &tauri::AppHandle,
+    turn_id: &str,
+    state: &mut ag::tool::ToolLoopState,
+    event: ag::tool::ToolLoopEvent,
+) -> Result<ag::tool::ToolLoopState, IpcError> {
+    let next = ag::tool::transition(*state, event).ok_or_else(|| {
+        IpcError::new(
+            "AG_TOOL_LOOP_STATE_INVALID",
+            &format!("SM-AG-02 非法转移：{:?} + {:?}", state, event),
+            false,
+            false,
+        )
+    })?;
+    *state = next;
+    emit_ag02(app, turn_id, next);
+    Ok(next)
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-STATE-008
- * term_ref: TERM-AG-015, TERM-AG-016
- * boundary: in=PreparedPromptCapabilityGrantAndActiveAgentTurnWithOptionalTaskRun | out=ToolResultsPendingDiffEventsAndSingleAgentTurnTerminalAndOnDemandTaskRunForTaskLevelProducts | delegate=ag::tool::transition | consumer=OptionalTaskRunStatus
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016
+ * boundary: in=PreparedPromptCurrentCapabilityGrantAndActiveAgentTurnWithOptionalTaskRun | out=ValidatedToolResultsPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=validate_requested_tool_for_grant,advance_tool_loop | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideGrantOrTreatWorkspaceOperationPlanAsContentProposal
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop(
@@ -53,7 +120,7 @@ pub(super) async fn run_turn_tool_loop(
     active_doc_path: Option<String>,
     explicit_edit_target_set: ag::target_set::ExplicitEditTargetSet,
     ws_root: Option<String>,
-    requires_edit_tool: bool,
+    required_terminal_tool: Option<String>,
     current_doc_requires_tool_read: bool,
 ) -> Result<(), IpcError> {
     let mut proposed_diff = false;
@@ -63,7 +130,7 @@ pub(super) async fn run_turn_tool_loop(
     // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
     // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultInjecting→
     // 续调 / FinalAnswer→LoopCompleted / 达上限→LoopAborted）。工具卡数据仍由 Channel 投影（互不替代）。
-    use ag::tool::ToolLoopState as TlSt;
+    use ag::tool::{ToolLoopEvent as TlEv, ToolLoopState as TlSt};
     const MAX_ROUNDS: usize = 6;
     // AG-TASK-01 F1a：单回合提案上限（整篇对齐分批最多 5 批；同轮可并行）。
     const MAX_PROPOSALS_PER_TURN: usize = 5;
@@ -73,9 +140,29 @@ pub(super) async fn run_turn_tool_loop(
     // 完整 Prompt 审计只保留本次 AgentTurn 最后一次实际发给模型的请求；回合退出时由 Drop
     // 统一输出一次，避免工具续轮把前序 messages/tools 反复打印。
     let mut final_prompt_audit = prompt_audit_enabled().then(FinalPromptAuditLog::default);
+    let mut tool_loop_state = TlSt::ModelStreaming;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            match advance_tool_loop(&app, &turn_id, &mut tool_loop_state, $event) {
+                Ok(next) => next,
+                Err(error) => {
+                    settle_and_emit_ag_turn_error(
+                        &state,
+                        task_run_id.as_deref(),
+                        &on_event,
+                        &terminal_latch,
+                        &app,
+                        &turn_id,
+                        &error,
+                    );
+                    return Ok(());
+                }
+            }
+        }};
+    }
     for _round in 0..MAX_ROUNDS {
         if cancelled.load(Ordering::Acquire) {
-            emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+            advance_or_finish!(TlEv::Cancel);
             if let Ok(conn) = state.db.lock() {
                 settle_optional_task_run(
                     &conn,
@@ -99,7 +186,7 @@ pub(super) async fn run_turn_tool_loop(
                 Err(error) => Some(error),
             };
             if let Some(error) = gate_error {
-                emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                advance_or_finish!(TlEv::LoopError);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
@@ -112,8 +199,8 @@ pub(super) async fn run_turn_tool_loop(
                 return Ok(());
             }
         }
-        emit_ag02(&app, &turn_id, TlSt::ModelStreaming); // 本轮模型流式
-                                                         // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
+        debug_assert_eq!(tool_loop_state, TlSt::ModelStreaming);
+        // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
         let provider_messages = provider_messages_for_model(&messages);
         if let Some(audit_log) = final_prompt_audit.as_mut() {
             let audit = build_prompt_audit_record(
@@ -134,7 +221,7 @@ pub(super) async fn run_turn_tool_loop(
         if let Err(error) =
             install_agent_turn_abort_handle(&state, &session_id, &turn_id, abort_handle)
         {
-            emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+            advance_or_finish!(TlEv::LoopError);
             settle_and_emit_ag_turn_error(
                 &state,
                 task_run_id.as_deref(),
@@ -161,7 +248,7 @@ pub(super) async fn run_turn_tool_loop(
         .await
         {
             Err(_) => {
-                emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                advance_or_finish!(TlEv::Cancel);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
@@ -174,7 +261,7 @@ pub(super) async fn run_turn_tool_loop(
                 return Ok(());
             }
             Ok(Err(error)) => {
-                emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                advance_or_finish!(TlEv::LoopError);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
@@ -190,7 +277,7 @@ pub(super) async fn run_turn_tool_loop(
         };
         match round {
             ent::gateway::RoundOutcome::Failed(error) => {
-                emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                advance_or_finish!(TlEv::LoopError);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
@@ -232,7 +319,7 @@ pub(super) async fn run_turn_tool_loop(
                             true,
                             false,
                         );
-                        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                        advance_or_finish!(TlEv::LoopError);
                         if let Ok(conn) = state.db.lock() {
                             settle_optional_task_run(
                                 &conn,
@@ -246,7 +333,7 @@ pub(super) async fn run_turn_tool_loop(
                     }
                     Ok(false) => {}
                     Err(error) => {
-                        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                        advance_or_finish!(TlEv::LoopError);
                         if let Ok(conn) = state.db.lock() {
                             settle_optional_task_run(
                                 &conn,
@@ -259,17 +346,16 @@ pub(super) async fn run_turn_tool_loop(
                         return Ok(());
                     }
                 }
-                if requires_edit_tool
-                    && !edit_intent_has_terminal_tool_result(proposed_diff, edit_blocked_reported)
-                {
-                    // AG-CTX-01：区分"已读未提案"与"零工具调用"——帮助模型理解失败原因并给出正确下一步。
-                    let message = if any_tool_called {
-                        "本轮是编辑请求，模型读取了文档但未生成修改建议；请基于已读内容直接调用 propose_edit 生成 DiffCard，或明确说明为何无法修改。文档没有被修改。"
-                    } else {
-                        "本轮是编辑请求，但模型未调用任何工具；请直接调用 propose_edit 生成修改建议（可先调用 read_doc/list_blocks 读取目标内容，再在同一轮继续调用 propose_edit）。文档没有被修改，请重试。"
-                    };
-                    let error = IpcError::new("AG_EDIT_TOOL_REQUIRED", message, true, false);
-                    emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                if terminal_tool_is_missing(
+                    required_terminal_tool.as_deref(),
+                    proposed_diff,
+                    edit_blocked_reported,
+                ) {
+                    let error = required_terminal_tool_error(
+                        required_terminal_tool.as_deref(),
+                        any_tool_called,
+                    );
+                    advance_or_finish!(TlEv::LoopError);
                     if let Ok(conn) = state.db.lock() {
                         settle_optional_task_run(
                             &conn,
@@ -281,7 +367,7 @@ pub(super) async fn run_turn_tool_loop(
                     emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
                     return Ok(());
                 }
-                emit_ag02(&app, &turn_id, TlSt::LoopCompleted); // ModelStreaming→FinalAnswer→LoopCompleted
+                advance_or_finish!(TlEv::FinalAnswer);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
@@ -294,7 +380,25 @@ pub(super) async fn run_turn_tool_loop(
                 return Ok(());
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
-                emit_ag02(&app, &turn_id, TlSt::ToolValidating); // ModelStreaming→ToolRequest→ToolValidating
+                if calls.is_empty() {
+                    let error = IpcError::new(
+                        "AG_TOOL_CALLS_EMPTY",
+                        "模型返回了空 ToolCall 集合，当前工具循环已中止。",
+                        true,
+                        false,
+                    );
+                    advance_or_finish!(TlEv::LoopError);
+                    settle_and_emit_ag_turn_error(
+                        &state,
+                        task_run_id.as_deref(),
+                        &on_event,
+                        &terminal_latch,
+                        &app,
+                        &turn_id,
+                        &error,
+                    );
+                    return Ok(());
+                }
                 any_tool_called = true;
                 // 先把 assistant 的 tool_calls 入历史（OpenAI 要求 tool 结果前有对应 assistant.tool_calls）。
                 let tc_json: Vec<serde_json::Value> = calls
@@ -308,10 +412,9 @@ pub(super) async fn run_turn_tool_loop(
                     .collect();
                 messages.push(serde_json::json!({ "role": "assistant", "content": null, "tool_calls": tc_json }));
 
-                emit_ag02(&app, &turn_id, TlSt::ToolExecuting);
-                for c in &calls {
+                for (call_index, c) in calls.iter().enumerate() {
                     if cancelled.load(Ordering::Acquire) {
-                        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                        advance_or_finish!(TlEv::Cancel);
                         if let Ok(conn) = state.db.lock() {
                             settle_optional_task_run(
                                 &conn,
@@ -323,6 +426,7 @@ pub(super) async fn run_turn_tool_loop(
                         emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
                         return Ok(());
                     }
+                    advance_or_finish!(TlEv::ToolRequest);
                     let params: serde_json::Value;
                     let arg_parse_error: Option<String> = match serde_json::from_str(&c.arguments) {
                         Ok(value) => {
@@ -521,6 +625,14 @@ pub(super) async fn run_turn_tool_loop(
                     } else {
                         None
                     };
+                    let validation_allows_execution = arg_parse_error.is_none()
+                        && plan_guard_error.is_none()
+                        && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow));
+                    if validation_allows_execution {
+                        advance_or_finish!(TlEv::ValidateOk);
+                    } else {
+                        advance_or_finish!(TlEv::ValidateFail);
+                    }
                     let (mut result, mut success) = if let Some(error_msg) = arg_parse_error {
                         (error_msg, false)
                     } else if let Some(error_msg) = plan_guard_error {
@@ -857,7 +969,7 @@ pub(super) async fn run_turn_tool_loop(
                         current_doc_read_confirmed = true;
                     }
                     if cancelled.load(Ordering::Acquire) {
-                        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+                        advance_or_finish!(TlEv::Cancel);
                         if let Ok(conn) = state.db.lock() {
                             settle_optional_task_run(
                                 &conn,
@@ -868,6 +980,13 @@ pub(super) async fn run_turn_tool_loop(
                         }
                         emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
                         return Ok(());
+                    }
+                    if validation_allows_execution {
+                        advance_or_finish!(if success {
+                            TlEv::ExecOk
+                        } else {
+                            TlEv::ExecFail
+                        });
                     }
                     let _ = on_event.send(AgTurnEvent::ToolResult {
                         turn_id: turn_id.clone(),
@@ -914,7 +1033,7 @@ pub(super) async fn run_turn_tool_loop(
                         {
                             let _ = ag::task::link_turn(&conn, &turn_id, task_run_id);
                         }
-                        emit_ag02(&app, &turn_id, TlSt::LoopCompleted);
+                        advance_or_finish!(TlEv::Handoff);
                         emit_ag_turn_done(
                             &on_event,
                             &terminal_latch,
@@ -935,7 +1054,7 @@ pub(super) async fn run_turn_tool_loop(
                             kind: decision.kind,
                             payload: decision.payload,
                         });
-                        emit_ag02(&app, &turn_id, TlSt::LoopCompleted);
+                        advance_or_finish!(TlEv::Handoff);
                         if let Ok(conn) = state.db.lock() {
                             // propose_decision 已将 TaskRun 置 WaitingConfirm；settle 只做同一真实状态的收束。
                             settle_optional_task_run(
@@ -957,28 +1076,27 @@ pub(super) async fn run_turn_tool_loop(
                     drop(mutation_guard);
                     // 结果回注模型（SM-AG-02 ResultInjecting）。
                     messages.push(serde_json::json!({ "role": "tool", "tool_call_id": c.id, "content": result }));
+                    let has_more_calls = call_index + 1 < calls.len();
+                    let has_another_round = _round + 1 < MAX_ROUNDS;
+                    if has_more_calls || has_another_round {
+                        advance_or_finish!(TlEv::Injected);
+                    }
                 }
-                emit_ag02(&app, &turn_id, TlSt::ResultInjecting); // ToolExecuting→ExecOk→ResultInjecting
-                                                                  // AG-CTX-01：移除工具结果截断（错误范式，曾导致提案关键数据丢失）。
-                                                                  // 上下文控制改由源头轻量投影承担（list_blocks 块目录 / read_doc blocks 范围参数），
-                                                                  // 工具结果不再事后截断。
-                                                                  // 继续下一轮（ResultInjecting→Injected→ModelStreaming，下轮顶部广播）。
+                // AG-CTX-01：工具结果不事后截断；同轮多个 ToolCall 已逐项回注并完成状态转移。
             }
         }
     }
 
-    // 达工具循环上限（BR-AG-STATE-002 LoopAborted）：收尾完成终态。
-    if requires_edit_tool
-        && !edit_intent_has_terminal_tool_result(proposed_diff, edit_blocked_reported)
-    {
-        // AG-CTX-01：与 LoopCompleted 分支同语义的文案区分。
-        let message = if any_tool_called {
-            "本轮是编辑请求，模型读取了文档但工具循环结束前未生成修改建议；请基于已读内容直接调用 propose_edit 生成 DiffCard，或明确说明为何无法修改。文档没有被修改。"
-        } else {
-            "本轮是编辑请求，但模型未调用任何工具；请直接调用 propose_edit 生成修改建议（可先调用 read_doc/list_blocks 读取目标内容，再在同一轮继续调用 propose_edit）。文档没有被修改，请重试。"
-        };
-        let error = IpcError::new("AG_EDIT_TOOL_REQUIRED", message, true, false);
-        emit_ag02(&app, &turn_id, TlSt::LoopAborted);
+    // 达工具循环上限（BR-AG-STATE-002 LoopAborted）：收束中止终态。
+    let missing_terminal_tool = terminal_tool_is_missing(
+        required_terminal_tool.as_deref(),
+        proposed_diff,
+        edit_blocked_reported,
+    );
+    if missing_terminal_tool {
+        let error =
+            required_terminal_tool_error(required_terminal_tool.as_deref(), any_tool_called);
+        advance_or_finish!(TlEv::LoopError);
         if let Ok(conn) = state.db.lock() {
             settle_optional_task_run(
                 &conn,
@@ -990,21 +1108,55 @@ pub(super) async fn run_turn_tool_loop(
         emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
         return Ok(());
     }
-    emit_ag02(&app, &turn_id, TlSt::LoopAborted); // ResultInjecting→LoopLimit→LoopAborted
+    advance_or_finish!(TlEv::LoopLimit);
+    let error = IpcError::new(
+        "AG_TOOL_LOOP_LIMIT",
+        "工具循环达到上限，当前 AgentTurn 已中止；未完成步骤不会被标记为完成。",
+        true,
+        false,
+    );
     if let Ok(conn) = state.db.lock() {
         settle_optional_task_run(
             &conn,
             task_run_id.as_deref(),
             &turn_id,
-            ag::task::TurnOutcome::Completed,
+            ag::task::TurnOutcome::Failed,
         );
     }
-    emit_ag_turn_done(
-        &on_event,
-        &terminal_latch,
-        &app,
-        &turn_id,
-        "tool_loop_limit",
-    );
+    emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_tool_requirement_distinguishes_content_and_workspace_side_effects() {
+        assert!(!terminal_tool_is_missing(None, false, false));
+        assert!(terminal_tool_is_missing(Some("propose_edit"), false, false));
+        assert!(!terminal_tool_is_missing(Some("propose_edit"), true, false));
+        assert!(!terminal_tool_is_missing(Some("propose_edit"), false, true));
+        assert!(terminal_tool_is_missing(
+            Some("plan_workspace_operation"),
+            false,
+            false
+        ));
+        assert_eq!(
+            required_terminal_tool_error(Some("plan_workspace_operation"), false).code,
+            "AG_WORKSPACE_PLAN_TOOL_REQUIRED"
+        );
+    }
+
+    // covers: BR-AG-STATE-002
+    // 生产状态广播只能由 advance_tool_loop 内真实转移成功后产生，防止回退为装饰性广播。
+    #[test]
+    fn production_tool_loop_has_one_transition_validated_state_broadcast_owner() {
+        let source = include_str!("turn_tool_loop.rs");
+        let broadcast_call = ["emit_ag02", "("].concat();
+        let transition_call = ["ag::tool::transition", "("].concat();
+
+        assert_eq!(source.matches(&broadcast_call).count(), 1);
+        assert_eq!(source.matches(&transition_call).count(), 1);
+    }
 }

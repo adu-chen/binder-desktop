@@ -14,7 +14,7 @@ use super::turn_control::{
     register_active_agent_turn,
 };
 use super::turn_events::{
-    emit_ag01, emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_error,
+    emit_ag01, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_error,
     settle_and_emit_ag_turn_error, sm_error,
 };
 use super::turn_prompt::{prepare_turn_prompt, PreparedTurnPrompt};
@@ -23,12 +23,34 @@ use super::turn_tool_loop::run_turn_tool_loop;
 
 /**
  * @GOV
+ * codes:    BR-SYS-STATE-007-GUARD-AG-AG-TURN-037
+ * type:     GUARD
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-SYS-STATE-007
+ * term_ref: TERM-AG-013
+ * boundary: in=OptionalRuntimeProfile | out=ValidatedAgentEditRuntimeProfileOrStablePreGateRejection | does_not=applyCompatibilityDefaultOrEmitExecutableEvent
+ */
+fn require_runtime_profile(runtime_profile: Option<String>) -> Result<String, IpcError> {
+    let runtime_profile = runtime_profile.ok_or_else(|| {
+        IpcError::new(
+            "AG_RUNTIME_PROFILE_REQUIRED",
+            "缺少 Agent RuntimeProfile",
+            false,
+            false,
+        )
+    })?;
+    ag::turn::ensure_runtime_profile(&runtime_profile)?;
+    Ok(runtime_profile)
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018
  * type:     API
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
- * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-016
- * boundary: in=AgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndOptionalTaskRunTransitions | effect=IPC-ag_start_turn | delegate=ag::turn::transition,register_active_agent_turn | does_not=createTaskRunForSimpleAgentTurnOrCreateNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
+ * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016
+ * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndOptionalTaskRunTransitions | effect=IPC-ag_start_turn | delegate=require_runtime_profile,resolve_intent_result_with_targets,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=defaultMissingRuntimeProfileOrCreateTaskRunForSimpleAgentTurnOrCreateNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
@@ -60,9 +82,7 @@ pub(crate) async fn ag_start_turn(
 ) -> Result<(), IpcError> {
     use ag::turn::{ensure_gate_passed, transition, GateState, TurnEvent, TurnState};
 
-    let runtime_profile =
-        runtime_profile.unwrap_or_else(|| ag::turn::AGENT_EDIT_1_0_PROFILE.to_string());
-    ag::turn::ensure_runtime_profile(&runtime_profile)?;
+    let runtime_profile = require_runtime_profile(runtime_profile)?;
     let clarification_resume = clarification_resume.unwrap_or(false);
 
     if prompt.trim().is_empty() && references.is_empty() {
@@ -441,11 +461,13 @@ pub(crate) async fn ag_start_turn(
                 )
             })
     });
-    let intent_result = ag::context::resolve_intent_result(
+    let intent_target_paths = explicit_edit_target_set.paths();
+    let intent_result = ag::context::resolve_intent_result_with_targets(
         &turn_id,
         &prompt,
         active_doc_path.as_deref(),
         has_selection,
+        &intent_target_paths,
     );
     // AG-1.0-TASKRUN-REWORK-INTENT-01：IntentResult 复杂目标 → 自动创建 TaskPlan（TERM-AG-018）。
     // 计划为可展示的受控步骤（读取→生成建议）；实际 ToolResult 才推进计划状态和 cursor。
@@ -559,6 +581,91 @@ pub(crate) async fn ag_start_turn(
         });
         return Ok(());
     }
+
+    // SM-AG-01 Assembling 必须在提交 Gate 前完成 PromptPackage、CapabilityGrant 与预算校验。
+    // 这段装配不调用 provider、ToolCall 或 Proposal；任一失败都保持在 Assembling 的错误路径。
+    let ws_root: Option<String> = Some(workspace_root_path.clone());
+    let explicit_edit_targets = explicit_edit_target_set.paths();
+    let required_terminal_tool = intent_result.required_terminal_tool().map(str::to_string);
+    let requires_current_doc_tool_read = required_terminal_tool.as_deref() == Some("propose_edit");
+    if intent_result.intent_type == ag::context::IntentTypeV1::Edit {
+        if let Some(snapshot) = &active_snapshot {
+            if !snapshot.content.trim().is_empty() && snapshot.blocks.is_empty() {
+                let error = IpcError::new(
+                    "AG_ACTIVE_BLOCKS_REQUIRED",
+                    "当前文档块投影为空，已阻断编辑请求，请重新加载文档后重试。",
+                    true,
+                    false,
+                );
+                if let Ok(conn) = state.db.lock() {
+                    settle_optional_task_run(
+                        &conn,
+                        task_run_id.as_deref(),
+                        &turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
+                }
+                emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                return Ok(());
+            }
+        }
+    }
+    let PreparedTurnPrompt {
+        current_doc_requires_tool_read,
+        messages,
+        tools,
+        capability_grant,
+        prompt_package,
+    } = started_turn_or_finish!(prepare_turn_prompt(
+        &state,
+        &runtime_profile,
+        &turn_id,
+        &session_id,
+        task_run_id.as_deref(),
+        &intent_result,
+        &explicit_edit_targets,
+        &read_ctx,
+        active_doc_path.as_deref(),
+        active_snapshot.as_ref(),
+        &history,
+        &prompt,
+        mention_block.as_deref(),
+        requires_current_doc_tool_read,
+    ));
+
+    // 预算与实际 provider messages/tools 使用同一序列化口径，并在 Gate 前失败关闭。
+    if ag::context::estimate_serialized_input_tokens(&messages, &tools) > PROMPT_TOKEN_BUDGET {
+        let error = IpcError::new(
+            "AG_PROMPT_BUDGET_EXCEEDED",
+            "本轮可信上下文超出 Prompt 预算，请减少引用或缩小文档范围后重试。",
+            true,
+            false,
+        );
+        if let Ok(conn) = state.db.lock() {
+            settle_optional_task_run(
+                &conn,
+                task_run_id.as_deref(),
+                &turn_id,
+                ag::task::TurnOutcome::Failed,
+            );
+        }
+        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+        return Ok(());
+    }
+    eprintln!(
+        "[ag-trace] turn_id={} session_id={} profile={} intent_id={} intent_type={:?} context_trace_id={} tool_manifest_hash={} envelope_count={} allowed_tool_count={} estimated_tokens={}",
+        turn_id,
+        session_id,
+        runtime_profile,
+        intent_result.intent_id,
+        intent_result.intent_type,
+        prompt_package.context_trace_id,
+        prompt_package.tool_manifest_hash,
+        prompt_package.envelopes.len(),
+        capability_grant.allowed_tools.len(),
+        prompt_package.estimated_tokens,
+    );
+
     let s = started_turn_or_finish!(transition(s, TurnEvent::Assembled).ok_or_else(sm_error)); // → AwaitingGate
     emit_ag01(&app, &turn_id, s);
     if cancelled.load(Ordering::Acquire) {
@@ -622,90 +729,6 @@ pub(crate) async fn ag_start_turn(
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| ent::gateway::default_model(&provider));
 
-    // agent-edit-1.0 不自动召回 AST/KB/TPL。显式引用仍由下方 REF 通道注入。
-    let ws_root: Option<String> = Some(workspace_root_path.clone());
-    let explicit_edit_targets = explicit_edit_target_set.paths();
-
-    let requires_edit_tool = intent_result.requires_proposal();
-    if intent_result.intent_type == ag::context::IntentTypeV1::Edit {
-        if let Some(snapshot) = &active_snapshot {
-            if !snapshot.content.trim().is_empty() && snapshot.blocks.is_empty() {
-                let error = IpcError::new(
-                    "AG_ACTIVE_BLOCKS_REQUIRED",
-                    "当前文档块投影为空，已阻断编辑请求，请重新加载文档后重试。",
-                    true,
-                    false,
-                );
-                emit_ag02(&app, &turn_id, ag::tool::ToolLoopState::LoopAborted);
-                if let Ok(conn) = state.db.lock() {
-                    settle_optional_task_run(
-                        &conn,
-                        task_run_id.as_deref(),
-                        &turn_id,
-                        ag::task::TurnOutcome::Failed,
-                    );
-                }
-                emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
-                return Ok(());
-            }
-        }
-    }
-    let PreparedTurnPrompt {
-        current_doc_requires_tool_read,
-        messages,
-        tools,
-        capability_grant,
-        prompt_package,
-    } = started_turn_or_finish!(prepare_turn_prompt(
-        &state,
-        &runtime_profile,
-        &turn_id,
-        &session_id,
-        task_run_id.as_deref(),
-        &intent_result,
-        &explicit_edit_targets,
-        &read_ctx,
-        active_doc_path.as_deref(),
-        active_snapshot.as_ref(),
-        &history,
-        &prompt,
-        mention_block.as_deref(),
-        requires_edit_tool,
-    ));
-
-    // 预算 gate 使用统一口径（P4 修复）：序列化 messages + tools，与审计同源，避免仅信封之和低估。
-    if ag::context::estimate_serialized_input_tokens(&messages, &tools) > PROMPT_TOKEN_BUDGET {
-        let error = IpcError::new(
-            "AG_PROMPT_BUDGET_EXCEEDED",
-            "本轮可信上下文超出 Prompt 预算，请减少引用或缩小文档范围后重试。",
-            true,
-            false,
-        );
-        if let Ok(conn) = state.db.lock() {
-            settle_optional_task_run(
-                &conn,
-                task_run_id.as_deref(),
-                &turn_id,
-                ag::task::TurnOutcome::Failed,
-            );
-        }
-        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
-        return Ok(());
-    }
-    eprintln!(
-        "[ag-trace] turn_id={} session_id={} profile={} intent_id={} intent_type={:?} context_trace_id={} tool_manifest_hash={} envelope_count={} allowed_tool_count={} estimated_tokens={}",
-        turn_id,
-        session_id,
-        runtime_profile,
-        intent_result.intent_id,
-        intent_result.intent_type,
-        prompt_package.context_trace_id,
-        prompt_package.tool_manifest_hash,
-        prompt_package.envelopes.len(),
-        capability_grant.allowed_tools.len(),
-        prompt_package.estimated_tokens,
-    );
-
     run_turn_tool_loop(
         state,
         app,
@@ -727,8 +750,59 @@ pub(crate) async fn ag_start_turn(
         active_doc_path,
         explicit_edit_target_set,
         ws_root,
-        requires_edit_tool,
+        required_terminal_tool,
         current_doc_requires_tool_read,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_profile_is_required_and_unknown_values_fail_closed() {
+        let missing = require_runtime_profile(None).expect_err("missing profile must fail closed");
+        assert_eq!(missing.code, "AG_RUNTIME_PROFILE_REQUIRED");
+
+        let unknown = require_runtime_profile(Some("future-profile".to_string()))
+            .expect_err("unknown profile must fail closed");
+        assert_eq!(unknown.code, "AG_RUNTIME_PROFILE_UNSUPPORTED");
+
+        assert_eq!(
+            require_runtime_profile(Some(ag::turn::AGENT_EDIT_1_0_PROFILE.to_string())).unwrap(),
+            ag::turn::AGENT_EDIT_1_0_PROFILE
+        );
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007
+    // 生产源码顺序回归：PromptPackage/预算必须先于 assembled、Gate 和 Streaming。
+    #[test]
+    fn prompt_package_and_budget_precede_gate_and_streaming_in_production_path() {
+        let source = include_str!("turn_runtime.rs");
+        let prepare_marker = ["started_turn_or_finish!(prepare_turn_prompt", "("].concat();
+        let budget_marker = ["estimate_serialized_input_tokens", "("].concat();
+        let assembled_marker = ["TurnEvent::", "Assembled"].concat();
+        let gate_marker = ["let gate = match ent::gateway::check_gate", "()"].concat();
+        let streaming_marker = ["TurnEvent::", "GatePassed"].concat();
+
+        let prepare = source
+            .find(&prepare_marker)
+            .expect("production prompt assembly");
+        let budget = source
+            .find(&budget_marker)
+            .expect("production budget check");
+        let assembled = source
+            .find(&assembled_marker)
+            .expect("production assembled transition");
+        let gate = source.find(&gate_marker).expect("production Gate call");
+        let streaming = source
+            .find(&streaming_marker)
+            .expect("production streaming transition");
+
+        assert!(prepare < budget);
+        assert!(budget < assembled);
+        assert!(assembled < gate);
+        assert!(gate < streaming);
+    }
 }

@@ -43,7 +43,7 @@ pub(super) fn prepare_turn_prompt(
     history: &[ag::context::HistTurn],
     prompt: &str,
     mention_block: Option<&str>,
-    requires_edit_tool: bool,
+    requires_current_doc_tool_read: bool,
 ) -> Result<PreparedTurnPrompt, IpcError> {
     // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     // 2026-08-09：DOC_CTX_CAP 9000→16000（AG-LIMIT-01 扩大内联注入上限，长文档测试可直接编辑；G5 标定）。
@@ -51,27 +51,37 @@ pub(super) fn prepare_turn_prompt(
         .required_context
         .iter()
         .any(|required| required == "current_document_logical_state");
-    let current_doc_prompt_context = match (
-        needs_current_document,
-        active_doc_path.as_deref(),
-        active_snapshot.as_ref(),
-    ) {
-        (true, Some(path), Some(snapshot)) => {
-            let (has_bdocx_tables, has_bdocx_images) =
-                bdocx_structure_presence_from_context(&read_ctx, path, snapshot);
-            build_current_doc_prompt_context(
-                path,
-                snapshot,
-                DOC_CTX_CAP,
-                has_bdocx_tables,
-                has_bdocx_images,
-            )
-            .map_err(capability_error_to_ipc)?
-        }
-        _ => empty_current_doc_prompt_context(),
-    };
+    let (active_bdocx, has_bdocx_tables, _has_bdocx_images) =
+        match (active_doc_path, active_snapshot) {
+            (Some(path), Some(snapshot))
+                if snapshot.editable_kind == "bdocx"
+                    && snapshot.content_format == "html"
+                    && super::edit_support::is_active_editor_snapshot_source(&snapshot.source) =>
+            {
+                let (has_tables, has_images) =
+                    bdocx_structure_presence_from_context(read_ctx, path, snapshot);
+                (true, has_tables, has_images)
+            }
+            _ => (false, false, false),
+        };
+    let current_doc_prompt_context =
+        match (needs_current_document, active_doc_path, active_snapshot) {
+            (true, Some(path), Some(snapshot)) => {
+                let (has_bdocx_tables, has_bdocx_images) =
+                    bdocx_structure_presence_from_context(read_ctx, path, snapshot);
+                build_current_doc_prompt_context(
+                    path,
+                    snapshot,
+                    DOC_CTX_CAP,
+                    has_bdocx_tables,
+                    has_bdocx_images,
+                )
+                .map_err(capability_error_to_ipc)?
+            }
+            _ => empty_current_doc_prompt_context(),
+        };
     let current_doc_requires_tool_read =
-        requires_edit_tool && current_doc_prompt_context.requires_read_before_edit;
+        requires_current_doc_tool_read && current_doc_prompt_context.requires_read_before_edit;
     let doc_ctx = current_doc_prompt_context.text;
 
     // 历史选择必须先于 PromptPackage 构建，确保 trace 中的历史 envelope 与实际模型输入完全一致。
@@ -96,10 +106,18 @@ pub(super) fn prepare_turn_prompt(
     );
 
     let capability_grant = ag::tool_registry::resolve_capability_grant(
-        &runtime_profile,
-        &turn_id,
-        &intent_result,
-        &explicit_edit_targets,
+        runtime_profile,
+        turn_id,
+        intent_result,
+        explicit_edit_targets,
+        ag::tool_registry::CapabilityFactorsV1 {
+            has_task_run: task_run_id.is_some(),
+            active_bdocx,
+            table_ops_available: has_bdocx_tables,
+            // 图片插入需要先调用 list_images 发现受控资产；活动 BDocx 即具备查询动态能力，
+            // 具体图片实例能力仍由 ToolCall 执行层校验。
+            image_ops_available: active_bdocx,
+        },
     );
     let tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;

@@ -179,7 +179,7 @@ Stage 2 内部分三步推进；Intent 先冻结，Context 与 Prompt 再依次�
 
 **验证样本矩阵**必须覆盖：
 
-- answer / inspect / search / analyze / edit / create_document / clarify；
+- answer / inspect / search / analyze / edit / create_document / organize_workspace / clarify；
 - 当前文档、选区、新文档、显式引用的 data-only 内容与用户可见文档身份；
 - “只分析，不要修改”等否定变更约束；
 - 当前轮覆盖历史、明确沿用历史、跨文档历史不应沿用；
@@ -232,7 +232,7 @@ Stage 2 内部分三步推进；Intent 先冻结，Context 与 Prompt 再依次�
 
 ### §8.1 目标与工作包
 
-WP-AG10-05 只开放完成当前文档阅读、分析、修改提案和新建提案所需工具，并证明注册不等于授权。
+WP-AG10-05 只开放完成当前任务所需的最小读取、内容修改提案或 WorkspaceOperationPlan 工具，并证明注册不等于授权。
 
 **开发范围**：`src-tauri/src/ag/tool_registry.rs`、`tool.rs`、`tool_exec.rs`、CapabilityGrant 生成、工具错误与循环预算。
 
@@ -244,7 +244,8 @@ WP-AG10-05 只开放完成当前文档阅读、分析、修改提案和新建提
 | inspect/analyze | 当前文档/显式引用读取、必要 search/list_blocks | proposal，除非用户另有明确编辑要求 |
 | search | 受限 list_docs/search_text/read_doc | workspace 外读取、写工具 |
 | edit | ExplicitEditTargetSet 成员目标读取、propose_edit/edit_blocked | 集合外写入、直接保存、文件结构操作 |
-| create_document | `base=empty` proposal | 带 AI 内容的直接 create_doc |
+| create_document | 必要读取、`plan_workspace_operation`；确认前由 CreateDocumentBundle 冻结初始内容 | 目标资源建立前 `propose_edit`、带 AI 内容的直接 create_doc |
+| organize_workspace | 必要读取、`plan_workspace_operation` | 内容 proposal、未经 DecisionRequest 直接执行资源副作用 |
 | clarify | 无副作用工具 | 所有写工具 |
 
 ### §8.3 验证方案
@@ -452,7 +453,7 @@ test:related 结果：
 | WP-AG10-02 Intent Layer | 生成版本化 `IntentResultV1`；当前轮否定约束优先；缺编辑目标阻断澄清；非文档问答不自动注入当前文档 | answer/analyze/edit/create/clarify 与目标/上下文选择断言 | Module Ready |
 | WP-AG10-03 Context Layer | 当前 LogicalState 为主事实；显式引用内容 data-only、规范化身份供 ExplicitEditTargetSet owner 消费；历史按文档归属和显式沿用确定性选择；1.0 自动 AST/KB/TPL 为零 | context、reference、history 与 Prompt 装配测试 | Integrated |
 | WP-AG10-04 Prompt Runtime | 固定系统→意图→当前文档→引用→历史→用户顺序；记录 provenance/freshness/hash/trust/token、context trace 与真实 tool manifest hash；trace 不记录正文 | PromptPackage、层序、注入隔离与历史 trace 一致性测试 | Module Ready |
-| WP-AG10-05 Tool Capability | 内容工具仍按 grant→Diff；资源工具需迁移为 plan_workspace_operation/execute_workspace_operation，禁止直调文件命令和资源 Diff | Intent×grant、DecisionRequest 真实确认、幂等/重启 | **Resource-operation migration pending** |
+| WP-AG10-05 Tool Capability | 内容工具按 CapabilityGrant→Diff；资源工具只生成 plan_workspace_operation，确认后由 TaskRun 调用 WS 执行，禁止直调文件命令和资源 Diff | Intent×CapabilityGrant、DecisionRequest 真实确认、幂等/重启 | Local Integrated；G5 pending |
 | WP-AG10-06 Editor/Diff | 普通内容编辑三态保持；新建需改为 CreateDocumentBundle，资源创建后初始内容进入普通 Diff | V-C1~C3 + V-R1/R2 + 既有 core_chain | **New baseline migration pending** |
 | WP-AG10-07 Session/UI/Trace | 前后端活动回合一致；停止按钮调用真实取消；Error/Cancelled 不被 Done 覆盖；Build 不呈现；脱敏 trace 可关联 intent/context/manifest/terminal | AG 前端 92 项、全量前端 552 项、治理审计 | Integrated（本地） |
 
@@ -479,7 +480,7 @@ test:related 结果：
 - 项目级 `cargo fmt -- --check` 仍会报告本次 Scope 外既有文件及 `lib.rs` 旧区域的格式差异；它不是当前
   测试选择器门禁，本轮只格式化了新增 AG 小模块代码，没有用范围扩张制造全库格式变更。
 
-当前阶段裁决：普通内容/Runtime 子链维持 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceOperation、WorkspaceTimeline 与 CreateDocumentBundle 为 `DESIGNED / IMPLEMENTATION_PENDING`，不得用旧集成证据宣称已完成。
+当前阶段裁决：普通内容/Runtime、WorkspaceOperation 与 CreateDocumentBundle 子链均为 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceTimeline 继续沿其独立验证卡判断。真实 provider/WKWebView 和生产配置证据进入待验证列表，不得用本地自动化宣称 G5 完成。
 
 ## 变更记录
 
@@ -489,3 +490,4 @@ test:related 结果：
 | 2026-08-08 | v1.1 | AG-1.0-IMPLEMENTATION-01：记录 WP-AG10-00～07 的实际实现状态与独立收口证据；非沙箱 test:related/test:full、TypeScript、ADUS 和治理审计通过；阶段裁决为 LOCAL_INTEGRATED / G5_PENDING，不以自动化冒充真实 provider/WKWebView G5 |
 | 2026-08-21 | v1.2 | 工作区资源操作基线重构：Stage 4/G5 改为 WorkspaceOperation + DecisionRequest、CreateDocumentBundle 和 WorkspaceTimeline；旧资源 Diff/空基准新建证据不再计入新基线，相关工作包状态改为 IMPLEMENTATION_PENDING。 |
 | 2026-08-28 | v1.3 | AG-CONFORMANCE-PLAN-S3D-COMPANION：承接 fed343a/a0afdff，把工作包和验证边界统一到 ExplicitEditTargetSet；只读内容不扩权、用户引用身份可初始化成员、scope confirm 可追加、集合外提案硬拒。 |
+| 2026-08-29 | v1.4 | AG-CONFORMANCE-CODE-S3E：WP-AG10-05 工具策略对齐当前 CreateDocumentBundle/WorkspaceOperationPlan 规则；CreateDocument/OrganizeWorkspace 只获得必要读取与 plan_workspace_operation，目标资源建立前不开放 propose_edit。 |

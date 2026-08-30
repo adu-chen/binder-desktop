@@ -785,6 +785,7 @@ mod tests {
             "turn-audit",
             &intent,
             &[],
+            tool_registry::CapabilityFactorsV1::default(),
         );
         let tools = tool_registry::tool_definitions_json_for_grant(&grant).unwrap();
         let tool_manifest_hash = context::sha256_text(

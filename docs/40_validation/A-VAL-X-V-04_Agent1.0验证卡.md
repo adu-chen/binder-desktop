@@ -211,6 +211,33 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 人类观察项 | 显式引用目标可编辑；集合外目标提示先引用或确认范围；取消范围卡后无隐藏授权；continuation 不跨 TaskRun/workspace 串用 |
 | 状态 | `DESIGNED` |
 
+### 4.15 V-S11 · RuntimeProfile / IntentResult / CapabilityGrant 最小授权（REQ-AG-007/015 / BR-SYS-STATE-007）
+
+| 字段 | 内容 |
+|---|---|
+| 完整操作 | A：分别省略 RuntimeProfile、传入未知值与唯一合法值；B：执行 answer/inspect/search/analyze/edit/create_document/organize_workspace/clarify；C：让普通只读回合请求副作用工具，让 CreateDocument 请求 propose_edit；D：分别执行简单 Edit 与复杂多目标 Edit 的 scope DecisionRequest；E：在普通文档、无目标结构 BDocx 与具备动态结构能力的活动 BDocx 请求表格/图片操作 |
+| 期望结果 | A：缺失/未知值在 Gate、provider、ToolCall 与 Proposal 前失败关闭，唯一合法值进入主链；B：IntentResult.allowed_tools 是当前 AgentTurn 的精确最小集，CapabilityGrant 只按 RuntimeProfile、任务类型、目标、副作用与格式/动态能力继续收窄；C：只读零副作用，CreateDocument/OrganizeWorkspace 只有必要读取与 plan_workspace_operation；D：普通 Edit 无 propose_decision，只有已绑定 TaskRun 的复杂 Edit 可提出 scope DecisionRequest，其他 kind 拒绝；E：BDocx 高级工具只有意图、目标、活动格式与动态能力共同满足时可见，具体参数仍在 ToolCall 执行层失败关闭 |
+| 自动化证据 | AG-CONFORMANCE-CODE-S3C：IntentResult 定向 17/17、CapabilityGrant/ToolCall 定向 10/10、RuntimeProfile 1/1、内容 Proposal/WorkspaceOperationPlan 终态区分 1/1；test:governance 19/19 与 governance:audit passed；ADUS 新增 `BR-SYS-STATE-007-GUARD-AG-AG-TURN-037`、`BR-AG-STATE-002-DATA-AG-AG-TOOL-034`、`BR-AG-STATE-002-GUARD-AG-AG-TOOL-035`。最终 test:related 两次均为前端 592/592、S3C 相关测试及其余 Rust 373/374 通过；唯一失败为范围外 LibreOffice Worker signal=6，按 HD-S3C-02 转入 DOC 环境待验证项，不反向修改 AG 实现 |
+| 人类观察项 | 只读回合工具卡无写能力；资源操作只出现待确认 WorkspaceOperationPlan；复杂多目标范围卡只允许 scope；BDocx 未满足动态能力时明确阻断且不伪造修改 |
+| 状态 | `PARTIAL`（本地自动化已通过；真实 Tauri/provider/编辑器链待 G5） |
+
+### 4.16 V-S12 · PromptPackage 前置与状态机生产驱动（REQ-AG-007/015 / SM-AG-01/02/04）
+
+| 字段 | 内容 |
+|---|---|
+| 完整操作 | A：构造 PromptPackage 组装失败或超预算回合，并分别执行 Gate pass/deny；B：让模型在一个轮次返回多个 ToolCall，混合允许、未获本轮允许和执行失败项；C：分别制造 provider/Gate/TaskPlan 循环级错误、达到循环上限、形成 Proposal 与形成 DecisionRequest；D：让 WaitingConfirm TaskRun 接收 Finish、对应 DecisionRequest confirm/cancel |
+| 期望结果 | A：PromptPackage、CapabilityGrant 与预算在 Assembling 完成，失败不调用 Gate/provider、不广播 Streaming；B：每个 ToolCall 按顺序独立经过 toolRequest/validateOk或validateFail/可选执行/回注，校验失败项不进入 ToolExecuting；C：loopError/loopLimit 只进入 LoopAborted→AgentTurn TurnError/Cancelled，不结算 Completed/Done，Proposal/DecisionRequest 只经 handoff→LoopCompleted；D：WaitingConfirm + Finish 被拒绝，只有对应裁决可离开 |
+| 自动化证据 | AG-CONFORMANCE-CODE-S3E：`cargo fmt --check`、`cargo check --lib` 通过；AG Rust 回归 164/164，通过 handoff/loopError/loopLimit/cancel/终态冻结、WaitingConfirm + Finish forbidden、RuntimeProfile、内容/资源终态区分，以及生产装配顺序/唯一状态广播 owner；PromptPackage/CapabilityGrant/预算均位于 Assembled/Gate 前，SM-AG-02 广播唯一入口为 `advance_tool_loop`，LoopAborted 结算为 Failed/Error。最终 test:related 为前端 592/592、Rust 376/377，唯一失败为范围外 LibreOffice Worker signal=6；test:governance 19/19、governance:audit passed，ADUS 已注册 `BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038` |
+| 人类观察项 | 真实 Tauri/provider 下 Streaming 不早于装配与 Gate；混合 ToolCall 卡片顺序与执行事实一致；循环上限显示失败而非完成；DecisionRequest 等待态不被 Done 伪装 |
+| 状态 | `PARTIAL`（实现与本地自动化已完成；真实 Tauri/provider 链待 G5） |
+
+### 4.17 待验证列表（不作为已完成实现的反向修改依据）
+
+| validation_id | 已完成边界 | 待验证内容 | 当前状态 |
+|---|---|---|---|
+| VAL-AG-REAL-RUNTIME-01 | S3A/S3B/S3C/S3D/S3E 的规则、生产 owner 与本地自动化 | 真实 Tauri/WKWebView + provider 的 PromptPackage→Gate→Streaming→ToolCall→Proposal/DecisionRequest 完整事件顺序 | G5_PENDING |
+| VAL-DOC-LIBREOFFICE-01 | S3C 定向 AG 测试、前端与其余 Rust 测试 | 非沙箱 macOS 环境复核 DOCX→PDF LibreOffice Worker signal=6；归 DOC 独立治理 | ENVIRONMENT_PENDING |
+
 ## 5. P1 开放条件验证卡清单
 
 每项 P1 按子能力、格式/解析能力、权限、确认/保存/恢复语义与真实验证**独立开放**；对应子卡在各项 P1
@@ -243,4 +270,7 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 2026-08-27 | v1.1 | AG-CONFORMANCE-CODE-S3A：细化 V-S6 为同一 AgentTurn 澄清受控重入，补充身份 guard、调用前失败恢复与等待态取消证据设计；卡状态保持 DESIGNED。 |
 | 2026-08-28 | v1.2 | AG-CONFORMANCE-CODE-S3B：细化 V-S7 为简单回合零 TaskRun、任务级产物按需创建、显式 continuation 唯一复用与无 TaskRun Diff 不自动续片段；卡状态保持 DESIGNED。 |
 | 2026-08-28 | v1.3 | AG-CONFORMANCE-CODE-S3D：新增 V-S10，覆盖 ExplicitEditTargetSet 初始来源、澄清单调追加、scope 确认追加、TaskRun 持久继承、CreateDocumentBundle 建盘后追加及集合外零 PendingDiff 硬拒；卡状态保持 DESIGNED。 |
+| 2026-08-28 | v1.4 | AG-CONFORMANCE-CODE-S3C：新增 V-S11，覆盖 RuntimeProfile 缺失/未知失败关闭、八类 IntentResult 精确 allowed_tools、五因素 CapabilityGrant、CreateDocument/OrganizeWorkspace 资源计划、复杂 Edit scope DecisionRequest 与 BDocx 动态能力；本地定向自动化和 ADUS 注册已通过，卡状态 PARTIAL/G5_PENDING。 |
+| 2026-08-29 | v1.5 | AG-CONFORMANCE-CODE-S3E：新增 V-S12 与统一待验证列表；覆盖 PromptPackage/Gate 前置、SM-AG-02 loopError/handoff/多 ToolCall 顺序生产驱动、SM-AG-04 WaitingConfirm forbidden；真实 Tauri/provider 与范围外 LibreOffice 环境验证保持独立待办。 |
+| 2026-08-29 | v1.6 | 回填 S3E 自动化与治理证据：AG 164/164、前端 592/592、Rust 376/377（唯一失败为范围外 LibreOffice Worker signal=6）、test:governance/governance:audit 通过；V-S12 保持 PARTIAL，未把本地证据升级为 G5。 |
 | 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |

@@ -21,6 +21,7 @@ pub enum IntentTypeV1 {
     Analyze,
     Edit,
     CreateDocument,
+    OrganizeWorkspace,
     Clarify,
 }
 
@@ -30,6 +31,7 @@ pub enum MutationV1 {
     None,
     ProposeEdit,
     ProposeCreate,
+    PlanWorkspaceOperation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -39,6 +41,7 @@ pub enum IntentTargetKindV1 {
     CurrentDocument,
     Selection,
     NewDocument,
+    Workspace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -69,7 +72,8 @@ pub struct IntentResultV1 {
     pub confidence: f32,
     pub ambiguity: AmbiguityLevelV1,
     pub ambiguity_reasons: Vec<String>,
-    pub required_tools: Vec<String>,
+    #[serde(alias = "requiredTools")]
+    pub allowed_tools: Vec<String>,
     pub required_context: Vec<String>,
 }
 
@@ -78,11 +82,14 @@ impl IntentResultV1 {
         self.ambiguity == AmbiguityLevelV1::Blocking
     }
 
-    pub fn requires_proposal(&self) -> bool {
-        matches!(
-            self.mutation,
-            MutationV1::ProposeEdit | MutationV1::ProposeCreate
-        )
+    pub fn required_terminal_tool(&self) -> Option<&'static str> {
+        match self.mutation {
+            MutationV1::ProposeEdit => Some("propose_edit"),
+            MutationV1::ProposeCreate | MutationV1::PlanWorkspaceOperation => {
+                Some("plan_workspace_operation")
+            }
+            MutationV1::None => None,
+        }
     }
 }
 
@@ -232,6 +239,33 @@ fn detect_target(text: &str, has_selection: bool) -> TargetKind {
     TargetKind::None
 }
 
+/// 文件/目录资源操作必须与文档内容 Edit 分离；只有明确资源对象时才进入 WorkspaceOperationPlan。
+fn requests_workspace_operation(text: &str, target: TargetKind) -> bool {
+    let folder_target = text_contains_any(text, &["文件夹", "目录"])
+        && !text_contains_any(text, &["md文档", "word文档", "文章", "稿件"]);
+    let resource_action =
+        text_contains_any(text, &["删除", "删掉", "重命名", "改名", "移动", "恢复"]);
+    let resource_target = text_contains_any(
+        text,
+        &[
+            "文件夹",
+            "目录",
+            "文件路径",
+            "文件名",
+            "这个文件",
+            "这份文件",
+            "这个文档",
+            "这份文档",
+        ],
+    );
+    let content_target = target == TargetKind::DocElement
+        || text_contains_any(text, &["内容", "标题", "段落", "表格", "图片", "选区"]);
+    let folder_action = resource_action
+        || text_contains_any(text, CREATE_VERBS_STRONG)
+        || text_contains_any(text, CREATE_VERBS_WEAK);
+    (folder_target && folder_action) || (resource_action && resource_target && !content_target)
+}
+
 /// 识别修饰语：否定（冻结 mutation）、咨询（只读分析）、疑问（不授写，无祈使时）、祈使（强化写意图）。
 fn detect_modifiers(text: &str) -> Modifiers {
     Modifiers {
@@ -363,24 +397,41 @@ pub fn detect_sync_from_reference(text: &str) -> Option<String> {
     })
 }
 
-/**
- * @GOV
- * codes:    BR-AG-DATA-004-RB-AG-AG-TURN-015
- * type:     RB
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-004
- * term_ref: TERM-AG-012
- * boundary: in=currentUserInputAndEditorTarget | out=IntentResult(currentTurnWinsBlockingAmbiguityStopsMutation)
- */
-/// 1.0 当前轮意图解析（V3 乐观授权，AG-INTENT-V3-01）：工具授予不再按意图枚举收窄——只读组
-/// 无条件授予（workspace 限定）、内容写入组通过 propose_edit 生成后置裁决、资源写入组通过
-/// plan_workspace_operation 生成前置裁决。意图识别退化为上下文注入器：仅寒暄/疑问/只读例外降权，
-/// 其余（含识别失败）默认按文档状态授予工具。输出统一结构供 Context/Prompt/Tool 消费。
+/// 1.0 当前轮意图解析便利入口；没有额外显式目标时，以当前文档作为唯一候选目标。
 pub fn resolve_intent_result(
     turn_id: &str,
     prompt: &str,
     active_doc_path: Option<&str>,
     has_selection: bool,
+) -> IntentResultV1 {
+    let explicit_targets = active_doc_path
+        .map(|path| vec![path.to_string()])
+        .unwrap_or_default();
+    resolve_intent_result_with_targets(
+        turn_id,
+        prompt,
+        active_doc_path,
+        has_selection,
+        &explicit_targets,
+    )
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-004-RB-AG-AG-TURN-015
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-DATA-004
+ * term_ref: TERM-AG-012
+ * boundary: in=CurrentUserInputEditorTargetAndExplicitEditTargetSet | out=IntentResultWithExactAllowedToolsAndBlockingAmbiguity | does_not=expandAuthorizationFromRegistryPromptHistoryOrProfile
+ */
+/// 形成供 Context、Prompt 与 CapabilityGrant 共用的精确 IntentResult；当前轮约束与显式目标优先。
+pub fn resolve_intent_result_with_targets(
+    turn_id: &str,
+    prompt: &str,
+    active_doc_path: Option<&str>,
+    has_selection: bool,
+    explicit_edit_targets: &[String],
 ) -> IntentResultV1 {
     let text = prompt.trim();
     let (verb, _strength) = detect_verb(text);
@@ -390,6 +441,8 @@ pub fn resolve_intent_result(
     let pure_decision = detect_pure_decision(text);
     let has_active_doc = active_doc_path.is_some();
     let mutation_forbidden = modifiers.negated;
+    let workspace_operation_requested =
+        !mutation_forbidden && requests_workspace_operation(text, target);
     // AG-INTENT-COMPOSITE-01：复合请求「新建/创建…文档，并…」——Create 强词 + Document/Workspace
     // 目标共现时 Create 主导，优先于 Edit（修复 detect_verb 按 Edit→Create 首命中导致「新建」被
     // 「优化」等 Edit 强词掩盖：真实案例「新建一个word文档，…并优化排版」被判 Edit 而无法新建）。
@@ -457,6 +510,12 @@ pub fn resolve_intent_result(
         } else {
             (IntentTypeV1::Answer, MutationV1::None, "direct_response")
         }
+    } else if workspace_operation_requested {
+        (
+            IntentTypeV1::OrganizeWorkspace,
+            MutationV1::PlanWorkspaceOperation,
+            "organize_workspace_plan",
+        )
     } else if create_requested {
         // AG-INTENT-COMPOSITE-01：Create 强词 + Document/Workspace 目标 → 新建主导（先于 Edit 分支）。
         (
@@ -479,10 +538,14 @@ pub fn resolve_intent_result(
             MutationV1::ProposeCreate,
             "create_document_proposal",
         )
+    } else if verb == VerbKind::Search {
+        (IntentTypeV1::Search, MutationV1::None, "workspace_search")
+    } else if verb == VerbKind::Analyze {
+        (IntentTypeV1::Analyze, MutationV1::None, "analyze_document")
+    } else if verb == VerbKind::Inspect {
+        (IntentTypeV1::Inspect, MutationV1::None, "inspect_document")
     } else if has_active_doc {
-        // AG-STRATEGY-01：general 档——查询/分析/浏览等请求统一走全量工具 + 模型自决
-        // （Search/Analyze/Inspect 细分并入；工具集相同，细分只徒增判定盲区）。单文档编辑
-        // 不再预锁目标，安全由调用时刻校验 + DiffCard 确认承担。
+        // 未命中已知动词但明确处于活动文档时保留既有修复/写作请求兜底；工具仍按 Edit 最小集收窄。
         (IntentTypeV1::Edit, MutationV1::ProposeEdit, "edit_proposal")
     } else {
         (IntentTypeV1::Clarify, MutationV1::None, "clarify_target")
@@ -493,8 +556,20 @@ pub fn resolve_intent_result(
             kind: IntentTargetKindV1::NewDocument,
             rel_path: None,
         },
-        // V3 乐观授权：默认 Edit 语义即当前文档——只要存在活动文档即指向 CurrentDocument，
-        // 无需显式指涉词（如「恢复被破坏的内容」仍应默认注入当前文档上下文）。
+        IntentTypeV1::OrganizeWorkspace => IntentTargetV1 {
+            kind: IntentTargetKindV1::Workspace,
+            rel_path: None,
+        },
+        IntentTypeV1::Search | IntentTypeV1::Analyze | IntentTypeV1::Inspect
+            if target == TargetKind::Workspace =>
+        {
+            IntentTargetV1 {
+                kind: IntentTargetKindV1::Workspace,
+                rel_path: None,
+            }
+        }
+        // Edit 的默认目标仍是当前活动文档；这只确定 ExplicitEditTargetSet 内的具体目标，
+        // 不扩大 IntentResult.allowed_tools 或 CapabilityGrant。
         IntentTypeV1::Edit if has_active_doc => IntentTargetV1 {
             kind: if has_selection {
                 IntentTargetKindV1::Selection
@@ -525,35 +600,41 @@ pub fn resolve_intent_result(
         },
     };
 
-    // V3 乐观授权：工具集按三分类固定授予（不再按意图枚举细分）。
-    // - Answer/Clarify：零工具（寒暄/澄清不调工具）
-    // - Analyze/Inspect/Search：只读组（workspace 限定，无副作用）
-    // - Edit/CreateDocument：全量（只读组 + 内容提案 + 资源操作计划；模型不直接写 DiskState）
-    // AG-STRATEGY-01：工具授予档位化——chat 零工具；read-only 声明（mutation_forbidden）只读全量；
-    // 其余（edit/create/general）全量（只读 + 提案 + glob）。意图不再按类型收窄工具。
-    const READ_TOOLS: &[&str] = &[
-        "read_doc",
-        "list_docs",
-        "search_text",
-        "list_blocks",
-        "list_tables",
-        "list_images",
-        "workspace_glob",
-    ];
-    const WRITE_PROPOSAL_TOOLS: &[&str] =
-        &["propose_edit", "plan_workspace_operation", "edit_blocked"];
-    let required_tools = if mutation_forbidden {
-        READ_TOOLS.iter().map(|tool| (*tool).to_string()).collect()
-    } else {
-        match intent_type {
-            IntentTypeV1::Answer | IntentTypeV1::Clarify => Vec::new(),
-            _ => READ_TOOLS
-                .iter()
-                .chain(WRITE_PROPOSAL_TOOLS.iter())
-                .map(|tool| (*tool).to_string())
-                .collect(),
+    let mut allowed_tools: Vec<&str> = match intent_type {
+        IntentTypeV1::Answer | IntentTypeV1::Clarify => Vec::new(),
+        IntentTypeV1::Inspect | IntentTypeV1::Analyze
+            if target.kind == IntentTargetKindV1::Workspace =>
+        {
+            vec!["list_docs", "workspace_glob"]
+        }
+        IntentTypeV1::Inspect | IntentTypeV1::Analyze => vec!["read_doc", "list_blocks"],
+        IntentTypeV1::Search => vec![
+            "list_docs",
+            "search_text",
+            "workspace_glob",
+            "read_doc",
+            "list_blocks",
+        ],
+        IntentTypeV1::Edit => vec!["read_doc", "list_blocks", "propose_edit", "edit_blocked"],
+        IntentTypeV1::CreateDocument | IntentTypeV1::OrganizeWorkspace => {
+            vec!["list_docs", "workspace_glob", "plan_workspace_operation"]
         }
     };
+    let table_operation_requested = intent_type == IntentTypeV1::Edit
+        && text_contains_any(text, &["表格", "单元格", "底纹", "表行", "表列", "行列"]);
+    let image_operation_requested = intent_type == IntentTypeV1::Edit
+        && text_contains_any(text, &["图片", "图像", "插图", "照片"]);
+    if table_operation_requested {
+        allowed_tools.push("list_tables");
+    }
+    if image_operation_requested {
+        allowed_tools.extend(["list_images", "import_image_asset"]);
+    }
+    let complex_edit = intent_type == IntentTypeV1::Edit
+        && super::task::is_complex_target(true, explicit_edit_targets, text);
+    if complex_edit {
+        allowed_tools.push("propose_decision");
+    }
 
     let mut required_context = vec!["current_user_input".to_string()];
     if target.rel_path.is_some() {
@@ -562,6 +643,33 @@ pub fn resolve_intent_result(
     if has_selection {
         required_context.push("current_selection".to_string());
     }
+    if intent_type == IntentTypeV1::CreateDocument
+        && has_active_doc
+        && text_contains_any(
+            text,
+            &["当前文档", "这个文档", "这份文档", "复制", "拷贝", "基于"],
+        )
+    {
+        required_context.push("current_document_logical_state".to_string());
+        allowed_tools.extend(["read_doc", "list_blocks"]);
+    }
+
+    let mut constraints = if mutation_forbidden {
+        vec!["mutation_forbidden_by_current_turn".to_string()]
+    } else {
+        Vec::new()
+    };
+    if table_operation_requested {
+        constraints.push("table_operation_requested".to_string());
+    }
+    if image_operation_requested {
+        constraints.push("image_operation_requested".to_string());
+    }
+    if complex_edit {
+        constraints.push("scope_decision_may_be_required".to_string());
+    }
+    allowed_tools.sort_unstable();
+    allowed_tools.dedup();
 
     IntentResultV1 {
         intent_version: INTENT_VERSION_V1.to_string(),
@@ -570,11 +678,7 @@ pub fn resolve_intent_result(
         target,
         operation: operation.to_string(),
         mutation,
-        constraints: if mutation_forbidden {
-            vec!["mutation_forbidden_by_current_turn".to_string()]
-        } else {
-            Vec::new()
-        },
+        constraints,
         confidence: if ambiguity == AmbiguityLevelV1::Blocking {
             0.45
         } else {
@@ -582,7 +686,7 @@ pub fn resolve_intent_result(
         },
         ambiguity,
         ambiguity_reasons,
-        required_tools,
+        allowed_tools: allowed_tools.into_iter().map(str::to_string).collect(),
         required_context,
     }
 }
@@ -1228,7 +1332,7 @@ mod tests {
         assert_eq!(analyze.intent_type, IntentTypeV1::Analyze);
         assert_eq!(analyze.mutation, MutationV1::None);
         assert!(analyze
-            .required_tools
+            .allowed_tools
             .iter()
             .all(|tool| tool != "propose_edit"));
         assert!(analyze
@@ -1239,12 +1343,12 @@ mod tests {
         assert_eq!(edit.intent_type, IntentTypeV1::Edit);
         assert_eq!(edit.target.kind, IntentTargetKindV1::Selection);
         assert_eq!(edit.mutation, MutationV1::ProposeEdit);
-        assert!(edit.required_tools.contains(&"propose_edit".to_string()));
+        assert!(edit.allowed_tools.contains(&"propose_edit".to_string()));
 
         let missing = resolve_intent_result("t3", "改写当前文档", None, false);
         assert_eq!(missing.intent_type, IntentTypeV1::Clarify);
         assert!(missing.is_blocking());
-        assert!(!missing.requires_proposal());
+        assert!(missing.required_terminal_tool().is_none());
 
         let unrelated = resolve_intent_result("t-unrelated", "你好", Some("a.md"), false);
         assert_eq!(unrelated.target.kind, IntentTargetKindV1::None);
@@ -1273,7 +1377,7 @@ mod tests {
         assert_eq!(edit.intent_type, IntentTypeV1::Edit);
         assert_eq!(edit.mutation, MutationV1::ProposeEdit);
         assert_eq!(edit.target.kind, IntentTargetKindV1::CurrentDocument);
-        assert!(edit.required_tools.contains(&"propose_edit".to_string()));
+        assert!(edit.allowed_tools.contains(&"propose_edit".to_string()));
 
         // 日志实例：创建请求（动词=创建 + 目标=md文档 → Document）。
         let create = resolve_intent_result(
@@ -1286,9 +1390,17 @@ mod tests {
         assert_eq!(create.mutation, MutationV1::ProposeCreate);
         assert_eq!(create.target.kind, IntentTargetKindV1::NewDocument);
 
-        // 创建动词 + 目标=文件夹（Workspace）仍为 Create。
+        // 文件夹属于资源操作，必须与 CreateDocument 分离。
         let create_dir = resolve_intent_result("v2-dir", "在根目录新建一个文件夹", None, false);
-        assert_eq!(create_dir.intent_type, IntentTypeV1::CreateDocument);
+        assert_eq!(create_dir.intent_type, IntentTypeV1::OrganizeWorkspace);
+        assert_eq!(create_dir.mutation, MutationV1::PlanWorkspaceOperation);
+        assert_eq!(create_dir.target.kind, IntentTargetKindV1::Workspace);
+        assert!(create_dir
+            .allowed_tools
+            .contains(&"plan_workspace_operation".to_string()));
+        assert!(!create_dir
+            .allowed_tools
+            .contains(&"propose_edit".to_string()));
     }
 
     // covers: BR-AG-DATA-004
@@ -1298,7 +1410,7 @@ mod tests {
         // 疑问句 + 编辑动词 + 无祈使 → 不授写（Answer）。
         let q = resolve_intent_result("v2-q", "改了吗", Some("a.md"), false);
         assert_eq!(q.intent_type, IntentTypeV1::Answer);
-        assert!(q.required_tools.iter().all(|t| t != "propose_edit"));
+        assert!(q.allowed_tools.iter().all(|t| t != "propose_edit"));
 
         // 咨询型「怎么修改」→ Analyze，只读。
         let advisory = resolve_intent_result("v2-adv", "这个文档怎么修改更好", Some("a.md"), false);
@@ -1316,6 +1428,68 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-004
+    #[test]
+    fn intent_result_uses_exact_tools_for_all_supported_intent_types() {
+        let answer = resolve_intent_result("m-answer", "你好", None, false);
+        assert_eq!(answer.intent_type, IntentTypeV1::Answer);
+        assert!(answer.allowed_tools.is_empty());
+
+        let inspect = resolve_intent_result("m-inspect", "读取当前文档", Some("a.md"), false);
+        assert_eq!(inspect.intent_type, IntentTypeV1::Inspect);
+        assert_eq!(inspect.allowed_tools, vec!["list_blocks", "read_doc"]);
+
+        let inspect_workspace = resolve_intent_result("m-inspect-ws", "查看项目目录", None, false);
+        assert_eq!(inspect_workspace.intent_type, IntentTypeV1::Inspect);
+        assert_eq!(inspect_workspace.target.kind, IntentTargetKindV1::Workspace);
+        assert_eq!(
+            inspect_workspace.allowed_tools,
+            vec!["list_docs", "workspace_glob"]
+        );
+
+        let search = resolve_intent_result("m-search", "搜索工作区中的预算", Some("a.md"), false);
+        assert_eq!(search.intent_type, IntentTypeV1::Search);
+        assert_eq!(
+            search.allowed_tools,
+            vec![
+                "list_blocks",
+                "list_docs",
+                "read_doc",
+                "search_text",
+                "workspace_glob"
+            ]
+        );
+
+        let analyze = resolve_intent_result("m-analyze", "分析当前文档", Some("a.md"), false);
+        assert_eq!(analyze.intent_type, IntentTypeV1::Analyze);
+        assert_eq!(analyze.allowed_tools, vec!["list_blocks", "read_doc"]);
+
+        let edit = resolve_intent_result("m-edit", "修改第一段", Some("a.md"), false);
+        assert_eq!(edit.intent_type, IntentTypeV1::Edit);
+        assert_eq!(
+            edit.allowed_tools,
+            vec!["edit_blocked", "list_blocks", "propose_edit", "read_doc"]
+        );
+
+        let create = resolve_intent_result("m-create", "创建md文档", None, false);
+        assert_eq!(create.intent_type, IntentTypeV1::CreateDocument);
+        assert_eq!(
+            create.allowed_tools,
+            vec!["list_docs", "plan_workspace_operation", "workspace_glob"]
+        );
+
+        let organize = resolve_intent_result("m-organize", "新建一个文件夹", None, false);
+        assert_eq!(organize.intent_type, IntentTypeV1::OrganizeWorkspace);
+        assert_eq!(
+            organize.allowed_tools,
+            vec!["list_docs", "plan_workspace_operation", "workspace_glob"]
+        );
+
+        let clarify = resolve_intent_result("m-clarify", "帮我改一下", None, false);
+        assert_eq!(clarify.intent_type, IntentTypeV1::Clarify);
+        assert!(clarify.allowed_tools.is_empty());
+    }
+
+    // covers: BR-AG-DATA-004
     // V2 弱信号裁决：编辑弱动词 + 无文档 → Clarify；非编辑弱动词（看看）→ Analyze。
     #[test]
     fn intent_v2_weak_signal_falls_to_clarify_or_analyze() {
@@ -1326,17 +1500,18 @@ mod tests {
         let edit_with_doc = resolve_intent_result("v2-w1b", "帮我改一下", Some("a.md"), false);
         assert_eq!(edit_with_doc.intent_type, IntentTypeV1::Edit);
 
-        // AG-STRATEGY-01：查询/浏览类请求并入 general 档（全量工具 + 模型自决），不再细分 Analyze。
+        // 浏览请求保持 Analyze，只取得必要读取能力。
         let analyze = resolve_intent_result("v2-w2", "看看这个文档", Some("a.md"), false);
-        assert_eq!(analyze.intent_type, IntentTypeV1::Edit);
-        assert_eq!(analyze.mutation, MutationV1::ProposeEdit);
+        assert_eq!(analyze.intent_type, IntentTypeV1::Analyze);
+        assert_eq!(analyze.mutation, MutationV1::None);
+        assert!(!analyze.allowed_tools.contains(&"propose_edit".to_string()));
     }
 
     // covers: BR-AG-DATA-004
-    // V3 乐观授权（AG-INTENT-V3-01）：识别失败不再导致零工具；工具集三分类固定授予。
+    // 未识别修复请求保留 Edit 兜底，但明确只读/查询意图必须使用精确最小工具集。
     #[test]
-    fn intent_v3_optimistic_grant_never_paralyzes_on_unrecognized_input() {
-        // 核心修复：无动词命中（如「恢复被破坏的内容」）但有当前文档 → 默认 Edit + 全工具。
+    fn intent_minimal_tools_preserve_unrecognized_edit_fallback() {
+        // 无动词命中（如「恢复被破坏的内容」）但有当前文档 → 保留 Edit 最小工具集。
         let repair = resolve_intent_result(
             "v3-repair",
             "整个章节策划的内容好像有问题，被破坏了。你能找到原内容，把破坏的补齐或恢复吗？",
@@ -1346,9 +1521,9 @@ mod tests {
         assert_eq!(repair.intent_type, IntentTypeV1::Edit);
         assert_eq!(repair.mutation, MutationV1::ProposeEdit);
         assert_eq!(repair.target.kind, IntentTargetKindV1::CurrentDocument);
-        // 全量工具：只读组 + 提案组。
-        assert!(repair.required_tools.contains(&"read_doc".to_string()));
-        assert!(repair.required_tools.contains(&"propose_edit".to_string()));
+        // 只开放目标读取与内容 Proposal。
+        assert!(repair.allowed_tools.contains(&"read_doc".to_string()));
+        assert!(repair.allowed_tools.contains(&"propose_edit".to_string()));
         assert!(repair
             .required_context
             .contains(&"current_document_logical_state".to_string()));
@@ -1361,7 +1536,7 @@ mod tests {
             false,
         );
         assert_eq!(english.intent_type, IntentTypeV1::Edit);
-        assert!(english.required_tools.contains(&"propose_edit".to_string()));
+        assert!(english.allowed_tools.contains(&"propose_edit".to_string()));
 
         // 无当前文档 + 未识别 → Clarify（非零工具瘫痪，进入澄清）。
         let no_doc = resolve_intent_result("v3-nodoc", "帮我处理一下", None, false);
@@ -1370,33 +1545,30 @@ mod tests {
         // 寒暄仍零工具。
         let greeting = resolve_intent_result("v3-hi", "你好", Some("a.md"), false);
         assert_eq!(greeting.intent_type, IntentTypeV1::Answer);
-        assert!(greeting.required_tools.is_empty());
+        assert!(greeting.allowed_tools.is_empty());
 
         let greeting_en = resolve_intent_result("v3-hi-en", "hello", Some("a.md"), false);
         assert_eq!(greeting_en.intent_type, IntentTypeV1::Answer);
-        assert!(greeting_en.required_tools.is_empty());
+        assert!(greeting_en.allowed_tools.is_empty());
 
         // 「你好，帮我改标题」含工作词 → 非寒暄 → Edit。
         let greeting_plus_work =
             resolve_intent_result("v3-hi-work", "你好，帮我改标题", Some("a.md"), false);
         assert_eq!(greeting_plus_work.intent_type, IntentTypeV1::Edit);
 
-        // AG-STRATEGY-01：疑问句 + 无动作动词 + 文档指涉 → Analyze（边界档），工具全量授予
-        // （非只读声明即全量，模型自决；安全由调用时刻校验 + DiffCard 承担）。
+        // 疑问句 + 文档指涉 → Analyze，只开放必要读取能力。
         let question = resolve_intent_result("v3-q", "这篇写得清楚吗", Some("a.md"), false);
         assert_eq!(question.intent_type, IntentTypeV1::Analyze);
         assert_eq!(question.target.kind, IntentTargetKindV1::CurrentDocument);
         assert!(question
             .required_context
             .contains(&"current_document_logical_state".to_string()));
-        assert!(question
-            .required_tools
-            .contains(&"propose_edit".to_string()));
+        assert!(!question.allowed_tools.contains(&"propose_edit".to_string()));
 
         // 疑问句 + 无动作动词 + 无文档指涉（如「改了吗」）→ Answer 零工具。
         let pure_question = resolve_intent_result("v3-pq", "改了吗", Some("a.md"), false);
         assert_eq!(pure_question.intent_type, IntentTypeV1::Answer);
-        assert!(pure_question.required_tools.is_empty());
+        assert!(pure_question.allowed_tools.is_empty());
 
         // P2 修复：纠错式请求（指出错误要求修）→ Edit（非零工具）。
         let fix_request = resolve_intent_result(
@@ -1407,16 +1579,15 @@ mod tests {
         );
         assert_eq!(fix_request.intent_type, IntentTypeV1::Edit);
         assert!(fix_request
-            .required_tools
+            .allowed_tools
             .contains(&"propose_edit".to_string()));
 
         // 只读信号 → Analyze 只读组（无 propose_edit）。
         let read_only = resolve_intent_result("v3-ro", "只分析不要修改", Some("a.md"), false);
         assert_eq!(read_only.intent_type, IntentTypeV1::Analyze);
-        assert!(read_only.required_tools.iter().all(|t| t != "propose_edit"));
+        assert!(read_only.allowed_tools.iter().all(|t| t != "propose_edit"));
 
-        // AG-STRATEGY-01：查询动词（列出/列举/显示/展示/有哪些）→ general 档（Edit 全量，
-        // 模型自决工具）；不再细分 Search 只读组（工具集相同，细分只徒增判定盲区）。
+        // 查询动词稳定形成 Search，只有 workspace 读取能力。
         for query in [
             "列出当前项目的文件树",
             "列举工作区所有文档",
@@ -1427,10 +1598,11 @@ mod tests {
             let result = resolve_intent_result("v3-query", query, Some("a.md"), false);
             assert_eq!(
                 result.intent_type,
-                IntentTypeV1::Edit,
-                "查询请求应判 general Edit: {query}"
+                IntentTypeV1::Search,
+                "查询请求应判 Search: {query}"
             );
-            assert!(result.required_tools.contains(&"propose_edit".to_string()));
+            assert!(!result.allowed_tools.contains(&"propose_edit".to_string()));
+            assert!(result.allowed_tools.contains(&"search_text".to_string()));
         }
 
         // AG-CTX-01 F3：整篇对齐任务检测。
@@ -1460,7 +1632,7 @@ mod tests {
             false,
         );
         assert_eq!(enrich.intent_type, IntentTypeV1::Edit);
-        assert!(enrich.required_tools.contains(&"propose_edit".to_string()));
+        assert!(enrich.allowed_tools.contains(&"propose_edit".to_string()));
         assert_eq!(enrich.target.kind, IntentTargetKindV1::CurrentDocument);
         assert!(enrich
             .required_context
@@ -1480,12 +1652,12 @@ mod tests {
                 "「{word}」应降权 Answer"
             );
             assert_eq!(r.mutation, MutationV1::None);
-            assert!(!r.required_tools.contains(&"propose_edit".to_string()));
+            assert!(!r.allowed_tools.contains(&"propose_edit".to_string()));
         }
         // 带实质内容的编辑请求不误伤。
         let edit = resolve_intent_result("t-edit", "把第一段加粗", Some("a.md"), false);
         assert_eq!(edit.intent_type, IntentTypeV1::Edit);
-        assert!(edit.required_tools.contains(&"propose_edit".to_string()));
+        assert!(edit.allowed_tools.contains(&"propose_edit".to_string()));
     }
 
     // covers: BR-AG-DATA-004
@@ -1519,11 +1691,10 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-004
-    // AG-STRATEGY-01：延续词/纯查询 → general 档（全量工具，模型自决；安全由调用时刻校验承担）。
+    // 延续词保留当前文档 Edit 兜底；纯查询独立收窄为 Search。
     #[test]
-    fn intent_general_full_tools_for_continuation_and_query() {
-        // 延续词「再试一下呢」（历史为新建请求）→ general 全量（含 propose_edit/glob），
-        // 不再被 Edit 目标锁死——模型可按当前目标选择内容 Diff 或资源操作计划。
+    fn intent_continuation_and_query_use_distinct_minimal_tools() {
+        // 延续词只继承当前明确目标，不获得资源操作工具。
         let cont = resolve_intent_result(
             "s-cont",
             "再试一下呢",
@@ -1531,12 +1702,13 @@ mod tests {
             false,
         );
         assert_eq!(cont.intent_type, IntentTypeV1::Edit);
-        assert!(cont.required_tools.contains(&"propose_edit".to_string()));
-        assert!(cont.required_tools.contains(&"workspace_glob".to_string()));
+        assert!(cont.allowed_tools.contains(&"propose_edit".to_string()));
+        assert!(!cont.allowed_tools.contains(&"workspace_glob".to_string()));
 
-        // 纯查询 → general 全量（不再细分只读 Search 组）。
+        // 纯查询 → Search，只读。
         let query = resolve_intent_result("s-q", "有哪些章节文档", Some("a.md"), false);
-        assert_eq!(query.intent_type, IntentTypeV1::Edit);
+        assert_eq!(query.intent_type, IntentTypeV1::Search);
+        assert!(!query.allowed_tools.contains(&"propose_edit".to_string()));
     }
 
     // covers: BR-AG-DATA-002, BR-AG-DATA-005

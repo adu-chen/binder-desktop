@@ -28,6 +28,8 @@ pub enum ToolLoopEvent {
     ExecFail,
     Injected,
     LoopLimit,
+    LoopError,
+    Handoff,
     Cancel,
 }
 
@@ -53,16 +55,20 @@ pub fn is_terminal(state: ToolLoopState) -> bool {
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-002
- * boundary: in=ToolLoopEvent | out=ToolLoopState(validateGatedResultInjectedLoopLimitedCancelTerminal)
+ * boundary: in=ToolLoopEvent | out=ToolLoopState(validateGatedResultInjectedHandoffLoopLimitedErrorCancelTerminal)
  */
 /// SM-AG-02 转移引擎（BR-AG-STATE-002）：toolRequest→校验；validateFail 拒绝原因回注（→ResultInjecting，
 /// 不中断循环）；execOk/execFail 均回注（失败不中断）；injected 在**上限内**续调（→ModelStreaming），达
-/// **上限**→LoopAborted；任意非终态 cancel→LoopAborted（无半落盘）。返回 `None` = 无合法转移。
+/// **上限**→LoopAborted；循环级错误→LoopAborted；Proposal/DecisionRequest 移交→LoopCompleted；
+/// 任意非终态 cancel→LoopAborted（无半落盘）。返回 `None` = 无合法转移。
 pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoopState> {
     use ToolLoopEvent::*;
     use ToolLoopState::*;
     // 任意非终态用户中断 → LoopAborted（无半落盘）。
     if matches!(event, Cancel) && !is_terminal(state) {
+        return Some(LoopAborted);
+    }
+    if matches!(event, LoopError) && !is_terminal(state) {
         return Some(LoopAborted);
     }
     let next = match (state, event) {
@@ -73,6 +79,7 @@ pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoop
         (ToolExecuting, ExecOk) => ResultInjecting,
         (ToolExecuting, ExecFail) => ResultInjecting, // 失败回注不中断
         (ResultInjecting, Injected) => ModelStreaming, // 上限内续调（计数由 loopLimit 事件区分）
+        (ResultInjecting, Handoff) => LoopCompleted,
         (ResultInjecting, LoopLimit) => LoopAborted,
         // 其余无合法转移（终态冻结；未校验不得执行；未注入不得续调）。
         _ => return None,
@@ -116,7 +123,7 @@ mod tests {
     use super::*;
 
     // covers: BR-AG-STATE-002
-    // 循环：请求→校验→执行→回注→续调；校验失败回注不中断；上限中止；终答完成；终态冻结。
+    // 循环：请求→校验→执行→回注→续调；校验失败回注不中断；上限/错误中止；终答/移交完成；终态冻结。
     #[test]
     fn loop_validate_inject_limit_and_terminals() {
         assert_eq!(
@@ -134,11 +141,19 @@ mod tests {
         assert_eq!(transition(ToolExecuting, ExecFail), Some(ResultInjecting));
         // 终答 / 上限
         assert_eq!(transition(ModelStreaming, FinalAnswer), Some(LoopCompleted));
+        assert_eq!(transition(ResultInjecting, Handoff), Some(LoopCompleted));
         assert_eq!(transition(ResultInjecting, LoopLimit), Some(LoopAborted));
         // 未校验不得执行
         assert_eq!(transition(ModelStreaming, ValidateOk), None);
         // 终态冻结
-        for ev in [ToolRequest, ValidateOk, Injected, Cancel] {
+        for ev in [
+            ToolRequest,
+            ValidateOk,
+            Injected,
+            Handoff,
+            LoopError,
+            Cancel,
+        ] {
             assert_eq!(transition(LoopCompleted, ev), None);
             assert_eq!(transition(LoopAborted, ev), None);
         }
@@ -155,6 +170,20 @@ mod tests {
             ResultInjecting,
         ] {
             assert_eq!(transition(s, Cancel), Some(LoopAborted));
+        }
+    }
+
+    // covers: BR-AG-STATE-002
+    // provider/Gate/TaskPlan 等循环级错误从任意活动态统一进入 LoopAborted。
+    #[test]
+    fn loop_error_aborts_from_any_active_state() {
+        for s in [
+            ModelStreaming,
+            ToolValidating,
+            ToolExecuting,
+            ResultInjecting,
+        ] {
+            assert_eq!(transition(s, LoopError), Some(LoopAborted));
         }
     }
 

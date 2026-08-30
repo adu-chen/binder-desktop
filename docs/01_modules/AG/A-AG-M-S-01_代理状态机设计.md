@@ -185,7 +185,7 @@ status: mapped
 machine_id: SM-AG-02
 owner_module: AG
 status: active
-summary: 回合内工具调用循环（注册/权限校验→执行→回注→循环控制；写盘禁令、上限、可中断）
+summary: 回合内逐 ToolCall 调用循环（注册/权限校验→执行→回注→循环控制；写盘禁令、上限、错误中止、受控移交、可中断）
 source_type: design
 chain: AG-TOOL
 rules: BR-AG-STATE-002, BR-AG-VERIFY-001
@@ -197,7 +197,7 @@ terminal_states: LoopCompleted, LoopAborted
 - **scope**：一次代理回合内的工具调用循环（首个工具请求出现→终轮答复/中止）
 - **context**：工具注册清单、本轮 IntentResult.allowed_tools、权限边界、AgentReadContext、循环计数与上限、当前工具请求/结果、CancellationToken
 - **states**：ModelStreaming、ToolValidating、ToolExecuting、ResultInjecting、LoopCompleted、LoopAborted
-- **events**：toolRequest、validateOk、validateFail、execOk、execFail、injected、finalAnswer、loopLimit、cancel
+- **events**：toolRequest、validateOk、validateFail、execOk、execFail、injected、finalAnswer、handoff、loopLimit、loopError、cancel
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
@@ -209,11 +209,17 @@ terminal_states: LoopCompleted, LoopAborted
 | ToolExecuting | execOk | — | ResultInjecting | 结果回注 |
 | ToolExecuting | execFail | — | ResultInjecting | 失败信息回注（不中断循环） |
 | ResultInjecting | injected | 循环计数 < 上限 | ModelStreaming | 续调模型（仍在已过门禁的回合内） |
+| ResultInjecting | handoff | 已真实形成 Proposal 或 DecisionRequest，当前模型片段必须交回上层等待预览/裁决 | LoopCompleted | 结束工具循环并回归 SM-AG-01 产出处置；不伪造模型 finalAnswer |
 | ResultInjecting | loopLimit | 达循环上限 | LoopAborted | 中止并回报（统一错误形状） |
+| 任意非终态 | loopError | provider/Gate/TaskPlan/运行时错误使当前循环无法继续 | LoopAborted | 统一错误形状回归 SM-AG-01 TurnError；不得结算 Completed/Done |
 | 任意非终态 | cancel | 用户中断 | LoopAborted | 中断终态，无半落盘 |
 
-- **error_states**：无独立错误终态——工具失败回注模型继续循环（execFail→ResultInjecting）；
-  循环级失败统一走 LoopAborted 回归 SM-AG-01 错误/中断路径
+- **多 ToolCall 顺序**：一个模型轮次返回多个 ToolCall 时，按响应顺序为每个 ToolCall 独立执行
+  `toolRequest→validateOk/validateFail→可选执行→结果回注`；前一 ToolCall 完成 `injected` 后才处理下一项。
+  校验失败项只回注拒绝原因，不进入 ToolExecuting，也不阻止后续独立 ToolCall 重新接受校验；任一项形成
+  Proposal/DecisionRequest 并触发 handoff 后，当前批次剩余 ToolCall 不再执行。
+- **error_states**：无独立错误状态——单个工具执行失败回注模型继续循环（execFail→ResultInjecting）；
+  循环级错误以 loopError 进入 LoopAborted，回归 SM-AG-01 TurnError，不得映射为 Completed/Done
 - **recovery_paths**：LoopAborted→SM-AG-01 TurnError/Cancelled 路径处置
 - **forbidden_transitions**：
   - ToolValidating → ToolExecuting 无 validateOk（未注册/越权不得执行）
@@ -221,9 +227,12 @@ terminal_states: LoopCompleted, LoopAborted
   - ToolExecuting → 直接文件写入（写意图必须产出 diff 建议，X-FORBID-006）
   - ToolExecuting → DiskState 读取，当目标文档已打开且 AgentReadContext 中应存在 OpenDocSnapshot
   - ResultInjecting → ModelStreaming 当循环已达上限（不得无限循环）
+  - 任意生产状态广播未经过 SM-AG-02 转移引擎
+  - LoopAborted → TaskRun Completed 或 AgentTurn Done
 - **acceptance_criteria**：未注册、未获本轮允许或越权工具不可达 ToolExecuting；循环上限强制生效；任何工具执行
   不产生直接文件写入；read_doc/search_text/list_blocks 对已打开文档命中 OpenDocSnapshot，缺失时拒绝；
-  cancel 随时可达 LoopAborted
+  多 ToolCall 逐项校验且失败项不执行；Proposal/DecisionRequest 只经 handoff 收束；loopError/loopLimit 进入
+  LoopAborted 后只允许 TurnError，cancel 随时可达 LoopAborted；生产广播均由转移引擎输出
 - **test_matrix**：见 §5
 
 ## §4 SM-AG-03 · 辅助回合机（autocomplete + inline-assist 同机承载）
@@ -371,3 +380,4 @@ terminal_states: Accepted, Dismissed
 | 2026-08-15 | v2.18 | AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：SM-AG-04 重构落地（运行时/数据层）——settle 按未决 DecisionRequest 判定 WaitingConfirm（去除 has_pending_proposal）、begin_turn 不绕回 waiting_confirm、回合入口 gate（AG_DECISION_PENDING）、propose_decision/resolve_decision 生命周期与 IPC、TaskPlan 持久化、StepProgress 实时事件。 |
 | 2026-08-21 | v2.19 | 工作区资源操作基线重构：SM-AG-04 增加 WorkspaceOperation 集成语义；DecisionRequest 确认后立即调用 SM-WS-04 执行，不增加 WaitingUserCommit 或资源 DiffCard；CreateDocumentBundle 初始内容 Diff 不驱动 TaskRun 等待；重启中断不得复用旧确认。 |
 | 2026-08-27 | v2.20 | AG-CONFORMANCE-GOVERNANCE-S1：将 SM-AG-01 澄清唯一化为 AwaitingClarification 非终态，用户补充后原 AgentTurn 回到 Assembling；TurnError 保持原 AgentTurn 终态，显式重试创建新 AgentTurn；同步测试矩阵。将 SM-AG-04 限定为复杂或跨执行片段目标，WaitingConfirm 唯一来源为 DecisionRequest；删除 active 正文中重复的旧语义修正段。 |
+| 2026-08-29 | v2.21 | AG-CONFORMANCE-CODE-S3E / HD-S3E-02：补齐 SM-AG-02 生产事件语义——新增 loopError→LoopAborted 与 ResultInjecting handoff→LoopCompleted；冻结同轮多 ToolCall 按单调用顺序驱动，校验失败不进入 ToolExecuting；禁止绕过转移引擎广播以及 LoopAborted 映射 Completed/Done。 |
