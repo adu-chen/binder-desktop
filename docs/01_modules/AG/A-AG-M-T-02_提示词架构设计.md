@@ -68,6 +68,7 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 | 工具/能力层 | 工具/能力定义层 | 工具清单与契约（AG-TOOL 注册项投影），按模式启停 | AG | P0 | BR-AG-STATE-002 |
 | 格式层 | 系统提示词层（子项） | 输出格式约束（**GFM Markdown 子集**：段落/标题/列表/加粗/围栏代码块标注语言/表格；**声明当前无图表/流程图（Mermaid）渲染能力**；HTML/docx 仅面向 BDocx 能力投影） | DOC/DE | P0 | BR-AG-DATA-002（骨架内）、BR-AG-UI-001 |
 | 任务状态层 | 上下文注入层 | 当前 Agent 任务 + 阶段 + artifacts（仅 active） | AG | P1 | BR-AG-STATE-004 |
+| 代理上下文事实集层 | 上下文注入层 | 版本化 AgentContextFacts：workspace、活动/打开会话、格式、脏态、保存基准、LogicalState 版本、显式 SelectionRef、关联 Proposal 状态；不含正文 | SYS/ED/DE/WS | P0 当前轮事实元数据 | BR-AG-DATA-008 / BR-SYS-DATA-008 |
 | 当前文档/编辑器层 | 上下文注入层 | 当前文件 + 分级块列表 + 选区/光标 + revision/baseline + pending diffs | WS/ED/DE | **P0 当前轮主事实** | BR-AG-DATA-001 |
 | 引用层 | 上下文注入层 | 显式 @mention（精确锚点可编辑 / 阅读上下文仅理解） | REF | P1 最高保留 | BR-AG-DATA-001（@mention 优先） |
 | 当前对话层 | 用户输入层 | 当前轮 user 输入 + IntentResult（结构化决策不替代原文） | AG | P0 信号源 | BR-AG-DATA-004（本文） |
@@ -90,7 +91,7 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
   治理/系统层 → 工具/能力层 → 格式层
         ──────── 缓存边界标记 ────────
 [会话特定区·每轮易变]
-  任务状态层 → 补强层(记忆/知识/模板，带权重声明) → 当前文档/编辑器层 → 引用层
+  任务状态层 → 补强层(记忆/知识/模板，带权重声明) → 代理上下文事实集层 → 当前文档/编辑器层 → 引用层
   ───────────────────────────────────────────────
 [messages[] 数组·与 system 分离]
   历史对话层(默认弱化) … 当前对话层(末条，含意图沿用结果)
@@ -239,7 +240,7 @@ data-only envelope → 显式引用 data-only envelope → 同文档必要历史
 补强关闭；后续 profile 启用时按 BR-AG-DATA-005 的 P2 门控插入，不得改变系统/数据可信边界。
 
 **实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举为唯一真源，
-固定层序 `System → RuntimeControl → IntentHint → CurrentDocument → Reference → History →
+固定层序 `System → RuntimeControl → IntentHint → AgentContextFacts → CurrentDocument → Reference → History →
 CrossDocHistory → User`（CrossDocHistory 仅显式沿用时注入）。其中 `RuntimeControl`（AG RUNTIME CONTROL
 结构化 system 消息）与自然语言提示词分离为两条独立消息；`History` 聚合为单块 DATA-ONLY 消息并保留
 role 序列；`system_prompt_version` 由提示词内容 hash 派生；预算 gate 使用序列化 messages+tools 统一口径；
@@ -256,6 +257,7 @@ role 序列；`system_prompt_version` 由提示词内容 hash 派生；预算 ga
 [系统层] 角色 + 硬约束(改经diff裁决/不越权落盘/workspace限界) + 格式约束
 [工具层] read_doc, list_docs, search_text, propose_edit
 ──缓存边界──
+[代理上下文事实集] workspace + active/open docs + dirty/baseline/version + explicit selections + proposal states（data-only）
 [当前文档] file + 文档块列表；富文档含 node_type/role/parent/depth/node_json/fingerprint/capabilities，
 容器/原子块只作语境，内容块按稳定 blockId 独立寻址 + revision/baseline + pending diffs
 [引用层] @mention: ref#1 精确锚点 block[..]→block[..] / ref#2 阅读上下文(仅理解)
@@ -347,6 +349,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-29 | v1.16 | AG-CONFORMANCE-CODE-S4A：新增独立 AgentContextFacts data-only 层，生产 LayerKind 顺序调整为 IntentHint→AgentContextFacts→CurrentDocument，并同步缓存边界与结构示例。 |
 | 2026-06-24 | v1.0 | 初版（M-T-01 §5.1 的 L3 专项细化）：提示词分层总览（13 层映射至来源模块与已有规则）、装配顺序与缓存边界布局、当前轮次原则与意图沿用判定、补强层污染隔离与分层截断序、三类回合结构示例（非规范）；新增规则 BR-AG-DATA-004（当前轮次原则/意图沿用）、BR-AG-DATA-005（补强层隔离/分层截断序）；新增 TERM-AG-005（IntentCarryover）；REQ_MAP（REQ-AG-004）；承接 BR-AG-DATA-001/002 不重定义骨架；调研依据 R-AG-X-R-01；作为提示词设计迭代版本，明确 BR-AG-DATA-005 为分层截断序唯一权威，废止 M-T-01 早期「@mention > 记忆/知识 > 当前文档」裁剪排序（同步 M-T-01 v1.2 去重，冲突以本文为准） |
 | 2026-07-04 | v1.1 | Assist 回合承接术语澄清（人类裁决）：更名「辅助续写/局部修改」，补两形态提示词差异——续写单候选 50–100 字量级；局部修改多轮 refine（上轮产出为基底，无历史层、不持久化、每轮过门禁） |
 | 2026-07-16 | v1.2 | 细化 Assist 提示词形态：辅助续写一次产出 3 个候选；局部修改 refine 仅携上轮候选结果与新指令，不保留完整对话历史 |

@@ -482,6 +482,22 @@ test:related 结果：
 
 当前阶段裁决：普通内容/Runtime、WorkspaceOperation 与 CreateDocumentBundle 子链均为 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceTimeline 继续沿其独立验证卡判断。真实 provider/WKWebView 和生产配置证据进入待验证列表，不得用本地自动化宣称 G5 完成。
 
+### §15.3 S4A 结构化项目事实与读取报告
+
+`AG-CONFORMANCE-CODE-S4A` 在不扩大 Agent 1.0 写能力的前提下补齐 REQ-AG-009：
+
+- AgentTurn 在 Gate 前冻结 `agent-context-facts-v1`，包含当前 workspace/turn、ED LogicalState 会话事实、
+  本轮显式 SelectionFact 与当前 AgentSession ProposalFact；其他会话、无归属 Proposal 和文档正文不进入该集。
+- Prompt Runtime 以独立 data-only 层注入事实，层序为 `System → RuntimeControl → IntentHint →
+  AgentContextFacts → CurrentDocument → Reference → History → CrossDocHistory → User`。
+- Inspect/Search/Analyze 的最小 CapabilityGrant 增加只读 `report_project`完成工具；ProjectReport 已读项必须
+  与同轮 Prompt/成功只读 ToolCall 证据账本一致，伪造读取、跨 workspace 路径或缺失不确定性均失败关闭。
+- 结构化报告只是回合完成证据，不创建 TaskRun/DecisionRequest/ChangeProposal，不改变
+  ExplicitEditTargetSet，不扩大写权限。
+
+当前裁决：生产实现、直接测试、完整 changed_files 影响选择器与治理审计已通过，S4A 为
+`LOCAL_INTEGRATED / G5_PENDING`；真实 Tauri/WKWebView + provider 项目读取链单独进入 G5 待验证列表。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
@@ -491,3 +507,4 @@ test:related 结果：
 | 2026-08-21 | v1.2 | 工作区资源操作基线重构：Stage 4/G5 改为 WorkspaceOperation + DecisionRequest、CreateDocumentBundle 和 WorkspaceTimeline；旧资源 Diff/空基准新建证据不再计入新基线，相关工作包状态改为 IMPLEMENTATION_PENDING。 |
 | 2026-08-28 | v1.3 | AG-CONFORMANCE-PLAN-S3D-COMPANION：承接 fed343a/a0afdff，把工作包和验证边界统一到 ExplicitEditTargetSet；只读内容不扩权、用户引用身份可初始化成员、scope confirm 可追加、集合外提案硬拒。 |
 | 2026-08-29 | v1.4 | AG-CONFORMANCE-CODE-S3E：WP-AG10-05 工具策略对齐当前 CreateDocumentBundle/WorkspaceOperationPlan 规则；CreateDocument/OrganizeWorkspace 只获得必要读取与 plan_workspace_operation，目标资源建立前不开放 propose_edit。 |
+| 2026-08-30 | v1.5 | AG-CONFORMANCE-CODE-S4A：登记 AgentContextFacts 独立 Prompt 层、当前 AgentSession ProposalFact 投影、ProjectReport 读取证据账本与 report_project 只读完成门。 |

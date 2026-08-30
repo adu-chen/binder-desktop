@@ -230,6 +230,30 @@ AwaitingClarification→Assembling 补充可单调追加新的显式引用。模
 回合内持有，不因本术语创建 TaskRun。集合外既有文档在 ChangeProposal 生成前失败关闭；`cross_doc` 只能表示
 集合内非当前文档的展示属性，不是授权来源（BR-AG-DATA-003 / BR-SYS-STATE-007/008）。
 
+<!-- TERM
+term_id: TERM-AG-020
+chains: AG-TURN
+zh: 代理上下文事实集
+en: AgentContextFacts
+forbidden: 上下文状态, 编辑器上下文, 项目上下文, AgentContext, context facts
+-->
+一次 AgentTurn 在进入 Prompt 装配前冻结的版本化只读事实载荷。它只包含当前 workspace 身份、活动与已打开
+编辑会话的路径/来源/格式/脏态/保存基准/LogicalState 版本、任务显式需要的 SelectionRef，以及关联
+ChangeProposal 的身份与状态；文档正文继续由 OpenDocSnapshot/ReferencePayload 承载。该事实集是
+ED/DE/WS→AG 的跨模块投影，不授予读取集合之外的访问权，也不扩大 CapabilityGrant 或
+ExplicitEditTargetSet（BR-AG-DATA-008 / BR-SYS-DATA-008）。
+
+<!-- TERM
+term_id: TERM-AG-021
+chains: AG-TURN, AG-TOOL
+zh: 项目报告
+en: ProjectReport
+forbidden: 项目总结, 项目扫描报告, workspace 报告, 分析总结, 普通回答
+-->
+Inspect/Search/Analyze AgentTurn 的结构化只读完成产物，固定声明本轮请求范围、可证明已读项及其来源、
+未读范围、结论证据和不确定性。ProjectReport 必须通过 `report_project` 与本轮读取证据账本核验；普通
+assistant 自由文本、目录列表或模型自述不构成 ProjectReport（BR-AG-OBS-001）。
+
 ## §1 文档定位
 
 ```
@@ -507,6 +531,42 @@ DiskState；任何已打开文档不得从 DiskState 或 loadedContent 旧快照
 才可作为 data-only 引用进入本轮。该限制是 1.0 发布收敛，不取消后续 profile 按 BR-AG-DATA-005
 确定性门控启用补强层的能力。
 
+<!-- RULE
+rule_id: BR-AG-DATA-008
+主链路: AG-TURN
+域: DATA
+-->
+每个 AgentTurn 必须在 PromptPackage 装配前冻结一个版本化 AgentContextFacts（TERM-AG-020），其跨模块
+字段基线归 BR-SYS-DATA-008。前端只从当前 active workspace 的 ED 会话真值、用户显式 SelectionRef 与
+DE ChangeProposal 投影组装；后端必须核验 workspace 身份、活动路径、OpenDocSnapshot 集合以及同路径
+source/sessionVersion/contentHash 等身份一致后才接受。已打开文档一律声明为 LogicalState 来源，活动文档
+与已打开非活动文档可区分；未打开文档不得伪装成编辑器事实。选区只在当前任务显式携带 SelectionRef 时
+进入，且必须带 relPath/blockId/range；兼容 `blockRefs` 必须先等价归一为本轮显式 SelectionFact。
+Proposal 事实只能投影当前 AgentSession，携带 diffId/sessionId/relPath/state/effectStatus/saved，不携带或改变内容。
+
+AgentContextFacts 作为独立 `AgentContextFacts` data-only Prompt 层注入，位于 IntentHint 之后、
+CurrentDocument 之前；不得并入 RuntimeControl、OpenDocSnapshot 或自然语言提示词。载荷缺失、版本未知、
+跨 workspace、活动路径不一致、打开文档来源或版本/hash 漂移时，必须在 Gate/provider/ToolCall 前失败关闭。
+该载荷只供模型认识会话事实与后续 ProjectReport 证据初始化，不授予额外读取、编辑、Proposal 或磁盘权限，
+也不得把打开标签、读取结果或 Proposal 路径加入 ExplicitEditTargetSet。
+
+<!-- RULE
+rule_id: BR-AG-OBS-001
+主链路: AG-TURN, AG-TOOL
+域: OBS
+-->
+IntentResult 为 Inspect、Search 或 Analyze 时，CapabilityGrant 必须只读地加入 `report_project` 并将其设为
+本轮必需完成工具；Answer、Clarify、Edit、CreateDocument 与 OrganizeWorkspace 不得因本规则获得该工具。
+`report_project` 输入必须形成版本化 ProjectReport（TERM-AG-021），至少包含 requestedScope、readItems、
+unreadItems、findings 与 uncertainties：每个 readItem 必须声明 relPath、source 和 coverage，并与本轮
+读取证据账本中的初始 AgentContextFacts/Prompt 注入或成功只读 ToolCall 完全匹配；目录枚举只证明结构，
+search_text 只证明命中片段，均不得登记为完整正文读取。未被账本证明的路径只能进入 unreadItems 或
+uncertainties；路径越出 workspace、来源不匹配、缺少不确定性声明或把目录列表当正文时失败关闭并回注模型。
+
+成功的 `report_project` 只锁定结构化只读完成证据，不创建 TaskRun/DecisionRequest/ChangeProposal/Diff，
+不写 LogicalState/DiskState，不扩大 CapabilityGrant 或 ExplicitEditTargetSet。工具成功后模型可生成面向用户
+的 Markdown 摘要，但回合只有在已存在成功 ProjectReport 时才可正常完成；自由文本不得替代结构化产物。
+
 ## §5.1 提示词 / 上下文组装架构（AG-TURN，2026-06-12 补 B-1）
 
 > 解除 A-CORE-X-R-01 B-1：提示词**文本/措辞/模型档**属实现期运营配置（不入规则）；本节锁设计层
@@ -529,7 +589,7 @@ DiskState；任何已打开文档不得从 DiskState 或 loadedContent 旧快照
 
 **实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举为唯一真源
 （装配顺序、审计层名、版本登记共用），取代早期仅供测试的 `assemble_prompt`/`PromptSkeleton` 四层骨架。
-固定层序为 `System → RuntimeControl → IntentHint → CurrentDocument → Reference → History →
+固定层序为 `System → RuntimeControl → IntentHint → AgentContextFacts → CurrentDocument → Reference → History →
 CrossDocHistory → User`（CrossDocHistory 仅显式沿用时注入）；`RuntimeControl` 独立为结构化 system
 消息（与自然语言提示词分离，P2 修复）；历史聚合为单块 DATA-ONLY 消息并保留 role 序列（P5/P7 修复）；
 `system_prompt_version` 由提示词内容 hash 派生（P3 修复）；预算 gate 使用序列化 messages+tools 统一口径
@@ -891,6 +951,30 @@ target_type: RULE
 target_id: BR-WS-DATA-003
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-AG-009
+target_type: CHAIN
+target_id: AG-TURN
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-009
+target_type: RULE
+target_id: BR-AG-DATA-008
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-009
+target_type: RULE
+target_id: BR-AG-OBS-001
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-AG-009
+target_type: CONSTRAINT
+target_id: X-SHARED-001
+status: mapped
+-->
 
 ## §9 测试与验收
 
@@ -906,6 +990,10 @@ status: mapped
   已打开文档覆盖测试必须包含：active live 内容覆盖 `loadedContent`、非激活 open session 内容覆盖 DiskState、
   标签切换过渡期 active binding 未对齐时读取目标 session LogicalState 且回写旧绑定文档、session 尚未载入时短暂等待、
   `search_text` 命中未保存 LogicalState、ReferencePayload.selection 失效时不作为当前事实。
+- **编辑器事实与项目报告**（BR-AG-DATA-008 / BR-AG-OBS-001，REQ-AG-009 验收）：AgentContextFacts
+  缺失、版本未知、workspace/活动路径/LogicalState 版本不一致均在 Gate 前拒绝；Inspect/Search/Analyze
+  缺少成功 ProjectReport 不得完成；readItems 只能引用初始注入或成功读取证据，目录/搜索片段不得伪装
+  成完整正文，未读与不确定性可观察；读取与报告不增加任何编辑目标或写工具。
 - **辅助回合**（BR-AG-STATE-003 / SM-AG-03）：latest-wins 生效（新请求覆盖旧请求）；辅助续写
   返回 3 候选且 Tab/1/2/3 采纳正确；局部修改支持选区替换与光标插入，多轮仅以上轮候选为基底；
   采纳走 ED 受控接口产生正常脏态；无订阅/断网静默。
@@ -942,6 +1030,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-29 | v2.52 | AG-CONFORMANCE-CODE-S4A：注册 TERM-AG-020 AgentContextFacts / TERM-AG-021 ProjectReport、BR-AG-DATA-008 / BR-AG-OBS-001 与 REQ-AG-009 完整映射；冻结版本化编辑器事实、独立 Prompt 层、只读读取证据账本及 report_project 失败关闭契约。 |
 | 2026-06-11 | v1.0 | 初版（AG G2 首件，P3 G2 起步）：AG 规则 SSOT——代理回合生命周期与产出唯一出口、门禁前置承接（无绕过路径）、回合历史本地持久化原则、工具调用循环（注册/权限/上限/写盘禁令）、上下文组装（来源限定与裁剪优先级）、内联辅助与自动补全（节流/门禁/装饰层/采纳即编辑）；注册链路 AG-TURN/AG-TOOL/AG-ASSIST（均 P1）、规则 6 条、约束 X-FORBID-006、术语 TERM-AG-001~004（AgentTurn/ToolCall/InlineAssist/Autocomplete）；REQ_MAP（REQ-AG-001~005）；债务（工具清单/历史表列/节流参数/CBT 接管延后记明） |
 | 2026-06-12 | v1.1 | Q5 澄清项留痕（人类指示后续细化）：§10 债务新增「单文档回合的跨文档产出边界待裁定」（倾向限定当前文档、跨文档升级 CBT，G3 前与 DE 联合裁定） |
 | 2026-06-24 | v1.2 | 接入 L3 细化 A-AG-M-T-02（提示词架构迭代版）并做职责去重：§5.1 增「L3 细化与版本优先」声明；上下文注入层表格行去除旧裁剪排序「显式 @mention > 记忆/知识 > 当前文档」（将当前文档排最低，与当前轮次原则冲突），改委派 M-T-02 BR-AG-DATA-005（当前文档 P0 永不截）；BR-AG-DATA-002 移除内嵌裁剪优先级排序、收敛为只锁组装骨架（分层/顺序/三类回合），截断序统一归 BR-AG-DATA-005，消除「功能重合·术语不同」的逻辑重复；冲突一律以 M-T-02 为准 |

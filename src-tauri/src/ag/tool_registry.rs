@@ -47,11 +47,11 @@ impl CapabilityGrantV1 {
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-DATA-AG-AG-TOOL-034, BR-AG-DATA-004-DATA-AG-AG-TOOL-034, BR-SYS-STATE-007-DATA-AG-AG-TOOL-034
+ * codes:    BR-AG-STATE-002-DATA-AG-AG-TOOL-034, BR-AG-DATA-004-DATA-AG-AG-TOOL-034, BR-SYS-STATE-007-DATA-AG-AG-TOOL-034, BR-AG-OBS-001-DATA-AG-AG-TOOL-034
  * type:     DATA
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-002, BR-AG-DATA-004, BR-SYS-STATE-007
- * term_ref: TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-004, BR-SYS-STATE-007, BR-AG-OBS-001
+ * term_ref: TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-021
  * boundary: in=RuntimeProfileIntentResultExplicitEditTargetSetAndDynamicCapabilityFacts | out=CapabilityGrantFiveFactorIntersection | does_not=expandIntentAllowedToolsFromRegistryPromptFrontendHistoryOrDefaults
  */
 /// 以 IntentResult.allowed_tools 为上界，按 profile、任务、目标、副作用和格式/动态能力继续收窄。
@@ -86,6 +86,10 @@ pub(super) fn resolve_capability_grant(
                         && scope_decision_requested
                         && factors.has_task_run
                 }
+                "report_project" => matches!(
+                    intent.intent_type,
+                    IntentTypeV1::Inspect | IntentTypeV1::Search | IntentTypeV1::Analyze
+                ),
                 "list_tables" => factors.active_bdocx && factors.table_ops_available,
                 "list_images" | "import_image_asset" => {
                     factors.active_bdocx && factors.image_ops_available
@@ -394,6 +398,10 @@ pub const TOOLS: &[ToolDef] = &[
         permission: ToolPermission::ReadOnly,
     },
     ToolDef {
+        name: "report_project",
+        permission: ToolPermission::ReadOnly,
+    },
+    ToolDef {
         name: "plan_workspace_operation",
         permission: ToolPermission::TaskControl,
     },
@@ -472,6 +480,62 @@ pub fn tool_definitions_json(
                             "description": "可选。目录相对路径（如 \"文学作品\"）；传此参数时返回该目录的直接子项。"
                         }
                     },
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "report_project",
+                "description": "以结构化 ProjectReport 结束只读检查/搜索/分析。必须如实列出 requestedScope、可证明的 readItems、unreadItems、findings 和 uncertainties。readItems 必须逐字使用本轮证据：初始 AgentContextFacts 为 coverage=session_metadata/evidence=agent_context_facts；提示词完整当前文档为 full_document/prompt_current_document，长文档目录为 structure_index/prompt_current_document；read_doc 全文为 full_document/read_doc，blocks 参数为 selected_blocks/read_doc；list_blocks/list_tables/list_images 为 structure_index/同名工具；list_docs/workspace_glob 为 workspace_structure/同名工具；search_text 命中为 search_excerpt/search_text。目录和搜索片段不得声称读完正文。该工具只生成只读报告证据，不修改任何内容或授权。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "version": { "type": "string", "enum": ["project-report-v1"] },
+                        "requestedScope": { "type": "array", "items": { "type": "string" } },
+                        "readItems": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "relPath": { "type": "string" },
+                                    "source": { "type": "string" },
+                                    "coverage": { "type": "string", "enum": ["session_metadata", "workspace_structure", "structure_index", "search_excerpt", "selected_blocks", "full_document"] },
+                                    "evidence": { "type": "string" }
+                                },
+                                "required": ["relPath", "source", "coverage", "evidence"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "unreadItems": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "relPath": { "type": "string" },
+                                    "reason": { "type": "string" }
+                                },
+                                "required": ["relPath", "reason"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "findings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "statement": { "type": "string" },
+                                    "sourcePaths": { "type": "array", "items": { "type": "string" } },
+                                    "uncertainty": { "type": "string", "enum": ["none", "low", "medium", "high"] }
+                                },
+                                "required": ["statement", "sourcePaths", "uncertainty"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "uncertainties": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+                    },
+                    "required": ["version", "requestedScope", "readItems", "unreadItems", "findings", "uncertainties"],
                     "additionalProperties": false
                 }
             }
@@ -674,7 +738,7 @@ mod tests {
 
     #[test]
     fn tools_registered_with_expected_permissions() {
-        assert_eq!(TOOLS.len(), 12);
+        assert_eq!(TOOLS.len(), 13);
         assert!(is_registered("read_doc"));
         assert!(is_registered("list_docs"));
         assert!(is_registered("search_text"));
@@ -682,6 +746,7 @@ mod tests {
         assert!(is_registered("list_tables"));
         assert!(is_registered("list_images"));
         assert!(is_registered("workspace_glob"));
+        assert!(is_registered("report_project"));
         assert!(!is_registered("move_doc"));
         assert!(!is_registered("create_folder"));
         assert!(is_registered("import_image_asset"));
@@ -700,6 +765,10 @@ mod tests {
         );
         assert_eq!(
             lookup("list_blocks").unwrap().permission,
+            ToolPermission::ReadOnly
+        );
+        assert_eq!(
+            lookup("report_project").unwrap().permission,
             ToolPermission::ReadOnly
         );
         assert_eq!(
@@ -734,6 +803,7 @@ mod tests {
             "list_blocks",
             "list_tables",
             "list_images",
+            "report_project",
             "plan_workspace_operation",
             "import_image_asset",
             "edit_blocked",
@@ -765,6 +835,7 @@ mod tests {
         );
         assert!(analyze_grant.allows("read_doc"));
         assert!(analyze_grant.allows("list_blocks"));
+        assert!(analyze_grant.allows("report_project"));
         assert!(!analyze_grant.allows("propose_decision"));
         assert!(!analyze_grant.allows("propose_edit"));
         assert!(!analyze_grant.allows("plan_workspace_operation"));
@@ -786,6 +857,7 @@ mod tests {
             .filter_map(|definition| definition["function"]["name"].as_str())
             .collect::<Vec<_>>();
         assert!(names.contains(&"read_doc"));
+        assert!(names.contains(&"report_project"));
         assert!(!names.contains(&"propose_edit"));
         assert!(!names.contains(&"propose_decision"));
         assert!(!names.contains(&"plan_workspace_operation"));

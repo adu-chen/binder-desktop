@@ -254,12 +254,12 @@ fn intent_hint_for_prompt(
 
 /**
  * @GOV
- * codes:    BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011
+ * codes:    BR-AG-DATA-001-DATA-AG-AG-TURN-011, BR-AG-DATA-002-DATA-AG-AG-TURN-011, BR-AG-DATA-004-DATA-AG-AG-TURN-011, BR-AG-DATA-005-DATA-AG-AG-TURN-011, BR-AG-DATA-008-DATA-AG-AG-TURN-011
  * type:     DATA
  * chain:    AG-TURN
- * rules:    BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005
- * term_ref: TERM-AG-005
- * boundary: in=promptRuntimeControlCurrentDocAndDocScopedHistory | out=AgentTurnMessages(layerTaggedSystemIntentCurrentDocReferenceHistoryUserOrder)
+ * rules:    BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-DATA-008
+ * term_ref: TERM-AG-005, TERM-AG-020
+ * boundary: in=promptRuntimeControlAgentContextFactsCurrentDocAndDocScopedHistory | out=AgentTurnMessages(layerTaggedSystemIntentFactsCurrentDocReferenceHistoryUserOrder)
  */
 pub fn assemble_agent_turn_messages(
     system_prompt: &str,
@@ -268,6 +268,7 @@ pub fn assemble_agent_turn_messages(
     active_doc_path: Option<&str>,
     history_budget_chars: usize,
     mention_block: Option<&str>,
+    agent_context_facts_json: Option<&str>,
     doc_ctx: Option<&str>,
     prompt: &str,
 ) -> AgentTurnMessages {
@@ -304,6 +305,13 @@ pub fn assemble_agent_turn_messages(
         "layer": LayerKind::IntentHint.as_str(),
         "content": intent_hint_for_prompt(carryover, dropped_cross_doc_history, sync_reference_hint.as_deref()),
     }));
+    if let Some(facts) = agent_context_facts_json {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "layer": LayerKind::AgentContextFacts.as_str(),
+            "content": format!("[DATA-ONLY agent_context_facts]\n{facts}\n[/DATA-ONLY]")
+        }));
+    }
     if let Some(ctx) = doc_ctx {
         messages.push(serde_json::json!({
             "role": "system",
@@ -599,6 +607,7 @@ mod tests {
             Some("b.md"),
             10_000,
             None,
+            None,
             Some("[当前编辑器打开的文档] 路径：b.md\n农夫与蛇当前正文"),
             "整理当前文档",
         );
@@ -627,6 +636,7 @@ mod tests {
             Some("b.md"),
             10_000,
             None,
+            None,
             Some("[当前编辑器打开的文档] 路径：b.md\n农夫与蛇当前正文"),
             "把刚才那段再短一点",
         );
@@ -649,6 +659,7 @@ mod tests {
             Some("a.md"),
             10_000,
             Some("显式引用正文"),
+            Some(r#"{"version":"agent-context-facts-v1","workspaceId":"ws1"}"#),
             Some("当前 LogicalState 正文"),
             "只分析，不要修改",
         );
@@ -657,6 +668,18 @@ mod tests {
             .iter()
             .map(|message| message["content"].as_str().unwrap_or(""))
             .collect::<Vec<_>>();
+        let facts_index = assembled
+            .messages
+            .iter()
+            .position(|message| message["layer"] == context::LayerKind::AgentContextFacts.as_str())
+            .unwrap();
+        let document_index = assembled
+            .messages
+            .iter()
+            .position(|message| message["layer"] == context::LayerKind::CurrentDocument.as_str())
+            .unwrap();
+        assert!(facts_index < document_index);
+        assert!(contents[facts_index].contains("[DATA-ONLY agent_context_facts]"));
         let current_index = contents
             .iter()
             .position(|content| content.contains("DATA-ONLY current_document"))

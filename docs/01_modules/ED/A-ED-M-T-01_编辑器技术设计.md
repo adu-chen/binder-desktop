@@ -557,6 +557,22 @@ rule_id: BR-ED-STATE-002
 受控接口，用户在 decoration 上的裁决交互转达消费方处理，ED 不代行裁决（diff 终态归 DE 终态机）。inline-assist/autocomplete 的业务语义
 归 AG（2026-06-11 人类确认，A-SYS-M-S-01 §3），本规则只约束其呈现承载面。
 
+<!-- RULE
+rule_id: BR-ED-DATA-008
+主链路: ED-EDIT, AG-TURN
+域: DATA
+-->
+ED 向 AgentContextFacts（TERM-AG-020 / BR-SYS-DATA-008）提供的编辑会话事实必须直接投影当前 active
+workspace 的 ED 会话真值：activeDoc 与 openDocs 逐项携 relPath、source、editFormat、contentFormat、
+dirty、baseline、sessionVersion、contentHash；活动路径使用 active_editor/active_editor_session，其他已打开
+路径使用 open_editor_session。当前或已打开文档正文仍由同一时点 OpenDocSnapshot LogicalState 承载，
+DiskState/loadedContent/显示态不得覆盖这些事实。SelectionFact 只在当前任务显式携带 SelectionRef 时投影，
+并保留所属 relPath、blockId 与 range；不得自动捕获无关光标或把选区跨 AgentSession 复用。
+
+ED 只生产事实投影，不负责 ProjectReport 结论、读取证据判定或工具授权；切换标签后，原打开文档仍保留其
+自身 LogicalState 版本与脏态，不能被新活动文档身份覆盖。跨 workspace、已关闭会话、未完成加载或
+source/version/hash 不一致的事实不得输出为可用 AgentContextFacts。
+
 ## §8 跨模块约束（CONSTRAINT）
 
 <!-- CONSTRAINT
@@ -684,6 +700,18 @@ target_type: RULE
 target_id: BR-CORE-STATE-003
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-ED-011
+target_type: RULE
+target_id: BR-ED-DATA-008
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-ED-011
+target_type: CONSTRAINT
+target_id: X-SHARED-001
+status: mapped
+-->
 
 ## §10 测试与验收
 
@@ -691,6 +719,9 @@ status: mapped
   脏态关闭须保存或确认丢弃；解析失败降级只读；断网时编辑可用；ED 无直接文件 I/O 调用路径（静态可查）。
   已有或 pending 后打开文档预览 diff 后 session content/version/hash 更新、置脏并持久化，卡片仍可裁决，切回该文档时不重复应用；
   重启恢复继承关闭前打开的文档标签、顺序和当前文档，孤立 `ed_session_snapshots` 不恢复为打开文档，恢复后的当前文档可进入 AG 工作序列。
+- **Agent 可感知会话事实**（BR-ED-DATA-008，REQ-ED-011 验收）：A 文档未保存后切换 B，冻结事实仍分别
+  保留 A/B 的 source、dirty、baseline、sessionVersion/contentHash，正文与事实均不回退 DiskState；只有
+  显式 SelectionRef 进入 selection facts，跨 workspace/AgentSession 或不一致快照在 Gate 前拒绝。
 - **blockId 稳定**（BR-ED-DATA-001，REQ-ED-002 验收）：普通编辑后既有 blockId 不变；删除块后定位
   该 blockId 收到失效信号；不存在静默错位。
 - **Markdown/b-docx 统一模型**（BR-ED-DATA-002/006、BR-ED-VERIFY-001）：Markdown 受支持语法渲染为结构化节点，支持子集语义往返；未编辑不改写、非支持结构不静默保存；docx 进入编辑与往返保存经 DOC
@@ -805,6 +836,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-29 | v1.10 | AG-CONFORMANCE-CODE-S4A：新增 BR-ED-DATA-008 与 REQ-ED-011 映射，冻结 ED→AgentContextFacts 的活动/打开会话、LogicalState 版本、脏态、基准与任务显式选区事实边界。 |
 | 2026-06-11 | v1.0 | 初版（ED G2 首件）：ED 规则 SSOT——编辑会话与脏态（经 WS、离线可用、解析失败降级只读）、内容块模型与稳定 blockId（失效可感知）、md/docx 统一编辑模型（二进制归 DOC）、分页与媒体呈现层纯化、编辑器装饰层接口契约（DE/AG 消费）；注册链路 ED-EDIT / ED-DECOR（均 P1）、规则 BR-ED-STATE-001/002·BR-ED-DATA-001/002/003、约束 X-FORBID-005（复用 X-SEQ-002/003·X-FORBID-004·X-SHARED-001·X-INTER-001）、术语 TERM-ED-001 Block / TERM-ED-002 EditorDecoration；REQ_MAP（REQ-ED-001~005）；债务（TipTap 选型/blockId 算法/样式子集/往返保持延后并记明 owner） |
 | 2026-06-11 | v1.1 | 人类决策落地：inline-assist/autocomplete 归属确认 AG（边界表述更新）；§11.1 新增选型记录（人类授权 AI 推荐，旧版仓库实证取材）——TipTap v3 系 + React + StarterKit + 扩展集基线 + tiptap-pagination-plus 移植（解除 ED-01）、blockId = TipTap Extension + block_+UUID + appendTransaction 补缺/分裂去重 + 转换层兜底注入、md 源不注入（解除 ED-02 算法部分）、docx 样式子集三级契约（必需/部分/不处理，执行 SSOT 归 DOC L2）；§11.2 余债收敛（往返保留度/分页适配/验证后转锁定） |
 | 2026-06-12 | v1.2 | Q2 缺口补遗（人类确认采纳）：§3 新增 BR-ED-STATE-003 外部变更会话处理——无脏态自动重载、有脏态/保存冲突进入显式裁决（保留己方→覆盖确认 / 放弃重载），双向内容损失均须用户显式选择；REQ_MAP 补 REQ-ED-001→BR-ED-STATE-003 |

@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { activeSession, agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
-import { deStore, type DiffCardState, type DiffView } from "../store/deStore";
+import { deStore, type DiffCardState, type DiffEffectStatus, type DiffView } from "../store/deStore";
 import { listActiveTables, parseTableEditPayload, summarizeTableOperation, type TableEditPayload } from "./edTableOps";
 import {
   parseImageDiffSnapshotProjection,
@@ -18,6 +18,7 @@ import { closeStore } from "../store/closeStore";
 import { tabsStore } from "../store/tabsStore";
 import { flushOpenEditorSessionSnapshots, openDocument } from "./edService";
 import { parseMarkdownForEditing } from "../components/ed/markdown/markdownCodec";
+import { workspaceShell } from "../store/workspaceShell";
 
 /** 审计修复（2026-07-26 · D10）：HTML sanitize — 保留内联安全标签，剥离 script/iframe/on* 等。
  *  用于 replace_block 的 new_html 在进入后端前清洗。 */
@@ -65,6 +66,102 @@ export type AgTurnEvent =
   | { type: "error"; turn_id: string; code: string; message: string; retriable: boolean };
 
 export const AGENT_EDIT_RUNTIME_PROFILE = "agent-edit-1.0" as const;
+export const AGENT_CONTEXT_FACTS_VERSION = "agent-context-facts-v1" as const;
+
+export interface AgentContextDocumentFact {
+  relPath: string;
+  source: OpenDocSnapshot["source"];
+  editFormat: OpenDocSnapshot["editFormat"];
+  contentFormat: OpenDocSnapshot["contentFormat"];
+  dirty: boolean;
+  baseline: string | null;
+  sessionVersion: number;
+  contentHash: string;
+}
+
+export interface AgentContextFacts {
+  version: typeof AGENT_CONTEXT_FACTS_VERSION;
+  workspaceId: string;
+  turnId: string;
+  activeDoc: AgentContextDocumentFact | null;
+  openDocs: AgentContextDocumentFact[];
+  selections: { relPath: string; blockId: string; start?: number; end?: number }[];
+  proposalFacts: {
+    diffId: string;
+    sessionId: string;
+    relPath: string;
+    state: DiffCardState;
+    effectStatus?: DiffEffectStatus;
+    saved: boolean;
+  }[];
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-008-DATA-AG-AG-TURN-041, BR-ED-DATA-008-DATA-AG-AG-TURN-041, BR-SYS-DATA-008-DATA-AG-AG-TURN-041
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-DATA-008
+ * term_ref: TERM-AG-020
+ * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=ag_start_turn | does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
+ */
+export function buildAgentContextFacts(
+  turnId: string,
+  sessionId: string,
+  openDocs: OpenDocSnapshot[],
+  references: ReferencePayload[],
+  blockRefs: ClarifyingTurnIdentity["blockRefs"] = [],
+): AgentContextFacts {
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  if (!workspaceId) throw new Error("AG_CONTEXT_FACTS_WORKSPACE_REQUIRED");
+  const projectDocument = (snapshot: OpenDocSnapshot): AgentContextDocumentFact => ({
+    relPath: snapshot.relPath,
+    source: snapshot.source,
+    editFormat: snapshot.editFormat,
+    contentFormat: snapshot.contentFormat,
+    dirty: snapshot.dirty,
+    baseline: snapshot.baseline == null ? null : String(snapshot.baseline),
+    sessionVersion: snapshot.sessionVersion,
+    contentHash: snapshot.contentHash,
+  });
+  const projectedOpenDocs = openDocs.map(projectDocument);
+  const activeDoc = projectedOpenDocs.find((doc) =>
+    doc.source === "active_editor" || doc.source === "active_editor_session"
+  ) ?? null;
+  const referenceSelections = references.flatMap((reference) => reference.kind === "selection"
+    ? [{
+        relPath: reference.relPath,
+        blockId: reference.blockId,
+        ...(reference.start !== undefined ? { start: reference.start } : {}),
+        ...(reference.end !== undefined ? { end: reference.end } : {}),
+      }]
+    : []);
+  const selections = mergeLegacyBlockRefs(referenceSelections.map((selection) => ({
+    ...selection,
+    text: "",
+  })), blockRefs).map(({ text: _text, ...selection }) => selection);
+  const proposalFacts = deStore.getSnapshot().diffs.flatMap((diff) =>
+    diff.relPath && diff.sessionId === sessionId
+      ? [{
+          diffId: diff.diffId,
+          sessionId,
+          relPath: diff.relPath,
+          state: diff.state,
+          ...(diff.effectStatus ? { effectStatus: diff.effectStatus } : {}),
+          saved: diff.draftSaved === true || diff.effectStatus === "saved",
+        }]
+      : []
+  );
+  return {
+    version: AGENT_CONTEXT_FACTS_VERSION,
+    workspaceId,
+    turnId,
+    activeDoc,
+    openDocs: projectedOpenDocs,
+    selections,
+    proposalFacts,
+  };
+}
 
 let seq = 0;
 interface ClarifyingTurnIdentity {
@@ -1918,6 +2015,20 @@ export async function startTurn(
         ? openDocSnapshots.find((s) => s.relPath === turnActiveDocPath)
         : undefined;
       const activeDocContent = activeSnapshot?.content;
+      let agentContextFacts: AgentContextFacts;
+      try {
+        const factBlockRefs = references.length ? [] : blockRefs;
+        agentContextFacts = buildAgentContextFacts(
+          turnId,
+          sessionId,
+          openDocSnapshots,
+          references,
+          factBlockRefs,
+        );
+      } catch (e) {
+        failStart(e);
+        return;
+      }
       backendInvocationStarted = true;
       if (clarification) clarifyingTurns.delete(sessionId);
       invoke("ag_start_turn", {
@@ -1931,6 +2042,7 @@ export async function startTurn(
         activeDocContent,
         activeDocFormat: activeSnapshot?.editFormat ?? turnActiveDocTarget.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
         openDocSnapshots,
+        agentContextFacts,
         history, // 对话历史（PI-AG-09B，后端按预算保留最近）
         mentions: references.length ? [] : mentions, // 兼容旧路径；新路径走 references 防重复注入
         blockRefs: references.length ? [] : blockRefs, // 兼容旧路径；新路径走 references 防重复注入

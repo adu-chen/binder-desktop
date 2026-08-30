@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 
 /**
  * @GOV
- * codes:    BR-SYS-DATA-002-DATA-SYS-DATA-MIGRATE-001
+ * codes:    BR-SYS-DATA-002-DATA-SYS-DATA-MIGRATE-001, BR-SYS-DATA-008-DATA-SYS-DATA-MIGRATE-001
  * type:     DATA
  * chain:    DATA-MIGRATE
- * rules:    BR-SYS-DATA-002
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection
+ * rules:    BR-SYS-DATA-002, BR-SYS-DATA-008
+ * term_ref: TERM-AG-020, TERM-AG-021
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFactsV1,ProjectReportV1
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -33,6 +34,91 @@ pub struct DocRef {
     pub rel_path: String,
     /// 文档类型（md / docx 等）。
     pub doc_type: String,
+}
+
+pub const AGENT_CONTEXT_FACTS_VERSION_V1: &str = "agent-context-facts-v1";
+pub const PROJECT_REPORT_VERSION_V1: &str = "project-report-v1";
+
+/// TERM-AG-020：ED/DE/WS→AG 的版本化会话事实，不携带文档正文或授权。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentContextDocumentFactV1 {
+    pub rel_path: String,
+    pub source: String,
+    pub edit_format: String,
+    pub content_format: String,
+    pub dirty: bool,
+    pub baseline: Option<String>,
+    pub session_version: u64,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentContextSelectionFactV1 {
+    pub rel_path: String,
+    pub block_id: String,
+    pub start: Option<usize>,
+    pub end: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentContextProposalFactV1 {
+    pub diff_id: String,
+    pub session_id: String,
+    pub rel_path: String,
+    pub state: String,
+    pub effect_status: Option<String>,
+    pub saved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentContextFactsV1 {
+    pub version: String,
+    pub workspace_id: String,
+    pub turn_id: String,
+    pub active_doc: Option<AgentContextDocumentFactV1>,
+    pub open_docs: Vec<AgentContextDocumentFactV1>,
+    pub selections: Vec<AgentContextSelectionFactV1>,
+    pub proposal_facts: Vec<AgentContextProposalFactV1>,
+}
+
+/// TERM-AG-021：ProjectReport 的可验证读取项。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReportReadItemV1 {
+    pub rel_path: String,
+    pub source: String,
+    pub coverage: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReportUnreadItemV1 {
+    pub rel_path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReportFindingV1 {
+    pub statement: String,
+    pub source_paths: Vec<String>,
+    pub uncertainty: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReportV1 {
+    pub version: String,
+    pub requested_scope: Vec<String>,
+    pub read_items: Vec<ProjectReportReadItemV1>,
+    pub unread_items: Vec<ProjectReportUnreadItemV1>,
+    pub findings: Vec<ProjectReportFindingV1>,
+    pub uncertainties: Vec<String>,
 }
 
 /// diff 状态枚举集合（单一来源，BR-SYS-DATA-002）。

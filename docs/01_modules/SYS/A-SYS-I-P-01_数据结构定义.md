@@ -330,6 +330,8 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | `StructuredVisibleEvent`（结构化可见事件） | 用户可见的回合/任务/Proposal 状态事实（意图结论、读取/工具、提案卡、等待确认、终态原因） | 事件顺序承载于 AgentSession；终态事件为回合锁存 | 只含真实运行事件，不含模型内部推理；等待、失败、取消、中断不得伪装为执行 | 终态事件后不得出现可产生副作用的迟到事件；具体形状、字段与 UI 投影归 D3（AG）与前端设计 |
 | `ExternalContentRef`（外部内容引用） | 用户显式附加、且有可用只读解析路径的外部文件内容，作为当前任务的一次性 data-only 内容引用 | 引用携带文件身份、来源入口、已读/未读标记、读取时点与当前任务范围 | 不支持/不可读只保留元数据不伪称已读；外部内容不能改变系统约束、目标、授权或确认点 | 只在当前 AgentTurn/TaskRun 当前任务内有效；任务结束、重启、跨会话/跨 workspace 不自动恢复、复读、导入、编辑或默认持久化；不自动转存为项目记忆 |
 | `MemorySelectionRef`（显式项目记忆引用） | 用户管理的 workspace 本地项目记忆条目，经用户明确选择以 data-only 引用进入当前回合 | 引用携带条目身份与选择动作；仅用户显式选择 | Agent 1.0 不自动写入、不提议写入、不自动检索或注入；普通发送、附件、会话/编辑历史不自动转存为记忆 | workspace 隔离；跨会话不串选择事实；条目删除/关闭后引用失效或明确标记 |
+| `AgentContextFacts`（代理上下文事实集） | 冻结 AgentTurn 开始时 ED/DE/WS 提供的版本化只读会话事实；正文仍由 OpenDocSnapshot/ReferencePayload 承载 | 与 workspace_id、turn_id 绑定；包含 active_doc、open_docs、显式 selections 与 proposal_facts | 缺失、版本未知、workspace/active path/source/sessionVersion/contentHash 不一致时在 Gate 前失败关闭；事实只可来自当前会话投影 | 只在当前 AgentTurn 有效；跨 workspace/AgentSession 不继承；不授予读取或编辑权限，不扩 ExplicitEditTargetSet |
+| `ProjectReport`（项目报告） | Inspect/Search/Analyze 的版本化结构化只读完成产物，声明请求范围、已读/未读、来源、结论证据与不确定性 | 与 turn_id 绑定；read_items 逐项引用本轮读取证据账本 | 只有成功 `report_project` 校验才形成；目录枚举/搜索片段不得伪装为完整正文，普通自由文本不构成完成证据 | 只读、回合内；不持久扩大授权，不创建 TaskRun/DecisionRequest/Proposal/Diff，不修改 LogicalState/DiskState |
 
 <!-- RULE
 rule_id: BR-SYS-STATE-007
@@ -364,6 +366,24 @@ rule_id: BR-SYS-DATA-007
 持久化。项目记忆是用户管理的 workspace 本地资产，仅用户明确选择的条目（MemorySelectionRef）以 data-only
 进入当前回合；Agent 1.0 不自动写入、不提议写入、不自动检索或注入。外部内容、会话历史与编辑历史均不得
 自动转存为项目记忆。
+
+<!-- RULE
+rule_id: BR-SYS-DATA-008
+主链路: AG-TURN, AG-TOOL, ED-EDIT, DE-DIFF
+域: DATA
+-->
+AgentContextFacts 与 ProjectReport 的跨模块字段和枚举以本文 §3.1 为单一共享契约来源。AgentContextFacts
+版本 `agent-context-facts-v1` 固定包含 workspaceId、turnId、activeDoc、openDocs、selections、proposalFacts：
+文档事实携 relPath/source/editFormat/contentFormat/dirty/baseline/sessionVersion/contentHash；SelectionFact
+携 relPath/blockId/start/end；ProposalFact 携 diffId/sessionId/relPath/state/effectStatus/saved。ProjectReport 版本
+`project-report-v1` 固定包含 requestedScope、readItems、unreadItems、findings、uncertainties：ReadItem 携
+relPath/source/coverage/evidence；Finding 携 statement/sourcePaths/uncertainty。字段允许 additive 扩展，
+版本未知必须失败关闭；任何模块不得复制一套近义结构或把正文、显示态、磁盘旧快照混入这些事实字段。
+
+AgentContextFacts 只能以当前 active workspace 的 ED/DE/WS 真值生成并与 AgentTurn 一次性绑定；
+ProposalFact 必须与当前 AgentSession 身份一致，不得投影其他会话或无归属 Proposal。
+ProjectReport readItems 只能引用同一回合的初始化 Prompt 证据或成功只读工具证据。两个对象均为 data-only，
+不构成 CapabilityGrant、ExplicitEditTargetSet、TaskRun 或写入授权来源。
 
 > 边界：本文只给统一时间轴与资源操作对象的跨模块共享**字段基线**；计划/执行/补偿/恢复转移语义归
 > A-WS-M-T-02 / A-WS-M-S-02。文档内容 Diff 三态仍由 DE/ED/WS 既有状态机负责。
@@ -448,7 +468,7 @@ constraint_id: X-SHARED-001
 
 <!-- CONSTRAINT
 constraint_id: X-SHARED-002
-摘要: Agent 1.0 共享运行时对象（RuntimeProfile/AgentSession/AgentTurn/IntentResult/CapabilityGrant/TaskRun/TaskStep/StructuredVisibleEvent/ExternalContentRef/MemorySelectionRef）的职责、身份、事件真值、隔离与迁移边界以 SYS 数据结构契约层（A-SYS-I-P-01 §3.1）为唯一契约来源；任何模块不得以旧设计、现有代码、已注册工具、Prompt、前端参数、兼容默认值或测试绿灯反向改写冻结需求语义或隐式扩大授权
+摘要: Agent 1.0 共享运行时对象（RuntimeProfile/AgentSession/AgentTurn/IntentResult/CapabilityGrant/TaskRun/TaskStep/StructuredVisibleEvent/ExternalContentRef/MemorySelectionRef/AgentContextFacts/ProjectReport）的职责、身份、事件真值、隔离与迁移边界以 SYS 数据结构契约层（A-SYS-I-P-01 §3.1）为唯一契约来源；任何模块不得以旧设计、现有代码、已注册工具、Prompt、前端参数、兼容默认值或测试绿灯反向改写冻结需求语义或隐式扩大授权
 涉及模块: SYS, AG, DE, ED, WS, REF, AST
 链路影响: AG-TURN, DE-DIFF, ED-EDIT, WS-SAVE, WS-DIFF-APPLY, REF-INJECT, AST-MEMORY, IPC-CALL
 -->
@@ -503,6 +523,12 @@ status: mapped
 req_id: REQ-SYS-009
 target_type: CONSTRAINT
 target_id: X-SHARED-002
+status: mapped
+-->
+<!-- REQ_MAP
+req_id: REQ-SYS-009
+target_type: RULE
+target_id: BR-SYS-DATA-008
 status: mapped
 -->
 <!-- REQ_MAP
@@ -608,6 +634,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-29 | v1.15 | AG-CONFORMANCE-CODE-S4A：将 AgentContextFacts / ProjectReport 纳入 Agent 1.0 共享对象，新增 BR-SYS-DATA-008 字段、版本、失败关闭与只读授权边界，并补 REQ-SYS-009 规则映射。 |
 | 2026-06-10 | v1.0 | 初版（SYS G2）：跨模块共享实体契约（WorkspaceRef/DocRef/PendingDiff/TimelineEntry，字段语义级）；workspace.db schema 基线与版本化迁移契约框架；规则 BR-SYS-DATA-002（共享结构单一来源）/ BR-SYS-PERSIST-001（schema 版本化迁移与重启可恢复）；链路 DATA-MIGRATE（P1）；约束 X-SHARED-001；REQ_MAP（REQ-SYS-002）；术语归属说明（不抢注 WS/DE 的 TERM）；测试验收与债务盲区 |
 | 2026-07-20 | v1.1 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：PendingDiff 新增 `effect_status`（not_applicable/awaiting_save/saved/discarded_on_abnormal_exit）与 `terminal_reason`（新增 abnormal_exit 取值）两列，语义 SSOT 归 `BR-SYS-DATA-005`（A-SYS-M-T-02 §4）；明确 `status=accepted` 不等于内容已落盘，区分裁决态与落盘效果两个维度；workspace.db 基线表同步 |
 | 2026-07-21 | v1.2 | 收紧跨会话边界：`awaiting_save` 仅为当前进程会话态，启动清算必须转 `discarded_on_abnormal_exit`，不得依赖 dirty 快照残留；`pending_diffs` 重启只恢复终态只读审阅。 |

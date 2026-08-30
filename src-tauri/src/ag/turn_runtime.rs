@@ -2,8 +2,9 @@
 
 use crate::ag::prompt_runtime::PROMPT_TOKEN_BUDGET;
 use crate::ipc::{AgTurnEvent, IpcError};
-use crate::types::ReferencePayload;
+use crate::types::{AgentContextFactsV1, ReferencePayload, AGENT_CONTEXT_FACTS_VERSION_V1};
 use crate::{ag, ent, workspace, AppState};
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
 use super::edit_support::is_active_editor_snapshot_source;
@@ -45,11 +46,194 @@ fn require_runtime_profile(runtime_profile: Option<String>) -> Result<String, Ip
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018
+ * codes:    BR-AG-DATA-008-GUARD-AG-AG-TURN-042, BR-ED-DATA-008-GUARD-AG-AG-TURN-042, BR-SYS-DATA-008-GUARD-AG-AG-TURN-042
+ * type:     GUARD
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-DATA-008
+ * term_ref: TERM-AG-020
+ * boundary: in=AgentContextFactsV1WorkspaceTurnOpenDocSnapshotsAndExplicitReferences | out=VerifiedSameTurnLogicalStateFactsOrStablePreGateRejection | does_not=acceptUnknownVersionCrossWorkspaceFactsOrGrantReadWriteCapability
+ */
+fn validate_agent_context_facts(
+    facts: Option<&AgentContextFactsV1>,
+    workspace_id: &str,
+    workspace_root: &std::path::Path,
+    turn_id: &str,
+    session_id: &str,
+    active_doc_path: Option<&str>,
+    open_doc_snapshots: &[ag::blocks::OpenDocSnapshot],
+    references: &[ReferencePayload],
+    block_refs: &[BlockRef],
+) -> Result<(), IpcError> {
+    let facts = facts.ok_or_else(|| {
+        IpcError::new(
+            "AG_CONTEXT_FACTS_REQUIRED",
+            "缺少版本化 AgentContextFacts，已在 Gate 前拒绝回合",
+            false,
+            false,
+        )
+    })?;
+    if facts.version != AGENT_CONTEXT_FACTS_VERSION_V1 {
+        return Err(IpcError::new(
+            "AG_CONTEXT_FACTS_VERSION_UNSUPPORTED",
+            "AgentContextFacts 版本未知，已在 Gate 前拒绝回合",
+            false,
+            false,
+        ));
+    }
+    if facts.workspace_id != workspace_id || facts.turn_id != turn_id {
+        return Err(IpcError::new(
+            "AG_CONTEXT_FACTS_IDENTITY_MISMATCH",
+            "AgentContextFacts 不属于当前 workspace/AgentTurn",
+            false,
+            false,
+        ));
+    }
+    if facts.open_docs.len() != open_doc_snapshots.len() {
+        return Err(IpcError::new(
+            "AG_CONTEXT_FACTS_OPEN_DOCS_MISMATCH",
+            "AgentContextFacts.openDocs 与 OpenDocSnapshot 集合不一致",
+            true,
+            false,
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for fact in &facts.open_docs {
+        crate::workspace::resolve_in_workspace(workspace_root, &fact.rel_path)?;
+        if !seen.insert(fact.rel_path.as_str()) {
+            return Err(IpcError::new(
+                "AG_CONTEXT_FACTS_DUPLICATE_DOC",
+                "AgentContextFacts.openDocs 含重复路径",
+                false,
+                false,
+            ));
+        }
+        let snapshot = open_doc_snapshots
+            .iter()
+            .find(|snapshot| snapshot.rel_path == fact.rel_path)
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_CONTEXT_FACTS_OPEN_DOCS_MISMATCH",
+                    "AgentContextFacts 声明了不存在的打开文档事实",
+                    true,
+                    false,
+                )
+            })?;
+        let baseline = snapshot.baseline.map(|value| value.to_string());
+        if fact.source != snapshot.source
+            || fact.edit_format != snapshot.edit_format
+            || fact.content_format != snapshot.content_format
+            || fact.dirty != snapshot.dirty
+            || fact.baseline != baseline
+            || fact.session_version != snapshot.session_version
+            || fact.content_hash != snapshot.content_hash
+        {
+            return Err(IpcError::new(
+                "AG_CONTEXT_FACTS_LOGICAL_STATE_MISMATCH",
+                "AgentContextFacts 与同轮 OpenDocSnapshot LogicalState 身份不一致",
+                true,
+                false,
+            ));
+        }
+    }
+    match (active_doc_path, facts.active_doc.as_ref()) {
+        (None, None) => {}
+        (Some(active_path), Some(active_fact))
+            if active_fact.rel_path == active_path
+                && facts.open_docs.iter().any(|fact| fact == active_fact)
+                && is_active_editor_snapshot_source(&active_fact.source) => {}
+        _ => {
+            return Err(IpcError::new(
+                "AG_CONTEXT_FACTS_ACTIVE_DOC_MISMATCH",
+                "AgentContextFacts.activeDoc 与当前活动编辑器不一致",
+                true,
+                false,
+            ));
+        }
+    }
+    let mut expected_selections = references
+        .iter()
+        .filter_map(|reference| match reference {
+            ReferencePayload::Selection {
+                rel_path,
+                block_id,
+                start,
+                end,
+                ..
+            } => Some((rel_path.as_str(), block_id.as_str(), *start, *end)),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    expected_selections.extend(block_refs.iter().map(|reference| {
+        (
+            reference.rel_path.as_str(),
+            reference.block_id.as_str(),
+            reference.start,
+            reference.end,
+        )
+    }));
+    let actual_selections = facts
+        .selections
+        .iter()
+        .map(|selection| {
+            crate::workspace::resolve_in_workspace(workspace_root, &selection.rel_path)?;
+            Ok((
+                selection.rel_path.as_str(),
+                selection.block_id.as_str(),
+                selection.start,
+                selection.end,
+            ))
+        })
+        .collect::<Result<BTreeSet<_>, IpcError>>()?;
+    if actual_selections != expected_selections {
+        return Err(IpcError::new(
+            "AG_CONTEXT_FACTS_SELECTION_MISMATCH",
+            "AgentContextFacts.selections 只能来自本轮显式 SelectionRef",
+            false,
+            false,
+        ));
+    }
+    for proposal in &facts.proposal_facts {
+        crate::workspace::resolve_in_workspace(workspace_root, &proposal.rel_path)?;
+        if proposal.diff_id.trim().is_empty()
+            || proposal.session_id != session_id
+            || !matches!(
+                proposal.state.as_str(),
+                "pending"
+                    | "validating"
+                    | "applying"
+                    | "accepted"
+                    | "rejected"
+                    | "expired"
+                    | "conflict"
+                    | "error"
+            )
+            || !matches!(
+                proposal.effect_status.as_deref(),
+                None | Some("not_applicable")
+                    | Some("awaiting_save")
+                    | Some("saved")
+                    | Some("discarded_on_abnormal_exit")
+            )
+            || (proposal.saved && proposal.effect_status.as_deref() == Some("awaiting_save"))
+        {
+            return Err(IpcError::new(
+                "AG_CONTEXT_FACTS_PROPOSAL_INVALID",
+                "AgentContextFacts.proposalFacts 含无效身份或状态",
+                false,
+                false,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-AG-DATA-008-API-AG-AG-TURN-018, BR-ED-DATA-008-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018, BR-SYS-DATA-008-API-AG-AG-TURN-018
  * type:     API
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
- * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016
+ * rules:    BR-AG-STATE-001, BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-STATE-007, BR-SYS-DATA-008
+ * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
  * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndOptionalTaskRunTransitions | effect=IPC-ag_start_turn | delegate=require_runtime_profile,resolve_intent_result_with_targets,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=defaultMissingRuntimeProfileOrCreateTaskRunForSimpleAgentTurnOrCreateNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
@@ -68,6 +252,7 @@ pub(crate) async fn ag_start_turn(
     active_doc_content: Option<String>,
     active_doc_format: Option<String>,
     open_doc_snapshots: Vec<ag::blocks::OpenDocSnapshot>,
+    agent_context_facts: Option<AgentContextFactsV1>,
     history: Vec<ag::context::HistTurn>,
     mentions: Vec<String>,
     block_refs: Vec<BlockRef>,
@@ -104,6 +289,20 @@ pub(crate) async fn ag_start_turn(
             .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
         (ws.workspace_id.clone(), ws.root_path.clone())
     };
+
+    validate_agent_context_facts(
+        agent_context_facts.as_ref(),
+        &workspace_id_for_turn,
+        std::path::Path::new(&workspace_root_path),
+        &turn_id,
+        &session_id,
+        active_doc_path.as_deref(),
+        &open_doc_snapshots,
+        &references,
+        &block_refs,
+    )?;
+    let agent_context_facts = agent_context_facts
+        .expect("validated AgentContextFacts must be present after fail-closed guard");
 
     if clarification_resume
         && (continuation_task_run_id.is_some()
@@ -612,6 +811,7 @@ pub(crate) async fn ag_start_turn(
     }
     let PreparedTurnPrompt {
         current_doc_requires_tool_read,
+        current_doc_prompt_coverage,
         messages,
         tools,
         capability_grant,
@@ -623,6 +823,7 @@ pub(crate) async fn ag_start_turn(
         &session_id,
         task_run_id.as_deref(),
         &intent_result,
+        &agent_context_facts,
         &explicit_edit_targets,
         &read_ctx,
         active_doc_path.as_deref(),
@@ -743,6 +944,8 @@ pub(crate) async fn ag_start_turn(
         model,
         runtime_profile,
         prompt_package,
+        agent_context_facts,
+        current_doc_prompt_coverage,
         messages,
         tools,
         capability_grant,
@@ -773,6 +976,118 @@ mod tests {
             require_runtime_profile(Some(ag::turn::AGENT_EDIT_1_0_PROFILE.to_string())).unwrap(),
             ag::turn::AGENT_EDIT_1_0_PROFILE
         );
+    }
+
+    // covers: BR-AG-DATA-008
+    // covers: BR-ED-DATA-008
+    // covers: BR-SYS-DATA-008
+    #[test]
+    fn agent_context_facts_fail_closed_on_logical_state_drift() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ag-context-facts-{unique}"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.md"), "disk old").unwrap();
+        let snapshot = ag::blocks::OpenDocSnapshot {
+            rel_path: "a.md".to_string(),
+            content: "logical new".to_string(),
+            baseline: Some(7),
+            edit_format: "markdown".to_string(),
+            content_format: "text".to_string(),
+            source: "active_editor".to_string(),
+            dirty: true,
+            session_version: 3,
+            content_hash: "h3".to_string(),
+            captured_at: 1,
+            block_snapshots: Vec::new(),
+            table_snapshots: Vec::new(),
+            image_snapshots: Vec::new(),
+        };
+        let doc_fact = crate::types::AgentContextDocumentFactV1 {
+            rel_path: "a.md".to_string(),
+            source: "active_editor".to_string(),
+            edit_format: "markdown".to_string(),
+            content_format: "text".to_string(),
+            dirty: true,
+            baseline: Some("7".to_string()),
+            session_version: 3,
+            content_hash: "h3".to_string(),
+        };
+        let facts = AgentContextFactsV1 {
+            version: AGENT_CONTEXT_FACTS_VERSION_V1.to_string(),
+            workspace_id: "ws1".to_string(),
+            turn_id: "t1".to_string(),
+            active_doc: Some(doc_fact.clone()),
+            open_docs: vec![doc_fact],
+            selections: vec![crate::types::AgentContextSelectionFactV1 {
+                rel_path: "a.md".to_string(),
+                block_id: "legacy".to_string(),
+                start: None,
+                end: None,
+            }],
+            proposal_facts: vec![crate::types::AgentContextProposalFactV1 {
+                diff_id: "diff-1".to_string(),
+                session_id: "s1".to_string(),
+                rel_path: "a.md".to_string(),
+                state: "accepted".to_string(),
+                effect_status: Some("saved".to_string()),
+                saved: true,
+            }],
+        };
+        let legacy_ref = BlockRef {
+            rel_path: "a.md".to_string(),
+            block_id: "legacy".to_string(),
+            start: None,
+            end: None,
+            text: "selected".to_string(),
+        };
+        validate_agent_context_facts(
+            Some(&facts),
+            "ws1",
+            &root,
+            "t1",
+            "s1",
+            Some("a.md"),
+            std::slice::from_ref(&snapshot),
+            &[],
+            std::slice::from_ref(&legacy_ref),
+        )
+        .unwrap();
+
+        let mut cross_session = facts.clone();
+        cross_session.proposal_facts[0].session_id = "s2".to_string();
+        let error = validate_agent_context_facts(
+            Some(&cross_session),
+            "ws1",
+            &root,
+            "t1",
+            "s1",
+            Some("a.md"),
+            std::slice::from_ref(&snapshot),
+            &[],
+            std::slice::from_ref(&legacy_ref),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "AG_CONTEXT_FACTS_PROPOSAL_INVALID");
+
+        let mut stale = facts;
+        stale.open_docs[0].content_hash = "old".to_string();
+        let error = validate_agent_context_facts(
+            Some(&stale),
+            "ws1",
+            &root,
+            "t1",
+            "s1",
+            Some("a.md"),
+            &[snapshot],
+            &[],
+            &[legacy_ref],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "AG_CONTEXT_FACTS_LOGICAL_STATE_MISMATCH");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     // covers: BR-AG-STATE-001, BR-SYS-STATE-007

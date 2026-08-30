@@ -92,6 +92,7 @@ async fn ag_start_turn(
     active_doc_content: Option<String>,
     active_doc_format: Option<String>,
     open_doc_snapshots: Vec<OpenDocSnapshot>,
+    agent_context_facts: Option<AgentContextFactsV1>, // 缺失/未知/身份漂移在 Gate 前失败关闭
     history: Vec<HistTurn>,
     mentions: Vec<String>,
     block_refs: Vec<BlockRef>,
@@ -120,6 +121,14 @@ struct OpenDocSnapshot {
     captured_at: i64,
 }
 ```
+
+`agent_context_facts` 使用 A-SYS-I-P-01 BR-SYS-DATA-008 的 `agent-context-facts-v1` 共享结构：只携
+workspace/turn 身份、活动与打开会话元数据、显式 SelectionFact 和当前 AgentSession 的 ProposalFact，
+不复制文档正文。ProposalFact 固定携 `diffId/sessionId/relPath/state/effectStatus/saved`，不携带 diff 内容。
+后端必须逐项与同轮 `open_doc_snapshots`、active workspace、active_doc_path、AgentSession、
+`references.selection` 及兼容 `block_refs` 交叉核验；任何 source/sessionVersion/contentHash/路径/身份不一致均在
+Gate/provider/ToolCall 前拒绝。
+该参数是事实载荷，不是 CapabilityGrant 或 ExplicitEditTargetSet 的授权来源。
 
 `HistTurn` 为历史对话投影，serde 使用 camelCase：
 
@@ -314,6 +323,12 @@ IntentResultV1
   required_context[]
   allowed_tools[]
 
+AgentContextFactsV1 (TERM-AG-020)
+  version=agent-context-facts-v1 / workspace_id / turn_id
+  active_doc? / open_docs[]: rel_path, source, edit_format, content_format, dirty, baseline?, session_version, content_hash
+  selections[]: rel_path, block_id, start?, end?
+  proposal_facts[]: diff_id, rel_path, state
+
 PromptDataEnvelopeV1
   source_kind / provenance / freshness / trust_level / content_hash / token_estimate / content(data-only)
 
@@ -322,6 +337,13 @@ PromptPackageV1
 
 CapabilityGrantV1
   turn_id / intent_id / allowed_tools / target_scope / expires_at_turn_terminal
+
+ProjectReportV1 (TERM-AG-021)
+  version=project-report-v1 / requested_scope[]
+  read_items[]: rel_path, source, coverage, evidence
+  unread_items[]: rel_path, reason
+  findings[]: statement, source_paths[], uncertainty
+  uncertainties[]
 ```
 
 `CapabilityGrantV1` 只在当前 turn 有效；注册表中存在但 grant 未包含的工具必须拒绝。上述对象默认只持久化
@@ -351,6 +373,7 @@ CapabilityGrantV1
 | `execute_workspace_operation` | plan_id、resolved DecisionRequest identity | receipt/final_state/timeline_entry_id | StructureWrite | 仅 TaskRun 在真实 confirm 后调用；WS 重验、幂等、fail-fast 补偿；重启不自动执行 |
 | `import_image_asset` | source_path | assetId/sourcePath/sourceHash/mediaType/byteSize/sourceFilePreserved | StructureWrite | 仅 workspace 相对 PNG/JPEG；受控根内复用，否则复制到图片根 imported 子目录；不得移动或删除源文件 |
 | `edit_blocked` | code、reason | 结构化阻断结果 | WriteIntent | 仅真实无法安全提案时使用；不修改文档、不生成 Diff |
+| `report_project` | ProjectReportV1 | `{status:project_report_recorded,documentModified:false,report}` | ReadOnly | 仅 Inspect/Search/Analyze 获得并作为必需完成工具；read_items 必须与本轮 AgentContextFacts/Prompt/成功只读 ToolCall 证据精确匹配；目录/搜索片段不可伪装全文；不创建 TaskRun/DecisionRequest/Proposal/Diff |
 
 ## §4 局部修改/辅助续写接口（AG-ASSIST / SM-AG-03）
 
@@ -474,6 +497,7 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-30 | v1.26 | AG-CONFORMANCE-CODE-S4A：`ag_start_turn` 新增版本化 AgentContextFacts；新增只读 `report_project` 完成工具与同轮读取证据失败关闭协议。 |
 | 2026-06-12 | v1.0 | 初版（实现前置件，AI 调用面）：AG 接口协议——chat 回合 4（start/cancel/stream/list，门禁不变量内建）、工具回注 1（tool_result 校验回注）、内联辅助 1（request_assist 静默失败、采纳经 ed.apply_edit）、上下文组装对接索引（WS/REF/AST/KB）；门禁前置 X-SEQ-001 固化为接口不变量、产出唯一经 de.generate_diff；零新增注册项；债务（工具清单/节流/接管接口/供给接口延后） |
 | 2026-06-24 | v1.1 | 新增 §2.1 流式回传契约（AgTurnEvent · PI-AG-10C 冻结点）：AgTurnEvent 六分支（Chunk/ToolRequest/ToolResult/DiffProposed/Done/Error）、ag_start_turn 命令签名（Channel<AgTurnEvent> 传输，承 SY-02 选型）、三终态映射（BR-SYS-STATE-002）、前端消费映射（agStore/deStore）、关联命令形状与冻结约定；§2 表格 start_turn/turn_stream 行改为 Channel<AgTurnEvent> 模型并指向 §2.1。前后端双轨同步真源，零新增注册类治理块 |
 | 2026-06-26 | v1.2 | 命名落地修正：AG 回合流式事件定名 **AgTurnEvent**（避开 src-tauri/src/ipc/mod.rs 既有 SYS `StreamEvent` 重名），§2.1 补「与 SYS StreamEvent 分层不同·非重复」说明（通用 dispatch 传输契约 vs AG 领域 per-call Channel）；PI-AG-10C 落地同步 |

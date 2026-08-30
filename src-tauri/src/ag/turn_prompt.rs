@@ -13,6 +13,7 @@ use crate::AppState;
 
 pub(super) struct PreparedTurnPrompt {
     pub(super) current_doc_requires_tool_read: bool,
+    pub(super) current_doc_prompt_coverage: Option<&'static str>,
     pub(super) messages: Vec<serde_json::Value>,
     pub(super) tools: serde_json::Value,
     pub(super) capability_grant: ag::tool_registry::CapabilityGrantV1,
@@ -21,12 +22,12 @@ pub(super) struct PreparedTurnPrompt {
 
 /**
  * @GOV
- * codes:    BR-AG-DATA-002-DATA-AG-AG-TURN-031
+ * codes:    BR-AG-DATA-002-DATA-AG-AG-TURN-031, BR-AG-DATA-008-DATA-AG-AG-TURN-031, BR-SYS-DATA-008-DATA-AG-AG-TURN-031
  * type:     DATA
  * chain:    AG-TURN
- * rules:    BR-AG-DATA-002
- * term_ref: TERM-AG-005
- * boundary: in=IntentCurrentDocumentReferenceHistoryAndToolManifest | out=BudgetedPromptPackageMessagesAndCapabilityGrant | delegate=assemble_agent_turn_messages | consumer=PromptPackageV1
+ * rules:    BR-AG-DATA-002, BR-AG-DATA-008, BR-SYS-DATA-008
+ * term_ref: TERM-AG-005, TERM-AG-020
+ * boundary: in=IntentAgentContextFactsCurrentDocumentReferenceHistoryAndToolManifest | out=BudgetedPromptPackageMessagesAndCapabilityGrant | delegate=assemble_agent_turn_messages | consumer=PromptPackageV1
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_turn_prompt(
@@ -36,6 +37,7 @@ pub(super) fn prepare_turn_prompt(
     session_id: &str,
     task_run_id: Option<&str>,
     intent_result: &ag::context::IntentResultV1,
+    agent_context_facts: &crate::types::AgentContextFactsV1,
     explicit_edit_targets: &[String],
     read_ctx: &ag::blocks::AgentReadContext,
     active_doc_path: Option<&str>,
@@ -80,9 +82,24 @@ pub(super) fn prepare_turn_prompt(
             }
             _ => empty_current_doc_prompt_context(),
         };
+    let current_doc_prompt_coverage = current_doc_prompt_context.text.as_ref().map(|_| {
+        if current_doc_prompt_context.requires_read_before_edit {
+            "structure_index"
+        } else {
+            "full_document"
+        }
+    });
     let current_doc_requires_tool_read =
         requires_current_doc_tool_read && current_doc_prompt_context.requires_read_before_edit;
     let doc_ctx = current_doc_prompt_context.text;
+    let agent_context_facts_json = serde_json::to_string(agent_context_facts).map_err(|error| {
+        IpcError::new(
+            "AG_CONTEXT_FACTS_SERIALIZE_FAILED",
+            &format!("AgentContextFacts 无法序列化: {error}"),
+            false,
+            false,
+        )
+    })?;
 
     // 历史选择必须先于 PromptPackage 构建，确保 trace 中的历史 envelope 与实际模型输入完全一致。
     // 为 Runtime 控制层预留固定空间后，按既有同文档/显式沿用规则确定性保留最近历史。
@@ -93,7 +110,8 @@ pub(super) fn prepare_turn_prompt(
         doc_ctx.as_deref(),
         &prompt,
         mention_block.as_deref(),
-    );
+    )
+    .saturating_sub(agent_context_facts_json.chars().count());
     let mut assembled_messages = assemble_agent_turn_messages(
         ag::prompts::SYSTEM_PROMPT_CHAT,
         None,
@@ -101,6 +119,7 @@ pub(super) fn prepare_turn_prompt(
         active_doc_path.as_deref(),
         history_budget,
         mention_block.as_deref(),
+        Some(&agent_context_facts_json),
         doc_ctx.as_deref(),
         &prompt,
     );
@@ -139,6 +158,14 @@ pub(super) fn prepare_turn_prompt(
             )
         })?);
     let mut prompt_envelopes = Vec::new();
+    prompt_envelopes.push(ag::context::prompt_data_envelope(
+        ag::context::PromptSourceTypeV1::AgentContextFacts,
+        turn_id,
+        "verified_editor_proposal_workspace_projection",
+        "frozen_at_turn_start",
+        ag::context::PromptTrustLevelV1::CurrentFact,
+        &agent_context_facts_json,
+    ));
     if let (Some(path), Some(context)) = (active_doc_path.as_deref(), doc_ctx.as_deref()) {
         let freshness = active_snapshot
             .as_ref()
@@ -199,6 +226,7 @@ pub(super) fn prepare_turn_prompt(
 
     Ok(PreparedTurnPrompt {
         current_doc_requires_tool_read,
+        current_doc_prompt_coverage,
         messages,
         tools,
         capability_grant,

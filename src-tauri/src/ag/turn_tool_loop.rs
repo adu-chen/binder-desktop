@@ -26,6 +26,7 @@ fn terminal_tool_is_missing(
     required_terminal_tool: Option<&str>,
     proposed_diff: bool,
     edit_blocked_reported: bool,
+    project_reported: bool,
 ) -> bool {
     match required_terminal_tool {
         Some("propose_edit") => {
@@ -33,6 +34,7 @@ fn terminal_tool_is_missing(
         }
         // 成功的资源计划会在 DecisionRequest 事件分支提前结束；仍在模型循环中即尚未满足。
         Some("plan_workspace_operation") => true,
+        Some("report_project") => !project_reported,
         _ => false,
     }
 }
@@ -45,6 +47,14 @@ fn required_terminal_tool_error(
         return IpcError::new(
             "AG_WORKSPACE_PLAN_TOOL_REQUIRED",
             "本轮是工作区资源请求，但工具循环结束前未生成 WorkspaceOperationPlan；请调用 plan_workspace_operation 生成待确认计划。工作区没有被修改。",
+            true,
+            false,
+        );
+    }
+    if required_terminal_tool == Some("report_project") {
+        return IpcError::new(
+            "AG_PROJECT_REPORT_REQUIRED",
+            "本轮是只读检查、搜索或分析请求，但尚未生成经读取证据核验的 ProjectReport；请先完成必要读取，再调用 report_project 如实列出已读、未读、来源与不确定性。",
             true,
             false,
         );
@@ -91,12 +101,12 @@ fn advance_tool_loop(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018, BR-AG-OBS-001-RB-AG-AG-TOOL-018
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-002, BR-SYS-STATE-008
- * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016
- * boundary: in=PreparedPromptCurrentCapabilityGrantAndActiveAgentTurnWithOptionalTaskRun | out=ValidatedToolResultsPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=validate_requested_tool_for_grant,advance_tool_loop | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideGrantOrTreatWorkspaceOperationPlanAsContentProposal
+ * rules:    BR-AG-STATE-002, BR-SYS-STATE-008, BR-AG-OBS-001
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021
+ * boundary: in=PreparedPromptAgentContextFactsCurrentCapabilityGrantAndActiveAgentTurnWithOptionalTaskRun | out=ValidatedToolResultsProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=validate_requested_tool_for_grant,advance_tool_loop,exec_project_report | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideGrantOrTreatProjectReportAsAuthorizationOrWorkspaceOperationPlanAsContentProposal
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop(
@@ -113,6 +123,8 @@ pub(super) async fn run_turn_tool_loop(
     model: String,
     runtime_profile: String,
     prompt_package: ag::context::PromptPackageV1,
+    agent_context_facts: crate::types::AgentContextFactsV1,
+    current_doc_prompt_coverage: Option<&'static str>,
     mut messages: Vec<serde_json::Value>,
     tools: serde_json::Value,
     capability_grant: ag::tool_registry::CapabilityGrantV1,
@@ -125,6 +137,7 @@ pub(super) async fn run_turn_tool_loop(
 ) -> Result<(), IpcError> {
     let mut proposed_diff = false;
     let mut edit_blocked_reported = false;
+    let mut project_reported = false;
     let mut proposal_count = 0usize;
 
     // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
@@ -135,6 +148,11 @@ pub(super) async fn run_turn_tool_loop(
     // AG-TASK-01 F1a：单回合提案上限（整篇对齐分批最多 5 批；同轮可并行）。
     const MAX_PROPOSALS_PER_TURN: usize = 5;
     let mut current_doc_read_confirmed = !current_doc_requires_tool_read;
+    let mut project_read_evidence = ag::tool_exec::ProjectReadEvidenceLedger::from_turn_start(
+        &agent_context_facts,
+        active_doc_path.as_deref(),
+        current_doc_prompt_coverage,
+    );
     // AG-CTX-01：本轮是否调用过任何工具（用于区分"已读未提案"与"零工具调用"的失败文案）。
     let mut any_tool_called = false;
     // 完整 Prompt 审计只保留本次 AgentTurn 最后一次实际发给模型的请求；回合退出时由 Drop
@@ -350,6 +368,7 @@ pub(super) async fn run_turn_tool_loop(
                     required_terminal_tool.as_deref(),
                     proposed_diff,
                     edit_blocked_reported,
+                    project_reported,
                 ) {
                     let error = required_terminal_tool_error(
                         required_terminal_tool.as_deref(),
@@ -651,6 +670,25 @@ pub(super) async fn run_turn_tool_loop(
                                     Err(error) => {
                                         (format!("阻断报告无效：{}", error.message), false)
                                     }
+                                }
+                            }
+                            ag::tool::ToolDecision::Allow if c.name == "report_project" => {
+                                match ws_root.as_deref() {
+                                    Some(root) => match ag::tool_exec::exec_project_report(
+                                        std::path::Path::new(root),
+                                        &params,
+                                        &project_read_evidence,
+                                    ) {
+                                        Ok(result) => (result, true),
+                                        Err(error) => (
+                                            format!("ProjectReport 校验失败：{}", error.message),
+                                            false,
+                                        ),
+                                    },
+                                    None => (
+                                        "无活动 workspace，无法核验 ProjectReport".to_string(),
+                                        false,
+                                    ),
                                 }
                             }
                             // 任务级确认只创建 DecisionRequest，不修改文档或 Diff。成功后当前执行片段必须结束，
@@ -968,6 +1006,15 @@ pub(super) async fn run_turn_tool_loop(
                     {
                         current_doc_read_confirmed = true;
                     }
+                    if success && c.name == "report_project" {
+                        project_reported = true;
+                    } else if success {
+                        // report_project 是完成时证据；成功报告后若又发生任何工具活动，先前报告不再覆盖
+                        // 当前最终读取边界，必须在结束前重新生成。
+                        project_reported = false;
+                        project_read_evidence
+                            .record_successful_tool(&read_ctx, &c.name, &params, &result);
+                    }
                     if cancelled.load(Ordering::Acquire) {
                         advance_or_finish!(TlEv::Cancel);
                         if let Ok(conn) = state.db.lock() {
@@ -1092,6 +1139,7 @@ pub(super) async fn run_turn_tool_loop(
         required_terminal_tool.as_deref(),
         proposed_diff,
         edit_blocked_reported,
+        project_reported,
     );
     if missing_terminal_tool {
         let error =
@@ -1133,14 +1181,42 @@ mod tests {
 
     #[test]
     fn terminal_tool_requirement_distinguishes_content_and_workspace_side_effects() {
-        assert!(!terminal_tool_is_missing(None, false, false));
-        assert!(terminal_tool_is_missing(Some("propose_edit"), false, false));
-        assert!(!terminal_tool_is_missing(Some("propose_edit"), true, false));
-        assert!(!terminal_tool_is_missing(Some("propose_edit"), false, true));
+        assert!(!terminal_tool_is_missing(None, false, false, false));
+        assert!(terminal_tool_is_missing(
+            Some("propose_edit"),
+            false,
+            false,
+            false
+        ));
+        assert!(!terminal_tool_is_missing(
+            Some("propose_edit"),
+            true,
+            false,
+            false
+        ));
+        assert!(!terminal_tool_is_missing(
+            Some("propose_edit"),
+            false,
+            true,
+            false
+        ));
         assert!(terminal_tool_is_missing(
             Some("plan_workspace_operation"),
             false,
+            false,
+            false,
+        ));
+        assert!(terminal_tool_is_missing(
+            Some("report_project"),
+            false,
+            false,
             false
+        ));
+        assert!(!terminal_tool_is_missing(
+            Some("report_project"),
+            false,
+            false,
+            true
         ));
         assert_eq!(
             required_terminal_tool_error(Some("plan_workspace_operation"), false).code,

@@ -42,9 +42,11 @@ import { agStore, activeSession, emptyComposerDraft } from "../store/agStore";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
 import { tabsStore } from "../store/tabsStore";
+import { workspaceShell } from "../store/workspaceShell";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
 import {
   AGENT_EDIT_RUNTIME_PROFILE,
+  AGENT_CONTEXT_FACTS_VERSION,
   acknowledgePreviewAndContinue,
   cancelActiveTurn,
   deleteAgentSession,
@@ -56,6 +58,7 @@ import {
   requestAssist,
   resolveDecisionAndContinue,
   startTurn,
+  buildAgentContextFacts,
   type AgTurnEvent,
 } from "./agService";
 
@@ -146,6 +149,85 @@ beforeEach(() => {
   deStore.reset();
   agStore.reset();
   tabsStore.reset();
+  workspaceShell._projectActive({ workspaceId: "ws-test", rootPath: "/tmp/ws-test" });
+});
+
+describe("AgentContextFacts", () => {
+  // covers: BR-AG-DATA-008
+  // covers: BR-ED-DATA-008
+  // covers: BR-SYS-DATA-008
+  it("freezes LogicalState session facts, explicit selection, and proposal state without document body", () => {
+    edStore.restoreSnapshots([
+      {
+        relPath: "a.md",
+        content: "unsaved logical body",
+        baseline: 7,
+        editFormat: "markdown",
+        contentFormat: "text",
+        source: "active_editor",
+        dirty: true,
+        sessionVersion: 3,
+        contentHash: "h3",
+        capturedAt: 1,
+      },
+    ], "a.md");
+    deStore.addDiff({
+      diffId: "diff-1",
+      sessionId: "session-1",
+      relPath: "a.md",
+      blockId: "b1",
+      title: "建议",
+      before: "前",
+      after: "后",
+      state: "pending",
+    });
+    const openDocs = edStore.getOpenSnapshots();
+    deStore.addDiff({
+      diffId: "diff-other-session",
+      sessionId: "session-other",
+      relPath: "other.md",
+      blockId: "b2",
+      title: "其他会话建议",
+      before: "前",
+      after: "后",
+      state: "pending",
+    });
+    const facts = buildAgentContextFacts("turn-1", "session-1", openDocs, [{
+      kind: "selection",
+      relPath: "a.md",
+      blockId: "b1",
+      start: 0,
+      end: 2,
+      text: "选区",
+    }], [{ relPath: "a.md", blockId: "legacy", text: "旧选区" }]);
+
+    expect(facts).toMatchObject({
+      version: AGENT_CONTEXT_FACTS_VERSION,
+      workspaceId: "ws-test",
+      turnId: "turn-1",
+      activeDoc: {
+        relPath: "a.md",
+        source: "active_editor",
+        dirty: true,
+        baseline: "7",
+        sessionVersion: 3,
+        contentHash: "h3",
+      },
+      selections: [
+        { relPath: "a.md", blockId: "b1", start: 0, end: 2 },
+        { relPath: "a.md", blockId: "legacy" },
+      ],
+      proposalFacts: [{
+        diffId: "diff-1",
+        sessionId: "session-1",
+        relPath: "a.md",
+        state: "pending",
+        saved: false,
+      }],
+    });
+    expect(facts.proposalFacts).toHaveLength(1);
+    expect(JSON.stringify(facts)).not.toContain("unsaved logical body");
+  });
 });
 
 describe("requestAssist 契约", () => {

@@ -83,6 +83,12 @@ impl IntentResultV1 {
     }
 
     pub fn required_terminal_tool(&self) -> Option<&'static str> {
+        if matches!(
+            self.intent_type,
+            IntentTypeV1::Inspect | IntentTypeV1::Search | IntentTypeV1::Analyze
+        ) {
+            return Some("report_project");
+        }
         match self.mutation {
             MutationV1::ProposeEdit => Some("propose_edit"),
             MutationV1::ProposeCreate | MutationV1::PlanWorkspaceOperation => {
@@ -605,15 +611,18 @@ pub fn resolve_intent_result_with_targets(
         IntentTypeV1::Inspect | IntentTypeV1::Analyze
             if target.kind == IntentTargetKindV1::Workspace =>
         {
-            vec!["list_docs", "workspace_glob"]
+            vec!["list_docs", "workspace_glob", "report_project"]
         }
-        IntentTypeV1::Inspect | IntentTypeV1::Analyze => vec!["read_doc", "list_blocks"],
+        IntentTypeV1::Inspect | IntentTypeV1::Analyze => {
+            vec!["read_doc", "list_blocks", "report_project"]
+        }
         IntentTypeV1::Search => vec![
             "list_docs",
             "search_text",
             "workspace_glob",
             "read_doc",
             "list_blocks",
+            "report_project",
         ],
         IntentTypeV1::Edit => vec!["read_doc", "list_blocks", "propose_edit", "edit_blocked"],
         IntentTypeV1::CreateDocument | IntentTypeV1::OrganizeWorkspace => {
@@ -694,6 +703,7 @@ pub fn resolve_intent_result_with_targets(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptSourceTypeV1 {
+    AgentContextFacts,
     CurrentDocument,
     Selection,
     ExplicitReference,
@@ -885,14 +895,15 @@ pub enum TurnKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerKind {
-    System,          // 静态提示词文本（P0 · system）
-    RuntimeControl,  // 结构化运行时控制 JSON（P0 · system）
-    IntentHint,      // 本轮意图提示（P0 · system）
-    CurrentDocument, // 当前文档块视图（P0 · system）
-    Reference,       // 显式引用（P0 · system）
-    History,         // 会话历史聚合单块（P1 · system）
-    CrossDocHistory, // 跨文档历史弱注入（P1 · system）
-    User,            // 当前输入（P0 · user）
+    System,            // 静态提示词文本（P0 · system）
+    RuntimeControl,    // 结构化运行时控制 JSON（P0 · system）
+    IntentHint,        // 本轮意图提示（P0 · system）
+    AgentContextFacts, // 版本化 ED/DE/WS 当前轮事实（P0 · data-only system）
+    CurrentDocument,   // 当前文档块视图（P0 · system）
+    Reference,         // 显式引用（P0 · system）
+    History,           // 会话历史聚合单块（P1 · system）
+    CrossDocHistory,   // 跨文档历史弱注入（P1 · system）
+    User,              // 当前输入（P0 · user）
 }
 
 impl LayerKind {
@@ -902,6 +913,7 @@ impl LayerKind {
             LayerKind::System => "system_prompt_final",
             LayerKind::RuntimeControl => "runtime_control",
             LayerKind::IntentHint => "intent_hint",
+            LayerKind::AgentContextFacts => "agent_context_facts",
             LayerKind::CurrentDocument => "current_document",
             LayerKind::Reference => "explicit_reference",
             LayerKind::History => "session_history",
@@ -922,11 +934,12 @@ impl LayerKind {
 /// 提示词装配层序（BR-AG-DATA-002）：恒为 System→RuntimeControl→IntentHint→CurrentDocument→Reference→
 /// History→CrossDocHistory→User；LayerKind 是装配顺序、审计层名与版本登记的唯一真源，取代旧四层骨架。
 /// 提示词文本/措辞属实现期，本函数锁分层顺序与差异。
-pub fn layer_order() -> [LayerKind; 8] {
+pub fn layer_order() -> [LayerKind; 9] {
     [
         LayerKind::System,
         LayerKind::RuntimeControl,
         LayerKind::IntentHint,
+        LayerKind::AgentContextFacts,
         LayerKind::CurrentDocument,
         LayerKind::Reference,
         LayerKind::History,
@@ -1191,19 +1204,20 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-002
-    // 层序唯一真源：LayerKind 固定为 System→RuntimeControl→IntentHint→CurrentDocument→Reference→History→CrossDocHistory→User。
+    // 层序唯一真源：LayerKind 固定为 System→RuntimeControl→IntentHint→AgentContextFacts→CurrentDocument→Reference→History→CrossDocHistory→User。
     #[test]
     fn layer_order_is_fixed_and_matches_enum() {
         let order = layer_order();
-        assert_eq!(order.len(), 8);
+        assert_eq!(order.len(), 9);
         assert_eq!(order[0], LayerKind::System);
         assert_eq!(order[1], LayerKind::RuntimeControl);
         assert_eq!(order[2], LayerKind::IntentHint);
-        assert_eq!(order[3], LayerKind::CurrentDocument);
-        assert_eq!(order[4], LayerKind::Reference);
-        assert_eq!(order[5], LayerKind::History);
-        assert_eq!(order[6], LayerKind::CrossDocHistory);
-        assert_eq!(order[7], LayerKind::User);
+        assert_eq!(order[3], LayerKind::AgentContextFacts);
+        assert_eq!(order[4], LayerKind::CurrentDocument);
+        assert_eq!(order[5], LayerKind::Reference);
+        assert_eq!(order[6], LayerKind::History);
+        assert_eq!(order[7], LayerKind::CrossDocHistory);
+        assert_eq!(order[8], LayerKind::User);
         // 层名是审计与装配共用的唯一标识，不允许空或重复。
         let names: Vec<&str> = order.iter().map(|kind| kind.as_str()).collect();
         assert!(names.iter().all(|name| !name.is_empty()));
@@ -1436,14 +1450,18 @@ mod tests {
 
         let inspect = resolve_intent_result("m-inspect", "读取当前文档", Some("a.md"), false);
         assert_eq!(inspect.intent_type, IntentTypeV1::Inspect);
-        assert_eq!(inspect.allowed_tools, vec!["list_blocks", "read_doc"]);
+        assert_eq!(
+            inspect.allowed_tools,
+            vec!["list_blocks", "read_doc", "report_project"]
+        );
+        assert_eq!(inspect.required_terminal_tool(), Some("report_project"));
 
         let inspect_workspace = resolve_intent_result("m-inspect-ws", "查看项目目录", None, false);
         assert_eq!(inspect_workspace.intent_type, IntentTypeV1::Inspect);
         assert_eq!(inspect_workspace.target.kind, IntentTargetKindV1::Workspace);
         assert_eq!(
             inspect_workspace.allowed_tools,
-            vec!["list_docs", "workspace_glob"]
+            vec!["list_docs", "report_project", "workspace_glob"]
         );
 
         let search = resolve_intent_result("m-search", "搜索工作区中的预算", Some("a.md"), false);
@@ -1454,6 +1472,7 @@ mod tests {
                 "list_blocks",
                 "list_docs",
                 "read_doc",
+                "report_project",
                 "search_text",
                 "workspace_glob"
             ]
@@ -1461,7 +1480,10 @@ mod tests {
 
         let analyze = resolve_intent_result("m-analyze", "分析当前文档", Some("a.md"), false);
         assert_eq!(analyze.intent_type, IntentTypeV1::Analyze);
-        assert_eq!(analyze.allowed_tools, vec!["list_blocks", "read_doc"]);
+        assert_eq!(
+            analyze.allowed_tools,
+            vec!["list_blocks", "read_doc", "report_project"]
+        );
 
         let edit = resolve_intent_result("m-edit", "修改第一段", Some("a.md"), false);
         assert_eq!(edit.intent_type, IntentTypeV1::Edit);

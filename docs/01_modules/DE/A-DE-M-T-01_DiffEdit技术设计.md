@@ -97,6 +97,12 @@ diff 生成必须满足：自修改建议（ChangeProposal）生成待裁决修�
 （`terminal_reason=abnormal_exit`），残留 `awaiting_save` 效果统一转 `discarded_on_abnormal_exit`；
 之后仅终态记录进入只读历史呈现。pending 态只在产生它的连续运行期内可被裁决。
 
+**AgentContextFacts 投影边界（AG-CONFORMANCE-CODE-S4A）**：DE 仅向当前 AgentSession 投影
+ProposalFact 的 `diffId/sessionId/relPath/state/effectStatus/saved`；`state` 是 DiffCard 对权威裁决态与受控过渡的
+既有投影，`effectStatus/saved` 用于区分已接受待保存、已保存与异常结束后已丢弃效果。不属于当前
+AgentSession 的 Proposal（含无归属旧记录）不进入该事实集；投影不携带 before/after/payload，也不改变 DE
+裁决权。跨模块字段形状统一引用 BR-SYS-DATA-008，本文不重定义近义结构。
+
 ## §4 payload 载荷形状（解除 REQ-DE-004 占位）
 
 `payload_ref` 所指载荷的结构（A-SYS-I-P-01 显式归 DE）：
@@ -416,6 +422,7 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-08-30 | v1.23 | AG-CONFORMANCE-CODE-S4A：在 BR-DE-DATA-001 下补充当前 AgentSession ProposalFact 投影边界，携带裁决/效果/保存态但不携带内容，不引入新近义规则。 |
 | 2026-07-21 | v1.12 | 收紧跨会话边界：pending 仅在产生它的连续运行期内可裁决；任一启动清算均把残留 pending 转 expired、残留 awaiting_save 转 discarded_on_abnormal_exit，之后只恢复终态只读历史。 |
 | 2026-06-11 | v1.0 | 初版（DE G2 首件）：DE 规则 SSOT——裁决粒度定为内容块级（解除 DE-01）、diff 生成与锚失效回报、payload 载荷形状（版本化 + before_snapshot 基准，解除 REQ-DE-004 占位）、终态裁决语义（三终态互斥不可逆、accepted 唯一触发落盘、ApplyError 不回退）、过期与外部变更（保守语义，解除 DE-03 机制）、多 diff 冲突（重叠重检、无并发落盘，解除 DE-02）；注册链路 DE-DIFF（P1）、规则 5 条、术语 TERM-DE-001 PendingDiff / TERM-DE-002 ChangeProposal（解除 A-SYS-I-P-01 §6 延期）；约束全复用不新增；REQ_MAP（REQ-DE-001~005）；债务（审阅 UI 待人类、数值延实现、CBT 联合） |
 | 2026-07-03 | v1.1 | 批B 样式 diff 承接（A-ED-X-L-02 PI-ED-11 文档先行，人类裁定 D-3 方案A：回合样式修改经 DE 裁决）：§4 载荷表 +style_ops（StyleOp 序列，可空；语义归 ED BR-ED-DATA-005，载荷承载与版本化归本文）、after_content 纯样式 diff 可空、target_blocks 可细化字符锚区间；BR-DE-DATA-002 规则文本同步（含样式变更语义的可视对比重建）；DiffCard 样式呈现形态延实现期（DE-04 审阅 UI 债务口径） |

@@ -231,12 +231,23 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 人类观察项 | 真实 Tauri/provider 下 Streaming 不早于装配与 Gate；混合 ToolCall 卡片顺序与执行事实一致；循环上限显示失败而非完成；DecisionRequest 等待态不被 Done 伪装 |
 | 状态 | `PARTIAL`（实现与本地自动化已完成；真实 Tauri/provider 链待 G5） |
 
-### 4.17 待验证列表（不作为已完成实现的反向修改依据）
+### 4.17 V-S13 · AgentContextFacts / ProjectReport 证据闭环（REQ-AG-009 / BR-AG-DATA-008 / BR-AG-OBS-001）
+
+| 字段 | 内容 |
+|---|---|
+| 完整操作 | A：以活动/非活动打开文档、显式 SelectionRef 和当前/其他 AgentSession Proposal 启动回合；B：分别执行 Inspect/Search/Analyze/Answer/Edit；C：读取完整文档、结构、搜索摘要与目录，再提交正确和伪造 ProjectReport；D：报告成功后再执行新读取并尝试结束 |
+| 期望结果 | A：事实在 Gate 前逐项匹配 LogicalState，兼容 blockRefs 归一为 SelectionFact，Proposal 仅包含当前 AgentSession 的裁决/效果/保存态且无正文；B：只有 Inspect/Search/Analyze 获得 report_project 并必须成功调用后才能完成；C：只有同轮证据账本能支持 readItems，目录/搜索证据不得冒充全文，无证据路径、跨 workspace 或缺失 uncertainties 失败关闭；D：新读取使旧报告失效，需重新报告 |
+| 自动化证据 | AG-CONFORMANCE-CODE-S4A：前端直接 59/59；Rust 事实身份/层序/最小授权/证据账本/终态门直接测试通过。完整 changed_files `test:plan` 命中前端/TypeScript/Rust 全量与治理门；非沙箱 `test:related` 完整通过：前端 593/593、Rust 379+5+4、TypeScript 及 governance:audit passed。test:governance 19/19，ADUS 已登记四条新规则的生产块与测试覆盖 |
+| 人类观察项 | 真实 Tauri/WKWebView + provider 下层序、工具卡、已读/未读范围和不确定性与实际文档一致；失败报告不伪装 Done |
+| 状态 | `PARTIAL`（实现与自动化已 LOCAL_INTEGRATED；仅真实 Tauri/WKWebView + provider G5 待完成） |
+
+### 4.18 待验证列表（不作为已完成实现的反向修改依据）
 
 | validation_id | 已完成边界 | 待验证内容 | 当前状态 |
 |---|---|---|---|
 | VAL-AG-REAL-RUNTIME-01 | S3A/S3B/S3C/S3D/S3E 的规则、生产 owner 与本地自动化 | 真实 Tauri/WKWebView + provider 的 PromptPackage→Gate→Streaming→ToolCall→Proposal/DecisionRequest 完整事件顺序 | G5_PENDING |
-| VAL-DOC-LIBREOFFICE-01 | S3C 定向 AG 测试、前端与其余 Rust 测试 | 非沙箱 macOS 环境复核 DOCX→PDF LibreOffice Worker signal=6；归 DOC 独立治理 | ENVIRONMENT_PENDING |
+| VAL-AG-PROJECT-REPORT-01 | S4A 版本化 AgentContextFacts、独立 Prompt 层、证据账本、report_project 完成门与本地直接测试 | 真实 Tauri/WKWebView + provider 下 Inspect/Search/Analyze 的读取证据、工具卡顺序、ProjectReport 与最终 Markdown 一致性 | G5_PENDING |
+| VAL-DOC-LIBREOFFICE-01 | 受控沙箱仍可复现 Worker signal=6；非沙箱 macOS 的单用例与完整 `test:related` 均通过 | 环境差异已确认，不作为 AG 实现缺口；DOC 后续只需维持发布环境回归 | VERIFIED_NON_SANDBOX |
 
 ## 5. P1 开放条件验证卡清单
 
@@ -273,4 +284,6 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 2026-08-28 | v1.4 | AG-CONFORMANCE-CODE-S3C：新增 V-S11，覆盖 RuntimeProfile 缺失/未知失败关闭、八类 IntentResult 精确 allowed_tools、五因素 CapabilityGrant、CreateDocument/OrganizeWorkspace 资源计划、复杂 Edit scope DecisionRequest 与 BDocx 动态能力；本地定向自动化和 ADUS 注册已通过，卡状态 PARTIAL/G5_PENDING。 |
 | 2026-08-29 | v1.5 | AG-CONFORMANCE-CODE-S3E：新增 V-S12 与统一待验证列表；覆盖 PromptPackage/Gate 前置、SM-AG-02 loopError/handoff/多 ToolCall 顺序生产驱动、SM-AG-04 WaitingConfirm forbidden；真实 Tauri/provider 与范围外 LibreOffice 环境验证保持独立待办。 |
 | 2026-08-29 | v1.6 | 回填 S3E 自动化与治理证据：AG 164/164、前端 592/592、Rust 376/377（唯一失败为范围外 LibreOffice Worker signal=6）、test:governance/governance:audit 通过；V-S12 保持 PARTIAL，未把本地证据升级为 G5。 |
+| 2026-08-30 | v1.7 | AG-CONFORMANCE-CODE-S4A：新增 V-S13 与 VAL-AG-PROJECT-REPORT-01，分开登记 AgentContextFacts/ProjectReport 生产实现、本地自动化与真实 provider/WKWebView G5 证据。 |
+| 2026-08-30 | v1.8 | 回填 S4A 完整影响证据：前端 593/593、Rust 379+5+4、TypeScript、test:governance 与 governance:audit 通过；LibreOffice 用例非沙箱复核通过；V-S13 仅保留真实 provider/WKWebView G5。 |
 | 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |
