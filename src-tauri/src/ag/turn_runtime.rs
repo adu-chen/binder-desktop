@@ -15,8 +15,8 @@ use super::turn_control::{
     register_active_agent_turn,
 };
 use super::turn_events::{
-    emit_ag01, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_error,
-    settle_and_emit_ag_turn_error, sm_error,
+    emit_ag01, emit_ag_turn_cancelled_from, emit_ag_turn_denied, emit_ag_turn_error_from,
+    settle_and_emit_ag_turn_error_from, sm_error,
 };
 use super::turn_prompt::{prepare_turn_prompt, PreparedTurnPrompt};
 use super::turn_reference::{build_turn_reference_runtime, TurnReferenceRuntime};
@@ -229,12 +229,12 @@ fn validate_agent_context_facts(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-AG-DATA-008-API-AG-AG-TURN-018, BR-ED-DATA-008-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018, BR-SYS-DATA-008-API-AG-AG-TURN-018
+ * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-AG-STATE-004-API-AG-AG-TURN-018, BR-AG-DATA-008-API-AG-AG-TURN-018, BR-ED-DATA-008-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018, BR-SYS-DATA-008-API-AG-AG-TURN-018
  * type:     API
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-STATE-007, BR-SYS-DATA-008
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-004, BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-STATE-007, BR-SYS-DATA-008
  * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndOptionalTaskRunTransitions | effect=IPC-ag_start_turn | delegate=require_runtime_profile,resolve_intent_result_with_targets,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=defaultMissingRuntimeProfileOrCreateTaskRunForSimpleAgentTurnOrCreateNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
+ * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnClarificationResumeAndAgentReadContext | out=AgentTurnEventStreamOrAwaitingClarificationIdentityAndOptionalTaskRunTransitions | effect=IPC-ag_start_turn | delegate=require_runtime_profile,resolve_intent_result_with_targets,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=defaultMissingRuntimeProfileOrCreateTaskRunForSimpleAgentTurnOrCreateNewAgentTurnForClarificationOrBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiffOrTriggerAutomaticProjectMemory
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
@@ -327,7 +327,20 @@ pub(crate) async fn ag_start_turn(
         )?;
     let terminal_latch = ag::turn::TerminalLatch::default();
 
-    {
+    // 注册成功即执行 send / clarificationProvided；后续持久化与上下文构建都是
+    // Assembling 的动作，失败只能由 assembleFail 收束为 TurnError。
+    let s = if clarification_resume {
+        transition(
+            TurnState::AwaitingClarification,
+            TurnEvent::ClarificationProvided,
+        )
+        .ok_or_else(sm_error)?
+    } else {
+        transition(TurnState::Idle, TurnEvent::Send).ok_or_else(sm_error)?
+    };
+    emit_ag01(&app, &turn_id, s);
+
+    let history_result = (|| -> Result<(), IpcError> {
         let conn = state
             .db
             .lock()
@@ -363,6 +376,20 @@ pub(crate) async fn ag_start_turn(
             &draft_payload,
         )
         .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
+        Ok(())
+    })();
+    if let Err(error) = history_result {
+        settle_and_emit_ag_turn_error_from(
+            &state,
+            clarification_task_run_id.as_deref(),
+            &on_event,
+            &terminal_latch,
+            &app,
+            &turn_id,
+            &error,
+            TurnState::Assembling,
+        );
+        return Ok(());
     }
 
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：先校验显式 TaskRun 续片段；
@@ -484,22 +511,20 @@ pub(crate) async fn ag_start_turn(
         Err(error) => {
             // 已确认/已预览的续片段在身份核验阶段失败时，原 TaskRun 已可能处于 executing。
             // 必须使用请求携带的稳定身份收束，不能在建立局部 task_run_id 之前直接返回。
-            if let Some(task_run_id) = continuation_task_run_id
+            let task_run_id = continuation_task_run_id
                 .as_deref()
-                .or(clarification_task_run_id.as_deref())
-            {
-                settle_and_emit_ag_turn_error(
-                    &state,
-                    Some(task_run_id),
-                    &on_event,
-                    &terminal_latch,
-                    &app,
-                    &turn_id,
-                    &error,
-                );
-                return Ok(());
-            }
-            return Err(error);
+                .or(clarification_task_run_id.as_deref());
+            settle_and_emit_ag_turn_error_from(
+                &state,
+                task_run_id,
+                &on_event,
+                &terminal_latch,
+                &app,
+                &turn_id,
+                &error,
+                TurnState::Assembling,
+            );
+            return Ok(());
         }
     };
 
@@ -509,7 +534,7 @@ pub(crate) async fn ag_start_turn(
             match $result {
                 Ok(value) => value,
                 Err(error) => {
-                    settle_and_emit_ag_turn_error(
+                    settle_and_emit_ag_turn_error_from(
                         &state,
                         task_run_id.as_deref(),
                         &on_event,
@@ -517,6 +542,7 @@ pub(crate) async fn ag_start_turn(
                         &app,
                         &turn_id,
                         &error,
+                        TurnState::Assembling,
                     );
                     return Ok(());
                 }
@@ -639,16 +665,6 @@ pub(crate) async fn ag_start_turn(
 
     // 结构性门禁前置：唯一通往 Streaming（模型调用）的路径是 AwaitingGate + gatePassed（X-SEQ-001）。
     // 每步转移广播 SM-AG-01（A-CORE-X-L-04 Task 2-E）：sending 等回合视图据此投影（X-FORBID-007）。
-    let s = if clarification_resume {
-        started_turn_or_finish!(transition(
-            TurnState::AwaitingClarification,
-            TurnEvent::ClarificationProvided,
-        )
-        .ok_or_else(sm_error))
-    } else {
-        started_turn_or_finish!(transition(TurnState::Idle, TurnEvent::Send).ok_or_else(sm_error))
-    }; // → Assembling
-    emit_ag01(&app, &turn_id, s);
     let has_selection = active_doc_path.as_deref().is_some_and(|active_path| {
         block_refs
             .iter()
@@ -804,7 +820,14 @@ pub(crate) async fn ag_start_turn(
                         ag::task::TurnOutcome::Failed,
                     );
                 }
-                emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                emit_ag_turn_error_from(
+                    &on_event,
+                    &terminal_latch,
+                    &app,
+                    &turn_id,
+                    &error,
+                    TurnState::Assembling,
+                );
                 return Ok(());
             }
         }
@@ -850,7 +873,14 @@ pub(crate) async fn ag_start_turn(
                 ag::task::TurnOutcome::Failed,
             );
         }
-        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+        emit_ag_turn_error_from(
+            &on_event,
+            &terminal_latch,
+            &app,
+            &turn_id,
+            &error,
+            TurnState::Assembling,
+        );
         return Ok(());
     }
     eprintln!(
@@ -878,7 +908,13 @@ pub(crate) async fn ag_start_turn(
                 ag::task::TurnOutcome::Cancelled,
             );
         }
-        emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+        emit_ag_turn_cancelled_from(
+            &on_event,
+            &terminal_latch,
+            &app,
+            &turn_id,
+            TurnState::AwaitingGate,
+        );
         return Ok(());
     }
     let gate = match ent::gateway::check_gate().await {
@@ -893,7 +929,7 @@ pub(crate) async fn ag_start_turn(
                     ag::task::TurnOutcome::Failed,
                 );
             }
-            emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+            emit_ag_turn_denied(&on_event, &terminal_latch, &app, &turn_id, &error);
             return Ok(());
         }
     };
@@ -910,7 +946,6 @@ pub(crate) async fn ag_start_turn(
         emit_ag_turn_denied(&on_event, &terminal_latch, &app, &turn_id, &error);
         return Ok(());
     }
-    started_turn_or_finish!(ensure_gate_passed(gate));
     if cancelled.load(Ordering::Acquire) {
         if let Ok(conn) = state.db.lock() {
             settle_optional_task_run(
@@ -920,10 +955,17 @@ pub(crate) async fn ag_start_turn(
                 ag::task::TurnOutcome::Cancelled,
             );
         }
-        emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+        emit_ag_turn_cancelled_from(
+            &on_event,
+            &terminal_latch,
+            &app,
+            &turn_id,
+            TurnState::AwaitingGate,
+        );
         return Ok(());
     }
-    let s = started_turn_or_finish!(transition(s, TurnEvent::GatePassed).ok_or_else(sm_error)); // → Streaming
+    let s = transition(s, TurnEvent::GatePassed)
+        .expect("AwaitingGate + GatePassed must be a valid SM-AG-01 transition"); // → Streaming
     emit_ag01(&app, &turn_id, s);
     debug_assert_eq!(s, TurnState::Streaming);
 
@@ -964,6 +1006,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // covers: BR-AG-STATE-004
     fn runtime_profile_is_required_and_unknown_values_fail_closed() {
         let missing = require_runtime_profile(None).expect_err("missing profile must fail closed");
         assert_eq!(missing.code, "AG_RUNTIME_PROFILE_REQUIRED");

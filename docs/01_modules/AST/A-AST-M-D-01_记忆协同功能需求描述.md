@@ -84,7 +84,7 @@ title: Agent 1.0 记忆写入的用户控制
 owner_module: AST
 status: active
 summary: 在 `agent-edit-1.0` 中，项目记忆只能由用户手工创建、编辑、关闭或删除；Agent 不创建、提议写入、更新或静默积累记忆。未来 Profile 的 Agent 写入能力不由本要求授权
-source_doc: REQ-CORE-019、A-AG-M-D-02 §5.17（CAP-18）
+source_doc: REQ-CORE-019、A-CORE-X-D-02 §3/§4
 acceptance: 普通 Agent 发送、外部文件附加、会话/任务恢复和相似主题都不会生成记忆写入或写入提议；用户管理动作可见且限定当前 workspace；不存在用户不可见或 Agent 自动产生的 1.0 项目记忆
 open_issues: 用户管理入口、确认/撤销语义、事件、Trace 与未来 Profile 的 Agent 写入策略归 AST/AG/SYS DESIGN Scope；自动写入须另行需求确认和验证
 -->
@@ -95,7 +95,7 @@ title: 记忆注入消费
 owner_module: AST
 status: active
 summary: `agent-edit-1.0` 只有用户明确选择的记忆条目可经 REF 作为 data-only 引用进入当前回合；不按相关性自动供给或注入。供给跨模块结构经 SYS 契约层，记忆正文不能提升为系统指令或授权
-source_doc: REQ-CORE-019、A-AG-M-D-02 §5.17（CAP-18）、A-AG-M-D-01（REQ-AG-017）、A-REF-M-D-01（REQ-REF-005）、X-SHARED-001
+source_doc: REQ-CORE-019、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-017）、A-REF-M-D-01（REQ-REF-005）、X-SHARED-001
 acceptance: 未选择时 `agent-edit-1.0` 注入空集；不同 workspace/AgentSession 不串记忆条目或选择事实；用户选择的条目可追溯，且不能改变系统约束、任务目标、工具授权、编辑目标或确认点
 open_issues: 选择令牌、相关性自动注入的未来开启条件、供给结构、上下文预算与可见性归 AST/AG/REF/SYS DESIGN Scope；自动注入须另行需求确认和验证
 -->

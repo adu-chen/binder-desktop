@@ -540,12 +540,6 @@ fn strip_tags(s: &str) -> String {
     out
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// 审计修复（2026-07-25 · A+D）：新增 ul/ol 容器块识别，列表容器在 project_blocks 中以空文本占位。
 fn is_html_block_tag(tag: &str) -> bool {
     matches!(
@@ -734,7 +728,7 @@ fn attr_value(attrs_str: &str, name: &str) -> Option<String> {
     None
 }
 
-/// 有限实体解码（与 html_escape 逆配 + 常用集）。
+/// 有限 HTML 实体解码（只接受当前投影所需的常用集）。
 fn decode_entity(ent: &str) -> Option<char> {
     match ent {
         "amp" => Some('&'),

@@ -3,9 +3,9 @@
 文档状态：R
 负责模块：AG
 文档职责：Agent 提示词工程调研与参考（L4 只读参考）
-上游约束：A-AG-M-T-01 对话代理技术设计、A-AG-X-L-02 对话代理集成计划
+上游约束：A-AG-M-T-01、A-AG-M-T-02、A-AG-X-L-04
 直接承接：PI-AG-07~11 开发前调研依据（仅供参考，不约束实现）
-使用边界：reference-only（ADU §2.1 L4），不定义 RULE/CHAIN/CONSTRAINT/TERM、不作为权威设计源；落地以 AG/DE 技术设计（M-T/M-S/M-D）+ A-AG-X-L-02 为准
+使用边界：reference-only（ADU §2.1 L4），不定义 RULE/CHAIN/CONSTRAINT/TERM、不作为权威设计源；落地以 AG/DE Active 技术设计与 A-AG-X-L-04 为准
 变更要求：调研增补可直接追加；若结论被采纳进设计，须在对应 M-T 文档落地并反向引用本文
 信息来源：旧项目 /Users/chenzhenqiang/Desktop/test/binder-project（context_manager.rs、ai_providers/、tool_*、diffCardMachine.ts、diffStore.ts）+ 公开网络调研（见文末「信息源」）
 ---
@@ -25,7 +25,7 @@
 | diff 交互与信息流 | 旧项目已有成熟的 **diffCardMachine（pending→working→applied/expired/rejected/applyRetryable）+ executionAnchor + revision/baseline 门禁 + 块列表(block_index)定位**；公开项目里 Aider 的编辑格式研究（diff 比 whole 显著降低"偷懒")与 Cline 的 DiffViewProvider（流式 diff 视图 + 逐行覆盖动画 + 审批工作流）是两条关键参考线 | §6 |
 | 其他重要参考 | Aider（编辑格式可靠性基准）、Cline/Roo-Code（编辑器内 diff 流式呈现）、Continue（IDE 上下文供给）、void（旧项目已参考其简洁性）、"LLMs Get Lost in Multi-Turn Conversation" 与 "Lost in the Middle" 两篇文献 | §3 / §7 |
 
-**与现状的衔接**：旧项目的 prompt 装配逻辑是单进程本地直连 provider（含 provider key）的产物；binder 受 X-FORBID-001（客户端永不持密钥）+ X-FORBID-006（产出唯经 AG→DE→WS 落盘）约束，**prompt 装配本身可大量复用旧项目逻辑，但调用链必须改走云 GW**（见 A-AG-X-L-02 / A-GW-M-D-01）。本文聚焦"装配什么、怎么分层、怎么防污染、怎么呈现 diff"，不涉及调用链改造。
+**与现状的衔接**：旧项目的 prompt 装配逻辑是单进程本地直连 provider（含 provider key）的产物；binder 受 X-FORBID-001（客户端永不持密钥）+ X-FORBID-006（产出唯经 AG→DE→WS 落盘）约束，调用链必须走云 GW（见 A-AG-X-L-04 / A-GW-M-D-01）。本文只保存调研背景，不参与当前装配裁决。
 
 ---
 
@@ -270,7 +270,7 @@ DE 解析 → ChangeProposal → 定位（block_index/锚点四元组）→ Pend
 
 ### 6.3 流式呈现建议（结合 Cline）
 
-- ChangeProposal 在 streaming 阶段**逐块产出即逐块揭示** diff 卡片（StreamEvent::DiffProposed，见 A-AG-X-L-02 PI-AG-10），不必等整轮结束。
+- 历史建议曾讨论 ChangeProposal 的流式揭示；当前事件与 Diff 投影只以 A-AG-I-P-01 / DE Active 契约为准。
 - 卡片四态 UI 直接映射 diffCardMachine：pending（待确认）/ working（应用中）/ applied / expired|rejected。
 - 可选：借鉴 Cline 的"未处理行半透明覆盖 + 当前行高亮"，但 binder 是块级而非行级，建议做**块级高亮 + 进度计数**（第 k/n 块）。
 
@@ -293,7 +293,7 @@ DE 解析 → ChangeProposal → 定位（block_index/锚点四元组）→ Pend
 
 ## §8 对 binder PI-AG-07~11 的具体参考建议
 
-> 对齐 A-AG-X-L-02（对话代理集成计划）。本节是"调研 → 计划"的落点，不改计划本身。
+> 历史“调研 → 计划”落点已过期；当前计划只见 A-AG-X-L-04。
 
 | PI | 调研给出的具体建议 |
 |---|---|

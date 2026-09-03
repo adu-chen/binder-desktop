@@ -816,80 +816,6 @@ pub fn build_prompt_package(
     }
 }
 
-/// 上下文来源（裁剪保留优先级：BR-AG-DATA-005 分层截断序）。
-/// P0 永不截：ExplicitMention、CurrentDoc（当前文档层，与显式引用同级不可裁）。
-/// P1 可裁：Memory、Knowledge（补强层，仅作补强不覆盖当前文档与显式引用）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextSource {
-    ExplicitMention, // 用户显式 @mention（P0 永不裁剪）
-    CurrentDoc,      // 当前文档（P0 永不裁剪，与 BR-AG-DATA-005 一致）
-    Memory,          // 记忆补强层（P1 可裁）
-    Knowledge,       // 知识补强层（P1 可裁）
-}
-
-fn priority(s: ContextSource) -> u8 {
-    match s {
-        ContextSource::ExplicitMention => 0,
-        ContextSource::CurrentDoc => 0, // P0 永不截，与 ExplicitMention 同级
-        ContextSource::Memory => 1,     // P1 补强层
-        ContextSource::Knowledge => 1,  // P1 补强层
-    }
-}
-
-/// 待组装上下文项（cost = 预算占用单位）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextItem {
-    pub source: ContextSource,
-    pub content: String,
-    pub cost: u32,
-}
-
-/// 组装结果：保留项 + 被裁剪项（可追溯，不静默丢弃）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssembledContext {
-    pub kept: Vec<ContextItem>,
-    pub trimmed: Vec<ContextItem>,
-}
-
-/**
- * @GOV
- * codes:    BR-AG-DATA-001-DATA-AG-AG-TURN-001
- * type:     DATA
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-001
- * boundary: in=contextSourcesAndBudget | out=AssembledContext(explicitMentionAlwaysKeptTrimTraceable)
- */
-/// 上下文组装与确定性裁剪（BR-AG-DATA-001）：按保留优先级（显式 @mention > 记忆/知识 > 当前文档）
-/// 在预算内贪心保留；**显式 @mention 永不裁剪**（即使超预算也保留）；被裁剪项进入 trimmed（可追溯，
-/// 不静默丢弃）。同优先级按输入顺序确定性处理。
-pub fn assemble_context(mut items: Vec<ContextItem>, budget: u32) -> AssembledContext {
-    // 稳定排序保证确定性：优先级升序（0 最先保留），同级保持输入序。
-    items.sort_by_key(|it| priority(it.source));
-    let mut kept = Vec::new();
-    let mut trimmed = Vec::new();
-    let mut used = 0u32;
-    for it in items {
-        // P0 永不截：ExplicitMention 与 CurrentDoc 优先于预算
-        let is_p0 =
-            it.source == ContextSource::ExplicitMention || it.source == ContextSource::CurrentDoc;
-        if is_p0 || used.saturating_add(it.cost) <= budget {
-            used = used.saturating_add(it.cost);
-            kept.push(it);
-        } else {
-            trimmed.push(it);
-        }
-    }
-    AssembledContext { kept, trimmed }
-}
-
-/// 回合类型（骨架差异）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnKind {
-    Chat,         // 对话历史 + 修改建议导向 diff
-    BuildTask,    // 任务计划上下文 + 单文件产出导向
-    InlineAssist, // 轻量、无系统对话历史、续写/局部改写
-}
-
 /// 提示词分层唯一真源（BR-AG-DATA-002 实现映射）：装配顺序、审计层名与版本登记共用同一枚举，
 /// 取代早期仅供测试的四层骨架。层序固定，不另起顺序。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -929,7 +855,7 @@ impl LayerKind {
  * type:     DATA
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-002
- * boundary: in=promptSourceKindsAndTurnKind | out=LayerOrder(systemRuntimeControlIntentDocRefHistoryUser)
+ * boundary: in=PromptLayerKinds | out=LayerOrder(systemRuntimeControlIntentFactsDocRefHistoryUser)
  */
 /// 提示词装配层序（BR-AG-DATA-002）：恒为 System→RuntimeControl→IntentHint→CurrentDocument→Reference→
 /// History→CrossDocHistory→User；LayerKind 是装配顺序、审计层名与版本登记的唯一真源，取代旧四层骨架。
@@ -951,8 +877,7 @@ pub fn layer_order() -> [LayerKind; 9] {
 // ── PI-AG-09B：对话历史 + P0–P3 预算截断 ───────────────────────────────────────────
 //
 // 承 BR-AG-DATA-005（M-T-02 分层截断序）：当前文档/当前轮输入 P0（层保留、超长内容可缩）；历史 P1
-// （按预算保留最近、drop 最旧，确定性可追溯）。历史是 role 结构化层，独立于上面 assemble_context 的
-// 内容源预算（assemble_context 处理 REF/AST/KB 补强源，③）。
+// （按预算保留最近、drop 最旧，确定性可追溯）。历史保持 role 结构化，不降级为普通文本项。
 
 /// 对话历史轮（前端 agStore 消息投影）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -1175,33 +1100,6 @@ pub fn scope_history_for_current_doc(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn item(s: ContextSource, c: &str, cost: u32) -> ContextItem {
-        ContextItem {
-            source: s,
-            content: c.into(),
-            cost,
-        }
-    }
-
-    // covers: BR-AG-DATA-001
-    // P0 永不截：ExplicitMention 与 CurrentDoc 在预算不足时仍保留；P1 补强层可裁且可追溯。
-    #[test]
-    fn explicit_mention_and_current_doc_always_kept_trim_is_traceable() {
-        use ContextSource::*;
-        let items = vec![
-            item(CurrentDoc, "doc", 100),
-            item(Memory, "mem", 50),
-            item(ExplicitMention, "@ref", 80),
-        ];
-        let r = assemble_context(items, 60); // 预算 60
-                                             // @mention 与 CurrentDoc 必在 kept（P0 永不截）
-        assert!(r.kept.iter().any(|i| i.source == ExplicitMention));
-        assert!(r.kept.iter().any(|i| i.source == CurrentDoc));
-        // Memory(50) 超预算被裁剪，进入 trimmed（可追溯）
-        assert!(r.trimmed.iter().any(|i| i.source == Memory));
-        assert!(!r.trimmed.is_empty(), "裁剪须可追溯");
-    }
 
     // covers: BR-AG-DATA-002
     // 层序唯一真源：LayerKind 固定为 System→RuntimeControl→IntentHint→AgentContextFacts→CurrentDocument→Reference→History→CrossDocHistory→User。
@@ -1733,7 +1631,9 @@ mod tests {
         assert!(!query.allowed_tools.contains(&"propose_edit".to_string()));
     }
 
-    // covers: BR-AG-DATA-002, BR-AG-DATA-005
+    // covers: BR-AG-DATA-001
+    // covers: BR-AG-DATA-002
+    // covers: BR-AG-DATA-005
     #[test]
     fn prompt_package_keeps_data_provenance_hash_and_raw_user_input() {
         let intent = resolve_intent_result("t4", "总结当前文档", Some("a.md"), false);

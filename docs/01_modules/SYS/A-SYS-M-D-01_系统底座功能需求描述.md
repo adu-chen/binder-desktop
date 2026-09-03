@@ -113,7 +113,7 @@ title: 跨模块共享数据结构与持久化 schema 基线
 owner_module: SYS
 status: active
 summary: 定义跨模块传递的共享实体/类型与 workspace.db 持久化 schema 基线及迁移契约框架，支撑内容提案、LogicalState、WorkspaceOperationPlan、WorkspaceOperationEntry、CreateDocumentBundle、统一 WorkspaceTimeline、AgentTurn、编辑器会话事实和引用快照等跨模块协作
-source_doc: REQ-CORE-001/002/007/010/011/012/014、APC §4.1、§9、A-AG-M-D-02 §2~§5、A-WS-M-T-02
+source_doc: REQ-CORE-001/002/007/010/011/012/014、APC §4.1、§9、A-CORE-X-D-02 §3/§4、A-WS-M-T-02
 acceptance: 跨模块共享类型有单一契约来源；LogicalState、ProposalState、WorkspaceOperationPlan/Entry、CreateDocumentBundle、AgentTurn/IntentResult/CapabilityGrant、编辑器会话事实与引用快照职责可追溯；内容 Diff 与资源操作状态不得混用；workspace.db schema 有版本化迁移契约；重启后未完成资源操作进入 Interrupted 且不自动执行，partial_failed 收据和 WorkspaceTimeline 恢复载荷可取回
 open_issues: 具体字段、表结构、可恢复范围与 WS/AG/DE/ED/REF 协作确定，归 A-SYS-I-P-01 + 各 owner G2
 -->
@@ -124,7 +124,7 @@ title: 状态机总图与注册
 owner_module: SYS
 status: active
 summary: 提供 APC §6 核心链状态机的总图框架与注册入口，汇总跨模块转移契约；须覆盖 AgentTurn、内容 Diff 预览/裁决/失效、WorkspaceOperation 前置裁决/重新核验/磁盘执行/补偿、CreateDocumentBundle 及显式保存链路，具体状态机由各 owner 模块在其 M-S 定义
-source_doc: REQ-CORE-002/003/010、APC §6、A-AG-M-D-02 §2/§4
+source_doc: REQ-CORE-002/003/010、APC §6、A-CORE-X-D-02 §3/§4
 acceptance: 核心链状态机可在总图注册并可追溯 owner；内容 Diff 预览、基准推进失效、裁决与显式保存，以及 WorkspaceOperation 前置裁决、dirty 阻断、fail-fast 补偿、Interrupted 恢复和 CreateDocumentBundle 安全拒绝均有跨模块契约登记；未注册状态机的状态化链路被阻断进入实现
 open_issues: 总图清单完整枚举依赖各模块 G2 暴露真实链路，SYS 提供框架并随后回填
 -->
@@ -179,7 +179,7 @@ title: Agent 文档生命周期共享契约
 owner_module: SYS
 status: active
 summary: 为 Agent 文档协作定义共享边界：提案的基准身份、LogicalState 与 DiskState 的分离、未保存文档元数据、AgentTurn 关联、引用快照、提案失效与显式保存的跨模块事件。实现 owner 仍分别是 AG/DE/ED/WS/REF，SYS 只定义可互操作的契约和总图登记入口
-source_doc: REQ-CORE-002/010、A-AG-M-D-02 §2、§4、§5.5、§5.10
+source_doc: REQ-CORE-002/010、A-CORE-X-D-02 §3/§4
 acceptance: 跨模块传递必须明确区分三条 Diff 分流：已有 LogicalState 时 pending 直接预览、显式接受只改变卡片生命周期，而保存有效 pending 预览会同时裁决并写盘；无 LogicalState 时 pending 只临时挂载、接受才原子写盘；pending 期间打开目标文档时迁移为已有 LogicalState 分流并保留绿色增量。未保存文档默认不泄露给无关联会话；每个跨模块事件可追溯到 AgentTurn 或用户操作
 open_issues: 结构字段、状态枚举、持久化/异常退出策略和 privacy 规则归 SYS 与 AG/DE/ED/WS/REF G2 联合定义
 -->
@@ -201,7 +201,7 @@ title: Agent 运行时共享身份、事件与恢复隔离
 owner_module: SYS
 status: active
 summary: 为 Agent 1.0 的运行底座声明跨模块契约边界：唯一 Runtime Profile、AgentTurn 与 AgentSession 身份、IntentResult 与 CapabilityGrant、结构化可见事件、澄清等待、取消、终态和本地事实历史。仅 `agent-edit-1.0` 可启动；未知或缺失 profile 必须在 Gate、provider、工具与 Proposal 前失败关闭。AgentSession 是展示、持久化和恢复隔离边界，workspace 仅为外层范围，不得替代会话键
-source_doc: REQ-CORE-016、REQ-AG-007、A-AG-M-D-02 §4.2（CAP-00）、§5.15~§5.17
+source_doc: REQ-CORE-016、REQ-AG-007、A-CORE-X-D-02 §3/§4
 acceptance: 共享契约可区分 profile、workspace、AgentSession、AgentTurn、意图、目标、副作用、所需上下文、允许工具、确认点、结构化事件与终态原因；缺失/未知 profile 不产生 Gate/provider/工具/Proposal 事件；澄清不是完成，取消可从任一活动阶段进入终态，首个终态后迟到事件/工具不得改变文档或卡片；跨 workspace/AgentSession 不串消息、任务事件、工具卡、Diff、引用、未保存上下文或本地事实历史；可见事件不包含模型内部推理，恢复不伪造成功且不自动写入或注入长期项目记忆
 open_issues: Runtime Profile 兼容迁移、状态机枚举和终态锁存、共享字段/事件形状、IPC、数据库 schema、会话管理、历史容量、异常恢复、脱敏 Trace 与跨模块投影归 SYS/AG DESIGN Scope；本 L1 不定义协议或实现
 -->
@@ -212,7 +212,7 @@ title: 受限任务链、真实进度与连续 Proposal 共享契约
 owner_module: SYS
 status: active
 summary: 为 Agent 1.0 的复合任务声明跨模块契约边界：受限任务实例（TaskRun）、其步骤与关联 AgentTurn、当前目标/确认点、真实执行或等待状态、连续 Proposal 的任务历史关联和中断/新回合重试。TaskRun 只组织当前用户目标内的已授权步骤，不是后台队列；当前状态必须来自实际回合、步骤或工具事件。连续同文档 Proposal 以当前 LogicalState 接力，前卡因基准推进失效；background pending Proposal 未建立 LogicalState 前不得作为后续编辑输入
-source_doc: REQ-CORE-017、REQ-AG-015、REQ-DE-009、A-AG-M-D-02 §5.15（CAP-16）
+source_doc: REQ-CORE-017、REQ-AG-015、REQ-DE-009、A-CORE-X-D-02 §3/§4
 acceptance: 共享契约可追溯一个复杂用户目标与其步骤/AgentTurn/Proposal 的关系、当前目标、确认点、实际执行/等待/中断/终态及原因；仅活跃回合/步骤/工具事件可声明工作中，等待补充、卡片 pending、失败、取消或完成不伪装为执行；连续 Proposal 关联不允许把旧 payload 作为新基准，后预览的基准推进可使前卡失效，且 background pending 必须迁移或依背景分流裁决后才可继续；中断重启不自动续跑，用户重试产生新 AgentTurn 并重新校验，取消不伪造回滚已成功预览内容；跨 workspace/AgentSession 的任务、事件、卡片、引用和未保存上下文不串线
 open_issues: TaskRun/步骤/Proposal 链的身份与状态、事件字段、IPC、数据库 schema、并发、恢复/重试、Trace、实际工作检测和 UI 投影归 SYS/AG/DE DESIGN Scope；TaskRun 正式 TERM 注册待 L2；本 L1 不定义队列、接口、状态机或实现
 -->

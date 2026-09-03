@@ -85,7 +85,7 @@ title: 检索召回供给
 owner_module: KB
 status: active
 summary: 按查询/相关性向后续 Agent Profile 召回知识条目；`agent-edit-1.0` 不自动召回，仅消费用户显式选择且经 REF 规范化的知识引用（含来源标识，AG 负责预算裁剪）；已删除条目不召回，无悬空供给
-source_doc: A-AG-M-D-02 §4.2（CAP-00）、A-AG-M-D-01（REQ-AG-004）、X-SHARED-001
+source_doc: A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-004）、X-SHARED-001
 acceptance: `agent-edit-1.0` 无自动知识召回；后续 Profile 的相关条目可溯源进入回合，删除即不再召回
 open_issues: 检索技术选型、自动召回开启条件与供给结构归 KB G2/实现期，联合 AG/REF/SYS
 -->

@@ -3,9 +3,9 @@
 文档状态：A
 负责模块：AG
 文档职责：AG 提示词架构 L3 专项设计——定义分层装配、当前轮意图、数据可信边界、上下文截断与 1.0 Prompt Runtime 最小契约
-上游约束：A-AG-M-T-01_代理技术设计.md（§5/§5.1 BR-AG-DATA-001/002 组装骨架与来源裁剪、AG-TURN 链路、TERM-AG-001~004）、A-CORE-C-P-01_APC.md（云薄端、§13 不绕门禁）、A-SYS-I-P-03_云接口契约.md（X-SEQ-001 门禁前置）
-直接承接：本文 RULE/TERM 为提示词架构 SSOT，PI-AG-07~09（A-AG-X-L-02）承接实现；调研依据见 R-AG-X-R-01（仅参考，不约束）
-使用边界：本文是 M-T-01 §5.1 的 L3 细化，不重定义组装骨架（归 BR-AG-DATA-002）与来源裁剪语义（归 BR-AG-DATA-001）；不锁定提示词文本/措辞/模型档（实现期运营配置）；不定义门禁/网关契约（归 SYS I-P-03）、diff 生成（归 DE）、@mention 解析（归 REF）；§6 结构示例为非规范说明，不构成被锁文本
+上游约束：A-AG-M-D-01_代理功能需求描述.md（REQ-AG-004/007/017）、A-CORE-X-D-02_Agent1.0冻结能力基线.md、A-AG-M-T-01_代理技术设计.md（§2.1/§5/§5.1 BR-AG-DATA-001/002、BR-AG-STATE-002）、A-CORE-C-P-01_APC.md（云薄端、§13 不绕门禁）、A-SYS-I-P-03_云接口契约.md（X-SEQ-001 门禁前置）
+直接承接：本文唯一持有 IntentCarryover（TERM-AG-005 / BR-AG-DATA-004）与数据隔离/截断序（BR-AG-DATA-005）的专项真源，组装骨架仍归 A-AG-M-T-01 BR-AG-DATA-002；A-AG-X-L-04 承接实现与验证，R-AG-X-R-01 仅作调研参考
+使用边界：本文是 M-T-01 §5.1 的 L3 细化，不重定义组装骨架（归 BR-AG-DATA-002）与来源裁剪语义（归 BR-AG-DATA-001）；不锁定提示词文本/措辞/模型档或预算数值（实现期运营配置）；不定义门禁/网关契约（归 SYS I-P-03）、diff 生成（归 DE）、@mention 解析（归 REF）；Build/CBT、自动记忆/知识/模板不属于 `agent-edit-1.0`；§6 结构示例为非规范说明，不构成被锁文本
 变更要求：新增/调整提示词层或截断序须同步 BR-AG-DATA-004/005 并回写 M-T-01 §5.1 交叉引用；TERM-AG-005 一经 term_ref 引用其 en 不可更改；落地后须 npm run governance:generate 注册
 治理成熟度：draft
 ---
@@ -37,13 +37,13 @@ M-T-01 §5.1（组装骨架 SSOT：BR-AG-DATA-002 分层/顺序、BR-AG-DATA-001
 本文（提示词架构）：多层清单 + 装配顺序/缓存边界 + 当前轮次原则 + 补强层隔离/截断序 + 结构示例
    │ 新增锁：BR-AG-DATA-004（当前轮次原则与意图沿用）、BR-AG-DATA-005（补强层隔离与分层截断序）
    ▼
-PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅参考）
+A-AG-X-L-04 承接当前实现与验证；R-AG-X-R-01 提供调研依据（仅参考）
 ```
 
-**与 M-T-01 的边界（职责单一化，去重）**：M-T-01 §5.1 锁「四层组装骨架（分层 + 注入顺序 + 三类
+**与 M-T-01 的边界（职责单一化，去重）**：M-T-01 §5.1 锁「四层组装骨架（分层 + 注入顺序 + 当前两类
 回合差异）」（BR-AG-DATA-002）与「来源限定 + 确定性裁剪 + 显式注入优先保留」原则（BR-AG-DATA-001）。
 本文**不重定义骨架与来源原则**，只做两件 M-T-01 未覆盖的事：
-1. 把四层骨架细化为面向 binder 文档场景的**完整分层清单**（含引用/记忆/知识/模板/展示等特有层），
+1. 把四层骨架细化为面向 binder 文档场景的**当前分层清单**，并标出 P2 保留层不得在当前 Profile 自动激活，
    每层标注来源模块与已有规则映射（§2）；
 2. 补 M-T-01 缺失的两个机制：**当前轮次原则 / 意图沿用判定**（§4，BR-AG-DATA-004）与
    **补强层污染隔离 / 分层截断序**（§5，BR-AG-DATA-005）。
@@ -51,7 +51,7 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 **版本优先（迭代声明）**：本文是提示词设计的迭代版本。**分层截断序以本文 BR-AG-DATA-005 为唯一
 权威**——M-T-01 §5.1 早期把当前文档排在裁剪优先级最低位的旧排序「显式 @mention > 记忆/知识 >
 当前文档」，与当前轮次原则（当前文档为当前轮主事实，§4）冲突，**已废止**，统一以本文「当前文档 P0
-永不截、显式 @mention/引用 P1、记忆/知识/模板 P2 先截」为准。M-T-01 v1.2 已同步移除该旧排序并委派
+永不截、显式引用与用户明确选择的项目记忆 P1、P2 自动补强关闭」为准。M-T-01 v1.2 已同步移除该旧排序并委派
 本文，**不存在两处规则各持一套截断序的逻辑重复**。
 
 **云薄端前提重申**：提示词在客户端装配，但模型调用经门禁→网关（X-SEQ-001）；本文不涉调用链。
@@ -65,33 +65,34 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 | 层 | 对应 M-T-01 骨架层 | 内容 | 来源模块 | 截断优先级 | 已有规则映射 |
 |---|---|---|---|---|---|
 | 治理/系统层 | 系统提示词层 | 角色定位 + 硬约束边界（修改经 diff 裁决、不越权落盘、workspace 限界） | AG | P0 永不截 | BR-AG-STATE-001 / X-FORBID-006 |
-| 工具/能力层 | 工具/能力定义层 | 工具清单与契约（AG-TOOL 注册项投影），按模式启停 | AG | P0 | BR-AG-STATE-002 |
+| 工具/能力层 | 工具/能力定义层 | 当轮 CapabilityGrant.allowed_tools 的精确契约投影；不暴露完整注册表 | AG | P0 | BR-AG-STATE-002 |
 | 格式层 | 系统提示词层（子项） | 输出格式约束（**GFM Markdown 子集**：段落/标题/列表/加粗/围栏代码块标注语言/表格；**声明当前无图表/流程图（Mermaid）渲染能力**；HTML/docx 仅面向 BDocx 能力投影） | DOC/DE | P0 | BR-AG-DATA-002（骨架内）、BR-AG-UI-001 |
-| 任务状态层 | 上下文注入层 | 当前 Agent 任务 + 阶段 + artifacts（仅 active） | AG | P1 | BR-AG-STATE-004 |
+| 任务状态层 | 上下文注入层 | 当前受限任务 + 阶段 + artifacts（仅存在 TaskRun 时） | AG | P1 | BR-SYS-STATE-008 / SM-AG-04 |
 | 代理上下文事实集层 | 上下文注入层 | 版本化 AgentContextFacts：workspace、活动/打开会话、格式、脏态、保存基准、LogicalState 版本、显式 SelectionRef、关联 Proposal 状态；不含正文 | SYS/ED/DE/WS | P0 当前轮事实元数据 | BR-AG-DATA-008 / BR-SYS-DATA-008 |
 | 当前文档/编辑器层 | 上下文注入层 | 当前文件 + 分级块列表 + 选区/光标 + revision/baseline + pending diffs | WS/ED/DE | **P0 当前轮主事实** | BR-AG-DATA-001 |
 | 引用层 | 上下文注入层 | 显式 @mention（精确锚点可编辑 / 阅读上下文仅理解） | REF | P1 最高保留 | BR-AG-DATA-001（@mention 优先） |
 | 当前对话层 | 用户输入层 | 当前轮 user 输入 + IntentResult（结构化决策不替代原文） | AG | P0 信号源 | BR-AG-DATA-004（本文） |
 | 历史对话层 | （由 messages[] 承载） | 既往轮次，默认弱化 | AG | P1/弱 | BR-AG-DATA-004（本文） |
-| 记忆补强层 | 上下文注入层 | 长期记忆检索结果，带权重声明 | AST | P2 先截 | BR-AG-DATA-005（本文） |
-| 知识补强层 | 上下文注入层 | 知识库自动检索切片（带 citation/provenance），经触发门控 | KB | P2 先截 | BR-AG-DATA-005（本文） |
-| 模板补强层 | 上下文注入层 | 编排/工作流约束引用（作为约束而非内容） | TPL | P2 先截 | BR-AG-DATA-005（本文） |
+| 显式项目记忆层 | 上下文注入层 | 用户在当前 workspace 明确选择的既有记忆条目；按显式引用归一，data-only | AST/REF | P1 | BR-AG-STATE-004 / REQ-AG-017 |
+| 知识补强层 | 上下文注入层 | P2 保留层；`agent-edit-1.0` 不自动检索或注入 | KB | inactive | A-CORE-X-D-02 §3 |
+| 模板补强层 | 上下文注入层 | P2 保留层；`agent-edit-1.0` 不自动执行或注入 | TPL | inactive | A-CORE-X-D-02 §3 |
 | 工作区依赖层 | 上下文注入层 | 文件依赖图、pending diff 状态 | WS | P3 按需 | BR-AG-DATA-005（本文） |
 | 展示层（输出侧） | —（非输入层） | 流式 chunk / 工具卡片 / diff 卡片，与模型输入解耦 | AG/前端 | — | 归 DE/前端，见 R-AG-X-R-01 §6 |
 
-**分层准则**：当前轮主事实（当前文档/当前对话）与显式引用为 P0/P1 高保留；记忆/知识/模板为 P2
-补强层，整体低于当前轮事实；工作区依赖为 P3 按需。展示层是输出侧，不进模型输入（隔离）。
+**分层准则**：当前轮主事实（当前文档/当前对话）与显式引用为 P0/P1 高保留；用户明确选择的项目记忆
+按 P1 data-only 引用处理；知识/模板自动补强在当前 Profile 不装配；工作区依赖为 P3 按需。展示层是输出侧，不进模型输入（隔离）。
 
 ## §3 装配顺序与缓存边界布局
 
 > 承 BR-AG-DATA-002 注入顺序，本节补**物理布局**设计（缓存/recency 优化），不改顺序语义。
 
 ```
-[稳定区·可进 prompt cache]
-  治理/系统层 → 工具/能力层 → 格式层
+[ 稳定区·可进 prompt cache ]
+  治理/系统不变量 → 格式层
         ──────── 缓存边界标记 ────────
 [会话特定区·每轮易变]
-  任务状态层 → 补强层(记忆/知识/模板，带权重声明) → 代理上下文事实集层 → 当前文档/编辑器层 → 引用层
+  RuntimeControl → 本轮 CapabilityGrant.allowed_tools 精确投影 → 任务状态层（如有）
+  → 代理上下文事实集层 → 当前文档/编辑器层 → 显式引用层（含用户明确选择的项目记忆）
   ───────────────────────────────────────────────
 [messages[] 数组·与 system 分离]
   历史对话层(默认弱化) … 当前对话层(末条，含意图沿用结果)
@@ -102,9 +103,9 @@ PI-AG-07~09（A-AG-X-L-02）承接实现；R-AG-X-R-01 提供调研依据（仅�
 稳定区、动态区、工具 manifest hash、IntentResult id 与 Context trace id 必须可观测，以支持同一回合复现。
 
 **两条布局设计依据**（调研支撑见 R-AG-X-R-01 §3.1/§3.4）：
-1. **稳定层在前并进缓存边界**：角色/工具/格式跨轮不变，置于缓存边界前以复用 prompt cache。
-2. **当前轮易变事实靠近末尾**：当前文档、当前对话置于 prompt 末尾吃 recency；补强层虽在中部
-   （接受其低优先级代价），但以显式权重声明（§5）抵消「中间迷失」的语义稀释。
+1. **稳定层在前并进缓存边界**：仅角色/系统不变量/格式可视为跨轮稳定；当轮 CapabilityGrant 及其工具契约投影必须放在动态区，不得因缓存沿用旧轮允许集。
+2. **当前轮易变事实靠近末尾**：当前文档、显式引用与当前对话置于 prompt 末尾；未获本轮选择或授权的
+   记忆、知识、模板不得为缓存或“补强”而注入。
 
 ## §4 当前轮次原则与意图沿用判定
 
@@ -178,9 +179,9 @@ Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user �
 
 **实现登记（2026-08-11，AG-WS-LAYERED-01 模型分层感知工作区）**：`list_docs` 不再全量返回文件树——无参数返回工作区概览（顶层目录+文件计数+总文件数，mode=overview；工作区 ≤30 文件且 ≤4KB 时豁免返回全量 mode=full）；`path` 参数返回该目录直接子项（一层，mode=children）。树枚举只含索引（路径/类型/计数），**永不携带正文**（正文唯一入口 read_doc / search_text）。该登记只证明分层读取现状，不授予新建或其他资源副作用；新建文档必须遵守本节 CreateDocumentBundle 约束。
 
-**实现登记（2026-08-11，AG-TASK-01 多提案批次衔接 + block_ops 删除）**：①`block_ops` 新增 `delete_node` 操作——仅删除 capabilities 含 delete_node 的 content 原子块（删除后块整体移除不留占位），容器/原子块拒绝 AG_BLOCK_OPERATION_TARGET_READONLY（不级联子树）；删除后同批后续操作引用已删块 → stale 回注（F4）。②放开同回合多提案——AG_PROPOSAL_ALREADY_CREATED 改为按批放行，单回合 ≤5 批（AG_TOO_MANY_PROPOSALS 超限），同轮可并行多 tool_calls，每批 base 递增。③批次元数据——propose_edit 支持可选 `batch={id,index,total}` 参数（1≤index≤total），随 style_ops `_batch` 键落库；接受路由返回 batch_remaining 衔接提示（F1c）。④前端——DiffCard 批次徽标（第 x/y 批）、删除块渲染（before=内容/after=【已删除】删除样式）、edBlockOps 支持 delete_node 原子应用与 reverse 精确恢复（记录删除位置重建）。⑤提示词——block_ops 描述补 delete_node、单批上限 24→32、批次衔接引导。语义详见 A-AG-M-T-01 §5.1。
+**历史实现登记（2026-08-11，AG-TASK-01）**：当时登记了 `block_ops.delete_node`、多提案批次、批次元数据与 Prompt 数字调整。此处不再持有批次数或单批操作数；运行时 capability/config 是数值唯一源，Prompt 只投影同一值。删除、多提案和 DiffCard 的有效语义以 Active AG/DE/ED 规则与运行时能力为准。
 
-**实现登记（2026-08-11，AG-CTX-01 上下文管理重构）**：上下文控制从"事后截断"改为"源头轻量投影+按需读取"（Claude Code Tool Result Budget 同思路）——①`list_blocks` 轻量投影：只返回块目录（block_id/block_index/node_type/role/parent/depth/text 前40字/fingerprint/capabilities），省略 node_json/全文/marks/attrs；②`read_doc` 支持 `blocks` 范围参数：只返回指定块完整投影（含 node_json 供 block_ops 提案），省略整篇 content，向后兼容（不传则全量）；③移除工具结果截断（trim_tool_results_to_budget 删除，曾导致提案关键数据丢失）；④查询动词补齐（列出/列举/显示/展示/有哪些 → Search 只读组），修复「列出文件树」被误判 Edit；⑤整篇对齐任务检测（`detect_sync_from_reference`）：「改成和 X 一样」注入能力边界提示（block_ops 单批 ≤24 块，引导分批/关键章节），不阻断；⑥AG_EDIT_TOOL_REQUIRED 文案区分「已读未提案」与「零工具调用」；⑦快照序列化空 marks/attrs 省略（`skip_serializing_if`）。
+**实现登记（2026-08-11，AG-CTX-01 上下文管理重构）**：上下文控制从"事后截断"改为"源头轻量投影+按需读取"——`list_blocks` 返回不含全文的块目录，`read_doc` 可按 blocks 读取完整目标投影，工具结果不再事后截掉关键提案数据；查询意图与整篇对齐任务使用确定性边界提示，批次/操作上限从运行时 capability/config 动态投影；`AG_EDIT_TOOL_REQUIRED` 区分已读未提案与零工具调用，快照省略空 marks/attrs。本登记不持有预算或操作数值。
 
 实现约束补充（2026-07-18）：历史消息必须携带所属 `relPath/turnId`。存在当前文档时，AG
 装配必须先按当前 `active_doc_path` 分流历史：同文档历史可进入同文档 P1 背景；跨文档或无归属历史
@@ -188,20 +189,20 @@ Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user �
 时，跨文档历史才可被弱标签化注入，且必须声明“不得作为当前文档事实”。“重写/改写/优化/再短一点”
 等泛编辑词本身不构成历史沿用。
 
-## §5 补强层污染隔离与分层截断序
+## §5 显式补充数据隔离与分层截断序
 
 > 承 BR-AG-DATA-001「确定性裁剪 + 显式注入优先保留」，本节细化补强层隔离与完整截断阶梯。
 
-**补强层隔离**：记忆/知识/模板为补强层（augmentation），其注入串必须自带权重声明——明示
-「仅作补强，不覆盖当前文档、显式引用与当前轮产出」；知识库自动检索须经触发门控（当前文档优先：
-有编辑锚点/显式引用充分/纯当前文档意图/文件操作意图时不触发，详尽门控示意见 R-AG-X-R-01 §2.4）。
+**补充数据隔离**：只有用户明确选择的项目记忆可按显式引用进入 `agent-edit-1.0`，注入串必须声明
+data-only，且不得覆盖当前文档、其他显式引用、当前用户输入、IntentResult 或 CapabilityGrant。
+知识库和模板的自动检索/注入在当前 Profile 关闭，不存在当前门控、相关性打分或 TopK 选择语义。
 
 **分层截断序（确定性阶梯，超预算时从高数字层先截）**：
 
 ```
 P0 永不截 : 治理/系统层、工具/能力层、格式层、当前文档/编辑器层、当前对话层
-P1 尽量留 : 任务状态层、引用层(显式@mention)、历史对话层(可先摘要化)
-P2 先截   : 记忆补强层、知识补强层、模板补强层
+P1 尽量留 : 任务状态层、引用层（含用户明确选择的项目记忆）、历史对话层(可先摘要化)
+P2 不装配 : 自动记忆/知识/模板（当前 Profile 关闭）
 P3 按需   : 工作区依赖层
 ```
 
@@ -210,12 +211,12 @@ rule_id: BR-AG-DATA-005
 主链路: AG-TURN
 域: DATA
 -->
-提示词补强层（记忆 / 知识 / 模板）的注入必须满足污染隔离：注入串自带权重声明，明示仅作补强、不
-覆盖当前文档与显式引用与当前轮产出；知识库自动检索须经确定性触发门控（当前文档优先，编辑上下文/
-显式引用充分/纯当前文档意图时不触发）。超上下文预算时按确定性优先级阶梯截断：当前文档、当前对话、
-系统/工具/格式层永不截（P0）；任务状态、显式引用、历史（可先摘要）尽量保留（P1）；记忆/知识/模板
-补强层先截（P2）；工作区依赖按需注入（P3）。预算数值与门控阈值属实现期标定，本规则锁「补强层低权 +
-权重声明 + 确定性分层截断序」。本规则细化 BR-AG-DATA-001 裁剪优先级语义，不重定义来源限定。
+用户明确选择的项目记忆必须按显式 data-only 引用注入，保留 workspace、来源与选择事实，不得覆盖当前文档、
+其他显式引用、当前输入、IntentResult、CapabilityGrant 或当前轮产出；未选择的项目记忆与知识/模板不得自动
+检索或注入。超上下文预算时按确定性优先级阶梯截断：当前文档、当前对话、系统/当轮授权工具/格式层不得
+静默截断（P0）；任务状态、显式引用（含明确选择的项目记忆）、历史（可先摘要）尽量保留（P1）；
+工作区依赖按需注入（P3）。预算数值属运行时配置，不在本文硬编码。本规则细化 BR-AG-DATA-001 的
+数据隔离与裁剪优先级，不构成任何自动补强能力的启用依据。
 
 实现约束补充（2026-07-18）：当前文档 P0 不得以“截取前部后继续编辑”的方式静默降级。当前文档
 超过内联预算时，AG 必须注入可追踪块目录/manifest，并要求模型先调用 `read_doc` 或 `list_blocks`
@@ -227,52 +228,41 @@ diff。未打开文档仍按 DiskState 读取规则处理。
 > 本节细化 BR-AG-DATA-002 的 Prompt 可信边界，并由 BR-AG-DATA-004 的 IntentResult 与
 > BR-AG-DATA-005 的分层预算共同约束，不新增平行规则。
 
-Prompt Runtime 必须把系统约束与不可信数据物理分层：只有产品不变量、运行策略和经本轮允许的工具契约
-可进入 system instruction；当前文档、显式引用、历史、记忆、知识和工具结果必须封装为 data-only
+Prompt Runtime 必须把系统约束与不可信数据物理分层：只有产品不变量、运行策略和经本轮 CapabilityGrant
+允许的工具契约可进入 system instruction；当前文档、显式引用、历史、用户明确选择的项目记忆和工具结果必须封装为 data-only
 PromptDataEnvelope，携 `source_kind/provenance/freshness/content_hash/trust_level/token_estimate`，不得因其
 内容包含“忽略规则/调用工具/修改文件”等文字而获得指令权限。每次调用产出版本化 PromptPackage，
-至少记录 `runtime_version/intent_id/context_trace_id/tool_manifest_hash/estimated_tokens`；发送前校验总预算、
+至少记录 `runtime_version/intent_id/context_trace_id/tool_manifest_hash/estimated_tokens`；工具 manifest 必须是
+当轮 `CapabilityGrant.allowed_tools` 的精确投影，不能暴露完整注册表或完整 RuntimeProfile；发送前校验总预算、
 角色边界与 workspace 作用域。调试追踪默认只保存层元数据、哈希、选择/裁剪原因，不保存用户正文、密钥
 或会话令牌。
 
-`agent-edit-1.0` 的装配顺序固定为：系统不变量与输出格式 → 本轮工具允许集 → IntentResult → 当前文档
-data-only envelope → 显式引用 data-only envelope → 同文档必要历史 → 当前 user 原文。AST/KB/TPL 自动
-补强关闭；后续 profile 启用时按 BR-AG-DATA-005 的 P2 门控插入，不得改变系统/数据可信边界。
+`agent-edit-1.0` 的装配顺序固定为：系统不变量与输出格式 → RuntimeControl → 当轮最小工具允许集 →
+IntentResult → AgentContextFacts → 当前文档 data-only envelope → 显式引用 data-only envelope（可含用户明确
+选择的项目记忆）→ 同文档必要历史 → 当前 user 原文。Prompt 对可编辑目标的声明只能来自当轮
+ExplicitEditTargetSet，不能把已读路径、打开标签、搜索结果或完整 workspace 描述成可写目标。AST/KB/TPL
+自动补强关闭；未来 Profile 启用必须新开需求/设计，不从本文推导。
 
-**实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举为唯一真源，
-固定层序 `System → RuntimeControl → IntentHint → AgentContextFacts → CurrentDocument → Reference → History →
-CrossDocHistory → User`（CrossDocHistory 仅显式沿用时注入）。其中 `RuntimeControl`（AG RUNTIME CONTROL
-结构化 system 消息）与自然语言提示词分离为两条独立消息；`History` 聚合为单块 DATA-ONLY 消息并保留
-role 序列；`system_prompt_version` 由提示词内容 hash 派生；预算 gate 使用序列化 messages+tools 统一口径；
-审计直接读取 `message.layer` 字段。本登记为 §2/§5.1 分层与截断序的实现映射，不改变 BR-AG-DATA-004/005
-与 M-T-01 §5.1 骨架语义。
+**实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产 `LayerKind` 是 M-T-01 §5.1
+BR-AG-DATA-002 的实现投影，具体层序只在该骨架真源中维护。本文只补充实现必须同时投影 BR-AG-DATA-004 的当前轮/历史处置与 BR-AG-DATA-005 的数据隔离/截断结果；
+`RuntimeControl` 与自然语言提示词物理分层，`History` 保留 role 序列，预算 gate 按序列化 messages+tools 统一核算。任何实现枚举都不得反向成为新的文档真源。
 
-## §6 三类回合结构示例（非规范说明）
+## §6 当前两类回合结构示例（非规范说明）
 
 > ⚠️ 本节为**设计示例**，帮助理解装配产物形态；其中文本为占位示意，**不构成被锁提示词文本**
-> （文本归实现期运营配置，M-T-01 §5.1 已声明）。三类回合骨架差异权威源为 BR-AG-DATA-002。
+> （文本归实现期运营配置，M-T-01 §5.1 已声明）。当前回合骨架差异权威源为 BR-AG-DATA-002。
 
 **Chat 回合**（含历史 + 修改建议导向 diff）：
 ```
 [系统层] 角色 + 硬约束(改经diff裁决/不越权落盘/workspace限界) + 格式约束
-[工具层] read_doc, list_docs, search_text, propose_edit
+[工具层] 仅投影本轮 CapabilityGrant.allowed_tools；示例不列完整注册工具
 ──缓存边界──
 [代理上下文事实集] workspace + active/open docs + dirty/baseline/version + explicit selections + proposal states（data-only）
 [当前文档] file + 文档块列表；富文档含 node_type/role/parent/depth/node_json/fingerprint/capabilities，
 容器/原子块只作语境，内容块按稳定 blockId 独立寻址 + revision/baseline + pending diffs
 [引用层] @mention: ref#1 精确锚点 block[..]→block[..] / ref#2 阅读上下文(仅理解)
-[补强层] (经门控,带权重声明:不覆盖当前文档/显式引用)
+[显式补充数据] 仅用户明确选择的项目记忆，可选；data-only，不覆盖当前文档/显式引用
 messages[]: …历史(弱化/摘要)… → [当前对话] user 输入 (+ carryover 结果)
-```
-
-**Build 回合（CBT 构建任务）**（任务计划上下文 + 单文件产出导向）：
-```
-[系统层] 构建角色 + 单文件产出边界(目标=本任务计划文件，BR-CBT-DATA-001)
-[工具层] 构建相关工具子集
-──缓存边界──
-[任务状态层] active 任务 + 阶段 + artifacts
-[当前文档] 目标文件块列表
-messages[]: 任务计划上下文 → [当前对话] 本步指令
 ```
 
 **Assist 回合（辅助续写/局部修改，2026-07-04 澄清定义）**（轻量、无系统对话历史）：
@@ -318,8 +308,7 @@ status: mapped
 - **当前轮次原则**（BR-AG-DATA-004）：构造「无沿用」轮 → 历史不进事实层（可查装配产物不含历史正文，
   仅近因摘要）；构造「指代回指/修正追加」轮 → 被沿用历史意图提权重述且贴近末尾；判定可观测（输出
   carryover 类型）。
-- **补强层隔离**（BR-AG-DATA-005）：记忆/知识/模板注入串含权重声明字样；知识门控在编辑上下文/显式
-  引用充分时不触发（reason 可观测）；超预算时 P2 补强层先于 P0/P1 被截，P0 永不截（确定性可复现）。
+- **补充数据隔离**（BR-AG-DATA-005）：仅用户当轮明确选择的项目记忆作 data-only 显式引用；未选记忆、知识库与模板的自动写入/检索/注入调用数为 0；超预算时按 P3→P1 的确定性阶梯处理，P0 不得静默截断。
 - **分层映射一致性**：§2 各层来源与 M-T-01 §5.1 骨架层一一对应，无层越权直写文件（X-FORBID-006）。
 - **本轮意图结果**（BR-AG-DATA-004）：否定编辑、显式编辑、新建、分析、目标不明等样本产生稳定
   IntentResult；blocking ambiguity 不开放副作用工具；Context 与工具允许集消费同一 intent_id。
@@ -334,22 +323,21 @@ status: mapped
 
 - **意图沿用判定的识别实现**（BR-AG-DATA-004 余项）：四维度的具体识别（规则/小模型/启发式）与阈值
   延实现期；本文仅锁机制语义，PI-AG-09 落地时需补识别策略并回写。
-- **相关性打分**：分层截断在预算内的「选哪些补强条目」需相关性打分；旧项目（R-AG-X-R-01 §2.2）为
-  Passthrough 占位，binder 实现期需补，否则 P2 层「按预算选 TopK」形同虚设（列 R-01 风险 R-01）。
 - **预算数值与门控阈值**：机制已锁，数值延 G5 标定。
-- **展示层细节**（流式 diff 呈现）归 DE/前端，本文不展开（见 R-AG-X-R-01 §6 / A-AG-X-L-02 PI-AG-10）。
+- **展示层细节**（流式 diff 呈现）归 A-AG-I-P-01、DE 与前端，本文不展开。
 
-## §10 后续动作
+## §10 后续设计入口
 
-1. 落地后随 `npm run governance:generate` 注册：BR-AG-DATA-004/005 规则、TERM-AG-005、REQ_MAP 进 ADUS。
-2. M-T-01 §5.1 增一句交叉引用指向本文（本文为其 L3 细化）——属 M-T-01 变更，待人类确认后由 AI 执行。
-3. PI-AG-09（A-AG-X-L-02）承接 BR-AG-DATA-004/005 实现意图沿用判定与分层截断。
+1. Prompt Runtime 的实现/验证只承接 A-AG-X-L-04；历史 PI-AG-07～09 不再作为当前计划源。
+2. 预算和批次数字由运行时 capability/config 持有，验证 Prompt、工具 schema 与执行 guard 是否投影同一值。
+3. 自动记忆/知识/模板与 Build 不在本文待办中；未来启用必须先进入新的 REQUIREMENT/DESIGN Scope。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-08-29 | v1.16 | AG-CONFORMANCE-CODE-S4A：新增独立 AgentContextFacts data-only 层，生产 LayerKind 顺序调整为 IntentHint→AgentContextFacts→CurrentDocument，并同步缓存边界与结构示例。 |
+| 2026-08-31 | v1.25 | AG-DOC-CONSOLIDATION-01：提示词装配收敛到 Agent 1.0 两类当前调用，排除 Build 和自动 AST/KB/TPL 增强；与 M-T-01 按“骨架/当前轮/截断”分开唯一权威；tool manifest 仅投影当轮 CapabilityGrant.allowed_tools 且不得进入跨轮稳定缓存，预算/工具上限仅由运行时配置作数值真源。 |
 | 2026-06-24 | v1.0 | 初版（M-T-01 §5.1 的 L3 专项细化）：提示词分层总览（13 层映射至来源模块与已有规则）、装配顺序与缓存边界布局、当前轮次原则与意图沿用判定、补强层污染隔离与分层截断序、三类回合结构示例（非规范）；新增规则 BR-AG-DATA-004（当前轮次原则/意图沿用）、BR-AG-DATA-005（补强层隔离/分层截断序）；新增 TERM-AG-005（IntentCarryover）；REQ_MAP（REQ-AG-004）；承接 BR-AG-DATA-001/002 不重定义骨架；调研依据 R-AG-X-R-01；作为提示词设计迭代版本，明确 BR-AG-DATA-005 为分层截断序唯一权威，废止 M-T-01 早期「@mention > 记忆/知识 > 当前文档」裁剪排序（同步 M-T-01 v1.2 去重，冲突以本文为准） |
 | 2026-07-04 | v1.1 | Assist 回合承接术语澄清（人类裁决）：更名「辅助续写/局部修改」，补两形态提示词差异——续写单候选 50–100 字量级；局部修改多轮 refine（上轮产出为基底，无历史层、不持久化、每轮过门禁） |
 | 2026-07-16 | v1.2 | 细化 Assist 提示词形态：辅助续写一次产出 3 个候选；局部修改 refine 仅携上轮候选结果与新指令，不保留完整对话历史 |

@@ -125,7 +125,7 @@ function getField(fields, ...keys) {
 function parseAnnotationBlocks(relativePath) {
   const src = readText(relativePath);
   const blocks = [];
-  const blockRe = /<!--\s*(MODULE|DOMAIN|RULE|CHAIN|CONSTRAINT|TERM)\s*([\s\S]*?)-->/g;
+  const blockRe = /<!--[ \t]*(MODULE|DOMAIN|REQ_MAP|REQ|RULE|CHAIN|CONSTRAINT|TERM|STATE_MACHINE)[ \t]*\r?\n([\s\S]*?)-->/g;
   let match;
   while ((match = blockRe.exec(src)) !== null) {
     const before = src.slice(0, match.index);
@@ -411,6 +411,15 @@ const chainStatus = new Map(); // chain_id -> status（active | planned | supers
 const chainIntegrationTests = new Map(); // chain_id -> integration_test
 const modules = new Set();
 const constraints = new Set();
+const requirements = new Map(); // req_id -> annotation block
+const requirementMaps = [];
+const requirementMapKeys = new Set();
+const duplicateRequirementMappings = [];
+const stateMachines = new Map(); // machine_id -> annotation block
+const validRequirementStatuses = new Set(['active', 'candidate', 'deferred', 'blocked', 'superseded']);
+const validRequirementMapStatuses = new Set(['mapped', 'candidate', 'deferred', 'blocked', 'superseded']);
+const validRequirementMapTargets = new Set(['RULE', 'CHAIN', 'CONSTRAINT']);
+const validStateMachineStatuses = new Set(['active', 'candidate', 'deferred', 'superseded']);
 
 for (const block of annotationBlocks) {
   if (block.kind === 'RULE') {
@@ -448,6 +457,175 @@ for (const block of annotationBlocks) {
     if (!getField(block.fields, 'constraint_id')) addFinding('OWNER_MISSING', 'CONSTRAINT block missing constraint_id', { file: block.file, line: block.line });
     if (!getField(block.fields, '摘要', 'summary')) addFinding('OWNER_MISSING', 'CONSTRAINT block missing 摘要/summary', { file: block.file, line: block.line });
   }
+  if (block.kind === 'REQ') {
+    const id = getField(block.fields, 'req_id');
+    for (const field of ['req_id', 'title', 'owner_module', 'status', 'summary']) {
+      if (!getField(block.fields, field)) addFinding('OWNER_MISSING', `REQ block missing ${field}`, { file: block.file, line: block.line });
+    }
+    if (id && !/^REQ-[A-Z0-9]+-\d{3}$/.test(id)) {
+      addFinding('REQ_ID_INVALID', 'REQ req_id must match REQ-[MODULE]-[SEQ]', { file: block.file, line: block.line, req_id: id });
+    }
+    const status = getField(block.fields, 'status');
+    if (status && !validRequirementStatuses.has(status)) {
+      addFinding('REQ_STATUS_INVALID', 'REQ status is invalid', { file: block.file, line: block.line, req_id: id, status });
+    }
+    if (id) {
+      if (requirements.has(id)) {
+        addFinding('REQ_DUPLICATE', 'REQ req_id is registered more than once', {
+          req_id: id, file: block.file, line: block.line, first_file: requirements.get(id).file,
+        });
+      } else {
+        requirements.set(id, block);
+      }
+    }
+  }
+  if (block.kind === 'REQ_MAP') {
+    for (const field of ['req_id', 'target_type', 'target_id', 'status']) {
+      if (!getField(block.fields, field)) addFinding('OWNER_MISSING', `REQ_MAP block missing ${field}`, { file: block.file, line: block.line });
+    }
+    const reqId = getField(block.fields, 'req_id');
+    const targetType = getField(block.fields, 'target_type');
+    const targetId = getField(block.fields, 'target_id');
+    const status = getField(block.fields, 'status');
+    if (targetType && !validRequirementMapTargets.has(targetType)) {
+      addFinding('REQ_MAP_TARGET_TYPE_INVALID', 'REQ_MAP target_type is invalid', { file: block.file, line: block.line, req_id: reqId, target_type: targetType });
+    }
+    if (status && !validRequirementMapStatuses.has(status)) {
+      addFinding('REQ_MAP_STATUS_INVALID', 'REQ_MAP status is invalid', { file: block.file, line: block.line, req_id: reqId, status });
+    }
+    const mappingKey = [reqId, targetType, targetId, status].join('|');
+    if (requirementMapKeys.has(mappingKey)) {
+      duplicateRequirementMappings.push({ file: block.file, line: block.line, req_id: reqId, target_type: targetType, target_id: targetId, status });
+    } else {
+      requirementMapKeys.add(mappingKey);
+    }
+    requirementMaps.push(block);
+  }
+  if (block.kind === 'STATE_MACHINE') {
+    for (const field of ['machine_id', 'owner_module', 'status', 'summary', 'source_type']) {
+      if (!getField(block.fields, field)) addFinding('OWNER_MISSING', `STATE_MACHINE block missing ${field}`, { file: block.file, line: block.line });
+    }
+    const id = getField(block.fields, 'machine_id');
+    const status = getField(block.fields, 'status');
+    if (id && !/^SM-[A-Z0-9]+-\d{2}$/.test(id)) {
+      addFinding('STATE_MACHINE_ID_INVALID', 'STATE_MACHINE machine_id must match SM-[MODULE]-[SEQ]', { file: block.file, line: block.line, machine_id: id });
+    }
+    if (status && !validStateMachineStatuses.has(status)) {
+      addFinding('STATE_MACHINE_STATUS_INVALID', 'STATE_MACHINE status is invalid', { file: block.file, line: block.line, machine_id: id, status });
+    }
+    if (id) {
+      if (stateMachines.has(id)) {
+        addFinding('STATE_MACHINE_DUPLICATE', 'STATE_MACHINE machine_id is registered more than once', {
+          machine_id: id, file: block.file, line: block.line, first_file: stateMachines.get(id).file,
+        });
+      } else {
+        stateMachines.set(id, block);
+      }
+    }
+  }
+}
+
+for (const [reqId, block] of requirements) {
+  const ownerModule = getField(block.fields, 'owner_module');
+  // 云端需求由独立 APC 管理，当前客户端模块表可能不登记其 owner；在覆盖摘要中保留事实，不作为本项目硬错误。
+  void ownerModule;
+}
+
+const targetRegistries = { RULE: rules, CHAIN: chains, CONSTRAINT: constraints };
+for (const block of requirementMaps) {
+  const reqId = getField(block.fields, 'req_id');
+  const targetType = getField(block.fields, 'target_type');
+  const targetId = getField(block.fields, 'target_id');
+  if (reqId && !requirements.has(reqId)) {
+    addFinding('REQ_MAP_REQUIREMENT_UNKNOWN', 'REQ_MAP references an unknown REQ', { req_id: reqId, file: block.file, line: block.line });
+  }
+  const registry = targetRegistries[targetType];
+  if (registry && targetId && !registry.has(targetId)) {
+    const actualType = Object.entries(targetRegistries).find(([, ids]) => ids.has(targetId))?.[0];
+    addFinding(actualType ? 'REQ_MAP_TARGET_TYPE_MISMATCH' : 'REQ_MAP_TARGET_UNKNOWN',
+      actualType ? 'REQ_MAP target_id exists under a different target_type' : 'REQ_MAP target_id is not registered', {
+        req_id: reqId, target_type: targetType, target_id: targetId, actual_type: actualType ?? null,
+        file: block.file, line: block.line,
+      });
+  }
+}
+
+const requirementCoverage = new Map();
+for (const [reqId, block] of requirements) {
+  const owner = getField(block.fields, 'owner_module') || 'UNKNOWN';
+  if (!requirementCoverage.has(owner)) requirementCoverage.set(owner, { total: 0, active: 0, mapped: 0, unmapped_active: [] });
+  const summary = requirementCoverage.get(owner);
+  summary.total += 1;
+  if (getField(block.fields, 'status') === 'active') {
+    summary.active += 1;
+    const mapped = requirementMaps.some(mapping =>
+      getField(mapping.fields, 'req_id') === reqId && getField(mapping.fields, 'status') === 'mapped');
+    if (mapped) summary.mapped += 1;
+    else summary.unmapped_active.push(reqId);
+  }
+}
+
+for (const [machineId, block] of stateMachines) {
+  const ownerModule = getField(block.fields, 'owner_module');
+  if (ownerModule && !modules.has(ownerModule)) {
+    addFinding('STATE_MACHINE_OWNER_UNKNOWN', 'STATE_MACHINE owner_module is not registered', { machine_id: machineId, owner_module: ownerModule, file: block.file, line: block.line });
+  }
+  for (const chainId of splitCsv(getField(block.fields, 'chain'))) {
+    if (!chains.has(chainId)) addFinding('STATE_MACHINE_CHAIN_UNKNOWN', 'STATE_MACHINE references an unknown CHAIN', { machine_id: machineId, chain: chainId, file: block.file, line: block.line });
+  }
+  for (const ruleId of splitCsv(getField(block.fields, 'rules'))) {
+    if (!rules.has(ruleId)) addFinding('STATE_MACHINE_RULE_UNKNOWN', 'STATE_MACHINE references an unknown RULE', { machine_id: machineId, rule: ruleId, file: block.file, line: block.line });
+  }
+}
+
+const mappingFindingTypes = new Set([
+  'REQ_ID_INVALID', 'REQ_STATUS_INVALID', 'REQ_DUPLICATE',
+  'REQ_MAP_TARGET_TYPE_INVALID', 'REQ_MAP_STATUS_INVALID',
+  'REQ_MAP_REQUIREMENT_UNKNOWN', 'REQ_MAP_TARGET_TYPE_MISMATCH', 'REQ_MAP_TARGET_UNKNOWN',
+  'STATE_MACHINE_ID_INVALID', 'STATE_MACHINE_STATUS_INVALID', 'STATE_MACHINE_DUPLICATE',
+  'STATE_MACHINE_OWNER_UNKNOWN', 'STATE_MACHINE_CHAIN_UNKNOWN', 'STATE_MACHINE_RULE_UNKNOWN',
+]);
+addCheck({
+  name: 'REQ / REQ_MAP / STATE_MACHINE integrity',
+  status: governance_findings.some(finding => mappingFindingTypes.has(finding.type)) ? 'failed' : 'passed',
+  requirements: requirements.size,
+  requirement_mappings: requirementMaps.length,
+  unique_requirement_mappings: requirementMapKeys.size,
+  duplicate_requirement_mappings: duplicateRequirementMappings,
+  state_machines: stateMachines.size,
+  coverage_by_module: Object.fromEntries([...requirementCoverage.entries()].sort(([a], [b]) => a.localeCompare(b))),
+  note: 'active coverage is reported per module; mapped target and state-machine reference integrity fail closed',
+});
+
+if (ADUS_PATH && fileExists(ADUS_PATH)) {
+  const adusContent = readText(ADUS_PATH);
+  const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const missingRequirements = [...requirements.keys()].filter(reqId =>
+    !new RegExp(`^\\|\\s*${escapeRegex(reqId)}\\s*\\|`, 'm').test(adusContent));
+  const missingMappings = requirementMaps.filter(block => {
+    const reqId = escapeRegex(getField(block.fields, 'req_id') || '');
+    const targetType = escapeRegex(getField(block.fields, 'target_type') || '');
+    const targetId = escapeRegex(getField(block.fields, 'target_id') || '');
+    return !new RegExp(`^\\|\\s*${reqId}\\s*\\|\\s*${targetType}\\s*\\|\\s*${targetId}\\s*\\|`, 'm').test(adusContent);
+  });
+  const missingStateMachines = [...stateMachines.keys()].filter(machineId =>
+    !new RegExp(`^\\|\\s*${escapeRegex(machineId)}\\s*\\|`, 'm').test(adusContent));
+  if (missingRequirements.length || missingMappings.length || missingStateMachines.length) {
+    addFinding('ADUS_REGISTRY_STALE', 'ADUS is missing REQ, REQ_MAP, or STATE_MACHINE registrations; run governance:generate', {
+      missing_requirements: missingRequirements,
+      missing_requirement_mappings: missingMappings.map(block => ({
+        req_id: getField(block.fields, 'req_id'), target_type: getField(block.fields, 'target_type'), target_id: getField(block.fields, 'target_id'),
+      })),
+      missing_state_machines: missingStateMachines,
+    });
+  }
+  addCheck({
+    name: 'ADUS requirement and state-machine registry freshness',
+    status: missingRequirements.length || missingMappings.length || missingStateMachines.length ? 'failed' : 'passed',
+    missing_requirements: missingRequirements.length,
+    missing_requirement_mappings: missingMappings.length,
+    missing_state_machines: missingStateMachines.length,
+  });
 }
 
 const deferredChainIntegrationTests = [];

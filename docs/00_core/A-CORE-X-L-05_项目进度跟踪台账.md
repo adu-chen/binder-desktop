@@ -207,20 +207,10 @@ G 阶段口径沿用 APC §5：
 
 ### 5.7 AG
 
-| Plan Item | 当前状态 | 证据 | 阻断/下一步 |
-|---|---|---|---|
-| PI-AG-01 代理回合机与门禁前置 | done | A-AG-X-L-01 标记 G4 | PI-AG-11 接真实模型 |
-| PI-AG-02 工具调用循环机 | done | A-AG-X-L-01 标记 G4 | PI-AG-08 工具清单/执行真实化 |
-| PI-AG-03 门禁/网关调用通道 | done | A-AG-X-L-01 标记 G4 | 真云门禁/网关联调 |
-| PI-AG-04 局部修改/辅助续写机 | done | A-AG-X-L-01 标记 G4 | 高频门禁与真模型验证 |
-| PI-AG-05 记忆写入对接 | done | A-AG-X-L-01 标记 G4 | 与 AST G5 验证 |
-| PI-AG-06 构建移交/回落对接 | done | A-AG-X-L-01 标记 G4 | 与 CBT G5 验证 |
-| PI-AG-07 系统提示词正文 | planned | A-AG-X-L-02 未标 G4 | 需实现/回填状态 |
-| PI-AG-08 工具注册清单与真实执行 | planned | A-AG-X-L-02 未标 G4 | 工具真实执行、propose_edit 路径验证 |
-| PI-AG-09 上下文供给真实接入 | planned | A-AG-X-L-02 未标 G4 | 接 REF/AST/KB/WS，验证截断序 |
-| PI-AG-10C/10B/10F 流式 IPC | planned | A-AG-X-L-02 未标 G4 | 契约冻结、前后端双轨实现 |
-| PI-AG-11 真实模型调用集成 | blocked | A-AG-X-L-02 明确依赖 PI-GW-01~04 | 云 GW 未实现 |
-| AG 专项：MODEL-CONFIG-01 模型配置体系 | partial | A-AG-M-D-01 v2.14 / A-AG-M-T-01 v2.24；agRuntime/assistRuntime 测试通过 | 预设清单（GET /models）与订阅档位映射依赖云 GW/LIC |
+本节原 PI-AG-01～11 状态表基于已过期的 X-AG-X-L-01/02，已退出当前控制链，不再在本台账复制 AG
+完成等级。当前唯一 Active 执行计划为 `A-AG-X-L-04`；需求/设计真值依次见 `A-CORE-X-D-02`、
+`A-AG-M-D-01`、`A-AG-M-T-01/T-02`、`A-AG-M-S-01`、`A-AG-I-P-01`；验证状态只见 `A-VAL-X-V-04`
+与实际 Runtime Report。历史 PI 状态不得用于宣称当前实现、G5 或发布完成。
 
 ### 5.8 REF
 

@@ -90,7 +90,7 @@ title: 构建产物 diff 化落盘
 owner_module: CBT
 status: active
 summary: 构建产物（新建/修改文档）一律生成 ChangeProposal 交 DE/ED 受控预览和裁决；接受不直接写盘，用户显式保存各目标的当前 LogicalState 后由 WS 落盘；CBT 无旁路写盘路径；支持按条/批量审阅
-source_doc: X-FORBID-006、REQ-CORE-002/010、A-AG-M-D-02 §2
+source_doc: X-FORBID-006、REQ-CORE-002/010、A-CORE-X-D-02 §3/§4
 acceptance: 构建产物在用户显式保存前不写入文件；部分裁决不直接落盘；各目标保存失败保留对应 LogicalState；无旁路直写
 open_issues: 批量审阅与逐目标保存交互形态联动 DE G2；新建文档的多目标预览/保存表达归 CBT/DE/ED/WS G2 联合
 -->

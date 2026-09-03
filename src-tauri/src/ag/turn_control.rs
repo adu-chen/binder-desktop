@@ -392,7 +392,12 @@ pub(crate) fn ag_cancel_turn(
                 ag::task::TurnOutcome::Cancelled,
             );
         }
-        super::turn_events::emit_ag01(&app, &turn_id, ag::turn::TurnState::Cancelled);
+        let cancelled = ag::turn::transition(
+            ag::turn::TurnState::AwaitingClarification,
+            ag::turn::TurnEvent::Cancel,
+        )
+        .ok_or_else(super::turn_events::sm_error)?;
+        super::turn_events::emit_ag01(&app, &turn_id, cancelled);
     }
     Ok(())
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 生成 adus.md 的自动生成区。
-// 来源一：设计文档（.md 文件）中的 <!-- MODULE -->、<!-- DOMAIN -->、<!-- RULE -->、<!-- CHAIN -->、<!-- CONSTRAINT --> 标注块
+// 来源一：设计文档（.md 文件）中的 MODULE / DOMAIN / REQ / REQ_MAP / RULE / CHAIN /
+//        CONSTRAINT / TERM / STATE_MACHINE 标注块
 // 来源二：源代码（.ts / .tsx 文件）中的 @GOV 标注
 // 来源三：triage 报告文件（*_triage.md）
 // adus.md 元信息头部（文档头 + 边界说明 + 变更记录，## 【自动生成区】之前的内容）保持不变。
@@ -122,9 +123,11 @@ function parseAnnotationBlocks(filePath) {
   const modules     = [];
   const domains     = [];
   const terms       = [];
+  const requirements = [];
+  const requirementMaps = [];
+  const stateMachines = [];
 
-  // 匹配 <!-- MODULE/DOMAIN/RULE/CHAIN/CONSTRAINT ... -->
-  const blockRe = /<!--\s*(MODULE|DOMAIN|RULE|CHAIN|CONSTRAINT|TERM)\s*([\s\S]*?)-->/g;
+  const blockRe = /<!--[ \t]*(MODULE|DOMAIN|REQ_MAP|REQ|RULE|CHAIN|CONSTRAINT|TERM|STATE_MACHINE)[ \t]*\r?\n([\s\S]*?)-->/g;
   let m;
   while ((m = blockRe.exec(src)) !== null) {
     const kind    = m[1];
@@ -143,9 +146,15 @@ function parseAnnotationBlocks(filePath) {
       if (fields['domain_code']) domains.push({ ...fields, sourceFile: relative(ROOT, filePath) });
     } else if (kind === 'TERM') {
       if (fields['term_id']) terms.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'REQ') {
+      if (fields['req_id']) requirements.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'REQ_MAP') {
+      if (fields['req_id']) requirementMaps.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+    } else if (kind === 'STATE_MACHINE') {
+      if (fields['machine_id']) stateMachines.push({ ...fields, sourceFile: relative(ROOT, filePath) });
     }
   }
-  return { rules, chains, constraints, modules, domains, terms };
+  return { rules, chains, constraints, modules, domains, terms, requirements, requirementMaps, stateMachines };
 }
 
 function parseKVBlock(body) {
@@ -319,6 +328,44 @@ function buildDomainRegistry(allDomains) {
   return mdTable(['domain_code', 'description', '来源'], rows);
 }
 
+// ── 需求注册表与需求映射表 ───────────────────────────────────────────────
+
+function buildRequirementRegistry(allRequirements) {
+  if (!allRequirements.length) {
+    return `（需求文档中存在 \`<!-- REQ -->\` 标注块后自动生成）`;
+  }
+  const rows = allRequirements.map(requirement => [
+    requirement['req_id'] ?? '',
+    requirement['title'] ?? '',
+    requirement['owner_module'] ?? '',
+    requirement['status'] ?? '',
+    requirement['summary'] ?? '',
+    requirement['sourceFile'] ?? '',
+  ]);
+  return mdTable(['req_id', 'title', 'owner_module', 'status', 'summary', '来源文档'], rows);
+}
+
+function buildRequirementMapRegistry(allRequirementMaps) {
+  if (!allRequirementMaps.length) {
+    return `（技术设计文档中存在 \`<!-- REQ_MAP -->\` 标注块后自动生成）`;
+  }
+  const uniqueMappings = new Map();
+  for (const mapping of allRequirementMaps) {
+    const key = [mapping['req_id'], mapping['target_type'], mapping['target_id'], mapping['status']].join('|');
+    if (!uniqueMappings.has(key)) uniqueMappings.set(key, { ...mapping, sourceFiles: new Set() });
+    uniqueMappings.get(key).sourceFiles.add(mapping['sourceFile'] ?? '');
+  }
+  const rows = [...uniqueMappings.values()].map(mapping => [
+    mapping['req_id'] ?? '',
+    mapping['target_type'] ?? '',
+    mapping['target_id'] ?? '',
+    mapping['status'] ?? '',
+    mapping['reason'] ?? '',
+    [...mapping.sourceFiles].filter(Boolean).join(', '),
+  ]);
+  return mdTable(['req_id', 'target_type', 'target_id', 'status', 'reason', '来源文档'], rows);
+}
+
 // ── 规则注册表 ─────────────────────────────────────────────────────────────
 
 function buildRuleRegistry(allRules, coverageMap = new Map()) {
@@ -411,6 +458,29 @@ function buildTermRegistry(allTerms) {
     t['sourceFile'] ?? '',
   ]);
   return mdTable(['term_id', '所属链路', '正式中文名', '正式英文名', '禁用别名', '来源文档'], rows);
+}
+
+// ── 状态机注册表 ─────────────────────────────────────────────────────────
+
+function buildStateMachineRegistry(allStateMachines) {
+  if (!allStateMachines.length) {
+    return `（设计文档中存在 \`<!-- STATE_MACHINE -->\` 标注块后自动生成）`;
+  }
+  const rows = allStateMachines.map(machine => [
+    machine['machine_id'] ?? '',
+    machine['owner_module'] ?? '',
+    machine['status'] ?? '',
+    machine['source_type'] ?? '',
+    machine['chain'] ?? '',
+    machine['rules'] ?? '',
+    machine['initial_state'] ?? '',
+    machine['terminal_states'] ?? '',
+    machine['sourceFile'] ?? '',
+  ]);
+  return mdTable([
+    'machine_id', 'owner_module', 'status', 'source_type', 'chain', 'rules',
+    'initial_state', 'terminal_states', '来源文档',
+  ], rows);
 }
 
 // ── 链路视图 ───────────────────────────────────────────────────────────────
@@ -531,14 +601,21 @@ function main() {
   // 2. 扫描设计文档标注块
   const docFiles = collectDesignDocs(DOCS);
   const allRules = [], allChains = [], allConstraints = [], allModules = [], allDomains = [], allTerms = [];
+  const allRequirements = [], allRequirementMaps = [], allStateMachines = [];
   for (const f of docFiles) {
-    const { rules, chains, constraints, modules, domains, terms } = parseAnnotationBlocks(f);
+    const {
+      rules, chains, constraints, modules, domains, terms,
+      requirements, requirementMaps, stateMachines,
+    } = parseAnnotationBlocks(f);
     allRules.push(...rules);
     allChains.push(...chains);
     allConstraints.push(...constraints);
     allModules.push(...modules);
     allDomains.push(...domains);
     allTerms.push(...terms);
+    allRequirements.push(...requirements);
+    allRequirementMaps.push(...requirementMaps);
+    allStateMachines.push(...stateMachines);
   }
 
   // 3. 扫描正式 triage 与标注延期记录。两者与 audit 共享严格解析器。
@@ -564,10 +641,13 @@ function main() {
   const knownChainIds   = new Set(allChains.map(c => c['chain_id']).filter(Boolean));
   const moduleTable     = buildModuleTable(allModules);
   const domainRegistry  = buildDomainRegistry(allDomains);
+  const requirementRegistry = buildRequirementRegistry(allRequirements);
+  const requirementMapRegistry = buildRequirementMapRegistry(allRequirementMaps);
   const chainRegistry   = buildChainRegistry(allChains);
   const ruleRegistry    = buildRuleRegistry(allRules, coverageMap);
   const constraintTable = buildConstraintTable(allConstraints);
   const termRegistry    = buildTermRegistry(allTerms);
+  const stateMachineRegistry = buildStateMachineRegistry(allStateMachines);
   const chainView       = buildChainView(govBlocks, knownChainIds);
   const ruleView        = buildRuleView(govBlocks);
   const triageSummary   = buildTriageSummary(triageRegistry.triageRecords);
@@ -645,6 +725,14 @@ ${moduleTable}
 
 ${domainRegistry}
 
+### 需求注册表
+
+${requirementRegistry}
+
+### 需求映射表
+
+${requirementMapRegistry}
+
 ### 链路注册表
 
 ${chainRegistry}
@@ -660,6 +748,10 @@ ${constraintTable}
 ### 术语注册表
 
 ${termRegistry}
+
+### 状态机注册表
+
+${stateMachineRegistry}
 
 ### 链路视图
 
@@ -691,12 +783,15 @@ ${annotationDeferralSummary}
     `@GOV 块: ${govBlocks.length}`,
     `模块标注: ${allModules.length}`,
     `域标注: ${allDomains.length}`,
+    `需求标注: ${allRequirements.length}`,
+    `需求映射: ${allRequirementMaps.length}`,
     `规则标注: ${allRules.length}`,
     `链路标注: ${allChains.length}`,
     `约束标注: ${allConstraints.length}`,
     `triage 记录: ${triageRegistry.triageRecords.length}`,
     `标注延期: ${triageRegistry.deferralRecords.length}`,
     `术语标注: ${allTerms.length}`,
+    `状态机标注: ${allStateMachines.length}`,
     `测试资产: ${testInventory.totals.assets}`,
     `测试用例: ${testInventory.totals.tests}`,
   ].join('，');

@@ -2,10 +2,10 @@
 文档编号：AG-M-S-01
 文档状态：A
 负责模块：AG
-文档职责：AG 代理模块级状态机设计——代理回合机（SM-AG-01）、工具调用循环机（SM-AG-02）、辅助回合机（SM-AG-03，承载 autocomplete 与 inline-assist），含 APC §6 必备字段；回填 A-SYS-M-S-01 总图四条 planned 行，登记 AG↔DE / AG↔ED / AG↔SYS 门禁 X-INTER-001 转移点
+文档职责：AG 代理模块级状态机设计——代理回合机（SM-AG-01）、工具调用循环机（SM-AG-02）、辅助回合机（SM-AG-03）与受限任务编排机（SM-AG-04），含 APC §6 必备字段；登记 AG↔DE / AG↔ED / AG↔SYS 门禁 X-INTER-001 转移点
 上游约束：A-AG-M-T-01_代理技术设计.md（AG-TURN/AG-TOOL/AG-ASSIST 链路、BR-AG-* 规则）、A-CORE-C-P-01_APC.md（§6）、A-SYS-M-S-01_状态机总图.md（X-SEQ-003/X-INTER-001）、A-SYS-I-P-03_云接口契约.md（SM-SYS-01 门禁段）、A-SYS-I-P-02_IPC协议.md（BR-SYS-STATE-002 流式终态）、A-ED-M-S-01_编辑器状态机设计.md（SM-ED-01 edit 入口）、ADU.md（§3.1）
-直接承接：三机经 rules 字段承载 A-AG-M-T-01 规则；machine_id 登记总图；产出交 DE 转移点供 DE G2 对接
-使用边界：本文定义 AG 状态机内部；不重定义 SM-SYS-01（门禁裁决归 SYS，本文以转移点对接）、不定义 DE diff 终态机（待 DE G2）、不定义 ED/WS 机内部；构建移交/回落状态机对接已双侧闭合（§2 takeover/fallbackIn + A-CBT-M-S-01 §3）
+直接承接：四机经 rules 字段承载 A-AG-M-T-01 与 SYS 共享规则；machine_id 登记总图；产出交 DE 转移点供 DE 对接
+使用边界：本文定义 `agent-edit-1.0` 的 AG 状态机内部；不重定义 SM-SYS-01（门禁裁决归 SYS，本文以转移点对接）、不定义 DE diff 终态机、不定义 ED/WS 机内部；Build/CBT 为 P2 后续 Profile，不进入本文状态集合或转移
 变更要求：transitions 变更须同步 A-AG-M-T-01 规则并重跑测试矩阵；跨模块转移点变更须与对侧 owner 共同复核；machine_id 一经登记不可更改
 治理成熟度：draft
 ---
@@ -15,12 +15,12 @@
 ## §1 文档定位
 
 ```
-A-AG-M-T-01（规则 SSOT）→ 本文 SM-AG-01/02/03
-本文 machine_id ──登记──→ A-SYS-M-S-01 §3（代理回合 / tool-call / autocomplete / inline-assist 四行转 active）
-转移点：AG↔SM-SYS-01（门禁）、AG 产出↔DE（待 DE G2）、SM-AG-03 采纳↔SM-ED-01（双侧就绪）
+A-AG-M-T-01（规则 SSOT）→ 本文 SM-AG-01/02/03/04
+本文 machine_id ──登记──→ A-SYS-M-S-01 §3/§3.1
+转移点：AG↔SM-SYS-01（门禁）、AG 产出↔DE、SM-AG-03 采纳↔SM-ED-01
 ```
 
-满足 X-SEQ-003：四条状态化核心链（APC §6 列举 + 2026-06-11 归属决策）在此建机。
+满足 X-SEQ-003：AgentTurn、ToolCall、Assist 与 TaskRun 的状态化核心链在此建机。
 autocomplete 与 inline-assist 由 **SM-AG-03 同机承载**（二者生命周期同构：触发→节流→门禁→
 轻量调用→装饰层呈现→采纳/弃，区别仅在触发源与候选形态，归 context 字段），总图两行回填同一
 machine_id 并注明。
@@ -36,20 +36,19 @@ source_type: design
 chain: AG-TURN
 rules: BR-AG-STATE-001, BR-AG-VERIFY-001, BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-PERSIST-001
 initial_state: Idle
-terminal_states: Completed, Cancelled, Denied, TurnError, HandedOver
+terminal_states: Completed, Cancelled, Denied, TurnError
 -->
 
 - **machine_id**：SM-AG-01　**owner_module**：AG
-- **scope**：一次代理回合（用户发起→产出处置完成/中断/拒绝/移交构建；目标边界按 BR-AG-DATA-003 2026-07-04 版）
-- **context**：回合输入（session_id + runtime_profile + prompt + 注入载荷 + open_doc_snapshots）、IntentResult、AgentReadContext、PromptPackage、真实 GateOutcome、CancellationToken、terminal_latch、流式缓冲、产出（回复/修改建议）、移交上下文、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
-- **states**：Idle、Assembling、AwaitingClarification、AwaitingGate、Streaming、HandingOff、Completed、Cancelled、Denied、TurnError、**HandedOver**
-- **events**：send、assembled、clarificationRequired、clarificationProvided、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail、**takeover、fallbackIn**
+- **scope**：一次 `agent-edit-1.0` 代理回合（用户发起→产出处置完成/中断/拒绝；目标边界按 BR-AG-DATA-003）
+- **context**：回合输入（session_id + runtime_profile + prompt + 注入载荷 + open_doc_snapshots）、IntentResult、AgentReadContext、PromptPackage、真实 GateOutcome、CancellationToken、terminal_latch、流式缓冲、产出（回复/修改建议）、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
+- **states**：Idle、Assembling、AwaitingClarification、AwaitingGate、Streaming、HandingOff、Completed、Cancelled、Denied、TurnError
+- **events**：send、assembled、clarificationRequired、clarificationProvided、assembleFail、gatePassed、gateDenied、streamEnd、streamFail、cancel、handoffOk、handoffFail
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
 | Idle | send | open_doc_snapshots 覆盖全部已打开文档且每项含 session_version/content_hash；active live 序列化成功；同 session 无其他活动回合 | Assembling | 写入/更新 AgentSession；创建 AgentTurn `draft` payload，记录 userMessage（BR-AG-PERSIST-001）；形成 IntentResult；构建 AgentReadContext、ContextBundle 与 PromptPackage |
-| Idle | fallbackIn | CBT 构建完成/中断回落（cbt.fallback，X-INTER-001） | Assembling | 以回落上下文起新 代理回合；回 fallbackAck（无双死） |
 | Assembling | clarificationRequired | IntentResult.ambiguity=blocking | AwaitingClarification | 输出结构化澄清问题；保持原 AgentTurn 非终态，不调用门禁、网关或工具，不产生修改建议 |
 | AwaitingClarification | clarificationProvided | 用户向原 AgentTurn 补充所需信息；同 session 无其他活动回合 | Assembling | 将补充输入并入原 AgentTurn，重新形成 IntentResult、AgentReadContext、ContextBundle 与 PromptPackage；不创建新 AgentTurn |
 | Assembling | assembled | IntentResult 非阻断；已打开文档引用和 selection 均基于 AgentReadContext 校验通过；PromptPackage 角色/预算/作用域校验通过 | AwaitingGate | 提交 SM-SYS-01 门禁（X-INTER-001 转移点） |
@@ -57,10 +56,9 @@ terminal_states: Completed, Cancelled, Denied, TurnError, HandedOver
 | AwaitingGate | gatePassed | 本次服务端 GateOutcome=GatePassed 且 verdict_id 可追踪 | Streaming | 经 AiGateway 发起流式调用；本地常量/缓存/桩值不得触发本转移 |
 | AwaitingGate | gateDenied | SM-SYS-01 GateDenied / 断网 | Denied | 明确拒绝（终态，不可绕过）；AgentTurn status=`gate_rejected` |
 | Streaming | streamEnd | — | HandingOff | 产出处置：修改建议交 DE，纯回复直接完成 |
-| Streaming | takeover | 构建触发（2026-07-04 判据换轴，BR-CBT-STATE-002）：用户显式触发（明确指令/构建按钮，触发即视为确认）或 AI 识别**项目级构建意图**提议经用户确认；多文件修改本身不再是判据 | HandedOver | 移交 CBT（cbt.takeover，上下文含项目蓝图随移交）；回 takeoverAck；本回合移交终结（无双活）；构建在原对话窗口呈现 |
 | Streaming | streamFail | — | TurnError | 统一错误形状（含可重试标记）；AgentTurn status=`error` |
 | Assembling / AwaitingClarification / AwaitingGate / Streaming / HandingOff | cancel | terminal_latch 尚未锁定 | Cancelled | 触发 CancellationToken，终止已启动的流式请求、阻止新模型/工具/Proposal 副作用并锁定唯一终态；无半落盘副作用；AgentTurn status=`cancelled` |
-| HandingOff | handoffOk | 修改建议已交 DE 生成 pending_diff / 无修改建议 | Completed | AgentTurn status=`completed`；异步触发记忆写入（BR-AG-STATE-004） |
+| HandingOff | handoffOk | 修改建议已交 DE 生成 pending_diff / 无修改建议 | Completed | AgentTurn status=`completed`；不得自动触发项目记忆副作用（BR-AG-STATE-004） |
 | HandingOff | handoffFail | — | TurnError | DE 生成失败（如锚失效）回报，可重试；AgentTurn status=`error` |
 - **error_states**：TurnError（原 AgentTurn 终态）
 - **recovery_paths**：用户对 TurnError 显式重试时创建新 AgentTurn，由新状态机的 Idle→send→Assembling 启动；原 AgentTurn 保持 TurnError/error 用于审计。Denied 不可重试绕过（须恢复订阅/网络后新建 AgentTurn 并 send）
@@ -70,26 +68,18 @@ terminal_states: Completed, Cancelled, Denied, TurnError, HandedOver
   - Streaming → Completed（产出含修改建议时必经 HandingOff 交 DE，不得跳过）
   - Assembling → AwaitingGate 当已打开文档缺少 OpenDocSnapshot 或引用锚无法校验（不得以 DiskState 兜底进入模型）
   - 任意态 → 直接写盘（本机无写盘动作，X-FORBID-006）
-  - takeover 无显式触发/确认（构建移交须用户显式触发或确认提议，BR-CBT-STATE-002）
-  - HandedOver → 任意活动态（移交终结后本回合不得继续，无双活）
-  - Completed / Cancelled / Denied / TurnError / HandedOver → 任意其他状态或终态（terminal_latch 只允许首次锁定）
+  - Completed / Cancelled / Denied / TurnError → 任意其他状态或终态（terminal_latch 只允许首次锁定）
   - AwaitingClarification → AwaitingGate / Streaming / Completed（未收到 clarificationProvided 并重新完成 Assembling，不得推进或伪装完成）
-  - `runtime_profile=agent-edit-1.0` → takeover / HandedOver（1.0 不启用代理构建）
 - **persistence_projection**：`send` 后先持久化 `draft`；`handoffOk`→`completed`；
   `clarificationRequired` 保持 `draft` 非终态；`streamFail/handoffFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
   应用崩溃/关闭/流式中断未收到终态时保持 `draft`，重启后只能显示未完成/可重试。
 - **acceptance_criteria**：不存在不经真实服务端 gatePassed 通往 Streaming 的路径；Denied 为终态且不可达
-  Streaming；修改建议唯一出口经 HandingOff 交 DE；cancel 后无半落盘副作用；takeover 须显式触发
-  或经确认且移交后本回合终结（HandedOver 终态，无双活）；fallbackIn 起新回合时回 fallbackAck（无双死）
-  ；completed/error/cancelled/gate_rejected/draft 五类历史状态均可重启恢复；每个 turn 最多锁定一个
+  Streaming；修改建议唯一出口经 HandingOff 交 DE；cancel 后无半落盘副作用；
+  completed/error/cancelled/gate_rejected/draft 五类历史状态均可重启恢复；每个 turn 最多锁定一个
   用户可见终态，网关 Error/Denied/Cancelled 后不得再出现 Done/Completed；blocking ambiguity 不发起模型调用；
-  澄清补充只使原 AgentTurn 由 AwaitingClarification 回到 Assembling，不创建新 AgentTurn、不产生取消终态。
+  澄清补充只使原 AgentTurn 由 AwaitingClarification 回到 Assembling，不创建新 AgentTurn、不产生取消终态；
+  状态集合中不存在 Build takeover/HandedOver/fallbackIn。
 - **test_matrix**：见 §5
-- **构建移交/回落（旧称 Chat↔Build 接管；B-3 补齐 2026-06-12，判据 2026-07-04 换轴）**：takeover
-  （显式触发或项目级构建意图经确认→HandedOver 终态，移交 CBT，蓝图随移交）/ fallbackIn（CBT 构建
-  完成/中断回落起新回合）与 SM-CBT-01（A-CBT-M-S-01 §3）双向回执对接（takeoverAck/fallbackAck），
-  登记 A-SYS-M-S-01 §5。构建执行期间（SM-CBT-01 活动态）不得发起新代理回合（仅中断），由前端
-  按 X-FORBID-007 投影门控。
 
 ### 2.1 澄清非终态与首终态契约（REQ-AG-007 / BR-SYS-STATE-007，2026-08-14 D3 登记）
 
@@ -208,7 +198,7 @@ terminal_states: LoopCompleted, LoopAborted
 | ToolValidating | validateFail | 未注册/未获本轮允许/越权/目标或参数失效 | ResultInjecting | 拒绝原因回注模型，不执行副作用 |
 | ToolExecuting | execOk | — | ResultInjecting | 结果回注 |
 | ToolExecuting | execFail | — | ResultInjecting | 失败信息回注（不中断循环） |
-| ResultInjecting | injected | 循环计数 < 上限 | ModelStreaming | 续调模型（仍在已过门禁的回合内） |
+| ResultInjecting | injected | 循环计数 < 上限；本次 provider continuation 已取得新的可追踪 GatePassed | ModelStreaming | 以当前 PromptPackage/CapabilityGrant 经 AiGateway 续调；不得复用首轮或上一轮 GateOutcome |
 | ResultInjecting | handoff | 已真实形成 Proposal 或 DecisionRequest，当前模型片段必须交回上层等待预览/裁决 | LoopCompleted | 结束工具循环并回归 SM-AG-01 产出处置；不伪造模型 finalAnswer |
 | ResultInjecting | loopLimit | 达循环上限 | LoopAborted | 中止并回报（统一错误形状） |
 | 任意非终态 | loopError | provider/Gate/TaskPlan/运行时错误使当前循环无法继续 | LoopAborted | 统一错误形状回归 SM-AG-01 TurnError；不得结算 Completed/Done |
@@ -227,11 +217,13 @@ terminal_states: LoopCompleted, LoopAborted
   - ToolExecuting → 直接文件写入（写意图必须产出 diff 建议，X-FORBID-006）
   - ToolExecuting → DiskState 读取，当目标文档已打开且 AgentReadContext 中应存在 OpenDocSnapshot
   - ResultInjecting → ModelStreaming 当循环已达上限（不得无限循环）
+  - ResultInjecting → ModelStreaming 未取得本次 provider continuation 的真实 GatePassed（每次模型调用都重新门禁）
   - 任意生产状态广播未经过 SM-AG-02 转移引擎
   - LoopAborted → TaskRun Completed 或 AgentTurn Done
 - **acceptance_criteria**：未注册、未获本轮允许或越权工具不可达 ToolExecuting；循环上限强制生效；任何工具执行
   不产生直接文件写入；read_doc/search_text/list_blocks 对已打开文档命中 OpenDocSnapshot，缺失时拒绝；
-  多 ToolCall 逐项校验且失败项不执行；Proposal/DecisionRequest 只经 handoff 收束；loopError/loopLimit 进入
+  多 ToolCall 逐项校验且失败项不执行；每次工具结果回注后的 provider continuation 都取得新的 GatePassed，
+  GateDenied/门禁错误只进入 LoopAborted/TurnError；Proposal/DecisionRequest 只经 handoff 收束；loopError/loopLimit 进入
   LoopAborted 后只允许 TurnError，cancel 随时可达 LoopAborted；生产广播均由转移引擎输出
 - **test_matrix**：见 §5
 
@@ -276,7 +268,7 @@ terminal_states: Accepted, Dismissed
 | Presenting | **refine** | assist_kind=inline-assist（局部修改多轮，2026-07-04 澄清） | Requesting | 以上轮候选产出为基底携新指令续调（仅传上一轮结果；每轮逐次过门禁；对话不持久化） |
 | Presenting | reposition | 滚动/缩放/窗口 resize 且逻辑锚仍有效 | Presenting | 基于当前缩放后的视觉锚点与静态浮层尺寸重算浮层位置；浮层 UI 尺寸不随正文缩放 |
 | Presenting | reposition | 逻辑锚结构失效 | Dismissed | 关闭浮层并回写 anchorLost |
-| Presenting | accept | — | Accepted | 采纳=用户编辑操作：经 ED 受控接口进入编辑模型，驱动 SM-ED-01 edit（X-INTER-001） |
+| Presenting | accept | requestId 为最新、逻辑锚有效，且 autocomplete 恰有 3 个有效候选或 inline-assist 有有效 preview | Accepted | 采纳=用户编辑操作：经 ED 受控接口进入编辑模型，驱动 SM-ED-01 edit（X-INTER-001） |
 | Presenting | dismiss | 用户忽略/关闭弹窗、点击浮层外、移动光标或改变选区 | Dismissed | 装饰复位不残留；已返回内容丢弃，不入历史 |
 | Presenting | anchorLost | blockId 失效 | Dismissed | 放弃呈现，装饰复位 |
 
@@ -287,6 +279,7 @@ terminal_states: Accepted, Dismissed
   - Requesting / Presenting → 直接修改文档模型（必经 accept 走 ED 受控接口，X-FORBID-005）
   - Idle → Presenting（未经调用不得呈现）
   - 过期 requestId 的 candidateOk → Presenting（旧请求不得覆盖新请求）
+  - candidateUnderflow 形成的轻量空态 → Accepted（无有效候选不得采纳）
 - **acceptance_criteria**：重复触发被防抖（默认 450ms 内不产生多次调用）；无订阅/断网/失败均静默且
   编辑不受影响；辅助续写严格呈现 3 候选并按 Tab/1/2/3 采纳，候选不足不展示半候选且保留空态；新请求覆盖旧请求，旧响应不得展示或应用；
   局部修改选区态替换、光标态插入；refine 每轮均过门禁且只传上一轮候选结果，回合不入历史（不持久化）；
@@ -307,18 +300,19 @@ terminal_states: Accepted, Dismissed
 - **SM-AG-01 1.0 加固**：本地 Passed 常量不得触发 Streaming；blocking ambiguity 走
   `clarificationRequired→AwaitingClarification`、网关调用为零，用户补充后须由原 AgentTurn 走
   `clarificationProvided→Assembling`；Gateway Error 后不得出现 Completed；cancel 必须触发
-  CancellationToken 且后续工具调用数为零；terminal_latch 拒绝第二终态；agent-edit-1.0 禁止 takeover。
+  CancellationToken 且后续工具调用数为零；terminal_latch 拒绝第二终态。
 - **SM-AG-02**：toolRequest→校验→执行→回注→续调循环；validateFail 回注拒绝；loopLimit 强制
   中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）；
   read_doc/search_text/list_blocks 已打开文档覆盖 LogicalState，未打开文档读取 DiskState。
   已注册但不在本轮 allowed_tools 的工具必须 validateFail；状态事件顺序必须先 ToolExecuting、后真实执行、
-  再 ResultInjecting，不得在工具完成后补发状态。
+  再 ResultInjecting，不得在工具完成后补发状态；每次 ResultInjecting 后的 provider continuation 必须重新取得
+  真实 GatePassed，不能复用首次或上一轮门禁结果。
 - **SM-AG-03**：重复 trigger 下 throttleDrop 或 latest-wins 覆盖生效；无订阅/断网 throttlePass 后静默回
   Idle；过期 requestId 的 candidateOk 被丢弃；候选不足 3 条 candidateUnderflow 且记录 parse_underflow；candidateOk→Presenting→accept→Accepted
   驱动 SM-ED-01 edit；辅助续写 3 候选采纳；局部修改光标插入；Presenting→refine→Requesting 多轮循环（只传上一轮
   候选结果，每轮过门禁、不持久化）；anchorLost/dismiss 回写终态且复位不残留；禁止未经门禁到 Requesting。
-- **跨模块（G5 联调）**：AG↔SM-SYS-01 门禁转移、HandingOff↔DE（待 DE G2 双侧）、
-  SM-AG-03 accept↔SM-ED-01 edit（双侧就绪）。
+- **跨模块（G5 联调）**：AG↔SM-SYS-01 门禁转移、HandingOff↔DE、SM-AG-03 accept↔SM-ED-01 edit；
+  完成等级只由验证文档与真实证据判定，不在状态机正文宣称。
 - 量化 NFR（节流参数、延迟）延 G5 标定。
 
 ## §6 总图登记（A-SYS-M-S-01）
@@ -329,7 +323,8 @@ terminal_states: Accepted, Dismissed
 | tool-call | SM-AG-02 | §3 行 planned→active |
 | autocomplete | SM-AG-03 | §3 行 planned→active（与 inline-assist 同机承载，context 区分） |
 | inline-assist | SM-AG-03 | §3 行 planned→active（同上） |
-| 转移点 | — | §5 X-INTER-001 登记：AG↔门禁（SM-SYS-01）、AG 产出→DE（DE 侧待 DE G2）、SM-AG-03 采纳→SM-ED-01（双侧就绪） |
+| 受限 TaskRun | SM-AG-04 | §3.1 登记 active；简单 AgentTurn 不进入 |
+| 转移点 | — | §5 X-INTER-001 登记：AG↔门禁（SM-SYS-01）、AG 产出→DE、SM-AG-03 采纳→SM-ED-01 |
 
 ## §7 术语归属说明
 
@@ -338,21 +333,19 @@ terminal_states: Accepted, Dismissed
 
 ## §8 技术债务与盲区（诚实声明）
 
-- **AG 产出→DE 转移仅单侧**：HandingOff 的 AG 侧契约已定（修改建议+定位锚交 DE，回执 handoffOk/
-  Fail）；DE 侧 diff 终态机待 DE G2，双侧完整对接与 G5 联调在 DE G2 后闭合。
-- ~~构建移交/回落未建模~~ **已建模（B-3，2026-06-12）**：SM-AG-01 增 takeover/fallbackIn 转移与
-  HandedOver 终态，与 SM-CBT-01 双向回执对接，登记总图 §5。原始记录留痕——
-- **构建移交/回落（历史债务，已解）**：SM-AG-01 与 CBT 构建机的接管/中断对接（总图 §5 既有转移点）联合
-  CBT G2 补登，本文不预定义接管协议。
+- **AG 产出→DE 系统验证**：HandingOff 契约已定（修改建议+定位锚交 DE，回执 handoffOk/Fail）；
+  是否完成双侧真实联调只由 A-VAL-X-V-04 与实际证据判定，本文不持有完成等级。
+- **P2 Build/CBT**：不属于本状态机设计；未来独立 Profile 不得复用已从 SM-AG-01 移除的历史 takeover/
+  HandedOver/fallbackIn 语义，必须重新经过需求、设计与验证。
 - **SM-AG-02 嵌套语义**：与 SM-AG-01 Streaming 段的嵌套激活/取消传播在实现期细化（单实例语义
   已锁，嵌套调度属实现）。
 - 节流窗口、循环上限数值延 G5/运营标定（机制已锁）。
 
-## §9 后续动作
+## §9 后续设计入口
 
-1. 落地后同步编辑 A-SYS-M-S-01：§3 四行 planned→active（SM-AG-01/02/03），§5 登记转移点。
-2. 随 `npm run governance:generate` 复跑核对。
-3. 待人类宣布 AG G2 闭合；DE G2 完成 AG 产出→DE 双侧对接；CBT G2 补登接管转移点。
+1. 总图只登记 SM-AG-01/02/03/04 及当前跨模块转移；不得保留 `agent-edit-1.0` 到 CBT 的 active 转移。
+2. REQ-AG-010/012/014/016 若形成新的状态化链路，须在各自 DESIGN Scope 建机并登记；当前不预建状态。
+3. P2 Build/CBT 只有在人类确认新的 RuntimeProfile 需求后，才可设计新的跨模块状态机。
 
 ## 变更记录
 
@@ -381,3 +374,4 @@ terminal_states: Accepted, Dismissed
 | 2026-08-21 | v2.19 | 工作区资源操作基线重构：SM-AG-04 增加 WorkspaceOperation 集成语义；DecisionRequest 确认后立即调用 SM-WS-04 执行，不增加 WaitingUserCommit 或资源 DiffCard；CreateDocumentBundle 初始内容 Diff 不驱动 TaskRun 等待；重启中断不得复用旧确认。 |
 | 2026-08-27 | v2.20 | AG-CONFORMANCE-GOVERNANCE-S1：将 SM-AG-01 澄清唯一化为 AwaitingClarification 非终态，用户补充后原 AgentTurn 回到 Assembling；TurnError 保持原 AgentTurn 终态，显式重试创建新 AgentTurn；同步测试矩阵。将 SM-AG-04 限定为复杂或跨执行片段目标，WaitingConfirm 唯一来源为 DecisionRequest；删除 active 正文中重复的旧语义修正段。 |
 | 2026-08-29 | v2.21 | AG-CONFORMANCE-CODE-S3E / HD-S3E-02：补齐 SM-AG-02 生产事件语义——新增 loopError→LoopAborted 与 ResultInjecting handoff→LoopCompleted；冻结同轮多 ToolCall 按单调用顺序驱动，校验失败不进入 ToolExecuting；禁止绕过转移引擎广播以及 LoopAborted 映射 Completed/Done。 |
+| 2026-08-31 | v2.22 | AG-DOC-CONSOLIDATION-01：当前状态机清单唯一化为 SM-AG-01～04；移除 Agent 1.0 中 Build 接管/回落转移；SM-AG-02 每次 provider continuation 必须重新 Gate，SM-AG-03 空候选不可采纳，完成回合不产生自动记忆副作用。 |

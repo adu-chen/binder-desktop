@@ -3,9 +3,9 @@
 文档状态：A
 负责模块：AG
 文档职责：Binder AG 1.0 开发与验证执行计划——将 agent-edit-1.0 目标架构拆成可独立开发、独立验证和阶段收口的工作包，定义阶段依赖、实施边界、验证方案、证据要求与发布退出门禁
-上游约束：A-AG-M-D-01、A-AG-M-D-02、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-WS-M-T-02、A-WS-M-S-02、A-CORE-X-L-06、A-VAL-X-V-01、A-SYS-I-P-03
+上游约束：A-CORE-X-D-02、A-AG-M-D-01、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-WS-M-T-02、A-WS-M-S-02、A-CORE-X-L-06、A-VAL-X-V-04、A-SYS-I-P-03
 直接承接：AG 1.0 后续 CODE_CHANGE Issue Trace/Scope Lock、测试影响计划、AG/DE/ED/WS/ENT/GW 联调、G5 系统验证与发布裁决
-使用边界：本文只规划 agent-edit-1.0；不重新审计当前实现，不把 G4 骨架标记视为完成，不纳入 Build/CBT、自动 AST/KB/TPL、未进入 ExplicitEditTargetSet 的跨文档写入、参考风格/排版、开放式 Planning 或多 Agent；WorkspaceOperation 只按已冻结的 WS 契约接入
+使用边界：本文是当前唯一 Active 的 AG 1.0 执行计划，只消费需求、设计和验证卡，不定义或覆盖它们；不把计划项或历史 G4/Integrated 标记视为当前完成真值，不纳入 Build/CBT、自动 AST/KB/TPL、未进入 ExplicitEditTargetSet 的跨文档写入、参考风格/排版、开放式 Planning 或多 Agent；当前验证状态唯一见 A-VAL-X-V-04 与实际 Runtime Report
 变更要求：工作包边界、阶段依赖、冻结契约、验证矩阵或退出条件变化时，须先回写对应 AG/WS L1/L2 与验证卡；实际开发按 ADP 为每个工作包建立独立 Scope，本文不得替代 Runtime Report
 治理成熟度：draft
 ---
@@ -162,7 +162,7 @@ flowchart LR
 ### §6.4 阶段收口条件
 
 - A-AG-M-S-01 的 SM-AG-01 主路径、拒绝路径、恢复路径和禁止转移均有断言；
-- AG1-V-01、V-02、V-03 自动化通过；
+- A-VAL-X-V-04 的 V-S6、V-S11、V-S12 中与 Gate、取消、错误和首终态相关的自动化证据通过；
 - 代码中不存在常量 GatePassed、仅 UI 取消或 Error→Done 路径；
 - 前端展示状态与后端真实终态一致；
 - WP-AG10-01 达到 Module Ready，可供后续模块使用，不等待真实工具和 Diff 完成。
@@ -223,7 +223,7 @@ Stage 2 内部分三步推进；Intent 先冻结，Context 与 Prompt 再依次�
 ### §7.4 Stage 2 总收口条件
 
 - WP-02/03/04 均达到 Module Ready；
-- AG1-V-04、V-07、V-08、V-09、V-12 自动化通过；
+- A-VAL-X-V-04 的 V-S1、V-S6、V-S8、V-S10、V-S11 中与只读意图、LogicalState、data-only、显式目标和澄清相关的自动化证据通过；
 - 任一 trace 中 intent_id、context_trace_id、runtime version 和 manifest hash 一致；
 - Intent、Context、Prompt 不存在重复目标判断或不同 allowed_tools 来源；
 - Stage 2 输出可作为 Tool Capability 和 Editor/Diff 的稳定输入。
@@ -263,7 +263,7 @@ WP-AG10-05 只开放完成当前任务所需的最小读取、内容修改提案
 ### §8.4 阶段收口条件
 
 - 完整 Intent×Tool allow/deny 矩阵通过；
-- AG1-V-13 通过，注册工具无法绕过 CapabilityGrant；
+- A-VAL-X-V-04 的 V-S11、V-S12 通过当前 Scope 的自动化门禁，已注册但未进入 CapabilityGrant 的工具不得执行；
 - 工具循环状态机和错误恢复有断言；
 - 静态与动态核验均证明没有工具直接写用户文档；
 - ToolResult 保持结构化错误和 trace 关联，可供模型恢复但不能扩权。
@@ -298,7 +298,7 @@ WP-AG10-06 把模型产出的写意图统一转换为可定位、可审阅、可
 
 ### §9.4 阶段收口条件
 
-- AG1-V-05、V-06、V-10、V-14 通过；
+- A-VAL-X-V-04 的 V-C1～V-C3、V-S1、V-S4、V-S5、V-S10 中与当前文档编辑、新建文档、基线冲突和保存失败相关的证据通过；
 - 当前文档修改继续按内容三态验证；新建需覆盖确认前零副作用、先建盘再投影、安全拒绝与基线推进；资源操作需覆盖 dirty 阻断、补偿、重启中断和统一恢复；
 - 用户接受前 LogicalState/DiskState 不发生 AI 写入；
 - 一个 proposal 只写一个 ExplicitEditTargetSet 成员文档；引用内容保持 data-only，引用身份仅提供成员资格；
@@ -326,7 +326,7 @@ WP-AG10-07 使 Agent 可以持续协作、重启恢复，并让用户和研发�
 
 ### §10.3 阶段收口条件
 
-- AG1-V-11、V-15 通过；
+- A-VAL-X-V-04 的 V-S9、V-S12、V-S13 中与会话隔离、事件顺序和脱敏追踪相关的证据通过；
 - session 隔离、重启恢复、未决 Diff 恢复与乱序事件测试通过；
 - UI 所有状态可追溯到真实事件，不自行推断伪终态；
 - telemetry 数据边界检查通过；
@@ -360,13 +360,13 @@ AG 1.0 发布闭环。Mock、局部单测和前端演示不能替代本阶段。
 | Isolation | 多 session/workspace 切换 | 上下文、历史、proposal、trace 不串线 |
 | Privacy/Trace | 检查 trace、日志、telemetry | 可定位阶段且默认无正文/密钥 |
 
-必须完整执行 A-AG-X-L-03 的 AG1-V-01～V-15；单个场景失败时回到对应工作包修复并重跑其 related tests，
+必须完整执行 A-VAL-X-V-04 中适用于当前 Scope 的验证卡；单个场景失败时回到对应工作包修复并重跑其 related tests，
 随后重跑受影响的 G5 场景，不得只修改验收记录。
 
 ### §11.4 发布退出门禁
 
 1. WP-AG10-00～07 全部至少达到 Integrated，发布主链达到 G5 Validated；
-2. AG1-V-01～V-15 全部有结果和证据，不存在未处置失败；
+2. A-VAL-X-V-04 中适用于发布 Scope 的验证卡全部有结果和证据，不存在未处置失败；
 3. `agent-edit-1.0` 默认入口不存在桩 Gate、假流、直接 provider、直接 create_doc AI 内容或工具直写；
 4. Error/Cancelled/Rejected/Conflicted/保存失败均不破坏原文，不显示伪成功；
 5. 所有默认开放工具均有权限、参数、错误恢复和系统验证证据；
@@ -443,6 +443,9 @@ test:related 结果：
 
 ## §15 2026-08-08 实施结果与阶段裁决
 
+> **历史快照，非当前真值**：本节保留 2026-08-08 当时的本地实施证据，不能覆盖后续需求/设计变化，
+> 也不能证明当前代码或 G5 状态。当前验证结论只由 A-VAL-X-V-04 的实际执行证据和对应 Runtime Report 给出。
+
 本轮 `AG-1.0-IMPLEMENTATION-01` 已按同一冻结契约完成 WP-AG10-00～07 的本地实现与直接消费者接线。
 这里的“完成”表示 Module Ready / 本地 Integrated，不代表 Stage 6 的真实 provider 与 WKWebView G5 已执行。
 
@@ -480,7 +483,7 @@ test:related 结果：
 - 项目级 `cargo fmt -- --check` 仍会报告本次 Scope 外既有文件及 `lib.rs` 旧区域的格式差异；它不是当前
   测试选择器门禁，本轮只格式化了新增 AG 小模块代码，没有用范围扩张制造全库格式变更。
 
-当前阶段裁决：普通内容/Runtime、WorkspaceOperation 与 CreateDocumentBundle 子链均为 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceTimeline 继续沿其独立验证卡判断。真实 provider/WKWebView 和生产配置证据进入待验证列表，不得用本地自动化宣称 G5 完成。
+2026-08-08～2026-08-30 最后登记的历史裁决为：普通内容/Runtime、WorkspaceOperation 与 CreateDocumentBundle 子链均为 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceTimeline 继续沿其独立验证卡判断。该裁决仅作历史证据，当前状态以 A-VAL-X-V-04 和对应 Runtime Report 为准。
 
 ### §15.3 S4A 结构化项目事实与读取报告
 
@@ -495,16 +498,17 @@ test:related 结果：
 - 结构化报告只是回合完成证据，不创建 TaskRun/DecisionRequest/ChangeProposal，不改变
   ExplicitEditTargetSet，不扩大写权限。
 
-当前裁决：生产实现、直接测试、完整 changed_files 影响选择器与治理审计已通过，S4A 为
-`LOCAL_INTEGRATED / G5_PENDING`；真实 Tauri/WKWebView + provider 项目读取链单独进入 G5 待验证列表。
+历史裁决：生产实现、直接测试、完整 changed_files 影响选择器与治理审计在当时已通过，S4A 登记为
+`LOCAL_INTEGRATED / G5_PENDING`；该登记不替代 A-VAL-X-V-04 和对应 Runtime Report 中的当前验证状态。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
-| 2026-08-08 | v1.0 | 初版：基于 A-AG-X-L-03 将 agent-edit-1.0 拆为 8 个独立工作包和 Stage 0～6；定义依赖与并行边界、Contract Ready/Module Ready/Integrated/G5/Release 五级完成标准；为 Runtime Profile、Execution、Intent、Context、Prompt、Tool、Editor/Diff、Session/Trace 分别建立开发范围、验证方案和独立收口条件；补充真实 G5 环境、场景组、发布门禁、统一证据模板与阻断回退规则 |
+| 2026-08-08 | v1.0 | 初版：基于现已过期的 X-AG-X-L-03 将 agent-edit-1.0 拆为 8 个独立工作包和 Stage 0～6；定义依赖与并行边界、完成标准、验证方案与发布门禁。 |
 | 2026-08-08 | v1.1 | AG-1.0-IMPLEMENTATION-01：记录 WP-AG10-00～07 的实际实现状态与独立收口证据；非沙箱 test:related/test:full、TypeScript、ADUS 和治理审计通过；阶段裁决为 LOCAL_INTEGRATED / G5_PENDING，不以自动化冒充真实 provider/WKWebView G5 |
 | 2026-08-21 | v1.2 | 工作区资源操作基线重构：Stage 4/G5 改为 WorkspaceOperation + DecisionRequest、CreateDocumentBundle 和 WorkspaceTimeline；旧资源 Diff/空基准新建证据不再计入新基线，相关工作包状态改为 IMPLEMENTATION_PENDING。 |
 | 2026-08-28 | v1.3 | AG-CONFORMANCE-PLAN-S3D-COMPANION：承接 fed343a/a0afdff，把工作包和验证边界统一到 ExplicitEditTargetSet；只读内容不扩权、用户引用身份可初始化成员、scope confirm 可追加、集合外提案硬拒。 |
 | 2026-08-29 | v1.4 | AG-CONFORMANCE-CODE-S3E：WP-AG10-05 工具策略对齐当前 CreateDocumentBundle/WorkspaceOperationPlan 规则；CreateDocument/OrganizeWorkspace 只获得必要读取与 plan_workspace_operation，目标资源建立前不开放 propose_edit。 |
 | 2026-08-30 | v1.5 | AG-CONFORMANCE-CODE-S4A：登记 AgentContextFacts 独立 Prompt 层、当前 AgentSession ProposalFact 投影、ProjectReport 读取证据账本与 report_project 只读完成门。 |
+| 2026-08-31 | v1.6 | AG-DOC-CONSOLIDATION-01：将本文收敛为唯一 Active 执行计划；移除对已废止计划中 AG1-V-01～15 的规范性依赖，统一改用 A-VAL-X-V-04 验证卡；历史实现裁决不再作当前状态真源。 |

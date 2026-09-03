@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：CORE
 文档职责：Binder Agent 1.0 冻结能力基线——固定已确认的产品需求范围、能力档位、非目标、变更入口与进入 DESIGN 的门禁
-上游约束：A-CORE-C-D-01_产品概述.md、A-CORE-X-D-01_1.0需求基线与文档体系索引.md、A-AG-M-D-02_代理1.0能力基线与需求分解.md、2026-08-14 人类 R6 冻结确认
+上游约束：A-CORE-C-P-01_APC.md、A-CORE-C-D-01_产品概述.md、2026-08-14 人类 R6 冻结确认及后续已记录的人类确认
 直接承接：后续 SYS、DE/ED/WS、AG/REF/AST 的 DESIGN Scope；本文件不替代各模块 M-D 的 REQ 或 L2 技术设计
 使用边界：本文只冻结已确认的 Agent 1.0 需求范围；不新增 REQ、不定义 RULE/CHAIN/CONSTRAINT/TERM、状态机、接口、Prompt、工具或实现算法；代码不得直接映射本文
 变更要求：任何产品行为、权限、档位、保存/隔离/隐私语义变化，必须新开 REQUIREMENT Scope 并同步产品根、能力基线、索引与受影响 L1；不得在 DESIGN/IMPLEMENTATION 中隐式改写
@@ -25,12 +25,12 @@
 ## §2 权威阅读顺序
 
 ```text
-本文件（冻结结论与变更规则）
-  ├─ 产品概述（REQ-CORE-001~019）
-  ├─ Agent 1.0 能力基线（能力卡、场景和档位）
-  ├─ 需求基线与文档体系索引（模块 L1 承接与设计顺序）
-  └─ 各模块 M-D（具体 REQ）
-       └─ 后续 L2 / 状态机 / 接口 / 验证 / 实现
+APC（项目边界）
+  └─ 产品概述（产品级 REQ-CORE-*）
+       └─ 本文件（Agent 1.0 冻结范围、档位与变更规则）
+            ├─ 需求基线与文档体系索引（只做导航）
+            └─ 各模块 Active M-D（具体 REQ）
+                 └─ L2 / 状态机 / 接口 / 验证 / 实现
 ```
 
 存在冲突、缺口或需要改变行为时，不以旧 L2、现有代码、Prompt、工具注册或 UI 文案裁决；必须新开
@@ -93,3 +93,4 @@ REQUIREMENT Scope，由产品根与能力基线重新确认后再传播。
 | 2026-08-14 | v1.0 | AG-1.0-R6-BASELINE-FREEZE-01：人类确认冻结 Agent 1.0 已确认需求范围；汇总 R1–R5-C 的 P0/P1/P2、不可突破边界、变更入口、DESIGN 顺序与需求确认/实现验证的真值区分。 |
 | 2026-08-21 | v1.1 | WORKSPACE-OPERATION-BASELINE-01：人类确认 WorkspaceOperation 八项决策；冻结前置裁决直接写盘、统一 WorkspaceTimeline、CreateDocumentBundle、安全拒绝补偿、fail-fast 补偿和 dirty 阻断。 |
 | 2026-08-28 | v1.2 | AG-CONFORMANCE-REQUIREMENT-S3D-COMPANION：按 HD-S3D-03 分离显式引用内容的 data-only 属性与用户可见引用身份的目标授权元数据属性；多既有文档编辑仍为 P1，须由输入显式冻结清单或 scope DecisionRequest 确认。 |
+| 2026-08-31 | v1.3 | AG-DOC-CONSOLIDATION-01：确立本文为 Agent 1.0 唯一冻结范围真源；候选 AG-M-D-02 降为 R 参考，消除候选基线与本文互相上游的循环。 |

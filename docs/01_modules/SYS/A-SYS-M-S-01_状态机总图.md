@@ -4,8 +4,8 @@
 负责模块：SYS
 文档职责：Binder 核心链状态机总图与注册框架技术设计——状态机注册清单、注册前置约束、跨模块状态转移契约框架；承接 REQ-SYS-003
 上游约束：A-SYS-M-D-01_系统底座功能需求描述.md（REQ-SYS-003、SY-04）、A-CORE-C-P-01_APC.md（§6 状态机驱动强制阈值与必备字段）、A-SYS-I-P-02_IPC协议.md（BR-SYS-STATE-002 流式终态）、A-SYS-I-P-03_云接口契约.md（SM-SYS-01）、ADP.md（SC-06/07）、ADU.md（§3.1 CONSTRAINT 格式）
-直接承接：各 owner 模块在其 M-S 定义本模块状态机并向本总图登记 machine_id；跨模块转移点（diff 落盘、构建移交/回落等）以本文框架对接
-使用边界：本文是状态机总图框架与跨模块转移契约的 SSOT；**不替各 owner 模块定义其状态机内部**（states/transitions/guards 等归各模块 M-S）；不重定义已存在的 SM-SYS-01（归 A-SYS-I-P-03）；总图完整清单依赖各模块 G2 暴露真实链路后回填（SY-04）
+直接承接：各 owner 模块在其 M-S 定义本模块状态机并向本总图登记 machine_id；当前跨模块转移点以本文框架对接，Agent 1.0 不含历史构建移交/回落
+使用边界：本文是状态机总图框架与跨模块转移契约的 SSOT；**不替各 owner 模块定义其状态机内部**（states/transitions/guards 等归各模块 M-S）；不重定义已存在的 SM-SYS-01（归 A-SYS-I-P-03）；当前已登记 16 台已定义状态机，后续仅在新 REQUIREMENT/DESIGN Scope 定义新状态化链路后由 owner 回填
 变更要求：核心链强制阈值变更须先经 APC §6 授权；新增状态机由 owner 模块 M-S 定义后登记本总图；跨模块转移契约变更须两侧 owner 共同复核
 治理成熟度：draft
 ---
@@ -28,7 +28,7 @@ REQ-SYS-003（L1）→ 本文（总图框架 + 注册前置/跨模块转移约�
 - 本文提供总图**框架与注册前置约束**，不替各 owner 模块定义其状态机内部（states/events/
   transitions/guards/actions/error_states/recovery_paths 等归各模块 M-S，APC §6）。
 - **不重定义 SM-SYS-01**（账号会话与订阅门禁状态机已在 A-SYS-I-P-03 定义），本文仅登记并对齐。
-- 总图**完整清单**依赖各业务模块 G2 暴露真实链路后回填（SY-04）；当前除 SM-SYS-01 外均为 planned。
+- 总图是非穷举注册表；当前 §3/§3.1 已登记的状态机均有 owner 设计，后续只在人类授权的新 REQUIREMENT/DESIGN Scope 暴露新状态化链路时追加。
 
 ## §2 状态机驱动总则与本文职责
 
@@ -44,8 +44,8 @@ recovery_paths / forbidden_transitions / acceptance_criteria / test_matrix。
 
 ## §3 状态机总图与注册清单
 
-APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` = 已在设计文档定义；
-`planned` = 待 owner 模块 G2 在其 M-S 定义后回填 machine_id（豁免 CHAIN/状态机未标注检测）。
+APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` = 已在 owner 设计文档定义，
+只表示“设计资产存在”，不等于任一 RuntimeProfile 已启用、实现已完成或 G5 已通过。`planned` = 待 owner 模块在其 M-S 定义后回填 machine_id。
 
 | 核心链 | owner_module | machine_id | status | 定义文档 |
 |---|---|---|---|---|
@@ -66,8 +66,8 @@ APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` 
 | 应用关闭 | SYS | SM-SYS-02 | active | A-SYS-M-S-02 §2 |
 
 > machine_id 由各 owner 模块在其 M-S 自行分配（格式 SM-[MODULE]-[SEQ]，ADU §3），本文不预占，
-> 避免跨模块 ID 归属漂移。2026-06-11 起总图全清单 active（12 台机，SY-04 闭合）；后续新模块/
-> 新链路按 owner G2 暴露登记追加。
+> 避免跨模块 ID 归属漂移。§3 当前登记 14 个唯一 machine_id（autocomplete/inline-assist 共用 SM-AG-03），
+> §3.1 另登记 SM-AG-04 与 SM-WS-04，合计 16 台已定义状态机。CBT/AST/TPL 的 active 只表示设计资产存在，不把其自动接入 Agent 1.0。
 
 ### 3.1 Agent 1.0 运行时与任务链状态机归属（D1 登记）
 
@@ -98,8 +98,7 @@ constraint_id: X-SEQ-003
 -->
 
 > X-SEQ-003 与 ADP SC-06（PHASE_GATE_BLOCKED）/ SC-07（MAPPING_CHAIN_BROKEN）一致：越过状态机直接
-> 实现状态化核心链触发阻断（APC §9、§6）。当前仅 SM-SYS-01 满足前置，其余核心链进入实现前须先补
-> 状态机定义并登记本总图。
+> 实现状态化核心链触发阻断（APC §9、§6）。当前登记项的设计前置已具备；任何新状态化链路在进入实现前仍必须先由 owner M-S 定义并登记本总图。
 
 ## §5 跨模块状态转移契约框架（CONSTRAINT）
 
@@ -114,16 +113,12 @@ constraint_id: X-SEQ-003
   建立带 GreenReview 的 LogicalState，取消其后台写盘资格而仍保持 pending，之后走已有 LogicalState
   分支。rejected/expired 不写文件；草稿分支经 ED 回滚/复位，后台分支经 SM-WS-02→Discarded。
   **三侧对接须以这三条规则一致性为准**，在 G5 联调验证。
-- **构建移交/回落（旧称 Chat↔Build 接管；2026-07-04 判据换轴）**：SM-AG-01（takeover→HandedOver
-  终态 / fallbackIn 起新回合，A-AG-M-S-01 §2）与 SM-CBT-01（A-CBT-M-S-01 §3）双向移交——takeover
-  触发=用户显式触发即确认，或项目级构建意图提议经确认（多文件意图不再是判据，BR-CBT-STATE-002）；
-  项目蓝图（BuildBlueprint）随移交传递；构建在原对话窗口呈现，执行期不得发起新代理回合；fallback +
-  双向回执（takeoverAck/fallbackAck），无双活双死。**双侧已建机就绪。**
-- **AG 回合 → AST 记忆写入**：SM-AG-01 HandingOff/Completed 终态后异步触发 `ast.capture`
-  （传 origin_turn，不阻塞回合，BR-AG-STATE-004），AST 自动落库（SM-AST-01）。
-  **双侧已就绪**（A-AG-M-T-01 §5.2 B-2 补齐 2026-06-12 + AST 侧 capture）。
-- **TPL 步骤委托**：SM-TPL-01 逐步委托 SM-AG-01 / SM-CBT-01 执行（发起+回执；abort 取消传播
-  延实现期细化）（A-TPL-M-S-01 §4）。
+- **P2 Build/CBT 隔离**：SM-CBT-01 可作为路线资产保留，但 `agent-edit-1.0` 的 SM-AG-01 不包含
+  takeover、HandedOver 或 fallbackIn，也没有到 CBT 的 active 跨模块转移。未来 Profile 启用时须重新完成
+  REQUIREMENT/DESIGN、双侧事件和 X-INTER-001 登记，不得复用历史“已就绪”结论。
+- **Agent 1.0 项目记忆隔离**：SM-AG-01 终态不触发 `ast.capture` 或其他自动记忆副作用；仅用户在当前
+  workspace 明确选择的既有项目记忆可经 REF 作为 data-only 引用进入当轮。SM-AST-01 的路线资产存在不构成 AG 激活。
+- **P2 TPL 隔离**：`agent-edit-1.0` 不委托 SM-TPL-01，也不接受模板工作流自动注入；未来启用须新开需求与设计。
 - **模型调用前门禁**：业务模块发起模型调用前必经 SM-SYS-01 的 GatePassed（X-SEQ-001，A-SYS-I-P-03）。
 - **ED 脏态 ↔ WS 保存**：SM-ED-01 的 edit/draftDiffApplied/sessionDiffApplied 事件是 SM-WS-01 Idle→Dirty 的业务驱动源；SM-WS-01
   Saved 回执驱动 SM-ED-01 Editing→Ready 清脏态，SaveError 不清脏态（A-ED-M-S-01 §3，双侧已就绪）。
@@ -240,16 +235,12 @@ status: mapped
   随 owner G2 回填 machine_id 后转 active。
 - **注册前置阻断**（X-SEQ-003）：状态化核心链在无状态机定义时，G4 实现验证触发 SC-06/07 阻断
   （集成阶段验证）。
-- **跨模块转移一致**（X-INTER-001）：diff accepted→LogicalState/未打开文档落盘、构建移交/回落等转移点两侧状态机对接
-  一致；其中 diff 必须覆盖已有 LogicalState 预览、无 LogicalState 挂载接受落盘、pending 打开迁移三条
-  分流，在 G5 跨模块联调验证（APC §5.1）。
+- **跨模块转移一致**（X-INTER-001）：当前 Active 转移点的两侧 owner 状态机必须对接一致；diff 必须覆盖已有 LogicalState 预览、无 LogicalState 挂载接受落盘、pending 打开迁移三条分流，在 G5 跨模块联调验证（APC §5.1）。Agent 1.0 不含构建移交/回落；未来新 Profile 须另行登记和验证。
 - **流式终态对齐**：经 IPC 流式的状态机终态与 BR-SYS-STATE-002 一致（SM-SYS-01 已对齐）。
 
 ## §10 技术债务与盲区（诚实声明）
 
-- **总图清单已全量闭合（SY-04 闭合，2026-06-11）**：APC §6 列举核心链 + owner G2 暴露新增链
-  （工作流执行）共 12 台状态机全部 active，无 planned 行；清单仍为非穷举框架，后续模块（ACCT/ENT
-  等）暴露状态化链路时按 X-SEQ-003 建机登记追加。
+- **总图清单已闭合**：§3/§3.1 当前合计 16 台已定义状态机，无 planned 登记项；清单仍为非穷举框架，新状态化链路按 X-SEQ-003 建机登记追加。
 - **autocomplete / inline-assist 归属已定（AG）**：2026-06-11 人类确认，SM-AG-03 同机承载已登记。
 - 跨模块转移点清单（§5）为代表性、非穷举，随各模块 G2 暴露补全。
 - **Agent 1.0 运行时/任务链状态机归属已回填（D1 债务关闭，2026-08-14）**：TaskRun 由 D3 建机
@@ -258,19 +249,11 @@ status: mapped
   与 SM-DE-01 连续 Proposal 接力已由 IMP-CLARIFICATION-01 / IMP-CONSECUTIVE-PROPOSAL-01 落地
   （BR-SYS-STATE-007/008）。
 
-## §11 后续动作
+## §11 维护入口
 
-1. 本文落地后随下一次 `npm run governance:generate` 注册：X-SEQ-003 / X-INTER-001 约束、REQ-SYS-003
-   的 REQ_MAP 进 ADUS；本轮新增 BR-SYS-STATE-007/008、BR-SYS-DATA-007、X-SHARED-002 与
-   REQ-SYS-010/011/012 的 REQ_MAP 一并注册。
-2. SYS G2 五件（C-T-01 / I-P-01 / I-P-02 / I-P-03 / M-S-01）齐备；待人类宣布 SYS G2 闭合（AI 不自行
-   宣布晋级，APC §2）。
-3. 各业务模块进入 G2 时在其 M-S 定义状态机并登记本总图，逐条将 planned 转 active，回填 SY-04。
-4. **D2（DE/ED/WS）**：扩展 SM-DE-01 承接连续 Proposal 接力/失效（BR-SYS-STATE-008）与三分流接口契约；
-   完成后向本总图回填。
-5. **D3（AG/REF/AST）**：调整 SM-AG-01 澄清非终态/全活动态取消/首终态（BR-SYS-STATE-007）；定义
-   TaskRun/步骤状态机并向本总图登记 machine_id；判定 AgentSession/ExternalContentRef/MemorySelectionRef
-   是否建机；定义结构化可见事件与引用/记忆消费契约。
+1. 本文现有 CONSTRAINT / REQ_MAP 已由 ADUS 生成器注册；任何更改后仅通过 `governance:generate` 刷新，不人工维护索引。
+2. D2 三分流/连续 Proposal 与 D3 AgentTurn/TaskRun/引用记忆归属已回填§3.1/§5，不再作“待建机”计划项。
+3. 未来只在已授权的 REQUIREMENT/DESIGN Scope 新增状态化链路时，由 owner M-S 先定义内部，再在本文登记 machine_id 和跨模块转移。
 
 ## 变更记录
 
@@ -291,3 +274,4 @@ status: mapped
 | 2026-08-14 | v1.12 | AG-1.0-D1-SYS-SHARED-CONTRACT-01：新增 §3.1 Agent 1.0 运行时与任务链状态机归属（AgentTurn=SM-AG-01、Proposal 链=SM-DE-01，TaskRun/步骤、AgentSession、ExternalContentRef、MemorySelectionRef 为 planned 待 D3）；§5 新增 TaskRun↔AgentTurn↔Proposal 链、澄清等待非终态、外部内容/显式记忆引用三个跨模块转移契约；REQ_MAP 补齐 REQ-SYS-010/011/012；§10 登记状态机待建债务。 |
 | 2026-08-14 | v1.13 | AG-1.0-DOC-CLOSURE-DCLOSURE-01：§3.1 回填——TaskRun 行 planned→active（machine_id=SM-AG-04，D3 建机）；AgentSession/ExternalContentRef/MemorySelectionRef 三行判定为无独立状态机（投影契约+history 双作用域 / payload 一次性 data-only）并注明落地 Scope；§10 D1 债务状态更新为已回填。 |
 | 2026-08-21 | v1.14 | 工作区资源操作基线重构：总图登记 SM-WS-04；新增 TaskRun→DecisionRequest→WorkspaceOperation 跨模块转移，明确资源操作不进入 SM-DE-01、CreateDocumentBundle 仅在资源创建后衔接初始内容 Diff、重启双方 Interrupted。 |
+| 2026-08-31 | v1.15 | AG-DOC-CONSOLIDATION-01：Agent 1.0 跨模块边界收敛为无 AG↔CBT Build 接管/回落、无自动 AST 记忆转移、无自动 TPL 委托；重算总图为 16 台已定义状态机，清除“仅 SM-SYS-01 active”、“12 台”及 D2/D3 待回填等过期正文。 |

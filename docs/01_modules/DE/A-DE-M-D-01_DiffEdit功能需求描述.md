@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：DE
 文档职责：DE Diff Edit 模块级功能需求描述——声明模块级 REQ-DE-*，承接产品级 REQ-CORE-002/010/013/014/015/017，界定提案生成 / 受控预览 / 提案裁决（接受/拒绝/失效）/ diff 内容载荷形状 / 基准推进后的失效处理
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/010/013/014/015/017）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§2、§3 CreateDocumentBundle、§5.10、§5.11.1、§5.13、§5.14、§5.15）、A-WS-M-T-02_工作区资源操作技术设计.md、A-CORE-C-P-01_APC.md（§4.1 DE 职责、§6 diff 终态核心链）、A-SYS-C-T-01_系统总体架构.md、A-SYS-I-P-01_数据结构定义.md、A-ED-M-T-01_编辑器技术设计.md、A-AG-M-D-01_代理功能需求描述.md、ADU.md（§3.2）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/010/013/014/015/017）、A-CORE-X-D-02_Agent1.0冻结能力基线.md（P0/P1 与不可突破边界）、A-WS-M-T-02_工作区资源操作技术设计.md、A-CORE-C-P-01_APC.md（§4.1 DE 职责、§6 diff 终态核心链）、A-SYS-C-T-01_系统总体架构.md、A-SYS-I-P-01_数据结构定义.md、A-ED-M-T-01_编辑器技术设计.md、A-AG-M-D-01_代理功能需求描述.md、ADU.md（§3.2）
 直接承接：DE L2 技术设计（diff 模型 / 审阅契约 / 终态机）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；DE G2 建 diff 终态机（解除总图 planned 行）并完成 X-INTER-001 与 SM-WS-02 的 DE 侧对接
 使用边界：本文是 L1 功能需求描述层，仅声明 REQ-DE-*，**不定义技术规则**；**代码不得直接映射 REQ**（ADU §3.2）；提案控制态持久化与显式保存落盘归 WS；diff 预览承载面归 ED；AI 产出生成归 AG；共享字段与状态集合归 SYS（DE 承接转移语义不重定义字段）
 变更要求：DE 职责或 diff 终态语义变更须先经 APC 授权再回写本文；status 枚举集合变更须回写 A-SYS-I-P-01（X-SHARED-001）；REQ 增删按 ADU §3.2
@@ -119,7 +119,7 @@ title: diff 终态裁决
 owner_module: DE
 status: active
 summary: 拥有提案接受/拒绝/失效的转移语义：结果互斥；已有 LogicalState 时显式接受只裁决已预览提案，保存有效 pending 预览也裁决为接受，拒绝只在原始基准仍有效时撤销预览，失效不得覆盖后续 LogicalState；无 LogicalState 时接受才触发 WS 原子写盘，pending 打开后迁移为前者
-source_doc: REQ-CORE-002/010、A-AG-M-D-02 §2、A-SYS-I-P-01（状态集合）
+source_doc: REQ-CORE-002/010、A-CORE-X-D-02 §3/§4、A-SYS-I-P-01（状态集合）
 acceptance: 已有 LogicalState 时显式接受不重复应用预览内容且不触发写盘；保存有效 pending 预览时将其裁决为 accepted/awaiting_save 后使当前 LogicalState 落盘；无 LogicalState 时接受原子写盘；pending 打开后建立带绿色增量的 LogicalState 并不得后台写盘；拒绝只撤销有效基准上的对应预览；失效后接受/拒绝不可执行
 open_issues: 提案终态机、基准比较和与保存状态机的跨模块转移归 DE/WS/ED G2 联合定义
 -->
@@ -141,7 +141,7 @@ title: 过期与外部变更处理
 owner_module: DE
 status: active
 summary: 待裁决提案在超时、目标内容外部变更、用户手动编辑或后续提案成功预览时转失效；失效不得覆盖已推进的 LogicalState，也不可再接受或拒绝
-source_doc: REQ-CORE-002/010、A-AG-M-D-02 §2、A-WS-M-D-01（REQ-WS-006）
+source_doc: REQ-CORE-002/010、A-CORE-X-D-02 §3/§4、A-WS-M-D-01（REQ-WS-006）
 acceptance: 任一基准推进信号使旧提案失效且文件不因失效被改写；检测不可得时不得自动回滚当前 LogicalState
 open_issues: 基准版本、内容哈希和超时策略归 DE G2（§7 DE-03）
 -->
@@ -152,7 +152,7 @@ title: CreateDocumentBundle 初始内容 Diff 的预览与裁决
 owner_module: DE
 status: active
 summary: CreateDocumentBundle 的 WorkspaceOperationPlan 确认且 WS 创建目标 DiskState 后，DE 才把预生成的初始内容作为带 operation_id/origin 的普通 ChangeProposal 投影到已打开目标；转换来源不是 DE 的可写目标。资源创建授权不由内容 Diff 的接受或拒绝替代
-source_doc: REQ-CORE-010/013、A-AG-M-D-02 §5.10、§5.13（CAP-13）、A-WS-M-T-02 §6
+source_doc: REQ-CORE-010/013、A-CORE-X-D-02 §3/§4、A-WS-M-T-02 §6
 acceptance: 初始内容预览后可继续手动或代理编辑；接受仅改变 Diff 卡生命周期，显式保存写入既有目标 DiskState；拒绝请求只在资源、DiskState 与 LogicalState 三重基线均未变化时由 WS 删除新建目标并关闭标签，任一基线推进使内容卡失效且目标继续存在；DE 不创建/删除资源、不改写转换来源、不把 Markdown→TXT 伪称无损
 open_issues: 无；跨模块顺序和补偿由 A-WS-M-T-02 / A-WS-M-S-02 定义
 -->
@@ -163,7 +163,7 @@ title: 工作区资源操作与内容 Diff 隔离
 owner_module: DE
 status: active
 summary: 创建、删除、重命名、移动、恢复等工作区资源操作不生成 DE DiffCard，不使用内容 Diff 的 pending/accepted/rejected 状态；它们由 WorkspaceOperationPlan + DecisionRequest 前置裁决并由 WS 执行。DE 只向计划提供受影响内容 Diff 清单，并在资源操作成功后接收失效事件
-source_doc: REQ-CORE-012/014、A-AG-M-D-02 §5.11/§5.11.1、A-WS-M-T-02
+source_doc: REQ-CORE-012/014、A-CORE-X-D-02 §3/§4、A-WS-M-T-02
 acceptance: 资源决策卡不得以“AI 修改建议”或 DiffCard 呈现；脏标签由 WS/ED 阻断资源执行；DecisionRequest 确认前有效内容 Diff 仍保持原状，确认并成功执行后受影响卡以 resource_baseline_changed 原因失效；资源操作失败或补偿完成前不得伪报内容卡已安全迁移；CreateDocumentBundle 初始内容 Diff 是唯一资源创建后继续进入 DE 的内容提案
 open_issues: 无；资源操作状态机归 A-WS-M-S-02，DE 仅承接内容卡影响事件
 -->
@@ -174,7 +174,7 @@ title: 多文档目标计划与逐项独立审阅
 owner_module: DE
 status: active
 summary: 多个既有文档修改前，DE 承接 AG 交付的可见目标计划确认；确认后目标成员、路径和身份冻结。每个目标单独拥有 Proposal、内容基准、预览、卡片终态和保存结果，按其自身 LogicalState/DiskState 分流；不得以一个跨文档总卡替代逐项审阅，也不得提供批量接受、批量保存或全有或全无裁决
-source_doc: REQ-CORE-015、A-AG-M-D-02 §5.14（CAP-15）、A-AG-M-D-01（REQ-AG-014）
+source_doc: REQ-CORE-015、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-014）
 acceptance: 任何既有文档写 Proposal 的目标均属于已确认冻结清单；每张卡只指向一个目标并可独立显示基准、预览、失效和保存状态；某一目标冲突、外部变化、结构变化或删除只使其自身卡失效，不静默跳过或改变其他目标卡；有 LogicalState 与背景目标分别遵循既有三分流；原生 DOCX、删除/文件树整理/格式转换混合操作不进入本多文档写入审阅路径
 open_issues: 目标计划卡与逐文档卡关联、独立基准/失效信号、呈现排序、并发、保存状态和 Trace/恢复契约归 DE/AG/ED/WS/REF/SYS G2 联合定义；本 L1 不定义批处理或事务接口
 -->
@@ -185,7 +185,7 @@ title: 复合任务内连续 Proposal 的基准接力
 owner_module: DE
 status: active
 summary: 对同一受限 TaskRun 中明确的同文档连续编辑，DE 为每张 Proposal 保留其所属任务/回合历史关联，但后续 Proposal 只可基于上一张成功预览后的当前 LogicalState 生成。后续预览成功即推进基准，使所有基于旧基准的前卡失效、保留历史且不可再裁决；连续 Proposal 不构成可独立叠加的补丁栈，也不提供任务级回滚。无 LogicalState 的 background pending Proposal 不得作为后续编辑输入
-source_doc: REQ-CORE-017、REQ-AG-015、A-AG-M-D-02 §5.15（CAP-16）、REQ-DE-003/005
+source_doc: REQ-CORE-017、REQ-AG-015、A-CORE-X-D-02 §3/§4、REQ-DE-003/005
 acceptance: Diff1 预览进入 LogicalState 后，Diff2/3 的 before/base 均来自最新 LogicalState 而非 Diff1 payload；Diff2 成功预览后 Diff1 明确显示为基准推进失效且接受/拒绝不可用，拒绝 Diff2 只依其有效基准恢复；背景 pending 目标必须先打开迁移为带绿色增量的 LogicalState，或按背景分流完成裁决后才可继续，不能后台叠加或错误写盘；任务取消、失败或中断不会把已成功预览内容伪装为未发生或自动回滚，卡片仍按各自生命周期呈现
 open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展示排序、跨模块事件、历史恢复、并发与 UI 投影归 DE/AG/ED/SYS DESIGN Scope；本 L1 不定义字段、状态机、事务、回滚或接口
 -->

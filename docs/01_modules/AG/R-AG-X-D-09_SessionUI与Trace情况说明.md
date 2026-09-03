@@ -1,22 +1,29 @@
 ---
 文档编号：AG-X-D-09
-文档状态：A
+文档状态：R
 负责模块：AG
-文档职责：WP-AG10-07 Session、UI 与 Trace 独立治理情况说明
-上游约束：A-AG-X-D-01、A-AG-X-D-03、A-AG-X-D-08、A-AG-X-L-04、A-AG-M-T-01、A-AG-M-S-01、A-AG-I-P-01
-直接承接：会话隔离与恢复、Composer 交互、MessageFlow/Tool/Diff 展示、运行时追踪
-使用边界：本文说明 agent-edit-1.0 的前端投影、历史持久化和脱敏追踪；不重定义 Execution、DE 或 workspace 状态真值
-变更要求：会话归属、历史 payload、active turn、消息片段、终态投影、Diff 引用、恢复或 trace 字段变化时同步更新
+文档职责：WP-AG10-07 Session、UI 与 Trace 历史治理情况参考
+上游约束：R-AG-X-D-01、R-AG-X-D-03、R-AG-X-D-08、A-AG-X-L-04、A-AG-M-T-01、A-AG-M-S-01、A-AG-I-P-01
+直接承接：无（仅供历史审计与问题定位参考）
+使用边界：L4 reference-only；不定义会话、UI、Trace 真值，当前需求、设计与接口以 A-AG-M-D-01、A-AG-M-T-01、A-AG-M-S-01、A-AG-I-P-01 为准
+变更要求：不再随实现同步；发现差异时回到对应 Active 控制真源处理
 ---
 
-# WP-AG10-07 · Session、UI 与 Trace 情况说明
+# WP-AG10-07 · Session、UI 与 Trace 情况说明（历史快照）
 
-## 1. 模块定位与当前裁决
+> **Reference only**：本文保留 2026-08 阶段实现审计上下文，不再作为当前需求、设计、协议或实现状态的控制源。
+
+> [!IMPORTANT]
+> 以下全部内容是 2026-08 时点快照。“当前”“必须”“不得”“冻结”“验证”和“会话入口”等用语仅记录当时的审计口径，不产生现行规范、Scope、任务授权或验收证据。
+> 本文不含正式 `REQ` / `REQ_MAP` / `RULE` / `CHAIN` / `CONSTRAINT` / `TERM` 注册块；其中的标识符只是 Active 真源的历史引用指针，代码、测试和计划不得映射到本文。
+> 需要当前结论时，必须回到文档头列出的 Active 需求、设计、状态机、协议与计划，并重新核验代码和测试。
+
+## 1. 历史模块定位与快照时裁决
 
 本模块把后端 Runtime 事件投影成用户可理解、可恢复的文档协作体验：每个 workspace/session 的消息、工具
 过程、Diff 引用、失败和取消都要保持归属正确，并在重启或切换后恢复。Trace 用于解释发生了什么，但不保存正文。
 
-当前等级：`Integrated（本地）`。会话持久化、五种回合状态、active turn、停止操作、流式消息、工具/Diff
+快照时等级：`Integrated（本地）`。当时会话持久化、五种回合状态、active turn、停止操作、流式消息、工具/Diff
 片段和本地脱敏日志已经接线并有自动化测试；持久化 AgentTrace、真实 App 重启恢复和完整 G5 尚未收口。
 
 ## 2. 职责、输入与输出
@@ -43,7 +50,7 @@
 - MessageFlow 中的文本、工具、Diff 和错误/取消展示。
 - 不含文档正文和秘密的 trace/log 元数据。
 
-## 3. 当前实现地图
+## 3. 快照时实现地图
 
 | 位置 | 当前职责 | 治理注意点 |
 |---|---|---|
@@ -54,7 +61,7 @@
 | MessageFlow、消息列表、Tool/Diff 组件 | 按事件顺序展示内容和裁决入口 | Diff 真值来自 DE，不来自历史副本 |
 | `src/services/agRuntime.test.ts`、`src/components/ag/AgentUI.test.tsx`、store/history 测试 | 乱序、终态、停止、恢复、展示和隔离断言 | 真实 WKWebView 仍需 G5 |
 
-## 4. 当前工作流程
+## 4. 快照时工作流程
 
 ```text
 用户在当前 workspace/session 发送输入
@@ -73,9 +80,9 @@ agService 校验 turn 归属和 first-terminal，agStore 投影为消息 segment
 后端持久化允许的状态为 `completed`、`error`、`cancelled`、`gate_rejected`、`draft`。前端不能把 Error、
 Cancelled 或 gate rejection 显示成成功，也不能让迟到 Done 覆盖已确定终态。
 
-## 5. 必须冻结与允许变化
+## 5. 历史冻结记录与可变项（不产生现行规则）
 
-必须冻结：
+当时记录为冻结的事项：
 
 - workspace、session、turn 三层归属；一个回合的事件不能进入其他会话或 workspace。
 - 同一回合只有第一个终态有效；Done、Error、Cancelled、GateRejected 互斥。
@@ -85,13 +92,13 @@ Cancelled 或 gate rejection 显示成成功，也不能让迟到 Done 覆盖已
 - UI 是 Runtime/DE/ED 状态的投影，不能凭本地组件状态伪造成功、应用或保存。
 - trace 禁止包含文档正文、显式引用正文、密钥、认证头和完整工具敏感结果。
 
-允许持续变化：
+当时记录为可变的事项：
 
 - 消息布局、工具卡和 DiffCard 的表现、加载反馈与可访问性。
 - Trace 后端、检索和调试界面；字段新增必须有隐私分类和版本。
 - 历史分页、压缩和保留策略，但必须保持会话隔离和旧 payload 兼容。
 
-## 6. 已知风险与待治理点
+## 6. 快照时风险记录（需重新核验）
 
 - 当前 trace 主要是结构化 `eprintln` 日志，不是可查询、可关联、可持久化的 AgentTrace 基础设施。
 - 计划中的遥测指标、用户反馈与质量评测尚未完整实现，不应把普通日志宣称为 Evaluation 闭环。
@@ -99,9 +106,9 @@ Cancelled 或 gate rejection 显示成成功，也不能让迟到 Done 覆盖已
 - 新 Runtime 行为尚未在真实 Tauri/WKWebView 中完成重启、停止、切换会话和 Diff 恢复的 G5。
 - 尚无单一 harness 从 `ag_start_turn` 覆盖到持久化、UI segments 和 DiffCard。
 
-## 7. 独立验证与收口标准
+## 7. 历史验证建议与当时收口口径（非当前验收）
 
-至少验证：
+当时建议至少验证：
 
 1. 两个 session、两个 workspace 和交错 turn 事件不会串消息、active state、工具卡或 DiffCard。
 2. Done/Error/Cancelled 任意乱序组合只有第一个终态生效，迟到事件不改变终态。
@@ -112,17 +119,19 @@ Cancelled 或 gate rejection 显示成成功，也不能让迟到 Done 覆盖已
 7. trace 捕获 profile、turn/session、intent、context hash、grant、terminal 等元数据，但扫描不到正文和凭证。
 8. 真实 App G5 覆盖流式输出、停止、错误、会话切换、重启恢复、ToolCard 和 DiffCard。
 
-自动化收口：1–7 全通过。产品 G5 收口：再完成第 8 项，并保留环境、账号、provider 和观察结果证据。
+当时收口口径：自动化 1–7 全通过；产品 G5 再完成第 8 项并保留环境、账号、provider 和观察结果证据。该口径不是当前验收结论。
 
-## 8. 下一治理会话入口
+## 8. 历史会话入口（已关闭）
+
+> 以下阅读顺序、候选范围和任务描述只保留历史，不得直接复用。当前工作必须从 Active 真源重新立项。
 
 必读顺序：A-AG-M-S-01 → A-AG-I-P-01 → A-AG-M-T-01 Session/UI/Trace 部分 → `ag/history.rs` →
 `agService.ts` → `agStore.ts` → Composer/MessageFlow/Tool/Diff 组件 → 前后端相关测试。
 
-候选修改范围：历史契约、前端服务/Store/展示和 trace。若改变 `AgTurnEvent` 或 Diff 状态，应回到 Execution 或
+当时的候选修改范围：历史契约、前端服务/Store/展示和 trace。若改变 `AgTurnEvent` 或 Diff 状态，当时建议回到 Execution 或
 DE owner 扩展 Scope；不能在 UI 中用推断状态修补后端契约。
 
-建议会话任务描述：
+历史任务描述（不得直接复用）：
 
 > 治理 WP-AG10-07 Session、UI 与 Trace。核验 workspace/session/turn 隔离、first-terminal、停止、五状态
 > 持久化恢复、Diff reference 单一真值和 trace 脱敏。若修改，建立独立 Scope，并用多会话乱序、重启恢复、
@@ -133,3 +142,4 @@ DE owner 扩展 Scope；不能在 UI 中用推断状态修补后端契约。
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-08 | v1.0 | 建立 Session/UI/Trace 的归属、持久化、终态投影、隐私边界、风险与独立验证入口 |
+| 2026-08-31 | v1.1 | 文档真源收敛：全文定性为非规范时点快照，规则 ID 仅作引用指针；历史化冻结、验证、风险和会话入口。 |

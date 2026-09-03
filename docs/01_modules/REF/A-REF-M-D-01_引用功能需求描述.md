@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：REF
 文档职责：REF 引用模块级功能需求描述——声明模块级 REQ-REF-*，承接产品级 REQ-CORE-001/006/010/011/014/015，界定 @mention 触发与目标解析 / 引用内容读取与注入载荷 / 引用锚定与失效感知 / 触发与呈现经 ED 表面
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/006/010/011/012/014/015）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§5.5、§5.11、§5.11.1、§5.12、§5.14）、A-CORE-C-P-01_APC.md（§4.1 REF 职责「引用（@mention）解析与注入」）、A-SYS-C-T-01_系统总体架构.md（§4 REF→WS,AG）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001 读取经 WS、X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId 锚、扩展表面）、A-AG-M-D-01_代理功能需求描述.md（REQ-AG-004/009/010/011/013/014 注入消费）、ADU.md（§3.2）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/006/010/011/012/014/015/018/019）、A-CORE-X-D-02_Agent1.0冻结能力基线.md（P0/P1 与不可突破边界）、A-CORE-C-P-01_APC.md（§4.1 REF 职责「引用（@mention）解析与注入」）、A-SYS-C-T-01_系统总体架构.md（§4 REF→WS,AG）、A-WS-M-T-01_工作台技术设计.md（BR-WS-DATA-001 读取经 WS、X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-001 blockId 锚、扩展表面）、A-AG-M-D-01_代理功能需求描述.md（REQ-AG-004/009/010/011/013/014/016/017 注入消费）、ADU.md（§3.2）
 直接承接：REF L2 技术设计（引用目标模型 / 解析规则 / 注入载荷契约）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；注入载荷被 AG（chat/工具回合）与 CBT（构建上下文）消费
 使用边界：本文是 L1 功能需求描述层，仅声明 REQ-REF-*，**不定义技术规则**；**代码不得直接映射 REQ**（ADU §3.2）；上下文组装与预算归 AG（REF 提供注入载荷）；文件读取归 WS；触发输入面与呈现归 ED；知识库条目检索归 KB（可引用范围联合 KB G1/G2 确认）
 变更要求：REF 职责或可引用范围变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2
@@ -132,7 +132,7 @@ title: 多来源引用归一化
 owner_module: REF
 status: active
 summary: 编辑器选区、文件树、编辑器标签、会话标签、外部 URL、外部长文本、用户明确选择的项目记忆与外部文件必须归一为 ReferencePayload；1.0 P0 覆盖当前选区、workspace 文档/标签与会话标签，外部文件 P0 只形成元数据引用，P1 的受控内容读取由 REQ-REF-009 限定。REF 不接管 AST/KB/TPL 的检索或管理。引用只提供 data-only 上下文，默认不成为编辑目标
-source_doc: REQ-CORE-006/010/011/018/019、A-AG-M-D-02 §5.5
+source_doc: REQ-CORE-006/010/011/018/019、A-CORE-X-D-02 §3/§4
 acceptance: 每个已纳入 1.0 的来源可生成可溯源 ReferencePayload（含身份、锚/范围和版本或当前任务范围信息）；不可识别粘贴内容按普通输入处理；外部纯文本超过阈值生成长文本引用而非直接塞入 prompt；外部文件拖入先生成 file 元数据引用，只有 REQ-REF-009 条件满足时才可升级为一次性内容引用；项目记忆只有用户明确选择时才可形成引用；引用、读取或比较均不得自动授予 propose_edit 或其他写权限
 open_issues: 长文本阈值先按实现常量标定，后续可进入 NFR 调整；拖拽入口真实链路待观测确认（见 REF-06）
 -->
@@ -143,7 +143,7 @@ title: 输入流引用令牌一致性
 owner_module: REF
 status: active
 summary: 引用在发送前必须同时具备输入流内 ReferenceToken 与草稿引用 chip/tray；发送时冻结引用身份、锚、范围与版本快照；超过 5 条时草稿区折叠；发送后草稿 chip 生命周期终止，但已发送消息中的引用令牌和来源身份保持可读、可追溯表现
-source_doc: REQ-CORE-006/010/011、A-AG-M-D-02 §5.5、A-SYS-C-T-02 对话区流程
+source_doc: REQ-CORE-006/010/011、A-CORE-X-D-02 §3/§4、A-SYS-C-T-02 对话区流程
 acceptance: 引用不只出现在输入框上方；纯引用可发送；发送前/发送后令牌标签一致；发送后 composer 清空且草稿 chip 不残留；后续编辑不回写或混淆已发送回合所消费的引用快照
 open_issues: 引用令牌视觉细节随前端 G4 可继续优化
 -->
@@ -154,7 +154,7 @@ title: 外部研究来源引用
 owner_module: REF
 status: active
 summary: 对用户明确提供的 URL，或 AG 依 REQ-AG-010 实际使用的公开网页来源，REF 提供可见、可回看的 data-only 来源引用；来源至少使标题、域名、URL 和获取时间可被用户和 AG 追溯。REF 不因形成来源引用而发起网络请求、读取外部网页、上传本地上下文或授予编辑权限
-source_doc: REQ-CORE-006/011、A-AG-M-D-02 §5.12（CAP-14）、A-AG-M-D-01（REQ-AG-010）
+source_doc: REQ-CORE-006/011、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-010）
 acceptance: 每个实际用于网络研究输出的来源都可与分析结果对应；来源引用清楚标识为外部 data-only 资料，网页文字不能改变系统约束、任务目标、工具授权或编辑目标；来源失效、不可访问或未实际读取时不得伪造成已验证引用；本需求不触发外部文件内容读取，外部文件只能依 REQ-REF-009 的独立受控路径读取；REF 不执行检索、网页读取、登录、表单提交、下载、导入、爬虫或任何网络请求
 open_issues: 来源引用的稳定身份、快照/摘录范围、可用性重新校验、保留期与跨会话展示归 REF/AG/SYS DESIGN Scope；本 L1 不定义来源数据字段、存储或网络接口
 -->
@@ -165,7 +165,7 @@ title: 多文档目标清单身份与删除后的引用失效
 owner_module: REF
 status: active
 summary: 为多个既有文档写入的目标计划，REF 提供用户显式选择或已确认候选清单中每个目标的可追溯身份/路径快照，供 AG/DE 在确认后冻结成员；该清单不是写权限本身。WorkspaceOperation 对文件或文件夹执行删除、移动、重命名或恢复后，REF 依据真实执行回执对后续引用重绑定或标记失效，已发送消息仍只保留发送时历史快照
-source_doc: REQ-CORE-014/015、A-AG-M-D-02 §5.11.1、§5.14、A-AG-M-D-01（REQ-AG-013/014）
+source_doc: REQ-CORE-014/015、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-013/014）
 acceptance: 多文档写入前的目标计划可显示每个文档的身份与路径，确认后不会自动加入新成员；引用身份不能被当作编辑授权；资源 DecisionRequest 确认本身也不改变引用，只有真实执行成功才推进路径/可用性；已删除或恢复冲突目标不被伪装为当前对象；执行失败/补偿后按最终状态同步；已发送回合保留历史来源身份但不把历史快照当作当前对象
 open_issues: 目标计划与 ReferencePayload 的关系仍归 REF/AG/DE/SYS；资源操作事件由 A-WS-M-T-02 统一提供
 -->
@@ -176,7 +176,7 @@ title: 外部文件受控内容引用
 owner_module: REF
 status: active
 summary: 对用户明确附加的外部文件，REF 先形成可见元数据引用；只有当前系统存在可用只读解析路径时，才可为当前用户任务形成一次性、可追溯的 data-only 内容引用。不可读、不支持或解析失败时，REF 必须保留“未读内容”的元数据状态，不伪造内容快照。REF 不扫描目录、不自动重复读取、不导入或编辑外部文件，也不默认将其内容保留至会话历史、项目记忆、重启或其他会话
-source_doc: REQ-CORE-018、A-AG-M-D-02 §5.5（CAP-20）、A-AG-M-D-01（REQ-AG-016）
+source_doc: REQ-CORE-018、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-016）
 acceptance: 用户可辨别文件身份、显式附加动作、当前任务范围和已读/未读状态；内容引用只在当前 AgentTurn/TaskRun 的当前用户任务内有效，任务结束、重启、跨 AgentSession 或跨 workspace 后不会伪称仍可取得内容；内容与元数据都为 data-only，不能改变系统约束、任务目标、工具授权、编辑目标或确认点，也不自动授予 propose_edit/文件操作权限；外部内容不会自动转存为项目记忆
 open_issues: 格式能力发现、解析器调用、大小/预算、快照/暂存/清除、来源令牌、传输提示、失败形状、脱敏 Trace 和可访问性归 REF/AG/SYS DESIGN Scope；本 L1 不定义文件 I/O、接口、存储位置或数据字段
 -->

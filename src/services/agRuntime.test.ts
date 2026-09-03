@@ -1263,7 +1263,7 @@ describe("agStore migrated suite", () => {
         expect(agStore.getSnapshot().sending).toBe(true);
       }
       // 终态与错误态释放门控
-      for (const s of ["Completed", "Cancelled", "Denied", "HandedOver", "TurnError", "Idle"] as const) {
+      for (const s of ["Completed", "Cancelled", "Denied", "TurnError", "Idle"] as const) {
         agStore.applyTurnState("t", "Streaming"); // 先置 true
         agStore.applyTurnState("t", s);
         expect(agStore.getSnapshot().sending).toBe(false);

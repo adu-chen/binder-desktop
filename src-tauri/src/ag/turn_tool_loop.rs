@@ -138,15 +138,12 @@ pub(super) async fn run_turn_tool_loop(
     let mut proposed_diff = false;
     let mut edit_blocked_reported = false;
     let mut project_reported = false;
-    let mut proposal_count = 0usize;
 
     // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
     // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultInjecting→
     // 续调 / FinalAnswer→LoopCompleted / 达上限→LoopAborted）。工具卡数据仍由 Channel 投影（互不替代）。
     use ag::tool::{ToolLoopEvent as TlEv, ToolLoopState as TlSt};
     const MAX_ROUNDS: usize = 6;
-    // AG-TASK-01 F1a：单回合提案上限（整篇对齐分批最多 5 批；同轮可并行）。
-    const MAX_PROPOSALS_PER_TURN: usize = 5;
     let mut current_doc_read_confirmed = !current_doc_requires_tool_read;
     let mut project_read_evidence = ag::tool_exec::ProjectReadEvidenceLedger::from_turn_start(
         &agent_context_facts,
@@ -826,19 +823,7 @@ pub(super) async fn run_turn_tool_loop(
                             }
                             // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
                             ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
-                                // AG-TASK-01 F1a：放开同回合多提案——整篇对齐等任务需分批提案（每批 ≤32 操作）。
-                                // 保留上限防滥用：单回合 ≤MAX_PROPOSALS_PER_TURN。
-                                if proposal_count >= MAX_PROPOSALS_PER_TURN {
-                                    (
-                                    serde_json::json!({
-                                        "code": "AG_TOO_MANY_PROPOSALS",
-                                        "message": format!("本回合已生成 {MAX_PROPOSALS_PER_TURN} 个修改建议，已达上限；请结束本回合，下一回合继续剩余批次。"),
-                                        "retriable": false,
-                                    })
-                                    .to_string(),
-                                    false,
-                                )
-                                } else if current_doc_edit_requires_prior_read(
+                                if current_doc_edit_requires_prior_read(
                                     &params,
                                     active_doc_path.as_deref(),
                                     current_doc_requires_tool_read,
@@ -926,7 +911,6 @@ pub(super) async fn run_turn_tool_loop(
                                             // 上继续续编；它没有 PreviewAck checkpoint，需经既有迁移或裁决后由
                                             // 人类下一次显式操作开启新片段。
                                             end_after_diff_proposal = true;
-                                            proposal_count += 1;
                                             diff_event_after_tool = Some((
                                                 edit_result.diff_id.clone(),
                                                 edit_result.rel_path.clone(),

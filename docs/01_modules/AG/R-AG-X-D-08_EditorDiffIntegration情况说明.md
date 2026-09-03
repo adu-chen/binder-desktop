@@ -1,23 +1,30 @@
 ---
 文档编号：AG-X-D-08
-文档状态：A
+文档状态：R
 负责模块：AG
-文档职责：WP-AG10-06 Editor/Diff Integration 独立治理情况说明
-上游约束：A-AG-X-D-01、A-AG-X-D-03、A-AG-X-D-04、A-AG-X-D-05、A-AG-X-D-07、A-AG-X-L-04、A-AG-M-T-01、A-AG-I-P-01
-直接承接：DE 修改建议与裁决链、ED LogicalState、WS 保存边界、Session/UI 的 DiffCard 投影
-使用边界：本文说明 AG 产出文档修改建议到用户裁决的集成边界；DE/ED/WS 契约仍由各自模块拥有，本文不重定义其真值
-变更要求：ChangeProposal、PendingDiff、目标/基准、接受拒绝冲突、保存或 DiffCard 关联语义变化时同步更新
+文档职责：WP-AG10-06 Editor/Diff Integration 历史治理情况参考
+上游约束：R-AG-X-D-01、R-AG-X-D-03、R-AG-X-D-04、R-AG-X-D-05、R-AG-X-D-07、A-AG-X-L-04、A-AG-M-T-01、A-AG-I-P-01
+直接承接：无（仅供历史审计与问题定位参考）
+使用边界：L4 reference-only；不定义 AG/DE/ED/WS 集成真值，当前需求、设计与接口以各模块 Active 控制文档为准
+变更要求：不再随实现同步；发现差异时回到对应 Active 控制真源处理
 ---
 
-# WP-AG10-06 · Editor/Diff Integration 情况说明
+# WP-AG10-06 · Editor/Diff Integration 情况说明（历史快照）
 
-## 1. 模块定位与当前裁决
+> **Reference only**：本文保留 2026-08 阶段实现审计上下文，不再作为当前需求、设计、协议或实现状态的控制源。
+
+> [!IMPORTANT]
+> 以下全部内容是 2026-08 时点快照。“当前”“必须”“不得”“冻结”“验证”和“会话入口”等用语仅记录当时的审计口径，不产生现行规范、Scope、任务授权或验收证据。
+> 本文不含正式 `REQ` / `REQ_MAP` / `RULE` / `CHAIN` / `CONSTRAINT` / `TERM` 注册块；其中的标识符只是 Active 真源的历史引用指针，代码、测试和计划不得映射到本文。
+> 需要当前结论时，必须回到文档头列出的 Active 需求、设计、状态机、协议与计划，并重新核验代码和测试。
+
+## 1. 历史模块定位与快照时裁决
 
 Editor/Diff Integration 是 Binder 文档内容代理的受控边界：模型生成的内容变化不能直接写入 DiskState，
 必须先转换为 `ChangeProposal`，由 DE 生成 PendingDiff，再由 DE/ED 受控预览进入 LogicalState。
 用户接受只裁决卡片，拒绝在基准有效时精确回滚，保存才把当前 LogicalState 写入 DiskState。
 
-当前等级：`Migration Pending`。既有文档内容 Diff 的基准、预览、裁决和保存链已有自动化证据；
+快照时等级：`Migration Pending`。当时既有文档内容 Diff 的基准、预览、裁决和保存链已有自动化证据；
 但旧的空基准新建链已被 CreateDocumentBundle 取代，且真实 Tauri/WKWebView 中从 Agent 回合到人工审阅 DiffCard 的 G5 尚未执行。
 
 ## 2. 职责、输入与输出
@@ -43,7 +50,7 @@ Editor/Diff Integration 是 Binder 文档内容代理的受控边界：模型生
 - PendingDiff / DiffProposed 事件与 `diff_id`、`rel_path` 引用。
 - 用户 Accept/Reject 后的应用、冲突或保存结果。
 
-## 3. 当前实现地图
+## 3. 快照时实现地图
 
 | 位置 | 当前职责 | 治理注意点 |
 |---|---|---|
@@ -53,7 +60,7 @@ Editor/Diff Integration 是 Binder 文档内容代理的受控边界：模型生
 | `src/store/agStore.ts`、消息流与 DiffCard 组件 | 保存 diff reference、展示用户裁决入口 | AG 历史不得复制 Diff 正文 |
 | `src-tauri/tests/core_chain.rs` 及 AG/DE/ED 相关测试 | 新建空基准、修改、冲突和保存链 | G5 仍需真实 UI 人工验证 |
 
-## 4. 当前工作流程
+## 4. 快照时工作流程
 
 既有文档编辑：
 
@@ -85,9 +92,9 @@ Accept：只改卡片生命周期，不重复应用；Reject：基准有效时�
 接受只裁决内容卡；三重基线未变时拒绝由 WS 补偿删除本次创建文件，否则卡失效且文件保留
 ```
 
-## 5. 必须冻结与允许变化
+## 5. 历史冻结记录与可变项（不产生现行规则）
 
-必须冻结：
+当时记录为冻结的事项：
 
 - AG 和 Tool 不得直接写入 DiskState；内容只能经 DE/ED 受控预览改变 LogicalState。
 - 1.0 每个提案只能针对一个明确目标；目标必须属于当前文档、显式声明目标或合法新建目标。
@@ -97,13 +104,13 @@ Accept：只改卡片生命周期，不重复应用；Reject：基准有效时�
 - Accept、Reject、Conflict、Save 是不同状态；生成 Diff 不等于已修改或已保存。
 - 会话历史仅保存 Diff reference，Diff 真值从 DE 读取。
 
-允许持续变化：
+当时记录为可变的事项：
 
 - Diff 展示样式、分块审阅和操作反馈，但不得改变接受前不写入的原则。
 - 写作、结构、布局智能产生提案的方式；它们必须输出同一受控修改建议契约。
 - 未来表格、图片、版式提案 schema；在冻结新契约前不应塞入 1.0 文本提案参数。
 
-## 6. 已知风险与待治理点
+## 6. 快照时风险记录（需重新核验）
 
 - 尚无一个确定性 harness 覆盖 `ag_start_turn → gateway/tool → DE → 前端 DiffCard` 全链路。
 - 真实 Tauri/WKWebView 中 DiffCard 的到达、滚动定位、接受/拒绝及错误反馈尚未完成 G5。
@@ -111,9 +118,9 @@ Accept：只改卡片生命周期，不重复应用；Reject：基准有效时�
 - 表格、图片和 BDocx 高级编辑底层能力可能已存在，但 1.0 grant 明确排除，不能由集成会话顺带开放。
 - AG、DE、ED、WS 的状态跨模块，任何 schema 或应用语义变化都不是 AG 单模块修改。
 
-## 7. 独立验证与收口标准
+## 7. 历史验证建议与当时收口口径（非当前验收）
 
-至少验证：
+当时建议至少验证：
 
 1. 修改既有文档生成 Diff 后，受控预览修改 LogicalState 但 DiskState 不变；Accept 不重复应用，Save 才写入。
 2. Reject 在基准有效时精确恢复 LogicalState；基准已推进时卡失效，不覆盖后续编辑。
@@ -124,17 +131,19 @@ Accept：只改卡片生命周期，不重复应用；Reject：基准有效时�
 7. 接受时发生冲突必须展示 Conflict，不得静默覆盖；保存失败不得显示为已保存。
 8. G5 人工验证覆盖真实 App 中提案出现、内容审阅、接受、拒绝、冲突提示和保存结果。
 
-自动化收口：1–7 全通过。产品 G5 收口：再完成第 8 项，并保存真实账号/provider/Tauri 环境证据。
+当时收口口径：自动化 1–7 全通过；产品 G5 再完成第 8 项并保存真实账号/provider/Tauri 环境证据。该口径不是当前验收结论。
 
-## 8. 下一治理会话入口
+## 8. 历史会话入口（已关闭）
+
+> 以下阅读顺序、候选范围和任务描述只保留历史，不得直接复用。当前工作必须从 Active 真源重新立项。
 
 必读顺序：A-AG-M-T-01 编辑/Diff 部分 → A-AG-I-P-01 → A-WS-M-T-02 / A-WS-M-S-02 → DE 技术设计 → ED/WS 相关设计 →
 `lib.rs` 的 `ag_propose_edit` → `de/generate.rs` → Diff store/apply → 前端 DiffCard 与核心链测试。
 
-候选修改范围：AG 提案适配和集成测试。若改变 `ChangeProposal`、PendingDiff、应用或保存状态，必须建立
+当时的候选修改范围：AG 提案适配和集成测试。若改变 `ChangeProposal`、PendingDiff、应用或保存状态，当时要求建立
 AG+DE/ED/WS 跨模块 Scope；不得在 AG 文件内复制或旁路下游契约。
 
-建议会话任务描述：
+历史任务描述（不得直接复用）：
 
 > 治理 WP-AG10-06 Editor/Diff Integration。核验所有文档内容修改只经 DE/ED 受控预览进入 LogicalState，既有文档
 > 使用最新 LogicalState，新建经 CreateDocumentBundle 先创建真实目标再投影初始内容 Diff，目标/版本/冲突失败关闭，会话只保存 Diff reference。若修改，
@@ -146,3 +155,4 @@ AG+DE/ED/WS 跨模块 Scope；不得在 AG 文件内复制或旁路下游契约�
 |---|---|---|
 | 2026-08-08 | v1.0 | 建立 Editor/Diff 集成的提案边界、目标与基准规则、跨模块风险和独立验证入口 |
 | 2026-08-21 | v1.1 | 同步三态罗盘与 CreateDocumentBundle：内容 Diff 预览可受控修改 LogicalState，接受只裁决、保存才写盘；旧空基准新建链改为先创建真实目标、再投影初始内容 Diff。当前等级转为 Migration Pending。 |
+| 2026-08-31 | v1.2 | 文档真源收敛：全文定性为非规范时点快照，规则 ID 仅作引用指针；历史化冻结、验证、风险和会话入口。 |

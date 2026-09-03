@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：ED
 文档职责：ED 编辑器模块级功能需求描述——声明模块级 REQ-ED-*，承接 APC §4.1 ED 职责与 REQ-CORE-002/004/009/010/011/012/013/014/015，界定 HTML/Markdown/纯文本与 BDocx 处理副本的富文本编辑运行时 / block 模型与 blockId 定位 / 分页系统 / 图文媒体能力 / 编辑器装饰层（供 diff 预览）/ CreateDocumentBundle 目标会话 / WorkspaceOperation 对标签与内容 Diff 的影响 / Agent 只读会话事实
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/004/009/010/011/012/013/014/015）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§2、§3 CreateDocumentBundle、§5.3、§5.10、§5.11.1、§5.13、§5.14）、A-WS-M-T-02_工作区资源操作技术设计.md、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§9 离线边界）、A-SYS-C-T-01_系统总体架构.md、A-WS-M-T-01_工作台技术设计.md、ADU.md（§3.2 REQ 规范）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-002/004/009/010/011/012/013/014/015）、A-CORE-X-D-02_Agent1.0冻结能力基线.md（P0/P1 与不可突破边界）、A-WS-M-T-02_工作区资源操作技术设计.md、A-CORE-C-P-01_APC.md（§4.1 ED 职责、§9 离线边界）、A-SYS-C-T-01_系统总体架构.md、A-WS-M-T-01_工作台技术设计.md、ADU.md（§3.2 REQ 规范）
 直接承接：ED L2 技术设计（编辑器运行时选型 / block 模型与 blockId / 分页 / 媒体 / decoration 接口）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；decoration 层供 DE（diff 呈现/审阅）与 AG（局部修改）消费
 使用边界：本文是 L1 功能需求描述层，仅声明模块级 REQ-ED-*，**不定义技术规则**（RULE/CHAIN/CONSTRAINT/TERM/STATE_MACHINE 见 ED L2）；**代码不得直接映射 REQ**（ADU §3.2）；编辑器框架版本/扩展选型、blockId 生成策略、分页实现、decoration 接口归 ED L2；DOCX/Pandoc 转换归 DOC、diff 生成与终态归 DE、文件 I/O 归 WS、预览导出归 PRV
 变更要求：ED 职责或编辑运行时边界变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2 req_id 规则（序号不复用，废弃改 superseded）
@@ -164,7 +164,7 @@ title: 编辑器装饰层（供 diff 呈现与局部修改）
 owner_module: ED
 status: active
 summary: 提供编辑器装饰层（decoration），按 blockId 承载 diff 的受控预览、审阅与局部修改的可视呈现；已有 LogicalState 的预览成功后候选内容进入该 LogicalState，背景 pending 在打开目标文档时也必须以同一 payload 建立并进入 LogicalState，提案裁决归 DE，ED 不直接写 DiskState
-source_doc: REQ-CORE-002/010、A-AG-M-D-02 §2
+source_doc: REQ-CORE-002/010、A-CORE-X-D-02 §3/§4
 acceptance: decoration 可按 blockId 定位呈现 diff；成功预览准确投影到已有或 pending 打开后新建的 LogicalState 并显示绿色增量；卡片在预览/迁移后仍为 pending，显式接受不重复应用预览内容，保存有效 pending 预览会一并裁决为接受，拒绝只在基准有效时复原；基准推进后旧提案不得错位回滚或继续裁决
 open_issues: decoration 与 DE diff/AG inline-assist 的接口契约归 ED L2 + DE/AG 联合（ED-05）
 -->
@@ -219,7 +219,7 @@ title: CreateDocumentBundle 的编辑器会话
 owner_module: ED
 status: active
 summary: CreateDocumentBundle 的 DecisionRequest 确认且 WS 创建目标 DiskState 后，ED 自动打开真实目标标签；随后承载初始内容 Diff 的受控预览、LogicalState、继续手动或代理编辑与普通未保存提示。确认前不得出现目标标签
-source_doc: REQ-CORE-010、A-AG-M-D-02 §5.10、A-WS-M-T-02 §6
+source_doc: REQ-CORE-010、A-CORE-X-D-02 §3/§4、A-WS-M-T-02 §6
 acceptance: 确认后标签对应真实磁盘节点；初始内容投影后可继续编辑；三重基线有效的拒绝由 WS 删除目标后 ED 自动关闭标签，任一手动/代理编辑或磁盘变化使卡片失效且标签保留；显式保存写入既有目标，关闭脏标签仍提示未保存；创建或投影失败不显示幽灵标签
 open_issues: 无；详细顺序与补偿见 A-WS-M-T-02 / A-WS-M-S-02
 -->
@@ -230,7 +230,7 @@ title: Agent 可感知的编辑器会话事实
 owner_module: ED
 status: active
 summary: 为 Agent 1.0 的 P0 阅读、分析和提案提供受限编辑器会话事实：当前 workspace 内的活动文档、已打开标签、每个标签的格式/脏态/保存基准、任务所需的选区或焦点、当前 LogicalState 版本以及关联 Proposal 状态。ED 只提供真实会话投影，不把显示态或磁盘旧内容伪装成当前编辑内容
-source_doc: REQ-CORE-011、A-AG-M-D-02 §5.3（CAP-03）、REQ-AG-009
+source_doc: REQ-CORE-011、A-CORE-X-D-02 §3/§4、REQ-AG-009
 acceptance: 用户在 A 文档产生未保存修改、切换至 B 后，Agent 仍可按任务读取 A 的 LogicalState、脏态和保存基准，且不会把 B 或 A 的 DiskState 混入；选区仅在任务需要时供给并带所属文档/锚；关联 Proposal 的 pending、冲突、失效与保存状态可被如实呈现；跨 workspace 或跨 AgentSession 不泄露标签、选区或未保存内容
 open_issues: 会话快照字段、刷新时机和跨模块事件归 ED/AG/SYS DESIGN Scope；本 L1 不定义 store、IPC 或序列化结构
 -->
@@ -241,7 +241,7 @@ title: 原生 DOCX 只读与 BDocx 编辑副本呈现
 owner_module: ED
 status: active
 summary: 原生 DOCX 只经 PRV 进入只读预览、读取和分析，不建立 ED 编辑会话。用户或 Agent 请求编辑时，新 BDocx 编辑副本按 CreateDocumentBundle 创建；资源确认并创建目标磁盘副本后，ED 以 HTML 编辑模型打开并投影初始内容 Diff，以模拟 Word 分页呈现，保存目标仍为新的 DOCX
-source_doc: REQ-CORE-004、A-AG-M-D-02 §6
+source_doc: REQ-CORE-004、A-CORE-X-D-02 §3/§4
 acceptance: 原生 DOCX 没有可编辑标签、样式/表格/图片写入工具或原地 save；副本资源确认创建后才出现可编辑标签，初始内容以普通 Diff 投影；副本编辑时呈现模拟 Word 分页，保存不改变原生 DOCX；初始 Diff 拒绝或失效遵循 CreateDocumentBundle 三重基线规则
 open_issues: 副本命名、来源关联、处理身份和 Pandoc/HTML/分页实现契约归 ED/DOC/WS DESIGN Scope；已确认样式操作的技术映射、能力开关与真实验证矩阵归 ED/DOC DESIGN Scope
 -->
@@ -252,7 +252,7 @@ title: WorkspaceOperation 执行前置与标签协调
 owner_module: ED
 status: active
 summary: WorkspaceOperationPlan 进入 DecisionRequest 时，ED 提供受影响打开标签、脏态、LogicalState 与有效内容 Diff 清单；删除、重命名或移动涉及脏标签时阻断执行。确认并成功修改 DiskState 后，ED 才按真实结果关闭标签或更新路径，并使相关内容 Diff 失效
-source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-WS-M-D-01（REQ-WS-008）
+source_doc: REQ-CORE-012、A-CORE-X-D-02 §3/§4、A-WS-M-D-01（REQ-WS-008）
 acceptance: 确认前标签路径不变；脏标签存在时资源操作不得执行；有效内容 Diff 作为确认影响展示但在确认前不失效；成功后标签路径/关闭状态与磁盘一致，受影响内容 Diff 以 resource_baseline_changed 失效；执行失败或补偿完成时标签按最终真实状态同步，不得显示暂定路径冒充磁盘结果
 open_issues: 无；事件与状态机见 A-WS-M-T-02 / A-WS-M-S-02
 -->
@@ -263,7 +263,7 @@ title: 最小格式转换目标副本的编辑器会话
 owner_module: ED
 status: active
 summary: TXT→Markdown、Markdown→TXT 的转换目标副本经 CreateDocumentBundle 确认并创建磁盘目标后，ED 自动打开标签并投影转换结果初始内容 Diff；来源文档不被改写或关闭。目标标签清晰呈现输入/输出格式、目标路径和 Markdown→TXT 的有损提示
-source_doc: REQ-CORE-013、A-AG-M-D-02 §5.13（CAP-13）、A-DE-M-D-01（REQ-DE-006）、A-DOC-M-D-01（REQ-DOC-006）
+source_doc: REQ-CORE-013、A-CORE-X-D-02 §3/§4、A-DE-M-D-01（REQ-DE-006）、A-DOC-M-D-01（REQ-DOC-006）
 acceptance: 确认或资源创建失败时不出现目标标签；资源创建后目标立即是已存在的磁盘节点，初始内容 Diff 接受不再次创建文件，保存写入既有目标；Markdown→TXT 的有损边界可见；目标手动或后续代理编辑使旧卡失效但目标标签/LogicalState 保留；HTML、通用 DOCX、批量或原地转换不产生本会话
 open_issues: 转换目标的标签标识、格式/路径/损失提示、来源快照呈现、提案失效事件与保存失败同步归 ED/DE/DOC/WS/AG/SYS DESIGN Scope；本 L1 不定义 UI、状态字段或接口
 -->
@@ -274,7 +274,7 @@ title: 删除/恢复前置裁决与受影响标签处理
 owner_module: ED
 status: active
 summary: 对已保存文件/文件夹删除或恢复，ED 在 WorkspaceOperationPlan 决策前提供受影响标签事实；任一受影响会话有未保存内容即阻断删除/重命名/移动。DecisionRequest 确认并由 WS 成功修改 DiskState 后，ED 按真实磁盘结果关闭、重建或更新标签
-source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-DE-M-D-01（REQ-DE-007）
+source_doc: REQ-CORE-014、A-CORE-X-D-02 §3/§4、A-DE-M-D-01（REQ-DE-007）
 acceptance: 确认前不关闭标签、不丢内容；任何脏会话未决时不得执行；成功删除后标签、路径和可编辑性不伪装目标仍存在，成功恢复后按真实资源重建会话；恢复冲突不自动覆盖；执行失败或补偿后标签严格同步最终磁盘状态；CreateDocumentBundle 初始 Diff 的安全拒绝继续按 REQ-ED-010
 open_issues: 无；受影响标签和事件契约见 A-WS-M-T-02 / A-WS-M-S-02
 -->
@@ -285,7 +285,7 @@ title: 多个既有文档的独立编辑器会话
 owner_module: ED
 status: active
 summary: 对已确认并冻结的多既有文档目标清单，ED 为每个已打开目标独立承载 LogicalState、受控预览、绿色差异、脏态、卡片失效和显式保存结果；ED 不因一个目标冲突、外部变化、结构变化或删除而改写、关闭或阻断其他目标会话。背景目标打开后仍按其自身三分流迁移为 LogicalState 预览
-source_doc: REQ-CORE-015、A-AG-M-D-02 §5.14（CAP-15）、A-DE-M-D-01（REQ-DE-008）
+source_doc: REQ-CORE-015、A-CORE-X-D-02 §3/§4、A-DE-M-D-01（REQ-DE-008）
 acceptance: 编辑器只为确认冻结清单中的可编辑目标显示多文档写入预览；每个目标的绿增、脏态、保存基准、Proposal 终态与失败提示可独立识别；任一目标失效仅禁用该目标卡，不静默跳过、回滚或污染其他目标；不提供跨文档一键接受、一键保存或共同事务呈现；原生 DOCX 与删除/文件树整理/格式转换混合操作不进入本会话
 open_issues: 多目标标签/卡片关联、并发预览与排序、背景目标迁移、逐项保存回执、独立失败/恢复和跨模块事件归 ED/DE/AG/WS/REF/SYS DESIGN Scope；本 L1 不定义 UI、状态字段、批处理或事务接口
 -->

@@ -12,7 +12,7 @@ import type { MessageContentPart, ReferenceTokenAttrs } from "../services/refere
  * （agent_turns 接线批）落地，本结构按可持久化形状设计。
  */
 
-/** 代理编辑（AgentEdit）面板双模式：edit=编辑（AI 交互精确修改当前内容，diff 裁决）；build=代理构建（TERM-AG-007，项目级蓝图与整体构建，接 CBT）。 */
+/** 会话持久化兼容字段：Agent 1.0 运行时只开放 edit；build 仅保留后续 Profile 的加法式数据形状，不授予入口。 */
 export type AgMode = "edit" | "build";
 
 export interface ChatMessage {
@@ -131,8 +131,7 @@ export type RustTurnState =
   | "TurnError"
   | "Completed"
   | "Cancelled"
-  | "Denied"
-  | "HandedOver";
+  | "Denied";
 
 /** 回合“进行中”的活动态集合：sending（输入门控）= 处于这些态之一。其余（Idle/各终态/TurnError）→ 非进行中。 */
 const ACTIVE_TURN_STATES: ReadonlySet<RustTurnState> = new Set([

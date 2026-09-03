@@ -1,46 +1,40 @@
 {
-  "scope_id": "AG-CONFORMANCE-CODE-S4A",
+  "scope_id": "AG-CODE-CONFORMANCE-CLOSURE-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "REQ-AG-009 AgentContextFacts 与 ProjectReport 完整契约",
+  "title": "Agent 1.0 规则映射代码一致性收敛",
   "status": "READY",
   "confirmation": "YES",
-  "scope_reason": "承接规则链复核发现的 REQ-AG-009 映射、规则、生产调用与验证缺口；人类选择完整结构化契约，并确认使用只读 report_project 终结工具强制输出。",
-  "issue_trace": ".governance/issues/AG-CONFORMANCE-CODE-S4A.md",
+  "confirmation_basis": "2026-09-01 人类明确要求继续按规则映射审计代码一致性、修复实现不符并删除多余冗余实现。",
+  "scope_reason": "沿 Agent Active RULE/STATE_MACHINE 到 @GOV/生产调用/测试的映射链，删除与 agent-edit-1.0 真源冲突或已被唯一实现替代且无生产调用的旧实现，并修正同链运行文案与状态投影。",
+  "issue_trace": ".governance/issues/AG-CODE-CONFORMANCE-CLOSURE-01.md",
   "objectives": [
-    "注册 AgentContextFacts 与 ProjectReport 独立术语并补齐 REQ-AG-009、REQ-SYS-009、REQ-ED-011 规则映射",
-    "建立 WS/ED/DE 到 AG 的版本化 AgentContextFacts 载荷并保持 LogicalState 优先于 DiskState",
-    "将 AgentContextFacts 作为独立 data-only Prompt 层接入生产装配",
-    "注册只读 report_project 工具并以本轮读取证据账本校验 ProjectReport 的已读范围、来源与不确定性",
-    "只为项目检查、搜索、分析意图授予 report_project，且不扩大任何编辑能力",
-    "补齐直接测试、影响验证、ADUS 注册与待验证列表"
+    "移除 SM-AG-01 中已退出 1.0 的 Build/CBT takeover、HandedOver、fallbackIn 与伪 Retry 事件",
+    "删除 agent-edit-1.0 明确禁用且无生产调用的自动记忆实现和 Build Prompt",
+    "删除被当前 Prompt Runtime/历史持久化实现取代的测试专用旧骨架与无调用代码",
+    "修正系统 Prompt 对逐轮最小 CapabilityGrant、ExplicitEditTargetSet 前置授权和 Proposal 片段交接的描述",
+    "让完成、失败、拒绝与取消投影只来自来源状态上的合法转移，并广播真实 HandingOff→Completed",
+    "同步前端状态类型、相关测试与 ADUS 派生索引"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONFORMANCE-CODE-S4A.md",
-    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
-    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
-    "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
-    "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
-    "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/01_modules/DE/A-DE-M-T-01_DiffEdit技术设计.md",
-    "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
-    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src-tauri/src/types/mod.rs",
-    "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/prompt_runtime.rs",
-    "src-tauri/src/ag/turn_prompt.rs",
-    "src-tauri/src/ag/turn_runtime.rs",
+    ".governance/issues/AG-CODE-CONFORMANCE-CLOSURE-01.md",
+    "src-tauri/src/ag/mod.rs",
+    "src-tauri/src/ag/memory_link.rs",
+    "src-tauri/src/ag/turn.rs",
+    "src-tauri/src/ag/turn_events.rs",
     "src-tauri/src/ag/turn_tool_loop.rs",
-    "src-tauri/src/ag/tool_registry.rs",
-    "src-tauri/src/ag/tool_exec.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ag/turn_control.rs",
+    "src-tauri/src/ag/prompts.rs",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/blocks.rs",
+    "src/store/agStore.ts",
     "src/services/agService.ts",
     "src/services/agRuntime.test.ts",
-    "scripts/test_governance.test.mjs",
-    "src/utils/promptRuntimeTrace.ts",
-    "src/utils/promptRuntimeTrace.test.ts"
+    "src/components/ag/AgentUI.test.tsx",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -49,48 +43,54 @@
     "CLAUDE.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
-    "docs/01_modules/SYS/A-SYS-M-D-01_系统底座功能需求描述.md",
-    "docs/01_modules/ED/A-ED-M-D-01_编辑器功能需求描述.md",
-    "所有未列入 allowed_files 的生产代码、设计与测试"
+    "docs/01_modules/AG/**",
+    "src-tauri/src/cbt/**",
+    "src/store/modelStore.ts",
+    "src/components/ag/ModelConfig.tsx",
+    "所有未列入 allowed_files 的生产代码、测试、业务文档与治理脚本"
   ],
   "constraints": [
-    "需求是权威上游，不修改需求来迎合实现",
-    "AgentContextFacts 与 ProjectReport 必须保持独立概念，不复用 OpenDocSnapshot、AgentReadContext 或普通 Answer 术语",
-    "已打开文档事实必须来自 LogicalState；DiskState 不得覆盖活动或已打开编辑器事实",
-    "report_project 是只读结构化完成工具，不创建 TaskRun、不产生 DecisionRequest、ChangeProposal、Diff 或磁盘副作用",
-    "ProjectReport 已读项必须来自当前回合可验证证据账本；无法证明的项失败关闭为未读或不确定",
-    "只读事实不得扩大 ExplicitEditTargetSet 或 CapabilityGrant 的写能力",
-    "相似功能、术语与语义必须联动更新，但不得顺带修改范围外业务能力"
+    "不新增需求、功能、业务规则、状态或运行时 Profile",
+    "Active 需求/设计/状态机是真源，不为既有代码反向改文档",
+    "仅删除经全仓引用核实无生产调用且已退出 1.0 或已被唯一实现替代的代码",
+    "保留 build 模型偏好兼容数据，因为 BR-AG-DATA-007 明确要求四槽数据存在但不得授予入口",
+    "不修改 CBT 模块；Agent 1.0 与 CBT 保持无 active 转移",
+    "ADUS 只通过 governance:generate 刷新，不人工编辑自动生成区",
+    "保留工作树内所有用户既有改动，不修改 Scope 外文件"
   ],
   "acceptance_criteria": [
-    "REQ-AG-009、REQ-SYS-009、REQ-ED-011 均有唯一 REQ_MAP 并落到明确规则 owner",
-    "AgentContextFacts 和 ProjectReport 具有版本、正式 TERM、共享类型与前后端字段一致性测试",
-    "PromptPackage 中存在独立 AgentContextFacts data-only 层且层序、预算、审计同步",
-    "项目 Inspect/Search/Analyze 意图获得 report_project 并将其设为必需完成工具；回答、澄清、编辑、新建意图不误获授权",
-    "report_project 校验 read/unread/source/uncertainty，伪造或无证据的已读项被拒绝且不能完成回合",
-    "生产调用边由 @GOV caller/delegate/consumer 明确登记，治理生成与审计通过",
-    "影响选择器要求的自动化通过；真实 UI/provider 场景若未执行则进入待验证列表，不声明 G5 完成"
+    "Rust/前端 SM-AG-01 状态集合与 Active 状态机完全一致，不再存在 HandedOver/takeover/fallbackIn",
+    "Agent 生产模块不再包含自动记忆触发实现或 Build Prompt",
+    "Prompt 与工具循环如实表达 IntentResult.allowed_tools、ExplicitEditTargetSet 与每张 Proposal 后 handoff，不保留不可达的同片段多提案计数分支",
+    "旧 ContextSource/assemble_context/TurnKind、旧 persist_turn/recover_turns 及无调用 helper 被删除",
+    "Completed 投影经 Streaming→HandingOff→Completed 两次合法转移且无 fallback 伪造",
+    "变更影响测试、Rust check、governance:audit 与 git diff check 通过"
   ],
   "human_decisions": [
     {
-      "id": "HD-S4A-01",
+      "id": "HD-AG-CONFORMANCE-01",
       "status": "CONFIRMED",
-      "question": "REQ-AG-009 采用完整结构化契约，独立注册 AgentContextFacts 与 ProjectReport"
+      "question": "继续按规则映射审计代码一致性，修复实现不符并果断删除多余冗余实现"
     },
     {
-      "id": "HD-S4A-02",
-      "status": "CONFIRMED",
-      "question": "使用只读 report_project 终结工具强制 ProjectReport 输出，并以真实读取证据失败关闭"
-    },
-    {
-      "id": "HD-S4A-03",
-      "status": "CONFIRMED",
-      "question": "将 S4A 新增的 1 个 Agent 前端测试登记到治理基线，AG frontend test cases 由 109 调整为 110"
+      "id": "HD-AG-CONFORMANCE-02",
+      "status": "INHERITED",
+      "question": "锚定已归一化的 Agent 1.0 真源，不新增需求、功能或逻辑"
     }
   ],
+  "validation": {
+    "governance_generate": "passed; ADUS regenerated with 313 parsed @GOV blocks, 100 rules, 27 chains and 961 discovered tests",
+    "governance_audit": "passed; 310 unique code blocks, 99 referenced rules, 99 covered rules, 0 uncovered rules",
+    "test_plan": "passed; selector required npm test, npx tsc --noEmit, full cargo test and governance:audit",
+    "frontend_tests": "passed; 26 files, 594 tests",
+    "typescript": "passed; npx tsc --noEmit",
+    "rust_tests": "passed outside restricted sandbox; 374 library tests, 5 core-chain tests, 4 state-broadcast tests. The first restricted run had only DOC LibreOffice worker signal=6, then the identical full cargo suite passed with normal process access",
+    "rust_check": "passed; no Agent warnings, 8 pre-existing DOC dead_code warnings remain outside scope",
+    "production_build": "passed; bundled tools verification, TypeScript and Vite production build",
+    "diff_check": "passed; git diff --check"
+  },
   "stop_conditions": [],
   "unresolved_items": [
-    "真实 Tauri/WKWebView + provider 的项目读取与 ProjectReport 终结链待 G5 系统验证"
+    "Eight pre-existing dead_code warnings remain in the DOC LibreOffice runtime; they are unrelated to Agent 1.0 and outside this Scope."
   ]
 }

@@ -223,7 +223,7 @@ A-* 标为主结构、R-* 标为旧体系参考；但旧 CLAUDE.md 的"当前权
 | A-AG-M-P-02_Binder Agent工具矩阵 | A | P1 | |
 | A-AG-M-T-05_AgentTaskController设计 | A | P1 | ⚠ 与下行编号冲突（见 §7） |
 | A-AG-M-T-05_文档生成流程 | A | P2 | ⚠ 编号重复；内容偏 CBT，可移 CBT |
-| A-AG-X-L-01_Binder Agent落地开发计划 | A | P2 | |
+| X-AG-X-L-01_代理开发计划 | X | P2 | 已过期；当前唯一 Active 计划为 A-AG-X-L-04 |
 | R-AG-C-D-01_Agent指导方案(Doctrine) | R | P2 | 指导参考 |
 | R-AG-M-R-01_分层提示词分析 | R | P2 | |
 | R-AG-M-R-02_约束与演化调研(中间态) | R | P2 | 指导参考 |

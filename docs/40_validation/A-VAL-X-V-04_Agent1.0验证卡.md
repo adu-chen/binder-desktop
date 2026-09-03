@@ -2,10 +2,10 @@
 文档编号：VAL-X-V-04
 文档状态：A
 负责模块：CORE
-文档职责：Agent 1.0 验证卡设计——为已冻结的状态化链路（三态分流/连续 Proposal/保存/澄清终态/TaskRun/外部内容/记忆）与 P1 开放条件定义进入 IMPLEMENTATION 的验证门禁
+文档职责：Agent 1.0 验证卡与证据状态登记——为已冻结的状态化链路（三态分流/连续 Proposal/保存/澄清终态/TaskRun/外部内容/记忆）与 P1 开放条件定义验证门禁，并只登记已有实际 Runtime Report 支持的证据状态
 上游约束：A-CORE-X-D-02_Agent1.0冻结能力基线.md（§6 第 4 项）、A-CORE-X-D-01_1.0需求基线与文档体系索引.md（§6 第 4 步）、A-CORE-C-P-01_APC.md（§5.1 G5、§10 测试策略）、A-CORE-C-T-01_三态模型.md（BR-CORE-STATE-001~003）、A-SYS-I-P-01_数据结构定义.md（§3.1 共享对象契约）、A-DE-M-S-01/A-ED-M-S-01/A-WS-M-S-01/A-AG-M-S-01（D2/D3 状态机）
-直接承接：后续 IMPLEMENTATION Scope（进入门禁与验收依据）、G5 集成/系统验证（执行与证据登记）、产品能力注册表（system_validation 回填）
-使用边界：本文是验证卡**设计**，不执行验证、不填报通过；卡状态一律 DESIGNED；只引用已注册规则与既有状态机，不新增 RULE/TERM/状态机
+直接承接：后续 IMPLEMENTATION Scope（进入门禁与验收依据）、G5 集成/系统验证（执行与证据登记）、A-AG-X-L-04 发布退出判断、产品能力注册表（system_validation 回填）
+使用边界：本文是 Agent 1.0 唯一 Active 验证卡与证据状态入口；只有已实际执行并可追溯到 Runtime Report 的证据才可把卡从 DESIGNED 更新为 PARTIAL/PASS，不得从计划、历史快照或代码存在推断通过；本文只引用已注册规则与既有状态机，不新增 RULE/TERM/状态机
 变更要求：冻结需求语义变化、状态机/契约变化或证据门禁变化时回写本文；未实际执行不得把卡状态改为 PASS
 ---
 
@@ -18,7 +18,7 @@
 | validation_id | `VAL-AG-1.0-CORE` |
 | phase | DESIGN（验证卡设计；执行属实现后的 VALIDATION / G5） |
 | owner / participants | CORE / SYS、DE、ED、WS、AG、REF、AST |
-| 当前状态 | `DESIGNED`：验证卡已设计，未执行；不表述为任何链路已验证通过 |
+| 当前状态 | 混合：V-C1～C3、V-R1/R2、V-S1～S10 仍为 `DESIGNED`；V-S11～S13 为 `PARTIAL`（已有本地自动化证据，真实 Tauri/WKWebView/provider G5 未闭合）；本文无 `PASS` 卡 |
 | 进入 IMPLEMENTATION 门禁 | §6：目标验证卡证据门禁满足，且 `governance:audit` 无该链路新增 error 级违规 |
 | G5 退出条件 | 核心场景卡自动化 + 真实环境证据闭合，P1 各项按 §5 独立证据开放 |
 
@@ -55,7 +55,7 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 
 ## 4. 核心场景卡
 
-> 状态值：`DESIGNED`（已设计待执行）｜`PASS`（自动化+真实证据闭合，未经执行不得填报）。
+> 状态值：`DESIGNED`（已设计待执行）｜`PARTIAL`（只闭合部分必需证据，尚不满足 G5）｜`PASS`（自动化+真实证据全部闭合）。未经实际执行不得提升状态。
 
 ### 4.1 V-C1 · CreateDocumentBundle：拒绝资源计划
 
@@ -286,4 +286,5 @@ A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证�
 | 2026-08-29 | v1.6 | 回填 S3E 自动化与治理证据：AG 164/164、前端 592/592、Rust 376/377（唯一失败为范围外 LibreOffice Worker signal=6）、test:governance/governance:audit 通过；V-S12 保持 PARTIAL，未把本地证据升级为 G5。 |
 | 2026-08-30 | v1.7 | AG-CONFORMANCE-CODE-S4A：新增 V-S13 与 VAL-AG-PROJECT-REPORT-01，分开登记 AgentContextFacts/ProjectReport 生产实现、本地自动化与真实 provider/WKWebView G5 证据。 |
 | 2026-08-30 | v1.8 | 回填 S4A 完整影响证据：前端 593/593、Rust 379+5+4、TypeScript、test:governance 与 governance:audit 通过；LibreOffice 用例非沙箱复核通过；V-S13 仅保留真实 provider/WKWebView G5。 |
+| 2026-08-31 | v1.9 | AG-DOC-CONSOLIDATION-01：统一文档头与正文已存的 DESIGNED/PARTIAL 状态；本文收敛为唯一 Active 验证卡和证据状态入口，无实际 Runtime Report 不得填报 PASS。 |
 | 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |

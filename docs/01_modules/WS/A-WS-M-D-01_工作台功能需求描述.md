@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：WS
 文档职责：WS 工作台模块级功能需求描述——声明模块级 REQ-WS-*，承接产品级 REQ-CORE-001/002/004/007/010/011/012/013/014/015，界定 workspace 生命周期 / 文件 I/O 与显式 save / 工作区概览与受限 DiskState 读取 / WorkspaceOperation 前置裁决与直接磁盘执行 / CreateDocumentBundle / WorkspaceTimeline / 多文档逐项保存 / 原生 DOCX 来源保护与 BDocx 编辑副本落盘 / 提案控制态 / 控制态缓存与重启可恢复
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/002/004/007/010/011/012/013/014/015）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§2、§3 CreateDocumentBundle、§5.2、§5.10、§5.11、§5.11.1、§5.13、§5.14、§6）、A-WS-M-T-02_工作区资源操作技术设计.md、A-WS-M-S-02_工作区资源操作状态机设计.md、A-CORE-C-P-01_APC.md（§4.1 WS 职责、§6 save 状态机、§9 文件系统安全边界）、A-SYS-I-P-01_数据结构定义.md、A-SYS-M-S-01_状态机总图.md、ADU.md（§3.2 REQ 规范）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/002/004/007/010/011/012/013/014/015）、A-CORE-X-D-02_Agent1.0冻结能力基线.md（P0/P1 与不可突破边界）、A-WS-M-T-02_工作区资源操作技术设计.md、A-WS-M-S-02_工作区资源操作状态机设计.md、A-CORE-C-P-01_APC.md（§4.1 WS 职责、§6 save 状态机、§9 文件系统安全边界）、A-SYS-I-P-01_数据结构定义.md、A-SYS-M-S-01_状态机总图.md、ADU.md（§3.2 REQ 规范）
 直接承接：WS L2 技术设计（workspace 模型 / 文件系统 / 时间轴 / workspace.db 完整 schema / save·落盘·还原状态机）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；解除 SYS 侧 SY-03（workspace.db 完整列）与 SY-04（save 状态机）
 使用边界：本文是 L1 功能需求描述层，仅声明模块级 REQ-WS-*，**不定义技术规则**（RULE/CHAIN/CONSTRAINT/TERM/STATE_MACHINE 见 WS L2）；**代码不得直接映射 REQ**（ADU §3.2）；workspace.db 具体表结构、时间轴存储模型、状态机枚举、缓存策略归 WS L2；diff 终态转移语义归 DE（WS 只负责持久化与落盘执行）
 变更要求：WS 职责或 workspace 边界变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2 req_id 规则（序号不复用，废弃改 superseded）
@@ -169,7 +169,7 @@ title: CreateDocumentBundle 的资源创建与内容投影边界
 owner_module: WS
 status: active
 summary: 新建文档由 CreateDocumentBundle 同时冻结 WorkspaceOperationPlan 与预先生成的初始内容；DecisionRequest 确认后 WS 重新核验并创建空的目标 DiskState，ED 打开标签，DE/ED 再以该磁盘基线投影初始内容 Diff。资源创建与内容 Diff 是顺序衔接但生命周期独立的两段
-source_doc: REQ-CORE-010、A-AG-M-D-02 §5.10、A-WS-M-T-02 §6
+source_doc: REQ-CORE-010、A-CORE-X-D-02 §3/§4、A-WS-M-T-02 §6
 acceptance: 确认前文件树无目标；确认后目标立即成为真实磁盘节点并打开标签；初始内容 Diff 接受不再次写盘，显式保存写入既有目标；初始 Diff 仅在资源、DiskState、LogicalState 三重基线未变时可通过拒绝删除刚创建文件，否则卡片失效且目标保留；任一失败均不得产生幽灵文件或虚假完成
 open_issues: 无；详细对象、状态与补偿见 A-WS-M-T-02 / A-WS-M-S-02
 -->
@@ -180,7 +180,7 @@ title: 原生 DOCX 来源保护与 BDocx 编辑副本保存
 owner_module: WS
 status: active
 summary: 原生 DOCX 仅作为预览、读取、分析和创建 BDocx 编辑副本的只读来源；创建副本 Proposal 在预览成功后仅产生未保存 LogicalState，用户显式保存才在 workspace 中生成新的 DOCX。任何编辑、接受、拒绝、失效或保存失败都不得改写原生 DOCX
-source_doc: REQ-CORE-004、REQ-CORE-010、A-AG-M-D-02 §6
+source_doc: REQ-CORE-004、REQ-CORE-010、A-CORE-X-D-02 §3/§4
 acceptance: 编辑原生 DOCX 的请求没有原地写盘路径；副本 Proposal 的接受不创建物理文件，保存成功才创建新的 DOCX 并记入时间轴；拒绝有效 Proposal 或关闭未保存副本不影响原文件；转换/保存失败保留副本 LogicalState 且原文件、既有副本均不变
 open_issues: 副本命名、来源关联、冲突策略及 DOC 转换与 WS 保存的状态机/接口归 DOC/WS/DE/ED DESIGN Scope
 -->
@@ -191,7 +191,7 @@ title: WorkspaceOperation 前置裁决与直接磁盘执行
 owner_module: WS
 status: active
 summary: 对创建文件夹、创建文档、删除、重命名、移动等工作区资源操作，WS 接收不可变 WorkspaceOperationPlan；DecisionRequest 确认前不执行，确认后重新核验路径、冲突、递归清单、打开会话、内容 Diff 与磁盘基线，再直接修改 DiskState。资源操作不进入内容 DiffCard 生命周期，也不等待第二次“保存文件树”
-source_doc: REQ-CORE-012、A-AG-M-D-02 §5.11（CAP-11）、A-AG-M-D-01（REQ-AG-011）、A-WS-M-T-02
+source_doc: REQ-CORE-012、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-011）、A-WS-M-T-02
 acceptance: 决策卡冻结并显示所有资源项和影响；拒绝不改盘；确认后脏标签阻断删除/重命名/移动，有效内容 Diff 作为影响展示并在成功执行后失效；每个执行结果与补偿收据可追溯；批量操作 fail-fast 并逆序补偿，补偿不完整进入 partial_failed；进程重启后未完成操作进入 Interrupted，绝不自动执行；所有路径保持在 workspace 内且不覆盖冲突目标。人工文件树入口（用户 UI 直调）保持直写，但删除/重命名必须遵守 BR-WS-STATE-009 安全底线（dirty 阻断、快照/时间轴可恢复、Diff 失效）（WS-RESOURCE-WRITE-GUARD-01）。
 open_issues: 无；共享对象、接口与状态机见 A-WS-M-T-02 / A-WS-M-S-02
 -->
@@ -202,7 +202,7 @@ title: 最小格式转换目标副本的 CreateDocumentBundle
 owner_module: WS
 status: active
 summary: 对 TXT→Markdown、Markdown→TXT 的转换目标副本，来源文件或来源 LogicalState 不被 WS 改写；目标资源创建沿 CreateDocumentBundle 执行：确认后先创建目标 DiskState，再将转换结果作为初始内容 Diff 投影。来源不是资源操作或内容 Diff 的写入目标
-source_doc: REQ-CORE-013、A-AG-M-D-02 §5.13（CAP-13）、A-DOC-M-D-01（REQ-DOC-006）、A-DE-M-D-01（REQ-DE-006）
+source_doc: REQ-CORE-013、A-CORE-X-D-02 §3/§4、A-DOC-M-D-01（REQ-DOC-006）、A-DE-M-D-01（REQ-DE-006）
 acceptance: 打开来源取当前 LogicalState、未打开来源取有读取时点的 DiskState；确认前不创建目标，确认后仅目标副本成为文件树/DiskState 节点并记录 WorkspaceTimeline；转换内容 Diff 的接受只改卡片生命周期，保存写入既有目标；目标后续编辑使旧转换卡失效但不删除目标；路径冲突、外部变化或写盘失败时不自动覆盖、不伪报成功；HTML、通用 DOCX、批量或原地转换不进入本能力
 open_issues: 转换目标的未保存元数据、源/目标基线、格式/路径校验、冲突时机、时间轴关系、重启恢复与错误形状归 WS/DOC/DE/ED/AG/SYS DESIGN Scope；本 L1 不定义状态机、接口或 I/O 算法
 -->
@@ -213,7 +213,7 @@ title: 删除与恢复的前置裁决及 WorkspaceTimeline
 owner_module: WS
 status: active
 summary: 对已保存文件/文件夹的删除与恢复，WS 使用 WorkspaceOperationPlan + DecisionRequest 前置裁决；确认后重新核验冻结影响清单、来源基线、冲突与脏会话，直接修改 DiskState，并写入含类型化资源快照和恢复元数据的 WorkspaceOperationEntry。永久清理不属于 Agent 1.0
-source_doc: REQ-CORE-014、A-AG-M-D-02 §5.11.1（CAP-12）、A-DE-M-D-01（REQ-DE-007）
+source_doc: REQ-CORE-014、A-CORE-X-D-02 §3/§4、A-DE-M-D-01（REQ-DE-007）
 acceptance: 确认前磁盘目标保持原状；非空文件夹递归范围、数量和来源快照冻结并在执行前重验，任一变化或脏会话均阻断；成功后真实移除目标、使相关内容 Diff 失效、更新标签/引用并写入可恢复 WorkspaceTimeline 条目；恢复按条目类型执行且冲突不自动覆盖；失败或补偿不完整必须显示真实状态，不得伪报成功。人工文件树删除同样写入可恢复 WorkspaceTimeline 条目并受 dirty 阻断（BR-WS-STATE-009，WS-RESOURCE-WRITE-GUARD-01）
 open_issues: 永久清理和保留期不在 1.0；其余契约由 A-WS-M-T-02 / A-WS-M-S-02 定义
 -->
@@ -224,7 +224,7 @@ title: 多个既有文档的独立保存与失败隔离
 owner_module: WS
 status: active
 summary: 在 AG 已确认并冻结的多既有文档目标清单内，WS 对每个目标独立持久化 Proposal 控制态、执行其自身 LogicalState/DiskState 分流、接受后的背景原子写盘或显式保存、失败保留和时间轴结果；不得把多个目标合并为批量保存、全有或全无事务或共同回滚
-source_doc: REQ-CORE-015、A-AG-M-D-02 §5.14（CAP-15）、A-DE-M-D-01（REQ-DE-008）
+source_doc: REQ-CORE-015、A-CORE-X-D-02 §3/§4、A-DE-M-D-01（REQ-DE-008）
 acceptance: WS 只接收冻结目标清单中的逐目标保存请求；每个目标保存前各自核验路径、基准和外部变化，单一目标冲突/删除/结构变化/写盘失败不写入该目标且不影响其他目标；有 LogicalState 的目标仅在其显式保存时写盘，背景目标仅在其自身卡接受时原子写盘并在打开后失去该资格；每个成功、失败和未保存状态可独立追溯；原生 DOCX、删除/文件树整理/格式转换混合操作不进入本保存路径
 open_issues: 冻结目标身份、逐目标队列/并发、控制态持久化、跨目标事件排序、时间轴/重启恢复、失败形状与 Trace 归 WS/DE/ED/AG/REF/SYS DESIGN Scope；本 L1 不定义批处理或事务接口
 -->

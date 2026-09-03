@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：PRV
 文档职责：PRV 预览与输出模块级功能需求描述——声明模块级 REQ-PRV-*，承接产品级 REQ-CORE-004/009 与 v1 范围冻结（音视频预览纳入、Excel/PPT 仅预览不编辑），界定原生 docx 语料实测只读预览 / Excel·PPT 预览 / 音视频预览 / 打印与导出
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-004/009）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§6）、A-CORE-C-P-01_APC.md（§4.1 PRV 职责、§9）、A-CORE-X-L-01_总体开发路线图.md（§2 v1 范围冻结：音视频纳入、Excel/PPT 编辑确认不做）、A-SYS-C-T-01_系统总体架构.md（§4 PRV→WS）、A-DOC-M-T-01_文档转换技术设计.md（预览链 LibreOffice→PDF、BR-DOC-DATA-001 双链分离、DOC-03 归属待联合）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004）、ADU.md（§3.2）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-004/009）、A-CORE-X-D-02_Agent1.0冻结能力基线.md（P0/P1 与不可突破边界）、A-CORE-C-P-01_APC.md（§4.1 PRV 职责、§9）、A-CORE-X-L-01_总体开发路线图.md（§2 v1 范围冻结：音视频纳入、Excel/PPT 编辑确认不做）、A-SYS-C-T-01_系统总体架构.md（§4 PRV→WS）、A-DOC-M-T-01_文档转换技术设计.md（预览链 LibreOffice→PDF、BR-DOC-DATA-001 双链分离、DOC-03 归属待联合）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004）、ADU.md（§3.2）
 直接承接：PRV L2 技术设计（预览呈现契约 / 打印导出管线）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；与 DOC 联合解除 DOC-03（Excel/PPT 等预览转换归属）
 使用边界：本文是 L1 功能需求描述层，仅声明 REQ-PRV-*；**代码不得直接映射 REQ**（ADU §3.2）；docx 预览转换归 DOC（PRV 消费 PDF）；编辑归 ED；文件读取经 WS；Excel/PPT/音视频的转换/解码归属在 §7 暴露联合确认
 变更要求：PRV 职责或预览范围变更（尤其涉 v1 冻结项）须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2

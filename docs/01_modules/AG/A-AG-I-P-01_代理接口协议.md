@@ -3,8 +3,8 @@
 文档状态：A
 负责模块：AG
 文档职责：AG 代理模块级接口协议（L2 接口层）——声明代理回合、工具、辅助、流式事件与 agent-edit-1.0 Runtime Profile 的冻结接口
-上游约束：A-SYS-I-P-02_IPC协议.md（骨架、流式逻辑契约）、A-SYS-I-P-03_云接口契约.md（CLOUD-GATE/INVOKE、SM-SYS-01、X-SEQ-001）、A-AG-M-T-01_代理技术设计.md（BR-AG-* 规则、AG-TURN/TOOL/ASSIST、X-FORBID-006）、A-AG-M-S-01_代理状态机设计.md（SM-AG-01/02/03）、A-DE-I-P-01_DiffEdit接口协议.md（generate_diff 承接产出）、A-ED-I-P-01_编辑器接口协议.md（apply_edit/装饰层）、A-REF-M-T-01（注入载荷）、ADU.md
-直接承接：实现期 AG command 注册；门禁/网关经 ENT 客户端通道（A-SYS-I-P-03 契约）；产出交 DE（de.generate_diff）；辅助采纳经 ED（ed.apply_edit）；记忆/知识/引用注入经 AST/KB/REF 供给
+上游约束：A-SYS-I-P-02_IPC协议.md（骨架、流式逻辑契约）、A-SYS-I-P-03_云接口契约.md（CLOUD-GATE/INVOKE、SM-SYS-01、X-SEQ-001）、A-AG-M-T-01_代理技术设计.md（BR-AG-* 规则、AG-TURN/TOOL/ASSIST、X-FORBID-006）、A-AG-M-S-01_代理状态机设计.md（SM-AG-01/02/03/04）、A-DE-I-P-01_DiffEdit接口协议.md（generate_diff 承接产出）、A-ED-I-P-01_编辑器接口协议.md（apply_edit/装饰层）、A-REF-M-T-01（注入载荷）、ADU.md
+直接承接：AG command 与 AgTurnEvent wire 契约；门禁/网关经 A-SYS-I-P-03；产出交 DE（de.generate_diff）；辅助采纳经 ED（ed.apply_edit）；显式引用由 REF 供给，用户明确选择的项目记忆按引用消费
 使用边界：本文声明 AG 接口语义级签名；门禁/网关协议字段归 A-SYS-I-P-03（不重定义）；落盘经 DE→WS（不重复）；呈现经 ED（不重复）；不新增 RULE/CHAIN/CONSTRAINT/TERM；工具清单/提示词/模型档延实现期运营配置
 变更要求：门禁前置语义变更涉 APC §13 须先授权；产出接口变更复核 DE；辅助采纳接口变更复核 ED；工具回注接口变更复核 SM-AG-02
 治理成熟度：draft
@@ -30,7 +30,7 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 |---|---|---|---|---|
 | `ag.start_turn` | session_id、`runtime_profile=agent-edit-1.0`、DocRef、prompt、已打开文档 `open_doc_snapshots`、注入引用集（`references` 主通道；旧 `mentions/block_refs` 兼容，可空）、`Channel<AgTurnEvent>` 句柄 | turn_id（SM-AG-01 启动）；流式经 channel 回推（§2.1）；后端先落 `draft`，终态更新 status | **gate_denied**（无订阅/断网，不可绕过）；`AG_RUNTIME_PROFILE_UNSUPPORTED`；组装失败；阻断歧义返回澄清且不调用模型 | 经门禁→网关；BR-AG-STATE-001/VERIFY-001/PERSIST-001/DATA-002/004/005 |
 | `ag.cancel_turn` | turn_id | 触发后端 CancellationToken；中断流和后续工具调度；返回 Cancelled 或 already_terminal | 未知 turn_id→not_found | SM-AG-01 cancel；幂等 |
-| `ag.turn_stream`（`Channel<AgTurnEvent>`） | turn_id、channel（随 start_turn 传入） | AgTurnEvent 六分支回推（§2.1） | 流式错误→Error 分支（统一错误形状） | BR-SYS-STATE-002 三类终态 |
+| `ag.turn_stream`（`Channel<AgTurnEvent>`） | turn_id、channel（随 start_turn 传入） | AgTurnEvent 十分支回推（§2.1） | 流式错误→Error 分支（统一错误形状） | BR-SYS-STATE-002 / BR-SYS-STATE-008 |
 | `ag.list_sessions` | — | 当前 workspace 的代理编辑会话元数据列表；含 activeSessionId | 无 active workspace → 空列表 | BR-AG-PERSIST-001（标签元数据全恢复） |
 | `ag.save_session` | session_id、title、mode、archived、open_index、is_active | ok | 无 active workspace → 错误 | BR-AG-PERSIST-001（标签元数据持久化） |
 | `ag.save_turn` | session_id、turn_id、status、rel_path、AgentTurnPayloadV1 | ok；upsert payload 与 turn 记录 | status 非五枚举值 → 拒绝 | BR-AG-PERSIST-001（完整 payload 由前端 UI 投影回写） |
@@ -42,8 +42,8 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 
 ### §2.1 流式回传契约（AgTurnEvent · 前后端双轨同步冻结点）
 
-> 本节是 A-AG-X-L-02 PI-AG-10C 的契约落点——前端轨（PI-AG-10F）与后端轨（PI-AG-10B）共同承接的
-> **唯一真源**。**物理传输** Tauri 2 `Channel<AgTurnEvent>`（SY-02 选型，per-call channel，不经
+> 本节是 AgTurnEvent 前后端 wire contract 的**唯一真源**，由 A-AG-X-L-04 的实现与验证工作承接。
+> **物理传输** Tauri 2 `Channel<AgTurnEvent>`（SY-02 选型，per-call channel，不经
 > dispatch 信封）；**事件语义**承 BR-SYS-STATE-002 三终态。本节为语义级接口签名，不新增注册类治理块。
 >
 > **与 SYS `ipc::StreamEvent` 的关系（分层不同·非重复）**：`ipc::StreamEvent` 是通用 IPC 传输契约
@@ -52,7 +52,7 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 > 但传输层不同故用独立 wire 类型，**不复用** `StreamEvent`（避免把领域事件埋进通用 `data`），
 > 也不与之重名。
 
-**AgTurnEvent 七分支**（`src-tauri/src/ipc/mod.rs`，serde `tag="type"` snake_case）：
+**AgTurnEvent 十分支**（`src-tauri/src/ipc/mod.rs`，serde `tag="type"` snake_case）：
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +61,14 @@ pub enum AgTurnEvent {
     Chunk        { turn_id: String, text: String },                                  // 模型输出文本分片
     ToolRequest  { turn_id: String, tool_name: String, params: serde_json::Value },  // 模型请求工具（SM-AG-02 激活）
     ToolResult   { turn_id: String, tool_name: String, result: String, success: bool }, // 工具结果回注（展示）
-    DiffProposed { turn_id: String, diff_id: String, rel_path: String },             // ChangeProposal→DE 产出待裁决
+    DiffProposed { turn_id: String, diff_id: String, rel_path: String,
+                   task_run_id: Option<String> },                                    // ChangeProposal→DE 产出待裁决
+    StepProgress { turn_id: String, action: String, label: String,
+                   detail: Option<String> },                                         // 真实当前动作
+    DecisionRequestProposed { turn_id: String, request_id: String,
+                              kind: String, payload: serde_json::Value },             // 任务级裁决待确认
+    DecisionRequestResolved { turn_id: String, request_id: String,
+                              outcome: String },                                     // confirm / cancel
     ClarificationRequired { turn_id: String, text: String },                         // 澄清等待（非终态，BR-SYS-STATE-007）
     Done         { turn_id: String, stop_reason: String },                           // 正常完成 / cancelled
     Error        { turn_id: String, code: String, message: String, retriable: bool },// 错误（含可重试）
@@ -70,11 +77,13 @@ pub enum AgTurnEvent {
 
 > **澄清等待事件（2026-08-14，AG-1.0-IMP-CLARIFICATION-01 / BR-SYS-STATE-007）**：
 > `ClarificationRequired` 是**非终态**事件——回合不终结、不锁存终态、不发 Done；前端投影为
-> `clarifying` 等待态（AgentTurnStatus），用户补充输入时先取消澄清回合再发起新回合，或在此阶段取消。
+> `clarifying` 等待态（AgentTurnStatus）；用户补充输入时使用同一 `turn_id` 受控重入原 AgentTurn 的
+> Assembling，不取消、不创建新 AgentTurn；用户也可在此阶段显式取消。
 > 澄清期间不调用门禁/网关/工具（BR-AG-STATE-001 blocking ambiguity 语义）。
 
 > **事件顺序即时序契约（2026-08-07，承接 BR-AG-UI-001 / TERM-AG-011）**：同一回合内
-> `Chunk → ToolRequest → ToolResult → (DiffProposed) → 下一轮 Chunk → …` 按发射顺序经 Channel
+> `Chunk / StepProgress / ToolRequest / ToolResult / DiffProposed / DecisionRequest* / ClarificationRequired / 终态`
+> 按实际发射顺序经 Channel
 > FIFO 到达前端；前端据此重建"正文↔工具卡↔Diff 卡"的交错时序（消息片段），接口分支本身不变。
 
 **ag_start_turn 命令签名**（独立 `tauri::command`，不走 dispatch 信封）：
@@ -181,6 +190,9 @@ interface AgentSessionDeleteResult {
   deleted_payloads: number;
 }
 ```
+
+`mode="build"` 仅是历史/additive 会话元数据兼容值，不对应 Agent 1.0 可启动 RuntimeProfile、入口或模型调用；
+`ag.start_turn` 在 1.0 仍只接受 `agent-edit-1.0`。
 
 `ag.list_sessions` 必须返回全部代理编辑会话元数据；前端打开/切换 workspace 后仅 eager-load
 `is_active=true` 的会话 turns，其余会话点击时调用 `ag.list_turns(session_id)` 懒加载。
@@ -308,7 +320,7 @@ AG 历史持久化投影：完成→`completed`；`Done(cancelled)`→`cancelled
 BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML 草稿的 BDocx diff 不得走后台 raw apply；前端应投
 `DE_BDOCX_DRAFT_REQUIRED`，避免把 HTML 当 docx 字节写入。
 
-**冻结约定**：本 schema 一经冻结，字段增删须前后端**双侧同步**并回写本节；桩阶段（GW 未就绪）后端经 `route_start_turn` 桩从 channel 推 `Chunk×N + Done`，前端零改动切换真实。
+**冻结约定**：本 schema 一经冻结，字段增删须前后端**双侧同步**并回写本节；历史桩或测试事件不得反向定义当前 wire contract。
 
 ### §2.1.1 1.0 内部运行契约
 
@@ -346,7 +358,8 @@ ProjectReportV1 (TERM-AG-021)
   uncertainties[]
 ```
 
-`CapabilityGrantV1` 只在当前 turn 有效；注册表中存在但 grant 未包含的工具必须拒绝。上述对象默认只持久化
+`CapabilityGrantV1` 只在当前 turn 有效；注册表中存在但 grant 未包含的工具必须拒绝，Prompt/tool manifest
+只投影 grant 中的精确最小工具集。上述对象默认只持久化
 版本、摘要、哈希和选择原因，不持久化用户正文副本、密钥或模型隐藏推理。
 
 ## §3 工具调用回注接口（AG-TOOL / SM-AG-02）
@@ -366,6 +379,8 @@ ProjectReportV1 (TERM-AG-021)
 > DecisionRequest 必须引用 plan_id、冻结摘要、影响和基线，模型参数不能伪造确认。
 > 用户明确新建文档时生成 CreateDocumentBundle：初始内容在确认前生成；确认后先执行资源创建，再以
 > operation_id/origin 调用 `de.generate_diff` 投影初始内容。
+> 每次工具结果回注后若要再次调用 provider，必须为该 continuation 重新取得真实 GatePassed；首轮或上一轮
+> GateOutcome 不得复用，门禁拒绝/错误结束当前循环并投影 Error，不得继续模型调用。
 
 | 工具 | 参数（语义） | 结果 | 权限 | 约束 |
 |---|---|---|---|---|
@@ -406,7 +421,8 @@ ProjectReportV1 (TERM-AG-021)
 ### §4.2 富文档 BlockOperation
 
 `propose_edit(operation=block_ops)` 仅接受当前活动 HTML LogicalState。`base` 必须精确匹配当前
-`sessionVersion/contentHash`；operations 为 1..32 个不重复 blockId 的 `replace_node`。后端先校验
+`sessionVersion/contentHash`；operations 必须非空、不重复，并同时满足当轮 manifest/schema 与执行 guard
+给出的有效上限；接口文档不另设数字。后端先校验
 动态能力、fingerprint、expectedNodeType、blockId/attrs 保持和受控 inline/mark Schema，再从可信
 快照补齐 beforeNode。任一项失败整批不生成 PendingDiff；成功后以 `patch_kind=block_ops` 和完整
 beforeNode/afterNode 投影给 DE/ED，不生成替换后的 HTML 字符串。
@@ -420,10 +436,10 @@ beforeNode/afterNode 投影给 DE/ED，不生成替换后的 HTML 字符串。
 | 已打开文档 | `open_doc_snapshots` / `AgentReadContext` / `AgentEditableSnapshot` | 本文 §2.1、A-SYS-I-P-01 §3、A-ED-I-P-01 §4 |
 | 未打开文档 | DiskState 读取结果 / `AgentEditableSnapshot` | 本文 §2.1、A-WS-I-P-01 §3、A-DOC-M-T-01 §2 |
 | 输入引用 | REF ReferencePayload / 注入载荷 | A-REF-M-T-01 §4、A-REF-I-P-01 §2.1 |
-| 记忆 | AST 供给（MemoryInjection） | A-AST-M-T-01 §4 |
-| 知识库 | KB 召回（KnowledgeInjection） | A-KB-M-T-01 §3 |
+| 用户明确选择的项目记忆 | REF/AST 归一的 data-only ReferencePayload | A-AST-M-D-01、A-REF-M-T-01 |
+| 知识库/模板 | `agent-edit-1.0` 不自动召回、不自动注入 | A-CORE-X-D-02 §3 |
 
-> REF/AST/KB 的供给接口随其各自 I-P（待建）声明；本文只定 AG 消费侧的组装入口。
+> 本文只定义 AG 消费入口；项目记忆必须有当前 workspace 的用户明确选择事实，工具注册或存在资产不构成注入授权。
 
 ## §5.1 BDocx 表格语义工具（AG-TURN）
 
@@ -482,15 +498,16 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
   OpenDocSnapshot；active live 序列化失败或非激活 session 基线缺失时阻断，不允许 DiskState 兜底。
 - **工具循环**：未注册/越权工具拒绝回注；上限生效；写意图工具不直写。
 - **辅助采纳路径**：request_assist→mount_decoration→apply_edit 走正常脏态（非 diff），与 ED G5 联调。
-- 流式三终态、回合历史恢复、与 DE/ED/WS/REF/AST/KB G5 全链联调。
+- 流式三终态、回合历史恢复、与 DE/ED/WS/REF 的当前主链接口联调；项目记忆仅验证用户明确选择的
+  data-only 引用，KB/TPL 自动供给不属于 Agent 1.0 验收。
   历史恢复须覆盖 completed/error/cancelled/gate_rejected/draft；只 eager-load 激活会话，其余懒加载。
 
 ## §7 债务与盲区
 
 - 工具注册清单/权限分级表、提示词与模型档延实现期运营配置（接口不锁）。
 - request_assist 的节流（前端侧 vs 接口侧）实现期定；候选呈现 schema 联合 ED/DE。
-- 构建移交/回落接口（takeover/fallback）随 CBT I-P 联合声明（本文不预定义，AG-04）。
-- REF/AST/KB 供给接口待其 I-P；本文 §5 仅占消费入口。
+- P2 Build/CBT 不属于本接口协议；未来独立 RuntimeProfile 必须重新定义接口，不复用历史 takeover/fallback。
+- 外部内容、项目记忆等 P1 能力只有完成各自 DESIGN Scope 后才扩展消费接口；当前不得由 `ReferencePayload` 类型存在推断能力已开放。
 - 历史保留策略覆盖 200MB 软上限、软归档与用户删除单个历史会话。
 
 ## 变更记录
@@ -498,6 +515,7 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
 | 2026-08-30 | v1.26 | AG-CONFORMANCE-CODE-S4A：`ag_start_turn` 新增版本化 AgentContextFacts；新增只读 `report_project` 完成工具与同轮读取证据失败关闭协议。 |
+| 2026-08-31 | v1.35 | AG-DOC-CONSOLIDATION-01：事件协议收敛到当前十个 AgTurnEvent 分支；澄清复用原 turn_id 并回到 Assembling；CapabilityGrant 仅携带当轮精确允许集，每次 provider continuation 必须重新门禁；数值上限仅由运行时 manifest/schema/guard 作真源。 |
 | 2026-06-12 | v1.0 | 初版（实现前置件，AI 调用面）：AG 接口协议——chat 回合 4（start/cancel/stream/list，门禁不变量内建）、工具回注 1（tool_result 校验回注）、内联辅助 1（request_assist 静默失败、采纳经 ed.apply_edit）、上下文组装对接索引（WS/REF/AST/KB）；门禁前置 X-SEQ-001 固化为接口不变量、产出唯一经 de.generate_diff；零新增注册项；债务（工具清单/节流/接管接口/供给接口延后） |
 | 2026-06-24 | v1.1 | 新增 §2.1 流式回传契约（AgTurnEvent · PI-AG-10C 冻结点）：AgTurnEvent 六分支（Chunk/ToolRequest/ToolResult/DiffProposed/Done/Error）、ag_start_turn 命令签名（Channel<AgTurnEvent> 传输，承 SY-02 选型）、三终态映射（BR-SYS-STATE-002）、前端消费映射（agStore/deStore）、关联命令形状与冻结约定；§2 表格 start_turn/turn_stream 行改为 Channel<AgTurnEvent> 模型并指向 §2.1。前后端双轨同步真源，零新增注册类治理块 |
 | 2026-06-26 | v1.2 | 命名落地修正：AG 回合流式事件定名 **AgTurnEvent**（避开 src-tauri/src/ipc/mod.rs 既有 SYS `StreamEvent` 重名），§2.1 补「与 SYS StreamEvent 分层不同·非重复」说明（通用 dispatch 传输契约 vs AG 领域 per-call Channel）；PI-AG-10C 落地同步 |

@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：AST
 文档职责：AST 记忆协同 G3 开发计划——承接型 Plan Item，承接 AST-MEMORY 链路与 BR-AST-* 规则、SM-AST-01，明确文件范围/@GOV/A 类债务/验收
-上游约束：A-CORE-X-L-02（P4）、APC §5/§6/§12、A-AST-M-T-01/A-AST-M-S-01、A-AST-I-P-01、A-AG-X-L-01（写入触发 PI-AG-05/B-2、供给消费）、A-CORE-X-R-01
+上游约束：A-CORE-X-L-02（P4）、A-CORE-X-D-02（自动记忆为 P2；Agent 1.0 仅显式选择的项目记忆）、APC §5/§6/§12、A-AST-M-T-01/A-AST-M-S-01、A-AST-I-P-01、A-AG-M-D-01（REQ-AG-017）、A-AG-M-T-01（BR-AG-STATE-004 关闭边界）、A-CORE-X-R-01
 直接承接：本计划驱动 AST 实现；@GOV 追溯 BR-AST-*；SM-AST-01 转移矩阵
 使用边界：L3 承接型 Plan Item；组装裁剪归 AG、持久化经 workspace.db（不重复）；@GOV 在实现代码
 变更要求：写入触发与 AG PI-AG-05（B-2）双侧对齐；PI 增删保持承接可追溯

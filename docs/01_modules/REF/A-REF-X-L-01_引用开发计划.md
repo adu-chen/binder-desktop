@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：REF
 文档职责：REF 引用 G3 开发计划——承接型 Plan Item，承接 REF-INJECT 链路与 BR-REF-* 规则，明确文件范围/@GOV/A 类债务/验收（REF 无状态机，豁免成立）
-上游约束：A-CORE-X-L-02（P3）、APC §5/§6/§12、A-REF-M-T-01、A-REF-I-P-01、A-WS-X-L-01（read/search）、A-ED-X-L-01（locate_block 锚校验、扩展点）、A-AG-X-L-01（注入消费）、A-CORE-X-R-01
+上游约束：A-CORE-X-L-02（P3）、APC §5/§6/§12、A-REF-M-T-01、A-REF-I-P-01、A-WS-X-L-01（read/search）、A-ED-X-L-01（locate_block 锚校验、扩展点）、A-AG-M-T-01/A-AG-I-P-01（当前注入消费契约）、A-CORE-X-R-01
 直接承接：本计划驱动 REF 实现；@GOV 追溯 BR-REF-*
 使用边界：L3 承接型 Plan Item；读取经 WS、锚校验经 ED（不重复）；@GOV 在实现代码
 变更要求：PI 增删保持承接可追溯

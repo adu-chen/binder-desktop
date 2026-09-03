@@ -38,7 +38,6 @@ const agServiceMock = vi.hoisted(() => ({
   newAgentSession: vi.fn(() => "s-new"),
   switchAgentSession: vi.fn(),
   closeAgentSession: vi.fn(),
-  setAgentMode: vi.fn(),
   cancelActiveTurn: vi.fn(),
 }));
 
@@ -49,7 +48,6 @@ vi.mock("../../services/agService", () => ({
   newAgentSession: agServiceMock.newAgentSession,
   switchAgentSession: agServiceMock.switchAgentSession,
   closeAgentSession: agServiceMock.closeAgentSession,
-  setAgentMode: agServiceMock.setAgentMode,
   cancelActiveTurn: agServiceMock.cancelActiveTurn,
 }));
 

@@ -1334,11 +1334,6 @@ export function closeAgentSession(id: string): void {
   void persistAgentSessionsMetadata();
 }
 
-export function setAgentMode(mode: AgMode): void {
-  agStore.setMode(mode);
-  void persistAgentSessionsMetadata();
-}
-
 const turnSaveChain = new Map<string, Promise<void>>();
 
 export async function deleteAgentSession(sessionId: string): Promise<void> {

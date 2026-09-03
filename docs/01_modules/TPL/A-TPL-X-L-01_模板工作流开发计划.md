@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：TPL
 文档职责：TPL 模板/工作流 G3 开发计划——承接型 Plan Item，承接 TPL-FLOW 链路与 BR-TPL-* 规则、SM-TPL-01，明确文件范围/@GOV/A 类债务/验收
-上游约束：A-CORE-X-L-02（P4）、APC §5/§6/§12、A-TPL-M-T-01/A-TPL-M-S-01、A-TPL-I-P-01、A-AG-X-L-01/A-CBT-X-L-01（执行委托）、A-CORE-X-R-01
+上游约束：A-CORE-X-L-02（P4）、A-CORE-X-D-02（模板工作流为 P2 后续 Profile）、APC §5/§6/§12、A-TPL-M-T-01/A-TPL-M-S-01、A-TPL-I-P-01、A-AG-M-T-02（agent-edit-1.0 自动模板注入关闭）、A-CBT-X-L-01（未来执行委托）、A-CORE-X-R-01
 直接承接：本计划驱动 TPL 实现；@GOV 追溯 BR-TPL-*；SM-TPL-01 转移矩阵
 使用边界：L3 承接型 Plan Item；执行通道归 AG/CBT、落盘经 DE→WS（不重复）；@GOV 在实现代码
 变更要求：PI 增删保持承接可追溯

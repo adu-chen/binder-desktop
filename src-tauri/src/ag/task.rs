@@ -22,16 +22,6 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-fn is_terminal(status: TaskRunStatus) -> bool {
-    matches!(
-        status,
-        TaskRunStatus::Completed
-            | TaskRunStatus::Failed
-            | TaskRunStatus::Cancelled
-            | TaskRunStatus::Interrupted
-    )
-}
-
 /// SM-AG-04 事件（A-AG-M-S-01 §2.2 主表）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskRunEvent {

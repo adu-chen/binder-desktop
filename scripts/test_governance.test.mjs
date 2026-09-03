@@ -104,6 +104,61 @@ describe('Test Governance', () => {
     expect(plan.commands.map((entry) => entry.id)).toEqual(['test-governance', 'governance-audit']);
   });
 
+  it('ADUS 完整登记 Agent 需求、需求映射与状态机', () => {
+    const parseBlocks = (source, type) => [...source.matchAll(
+      new RegExp(`<!--[ \\t]*${type}[ \\t]*\\r?\\n([\\s\\S]*?)-->`, 'g'),
+    )].map((match) => Object.fromEntries(match[1]
+      .split(/\r?\n/)
+      .map((line) => {
+        const separator = line.indexOf(':');
+        return separator < 0
+          ? null
+          : [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+      })
+      .filter(Boolean)));
+
+    const requirementSource = readFileSync(
+      join(DEFAULT_ROOT, 'docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md'),
+      'utf8',
+    );
+    const designSources = [
+      'docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md',
+      'docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md',
+      'docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md',
+    ].map((path) => readFileSync(join(DEFAULT_ROOT, path), 'utf8'));
+    const requirements = parseBlocks(requirementSource, 'REQ');
+    const mappings = designSources.flatMap((source) => parseBlocks(source, 'REQ_MAP'));
+    const activeRequirements = requirements.filter((entry) => entry.status === 'active');
+    const deferredRequirements = requirements
+      .filter((entry) => entry.status === 'deferred')
+      .map((entry) => entry.req_id)
+      .sort();
+
+    expect(requirements).toHaveLength(17);
+    expect(activeRequirements).toHaveLength(13);
+    expect(deferredRequirements).toEqual([
+      'REQ-AG-010', 'REQ-AG-012', 'REQ-AG-014', 'REQ-AG-016',
+    ]);
+    for (const requirement of activeRequirements) {
+      expect(mappings.some((mapping) => (
+        mapping.req_id === requirement.req_id && mapping.status === 'mapped'
+      )), `${requirement.req_id} 缺少 mapped REQ_MAP`).toBe(true);
+    }
+
+    const adus = readFileSync(
+      join(DEFAULT_ROOT, 'docs/00_core/A-CORE-C-R-01_ADUS.md'),
+      'utf8',
+    );
+    expect(adus).toContain('### 需求注册表');
+    expect(adus).toContain('### 需求映射表');
+    expect(adus).toContain('### 状态机注册表');
+    expect(adus).toMatch(/\|\s*REQ-AG-010\s*\|[^\n]*\|\s*deferred\s*\|/);
+    expect(adus).toMatch(/\|\s*REQ-AG-009\s*\|\s*CONSTRAINT\s*\|\s*X-SHARED-002\s*\|\s*mapped\s*\|/);
+    for (const machineId of ['SM-AG-01', 'SM-AG-02', 'SM-AG-03', 'SM-AG-04']) {
+      expect(adus).toMatch(new RegExp(`\\|\\s*${machineId}\\s*\\|\\s*AG\\s*\\|`));
+    }
+  });
+
   it('产品能力图谱变更强制触发其自测、治理自测与审计', () => {
     const plan = buildRelatedTestPlan(DEFAULT_ROOT, ['.governance/product-capability-registry.json'], registry, inventory);
     expect(plan.status).toBe('passed');

@@ -3,9 +3,9 @@
 文档状态：A
 负责模块：AG
 文档职责：AG 代理模块级 L2 技术设计（规则 SSOT）——代理回合、工具调用、上下文/提示词、会话与辅助能力，并定义 agent-edit-1.0 Runtime Profile 的可靠执行边界
-上游约束：A-AG-M-D-01_代理功能需求描述.md（REQ-AG-001~006、AG 1.0 EP 能力基线）、A-CORE-C-P-01_APC.md（§4.1/§4.3 云薄端、§6、§13）、A-SYS-I-P-03_云接口契约.md（SM-SYS-01、X-SEQ-001、CLOUD-GATE/INVOKE、TERM-CLOUD-001~004）、A-SYS-I-P-02_IPC协议.md（BR-SYS-STATE-002 流式终态、统一错误形状）、A-SYS-I-P-01_数据结构定义.md（X-SHARED-001、BR-SYS-PERSIST-001）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（ED-DECOR、X-FORBID-005）、A-DE-M-D-01_DiffEdit功能需求描述.md（REQ-DE-001 产出消费）、ADU.md（§3）
-直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 AG 规则 SSOT，代码经 @GOV 映射；SM-AG-01/02/03 在 A-AG-M-S-01 定义并登记总图；AG 产出契约供 DE G2 承接；注入消费契约对接 REF
-使用边界：本文是 AG 规则 SSOT；不重定义门禁/网关契约（归 A-SYS-I-P-03，本文承接引用）、不定义 diff 生成与终态（归 DE）、不定义 @mention 解析（归 REF）、不定义装饰层机制（归 ED）、不锁定模型/提示词/工具具体清单（延实现期与运营配置）、状态机内部归 A-AG-M-S-01；项目级构建编排归 CBT（构建移交/回落契约见 BR-CBT-STATE-002，双侧已闭合）
+上游约束：A-AG-M-D-01_代理功能需求描述.md（REQ-AG-001~009/011/013/015）、A-CORE-X-D-02_Agent1.0冻结能力基线.md、A-CORE-C-P-01_APC.md（§4.1/§4.3 云薄端、§6、§13）、A-SYS-I-P-03_云接口契约.md（SM-SYS-01、X-SEQ-001、CLOUD-GATE/INVOKE、TERM-CLOUD-001~004）、A-SYS-I-P-02_IPC协议.md（BR-SYS-STATE-002 流式终态、统一错误形状）、A-SYS-I-P-01_数据结构定义.md（X-SHARED-001、BR-SYS-PERSIST-001）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004）、A-ED-M-T-01_编辑器技术设计.md（ED-DECOR、X-FORBID-005）、A-DE-M-D-01_DiffEdit功能需求描述.md（REQ-DE-001 产出消费）、ADU.md（§3）
+直接承接：本文 RULE/CHAIN/CONSTRAINT/TERM 为 AG 规则 SSOT，代码经 @GOV 映射；SM-AG-01/02/03/04 在 A-AG-M-S-01 定义并登记总图；AG 产出契约供 DE 承接；注入消费契约对接 REF
+使用边界：本文是 AG 规则 SSOT；不重定义门禁/网关契约（归 A-SYS-I-P-03，本文承接引用）、不定义 diff 生成与终态（归 DE）、不定义 @mention 解析（归 REF）、不定义装饰层机制（归 ED）、不锁定模型/提示词/工具具体清单（延实现期与运营配置）、状态机内部归 A-AG-M-S-01；BuildMode/CBT 属 P2 后续 Profile，不是 `agent-edit-1.0` 的能力或调用路径
 变更要求：门禁前置语义变更须先经 APC 授权（§13 不得绕过订阅门禁）；工具权限边界变更须与 DE/WS 联合复核；回合历史持久化结构变更遵守 BR-SYS-PERSIST-001；TERM 一经 term_ref 引用其 en 不可更改
 治理成熟度：draft
 ---
@@ -69,11 +69,10 @@ zh: 编辑模式
 en: EditMode
 forbidden: 对话模式, chat模式, chat 模式, 对话编辑模式
 -->
-代理编辑（TERM-AG-008）面板双模式之一（2026-07-04 人类裁决）：默认面向当前文档的 AI 精确修改
+代理编辑（TERM-AG-008）面板在 Agent 1.0 的当前运行模式：默认面向当前文档的 AI 精确修改
 （编辑器感知 + 块级锚定，内容产出一律经 DE diff 裁决、人最后裁定），兼具文件创建、工作区资源整理、
 项目感知、对话与资源获取。资源操作统一生成 WorkspaceOperationPlan，并以 DecisionRequest 前置裁决；
-确认后由 WS 重新核验并直接修改 DiskState，不生成资源 DiffCard。模式是默认
-姿态非能力墙——与代理构建互相复用彼此能力。注：编辑器/文档层的「编辑态 vs 预览态」（docx 打开
+确认后由 WS 重新核验并直接修改 DiskState，不生成资源 DiffCard。Agent 1.0 不存在可与之互相复用能力的 BuildMode 运行路径。注：编辑器/文档层的「编辑态 vs 预览态」（docx 打开
 形态）与本模式无关，不得混用。
 
 <!-- TERM
@@ -83,10 +82,9 @@ zh: 代理构建
 en: BuildMode
 forbidden: 构建模式, agent模式, agent 模式, Chat Build, chat-build
 -->
-代理编辑（TERM-AG-008）面板双模式之一（2026-07-04 人类裁决；2026-08-07 中文称呼更名
-「代理构建」，旧称「构建模式」退役为禁用别名，en/term_id 不变）：对话阶段（多轮需求搜集→项目蓝图
-BuildBlueprint，属本模式下的普通代理回合）→ 显式触发构建（明确指令或构建按钮）→ 计划确认 →
-执行构建（期间不可发起对话，仅中断）→ 完成后回落对话继续编辑调整。构建执行编排归 CBT（SM-CBT-01）。
+后续 Profile 的保留名称（2026-08-07 中文称呼更名为「代理构建」，旧称「构建模式」退役为禁用别名，en/term_id 不变）。
+当前仅用于第四个模型偏好槽位与历史会话元数据兼容，不定义 RuntimeProfile、入口、回合、状态机、CBT 接管、工具或验收语义。
+任何未来启用都必须由新的 REQUIREMENT/DESIGN Scope 重新定义，不得从本 TERM 推导旧工作流。
 
 <!-- TERM
 term_id: TERM-AG-008
@@ -95,9 +93,9 @@ zh: 代理编辑
 en: AgentEdit
 forbidden: 对话编辑, 对话编辑板块
 -->
-AI 编辑三层之第三层（面板级，2026-07-04 人类裁决定名）：agent 面板承载的完整 AI 能力域
-（编辑模式 EditMode + 代理构建 BuildMode），会话持久化、产出经 DE diff 裁决、工具调用、项目
-构建。沿革：旧版曾以「对话编辑」总称整个 agent 能力，该词后又错位为 DE 模块中文名——三重身份
+AI 编辑三层之第三层（面板级，2026-07-04 人类裁决定名）：Agent 1.0 面板承载 EditMode、会话持久化、
+经 DE diff 裁决的产出与受限工具调用；BuildMode 是 P2 后续 Profile，不属于当前 AgentEdit 运行边界。
+沿革：旧版曾以「对话编辑」总称整个 agent 能力，该词后又错位为 DE 模块中文名——三重身份
 致混，2026-07-04 裁定：正式名「代理编辑」，「对话编辑」全面退役为禁用别名；DE 模块更名
 **Diff Edit**（不再有中文名）。
 AI 编辑三层：①辅助续写（TERM-AG-004，光标级）②局部修改（TERM-AG-003，选区/光标级）
@@ -201,7 +199,7 @@ forbidden: 确认卡, 裁决项, decision 实例, 确认请求
 -->
 任务级通用裁决项（类型：权限 permission / 方案 plan_choice / 范围 scope / 人工确认 manual_confirm），与内容
 裁决分离：生命周期 proposed → resolved（confirm / cancel），confirm/cancel 驱动 TaskRun 的 UserConfirm /
-UserCancel 事件；内容层 DiffCard 的接受/拒绝不驱动 TaskRun（A-AG-M-D-01 §5b，REQ-AG-015）。
+UserCancel 事件；内容层 DiffCard 的接受/拒绝不驱动 TaskRun（本文 §7.2、A-AG-M-S-01 §2.2，REQ-AG-015）。
 
 <!-- TERM
 term_id: TERM-AG-018
@@ -212,7 +210,7 @@ forbidden: 计划, 任务计划清单, plan 单元, 执行计划
 -->
 IntentResult 判定复杂目标后创建的可展示操作计划（非模型思维链）：保存步骤列表、步骤依赖、当前游标、所需
 授权、确认点标记与阶段结果；简单目标单 AgentTurn 直行不建 TaskPlan；执行按片段推进，每片段重新授权，
-任务级确认后自动开始下一片段且不后台续跑（A-AG-M-D-01 §5b，REQ-AG-015）。
+任务级确认后自动开始下一片段且不后台续跑（本文 §7.2、A-AG-M-S-01 §2.2，REQ-AG-015）。
 
 <!-- TERM
 term_id: TERM-AG-019
@@ -257,9 +255,9 @@ assistant 自由文本、目录列表或模型自述不构成 ProjectReport（BR
 ## §1 文档定位
 
 ```
-REQ-CORE-001/002/006/008/009 → REQ-AG-001~005（AG L1）→ 本文（SSOT）→ 代码(@GOV)
+CORE 冻结基线 → REQ-AG-*（AG L1）→ 本文（已映射需求的规则 SSOT）→ A-AG-M-S-01 / A-AG-I-P-01 → 代码(@GOV)
 本文 ←承接← A-SYS-I-P-03（门禁/网关契约，不重定义）、A-ED-M-T-01（ED-DECOR）、REF（注入载荷）
-本文 →驱动→ A-AG-M-S-01（SM-AG-01/02/03）→登记→ A-SYS-M-S-01 总图（四条 planned 行转 active）
+本文 →驱动→ A-AG-M-S-01（SM-AG-01/02/03/04）→登记→ A-SYS-M-S-01 总图
 本文产出契约 →供→ DE G2（AI 产出→diff 生成）承接
 ```
 
@@ -269,7 +267,7 @@ REQ-CORE-001/002/006/008/009 → REQ-AG-001~005（AG L1）→ 本文（SSOT）�
 ## §2 技术分层与边界
 
 ```
-AG 代理（本文 SSOT）——代理编辑（TERM-AG-008）面板：编辑模式 + 代理构建（构建编排归 CBT）
+AG 代理（本文 SSOT）——Agent 1.0 代理编辑（TERM-AG-008）面板：EditMode；BuildMode/CBT 为 P2 后续 Profile
   ├─ 代理回合（§3，AG-TURN）        组装→门禁→网关流式→产出处置；历史持久化原则
   ├─ 工具调用循环（§4，AG-TOOL）    注册/权限校验→执行→回注→循环控制
   ├─ 上下文组装（§5）               文档/注入载荷/本地资产，workspace 限界
@@ -351,10 +349,7 @@ DecisionRequest，确认后由 WS 创建真实资源并打开编辑标签；只�
 显式编辑目标集，再以该 DiskState 为基线投影初始内容 Diff（承 A-WS-M-T-02 §6；内容 Diff 不得创建资源，
 X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）。一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
 LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot 中的
-LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。识别到
-**项目级整体构建意图**（从蓝图构建完整项目——多文件修改本身不再是升级判据）时提议触发构建
-（判据归 BR-CBT-STATE-002），构建在**原对话窗口**内实现、不强制切换模式；编辑/构建两模式互相
-复用彼此能力。**DE 侧协同复核**同步调整：`de.generate_diff` 校验 target 在 workspace 内且属回合
+LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。Agent 1.0 不识别或触发 Build/CBT 接管；遇到超出当前冻结能力的请求时只能明确拒绝或收敛到已授权的 Agent 1.0 能力，不得复用 BR-CBT-STATE-002。**DE 侧协同复核**同步调整：`de.generate_diff` 校验 target 在 workspace 内且属回合
 显式编辑目标集（当前文档 + 显式指向的既有文档 + 经确认追加的既有文档；CreateDocumentBundle 建盘并追加后
 目标才可进入内容链路），越出者拒绝。
 （沿革：原文本限单文档、跨文档一律升级 CBT——2026-06-12 B-4 裁定；2026-07-04 人类澄清编辑模式
@@ -520,16 +515,14 @@ rule_id: BR-AG-DATA-001
 域: DATA
 -->
 回合上下文的来源限定为：已打开文档 OpenDocSnapshot（LogicalState）、未打开文档 DiskState 读取结果、
-REF 注入载荷（@mention 与 ReferencePayload，含来源标识）、AST/KB/TPL 本地资产快照（经 REF 显式引用进入；其生成/筛选/管理归各 owner）；
+REF 注入载荷（@mention 与 ReferencePayload，含来源标识）、用户在当前 workspace 当轮明确选择的项目记忆快照（经 REF 作 data-only 引用进入；其管理归 AST）；
 一切 workspace 内容读取限定 workspace 内（X-FORBID-004）；超出上下文预算时裁剪策略必须确定性且用户显式选定的注入优先保留，裁剪发生时对调用
 可追溯（不静默丢弃显式注入）。预算数值与裁剪算法延实现期标定，本规则锁来源限定与裁剪优先级语义。
 已打开文档读取存在硬优先级：`source=active_editor/active_editor_session/open_editor_session` 的 LogicalState > 未打开文档
 DiskState；任何已打开文档不得从 DiskState 或 loadedContent 旧快照取上下文主事实。ReferencePayload.selection
 必须在发送时按当前 AgentReadContext 校验；无法校验的 selection 只能作为用户原始选区快照呈现，不得作为当前
 文档事实。
-`runtime_profile=agent-edit-1.0` 下 AST/KB/TPL 不做自动检索或自动注入；只有用户显式引用且来源可校验时
-才可作为 data-only 引用进入本轮。该限制是 1.0 发布收敛，不取消后续 profile 按 BR-AG-DATA-005
-确定性门控启用补强层的能力。
+`runtime_profile=agent-edit-1.0` 下 AST/KB/TPL 不做自动写入、检索或注入；只有用户当轮明确选择的项目记忆且来源可校验时，才可作为 data-only 引用进入本轮。未来 Profile 不得从 BR-AG-DATA-005 推导自动补强语义，须重新进入 REQUIREMENT/DESIGN Scope。
 
 <!-- RULE
 rule_id: BR-AG-DATA-008
@@ -570,36 +563,37 @@ uncertainties；路径越出 workspace、来源不匹配、缺少不确定性声
 ## §5.1 提示词 / 上下文组装架构（AG-TURN，2026-06-12 补 B-1）
 
 > 解除 A-CORE-X-R-01 B-1：提示词**文本/措辞/模型档**属实现期运营配置（不入规则）；本节锁设计层
-> 的**组装骨架**——分层、注入顺序、三类回合的结构差异。
+> 的**组装骨架**——分层、注入顺序、当前两类回合的结构差异。
 >
 > **L3 细化与版本优先（2026-06-24，迭代版）**：组装骨架的完整分层（含引用/记忆/知识/模板等
 > binder 特有层）、当前轮次原则与意图沿用判定、补强层污染隔离与**分层截断序**，由 L3 专项
 > A-AG-M-T-02_提示词架构设计.md 细化（BR-AG-DATA-004/005）。**职责单一化（去重）**：本节（BR-AG-DATA-002）
-> 自此只锁**组装骨架**（分层/注入顺序/三类回合差异），**截断序统一归 M-T-02 BR-AG-DATA-005**，
-> 不再在本节内嵌裁剪优先级排序；与 M-T-02 表述冲突时**以 M-T-02 为准**。
+> 自此只锁**组装骨架**（分层/注入顺序/当前两类回合差异），**截断序统一归 M-T-02 BR-AG-DATA-005**，
+> 不再在本节内嵌裁剪优先级排序。冲突裁决按职责分开：组装骨架与层序以本文 BR-AG-DATA-002 为准；
+> 当前轮意图沿用以 BR-AG-DATA-004 为准；数据隔离与截断序以 M-T-02 BR-AG-DATA-005 为准。
 
 **组装分层**（自上而下）：
 
 | 层 | 内容 | 性质 |
 |---|---|---|
 | 系统提示词层 | 产品角色定位 + 硬约束边界声明（修改须经 diff 裁决、不得越权落盘、workspace 限界） | 设计锁边界，文本实现期 |
-| 工具/能力定义层 | 可用工具清单与契约（AG-TOOL 注册项投影） | 清单实现期运营 |
-| 上下文注入层 | 来源限定承 BR-AG-DATA-001（显式 @mention 不被静默丢弃）；已打开文档以 OpenDocSnapshot LogicalState 为当前轮主事实，记忆/知识为补强层——完整分层与**截断序**见 M-T-02 §2/§5（BR-AG-DATA-005，**当前文档 P0 永不截**） | 顺序设计锁；截断序细化归 M-T-02 |
+| 工具/能力定义层 | 当轮 CapabilityGrant.allowed_tools 的精确契约投影；注册表/Profile 不得扩大允许集 | 允许集为当轮动态真值；具体工具实现归运行时 |
+| 上下文注入层 | 来源限定承 BR-AG-DATA-001（显式 @mention 不被静默丢弃）；已打开文档以 OpenDocSnapshot LogicalState 为当前轮主事实；仅用户明确选择的项目记忆可作 data-only 显式引用，自动记忆/知识/模板不装配。完整分层与**截断序**见 M-T-02 §2/§5（BR-AG-DATA-005，**当前文档 P0 不得静默截断**） | 顺序设计锁；截断序细化归 M-T-02 |
 | 用户输入层 | 本轮 prompt / 编辑触发上下文 | — |
 
-**实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举为唯一真源
+**实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举作为 BR-AG-DATA-002 的唯一实现投影
 （装配顺序、审计层名、版本登记共用），取代早期仅供测试的 `assemble_prompt`/`PromptSkeleton` 四层骨架。
 固定层序为 `System → RuntimeControl → IntentHint → AgentContextFacts → CurrentDocument → Reference → History →
 CrossDocHistory → User`（CrossDocHistory 仅显式沿用时注入）；`RuntimeControl` 独立为结构化 system
 消息（与自然语言提示词分离，P2 修复）；历史聚合为单块 DATA-ONLY 消息并保留 role 序列（P5/P7 修复）；
 `system_prompt_version` 由提示词内容 hash 派生（P3 修复）；预算 gate 使用序列化 messages+tools 统一口径
-（P4 修复）；审计直接读取 `message.layer` 字段（P6 修复）。本登记不改变 BR-AG-DATA-002 组装骨架语义。
+（P4 修复）；审计直接读取 `message.layer` 字段（P6 修复）。规范真源仍是 BR-AG-DATA-002；`LayerKind` 必须投影它，不得反向修改文档语义。
 
 **实现登记（2026-08-11，AG-INTENT-COMPOSITE-01 复合请求意图优先级）**：`resolve_intent_result` 新增 `create_requested` 前置判定（非否定 ∧ Create 强词 ∧ Document/Workspace 目标 → CreateDocument，先于 `verb==Edit` 分支）；修复「新建…文档，并优化排版」被判 Edit 的复合意图缺陷；detect_verb 首命中与 V2/V3 语义不变；补复合意图回归测试。语义详见 A-AG-M-T-02 §4。
 
 **实现登记（2026-08-11，AG-WS-LAYERED-01 模型分层感知工作区）**：`list_docs` 分层——无参数 → 概览（mode=overview：顶层目录+文件计数+总文件数；豁免 ≤30 文件且 ≤4KB → mode=full 全量）；`path` → 该目录一层直接子项（mode=children）。树枚举只含索引（路径/类型/计数），正文唯一入口 read_doc/search_text；前端 ws.list_docs 与 search_text 内部遍历保持全量语义。prompt 分层引导 + CreateDocument 专项。语义详见 A-AG-M-T-02 §4。
 
-**实现登记（2026-08-11，AG-TASK-01 多提案批次衔接 + block_ops 删除）**：`block_ops` 新增 `delete_node`（仅 content 原子块，afterNode=null 删除标记，容器拒绝不级联；前后端原子应用 + reverse 精确恢复记录位置重建）；放开同回合多提案（≤5 批、同轮并行、每批 base 递增）；批次元数据 `batch={id,index,total}` 随 style_ops `_batch` 键落库，接受路由返回 batch_remaining 衔接提示；DiffCard 批次徽标 + 删除渲染；提示词单批上限 24→32。语义详见 A-AG-M-T-02 §4。
+**历史实现登记（2026-08-11，AG-TASK-01）**：当时登记了多提案批次、`block_ops.delete_node` 与提示词单批上限从 24 调到 32。该数值不再构成设计常量；当前批次/操作上限只由运行时 capability/config 持有，Prompt 必须投影同一值，不得在文档或提示词另设数字。多提案与删除的有效语义仍以 Active 规则、DE/ED 契约和运行时能力为准。
 
 **实现登记（2026-08-13，AG-STRATEGY-05 文档改写安全闭合）**：BDocx capability manifest、工具 schema、运行时声明和服务端 guard 统一为「无表格且无图片才允许整篇 `replace_document`」；表格或图片存在、或新 HTML 引入其中任一结构时，返回 `AG_BDOCX_REPLACE_DOCUMENT_REQUIRES_STRUCTURED_OPS`，不产生 PendingDiff。`block_ops` 修复同锚点插入/替换互相覆盖：replace/delete 先写、插入后写，同坐标多插入按原 proposal 顺序展示；forward→reverse 保证恢复原 LogicalState。`propose_edit` 工具结果只确认 pending proposal，前端以 `queued/applied/failed` 单独投影草稿预览并输出不含正文的 `[de-draft-preview]` 运行事件；接受仅确认、保存才写盘，卡片不得提前宣称完成。
 
@@ -613,39 +607,30 @@ rule_id: BR-AG-DATA-002
 回合的提示词与上下文必须按统一组装骨架构建：系统提示词层（声明产品角色与硬约束边界——修改经
 diff 裁决、不越权落盘、workspace 限界）→ 工具/能力定义层 → 上下文注入层（来源与注入顺序承
 BR-AG-DATA-001；完整分层、当前轮次优先与**截断序**归 A-AG-M-T-02 BR-AG-DATA-004/005，冲突以
-M-T-02 为准）→ 用户输入层；三类回合采用结构骨架差异——**编辑回合**（代码名 TurnKind::Chat 沿用；
-含对话历史 + 修改建议导向 diff 产出）、**CBT 构建任务**（任务计划上下文 + 单文件产出导向，承
-A-CBT-M-T-01）、**辅助回合**（辅助续写/局部修改；轻量、无系统对话历史；辅助续写与局部修改必须
+M-T-02 为准）→ 用户输入层；`agent-edit-1.0` 的两类回合采用结构骨架差异——**编辑回合**（代码名 TurnKind::Chat 沿用；
+含对话历史 + 修改建议导向 diff 产出）、**辅助回合**（辅助续写/局部修改；轻量、无系统对话历史；辅助续写与局部修改必须
 按 assist_kind 使用不同 system prompt，避免 3 候选 JSON 契约与单正文改写契约混用）。提示词文本/措辞/模型档属实现期运营配置不入规则；
 本规则同时锁可信边界：只有产品不变量、运行策略和经本轮允许的工具契约可进入 system instruction；
-当前文档、显式引用、历史、记忆、知识和工具结果必须作为 data-only PromptDataEnvelope 注入，并保留
-来源、freshness、hash、trust 与 token 元数据，不得因数据正文含命令文字而获得指令权限。每次调用形成
+当前文档、显式引用、历史、用户明确选择的项目记忆和工具结果必须作为 data-only PromptDataEnvelope 注入，并保留
+来源、freshness、hash、trust 与 token 元数据，不得因数据正文含命令文字而获得指令权限；`agent-edit-1.0`
+不得自动检索或注入记忆、知识、模板。每次调用形成
 带 runtime/version、intent_id、context trace、tool manifest hash 和预算结果的 PromptPackage；调试追踪
-默认不保存用户正文、密钥或会话令牌。本规则锁组装分层、注入顺序、可信边界与三类回合骨架差异
-（**截断序不在本规则，归 BR-AG-DATA-005，去重单一化**）。
+默认不保存用户正文、密钥或会话令牌。本规则锁组装分层、注入顺序、可信边界与当前两类回合骨架差异
+（**截断序不在本规则，归 BR-AG-DATA-005，去重单一化**）。Build/CBT 的 Prompt 骨架不属于
+`agent-edit-1.0`，由未来独立 Profile 的需求与设计定义。
 
-## §5.2 记忆写入触发对接（AG-TURN，2026-06-12 补 B-2）
-
-> 解除 A-CORE-X-R-01 B-2：AST 侧写入已就绪（ast.capture + SM-AST-01），本节补 AG 侧**何时触发**
-> 写入的对接契约。
+## §5.2 Agent 1.0 记忆关闭边界（AG-TURN）
 
 <!-- RULE
 rule_id: BR-AG-STATE-004
 主链路: AG-TURN
 域: STATE
 -->
-回合产出处置完成后（SM-AG-01 HandingOff/Completed 终态），AG 须**异步触发记忆写入**：将回合中
-浮现的可沉淀事实候选交 AST（`ast.capture`，传 origin_turn 来源回合标识），由 AST 自动落库
-（A-AST-M-T-01 BR-AST-STATE-001）。记忆写入**异步进行、不阻塞回合终态、失败不影响回合**（记忆为
-增益非关键路径，不进 X-FORBID-006 落盘路径）；可沉淀事实的判定机制（模型/规则）延实现期。本规则
-锁「回合终态后异步触发、传 origin_turn、不阻塞」的对接语义，写入落库语义归 AST。该 AG→AST 转移
-登记 A-SYS-M-S-01 §5（X-INTER-001）。
-`runtime_profile=agent-edit-1.0` 不激活自动记忆写回，因此不要求为 1.0 发布主链调用 AST；后续 profile
-启用该能力时仍必须完整遵守本规则，不得以同步写入或失败传播方式简化。
-> **1.0 关闭处置登记（2026-08-14 · AG-1.0-DOC-CLOSURE-DCLOSURE-01）**：代码实体 `ag/memory_link.rs`
-> （on_turn_terminal / try_capture）与 `ast/capture.rs`（SM-AST-01 自动写入机）在 1.0 **保留但未接回合链**
-> （全库无生产调用方，仅自身测试引用），与 A-AST-M-T-01 §4.1「BR-AST-STATE-001 自动写入在 1.0 关闭」
-> 一致。后续 profile 启用本能力时须接线并按本规则异步触发；在关闭期间不得被误用为同步写入路径。
+`runtime_profile=agent-edit-1.0` 的回合终态不得触发项目记忆提议、写入、检索或注入；会话历史、编辑历史、
+外部文件与工具结果也不得自动转存为项目记忆。只有用户在当前 workspace 明确选择的既有项目记忆条目，
+才可作为当轮 data-only 引用进入上下文。代码中保留的 `ag/memory_link.rs`、`ast/capture.rs` 或工具注册不构成
+激活依据，不得存在生产调用方。未来 Profile 若启用自动记忆，必须新开 REQUIREMENT/DESIGN Scope 建立
+独立规则、状态机、接口和验证，不得从本规则推导启用语义。
 
 ## §6 辅助续写与局部修改（AG-ASSIST）
 
@@ -712,7 +697,7 @@ A-ED-M-T-01 §5.1）经 ed.apply_edit 视为用户编辑直改；chat/agent **�
 
 ### §6.1 模型注册表与能力偏好（AG-MODEL-CATALOG）
 
-模型配置体系的客户端承载（REQ-AG-006）：模型注册表（来源分层）与能力偏好（四类能力独立配模型）
+模型配置体系的客户端承载（REQ-AG-006）：模型注册表（来源分层）与四个能力偏好槽位
 均由客户端维护（localStorage 偏好，P0-P1 沿用；统一设置体系并入后立项）；预设模型清单由云端
 下发（GET /models，桌面端仅消费，TERM-AG-010）；调用时按能力偏好解析 provider/model 传入
 既有 AG-ASSIST / AG-TURN 链路，门禁与密钥语义不变（X-FORBID-001/002、X-SEQ-001）。
@@ -740,11 +725,12 @@ rule_id: BR-AG-DATA-007
 主链路: AG-MODEL-CATALOG
 域: DATA
 -->
-能力模型偏好解析必须满足：四类能力（autocomplete / inline-assist / agent-edit / build）各自维护
+能力模型偏好解析必须满足：四个槽位（autocomplete / inline-assist / agent-edit / build）各自维护
 一项偏好，值为「跟随全局默认」或「显式指定 modelKey」二者之一；解析结果必须是注册表内存在的
 modelKey，注册表条目被删除后引用它的显式偏好回落为「跟随全局默认」，不得产出悬空 modelKey；
 解析为**纯同步逻辑**，不引入跨请求状态；解析出的 provider/model 仅作为调用参数传入既有链路，
-不改变门禁前置与服务端裁决路径（X-FORBID-002）。
+不改变门禁前置与服务端裁决路径（X-FORBID-002）。`build` 只保存后续 Profile 的偏好数据，不授予
+Agent 1.0 入口、调用、工具或 RuntimeProfile 能力。
 
 ## §7 跨模块约束（CONSTRAINT）
 
@@ -775,7 +761,7 @@ constraint_id: X-FORBID-006
 X-FORBID-005（不绕过 ED 接口）、X-SHARED-001（共享结构经 SYS）、X-SEQ-003/X-INTER-001
 （建机前置与跨模块转移登记）。
 
-### 7.2 TaskRun 编排重构契约（2026-08-15 · AG-1.0-TASKRUN-REWORK-DESIGN-01，承接 A-AG-M-D-01 §5b / A-AG-M-S-01 §2.2）
+### 7.2 TaskRun 编排契约（承接 REQ-AG-015 / A-AG-M-S-01 §2.2）
 
 本节只适用于 IntentResult 判定为复杂目标或必须跨执行片段继续的目标。简单目标只创建单个 AgentTurn，
 不创建 `task_runs`、TaskPlan、TaskStep 或任务级状态投影。是否进入 TaskRun 必须在任何 TaskRun 持久化或
@@ -818,6 +804,11 @@ X-FORBID-005（不绕过 ED 接口）、X-SHARED-001（共享结构经 SYS）、
 - CreateDocumentBundle 的资源创建完成后，初始内容 Diff 只是普通内容提案事件；它不把 TaskRun 再次置为 WaitingConfirm。TaskRun 可在提案成功投影后继续执行后续无需额外权限的步骤。
 
 ## §8 需求到规则映射（REQ_MAP）
+
+当前映射边界：REQ-AG-001～009、011、013、015、017 已由本文、A-AG-M-S-01 或已列明的跨模块 Active 规则承接。
+REQ-AG-010（网络研究）、012（格式转换）、014（多个既有文档）、016（外部文件内容）仍为
+`deferred / DESIGN_PENDING`，不得从代码、工具注册、Prompt 或历史情况说明推导设计完成；补齐时只能在独立 DESIGN Scope
+新增或映射规则。本节只登记真实存在的映射，不为追求全量映射伪造 RULE。
 
 <!-- REQ_MAP
 req_id: REQ-AG-001
@@ -886,7 +877,7 @@ target_id: BR-AG-DATA-002
 status: mapped
 -->
 <!-- REQ_MAP
-req_id: REQ-AG-001
+req_id: REQ-AG-017
 target_type: RULE
 target_id: BR-AG-STATE-004
 status: mapped
@@ -975,6 +966,12 @@ target_type: CONSTRAINT
 target_id: X-SHARED-001
 status: mapped
 -->
+<!-- REQ_MAP
+req_id: REQ-AG-009
+target_type: CONSTRAINT
+target_id: X-SHARED-002
+status: mapped
+-->
 
 ## §9 测试与验收
 
@@ -1009,28 +1006,24 @@ status: mapped
 - **已打开非激活文档样式类自动应用**：文本/块替换由 ED session 事务承接；StyleOp 若缺少无 ProseMirror
   runtime 的可逆事务实现，必须让 DiffCard 失效并记录债务，不能降级为 DiskState 应用。
 - **节流与成本参数**（AG-03 余项）：机制已锁，数值延 G5 标定。
-- **构建移交/回落**（AG-04）：与 CBT 的状态机对接联合 CBT G2，本文不预定义接管协议。
-- ~~单文档回合的跨文档产出边界待裁定~~ **已补（B-4，2026-06-12）→ 2026-07-04 再裁：单文档铁律废止，现行边界见 BR-AG-DATA-003**。原 B-4 结论（限当前文档、
-  跨文档升级 CBT、DE 侧协同校验）已被取代。以下原始记录留痕——
-- **单文档回合的跨文档产出边界待裁定**（2026-06-12 人类指示后续细化）：编辑模式代理回合能否产出
-  指向 @mention 引用文档（非当前文档）的 ChangeProposal 未显式裁定——倾向限定当前文档、跨文档
-  修改一律升级 CBT 构建路径；G3 前与 DE 联合补一句边界裁定。
+- **P2 Build/CBT**：不属于 `agent-edit-1.0`；本文不持有接管/回落协议。未来启用须独立 Profile 与新的需求、设计和验证。
+- **多个既有文档**：P1 需求已在 REQ-AG-014 冻结，当前 L2 仅有 ExplicitEditTargetSet/DecisionRequest 的部分公共边界，完整规则仍为 `DESIGN_PENDING`；不得退回已被取代的“跨文档一律升级 CBT”口径。
+- **网络研究、格式转换、外部文件内容**：REQ-AG-010/012/016 已冻结但尚未完成 AG L2 全量映射，当前不得以工具存在或实现片段宣称设计完成。
 - 模型选择、提示词、上下文预算数值属实现期/运营配置，不入规则。
 
-## §11 后续动作
+## §11 后续设计入口
 
-1. 落地后随 `npm run governance:generate` 注册：AG-TURN/AG-TOOL/AG-ASSIST 链路、
-   BR-AG-STATE-001/002/003、BR-AG-VERIFY-001、BR-AG-DATA-001、BR-AG-PERSIST-001 规则、
-   X-FORBID-006 约束、TERM-AG-001~004、REQ_MAP 进 ADUS。
-2. 续 A-AG-M-S-01（SM-AG-01 回合机 / SM-AG-02 工具循环机 / SM-AG-03 辅助回合机），回填总图
-   四条 planned 行（代理回合 / tool-call / autocomplete / inline-assist）。
-3. 待人类宣布 AG G2 闭合；DE G2 承接产出契约；CBT G2 联合接管协议。
+1. Active 规则、状态机与接口的现有差异在对应 DESIGN Scope 内修正，并以本文件、A-AG-M-S-01、A-AG-I-P-01 分层持有真值。
+2. REQ-AG-010/012/014/016 只能在各自独立 DESIGN Scope 补齐 REQ_MAP、状态/接口（如需要）和验证卡；在此之前保持 `DESIGN_PENDING`。
+3. Build/CBT、自动记忆/知识、模板工作流等 P2 路线不得复用本节作为启用依据，必须先回到 REQUIREMENT Scope。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-01 | v2.54 | AG-MAPPING-REGISTRY-CLOSURE-01：同步四条 DESIGN_PENDING 需求的 deferred 状态；REQ-AG-009 补充映射到 Agent 1.0 共享运行时对象专门约束 X-SHARED-002，不新增业务规则。 |
 | 2026-08-29 | v2.52 | AG-CONFORMANCE-CODE-S4A：注册 TERM-AG-020 AgentContextFacts / TERM-AG-021 ProjectReport、BR-AG-DATA-008 / BR-AG-OBS-001 与 REQ-AG-009 完整映射；冻结版本化编辑器事实、独立 Prompt 层、只读读取证据账本及 report_project 失败关闭契约。 |
+| 2026-08-31 | v2.53 | AG-DOC-CONSOLIDATION-01：收敛 Agent 1.0 设计边界；Build/CBT 只作 P2 未来 Profile，禁止自动记忆/知识库/模板写入、检索和注入；按四台状态机建立当前映射，REQ-AG-010/012/014/016 明确保持 DESIGN_PENDING，不伪造设计闭环。 |
 | 2026-06-11 | v1.0 | 初版（AG G2 首件，P3 G2 起步）：AG 规则 SSOT——代理回合生命周期与产出唯一出口、门禁前置承接（无绕过路径）、回合历史本地持久化原则、工具调用循环（注册/权限/上限/写盘禁令）、上下文组装（来源限定与裁剪优先级）、内联辅助与自动补全（节流/门禁/装饰层/采纳即编辑）；注册链路 AG-TURN/AG-TOOL/AG-ASSIST（均 P1）、规则 6 条、约束 X-FORBID-006、术语 TERM-AG-001~004（AgentTurn/ToolCall/InlineAssist/Autocomplete）；REQ_MAP（REQ-AG-001~005）；债务（工具清单/历史表列/节流参数/CBT 接管延后记明） |
 | 2026-06-12 | v1.1 | Q5 澄清项留痕（人类指示后续细化）：§10 债务新增「单文档回合的跨文档产出边界待裁定」（倾向限定当前文档、跨文档升级 CBT，G3 前与 DE 联合裁定） |
 | 2026-06-24 | v1.2 | 接入 L3 细化 A-AG-M-T-02（提示词架构迭代版）并做职责去重：§5.1 增「L3 细化与版本优先」声明；上下文注入层表格行去除旧裁剪排序「显式 @mention > 记忆/知识 > 当前文档」（将当前文档排最低，与当前轮次原则冲突），改委派 M-T-02 BR-AG-DATA-005（当前文档 P0 永不截）；BR-AG-DATA-002 移除内嵌裁剪优先级排序、收敛为只锁组装骨架（分层/顺序/三类回合），截断序统一归 BR-AG-DATA-005，消除「功能重合·术语不同」的逻辑重复；冲突一律以 M-T-02 为准 |
@@ -1068,7 +1061,7 @@ status: mapped
 | 2026-08-11 | v2.34 | AG-TASK-01：§5.1 登记多提案批次衔接 + block_ops 删除——delete_node（content 原子块/reverse 恢复）、单回合 ≤5 批、batch 元数据落库与接受衔接、DiffCard 批次徽标/删除渲染、单批上限 24→32；语义详见 A-AG-M-T-02 §4 |
 | 2026-08-14 | v2.37 | AG-1.0-DOC-CLOSURE-DCLOSURE-01：§5.2（BR-AG-STATE-004）补 1.0 关闭处置登记——memory_link.rs / ast capture 自动写入实体保留但未接回合链（仅测试引用），与 A-AST-M-T-01 §4.1 关闭语义一致，后续 profile 启用时须按本规则异步接线。 |
 | 2026-08-15 | v2.38 | AG-1.0-DEBT-CLEANUP-01：UNC-22 移除旧 dispatch `ag.start_turn` 桩（注册/分发/route 三处；前端唯一入口独立 async `ag_start_turn` + Channel 不变）；UNC-13 确认 workspace-only 旧路径 persist_turn/recover_turns（turn.rs）**无生产调用方**（仅自身测试），标记退役保留代码（新路径 ag.history list_turns/save_turn + AgentSession 为唯一恢复路径）。 |
-| 2026-08-15 | v2.39 | AG-1.0-TASKRUN-REWORK-REQ-01：登记 TERM-AG-017（DecisionRequest 任务级裁决请求）/ TERM-AG-018（TaskPlan 任务计划）；§7.1 语义纠偏契约承接（三层分离、确认 gate、片段执行）以 A-AG-M-D-01 §5b 与 A-AG-M-S-01 §2.2.1 为准。 |
+| 2026-08-15 | v2.39 | AG-1.0-TASKRUN-REWORK-REQ-01：登记 TERM-AG-017（DecisionRequest 任务级裁决请求）/ TERM-AG-018（TaskPlan 任务计划）；三层分离、确认 gate、片段执行现由本文 §7.2 与 A-AG-M-S-01 §2.2 持有。 |
 | 2026-08-15 | v2.40 | AG-1.0-TASKRUN-REWORK-DESIGN-01：新增 §7.2 TaskRun 编排重构契约——数据契约（迁移 v12：task_plans / task_plan_steps / decision_requests；task_runs 语义修正）、事件契约（step_progress / decision_request_proposed / decision_request_resolved；diff_proposed 不驱动 TaskRun）、UI 契约（移除顶部卡、底部当前动作状态条、DecisionRequest 卡）。 |
 | 2026-08-15 | v2.41 | AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实现 §7.2 运行时/数据层——迁移 v12 三表（task_plans/task_plan_steps/decision_requests）；types 增 DecisionRequestV1/TaskPlanV1/TaskPlanStepV1；task.rs 增 propose_decision/resolve_decision/has_pending_decision/pending_decision/latest_pending_decision_for_session/create_plan/list_plans_by_run；begin_turn 不绕回 waiting_confirm；settle_turn 按未决 DecisionRequest 判定 WaitingConfirm（去除 has_pending_proposal）；lib.rs 回合入口 gate（AG_DECISION_PENDING）+ ag.propose_decision/ag.resolve_decision IPC + StepProgress 事件；ipc AgTurnEvent 增 StepProgress/DecisionRequestProposed/DecisionRequestResolved。 |
 | 2026-08-15 | v2.42 | AG-1.0-TASKRUN-REWORK-IMP-UI-01：实现 §7.2.3 UI——移除顶部 TaskRun 卡（TaskRunCard 删除）；信息流底部实时当前动作状态条（step_progress→agStore.currentAction）+ DecisionRequest 卡（裁决 confirm/cancel→ag.resolve_decision）；回合终态清 currentAction、待裁决跨回合保留（三层分离）；agRuntime +2。 |

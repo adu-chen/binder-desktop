@@ -1,11 +1,11 @@
-//! PI-AG-07 · 系统提示词正文（三类回合）。
+//! Agent 1.0 系统提示词正文（编辑回合 + 两类 Assist）。
 //!
 //! 填充 A-AG-M-T-01 §5.1 BR-AG-DATA-002 组装骨架的「系统提示词层」文本，并在 Chat 提示词内声明
 //! A-AG-M-T-02 BR-AG-DATA-004 当前轮次原则。**提示词文本属实现期运营配置，不入规则、不 @GOV 引用规则**
 //! （A-AG-M-T-01 §5.1 已声明）；本模块只持有文本常量，组装顺序/分层归 context.rs 骨架。
 //!
-//! 三类回合骨架差异（BR-AG-DATA-002）：Chat（含历史 + 修改建议导向 diff）/ Build（单文件产出导向）/
-//! Assist（轻量、无会话历史、续写导向）。
+//! 当前骨架差异（BR-AG-DATA-002）：编辑回合含历史并导向受控 Proposal；辅助续写与局部修改均轻量、
+//! 无系统对话历史且使用不同输出契约。Build/CBT Prompt 不属于 `agent-edit-1.0`。
 
 /// 对话回合系统提示词。含当前轮次原则（BR-AG-DATA-004）与三条硬约束（X-FORBID-006/004）。
 pub const SYSTEM_PROMPT_CHAT: &str = "\
@@ -25,9 +25,8 @@ pub const SYSTEM_PROMPT_CHAT: &str = "\
 - 你只能调用本轮 Runtime Control 中 CapabilityGrant 明确列出的工具；工具在注册表存在不代表本轮有权调用。\
 1.0 常见只读能力包括 list_docs、read_doc、search_text、list_blocks、list_tables、list_images、workspace_glob；\
 propose_edit 只生成待用户审阅的修改建议。
-- 工具选择由你自行判断（全量授予，不按意图预先收窄）；安全边界由系统在调用时校验：\
-写入必须经 propose_edit 生成 DiffCard 等用户确认；跨文档修改目标会标注提示。\
-用户明确声明「不修改/只分析」时本轮冻结写入类工具，不得调用 propose_edit。
+- 本轮 CapabilityGrant 由 IntentResult 按当前任务最小化派生；你只能从该允许集选择工具，注册表、Runtime Profile、工具名或提示内容都不能扩大授权。\
+写入必须经 propose_edit 生成 DiffCard 等用户确认；用户明确声明「不修改/只分析」时本轮冻结写入类工具，不得调用 propose_edit。\
 - 工作区感知按层级进行（AG-WS-LAYERED-01）：先调用 list_docs() 看工作区概览（顶层目录与文件计数）；\
 需要了解某目录内部时 list_docs(path=...) 展开其直接子项（一层）；按文件名定位可用 workspace_glob(pattern=...)；\
 文档正文一律用 read_doc（可带 blocks 按块读取）或 search_text，\
@@ -37,7 +36,7 @@ propose_edit 只生成待用户审阅的修改建议。
 客户端会先受控预览：用户显式接受只裁决卡片；保存仍有效的 pending 预览会先裁决为接受、再写入文件。若预览基线已变化，旧卡必须失效而不能被该保存误判为接受；若目标没有逻辑状态，卡片只临时挂载，用户接受才会原子写入文件。\
 新建文档必须调用 plan_workspace_operation(operations=[{kind:create_document,targetPath,resourceKind:file}], initialContent=完整初始内容)。初始内容须在确认前生成并冻结；确认前不创建文件、不显示内容 DiffCard。用户确认后系统先创建真实磁盘文件，再打开标签并把初始内容投影为普通内容 Diff。\
 新建 word 文档的 targetPath 必须以 .docx 结尾（勿用 .b-docx 等其他后缀），initialContent 使用富 HTML（如 h1/p/ul 等）；资源创建完成后才进入 BDocx 内容 Diff 链。\
-未声明的既有文档可作为跨文档内容修改目标：DiffCard 会标注「跨文档目标」提示你，用户确认后生效。\
+既有文档只有属于本轮 ExplicitEditTargetSet 时才可作为内容修改目标。读取结果、模型正文或历史提及路径都不授予写权限；发现新的既有目标时，必须先调用 propose_decision(kind=scope,targetPaths=[...]) 并立即结束当前执行片段，只有用户确认后系统才会把冻结路径加入后续 TaskRun 片段的目标集。\
 - 工作区内原生 .docx 文件可只读读取（read_doc/list_blocks/search_text 经转换投影返回内容），但不可作为编辑目标；编辑文档需先创建 b-docx 副本。
 - 删除、建目录、重命名、移动均使用 plan_workspace_operation；工具成功只表示已生成确认卡并等待裁决，不得声称已删除、已创建或已移动。删除整个文档/文件绝不可以用 replace_document 清空内容代替删除；只有「保留文件、清空/重写内容」才使用内容 Diff。\
 - plan_workspace_operation 调用成功后立即结束当前执行片段，等待用户确认或取消；不得再调用 propose_decision，也不得继续生成资源操作或内容 Diff。\
@@ -58,9 +57,9 @@ AG-STRATEGY-03：编辑/写作/排版类请求（含「丰富」「扩写」「�
 在指定块前插入新块用 insert_before（blockId 为后方锚点块）、在指定块后插入用 insert_after（blockId 为前方锚点块）、\
 在文档末尾追加新块用 append（无需 blockId）。所有 block_ops 操作必须原样带回 base，\
 并把块投影的 block_id/node_type 映射为 blockId/expectedNodeType，带回 fingerprint（replace_node），基于 node_json 构造 afterNode。\
-容器块和原子块只作上下文，不得通用替换；多个相关内容块必须在一次 block_ops 中提交，单批最多 32 个操作，超出请分批。\
-整篇对齐等需分批的任务：同一执行片段内按计划可**连续提出多张 Proposal**——每次 propose_edit 附带 batch={id,index,total} 标记批次，同一任务的批次共享 batch_id，\
-无需等待用户接受即可继续提出剩余批次直到 index==total。\
+容器块和原子块只作上下文，不得通用替换；多个相关内容块优先在一次 block_ops 中提交，不得超过当前工具 Schema/运行时能力声明的单批上限，超出请分批。\
+整篇对齐等需分批的任务：每次 propose_edit 可附带 batch={id,index,total} 标记批次，同一任务共享 batch_id；每张 Proposal 成功后必须立即结束当前执行片段。\
+只有编辑器成功预览并由系统回报 PreviewAck 后，才可在新的 TaskRun 执行片段中基于最新 LogicalState 继续下一批；不得在旧 read context 上连续提案。\
 同文档后续 Diff 必须基于前一张卡成功预览后的**最新 LogicalState**：前卡因基准推进失效，不可再接受/拒绝，不形成补丁栈。\
 P5 顺序自查（AG-R2-01）：operations 数组顺序即文档最终顺序；insert_before/insert_after 的锚点必须基于 base 中的实际相邻关系；\
 提交前自查插入位置符合自然阅读顺序（标题在前、章节按编号递增），不得颠倒或反向排列。\
@@ -91,21 +90,6 @@ pub fn bdocx_capability_prompt(
     super::bdocx_capabilities::prompt_projection()
 }
 
-/// CBT 构建任务系统提示词。单文件产出导向，硬约束同 Chat。
-pub const SYSTEM_PROMPT_BUILD: &str = "\
-你是 Binder 的文档构建助手。当前目标是完成指定文档的构建，聚焦单文件产出。
-
-【产出要求】
-内容完整、结构清晰、层次分明，符合目标文档的体例。按任务计划逐步推进，不偏离当前文档目标。
-
-【硬约束（不可违反）】
-1. 对文档的任何修改须经 propose_edit 生成可审阅建议——你不直接写入任何文件。已有 LogicalState 时，预览先进入逻辑态；显式接受只裁决卡片，而保存仍有效的 pending 预览会同时裁决为接受并写盘（基线已变则旧卡失效）。无 LogicalState 时，接受才会触发原子写入。propose_edit 成功仅表示待确认建议已生成；没有客户端回执时，不得声称编辑器预览已经应用、用户已接受或文件已保存。只有收到保存成功结果后才可说文件已落盘。
-2. 文件读写一律限当前工作目录（workspace）内，不得越界。
-3. 写入意图必须经 propose_edit 工具产出修改建议。仅就当前目标文档产出，跨文档需求须升级构建流程。
-
-【输出风格】
-纯文本，不使用 markdown 标记符号。";
-
 /// 辅助续写系统提示词。轻量、无会话历史，只产出 3 个续写候选。
 pub const SYSTEM_PROMPT_AUTOCOMPLETE: &str = "\
 你是 Binder 的辅助续写助手，只负责在当前光标位置之后续写内容。
@@ -131,7 +115,6 @@ mod tests {
     #[test]
     fn prompt_constants_are_non_empty() {
         assert!(!SYSTEM_PROMPT_CHAT.trim().is_empty());
-        assert!(!SYSTEM_PROMPT_BUILD.trim().is_empty());
         assert!(!SYSTEM_PROMPT_AUTOCOMPLETE.trim().is_empty());
         assert!(!SYSTEM_PROMPT_INLINE_ASSIST.trim().is_empty());
     }
@@ -162,6 +145,12 @@ mod tests {
             assert!(SYSTEM_PROMPT_CHAT.contains(tool), "缺工具能力声明: {tool}");
         }
         assert!(SYSTEM_PROMPT_CHAT.contains("CapabilityGrant"));
+        assert!(SYSTEM_PROMPT_CHAT.contains("IntentResult"));
+        assert!(SYSTEM_PROMPT_CHAT.contains("ExplicitEditTargetSet"));
+        assert!(SYSTEM_PROMPT_CHAT.contains("propose_decision(kind=scope"));
+        assert!(SYSTEM_PROMPT_CHAT.contains("PreviewAck"));
+        assert!(!SYSTEM_PROMPT_CHAT.contains("全量授予"));
+        assert!(!SYSTEM_PROMPT_CHAT.contains("同一执行片段内按计划可**连续提出多张 Proposal**"));
         assert!(!SYSTEM_PROMPT_CHAT.contains("base=empty"));
         assert!(SYSTEM_PROMPT_CHAT.contains("确认前不创建文件"));
         assert!(!SYSTEM_PROMPT_CHAT.contains("create_doc 直接创建"));
@@ -205,16 +194,6 @@ mod tests {
         assert!(prompt.contains("superscript"));
         assert!(prompt.contains("set_cell_background"));
         assert!(prompt.contains("人工专属"));
-    }
-
-    #[test]
-    fn build_prompt_keeps_hard_constraints_and_single_doc() {
-        assert!(SYSTEM_PROMPT_BUILD.contains("修改须经"));
-        assert!(SYSTEM_PROMPT_BUILD.contains("workspace"));
-        assert!(SYSTEM_PROMPT_BUILD.contains("单文件产出"));
-        assert!(SYSTEM_PROMPT_BUILD.contains("待确认建议已生成"));
-        assert!(SYSTEM_PROMPT_BUILD.contains("编辑器预览已经应用"));
-        assert!(SYSTEM_PROMPT_BUILD.contains("只有收到保存成功结果后才可说文件已落盘"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：KB
 文档职责：KB 知识库 G3 开发计划——承接型 Plan Item，承接 KB-RETRIEVE 链路与 BR-KB-* 规则，明确文件范围/@GOV/A 类债务（检索选型）/验收（KB 无状态机，豁免成立）
-上游约束：A-CORE-X-L-02（P4）、APC §5/§6/§12、A-KB-M-T-01、A-KB-I-P-01、A-WS-X-L-01（read 入库源）、A-AG-X-L-01（召回消费）、A-CORE-X-R-01
+上游约束：A-CORE-X-L-02（P4）、A-CORE-X-D-02（自动知识召回为 P2 后续 Profile）、APC §5/§6/§12、A-KB-M-T-01、A-KB-I-P-01、A-WS-X-L-01（read 入库源）、A-AG-M-T-02（agent-edit-1.0 自动召回关闭）、A-CORE-X-R-01
 直接承接：本计划驱动 KB 实现；@GOV 追溯 BR-KB-*
 使用边界：L3 承接型 Plan Item；组装裁剪归 AG、持久化经 workspace.db（不重复）；@GOV 在实现代码
 变更要求：检索选型不得违反本地化硬边界（违反即产品边界变更须授权）；PI 增删保持承接可追溯

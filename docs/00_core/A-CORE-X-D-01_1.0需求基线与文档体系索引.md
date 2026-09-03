@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：CORE
 文档职责：Binder Agent 1.0 的需求层导航、基线传播范围与后续设计同步清单
-上游约束：A-CORE-C-P-01_APC.md、A-CORE-C-D-01_产品概述.md、A-AG-M-D-02_代理1.0能力基线与需求分解.md
+上游约束：A-CORE-C-P-01_APC.md、A-CORE-C-D-01_产品概述.md、A-CORE-X-D-02_Agent1.0冻结能力基线.md
 直接承接：各模块 M-D（L1）需求描述、后续 L2 技术设计/状态机/接口/验证卡与开发计划的对齐工作
 使用边界：本文只组织和索引已确认的需求基线，不定义 RULE/CHAIN/CONSTRAINT/接口字段，不替代模块 M-D 的 REQ 或 L2 技术设计
 变更要求：1.0 范围、确认项或文档层级变化时，先更新产品根与能力基线，再更新本文的映射和状态；不得由本文反向扩大 Runtime Profile 或工具权限
@@ -42,23 +42,23 @@
 
 > **R6 冻结状态：已冻结。**上述十二组构成 Agent 1.0 Baseline v1.0；权威冻结结论、变更规则与 DESIGN 输入见 [A-CORE-X-D-02_Agent1.0冻结能力基线.md](A-CORE-X-D-02_Agent1.0冻结能力基线.md)。冻结的是需求范围，不是实现或发布状态。
 
-其余能力档位仍以 [A-AG-M-D-02_代理1.0能力基线与需求分解.md](../01_modules/AG/A-AG-M-D-02_代理1.0能力基线与需求分解.md)
-为候选或待逐条确认项。R2 已确认不等于 1.0 全部冻结，本文不把其余项伪装成已冻结的发布承诺。
+历史候选拆分和确认过程保留在 [R-AG-M-D-02_代理1.0能力基线与需求分解.md](../01_modules/AG/R-AG-M-D-02_代理1.0能力基线与需求分解.md)，仅供追溯；它不再包含有效候选项，也不得补充或解释当前冻结范围。任何未写入 CORE 冻结基线和对应 Active 模块 M-D 的能力，均不属于已确认的 Agent 1.0 需求。
 
 ## §2 文档体系与阅读顺序
 
 ```text
 APC（项目边界与授权）
   └─ 产品概述 CORE-C-D-01（产品级 REQ-CORE-*）
-       ├─ Agent 1.0 能力基线 AG-M-D-02（确认项、档位、验收样例、待决项）
-       └─ 模块 M-D（L1 REQ，按模块承接）
-            └─ L2 技术设计 / M-S 状态机 / I-P 接口（待下一轮同步）
-                 └─ 验证卡、测试矩阵、实现与 Trace（待设计冻结后承接）
+       └─ CORE-X-D-02（Agent 1.0 冻结范围与档位）
+            ├─ 本文（只做导航与传播检查）
+            └─ 模块 Active M-D（L1 REQ，按模块承接）
+                 └─ L2 技术设计 / M-S 状态机 / I-P 接口
+                      └─ 验证卡、测试矩阵、实现与 Trace
 ```
 
 阅读和修改的规则如下：
 
-- 讨论“要不要做、何时做、什么算完成”时，先读产品概述与 AG-M-D-02。
+- 讨论“要不要做、何时做、什么算完成”时，先读产品概述与 CORE-X-D-02；若需改变范围，必须新开 REQUIREMENT Scope。
 - 讨论某模块应承接什么用户可见行为时，读对应 M-D 的 `REQ-*`。
 - 讨论状态枚举、数据字段、接口、UI 状态或工具实现时，必须在 L1 已确认后新开 L2 同步；不得把现有 L2
   的旧语义反向当作需求来源。
@@ -80,7 +80,7 @@ APC（项目边界与授权）
 | 文档 / 模块 | 1.0 关系 | 本轮处理 | 后续责任 |
 |---|---|---|---|
 | [产品概述](A-CORE-C-D-01_产品概述.md) / CORE | 产品级根 | REQ-CORE-010/012/014 锁定 CreateDocumentBundle、WorkspaceOperation 前置裁决直接写盘与 WorkspaceTimeline；REQ-CORE-011 锁定 R2 感知主链；REQ-CORE-004 锁定原生 DOCX 只读与 BDocx 副本编辑；REQ-CORE-013/015 保持最小转换与逐文档编辑；REQ-CORE-016~019 保持运行时、复合任务、外部内容与项目记忆 | 维持产品级边界；范围变化先经 APC |
-| [能力基线](../01_modules/AG/A-AG-M-D-02_代理1.0能力基线与需求分解.md) / AG | 1.0 基线 | CreateDocumentBundle、WorkspaceOperationPlan、WorkspaceTimeline 与 CAP-00/20/01~04；R3 编辑边界、R4-A 网络研究、R4-C 最小格式矩阵、CAP-15 逐文档编辑；R5-A 运行时、R5-B 受限 TaskRun、R5-C 外部内容与用户管理记忆边界 | 新资源基线向 L2/验证传播后进入实现 Scope |
+| [冻结能力基线](A-CORE-X-D-02_Agent1.0冻结能力基线.md) / CORE | Agent 1.0 唯一冻结范围 | 持有 P0/P1/P2、不可突破边界和变更入口；不持有模块字段、状态或算法 | 范围变化只在 REQUIREMENT Scope 更新；本文不复制完整能力卡 |
 | [代理](../01_modules/AG/A-AG-M-D-01_代理功能需求描述.md) / AG | P0/P1 主链 owner | REQ-AG-007 承接 R5-A 的 Runtime、IntentResult、最小授权、结构化事件、AgentSession 隔离与本地事实历史；REQ-AG-015 承接 R5-B 的 TaskRun、复合步骤、真实工作状态与连续 Proposal；REQ-AG-016/017 承接 R5-C 的外部内容消费与显式项目记忆引用；REQ-AG-008/009 承接新建与项目/文档分析；010~014 承接 R4 P1 能力 | AG L2：Runtime / TaskRun / Intent / Tool / Session / Trace |
 | [Diff Edit](../01_modules/DE/A-DE-M-D-01_DiffEdit功能需求描述.md) / DE | P0 主链 owner | REQ-DE-006 承接 CreateDocumentBundle 创建目标后的初始内容 Diff；REQ-DE-007 明确资源操作不生成 DiffCard，只提供影响清单和失效；REQ-DE-008/009 保持多文档与连续 Proposal | DE L2：初始内容关联、基准比较、资源影响失效 |
 | [编辑器](../01_modules/ED/A-ED-M-D-01_编辑器功能需求描述.md) / ED | P0 主链 owner | REQ-ED-010/012/014 承接确认后真实目标标签与初始内容投影；013/015 承接脏标签阻断、资源执行后路径/关闭同步；016 保持多文档隔离 | ED L2：标签事实、脏态前置、执行回执同步 |
@@ -153,3 +153,4 @@ AG-M-D-02 先确认，再进入本索引和模块 M-D。
 | 2026-08-14 | v1.11 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：R5-C 确认外部文件为 P1 的显式、一次性 data-only 内容读取，未读格式退回元数据；项目长期记忆为 P1 的 workspace 本地用户资产，只有显式选择才能进入回合。REQ-CORE-018/019、REQ-AG-016/017、REQ-REF-009、REQ-SYS-012 与 AST 1.0 边界完成直接 L1 承接；自动记忆能力仍为 P2。 |
 | 2026-08-14 | v1.12 | AG-1.0-R6-BASELINE-FREEZE-01：R1–R5-C 的十二组已确认需求冻结为 Agent 1.0 Baseline v1.0；索引、产品根、能力基线同向引用冻结记录。后续仅可按有序 DESIGN Scope 细化，需求变化必须另开 REQUIREMENT Scope；冻结不宣称实现、验证或发布完成。 |
 | 2026-08-21 | v1.13 | WORKSPACE-OPERATION-BASELINE-01：以人类确认的八项决策替代 R4-B/R4-D 旧逻辑树暂存语义；登记 WorkspaceOperation 前置裁决直接写盘、WorkspaceTimeline 统一恢复、CreateDocumentBundle 与失败补偿边界。 |
+| 2026-08-31 | v1.14 | AG-DOC-CONSOLIDATION-01：将 Agent 1.0 范围统一指向 A-CORE-X-D-02，AG-M-D-01 保留模块需求真源职责；移除候选基线作为 Active 上游的循环与竞争。 |

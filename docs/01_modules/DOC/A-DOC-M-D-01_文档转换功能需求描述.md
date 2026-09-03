@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：DOC
 文档职责：DOC 文档转换模块级功能需求描述——声明模块级 REQ-DOC-*，承接产品级 REQ-CORE-001/004/009/013，界定原生 DOCX 只读预览转换 / BDocx 编辑副本的打开与保存转换 / TXT↔Markdown 的最小副本转换 / 样式子集契约与用户明示 / 预览转换服务（供 PRV）/ 本地转换运行时与离线边界
-上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/004/009/013）、A-AG-M-D-02_代理1.0能力基线与需求分解.md（§5.13 CAP-13）、A-CORE-C-P-01_APC.md（§4.1 DOC 职责「DOCX/Pandoc 转换」）、A-SYS-C-T-01_系统总体架构.md（§4 DOC→WS,ED 依赖）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-002 转换归 DOC、§11.1 样式子集选型记录）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004、save 经 WS）、A-SYS-M-S-01_状态机总图.md（docx 开/存核心链 owner=DOC）、ADU.md（§3.2 REQ 规范）
+上游约束：A-CORE-C-D-01_产品概述.md（REQ-CORE-001/004/009/013）、A-CORE-X-D-02_Agent1.0冻结能力基线.md（P0/P1 与不可突破边界）、A-CORE-C-P-01_APC.md（§4.1 DOC 职责「DOCX/Pandoc 转换」）、A-SYS-C-T-01_系统总体架构.md（§4 DOC→WS,ED 依赖）、A-ED-M-T-01_编辑器技术设计.md（BR-ED-DATA-002 转换归 DOC、§11.1 样式子集选型记录）、A-WS-M-T-01_工作台技术设计.md（X-FORBID-004、save 经 WS）、A-SYS-M-S-01_状态机总图.md（docx 开/存核心链 owner=DOC）、ADU.md（§3.2 REQ 规范）
 直接承接：DOC L2 技术设计（转换管线 / 样式子集执行契约 / docx 开存状态机）经 REQ_MAP 映射 RULE/CHAIN/CONSTRAINT/TERM；解除 A-SYS-M-S-01 §3 docx 开/存 planned 行
 使用边界：本文是 L1 功能需求描述层，仅声明模块级 REQ-DOC-*，**不定义技术规则**（见 DOC L2）；**代码不得直接映射 REQ**（ADU §3.2）；转换器选型细节、管线实现、缓存策略归 DOC L2/实现期；富文本编辑归 ED；预览呈现与打印导出归 PRV；文件落盘归 WS
 变更要求：DOC 职责或转换边界变更须先经 APC 授权再回写本文；REQ 增删按 ADU §3.2 req_id 规则
@@ -157,7 +157,7 @@ title: 最小文本格式转换与保真/损失告知
 owner_module: DOC
 status: active
 summary: 仅对已确认的 TXT→Markdown、Markdown→TXT 目标副本 Proposal 在本地转换来源内容。TXT→Markdown 只保留文本和换行，不自动推断标题、列表、任务或其他 Markdown 语义；Markdown→TXT 是有损转换，输出可读纯文本但不承诺样式、结构、表格、图片或可逆往返。DOC 只处理内容转换，不改写来源、不创建目标文件或标签
-source_doc: REQ-CORE-013、A-AG-M-D-02 §5.13（CAP-13）、A-AG-M-D-01（REQ-AG-012）
+source_doc: REQ-CORE-013、A-CORE-X-D-02 §3/§4、A-AG-M-D-01（REQ-AG-012）
 acceptance: 仅支持两条已确认方向且全部本地执行；转换结果随 Proposal 提供输入/输出格式及保真或损失说明；TXT→Markdown 不注入未在来源表达的 Markdown 语义；Markdown→TXT 不伪称无损或可逆；不支持的格式、来源读取失败或转换失败返回明确失败且不产生目标 LogicalState 或磁盘文件；HTML 互转、通用 DOCX 互转、批量/原地转换无入口，BDocx 仍仅遵循 REQ-DOC-001/002 的专用编辑副本链
 open_issues: 文本编码、换行、空白、具体 Markdown 语法降级/序列化规则、转换错误形状、能力检测和测试语料归 DOC/ED/WS/DE DESIGN Scope；本 L1 不定义算法、工具或接口
 -->

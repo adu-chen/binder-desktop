@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：CBT
 文档职责：CBT 构建 G3 开发计划——承接型 Plan Item，承接 CBT-BUILD 链路与 BR-CBT-* 规则、SM-CBT-01，明确文件范围/@GOV/A 类债务/验收
-上游约束：A-CORE-X-L-02（P4）、APC §5/§6/§12、A-CBT-M-T-01/A-CBT-M-S-01、A-CBT-I-P-01、A-AG-X-L-01（回合基建、接管 PI-AG-06 对接）、A-DE-X-L-01（产物 diff 化）、A-CORE-X-R-01
+上游约束：A-CORE-X-L-02（P4）、A-CORE-X-D-02（Build/CBT 为 P2 后续 Profile）、APC §5/§6/§12、A-CBT-M-T-01/A-CBT-M-S-01、A-CBT-I-P-01、A-AG-M-T-01/A-AG-M-S-01（仅共享 AgentTurn 基础；agent-edit-1.0 不激活构建接管）、A-DE-X-L-01（产物 diff 化）、A-CORE-X-R-01
 直接承接：本计划驱动 CBT 实现；@GOV 追溯 BR-CBT-*；SM-CBT-01 转移矩阵
 使用边界：L3 承接型 Plan Item；模型调用经 AG、落盘经 DE→WS（不重复）；@GOV 在实现代码
 变更要求：接管 PI 与 AG PI-AG-06（B-3）双侧对齐；PI 增删保持承接可追溯

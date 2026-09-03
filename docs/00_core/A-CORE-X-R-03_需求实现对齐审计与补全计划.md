@@ -103,7 +103,7 @@
 
 | ID | 缺口 | 承接去向 | 阻断依赖 | 验收 |
 |---|---|---|---|---|
-| G-1 | AG-TURN 模型调用解桩（`lib.rs` 桩 → 真实网关流式分片） | AG PI（A-AG-X-L-01）+ CLOUD-INVOKE | **云 AI 网关就绪（C 类，待云端 APC）**；客户端可先完成"门禁→网关"接线打桩验收 | 有效订阅下真回合出真实流式回复；无订阅硬拒（X-SEQ-001） |
+| G-1 | AG-TURN 模型调用解桩（`lib.rs` 桩 → 真实网关流式分片） | 历史 AG PI（现归档为 X-AG-X-L-01）+ CLOUD-INVOKE；当前计划仅见 A-AG-X-L-04 | **云 AI 网关就绪（C 类，待云端 APC）**；客户端可先完成"门禁→网关"接线打桩验收 | 有效订阅下真回合出真实流式回复；无订阅硬拒（X-SEQ-001） |
 | G-2 | DE 真实产出接线（真实模型 ChangeProposal → `de.generate_diff`，退役 `generateSampleDiff`） | DE + AG PI | G-1（模型产出前置） | AG 回合产出经 DE→WS 全链落盘；`generateSampleDiff` 仅留测试夹具 |
 | G-3 | AG-TOOL 工具回合落地（`ToolCallCard` 演示 → SM-AG-01 tool 段真实驱动） | AG PI | G-1 | 工具调用 6 态由真实回合驱动，非占位 |
 

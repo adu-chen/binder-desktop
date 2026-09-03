@@ -4,7 +4,7 @@
 负责模块：GW
 文档职责：AI 网关功能需求描述（GW 模块 L1）——供应商适配层（OpenAI/Anthropic/DeepSeek）、统一流式转发、BYOK 密钥代持、订阅门禁裁决（CLOUD-GATE）、内容不留存；承接 REQ-CLOUD-003/004 并展开为模块级 REQ-GW-001~006
 上游约束：A-CLOUD-C-P-01_云端APC.md（§1 GW 职责、§5 禁区）、A-CLOUD-C-D-01_云端产品概述.md（REQ-CLOUD-003/004）、A-SYS-I-P-03_云接口契约.md（CLOUD-GATE/INVOKE、BR-SYS-DATA-004、X-SEQ-001/X-FORBID-001/002）
-直接承接：GW L2 技术设计（待建）；客户端 A-ENT-M-T-01（BR-ENT-STATE-001/VERIFY-001）、A-AG-X-L-02（PI-AG-11 依赖 PI-GW-01~05）
+直接承接：GW L2 技术设计（待建）；客户端 A-ENT-M-T-01（BR-ENT-STATE-001/VERIFY-001）、A-AG-X-L-04（Agent 1.0 网关联调与验证）
 使用边界：仅含 REQ 块与叙述性设计，遵守驻留期硬约定不放注册类治理块（云 APC §3）；客户端对接契约字段归 A-SYS-I-P-03（本文不重定义协议）；具体技术方案归 GW L2（迁移后展开）
 变更要求：涉 A-SYS-I-P-03 接口语义的变更须双侧复核留痕；provider 池变更须人类确认；BR-SYS-DATA-004（内容不留存）弱化即产品边界变更，须云 APC 授权
 治理成熟度：draft
@@ -234,7 +234,7 @@ GW → 调用完成，计量元数据写 usage_logs（无正文，REQ-GW-006）
 
 ## §5 开发路线图（PI-GW-01~05）
 
-> 叙述性，不含注册类治理块。PI 编号与 A-AG-X-L-02 的依赖引用对应。
+> 叙述性，不含注册类治理块。历史 PI-AG-11 依赖已退出当前控制链，当前客户端联调计划统一见 A-AG-X-L-04。
 
 **PI-GW-01　供应商适配层（三适配器 + 统一接口）**
 - OpenAI 适配器：Chat Completions 请求构造 + SSE 解析 + StreamEvent 映射

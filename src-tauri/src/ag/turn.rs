@@ -1,16 +1,13 @@
-//! PI-AG-01/03/06 · 代理回合机 SM-AG-01 + 门禁前置 + 回合持久化 · AG-TURN
-//! 规则：BR-AG-STATE-001（回合生命周期）/ BR-AG-VERIFY-001（门禁前置无绕过）/ BR-AG-PERSIST-001（本地可恢复）
+//! 代理回合机 SM-AG-01 与门禁前置 · AG-TURN
+//! 规则：BR-AG-STATE-001（回合生命周期）/ BR-AG-VERIFY-001（门禁前置无绕过）
 //!
 //! 承接 A-AG-M-S-01 SM-AG-01：回合经 组装→门禁→流式→产出处置 完整生命周期；**通往模型调用（Streaming）
 //! 的唯一路径是 AwaitingGate + gatePassed**（门禁前置，结构上无绕过路径，BR-AG-VERIFY-001 / X-SEQ-001）；
 //! gateDenied/cancel 为终态不可绕过且无半落盘副作用；含修改建议的产出经 HandingOff 交 DE（X-FORBID-006，
-//! AG 无直写）；takeover→HandedOver 移交 CBT（PI-AG-06，无双活）、fallbackIn 自 CBT 回落起新回合（无双死）。
-//! 回合落 agent_turns 本地持久化、重启可恢复、不上云（BR-AG-PERSIST-001）；记忆异步触发归 PI-AG-05。
+//! AG 无直写）。Agent 1.0 不包含 Build/CBT 接管或回落状态；回合持久化归 `ag::history`。
 
 use crate::ipc::IpcError;
-use rusqlite::Connection;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Binder AG 1.0 唯一开放的主回合运行配置。
 pub const AGENT_EDIT_1_0_PROFILE: &str = "agent-edit-1.0";
@@ -55,14 +52,7 @@ impl TerminalLatch {
     }
 }
 
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-/// SM-AG-01 状态（A-AG-M-S-01 §2）。TurnError/Completed/Cancelled/Denied/HandedOver 为终态；
+/// SM-AG-01 状态（A-AG-M-S-01 §2）。TurnError/Completed/Cancelled/Denied 为终态；
 /// AwaitingClarification 为等待用户输入的非终态（BR-SYS-STATE-007，澄清不终结回合）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnState {
@@ -77,14 +67,12 @@ pub enum TurnState {
     Completed,
     Cancelled,
     Denied,
-    HandedOver,
 }
 
-/// SM-AG-01 事件。takeover 携带用户是否显式确认（多文件构建意图移交 CBT）。
+/// SM-AG-01 事件。重试会创建新的 AgentTurn，不是本状态机内事件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnEvent {
     Send,
-    FallbackIn,
     Assembled,
     ClarificationRequired,
     ClarificationProvided,
@@ -92,12 +80,10 @@ pub enum TurnEvent {
     GatePassed,
     GateDenied,
     StreamEnd,
-    Takeover { user_confirmed: bool },
     StreamFail,
     Cancel,
     HandoffOk,
     HandoffFail,
-    Retry,
 }
 
 /// 门禁裁决结果（AG 承接 SM-SYS-01 GatePassed/GateDenied；Offline=断网）。
@@ -112,11 +98,7 @@ pub enum GateState {
 pub fn is_terminal(state: TurnState) -> bool {
     matches!(
         state,
-        TurnState::TurnError
-            | TurnState::Completed
-            | TurnState::Cancelled
-            | TurnState::Denied
-            | TurnState::HandedOver
+        TurnState::TurnError | TurnState::Completed | TurnState::Cancelled | TurnState::Denied
     )
 }
 
@@ -130,14 +112,14 @@ pub fn is_terminal(state: TurnState) -> bool {
  */
 /// SM-AG-01 转移引擎（BR-AG-STATE-001 / BR-SYS-STATE-007）：**Streaming（模型调用）仅经
 /// AwaitingGate+gatePassed 可达**（门禁前置无绕过）；gateDenied→Denied 终态不可绕过；cancel→Cancelled
-/// 无半落盘；takeover 须用户确认→HandedOver；handoffOk→Completed（交 DE 完毕）；**澄清
+/// 无半落盘；handoffOk→Completed（交 DE 完毕）；**澄清
 /// （ClarificationRequired）→AwaitingClarification 非终态，不终结回合；仅 ClarificationProvided 可使
 /// 同一 AgentTurn 回到 Assembling**。返回 `None` = 无合法转移（含全部 forbidden）。
 pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
     use TurnEvent::*;
     use TurnState::*;
     let next = match (state, event) {
-        (Idle, Send) | (Idle, FallbackIn) => Assembling,
+        (Idle, Send) => Assembling,
         // 澄清是等待用户输入的非终态（BR-SYS-STATE-007），不终结回合。
         (Assembling, ClarificationRequired) => AwaitingClarification,
         // 用户补充说明只恢复原 AgentTurn；不是 Retry，也不创建新回合身份。
@@ -148,19 +130,14 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
         (AwaitingGate, GatePassed) => Streaming,
         (AwaitingGate, GateDenied) => Denied,
         (Streaming, StreamEnd) => HandingOff,
-        (
-            Streaming,
-            Takeover {
-                user_confirmed: true,
-            },
-        ) => HandedOver,
         (Streaming, StreamFail) => TurnError,
-        (Streaming, Cancel) => Cancelled,
-        // 澄清等待是活动阶段：取消可在此生效（BR-SYS-STATE-007 任一活动阶段取消）。
-        (AwaitingClarification, Cancel) => Cancelled,
+        // 任一活动阶段取消都必须到达唯一 Cancelled 终态。
+        (Assembling | AwaitingClarification | AwaitingGate | Streaming | HandingOff, Cancel) => {
+            Cancelled
+        }
         (HandingOff, HandoffOk) => Completed,
         (HandingOff, HandoffFail) => TurnError,
-        // 其余无合法转移（终态冻结；无 gatePassed 不得 Streaming；takeover 未确认不移交）。
+        // 其余无合法转移（终态冻结；无 gatePassed 不得 Streaming）。
         _ => return None,
     };
     Some(next)
@@ -195,64 +172,11 @@ pub fn ensure_gate_passed(gate: GateState) -> Result<(), IpcError> {
     }
 }
 
-/**
- * @GOV
- * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-001
- * type:     EFFECT
- * chain:    AG-TURN
- * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentTurnRecord | out=persistedTurn(localScopedRecoverableNotUploaded)
- */
-/// 回合落历史（BR-AG-PERSIST-001）：写 agent_turns 于 workspace 控制态（本地、不上云）。重启后由
-/// recover_turns 恢复会话历史。仅在 SM-AG-01 终态（HandingOff→Completed 等）调用。
-pub fn persist_turn(
-    conn: &Connection,
-    turn_id: &str,
-    workspace_id: &str,
-    rel_path: Option<&str>,
-    payload_ref: &str,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO agent_turns (turn_id, workspace_id, rel_path, payload_ref, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        (turn_id, workspace_id, rel_path, payload_ref, now_millis()),
-    )?;
-    Ok(())
-}
-
-/**
- * @GOV
- * codes:    BR-AG-PERSIST-001-QUERY-AG-AG-TURN-001
- * type:     QUERY
- * chain:    AG-TURN
- * rules:    BR-AG-PERSIST-001
- * boundary: in=workspaceId | out=conversationHistory(localScopedRecoverableInOrder)
- */
-/// 恢复会话历史（BR-AG-PERSIST-001）：列举当前 workspace 的回合历史（按时序），重启可恢复；恒以
-/// workspace_id 作用域（隔离），纯本地读取不上云。
-pub fn recover_turns(
-    conn: &Connection,
-    workspace_id: &str,
-) -> rusqlite::Result<Vec<(String, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT turn_id, payload_ref FROM agent_turns WHERE workspace_id=?1 ORDER BY created_at ASC",
-    )?;
-    let rows = stmt.query_map([workspace_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    rows.collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::TurnEvent::*;
     use super::TurnState::*;
     use super::*;
-    use crate::db;
-
-    fn fresh() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
-        db::migrate(&mut conn).unwrap();
-        conn
-    }
 
     // covers: BR-AG-STATE-001
     // 正路 + 门禁前置：Streaming 仅经 AwaitingGate+gatePassed 可达（无绕过）；gateDenied/cancel 终态。
@@ -286,8 +210,6 @@ mod tests {
                 "{from:?} 不应可达 Streaming"
             );
         }
-        // fallbackIn 自 CBT 回落起新回合（无双死）
-        assert_eq!(transition(Idle, FallbackIn), Some(Assembling));
     }
 
     // covers: BR-AG-STATE-001
@@ -315,43 +237,25 @@ mod tests {
     }
 
     // covers: BR-AG-STATE-001
-    // 取消无半落盘终态；takeover 须确认；TurnError 终态冻结，重试须创建新回合。
+    // 取消无半落盘终态；TurnError 和其余终态冻结，重试须创建新回合。
     #[test]
-    fn cancel_takeover_retry_and_terminals_frozen() {
-        assert_eq!(transition(Streaming, Cancel), Some(Cancelled));
-        assert_eq!(
-            transition(
-                Streaming,
-                Takeover {
-                    user_confirmed: true
-                }
-            ),
-            Some(HandedOver)
-        );
-        assert_eq!(
-            transition(
-                Streaming,
-                Takeover {
-                    user_confirmed: false
-                }
-            ),
-            None,
-            "未确认不移交"
-        );
+    fn cancel_error_and_terminals_are_frozen() {
+        for active in [
+            Assembling,
+            AwaitingClarification,
+            AwaitingGate,
+            Streaming,
+            HandingOff,
+        ] {
+            assert_eq!(transition(active, Cancel), Some(Cancelled));
+        }
         assert_eq!(transition(Streaming, StreamFail), Some(TurnError));
-        assert_eq!(transition(TurnError, Retry), None);
         for ev in [Send, GatePassed, StreamEnd, HandoffOk, Cancel] {
             assert_eq!(transition(Completed, ev), None);
             assert_eq!(transition(Cancelled, ev), None);
             assert_eq!(transition(Denied, ev), None);
-            assert_eq!(transition(HandedOver, ev), None);
         }
-        assert!(
-            is_terminal(Denied)
-                && is_terminal(HandedOver)
-                && is_terminal(TurnError)
-                && !is_terminal(Streaming)
-        );
+        assert!(is_terminal(Denied) && is_terminal(TurnError) && !is_terminal(Streaming));
     }
 
     #[test]
@@ -380,21 +284,5 @@ mod tests {
         let offline = ensure_gate_passed(GateState::Offline).unwrap_err();
         assert_eq!(offline.code, "AG_GATE_OFFLINE");
         assert!(offline.retriable);
-    }
-
-    // covers: BR-AG-PERSIST-001
-    // 回合本地持久化可恢复、按时序、workspace 隔离（不上云为结构性：纯本地表无网络出口）。
-    #[test]
-    fn turns_persist_locally_and_recover_in_order() {
-        let conn = fresh();
-        persist_turn(&conn, "t1", "ws1", Some("a.md"), "p1").unwrap();
-        persist_turn(&conn, "t2", "ws1", None, "p2").unwrap();
-        persist_turn(&conn, "t3", "ws2", None, "p3").unwrap();
-        let h = recover_turns(&conn, "ws1").unwrap();
-        assert_eq!(
-            h.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
-            vec!["t1", "t2"]
-        );
-        assert_eq!(recover_turns(&conn, "ws2").unwrap().len(), 1); // 隔离
     }
 }

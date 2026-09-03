@@ -88,7 +88,7 @@ title: 模板化工作流
 owner_module: TPL
 status: active
 summary: 支持后续 Profile 的多步写作流程定义（步骤序列+每步模板/指令）与可复用执行；`agent-edit-1.0` 不执行模板工作流。启用后执行逐步委托 AG（单文档回合）或 CBT（多文件构建），均过门禁、经受控预览并由显式保存落盘；步骤失败暂停可恢复，不静默跳步
-source_doc: APC §4.1、A-AG-M-D-02 §4、REQ-CORE-010、A-CBT-M-D-01（REQ-CBT-002）
+source_doc: APC §4.1、A-CORE-X-D-02 §3/§4、REQ-CORE-010、A-CBT-M-D-01（REQ-CBT-002）
 acceptance: `agent-edit-1.0` 无模板工作流执行入口；后续 Profile 的工作流可定义、可复用执行；每步执行过门禁；步骤失败不静默跳步；中止无半成品落盘
 open_issues: 工作流表达模型（步骤/条件/人类确认点）归 TPL G2（§7 TPL-01）；执行编排是否状态化建机待 G2 评估（§7 TPL-02）
 -->

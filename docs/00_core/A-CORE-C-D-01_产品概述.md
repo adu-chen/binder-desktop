@@ -122,7 +122,7 @@ title: 对话生成文档提案并由人类裁决
 owner_module: CORE
 status: active
 summary: AI 文档修改以 diff/ChangeProposal 呈现并由用户接受或拒绝；受控预览可更新可编辑的文档逻辑状态，显式接受不重复应用或直接写盘，而保存有效 pending 预览等同接受并写盘；含代理编辑（AgentEdit，编辑/构建双模式）与工具调用（2026-07-04 术语更名，能力细化经 REQ-AG-* 承接）
-source_doc: APC §1、A-AG-M-D-02 §2（已确认文档生命周期基线）
+source_doc: APC §1、A-CORE-X-D-02 §3/§4（已冻结文档生命周期边界）
 acceptance: AI 修改在用户显式保存前不写入文件；接受不重复应用预览内容；拒绝仅在原始基准仍有效时撤销对应预览；文档逻辑状态已推进时原提案失效而非覆盖后续编辑
 -->
 
@@ -202,7 +202,7 @@ title: 文档逻辑状态优先与新建文档绑定生命周期
 owner_module: CORE
 status: active
 summary: 普通文档内容修改仍首先作用于 LogicalState 并遵守内容 Diff 后置裁决。Agent 新建文档是受前置裁决的 WorkspaceOperation：初始内容在确认前生成并冻结，用户确认后先创建 DiskState 空文件并记录资源操作历史，再打开标签、建立 LogicalState 并投影绑定初始内容 Diff。绑定初始 Diff 遵守普通内容 Diff 生命周期；只有文件身份、空文件磁盘基线和 LogicalState 版本均未推进时，拒绝才可补偿删除本次创建文件
-source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-AG-M-D-02 §5.10
+source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-CORE-X-D-02 §3/§4
 acceptance: 未确认或初始内容生成失败时不创建文件；确认后文件立即存在且初始内容以独立 DiffCard 审阅；接受只裁决内容卡、保存才写入初始内容；安全拒绝会删除本次创建文件并记录补偿历史，任何人工/后续 Agent/外部/路径基线推进都会使旧卡失效并禁止删除；普通内容 Diff 永远不能删除文件
 -->
 
@@ -212,7 +212,7 @@ title: Agent 1.0 的项目与文档上下文感知
 owner_module: CORE
 status: active
 summary: Agent 1.0 P0 必须支持基础聊天/任务交互、工作区概览与可复核项目分析、当前编辑器状态感知，以及当前文档、显式引用和未打开工作区文档的受限阅读与比较。项目分析默认先读取结构概览，正文仅在任务需要时按最小范围读取；已打开文档以 LogicalState 为准，未打开文档才读取 DiskState 并标明读取时点/新鲜度
-source_doc: 2026-08-13 人类确认、A-AG-M-D-02 §5.1~§5.5、CAP-01~04
+source_doc: 2026-08-13 人类确认、A-CORE-X-D-02 §3/§4
 acceptance: 回答、分析、Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；项目报告披露已读/未读范围、来源与不确定性；Agent 可感知活动文档、打开标签、脏态、保存基准、任务所需选区和关联提案；M1 多文档读取/比较与 M2 当前文档修改、其他文档显式引用为 P0，多个既有文档写入 M4 保持 P1
 -->
 
@@ -222,7 +222,7 @@ title: 工作区资源操作的前置裁决与磁盘提交
 owner_module: CORE
 status: active
 summary: 创建文档/文件夹、重命名、移动、删除和恢复统一属于 WorkspaceOperation。系统先只读统计目标、影响和基线并冻结 WorkspaceOperationPlan，由 DecisionRequest 前置裁决；用户确认且执行前再核验成功后，WS 直接改变 DiskState，不生成资源 DiffCard或再次等待接受。批量操作采用失败即停和反向补偿，不承诺文件系统级严格事务
-source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-AG-M-D-02 §5.11（CAP-11/12）
+source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-CORE-X-D-02 §3/§4
 acceptance: 未确认、拒绝、过期或再核验失败均零磁盘副作用；确认只执行一次且重复事件幂等；卡片显示完整目标、顺序、递归范围、内容 Diff/标签影响和失败策略；dirty 目标先阻断；资源操作成功后文件树、标签、引用和关联内容 Diff 状态同步；批量失败逐项记录执行与补偿结果，补偿不完整不得伪报成功
 -->
 
@@ -232,7 +232,7 @@ title: 最小格式转换与目标副本生命周期
 owner_module: CORE
 status: active
 summary: Agent 1.0 P1 仅支持 TXT→Markdown 与 Markdown→TXT 的受控格式转换，转换一律创建新的目标副本且不改写来源。已打开来源读取当前 LogicalState，未打开来源读取 DiskState 并标明读取时点；预览成功后建立目标 LogicalState 与标签，接受只裁决转换 Proposal，显式保存当前目标才写入目标 DiskState。Markdown→TXT 为有损转换，必须明示损失边界
-source_doc: 2026-08-14 人类 R4-C 确认、A-AG-M-D-02 §5.13（CAP-13）
+source_doc: 2026-08-14 人类 R4-C 确认、A-CORE-X-D-02 §3/§4
 acceptance: 转换 Proposal 展示来源身份/状态时点、输入输出格式、目标路径及保真或损失说明；来源是转换时刻的冻结输入，后续来源变化不自动刷新或回写已预览目标；TXT→Markdown 不自动猜测标题、列表或任务等语义；Markdown→TXT 不承诺样式、结构、表格、图片或可逆往返；预览前失败不产生目标逻辑文档或文件，目标后续编辑使旧转换卡失效，保存冲突/失败不覆盖既有目标且保留目标 LogicalState 与标签；HTML 互转、通用 DOCX 互转、批量或原地转换不提供入口，BDocx 仍仅是 REQ-CORE-004 的专用编辑副本处理路径
 -->
 
@@ -242,7 +242,7 @@ title: 工作区时间轴中的资源删除与恢复
 owner_module: CORE
 status: active
 summary: 删除与恢复是 WorkspaceOperation：完整影响清单和资源快照在确认前冻结，DecisionRequest 前置裁决后重新核验并直接改变 DiskState。产品不建设第二套撤销入口，而将现有文档时间轴扩展为统一 WorkspaceTimeline；资源节点保存前后路径、目录清单、内容/元数据快照和逐项执行回执，由类型化还原器前进式恢复。永久清理历史快照不属于 Agent 1.0
-source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-AG-M-D-02 §5.11.1（CAP-12）
+source_doc: 2026-08-21 人类确认的 WorkspaceOperation 八项决策、A-CORE-X-D-02 §3/§4
 acceptance: 删除确认卡显示完整目标、递归数量、可恢复性和受影响会话；确认时来源或清单变化则卡片过期且不删除；dirty 会话先保存或明确放弃；删除成功生成可取回的 WorkspaceOperationEntry，恢复仍需新的前置裁决且不覆盖冲突目标；文件、空目录和非空目录均可由统一时间轴恢复；新建文档绑定初始 Diff 的安全拒绝按 REQ-CORE-010 记录补偿资源节点
 open_issues: 历史快照容量和永久清理策略后置；不阻断 1.0 的追加式资源历史与类型化恢复
 -->
@@ -253,7 +253,7 @@ title: 多个既有文档的受控独立编辑
 owner_module: CORE
 status: active
 summary: Agent 1.0 P1 可修改用户明确选定或确认候选清单后的多个既有、已保存且可编辑文档；目标清单在确认后冻结，不得动态扩展。每个目标独立生成 Proposal、基准、预览、裁决、保存与失败结果，并逐目标遵循 LogicalState/DiskState 三分流；不提供批量接受、批量保存、跨文档全有或全无事务。范围仅含 TXT、Markdown、HTML 与 BDocx 编辑副本，不含原生 DOCX、删除/文件树整理/格式转换混合操作
-source_doc: 2026-08-14 人类 R4-D 确认、A-AG-M-D-02 §5.14（CAP-15）
+source_doc: 2026-08-14 人类 R4-D 确认、A-CORE-X-D-02 §3/§4
 acceptance: 用户能在写入前看见并确认冻结目标列表及每项范围；任一目标的冲突、外部变化、结构变化或删除只使该目标 Proposal 失效，不静默跳过、误写或阻断其他目标；每项打开文档的预览直接更新其 LogicalState、接受只裁决卡片、保存才写盘，背景目标只在其自身卡片接受时原子落盘且打开后迁移为前者；每个目标的失败、未保存状态与保存结果可独立追溯
 open_issues: 目标清单卡、用户选择/候选确认交互、跨文档计划表达、独立 Proposal/基准/失效事件、每项保存队列和 Trace/恢复契约归 AG/DE/ED/WS/REF/SYS DESIGN Scope；本 L1 不定义批处理接口、并发模型或事务实现
 -->
@@ -264,7 +264,7 @@ title: Agent 运行时、意图授权与会话隔离
 owner_module: CORE
 status: active
 summary: Agent 1.0 P0 只能以 agent-edit-1.0 启动；未知或缺失运行配置必须在模型、工具与 Proposal 前失败关闭，Build/CBT 保持 P2。每个用户发送对应一个 AgentTurn，澄清为等待用户输入的非终态，取消可在任一活动阶段生效，首个终态后迟到事件/工具不得产生副作用。每轮 IntentResult 固定任务类型、目标、预期副作用、所需上下文、允许工具和确认点；写入目标或范围不清时只能澄清或生成目标计划。用户只见结构化任务事件，不见模型内部推理；workspace/AgentSession/AgentTurn 三层隔离，历史与编辑事实本地保存
-source_doc: 2026-08-14 人类 R5-A 确认、A-AG-M-D-02 §4.2（CAP-00）、§5.15~§5.17
+source_doc: 2026-08-14 人类 R5-A 确认、A-CORE-X-D-02 §3/§4
 acceptance: 缺失/未知 profile 不会到达 Gate、provider、工具或 Proposal；澄清不被表现为完成，取消/失败/拒绝/完成互斥且不伪成功；只读任务不获得 Proposal 或写工具，写入歧义不猜测目标或执行；可见事件可追溯任务结论、读取/工具、Proposal/操作卡、等待确认和终态原因但不泄露内部推理；不同 workspace/AgentSession 的消息、任务事件、工具卡、Diff、引用和未保存上下文不串线，重启恢复不伪造成功；长期项目记忆不因本要求自动写入或注入
 open_issues: Runtime Profile 的兼容迁移、AgentTurn 等待澄清/取消/终态状态机、IntentResult/CapabilityGrant/AgentSession/事件/Trace 字段、本地历史存储恢复和会话管理交互归 AG/SYS DESIGN Scope；本 L1 不定义接口、数据字段、Prompt、UI 或实现算法
 -->
@@ -275,7 +275,7 @@ title: 受限复合任务、真实进度与连续 Proposal
 owner_module: CORE
 status: active
 summary: Agent 1.0 的 IntentResult 是任务编排入口：简单目标可形成单回合，复杂目标形成受限任务实例（TaskRun），在同一用户目标内组织多个 AgentTurn 与已授权步骤。每一步都重新受 profile、意图、目标、上下文、最小工具和既有确认点限制；TaskRun 不是后台队列，不自动跨确认点、跨重启或脱离用户续跑。明确的同文档复合目标可连续产生 Proposal：后续 Proposal 必须读取最新 LogicalState，成功预览推进基准并使前卡失效、保留历史且不可再裁决；连续卡不构成补丁栈或任务级回滚。无 LogicalState 的背景 pending Proposal 不得作为后续编辑输入。用户可辨别真实执行、等待补充、等待卡片裁决、中断可重试及终态，且不见模型内部推理
-source_doc: 2026-08-14 人类 R5-B 确认、A-AG-M-D-02 §5.15（CAP-16）、REQ-CORE-010/016
+source_doc: 2026-08-14 人类 R5-B 确认、A-CORE-X-D-02 §3/§4、REQ-CORE-010/016
 acceptance: 研究→大纲→内容、创建→编辑→排版等复合目标按可见步骤推进，步骤只获得当前最小授权且既有多文档、删除、结构保存等确认点不被越过；Diff1 预览进入 LogicalState 后，Diff2 只以该当前状态为基准，Diff2 预览成功即使 Diff1 失效且不可接受/拒绝，拒绝 Diff2 只回到其自身有效基准；背景 pending 目标必须先打开迁移为 LogicalState，或依其背景分流完成裁决后才可继续编辑；取消只停止未开始的后续步骤，不回滚已成功预览的当前 LogicalState 或伪造卡片终态；中断重启后不自动续跑，用户显式重试创建新 AgentTurn 并重新校验；当前“工作中”由真实活跃回合/步骤/工具事件支撑，等待、卡片 pending、失败、取消或完成不伪装为执行中
 open_issues: TaskRun/步骤/关联 AgentTurn 与 Proposal 链的状态机、身份字段、并发、计划和进度交互、事件/Trace、持久化/重启恢复、时长与循环上限归 AG/DE/SYS DESIGN Scope；TaskRun 为本轮产品术语，正式 TERM 注册和实现命名待 L2；本 L1 不定义接口、数据结构、Prompt、UI 或算法
 -->
@@ -286,7 +286,7 @@ title: 受控外部文件内容读取
 owner_module: CORE
 status: active
 summary: Agent 1.0 以 P1 提供用户显式附加/选择的外部文件内容读取。只有系统当时具备可用只读解析能力的格式，才可在当前用户任务中形成可追溯的一次性 data-only 内容引用；不支持或不可读的文件只保留元数据引用并如实说明。系统不得扫描外部目录、自动再次读取、导入或编辑外部文件；外部内容不授予写入或执行权限，也不默认写入会话历史或项目记忆
-source_doc: 2026-08-14 人类 R5-C 确认、REQ-CORE-006、A-AG-M-D-02 §5.5（CAP-20）
+source_doc: 2026-08-14 人类 R5-C 确认、REQ-CORE-006、A-CORE-X-D-02 §3/§4
 acceptance: 用户可辨别文件来源、已读/未读状态和“只供当前任务”的范围；支持的只读路径只向当前任务提供 data-only 内容，分析或基于内容的修改仍受 IntentResult、最小授权与 Proposal/裁决/保存约束；不支持/失败文件不伪称已读；任务结束、重启、其他会话或 workspace 不自动再次取得该内容
 open_issues: 格式清单、解析器可用性、大小/上下文预算、内容快照/暂存/清除、传输提示、脱敏 Trace、错误与 UI 归 REF/AG/SYS DESIGN Scope；本 L1 不定义读取接口、数据字段、存储位置或实现算法
 -->
@@ -297,7 +297,7 @@ title: 用户管理的本地项目长期记忆
 owner_module: CORE
 status: active
 summary: Agent 1.0 以 P1 提供 workspace 隔离、本地保存的项目长期记忆；用户可创建、查看来源、编辑、删除和关闭条目。它不是会话/编辑事实或外部文件的自动副本。Agent 1.0 不自动写入、不生成写入提议、不按相关性自动检索或注入；只有用户明确选择的记忆条目，才可作为 data-only 引用进入当前 AgentTurn
-source_doc: 2026-08-14 人类 R5-C 确认、REQ-CORE-005/006/016、A-AG-M-D-02 §5.17（CAP-18）
+source_doc: 2026-08-14 人类 R5-C 确认、REQ-CORE-005/006/016、A-CORE-X-D-02 §3/§4
 acceptance: 项目记忆不跨 workspace 共享或上云，用户可管理其完整生命周期；普通 Agent 发送、外部文件附加和会话恢复不会创建、提议、检索或注入记忆；用户选择的条目可追溯来源并仅影响当前回合的 data-only 上下文，不改变系统约束、任务目标、工具授权、编辑目标或确认点；外部文件内容不会自动转存为记忆
 open_issues: 记忆条目模型、手工管理/关闭交互、来源模型、显式选择令牌、删除传播、存储/事件/IPC/状态机和隐私策略归 AST/REF/AG/SYS DESIGN Scope；未来 Profile 的 Agent 记忆提议、自动写入或自动注入须独立确认和验证
 -->
@@ -361,3 +361,4 @@ open_issues: 记忆条目模型、手工管理/关闭交互、来源模型、显
 | 2026-08-14 | v2.2 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：新增 REQ-CORE-018/019；外部文件实际读取进入 P1 的显式、一次性 data-only 路径，未读格式退回元数据；长期项目记忆进入 P1 的 workspace 本地用户管理路径，Agent 1.0 不自动写入、提议或注入，外部内容不自动转存为记忆。 |
 | 2026-08-14 | v2.3 | AG-1.0-R6-BASELINE-FREEZE-01：R1–R5-C 的 Agent 1.0 已确认需求范围冻结；新增冻结记录入口，声明后续设计不得隐式改变产品行为、权限、档位或状态语义，需求冻结不等于实现或发布完成。 |
 | 2026-08-21 | v2.4 | WORKSPACE-OPERATION-BASELINE-01：人类确认八项新决策，REQ-CORE-010/012/014 改为 WorkspaceOperationPlan 前置裁决后直接写 DiskState；统一 WorkspaceTimeline 承载资源恢复；新建文档采用 CreateDocumentBundle，绑定初始 Diff 仅在基线未推进时可补偿删除。 |
+| 2026-08-31 | v2.5 | AG-DOC-CONSOLIDATION-01：需求来源收敛到 A-CORE-X-D-02 冻结范围基线，不再把 AG 候选基线作为产品需求上游。 |
