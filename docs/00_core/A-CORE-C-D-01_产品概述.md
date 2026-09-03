@@ -51,8 +51,8 @@ AI 的所有文档修改以提案（diff）形式呈现，用户始终保有裁�
 |---|---|---|
 | 本地 workspace 写作与文件 I/O、pending_diffs 持久化 | WS | REQ-CORE-001 |
 | 对话生成 diff → 按 LogicalState 分流裁决/保存或接受落盘（核心交互） | DE/AG/ED/WS | REQ-CORE-002 |
-| 代理编辑（AgentEdit：编辑/构建双模式）+ 工具调用 | AG | REQ-CORE-002 |
-| 构建：项目蓝图与多文件文档项目构建（CBT） | CBT | REQ-CORE-003 |
+| 代理编辑（AgentEdit：`agent-edit-1.0`）+ 工具调用 | AG | REQ-CORE-002 |
+| 构建：项目蓝图与多文件文档项目构建（CBT；不进入 Agent 1.0 Profile） | CBT | REQ-CORE-003 |
 | 原生 DOCX 只读预览/分析、BDocx 处理副本编辑、Excel/PPT/音视频**预览** + 打印/导出 | DOC/ED/PRV | REQ-CORE-004 |
 | 文本与 Markdown 的受控副本转换（TXT→Markdown、Markdown→TXT） | AG/DE/DOC/ED/WS | REQ-CORE-013 |
 | 本地记忆 / 知识库 / 模板工作流 | AST/KB/TPL | REQ-CORE-005 |
@@ -121,9 +121,9 @@ req_id: REQ-CORE-002
 title: 对话生成文档提案并由人类裁决
 owner_module: CORE
 status: active
-summary: AI 文档修改以 diff/ChangeProposal 呈现并由用户接受或拒绝；受控预览可更新可编辑的文档逻辑状态，显式接受不重复应用或直接写盘，而保存有效 pending 预览等同接受并写盘；含代理编辑（AgentEdit，编辑/构建双模式）与工具调用（2026-07-04 术语更名，能力细化经 REQ-AG-* 承接）
+summary: AI 文档修改以 diff/ChangeProposal 呈现并由用户接受或拒绝；受控预览可更新可编辑的文档逻辑状态，显式接受不重复应用或直接写盘，而保存有效 pending 预览等同接受并写盘；Agent 1.0 只包含 `agent-edit-1.0` 的代理编辑与工具调用，构建由独立后续 Profile 承接
 source_doc: APC §1、A-CORE-X-D-02 §3/§4（已冻结文档生命周期边界）
-acceptance: AI 修改在用户显式保存前不写入文件；接受不重复应用预览内容；拒绝仅在原始基准仍有效时撤销对应预览；文档逻辑状态已推进时原提案失效而非覆盖后续编辑
+acceptance: AI 修改在用户显式保存前不写入文件；接受不重复应用预览内容；拒绝仅在原始基准仍有效时撤销对应预览；文档逻辑状态已推进时原提案失效而非覆盖后续编辑；同一次结构化修改中，不连续或可独立接受/拒绝的块组生成同一 ProposalBatch 下的独立 DiffCard，相邻且不可分的块可合并，不以整文档单卡捆绑人工裁决
 -->
 
 <!-- REQ
@@ -211,9 +211,9 @@ req_id: REQ-CORE-011
 title: Agent 1.0 的项目与文档上下文感知
 owner_module: CORE
 status: active
-summary: Agent 1.0 P0 必须支持基础聊天/任务交互、工作区概览与可复核项目分析、当前编辑器状态感知，以及当前文档、显式引用和未打开工作区文档的受限阅读与比较。项目分析默认先读取结构概览，正文仅在任务需要时按最小范围读取；已打开文档以 LogicalState 为准，未打开文档才读取 DiskState 并标明读取时点/新鲜度
+summary: Agent 1.0 P0 必须支持基础聊天/任务交互、工作区概览与可复核项目分析、当前编辑器状态感知，以及当前文档、显式引用和未打开工作区文档的受限阅读与比较。项目分析默认先读取结构概览，模型再按任务与现有证据选择最小必要正文；运行时记录实际读取证据并派生项目报告。已打开文档以 LogicalState 为准，未打开文档才读取 DiskState 并标明读取时点/新鲜度
 source_doc: 2026-08-13 人类确认、A-CORE-X-D-02 §3/§4
-acceptance: 回答、分析、Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；项目报告披露已读/未读范围、来源与不确定性；Agent 可感知活动文档、打开标签、脏态、保存基准、任务所需选区和关联提案；M1 多文档读取/比较与 M2 当前文档修改、其他文档显式引用为 P0，多个既有文档写入 M4 保持 P1
+acceptance: 回答、分析、Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；项目报告由实际读取证据派生并披露已读/未读范围、来源、读取状态与不确定性，不能由模型自报替代；Agent 可感知活动文档、打开标签、脏态、保存基准、任务所需选区和关联提案；M1 多文档读取/比较与 M2 当前文档修改、其他文档显式引用为 P0，多个既有文档写入 M4 保持 P1
 -->
 
 <!-- REQ
@@ -263,9 +263,9 @@ req_id: REQ-CORE-016
 title: Agent 运行时、意图授权与会话隔离
 owner_module: CORE
 status: active
-summary: Agent 1.0 P0 只能以 agent-edit-1.0 启动；未知或缺失运行配置必须在模型、工具与 Proposal 前失败关闭，Build/CBT 保持 P2。每个用户发送对应一个 AgentTurn，澄清为等待用户输入的非终态，取消可在任一活动阶段生效，首个终态后迟到事件/工具不得产生副作用。每轮 IntentResult 固定任务类型、目标、预期副作用、所需上下文、允许工具和确认点；写入目标或范围不清时只能澄清或生成目标计划。用户只见结构化任务事件，不见模型内部推理；workspace/AgentSession/AgentTurn 三层隔离，历史与编辑事实本地保存
+summary: Agent 1.0 P0 只能以 agent-edit-1.0 启动；未知或缺失运行配置必须在模型、工具与 Proposal 前失败关闭，Build/CBT 保持 P2。每个用户发送对应一个 AgentTurn，澄清为等待用户输入的非终态，取消可在任一活动阶段生效，首个终态后迟到事件/工具不得产生副作用。模型负责结合当前输入与真实工具证据形成并持续更新 IntentResult、选择工具和调整路线；IntentResult 只表达任务目标、编辑目标候选、预期副作用、所需上下文、歧义与确认点，不授予工具权限。运行时依据 profile、工具注册、显式目标、格式/动态能力、DecisionRequest、Gate、预算和终态生成并逐次校验 CapabilityGrant。用户只见结构化任务事件，不见模型内部推理；workspace/AgentSession/AgentTurn 三层隔离，历史与编辑事实本地保存
 source_doc: 2026-08-14 人类 R5-A 确认、A-CORE-X-D-02 §3/§4
-acceptance: 缺失/未知 profile 不会到达 Gate、provider、工具或 Proposal；澄清不被表现为完成，取消/失败/拒绝/完成互斥且不伪成功；只读任务不获得 Proposal 或写工具，写入歧义不猜测目标或执行；可见事件可追溯任务结论、读取/工具、Proposal/操作卡、等待确认和终态原因但不泄露内部推理；不同 workspace/AgentSession 的消息、任务事件、工具卡、Diff、引用和未保存上下文不串线，重启恢复不伪造成功；长期项目记忆不因本要求自动写入或注入
+acceptance: 缺失/未知 profile 不会到达 Gate、provider、工具或 Proposal；澄清不被表现为完成，取消/失败/拒绝/完成互斥且不伪成功；IntentResult 可随真实证据更新但不得包含或等价承载授权工具清单，关键词分类、Prompt 文本、已注册工具和模型请求均不能自行扩权；每次工具调用必须命中当时有效的 CapabilityGrant，写入歧义只能澄清或请求目标确认；可见事件可追溯任务结论、读取/工具、Proposal/操作卡、等待确认和终态原因但不泄露内部推理；不同 workspace/AgentSession 的消息、任务事件、工具卡、Diff、引用和未保存上下文不串线，重启恢复不伪造成功；长期项目记忆不因本要求自动写入或注入
 open_issues: Runtime Profile 的兼容迁移、AgentTurn 等待澄清/取消/终态状态机、IntentResult/CapabilityGrant/AgentSession/事件/Trace 字段、本地历史存储恢复和会话管理交互归 AG/SYS DESIGN Scope；本 L1 不定义接口、数据字段、Prompt、UI 或实现算法
 -->
 
@@ -274,9 +274,9 @@ req_id: REQ-CORE-017
 title: 受限复合任务、真实进度与连续 Proposal
 owner_module: CORE
 status: active
-summary: Agent 1.0 的 IntentResult 是任务编排入口：简单目标可形成单回合，复杂目标形成受限任务实例（TaskRun），在同一用户目标内组织多个 AgentTurn 与已授权步骤。每一步都重新受 profile、意图、目标、上下文、最小工具和既有确认点限制；TaskRun 不是后台队列，不自动跨确认点、跨重启或脱离用户续跑。明确的同文档复合目标可连续产生 Proposal：后续 Proposal 必须读取最新 LogicalState，成功预览推进基准并使前卡失效、保留历史且不可再裁决；连续卡不构成补丁栈或任务级回滚。无 LogicalState 的背景 pending Proposal 不得作为后续编辑输入。用户可辨别真实执行、等待补充、等待卡片裁决、中断可重试及终态，且不见模型内部推理
+summary: 简单目标由单个 AgentTurn 完成；复杂或跨执行片段目标可形成 TaskRun，作为同一用户目标、当前路线、阶段、已完成事实、等待点与关联 AgentTurn/Proposal 的可观察投影。模型可依据新证据更新后续路线，运行时从事件事实投影 TaskRun/TaskPlan，不以静态计划调度模型、不预授权未来工具，也不自动跨确认点、跨重启或脱离用户续跑。明确的同文档复合目标可连续产生 Proposal：后续 Proposal 必须读取最新 LogicalState，成功预览推进基准并使前卡失效、保留历史且不可再裁决；连续卡不构成补丁栈或任务级回滚。无 LogicalState 的背景 pending Proposal 不得作为后续编辑输入。用户可辨别真实执行、等待补充、等待卡片裁决、中断可重试及终态，且不见模型内部推理
 source_doc: 2026-08-14 人类 R5-B 确认、A-CORE-X-D-02 §3/§4、REQ-CORE-010/016
-acceptance: 研究→大纲→内容、创建→编辑→排版等复合目标按可见步骤推进，步骤只获得当前最小授权且既有多文档、删除、结构保存等确认点不被越过；Diff1 预览进入 LogicalState 后，Diff2 只以该当前状态为基准，Diff2 预览成功即使 Diff1 失效且不可接受/拒绝，拒绝 Diff2 只回到其自身有效基准；背景 pending 目标必须先打开迁移为 LogicalState，或依其背景分流完成裁决后才可继续编辑；取消只停止未开始的后续步骤，不回滚已成功预览的当前 LogicalState 或伪造卡片终态；中断重启后不自动续跑，用户显式重试创建新 AgentTurn 并重新校验；当前“工作中”由真实活跃回合/步骤/工具事件支撑，等待、卡片 pending、失败、取消或完成不伪装为执行中
+acceptance: 研究→大纲→内容、创建→编辑→排版等复合目标按可见且可更新的路线推进，TaskRun/TaskPlan 只反映模型已表达和事件已证实的当前事实，不能成为执行许可或自动续跑依据；每次实际调用只获得当时 CapabilityGrant，既有多文档、删除、结构保存等确认点不被越过；Diff1 预览进入 LogicalState 后，Diff2 只以该当前状态为基准，Diff2 预览成功即使 Diff1 失效且不可接受/拒绝，拒绝 Diff2 只回到其自身有效基准；背景 pending 目标必须先打开迁移为 LogicalState，或依其背景分流完成裁决后才可继续编辑；取消只停止未开始的后续步骤，不回滚已成功预览的当前 LogicalState 或伪造卡片终态；中断重启后不自动续跑，用户显式重试创建新 AgentTurn 并重新校验；当前“工作中”由真实活跃回合/步骤/工具事件支撑，等待、卡片 pending、失败、取消或完成不伪装为执行中
 open_issues: TaskRun/步骤/关联 AgentTurn 与 Proposal 链的状态机、身份字段、并发、计划和进度交互、事件/Trace、持久化/重启恢复、时长与循环上限归 AG/DE/SYS DESIGN Scope；TaskRun 为本轮产品术语，正式 TERM 注册和实现命名待 L2；本 L1 不定义接口、数据结构、Prompt、UI 或算法
 -->
 
@@ -316,7 +316,7 @@ open_issues: 记忆条目模型、手工管理/关闭交互、来源模型、显
 - **删除与恢复边界**：已保存文件/文件夹的删除按 REQ-CORE-014 生成 WorkspaceOperationPlan 和 DecisionRequest；确认后重新核验并直接修改磁盘，同时写入可恢复的 WorkspaceTimeline 条目。脏标签阻断执行，永久清理、自动清空和未核验递归删除不属于 1.0。
 - **多文档写入边界**：多个既有文档的写入只按 REQ-CORE-015 的已确认冻结目标清单逐项进行；每项独立预览、裁决和保存，不因“多文档”获得批量接受、批量保存或跨文档事务授权。
 - **Agent 运行边界**：仅 REQ-CORE-016 的 agent-edit-1.0 可启动；profile、意图、目标、副作用、上下文、工具与确认点逐层收窄。澄清等待、取消、终态、可见事件和 AgentSession 隔离必须如实表现；模型内部推理、长期记忆自动写入及 Build/CBT 不属于 1.0 主链。
-- **复合任务与连续 Proposal 边界**：REQ-CORE-017 的 TaskRun 只能组织当前用户目标内的受限步骤，不能成为后台队列或跨确认点自动执行。同文档后续 Proposal 只可基于最新 LogicalState；基准推进使前卡失效，禁止补丁叠加、任务级自动回滚或背景 pending payload 续编。
+- **复合任务与连续 Proposal 边界**：REQ-CORE-017 的 TaskRun/TaskPlan 只能投影当前用户目标、模型路线与事件事实，不能成为静态调度器、未来授权、后台队列或跨确认点自动执行。同文档后续 Proposal 只可基于最新 LogicalState；基准推进使前卡失效，禁止补丁叠加、任务级自动回滚或背景 pending payload 续编。
 - **外部内容与项目记忆边界**：REQ-CORE-018 的外部文件内容只在用户显式附加后的当前任务中以 data-only 使用；REQ-CORE-019 的长期记忆由用户在 workspace 内管理，只有明确选择才进入回合。二者都不自动写入、不自动注入、不能改变授权或成为外部文件扫描入口。
 - **Agent 1.0 冻结边界**：R1–R5-C 的已确认 1.0 需求范围已由 [Agent 1.0 冻结能力基线](A-CORE-X-D-02_Agent1.0冻结能力基线.md) 固定；后续设计只能细化，任何行为、权限、档位或状态语义变动必须新开 REQUIREMENT Scope，不得由 L2、Prompt、工具或代码隐式扩大。
 
@@ -362,3 +362,4 @@ open_issues: 记忆条目模型、手工管理/关闭交互、来源模型、显
 | 2026-08-14 | v2.3 | AG-1.0-R6-BASELINE-FREEZE-01：R1–R5-C 的 Agent 1.0 已确认需求范围冻结；新增冻结记录入口，声明后续设计不得隐式改变产品行为、权限、档位或状态语义，需求冻结不等于实现或发布完成。 |
 | 2026-08-21 | v2.4 | WORKSPACE-OPERATION-BASELINE-01：人类确认八项新决策，REQ-CORE-010/012/014 改为 WorkspaceOperationPlan 前置裁决后直接写 DiskState；统一 WorkspaceTimeline 承载资源恢复；新建文档采用 CreateDocumentBundle，绑定初始 Diff 仅在基线未推进时可补偿删除。 |
 | 2026-08-31 | v2.5 | AG-DOC-CONSOLIDATION-01：需求来源收敛到 A-CORE-X-D-02 冻结范围基线，不再把 AG 候选基线作为产品需求上游。 |
+| 2026-09-03 | v2.6 | AG-ADAPTIVE-RUNTIME-REQ-01：在既有 Agent 1.0 范围内明确模型主导语义与路线、运行时主导动态授权；IntentResult 去除工具授权职责，TaskRun/TaskPlan 改为事件事实投影，并消除 AgentEdit 与 Build 双模式歧义。 |

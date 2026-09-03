@@ -96,10 +96,10 @@ req_id: REQ-DE-001
 title: diff 生成
 owner_module: DE
 status: active
-summary: 将 AG 的 AI 修改建议生成为 pending_diff（PendingDiff 共享结构，blockId 定位目标内容块），交 WS 持久化；定位锚失效时生成失败并回报，不产生错位 diff
+summary: 将 AG 的一次结构化内容修改生成为 ProposalBatch，并按可独立人工裁决的连续块组拆成一个或多个 pending_diff/DiffCard（PendingDiff 共享结构，blockId 定位目标内容块），交 WS 持久化；不连续块默认分卡，相邻且共同表达一个不可分修改的块可合并；定位锚失效时生成失败并回报，不产生错位 diff
 source_doc: REQ-CORE-002、A-SYS-I-P-01（PendingDiff）、A-ED-M-T-01（BR-ED-DATA-001）
-acceptance: AI 修改建议可生成为持久化 pending_diff 且定位准确；锚失效有明确失败回报
-open_issues: diff 粒度（块级/行级/字符级对比）归 DE G2（§7 DE-01）
+acceptance: AI 修改建议可生成为持久化 ProposalBatch 与一个或多个定位准确的 pending_diff；每张卡只覆盖一个可独立接受/拒绝的连续块组，同批卡保留 batch 身份和顺序但裁决互不捆绑；不连续块不得仅因同一次工具调用合并为一张卡；锚失效有明确失败回报
+open_issues: 分组算法、批次字段和相邻不可分判定归 DE G2；裁决原则已由本 REQ 固定
 -->
 
 <!-- REQ
@@ -107,9 +107,9 @@ req_id: REQ-DE-002
 title: diff 审阅呈现
 owner_module: DE
 status: active
-summary: 经 ED 装饰层或 DiffCard 呈现文本、已确认样式以及 HTML 编辑文档/BDocx 处理副本的表格语义修改对比和接受/拒绝控件，用户交互由 ED 转达 DE 裁决；字符基础样式为 P0，颜色/突出显示、段落样式、字号与字体族为 P1；原生 DOCX 不作为可修改目标；终态后装饰复位不残留
+summary: 经 ED 装饰层或 DiffCard 按 ProposalBatch 中的独立裁决单元呈现文本、已确认样式以及 HTML 编辑文档/BDocx 处理副本的表格语义修改对比和接受/拒绝控件，用户交互由 ED 转达 DE 裁决；字符基础样式为 P0，颜色/突出显示、段落样式、字号与字体族为 P1；原生 DOCX 不作为可修改目标；终态后装饰复位不残留
 source_doc: REQ-CORE-002、A-ED-M-T-01（ED-DECOR、BR-ED-STATE-002）
-acceptance: diff 可视呈现于编辑器目标位置；HTML 编辑文档与 BDocx 处理副本的样式操作必须展示目标范围、操作名称和修改前后结果，不显示原始 HTML、CSS 或 OOXML；HTML 编辑文档与 BDocx 处理副本的表格操作按坐标/参数展示，单元格底纹显示修改前后色块与十六进制色值；原生 DOCX 的编辑请求只可展示“创建 BDocx 编辑副本”的新文档 Proposal；裁决控件交互可达；终态后呈现复位
+acceptance: diff 可视呈现于编辑器目标位置，同批多卡显示共同批次关系、各自目标范围和独立接受/拒绝状态，不以一个总裁决替代独立裁决；HTML 编辑文档与 BDocx 处理副本的样式操作必须展示目标范围、操作名称和修改前后结果，不显示原始 HTML、CSS 或 OOXML；HTML 编辑文档与 BDocx 处理副本的表格操作按坐标/参数展示，单元格底纹显示修改前后色块与十六进制色值；原生 DOCX 的编辑请求只可展示“创建 BDocx 编辑副本”的新文档 Proposal；裁决控件交互可达；终态后呈现复位
 open_issues: 审阅 UI 形态（逐条/批量/侧栏）归 DE G2/实现期（§7 DE-04）
 -->
 
@@ -129,9 +129,9 @@ req_id: REQ-DE-004
 title: diff 内容载荷形状
 owner_module: DE
 status: active
-summary: 定义 payload_ref 所指 diff 内容载荷的结构（修改前后内容、已确认样式操作、HTML 编辑文档/BDocx 处理副本的 TableOperation 与 ImageOperation、定位信息、来源元数据），为 A-SYS-I-P-01 显式留归 DE 的占位补形；原生 DOCX 编辑请求的载荷目标是新副本 Proposal；载荷形状版本化以支持迁移
+summary: 定义 ProposalBatch 与 payload_ref 所指 diff 内容载荷的结构（批次身份、分组顺序、独立裁决单元、修改前后内容、已确认样式操作、HTML 编辑文档/BDocx 处理副本的 TableOperation 与 ImageOperation、定位信息、来源元数据），为 A-SYS-I-P-01 显式留归 DE 的占位补形；原生 DOCX 编辑请求的载荷目标是新副本 Proposal；载荷形状版本化以支持迁移
 source_doc: A-SYS-I-P-01 §3（payload 形状归 DE）
-acceptance: 载荷形状有单一定义且 WS 持久化/恢复后可完整重建文本、样式、表格与图片审阅呈现；已确认样式操作保留其目标范围、操作和前后结果，不退化为原始 HTML、CSS 或 OOXML 替换；table_ops 保留操作和前后 TableSnapshot，image_ops 保留操作、项目来源、锚和前后 ImageSnapshot，不退化为原始 HTML 替换
+acceptance: 载荷形状有单一定义且 WS 持久化/恢复后可完整重建 ProposalBatch 关系、每张卡的连续目标组、独立裁决状态以及文本、样式、表格与图片审阅呈现；已确认样式操作保留其目标范围、操作和前后结果，不退化为原始 HTML、CSS 或 OOXML 替换；table_ops 保留操作和前后 TableSnapshot，image_ops 保留操作、项目来源、锚和前后 ImageSnapshot，不退化为原始 HTML 替换
 open_issues: 载荷具体结构与版本化策略归 DE G2
 -->
 
@@ -184,9 +184,9 @@ req_id: REQ-DE-009
 title: 复合任务内连续 Proposal 的基准接力
 owner_module: DE
 status: active
-summary: 对同一受限 TaskRun 中明确的同文档连续编辑，DE 为每张 Proposal 保留其所属任务/回合历史关联，但后续 Proposal 只可基于上一张成功预览后的当前 LogicalState 生成。后续预览成功即推进基准，使所有基于旧基准的前卡失效、保留历史且不可再裁决；连续 Proposal 不构成可独立叠加的补丁栈，也不提供任务级回滚。无 LogicalState 的 background pending Proposal 不得作为后续编辑输入
+summary: 对同一复杂任务投影中明确的同文档连续编辑，DE 为每个 ProposalBatch 及其 DiffCard 保留任务/回合历史关联，但后续 ProposalBatch 只可基于上一批成功预览后的当前 LogicalState 生成。同一批内的卡按各自连续块组独立裁决；后续批预览成功即推进基准，使所有基于旧基准的前批卡失效、保留历史且不可再裁决；连续 Proposal 不构成补丁栈或任务级回滚。无 LogicalState 的 background pending Proposal 不得作为后续编辑输入
 source_doc: REQ-CORE-017、REQ-AG-015、A-CORE-X-D-02 §3/§4、REQ-DE-003/005
-acceptance: Diff1 预览进入 LogicalState 后，Diff2/3 的 before/base 均来自最新 LogicalState 而非 Diff1 payload；Diff2 成功预览后 Diff1 明确显示为基准推进失效且接受/拒绝不可用，拒绝 Diff2 只依其有效基准恢复；背景 pending 目标必须先打开迁移为带绿色增量的 LogicalState，或按背景分流完成裁决后才可继续，不能后台叠加或错误写盘；任务取消、失败或中断不会把已成功预览内容伪装为未发生或自动回滚，卡片仍按各自生命周期呈现
+acceptance: Batch1 预览进入 LogicalState 后，Batch2/3 的 before/base 均来自最新 LogicalState 而非 Batch1 payload；同批不连续或可独立裁决块可分别接受/拒绝且结果只作用于各自范围，后续批成功预览后前批仍 pending 的卡明确显示为基准推进失效且不可再裁决；拒绝最新卡只依其有效基准恢复对应范围；背景 pending 目标必须先打开迁移为带绿色增量的 LogicalState，或按背景分流完成裁决后才可继续，不能后台叠加或错误写盘；任务取消、失败或中断不会把已成功预览内容伪装为未发生或自动回滚，卡片仍按各自生命周期呈现
 open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展示排序、跨模块事件、历史恢复、并发与 UI 投影归 DE/AG/ED/SYS DESIGN Scope；本 L1 不定义字段、状态机、事务、回滚或接口
 -->
 
@@ -209,7 +209,7 @@ open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展�
 
 | 编号 | 分类 | 状态 | 处置 |
 |---|---|---|---|
-| DE-01 | BOUNDARY_OPEN | 显式延期 | diff 粒度（块级/行级/字符级对比与混合策略）归 DE G2 |
+| DE-01 | BOUNDARY_OPEN | 需求已关闭，待设计 | 人工裁决粒度固定为连续且语义不可分的块组；不连续或可独立裁决块必须分卡，组内字符/行对比算法归 DE G2 |
 | DE-02 | DESIGN_RISK | 显式延期 | 同一文档多 pending_diff 并存的顺序、重叠与冲突处理归 DE G2（影响落盘正确性，联动 WS） |
 | DE-03 | BOUNDARY_OPEN | 显式延期 | expired 触发细则（超时时长、外部变更检测机制）归 DE G2 |
 | DE-04 | NEEDS_HUMAN_DECISION | 显式延期（不阻断 G1） | 审阅 UI 形态（逐条/批量裁决、侧栏/内联）属产品体验决策，延 G2/实现期人类确认 |
@@ -225,7 +225,7 @@ open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展�
 
 ## §8 后续动作
 
-1. 待人类宣布 DE 模块级 G1 闭合后进入 DE G2：diff 模型与粒度（解除 DE-01）、多 diff 冲突
+1. 待人类宣布 DE 模块级 G1 闭合后进入 DE G2：ProposalBatch 字段与连续块分组算法、多 diff 冲突
   （解除 DE-02）、payload 形状（REQ-DE-004）、基准失效细则（解除 DE-03）、提案/预览/保存状态机
   （REQ-DE-003/006/007/008，回填总图及 ED/WS 跨模块转移）、注册 diff 相关 TERM。
 2. G2 经 REQ_MAP 把 REQ-DE-001~008 映射为 RULE/CHAIN/CONSTRAINT/TERM。
@@ -249,3 +249,4 @@ open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展�
 | 2026-08-14 | v1.15 | AG-1.0-R4-DELETE-MULTIDOC-REQUIREMENTS-01：新增 REQ-DE-007/008；删除/恢复卡只预览红色逻辑暂存、接受不执行物理变更、显式保存才交 WS；多既有文档先确认冻结目标计划，再以逐目标独立 Proposal/基准/裁决/保存处理，不提供批量裁决或事务。 |
 | 2026-08-14 | v1.16 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-DE-009，固定复合任务中连续 Proposal 必须以最新 LogicalState 接力、后预览使前卡基准推进失效；禁止旧 payload 续编、补丁堆叠和任务级回滚，background pending 先迁移或裁决才可继续。 |
 | 2026-08-21 | v1.17 | 工作区资源操作基线重构：REQ-DE-006 改为 CreateDocumentBundle 创建磁盘目标后的初始内容 Diff；REQ-DE-007 明确资源操作不生成 DiffCard，DE 仅提供影响清单并接收资源基线变化导致的内容卡失效。 |
+| 2026-09-03 | v1.18 | AG-ADAPTIVE-RUNTIME-REQ-01：REQ-DE-001/002/004/009 引入 ProposalBatch 与可独立裁决连续块组；不连续块分卡、相邻不可分块可合并，同批关系不捆绑裁决。 |

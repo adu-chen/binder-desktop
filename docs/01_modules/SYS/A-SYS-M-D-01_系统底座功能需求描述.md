@@ -200,9 +200,9 @@ req_id: REQ-SYS-010
 title: Agent 运行时共享身份、事件与恢复隔离
 owner_module: SYS
 status: active
-summary: 为 Agent 1.0 的运行底座声明跨模块契约边界：唯一 Runtime Profile、AgentTurn 与 AgentSession 身份、IntentResult 与 CapabilityGrant、结构化可见事件、澄清等待、取消、终态和本地事实历史。仅 `agent-edit-1.0` 可启动；未知或缺失 profile 必须在 Gate、provider、工具与 Proposal 前失败关闭。AgentSession 是展示、持久化和恢复隔离边界，workspace 仅为外层范围，不得替代会话键
+summary: 为 Agent 1.0 声明模型主导、运行时受控的跨模块边界：模型维护可更新 IntentResult、选择工具并依据证据调整路线；运行时维护唯一 Runtime Profile、AgentTurn/AgentSession 身份、事实快照、动态 CapabilityGrant、Gate、预算、副作用、取消与终态。AgentTurn 的 append-only 事件是状态事实源，界面、TaskRun/TaskPlan、ProjectReport 与恢复状态均由事件和工具证据投影。仅 `agent-edit-1.0` 可启动；未知或缺失 profile 在 Gate、provider、工具与 Proposal 前失败关闭；AgentSession 是展示、持久化和恢复隔离边界
 source_doc: REQ-CORE-016、REQ-AG-007、A-CORE-X-D-02 §3/§4
-acceptance: 共享契约可区分 profile、workspace、AgentSession、AgentTurn、意图、目标、副作用、所需上下文、允许工具、确认点、结构化事件与终态原因；缺失/未知 profile 不产生 Gate/provider/工具/Proposal 事件；澄清不是完成，取消可从任一活动阶段进入终态，首个终态后迟到事件/工具不得改变文档或卡片；跨 workspace/AgentSession 不串消息、任务事件、工具卡、Diff、引用、未保存上下文或本地事实历史；可见事件不包含模型内部推理，恢复不伪造成功且不自动写入或注入长期项目记忆
+acceptance: 共享契约可区分 profile、workspace、AgentSession、AgentTurn、可更新意图、目标候选、副作用、所需上下文、歧义、确认点、CapabilityGrant、工具证据、结构化事件与终态原因；IntentResult 不得包含或等价承载允许工具，任一工具调用都按当时 profile/注册/目标/格式/动态能力/DecisionRequest/Gate/预算/终态重新校验；缺失/未知 profile 不产生 Gate/provider/工具/Proposal 事件；澄清不是完成，取消可从任一活动阶段进入终态，首个终态后迟到事件/工具无副作用；跨 workspace/AgentSession 不串消息、任务事件、工具卡、Diff、引用、未保存上下文或本地事实历史；投影可重建且不包含模型内部推理，恢复不伪造成功或自动续跑
 open_issues: Runtime Profile 兼容迁移、状态机枚举和终态锁存、共享字段/事件形状、IPC、数据库 schema、会话管理、历史容量、异常恢复、脱敏 Trace 与跨模块投影归 SYS/AG DESIGN Scope；本 L1 不定义协议或实现
 -->
 
@@ -211,9 +211,9 @@ req_id: REQ-SYS-011
 title: 受限任务链、真实进度与连续 Proposal 共享契约
 owner_module: SYS
 status: active
-summary: 为 Agent 1.0 的复合任务声明跨模块契约边界：受限任务实例（TaskRun）、其步骤与关联 AgentTurn、当前目标/确认点、真实执行或等待状态、连续 Proposal 的任务历史关联和中断/新回合重试。TaskRun 只组织当前用户目标内的已授权步骤，不是后台队列；当前状态必须来自实际回合、步骤或工具事件。连续同文档 Proposal 以当前 LogicalState 接力，前卡因基准推进失效；background pending Proposal 未建立 LogicalState 前不得作为后续编辑输入
+summary: 为 Agent 1.0 的复合任务声明共享投影边界：复杂或跨执行片段目标才创建 TaskRun，其 TaskPlan 表达模型当前路线，并与 AgentTurn、工具证据、等待点和 ProposalBatch 关联；事件事实投影真实执行、等待、中断与终态。TaskRun/TaskPlan 不是静态调度器、未来工具授权或后台队列，模型可根据新证据更新未执行路线但不能跨确认点自动续跑。连续同文档 Proposal 以当前 LogicalState 接力，前卡因基准推进失效；background pending Proposal 未建立 LogicalState 前不得作为后续编辑输入
 source_doc: REQ-CORE-017、REQ-AG-015、REQ-DE-009、A-CORE-X-D-02 §3/§4
-acceptance: 共享契约可追溯一个复杂用户目标与其步骤/AgentTurn/Proposal 的关系、当前目标、确认点、实际执行/等待/中断/终态及原因；仅活跃回合/步骤/工具事件可声明工作中，等待补充、卡片 pending、失败、取消或完成不伪装为执行；连续 Proposal 关联不允许把旧 payload 作为新基准，后预览的基准推进可使前卡失效，且 background pending 必须迁移或依背景分流裁决后才可继续；中断重启不自动续跑，用户重试产生新 AgentTurn 并重新校验，取消不伪造回滚已成功预览内容；跨 workspace/AgentSession 的任务、事件、卡片、引用和未保存上下文不串线
+acceptance: 共享契约可追溯复杂用户目标、模型当前路线、路线修订、AgentTurn、真实工具证据、ProposalBatch/DiffCard、确认点及执行/等待/中断/终态原因；TaskPlan 只能由模型表达和 append-only 事件投影更新，不能触发未由当前模型调用选择的工具或授予未来权限；仅活跃 provider/工具事件可声明工作中，等待补充、卡片 pending、失败、取消或完成不伪装执行；连续 Proposal 不使用旧 payload 作为新基准，后预览可使前卡失效，background pending 必须迁移或裁决后才可继续；中断重启不自动续跑，用户重试产生新 AgentTurn 并重新校验；跨 workspace/AgentSession 的任务、事件、卡片、引用和未保存上下文不串线
 open_issues: TaskRun/步骤/Proposal 链的身份与状态、事件字段、IPC、数据库 schema、并发、恢复/重试、Trace、实际工作检测和 UI 投影归 SYS/AG/DE DESIGN Scope；TaskRun 正式 TERM 注册待 L2；本 L1 不定义队列、接口、状态机或实现
 -->
 
@@ -236,7 +236,7 @@ open_issues: 可读格式能力、快照/暂存/清除、来源/选择令牌、�
 - **云/客户端边界**：SYS 定义客户端侧契约，不实现云端逻辑（AUTH/GW/LIC 独立 APC）。
 - **状态机边界**（REQ-SYS-003）：状态化核心链必须先有状态机定义方可实现，SYS 不替各模块定义其状态机，只提供总图与跨模块转移契约（APC §6、ADP SC-06/07）。
 - **Agent 运行时边界**（REQ-SYS-010）：SYS 只定义 profile/turn/session/intent/grant/事件/恢复的共享契约，不以 workspace 代替 AgentSession 隔离，也不以兼容默认值扩大 `agent-edit-1.0`；模型内部推理、长期记忆自动写入和具体运行时实现不属于 SYS L1。
-- **Agent 任务链边界**（REQ-SYS-011）：SYS 只定义 TaskRun/步骤/回合/Proposal/进度的共享契约，不把它实现为后台队列、任务级事务或自动跨重启续跑；连续 Proposal 的真值是当前 LogicalState，模型内部推理和具体进度 UI 不属于 SYS L1。
+- **Agent 任务链边界**（REQ-SYS-011）：SYS 只定义 TaskRun/TaskPlan、回合、ProposalBatch、工具证据和进度的共享投影契约，不把它实现为静态调度器、未来授权、后台队列、任务级事务或自动跨重启续跑；连续 Proposal 的真值是当前 LogicalState，模型内部推理和具体进度 UI 不属于 SYS L1。
 - **外部内容与记忆边界**（REQ-SYS-012）：SYS 只定义当前任务外部内容与 workspace 项目记忆的隔离/保留契约；外部内容不因会话恢复变成可复读资产，项目记忆不因附件、历史或相似任务自动产生/注入。格式、暂存、存储、事件、状态机和 UI 不属于 SYS L1。
 - **L4 原料边界**：取材见台账 §4.2（SYS）；旧 binder 文档为原料不为权威，REQ 重新撰写（APC §8）。云契约部分无 L4 原料（greenfield，台账 §4.15）。
 
@@ -255,7 +255,7 @@ NEEDS_HUMAN_DECISION/DESIGN_RISK）。各项均**显式延期**至 G2/G5 并记�
 | SY-05 | ACCEPTANCE_MISSING | 部分关闭 | 定性验收已入 §5 各 REQ-SYS-*；量化指标（IPC 延迟、迁移性能）延 G5 NFR 标定（APC §9） |
 | SY-06 | FLOW_INCOMPLETE | 部分关闭 | REQ-SYS-008 所涉共享结构与状态机已同步 BR-CORE-STATE-001~003；运行时代码与跨模块自动化验证仍须按三分流收口，未验证前不得宣称全链闭合 |
 | SY-07 | FLOW_INCOMPLETE | 已识别，待 G2 | REQ-SYS-010 的 profile 强制入参、AgentTurn 等待澄清/全活动态取消/首终态、IntentResult/CapabilityGrant/AgentSession 的共享字段、结构化事件、持久化恢复与现有 workspace 级历史迁移均待 SYS/AG DESIGN Scope；不得以旧兼容或 UI 表现替代。 |
-| SY-08 | FLOW_INCOMPLETE | 已识别，待 G2 | REQ-SYS-011 的 TaskRun/步骤/Proposal 链、真实工作状态、确认点、中断/新回合重试、并发、恢复和旧 L2 的澄清终结/原回合 Retry 迁移待 SYS/AG/DE DESIGN Scope；不得以后台队列、静态 spinner 或旧 payload 续编替代。 |
+| SY-08 | FLOW_INCOMPLETE | 需求已收敛，待 G2 | REQ-SYS-010/011 的 append-only 事件、TaskRun/TaskPlan 投影、ProposalBatch、动态 CapabilityGrant、真实工作状态、确认点、中断/新回合重试、并发与恢复待 SYS/AG/DE DESIGN Scope；不得以静态调度、未来预授权、后台队列、静态 spinner 或旧 payload 续编替代。 |
 | SY-09 | DESIGN_RISK | 已识别，待 G2 | REQ-SYS-012 的外部内容可读能力、当前任务快照/清除、来源与记忆选择、跨会话/重启隔离、关闭/删除传播与脱敏 Trace 待 SYS/AG/REF/AST DESIGN Scope；不得把附件或历史隐式持久化/注入为项目记忆。 |
 
 ## §8 后续动作
@@ -282,3 +282,4 @@ NEEDS_HUMAN_DECISION/DESIGN_RISK）。各项均**显式延期**至 G2/G5 并记�
 | 2026-08-14 | v1.6 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-SYS-011，承接受限 TaskRun、步骤/回合/Proposal 关联、真实工作状态、连续 Proposal 的 LogicalState 接力与前卡失效、中断新回合重试和隔离；队列、事务、自动续跑及字段/状态机留待 DESIGN Scope。 |
 | 2026-08-14 | v1.7 | AG-1.0-R5C-MEMORY-EXTERNAL-READ-REQUIREMENTS-01：新增 REQ-SYS-012，承接外部文件一次性 data-only 内容引用的当前任务/会话/重启隔离，以及项目记忆的 workspace 本地、显式选择、无自动写入/提议/注入边界；具体格式、暂存、字段与状态机留待 DESIGN Scope。 |
 | 2026-08-21 | v1.8 | 工作区资源操作基线重构：扩展 REQ-SYS-002/003，纳入 WorkspaceOperationPlan/Entry、CreateDocumentBundle、统一 WorkspaceTimeline、SM-WS-04 前置裁决/补偿与重启 Interrupted/partial_failed 跨模块边界。 |
+| 2026-09-03 | v1.9 | AG-ADAPTIVE-RUNTIME-REQ-01：REQ-SYS-010/011 收敛为 append-only 事件事实源、运行时动态授权和可重建投影；TaskRun/TaskPlan 不再承担静态调度或未来授权职责。 |
