@@ -16,6 +16,13 @@ import {
   loadTriageRegistry,
   sourceFileExists,
 } from './triage_registry.mjs';
+import {
+  activeReferenceMayUseRule,
+  activeDocumentMayOwnRule,
+  extractDocumentStatus,
+  ruleSourceStatus,
+  VALID_RULE_SOURCE_STATUSES,
+} from './rule_lifecycle.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -124,13 +131,20 @@ function getField(fields, ...keys) {
 
 function parseAnnotationBlocks(relativePath) {
   const src = readText(relativePath);
+  const documentStatus = extractDocumentStatus(src);
   const blocks = [];
   const blockRe = /<!--[ \t]*(MODULE|DOMAIN|REQ_MAP|REQ|RULE|CHAIN|CONSTRAINT|TERM|STATE_MACHINE)[ \t]*\r?\n([\s\S]*?)-->/g;
   let match;
   while ((match = blockRe.exec(src)) !== null) {
     const before = src.slice(0, match.index);
     const line = before.split('\n').length;
-    blocks.push({ kind: match[1], fields: parseKVBlock(match[2]), file: relativePath, line });
+    blocks.push({
+      kind: match[1],
+      fields: parseKVBlock(match[2]),
+      file: relativePath,
+      line,
+      documentStatus,
+    });
   }
   return blocks;
 }
@@ -406,6 +420,7 @@ const docFiles = collectFiles(docDir, f =>
 );
 const annotationBlocks = docFiles.flatMap(parseAnnotationBlocks);
 const rules = new Set();
+const ruleStatus = new Map(); // rule_id -> active | superseded
 const chains = new Set();
 const chainStatus = new Map(); // chain_id -> status（active | planned | superseded）
 const chainIntegrationTests = new Map(); // chain_id -> integration_test
@@ -424,11 +439,25 @@ const validStateMachineStatuses = new Set(['active', 'candidate', 'deferred', 's
 for (const block of annotationBlocks) {
   if (block.kind === 'RULE') {
     const id = block.fields['rule_id'];
-    if (id) rules.add(id);
+    const status = ruleSourceStatus(block.fields);
+    if (id) {
+      rules.add(id);
+      ruleStatus.set(id, status);
+    }
     // 支持中英文字段名
     if (!getField(block.fields, 'rule_id')) addFinding('OWNER_MISSING', 'RULE block missing rule_id', { file: block.file, line: block.line });
     if (!getField(block.fields, '域', 'domain')) addFinding('OWNER_MISSING', 'RULE block missing 域/domain', { file: block.file, line: block.line });
     if (!getField(block.fields, '主链路', 'main_chain')) addFinding('OWNER_MISSING', 'RULE block missing 主链路/main_chain', { file: block.file, line: block.line });
+    if (!VALID_RULE_SOURCE_STATUSES.has(status)) {
+      addFinding('RULE_SOURCE_STATUS_INVALID', 'RULE source status must be active or superseded', {
+        rule: id, status, file: block.file, line: block.line,
+      });
+    }
+    if (!activeDocumentMayOwnRule(block.documentStatus, block.fields)) {
+      addFinding('RULE_SOURCE_DOCUMENT_INACTIVE', 'R/X document cannot provide an active RULE', {
+        rule: id, document_status: block.documentStatus, file: block.file, line: block.line,
+      });
+    }
   }
   if (block.kind === 'CHAIN') {
     const id = block.fields['chain_id'];
@@ -548,6 +577,11 @@ for (const block of requirementMaps) {
         file: block.file, line: block.line,
       });
   }
+  if (targetType === 'RULE' && targetId && getField(block.fields, 'status') === 'mapped' && !activeReferenceMayUseRule(ruleStatus.get(targetId))) {
+    addFinding('REQ_MAP_TARGET_SUPERSEDED', 'mapped REQ_MAP cannot target a superseded RULE', {
+      req_id: reqId, target_id: targetId, file: block.file, line: block.line,
+    });
+  }
 }
 
 const requirementCoverage = new Map();
@@ -575,6 +609,11 @@ for (const [machineId, block] of stateMachines) {
   }
   for (const ruleId of splitCsv(getField(block.fields, 'rules'))) {
     if (!rules.has(ruleId)) addFinding('STATE_MACHINE_RULE_UNKNOWN', 'STATE_MACHINE references an unknown RULE', { machine_id: machineId, rule: ruleId, file: block.file, line: block.line });
+    if (getField(block.fields, 'status') === 'active' && !activeReferenceMayUseRule(ruleStatus.get(ruleId))) {
+      addFinding('STATE_MACHINE_RULE_SUPERSEDED', 'active STATE_MACHINE cannot reference a superseded RULE', {
+        machine_id: machineId, rule: ruleId, file: block.file, line: block.line,
+      });
+    }
   }
 }
 
@@ -582,8 +621,10 @@ const mappingFindingTypes = new Set([
   'REQ_ID_INVALID', 'REQ_STATUS_INVALID', 'REQ_DUPLICATE',
   'REQ_MAP_TARGET_TYPE_INVALID', 'REQ_MAP_STATUS_INVALID',
   'REQ_MAP_REQUIREMENT_UNKNOWN', 'REQ_MAP_TARGET_TYPE_MISMATCH', 'REQ_MAP_TARGET_UNKNOWN',
+  'REQ_MAP_TARGET_SUPERSEDED', 'RULE_SOURCE_STATUS_INVALID', 'RULE_SOURCE_DOCUMENT_INACTIVE',
   'STATE_MACHINE_ID_INVALID', 'STATE_MACHINE_STATUS_INVALID', 'STATE_MACHINE_DUPLICATE',
   'STATE_MACHINE_OWNER_UNKNOWN', 'STATE_MACHINE_CHAIN_UNKNOWN', 'STATE_MACHINE_RULE_UNKNOWN',
+  'STATE_MACHINE_RULE_SUPERSEDED',
 ]);
 addCheck({
   name: 'REQ / REQ_MAP / STATE_MACHINE integrity',
@@ -610,21 +651,30 @@ if (ADUS_PATH && fileExists(ADUS_PATH)) {
   });
   const missingStateMachines = [...stateMachines.keys()].filter(machineId =>
     !new RegExp(`^\\|\\s*${escapeRegex(machineId)}\\s*\\|`, 'm').test(adusContent));
-  if (missingRequirements.length || missingMappings.length || missingStateMachines.length) {
-    addFinding('ADUS_REGISTRY_STALE', 'ADUS is missing REQ, REQ_MAP, or STATE_MACHINE registrations; run governance:generate', {
+  const staleRuleStatuses = [...rules].filter(ruleId => {
+    const expectedStatus = ruleStatus.get(ruleId) === 'superseded' ? 'superseded' : 'registered';
+    return !new RegExp(`^\\|\\s*${escapeRegex(ruleId)}\\s*\\|[^\\n]*\\|\\s*${expectedStatus}\\s*\\|`, 'm').test(adusContent);
+  });
+  if (missingRequirements.length || missingMappings.length || missingStateMachines.length || staleRuleStatuses.length) {
+    addFinding('ADUS_REGISTRY_STALE', 'ADUS is missing registrations or contains stale RULE lifecycle status; run governance:generate', {
       missing_requirements: missingRequirements,
       missing_requirement_mappings: missingMappings.map(block => ({
         req_id: getField(block.fields, 'req_id'), target_type: getField(block.fields, 'target_type'), target_id: getField(block.fields, 'target_id'),
       })),
       missing_state_machines: missingStateMachines,
+      stale_rule_statuses: staleRuleStatuses.map(ruleId => ({
+        rule_id: ruleId,
+        expected_status: ruleStatus.get(ruleId) === 'superseded' ? 'superseded' : 'registered',
+      })),
     });
   }
   addCheck({
-    name: 'ADUS requirement and state-machine registry freshness',
-    status: missingRequirements.length || missingMappings.length || missingStateMachines.length ? 'failed' : 'passed',
+    name: 'ADUS registry freshness',
+    status: missingRequirements.length || missingMappings.length || missingStateMachines.length || staleRuleStatuses.length ? 'failed' : 'passed',
     missing_requirements: missingRequirements.length,
     missing_requirement_mappings: missingMappings.length,
     missing_state_machines: missingStateMachines.length,
+    stale_rule_statuses: staleRuleStatuses.length,
   });
 }
 
@@ -748,6 +798,11 @@ for (const block of govBlocks) {
   for (const ruleId of splitCsv(block.fields.rules)) {
     referencedRules.add(ruleId);
     if (!rules.has(ruleId)) addFinding('RULE_MISSING', '@GOV references unknown RULE', { file: block.file, line: block.line, rule: ruleId });
+    if (!activeReferenceMayUseRule(ruleStatus.get(ruleId))) {
+      addFinding('RULE_SUPERSEDED_REFERENCE', '@GOV cannot reference a superseded RULE', {
+        file: block.file, line: block.line, rule: ruleId,
+      });
+    }
   }
 
   // ADU §4.2/§4.4：一个 @GOV 块只有一个全局唯一代码块 ID；rules 与 codes 双向闭合，
@@ -816,13 +871,14 @@ addCheck({
   name: '@GOV rule-code closure and code block uniqueness',
   status: governance_findings.some(f => [
     'CODE_MAPPING_INVALID', 'CODE_BLOCK_TYPE_MISMATCH', 'CODE_BLOCK_ID_MIXED',
-    'RULE_CODE_NOT_CLOSED', 'CODE_BLOCK_ID_DUPLICATE',
+    'RULE_CODE_NOT_CLOSED', 'CODE_BLOCK_ID_DUPLICATE', 'RULE_SUPERSEDED_REFERENCE',
   ].includes(f.type)) ? 'failed' : 'passed',
   code_blocks: codeBlockOwners.size,
 });
 
 for (const ruleId of rules) {
   if (CLIENT_OUT_OF_SCOPE_RULES.has(ruleId)) continue;
+  if (!activeReferenceMayUseRule(ruleStatus.get(ruleId))) continue;
   if (!referencedRules.has(ruleId)) addFinding('OWNER_MISSING', 'RULE not referenced by any @GOV block', { rule: ruleId });
 }
 for (const chainId of chains) {
@@ -852,7 +908,11 @@ for (const file of [...testFiles, ...governanceTestFiles, ...sourceFiles]) {
     coveredRules.add(m[1]);
   }
 }
-const uncoveredRules = [...rules].filter(id => !CLIENT_OUT_OF_SCOPE_RULES.has(id) && !coveredRules.has(id));
+const uncoveredRules = [...rules].filter(id => (
+  !CLIENT_OUT_OF_SCOPE_RULES.has(id)
+  && activeReferenceMayUseRule(ruleStatus.get(id))
+  && !coveredRules.has(id)
+));
 addCheck({ name: 'test coverage comments reference rules', status: uncoveredRules.length === 0 ? 'passed' : 'failed', covered_rules: coveredRules.size, uncovered_rules: uncoveredRules });
 
 if (issuePath !== null) runIssueScopeAudit(issuePath);

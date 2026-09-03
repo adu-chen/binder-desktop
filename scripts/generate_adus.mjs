@@ -27,6 +27,13 @@ import {
   displayTriageRecord,
   loadTriageRegistry,
 } from './triage_registry.mjs';
+import {
+  activeDocumentMayOwnRule,
+  extractDocumentStatus,
+  ruleRegistryStatus,
+  ruleSourceStatus,
+  VALID_RULE_SOURCE_STATUSES,
+} from './rule_lifecycle.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
@@ -117,6 +124,7 @@ function collectTriageFiles(dir, results = []) {
 
 function parseAnnotationBlocks(filePath) {
   const src = readFileSync(filePath, 'utf8');
+  const documentStatus = extractDocumentStatus(src);
   const rules       = [];
   const chains      = [];
   const constraints = [];
@@ -135,7 +143,11 @@ function parseAnnotationBlocks(filePath) {
     const fields  = parseKVBlock(body);
 
     if (kind === 'RULE') {
-      if (fields['rule_id']) rules.push({ ...fields, sourceFile: relative(ROOT, filePath) });
+      if (fields['rule_id']) rules.push({
+        ...fields,
+        documentStatus,
+        sourceFile: relative(ROOT, filePath),
+      });
     } else if (kind === 'CHAIN') {
       if (fields['chain_id']) chains.push({ ...fields, sourceFile: relative(ROOT, filePath) });
     } else if (kind === 'CONSTRAINT') {
@@ -387,8 +399,8 @@ function buildRuleRegistry(allRules, coverageMap = new Map()) {
       r['域'] ?? r['domain'] ?? '',
       r['主链路'] ?? r['main_chain'] ?? '',
       r['sourceFile'] ?? '',
-      r['registry_status'] ?? 'registered',
-      coverageStr,
+      ruleRegistryStatus(r),
+      ruleRegistryStatus(r) === 'superseded' ? 'N/A (superseded)' : coverageStr,
     ];
   });
   return mdTable(['rule_id', '域', '主链路', '来源文档', 'registry_status', '测试覆盖'], rows);
@@ -616,6 +628,18 @@ function main() {
     allRequirements.push(...requirements);
     allRequirementMaps.push(...requirementMaps);
     allStateMachines.push(...stateMachines);
+  }
+
+  for (const rule of allRules) {
+    const sourceStatus = ruleSourceStatus(rule);
+    if (!VALID_RULE_SOURCE_STATUSES.has(sourceStatus)) {
+      throw new Error(`RULE_SOURCE_STATUS_INVALID: ${rule.rule_id} in ${rule.sourceFile} has status=${sourceStatus}`);
+    }
+    if (!activeDocumentMayOwnRule(rule.documentStatus, rule)) {
+      throw new Error(
+        `RULE_SOURCE_DOCUMENT_INACTIVE: ${rule.rule_id} in ${rule.sourceFile} is active but document status is ${rule.documentStatus || 'missing'}`,
+      );
+    }
   }
 
   // 3. 扫描正式 triage 与标注延期记录。两者与 audit 共享严格解析器。

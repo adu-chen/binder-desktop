@@ -1,96 +1,58 @@
 {
-  "scope_id": "AG-CODE-CONFORMANCE-CLOSURE-01",
+  "scope_id": "AG-GOV-RULE-LIFECYCLE-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "Agent 1.0 规则映射代码一致性收敛",
+  "title": "RULE superseded 生命周期生成与审计闭环",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-01 人类明确要求继续按规则映射审计代码一致性、修复实现不符并删除多余冗余实现。",
-  "scope_reason": "沿 Agent Active RULE/STATE_MACHINE 到 @GOV/生产调用/测试的映射链，删除与 agent-edit-1.0 真源冲突或已被唯一实现替代且无生产调用的旧实现，并修正同链运行文案与状态投影。",
-  "issue_trace": ".governance/issues/AG-CODE-CONFORMANCE-CLOSURE-01.md",
+  "confirmation_basis": "2026-09-03 人类确认按 Agent 优化计划推荐方案 C6 完整执行，授权最小修改 ADU 与治理脚本。",
+  "scope_reason": "ADU 已要求 superseded RULE 保留 ID 且不得被 @GOV 引用，但生成器与只读审计尚不能从规则源状态派生并执行该约束；先补齐这一闭环，避免后续 Agent 规则迁移形成假登记。",
+  "issue_trace": ".governance/issues/AG-GOV-RULE-LIFECYCLE-01.md",
   "objectives": [
-    "移除 SM-AG-01 中已退出 1.0 的 Build/CBT takeover、HandedOver、fallbackIn 与伪 Retry 事件",
-    "删除 agent-edit-1.0 明确禁用且无生产调用的自动记忆实现和 Build Prompt",
-    "删除被当前 Prompt Runtime/历史持久化实现取代的测试专用旧骨架与无调用代码",
-    "修正系统 Prompt 对逐轮最小 CapabilityGrant、ExplicitEditTargetSet 前置授权和 Proposal 片段交接的描述",
-    "让完成、失败、拒绝与取消投影只来自来源状态上的合法转移，并广播真实 HandingOff→Completed",
-    "同步前端状态类型、相关测试与 ADUS 派生索引"
+    "为 RULE 标注定义最小 active/superseded 源状态，registry_status 继续由生成器派生",
+    "让 ADUS 如实登记 registered/superseded，并阻止 active 代码、状态机和 mapped REQ_MAP 引用 superseded RULE",
+    "让 superseded RULE 免除生产 owner 与测试覆盖要求，同时保留 ID 和来源追溯",
+    "阻止 R/X 文档继续提供 active RULE，不引入第二套人工规则注册表"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CODE-CONFORMANCE-CLOSURE-01.md",
-    "src-tauri/src/ag/mod.rs",
-    "src-tauri/src/ag/memory_link.rs",
-    "src-tauri/src/ag/turn.rs",
-    "src-tauri/src/ag/turn_events.rs",
-    "src-tauri/src/ag/turn_tool_loop.rs",
-    "src-tauri/src/ag/turn_runtime.rs",
-    "src-tauri/src/ag/turn_control.rs",
-    "src-tauri/src/ag/prompts.rs",
-    "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/task.rs",
-    "src-tauri/src/ag/blocks.rs",
-    "src/store/agStore.ts",
-    "src/services/agService.ts",
-    "src/services/agRuntime.test.ts",
-    "src/components/ag/AgentUI.test.tsx",
+    ".governance/issues/AG-GOV-RULE-LIFECYCLE-01.md",
+    "ADU.md",
+    "scripts/generate_adus.mjs",
+    "scripts/audit_taskflow_governance.mjs",
+    "scripts/rule_lifecycle.mjs",
+    "scripts/test_governance.test.mjs",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
-    "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "CLAUDE.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "docs/01_modules/AG/**",
-    "src-tauri/src/cbt/**",
-    "src/store/modelStore.ts",
-    "src/components/ag/ModelConfig.tsx",
-    "所有未列入 allowed_files 的生产代码、测试、业务文档与治理脚本"
+    "所有业务需求、设计、生产代码与业务测试"
   ],
   "constraints": [
-    "不新增需求、功能、业务规则、状态或运行时 Profile",
-    "Active 需求/设计/状态机是真源，不为既有代码反向改文档",
-    "仅删除经全仓引用核实无生产调用且已退出 1.0 或已被唯一实现替代的代码",
-    "保留 build 模型偏好兼容数据，因为 BR-AG-DATA-007 明确要求四槽数据存在但不得授予入口",
-    "不修改 CBT 模块；Agent 1.0 与 CBT 保持无 active 转移",
-    "ADUS 只通过 governance:generate 刷新，不人工编辑自动生成区",
-    "保留工作树内所有用户既有改动，不修改 Scope 外文件"
+    "只补齐 ADU 已声明的 RULE 生命周期，不扩展为新治理平台",
+    "registry_status 仍由脚本派生，不在 RULE 块中手写",
+    "现有未声明 status 的 RULE 兼容为 active/registered",
+    "ADUS 自动生成区只由 governance:generate 更新"
   ],
   "acceptance_criteria": [
-    "Rust/前端 SM-AG-01 状态集合与 Active 状态机完全一致，不再存在 HandedOver/takeover/fallbackIn",
-    "Agent 生产模块不再包含自动记忆触发实现或 Build Prompt",
-    "Prompt 与工具循环如实表达 IntentResult.allowed_tools、ExplicitEditTargetSet 与每张 Proposal 后 handoff，不保留不可达的同片段多提案计数分支",
-    "旧 ContextSource/assemble_context/TurnKind、旧 persist_turn/recover_turns 及无调用 helper 被删除",
-    "Completed 投影经 Streaming→HandingOff→Completed 两次合法转移且无 fallback 伪造",
-    "变更影响测试、Rust check、governance:audit 与 git diff check 通过"
+    "active RULE 继续派生为 registered",
+    "superseded RULE 在 ADUS 保留 ID 且派生为 superseded",
+    "@GOV、active STATE_MACHINE 和 mapped REQ_MAP 引用 superseded RULE 时审计失败",
+    "superseded RULE 不要求生产 @GOV owner 或测试 covers",
+    "R/X 文档中的 active RULE 被审计拒绝",
+    "治理测试、生成、只读审计和 diff check 通过"
   ],
   "human_decisions": [
     {
-      "id": "HD-AG-CONFORMANCE-01",
+      "id": "HD-AG-OPT-C6",
       "status": "CONFIRMED",
-      "question": "继续按规则映射审计代码一致性，修复实现不符并果断删除多余冗余实现"
-    },
-    {
-      "id": "HD-AG-CONFORMANCE-02",
-      "status": "INHERITED",
-      "question": "锚定已归一化的 Agent 1.0 真源，不新增需求、功能或逻辑"
+      "question": "授权最小修改 ADU 和治理脚本，使 RULE superseded 生命周期可生成、可审计"
     }
   ],
-  "validation": {
-    "governance_generate": "passed; ADUS regenerated with 313 parsed @GOV blocks, 100 rules, 27 chains and 961 discovered tests",
-    "governance_audit": "passed; 310 unique code blocks, 99 referenced rules, 99 covered rules, 0 uncovered rules",
-    "test_plan": "passed; selector required npm test, npx tsc --noEmit, full cargo test and governance:audit",
-    "frontend_tests": "passed; 26 files, 594 tests",
-    "typescript": "passed; npx tsc --noEmit",
-    "rust_tests": "passed outside restricted sandbox; 374 library tests, 5 core-chain tests, 4 state-broadcast tests. The first restricted run had only DOC LibreOffice worker signal=6, then the identical full cargo suite passed with normal process access",
-    "rust_check": "passed; no Agent warnings, 8 pre-existing DOC dead_code warnings remain outside scope",
-    "production_build": "passed; bundled tools verification, TypeScript and Vite production build",
-    "diff_check": "passed; git diff --check"
-  },
   "stop_conditions": [],
-  "unresolved_items": [
-    "Eight pre-existing dead_code warnings remain in the DOC LibreOffice runtime; they are unrelated to Agent 1.0 and outside this Scope."
-  ]
+  "unresolved_items": []
 }

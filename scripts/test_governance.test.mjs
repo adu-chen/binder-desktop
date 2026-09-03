@@ -25,10 +25,30 @@ import {
   renderCapabilityAtlas,
   writeProductCapabilityArtifacts,
 } from './product_capability.mjs';
+import {
+  activeDocumentMayOwnRule,
+  activeReferenceMayUseRule,
+  extractDocumentStatus,
+  ruleRegistryStatus,
+  ruleSourceStatus,
+} from './rule_lifecycle.mjs';
 
 describe('Test Governance', () => {
   const { registry } = loadTestGovernance(DEFAULT_ROOT);
   const inventory = buildTestInventory(DEFAULT_ROOT, registry);
+
+  it('规则生命周期由 RULE 真源状态派生，并阻断退役规则的活动引用', () => {
+    expect(extractDocumentStatus('文档状态：R\n')).toBe('R');
+    expect(ruleSourceStatus({})).toBe('active');
+    expect(ruleRegistryStatus({})).toBe('registered');
+    expect(activeDocumentMayOwnRule('A', {})).toBe(true);
+    expect(activeDocumentMayOwnRule('R', {})).toBe(false);
+
+    const retired = { status: 'superseded' };
+    expect(ruleRegistryStatus(retired)).toBe('superseded');
+    expect(activeDocumentMayOwnRule('R', retired)).toBe(true);
+    expect(activeReferenceMayUseRule(ruleSourceStatus(retired))).toBe(false);
+  });
 
   it('支持稳定的路径 glob，且 **/ 可匹配零级或多级目录', () => {
     expect(matchesGlob('src/components/ed/Editor.test.tsx', 'src/components/ed/**/*.test.tsx')).toBe(true);

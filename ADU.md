@@ -546,6 +546,7 @@ generate_adus.mjs 的注册表生成功能失效。
 rule_id: BR-TF-STATE-001
 主链路: CHAIN-TASK-CREATE
 域: STATE
+status: active
 -->
 任务创建时状态必须为 draft。
 ```
@@ -553,6 +554,12 @@ rule_id: BR-TF-STATE-001
 注：registry_status 由 generate_adus.mjs 派生并写入 ADUS.md 规则注册表，
 不在 `<!-- RULE -->` 标注块中手写。规则生命周期（generated / registered /
 superseded）的权威值见 §3.3，由脚本管理。
+
+`status` 为可选真源字段，合法值为 `active | superseded`，省略时按 `active`。
+`active` 经脚本登记为 `registry_status=registered`；`superseded` 经脚本登记为
+`registry_status=superseded`。R/X 文档不得提供活动规则；若历史文档必须保留旧
+rule_id，必须显式标记 `status: superseded`。退役规则不得被 mapped REQ_MAP、活动
+STATE_MACHINE 或 `@GOV` 引用，也不再承担代码 owner 与测试覆盖义务。
 
 错误格式示例（禁止）：
 
@@ -568,6 +575,7 @@ superseded）的权威值见 §3.3，由脚本管理。
 rule_id: BR-[模块]-[域]-[序号]
 主链路: [chain_id，多条用逗号分隔]
 域: [域编码]
+status: active
 -->
 [规则的完整描述文本]
 ```
@@ -822,13 +830,15 @@ chain_id 规则：
 
 **registered（已登记）：**
   脚本扫描设计文档，提取 `<!-- RULE -->` 标注块
+  RULE 真源 `status` 为 active 或省略
   rule_id 已登记到规则注册表，registry_status=registered
 
 **superseded（已取代）：**
   规则被新规则取代
+  RULE 真源显式写入 `status: superseded`
   旧 rule_id 保留，registry_status=superseded
-  引用此 rule_id 的 @GOV 块由 AI 自动更新
-  不得在新 @GOV 标注中引用
+  所有 mapped REQ_MAP、活动 STATE_MACHINE 与 @GOV 引用必须在同一治理变更中解除
+  不得承担活动代码 owner 或测试覆盖义务，也不得在新活动映射中引用
 
 **规则创建流程：**
 1. 人类在设计文档中描述规则意图
@@ -1871,3 +1881,4 @@ Issue Trace 完成后，必须产出文件范围结论，作为 ADP Scope Lock �
 | 2026-06-09 | v1.21 | 结构性减负：§4.3 新增「@GOV 强制标注范围」分层（强制=CHAIN 入口 error / 应当=业务可执行块 BLOCK_UNANNOTATED warning / 不要求=纯展示组件、薄包装、纯类型），明确人类可显式豁免须留痕；§4.5 CHAIN_ENTRY_UNANNOTATED 改述为引擎已实现的覆盖式检测、入口函数粒度标 deferred，superseded 链路加入豁免 |
 | 2026-08-01 | v1.22 | triage 语义修复：§5.2 明确 BLOCK_UNANNOTATED 为负空间发现而非正式分类；§5.3 收紧为已有 `@GOV rules: []` 的七类分类记录；新增 §5.3.1 标注延期清单，以文件 + symbol 精确豁免，禁止决策记录和文本包含匹配混入 triage |
 | 2026-08-26 | v1.23 | CHAIN 集成测试契约闭环：§3.2 模板补充必填单数字段 `integration_test`，明确统一测试可被多条真实覆盖链路复用；§5.6 移除 deferred enforcement 说明，与生成器及只读 audit 的实际检测能力对齐。 |
+| 2026-09-03 | v1.24 | 补全 RULE 退役真源：新增可选 `status: active \| superseded`，明确 R/X 文档所有权、ADUS 派生状态、活动引用阻断以及退役规则的 owner/测试豁免。 |

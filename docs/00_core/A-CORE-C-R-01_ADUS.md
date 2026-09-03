@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-09-01T14:49:32.221Z -->
+<!-- 最后生成时间：2026-09-03T15:24:53.742Z -->
 
 ### 模块编码表
 
@@ -2675,11 +2675,11 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 78；Rust 集成测试文件 2；测试用例约 961。
+动态发现：前端测试文件 26；Rust 内联测试文件 78；Rust 集成测试文件 2；测试用例约 962。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
-| CORE | high | 6 | 105 | governance:1, service:2, unit:3 | 1/1 → 1 |
+| CORE | high | 6 | 106 | governance:1, service:2, unit:3 | 1/1 → 1 |
 | SYS | critical | 36 | 355 | component:2, integration:2, service:5, state:1, unit:26 | 3/3 → 3 |
 | WS | critical | 21 | 273 | component:1, integration:1, service:4, unit:15 | 2/2 → 2 |
 | ED | critical | 24 | 472 | component:4, service:7, state:1, unit:12 | 11/11 → 11 |
