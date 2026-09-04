@@ -73,6 +73,7 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | 字段 | 语义 | 备注 |
 |---|---|---|
 | diff_id | diff 不透明标识 | 标识符 |
+| proposal_batch_id / group_index / group_count | 同次模型提案批次与组内顺序 | 仅表达关联；每个 diff_id 独立裁决 |
 | target | 目标文档引用 | DocRef |
 | origin_module | 生成来源模块编码 | DE / AG / CBT 等 |
 | status | diff 状态 | **枚举值集合：pending / accepted / rejected / expired** |
@@ -91,6 +92,20 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 > 卡片仍为 `pending`，之后回到已有 LogicalState 分支。`status=accepted` 不代表内容已落盘——
 > `effect_status` 才是"内容是否已生效"的权威字段，区分裁决态与落盘效果两个维度（解除历史审计
 > 发现的"accepted 即完成"歧义）。
+
+**ProposalBatch · 提案批次（跨模块关联结构，主责 DE）**
+
+| 字段 | 语义 | 备注 |
+|---|---|---|
+| proposal_batch_id | 同次已校验 ChangeProposal 的批次身份 | 不透明标识符 |
+| turn_id / tool_call_id | 来源 AgentTurn 与模型工具请求 | 可追溯，不构成授权 |
+| diff_ids | 按 group_index 排列的 PendingDiff 身份 | 一个或多个；各自进入 SM-DE-01 |
+| grouping_version | 分组算法/契约版本 | 恢复与诊断使用 |
+
+> ProposalBatch 不具有统一接受/拒绝终态；批量 UI 操作必须展开为对各 PendingDiff 的独立裁决。位置连续
+> 只是可合并的必要条件，不是充分条件；不连续或可独立裁决的块组必须拆分。同一文档同批结构化卡的
+> DiffProjection 必须共享相同生成基线、持有互不重叠且可独立反向的目标集合，并由 ED 聚合成一次前向
+> 事务；共享预览推进的整篇版本不能使兄弟卡互相失效。
 
 **WorkspaceTimelineEntry · 统一工作区时间轴条目（基线）**（REQ-CORE-007/014，主责 WS）
 
@@ -250,16 +265,20 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | location_label | 卡片位置说明 | 仅用于可见投影，不参与锚校验 |
 | draft_mode | 应用路径 | current_editor / open_session / background |
 | snapshot_source | 生成基线来源 | active_editor / active_editor_session / open_editor_session / disk_snapshot |
-| base_session_version | 生成时 ED session 版本 | 已打开文档必填；未打开文档为空 |
-| base_content_hash | 生成时内容哈希 | 已打开文档必填；未打开文档可使用 DiskState baseline |
+| base_session_version | 生成时 ED session 版本 | 已打开文档必填；同一文档同批结构化卡必须相同；未打开文档为空 |
+| base_content_hash | 生成时内容哈希 | 已打开文档必填；同一文档同批结构化卡必须相同；未打开文档可使用 DiskState baseline |
 | style_ops / block_ops / table_ops / image_ops | 可空的类型化操作载荷 | 与 patch_kind 对应的字段必填；执行与详细 Diff 的唯一真值 |
-| batch | 可空批次元数据 | 同一批次的 id / index / total；无批次时为空 |
+| proposal_batch_id / group_index / group_count | ProposalBatch 身份与卡片稳定顺序 | 新载荷必填；每卡独立裁决，三字段不得藏入自由形状 JSON |
 | preview_checkpoint_required | 是否要求编辑器预览回执 | true 时必须完成预览检查点后才能续片段 |
 | cross_doc | 是否跨文档提案 | 可空兼容旧载荷；新载荷应显式给出 |
 
 > 边界：DiffProjection 是跨 AG/DE/ED 的最小互操作载荷。`draft_mode=open_session` 时，
 > ED 必须以 `base_session_version` 与 `base_content_hash` 校验当前 LogicalState；校验失败不得应用，
 > DiffCard 进入不可裁决的失效/冲突状态。`draft_mode=background` 只允许目标文档未打开。
+> 对同一文档同批结构化多卡，这两个字段只校验一次聚合前向事务；事务成功后，逐卡接受/拒绝改用本卡
+> 类型化载荷中的目标 after fingerprint。卡片不得复制整篇 after 充当局部裁决真值。
+> 旧 DiffProjection 的 `batch:{id,index,total}` 仅允许迁移读取并转换为上述三字段，不得继续生产或作为
+> ProposalBatch 的第二种活动 wire 形状。
 
 **BDocxCapabilityManifest · BDocx 代理编辑能力清单（基线）**（主责 SYS，AG/ED/DE/DOC 消费，
 2026-07-28 登记）
@@ -313,25 +332,26 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 ### 3.1 Agent 1.0 共享运行时对象契约（R5-A / R5-B / R5-C）
 
 > 承接 REQ-SYS-008/009/010/011/012（A-SYS-M-D-01）与冻结基线
-> （A-CORE-X-D-02 §3/§4）。本轮只锚定各对象的**职责、身份关系、事件真值、隔离与迁移边界**；
-> 具体字段、序列化、持久化表与状态机内部由 D2（DE/ED/WS）与 D3（AG/REF/AST）及 owner 模块 L2 承接，
-> **不锁死实现细节**。这些对象的正式术语（RuntimeProfile、CapabilityGrant、TaskRun 等）由主责模块在
-> 其 L2 按 ADU §3.2 注册；本文仅以数据结构契约身份引用，不抢注。
+> （A-CORE-X-D-02 §3/§4）。本节锚定各对象的**职责、身份关系、事件真值、隔离与迁移边界**；共享字段
+> 基线与版本在 BR-SYS-DATA-008/§4 锁定，owner 私有载荷、序列化细节和状态机内部仍归各模块 L2。
+> 正式术语由主责模块按 ADU §3.2 注册；本文以跨模块数据结构契约身份引用，不重复注册。
 
 | 共享对象 | 职责 | 身份关系 | 事件真值 | 隔离与迁移边界 |
 |---|---|---|---|---|
 | `RuntimeProfile`（运行时档位） | 声明一次 Agent 交互可用的运行时能力档位；1.0 唯一 `agent-edit-1.0` | profile_id 作为回合/意图/授权的最顶层收窄约束 | 缺失或未知 profile 必须在 Gate、provider、工具与 Proposal **之前**失败关闭，不产生任何可执行事件 | 已注册工具、Prompt、前端参数或兼容默认值都不构成 profile 的授权来源；Build/CBT 等 P2 不进入该 profile |
 | `AgentSession`（代理会话） | 用户可见的代理编辑会话；是**展示、持久化与恢复的隔离键** | session_id 属于唯一 workspace；一个 workspace 可有多会话 | 会话内消息、工具卡、DiffCard、引用、未保存上下文与回合按事件顺序呈现，跨会话不串线 | workspace 只是外层范围，不能替代 AgentSession 作为恢复隔离键；会话归档/删除后的回合只读或不可恢复须明确 |
 | `AgentTurn`（代理回合） | 一个用户发送对应一个回合；收敛当前目标、意图与一次交互结果 | turn_id 属于唯一 AgentSession；可关联 DocRef、TaskRun、Proposal 与结构化事件 | **澄清是等待用户输入的非终态**；取消可在任一活动阶段生效；完成/失败/拒绝/取消互斥且**首个终态获胜**；首终态后到达的迟到事件或工具不得产生文档、卡片或落盘副作用 | 回合上下文（引用快照、外部内容、显式记忆选择）只在回合内有效；重启不伪造成功；新回合重新校验上下文 |
-| `IntentResult`（本轮意图结果） | 固定本轮任务类型、目标、预期副作用、所需上下文、允许工具与确认点 | 随回合生成；写入意图目标或范围不明时只能澄清或生成目标计划 | 是结构化收窄边界而非自然语言结论；“只分析不修改”不获得 Proposal | 不展示模型内部推理；不因历史意图覆盖当前明确请求 |
-| `CapabilityGrant`（当轮能力授权） | 本轮允许的工具/操作集合；逐层收窄（profile ∩ 任务类型 ∩ 目标 ∩ 副作用等级 ∩ 格式/动态能力） | 与回合/意图绑定；工具须同时通过全部校验才可见/可执行 | 注册表存在 ≠ 本轮可调用；越权调用失败关闭 | grant 只在当前回合有效；跨回合不隐式继承，除非显式重新授权 |
-| `TaskRun`（受限任务实例） | 同一用户目标内组织多个受限步骤/AgentTurn 的编排实例；**不是后台队列** | task_run_id 属于唯一 AgentSession 与用户目标；步骤/回合/Proposal 可追溯到 TaskRun | 不自动重试、不跨重启续跑、不越过确认点；“工作中”只能由真实回合、步骤或工具事件驱动，等待补充/卡片 pending/失败/取消不伪装执行 | 同文档连续 Proposal 以最新 LogicalState 接力；前卡因基准推进失效，不形成补丁栈或任务级回滚；无 LogicalState 的 background pending 必须先迁移（BR-CORE-STATE-003）或完成背景分流裁决（BR-CORE-STATE-002）后才可继续 |
-| `TaskStep`（任务步骤） | TaskRun 内有依赖的受限步骤（读取/搜索/分析/生成/提案/等待确认等） | step_id 属于唯一 TaskRun；每步关联输入来源、允许工具、确认点、输出与失败语义 | 每步重新取得当前最小授权；只读/研究可连续推进；进入 W1/W2/W3 的步骤不得在不可见后台继续 | 中断可重试但用户显式重试创建新回合并重新校验；取消停止未开始步骤，保留已成功预览内容 |
-| `StructuredVisibleEvent`（结构化可见事件） | 用户可见的回合/任务/Proposal 状态事实（意图结论、读取/工具、提案卡、等待确认、终态原因） | 事件顺序承载于 AgentSession；终态事件为回合锁存 | 只含真实运行事件，不含模型内部推理；等待、失败、取消、中断不得伪装为执行 | 终态事件后不得出现可产生副作用的迟到事件；具体形状、字段与 UI 投影归 D3（AG）与前端设计 |
+| `IntentResult`（本轮意图结果） | 模型驱动且可修订的目标语义投影：目标、候选、预期副作用、所需上下文、歧义与确认点 | 与 turn_id/source_event_seq/revision 绑定；首轮可 unresolved | 只记录可见语义，不含 allowed_tools，不是授权或调度边界 | 不展示隐藏推理；后续 ToolResult 可使其修订，历史不得覆盖当前明确请求 |
+| `CapabilityGrant`（当轮能力授权） | 下一次具体工具执行的短生命周期授权；由 profile、注册表、当前范围/目标、允许副作用路径、格式/动态能力、裁决、Gate、预算、取消与终态收窄 | 与 turn_id/grant_id/computed_at_seq 绑定；工具执行前重新计算 | IntentResult、TaskPlan、模型文字和注册表存在性均不授权；越权失败关闭 | 动作完成或事实变化即失效，不跨工具/回合继承 |
+| `TaskRun`（受限任务实例） | 复杂目标的可观察投影，关联 AgentTurn、真实工作、等待点和当前候选路线；**不是调度器或后台队列** | task_run_id 属于唯一 AgentSession 与用户目标；可从 TurnEvent 重建 | 不自动启动候选工作、不自动重试、不跨重启续跑；“工作中”只由真实 provider/工具/领域事件驱动 | 投影丢失不影响执行事实；同文档连续 Proposal 仍以最新 LogicalState 接力 |
+| `TaskPlan`（任务计划） | 模型当前可见路线与已发生事件形成的计划投影 | 属于 TaskRun；携 route revision、候选/已发生工作与依赖 | 不含执行游标或 required_grant，不能触发工具 | 模型可随证据更新；简单回合不创建 |
+| `TaskStep`（任务步骤） | TaskRun 内已发生、当前活动、等待或候选工作的展示单元 | step_id 属于唯一 TaskRun；关联来源事件和结果 | candidate 不承诺执行；active 必须有真实事件 | 不持有 CapabilityGrant；等待期间不可见后台不继续 |
+| `TurnEvent`（回合事件） | 回合运行事实的 append-only 源，覆盖输入、context、Gate、provider、模型、工具、裁决、Proposal 与终态 | event_id 属于 turn_id；seq 在回合内唯一单调；终态事件首个锁存 | 已提交事件不可覆盖；可见事件是同一 seq 空间的安全投影，不含隐藏推理 | 投影/恢复从事件及其引用业务事实重建；终态后迟到事件不得产生副作用 |
 | `ExternalContentRef`（外部内容引用） | 用户显式附加、且有可用只读解析路径的外部文件内容，作为当前任务的一次性 data-only 内容引用 | 引用携带文件身份、来源入口、已读/未读标记、读取时点与当前任务范围 | 不支持/不可读只保留元数据不伪称已读；外部内容不能改变系统约束、目标、授权或确认点 | 只在当前 AgentTurn/TaskRun 当前任务内有效；任务结束、重启、跨会话/跨 workspace 不自动恢复、复读、导入、编辑或默认持久化；不自动转存为项目记忆 |
 | `MemorySelectionRef`（显式项目记忆引用） | 用户管理的 workspace 本地项目记忆条目，经用户明确选择以 data-only 引用进入当前回合 | 引用携带条目身份与选择动作；仅用户显式选择 | Agent 1.0 不自动写入、不提议写入、不自动检索或注入；普通发送、附件、会话/编辑历史不自动转存为记忆 | workspace 隔离；跨会话不串选择事实；条目删除/关闭后引用失效或明确标记 |
 | `AgentContextFacts`（代理上下文事实集） | 冻结 AgentTurn 开始时 ED/DE/WS 提供的版本化只读会话事实；正文仍由 OpenDocSnapshot/ReferencePayload 承载 | 与 workspace_id、turn_id 绑定；包含 active_doc、open_docs、显式 selections 与 proposal_facts | 缺失、版本未知、workspace/active path/source/sessionVersion/contentHash 不一致时在 Gate 前失败关闭；事实只可来自当前会话投影 | 只在当前 AgentTurn 有效；跨 workspace/AgentSession 不继承；不授予读取或编辑权限，不扩 ExplicitEditTargetSet |
-| `ProjectReport`（项目报告） | Inspect/Search/Analyze 的版本化结构化只读完成产物，声明请求范围、已读/未读、来源、结论证据与不确定性 | 与 turn_id 绑定；read_items 逐项引用本轮读取证据账本 | 只有成功 `report_project` 校验才形成；目录枚举/搜索片段不得伪装为完整正文，普通自由文本不构成完成证据 | 只读、回合内；不持久扩大授权，不创建 TaskRun/DecisionRequest/Proposal/Diff，不修改 LogicalState/DiskState |
+| `EvidenceLedger`（证据账本） | ContextFrozen 与成功只读 ToolResult 确定性派生的读取覆盖 | 与 turn_id/through_seq 绑定；每项反查 source_event_id | 不接受模型自报；目录/搜索只证明实际覆盖 | 只读且不授权；可从事件重建 |
+| `ProjectReport`（项目报告） | EvidenceLedger 与模型最终回答关联形成的版本化只读投影，声明请求范围、已读/未读、结论证据与不确定性 | 与 turn_id/evidence_through_seq 绑定；read_items/findings 引用 evidence_ids | 运行时派生，无 `report_project` 工具；模型声称不能提高读取覆盖 | 只读；不创建 TaskRun/DecisionRequest/Proposal/Diff，不修改 LogicalState/DiskState |
 
 <!-- RULE
 rule_id: BR-SYS-STATE-007
@@ -339,19 +359,22 @@ rule_id: BR-SYS-STATE-007
 域: STATE
 -->
 Agent 1.0 运行时共享对象（RuntimeProfile / AgentSession / AgentTurn / IntentResult / CapabilityGrant /
-StructuredVisibleEvent）的事件真值与隔离以本文 §3.1 契约为唯一来源：仅 `agent-edit-1.0` 可启动，缺失或
+TurnEvent）的事件真值与隔离以本文 §3.1 契约为唯一来源：仅 `agent-edit-1.0` 可启动，缺失或
 未知 profile 必须在 Gate、provider、工具与 Proposal 前失败关闭；一个用户发送对应一个 AgentTurn，澄清是
 等待用户输入的非终态，取消可在任一活动阶段生效，完成/失败/拒绝/取消互斥且首个终态获胜，首终态后的迟到
-事件或工具不得产生文档、卡片或落盘副作用；已注册工具、Prompt、前端参数或兼容默认值不构成当轮授权；
-可见事件只包含真实回合/工具/Proposal 事实，不包含模型内部推理。
+事件或工具不得产生文档、卡片或落盘副作用；TurnEvent 必须按 turn 内唯一单调 seq 追加且不可覆盖，
+可见事件是同一序列的安全投影；IntentResult 可随模型/工具证据修订但不授权。已注册工具、Prompt、
+TaskPlan、前端参数或兼容默认值不构成当轮授权；可见事件不包含模型内部推理。
 
 <!-- RULE
 rule_id: BR-SYS-STATE-008
 主链路: AG-TURN, DE-DIFF
 域: STATE
 -->
-TaskRun 只组织当前用户目标内的已授权步骤，不是后台队列：不自动重试、不跨重启续跑、不越过确认点；
-“工作中”只能由真实回合、步骤或工具事件驱动，等待补充、卡片 pending、失败、取消或中断不得伪装为执行。
+TaskRun/TaskPlan/TaskStep 是复杂目标的 TurnEvent 派生投影，不是调度器或后台队列：不得持有
+CapabilityGrant、执行游标或“执行下一步”命令，不自动启动候选工作、不自动重试、不跨重启续跑、不越过
+确认点；“工作中”只能由真实 provider、工具或领域事件驱动，等待补充、卡片 pending、失败、取消或中断
+不得伪装为执行。简单 AgentTurn 不创建空 TaskRun/TaskPlan。
 同文档连续 Proposal 必须以最新 LogicalState 为基准接力：前卡因基准推进失效且不可再接受/拒绝，不形成
 补丁栈或任务级回滚；无 LogicalState 的 background pending Proposal 必须先迁移（BR-CORE-STATE-003）或
 依 BR-CORE-STATE-002 完成背景分流裁决后才可继续。
@@ -372,18 +395,23 @@ rule_id: BR-SYS-DATA-008
 主链路: AG-TURN, AG-TOOL, ED-EDIT, DE-DIFF
 域: DATA
 -->
-AgentContextFacts 与 ProjectReport 的跨模块字段和枚举以本文 §3.1 为单一共享契约来源。AgentContextFacts
+AgentContextFacts、TurnEvent、EvidenceLedger 与 ProjectReport 的跨模块字段和枚举以本文 §3.1 为单一共享契约来源。AgentContextFacts
 版本 `agent-context-facts-v1` 固定包含 workspaceId、turnId、activeDoc、openDocs、selections、proposalFacts：
 文档事实携 relPath/source/editFormat/contentFormat/dirty/baseline/sessionVersion/contentHash；SelectionFact
-携 relPath/blockId/start/end；ProposalFact 携 diffId/sessionId/relPath/state/effectStatus/saved。ProjectReport 版本
-`project-report-v1` 固定包含 requestedScope、readItems、unreadItems、findings、uncertainties：ReadItem 携
-relPath/source/coverage/evidence；Finding 携 statement/sourcePaths/uncertainty。字段允许 additive 扩展，
+携 relPath/blockId/start/end；ProposalFact 携 diffId/sessionId/relPath/state/effectStatus/saved。TurnEvent 版本
+`turn-event-v1` 固定包含 eventId/turnId/seq/occurredAt/kind/payloadVersion/payload；EvidenceLedger 版本
+`evidence-ledger-v1` 固定包含 turnId/throughSeq/evidenceItems，每项携 evidenceId/relPath/source/coverage/
+versionOrHash/sourceEventId。ProjectReport 版本 `project-report-v2` 固定包含 turnId/evidenceThroughSeq/
+requestedScope/readItems/unreadItems/findings/uncertainties，ReadItem/Finding 只能引用 evidenceIds。字段允许 additive 扩展，
 版本未知必须失败关闭；任何模块不得复制一套近义结构或把正文、显示态、磁盘旧快照混入这些事实字段。
 
 AgentContextFacts 只能以当前 active workspace 的 ED/DE/WS 真值生成并与 AgentTurn 一次性绑定；
 ProposalFact 必须与当前 AgentSession 身份一致，不得投影其他会话或无归属 Proposal。
-ProjectReport readItems 只能引用同一回合的初始化 Prompt 证据或成功只读工具证据。两个对象均为 data-only，
-不构成 CapabilityGrant、ExplicitEditTargetSet、TaskRun 或写入授权来源。
+EvidenceLedger 只能从同一回合的 ContextFrozen 或成功只读 ToolResult 事件派生；ProjectReport 由运行时关联
+EvidenceLedger 与模型最终回答生成；模型可提交 finding→evidenceIds 关联，但运行时只接受当前回合账本中
+截至 evidenceThroughSeq 且覆盖等级足够的身份，未知、跨回合或覆盖不足的引用只能形成 uncertainty。
+目录/搜索的覆盖不得升级为全文，模型自报不得写账。上述对象均为
+data-only/只读投影，不构成 CapabilityGrant、ExplicitEditTargetSet、TaskRun 或写入授权来源。
 
 > 边界：本文只给统一时间轴与资源操作对象的跨模块共享**字段基线**；计划/执行/补偿/恢复转移语义归
 > A-WS-M-T-02 / A-WS-M-S-02。文档内容 Diff 三态仍由 DE/ED/WS 既有状态机负责。
@@ -409,7 +437,8 @@ WorkspaceOperationEntry / CreateDocumentBundle / ReferencePayload / OpenDocSnaps
 | 表 | 基线列 | 职责 | 完整定义归属 |
 |---|---|---|---|
 | schema_meta | schema_version（整数，单调递增）、applied_at | 记录当前 schema 版本，驱动迁移 | SYS（本文） |
-| pending_diffs | diff_id(PK)、workspace_id、rel_path、origin_module、status、created_at、payload_ref、effect_status（2026-07-20 新增）、terminal_reason（2026-07-20 新增，可空） | 持久化待裁决或已自动应用 diff；重启仅可恢复只读终态审阅：pending 必须 expired，awaiting_save 必须 discarded_on_abnormal_exit，裁决权与未确认效果均不得跨会话 | 基线 SYS / 完整列 WS·DE G2 |
+| proposal_batches | proposal_batch_id(PK)、workspace_id、turn_id、tool_call_id、grouping_version、created_at | 持久化同次 ChangeProposal 的来源与分组版本；无统一裁决终态 | DE / 基线 SYS |
+| pending_diffs | diff_id(PK)、workspace_id、proposal_batch_id、group_index、group_count、rel_path、origin_module、status、created_at、payload_ref、effect_status（2026-07-20 新增）、terminal_reason（2026-07-20 新增，可空） | 持久化逐卡独立裁决状态；重启仅可恢复只读终态审阅：pending 必须 expired，awaiting_save 必须 discarded_on_abnormal_exit，裁决权与未确认效果均不得跨会话 | 基线 SYS / 完整列 WS·DE G2 |
 | timeline | entry_id(PK)、workspace_id、entry_kind、target_refs、version_seq、label、payload_ref、created_at | 持久化统一 WorkspaceTimeline | 基线 SYS / 完整列 WS G2 |
 | workspace_operation_plans | plan_id(PK)、workspace_id、plan_json、decision_request_id、idempotency_key、status、created_at、updated_at | 持久化不可变计划与状态；重启未终态统一 Interrupted | WS |
 | workspace_operation_entries | operation_id(PK)、plan_id、workspace_id、before_ref、after_ref、receipts_ref、restore_kind、final_status、created_at | 类型化资源操作历史与恢复入口 | WS |
@@ -423,7 +452,8 @@ BR-SYS-PERSIST-001 约束）**
 |---|---|---|---|
 | agent_sessions | session_id(PK)、workspace_id、title、mode、archived、open_index、is_active、created_at、updated_at、last_active_at | 代理编辑会话标签元数据（重启恢复打开/归档顺序与激活态） | AG |
 | agent_turns | turn_id(PK)、session_id、workspace_id、rel_path(可空)、status(completed/error/cancelled/gate_rejected/draft)、payload_ref、created_at、updated_at | 回合/对话历史（BR-AG-PERSIST-001：全状态本地可恢复不上云） | AG |
-| agent_turn_payloads | payload_ref(PK)、workspace_id、payload_json、payload_size、created_at | 回合内容载荷（AG 私有 v1 JSON；工具摘要只读、Diff 仅引用） | AG |
+| agent_turn_events | event_id(PK)、workspace_id、session_id、turn_id、seq、kind、payload_version、payload_json、occurred_at | append-only 回合事实；(turn_id,seq) 唯一，禁止更新/删除单项事件；删除整个 AgentSession 时随历史一起删除 | AG |
+| agent_turn_payloads | payload_ref(PK)、workspace_id、payload_json、payload_size、created_at | 可重建的回合展示物化缓存（AG 私有 v2 JSON；lastEventSeq、工具摘要只读、Diff 仅引用），不得覆盖事件/状态事实 | AG |
 | ed_open_tabs | workspace_id、rel_path、kind、open_index、is_active、updated_at | 编辑器打开文档标签元数据；重启恢复打开集合、顺序与当前文档，正文不在此表 | ED |
 | ed_session_snapshots | workspace_id、rel_path、content、edit_format、content_format、dirty、session_version、content_hash、updated_at | 已打开文档 LogicalState 的持久化镜像；只对 `ed_open_tabs` 中仍打开的文档参与恢复和自动应用基线校验；旧记录迁移时 content_format 按 edit_format 安全回填 | ED |
 | build_runs | run_id(PK)、workspace_id、status、plan_ref（任务计划载荷）、interrupted_at(可空)、created_at、updated_at | 构建控制态（BR-CBT-PERSIST-001：重启恢复至中断点或明确关闭，无悬挂） | CBT |
@@ -468,7 +498,7 @@ constraint_id: X-SHARED-001
 
 <!-- CONSTRAINT
 constraint_id: X-SHARED-002
-摘要: Agent 1.0 共享运行时对象（RuntimeProfile/AgentSession/AgentTurn/IntentResult/CapabilityGrant/TaskRun/TaskStep/StructuredVisibleEvent/ExternalContentRef/MemorySelectionRef/AgentContextFacts/ProjectReport）的职责、身份、事件真值、隔离与迁移边界以 SYS 数据结构契约层（A-SYS-I-P-01 §3.1）为唯一契约来源；任何模块不得以旧设计、现有代码、已注册工具、Prompt、前端参数、兼容默认值或测试绿灯反向改写冻结需求语义或隐式扩大授权
+摘要: Agent 1.0 共享运行时对象（RuntimeProfile/AgentSession/AgentTurn/IntentResult/CapabilityGrant/TaskRun/TaskPlan/TaskStep/TurnEvent/EvidenceLedger/ExternalContentRef/MemorySelectionRef/AgentContextFacts/ProjectReport）的职责、身份、事件真值、隔离与迁移边界以 SYS 数据结构契约层（A-SYS-I-P-01 §3.1）为唯一契约来源；任何模块不得以旧设计、现有代码、已注册工具、Prompt、前端参数、兼容默认值或测试绿灯反向改写冻结需求语义或隐式扩大授权
 涉及模块: SYS, AG, DE, ED, WS, REF, AST
 链路影响: AG-TURN, DE-DIFF, ED-EDIT, WS-SAVE, WS-DIFF-APPLY, REF-INJECT, AST-MEMORY, IPC-CALL
 -->
@@ -578,8 +608,12 @@ status: mapped
   （A-SYS-M-S-01）的状态集合对齐，无第三处定义；AgentTurnHistory.status 枚举集合
   （completed/error/cancelled/gate_rejected/draft）与 AG 历史恢复契约对齐。
 - **共享运行时契约可追溯**（BR-SYS-STATE-007/008、BR-SYS-DATA-007、X-SHARED-002，REQ-SYS-009~012 验收）：
-  唯一 profile 失败关闭、澄清非终态、首终态锁存与迟到事件无副作用、TaskRun 非后台队列、外部内容/记忆
-  data-only 隔离的可追溯约束在本文 §3.1 单一来源；下游 @GOV 引用这些规则时不得私自定义或反向改写。
+  唯一 profile 失败关闭、TurnEvent 追加/首终态锁存、CapabilityGrant 逐动作授权、TaskRun 纯投影、
+  EvidenceLedger/ProjectReport 派生及外部内容/记忆 data-only 隔离均以本文 §3.1 为单一来源；下游 @GOV
+  引用这些规则时不得私自定义或反向改写。
+- **ProposalBatch 关联而不合并终态**：同批多 PendingDiff 共享 batch 身份和稳定顺序，但逐卡 status/
+  effect_status 独立；同文档结构化多卡共享基线并只做一次 ED 前向事务，拒绝一张只反向该卡目标且其他
+  卡仍可裁决；批量裁决等价于多个逐卡命令，不得新增批次终态。
 - 量化 NFR（迁移耗时、db 体量）延 G5 标定（APC §9）。
 
 ## §9 技术债务与盲区
@@ -588,52 +622,32 @@ status: mapped
 - 不透明 ID 生成算法（ULID/UUID/自增等）属实现选型，延 L2 实现/G5，本文只约定"不透明标识符"语义。
 - 具体序列化格式（payload_ref 指向的 diff 内容编码）归 DE；AgentTurnPayload 的 JSON 形状归 AG；本文只占位共享字段。
   AG 历史恢复不得把缺失的 diff 当前状态默认视为 pending：状态查询归 DE/WS，缺失只可投影为只读不可用。
+  TaskRun/TaskPlan/TaskStep 可保存为性能缓存，但不列入不可替代基线；删除后必须能由 agent_turn_events 重建。
 - diff / timeline 的状态机与转移归 A-SYS-M-S-01 与 DE/WS M-S，本文只锁字段与枚举集合。
 - `DiffProjection.patch_kind=style_ops` 在已打开非激活文档上的自动应用需要 ED 提供无 ProseMirror runtime 的
   StyleOp 事务；若实现阶段未具备该能力，必须让对应 DiffCard 失效并记录债务，不能降级为 DiskState 应用。
 
-### 9.1 Agent 1.0 共享契约的漂移债务（D1 登记，不反向修改需求）
+### 9.1 Agent 1.0 共享契约的实现迁移边界
 
-以下为现有 L2/代码与冻结基线（A-CORE-X-D-02）不一致的漂移点，本轮**只登记迁移债务**，不在 D1 内修改
-实现或旧设计；具体迁移由对应 D2/D3 承接：
+- 旧 IntentResultV1/CapabilityGrantV1/AgentTurnPayloadV1 只允许迁移读取；不得继续作为授权或事件真源。
+- agent_turn_events 的迁移、索引和 crash-safe append 由 AG 实现阶段完成；落地前不得宣称事件重建已验证。
+- TaskRun/TaskPlan 的既有表若保留，只能作可丢弃投影缓存；需用重建测试证明删表/清缓存不改变行为。
+- 外部内容与记忆引用仍按各自既有 P1 设计/验证状态开放，本次共享契约收敛不改变能力档位。
 
-- **澄清终态漂移（归 D3/AG）**：现有 SM-AG-01（A-AG-M-S-01 §2）将 `clarificationRequired` 终结为
-  `Completed`，与冻结基线「澄清是等待用户输入的非终态」不一致；AgentTurnStatus 五枚举
-  （completed/error/cancelled/gate_rejected/draft）无澄清等待非终态值。D3 需调整回合状态机与状态枚举语义，
-  不得把澄清伪装为完成。
-- **AgentSession 隔离键漂移（归 D3/AG）**：现有 agent_sessions/agent_turns 持久化以 workspace_id 外键
-  隔离为主；冻结基线要求 AgentSession 是展示、持久化与恢复的隔离键，workspace 只是外层范围。语义边界已
-  在本文件 §3.1 锚定，持久化/查询迁移由 D3 承接。
-- **意图/授权对象未统一收窄（归 D3/AG）**：现有 IntentResultV1/CapabilityGrantV1（A-AG-I-P-01）已存在，
-  但「已注册工具、Prompt、前端参数、兼容默认值均不是授权来源」的语义需在 D3 收敛为 BR-SYS-STATE-007 的
-  运行时校验，不能依赖 Prompt 文字。
-- **TaskRun 无共享契约与状态机（归 D3/AG + D2/DE）**：TaskRun/步骤/Proposal 链的身份、事件与恢复待
-  D3 定义状态机并向 SYS 总图登记；Proposal 链的接力/失效语义在 BR-CORE-STATE-001~003 已有约束，
-  连续 Proposal 的编排细节归 D2/DE。
-- **外部内容与记忆引用（归 D3/REF/AST）**：ReferencePayload.file 目前仅元数据（A-SYS-I-P-01 §3），
-  R5-C 的一次性 data-only 内容读取（ExternalContentRef）与显式记忆选择（MemorySelectionRef）的暂存/清除、
-  当前任务范围与来源令牌由 D3 定义，未验证前 P1 入口保持关闭。
+## §10 维护与实现入口
 
-## §10 后续动作
-
-1. 本文落地后随下一次 `npm run governance:generate` 注册：DATA-MIGRATE 链路、BR-SYS-DATA-002 /
-   BR-SYS-PERSIST-001 规则、X-SHARED-001 约束、REQ-SYS-002 的 REQ_MAP 进 ADUS；本轮新增
-   BR-SYS-STATE-007/008、BR-SYS-DATA-007、X-SHARED-002 与 REQ-SYS-008~012 的 REQ_MAP 一并注册。
-2. 继续 SYS G2：A-SYS-I-P-02（IPC / Tauri command 协议，承接 REQ-SYS-001，引用本文共享结构作为载荷）、
-   A-SYS-M-S-01（状态机总图，引用本文 PendingDiff/TimelineEntry 字段契约）。
-3. WS G2 启动时与本文联合敲定 workspace.db 完整 schema（解除 SY-03），并在 WS L2 注册
-   workspace / timeline 相关 TERM。
-4. **D2（DE/ED/WS）设计输入**：三态三分流状态机与接口契约（BR-CORE-STATE-001~003）、连续 Proposal
-   接力/失效、显式保存与保存失败保留、关闭清算；输出 Proposal 链与保存/裁决契约。
-5. **D3（AG/REF/AST）设计输入**：RuntimeProfile/AgentTurn/AgentSession/IntentResult/CapabilityGrant/
-   TaskRun/TaskStep/StructuredVisibleEvent 的运行时契约与状态机（并向 SYS 总图登记 machine_id）；
-   ExternalContentRef 暂存/清除与 MemorySelectionRef 显式选择；为 RuntimeProfile、CapabilityGrant、TaskRun、
-   TaskStep、ExternalContentRef、MemorySelectionRef 等核心对象注册 TERM（主责模块 L2，ADU §3.2）。
+1. 共享对象、字段、版本或枚举变化后运行 `npm run governance:generate`，不得人工改写 ADUS 自动生成区。
+2. wire 私有字段由各 owner 接口协议维护；跨模块字段不得绕过本文另建近义结构。
+3. workspace.db 结构变化必须增加 schema_version 与前向迁移，并同步 WS/DE/AG 的生产者和消费者。
+4. ProposalBatch/PendingDiff 的分组、三分流、连续 Proposal 与裁决终态以 DE/ED/WS 当前设计为准；本文只锁共享结构。
+5. Agent 实现按 A-AG-I-P-01 的 V2 契约落地 TurnEvent、IntentResult/TaskRun 投影、逐动作
+   CapabilityGrant 和 EvidenceLedger/ProjectReport；外部内容与 MemorySelectionRef 仍由各自既有能力状态约束。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.16 | AG-ADAPTIVE-RUNTIME-DESIGN-01：共享运行时对象归一为模型可修订 IntentResult、逐动作 CapabilityGrant、append-only TurnEvent、纯投影 TaskRun/TaskPlan/TaskStep、EvidenceLedger 派生 ProjectReport；增加 agent_turn_events 基线与 ProposalBatch 关联字段，并锁定同文档同批结构化卡共享基线、一次前向事务和目标局部裁决。 |
 | 2026-08-29 | v1.15 | AG-CONFORMANCE-CODE-S4A：将 AgentContextFacts / ProjectReport 纳入 Agent 1.0 共享对象，新增 BR-SYS-DATA-008 字段、版本、失败关闭与只读授权边界，并补 REQ-SYS-009 规则映射。 |
 | 2026-06-10 | v1.0 | 初版（SYS G2）：跨模块共享实体契约（WorkspaceRef/DocRef/PendingDiff/TimelineEntry，字段语义级）；workspace.db schema 基线与版本化迁移契约框架；规则 BR-SYS-DATA-002（共享结构单一来源）/ BR-SYS-PERSIST-001（schema 版本化迁移与重启可恢复）；链路 DATA-MIGRATE（P1）；约束 X-SHARED-001；REQ_MAP（REQ-SYS-002）；术语归属说明（不抢注 WS/DE 的 TERM）；测试验收与债务盲区 |
 | 2026-07-20 | v1.1 | 承接 APP-CLOSE-DIFF-LIFECYCLE-01：PendingDiff 新增 `effect_status`（not_applicable/awaiting_save/saved/discarded_on_abnormal_exit）与 `terminal_reason`（新增 abnormal_exit 取值）两列，语义 SSOT 归 `BR-SYS-DATA-005`（A-SYS-M-T-02 §4）；明确 `status=accepted` 不等于内容已落盘，区分裁决态与落盘效果两个维度；workspace.db 基线表同步 |

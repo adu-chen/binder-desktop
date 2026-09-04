@@ -3,9 +3,9 @@
 文档状态：A
 负责模块：WS
 文档职责：WorkspaceOperation 与 WorkspaceTimeline 资源还原状态机设计
-上游约束：A-WS-M-T-02（WS-OPERATION、BR-WS-STATE-003/BR-WS-DATA-003/BR-WS-OBS-002/BR-WS-PERSIST-003）、A-AG-M-S-01（SM-AG-04）、A-SYS-M-S-01
+上游约束：A-WS-M-T-02（WS-OPERATION、BR-WS-STATE-003/BR-WS-DATA-003/BR-WS-OBS-002/BR-WS-PERSIST-003）、A-AG-M-S-01（SM-AG-01、SM-AG-04 投影）、A-SYS-M-S-01
 直接承接：WS 资源操作执行器、DecisionRequest 接线、统一时间轴还原器及状态转移测试
-使用边界：不定义内容 Diff 状态机；不允许 TaskRun 或前端绕过本机直接执行资源副作用
+使用边界：不定义内容 Diff 状态机；不允许模型、AgentTurn 外层调用方、TaskRun 投影或前端绕过本机直接执行资源副作用
 变更要求：状态、事件、guard、补偿或终态变化须同步 A-WS-M-T-02、A-SYS-M-S-01 和验证矩阵
 治理成熟度：draft
 ---
@@ -69,19 +69,20 @@ operation_id 的补偿删除事件。guard 不成立时 Diff 失效，不得删�
 DecisionRequest，经确认和再核验后执行，并追加新 WorkspaceOperationEntry。现有 SM-WS-03 继续只处理
 DocumentTimeline 内容快照；统一 UI 根据 entry_type 路由 SM-WS-03 或 SM-WS-04。
 
-## 4. 与 SM-AG-04 的跨模块转移
+## 4. 与 SM-AG-01 / SM-AG-04 的跨模块转移
 
 ```text
 SM-WS-04.WaitingConfirm
 → DecisionRequest proposed
-→ SM-AG-04.WaitingConfirm
+→ SM-AG-01.AwaitingDecision；SM-AG-04（若存在）从事件投影 Waiting
 → confirm
-→ SM-AG-04.Executing + SM-WS-04.Revalidating
+→ SM-AG-01 以当前终态/取消状态、确认回执和冻结 plan 重算 permitted_effect_paths，由运行时调用 SM-WS-04.Revalidating
 → OperationOutcome
-→ SM-AG-04 Completed/Failed/Interrupted
+→ SM-AG-01 追加 ToolResult/终态事件；SM-AG-04 仅据事件投影 Active/Completed/Failed/Interrupted
 ```
 
-资源操作不产生 DiffCard 事件；只有 CreateDocumentBundle 的绑定初始内容在资源创建成功后进入 SM-DE-01。
+SM-AG-04 不触发状态转移、调用工具或恢复授权。资源操作不产生 DiffCard 事件；只有 CreateDocumentBundle 的绑定
+初始内容在资源创建成功后进入 SM-DE-01。
 
 ## 5. 测试矩阵
 
@@ -98,3 +99,4 @@ SM-WS-04.WaitingConfirm
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
 | 2026-08-21 | v1.0 | 建立 SM-WS-04，固定前置裁决、确认时再核验、直接写盘、fail-fast 补偿、CreateDocumentBundle 和统一时间轴资源还原。 |
+| 2026-09-03 | v1.1 | AG-ADAPTIVE-RUNTIME-DESIGN-01：DecisionRequest 等待与恢复归 SM-AG-01；SM-AG-04 仅从 TurnEvent 派生任务可观察状态，不再与 WS 执行器联动调度。 |

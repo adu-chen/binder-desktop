@@ -5,7 +5,7 @@
 文档职责：工作区资源操作与统一工作区时间轴的 L2 技术设计（规则 SSOT）
 上游约束：REQ-CORE-010/012/014、REQ-AG-008/011/013/015、REQ-WS-006/008/010、BR-SYS-STATE-008、X-FORBID-004
 直接承接：A-WS-M-S-02、A-WS-I-P-01、A-SYS-I-P-01、A-AG-M-T-01、A-VAL-X-V-04 及工作区资源操作实现
-使用边界：本文只定义创建、重命名、移动、删除与恢复等工作区资源副作用；文档正文、样式、表格和图片修改仍归 DE 内容 Diff；TaskRun 只编排，不拥有资源状态
+使用边界：本文只定义创建、重命名、移动、删除与恢复等工作区资源副作用；文档正文、样式、表格和图片修改仍归 DE 内容 Diff；AgentTurn 运行时协调调用，TaskRun 仅作可选事件投影，二者均不拥有资源状态
 变更要求：操作种类、前置裁决、批量失败策略、创建文档绑定语义或时间轴还原语义变化，必须同步状态机、接口、共享结构和验证矩阵
 治理成熟度：draft
 ---
@@ -71,7 +71,9 @@ chains: WS-OPERATION, DE-DIFF, AG-TURN
 1. **内容写入**：模型生成内容 Diff，DE/ED 预览先改变 LogicalState，用户后置裁决；磁盘写入仍遵守既有三态与保存规则。
 2. **工作区资源写入**：系统先生成 WorkspaceOperationPlan，由 DecisionRequest 前置裁决；确认后 WS 重新核验并直接改变 DiskState，不生成资源 DiffCard，也不再二次接受。
 
-TaskRun 只持有 `operation_id`、`request_id`、步骤状态和执行结果，不解析路径迁移、快照或时间轴还原细节。
+AgentTurn 运行时只传递 `operation_id`、`request_id` 和真实裁决结果，不能解析或绕过路径迁移、快照、
+再核验与时间轴还原细节。若本回合形成 TaskRun 投影，它只能从相同 TurnEvent 观察当前操作状态与结果，
+不得据此调度执行、恢复旧授权或直接调用 WS 副作用。
 DecisionRequest 是裁决身份和恢复游标；其 UI 可直接呈现 WorkspaceOperationPlan，但不得复制另一张“资源 Proposal 卡”。
 
 ## 2. WorkspaceOperationPlan
@@ -105,7 +107,7 @@ integration_test: src-tauri/src/workspace/operation.rs::plan_freezes_real_baseli
 -->
 
 ```text
-IntentResult（Agent 意图）
+模型基于当前上下文选择资源操作工具并给出受限 operation intents
 → 只读预检并构造 WorkspaceOperationPlan
 → DecisionRequest(proposed)
 → 用户 reject：计划 rejected，不写盘
@@ -114,7 +116,7 @@ IntentResult（Agent 意图）
 → 一致：WS 按顺序执行 DiskState 副作用
 → 每项写执行回执；失败即停并反向补偿已完成项
 → 成功或真实 partial_failed 写 WorkspaceOperationEntry
-→ 更新文件树、标签、引用、BDocx 身份和 TaskRun 可见事件
+→ 更新文件树、标签、引用、BDocx 身份并追加真实 TurnEvent；TaskRun（若存在）仅据此刷新投影
 ```
 
 > 用户文件树动作不进入 WS-OPERATION 链（2026-08-22，WS-RESOURCE-WRITE-GUARD-01）：人工直调
@@ -220,11 +222,13 @@ WorkspaceOperationEntry 分支。资源条目必须保存足以执行类型化�
 还原动作本身也先生成 WorkspaceOperationPlan 并经 DecisionRequest 前置裁决；确认后执行还原并追加新条目，
 不删除、改写或倒退既有历史。被拒绝且从未进入 DiskState 的初始内容只保留在 Diff 审计历史，不进入时间轴快照。
 
-## 8. TaskRun 接口边界
+## 8. AgentTurn 与 TaskRun 投影边界
 
-TaskRun 的 WaitingConfirm 唯一由 DecisionRequest 产生。确认后恢复原 TaskRun，WS 执行完成即返回
-OperationOutcome；不增加 WaitingUserCommit。失败不自动重试，重启进入 Interrupted，用户显式恢复时生成新执行片段
-并生成新的计划/DecisionRequest。TaskRun 不解析 WorkspaceOperationPlan 的文件系统字段，也不执行补偿。
+DecisionRequest 使 AgentTurn 进入等待裁决；如果存在 TaskRun 投影，它从同一事件派生 Waiting 状态。确认后恢复
+AgentTurn 的模型—工具循环，由运行时调用 WS 再核验与执行；WS 完成后返回 OperationOutcome 并追加事件，不增加
+WaitingUserCommit。TaskRun/TaskPlan/TaskStep 均不得调用 WS、解析 WorkspaceOperationPlan 的文件系统字段、执行补偿
+或自动启动未来步骤。失败不自动重试，重启时未完成 WorkspaceOperation 进入 Interrupted；用户显式恢复后，AgentTurn
+基于真实状态重新生成计划和新的 DecisionRequest，旧授权不复用。
 
 ## 9. 验收矩阵
 
@@ -234,7 +238,7 @@ OperationOutcome；不增加 WaitingUserCommit。失败不自动重试，重启�
 4. dirty 目标不能进入执行；内容 Diff 影响在卡片可见且确认后准确失效。
 5. 文件、空目录、非空目录删除均保存可取回快照并可经 WorkspaceTimeline 前进式恢复。
 6. CreateDocumentBundle 接受、拒绝、基线推进、外部修改、投影失败和补偿失败全部覆盖。
-7. TaskRun 确认后继续原 run；拒绝终止未执行步骤；重启不自动使用旧授权。
+7. 确认后 AgentTurn 以当前终态/取消状态、真实裁决身份与冻结 plan 重新校验允许副作用路径，再由 WS 重验执行；拒绝后零副作用；TaskRun 仅同步投影，重启不自动使用旧授权。
 
 ## 10. 需求到规则映射
 
@@ -299,3 +303,4 @@ status: mapped
 |---|---|---|
 | 2026-08-21 | v1.0 | 根据人类确认的八项决策建立 WorkspaceOperation/WorkspaceOperationPlan、前置裁决直接写盘、统一 WorkspaceTimeline、CreateDocumentBundle、fail-fast 补偿、dirty 阻断与 TaskRun 边界。 |
 | 2026-08-22 | v1.1 | WS-RESOURCE-WRITE-GUARD-01：WS-OPERATION 链推进 active（integration_test=deferred: G5）并收窄为 Agent 意图；新增 BR-WS-STATE-009（人工文件树删除/重命名安全底线：dirty 阻断、快照/时间轴可恢复、内容 Diff 失效）；REQ-MAP REQ-WS-008/010 → BR-WS-STATE-009。 |
+| 2026-09-03 | v1.2 | AG-ADAPTIVE-RUNTIME-DESIGN-01：资源操作执行协调归 AgentTurn 运行时；TaskRun 降为事件派生的可选观察投影，不再承担确认恢复、步骤终止或执行编排。 |

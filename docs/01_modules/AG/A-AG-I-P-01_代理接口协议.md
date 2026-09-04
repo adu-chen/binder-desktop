@@ -17,7 +17,7 @@
 ```
 A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG 回合/工具/辅助接口）→ 实现 + @GOV(追溯 A-AG-M-T-01)
 门禁前置：每个发起 command 内部必经 ENT 门禁通道（SM-SYS-01 GatePassed）方达网关——X-SEQ-001 在接口层的硬约束
-产出：HandingOff → de.generate_diff；辅助采纳 → ed.apply_edit
+产出：SM-AG-02 `propose_edit` → de.generate_diff；辅助采纳 → ed.apply_edit
 ```
 
 **接口层门禁不变量（X-SEQ-001 / BR-AG-VERIFY-001）**：下列任一发起 command 的实现路径中，
@@ -28,13 +28,14 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 
 | command/事件 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ag.start_turn` | session_id、`runtime_profile=agent-edit-1.0`、DocRef、prompt、已打开文档 `open_doc_snapshots`、注入引用集（`references` 主通道；旧 `mentions/block_refs` 兼容，可空）、`Channel<AgTurnEvent>` 句柄 | turn_id（SM-AG-01 启动）；流式经 channel 回推（§2.1）；后端先落 `draft`，终态更新 status | **gate_denied**（无订阅/断网，不可绕过）；`AG_RUNTIME_PROFILE_UNSUPPORTED`；组装失败；阻断歧义返回澄清且不调用模型 | 经门禁→网关；BR-AG-STATE-001/VERIFY-001/PERSIST-001/DATA-002/004/005 |
+| `ag.start_turn` | session_id、`runtime_profile=agent-edit-1.0`、DocRef、prompt、已打开文档 `open_doc_snapshots`、注入引用集（`references` 主通道；旧 `mentions/block_refs` 兼容，可空）、`Channel<AgTurnEvent>` 句柄 | turn_id（SM-AG-01 启动）；流式经 channel 回推（§2.1）；后端先落 `draft`，终态更新 status | **gate_denied**（无订阅/断网，不可绕过）；`AG_RUNTIME_PROFILE_UNSUPPORTED`；事实/组装失败；模型请求澄清则进入原回合等待 | 经门禁→网关；BR-AG-STATE-001/VERIFY-001/PERSIST-001/DATA-002/004/005 |
 | `ag.cancel_turn` | turn_id | 触发后端 CancellationToken；中断流和后续工具调度；返回 Cancelled 或 already_terminal | 未知 turn_id→not_found | SM-AG-01 cancel；幂等 |
-| `ag.turn_stream`（`Channel<AgTurnEvent>`） | turn_id、channel（随 start_turn 传入） | AgTurnEvent 十分支回推（§2.1） | 流式错误→Error 分支（统一错误形状） | BR-SYS-STATE-002 / BR-SYS-STATE-008 |
+| `ag.turn_stream`（`Channel<AgTurnEvent>`） | turn_id、channel（随 start_turn 传入） | append-only TurnEvent 的安全 wire 投影（§2.1） | 流式错误→Error 分支（统一错误形状） | BR-SYS-STATE-002 / BR-SYS-STATE-008 |
 | `ag.list_sessions` | — | 当前 workspace 的代理编辑会话元数据列表；含 activeSessionId | 无 active workspace → 空列表 | BR-AG-PERSIST-001（标签元数据全恢复） |
 | `ag.save_session` | session_id、title、mode、archived、open_index、is_active | ok | 无 active workspace → 错误 | BR-AG-PERSIST-001（标签元数据持久化） |
-| `ag.save_turn` | session_id、turn_id、status、rel_path、AgentTurnPayloadV1 | ok；upsert payload 与 turn 记录 | status 非五枚举值 → 拒绝 | BR-AG-PERSIST-001（完整 payload 由前端 UI 投影回写） |
+| `ag.save_turn` | session_id、turn_id、rel_path、AgentTurnPayloadV2（兼容 UI 物化视图） | ok；仅 upsert 可重建展示投影，不写运行状态或 TurnEvent | payload 引用未知 event/diff → 拒绝 | BR-AG-PERSIST-001（兼容投影缓存） |
 | `ag.list_turns` | session_id | 指定代理编辑会话的回合历史列表（按 created_at 升序） | session 不属当前 workspace → 拒绝 | BR-AG-PERSIST-001（内容懒加载） |
+| `ag.list_turn_events` | turn_id、after_seq? | 该回合按 seq 升序的安全事件投影 | turn 不属当前 workspace → 拒绝 | TERM-AG-022；恢复/补流 |
 | `ag.delete_session` | session_id | 删除当前 workspace 指定代理编辑会话及其回合 payload 记录；返回删除计数 | 无 active workspace → 错误；代理回合进行中前端禁用 | BR-AG-PERSIST-001（用户删除历史会话） |
 
 > 含修改建议的回合产出：回合内部经 `de.generate_diff` 交 DE（AG 无直接写盘，X-FORBID-006）；
@@ -52,37 +53,52 @@ A-SYS-I-P-02（骨架）+ A-SYS-I-P-03（门禁/网关契约）→ 本文（AG �
 > 但传输层不同故用独立 wire 类型，**不复用** `StreamEvent`（避免把领域事件埋进通用 `data`），
 > 也不与之重名。
 
-**AgTurnEvent 十分支**（`src-tauri/src/ipc/mod.rs`，serde `tag="type"` snake_case）：
+**AgTurnEvent envelope 与 payload**（`src-tauri/src/ipc/mod.rs`；字段 camelCase，payload `tag="type"` snake_case）：
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgTurnEvent {
-    Chunk        { turn_id: String, text: String },                                  // 模型输出文本分片
-    ToolRequest  { turn_id: String, tool_name: String, params: serde_json::Value },  // 模型请求工具（SM-AG-02 激活）
-    ToolResult   { turn_id: String, tool_name: String, result: String, success: bool }, // 工具结果回注（展示）
-    DiffProposed { turn_id: String, diff_id: String, rel_path: String,
-                   task_run_id: Option<String> },                                    // ChangeProposal→DE 产出待裁决
-    StepProgress { turn_id: String, action: String, label: String,
-                   detail: Option<String> },                                         // 真实当前动作
-    DecisionRequestProposed { turn_id: String, request_id: String,
-                              kind: String, payload: serde_json::Value },             // 任务级裁决待确认
-    DecisionRequestResolved { turn_id: String, request_id: String,
-                              outcome: String },                                     // confirm / cancel
-    ClarificationRequired { turn_id: String, text: String },                         // 澄清等待（非终态，BR-SYS-STATE-007）
-    Done         { turn_id: String, stop_reason: String },                           // 正常完成 / cancelled
-    Error        { turn_id: String, code: String, message: String, retriable: bool },// 错误（含可重试）
+pub struct AgTurnEvent {
+    event_id: String,
+    turn_id: String,
+    seq: u64,
+    occurred_at: i64,
+    payload_version: u32,
+    event: AgTurnEventPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgTurnEventPayload {
+    Chunk        { text: String },
+    IntentUpdated { revision: u64, projection: IntentResultV2 },
+    RouteUpdated { revision: u64, summary: String, steps: Vec<TaskStepProjectionV2> },
+    ToolRequest  { tool_call_id: String, tool_name: String, params: serde_json::Value },
+    ToolResult   { tool_call_id: String, tool_name: String, result: String, success: bool,
+                   evidence_ids: Vec<String> },
+    DiffProposed { diff_id: String, proposal_batch_id: String, group_index: u32,
+                   group_count: u32, rel_path: String, task_run_id: Option<String> },
+    StepProgress { action: String, label: String, detail: Option<String> },
+    DecisionRequestProposed { request_id: String, kind: String, payload: serde_json::Value },
+    DecisionRequestResolved { request_id: String, outcome: String },
+    ClarificationRequired { text: String },
+    Done         { stop_reason: String },
+    Error        { code: String, message: String, retriable: bool },
 }
 ```
+
+后端持久化 TurnEvent 可包含不向 UI 公开的 Gate/Context/Provider 元数据事件；AgTurnEvent 只能是同一 seq
+空间的安全投影，不得另造顺序或覆盖已发送事件。`IntentUpdated/RouteUpdated` 只呈现可见语义与候选工作，
+不得携带隐藏推理、CapabilityGrant 或“执行下一步”命令。
 
 > **澄清等待事件（2026-08-14，AG-1.0-IMP-CLARIFICATION-01 / BR-SYS-STATE-007）**：
 > `ClarificationRequired` 是**非终态**事件——回合不终结、不锁存终态、不发 Done；前端投影为
 > `clarifying` 等待态（AgentTurnStatus）；用户补充输入时使用同一 `turn_id` 受控重入原 AgentTurn 的
 > Assembling，不取消、不创建新 AgentTurn；用户也可在此阶段显式取消。
-> 澄清期间不调用门禁/网关/工具（BR-AG-STATE-001 blocking ambiguity 语义）。
+> 澄清事件由模型可见输出产生；进入等待后不调用门禁/网关/工具。用户补充后重新组装和过 Gate。
 
 > **事件顺序即时序契约（2026-08-07，承接 BR-AG-UI-001 / TERM-AG-011）**：同一回合内
-> `Chunk / StepProgress / ToolRequest / ToolResult / DiffProposed / DecisionRequest* / ClarificationRequired / 终态`
+> `Chunk / IntentUpdated / RouteUpdated / StepProgress / ToolRequest / ToolResult / DiffProposed / DecisionRequest* / ClarificationRequired / 终态`
 > 按实际发射顺序经 Channel
 > FIFO 到达前端；前端据此重建"正文↔工具卡↔Diff 卡"的交错时序（消息片段），接口分支本身不变。
 
@@ -150,17 +166,17 @@ struct HistTurn {
 }
 ```
 
-边界：`history` 不再允许作为裸 `role/content` 事实层输入。AG 后端必须按当前 `active_doc_path`
-分流历史：同 `rel_path` 历史可作为同文档 P1 背景；不同 `rel_path` 或缺失 `rel_path` 的历史默认丢弃，
-仅当本轮用户显式回指历史时，以“其他文档历史”弱提示注入，且不得覆盖当前 `OpenDocSnapshot`
-形成的当前文档事实。
+边界：`history` 不再允许作为裸 `role/content` 事实层输入。AG 后端按 `active_doc_path` 和预算形成带来源的
+有限历史候选：同 `rel_path` 可作为同文档 P1 背景，其他历史只能以明确标注来源的弱摘要进入，均不得
+覆盖当前 OpenDocSnapshot。是否沿用由模型写入 IntentResult revision；后端不得通过关键词先行固定语义，
+历史身份也不得扩大 ExplicitEditTargetSet 或 CapabilityGrant。
 
 ### §2.2 历史恢复接口（BR-AG-PERSIST-001）
 
 历史恢复走 dispatch 信封，属于 workspace 控制态查询/更新：
 
 ```typescript
-type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft" | "clarifying";
+type AgentTurnStatus = "completed" | "error" | "cancelled" | "gate_rejected" | "draft" | "clarifying" | "awaiting_decision";
 
 interface AgentSessionDto {
   session_id: string;
@@ -179,7 +195,7 @@ interface AgentTurnDto {
   session_id: string;
   status: AgentTurnStatus;
   rel_path?: string | null;
-  payload: AgentTurnPayloadV1;
+  payload: AgentTurnPayloadV2;
   created_at: number;
   updated_at: number;
 }
@@ -188,6 +204,7 @@ interface AgentSessionDeleteResult {
   deleted_sessions: number;
   deleted_turns: number;
   deleted_payloads: number;
+  deleted_events: number;
 }
 ```
 
@@ -197,18 +214,19 @@ interface AgentSessionDeleteResult {
 `ag.list_sessions` 必须返回全部代理编辑会话元数据；前端打开/切换 workspace 后仅 eager-load
 `is_active=true` 的会话 turns，其余会话点击时调用 `ag.list_turns(session_id)` 懒加载。
 `ag.save_session` 用于新建、切换、关闭/归档、标题或模式变更后的元数据持久化。
-`ag.save_turn` 是前端 UI 投影到后端历史 payload 的唯一写入口；原因是完整助手文本、工具摘要与
-Diff 引用在前端流式消费后最完整。`ag_start_turn` 可先创建保底 `draft`，随后前端用同一 `turn_id`
-多次 upsert，终态时写最终 status。
-`ag.delete_session` 只删除当前 workspace 内指定代理编辑会话的 AG 历史记录，不删除 DE `pending_diffs` /
+后端 TurnEvent 与领域事实是运行真源：`ag_start_turn` 先创建 `draft` 并开始追加事件，状态只由状态机与
+terminal_latch 派生。`ag.save_turn` 仅保留为前端展示物化缓存的兼容入口，不能覆盖 status、事件顺序、
+工具结果、DecisionRequest 或 Diff 事实；缺失/损坏时必须能用 `ag.list_turn_events` 与 DE/WS 事实重建。
+`ag.delete_session` 只删除当前 workspace 内指定代理编辑会话的 AG 历史记录（含 TurnEvent），不删除 DE `pending_diffs` /
 `diff_payloads`；前端必须在无活动代理回合时调用，成功后从历史/标签列表移除该会话。若删除的是活动
 会话则切换到剩余会话，没有剩余会话时新建空会话并重新持久化元数据。
 
-`AgentTurnPayloadV1` 至少包含：
+`AgentTurnPayloadV2` 至少包含：
 
 ```typescript
 {
-  version: 1;
+  version: 2;
+  lastEventSeq: number;
   userMessage: { id: string; role: "user"; content: string; parts?: unknown[] };
   assistantMessage?: { id: string; role: "assistant"; content: string; error?: boolean; streaming: false };
   toolSummaries: { id: string; name: string; inputSummary?: string; resultSummary?: string; state: string; anchorMessageId?: string }[];
@@ -285,9 +303,10 @@ DOC 编辑链转为 canonical HTML 后投影；原生 `.docx` 不得进入该投
 既有文档的 `replace_document` 还必须通过主题/实体身份守卫；若新旧全文重合度极低，返回
 `AG_REPLACE_DOCUMENT_IDENTITY_DRIFT`，视为疑似错文档或历史上下文污染，不生成 diff。
 `propose_edit` 可携带 `style_ops`（StyleOp 数组，schema 见 A-ED-M-T-01 §5.1）：样式类修改必须经该字段
-进入 DE 裁决，不得只用自然语言声明“已加粗/已改样式”。若本轮是编辑意图且当前文档存在，后端必须在
-回合结束前收到成功的 `propose_edit` 并发出 `DiffProposed`；否则回 `Error { code: AG_EDIT_TOOL_REQUIRED }`，
-前端不得将该回合投影为正常完成或“已修改”。
+进入 DE 裁决，不得只用自然语言声明“已加粗/已改样式”。若模型当前 IntentResult revision 明确表达
+`side_effect_intent=content_proposal`，但最终回答前没有成功 `propose_edit`，运行时必须在预算内把
+“尚未产生 Proposal”作为可恢复约束回注；仍未产生时以结构化 incomplete/error 结束，不得投影为
+“已修改”。该检查只消费模型语义事件与真实 Proposal 事件，不得重新引入关键词编辑分类器。
 `style_ops` 在生成 PendingDiff 前必须按 A-SYS-I-P-04 BDocxCapabilityManifest 校验真实 mark 名、
 attrs 与操作字段，并按同一 AgentEditableSnapshot 校验 blockId 和块内纯文本半开区间。未知 mark、
 错误别名（如 `sub/sup`）、非法 attrs、错误 blockId 或越界/空 range 必须返回
@@ -295,13 +314,15 @@ attrs 与操作字段，并按同一 AgentEditableSnapshot 校验 blockId 和块
 
 成功的 `propose_edit` 必须先通过 `ToolResult { tool_name: "propose_edit" }` 返回后端权威
 `DiffProjection` JSON，再发送 `DiffProposed` 通知。`DiffProjection` 至少包含
-`{diff_id, rel_path, patch_kind, block_id?, block_index?, before_text, after_text, location_label,
+`{diff_id, proposal_batch_id, group_index, group_count, rel_path, patch_kind, block_id?, block_index?, before_text, after_text, location_label,
 draft_mode, snapshot_source, base_session_version?, base_content_hash?, style_ops?, block_ops?}`，其中 before/after
 必须来自同一 `AgentEditableSnapshot` 的目标块或显式 `replace_document` 全文基准。`draft_mode`
 枚举为 `current_editor / open_session / background`：目标是激活文档时为 `current_editor`；目标是已打开非激活文档时为
 `open_session` 且必须携带 session 基线；目标未打开时为 `background`。前端不得再从 `tool_request.params`
-或当前编辑器尾部内容推测 before/after；
-缺少 `DiffProjection` 时必须投 error 卡（`DE_DIFF_PROJECTION_MISSING`），不进入 ED 草稿链。
+或当前编辑器尾部内容推测 before/after。同一 `propose_edit` 可返回一个 ProposalBatch 内的多个
+DiffProjection：不连续或可独立裁决的块组各自一个 diff_id，连续且语义不可分的相邻块可合并；每个投影
+独立进入 SM-DE-01。缺少任一权威 DiffProjection 时必须投 error 卡（`DE_DIFF_PROJECTION_MISSING`），
+不进入 ED 草稿链。
 
 **三终态映射**（BR-SYS-STATE-002）：完成 → `Done`；用户中断 → `Done { stop_reason: "cancelled" }`（无半落盘）；错误 → `Error`。
 AG 历史持久化投影：完成→`completed`；`Done(cancelled)`→`cancelled`；门禁拒绝→`gate_rejected`；
@@ -310,9 +331,13 @@ AG 历史持久化投影：完成→`completed`；`Done(cancelled)`→`cancelled
 必须被拒绝和记录诊断，尤其网关 Error 不得被转换为 `RoundOutcome::Done` 后再投 Completed。
 
 **前端消费映射**（PI-AG-10F，`agStore`/`deStore`）：`Chunk`→`appendToMessage`、`ToolRequest`/`ToolResult`→工具卡片；
-成功 `ToolResult(propose_edit).projection`→缓存权威 DiffProjection，随后 `DiffProposed`→`deStore.addDiff`
-（按 projection 建卡并分流：`current_editor` 进入 ED 草稿链，`open_session` 立即执行 ED session
-自动应用事务并禁用卡片裁决，`background` 等待人类接受后落盘，异常则投 error/expired 卡）；`Done`→`finishMessage`、`Error`→`pushError`。
+成功 `ToolResult(propose_edit).projections[]`→按 ProposalBatch 缓存完整权威 DiffProjection 集合，随后
+核对全部 `DiffProposed` 的 proposal_batch_id、group_index/group_count 后一次 fan-out 到消息流。`current_editor`
+同文档同批结构化多卡必须收齐后聚合 operations，只提交一次 ED 前向事务，再把各卡标记为已预览且
+保持 pending；不得逐卡应用导致兄弟卡因整篇版本推进而失效。`open_session` 只处理其受支持的单组或可
+原子聚合载荷，`background` 等待人类接受后落盘；异常投 error/expired 卡。各卡接受/拒绝仍为独立
+SM-DE-01 事件，反向只作用于本卡目标；
+`Done`→`finishMessage`、`Error`→`pushError`。
 
 **关联命令形状**（同属契约，前后端对齐）：`ag.cancel_turn(turn_id)`（前端关闭 channel）；产出落
 `de.generate_diff`→`DiffProposed`；当前编辑器草稿路径裁决经 `de.accept_draft_diff`/`de.reject_diff`，
@@ -327,7 +352,39 @@ BDocx 修改的磁盘内容是 docx 字节，未应用到当前编辑器 HTML �
 以下对象不作为前端必须解释的 UI wire，但属于后端模块间冻结契约，必须版本化并可由 Trace 观察：
 
 ```text
-IntentResultV1
+IntentResultV2
+  revision / source_event_seq
+  goal / intent_type
+  target_candidates[]
+  side_effect_intent: none | content_proposal | structure_plan
+  ambiguity: none | non_blocking | blocking
+  required_context[] / confirmation_points[]
+  // 不含 allowed_tools，不是授权对象
+
+TurnEventV1 (TERM-AG-022)
+  event_id / turn_id / seq / occurred_at / kind / payload_version / payload
+
+EvidenceLedgerV1 (TERM-AG-023)
+  turn_id / through_seq
+  evidence_items[]: evidence_id, rel_path, source, coverage, version_or_hash, source_event_id
+
+ModelFinalEnvelopeV2
+  answer_markdown
+  findings[]?: statement, evidence_ids[], uncertainty?
+
+TaskRunProjectionV2 / TaskPlanProjectionV2 / TaskStepProjectionV2
+  task_run_id / source_turn_ids[] / through_seq / goal / status
+  observed_steps[] / waiting_on[] / current_route_revision? / candidate_steps[]
+  // 不含 required_grant、执行游标或执行命令
+
+ProjectReportV2 (TERM-AG-021, runtime-derived)
+  version=project-report-v2 / turn_id / evidence_through_seq / requested_scope[]
+  read_items[]: rel_path, source, coverage, evidence_ids[]
+  unread_items[]: rel_path, reason
+  findings[]: statement, evidence_ids[], uncertainty
+  uncertainties[]
+
+兼容读取期的 IntentResultV1（只读迁移，不得用于授权）
   intent_type: answer | inspect | search | analyze | edit | create_document | organize_workspace | clarify
   target: active_document | selection | explicit_document | workspace | none
   mutation: none | content_proposal | structure_operation
@@ -344,34 +401,33 @@ AgentContextFactsV1 (TERM-AG-020)
 PromptDataEnvelopeV1
   source_kind / provenance / freshness / trust_level / content_hash / token_estimate / content(data-only)
 
-PromptPackageV1
-  runtime_version / intent_id / context_trace_id / tool_manifest_hash / estimated_tokens / messages
+PromptPackageV2
+  runtime_version / intent_revision / context_trace_id / capability_grant_id / tool_manifest_hash / estimated_tokens / messages
 
-CapabilityGrantV1
-  turn_id / intent_id / allowed_tools / target_scope / expires_at_turn_terminal
-
-ProjectReportV1 (TERM-AG-021)
-  version=project-report-v1 / requested_scope[]
-  read_items[]: rel_path, source, coverage, evidence
-  unread_items[]: rel_path, reason
-  findings[]: statement, source_paths[], uncertainty
-  uncertainties[]
+CapabilityGrantV2
+  grant_id / turn_id / computed_at_seq / allowed_tools / readable_scope
+  explicit_edit_targets_hash / permitted_effect_paths / format_capability_hash
+  dynamic_capability_hash / decision_receipt_ids[] / budgets / expires_after_tool_call
 ```
 
-`CapabilityGrantV1` 只在当前 turn 有效；注册表中存在但 grant 未包含的工具必须拒绝，Prompt/tool manifest
-只投影 grant 中的精确最小工具集。上述对象默认只持久化
-版本、摘要、哈希和选择原因，不持久化用户正文副本、密钥或模型隐藏推理。
+`CapabilityGrantV2` 在每次工具请求前按当前事实重新计算，动作结束即失效；IntentResult、TaskPlan 和兼容
+IntentResultV1.allowed_tools 不参与授权。注册表中存在但当前 grant 未包含的工具必须拒绝，Prompt/tool
+manifest 只投影 provider 调用前计算的工具集。TurnEvent 持久化不可变事实；其余 projection 可重建。
+成功只读 ToolResult 的 `evidence_ids` 由运行时生成并与 EvidenceLedger 同源，模型不可自定义。运行时从
+ModelFinalEnvelopeV2 派生 ProjectReport：只保留当前 turn、`evidence_through_seq` 范围内存在且覆盖等级
+足够的引用；未知/跨回合/覆盖不足的 finding 转入 uncertainties。该 envelope 不是工具调用或授权来源。
+默认不持久化额外用户正文副本、密钥或模型隐藏推理。
 
 ## §3 工具调用回注接口（AG-TOOL / SM-AG-02）
 
 | 接口 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `ag.tool_result`（回注） | turn_id、tool_call_id、执行结果/失败 | 续行回合 | 工具未注册/越权→拒绝并回注拒绝原因（不执行） | SM-AG-02 ToolValidating；BR-AG-STATE-002 |
+| `ag.tool_result`（内部记录） | turn_id、tool_call_id、执行结果/失败、运行时生成的 evidence_ids（只读成功时） | 追加 ToolResult TurnEvent；从成功只读结果重建 EvidenceLedger；原回合返回 Assembling | 工具未注册/当前未授权/越权→记录拒绝（不执行）；模型自定义 evidence_id → 丢弃 | SM-AG-02 ToolValidating；BR-AG-STATE-002 |
 
 > 工具执行在回合内编排：只读类工具（读/搜/块读取）经 workspace 限界后统一产出
 > `AgentEditableSnapshot`，BDocx 走 DOC 编辑模型而非 WS UTF-8 文本读取；
 > 工作区资源工具（创建文档/文件夹、删除、重命名、移动、恢复）只调用 `ws.plan_operation` 生成
-> WorkspaceOperationPlan，并通过 DecisionRequest 请求前置授权；确认后 TaskRun 调用 `ws.execute_operation`。
+> WorkspaceOperationPlan，并通过 DecisionRequest 请求前置授权；确认后原 AgentTurn 的运行时 effect handler 调用 `ws.execute_operation`。
 > 它们不生成 DiffCard，也不得直接调用低层 `ws.create_* / delete_* / rename_doc`；
 > **写意图工具不直写**——产出修改建议走 `de.generate_diff`（X-FORBID-006）；循环上限/中断由
 > SM-AG-02 管理，达上限 LoopAborted。确有资产/锚/动态能力阻断时，`edit_blocked` 返回
@@ -379,16 +435,18 @@ ProjectReportV1 (TERM-AG-021)
 > DecisionRequest 必须引用 plan_id、冻结摘要、影响和基线，模型参数不能伪造确认。
 > 用户明确新建文档时生成 CreateDocumentBundle：初始内容在确认前生成；确认后先执行资源创建，再以
 > operation_id/origin 调用 `de.generate_diff` 投影初始内容。
-> 每次工具结果回注后若要再次调用 provider，必须为该 continuation 重新取得真实 GatePassed；首轮或上一轮
-> GateOutcome 不得复用，门禁拒绝/错误结束当前循环并投影 Error，不得继续模型调用。
+> 每次工具结果记录后先回到 SM-AG-01 Assembling；若要再次调用 provider，必须重建 PromptPackage 并取得
+> 新的真实 GatePassed。首轮或上一轮 GateOutcome 不得复用，门禁拒绝/错误结束当前循环并投影 Error。
 
 | 工具 | 参数（语义） | 结果 | 权限 | 约束 |
 |---|---|---|---|---|
 | `plan_workspace_operation` | operation intents（create/delete/rename/move/restore）、目标与来源 | plan_id/summary/impact/baselines | StructureWrite | 只生成不可变计划与 DecisionRequest，不执行磁盘操作 |
-| `execute_workspace_operation` | plan_id、resolved DecisionRequest identity | receipt/final_state/timeline_entry_id | StructureWrite | 仅 TaskRun 在真实 confirm 后调用；WS 重验、幂等、fail-fast 补偿；重启不自动执行 |
 | `import_image_asset` | source_path | assetId/sourcePath/sourceHash/mediaType/byteSize/sourceFilePreserved | StructureWrite | 仅 workspace 相对 PNG/JPEG；受控根内复用，否则复制到图片根 imported 子目录；不得移动或删除源文件 |
 | `edit_blocked` | code、reason | 结构化阻断结果 | WriteIntent | 仅真实无法安全提案时使用；不修改文档、不生成 Diff |
-| `report_project` | ProjectReportV1 | `{status:project_report_recorded,documentModified:false,report}` | ReadOnly | 仅 Inspect/Search/Analyze 获得并作为必需完成工具；read_items 必须与本轮 AgentContextFacts/Prompt/成功只读 ToolCall 证据精确匹配；目录/搜索片段不可伪装全文；不创建 TaskRun/DecisionRequest/Proposal/Diff |
+
+`execute_workspace_operation` 不是模型工具：仅 SM-AG-01 在收到与冻结 plan 匹配的真实 confirm 回执后调用
+WS，WS 仍执行重验、幂等和 fail-fast 补偿。ProjectReport 也不是模型工具：运行时从 EvidenceLedger 与
+最终回答派生，工具清单不得注册或暴露 `report_project`。
 
 ## §4 局部修改/辅助续写接口（AG-ASSIST / SM-AG-03）
 
@@ -496,7 +554,13 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 - **产出唯一出口**：含修改建议回合经 `de.generate_diff`，无直接写盘（X-FORBID-006 静态+联调）。
 - **已打开文档读取门禁**：打开文档的 read_doc/search_text/list_blocks/propose_edit/ReferencePayload 均命中
   OpenDocSnapshot；active live 序列化失败或非激活 session 基线缺失时阻断，不允许 DiskState 兜底。
-- **工具循环**：未注册/越权工具拒绝回注；上限生效；写意图工具不直写。
+- **工具循环**：每个工具请求都重新计算 CapabilityGrant；IntentResult/TaskPlan 变化不直接扩权；未注册/越权工具拒绝记录；ToolResult 后回 Assembling 并重新 Gate；上限生效；写意图工具不直写。
+- **事件与恢复**：TurnEvent seq 单调且不可覆盖；Channel 断线可由 after_seq 补流；删除 UI payload 后能从
+  事件、DE/WS 事实重建同一终态、工具卡顺序、IntentResult/TaskRun 投影和 ProjectReport。
+- **证据关联**：只读成功结果由运行时分配 evidence_id；ProjectReport 仅接受同回合账本中覆盖等级足够的
+  finding 引用，伪造/跨回合/目录或搜索冒充全文的引用进入 uncertainties，不提高 readItems 覆盖。
+- **提案分组**：一个 ProposalBatch 的不连续或可独立裁决块产生多个 DiffProposed，group_index 连续且
+  每个 diff_id 独立裁决；相邻但语义可分的修改不得仅因位置连续强制合并。
 - **辅助采纳路径**：request_assist→mount_decoration→apply_edit 走正常脏态（非 diff），与 ED G5 联调。
 - 流式三终态、回合历史恢复、与 DE/ED/WS/REF 的当前主链接口联调；项目记忆仅验证用户明确选择的
   data-only 引用，KB/TPL 自动供给不属于 Agent 1.0 验收。
@@ -504,7 +568,7 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 
 ## §7 债务与盲区
 
-- 工具注册清单/权限分级表、提示词与模型档延实现期运营配置（接口不锁）。
+- 工具注册清单、提示词与模型档延实现期运营配置（接口不锁）；权限算法的输入边界已由 CapabilityGrantV2 锁定。
 - request_assist 的节流（前端侧 vs 接口侧）实现期定；候选呈现 schema 联合 ED/DE。
 - P2 Build/CBT 不属于本接口协议；未来独立 RuntimeProfile 必须重新定义接口，不复用历史 takeover/fallback。
 - 外部内容、项目记忆等 P1 能力只有完成各自 DESIGN Scope 后才扩展消费接口；当前不得由 `ReferencePayload` 类型存在推断能力已开放。
@@ -514,6 +578,7 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.36 | AG-ADAPTIVE-RUNTIME-DESIGN-01：AgTurnEvent 改为带 seq 的 append-only 安全投影并新增 Intent/Route 事件；内部契约升级为 IntentResult/CapabilityGrant/PromptPackage V2、TurnEvent/EvidenceLedger 与任务投影；移除 report_project 和模型可见 WS 执行工具；ProposalBatch 支持多 DiffProjection。 |
 | 2026-08-30 | v1.26 | AG-CONFORMANCE-CODE-S4A：`ag_start_turn` 新增版本化 AgentContextFacts；新增只读 `report_project` 完成工具与同轮读取证据失败关闭协议。 |
 | 2026-08-31 | v1.35 | AG-DOC-CONSOLIDATION-01：事件协议收敛到当前十个 AgTurnEvent 分支；澄清复用原 turn_id 并回到 Assembling；CapabilityGrant 仅携带当轮精确允许集，每次 provider continuation 必须重新门禁；数值上限仅由运行时 manifest/schema/guard 作真源。 |
 | 2026-06-12 | v1.0 | 初版（实现前置件，AI 调用面）：AG 接口协议——chat 回合 4（start/cancel/stream/list，门禁不变量内建）、工具回注 1（tool_result 校验回注）、内联辅助 1（request_assist 静默失败、采纳经 ed.apply_edit）、上下文组装对接索引（WS/REF/AST/KB）；门禁前置 X-SEQ-001 固化为接口不变量、产出唯一经 de.generate_diff；零新增注册项；债务（工具清单/节流/接管接口/供给接口延后） |

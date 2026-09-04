@@ -24,9 +24,9 @@ zh: 意图沿用判定
 en: IntentCarryover
 forbidden: 历史复用, 意图继承, 上下文继承, 意图沿袭, carryover
 -->
-在代理回合上下文组装前，对当前轮用户输入与历史轮意图关系做出的结构化判定：识别本轮是否显式
-沿用/调用/选择了历史轮意图（指代回指 / 显式选择 / 任务延续 / 修正追加），输出沿用目标，决定
-历史意图是否提权进入当前轮上下文。默认判定为「无沿用」，历史不进当前轮事实层（BR-AG-DATA-004）。
+IntentResult 中对当前轮与历史目标关系的可见语义投影：模型可表达本轮是否沿用/调用/选择了历史对象
+（指代回指 / 显式选择 / 任务延续 / 修正追加）。运行时只提供有来源、受预算约束的历史候选，不以本地
+关键词预判沿用；沿用也不授予目标或工具权限（BR-AG-DATA-004）。
 
 ## §1 文档定位
 
@@ -100,7 +100,7 @@ A-AG-X-L-04 承接当前实现与验证；R-AG-X-R-01 提供调研依据（仅�
 
 1.0 必须落地统一 Prompt Runtime 和 `runtime_version`，但 provider prompt cache 命中率不是 1.0 发布
 阻断项：没有可靠缓存时允许每轮完整装配，不能为了缓存复用而混淆系统规则、文档数据和用户输入。
-稳定区、动态区、工具 manifest hash、IntentResult id 与 Context trace id 必须可观测，以支持同一回合复现。
+稳定区、动态区、工具 manifest hash、IntentResult revision 与 Context trace id 必须可观测，以支持同一回合复现。
 
 **两条布局设计依据**（调研支撑见 R-AG-X-R-01 §3.1/§3.4）：
 1. **稳定层在前并进缓存边界**：仅角色/系统不变量/格式可视为跨轮稳定；当轮 CapabilityGrant 及其工具契约投影必须放在动态区，不得因缓存沿用旧轮允许集。
@@ -111,54 +111,44 @@ A-AG-X-L-04 承接当前实现与验证；R-AG-X-R-01 提供调研依据（仅�
 
 > M-T-01 §5.1 只锁注入顺序，未规定历史轮的处置。本节补此机制。
 
-**原则**：当前轮用户输入是本轮主需求（信号源）。历史轮、记忆、知识、模板默认为弱上下文，不得
-自动凌驾当前轮事实判断。只有意图沿用判定（IntentCarryover）识别出本轮显式沿用历史意图时，才把
-对应历史意图提权重述到当前轮邻近位置——而非整段堆叠历史。
+**原则**：当前轮用户输入是本轮主需求。历史轮、记忆、知识、模板默认为弱上下文，不得自动凌驾当前
+轮事实。运行时提供带来源的有限历史候选，模型在当前 IntentResult 中表达是否沿用；只有明确沿用的
+对象才进入当前路线，而不是整段堆叠历史。
 
-**意图沿用判定（设计层，维度示意，阈值实现期）**：
+**模型可判断的沿用关系（设计示意，不是关键词路由表）**：
 
-| 维度 | 触发示意 | 沿用输出 |
+| 维度 | 输入示意 | 语义投影 |
 |---|---|---|
 | 指代回指 | 「继续」「接着上面」「它/那个」、无主语祈使 | 解析上一轮目标 |
 | 显式选择 | 「用第二个方案」「按刚才说的」 | 沿用上一轮产出 |
 | 任务延续 | 当前轮是 active Agent 任务的下一步 | 续 task 上下文 |
 | 修正追加 | 「再短一点」「把刚才那段改成…」 | 操作对象=上一轮 diff/选区 |
 
-- 判定=无沿用 → 历史不进事实层，仅保留极简近因摘要（防失忆，不污染）。
-- 判定≠无沿用 → 被沿用的历史意图重述为一条当前轮上下文行（贴近末尾），不原样堆历史。
+- 当前 IntentResult 未表达沿用 → 历史不提升为当前事实，仅保留运行时允许的极简近因摘要。
+- 当前 IntentResult 明确沿用 → 被引用历史作为 data-only 语义背景，仍不授予目标或工具权限。
 
 <!-- RULE
 rule_id: BR-AG-DATA-004
 主链路: AG-TURN
 域: DATA
 -->
-代理回合上下文组装前必须执行意图沿用判定（IntentCarryover）：当前轮用户输入为本轮主需求，历史
-对话、记忆、知识、模板默认为弱上下文，不得自动凌驾当前轮事实判断；仅当判定识别出本轮显式沿用/
-调用/选择历史轮意图（指代回指 / 显式选择 / 任务延续 / 修正追加）时，方可将对应历史意图提权并重述
-至当前轮上下文邻近位置；判定为「无沿用」时历史不进当前轮事实层，仅保留极简近因摘要，不得整段堆叠
-历史污染当前轮。判定维度的具体识别规则与阈值属实现期，本规则锁「当前轮为主、历史默认弱化、显式
-沿用才提权、不污染当前轮事实」的机制语义。本规则承接 BR-AG-DATA-001/002 的来源与注入顺序，不重
-定义组装骨架。
+代理回合装配必须坚持当前轮优先：当前用户输入完整保留为末条 user 内容；历史对话、记忆、知识与模板
+默认为 data-only 弱上下文，不得自动凌驾当前轮事实。运行时只根据显式回指身份、同一未终结回合和预算
+选择可供模型判断的历史摘要/引用，不以关键词预判任务类型、编辑意图或工具集合；模型基于当前输入与这些
+可见事实形成或更新 IntentResult（TERM-AG-012），其中可表达 IntentCarryover。未被模型当前语义投影沿用的
+历史不得提升为当前目标，整段历史不得无界堆叠。
 
-在选择上下文和开放工具前，同一步骤必须形成版本化 IntentResult（TERM-AG-012），至少包含
-`intent_type(answer/inspect/search/analyze/edit/create_document/organize_workspace/clarify)`、`target`、
-`mutation`、`ambiguity`、`required_context`、`allowed_tools`。显式目标、否定约束（如“不要修改”）、
-ReferencePayload 与当前编辑器状态优先由确定性规则解析；低置信或存在多个高风险目标时输出
-`ambiguity=blocking` 并进入澄清，不得凭模型猜测执行。IntentResult 必须同时约束 Context 选择、
-Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user 内容保留，IntentResult 不替代原文、不保存
-模型隐藏推理。1.0 不要求通用规划器或小模型分类器，允许规则优先实现，但不得退化为单一“是否编辑”布尔值。
-当 `ambiguity=blocking` 时，原 AgentTurn 进入 AwaitingClarification，不调用门禁、模型或工具；
-用户补充所需信息后，补充内容并入原 AgentTurn，由 `clarificationProvided` 返回 Assembling 并
-重新形成 IntentResult。该继续语义不创建新 AgentTurn、不伪造取消，也不替代 DecisionRequest
-裁决、错误/中断重试或 Assist 的独立状态语义。
+IntentResult 至少包含 `revision/goal/intent_type/target_candidates/side_effect_intent/ambiguity/
+required_context/confirmation_points`；初始可为 `unresolved`，每次模型输出或 ToolResult 后可修订。它不包含
+`allowed_tools`，不控制 Context 的事实来源，也不授予目标或副作用。运行时可用 ExplicitEditTargetSet、
+ReferencePayload 身份和编辑器状态校验模型目标是否可执行，但不得把确定性关键词分类结果伪装成模型语义。
+原始输入始终保留，IntentResult 不替代原文、不保存隐藏推理。
 
-`IntentResult.allowed_tools` 是当前 AgentTurn 的精确允许集，不是 Prompt 建议：
-
-- `answer` 在不需项目事实时为空集，需要事实时只给必要的只读工具；`inspect/search/analyze` 只给当前任务必要的只读工具。
-- `edit` 只给目标读取及当前格式/动态能力允许的内容 Proposal 工具；不得因为工具已注册而获得资源操作能力。
-- `create_document` / `organize_workspace` 只给当前任务必要的只读工具与 `plan_workspace_operation`；只读结果只能用于形成当前计划，资源副作用唯一仍是 CreateDocumentBundle/WorkspaceOperationPlan 前置裁决链。
-- `create_document` 的目标资源建立前不给 `propose_edit`；`clarify` 不开放模型、工具或 Proposal 副作用。
-- RuntimeProfile、工具注册、Prompt 文本、前端参数和历史回合都不得扩大该允许集；执行器仍须按 CapabilityGrant 二次校验。
+当模型指出关键信息缺失且继续会造成目标或高风险副作用不明确时，运行时追加 clarification 事件并让原
+AgentTurn 进入 AwaitingClarification；用户补充后，补充内容进入原回合，重新冻结 AgentContextFacts、重新
+Gate 并调用模型更新 IntentResult。该继续语义不创建新 AgentTurn、不伪造取消，也不替代 DecisionRequest、
+错误/中断重试或 Assist 的独立状态语义。CapabilityGrant 只按 M-T-01 BR-AG-STATE-002 的硬事实计算，
+不从 IntentResult 的 intent_type 或 side_effect_intent 派生。
 
 **实现登记（2026-08-12，AG-STRATEGY-05 提示词按改动范围分流编辑操作）**：编辑操作选择由「文件类型一刀切」改为「改动范围」分流——整篇重写/大幅重排 → 纯文本可用 `replace_document`；当前 BDocx 仅当同轮 LogicalState 明确**无表格且无图片**时可用 `replace_document` 提交完整 HTML，后端同时拒绝既有或新引入的表格/图片；局部修改 → `replace_block`（纯文本）/ `block_ops`（富文档）；表格/图片 → `table_ops`/`image_ops`。结构状态不明时先读取运行时声明或 `list_tables`/`list_images`，不得从段落列表猜测。这样既不把无受保护结构的整篇改写错误拆为易残留的块操作，也不允许整篇替换绕过受保护结构。
 
@@ -166,16 +156,16 @@ Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user �
 
 **实现登记（2026-08-13，AG-STRATEGY-05 事务安全与状态语义闭合）**：同锚点的 `insert_before`/`insert_after` 与 `replace_node`/`delete_node` 改为单事务内先处理既有锚点、再插入新块；同坐标多插入按提案阅读顺序稳定落位。forward 先作最终节点、节点 id 与数量后置校验，失败不 dispatch；reverse 按 `afterNode.attrs.blockId` 定位并删除实际插入节点，绝不把插入操作的空 `beforeNode` 当作可解析节点。提示词、能力声明和工具结果统一为三段事实：`propose_edit` 只确认待审建议生成；客户端预览另有 applied/failed 回执；用户接受只确认，保存成功才落盘。前端日志以 `[de-draft-preview]` 输出 `diff_id`、`preview_state` 与可选错误码，不记录正文；卡片在 queued/applied/failed 状态分别显示真实边界并阻止 queued 直接接受。
 
-**实现登记（2026-08-11，AG-STRATEGY-03 文档感知 + 块 id + 排版意识 + 确认去重）**：Edit 动词表补「丰富/扩写/充实/重排/排版/美化」、文档指涉词补「故事/寓言/童话/小说」；非寒暄 Answer/Inspect/Analyze 意图且打开文档时兜底注入当前文档（只读，纯寒暄不注入）；insert/append 新块 afterNode 允许可选 blockId（模型显式给新块 id）；block_ops 投影 after 侧对 insert/append 新块用独立 id 标注（不再复用锚点 id，修复标题块与正文块同 id 错乱）；prompt 补排版映射（style_ops + heading）、确认去重（默认直接 propose_edit）、生成后自检（list_blocks 核对 + 删残句）。修复「丰富故事」被判零工具 Answer 导致模型看不到内容、insert 新块无 id、无排版意识、反复文字确认 4 类问题。
+**结构化编辑登记（2026-08-11）**：insert/append 新块 afterNode 允许可选 blockId，服务端负责生成/校验
+唯一 id；block_ops 投影的新增块不复用锚点 id；Prompt 可说明 style_ops/heading 与生成后核对工具。历史
+Edit 动词表、寒暄/任务分类和确定性工具分组已退出现行设计，不得作为 IntentResult 或 CapabilityGrant 真源。
 
 **当前 Prompt 约束（2026-08-21，WorkspaceOperation 基线）**：
 
 - `organize_workspace` 及创建/重命名/移动/删除/恢复意图只能产生 `WorkspaceOperationPlan`，并由独立 `DecisionRequest` 前置裁决；不得调用 `propose_edit(operation=...)`、生成资源 DiffCard 或在确认后等待第二次保存。
 - 新建文档必须在确认前同时准备目标路径、初始内容和 `CreateDocumentBundle`；确认后由 WS 创建真实磁盘目标，系统再打开标签并以普通内容 Diff 投影已冻结内容。
-- Prompt 只描述意图、允许工具和上述边界；确认身份、幂等、路径/基线核验、dirty 阻断、补偿和重启 Interrupted 由运行时强制，不以模型文字作为授权证据。
-- `userConfirm` 恢复原 TaskRun 并立即调用 WS 执行冻结 plan；不新增 `WaitingUserCommit`。重启后旧运行进入 Interrupted，再次执行必须重新生成 plan 和 DecisionRequest。
-
-**实现登记（2026-08-11，AG-INTENT-COMPOSITE-01 复合请求意图优先级）**：`resolve_intent_result` 新增 `create_requested` 前置判定——非否定 ∧ 文本含 Create 强词（创建/新建/生成/建立/制作）∧ 目标为 Document/Workspace 时，CreateDocument 优先于 `verb == Edit` 分支。修复真实案例「新建一个word文档，…并优化排版」被判 Edit 当前文档而无法新建（detect_verb 按 Edit→Create 首命中，「优化」掩盖「新建」）。detect_verb 首命中机制与 V2/V3 语义不变；补复合意图回归测试（复合/存量编辑/单动作/否定）。
+- Prompt 只描述当前 IntentResult 投影、CapabilityGrant 工具和上述边界；确认身份、幂等、路径/基线核验、dirty 阻断、补偿和重启 Interrupted 由运行时强制，不以模型文字作为授权证据。
+- `userConfirm` 恢复原 AgentTurn；运行时以当前终态/取消状态、真实确认回执与冻结 plan 重新计算 permitted_effect_paths，通过后才调用 WS 重验执行；该内部入口不暴露给模型。TaskRun 若存在只投影事件，不新增 `WaitingUserCommit`。重启后旧运行进入 Interrupted，再次执行必须重新生成 plan 和 DecisionRequest。
 
 **实现登记（2026-08-11，AG-WS-LAYERED-01 模型分层感知工作区）**：`list_docs` 不再全量返回文件树——无参数返回工作区概览（顶层目录+文件计数+总文件数，mode=overview；工作区 ≤30 文件且 ≤4KB 时豁免返回全量 mode=full）；`path` 参数返回该目录直接子项（一层，mode=children）。树枚举只含索引（路径/类型/计数），**永不携带正文**（正文唯一入口 read_doc / search_text）。该登记只证明分层读取现状，不授予新建或其他资源副作用；新建文档必须遵守本节 CreateDocumentBundle 约束。
 
@@ -183,11 +173,10 @@ Prompt 任务声明和工具允许集；原始用户输入仍作为末条 user �
 
 **实现登记（2026-08-11，AG-CTX-01 上下文管理重构）**：上下文控制从"事后截断"改为"源头轻量投影+按需读取"——`list_blocks` 返回不含全文的块目录，`read_doc` 可按 blocks 读取完整目标投影，工具结果不再事后截掉关键提案数据；查询意图与整篇对齐任务使用确定性边界提示，批次/操作上限从运行时 capability/config 动态投影；`AG_EDIT_TOOL_REQUIRED` 区分已读未提案与零工具调用，快照省略空 marks/attrs。本登记不持有预算或操作数值。
 
-实现约束补充（2026-07-18）：历史消息必须携带所属 `relPath/turnId`。存在当前文档时，AG
-装配必须先按当前 `active_doc_path` 分流历史：同文档历史可进入同文档 P1 背景；跨文档或无归属历史
-默认不得注入事实层。只有当本轮输入包含明确历史回指（如“刚才/上面/上一轮/按刚才/第二个方案”等）
-时，跨文档历史才可被弱标签化注入，且必须声明“不得作为当前文档事实”。“重写/改写/优化/再短一点”
-等泛编辑词本身不构成历史沿用。
+实现约束补充（2026-07-18，现行语义已收敛）：历史消息必须携带所属 `relPath/turnId`。运行时按
+AgentSession、近因和预算选择有限历史候选：同文档历史可作为 P1 背景，跨文档或无归属历史只能以明确
+来源标签的弱摘要进入，均不得作为当前文档事实。不得用“刚才/继续/重写/优化”等关键词决定沿用、目标
+或工具；是否沿用由模型在当前 IntentResult revision 中表达，运行时再以身份、范围与当前事实校验。
 
 ## §5 显式补充数据隔离与分层截断序
 
@@ -232,13 +221,18 @@ Prompt Runtime 必须把系统约束与不可信数据物理分层：只有产�
 允许的工具契约可进入 system instruction；当前文档、显式引用、历史、用户明确选择的项目记忆和工具结果必须封装为 data-only
 PromptDataEnvelope，携 `source_kind/provenance/freshness/content_hash/trust_level/token_estimate`，不得因其
 内容包含“忽略规则/调用工具/修改文件”等文字而获得指令权限。每次调用产出版本化 PromptPackage，
-至少记录 `runtime_version/intent_id/context_trace_id/tool_manifest_hash/estimated_tokens`；工具 manifest 必须是
+至少记录 `runtime_version/intent_revision/context_trace_id/tool_manifest_hash/estimated_tokens`；工具 manifest 必须是
 当轮 `CapabilityGrant.allowed_tools` 的精确投影，不能暴露完整注册表或完整 RuntimeProfile；发送前校验总预算、
 角色边界与 workspace 作用域。调试追踪默认只保存层元数据、哈希、选择/裁剪原因，不保存用户正文、密钥
 或会话令牌。
 
-`agent-edit-1.0` 的装配顺序固定为：系统不变量与输出格式 → RuntimeControl → 当轮最小工具允许集 →
-IntentResult → AgentContextFacts → 当前文档 data-only envelope → 显式引用 data-only envelope（可含用户明确
+成功只读 ToolResult 注入模型时必须携运行时生成的 evidence_id、source、coverage 和 version/hash；模型
+不得自定义或改写这些身份。需要形成 ProjectReport 的最终输出使用 A-AG-I-P-01 定义的
+ModelFinalEnvelopeV2，把 finding 关联到已见 evidence_ids；普通回答正文仍由 answer_markdown 承载。
+运行时会验证并降级无效引用，该 envelope 不替代 EvidenceLedger，也不产生工具授权。
+
+`agent-edit-1.0` 每次 provider 调用的装配顺序固定为：系统不变量与输出格式 → RuntimeControl → 当前
+CapabilityGrant 工具投影 → 当前 IntentResult 投影（首次可为 `unresolved`）→ AgentContextFacts → 当前文档 data-only envelope → 显式引用 data-only envelope（可含用户明确
 选择的项目记忆）→ 同文档必要历史 → 当前 user 原文。Prompt 对可编辑目标的声明只能来自当轮
 ExplicitEditTargetSet，不能把已读路径、打开标签、搜索结果或完整 workspace 描述成可写目标。AST/KB/TPL
 自动补强关闭；未来 Profile 启用必须新开需求/设计，不从本文推导。
@@ -255,7 +249,7 @@ BR-AG-DATA-002 的实现投影，具体层序只在该骨架真源中维护。�
 **Chat 回合**（含历史 + 修改建议导向 diff）：
 ```
 [系统层] 角色 + 硬约束(改经diff裁决/不越权落盘/workspace限界) + 格式约束
-[工具层] 仅投影本轮 CapabilityGrant.allowed_tools；示例不列完整注册工具
+[工具层] 仅投影本次调用前由运行时计算的 CapabilityGrant.allowed_tools；示例不列完整注册工具
 ──缓存边界──
 [代理上下文事实集] workspace + active/open docs + dirty/baseline/version + explicit selections + proposal states（data-only）
 [当前文档] file + 文档块列表；富文档含 node_type/role/parent/depth/node_json/fingerprint/capabilities，
@@ -305,13 +299,12 @@ status: mapped
 -->
 ## §8 测试与验收
 
-- **当前轮次原则**（BR-AG-DATA-004）：构造「无沿用」轮 → 历史不进事实层（可查装配产物不含历史正文，
-  仅近因摘要）；构造「指代回指/修正追加」轮 → 被沿用历史意图提权重述且贴近末尾；判定可观测（输出
-  carryover 类型）。
+- **当前轮次原则**（BR-AG-DATA-004）：模型在无沿用样本中不把历史提升为当前目标；指代回指/修正追加
+  样本可在 IntentResult revision 中表达明确沿用；运行时不通过关键词预先固定路线或工具集合。
 - **补充数据隔离**（BR-AG-DATA-005）：仅用户当轮明确选择的项目记忆作 data-only 显式引用；未选记忆、知识库与模板的自动写入/检索/注入调用数为 0；超预算时按 P3→P1 的确定性阶梯处理，P0 不得静默截断。
 - **分层映射一致性**：§2 各层来源与 M-T-01 §5.1 骨架层一一对应，无层越权直写文件（X-FORBID-006）。
-- **本轮意图结果**（BR-AG-DATA-004）：否定编辑、显式编辑、新建、分析、目标不明等样本产生稳定
-  IntentResult；blocking ambiguity 不开放副作用工具；Context 与工具允许集消费同一 intent_id。
+- **本轮意图结果**（BR-AG-DATA-004）：复合、否定、目标不明与工具结果改变判断等样本由模型产生可修订
+  IntentResult；首次可 unresolved；它不含 allowed_tools，CapabilityGrant 在相同语义下仍只由硬事实决定。
 - **数据可信边界**（BR-AG-DATA-002/005）：含提示注入文字的文档/引用仍为 data-only；PromptPackage 可查
   runtime/version/hash/token/trace，超预算或 envelope 越出 workspace 时在网关调用前拒绝。
 - **BDocx 改写路由与状态诚实性**：无表格、无图片的当前 BDocx 可提交完整 HTML `replace_document`；已有或
@@ -321,8 +314,8 @@ status: mapped
 
 ## §9 技术债务与盲区（诚实声明）
 
-- **意图沿用判定的识别实现**（BR-AG-DATA-004 余项）：四维度的具体识别（规则/小模型/启发式）与阈值
-  延实现期；本文仅锁机制语义，PI-AG-09 落地时需补识别策略并回写。
+- **模型语义投影格式**（BR-AG-DATA-004 余项）：provider 间如何承载 IntentResult revision 可在实现期选择
+  结构化响应或等价事件投影，但不得回退为关键词授权器，也不得暴露隐藏推理。
 - **预算数值与门控阈值**：机制已锁，数值延 G5 标定。
 - **展示层细节**（流式 diff 呈现）归 A-AG-I-P-01、DE 与前端，本文不展开。
 
@@ -336,6 +329,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.26 | AG-ADAPTIVE-RUNTIME-DESIGN-01：当前轮语义改由模型在真实证据上形成和修订；IntentResult 移除 allowed_tools 与授权职责；Prompt 每次只投影当前 CapabilityGrant，澄清改为模型输出驱动。 |
 | 2026-08-29 | v1.16 | AG-CONFORMANCE-CODE-S4A：新增独立 AgentContextFacts data-only 层，生产 LayerKind 顺序调整为 IntentHint→AgentContextFacts→CurrentDocument，并同步缓存边界与结构示例。 |
 | 2026-08-31 | v1.25 | AG-DOC-CONSOLIDATION-01：提示词装配收敛到 Agent 1.0 两类当前调用，排除 Build 和自动 AST/KB/TPL 增强；与 M-T-01 按“骨架/当前轮/截断”分开唯一权威；tool manifest 仅投影当轮 CapabilityGrant.allowed_tools 且不得进入跨轮稳定缓存，预算/工具上限仅由运行时配置作数值真源。 |
 | 2026-06-24 | v1.0 | 初版（M-T-01 §5.1 的 L3 专项细化）：提示词分层总览（13 层映射至来源模块与已有规则）、装配顺序与缓存边界布局、当前轮次原则与意图沿用判定、补强层污染隔离与分层截断序、三类回合结构示例（非规范）；新增规则 BR-AG-DATA-004（当前轮次原则/意图沿用）、BR-AG-DATA-005（补强层隔离/分层截断序）；新增 TERM-AG-005（IntentCarryover）；REQ_MAP（REQ-AG-004）；承接 BR-AG-DATA-001/002 不重定义骨架；调研依据 R-AG-X-R-01；作为提示词设计迭代版本，明确 BR-AG-DATA-005 为分层截断序唯一权威，废止 M-T-01 早期「@mention > 记忆/知识 > 当前文档」裁剪排序（同步 M-T-01 v1.2 去重，冲突以本文为准） |

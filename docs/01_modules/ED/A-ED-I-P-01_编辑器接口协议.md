@@ -85,7 +85,11 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 > 单事务批内原子应用。`insert_block` 仍是接口预留，未在本轮实现。
 > `ed.apply_session_diff` 是 `draft_mode=open_session` 的唯一入口。它不依赖用户切换到目标窗口，
 > 但必须只作用于已打开非激活文档的 `EditSession.content`；成功后调用 `ed.persist_session_snapshot`，
-> 并由 DE 调用 `de.accept_draft_diff(open_session)`。失败时必须保持原 LogicalState 不变。
+> 并由 DE 记录 previewApplied；`de.accept_draft_diff(open_session)` 只由后续用户接受或保存触发。失败时
+> 必须保持原 LogicalState 不变。
+> DE 对活动编辑器同文档同批、具稳定 blockId/逐块 before/after 的 `replace_block` 调用，必须先收齐后
+> 合成一个 `applyEditOps()` 操作序列；与下述 `block_ops` 一样只产生一次前向事务。整篇、样式、表格、
+> 图片和 open_session 字符串载荷当前不拆成多张独立卡。
 
 ### §4.1 apply_edit 操作粒度表（PI-ED-10/11，正式承接 §7 既有债务）
 
@@ -106,13 +110,16 @@ ED 接口分两类：**（a）编辑会话 command**（前端 Store/Service ↔ 
 
 ### §4.1.1 富文档结构化 BlockOperation
 
-活动富文档内容修改使用 `applyStructuredBlockOperations(payload,direction)`，payload 为
-`{payloadVersion:1,base:{sessionVersion,contentHash},operations[]}`。每项是
+活动富文档内容修改使用 `applyStructuredBlockOperations(payloadOrBatch,direction)`；单卡 payload 为
+`{payloadVersion:1,base:{sessionVersion,contentHash},operations[]}`，同一文档同一 ProposalBatch 的
+结构化多卡前向预览可传共享 base 的 payload 列表。每项是
 `{op:replace_node,blockId,fingerprint,expectedNodeType,beforeNode,afterNode}`。
 
-前向应用先对整批完成 base、blockId 唯一性、锚、动态能力、node type、fingerprint、attrs/blockId
-保持和 ProseMirror Schema 校验，再按位置倒序写入一个 transaction；任一失败不得 dispatch。
-反向拒绝只在目标节点仍精确匹配 afterNode fingerprint 时恢复 beforeNode；后置人工编辑导致不匹配时
+前向应用先核对同批身份、group_count、完全相同的 base、卡间目标互斥与可独立反向性，再对聚合操作完成
+blockId 唯一性、锚、动态能力、node type、fingerprint、attrs/blockId 保持和 ProseMirror Schema 校验，
+按位置倒序写入一个 transaction；任一失败不得 dispatch。成功后返回一个新 OpenDocSnapshot 和逐卡
+previewApplied 回执，整篇版本只推进一次。反向拒绝只传入一张卡的 payload，并在目标节点仍精确匹配
+afterNode fingerprint 时恢复 beforeNode；后置人工编辑导致不匹配时
 返回 conflict，不得用 draftBaseContent 整篇覆盖。表格、图片及其祖先/承载块没有 replace_node 能力，
 继续使用专用 TableOperation/ImageOperation。
 
@@ -198,6 +205,8 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
   与 DE/AG/REF G5 联调。
 - ImageOperation 覆盖插入/删除批原子应用、Block/image 锚失效、项目来源属性保持、非活动会话拒绝、
   reject 全文恢复，以及保存前规范媒体引用不含 `asset://`。
+- ProposalBatch 结构化多卡覆盖：同文档共享 base、group_count 完整、目标互斥时只 dispatch 一个前向事务；
+  任一卡预检失败零 dispatch；拒绝一张只反向该卡节点，其他卡仍匹配并可接受；逐卡前向应用路径被拒绝。
 
 ## §7 债务与盲区
 
@@ -214,6 +223,7 @@ ED 会话订阅 `ws.external_change` 事件的逻辑契约：无脏态自动重�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.17 | AG-ADAPTIVE-RUNTIME-DESIGN-01：`applyStructuredBlockOperations` 承接同文档同批结构化多卡共享基线、聚合单事务预览与逐卡 exact-node 反向；修正 open_session 预览后不得自动接受。 |
 | 2026-06-12 | v1.0 | 初版（实现前置件）：ED 接口协议——编辑会话 command 5 条（含 resolve_conflict 对接 SM-ED-01 Conflicted）、装饰层接口 4 条（mount/update/dismiss/on_action，X-FORBID-005 唯一通道）、blockId 定位 2 条（locate_block 失效信号 / apply_edit 内联采纳落点）、外部变更订阅承 WS I-P；零新增注册项；债务（呈现 schema/编辑 op 粒度/装饰层进程边界延实现期） |
 | 2026-07-03 | v1.1 | 批B 契约扩展（A-ED-X-L-02 PI-ED-10/11 文档先行，承 BR-ED-DATA-004/005）：§4 扩字符锚定位（locate_block 带 {start,end} 区间校验）+ 新增 ed.get_cursor_ref / ed.get_selection_ref（按需查询）；新增 §4.1 apply_edit 操作粒度表（replace_text/insert_block/set_mark/unset_mark/set_block_attr，批内原子）解除既有债务；§7 登记样式投影读接口归 AG I-P 承载 |
 | 2026-07-04 | v1.2 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |

@@ -36,8 +36,8 @@ zh: 修改建议
 en: ChangeProposal
 forbidden: AI建议, 修改意见, 编辑建议, 产出建议
 -->
-AG 代理回合产出中交接 DE 的修改意图载体（目标定位 + 修改内容 + 来源元数据），是 SM-AG-01
-HandingOff 与 DE 生成（SM-DE-01 Generating）之间的交接物；经 DE 生成为待裁决修改后进入裁决。
+AG 代理回合中 `propose_edit` 工具交接 DE 的修改意图载体（目标定位 + 修改内容 + 来源元数据），是
+SM-AG-02 ToolExecuting 与 DE 生成（SM-DE-01 Generating）之间的交接物；经 DE 生成为待裁决修改后进入裁决。
 
 <!-- TERM
 term_id: TERM-DE-004
@@ -52,13 +52,23 @@ is_new_doc），是后台 apply 或编辑器草稿重建时消费的内容来源
 **落盘内容**的单一形状（BR-DE-DATA-002），经 payload_ref 由 PendingDiff 关联，持久化于 workspace.db
 `diff_payloads` 表（DE 拥有形状、WS db 承载持久化，见 §1 分层）。
 
+<!-- TERM
+term_id: TERM-DE-005
+chains: DE-DIFF
+zh: 提案批次
+en: ProposalBatch
+forbidden: diff批次, 批量diff, 修改批次, 提案组, batch diff
+-->
+同一次已校验 ChangeProposal 产生的一组关联 PendingDiff。批次保留来源 AgentTurn/ToolCall、稳定顺序与
+分组版本，只用于追溯和批量 UI 展开；没有统一裁决终态，每个 PendingDiff 独立进入 SM-DE-01。
+
 ## §1 文档定位
 
 ```
 REQ-CORE-002 → REQ-DE-001~005（DE L1）→ 本文（SSOT）→ 代码(@GOV)
 本文 ←承接← A-SYS-I-P-01（字段/枚举单一来源）、A-AG-M-T-01（ChangeProposal 交接）
 本文 →驱动→ A-DE-M-S-01（SM-DE-01 diff 终态机）→登记→ 总图（闭合 WS/AG 单侧转移点）
-本文 →消费→ ED-EDIT/ED-DECOR（草稿应用、open session 自动应用与呈现）；未打开文档后台裁决信号 →可驱动→ SM-WS-02（apply 落盘）
+本文 →消费→ ED-EDIT/ED-DECOR（草稿预览、open session 预览与呈现）；未打开文档后台裁决信号 →可驱动→ SM-WS-02（apply 落盘）
 ```
 
 **分层重申**：字段归 SYS、持久化与落盘归 WS、呈现归 ED、产出归 AG；本文拥有**转移语义、payload
@@ -66,10 +76,33 @@ REQ-CORE-002 → REQ-DE-001~005（DE L1）→ 本文（SSOT）→ 代码(@GOV)
 
 ## §2 裁决粒度（解除 DE-01）
 
-**裁决单元 = 内容块（Block）级**：每条待裁决修改以一个或多个完整内容块为裁决目标（blockId 锚，
-BR-ED-DATA-001），接受/拒绝以整条 diff 为单位。块内细粒度对比（字符/词级高亮）是**呈现层增强**
-（ED 装饰层渲染），不改变裁决单元。多块修改可拆分为多条 diff 以支持逐条裁决（拆分策略属 AG/DE
-生成期协作，以"单条 diff 语义自洽可独立裁决"为原则）。
+**裁决单元 = 可独立裁决的连续内容块组**：每条 PendingDiff 命中一个完整块或一组文档顺序连续、共同
+表达一个不可分修改的块（blockId 锚，BR-ED-DATA-001），接受/拒绝以单条 diff 为单位。块内字符/词级
+高亮只属呈现增强，不改变裁决单元。
+
+同一次 ChangeProposal 先形成 ProposalBatch，再按以下唯一规则拆分：
+
+1. 按目标文档和稳定文档顺序把操作归一为**块候选**：同一现有 blockId 上的多个操作先在同一基线事务
+   中合成一个 before/after 候选；插入的新连续块按各自最终 blockId 建候选。不同文档或不连续块永不合并。
+2. 默认每个块候选独立成卡；模型可用相同 `adjudication_group` 声明相邻块候选语义不可分，运行时只在
+   目标区间相邻/重叠、共同裁决不会掩盖独立选择且可在同一编辑事务中校验时接受合并声明。
+3. 未声明同组、声明不同组，或虽相邻但可独立接受/拒绝的操作必须拆卡；目标集合重叠、父子结构互相
+   依赖或任一卡反向会破坏另一卡时不能伪装为独立卡，必须合并为一个不可分组或整批拒绝；整篇
+   `replace_document` 天然一组。
+4. 所有组先完成目标、基线、格式/动态能力与组内事务校验，再在一个持久化事务中写入 ProposalBatch 和
+   全部 PendingDiff；任一组失败则整批不生成，避免部分卡片歪曲模型提案。
+5. 同一文档同批的多个结构化卡共享完全相同的 `base_session_version/base_content_hash`。已有 LogicalState
+   路径必须把各卡操作聚合后再做一次全批预检与一次 ED 前向事务；不得按卡依次应用并让第一卡推进的
+   文档哈希使兄弟卡过期。预览成功后，每卡只以自身目标集合及 after fingerprint 作为接受/拒绝的有效性
+   guard；同批其他卡的预览或裁决不改变本卡状态。
+
+Agent 1.0 的多卡独立预览当前只适用于活动 `current_editor` 上可目标局部反向的 `block_ops`，以及具稳定
+blockId 和逐块 before/after 的 `replace_block`；两者分别聚合到既有结构化操作或编辑操作的单一事务。
+`replace_document`、`style_ops`、`table_ops`、`image_ops` 仍按各自完整事务生成单卡；`open_session` 的
+字符串应用也保持单卡。它们只有在其 owner 协议以后明确提供目标局部 guard 与反向事务后才可拆卡，
+不得仅为多显示卡片而复制整篇 before/after。
+
+ProposalBatch 只表达关联。批量接受/拒绝必须展开为多个逐卡裁决，不能新增一个批次终态覆盖各卡结果。
 
 ## §3 diff 生成（DE-DIFF）
 
@@ -86,10 +119,13 @@ rule_id: BR-DE-DATA-001
 主链路: DE-DIFF
 域: DATA
 -->
-diff 生成必须满足：自修改建议（ChangeProposal）生成待裁决修改（PendingDiff），以 blockId 锚定
-目标内容块；锚失效时生成失败并回报来源（AG handoffFail），不得产生错位或无锚 diff；生成后交 WS
-持久化，持久化失败回统一错误形状且不进入裁决；PendingDiff 字段与 status 枚举集合
-引用 A-SYS-I-P-01 单一来源（X-SHARED-001），DE 不重定义。
+diff 生成必须满足：自一次修改建议（ChangeProposal）创建一个 ProposalBatch，并按 §2 生成一个或多个
+PendingDiff；每卡只包含一个可独立裁决的连续内容块组。不同文档、不连续或可独立裁决的组不得合并；
+同一块上的操作先合成为一个块候选；相邻块候选只有共享同一 adjudication_group 且组内事务可校验时才可合并；不能独立反向的目标必须合并或拒绝。
+同一文档同批结构化卡共享生成基线并由 ED 聚合为一次前向事务，批内兄弟卡不得因该事务推进整篇版本而互相失效。所有组在写入前完成 blockId/
+基线/格式动态能力校验；锚失效或任一组无效时整批失败并向 AG 返回结构化失败 ToolResult，不得产生错位、无锚
+或部分持久化 diff。持久化成功后逐卡进入 SM-DE-01；PendingDiff/ProposalBatch 字段与 status 枚举引用
+A-SYS-I-P-01 单一来源（X-SHARED-001），DE 不重定义。
 
 **跨会话边界（2026-07-21 收紧，APP-CLOSE-DIFF-LIFECYCLE-01）**：持久化保证的是当前运行期内
 审阅呈现可完整重建，**不保证裁决权或未确认写盘效果跨会话存活**。任一新会话启动时，清算
@@ -110,6 +146,7 @@ AgentSession 的 Proposal（含无归属旧记录）不进入该事实集；投�
 | 字段 | 语义 | 备注 |
 |---|---|---|
 | payload_version | 载荷形状版本 | 单调递增，支持迁移 |
+| proposal_batch_id / group_index / group_count | 批次身份与卡片稳定顺序 | 仅关联；不共享裁决终态 |
 | target_blocks | 目标内容块定位（blockId 列表 + DocRef） | 锚集合；可细化至字符锚区间（CharAnchor，A-ED-M-T-01 §4.1，2026-07-03 批B） |
 | before_snapshot | 修改前目标内容快照 | 外部变更检测基准（§6）+ 审阅对比基准 |
 | after_content | 修改后内容 | 当前编辑器草稿应用或后台 apply 的执行物；纯样式 diff 时可空 |
@@ -117,21 +154,24 @@ AgentSession 的 Proposal（含无归属旧记录）不进入该事实集；投�
 | table_ops | 表格操作载荷（TableOperation + before/after TableSnapshot，可空） | BDocx 表格语义修改载体；不得退化为原始 HTML 替换 |
 | image_ops | 图片操作载荷（ImageOperation + 项目来源/锚 + before/after ImageSnapshot，可空） | BDocx 图片语义修改载体；不得退化为原始 HTML 替换 |
 | snapshot_source | 生成基线来源 | active_editor / active_editor_session / open_editor_session / disk_snapshot；已打开文档不得为 disk_snapshot |
-| base_session_version | 生成时 ED session 版本 | `snapshot_source=active_editor/active_editor_session/open_editor_session` 时必填 |
-| base_content_hash | 生成时内容哈希 | `snapshot_source=active_editor/active_editor_session/open_editor_session` 时必填；用于自动应用与冲突重检 |
-| origin | 来源元数据（origin_module、回合标识） | 可溯源到 AgentTurn |
+| base_session_version | 生成时 ED session 版本 | `snapshot_source=active_editor/active_editor_session/open_editor_session` 时必填；同文档同批卡完全相同 |
+| base_content_hash | 生成时内容哈希 | `snapshot_source=active_editor/active_editor_session/open_editor_session` 时必填；同文档同批卡完全相同，用于前向批预检而非批内逐卡裁决 |
+| origin | 来源元数据（origin_module、回合标识、tool_call_id） | 可溯源到 AgentTurn 与模型提案 |
 
 实现约定：为兼容后台 `de.accept_diff` 的统一落盘路径，纯样式 diff 的 `after_content` 可在运行时写入
 目标基准内容（即文本内容不变），样式语义由 `style_ops` 承载；审阅 UI 以 `style_ops` 重建样式摘要，
 当前编辑器草稿路径以 `style_ops` 应用真实样式。
 
 运行时视图投影约定：AG 的 `propose_edit` 必须在 `DiffProposed` 前通过 `ToolResult` 返回
-`DiffProjection`，字段包括 `{diff_id, rel_path, patch_kind, block_id?, block_index?, before_text,
+`DiffProjection`，字段包括 `{diff_id, proposal_batch_id, group_index, group_count, rel_path, patch_kind, block_id?, block_index?, before_text,
 after_text, location_label, draft_mode, snapshot_source, base_session_version?, base_content_hash?,
 style_ops?, block_ops?, table_ops?, image_ops?}`。`draft_mode` 仅允许 `current_editor / open_session / background`。DE/前端建 DiffCard 与 ED 草稿只能消费该投影，
 不得用当前编辑器整篇内容截尾或 `tool_request.params` 重建 before/after。`replace_block` 的 before/after
 必须来自同一目标 Block；`replace_document` 只在显式整篇替换时使用整篇基准。`draft_mode=open_session`
 必须携带 session 基线元数据，且只能用于已打开非激活文档；`draft_mode=background` 只能用于未打开文档。
+同一文档同批块级多卡的 `target_blocks` 必须互不重叠，且各卡 `block_ops` 或稳定 `replace_block` 的
+before/after fingerprint 只覆盖本卡目标；前端不得为每卡复制整篇 after 作为裁决 guard。其余
+patch_kind 在当前协议中 `group_count=1`。
 
 <!-- RULE
 rule_id: BR-DE-DATA-002
@@ -141,7 +181,7 @@ rule_id: BR-DE-DATA-002
 diff 载荷必须含：载荷版本（payload_version，形状变更须版本递增并兼容迁移）、目标内容块定位
 （可细化至字符锚区间）、修改前内容快照、修改后内容（纯样式/结构操作 diff 可保持基线）、样式操作、BlockOperation、TableOperation
 或 ImageOperation 序列（均可空；其编辑语义归 ED，本规则锁在载荷中的承载与版本化）、生成基线来源、
-session 版本/内容哈希（已打开文档必填）、来源元数据；ImageOperation 还必须保留项目来源路径/hash、
+session 版本/内容哈希（已打开文档必填）、ProposalBatch 身份/组内顺序与来源元数据；ImageOperation 还必须保留项目来源路径/hash、
 Block 或图片实例锚及 before/after ImageSnapshot。经 WS 持久化并恢复后必须可完整重建审阅呈现
 （对比基准 = before_snapshot，含样式、表格和图片变更语义的可视对比）；
 具体序列化格式延实现期，本规则锁字段语义集合。
@@ -155,9 +195,11 @@ rule_id: BR-DE-STATE-001
 -->
 待裁决修改的终态转移必须满足：pending→accepted/rejected/expired 三终态互斥且不可逆（终态后
 不得再转移、不得复活）。已有 LogicalState 的当前或非激活打开文档中，块级、整篇和 StyleOp diff 在
-pending 时即经 ED 受控接口把 after/样式操作应用为草稿并产生脏态，DiffCard 继续保持可接受/拒绝；显式接受
+pending 时即经 ED 受控接口把 after/样式操作应用为草稿并产生脏态；同文档同批结构化多卡必须先聚合为
+一次原子预览，再分别保持可接受/拒绝。显式接受
 不得再次应用内容或写盘；保存仍有效的 pending 预览时，必须先裁决为 accepted/awaiting_save，再经保存链写盘。若保存前
-基线已推进，必须将旧卡置 expired，保存当前 LogicalState 但不得把旧卡裁决为 accepted。pending 后打开的后台目标必须以同一 DiffPayload 建立
+本卡目标不再匹配 after fingerprint，必须将该卡置 expired，保存当前 LogicalState 但不得把它裁决为 accepted；
+同批预览或互不重叠兄弟卡裁决造成的整篇版本推进本身不构成失效。pending 后打开的后台目标必须以同一 DiffPayload 建立
 LogicalState、显示 GreenReview 并切换到这一路径。无 LogicalState 的后台 diff 才可走 accepted→SM-WS-02
 apply 路径，且仅适用于文本/.html 等可直接应用载荷。既有 BDocx 的磁盘权威是 docx 字节，DiffPayload
 中的 HTML/Block 投影不得经后台 raw apply 写入 `.docx`；未在当前编辑器 HTML 草稿中成功应用的 BDocx
@@ -168,7 +210,8 @@ block_ops 草稿已应用，拒绝前必须验证当前目标仍匹配 afterNode
 exact beforeNode。指纹已变化则投 conflict 并停止后端拒绝，不得整篇覆盖后置人工编辑。用户裁决交互经
 ED/DiffCard 转达（X-FORBID-005），DE 不绕过 ED 直接操纵编辑器。DiffCard 显式接受 block_ops
 也必须先验证 afterNode fingerprint；已变化则保持 Pending 并投 conflict，不确认不可逆终态。保存动作
-只写入当前 LogicalState，不得替代 `userAccept` 或改写 DiffCard 生命周期。
+是对该文档中仍能逐卡通过目标 after guard 的 pending 预览执行接受并落盘的入口；不得把失效卡或同批
+其他卡的终态一并改写。
 状态转移归 SM-DE-01。
 
 ### §5.1 效果态（解除审计发现：accepted 不等于已落盘的历史不一致，2026-07-20 新增）
@@ -196,7 +239,8 @@ rule_id: BR-DE-STATE-002
 域: STATE
 -->
 待裁决修改在以下条件转 expired：（a）超时——自创建起超过可配置时限未裁决；（b）外部变更——
-目标内容块当前内容与 before_snapshot 不一致（经内容比对/文档 version_seq 检测）。外部变更检测
+预览前目标内容块与 before_snapshot 不一致，或预览后目标不再匹配本卡 after fingerprint（经目标内容
+比对/文档 version_seq 辅助检测）。整篇版本变化只能触发目标重检，不能在目标仍匹配时直接误杀同批兄弟卡。外部变更检测
 不可得时保守不自动过期，保持 pending 留人类裁决；expired 为终态、不落盘、装饰复位。超时时长
 数值与检测触发时机（呈现时/裁决时/定时）延实现期标定，本规则锁判定条件与保守语义。
 
@@ -207,10 +251,14 @@ rule_id: BR-DE-DATA-003
 主链路: DE-DIFF
 域: DATA
 -->
-同一文档多条待裁决修改并存时：呈现与裁决按创建序组织；**同一目标内容块不得并发草稿应用、open session 自动应用或后台
-落盘**——先序 diff 改变编辑器草稿、ED session LogicalState 或后台落盘后，与其目标重叠的后续 pending diff 必须重新执行外部
+同一文档多条待裁决修改并存时：呈现与裁决按 ProposalBatch/group_index 后接创建序组织；同批身份不
+改变逐卡独立状态。**同一目标内容块不得并发草稿预览、open session 预览或后台落盘**——同批结构化
+多卡的目标必须互不重叠，并在共同基线上聚合成一次前向事务；事务成功后按各卡目标 after fingerprint
+独立裁决，任一卡反向只作用于自身目标。不同批次中，先序 diff 改变
+编辑器草稿、ED session LogicalState 或后台落盘后，与其目标重叠的后续 pending diff 必须重新执行外部
 变更检测（§6，before_snapshot 比对），内容已变更者转 expired（不静默用陈旧 after_content 覆盖新内容）；
-互不重叠的 diff 可独立裁决。冲突判定以目标内容块集合的交集为准。
+互不重叠的 diff 可独立裁决；同批预览不得触发兄弟卡的 `document_revision_advanced`，同批一张卡的终态
+不得自动改变其他卡。冲突判定以目标内容块集合及结构依赖关系为准，不能只看整篇 content_hash。
 
 ## §8 跨模块约束（复用，不新增）
 
@@ -237,8 +285,8 @@ assistant 消息后方，不得把多轮修改统一沉底为会话级全局列�
 已有 LogicalState（包括 `open_session` 与 pending 后打开迁移）的 DiffCard 在预览成功后必须显示为已应用到
 LogicalState，但仍保留接受/拒绝；这些操作只能裁决卡片，不得二次应用内容。预览失败、基准推进或超时后
 才显示失效/错误原因并禁用裁决。
-批量裁决条是全局操作控件，可继续放在输入框上方；侧栏/内联整体布局仍属 DE-04 剩余 UI 债务，不在
-本局部闭合范围内。
+同一 ProposalBatch 的卡片应保留批次身份与 `group_index/group_count`，但每张卡都有独立操作与终态；
+批量裁决条是全局操作控件，其动作必须展开为多个逐卡命令。侧栏/内联整体布局仍属 DE-04 剩余 UI 债务。
 
 ### §8.2 WorkspaceOperation 与 CreateDocumentBundle 边界（2026-08-21）
 
@@ -375,18 +423,20 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
 
 ## §10 测试与验收
 
-- **生成与锚**（BR-DE-DATA-001，REQ-DE-001 验收）：建议可生成为持久化 PendingDiff 且定位准确；
-  锚失效生成失败回报 AG；无错位/无锚 diff。
-- **载荷往返**（BR-DE-DATA-002，REQ-DE-004 验收）：持久化→重启→恢复后审阅呈现完整重建（对比
-  基准一致）；payload_version 迁移不丢载荷。
+- **生成、分组与锚**（BR-DE-DATA-001，REQ-DE-001 验收）：同块多操作、单块、一组相邻不可分块、相邻可独立块、
+  不连续块与跨文档样本分别产生预期 1/N 张卡；proposal_batch_id 相同且 group_index 稳定，每卡定位准确；
+  任一锚/组校验失败整批失败回报 AG，无错位、无锚或部分持久化 diff。
+- **载荷往返**（BR-DE-DATA-002，REQ-DE-004 验收）：持久化→恢复后按批次和组序完整重建审阅呈现，
+  各卡 before/after 只含本组且基准一致；同文档同批结构化多卡共享基线、目标集合互不重叠；payload_version 迁移不丢载荷。
 - **终态语义**（BR-DE-STATE-001 / SM-DE-01，REQ-DE-002/003 验收）：三终态互斥不可逆；已有
   LogicalState 的草稿路径在 pending 即预览、用户显式接受不直接落盘，而保存有效 pending 预览会先转 accepted/awaiting_save；后台文本/.html 路径仅在
   持续无 LogicalState 时可由 accepted 触发 apply。已打开非激活文档或 pending 后打开迁移预览成功后保持
   pending 且接受/拒绝可用，基线不匹配时不得应用、不得继续裁决；既有 BDocx 未进编辑器草稿时不得 raw apply；
-  rejected/expired 文件不变，草稿已应用时 rejected 回滚；ApplyError 不回退终态。
+  rejected/expired 文件不变，草稿已应用时 rejected 只回滚本卡目标；同批其他卡的预览与终态保持有效；ApplyError 不回退终态。
 - **过期保守性**（BR-DE-STATE-002，REQ-DE-005 验收）：超时/外部变更转 expired；检测不可得不误杀。
-- **冲突**（BR-DE-DATA-003）：重叠 diff 在先序草稿应用、open session 自动应用或后台落盘后重检，陈旧者 expired；
-  不重叠者独立裁决；无并发应用/落盘同一块。
+- **冲突**（BR-DE-DATA-003）：同文档同批结构化多卡聚合预检并只 dispatch 一次前向事务；批内卡不因
+  共享预览推进整篇版本而互相失效，拒绝一张只反向其目标且其他卡仍可裁决。不同批次重叠 diff 在先序
+  草稿/open session 预览或后台落盘后重检，陈旧者 expired；无并发应用/落盘同一块。
 - **DiffCard 紧凑态**（TERM-DE-003，DE-04 局部闭合）：默认渲染为标题/位置/红删/绿增/操作五行；
   长内容、状态提示与样式摘要不无界撑高默认卡片，展开后可查看详情；多轮 DiffCard 按各自
   AgentTurn/assistant 消息锚点插入消息流，不沉底汇总；已有或 pending 后打开迁移的预览卡仍可接受或拒绝，
@@ -394,34 +444,33 @@ DiffCard 对插入须显示来源相对路径、目标 Block 前/后、alt、受
   BDocx 底纹 Diff 必须同时显示精确逻辑坐标、前后色块与色值/清除态。
   BDocx 图片 Diff 必须分别显示插入来源/位置/alt/width 或删除目标前后状态，不得退化为“修改图片”
   摘要；非活动会话不产生 image_ops 卡。
-- 跨模块（G5 联调）：AG HandingOff→DE 生成、DE pending→ED 草稿应用、DE accepted→ED/WS save
+- 跨模块（G5 联调）：SM-AG-02 propose_edit→DE 生成、DE pending→ED 草稿应用、DE accepted→ED/WS save
   或后台 SM-WS-02 apply、DE rejected→ED 回滚/复位三链对接。
 - 量化 NFR（生成/呈现延迟）延 G5（DE-05）。
 
 ## §11 技术债务与盲区（诚实声明）
 
-- **审阅 UI 形态剩余项**（DE-04）：逐条 DiffCard 默认紧凑形态已在 §8.1 局部闭合；批量裁决、侧栏/
-  内联整体布局仍属产品体验，延实现期人类确认。
+- **审阅 UI 形态剩余项**（DE-04）：逐条 DiffCard 默认紧凑形态和 ProposalBatch 的逐卡裁决语义已在
+  §2/§8.1 闭合；侧栏/内联整体布局仍属后续产品体验，不影响当前分组与终态。
 - **非激活/迁移预览的视觉债务**：必须保留用户裁决入口并防止二次内容应用；DiffCard 视觉仍可能只有绿增
   预览、缺少完整红删效果。后续需要补完整红删/绿增对比和 DiffCard 失效态视觉，不得借此禁用接受/拒绝。
 - **超时时长与检测触发时机**（DE-03 数值部分）：判定条件已锁，数值与触发时机延实现期标定。
-- **diff 拆分策略**：多块修改拆分为可独立裁决单条的具体算法（语义自洽边界判定）延实现期，与 AG
-  生成侧联合调优。
-- **CBT 构建产物 diff 化**：构建（多文件批量产出）走 diff 路径的批量裁决形态联合 CBT G2。
+- **分组启发式调优**：§2 已锁唯一安全基线（默认拆分、仅相邻且显式同组/事务可校验时合并）；后续可在
+  不改变该边界下优化模型对 adjudication_group 的选择，不能把调优当作恢复单卡聚合的理由。
+- **P2 CBT 构建产物**：不属于 Agent 1.0 当前链路；未来 Profile 若启用，必须显式复用或扩展本文协议并重新验证。
 - 块内细粒度对比的呈现算法（字符/词级 diff）属 ED 装饰层渲染实现，延实现期。
 
-## §12 后续动作
+## §12 维护与实现入口
 
-1. 落地后随 `npm run governance:generate` 注册：DE-DIFF 链路、BR-DE-DATA-001/002/003、
-   BR-DE-STATE-001/002 规则、TERM-DE-001/002、REQ_MAP 进 ADUS。
-2. 续 A-DE-M-S-01（SM-DE-01 diff 终态机），回填总图 diff 终态行，闭合 SM-WS-02 accepted 入口与
-   SM-AG-01 HandingOff 出口两个单侧转移点。
-3. 待人类宣布 DE G2 闭合；CBT G2 联合构建产物 diff 化契约。
+1. 规则、术语、链路或映射变化后运行 `npm run governance:generate`，不得人工修改 ADUS 自动生成区。
+2. A-DE-M-S-01 是逐卡状态机真源，A-DE-I-P-01 是接口真源；分组字段变化须同步 SYS 共享结构和 WS 批次持久化。
+3. 实现与验证按同块多操作、单块、相邻不可分、相邻可独立、不连续和跨文档样本覆盖 1/N 分组及独立终态。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.24 | AG-ADAPTIVE-RUNTIME-DESIGN-01：注册 ProposalBatch；BR-DE-DATA-001 锁定可独立裁决连续块组的默认拆分/受控合并、整批预检与原子持久化；同文档同批结构化卡共享基线并聚合为一次 ED 前向事务，逐卡以目标 after fingerprint 独立裁决。 |
 | 2026-08-30 | v1.23 | AG-CONFORMANCE-CODE-S4A：在 BR-DE-DATA-001 下补充当前 AgentSession ProposalFact 投影边界，携带裁决/效果/保存态但不携带内容，不引入新近义规则。 |
 | 2026-07-21 | v1.12 | 收紧跨会话边界：pending 仅在产生它的连续运行期内可裁决；任一启动清算均把残留 pending 转 expired、残留 awaiting_save 转 discarded_on_abnormal_exit，之后只恢复终态只读历史。 |
 | 2026-06-11 | v1.0 | 初版（DE G2 首件）：DE 规则 SSOT——裁决粒度定为内容块级（解除 DE-01）、diff 生成与锚失效回报、payload 载荷形状（版本化 + before_snapshot 基准，解除 REQ-DE-004 占位）、终态裁决语义（三终态互斥不可逆、accepted 唯一触发落盘、ApplyError 不回退）、过期与外部变更（保守语义，解除 DE-03 机制）、多 diff 冲突（重叠重检、无并发落盘，解除 DE-02）；注册链路 DE-DIFF（P1）、规则 5 条、术语 TERM-DE-001 PendingDiff / TERM-DE-002 ChangeProposal（解除 A-SYS-I-P-01 §6 延期）；约束全复用不新增；REQ_MAP（REQ-DE-001~005）；债务（审阅 UI 待人类、数值延实现、CBT 联合） |

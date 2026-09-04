@@ -3,7 +3,7 @@
 文档状态：A
 负责模块：SYS
 文档职责：Binder 客户端前端交互架构与流程总图（视图层 SSOT）——应用外壳阶段（欢迎页/主工作台）、跨模块界面分区与协作点、核心交互端到端流程图、前端状态对后端状态机/控制态的投影一致性约束；承接 REQ-SYS-006
-上游约束：A-SYS-M-D-01_系统底座功能需求描述.md（REQ-SYS-006）、A-CORE-C-P-01_APC.md（§4.1 模块职责、§7 代表性流程）、A-SYS-C-T-01_系统总体架构.md（§2 分层、X-SEQ-002）、A-SYS-M-S-01_状态机总图.md（12 台状态机，前端态投影来源）、各模块 I-P（command 面）、A-CORE-X-L-01_总体开发路线图.md（§9 UI 板块 just-in-time）
+上游约束：A-SYS-M-D-01_系统底座功能需求描述.md（REQ-SYS-006）、A-CORE-C-P-01_APC.md（§4.1 模块职责、§7 代表性流程）、A-SYS-C-T-01_系统总体架构.md（§2 分层、X-SEQ-002）、A-SYS-M-S-01_状态机总图.md（16 台已定义状态机及 Agent 1.0 当前转移，前端态投影来源）、各模块 I-P（command 面）、A-CORE-X-L-01_总体开发路线图.md（§9 UI 板块 just-in-time）
 直接承接：前端开发按本文界面骨架与流程总图施工；前端 store 状态按本文投影规则映射后端状态机；UI 视觉/组件细节贴模块 G4 just-in-time（路线图 §9.2），不在本文
 使用边界：本文是前端交互**视图层 SSOT**（架构与流程），**不定义视觉规范/像素/组件库**（路线图 §9 原料 just-in-time）、不重定义业务规则（归各模块 L2）、不定义 command 签名（归各 I-P）；流程图为交互骨架，细粒度交互随各模块 G4 细化
 变更要求：界面分区或主干流程变更须复核相关模块状态机与 I-P；前端状态投影规则变更涉 X-FORBID-007 须架构评审
@@ -38,9 +38,10 @@ forbidden: diff卡片, AI建议卡, 修改面板, 修改组件, 变更卡, 审�
 PendingDiff（TERM-DE-001）在对话面板（Chat Panel）中的视图投影组件，具备互斥可辨状态
 （pending / validating / applying / accepted / rejected / expired / conflict / error）；
 当前编辑器草稿路径与编辑器绿色审阅层（GreenReview，TERM-ED-003）同步；已打开非激活文档自动应用路径
-成功后显示为已应用且禁用接受/拒绝，不要求 GreenReview 一一对应。DiffCard
+成功后显示为已应用到 LogicalState 且仍可独立接受/拒绝，不要求 GreenReview 一一对应。DiffCard
 归属触发它的 AgentTurn 信息流，按回合内事件时序内嵌在对应 assistant 消息流中（消息片段
-TERM-AG-011 / BR-AG-UI-001，AG 技术设计 §3.2），不整体沉到正文底部；批量裁决条是独立全局操作控件。
+TERM-AG-011 / BR-AG-UI-001，AG 技术设计 §3.2），不整体沉到正文底部；同一 ProposalBatch 按
+group_index 稳定显示多个可独立裁决的卡片，批量裁决条只是展开逐卡命令的独立全局操作控件。
 状态机来源：SM-DE-01；视觉规范：docs/binder_ui/binder-showcase.jsx §02。
 
 <!-- TERM
@@ -58,12 +59,12 @@ EditorDecoration（TERM-ED-002）的具体实例，基于 ProseMirror Decoration
 ## §1 文档定位
 
 本文回答 Q3 暴露的体系空白——此前前端交互被隐式分散在各模块状态机与 command 表，缺一处统一收口。
-本文是前端交互的**视图层 SSOT**：把已注册的 12 台状态机、16 份接口协议投影为用户可见的界面骨架
+本文是前端交互的**视图层 SSOT**：把已注册的状态机与接口协议投影为用户可见的界面骨架
 与端到端流程，约束前端"按图施工"。
 
 ```
 REQ-SYS-006（L1）→ 本文（界面骨架 + 流程总图 + 投影约束）→ 前端实现(@GOV)
-本文 ←投影← A-SYS-M-S-01（12 台状态机：前端态的权威来源）+ 各 I-P（command 面）
+本文 ←投影← A-SYS-M-S-01（16 台已定义状态机及当前 active 转移：前端态的权威来源）+ 各 I-P（command 面）
 本文 不含 ← UI 视觉规范/组件（路线图 §9 原料，just-in-time）
 ```
 
@@ -103,11 +104,11 @@ UI 组件（界面分区，§3）
 | 模块栏 | SYS（导航）+ WS/AST/KB/TPL | WS/OL/ME/KN/TM/TL 模块入口；顶部 Binder Logo 承载 workspace 菜单（切换最近 / 打开其他文件夹 / 返回欢迎页），具体动作仍走 WS command 与脏态守卫 |
 | 侧边栏 | WS | 文件树 / 搜索（ws.list_docs/search）；只读预览文件保持正常可点击文件行，叠加轻量 `VIEW` 模式标记，不以灰禁用表达 |
 | 编辑区 | ED | md / b-docx / .html 富文本编辑、分页、装饰层（diff/局部修改呈现挂载点）；原生 docx 只读预览 |
-| 对话区（代理编辑面板） | AG | 代理编辑（AgentEdit）：编辑/构建双模式切换、回合输入与流式回显（ag.start_turn/turn_stream）；每轮产出的 DiffCard 插入对应 assistant 消息后；构建过程同窗口呈现 |
+| 对话区（代理编辑面板） | AG | `agent-edit-1.0` 单一 RuntimeProfile：回合输入与流式回显（ag.start_turn/turn_stream）；每轮 ProposalBatch 产出的一个或多个 DiffCard 按事件顺序插入对应 assistant 消息流；不展示 BuildMode 或 CBT 接管入口 |
 | diff 审阅 | DE（+ED 装饰层） | diff 高亮（编辑区内联）+ 裁决控件（接受/拒绝） |
 | 时间轴面板 | WS | 文档历史节点浏览/预览/还原（ws.list_timeline/restore） |
 | 预览面板 | PRV | docx/Excel/PPT 的 LO 语料实测只读预览、音视频（`prv.preview`，独立面板/标签，与编辑分离） |
-| 构建视图 | CBT | 任务计划/进度/接管（cbt.start_build；构建移交 切换） |
+| 构建视图 | CBT | P2 路线资产；不属于 Agent 1.0 当前界面骨架，不展示入口、进度或接管状态 |
 | 资产面板 | AST/KB/TPL | 记忆/知识库/模板管理 |
 | @mention 触发 | REF | 编辑/对话输入内的引用候选浮层（前端进程内，经 ED 扩展点） |
 | 状态栏 | SYS/WS | 基础就绪态与当前 workspace 路径展示；不承载账户、订阅或 ACCT/ENT 入口 |
@@ -170,9 +171,10 @@ flowchart TD
   G -- 是 --> ST[网关流式回显 turn_stream]
   ST --> PR{含修改建议?}
   PR -- 否 --> EN[回复完成]
-  PR -- 是 --> PJ[propose_edit 读取 AgentReadContext + 返回 DiffProjection]
-  PJ --> DM{draft_mode?}
-  DM -- current_editor --> DR[ED applyEditOps/applyStyleOps 应用为草稿 + GreenReview]
+  PR -- 是 --> PJ[propose_edit 读取 AgentReadContext + 返回 ChangeProposal]
+  PJ --> PB[DE 全组校验 + ProposalBatch 按独立连续块组拆分]
+  PB --> DM{按文档批次确定 draft_mode?}
+  DM -- current_editor --> DR[收齐同批 projections；单卡或结构化多卡聚合为一次 ED 草稿事务 + 逐卡 GreenReview]
   DM -- open_session --> OA{session 基线匹配?}
   DM -- background --> BG{目标文档未打开?}
   OA -- 是 --> OSAP[ed.apply_session_diff 修改 LogicalState + 置脏 + 持久化镜像]
@@ -180,29 +182,32 @@ flowchart TD
   BG -- 是 --> DEC2[DiffCard 等待用户接受]
   BG -- 否 --> ER[error 卡 禁止后台写已打开文档]
   DR --> DEC[DiffCard 插入本轮 assistant 消息后]
-  OSAP --> DONE[de.accept_draft_diff(open_session) + DiffCard 禁用裁决]
-  EX --> DONE
+  OSAP --> DEC
+  EX --> DONE[错误卡 / 已失效卡]
   ER --> DONE
   DEC2 --> AC2[接受 de.accept_diff]
   DEC --> AC[接受 de.accept_draft_diff]
   DEC --> RJ[拒绝 de.reject_diff]
   AC --> SV[用户保存 / ws.save_doc]
-  DONE --> SV2[用户稍后保存目标文档]
   AC2 --> APPLY[ws.apply_diff 未打开后台落盘]
   RJ --> RB[ED 回滚 before + GreenReview 复位]
   SV --> CL[保存成功 清脏态 + GreenReview 复位]
-  SV2 --> CL2[保存成功 清脏态]
   APPLY --> CL3[Applied / ApplyError 归 WS]
   RB --> CL
 ```
 
 > AgentEdit 的唯一链路是 `OpenDocSnapshot/AgentReadContext → DiffProjection → DiffCard/ED LogicalState`：
 > 前端不得从 tool_request 或整篇当前内容推断 before/after。已打开文档必须读取 LogicalState，未打开文档才读取
-> DiskState；后台文本/.html diff 仅适用于未打开文档。既有 BDocx 必须进入打开文档 LogicalState，
+> DiskState；后台文本/.html diff 仅适用于未打开文档。ChangeProposal 必须先经 DE 形成 ProposalBatch，按
+> 可独立裁决的连续块组生成一个或多个 DiffProjection；前端只逐卡投影，不得把同批卡合成共享终态。既有 BDocx 必须进入打开文档 LogicalState，
 > 未应用时不得后台 raw apply 写入 `.docx`。当前编辑器命中的块级 diff 以草稿编辑为主路径，accept 不再直接写文件；
-> 已打开非激活文档的 open_session diff 在模型回传后自动应用到 session LogicalState，DiffCard 禁用接受/拒绝。
+> 已打开非激活文档的 open_session diff 在模型回传后自动预览到 session LogicalState，DiffCard 保持 pending
+> 并允许独立接受/拒绝；接受不重复应用，拒绝按原载荷精确回滚。
+> 同一文档同一 ProposalBatch 的结构化多卡必须共享生成基线并在前端收齐 `group_count` 后聚合为一次
+> ED 前向事务；事务完成才逐卡标记预览成功。整篇版本推进不得让批内卡互相失效，逐卡拒绝只反向本卡
+> 目标。任一组缺失、身份/基线不一致、目标重叠或事务失败时零半应用，并使对应文档 cohort 进入失效/错误投影。
 > DiffCard 是 AgentTurn 信息流内容，不得沉底汇总为会话级全局列表；无历史锚点的 legacy diff 可显示
-> 在“未归属修改建议”fallback 区。批量裁决条仍可作为全局操作控件显示在输入框上方。
+> 在“未归属修改建议”fallback 区。批量裁决条仍可作为全局操作控件显示在输入框上方，但动作必须展开为逐卡裁决。
 
 > 局部修改/辅助续写（SM-AG-03）走旁路：编辑区触发→候选装饰呈现→**采纳=用户编辑**
 > （ed.apply_edit 进 §4.2 写作流），不经 diff 裁决。
@@ -321,43 +326,29 @@ flowchart TD
   RS -. 还原失败 .-> KP[保持现状 不破坏当前版本]
 ```
 
-### 4.8 构建移交/回落与多文件构建（投影 SM-CBT-01 + SM-AG-01；旧称 Chat↔Build 接管，2026-07-04 判据换轴）
+### 4.8 P2 Build/CBT 隔离（Agent 1.0 非活动路径）
 
-```mermaid
-flowchart TD
-  CH[代理编辑面板 对话阶段 多轮需求搜集→项目蓝图] --> TRG{构建触发?}
-  TRG -- 显式触发:明确指令/构建按钮 触发即确认 --> TK[cbt.takeover 移交 蓝图随移交 + takeoverAck]
-  TRG -- AI 识别项目级构建意图 --> CFM{用户确认提议?}
-  CFM -- 否 --> CH
-  CFM -- 是 --> TK
-  TK --> PL[任务计划 PlanReview 原对话窗口呈现]
-  PL --> CP[cbt.confirm_plan 用户确认/调整]
-  CP --> RUN[逐任务执行 经门禁 期间不可发起对话 仅中断]
-  RUN --> ADJ[产物逐条 diff 裁决 进 §4.3]
-  RUN -. 任务失败 .-> PA[暂停 不静默跳步]
-  ADJ --> FB[完成/中断 → cbt.fallback 回落对话 可继续编辑调整项目]
-```
-
-> 移交触发=显式触发即确认或项目级意图提议经确认（**多文件修改意图不再是判据**——编辑模式本身
-> 可跨文件，BR-AG-DATA-003）；双向回执无双活双死（BR-CBT-STATE-002）；构建在原对话窗口呈现、
-> 执行期 composer 门控禁新回合（X-FORBID-007 投影）；构建产物落盘同走 diff 路径（X-FORBID-006，
-> origin=CBT）；批量裁决形态待 DE-04 决策。
+`agent-edit-1.0` 不包含 BuildMode、构建按钮、`cbt.takeover`、`cbt.fallback`、CBT 进度或构建执行期
+composer 门控；前端不得因多文件目标、模型文字或历史会话元数据投影这些入口和状态。SM-CBT-01 只作为
+P2 路线资产保留，与当前 SM-AG-01 没有 active 跨模块转移。未来若启用，必须先建立独立 RuntimeProfile，
+重新完成需求、设计、接口、状态机与真实系统验证，不得复用已退役的接管流程作为实现依据。
 
 ### 4.9 本地资产管理（投影 AST/KB/TPL，资产面板）
 
 ```mermaid
 flowchart TD
   AP2[资产面板] --> TAB{记忆 / 知识库 / 模板}
-  TAB -- 记忆 AST --> MM[浏览/编辑/撤销 ast.* 自动写入条目可见可溯源]
+  TAB -- 记忆 AST --> MM[用户浏览/创建/编辑/撤销 可见可溯源]
   TAB -- 知识库 KB --> KK[主动入库/检索 kb.* 本地执行不上行]
-  TAB -- 模板 TPL --> TT[模板管理/应用 + 工作流执行 确认点强制]
+  TAB -- 模板 TPL --> TT[模板管理/应用；自动工作流执行为 P2 非当前路径]
   MM --> ISO[均 workspace 级隔离 切换即切换资产集]
   KK --> ISO
   TT --> ISO
 ```
 
-> 三类资产均 workspace 级隔离（2026-06-11 决策）；记忆自动写入但可见/可溯源/可撤销；知识库主动
-> 入库（AI 不静默建库）；模板工作流执行委托 AG/CBT、产物走 diff 路径。
+> 三类资产均 workspace 级隔离。Agent 1.0 不自动写入记忆、不自动检索/注入知识库或模板，也不委托
+> AG/CBT 执行模板工作流；只有用户当轮明确选择的既有项目记忆可经 REF 作为 data-only 引用进入回合。
+> 资产面板的人工管理能力不因此成为 Agent 工具授权。
 
 ### 4.10 账号 / 订阅 / 门户（投影 SM-SYS-01 会话段，状态栏 + 浏览器）
 
@@ -405,12 +396,12 @@ backdrop 点击关闭、`role="menu"/"menuitem"`。样式沿用 `.ftn-menu` toke
 
 | 协作点 | 参与模块 | 协作语义 |
 |---|---|---|
-| diff 呈现 | DE（逻辑/裁决）+ ED（LogicalState/装饰层）+ 用户（仅可裁决允许路径） | DE 生成→current_editor 按 blockId 挂装饰并等待用户裁决；open_session 自动应用到 ED session 后禁用裁决；background 仅未打开文档可由用户接受后落盘（ED 不代裁，X-FORBID-005） |
+| diff 呈现 | DE（逻辑/裁决）+ ED（LogicalState/装饰层）+ 用户（仅可裁决允许路径） | DE 将 ProposalBatch 按可独立裁决连续块组生成一个或多个卡片→current_editor 同文档结构化多卡收齐后一次事务预览、open_session 按安全载荷预览，随后逐卡等待独立裁决；background 仅未打开文档可由用户接受后落盘（ED 不代裁，X-FORBID-005） |
 | 局部修改呈现 | AG（候选）+ ED（装饰层）+ 用户（采纳） | AG 候选→ED 装饰呈现→采纳经 ed.apply_edit 进编辑模型 |
 | @mention | REF（解析）+ ED（触发浮层）+ AG（消费注入） | ED 触发面→REF 候选/锚→注入 AG 回合上下文 |
 | 时间轴还原 | WS（节点/还原）+ ED（重载呈现） | WS 列节点→预览→还原→ED 重载编辑模型 |
-| 构建移交/回落 | AG（代理回合）+ CBT（构建回合）+ 用户（确认） | 识别构建意图→用户确认→takeover 移交（无双活）→构建/回落 fallback（无双死） |
-| 资产注入 | AST/KB（供给）+ REF（@mention）+ AG（组装） | 三类供给（记忆/知识/引用）→AG 回合上下文组装，显式注入优先保留 |
+| P2 Build/CBT 隔离 | AG + CBT | Agent 1.0 不投影构建入口、接管/回落或 CBT 运行态；未来 Profile 须重新建链，不复用历史转移 |
+| 显式项目记忆引用 | AST（用户管理）+ REF（显式引用）+ AG（组装） | 只有用户当轮明确选择的既有项目记忆以 data-only 快照进入回合；KB/TPL 不自动检索、执行或注入 |
 | 外部变更冲突 | WS（感知/基线）+ ED（会话裁决）+ 用户（选择） | WS 发外部变更事件→无脏态自动重载/有脏态进 Conflicted→用户选保留或重载（双向损失均显式） |
 | 账户/订阅 | ACCT（会话）+ ENT（用量/门禁）+ 门户（浏览器） | 状态栏展示→购买/管理跳转门户（桌面端不内置支付） |
 
@@ -444,6 +435,9 @@ status: mapped
 - **投影一致**（X-FORBID-007，G4/G5）：静态审查前端 Store 无与后端可漂移的并行业务状态（如自存
   门禁通过/保存终态/diff 终态）；界面流转由后端事件驱动（状态机投影），核心交互在 G5 跨模块联调
   验证界面与后端态一致。
+- **独立裁决投影**（DE-DIFF，G4/G5）：单块、相邻不可分、相邻可独立、不连续和跨文档样本按
+  ProposalBatch/group_index 渲染 1/N 张卡；同文档结构化多卡只产生一次前向编辑事务，拒绝一张只回滚
+  本卡目标且其余卡仍可裁决；任一卡终态不改变同批其他卡，批量动作保留逐项真实结果。
 - **右键菜单**（CTX-MENU-01，G4）：ContextMenu 组件键盘可达（Esc/↑↓/Enter）与视口钳制有自动化
   断言；各目标面菜单项集与 disabled 态由投影 store 计算（无本地业务判断）；文件树迁移不回归既有
   重命名/导出/删除路径。
@@ -499,3 +493,5 @@ status: mapped
 | 2026-07-26 | v1.23 | BDocx 打开流程增加当前 loadSeq 的首轮分页 settled 门禁；转换结果到达后保持加载遮罩，避免揭示 setContent 与分页收敛的中间回填帧。 |
 | 2026-08-06 | v1.24 | 新增 §4.11 右键上下文菜单（统一 ContextMenu，CTX-MENU-01）：右键收敛为 SYS 纯展示组件（不持业务状态、X-FORBID-007），覆盖文件树文件/目录、编辑器选区/光标（剪切/复制/粘贴 + 局部修改/辅助续写）、DiffCard、表格/图片、标签栏；预览面板不提供；§8 补右键菜单验收条目；无新增 TERM/RULE 标注块 |
 | 2026-08-07 | v1.25 | AG-MSG-RENDER-01：TERM-DE-003 DiffCard 归属语义由"对应 assistant 消息后方"细化为"按回合内事件时序内嵌于 assistant 消息流"（消息片段 TERM-AG-011 / BR-AG-UI-001） |
+| 2026-09-03 | v1.26 | AG-ADAPTIVE-RUNTIME-DESIGN-01：前端对话主链接入 ProposalBatch 多卡投影；按可独立裁决连续块组逐卡呈现与裁决；同文档结构化多卡收齐后一次 ED 前向事务、逐卡局部反向；修正 open_session 预览后禁用裁决的旧表述。 |
+| 2026-09-03 | v1.27 | AG-ADAPTIVE-RUNTIME-DESIGN-01：移除 Agent 1.0 前端骨架中的编辑/构建双模式和 active CBT 接管流程；SM-CBT-01 仅保留为 P2 路线资产；关闭自动记忆/知识/模板和工作流委托投影，仅保留用户显式项目记忆引用，并同步状态机总数口径。 |

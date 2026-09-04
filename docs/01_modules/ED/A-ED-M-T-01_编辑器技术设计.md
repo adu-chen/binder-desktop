@@ -183,7 +183,9 @@ rule_id: BR-ED-STATE-001
 文档编辑会话必须经完整生命周期管理：内容加载与 save 落盘全部经 WS（ED 无直接文件 I/O 路径，
 X-SEQ-002/X-FORBID-004）；用户编辑、已有 LogicalState 的 DE 草稿 diff 预览，以及 pending 后打开文档的
 DiffPayload 迁移都属于编辑操作，必须产生脏态并驱动 WS save 保存机（SM-WS-01 Idle→Dirty，X-INTER-001
-转移点）。已打开但非激活文档的预览必须经 ED session 受控事务修改 `EditSession.content`、递增 session
+转移点）。同一文档同一 ProposalBatch 的结构化多卡必须共享生成基线，把各卡互不重叠且可独立反向的
+操作聚合预检后只 dispatch 一次前向事务；任一操作失败不得产生半应用，成功后每卡仍独立 pending，
+整篇 session 版本推进不得使批内兄弟卡失效。已打开但非激活文档的预览必须经 ED session 受控事务修改 `EditSession.content`、递增 session
 版本、刷新内容哈希并持久化 `ed_session_snapshots`；预览成功后 DiffCard 仍由用户接受/拒绝裁决，不得自动
 accepted。有脏态的会话不得静默关闭或丢失，关闭前须保存或经用户显式确认丢弃；内容解析失败降级只读
 而非静默丢内容；编辑功能离线可用，不依赖在线鉴权。状态转移归 SM-ED-01（A-ED-M-S-01）。
@@ -323,6 +325,9 @@ Markdown 保存必须满足无静默丢失：支持子集执行 parse→serializ
   doc（`replace_text` / `replace_block` / `replace_document`）；样式批量修改经 `applyStyleOps()`
   规划并应用单事务。DE 草稿应用、reject 回滚、示例 diff 生成均以当前编辑器 LogicalState 为准，
   不以 `edStore.EditSession.content` 派生缓存作为真值。
+- **ProposalBatch 块级预览**：活动编辑器中，同文档同批且具有稳定 blockId/逐块 before/after 的多个
+  `replace_block` 先聚合为一次 `applyEditOps()`；多个 `block_ops` 按下述结构化入口聚合。整篇、样式、
+  表格、图片与 open_session 字符串载荷当前保持单卡，不得复制全文制造可独立裁决假象。
 - **已打开非激活文档入口（2026-07-18）**：`draft_mode=open_session` 的文本/块/整篇 diff 不要求用户切换窗口；
   ED 必须在 `EditSession.content` 上执行 session apply 事务，先校验 `base_session_version` 与
   `base_content_hash`，成功后写回 content、递增版本、刷新哈希、置脏并持久化 `ed_session_snapshots`。
@@ -342,9 +347,11 @@ Markdown 保存必须满足无静默丢失：支持子集执行 parse→serializ
 - **富文档结构化内容块（2026-07-30）**：活动 ProseMirror doc 是层级块结构唯一真源。
   `projectAgentEditableBlocks()` 遍历所有稳定 blockId 节点，投影 node type、role、父子层级、node JSON、
   fingerprint 与动态 capabilities；列表/listItem/blockquote 等非 textblock 容器只读，其 paragraph
-  子节点独立可写，表格祖先和图片承载块不开放通用写能力。`applyStructuredBlockOperations()` 先整批
-  预检，再以一个 transaction 倒序 replaceWith，避免多个列表条目被拼成单段。Diff 拒绝使用 exact
-  beforeNode/afterNode 反向事务；节点在提案后被人工修改时转 conflict，不使用全文恢复覆盖其他改动。
+  子节点独立可写，表格祖先和图片承载块不开放通用写能力。`applyStructuredBlockOperations()` 接受
+  单卡 payload 或同文档同批、共享 base 的 payload 列表；前向先核对 batch/group_count、卡间目标互斥和
+  可独立反向性，再聚合预检并以一个 transaction 倒序 replaceWith，避免多个列表条目被拼成单段或逐卡
+  推进基准。Diff 拒绝只传本卡 payload，使用 exact beforeNode/afterNode 反向事务；节点在提案后被人工
+  修改时转 conflict，不使用全文恢复覆盖其他卡或人工改动。
 
 <!-- RULE
 rule_id: BR-ED-DATA-005
@@ -718,6 +725,8 @@ status: mapped
 - **会话生命周期**（BR-ED-STATE-001 / SM-ED-01，REQ-ED-001 验收）：md/docx 可打开/编辑/关闭；
   脏态关闭须保存或确认丢弃；解析失败降级只读；断网时编辑可用；ED 无直接文件 I/O 调用路径（静态可查）。
   已有或 pending 后打开文档预览 diff 后 session content/version/hash 更新、置脏并持久化，卡片仍可裁决，切回该文档时不重复应用；
+  同文档同批结构化多卡共享生成基线，聚合预检后只产生一个前向事务；任一卡反向只恢复本卡目标，
+  其他卡及人工修改不被覆盖，批内卡不因共享预览造成的整篇版本推进而失效；
   重启恢复继承关闭前打开的文档标签、顺序和当前文档，孤立 `ed_session_snapshots` 不恢复为打开文档，恢复后的当前文档可进入 AG 工作序列。
 - **Agent 可感知会话事实**（BR-ED-DATA-008，REQ-ED-011 验收）：A 文档未保存后切换 B，冻结事实仍分别
   保留 A/B 的 source、dirty、baseline、sessionVersion/contentHash，正文与事实均不回退 DiskState；只有
@@ -836,6 +845,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.65 | AG-ADAPTIVE-RUNTIME-DESIGN-01：BR-ED-STATE-001 与结构化 BlockOperation 补齐 ProposalBatch 多卡事务语义——同文档同批共享基线、互斥目标聚合为一次前向事务，逐卡反向只作用本卡目标，批内整篇版本推进不互相失效。 |
 | 2026-08-29 | v1.10 | AG-CONFORMANCE-CODE-S4A：新增 BR-ED-DATA-008 与 REQ-ED-011 映射，冻结 ED→AgentContextFacts 的活动/打开会话、LogicalState 版本、脏态、基准与任务显式选区事实边界。 |
 | 2026-06-11 | v1.0 | 初版（ED G2 首件）：ED 规则 SSOT——编辑会话与脏态（经 WS、离线可用、解析失败降级只读）、内容块模型与稳定 blockId（失效可感知）、md/docx 统一编辑模型（二进制归 DOC）、分页与媒体呈现层纯化、编辑器装饰层接口契约（DE/AG 消费）；注册链路 ED-EDIT / ED-DECOR（均 P1）、规则 BR-ED-STATE-001/002·BR-ED-DATA-001/002/003、约束 X-FORBID-005（复用 X-SEQ-002/003·X-FORBID-004·X-SHARED-001·X-INTER-001）、术语 TERM-ED-001 Block / TERM-ED-002 EditorDecoration；REQ_MAP（REQ-ED-001~005）；债务（TipTap 选型/blockId 算法/样式子集/往返保持延后并记明 owner） |
 | 2026-06-11 | v1.1 | 人类决策落地：inline-assist/autocomplete 归属确认 AG（边界表述更新）；§11.1 新增选型记录（人类授权 AI 推荐，旧版仓库实证取材）——TipTap v3 系 + React + StarterKit + 扩展集基线 + tiptap-pagination-plus 移植（解除 ED-01）、blockId = TipTap Extension + block_+UUID + appendTransaction 补缺/分裂去重 + 转换层兜底注入、md 源不注入（解除 ED-02 算法部分）、docx 样式子集三级契约（必需/部分/不处理，执行 SSOT 归 DOC L2）；§11.2 余债收敛（往返保留度/分页适配/验证后转锁定） |

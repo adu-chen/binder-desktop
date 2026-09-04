@@ -49,14 +49,15 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 | `ws.search` | workspace_id、查询 | 命中列表（DocRef + 定位） | — | 限界 X-FORBID-004 |
 
 > `ws.create_doc/create_folder/delete_folder/rename_doc/delete_doc` 是 WS 内部原子执行器或人工文件树入口的
-> 低层能力，不是 Agent 资源授权接口。Agent、TaskRun 与模型工具不得直接调用这些 command；必须使用下节
+> 低层能力，不是 Agent 资源授权接口。模型工具、TaskRun 投影与前端不得直接调用这些 command；AgentTurn
+> 运行时只能在当前 CapabilityGrant 校验通过后使用下节
 > WorkspaceOperation 计划与执行接口。既有直接调用属于迁移债务。
 
 ### §3.1 WorkspaceOperation（WS-OPERATION / SM-WS-04）
 
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
 |---|---|---|---|---|
-| `ws.plan_operation` | workspace_id、受限 operation intents、TaskRun/AgentTurn 来源 | WorkspaceOperationPlan（不可变 items、影响清单、基线、补偿策略、idempotency_key） | 越界/不支持操作/无法冻结清单/目标冲突 | Planning；BR-WS-STATE-003 / BR-WS-DATA-003 |
+| `ws.plan_operation` | workspace_id、受限 operation intents、AgentTurn 来源及可选 task_run_id 关联 | WorkspaceOperationPlan（不可变 items、影响清单、基线、补偿策略、idempotency_key） | 越界/不支持操作/无法冻结清单/目标冲突 | Planning；BR-WS-STATE-003 / BR-WS-DATA-003 |
 | `ws.get_operation_plan` | plan_id | 完整计划 + 当前状态 + DecisionRequest 关联 | 不存在/跨 workspace | BR-WS-DATA-003 |
 | `ws.execute_operation` | plan_id、resolved DecisionRequest identity、outcome=confirm | WorkspaceOperationReceipt + WorkspaceOperationEntry | 未确认、确认不匹配、计划过期、基线变化、dirty target、幂等冲突、补偿失败 | Revalidating→Executing/Compensating；BR-WS-STATE-003 / BR-WS-PERSIST-003 |
 | `ws.cancel_operation` | plan_id、resolved DecisionRequest identity、outcome=cancel | Rejected 回执，零磁盘副作用 | 已执行/终态 | Rejected |
@@ -64,13 +65,14 @@ A-SYS-I-P-02（协议骨架：命名/信封/错误/流式）→ 本文（WS comm
 
 `ws.execute_operation` 只能接受真实已解决 DecisionRequest 的身份；布尔 `confirmed=true`、模型参数、Prompt 文本或
 前端任意字段均不是授权。重复 confirm/execute 由 idempotency_key 返回同一终态回执，不重复执行。重启恢复时
-Planning/WaitingConfirm/Executing/Compensating 一律投影为 Interrupted，接口不得自动调用 execute。
+Planning/WaitingConfirm/Executing/Compensating 一律投影为 Interrupted，接口不得自动调用 execute。TaskRun/TaskPlan/
+TaskStep 只允许保存 operation_id/request_id 的事件关联，不是调用方，也不构成恢复或执行授权。
 
 ## §4 pending_diffs（WS-DIFF-APPLY）
 
 | command | 参数（语义） | 结果 | 特有错误类 | 状态机/规则归属 |
 |---|---|---|---|---|
-| `ws.persist_diff` | PendingDiff（A-SYS-I-P-01） | diff_id（status=pending） | 持久化失败 | BR-DE-DATA-001 的 WS 侧 |
+| `ws.persist_diff_batch` | ProposalBatch + 一个或多个 PendingDiff（A-SYS-I-P-01） | proposal_batch_id + 按 group_index 稳定排序的 diff_ids（均 status=pending） | 任一批次/卡片身份、顺序、载荷或持久化失败则整批回滚、零残留 | BR-DE-DATA-001 的 WS 侧；单事务写 proposal_batches/pending_diffs/diff_payloads |
 | `ws.list_pending_diffs` | workspace_id、过滤（status/rel_path 可空） | PendingDiff 列表 | — | 重启恢复入口 |
 | `ws.apply_diff` | diff_id | Applied 回执 + 时间轴 entry_id | apply 失败（不留半节点，可重试） | SM-WS-02（仅 DE accepted 信号方可调用——调用方约束，BR-WS-STATE-001） |
 | `ws.discard_diff` | diff_id、终态（rejected/expired） | Discarded 回执 | — | SM-WS-02（不写文件） |
@@ -99,6 +101,8 @@ Planning/WaitingConfirm/Executing/Compensating 一律投影为 Interrupted，接
 - 实现注册表与本文清单一致（未注册 command 协议错误，BR-SYS-DATA-003）；每 command 集成测试覆盖
   正路 + 特有错误类；`ws.save_doc` 冲突路（基线偏离 + override 路径）强制覆盖（SM-WS-01 矩阵）；
   `ws.apply_diff` 仅在 accepted 后被调用的约束在 DE/WS 联调验证。
+- `ws.persist_diff_batch` 覆盖单卡、多卡、顺序/身份冲突及中途失败；失败时 proposal_batches、pending_diffs、
+  diff_payloads 三者均零残留，不保留可见半批次。
 
 ## §8 债务与盲区
 
@@ -127,3 +131,5 @@ Planning/WaitingConfirm/Executing/Compensating 一律投影为 Interrupted，接
 | 2026-08-06 | v1.8 | WS-DIR-DELETE-01：新增 `ws.delete_folder` command（镜像 `ws.create_folder`）：两级语义——mode=empty 仅删空目录（非空拒 WS_NOT_EMPTY）、mode=recursive 递归删除；缺失/目标为文件拒绝；删除后由实现侧清洗 bdocx_manifest。文件删除 `ws.delete_doc` 语义不变 |
 | 2026-08-07 | v1.9 | WS-NEW-BUTTON-01：文件树「＋」新建按钮下拉（格式选择 + 激活区域 + 文件夹入口）为前端入口组合，复用既有 `ws.create_doc` / `ws.create_folder` command，无新增命令面；登记本行避免前端入口与协议脱节。 |
 | 2026-08-21 | v1.10 | 工作区资源操作基线重构：新增 ws.plan/get/execute/cancel/list_operation 语义接口；Agent 资源操作不得直接调用低层文件 command；统一 WorkspaceTimeline 支持类型化资源条目，资源恢复返回新的前置裁决计划。 |
+| 2026-09-03 | v1.11 | AG-ADAPTIVE-RUNTIME-DESIGN-01：资源操作接口调用方收敛为受当前 CapabilityGrant 约束的 AgentTurn 运行时；TaskRun 仅保留可选关联，不再充当调用方或授权来源。 |
+| 2026-09-03 | v1.12 | AG-ADAPTIVE-RUNTIME-DESIGN-01：单条 ws.persist_diff 收敛为 ws.persist_diff_batch，保证 ProposalBatch 与全部 PendingDiff/DiffPayload 单事务持久化、失败零残留。 |

@@ -3,10 +3,10 @@
 文档状态：A
 负责模块：DE
 文档职责：DE Diff Edit 模块级接口协议（L2 接口层）——按 A-SYS-I-P-02 骨架声明 diff 生成接口（承接 AG ChangeProposal）、裁决/自动应用接口（accept/reject/expire）、过期与冲突重检接口、审阅呈现对接；产品核心交互「代理回合→diff→LogicalState/落盘」的 DE 侧 command 面
-上游约束：A-SYS-I-P-02_IPC协议.md（骨架）、A-DE-M-T-01_DiffEdit技术设计.md（BR-DE-* 规则、DE-DIFF、payload 形状、TERM-DE-001/002）、A-DE-M-S-01_DiffEdit状态机设计.md（SM-DE-01）、A-WS-I-P-01_工作台接口协议.md（persist_diff/apply_diff/discard_diff 复用）、A-ED-I-P-01_编辑器接口协议.md（locate_block/装饰层呈现）、A-SYS-I-P-01_数据结构定义.md（PendingDiff、payload 字段）、ADU.md
-直接承接：实现期 DE command 注册；AG/CBT 经 `de.generate_diff` 提交 ChangeProposal；前端审阅 UI 经裁决接口；落盘经 WS（apply_diff）、呈现经 ED（装饰层）
+上游约束：A-SYS-I-P-02_IPC协议.md（骨架）、A-DE-M-T-01_DiffEdit技术设计.md（BR-DE-* 规则、DE-DIFF、payload 形状、TERM-DE-001/002/005）、A-DE-M-S-01_DiffEdit状态机设计.md（SM-DE-01）、A-WS-I-P-01_工作台接口协议.md（persist_diff_batch/apply_diff/discard_diff 复用）、A-ED-I-P-01_编辑器接口协议.md（locate_block/装饰层呈现）、A-SYS-I-P-01_数据结构定义.md（ProposalBatch/PendingDiff、payload 字段）、ADU.md
+直接承接：实现期 DE command 注册；Agent 1.0 由 SM-AG-02 `propose_edit` 经 `de.generate_diff` 提交 ChangeProposal；前端审阅 UI 经裁决接口；落盘经 WS（apply_diff）、呈现经 ED（装饰层）；CBT 仅为未来 Profile 潜在调用方
 使用边界：本文声明 DE 接口语义级签名；持久化与落盘经 WS（A-WS-I-P-01，不重复）、呈现经 ED（A-ED-I-P-01，不重复）；不新增 RULE/CHAIN/CONSTRAINT/TERM；裁决 UI 形态（DE-04）属实现期，本文只定接口
-变更要求：裁决接口语义变更须复核 SM-DE-01 与 SM-WS-02 双侧；payload 形状变更回写 A-SYS-I-P-01；ChangeProposal 接口变更复核 AG/CBT 调用方
+变更要求：裁决接口语义变更须复核 SM-DE-01 与 SM-WS-02 双侧；payload 形状变更回写 A-SYS-I-P-01；ChangeProposal 接口变更复核 AG 当前调用方，未来 CBT Profile 启用时另行复核
 治理成熟度：draft
 ---
 
@@ -16,10 +16,10 @@
 
 ```
 A-SYS-I-P-02（骨架）→ 本文（DE 生成/裁决/过期接口）→ 实现 + @GOV(追溯 A-DE-M-T-01)
-上游：AG/CBT(ChangeProposal) → de.generate_diff；下游：已有或 pending 后打开的文档 → ED LogicalState，持续未打开文档 accept → ws.apply_diff、呈现 → ed.mount_decoration
+上游：SM-AG-02 propose_edit(ChangeProposal) → de.generate_diff；下游：已有或 pending 后打开的文档 → ED LogicalState，持续未打开文档 accept → ws.apply_diff、呈现 → ed.mount_decoration
 ```
 
-DE 是「代理回合→diff→LogicalState/落盘」链的中枢：接 AG/CBT 的 ChangeProposal 生成 PendingDiff，经 ED
+DE 是「代理回合→diff→LogicalState/落盘」链的中枢：接 Agent 1.0 `propose_edit` 的 ChangeProposal 生成 PendingDiff，经 ED
 装饰层或 DiffCard 呈现审阅；已有 LogicalState 的目标立即受控预览并等待保存，持续未打开的目标只由卡片
 临时挂载、accepted 后驱动 WS 落盘。后台 pending 在用户打开文档时必须迁移到前一条路径，rejected/expired
 不写文件。
@@ -28,15 +28,26 @@ DE 是「代理回合→diff→LogicalState/落盘」链的中枢：接 AG/CBT �
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `de.generate_diff` | ChangeProposal（target_blocks: DocRef+blockId、修改内容、origin: 模块/回合、DiffProjection 基线元数据；CreateDocumentBundle 初始内容必须附 operation_id/origin=create_document_bundle） | diff_id（SM-DE-01 Pending）+ 呈现就绪 | **anchor_lost**；已打开文档缺 session 基线；CreateDocumentBundle 目标 DiskState/operation 不存在或不匹配；持久化失败 | 经 `ed.locate_block`/AgentReadContext 校验锚 + `ws.persist_diff` 持久化 + `ed.mount_decoration` 或 DiffCard 呈现 |
+| `de.generate_diff` | ChangeProposal（原子操作可带 `adjudication_group`；target_blocks: DocRef+blockId、修改内容、origin: 模块/回合/tool_call、DiffProjection 基线元数据；CreateDocumentBundle 初始内容必须附 operation_id/origin=create_document_bundle） | ProposalBatch + `diffs[]`（一个或多个独立 SM-DE-01 Pending，含 group_index/group_count）+ 呈现就绪 | **anchor_lost / invalid_group**；已打开文档缺 session 基线；CreateDocumentBundle 目标 DiskState/operation 不存在或不匹配；任一组校验或持久化失败则整批零生成 | 经 `ed.locate_block`/AgentReadContext 全组校验 + 单事务 `ws.persist_diff_batch`；同文档同批结构化 projections 聚合为一次 ED 预览，随后逐卡 mount/呈现 |
 | `de.get_diff` | diff_id | PendingDiff + payload（含 before_snapshot 对比基准） | 不存在 | BR-DE-DATA-002（重启恢复可重建审阅） |
-| `de.list_diffs` | DocRef（可空 → workspace 全量） | PendingDiff 列表（按创建序） | — | 多 diff 并存呈现（BR-DE-DATA-003） |
+| `de.list_diffs` | DocRef（可空 → workspace 全量） | PendingDiff 列表（按 proposal_batch_id/group_index 后接创建序） | — | 多 diff 并存呈现（BR-DE-DATA-003） |
 | `de.update_image_diff_snapshots` | diff_id、before/after ImageSnapshot、affectedBlockIds | 将 ED 实际应用结果补入既有 ImageOperation DiffPayload；首次写入后只接受同值幂等重试 | workspace/diff 不匹配、非 image_ops、快照字段/路径/hash 无效、已写值冲突 | BR-DE-DATA-002；只补审阅载荷，不修改文档内容或 diff 终态 |
 
 `patch_kind=block_ops` 时 DiffProjection 必须携带版本化 StructuredBlockEditPayload。每个目标块的
 beforeNode/afterNode、blockId、expectedNodeType 与 fingerprint 是执行、详细审阅和精确拒绝的共同
 真值；before/after 文本摘要只供紧凑卡显示，不得反向重建执行载荷。该 kind 仅允许
 `draft_mode=current_editor`，不得进入 open_session HTML 字符串或 background raw apply。
+
+分组协议固定为：同一现有 blockId 的多个操作先在共同基线内合成为一个块候选；不同文档或不连续目标
+必拆；默认每个块候选独立；只有相同 `adjudication_group`、目标区间相邻/重叠且同一事务可校验时合并；
+整篇 replace_document 单独一组。
+服务端忽略任何试图跨非连续块合并的声明并返回 invalid_group，不得降级为整篇单卡。所有组先校验再原子
+写入，结果中每个 DiffProjection 必须含 `proposal_batch_id/group_index/group_count`。
+同一文档同批结构化 projections 必须携相同 `base_session_version/base_content_hash`，目标集合互不重叠且
+反向操作彼此独立；前端只有收齐并核对 `group_count` 后，才可聚合 operations 做一次前向 ED 事务。事务
+成功后逐卡保持 pending；事务失败则该文档 cohort 全部失效且 LogicalState 不得残留部分修改。
+当前可拆多卡的 patch_kind 仅为活动 `current_editor` 的 `block_ops`，以及具稳定 blockId/逐块 before/after
+的 `replace_block`；`replace_document/style_ops/table_ops/image_ops` 和 `open_session` 字符串应用保持单卡。
 
 `patch_kind=table_ops` 时 DiffProjection 必须携带受限 TableOperation 及 before/after TableSnapshot，
 包括每个逻辑单元格的 `backgroundColor`。DiffCard 直接消费该投影：`set_cell_background` 按 `RnCn`
@@ -55,9 +66,9 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 
 | command | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
 |---|---|---|---|---|
-| `de.accept_draft_diff` | diff_id、apply_context(current_editor/open_session)、base_session_version?、base_content_hash? | Accepted（不可逆）；仅确认已进入 LogicalState，不触发 `ws.apply_diff`；可由 DiffCard 的显式“接受”或对仍有效 pending 预览执行的保存调用 | 基线不匹配 → 拒绝，调用方应转 `de.expire_diff`；终态后再调用 → 协议错误 | SM-DE-01 Accepted → ED/WS save 路径 |
+| `de.accept_draft_diff` | diff_id、apply_context(current_editor/open_session)、当前 LogicalState 身份 | Accepted（不可逆）；服务端用已持久化 payload 校验本卡目标 after fingerprint，仅确认已进入 LogicalState，不触发 `ws.apply_diff`；可由显式“接受”或保存调用 | 本卡目标不匹配 → 拒绝并只使本卡失效；终态后再调用 → 协议错误 | SM-DE-01 Accepted → ED/WS save 路径 |
 | `de.accept_diff` | diff_id | Accepted（不可逆）→ 仅当目标持续没有 LogicalState 时触发 `ws.apply_diff`，回 Applied + 卡片复位 | 目标已打开或已迁移 → `DE_OPEN_DOC_REQUIRES_LOGICAL_STATE`；apply 失败 → 终态保持 Accepted、WS 侧重试（不回退） | SM-DE-01 Accepted → SM-WS-02（X-INTER-001，未打开文档后台落盘触发） |
-| `de.reject_diff` | diff_id | Rejected（不可逆）→ 有 LogicalState 时由 ED 精确回滚并复位；无 LogicalState 时解除卡片临时挂载 | 已推进基线 → `DE_DIFF_BASE_ADVANCED`，调用方应先 expire；终态后再调用 → 协议错误 | 不写文件 |
+| `de.reject_diff` | diff_id | Rejected（不可逆）→ 有 LogicalState 时先以本卡目标 after fingerprint 校验，再由 ED 只反向本卡操作并复位；无 LogicalState 时解除卡片临时挂载 | 本卡目标已变化 → conflict/`DE_DIFF_BASE_ADVANCED`，不得影响同批其他卡；终态后再调用 → 协议错误 | 不写文件 |
 | `de.promote_pending_diff_on_open` | diff_id（ED 已用同一 DiffPayload 建立 LogicalState 并应用绿色预览后调用） | 保持 Pending；校验卡片仍可迁移，并使其退出后台路径 | 已 accepted/rejected/expired → 协议错误 | BR-CORE-STATE-003，ED-EDIT |
 | `de.expire_diff` | diff_id、reason | Expired（不可逆）→ `ws.discard_diff` + 装饰复位 | 终态后再调用 → 协议错误 | 自动应用失败、超时或外部变更关闭 |
 
@@ -67,6 +78,9 @@ resize/layout/move 并按固定顺序执行，delete 独占；DiffCard 必须逐
 > 成功后仍保持 Pending 并保留用户裁决入口；用户可显式接受，也可保存仍有效的预览，二者均调用
 > `de.accept_draft_diff`。预览失败或基准已推进时调用 `de.expire_diff` 或投错误卡；这些路径都不得调用
 > `de.accept_diff` 触发后台落盘。
+> 同一文档同批结构化多卡的整篇 session version/hash 在共享预览后必然推进；该推进不是逐卡失效依据。
+> 接受、拒绝与保存必须按各卡目标 after fingerprint 判断；保存可逐卡接受所有仍有效预览，但不得把目标
+> 已变化的卡或同批其他卡的既有终态改写。
 
 工作区资源操作不得进入本协议：`delete_doc/delete_folder/create_doc/create_folder/rename/move/restore` 不是合法
 patch_kind，也不得用空 `before/after` 或“删除文档”投影伪造成 ChangeProposal。它们只走 A-WS-I-P-01 的
@@ -77,31 +91,33 @@ WorkspaceOperation 接口。CreateDocumentBundle 是唯一例外，但 DE 只接
 
 | command/事件 | 参数（语义） | 结果 | 归属 |
 |---|---|---|---|
-| `de.check_expiry` | diff_id（或定时/呈现时触发） | 维持 Pending / 转 Expired | 外部变更（目标块 ≠ before_snapshot，订阅 `ws.external_change`）或超时→Expired；检测不可得→保守维持 Pending（BR-DE-STATE-002） |
-| `de.recheck_overlap` | 落盘事件或 ED session 自动应用事件触发（先序 diff Applied/autoApplied） | 重叠 pending diff 重检结果（陈旧者转 Expired） | BR-DE-DATA-003（不并发应用/落盘同一块，不覆盖新内容） |
+| `de.check_expiry` | diff_id（或定时/呈现时触发） | 维持 Pending / 转 Expired | 预览前目标 ≠ before_snapshot，或预览后目标 ≠ 本卡 after fingerprint，或超时→Expired；检测不可得→保守维持 Pending（BR-DE-STATE-002） |
+| `de.recheck_overlap` | ProposalBatch 预览完成、落盘事件或 ED session 自动应用事件触发 | 重叠 pending diff 重检结果（陈旧者转 Expired） | BR-DE-DATA-003；当前 batch_id 的兄弟卡排除，按目标集合而非整篇 hash 判断 |
 
 ## §5 跨模块对接小结（不重复定义，仅索引）
 
 | 环节 | 调用 | 文档 |
 |---|---|---|
-| 接 AG 产出 | AG HandingOff → `de.generate_diff` | A-AG-M-S-01 §3 |
+| 接 AG 产出 | SM-AG-02 ToolExecuting(propose_edit) → `de.generate_diff`；返回 ToolResult + DiffProposed/结构化失败 | A-AG-M-S-01 §3 |
 | 锚校验/呈现/自动应用 | `ed.locate_block` / `ed.apply_session_diff` / `ed.mount_decoration` / `ed.dismiss_decoration` | A-ED-I-P-01 §3/§4 |
 | 未打开文档落盘/丢弃 | `ws.apply_diff` / `ws.discard_diff` | A-WS-I-P-01 §4；仅 BR-CORE-STATE-002 分支 |
 | 外部变更 | 订阅 `ws.external_change` → check_expiry | A-WS-I-P-01 §6 |
 
 ## §6 测试与验收
 
-- `de.generate_diff` 锚有效→Pending、锚失效→GenFailed 回报 AG；`de.accept_diff` 只对持续无
+- `de.generate_diff` 对同块多操作/单块/相邻不可分/相邻可独立/不连续/跨文档样本产生符合分组规则的 1/N 个 Pending；
+  同批 group_index 稳定，任一组锚或事务无效→整批 GenFailed 且零残留；同文档同批结构化多卡共享
+  基线、收齐后一次 ED 预览，任一卡接受/拒绝不改变其他卡，拒绝只反向自身目标；`de.accept_diff` 只对持续无
   LogicalState 的文档触发 `ws.apply_diff`、ApplyError 不回退终态；`de.accept_draft_diff` 不触发
   `ws.apply_diff`；保存仍有效 pending 预览时必须裁决为 accepted/awaiting_save，基准已推进时必须先失效；
   `de.promote_pending_diff_on_open` 后不得再调用后台 accept；
   reject/expire 不写文件 + 装饰复位；终态后再裁决被拒；
-  过期保守性（检测不可得不误杀）；重叠重检（先序落盘后陈旧者 Expired）；全链与 AG/ED/WS G5 联调。
+  过期保守性（检测不可得不误杀）；重叠重检（先序落盘后陈旧者 Expired）；同批卡可独立终态；全链与 AG/ED/WS G5 联调。
 
 ## §7 债务与盲区
 
-- 裁决 UI 形态（逐条/批量，DE-04 待人类）影响是否需 `de.accept_batch`/`de.reject_batch` 批量
-  接口——延决策后补；CBT 构建产物的批量裁决同此（CBT-02）。
+- 批量 UI 不新增 `de.accept_batch`/`de.reject_batch` 状态语义；实现可并行/串行调用既有逐卡命令，
+  必须逐项返回结果且保留部分裁决的真实状态。未来 CBT Profile 不从本文推导新的批次协议。
 - ~~payload 序列化与 before_snapshot 存储形态延实现期~~ → **已解除（PI-BE-02，2026-06-23）**：
   DiffPayload（TERM-DE-004）持久化于 workspace.db `diff_payloads` 表（payload_ref 主键，after_content
   BLOB、before_snapshot TEXT、is_new_doc），经 PendingDiff.payload_ref 关联；`de.accept_diff` 经此取回
@@ -115,6 +131,7 @@ WorkspaceOperation 接口。CreateDocumentBundle 是唯一例外，但 DE 只接
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.11 | AG-ADAPTIVE-RUNTIME-DESIGN-01：de.generate_diff 改为全组校验后返回 ProposalBatch + diffs[]；锁定 adjudication_group 的受控合并、非连续/可独立块拆卡、批次原子生成；同文档同批结构化卡共享基线并一次预览，随后按目标 fingerprint 逐卡独立裁决。 |
 | 2026-06-12 | v1.0 | 初版（实现前置件，核心交互链 DE 侧）：DE 接口协议——生成 3 条（generate_diff 接 ChangeProposal+锚校验、get/list）、裁决 2 条（accept 唯一触发落盘不可逆、reject）、过期与重检 2 条（check_expiry 保守过期 / recheck_overlap 冲突）；§5 跨模块对接索引（AG/ED/WS，不重复定义）；零新增注册项；债务（批量裁决接口待 DE-04 决策、序列化/过期触发延实现期） |
 | 2026-07-04 | v1.1 | 术语统一清扫（承 2026-07-04 人类三轮裁决）：正文禁用别名替换——内联辅助→局部修改、自动补全→辅助续写、对话编辑→Diff Edit、Chat↔Build 接管→构建移交/回落、chat/chat-agent 回合→代理回合；文件名与变更记录历史行不改写 |
 | 2026-07-18 | v1.2 | 补齐已打开文档接口边界：`de.accept_draft_diff` 确认 current/open session LogicalState，不触发后台落盘；`de.accept_diff` 限未打开文档；新增 `de.expire_diff` 承接 open_session 自动应用失败 |

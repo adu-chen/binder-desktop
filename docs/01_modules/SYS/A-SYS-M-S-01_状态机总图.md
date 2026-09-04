@@ -69,23 +69,23 @@ APC §6 列举的核心链（非穷举）及其状态机登记状态。`active` 
 > 避免跨模块 ID 归属漂移。§3 当前登记 14 个唯一 machine_id（autocomplete/inline-assist 共用 SM-AG-03），
 > §3.1 另登记 SM-AG-04 与 SM-WS-04，合计 16 台已定义状态机。CBT/AST/TPL 的 active 只表示设计资产存在，不把其自动接入 Agent 1.0。
 
-### 3.1 Agent 1.0 运行时与任务链状态机归属（D1 登记）
+### 3.1 Agent 1.0 运行时与任务链状态机归属
 
-承接冻结基线（A-CORE-X-D-02 §6）与 REQ-SYS-010/011/012：D1 只登记**归属与契约**，状态机内部定义由
-对应 D2/D3 在 owner 模块 M-S 完成并向本总图登记 machine_id（X-SEQ-003）。
+承接冻结基线（A-CORE-X-D-02 §6）与 REQ-SYS-010/011/012：本节登记当前**归属与跨模块契约**；
+状态机内部均由 owner 模块 M-S 定义并向本总图登记 machine_id（X-SEQ-003）。
 
 | 状态化链路 | 归属判定 | owner_module | machine_id | 登记状态 | 说明 |
 |---|---|---|---|---|---|
-| 代理回合（AgentTurn） | AG（既有 SM-AG-01，D3 扩展澄清非终态等 R5-A 语义） | AG | SM-AG-01 | active（D3 调整） | 澄清等待、全活动态取消、首终态锁存、迟到事件无副作用（BR-SYS-STATE-007） |
-| 工具调用循环 | AG | AG | SM-AG-02 | active | 既有；按 CapabilityGrant 收窄（BR-SYS-STATE-007） |
-| Proposal 链（连续 Proposal 接力/失效） | DE（既有 SM-DE-01，D2 扩展接力语义） | DE | SM-DE-01 | active（D2 调整） | 以最新 LogicalState 接力、前卡基准推进失效、不形成补丁栈（BR-SYS-STATE-008） |
-| 受限任务实例（TaskRun）与步骤 | AG 编排（同一用户目标内组织步骤/回合） | AG | SM-AG-04 | active（D3 建机） | 非后台队列、不自动重试/续跑、不越确认点；真实工作状态由回合/步骤/工具事件驱动（BR-SYS-STATE-008） |
-| 工作区资源操作（WorkspaceOperation） | WS 承载计划、重验、磁盘执行、补偿与恢复；AG/TaskRun 只负责意图、DecisionRequest 与调用 | WS | SM-WS-04 | active（设计已登记，待实现） | 前置裁决；确认后直接 DiskState；无资源 DiffCard；fail-fast 逆序补偿；重启 Interrupted |
-| 代理会话（AgentSession）生命周期 | AG（展示/持久化/恢复隔离键） | AG | —（已判定：无独立状态机） | 已判定（D3） | 判定为按 X-FORBID-007 投影 + history 双作用域（workspace+session）持久化/恢复，不建独立状态机 |
-| 外部内容引用（ExternalContentRef）暂存/清除 | REF（读取路径）+ AG（当前任务消费） | REF/AG | —（已判定：无独立状态机） | 已判定（D3） | 一次性 data-only、当前任务范围、不自动持久化；payload 随发送即弃（BR-SYS-DATA-007，IMP-EXTERNAL-CONTENT-01 落地） |
-| 显式项目记忆引用（MemorySelectionRef） | AST（用户管理）+ REF（选择注入） | AST/REF | —（已判定：无独立状态机） | 已判定（D3） | 仅显式选择进入当前回合、不自动写入/检索/注入（BR-SYS-DATA-007，IMP-MEMORY-SELECTION-01 落地） |
+| 代理回合（AgentTurn） | AG（SM-AG-01 承载模型/工具自适应回合与等待） | AG | SM-AG-01 | active | 澄清等待、裁决等待、全活动态取消、首终态锁存、迟到事件无副作用（BR-SYS-STATE-007） |
+| 工具调用循环 | AG | AG | SM-AG-02 | active | 每个 ToolCall 按当前硬事实计算 CapabilityGrant，结果回 SM-AG-01 重新装配/Gate（BR-SYS-STATE-007） |
+| Proposal 链（连续 Proposal 接力/失效） | DE（SM-DE-01 承载逐卡生成、预览与裁决） | DE | SM-DE-01 | active | 以最新 LogicalState 接力、前卡基准推进失效、不形成补丁栈（BR-SYS-STATE-008） |
+| TaskRun/TaskPlan/TaskStep 投影 | AG 从复杂目标 TurnEvent 派生可观察任务投影 | AG | SM-AG-04 | active | 不调度、不授权、非后台队列；候选路线可更新，真实工作状态只由 provider/工具/领域事件驱动（BR-SYS-STATE-008） |
+| 工作区资源操作（WorkspaceOperation） | WS 承载计划、重验、磁盘执行、补偿与恢复；AG AgentTurn 负责 DecisionRequest 与确认回执后的调用，TaskRun 只投影 | WS | SM-WS-04 | active（设计已登记，待实现） | 前置裁决；确认后直接 DiskState；无资源 DiffCard；fail-fast 逆序补偿；重启 Interrupted |
+| 代理会话（AgentSession）生命周期 | AG（展示/持久化/恢复隔离键） | AG | —（无独立状态机） | contract | 按 X-FORBID-007 投影 + history 双作用域（workspace+session）持久化/恢复，不建独立状态机 |
+| 外部内容引用（ExternalContentRef）暂存/清除 | REF（读取路径）+ AG（当前任务消费） | REF/AG | —（无独立状态机） | contract | 一次性 data-only、当前任务范围、不自动持久化；payload 随发送即弃（BR-SYS-DATA-007） |
+| 显式项目记忆引用（MemorySelectionRef） | AST（用户管理）+ REF（选择注入） | AST/REF | —（无独立状态机） | contract | 仅显式选择进入当前回合、不自动写入/检索/注入（BR-SYS-DATA-007） |
 
-> 归属原则：SYS 总图只登记契约与跨模块转移点，不定义内部；TaskRun/回合/会话等运行时状态机归 AG，
+> 归属原则：SYS 总图只登记契约与跨模块转移点，不定义内部；TaskRun 投影/回合/会话等运行时状态机归 AG，
 > Proposal 链归 DE，保存/落盘归 WS，LogicalState 投影归 ED，引用/记忆消费归 REF/AST。
 
 ## §4 状态机注册前置约束（CONSTRAINT）
@@ -126,8 +126,8 @@ constraint_id: X-SEQ-003
   失败语义两侧一致）；SM-DOC-01 SaveConverting 经 SM-WS-01 原子落盘（Saved/SaveError 回执驱动
   saveConvertOk/Fail），原文件不破坏由 WS 保障（A-DOC-M-S-01 §3，双侧已就绪）。
 - **AG 回合门禁与产出**：SM-AG-01 AwaitingGate 提交 SM-SYS-01（gatePassed/gateDenied 驱动，
-  Denied 不可绕过）；SM-AG-01 HandingOff 将修改建议（ChangeProposal）交 SM-DE-01 Generating
-  （genOk/genFail 回执 handoffOk/Fail，**双侧已就绪**，A-DE-M-S-01 §3）；SM-AG-03 accept 驱动
+  Denied 不可绕过）；SM-AG-02 `propose_edit` 将修改建议（ChangeProposal）交 SM-DE-01 Generating，
+  成功回传 ToolResult + DiffProposed，失败回传结构化 ToolResult 且允许模型调整路线（**双侧已就绪**，A-DE-M-S-01 §3）；SM-AG-03 accept 驱动
   SM-ED-01 edit（采纳即用户编辑，双侧已就绪）（A-AG-M-S-01 §6）。
   AG 发起回合前必须携带 OpenDocSnapshot 构建 AgentReadContext；已有 LogicalState 的 diff 经 DE 分流到
   SM-ED-01 预览，未打开文档保持背景临时挂载，只有用户接受才可经 SM-WS-02 落盘；背景 pending 被打开时
@@ -138,23 +138,24 @@ constraint_id: X-SEQ-003
   `AwaitingDecision` 态的批量决策复用既有 `de.accept_diff`/`de.reject_diff` 驱动 SM-DE-01，复用
   既有保存链驱动 SM-ED-01/SM-WS-01 清脏态；`Verifying` 态只读复核 pending_diffs/ed_session_snapshots
   当前真值。**四个转移点双侧已就绪**（AG/DE/ED/WS 侧均复用既有事件，无需对侧改动，A-SYS-M-S-02 §3）。
-- **TaskRun ↔ AgentTurn ↔ Proposal 链**（2026-08-14 D1 登记，R5-B）：同一用户目标的 TaskRun 经
-  SM-AG-01（AgentTurn）组织步骤；进入写入的步骤经 DE 的 SM-DE-01 生成 Proposal 并沿 BR-CORE-STATE-001~003
+- **TaskRun 投影 ↔ AgentTurn ↔ Proposal 链**：同一复杂用户目标的 TaskRun 从 SM-AG-01 TurnEvent
+  派生，不组织或启动步骤；模型在 AgentTurn 中选择 Proposal 工具，经 DE 的 SM-DE-01 生成 Proposal 并沿 BR-CORE-STATE-001~003
   三分流交给 SM-ED-01（已有 LogicalState 预览）/ SM-WS-02（无 LogicalState 接受落盘）；连续 Proposal
-  必须以最新 LogicalState 为基准接力，前卡基准推进失效且不可再裁决（BR-SYS-STATE-008）。TaskRun 状态机
-  （AG）D3 建机后登记本总图；取消只停止未开始步骤、保留已成功预览内容，不形成任务级回滚。
-- **TaskRun ↔ DecisionRequest ↔ WorkspaceOperation 链**（2026-08-21 登记）：资源步骤由 AG 生成
-  WorkspaceOperationPlan，并以 DecisionRequest 进入 SM-AG-04 WaitingConfirm；确认后 TaskRun 立即调用
-  SM-WS-04 Revalidating/Executing，拒绝零磁盘副作用。WS 完成或补偿终态回传 TaskRun 后才可推进依赖步骤。
+  必须以最新 LogicalState 为基准接力，前卡基准推进失效且不可再裁决（BR-SYS-STATE-008）。SM-AG-04
+  只观察并展示这些事实；取消保留已成功预览内容，不形成任务级回滚。
+- **AgentTurn ↔ DecisionRequest ↔ WorkspaceOperation 链**：资源计划由 AG 生成 WorkspaceOperationPlan，
+  DecisionRequest 使 SM-AG-01 进入 AwaitingDecision；确认后 AgentTurn 运行时调用 SM-WS-04
+  Revalidating/Executing，拒绝零磁盘副作用。WS 完成或补偿结果追加为 TurnEvent，模型在下一次 Gate 后
+  决定后续路线；SM-AG-04 只投影 Waiting/Active，不自动推进依赖步骤。
   资源卡不进入 SM-DE-01；受影响内容 Diff 仅在资源执行成功后因基线推进失效。CreateDocumentBundle 在
   资源创建成功后再进入 SM-DE-01 投影初始内容 Diff。重启使两侧未终态都进入 Interrupted，旧确认不得重放。
-- **AgentTurn 澄清等待（非终态）**（2026-08-14 D1 登记，R5-A）：澄清是等待用户输入的非终态，不是
+- **AgentTurn 澄清等待（非终态）**：模型输出澄清请求后进入等待用户输入的非终态，不是
   SM-AG-01 的 Completed；取消可在任一活动阶段进入终态，首终态后迟到事件/工具不得产生文档、卡片或落盘
-  副作用（BR-SYS-STATE-007）。D3 调整 SM-AG-01 时须与 IPC 流式终态契约（BR-SYS-STATE-002）对齐。
-- **外部内容 / 显式记忆引用边界**（2026-08-14 D1 登记，R5-C）：ExternalContentRef 只在当前
+  副作用（BR-SYS-STATE-007）。SM-AG-01 必须与 IPC 流式终态契约（BR-SYS-STATE-002）对齐。
+- **外部内容 / 显式记忆引用边界**（R5-C）：ExternalContentRef 只在当前
   AgentTurn/TaskRun 当前任务内经 REF 以 data-only 注入 AG（BR-SYS-DATA-007），任务结束/重启/跨会话
   不恢复；MemorySelectionRef 仅用户显式选择进入回合。两者不得触发 AST 自动写入（SM-AST-01 仅用户
-  管理路径），D3 定义暂存/清除与来源令牌后按 X-SEQ-003 判定是否建机登记。
+  管理路径）；若后续出现独立暂存/清除与来源令牌链，再按 X-SEQ-003 判定是否建机登记。
 
 <!-- CONSTRAINT
 constraint_id: X-INTER-001
@@ -231,11 +232,11 @@ status: mapped
 
 ## §9 测试与验收
 
-- **注册可追溯**（REQ-SYS-003 验收）：总图清单中每条核心链状态机可追溯 owner_module；planned 项
-  随 owner G2 回填 machine_id 后转 active。
+- **注册可追溯**（REQ-SYS-003 验收）：总图清单中每条状态化核心链均可追溯 owner_module、machine_id
+  与活动设计；无独立状态机的共享对象须明确标记 contract，不得伪造 machine_id。
 - **注册前置阻断**（X-SEQ-003）：状态化核心链在无状态机定义时，G4 实现验证触发 SC-06/07 阻断
   （集成阶段验证）。
-- **跨模块转移一致**（X-INTER-001）：当前 Active 转移点的两侧 owner 状态机必须对接一致；diff 必须覆盖已有 LogicalState 预览、无 LogicalState 挂载接受落盘、pending 打开迁移三条分流，在 G5 跨模块联调验证（APC §5.1）。Agent 1.0 不含构建移交/回落；未来新 Profile 须另行登记和验证。
+- **跨模块转移一致**（X-INTER-001）：当前 Active 转移点的两侧 owner 状态机必须对接一致；工具结果必须回 SM-AG-01 重过 Gate，TaskRun 投影不得调用领域状态机；diff 必须覆盖已有 LogicalState 预览、无 LogicalState 挂载接受落盘、pending 打开迁移三条分流，在 G5 跨模块联调验证（APC §5.1）。Agent 1.0 不含构建移交/回落；未来新 Profile 须另行登记和验证。
 - **流式终态对齐**：经 IPC 流式的状态机终态与 BR-SYS-STATE-002 一致（SM-SYS-01 已对齐）。
 
 ## §10 技术债务与盲区（诚实声明）
@@ -243,8 +244,7 @@ status: mapped
 - **总图清单已闭合**：§3/§3.1 当前合计 16 台已定义状态机，无 planned 登记项；清单仍为非穷举框架，新状态化链路按 X-SEQ-003 建机登记追加。
 - **autocomplete / inline-assist 归属已定（AG）**：2026-06-11 人类确认，SM-AG-03 同机承载已登记。
 - 跨模块转移点清单（§5）为代表性、非穷举，随各模块 G2 暴露补全。
-- **Agent 1.0 运行时/任务链状态机归属已回填（D1 债务关闭，2026-08-14）**：TaskRun 由 D3 建机
-  SM-AG-04（active，§3.1）；AgentSession/ExternalContentRef/MemorySelectionRef 经 D3 判定**无独立
+- **Agent 1.0 运行时/任务链状态机归属已回填**：TaskRun 纯投影由 SM-AG-04 承载（active，§3.1）；AgentSession/ExternalContentRef/MemorySelectionRef **无独立
   状态机**（投影契约 + history 双作用域 / payload 一次性 data-only），§3.1 已回填；SM-AG-01 澄清非终态
   与 SM-DE-01 连续 Proposal 接力已由 IMP-CLARIFICATION-01 / IMP-CONSECUTIVE-PROPOSAL-01 落地
   （BR-SYS-STATE-007/008）。
@@ -252,13 +252,14 @@ status: mapped
 ## §11 维护入口
 
 1. 本文现有 CONSTRAINT / REQ_MAP 已由 ADUS 生成器注册；任何更改后仅通过 `governance:generate` 刷新，不人工维护索引。
-2. D2 三分流/连续 Proposal 与 D3 AgentTurn/TaskRun/引用记忆归属已回填§3.1/§5，不再作“待建机”计划项。
+2. 三分流/连续 Proposal 与 AgentTurn/TaskRun/引用记忆归属已回填 §3.1/§5，不再作“待建机”计划项。
 3. 未来只在已授权的 REQUIREMENT/DESIGN Scope 新增状态化链路时，由 owner M-S 先定义内部，再在本文登记 machine_id 和跨模块转移。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-03 | v1.18 | AG-ADAPTIVE-RUNTIME-DESIGN-01：SM-AG-04 登记改为 TurnEvent 派生 TaskRun 投影机；工具结果统一回 SM-AG-01 重装配/门禁；DecisionRequest/WorkspaceOperation 改由 AgentTurn 驱动，TaskRun 不再调度。 |
 | 2026-06-10 | v1.0 | 初版（SYS G2 末件）：状态机总图框架与注册清单（登记 APC §6 核心链，SM-SYS-01 active 其余 planned）；注册前置约束 X-SEQ-003（对齐 ADP SC-06/07）、跨模块转移契约框架 X-INTER-001；流式终态与 BR-SYS-STATE-002 对齐；REQ_MAP（REQ-SYS-003）；术语归属说明；债务盲区（SY-04 总图未闭合、autocomplete/inline-assist 归属待定） |
 | 2026-06-10 | v1.1 | WS G2 回填（owner 模块登记，§11.3）：§3 总图清单 save 行 planned→active 回填 machine_id=SM-WS-01，新增「diff 落盘（WS 侧）SM-WS-02」「时间轴还原 SM-WS-03」两行（A-WS-M-S-01 定义）；§5 X-INTER-001「diff accepted→落盘」转移点登记 WS 侧机 SM-WS-02（DE 侧待 DE G2）；§10 SY-04 债务由「未闭合」更新为「部分闭合」（SYS+WS 已 active，余模块 planned） |
 | 2026-06-11 | v1.2 | ED G2 回填（owner 模块登记，§11.3）：§3 新增「文档编辑会话｜ED｜SM-ED-01｜active」行（A-ED-M-S-01 定义）；§5 X-INTER-001 登记「ED 脏态↔WS 保存」转移点（edit→Dirty 唯一驱动、Saved 回执清脏态，双侧已就绪）；autocomplete/inline-assist 归属仍待确认，未回填 |
