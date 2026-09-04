@@ -2,513 +2,380 @@
 文档编号：AG-X-L-04
 文档状态：A
 负责模块：AG
-文档职责：Binder AG 1.0 开发与验证执行计划——将 agent-edit-1.0 目标架构拆成可独立开发、独立验证和阶段收口的工作包，定义阶段依赖、实施边界、验证方案、证据要求与发布退出门禁
-上游约束：A-CORE-X-D-02、A-AG-M-D-01、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-WS-M-T-02、A-WS-M-S-02、A-CORE-X-L-06、A-VAL-X-V-04、A-SYS-I-P-03
-直接承接：AG 1.0 后续 CODE_CHANGE Issue Trace/Scope Lock、测试影响计划、AG/DE/ED/WS/ENT/GW 联调、G5 系统验证与发布裁决
-使用边界：本文是当前唯一 Active 的 AG 1.0 执行计划，只消费需求、设计和验证卡，不定义或覆盖它们；不把计划项或历史 G4/Integrated 标记视为当前完成真值，不纳入 Build/CBT、自动 AST/KB/TPL、未进入 ExplicitEditTargetSet 的跨文档写入、参考风格/排版、开放式 Planning 或多 Agent；当前验证状态唯一见 A-VAL-X-V-04 与实际 Runtime Report
-变更要求：工作包边界、阶段依赖、冻结契约、验证矩阵或退出条件变化时，须先回写对应 AG/WS L1/L2 与验证卡；实际开发按 ADP 为每个工作包建立独立 Scope，本文不得替代 Runtime Report
+文档职责：Binder Agent 1.0 唯一实施计划——把已冻结需求和设计拆为可独立治理、实现、删除旧逻辑和验证的工作包
+上游约束：A-CORE-X-D-02、A-AG-M-D-01、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-SYS-I-P-01、A-DE-M-T-01/A-DE-M-S-01/A-DE-I-P-01、A-ED-M-T-01/A-ED-M-S-01/A-ED-I-P-01、A-WS-M-T-02/A-WS-M-S-02/A-WS-I-P-01、A-VAL-X-V-04
+直接承接：WP-AG10-01～09 的 CODE_CHANGE Scope、A-VAL-X-V-04 验证卡、G5 系统验证与发布裁决
+使用边界：本文只规定实施顺序、范围和证据门禁，不定义需求、运行时授权或完成事实；实际状态只来自对应 Scope 的 Runtime Report 和验证卡；旧实现存在不等于当前工作包已完成
+变更要求：工作包边界、依赖或退出条件变化时，先核对上游需求/设计；不得用改计划掩盖实现偏差
 治理成熟度：draft
 ---
 
-# Binder AG 1.0 开发与验证计划
+# Binder Agent 1.0 开发与验证计划
 
-## §1 计划目标
+## §1 目标与唯一事实来源
 
-本计划把 `agent-edit-1.0` 拆成八个工程工作包和七个阶段，使每个能力模块都具备：
+本计划只服务一个结果：将已冻结的 `agent-edit-1.0` 从当前“代码存在但语义分叉”的状态收敛为可靠、
+可泛化、可审计的专业 Agent。唯一事实顺序为：
 
-1. 明确职责、输入、输出和不负责事项；
-2. 可由独立 CODE_CHANGE Scope 实施；
-3. 可在不等待完整 Agent 完成时验证自身契约；
-4. 有明确模块退出门禁，能够独立收口；
-5. 最终通过跨模块 G5 验证聚合为 AG 1.0 发布能力。
+1. L1 需求决定做什么和不做什么；
+2. Active L2 设计、协议和状态机决定运行契约；
+3. 本文决定实施顺序与交付粒度；
+4. A-VAL-X-V-04 决定验证场景和证据状态；
+5. ADUS、测试治理注册表和实际 Runtime Report 证明映射与执行结果。
 
-“独立收口”不等于“无依赖”。上游冻结契约未通过时，下游可以准备测试夹具和适配层，但不得以假契约
-宣布完成。
+本文不得把历史提交、旧自动化数量、类名存在或 UI 展示推断为完成。所有工作包当前从 `PLANNED`
+起步；只有新 Scope 按当前契约实施并产生证据后才能进入 `READY`。
 
-## §2 开发原则与完成等级
+## §2 冻结基线与非目标
 
-### §2.1 五条实施原则
+### §2.1 必须保持的 1.0 基线
 
-- **契约先于接线**：IntentResult、PromptPackage、CapabilityGrant、ChangeProposal 和事件终态先冻结，后实现消费者。
-- **可靠性先于能力数量**：先修真实门禁、取消和唯一终态，再开放工具和复杂上下文。
-- **默认拒绝**：工具、目标、上下文来源和 Runtime Profile 未显式允许即不可用。
-- **每个工作包自带验证**：不把单元测试、故障注入或负向测试统一拖到最后补写。
-- **G4 与 G5 分离**：模块通过自动化可收口为 G4；只有真实网关、编辑器、Diff 和保存链通过后才具备 G5 发布证据。
+- 模型负责理解用户目标、选择当前动作，并根据真实 ToolResult 修订 IntentResult 与路线；关键词分类只能提供
+  非权威提示，不能决定授权或完成。
+- 运行时负责 RuntimeProfile、Gate、CapabilityGrant、目标范围、格式动态能力、预算、取消、终态锁存和
+  副作用边界；每次 provider 调用重新 Gate，每次工具执行重新计算当前 grant。
+- TurnEvent 是 append-only 回合事实源；UI 状态、TaskRun/TaskPlan/TaskStep、EvidenceLedger 和 ProjectReport
+  都是可重建投影，不得反向驱动执行。
+- 简单目标只使用 AgentTurn；复杂或跨执行片段目标才有 TaskRun。TaskPlan 只显示模型当前路线和已发生事实，
+  不是调度器、后台队列、执行游标或未来授权。
+- 文档内容修改只能形成 ChangeProposal；ProposalBatch 可包含一个或多个独立 DiffProjection。当前 1.0 的
+  同文档多卡只支持 `current_editor` 下的 `block_ops` 与稳定 blockId `replace_block`。
+- 同一 ProposalBatch 的多卡共享生成基线、目标互不重叠、一次受控预览、逐卡局部裁决；批内兄弟卡不得因
+  整篇 revision 推进互相失效。后续批次仍以最新 LogicalState 为基准并可使旧批次失效。
+- 项目报告只从实际读取结果形成 EvidenceLedger 后派生；不存在模型可调用的 `report_project` 完成工具。
+- WorkspaceOperation 只由模型提出计划；DecisionRequest 裁决后由运行时在同一 AgentTurn 内重验并调用 WS，
+  TaskRun/TaskPlan 不执行资源操作。
 
-### §2.2 完成等级
+### §2.2 不进入本计划
 
-| 等级 | 含义 | 必备证据 |
+- Build/CBT 接管或回落、多 Agent、后台任务队列、自动重试或重启后自动续跑。
+- 自动 AST/KB/TPL 检索或写入、开放式长期记忆、未明确授权的外部网络读取。
+- 未进入 ExplicitEditTargetSet 的跨文档写入、跨文档事务、批量接受/保存。
+- 参考风格生成、通用排版代理，以及没有稳定目标局部逆操作的多卡 `replace_document/style_ops/table_ops/image_ops`。
+
+## §3 完成等级与统一门禁
+
+| 等级 | 含义 | 必须证据 |
 |---|---|---|
-| Contract Ready | 输入输出、错误、状态和兼容策略已冻结 | L1/L2/I-P 对齐；契约样例；无未决高风险语义 |
-| Module Ready | 单模块真实实现完成 | 单元/状态/服务测试；负向路径；无桩或伪成功 |
-| Integrated | 与直接消费者真实接线 | 契约测试、集成测试、失败传播与恢复测试 |
-| G5 Validated | 在真实系统边界证明需求闭环 | 真实模型/网关/编辑器/Diff/保存链记录 |
-| Release Ready | 所有发布阻断项满足 | §11 发布门禁；未验证能力关闭；治理和打包通过 |
+| PLANNED | 工作包已在本文定义，尚未按当前设计实施 | 工作包范围、依赖、验证卡已明确 |
+| IMPLEMENTED | 当前 Scope 内生产实现和必要迁移完成 | 代码审阅；旧路径删除清单；主/负/恢复测试 |
+| INTEGRATED | 直接生产者与消费者使用同一契约 | 契约测试、前后端/跨模块测试、失败传播 |
+| G5_VALIDATED | 真实 Tauri/WKWebView/provider/workspace 场景通过 | A-VAL-X-V-04 的可复核系统证据 |
+| RELEASE_READY | 发布阻断场景全部闭合 | G5、治理、完整回归、打包和边界说明 |
 
-工作包只有达到 `Module Ready` 才能独立收口；阶段只有所有必需工作包达到该阶段指定等级才能退出。
+每个工作包退出前必须同时满足：
 
-## §3 工作包拆分
+1. 显式 ADP Scope 已确认，实际 changed_files 全部在范围内；
+2. 当前实现与其承接的 REQ→RULE/STATE_MACHINE→@GOV→TEST 链逐项一致；
+3. 旧语义的生产入口、类型字段、分支和测试期望已删除或被明确的只读迁移替代；
+4. `test:plan` 与同输入 `test:related` 实际通过，不能手选更小测试集；
+5. 自动化与系统验证结论分开，Runtime Report 无伪完成；
+6. 无未处置 Stop Condition，工作包才可标记 READY 并形成独立提交。
 
-| 工作包 | 能力模块 | 主要职责 | 核心输入 | 核心输出 | 直接依赖 | 可独立收口 |
-|---|---|---|---|---|---|---|
-| WP-AG10-00 | Runtime Profile 与契约入口 | 统一 1.0 入口、能力开关和冻结契约 | start_turn 请求、发布配置 | `agent-edit-1.0` 入口与能力矩阵 | 无 | 是 |
-| WP-AG10-01 | Execution Kernel | 真实门禁、流式、取消、错误、唯一终态 | PromptPackage、GateOutcome、CancellationToken | 有序事件流与单一终态 | WP-AG10-00 | 是 |
-| WP-AG10-02 | Intent Layer | 识别当前轮目标、变更意图和歧义 | 用户原文、显式目标、编辑器焦点、必要历史 | `IntentResultV1` | WP-AG10-00 | 是 |
-| WP-AG10-03 | Context Layer | 选择、校验、裁剪文档上下文 | IntentResult、LogicalState、选区、引用、历史 | ContextBundle / PromptDataEnvelope 清单 | WP-AG10-02 | 是 |
-| WP-AG10-04 | Prompt Runtime | 按信任层和版本装配模型输入 | IntentResult、ContextBundle、工具 manifest | `PromptPackageV1` + trace 元数据 | WP-AG10-02、WP-AG10-03 | 是 |
-| WP-AG10-05 | Tool Capability Layer | 注册、逐回合授权、参数校验与执行；资源意图只能生成 WorkspaceOperationPlan，确认后由 TaskRun 调用 WS | IntentResult、Runtime Profile、工具请求、DecisionRequest 回执 | `CapabilityGrantV1`、ToolResult、plan_id/operation receipt | WP-AG10-01、WP-AG10-02、WP-AG10-04、SM-WS-04 | 是 |
-| WP-AG10-06 | Editor/Diff Integration | 只将文档内容修改变成可审阅 ChangeProposal；CreateDocumentBundle 在资源创建成功后投影普通初始内容 Diff | IntentResult、LogicalState revision、模型/工具产出、operation_id | PendingDiff、审阅/应用/冲突回执 | WP-AG10-01、WP-AG10-03、WP-AG10-05、SM-WS-04 | 是 |
-| WP-AG10-07 | Session、UI 与 Trace | 会话隔离、消息呈现、恢复、脱敏追踪 | Turn 事件、proposal、session/workspace 归属 | 可恢复消息流、AgentTrace、反馈元数据 | WP-AG10-01；完整收口依赖 WP-AG10-06 | 是 |
+## §4 工作包总表
 
-每个工作包独立开发时只能修改其职责范围和必要契约适配；发现其他模块缺陷时记录为依赖，不得顺手扩大 Scope。
+| 顺序 | 工作包 | 唯一结果 | 主要验证卡 | 初始状态 |
+|---|---|---|---|---|
+| 1 | WP-AG10-01 · TurnEvent Foundation | append-only 事件、顺序、持久化与安全投影成为事实源 | V-S6、V-S9、V-S12 | PLANNED |
+| 2 | WP-AG10-02 · Adaptive Turn Kernel | 模型—工具—证据自适应循环；逐次 Gate；真实等待/终态 | V-S6、V-S11、V-S12 | PLANNED |
+| 3 | WP-AG10-03 · Dynamic Capability | 每次动作按硬事实计算 grant；移除语义授权和越权入口 | V-S10、V-S11、V-C1～C3、V-R1/R2 | PLANNED |
+| 4 | WP-AG10-04 · Context & Prompt | 当前事实、data-only 内容和每次调用重装配 | V-S8～S12 | PLANNED |
+| 5 | WP-AG10-05 · Evidence & Report | 成功读取生成 EvidenceLedger；最终报告由运行时派生 | V-S13 | PLANNED |
+| 6 | WP-AG10-06 · Task Projection & Decisions | 简单回合零 TaskRun；复杂任务投影；同回合裁决恢复 | V-S7、V-C1～C3、V-R1/R2 | PLANNED |
+| 7 | WP-AG10-07 · ProposalBatch & DiffCard | 同批连续块组拆卡、一次预览、逐卡独立裁决 | V-S1～S5、V-S14 | PLANNED |
+| 8 | WP-AG10-08 · UI, Recovery & Migration | UI 只消费事件/业务事实；恢复与兼容读取不造第二真源 | V-S6、V-S7、V-S9、V-S14 | PLANNED |
+| 9 | WP-AG10-09 · Redundancy Removal | 删除旧 resolver、report tool、静态 scheduler 和过期兼容写入 | 全部受影响卡 | PLANNED |
 
-## §4 总体依赖与并行策略
+## §5 依赖与执行顺序
 
 ```mermaid
 flowchart LR
-    P0["Stage 0<br/>Profile / Contract"] --> E["Stage 1<br/>Execution Kernel"]
-    P0 --> I["Stage 2A<br/>Intent"]
-    I --> C["Stage 2B<br/>Context"]
-    C --> P["Stage 2C<br/>Prompt Runtime"]
-    E --> T["Stage 3<br/>Tool Capability"]
-    I --> T
-    P --> T
-    T --> D["Stage 4<br/>Editor / Diff"]
-    C --> D
-    E --> D
-    E --> S["Stage 5A<br/>Session / UI 基础"]
-    D --> S2["Stage 5B<br/>Proposal / Trace 收口"]
-    S --> S2
-    S2 --> G["Stage 6<br/>G5 / Release"]
+  G["G1/G2/G3 已冻结"] --> W1["WP1 TurnEvent"]
+  W1 --> W2["WP2 Adaptive Kernel"]
+  W2 --> W3["WP3 Dynamic Grant"]
+  W2 --> W4["WP4 Context & Prompt"]
+  W4 --> W5["WP5 Evidence & Report"]
+  W1 --> W6["WP6 Task Projection"]
+  W3 --> W6
+  W3 --> W7["WP7 ProposalBatch"]
+  W6 --> W7
+  W5 --> W8["WP8 UI & Recovery"]
+  W7 --> W8
+  W8 --> W9["WP9 Redundancy Removal"]
+  W9 --> G5["G5 System Validation"]
 ```
 
-允许的并行关系：
+WP3 与 WP4 在契约上可并行，但当前仓库共享 `runtime/context/prompt/tool` 文件较多，默认串行执行以减少
+混合 Scope。任何调整顺序都不能绕过上游退出条件。
 
-- Stage 1 Execution Kernel 与 Stage 2A Intent 可在 Stage 0 退出后并行；
-- Context 完成输入输出冻结后，Prompt Runtime 实现可与 Tool policy 测试夹具准备并行；
-- Session schema、消息 segment 和基础恢复可在事件契约冻结后与 Context/Prompt 并行；
-- Editor/Diff 只能在 ChangeProposal、工具授权和执行终态语义稳定后进入真实接线；
-- Stage 6 不是集中补测试阶段，而是聚合此前已有证据并完成真实系统验证。
+## §6 工作包实施规格
 
-禁止的并行方式：前后端各自发明同名不同义的契约、在 Intent 未冻结前硬编码工具权限、在 Execution
-未可靠前用 UI 状态掩盖取消/错误、在 Diff 基准未锁前直接接模型写入。
+### §6.1 WP-AG10-01 · TurnEvent Foundation
 
-## §5 Stage 0：Runtime Profile 与契约基线
+**目标**：唯一化回合事实；相同持久化事件序列必须重建相同安全投影。
 
-### §5.1 目标
+**候选生产范围**：`src-tauri/src/ag/turn_events.rs`、`turn.rs`、`runtime.rs`、持久化迁移、
+`src/services/agService.ts`、`src/store/agStore.ts` 及事件监听直接消费者。实际 Scope 以代码审计为准。
 
-建立唯一 1.0 主入口和兼容面，确保所有后续工作使用同一 Runtime Profile、数据结构和错误语义。
+**必须实现**：
 
-### §5.2 工作包：WP-AG10-00
+- `seq` 单调且 `(workspace_id, agent_session_id, turn_id, seq)` 唯一；事件只追加，不原位改历史；
+- Intent revision、route observation、provider activity、ToolCall/ToolResult、等待、Proposal/Decision 和终态均有
+  可恢复事件；正文、密钥和隐藏推理不进入安全投影；
+- terminal_latch 后迟到 provider/tool/event 不产生业务副作用；
+- 前端从事件 reducer 得到活动状态，不从 Promise 完成或卡片 pending 猜测执行中。
 
-**开发范围**：
+**必须删除/替代**：并列的可变回合状态真源、前后端各自发明的完成事件、终态后补发执行状态路径。
 
-- `ag.start_turn` / 前端 `startTurn` 参数与兼容适配；
-- `runtime_profile=agent-edit-1.0` 的后端校验；
-- IntentResultV1、PromptDataEnvelopeV1、PromptPackageV1、CapabilityGrantV1、ChangeProposal 和回合事件的共享类型；
-- Build/CBT、ExplicitEditTargetSet 集合外写入、文件结构操作、自动 AST/KB/TPL 的 feature gate；
-- 旧入口只能适配到同一主链，不能保留第二条 provider 调用路径。
+**退出证据**：顺序/重复/乱序/重放/终态后迟到/多 session 隔离测试；V-S6/S9/S12 自动化部分；完整影响回归。
 
-**不在范围**：实现意图算法、Prompt 文本、工具执行或 Diff 应用。
+### §6.2 WP-AG10-02 · Adaptive Turn Kernel
 
-### §5.3 验证方案
+**目标**：建立模型选择动作、工具提供新事实、模型据此调整路线的单一回合循环。
 
-| 验证层 | 条件 | 通过标准 |
-|---|---|---|
-| 静态/契约 | 前后端共享字段、枚举、serde/TypeScript 形状 | 名称、可选性、错误码和版本一致；契约快照通过 |
-| Service | 传入 `agent-edit-1.0` 与未知 profile | 合法 profile 进入统一入口；未知 profile 稳定拒绝 |
-| 负向 | BuildMode、结构工具、自动补强试图进入 1.0 | 被 feature gate 或 manifest 拒绝，不产生模型/工具调用 |
-| 路径核验 | 搜索所有 provider 调用入口 | 1.0 只有一个受控入口；无客户端/provider 直连 |
+**候选生产范围**：`turn_runtime.rs`、`turn_prompt.rs`、`turn_tool_loop.rs`、`prompts.rs`、provider 调用适配与取消传播。
 
-### §5.4 阶段收口条件
+**必须实现**：
 
-- 六项冻结契约都有版本和兼容策略；
-- 前端能力展示、后端 profile 和工具 manifest 的 1.0 边界一致；
-- 不支持能力返回稳定结果，不出现空壳按钮、半接管或伪成功；
-- 契约测试与治理审计通过；
-- 输出一份契约变更影响清单，后续工作包以此为输入。
+- 首次 IntentResult 可为 unresolved；模型结构化输出产生 Intent revision、route observation、ToolCall、
+  DecisionRequest、ProposalBatch 或 final answer；
+- ToolResult 回注后重新组装 PromptPackage，并在每次 provider 调用前重新 Gate；
+- AwaitingClarification/AwaitingDecision 暂停 provider 和工具；合法补充/裁决恢复原 AgentTurn；
+- 循环预算、取消、provider/tool 错误和首终态真实生效，无自动重试或后台续跑。
 
-## §6 Stage 1：可靠 Execution Kernel
+**必须删除/替代**：关键词 resolver 作为最终语义、预先固定整轮工具路线、一次 Gate 覆盖后续调用、
+`streamEnd`/handoff 伪装最终完成。
 
-### §6.1 目标
+**退出证据**：模型输出结构解析、工具回注后改线、逐次 Gate、澄清/裁决恢复、取消竞态、循环上限与错误传播测试；V-S6/S11/S12。
 
-在尚未增加复杂工具和上下文前，证明每个回合的门禁、流、取消、错误与终态是真实的。
+### §6.3 WP-AG10-03 · Dynamic Capability
 
-### §6.2 工作包：WP-AG10-01
+**目标**：工具注册与当前执行授权彻底分离，每次 ToolCall 都获得短生命周期 CapabilityGrant。
 
-**开发范围**：`src-tauri/src/ag/turn.rs`、模型调用编排、取消传播、事件发射、必要 IPC 适配、前端回合状态归并。
+**候选生产范围**：`tool_registry.rs`、`tool.rs`、`tool_exec.rs`、`target_set.rs`、相关类型和 WorkspaceOperation 内部入口。
 
-**输出契约**：有序 Turn 事件、结构化 GateDenied/Error/Cancelled、单一 terminal state、与 turn_id 关联的执行 trace。
+**必须实现**：
 
-**关键实现机制**：
+- grant 只由当前 profile、注册表、ExplicitEditTargetSet、允许副作用、格式/动态能力、确认事实、Gate、预算、
+  取消和终态收窄；动作或事实变化即失效；
+- IntentResult、TaskPlan、Prompt 文本、历史路径、工具发现和“注册存在”均不授权；
+- `propose_edit` 在持久化前由 AG 与 DE 双重校验目标；WorkspaceOperation 仅允许 plan 工具，确认后的执行是
+  运行时内部调用；
+- tool manifest 只投影当前 grant，未知/过期/越界/参数不合法稳定失败关闭。
 
-- GatePassed 只消费本次服务端 GateOutcome；
-- CancellationToken 传播到 provider stream 和 tool loop；
-- terminal_latch 首次终态后拒绝后续 Done/Error/Cancelled；
-- gateway/provider/tool error 不转换为 Done；
-- 同 session active turn 采用单活或显式排队，不允许竞争执行。
+**必须删除/替代**：`IntentResult.allowed_tools` 写入与消费、静态 intent×tool 授权表作为最终真源、
+模型可见 WS 执行工具和因重复失败而扩权的分支。
 
-### §6.3 验证方案
+**退出证据**：硬事实组合表、grant 失效、AG/DE 双守、资源操作确认前后、格式动态能力、workspace 越界和参数边界测试；V-S10/S11 及 V-C/V-R 相关部分。
 
-| 测试组 | 注入条件 | 必须断言 |
-|---|---|---|
-| Gate | denied/offline/过期或错误 verdict | provider 请求数为 0；工具数为 0；终态正确 |
-| Cancel | 流式前、流式中、工具请求前后取消 | 后续 token/tool/proposal 数为 0；唯一 Cancelled |
-| Error | provider 首包前、部分文本后、工具执行中失败 | Error 保留真实阶段；不得再出现 Done |
-| Race | cancel 与 streamEnd、toolResult 与 error 同时到达 | terminal_latch 只接受一个合法终态 |
-| Ordering | text/tool/proposal 连续事件 | 前后端观察顺序一致；无完成后补发执行态 |
-| Concurrency | 同 session 连续启动两个 turn | 第二个按契约排队或拒绝；不得双活 |
+### §6.4 WP-AG10-04 · Context & Prompt
 
-### §6.4 阶段收口条件
+**目标**：每次模型调用只看到当前有效、带来源、受预算控制的事实，且内容层永远不能提升权限。
 
-- A-AG-M-S-01 的 SM-AG-01 主路径、拒绝路径、恢复路径和禁止转移均有断言；
-- A-VAL-X-V-04 的 V-S6、V-S11、V-S12 中与 Gate、取消、错误和首终态相关的自动化证据通过；
-- 代码中不存在常量 GatePassed、仅 UI 取消或 Error→Done 路径；
-- 前端展示状态与后端真实终态一致；
-- WP-AG10-01 达到 Module Ready，可供后续模块使用，不等待真实工具和 Diff 完成。
+**候选生产范围**：`context.rs`、`history.rs`、`reference_runtime.rs`、`turn_reference.rs`、`prompt_runtime.rs`、
+`turn_prompt.rs`、`prompts.rs` 及前端 AgentContextFacts 装配。
 
-## §7 Stage 2：Intent、Context 与 Prompt Runtime
+**必须实现**：
 
-Stage 2 内部分三步推进；Intent 先冻结，Context 与 Prompt 再依次消费，禁止三套逻辑各自猜测用户意图。
+- 已打开文档读取 LogicalState，未打开文档读取带时点的新鲜 DiskState；Selection/DocRef/外部内容逐项校验；
+- 工具结果、文档、引用、历史和显式记忆均为 data-only；来源、freshness、hash、trust 与裁剪原因可追踪；
+- ToolResult 或用户补充后重新组装动态层；Prompt 当前工具层只来自本次 CapabilityGrant；
+- 当前轮明确输入优先于历史，跨 workspace/session 不注入，1.0 自动 AST/KB/TPL 调用为零。
 
-### §7.1 Stage 2A：WP-AG10-02 Intent Layer
+**必须删除/替代**：Context/Prompt/Intent 三处重复目标判断、全量注册表暴露、跨轮缓存动态 grant、旧 DiskState 覆盖 LogicalState。
 
-**职责**：从当前轮原文、显式目标、编辑器焦点和必要历史形成 IntentResultV1。
+**退出证据**：未保存内容、引用/选区失效、注入文本、预算裁剪、循环重装配、跨会话隔离测试；V-S8/S9/S10/S12。
 
-**开发边界**：只决定任务语义和候选能力，不读取大规模上下文、不执行工具、不生成 Diff。
+### §6.5 WP-AG10-05 · Evidence & Report
 
-**验证样本矩阵**必须覆盖：
+**目标**：项目级结论只能由真实读取证据支持，报告范围和不确定性可复核。
 
-- answer / inspect / search / analyze / edit / create_document / organize_workspace / clarify；
-- 当前文档、选区、新文档、显式引用的 data-only 内容与用户可见文档身份；
-- “只分析，不要修改”等否定变更约束；
-- 当前轮覆盖历史、明确沿用历史、跨文档历史不应沿用；
-- 单目标、多目标、目标缺失和高风险歧义；
-- 同义表达、多轮修正和显式选择上一轮方案。
+**候选生产范围**：`tool_exec.rs`、`context.rs`、`turn_events.rs`、报告投影类型、前端报告展示直接消费者。
 
-**独立收口条件**：相同输入产生稳定结构；blocking ambiguity 不进入模型生成和工具阶段；原始输入不被摘要替代；Context/Prompt/Tool 可通过同一 intent_id 消费结果。
+**必须实现**：
 
-### §7.2 Stage 2B：WP-AG10-03 Context Layer
+- 只有成功读取事件进入 EvidenceLedger；目录、搜索摘要、结构读取和全文读取保留不同 coverage；
+- evidence 与 workspace/turn/source/version/hash/seq 绑定；失败或跨 workspace 结果不可伪装已读；
+- final answer 到达时，运行时关联 evidence through seq 派生 ProjectReport；报告声明已读、未读、来源与不确定性；
+- 新读取只扩展账本，不要求模型重提“报告完成”工具。
 
-**职责**：按 IntentResult 选择当前 LogicalState、选区、显式引用和必要历史，输出带 provenance 的 ContextBundle。
+**必须删除/替代**：`report_project` 工具、强制报告完成门、自报 readItems 覆盖和报告失败导致本可完成回合伪失败的逻辑。
 
-**验证方案**：
+**退出证据**：证据类型/范围/顺序/跨 workspace/失败读取/最终派生测试；V-S13 自动化与真实环境前置证据。
 
-| 场景 | 必须断言 |
-|---|---|
-| 编辑器未保存、磁盘为旧内容 | 当前文档读取 LogicalState，不以 DiskState 覆盖 |
-| 引用 A、修改当前 B | A 内容为 data-only envelope；A/B 规范化身份供 ExplicitEditTargetSet owner 消费；本层不授予写工具 |
-| selection 锚过期 | 拒绝作为当前事实或进入澄清，不猜测位置 |
-| 上下文超预算 | 按 P0→P3 规则裁剪；显式来源与裁剪原因可追踪 |
-| session/workspace 切换 | 不注入其他 session/workspace 临时上下文 |
-| 自动 AST/KB/TPL | 1.0 调用数为 0；显式合法引用除外 |
+### §6.6 WP-AG10-06 · Task Projection & Decisions
 
-**独立收口条件**：所有来源带 source/provenance/freshness/hash/trust/token 元数据；当前文档新鲜度、workspace 边界、引用校验和裁剪确定性测试通过；无模型调用也能独立验证输出包。
+**目标**：复杂任务对用户可观察，但不建立第二个执行引擎。
 
-### §7.3 Stage 2C：WP-AG10-04 Prompt Runtime
+**候选生产范围**：`task.rs`、`task_runtime.rs`、`turn_control.rs`、DecisionRequest/WorkspaceOperation 适配、`PlanCard.tsx`。
 
-**职责**：把系统约束、本轮 grant、IntentResult、ContextBundle 和用户原文装配为 PromptPackageV1。
+**必须实现**：
 
-**验证方案**：
+- 简单目标不创建 TaskRun/TaskPlan；复杂或跨执行片段目标才从 TurnEvent 派生 TaskRun；
+- TaskPlan/TaskStep 只含当前路线 revision、已发生事实、候选动作、等待点和结果，不含执行游标、required_grant
+  或“执行下一步”命令；
+- DecisionRequest 与原 AgentTurn 绑定，confirm/cancel 后在同一回合恢复并重新校验；DiffCard 裁决不改变 TaskRun；
+- 中断只投影 Interrupted，重试创建新 AgentTurn；删除 TaskRun 投影不影响 Proposal、Decision 或实际副作用事实。
 
-- Prompt 层序快照：系统/输出协议 → 工具允许集 → IntentResult → 当前文档/选区 → 显式引用 → 必要历史 → 用户原文；
-- 信任边界测试：文档、引用、历史和工具结果中的“忽略规则/调用工具”等文字保持 data-only；
-- 预算测试：估算、裁剪和拒绝发生在网关调用前；
-- 版本测试：runtime、system prompt、tool manifest、intent 和 context trace 可关联；
-- 脱敏测试：默认 trace 不含正文、密钥、token；
-- 缓存测试：即使不启用 provider cache，也能区分稳定层和动态层；cache 不是阶段阻断项。
+**必须删除/替代**：静态 plan scheduler、TaskStep 自动执行、计划预授权、确认后由 TaskRun 调用 WS、
+重启/定时后台续跑和简单请求空 TaskRun。
 
-**独立收口条件**：给定固定 IntentResult/ContextBundle 可确定性生成同版本 PromptPackage；提示注入不能改变系统层；PromptPackage 可在不调用 provider 的情况下完整验证。
+**退出证据**：简单/复杂判定、投影重建、路线修订、等待无活动、同回合裁决恢复、中断重试和删除投影无副作用测试；V-S7 与 A-VAL-X-V-05。
 
-### §7.4 Stage 2 总收口条件
+### §6.7 WP-AG10-07 · ProposalBatch & DiffCard
 
-- WP-02/03/04 均达到 Module Ready；
-- A-VAL-X-V-04 的 V-S1、V-S6、V-S8、V-S10、V-S11 中与只读意图、LogicalState、data-only、显式目标和澄清相关的自动化证据通过；
-- 任一 trace 中 intent_id、context_trace_id、runtime version 和 manifest hash 一致；
-- Intent、Context、Prompt 不存在重复目标判断或不同 allowed_tools 来源；
-- Stage 2 输出可作为 Tool Capability 和 Editor/Diff 的稳定输入。
+**目标**：将一次模型修改按人工可独立裁决的连续块组拆卡，同时保持编辑器事务一致。
 
-## §8 Stage 3：最小 Tool Capability Layer
+**候选生产范围**：AG `edit_projection.rs/edit_runtime.rs/edit_types.rs/block_ops.rs`；DE `generate.rs/store.rs/lifecycle.rs/expiry.rs/routes.rs`；
+前端 `agService.ts/deService.ts/deStore.ts/edStore.ts/edBlockOps.ts` 与 DiffCard 直接消费者。
 
-### §8.1 目标与工作包
+**必须实现**：
 
-WP-AG10-05 只开放完成当前任务所需的最小读取、内容修改提案或 WorkspaceOperationPlan 工具，并证明注册不等于授权。
+- ProposalBatch 输出 `proposal_batch_id/group_index/group_count`；前端等齐完整批次、校验序号和目标不重叠；
+- 同文档同批 `block_ops`/稳定 `replace_block` 聚合为一次 ED 前向事务；任一组预检失败时整批不预览；
+- 每张卡持有自身目标 before/after fingerprint 与局部 inverse；接受只裁决，拒绝只反转该组，兄弟卡保持 pending；
+- 批内预览/裁决不触发兄弟卡 `document_revision_advanced`；跨批后续修改仍按最新 LogicalState 和既有失效规则；
+- 不具备目标局部逆操作的 proposal kind 保持单卡；不以文本行距或 UI 偶然分段伪造块边界。
 
-**开发范围**：`src-tauri/src/ag/tool_registry.rs`、`tool.rs`、`tool_exec.rs`、CapabilityGrant 生成、工具错误与循环预算。
+**必须删除/替代**：单 Proposal 强制单 DiffProjection、逐卡前向预览、整篇 hash 守卫批内裁决、
+`batch:{id,index,total}` 新写入和全局 accept/reject 作为批次裁决。
 
-### §8.2 1.0 工具策略
+**退出证据**：单组、多组连续/不连续、重叠拒绝、缺组/乱序、原子预检失败、逐卡 accept/reject、兄弟卡保持、跨批失效、保存/恢复测试；V-S1～S5 与 V-S14。
 
-| Intent | 可授权能力 | 明确禁止 |
-|---|---|---|
-| answer | 空或完成回答所需的最小只读工具 | proposal、结构写、删除 |
-| inspect/analyze | 当前文档/显式引用读取、必要 search/list_blocks | proposal，除非用户另有明确编辑要求 |
-| search | 受限 list_docs/search_text/read_doc | workspace 外读取、写工具 |
-| edit | ExplicitEditTargetSet 成员目标读取、propose_edit/edit_blocked | 集合外写入、直接保存、文件结构操作 |
-| create_document | 必要读取、`plan_workspace_operation`；确认前由 CreateDocumentBundle 冻结初始内容 | 目标资源建立前 `propose_edit`、带 AI 内容的直接 create_doc |
-| organize_workspace | 必要读取、`plan_workspace_operation` | 内容 proposal、未经 DecisionRequest 直接执行资源副作用 |
-| clarify | 无副作用工具 | 所有写工具 |
+### §6.8 WP-AG10-08 · UI, Recovery & Migration
 
-### §8.3 验证方案
+**目标**：用户看到的消息、工具、等待、任务、报告和 Diff 状态完全来自当前事实，重启恢复不制造新语义。
 
-- 对每个 Intent 生成 CapabilityGrant 快照，断言最小允许集；
-- 对每个工具执行 registry + grant + target + parameters 四重校验；
-- 覆盖未注册、已注册未授权、grant 过期、错误 target、参数越界、workspace 越界；
-- 覆盖当前文档/用户显式引用初始化、同 AgentTurn 澄清单调追加、只读工具零追加、scope DecisionRequest
-  confirm 追加/cancel 零追加、TaskRun continuation 继承与集合外 propose_edit 硬拒；
-- 权限拒绝重复调用不能升级权限；同类失败和总循环达到上限后结束；
-- 只读工具对已打开文档使用 LogicalState；
-- propose 工具只形成 ChangeProposal，不产生 LogicalState/DiskState 写入；
-- `create_folder`、move/rename、delete、命令、网络和未验证高级工具在 1.0 grant 中始终缺席。
+**候选生产范围**：`agService.ts`、`agStore.ts`、AgentPanel/MessageFlow/PlanCard/ToolCallCard、DiffCard/deStore/edStore、
+Rust/前端持久化迁移与事件补流。
 
-### §8.4 阶段收口条件
+**必须实现**：
 
-- 完整 Intent×Tool allow/deny 矩阵通过；
-- A-VAL-X-V-04 的 V-S11、V-S12 通过当前 Scope 的自动化门禁，已注册但未进入 CapabilityGrant 的工具不得执行；
-- 工具循环状态机和错误恢复有断言；
-- 静态与动态核验均证明没有工具直接写用户文档；
-- ToolResult 保持结构化错误和 trace 关联，可供模型恢复但不能扩权。
+- 信息流按 seq 消费安全事件；等待态无“工作中”动画；Error/Cancelled/Interrupted/Rejected/Conflicted 不显示完成；
+- Intent/route 只显示用户可理解摘要，不显示隐藏推理；ProjectReport 展示已读/未读与不确定性；
+- 同批卡可分别裁决并显示批内位置；批次缺失/损坏失败关闭；
+- V1 兼容只读一次转换为 V2 当前投影，不继续写旧字段，不让历史恢复重启执行。
 
-## §9 Stage 4：Editor/Diff 可靠闭环
+**必须删除/替代**：Promise/UI 本地猜终态、卡片 pending=Agent 执行中、旧 batch 嵌套字段新写入、恢复时自动续跑。
 
-### §9.1 目标与工作包
+**退出证据**：事件乱序/补流、等待/终态、批内卡片、报告、重启/迁移和多 session/workspace UI 测试；V-S6/S7/S9/S14。
 
-WP-AG10-06 把模型产出的写意图统一转换为可定位、可审阅、可拒绝和可冲突检测的 ChangeProposal。
+### §6.9 WP-AG10-09 · Redundancy Removal
 
-**开发范围**：AG→DE 交接、proposal 持久化、DiffCard、ED LogicalState revision/hash、锚校验、apply 回执、WS 保存结果。
+**目标**：在所有当前消费者完成迁移后，删除会重新形成第二真源的旧实现与过期测试夹具。
 
-### §9.2 分路径开发
+**删除候选**：旧关键词授权 resolver、IntentResultV1 授权字段、`report_project` 注册/执行/Prompt、静态 TaskPlan
+执行器、模型可见 WS 副作用工具、旧事件别名、旧 batch 写入、仅服务旧路径的适配器和测试 helper。
 
-| 路径 | 输入 | 预期输出 | 禁止结果 |
-|---|---|---|---|
-| 当前全文编辑 | 当前 LogicalState + base revision | 当前文档 PendingDiff | 直接替换编辑器/磁盘 |
-| 当前选区编辑 | selection anchor + revision + before context | 可定位块/区间 Diff | 锚失效后猜测应用 |
-| 新建文档 | CreateDocumentBundle（目标计划 + 预生成初始内容） | DecisionRequest；确认后真实文件/标签 + 初始内容 PendingDiff | 确认前创建文件；内容 Diff 承担资源授权 |
-| 工作区资源操作 | WorkspaceOperation intent + 当前磁盘/标签/Diff/引用事实 | 不可变 plan + DecisionRequest；确认后 WS 回执 | 直接调用低层文件命令；生成资源 DiffCard；确认后等待第二次保存 |
-| 用户拒绝 | pending proposal | Rejected，文档不变 | 保留隐式待应用写入 |
-| 基准冲突 | proposal base ≠ 当前 revision/hash | Conflicted/重新确认 | 静默覆盖用户新编辑 |
-| 保存失败 | apply 成功、save 失败 | LogicalState 脏态 + 明确失败 | 声明 DiskState 已更新 |
+**执行约束**：
 
-### §9.3 验证方案
+- 删除前用引用搜索和测试注册表证明无当前生产消费者；
+- 测试只在其断言对象已被当前契约替代时更新或删除，必须同时存在新契约的等价或更强断言；
+- 不借机重构无关模块、重命名公共 API 或升级依赖；
+- 删除后做全库禁用标识扫描，兼容读取白名单必须逐项注明删除条件。
 
-1. **模块测试**：proposal schema、状态互斥、base/hash 校验；WorkspaceOperation plan/confirm/receipt；CreateDocumentBundle 关联和三重基线。
-2. **前后端集成**：DiffProposed 事件、DiffCard 状态、接受/拒绝回执、消息 proposal 关联。
-3. **真实编辑器集成**：未保存内容、selection 锚、用户继续编辑后的冲突、apply transaction。
-4. **保存链集成**：LogicalState 更新与 DiskState 保存分开断言；保存失败可重试。
-5. **恢复测试**：重启后 pending/rejected/accepted/conflicted 不被错误重置。
+**退出证据**：零旧生产入口、零旧字段写入、零重复状态/授权真源；前端/Rust/TypeScript/治理完整回归；所有受影响验证卡仍满足。
 
-### §9.4 阶段收口条件
+## §7 每个工作包的 Scope 模板
 
-- A-VAL-X-V-04 的 V-C1～V-C3、V-S1、V-S4、V-S5、V-S10 中与当前文档编辑、新建文档、基线冲突和保存失败相关的证据通过；
-- 当前文档修改继续按内容三态验证；新建需覆盖确认前零副作用、先建盘再投影、安全拒绝与基线推进；资源操作需覆盖 dirty 阻断、补偿、重启中断和统一恢复；
-- 用户接受前 LogicalState/DiskState 不发生 AI 写入；
-- 一个 proposal 只写一个 ExplicitEditTargetSet 成员文档；引用内容保持 data-only，引用身份仅提供成员资格；
-- 原文件在错误、取消、冲突和保存失败路径中可恢复。
-
-## §10 Stage 5：Session、UI、Trace 与体验收口
-
-### §10.1 目标与工作包
-
-WP-AG10-07 使 Agent 可以持续协作、重启恢复，并让用户和研发看到与真实 Runtime 一致的状态。
-
-**开发范围**：agent_sessions/turns/payloads、前端 agStore/agService、消息 segment、proposal 关联、AgentTrace、脱敏 telemetry 和用户反馈元数据。
-
-### §10.2 验证方案
-
-| 能力 | 验证条件 | 通过标准 |
-|---|---|---|
-| Session 隔离 | 两个 workspace、多个 session、相同文档 | 历史、active turn、proposal 和 trace 不串线 |
-| 重启恢复 | completed/error/cancelled/draft + pending proposal | 状态原样恢复；draft/pending 不显示为成功 |
-| 消息时序 | text/tool/proposal/error 交错事件 | UI 顺序与 Runtime 事件一致 |
-| 状态诚实 | Error、Cancelled、Conflicted、Rejected | 不渲染成 Done/Applied |
-| Trace 完整 | 任一 turn | intent/context/prompt/grant/gate/tool/proposal/terminal 可关联 |
-| 数据最小化 | 检查数据库、日志、telemetry | 默认不含正文、密钥、provider token |
-| 用户反馈 | 接受/拒绝/失败后提交反馈 | 只关联脱敏任务类型、模型、耗时、结果和错误阶段 |
-
-### §10.3 阶段收口条件
-
-- A-VAL-X-V-04 的 V-S9、V-S12、V-S13 中与会话隔离、事件顺序和脱敏追踪相关的证据通过；
-- session 隔离、重启恢复、未决 Diff 恢复与乱序事件测试通过；
-- UI 所有状态可追溯到真实事件，不自行推断伪终态；
-- telemetry 数据边界检查通过；
-- WP-AG10-07 达到 Integrated，能够承接完整 G5 场景。
-
-## §11 Stage 6：G5 系统验证与发布收口
-
-### §11.1 目标
-
-在目标 macOS 构建中，以真实 AiGateway/托管模型/BYOK、真实编辑器状态和真实 Diff/保存链证明
-AG 1.0 发布闭环。Mock、局部单测和前端演示不能替代本阶段。
-
-### §11.2 验证环境
-
-- 目标 macOS 安装包或等价 release build；
-- 真实 SubscriptionGate、AiGateway 托管模型和 BYOK 测试账号；
-- Markdown、文本和 1.0 支持范围内的 DOCX 样本文档；
-- 包含未保存编辑、显式引用、长文档、提示注入文本和基准冲突的固定样例；
-- 可查看脱敏 trace、网关请求计数、工具调用和 proposal 状态的测试观测面。
-
-### §11.3 G5 场景组
-
-| 场景组 | 覆盖 | 通过标准 |
-|---|---|---|
-| Read/Analyze | 回答、审阅、比较、只分析不修改 | 内容相关；写工具和 Diff 为零 |
-| Edit | 全文、选区、未保存内容、显式引用辅助 | 目标正确；先 Diff；接受/拒绝符合预期 |
-| Create | 根据要点新建文档 | 确认前无文件；确认后先出现真实文件/标签，再出现初始内容 Diff；安全拒绝受三重基线约束 |
-| Resource Ops | 创建/删除/重命名/移动/恢复与批量故障 | DecisionRequest 前置裁决、确认后直接磁盘执行、dirty 阻断、fail-fast 补偿、WorkspaceTimeline 可恢复 |
-| Safety | gate denied、cancel、provider/tool error、提示注入、越权工具 | 无旁路、无伪成功、无原文破坏 |
-| Conflict/Recovery | proposal 后继续编辑、保存失败、重启恢复 | 冲突明确；不覆盖；状态可恢复 |
-| Isolation | 多 session/workspace 切换 | 上下文、历史、proposal、trace 不串线 |
-| Privacy/Trace | 检查 trace、日志、telemetry | 可定位阶段且默认无正文/密钥 |
-
-必须完整执行 A-VAL-X-V-04 中适用于当前 Scope 的验证卡；单个场景失败时回到对应工作包修复并重跑其 related tests，
-随后重跑受影响的 G5 场景，不得只修改验收记录。
-
-### §11.4 发布退出门禁
-
-1. WP-AG10-00～07 全部至少达到 Integrated，发布主链达到 G5 Validated；
-2. A-VAL-X-V-04 中适用于发布 Scope 的验证卡全部有结果和证据，不存在未处置失败；
-3. `agent-edit-1.0` 默认入口不存在桩 Gate、假流、直接 provider、直接 create_doc AI 内容或工具直写；
-4. Error/Cancelled/Rejected/Conflicted/保存失败均不破坏原文，不显示伪成功；
-5. 所有默认开放工具均有权限、参数、错误恢复和系统验证证据；
-6. 未通过 G5 的保留能力通过 feature gate 关闭；
-7. `test:plan`、`test:related`、模块测试、集成测试、治理审计和 macOS 打包验证实际通过；
-8. 发布说明明确 1.0 能力边界、已知限制、第三方模型处理和正文默认不持久化策略。
-
-## §12 各工作包统一验证与交付模板
-
-每个 CODE_CHANGE Scope 的交付记录必须包含：
+每个 CODE_CHANGE Scope 必须在开始前填实以下内容，不能复制占位文本直接开工：
 
 ```text
-工作包：WP-AG10-xx
-输入契约版本：
-输出契约版本：
-实现文件：
-直接消费者：
-主路径测试：
-拒绝/错误/恢复测试：
-状态机或契约测试：
-test:plan 结果：
-test:related 结果：
-治理审计：
-系统验证：NOT_REQUIRED / PENDING / PASSED / BLOCKED
-未解决项及是否影响下一阶段：
+scope_id:
+work_package:
+upstream_requirements:
+upstream_rules_and_state_machines:
+validation_cards:
+production_owners_read:
+direct_consumers_read:
+allowed_files:
+explicit_deletions:
+migration_boundary:
+test_plan_changed_files:
+system_validation_required:
+stop_conditions:
 ```
 
-### §12.1 模块独立收口检查表
+同一个文件跨多个工作包时，只修改当前工作包所需块；若无法切分且会同时改变两个冻结契约，应暂停并把两者
+合并为一个经确认的新 Scope，不能隐式扩张。
 
-- 职责输入输出未越界；
-- 真实实现替代所有当前 Scope 内的桩；
-- 主路径、边界、拒绝、错误、取消/恢复均有断言；
-- 对上游契约的假设已通过契约测试；
-- 对直接消费者提供稳定样例和错误形状；
-- 没有通过吞错、常量成功、放宽断言或隐藏 UI 制造通过；
-- 自动化不能覆盖的项明确标为 VALIDATION_ONLY 并进入 Stage 6；
-- 无阻断未决项时才标记 Module Ready。
+## §8 进度自检与完整度自检
 
-### §12.2 阶段独立收口检查表
+每次继续执行时先报告：当前工作包、阶段内完成比例、整体 10 阶段完成数；比例只辅助沟通，不替代证据。
 
-- 本阶段全部必需工作包已 Module Ready；
-- 阶段场景矩阵全部通过；
-- 直接下游可以只依赖冻结输出，不需要读取本模块内部状态；
-- 失败可归因到明确模块和阶段；
-- 设计、接口、状态机和测试证据与实际实现一致；
-- 生成 ADUS 后治理审计通过；
-- 输出阶段 Runtime Report 后才允许进入下一阶段。
+每个工作包至少在“开始、关键实现完成、验证结束”三点执行以下自检：
 
-## §13 阻断与回退规则
-
-出现下列任一情况，当前阶段不得收口：
-
-- 需要改变 IntentResult/PromptPackage/CapabilityGrant/ChangeProposal 的冻结语义但未先回写设计；
-- 发现第二条模型调用、工具直写、直接创建 AI 文档或客户端绕过门禁路径；
-- 单元测试通过但真实错误被转换为 Done/Applied；
-- 当前文档读取使用旧 DiskState 覆盖 LogicalState；
-- 未验证能力只能靠 Prompt 声明“不要使用”，没有 Runtime feature gate；
-- 测试只能通过删除断言、跳过用例、吞异常或硬编码预期结果；
-- 下游必须读取上游内部实现细节才能工作，说明契约尚未收敛；
-- 系统验证失败但无法由 trace 定位到 intent/context/prompt/tool/execution/diff/session 阶段。
-
-回退时只回到产生根因的最近工作包；契约未改变则不重做已收口模块。若契约改变，必须重新运行所有直接
-消费者的契约测试与影响选择器给出的 related tests。
-
-## §14 计划完成定义
-
-本计划完成不以“八个工作包代码合并”判断，而以以下系统状态判断：
-
-> 用户可以在 Binder 中持续地让 Agent 阅读、分析、修改当前文档或提出新建文档；Runtime 准确限制
-> 上下文和工具；所有 AI 变更先进入 Diff；门禁、取消、错误、冲突、保存失败和会话恢复均表现真实；
-> 任一失败不破坏原文；研发可以通过脱敏 Trace 定位失败阶段；未验证的高级能力在 1.0 默认关闭。
-
-达到该状态并满足 §11.4 后，AG 1.0 才可标记 Release Ready。
-
-## §15 2026-08-08 实施结果与阶段裁决
-
-> **历史快照，非当前真值**：本节保留 2026-08-08 当时的本地实施证据，不能覆盖后续需求/设计变化，
-> 也不能证明当前代码或 G5 状态。当前验证结论只由 A-VAL-X-V-04 的实际执行证据和对应 Runtime Report 给出。
-
-本轮 `AG-1.0-IMPLEMENTATION-01` 已按同一冻结契约完成 WP-AG10-00～07 的本地实现与直接消费者接线。
-这里的“完成”表示 Module Ready / 本地 Integrated，不代表 Stage 6 的真实 provider 与 WKWebView G5 已执行。
-
-| 工作包 | 实际系统状态 | 自动化收口证据 | 裁决 |
-|---|---|---|---|
-| WP-AG10-00 Runtime Profile | `agent-edit-1.0` 为唯一主入口；未知 profile 默认拒绝；Build 入口物理关闭 | profile 单测、Composer/Service 契约测试 | Integrated |
-| WP-AG10-01 Execution Kernel | 本次服务端 GateOutcome、逐次续调门禁、后端单 session 单活、provider abort、工具前取消、唯一终态 | Rust AG 测试、前端 Error→Done 锁存测试、取消命令测试 | Integrated |
-| WP-AG10-02 Intent Layer | 生成版本化 `IntentResultV1`；当前轮否定约束优先；缺编辑目标阻断澄清；非文档问答不自动注入当前文档 | answer/analyze/edit/create/clarify 与目标/上下文选择断言 | Module Ready |
-| WP-AG10-03 Context Layer | 当前 LogicalState 为主事实；显式引用内容 data-only、规范化身份供 ExplicitEditTargetSet owner 消费；历史按文档归属和显式沿用确定性选择；1.0 自动 AST/KB/TPL 为零 | context、reference、history 与 Prompt 装配测试 | Integrated |
-| WP-AG10-04 Prompt Runtime | 固定系统→意图→当前文档→引用→历史→用户顺序；记录 provenance/freshness/hash/trust/token、context trace 与真实 tool manifest hash；trace 不记录正文 | PromptPackage、层序、注入隔离与历史 trace 一致性测试 | Module Ready |
-| WP-AG10-05 Tool Capability | 内容工具按 CapabilityGrant→Diff；资源工具只生成 plan_workspace_operation，确认后由 TaskRun 调用 WS 执行，禁止直调文件命令和资源 Diff | Intent×CapabilityGrant、DecisionRequest 真实确认、幂等/重启 | Local Integrated；G5 pending |
-| WP-AG10-06 Editor/Diff | 普通内容编辑三态保持；新建需改为 CreateDocumentBundle，资源创建后初始内容进入普通 Diff | V-C1~C3 + V-R1/R2 + 既有 core_chain | **New baseline migration pending** |
-| WP-AG10-07 Session/UI/Trace | 前后端活动回合一致；停止按钮调用真实取消；Error/Cancelled 不被 Done 覆盖；Build 不呈现；脱敏 trace 可关联 intent/context/manifest/terminal | AG 前端 92 项、全量前端 552 项、治理审计 | Integrated（本地） |
-
-### §15.1 最终自动化证据
-
-| 验证 | 结果 | 证明范围 |
+| 维度 | 自检问题 | 完整标准 |
 |---|---|---|
-| AG Rust 定向 | `PASS`：136 passed | Intent、Context、Prompt、Tool、终态、取消和 proposal 守卫 |
-| AG 前端定向 | `PASS`：3 files / 92 tests | Runtime Profile、唯一终态、取消、会话/UI 投影 |
-| Core chain | 旧基线自动化曾通过；新资源基线未验证 | 普通 PendingDiff 证据可复用；旧“新建空基准/资源删除 Diff”证据不计入新基线 |
-| `test:plan` | `PASS` | 选择前端全量、TypeScript、Rust 全量、治理审计 |
-| 非沙箱 `test:related` | `PASS`：前端 552；Rust 295 + 5 + 4；TypeScript 与 audit 通过 | changed_files 直接/间接消费者完整回归 |
-| 非沙箱 `test:full` | `PASS`：前端 552；Rust 295 + 5 + 4 | 项目完整自动化基线；LibreOffice 真转换通过 |
-| `governance:generate/audit` | `PASS`：92 assets / 856 cases；0 governance finding/warning | ADUS、测试治理与规则引用一致 |
-| 规则语义复核 | `PASS` | 新增 IntentResult 边界及 Prompt 组装边界与 BR-AG-DATA-001/002/004/005 一致 |
+| 需求 | 是否只实现已注册 Active REQ，且没有新增能力？ | 目标 REQ 全列出，无范围外行为 |
+| 设计 | 类型、事件、状态和副作用是否只有一个定义？ | 无相反生产路径或兼容写入 |
+| 映射 | RULE/CHAIN/@GOV/测试 owner 是否闭合？ | governance:audit 无新增 finding |
+| 实现 | 生产者、直接消费者、失败和恢复是否一起迁移？ | 无半接线、TODO、伪成功 |
+| 删除 | 被替代实现和测试是否有证据地清理？ | 禁用标识扫描只剩文档历史/迁移读取 |
+| 验证 | 自动化与系统行为是否分别有结论？ | Runtime Report 可复核，不用单测冒充 G5 |
 
-### §15.2 未完成边界与发布结论
+若任一维度为 partial，工作包不得进入 READY；非阻断项写入 unresolved_items，影响正确性的进入 BLOCKED。
 
-- Stage 0～5 已达到本地 Integrated，可以作为 AG 1.0 后续真实联调基线。
-- Stage 6 尚未执行真实账号/订阅/AiGateway/托管模型或 BYOK、真实 WKWebView、真实 DiffCard 人工观察；
-  因此本轮不得标记 `G5 Validated` 或 `Release Ready`。
-- 受控沙箱内 LibreOffice E2E 会因 AppKit 注册限制 signal 6；同一代码和测试在非沙箱 macOS
-  `test:related` 与 `test:full` 均通过，未删除、跳过或弱化测试。
-- 项目级 `cargo fmt -- --check` 仍会报告本次 Scope 外既有文件及 `lib.rs` 旧区域的格式差异；它不是当前
-  测试选择器门禁，本轮只格式化了新增 AG 小模块代码，没有用范围扩张制造全库格式变更。
+## §9 G5 系统验证
 
-2026-08-08～2026-08-30 最后登记的历史裁决为：普通内容/Runtime、WorkspaceOperation 与 CreateDocumentBundle 子链均为 `LOCAL_INTEGRATED / G5_PENDING`；WorkspaceTimeline 继续沿其独立验证卡判断。该裁决仅作历史证据，当前状态以 A-VAL-X-V-04 和对应 Runtime Report 为准。
+WP1～09 全部 READY 后，按 A-VAL-X-V-04 在目标 macOS release build 或等价真实 Tauri/WKWebView 环境执行：
 
-### §15.3 S4A 结构化项目事实与读取报告
+1. 只读回答/检索/分析：能主动选择必要读取工具，零写工具、零 Diff；报告范围与真实读取一致；
+2. 自适应编辑：模型读取→修改路线→再次读取/修正→Proposal，工具失败可解释调整且不扩权；
+3. 同批多卡：跨两个以上不连续块，一次出现多张可独立裁决卡，分别接受/拒绝后内容正确；
+4. 后续批次：以最新 LogicalState 生成，旧批按规则失效，不使用旧 payload 叠加；
+5. 澄清与 Decision：均恢复原 AgentTurn，等待期间无模型/工具活动，确认后重新 Gate/授权；
+6. WorkspaceOperation/CreateDocumentBundle：确认前零副作用，确认后运行时重验和真实执行；
+7. 取消、错误、限额、网络中断和重启：唯一真实终态，无自动续跑、无旁路写入、无原文破坏；
+8. 多 session/workspace：事件、目标、证据、TaskRun、卡片和未保存内容不串线。
 
-`AG-CONFORMANCE-CODE-S4A` 在不扩大 Agent 1.0 写能力的前提下补齐 REQ-AG-009：
+真实 provider 输出有随机性时，契约/故障路径使用确定性 provider harness；另以至少一个真实 provider 验证模型实际
+工具选择与交互体验。两类证据都必须保留，不能互相替代。
 
-- AgentTurn 在 Gate 前冻结 `agent-context-facts-v1`，包含当前 workspace/turn、ED LogicalState 会话事实、
-  本轮显式 SelectionFact 与当前 AgentSession ProposalFact；其他会话、无归属 Proposal 和文档正文不进入该集。
-- Prompt Runtime 以独立 data-only 层注入事实，层序为 `System → RuntimeControl → IntentHint →
-  AgentContextFacts → CurrentDocument → Reference → History → CrossDocHistory → User`。
-- Inspect/Search/Analyze 的最小 CapabilityGrant 增加只读 `report_project`完成工具；ProjectReport 已读项必须
-  与同轮 Prompt/成功只读 ToolCall 证据账本一致，伪造读取、跨 workspace 路径或缺失不确定性均失败关闭。
-- 结构化报告只是回合完成证据，不创建 TaskRun/DecisionRequest/ChangeProposal，不改变
-  ExplicitEditTargetSet，不扩大写权限。
+## §10 停止、回退与重新规划
 
-历史裁决：生产实现、直接测试、完整 changed_files 影响选择器与治理审计在当时已通过，S4A 登记为
-`LOCAL_INTEGRATED / G5_PENDING`；该登记不替代 A-VAL-X-V-04 和对应 Runtime Report 中的当前验证状态。
+出现以下任一条件立即停止当前工作包：
+
+- 当前需求/设计不能唯一回答实现问题；
+- 需要新增 RULE/CHAIN/TERM、产品功能或超出 1.0 的工具；
+- changed_files 超出 Scope，或发现用户/其他任务未提交改动与本工作包重叠；
+- 只能通过吞错、放宽授权、跳过/删除有效测试或保留双路径才能继续；
+- 迁移无法保证历史数据安全，或删除候选仍有当前消费者；
+- `test:plan` 无法映射修改、治理 audit 出现 error、真实系统结果与自动化结论冲突。
+
+回退只回到产生根因的最近工作包。若冻结契约变化，先重新进入 REQUIREMENT/DESIGN/PLAN；不得修改文档去适配
+错误代码。已验证且契约未受影响的工作包不重复改写，但须按选择器重跑受影响测试。
+
+## §11 计划完成定义
+
+只有以下事实同时成立，Agent 1.0 优化才算完成：
+
+- WP1～09 各有 READY Runtime Report 和独立提交；
+- IntentResult、CapabilityGrant、TurnEvent、EvidenceLedger、TaskRun 投影和 ProposalBatch 生产/消费只有一套；
+- 旧 resolver、报告工具、静态 scheduler、批内整篇失效和旧字段新写入已从生产路径删除；
+- 所有当前验证卡获得与当前提交对应的自动化证据，发布阻断卡获得真实系统证据；
+- 完整前端、TypeScript、Rust、治理与产品能力审计通过；
+- 用户可持续对话、主动读取、基于证据调整、提出安全编辑，并对不连续修改逐卡裁决；等待、失败、取消和恢复真实；
+- 未验证能力关闭，发布说明如实列出边界。
+
+## §12 当前阶段状态
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| G1 需求唯一化 | READY | AG-ADAPTIVE-RUNTIME-REQ-01 Runtime Report |
+| G2 设计/协议/状态机唯一化 | READY | AG-ADAPTIVE-RUNTIME-DESIGN-01 Runtime Report |
+| G3 实施与验证计划 | READY | AG-ADAPTIVE-RUNTIME-PLAN-01 Runtime Report |
+| WP1～09 | PLANNED | 不继承旧实现完成裁决，逐包重新验证 |
+| G5 系统验证 | NOT_STARTED | WP1～09 READY 后进入 |
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
-|------|------|---------|
-| 2026-08-08 | v1.0 | 初版：基于现已过期的 X-AG-X-L-03 将 agent-edit-1.0 拆为 8 个独立工作包和 Stage 0～6；定义依赖与并行边界、完成标准、验证方案与发布门禁。 |
-| 2026-08-08 | v1.1 | AG-1.0-IMPLEMENTATION-01：记录 WP-AG10-00～07 的实际实现状态与独立收口证据；非沙箱 test:related/test:full、TypeScript、ADUS 和治理审计通过；阶段裁决为 LOCAL_INTEGRATED / G5_PENDING，不以自动化冒充真实 provider/WKWebView G5 |
-| 2026-08-21 | v1.2 | 工作区资源操作基线重构：Stage 4/G5 改为 WorkspaceOperation + DecisionRequest、CreateDocumentBundle 和 WorkspaceTimeline；旧资源 Diff/空基准新建证据不再计入新基线，相关工作包状态改为 IMPLEMENTATION_PENDING。 |
-| 2026-08-28 | v1.3 | AG-CONFORMANCE-PLAN-S3D-COMPANION：承接 fed343a/a0afdff，把工作包和验证边界统一到 ExplicitEditTargetSet；只读内容不扩权、用户引用身份可初始化成员、scope confirm 可追加、集合外提案硬拒。 |
-| 2026-08-29 | v1.4 | AG-CONFORMANCE-CODE-S3E：WP-AG10-05 工具策略对齐当前 CreateDocumentBundle/WorkspaceOperationPlan 规则；CreateDocument/OrganizeWorkspace 只获得必要读取与 plan_workspace_operation，目标资源建立前不开放 propose_edit。 |
-| 2026-08-30 | v1.5 | AG-CONFORMANCE-CODE-S4A：登记 AgentContextFacts 独立 Prompt 层、当前 AgentSession ProposalFact 投影、ProjectReport 读取证据账本与 report_project 只读完成门。 |
-| 2026-08-31 | v1.6 | AG-DOC-CONSOLIDATION-01：将本文收敛为唯一 Active 执行计划；移除对已废止计划中 AG1-V-01～15 的规范性依赖，统一改用 A-VAL-X-V-04 验证卡；历史实现裁决不再作当前状态真源。 |
+|---|---|---|
+| 2026-08-08 | v1.0 | 初版，按当时架构建立 8 个工作包和 Stage 0～6。 |
+| 2026-08-21 | v1.2 | 工作区资源操作改用 WorkspaceOperation、DecisionRequest 与 CreateDocumentBundle。 |
+| 2026-08-28 | v1.3 | 对齐 ExplicitEditTargetSet。 |
+| 2026-08-29 | v1.4 | 对齐 WorkspaceOperationPlan 工具边界。 |
+| 2026-08-30 | v1.5 | 登记当时 AgentContextFacts 与 report_project 实现裁决。 |
+| 2026-08-31 | v1.6 | 收敛为唯一 Active Agent 1.0 执行计划。 |
+| 2026-09-03 | v2.0 | AG-ADAPTIVE-RUNTIME-PLAN-01：以 G1/G2 当前真源重建 WP1～09；IntentResult 去授权、TaskRun 投影化、ProjectReport 运行时派生、ProposalBatch 独立拆卡；旧实现证据不再赋予当前完成状态。 |

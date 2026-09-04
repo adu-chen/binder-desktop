@@ -1,39 +1,26 @@
 {
-  "scope_id": "AG-ADAPTIVE-RUNTIME-DESIGN-01",
+  "scope_id": "AG-ADAPTIVE-RUNTIME-PLAN-01",
   "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "DESIGN",
-  "title": "Agent 1.0 自适应运行时设计与协议收敛",
+  "governance_phase": "PLAN",
+  "title": "Agent 1.0 自适应运行时实施与验证计划收敛",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-03 人类确认按推荐方案完整执行；本阶段承接已 READY 的 AG-ADAPTIVE-RUNTIME-REQ-01 与 C1-C5，不新增产品能力。",
-  "scope_reason": "G1 已统一需求，但现行 L2/L3 设计仍把关键词 IntentResult、静态 TaskPlan、强制 report_project 与单 Proposal 单 DiffCard 固化为运行权威；本 Scope 在保留既有规则 ID 和链路的前提下归一其设计语义。对账确认同批多卡若仍由 ED 逐卡推进整篇基准会互相失效，因此将既有 ED 受控事务设计纳入 C5 的必要闭环，不增加能力。",
-  "issue_trace": ".governance/issues/AG-ADAPTIVE-RUNTIME-DESIGN-01.md",
+  "confirmation_basis": "2026-09-03 人类确认按推荐方案完整执行；本阶段承接已 READY 的 AG-ADAPTIVE-RUNTIME-REQ-01 与 AG-ADAPTIVE-RUNTIME-DESIGN-01。",
+  "scope_reason": "需求和设计已唯一化，但活动执行计划、Agent 验证卡与 TaskRun 手动卡仍固化旧 Intent 授权、静态计划调度、report_project 完成门和同批卡互相失效语义；本 Scope 只把既有设计翻译为实施工作包与证据门禁，不新增功能。",
+  "issue_trace": ".governance/issues/AG-ADAPTIVE-RUNTIME-PLAN-01.md",
   "objectives": [
-    "定义模型语义与路线责任、运行时硬边界责任及二者逐次交互契约",
-    "将 IntentResult、TaskRun、TaskPlan、ProjectReport 收敛为事件派生且可重建的投影",
-    "定义按当前事实动态计算并逐次校验的 CapabilityGrant，不从语义分类结果继承授权",
-    "定义 append-only TurnEvent 与 EvidenceLedger 为回合事实来源，并保持 Gate、取消、终态锁存和隔离不变量",
-    "定义 ProposalBatch 与按可独立裁决连续块组拆分 DiffCard 的协议、状态和载荷边界"
+    "建立 WP1-WP9 唯一实施顺序、依赖、代码边界、删除项和阶段退出条件",
+    "把 IntentResult、CapabilityGrant、TurnEvent、EvidenceLedger、TaskRun 投影和 ProposalBatch 的设计逐项映射到验证卡",
+    "撤销旧实现证据对已变更语义的当前 PARTIAL 裁决，保留其历史可追溯性",
+    "重写 TaskRun 人工验证，使其验证投影、同回合恢复和无后台调度",
+    "为每个后续 CODE_CHANGE Scope 给出明确进入门禁、自动化证据和系统验证责任"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-ADAPTIVE-RUNTIME-DESIGN-01.md",
-    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
-    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
-    "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
-    "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
-    "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
-    "docs/01_modules/SYS/A-SYS-M-S-01_状态机总图.md",
-    "docs/01_modules/SYS/A-SYS-C-T-02_前端交互架构与流程总图.md",
-    "docs/01_modules/DE/A-DE-M-T-01_DiffEdit技术设计.md",
-    "docs/01_modules/DE/A-DE-M-S-01_DiffEdit状态机设计.md",
-    "docs/01_modules/DE/A-DE-I-P-01_DiffEdit接口协议.md",
-    "docs/01_modules/ED/A-ED-M-T-01_编辑器技术设计.md",
-    "docs/01_modules/ED/A-ED-M-S-01_编辑器状态机设计.md",
-    "docs/01_modules/ED/A-ED-I-P-01_编辑器接口协议.md",
-    "docs/01_modules/WS/A-WS-M-T-02_工作区资源操作技术设计.md",
-    "docs/01_modules/WS/A-WS-M-S-02_工作区资源操作状态机设计.md",
-    "docs/01_modules/WS/A-WS-I-P-01_工作台接口协议.md",
+    ".governance/issues/AG-ADAPTIVE-RUNTIME-PLAN-01.md",
+    "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+    "docs/40_validation/A-VAL-X-V-05_TaskRun手动测试卡.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
@@ -41,29 +28,25 @@
     "ADP.md",
     "AGENTS.md",
     "governance.config.json",
-    "L1 需求、开发计划、验证文档、L4 参考文档、上述清单外的 L2 设计与生产代码"
+    "L1/L2 需求与设计、生产代码、测试代码、上述清单外的计划和验证文档"
   ],
   "constraints": [
-    "不新增 REQ、RULE、CHAIN、能力档位、外部工具或产品功能；既有规则 ID 原位更新",
-    "不把模型文本、读取结果、历史路径或注册表存在性当作目标、副作用或执行授权",
-    "保持 agent-edit-1.0、ExplicitEditTargetSet、DecisionRequest、Diff 裁决、每次 provider 调用 Gate、预算、取消、终态锁存与会话隔离",
-    "投影结构不得反向驱动工具调用或产生未来步骤预授权",
+    "不新增或改变 REQ、RULE、CHAIN、TERM、状态机、产品能力与 1.0 范围",
+    "计划不得成为运行时授权、状态或实现完成真源",
+    "旧自动化证据只能证明当时实现，不得继续证明已变化的当前契约",
+    "每个工作包只在独立 ADP Scope 中实施并由 changed_files 选择器决定测试",
     "ADUS 自动生成区只由 governance:generate 更新"
   ],
   "acceptance_criteria": [
-    "AG/SYS/DE 对 IntentResult、CapabilityGrant、TaskRun/TaskPlan、ProjectReport、TurnEvent、EvidenceLedger、ProposalBatch 使用唯一一致定义",
-    "状态机明确模型调用和工具回注可自适应循环，任何继续调用均重新 Gate 和计算当前授权",
-    "接口不再要求 report_project，不再暴露静态计划调度或 TaskStep 工具授权语义",
-    "Diff 生成协议返回同批一个或多个独立 PendingDiff，卡片生命周期仍逐卡遵守 SM-DE-01",
-    "同一文档同批结构化多卡在共享基线上一次受控预览；批内卡不互相失效，裁决只作用于各自目标集合",
-    "既有 REQ_MAP/RULE/CHAIN 数量不变，治理生成、审计、影响测试与 diff check 通过"
+    "活动计划只保留 WP1-WP9 与 G5 一套当前执行路线，无旧 Stage/WP 双重真源",
+    "每个工作包都有上游设计、生产范围、明确删除项、验证卡、退出条件和依赖",
+    "V-S6/V-S7/V-S11/V-S12/V-S13 语义与 G2 一致，并新增同批独立 DiffCard 的 V-S14",
+    "所有受 G2 语义变更影响的旧 PARTIAL 状态回到 DESIGNED，重新获得当前 Runtime Report 前不得升级",
+    "TaskRun 手动卡不要求静态游标、自动下一片段或同批兄弟卡互相失效",
+    "治理生成、审计、影响测试与 diff check 通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-OPT-C1", "status": "CONFIRMED", "question": "采用模型主导的自适应回合，运行时只控制硬边界"},
-    {"id": "HD-AG-OPT-C2", "status": "CONFIRMED", "question": "IntentResult 为可更新语义投影，不持有工具授权"},
-    {"id": "HD-AG-OPT-C3", "status": "CONFIRMED", "question": "TaskRun/TaskPlan 为复杂任务可观察投影，不作为静态调度器"},
-    {"id": "HD-AG-OPT-C4", "status": "CONFIRMED", "question": "ProjectReport 由真实读取证据派生，不要求模型显式报告"},
-    {"id": "HD-AG-OPT-C5", "status": "CONFIRMED", "question": "DiffCard 以可独立裁决的连续块组为粒度"}
+    {"id": "HD-AG-OPT-EXEC", "status": "CONFIRMED", "question": "按推荐方案完整执行，并在每阶段自检进度与完成度"}
   ],
   "stop_conditions": [],
   "unresolved_items": []

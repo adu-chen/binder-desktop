@@ -2,289 +2,329 @@
 文档编号：VAL-X-V-04
 文档状态：A
 负责模块：CORE
-文档职责：Agent 1.0 验证卡与证据状态登记——为已冻结的状态化链路（三态分流/连续 Proposal/保存/澄清终态/TaskRun/外部内容/记忆）与 P1 开放条件定义验证门禁，并只登记已有实际 Runtime Report 支持的证据状态
-上游约束：A-CORE-X-D-02_Agent1.0冻结能力基线.md（§6 第 4 项）、A-CORE-X-D-01_1.0需求基线与文档体系索引.md（§6 第 4 步）、A-CORE-C-P-01_APC.md（§5.1 G5、§10 测试策略）、A-CORE-C-T-01_三态模型.md（BR-CORE-STATE-001~003）、A-SYS-I-P-01_数据结构定义.md（§3.1 共享对象契约）、A-DE-M-S-01/A-ED-M-S-01/A-WS-M-S-01/A-AG-M-S-01（D2/D3 状态机）
-直接承接：后续 IMPLEMENTATION Scope（进入门禁与验收依据）、G5 集成/系统验证（执行与证据登记）、A-AG-X-L-04 发布退出判断、产品能力注册表（system_validation 回填）
-使用边界：本文是 Agent 1.0 唯一 Active 验证卡与证据状态入口；只有已实际执行并可追溯到 Runtime Report 的证据才可把卡从 DESIGNED 更新为 PARTIAL/PASS，不得从计划、历史快照或代码存在推断通过；本文只引用已注册规则与既有状态机，不新增 RULE/TERM/状态机
-变更要求：冻结需求语义变化、状态机/契约变化或证据门禁变化时回写本文；未实际执行不得把卡状态改为 PASS
+文档职责：Agent 1.0 唯一验证卡与证据状态入口——把冻结需求、设计、状态机和实施工作包映射为可复核的自动化与真实系统证据
+上游约束：A-CORE-X-D-02、A-AG-M-D-01、A-AG-M-T-01、A-AG-M-T-02、A-AG-M-S-01、A-AG-I-P-01、A-SYS-I-P-01、A-DE-M-T-01/A-DE-M-S-01/A-DE-I-P-01、A-ED-M-T-01/A-ED-M-S-01/A-ED-I-P-01、A-WS-M-T-02/A-WS-M-S-02/A-WS-I-P-01
+直接承接：A-AG-X-L-04、WP-AG10-01～09 IMPLEMENTATION Scope、G5 系统验证、产品能力 system_validation 回填
+使用边界：卡状态只能由对应提交的实际 Runtime Report 与可复核证据推进；历史实现、旧测试数量、代码存在、计划完成或单层 mock 均不能提升当前状态；本文不新增产品需求、规则、术语或状态机
+变更要求：冻结语义、状态机、协议或证据门禁变化时必须回写；未实际执行不得写 PASS
 ---
 
-# Agent 1.0 验证卡设计
+# Agent 1.0 验证卡
 
-## 1. 验证身份与当前结论
+## §1 当前裁决
 
 | 字段 | 内容 |
 |---|---|
 | validation_id | `VAL-AG-1.0-CORE` |
-| phase | DESIGN（验证卡设计；执行属实现后的 VALIDATION / G5） |
-| owner / participants | CORE / SYS、DE、ED、WS、AG、REF、AST |
-| 当前状态 | 混合：V-C1～C3、V-R1/R2、V-S1～S10 仍为 `DESIGNED`；V-S11～S13 为 `PARTIAL`（已有本地自动化证据，真实 Tauri/WKWebView/provider G5 未闭合）；本文无 `PASS` 卡 |
-| 进入 IMPLEMENTATION 门禁 | §6：目标验证卡证据门禁满足，且 `governance:audit` 无该链路新增 error 级违规 |
-| G5 退出条件 | 核心场景卡自动化 + 真实环境证据闭合，P1 各项按 §5 独立证据开放 |
+| phase | DESIGN；卡执行属各 IMPLEMENTATION Scope 与最终 VALIDATION/G5 |
+| owner / participants | CORE / AG、SYS、DE、ED、WS、ENT、GW、REF |
+| 当前状态 | V-C1～C3、V-R1/R2、V-S1～S14 全部 `DESIGNED`；当前无 `AUTOMATED`、`SYSTEM_PASS` 或 `PASS` 卡 |
+| 降级原因 | 2026-09-03 G1/G2 改变 IntentResult 授权、TaskRun 调度、ProjectReport 完成门和同批 DiffCard 生命周期；旧局部自动化仍可作回归素材，但不能证明当前契约 |
+| IMPLEMENTATION 门禁 | §8：Scope 声明卡 ID、规则/状态机、changed_files 和证据层；治理审计通过 |
+| G5 退出条件 | 发布阻断卡同时具备当前提交的自动化证据与真实 Tauri/WKWebView/provider/workspace 证据 |
 
-本文按冻结基线 §6 第 4 项为 D1/D2/D3 的每个状态化链路与每项 P1 开放条件建立验证卡。卡的字段结构与
-A-VAL-X-V-02 一致（前置条件 / 完整操作 / 期望结果 / 自动化证据 / 人类观察项 / 状态）。
+状态口径：
 
-## 2. 来源与追溯
+- `DESIGNED`：场景、断言和所需证据已定义，当前实现尚未按本契约重新证明；
+- `AUTOMATED`：当前提交的模块/契约/集成自动化通过，但未完成必需真实系统观察；
+- `SYSTEM_PASS`：真实系统场景通过，但完整影响自动化尚未闭合；
+- `PASS`：当前提交的自动化和真实系统证据都闭合；
+- `BLOCKED`：环境、依赖或缺陷阻断，并有明确恢复动作。
 
-| 验证意图 | 需求来源 | 技术约束 | 状态机 / 契约 |
-|---|---|---|---|
-| 三态三分流：已有 LogicalState 预览/保存、无 LogicalState 接受落盘、pending 打开迁移 | REQ-CORE-002/010、REQ-DE-003、REQ-ED-005、REQ-WS-003 | BR-CORE-STATE-001~003、X-FORBID-008/009 | SM-DE-01、SM-ED-01、SM-WS-01/02 |
-| 连续 Proposal 以最新 LogicalState 接力、前卡失效、非补丁栈 | REQ-DE-009、REQ-AG-015、REQ-SYS-011 | BR-SYS-STATE-008 | SM-DE-01、SM-AG-04 |
-| CreateDocumentBundle：确认前零副作用、确认后先建盘再投影、三重基线安全拒绝 | REQ-CORE-010、REQ-ED-010、REQ-WS-006 | BR-WS-STATE-003、BR-WS-DATA-003 | SM-WS-04、SM-DE-01、SM-ED-01 |
-| WorkspaceOperation：前置裁决、重验、直接磁盘执行、补偿、统一恢复 | REQ-CORE-012/014、REQ-WS-008/010、REQ-AG-011/013 | BR-WS-STATE-003、BR-WS-PERSIST-003 | SM-WS-04、SM-AG-04 |
-| AgentTurn：澄清非终态、任一阶段取消、首终态锁存、迟到事件无副作用 | REQ-AG-007、REQ-SYS-010 | BR-SYS-STATE-007 | SM-AG-01 |
-| TaskRun：非后台队列、确认点、中断可重试、不跨重启续跑 | REQ-AG-015、REQ-SYS-011 | BR-SYS-STATE-008 | SM-AG-04 |
-| 外部内容一次性 data-only、显式记忆选择 | REQ-REF-009、REQ-AST-001、REQ-SYS-012 | BR-SYS-DATA-007 | ExternalContentRef / MemorySelectionRef |
-| 多会话/多 workspace 隔离 | REQ-SYS-009/010、REQ-ED-011 | BR-SYS-STATE-007 | AgentSession / AgentTurn 隔离 |
-| 显式编辑目标：初始来源、澄清追加、scope 确认、TaskRun 继承与集合外硬拒 | REQ-AG-001、REQ-AG-015 | BR-AG-DATA-003、BR-SYS-STATE-007/008、BR-SYS-PERSIST-001 | ExplicitEditTargetSet / DecisionRequest / TaskRun |
+任一证据失效或冻结契约变化时，卡回到能够被现有证据真实支持的状态，不允许“只升不降”。
 
-## 3. 状态化链路验证矩阵
+## §2 追溯矩阵
 
-| 链路 | 验证卡 | 验证点 | 门禁证据 |
-|---|---|---|---|
-| DE-DIFF（Proposal 链） | V-S1/S2/S3/S4 | 三分流 + 连续接力 | 自动化（deRuntime/edOperations）+ 真实环境 |
-| ED-EDIT（LogicalState 承接） | V-S1/S3 | 预览投影、pending 迁移、未保存会话 | 自动化 + 真实环境 |
-| WS-SAVE / WS-DIFF-APPLY | V-S1/S2/S5 | 保存先裁决、无 LogicalState 原子落盘、失败保留 | 自动化（edRuntime/rust 落盘）+ 真实环境 |
-| AG-TURN（AgentTurn） | V-S6 | 澄清/取消/首终态 | 自动化（agRuntime）+ 真实环境 |
-| AG-TURN（TaskRun） | V-S7 | 编排/确认点/中断重试 | 自动化 + 真实环境 |
-| WS-OPERATION | V-C1/C2/C3/R1/R2 | 前置裁决、先建盘、三重基线拒绝、dirty 阻断、补偿/恢复 | Rust/IPC/前端自动化 + 真实 workspace |
-| REF-INJECT / AST-MEMORY | V-S8 | 外部内容/记忆 data-only | 自动化 + 真实环境 |
-| 会话隔离 | V-S9 | 多会话/多 workspace 不串线 | 自动化 + 真实环境 |
-| AG-TURN / AG-TOOL / DE-DIFF（目标授权） | V-S10 | ExplicitEditTargetSet 单调来源、持久化、确认追加与 PendingDiff 前硬拒 | Rust 自动化 + 真实 workspace/provider |
+| 验证意图 | 需求 | 规则/约束 | 状态机/协议 | 验证卡 |
+|---|---|---|---|---|
+| 内容三态、预览、裁决、保存 | REQ-CORE-002/010、REQ-DE-001~003、REQ-ED-005、REQ-WS-003 | BR-CORE-STATE-001~003、BR-DE-DATA-001~003、X-FORBID-006/008/009 | SM-DE-01、SM-ED-01、SM-WS-01/02 | V-S1～S5 |
+| AgentTurn、事件、澄清、取消、终态 | REQ-AG-007、REQ-SYS-010 | BR-AG-STATE-001、BR-SYS-STATE-007 | SM-AG-01/02、AgTurnEvent/TurnEvent | V-S6、V-S12 |
+| 复杂任务可观察投影 | REQ-AG-015、REQ-SYS-011 | BR-SYS-STATE-008 | SM-AG-04、TaskRun/TaskPlan/TaskStep | V-S7 |
+| 外部内容、显式记忆与会话隔离 | REQ-AG-016/017、REQ-SYS-009/010/012 | BR-SYS-DATA-007、BR-SYS-STATE-007 | ExternalContentRef/MemorySelectionRef/AgentSession | V-S8、V-S9 |
+| 编辑目标和动态能力授权 | REQ-AG-001/007/015 | BR-AG-DATA-003、BR-AG-STATE-002、BR-SYS-STATE-007/008 | ExplicitEditTargetSet/CapabilityGrant | V-S10、V-S11 |
+| 当前上下文、读取证据和项目报告 | REQ-AG-009 | BR-AG-DATA-008、BR-AG-OBS-001、BR-SYS-DATA-008 | AgentContextFacts/EvidenceLedger/ProjectReport | V-S13 |
+| 同批独立卡片与跨批接力 | REQ-AG-001/015、REQ-DE-001/009、REQ-SYS-011 | BR-DE-DATA-001~003、BR-DE-STATE-001/002、BR-SYS-STATE-008 | ProposalBatch/SM-DE-01/SM-ED-01 | V-S4、V-S14 |
+| CreateDocumentBundle | REQ-AG-008、REQ-ED-010、REQ-WS-006 | BR-WS-STATE-003、BR-WS-DATA-003 | SM-WS-04、SM-DE-01、SM-ED-01 | V-C1～C3 |
+| WorkspaceOperation | REQ-AG-011/013、REQ-WS-008/010、REQ-CORE-012/014 | BR-WS-STATE-003、BR-WS-PERSIST-003 | SM-WS-04、DecisionRequest | V-R1/R2 |
 
-## 4. 核心场景卡
+## §3 通用证据要求
 
-> 状态值：`DESIGNED`（已设计待执行）｜`PARTIAL`（只闭合部分必需证据，尚不满足 G5）｜`PASS`（自动化+真实证据全部闭合）。未经实际执行不得提升状态。
+每张卡必须同时记录：
 
-### 4.1 V-C1 · CreateDocumentBundle：拒绝资源计划
+1. 提交、Scope ID、Runtime Report 和测试环境；
+2. 自动化：生产 owner、直接消费者、主路径、拒绝/错误/恢复、状态机或契约测试；
+3. 真实系统：用户操作、可见结果、事件序列/脱敏 trace、磁盘或数据库事实；
+4. 负空间：不应发生的 provider、工具、Proposal、文件写入和跨会话数据均为零；
+5. 缺陷与重测：失败归属工作包，修复后重跑 related tests 与受影响系统场景。
+
+固定模型文本不是通用验收前提。工具选择/结构协议用确定性 provider harness 证明，真实交互质量至少用一个真实
+provider 另行证明；二者不可互相替代。
+
+## §4 内容、资源与保存卡
+
+### §4.1 V-C1 · CreateDocumentBundle 拒绝
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | 打开 workspace；请求“新建一份会议纪要”；系统已生成初始内容和 WorkspaceOperationPlan |
-| 完整操作 | 查看 DecisionRequest 后拒绝 |
-| 期望结果 | 确认前没有文件、标签或内容 Diff；拒绝后计划为 Rejected，DiskState 不变，TaskRun 不再执行该步骤 |
-| 自动化证据设计 | WS：plan→cancel 零文件副作用；AG：DecisionRequest cancel→TaskRun 终态；UI：无 DiffCard/标签 |
-| 人类观察项 | 决策卡与资源影响清楚；拒绝后文件树无目标 |
+| 操作 | 请求新建带 AI 初始内容的文档；DecisionRequest 出现后拒绝 |
+| 期望 | 确认前文件、标签、内容 Diff 均为零；拒绝后计划终止，DiskState 不变，AgentTurn 如实结束或继续其他已允许路线 |
+| 自动化 | plan→cancel 零副作用；重复/错误身份裁决失败关闭；UI 无伪标签/卡 |
+| 系统观察 | 文件树、标签和磁盘均无目标；卡片说明资源影响 |
 | 状态 | DESIGNED |
 
-### 4.2 V-C2 · CreateDocumentBundle：确认后先建盘再投影
+### §4.2 V-C2 · CreateDocumentBundle 确认与投影
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | V-C1 同类计划，目标不存在且基线有效 |
-| 完整操作 | 确认 DecisionRequest；观察文件树/标签/初始内容 Diff；接受内容卡并保存 |
-| 期望结果 | WS 先创建空的目标 DiskState 并写资源条目，ED 再打开真实标签，DE 再显示初始内容 Diff；内容卡接受不再次创建/写入文件，保存后重开内容一致 |
-| 自动化证据设计 | Rust/IPC 验证调用顺序与幂等；DE 验证 operation_id/origin；ED 验证标签对应真实 DocRef；WorkspaceTimeline 同时有资源与内容类型条目 |
-| 人类观察项 | 确认后文件立即出现；随后才出现绿色初始内容和 DiffCard |
+| 操作 | 确认有效计划，观察资源创建、标签和初始内容 Diff，接受并保存 |
+| 期望 | 运行时在同一 AgentTurn 重验后调用 WS；先建立真实目标，再打开标签并投影普通内容 Diff；接受不重复创建，保存后重开一致 |
+| 自动化 | 调用顺序、身份、幂等、operation receipt、Proposal origin 与保存链 |
+| 系统观察 | 文件先出现，初始内容卡随后出现；无第二次资源确认 |
 | 状态 | DESIGNED |
 
-### 4.3 V-C3 · CreateDocumentBundle：安全拒绝与基线推进
+### §4.3 V-C3 · CreateDocumentBundle 安全拒绝
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | V-C2 已投影初始内容 Diff |
-| 完整操作 | A：不做其他修改直接拒绝；B：重新创建后先手动/代理编辑、外部修改或重命名，再尝试裁决旧卡 |
-| 期望结果 | A：资源/DiskState/LogicalState 三重基线未变，WS 补偿删除本次文件并关闭标签；B：旧卡失效且不可接受/拒绝，文件、标签和当前内容保留 |
-| 自动化证据设计 | 三重 guard 参数化测试；补偿删除写 WorkspaceOperationEntry；任一基线推进均拒绝补偿 |
-| 人类观察项 | 安全拒绝确实删除空目标；继续编辑后旧卡失效且不误删文件 |
+| 操作 | A：初始内容预览后直接拒绝；B：先推进资源/LogicalState/DiskState 任一基线再裁决旧卡 |
+| 期望 | A 仅在三重基线未变时执行专用补偿；B 旧卡失效但不删除当前文件、标签或内容 |
+| 自动化 | 三重 guard、补偿幂等、基线推进和错误恢复参数化测试 |
+| 系统观察 | 安全拒绝可恢复；发生后续工作时绝不误删 |
 | 状态 | DESIGNED |
 
-### 4.4 V-R1 · WorkspaceOperation：dirty 阻断与内容 Diff 失效
+### §4.4 V-R1 · WorkspaceOperation 重验与 dirty 阻断
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | 删除/重命名/移动目标存在打开标签；分别构造 dirty 与 clean+pending content Diff |
-| 完整操作 | 生成资源计划并确认 |
-| 期望结果 | dirty 标签使执行在 Revalidating 阶段阻断且磁盘不变；clean 目标确认前内容 Diff 仍有效，资源执行成功后内容 Diff 以 resource_baseline_changed 失效，标签/引用按真实结果同步 |
-| 自动化证据设计 | WS/ED/DE/REF 联调：影响清单、dirty guard、执行回执、失效事件与路径重绑定 |
-| 人类观察项 | 决策卡列出受影响标签/Diff；阻断和成功后的显示都与磁盘一致 |
+| 操作 | 对带 dirty 标签、pending 内容 Diff 或引用的资源生成删除/重命名/移动计划并裁决 |
+| 期望 | 确认前零副作用；运行时确认后重新计算 grant 并让 WS 重验；dirty 阻断；成功操作后相关 Diff/引用按真实结果失效或重绑 |
+| 自动化 | DecisionRequest 身份、grant 重算、WS revalidate、DE/ED/REF 消费者和磁盘断言 |
+| 系统观察 | 卡片影响范围与真实文件树一致；无模型直调低层文件命令 |
 | 状态 | DESIGNED |
 
-### 4.4a V-R2 · WorkspaceOperation：批量补偿、重启中断与时间轴恢复
+### §4.5 V-R2 · WorkspaceOperation 补偿、中断与恢复
 
 | 字段 | 内容 |
 |---|---|
-| 前置条件 | 三项批量计划；第 2 项注入失败；另构造补偿失败与执行中重启 |
-| 完整操作 | 确认执行；观察 fail-fast/逆序补偿；从 WorkspaceTimeline 发起恢复 |
-| 期望结果 | 第 2 项失败后第 3 项不执行；第 1 项逆序补偿成功则 FailedCompensated，补偿失败则 PartialFailed 并保留逐项收据；重启后 Interrupted 且不自动执行；资源恢复生成新的 WorkspaceOperationPlan 和 DecisionRequest，冲突不覆盖 |
-| 自动化证据设计 | SM-WS-04 全转移矩阵、幂等重复确认、补偿故障注入、重启恢复、文件/空目录/非空目录类型化恢复 |
-| 人类观察项 | partial_failed 明确列出实际状态；恢复仍先确认；无第二套撤销 UI |
+| 操作 | 批量计划中注入中段失败、补偿失败和进程重启；从 WorkspaceTimeline 发起恢复 |
+| 期望 | fail-fast、逆序补偿、逐项 receipt；补偿不完整为 PartialFailed；重启为 Interrupted 且不续跑；恢复重新计划和确认，冲突不覆盖 |
+| 自动化 | SM-WS-04 全转移、幂等、故障注入、重启、文件/目录类型化恢复 |
+| 系统观察 | 实际完成/补偿项清晰；只有一套恢复入口 |
 | 状态 | DESIGNED |
-### 4.5 V-S1 · 已有 LogicalState：预览、接受、保存（BR-CORE-STATE-001）
+
+### §4.6 V-S1 · 已有 LogicalState 的预览、裁决和保存
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 对已打开文档生成 diff；预览；接受；保存；重开 |
-| 期望结果 | 预览进入 LogicalState 且卡片仍 pending；接受不重复应用、不写盘；保存先裁决 accepted/awaiting_save 再写盘；重开一致 |
-| 自动化证据设计 | deRuntime/edRuntime 三分流编排；rust Mock-Webview IPC→DiskState→第二次读取 |
-| 人类观察项 | 绿色增量、卡片终态、保存后复位 |
-| 状态 | `DESIGNED` |
+| 操作 | 对已打开且有未保存内容的文档生成 Proposal，预览、接受、保存、重开 |
+| 期望 | 以当前 LogicalState 为基准；预览后卡仍 pending；接受只裁决不重复应用；保存才更新 DiskState；重开一致 |
+| 自动化 | DE/ED 三态、未保存基线、save receipt、重开读取 |
+| 系统观察 | 绿增、卡状态和磁盘时点一致 |
+| 状态 | DESIGNED |
 
-### 4.6 V-S2 · 无 LogicalState：挂载、接受、落盘（BR-CORE-STATE-002）
-
-| 字段 | 内容 |
-|---|---|
-| 完整操作 | 对未打开文档生成后台 diff；卡片挂载；接受；读取文件 |
-| 期望结果 | 预览/接受前磁盘不变；接受才原子写盘 + 恰一个时间轴节点；拒绝/过期不写文件 |
-| 自动化证据设计 | deRuntime background 路径；rust：ws.apply_diff 原子落盘；无半节点 |
-| 人类观察项 | 卡片挂载、接受后文件出现 |
-| 状态 | `DESIGNED` |
-
-### 4.7 V-S3 · pending 打开迁移（BR-CORE-STATE-003）
+### §4.7 V-S2 · 无 LogicalState 的后台 Proposal
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 后台 pending diff 存在时打开目标文档；再接受 |
-| 期望结果 | 以同一 payload 建立带绿色增量的 LogicalState；卡片转已有 LogicalState 路径；不再后台落盘；接受只裁决 |
-| 自动化证据设计 | edRuntime pendingDiffPromoted；deRuntime 迁移后路径断言 |
-| 人类观察项 | 打开后绿增、卡片仍可裁决、保存行为 |
-| 状态 | `DESIGNED` |
+| 操作 | 对未打开既有文档形成 Proposal，分别接受和拒绝 |
+| 期望 | 接受前磁盘不变；接受才原子落盘并产生一个时间轴节点；拒绝/过期零写入 |
+| 自动化 | background 分流、原子写、重复裁决和失败恢复 |
+| 系统观察 | 卡片目标明确，接受后真实文件改变 |
+| 状态 | DESIGNED |
 
-### 4.8 V-S4 · 连续 Proposal 接力（REQ-DE-009 / BR-SYS-STATE-008）
-
-| 字段 | 内容 |
-|---|---|
-| 完整操作 | 同一文档复合目标连续生成 Diff1→Diff2→Diff3；中途拒绝最新卡；接受全部 |
-| 期望结果 | Diff2/3 基准来自最新 LogicalState 而非旧 payload；后预览使前卡失效且不可裁决；拒绝最新卡无任务级回滚；background pending 不得作为续编输入 |
-| 自动化证据设计 | deRuntime：多卡基准/失效/拒绝语义；agRuntime：TaskRun 内连续回合 |
-| 人类观察项 | 卡片失效顺序、拒绝行为、内容历史 |
-| 状态 | `DESIGNED` |
-
-### 4.9 V-S5 · 保存有效 pending 先裁决 / 保存失败（REQ-WS-003）
+### §4.8 V-S3 · pending 打开迁移
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 已应用但仍 pending 的 diff 直接保存；制造外部变更后保存触发冲突 |
-| 期望结果 | 保存先裁决 accepted/awaiting_save 再落盘；基线推进时旧卡失效只保存当前内容；失败保留 accepted/awaiting_save 与 dirty；不覆盖外部内容 |
-| 自动化证据设计 | edRuntime 保存即接受/失败保留；rust saveConflict→override 路径 |
-| 人类观察项 | 保存后卡状态、冲突提示、文件未被静默覆盖 |
-| 状态 | `DESIGNED` |
+| 操作 | 后台 pending 存在时打开目标，再裁决和保存 |
+| 期望 | 同一 payload 挂载到 LogicalState 并保持 pending；不再走后台落盘；身份和终态不重复 |
+| 自动化 | pendingDiffPromoted、路径切换、恢复和保存断言 |
+| 系统观察 | 打开后可见预览，卡仍可裁决 |
+| 状态 | DESIGNED |
 
-### 4.10 V-S6 · AgentTurn 澄清/取消/首终态/迟到事件（REQ-AG-007 / BR-SYS-STATE-007）
-
-| 字段 | 内容 |
-|---|---|
-| 完整操作 | 写入歧义请求触发澄清；以原 session/workspace/turn_id 补充后继续；分别尝试错误 session、workspace、turn_id、重复恢复与终态恢复；在等待态和流式中取消；观察首终态后到达的事件 |
-| 期望结果 | 澄清保持原 AgentTurn 的 AwaitingClarification 非终态（不伪装完成/取消、不创建新 turn_id）；只有匹配原身份的 ClarificationProvided 可回到 Assembling，错误、重复和终态重入失败关闭；取消任一活动阶段生效且无半落盘；完成/失败/拒绝/取消互斥、首终态锁存；迟到事件/工具无文档/卡片/落盘副作用 |
-| 自动化证据设计 | agRuntime：同 turn_id 补充、不调用 cancel、不产生第二组消息、调用前快照失败保留等待身份、等待态取消、terminal_latch；rust：状态机唯一恢复事件、session/workspace/turn/task 身份 guard、重复/终态重入失败、取消竞争与终态后迟到事件抑制 |
-| 人类观察项 | 澄清等待呈现、取消后无新工具/提案、终态原因 |
-| 状态 | `DESIGNED` |
-
-### 4.11 V-S7 · TaskRun 编排（REQ-AG-015 / BR-SYS-STATE-008）
+### §4.9 V-S4 · 跨 ProposalBatch 接力
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 分别执行简单回答/分析/检索、单文档局部修改、复杂多目标修改与 CreateDocument；让简单回合动态请求任务级确认；复杂目标经 IntentResult 形成可展示 TaskPlan（步骤/依赖/当前游标/所需授权/确认点）；任务级确认后自动下一片段；存在非终态任务时尝试不带 continuation 的新任务级请求，再用稳定 task_run_id 显式续接 |
-| 期望结果 | 简单 AgentTurn 不创建/绑定 TaskRun；简单 pending Diff 可见但 task_run_id 为空，不生成任务预览 checkpoint 或自动续片段；TaskPlan、DecisionRequest、WorkspaceOperationPlan 在持久化前按需创建并绑定 TaskRun。**三层分离**：DiffCard 只确认内容（接受/拒绝不改变 TaskRun）；任务级确认走 DecisionRequest，confirm 后自动开始下一执行片段（无需新聊天消息、绝不后台续跑）；只有显式 continuation 可复用非终态 TaskRun，无身份请求失败关闭且不合并目标/自行取消旧任务；同文档连续 Diff 基于最新 LogicalState、前卡因基准推进失效；信息流底部实时当前动作来自运行事件 |
-| 自动化证据设计 | agRuntime：无 TaskRun 简单 Diff 不确认/不自动续片段，DecisionRequest/Preview continuation 保持稳定身份；task.rs：简单输入零 task_runs、复杂/任务级工具判据、非终态隐式复用拒绝、显式 continuation 与 plan 生命周期；turn_control：无 TaskRun 澄清同 turn_id 恢复 |
-| 人类观察项 | 底部实时状态、DecisionRequest 卡裁决、gate 拦截、片段内多卡；**手动执行材料见 A-VAL-X-V-05（修订版）** |
-| 状态 | `DESIGNED` |
+| 操作 | 先生成 Batch1，随后在当前 LogicalState 上生成 Batch2；另对 background pending 尝试续编 |
+| 期望 | Batch2 只读取最新 LogicalState，不叠加旧 payload；新批预览可按既有基线规则使旧批卡失效；background pending 未迁移/裁决前不得作为编辑输入 |
+| 自动化 | 跨批 base revision/hash、旧卡 expiry、拒绝无任务级回滚、background guard |
+| 系统观察 | 新旧批关系清楚，旧卡不可误裁决 |
+| 状态 | DESIGNED |
 
-### 4.12 V-S8 · 外部内容一次性引用 / 显式记忆选择（BR-SYS-DATA-007）
-
-| 字段 | 内容 |
-|---|---|
-| 完整操作 | 附加外部文件请求分析；显式选择记忆条目进入回合；任务结束后再请求 |
-| 期望结果 | 仅可用只读解析路径形成一次性 data-only 内容引用；不支持格式明确未读；任务结束/重启/跨会话不恢复、不转存记忆；记忆仅显式选择条目进入，1.0 不自动写入/检索/注入 |
-| 自动化证据设计 | refRuntime ExternalContentRef 生命周期；astRuntime 显式选择/不自动写入 |
-| 人类观察项 | 外部内容只读呈现、记忆选择交互、无自动写入 |
-| 状态 | `DESIGNED` |
-
-### 4.13 V-S9 · 多会话/多 workspace 引用隔离（G5-AG-09）
+### §4.10 V-S5 · 保存 pending 与保存失败
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | 两个 AgentSession / 两个 workspace 交错回合，各自带引用、diff、未保存内容 |
-| 期望结果 | 消息、终态、工具卡、DiffCard、引用与未保存上下文不串线；重启恢复不伪造成功 |
-| 自动化证据设计 | agRuntime 多会话隔离；rust 会话级持久化 |
-| 人类观察项 | 交错会话无串线、恢复正确 |
-| 状态 | `DESIGNED` |
+| 操作 | 预览后未点接受直接保存；另制造磁盘冲突/保存失败 |
+| 期望 | 保存先把有效 pending 裁决为 accepted/awaiting_save 再落盘；失败保留 dirty 与待保存事实，不覆盖外部内容，不伪报成功 |
+| 自动化 | 保存即接受、冲突、失败重试、状态恢复 |
+| 系统观察 | 卡片、dirty、错误和磁盘一致 |
+| 状态 | DESIGNED |
 
-### 4.14 V-S10 · ExplicitEditTargetSet 授权闭环（REQ-AG-001 / BR-AG-DATA-003）
+## §5 Agent 运行时卡
 
-| 字段 | 内容 |
-|---|---|
-| 完整操作 | A：以当前文档和显式 Doc/Selection 引用发起编辑；B：同一 AgentTurn 澄清补充显式文档引用；C：让工具发现集合外既有文档并发起 scope DecisionRequest，分别确认、取消和重放；D：显式续接绑定 TaskRun；E：尝试把模型文字、历史路径、只读工具结果、外部 File/LongText 内容或打开标签作为写入目标 |
-| 期望结果 | A/B：仅用户可见且归一到 active workspace 的既有文档身份进入单调集合，引用正文保持 data-only；C：请求冻结非空去重路径，只有 confirm 原子追加，cancel/失败/不同裁决重放零追加；D：只继承该 TaskRun 已持久化集合；E：`propose_edit` 在 ChangeProposal/PendingDiff 持久化前以稳定错误拒绝，且零 PendingDiff；集合成员资格不改变只读 IntentResult 的工具授权 |
-| 自动化证据设计 | Rust：初始集合与非身份引用隔离、澄清单调不缩减、v16 迁移和来源持久化、scope confirm/cancel/replay、CreateDocumentBundle 建盘后追加、TaskRun workspace 身份复核、AG/DE 双守；工具注册测试：target_scope 与参数约束；系统级检查拒绝前后 PendingDiff 计数不变 |
-| 人类观察项 | 显式引用目标可编辑；集合外目标提示先引用或确认范围；取消范围卡后无隐藏授权；continuation 不跨 TaskRun/workspace 串用 |
-| 状态 | `DESIGNED` |
-
-### 4.15 V-S11 · RuntimeProfile / IntentResult / CapabilityGrant 最小授权（REQ-AG-007/015 / BR-SYS-STATE-007）
+### §5.1 V-S6 · TurnEvent、澄清、取消与首终态
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | A：分别省略 RuntimeProfile、传入未知值与唯一合法值；B：执行 answer/inspect/search/analyze/edit/create_document/organize_workspace/clarify；C：让普通只读回合请求副作用工具，让 CreateDocument 请求 propose_edit；D：分别执行简单 Edit 与复杂多目标 Edit 的 scope DecisionRequest；E：在普通文档、无目标结构 BDocx 与具备动态结构能力的活动 BDocx 请求表格/图片操作 |
-| 期望结果 | A：缺失/未知值在 Gate、provider、ToolCall 与 Proposal 前失败关闭，唯一合法值进入主链；B：IntentResult.allowed_tools 是当前 AgentTurn 的精确最小集，CapabilityGrant 只按 RuntimeProfile、任务类型、目标、副作用与格式/动态能力继续收窄；C：只读零副作用，CreateDocument/OrganizeWorkspace 只有必要读取与 plan_workspace_operation；D：普通 Edit 无 propose_decision，只有已绑定 TaskRun 的复杂 Edit 可提出 scope DecisionRequest，其他 kind 拒绝；E：BDocx 高级工具只有意图、目标、活动格式与动态能力共同满足时可见，具体参数仍在 ToolCall 执行层失败关闭 |
-| 自动化证据 | AG-CONFORMANCE-CODE-S3C：IntentResult 定向 17/17、CapabilityGrant/ToolCall 定向 10/10、RuntimeProfile 1/1、内容 Proposal/WorkspaceOperationPlan 终态区分 1/1；test:governance 19/19 与 governance:audit passed；ADUS 新增 `BR-SYS-STATE-007-GUARD-AG-AG-TURN-037`、`BR-AG-STATE-002-DATA-AG-AG-TOOL-034`、`BR-AG-STATE-002-GUARD-AG-AG-TOOL-035`。最终 test:related 两次均为前端 592/592、S3C 相关测试及其余 Rust 373/374 通过；唯一失败为范围外 LibreOffice Worker signal=6，按 HD-S3C-02 转入 DOC 环境待验证项，不反向修改 AG 实现 |
-| 人类观察项 | 只读回合工具卡无写能力；资源操作只出现待确认 WorkspaceOperationPlan；复杂多目标范围卡只允许 scope；BDocx 未满足动态能力时明确阻断且不伪造修改 |
-| 状态 | `PARTIAL`（本地自动化已通过；真实 Tauri/provider/编辑器链待 G5） |
+| 操作 | 触发模型澄清并用原身份补充；测试错误身份/重复恢复；在组装、provider、工具和等待阶段取消；注入终态后迟到事件 |
+| 期望 | 澄清恢复原 AgentTurn；等待不显示工作中；取消停止未开始动作；TurnEvent seq 单调；首终态后迟到事件无卡片、文档或磁盘副作用 |
+| 自动化 | append/replay/乱序/身份/取消竞态/terminal_latch；前端相同事件重建相同状态 |
+| 系统观察 | 补充不新建 turn；停止后无新 token/tool/proposal；终态原因唯一 |
+| 状态 | DESIGNED |
 
-### 4.16 V-S12 · PromptPackage 前置与状态机生产驱动（REQ-AG-007/015 / SM-AG-01/02/04）
-
-| 字段 | 内容 |
-|---|---|
-| 完整操作 | A：构造 PromptPackage 组装失败或超预算回合，并分别执行 Gate pass/deny；B：让模型在一个轮次返回多个 ToolCall，混合允许、未获本轮允许和执行失败项；C：分别制造 provider/Gate/TaskPlan 循环级错误、达到循环上限、形成 Proposal 与形成 DecisionRequest；D：让 WaitingConfirm TaskRun 接收 Finish、对应 DecisionRequest confirm/cancel |
-| 期望结果 | A：PromptPackage、CapabilityGrant 与预算在 Assembling 完成，失败不调用 Gate/provider、不广播 Streaming；B：每个 ToolCall 按顺序独立经过 toolRequest/validateOk或validateFail/可选执行/回注，校验失败项不进入 ToolExecuting；C：loopError/loopLimit 只进入 LoopAborted→AgentTurn TurnError/Cancelled，不结算 Completed/Done，Proposal/DecisionRequest 只经 handoff→LoopCompleted；D：WaitingConfirm + Finish 被拒绝，只有对应裁决可离开 |
-| 自动化证据 | AG-CONFORMANCE-CODE-S3E：`cargo fmt --check`、`cargo check --lib` 通过；AG Rust 回归 164/164，通过 handoff/loopError/loopLimit/cancel/终态冻结、WaitingConfirm + Finish forbidden、RuntimeProfile、内容/资源终态区分，以及生产装配顺序/唯一状态广播 owner；PromptPackage/CapabilityGrant/预算均位于 Assembled/Gate 前，SM-AG-02 广播唯一入口为 `advance_tool_loop`，LoopAborted 结算为 Failed/Error。最终 test:related 为前端 592/592、Rust 376/377，唯一失败为范围外 LibreOffice Worker signal=6；test:governance 19/19、governance:audit passed，ADUS 已注册 `BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038` |
-| 人类观察项 | 真实 Tauri/provider 下 Streaming 不早于装配与 Gate；混合 ToolCall 卡片顺序与执行事实一致；循环上限显示失败而非完成；DecisionRequest 等待态不被 Done 伪装 |
-| 状态 | `PARTIAL`（实现与本地自动化已完成；真实 Tauri/provider 链待 G5） |
-
-### 4.17 V-S13 · AgentContextFacts / ProjectReport 证据闭环（REQ-AG-009 / BR-AG-DATA-008 / BR-AG-OBS-001）
+### §5.2 V-S7 · TaskRun/TaskPlan 可观察投影
 
 | 字段 | 内容 |
 |---|---|
-| 完整操作 | A：以活动/非活动打开文档、显式 SelectionRef 和当前/其他 AgentSession Proposal 启动回合；B：分别执行 Inspect/Search/Analyze/Answer/Edit；C：读取完整文档、结构、搜索摘要与目录，再提交正确和伪造 ProjectReport；D：报告成功后再执行新读取并尝试结束 |
-| 期望结果 | A：事实在 Gate 前逐项匹配 LogicalState，兼容 blockRefs 归一为 SelectionFact，Proposal 仅包含当前 AgentSession 的裁决/效果/保存态且无正文；B：只有 Inspect/Search/Analyze 获得 report_project 并必须成功调用后才能完成；C：只有同轮证据账本能支持 readItems，目录/搜索证据不得冒充全文，无证据路径、跨 workspace 或缺失 uncertainties 失败关闭；D：新读取使旧报告失效，需重新报告 |
-| 自动化证据 | AG-CONFORMANCE-CODE-S4A：前端直接 59/59；Rust 事实身份/层序/最小授权/证据账本/终态门直接测试通过。完整 changed_files `test:plan` 命中前端/TypeScript/Rust 全量与治理门；非沙箱 `test:related` 完整通过：前端 593/593、Rust 379+5+4、TypeScript 及 governance:audit passed。test:governance 19/19，ADUS 已登记四条新规则的生产块与测试覆盖 |
-| 人类观察项 | 真实 Tauri/WKWebView + provider 下层序、工具卡、已读/未读范围和不确定性与实际文档一致；失败报告不伪装 Done |
-| 状态 | `PARTIAL`（实现与自动化已 LOCAL_INTEGRATED；仅真实 Tauri/WKWebView + provider G5 待完成） |
+| 操作 | 运行简单回答、单次编辑、复杂多步骤目标；模型在 ToolResult 后修订路线；触发 DecisionRequest；删除/重建投影；重启和重试 |
+| 期望 | 简单目标零 TaskRun；复杂任务从事件派生 TaskRun/TaskPlan；候选步骤不自动执行、不授予权限；路线可修订；Decision 恢复原 AgentTurn 并重验；重启不续跑，重试新建 turn |
+| 自动化 | 事件重建、简单/复杂、route revision、等待无 activity、投影删除无业务副作用、Decision 身份与同回合恢复 |
+| 系统观察 | 当前路线和已完成事实真实；无静态游标/后台推进；详见 A-VAL-X-V-05 |
+| 状态 | DESIGNED |
 
-### 4.18 待验证列表（不作为已完成实现的反向修改依据）
+### §5.3 V-S8 · 外部内容与显式记忆 data-only
 
-| validation_id | 已完成边界 | 待验证内容 | 当前状态 |
-|---|---|---|---|
-| VAL-AG-REAL-RUNTIME-01 | S3A/S3B/S3C/S3D/S3E 的规则、生产 owner 与本地自动化 | 真实 Tauri/WKWebView + provider 的 PromptPackage→Gate→Streaming→ToolCall→Proposal/DecisionRequest 完整事件顺序 | G5_PENDING |
-| VAL-AG-PROJECT-REPORT-01 | S4A 版本化 AgentContextFacts、独立 Prompt 层、证据账本、report_project 完成门与本地直接测试 | 真实 Tauri/WKWebView + provider 下 Inspect/Search/Analyze 的读取证据、工具卡顺序、ProjectReport 与最终 Markdown 一致性 | G5_PENDING |
-| VAL-DOC-LIBREOFFICE-01 | 受控沙箱仍可复现 Worker signal=6；非沙箱 macOS 的单用例与完整 `test:related` 均通过 | 环境差异已确认，不作为 AG 实现缺口；DOC 后续只需维持发布环境回归 | VERIFIED_NON_SANDBOX |
+| 字段 | 内容 |
+|---|---|
+| 操作 | 显式附加可读/不可读外部文件，显式选择项目记忆，结束/重启/换会话后再次请求 |
+| 期望 | 仅当前任务消费带来源的一次性内容；不可读只报元数据；不产生目标、授权或写入；记忆不自动检索、注入、创建或更新 |
+| 自动化 | 引用生命周期、来源/预算、Prompt 注入隔离、零 AST/KB/TPL 自动调用 |
+| 系统观察 | 已读/未读清楚，无隐式记忆行为 |
+| 状态 | DESIGNED |
 
-## 5. P1 开放条件验证卡清单
+### §5.4 V-S9 · session/workspace 隔离与恢复
 
-每项 P1 按子能力、格式/解析能力、权限、确认/保存/恢复语义与真实验证**独立开放**；对应子卡在各项 P1
-开放时细化（本清单为门禁框架）。未满足 §6 门禁前入口保持关闭。
+| 字段 | 内容 |
+|---|---|
+| 操作 | 两个 workspace、多个 AgentSession 交错运行，包含引用、未保存内容、证据、Decision 和 Diff；重启恢复 |
+| 期望 | 事件、上下文、目标、证据、任务投影和卡片不串线；活动回合恢复为 Interrupted 或原等待/终态，不自动执行 |
+| 自动化 | 复合身份键、持久化查询、事件补流、前端 store 隔离 |
+| 系统观察 | 切换与重启后的信息流和文档状态一致 |
+| 状态 | DESIGNED |
 
-| P1 能力 | 独立开放条件 | 验证卡（设计） |
+### §5.5 V-S10 · ExplicitEditTargetSet 双守
+
+| 字段 | 内容 |
+|---|---|
+| 操作 | 当前文档/显式 DocRef 初始化目标；澄清追加；scope Decision 分别确认/取消/重放；尝试用模型文本、历史路径、只读结果、外部内容或其他 workspace 目标提案 |
+| 期望 | 只有用户可见且归一到当前 workspace 的身份可进入集合；确认原子追加，取消零追加；AG/DE 在 PendingDiff 前双重拒绝集合外目标；data-only 内容不扩权 |
+| 自动化 | 初始化、单调追加、持久化、Decision 身份/重放、CreateDocument 建盘后追加、AG/DE 双守和零 PendingDiff |
+| 系统观察 | 集合外提案明确阻断，无隐藏授权 |
+| 状态 | DESIGNED |
+
+### §5.6 V-S11 · 模型语义与动态 CapabilityGrant
+
+| 字段 | 内容 |
+|---|---|
+| 操作 | 使用同义/含糊/否定/多轮修正请求；让模型先读后改线；分别请求只读、内容提案、资源计划和越权工具；在目标、格式、Gate、确认、预算变化后重试 |
+| 期望 | IntentResult 由模型输出并可 revision，不含 allowed_tools；本地提示不能冒充最终语义；每次 ToolCall 前按当前硬事实新建 grant，动作后失效；注册、Prompt、TaskPlan 和历史均不授权 |
+| 自动化 | 结构化模型输出、revision、硬事实组合/收窄、grant 过期、格式动态能力、未知/未授权/参数/目标/workspace 越界和重复失败不扩权 |
+| 系统观察 | Agent 能根据证据调整路线；工具可见/执行与当前事实一致；拒绝不导致僵死或偷偷扩权 |
+| 状态 | DESIGNED |
+
+### §5.7 V-S12 · 自适应模型—工具循环与真实事件
+
+| 字段 | 内容 |
+|---|---|
+| 操作 | 让模型连续执行读取→ToolResult→第二次 provider→另一工具/最终回答；分别注入每次 Gate deny、Prompt 超预算、工具失败、循环上限、取消、Decision 等待 |
+| 期望 | 每次 provider 前重装配并 Gate；每次工具前重算 grant；ToolResult 进入事件/上下文后模型可改线；等待无活动；错误/限额/取消真实终止；Proposal/Decision/final 各走唯一合法路径 |
+| 自动化 | 确定性 provider 脚本、调用计数/顺序、Gate 与 grant 次数、事件 replay、失败传播和首终态 |
+| 系统观察 | 工具卡顺序和当前动作与真实调用一致，不出现固定流程或完成后继续活动 |
+| 状态 | DESIGNED |
+
+### §5.8 V-S13 · EvidenceLedger 与运行时派生 ProjectReport
+
+| 字段 | 内容 |
+|---|---|
+| 操作 | 分别读取目录、搜索命中、结构摘要、部分块和全文；注入失败/跨 workspace 读取；最终回答后查看报告 |
+| 期望 | 仅成功读取进入 ledger，coverage 类型不互相冒充；evidence 与 turn/source/version/seq 绑定；ProjectReport 由最终回答和 ledger 派生，披露已读/未读/来源/不确定性；无 report_project 工具 |
+| 自动化 | evidence append/replay、coverage、失败/跨域、最终 through_seq、工具注册表/Prompt 无 report_project |
+| 系统观察 | 报告与实际工具卡一致，未读内容不伪装已分析 |
+| 状态 | DESIGNED |
+
+### §5.9 V-S14 · ProposalBatch 同批独立 DiffCard
+
+| 字段 | 内容 |
+|---|---|
+| 操作 | 对当前文档的两个不连续块和一个连续块组在一次模型提案中修改；分别接受第 1 卡、拒绝第 2 卡；覆盖乱序/缺组/重叠目标/预检失败/重启；再生成下一批 |
+| 期望 | 一个 ProposalBatch 产生按连续且可独立裁决目标拆分的多卡；前端完整收齐后一次 ED 前向事务；每卡局部 fingerprint/inverse；裁决一张不改变兄弟卡；批内无 document_revision_advanced；下一批才按最新 LogicalState 触发旧批失效 |
+| 自动化 | group id/index/count、完整性、非重叠、原子预检、一次事务、局部 accept/reject、兄弟 pending、跨批 expiry、持久化/恢复；不支持 kind 强制单卡 |
+| 系统观察 | 不连续修改出现多张卡，可独立裁决；连续同块修改不被机械拆碎；最终内容和磁盘正确 |
+| 状态 | DESIGNED |
+
+## §6 工作包—验证卡矩阵
+
+| 工作包 | 必须达到 AUTOMATED 的卡 | 必须在该包做的负向证明 |
 |---|---|---|
-| TXT→Markdown / Markdown→TXT 目标副本转换 | 来源不改写、CreateDocumentBundle 先创建目标、初始内容 Diff、损失告知与三重基线拒绝 | V-P1-01 |
-| 外部文件内容读取 | 显式附加 + 可用只读解析 → 一次性 data-only；任务结束清除；不支持格式退回元数据 | V-P1-02（=V-S8 数据面） |
-| 显式项目记忆选择 | workspace 本地用户管理；仅显式选择进入回合；不自动写入/提议/检索/注入 | V-P1-03（=V-S8 记忆面） |
-| WorkspaceOperation：创建/重命名/移动 | DecisionRequest 前置裁决、确认时重验、直接磁盘执行、dirty 阻断、内容 Diff 失效、幂等与补偿 | V-P1-04（=V-R1/R2） |
-| 删除/恢复 | 冻结递归清单、dirty 阻断、类型化快照、WorkspaceTimeline 恢复、冲突不覆盖、无永久清理 | V-P1-05（=V-R1/R2） |
-| 多既有文档逐项编辑 | 确认冻结目标清单、逐目标独立 Proposal/基准/裁决/保存、无批量裁决/事务 | V-P1-06 |
-| 样式 P1（颜色/突出显示/段落/字号/字体族）、表格、图片 | 受控操作、动态能力、保存重开真实验证逐项通过后开放 | V-P1-07 |
+| WP-AG10-01 | V-S6、V-S9、V-S12 的事件部分 | 乱序、重复、终态迟到、跨身份事件不改变事实 |
+| WP-AG10-02 | V-S6、V-S11、V-S12 | 关键词不授权、后续 provider 不复用旧 Gate、等待无执行 |
+| WP-AG10-03 | V-S10、V-S11、V-C/V-R 授权部分 | 过期/越权/未注册/目标外/参数错/模型可见 WS 执行均拒绝 |
+| WP-AG10-04 | V-S8～S12 的上下文/Prompt 部分 | 内容提示注入、旧 DiskState、跨 session/workspace、旧 grant 缓存无效 |
+| WP-AG10-05 | V-S13 | 失败、目录、搜索、跨域证据不能冒充全文已读；无报告工具 |
+| WP-AG10-06 | V-S7、V-C/V-R 的 Decision 部分 | 简单回合零 TaskRun、候选步骤/投影不能启动动作、重启不续跑 |
+| WP-AG10-07 | V-S1～S5、V-S14 | 批内整篇 hash 不使兄弟失效；重叠/缺组整批不预览 |
+| WP-AG10-08 | V-S6、V-S7、V-S9、V-S14 的 UI/恢复部分 | UI 不猜终态/工作态，旧数据不自动执行或继续写旧格式 |
+| WP-AG10-09 | 全部受影响卡 | 禁用标识和旧入口零生产消费者；更新测试不弱化覆盖 |
 
-## 6. 进入 IMPLEMENTATION 的门禁规则
+## §7 G5 场景与发布阻断
 
-1. 每个 IMPLEMENTATION Scope 必须声明其承接的验证卡（如 V-S1/S2/S3 → 三分流实现）。
-2. 该卡的设计证据门禁：相关自动化测试（按 ADP §5 `test:related` 选择）与 `governance:audit`
-   （无该链路新增 error 级违规）通过；状态化链路必须有对应状态机转移测试（APC §10）。
-3. 自动化证据只证明实现正确性；真实系统证据（WKWebView、真实 provider、真实 workspace）在 VALIDATION
-   阶段登记，未登记前卡状态保持 `DESIGNED`/`PARTIAL`，不表述为 G5 通过（APC §5.1）。
-4. 冻结语义变化、状态机/契约变化或证据门禁变化时回写本文并复核受影响验证卡。
+| 场景 | 最少卡 | 发布阻断事实 |
+|---|---|---|
+| 只读回答/分析 | V-S11～S13 | 主动读取、证据真实、零写工具/Proposal |
+| 当前文档编辑 | V-S1、V-S5、V-S10～S12 | LogicalState 正确、先 Proposal、裁决与保存分离 |
+| 不连续块独立裁决 | V-S14、V-S5 | 多卡一次预览、逐卡 accept/reject、保存重开正确 |
+| 跨批继续修改 | V-S4 | 新批以最新 LogicalState 为基准，旧批失效正确 |
+| 澄清/Decision/复杂任务 | V-S6、V-S7、V-S12 | 同回合恢复、逐次 Gate/grant、无后台 scheduler |
+| 新建和资源操作 | V-C1～C3、V-R1/R2 | 确认前零副作用、运行时重验、失败/补偿/恢复真实 |
+| 错误/取消/重启 | V-S5、V-S6、V-S9、V-S12 | 唯一终态、无原文破坏、无自动续跑 |
+| 隔离与隐私 | V-S8、V-S9、V-S13 | 不串线；正文/密钥/隐藏推理不进安全事件或默认 trace |
+
+## §8 进入 IMPLEMENTATION 与更新卡状态
+
+每个实现 Scope 必须：
+
+1. 声明工作包和本表卡 ID；列出相关 REQ、RULE、CHAIN、STATE_MACHINE 与预计生产 owner/消费者；
+2. 读取测试治理注册表和 ADUS，使用实际 changed_files 运行 `test:plan`，不得手选缩减；
+3. 对被替代实现列删除清单；删除旧测试前必须有当前契约的等价或更强断言；
+4. 运行 `test:related`、治理审计和工作包专项测试；需真实系统验证的卡在自动化通过后只标 `AUTOMATED`；
+5. 把命令、数量、环境、失败和恢复写入 Runtime Report，再更新卡状态；没有报告不更新；
+6. 卡达到 `PASS` 后若相关契约或生产 owner 改变，自动回到 `DESIGNED`/`AUTOMATED` 并重验。
+
+## §9 P1 独立开放条件
+
+下列能力不得因核心 Agent 通过而整体开放；每项需要独立 Scope、动态能力和真实验证。未满足时保持关闭：
+
+| P1 能力 | 独立条件 | 复用卡 |
+|---|---|---|
+| TXT/Markdown 目标副本转换 | 来源不改写、CreateDocumentBundle、损失告知、三重基线安全拒绝 | V-C1～C3 |
+| 外部文件内容读取 | 用户显式附加、可用只读解析、一次性 data-only、未读披露 | V-S8、V-S13 |
+| 显式项目记忆选择 | 仅用户选择进入本轮，不自动检索/写入/注入 | V-S8、V-S9 |
+| Workspace 创建/重命名/移动 | Decision、重验、dirty 阻断、幂等/补偿 | V-R1/R2 |
+| 删除/恢复 | 冻结递归范围、类型化快照、Timeline 恢复、冲突不覆盖 | V-R1/R2 |
+| 多既有文档逐项编辑 | 冻结目标清单，每目标独立基准/Proposal/裁决/保存，无批量事务承诺 | V-S10 + 独立子卡 |
+| 样式/表格/图片 | 受控操作、目标局部逆操作、格式动态能力、保存重开逐项通过 | V-S11 + 独立子卡 |
+
+## §10 当前待验证清单
+
+| validation_id | 当前可复用素材 | 当前必须重新证明 | 状态 |
+|---|---|---|---|
+| VAL-AG-ADAPTIVE-RUNTIME-01 | 既有 provider/工具/终态测试夹具 | TurnEvent→模型→ToolResult→再调用→final 的当前完整契约 | DESIGNED |
+| VAL-AG-DYNAMIC-GRANT-01 | 既有工具注册、目标和参数测试 | 无 IntentResult 授权、逐动作 grant 及变化后失效 | DESIGNED |
+| VAL-AG-EVIDENCE-REPORT-01 | 既有读取证据测试素材 | 无 report_project 工具的运行时派生报告 | DESIGNED |
+| VAL-AG-PROPOSAL-BATCH-01 | 既有 block_ops/DE/ED 测试素材 | 同批多卡一次预览与目标局部独立裁决 | DESIGNED |
+| VAL-AG-REAL-EXPERIENCE-01 | 既有 Tauri 启动与真实 provider 条件 | 非固定表达的意图泛化、工具选择、状态诚实和交互流畅性 | DESIGNED |
+| VAL-DOC-LIBREOFFICE-01 | 2026-09-03 非沙箱完整 Rust 套件通过 | 仅在后续 DOC/发布环境变更时回归，不是 Agent 当前阻断 | VERIFIED_NON_SANDBOX |
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
-|------|------|---------|
-| 2026-08-14 | v1.0 | AG-1.0-D4-VALIDATION-CARDS-01：建立 Agent 1.0 验证卡设计——追溯矩阵、状态化链路验证矩阵、核心场景卡 V-N1~N4（D-NEW）与 V-S1~S9（三态分流/连续接力/保存/澄清终态/TaskRun/外部内容记忆/会话隔离）、P1 独立开放条件清单（V-P1-01~07）与进入 IMPLEMENTATION 的门禁规则；卡状态一律 DESIGNED，未执行不填报通过。 |
-| 2026-08-27 | v1.1 | AG-CONFORMANCE-CODE-S3A：细化 V-S6 为同一 AgentTurn 澄清受控重入，补充身份 guard、调用前失败恢复与等待态取消证据设计；卡状态保持 DESIGNED。 |
-| 2026-08-28 | v1.2 | AG-CONFORMANCE-CODE-S3B：细化 V-S7 为简单回合零 TaskRun、任务级产物按需创建、显式 continuation 唯一复用与无 TaskRun Diff 不自动续片段；卡状态保持 DESIGNED。 |
-| 2026-08-28 | v1.3 | AG-CONFORMANCE-CODE-S3D：新增 V-S10，覆盖 ExplicitEditTargetSet 初始来源、澄清单调追加、scope 确认追加、TaskRun 持久继承、CreateDocumentBundle 建盘后追加及集合外零 PendingDiff 硬拒；卡状态保持 DESIGNED。 |
-| 2026-08-28 | v1.4 | AG-CONFORMANCE-CODE-S3C：新增 V-S11，覆盖 RuntimeProfile 缺失/未知失败关闭、八类 IntentResult 精确 allowed_tools、五因素 CapabilityGrant、CreateDocument/OrganizeWorkspace 资源计划、复杂 Edit scope DecisionRequest 与 BDocx 动态能力；本地定向自动化和 ADUS 注册已通过，卡状态 PARTIAL/G5_PENDING。 |
-| 2026-08-29 | v1.5 | AG-CONFORMANCE-CODE-S3E：新增 V-S12 与统一待验证列表；覆盖 PromptPackage/Gate 前置、SM-AG-02 loopError/handoff/多 ToolCall 顺序生产驱动、SM-AG-04 WaitingConfirm forbidden；真实 Tauri/provider 与范围外 LibreOffice 环境验证保持独立待办。 |
-| 2026-08-29 | v1.6 | 回填 S3E 自动化与治理证据：AG 164/164、前端 592/592、Rust 376/377（唯一失败为范围外 LibreOffice Worker signal=6）、test:governance/governance:audit 通过；V-S12 保持 PARTIAL，未把本地证据升级为 G5。 |
-| 2026-08-30 | v1.7 | AG-CONFORMANCE-CODE-S4A：新增 V-S13 与 VAL-AG-PROJECT-REPORT-01，分开登记 AgentContextFacts/ProjectReport 生产实现、本地自动化与真实 provider/WKWebView G5 证据。 |
-| 2026-08-30 | v1.8 | 回填 S4A 完整影响证据：前端 593/593、Rust 379+5+4、TypeScript、test:governance 与 governance:audit 通过；LibreOffice 用例非沙箱复核通过；V-S13 仅保留真实 provider/WKWebView G5。 |
-| 2026-08-31 | v1.9 | AG-DOC-CONSOLIDATION-01：统一文档头与正文已存的 DESIGNED/PARTIAL 状态；本文收敛为唯一 Active 验证卡和证据状态入口，无实际 Runtime Report 不得填报 PASS。 |
-| 2026-08-21 | v1.1 | 工作区资源操作基线重构：用 V-C1~C3 替代 D-NEW 场景，新增 V-R1/R2 覆盖 DecisionRequest、直接磁盘执行、dirty 阻断、内容 Diff 失效、fail-fast 补偿、partial_failed、重启 Interrupted 与 WorkspaceTimeline 类型化恢复。 |
+|---|---|---|
+| 2026-08-14 | v1.0 | 建立 Agent 1.0 状态化链路验证卡。 |
+| 2026-08-21 | v1.1 | 新增 WorkspaceOperation/CreateDocumentBundle 场景。 |
+| 2026-08-27 | v1.2 | 澄清恢复统一为原 AgentTurn。 |
+| 2026-08-28 | v1.3 | 新增 TaskRun 与 ExplicitEditTargetSet 验证。 |
+| 2026-08-30 | v1.7 | 新增当时 AgentContextFacts/report_project 局部证据。 |
+| 2026-08-31 | v1.9 | 收敛为唯一 Active Agent 验证卡。 |
+| 2026-09-03 | v2.0 | AG-ADAPTIVE-RUNTIME-PLAN-01：按 G1/G2 重建当前卡；IntentResult/Grant 分权、TaskRun 投影化、EvidenceLedger 派生报告、自适应循环与 ProposalBatch 独立卡片成为当前验收；受语义变更影响的旧 PARTIAL 全部回到 DESIGNED。 |
