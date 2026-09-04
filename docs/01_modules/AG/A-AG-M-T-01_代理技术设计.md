@@ -799,8 +799,10 @@ X-FORBID-005（不绕过 ED 接口）、X-SHARED-001（共享结构经 SYS）、
 
 #### 7.2.1 数据与重建契约
 
-- `turn_events(event_id TEXT PK, turn_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL,
-  payload_json TEXT NOT NULL, created_at INTEGER)` 是追加式运行事实表；同 turn 的 seq 唯一递增，已提交事件不可覆盖；
+- `agent_turn_events(event_id TEXT PK, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_version INTEGER NOT NULL,
+  payload_json TEXT NOT NULL, occurred_at INTEGER NOT NULL)` 是追加式运行事实表；同 turn 的 seq 唯一递增，
+  已提交事件不可覆盖或单项删除，删除整个 AgentSession 时随历史一起删除；
 - `task_runs`、`task_plans`、`task_plan_steps` 为可丢弃并重建的查询投影：只保存/缓存目标、当前状态、已发生
   工作、等待点、模型当前候选路线与结果引用，不保存 `required_grant` 或执行游标；
 - `decision_requests` 是独立业务事实，必须绑定 `turn_id`，可选绑定 `task_run_id`；投影丢失不影响裁决恢复；
@@ -1049,6 +1051,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-09-04 | v2.56 | AG-ADAPTIVE-RUNTIME-DOC-NAME-01：仅将 §7.2.1 的 TurnEvent 持久化表名、基线列和删除语义对齐至共享数据结构唯一真源 `agent_turn_events`；不新增需求、规则、功能或逻辑。 |
 | 2026-09-03 | v2.55 | AG-ADAPTIVE-RUNTIME-DESIGN-01：IntentResult 改为模型驱动可修订语义投影并移除授权；CapabilityGrant 改为逐工具按硬事实计算；TaskRun/TaskPlan/TaskStep 投影化；注册 TurnEvent/EvidenceLedger；ProjectReport 改由真实证据派生并移除 report_project 完成门。 |
 | 2026-09-01 | v2.54 | AG-MAPPING-REGISTRY-CLOSURE-01：同步四条 DESIGN_PENDING 需求的 deferred 状态；REQ-AG-009 补充映射到 Agent 1.0 共享运行时对象专门约束 X-SHARED-002，不新增业务规则。 |
 | 2026-08-29 | v2.52 | AG-CONFORMANCE-CODE-S4A：注册 TERM-AG-020 AgentContextFacts / TERM-AG-021 ProjectReport、BR-AG-DATA-008 / BR-AG-OBS-001 与 REQ-AG-009 完整映射；冻结版本化编辑器事实、独立 Prompt 层、只读读取证据账本及 report_project 失败关闭契约。 |
