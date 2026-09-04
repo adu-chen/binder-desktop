@@ -35,6 +35,12 @@ pub(super) struct ActiveAgentTurnLease {
     turn_id: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct CancelActiveTurnOutcome {
+    awaiting_clarification: bool,
+    task_run_id: Option<String>,
+}
+
 impl Drop for ActiveAgentTurnLease {
     fn drop(&mut self) {
         if let Ok(mut turns) = self.active_turns.lock() {
@@ -369,11 +375,12 @@ pub(super) fn lock_agent_turn_effect<'a>(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-API-AG-AG-TURN-019
+ * codes:    BR-AG-STATE-001-API-AG-AG-TURN-019, BR-AG-PERSIST-001-API-AG-AG-TURN-019, BR-SYS-STATE-007-API-AG-AG-TURN-019
  * type:     API
  * chain:    AG-TURN
- * rules:    BR-AG-STATE-001
- * boundary: in=AgentTurnCancellationIdentity(sessionId,turnId) | out=CancelledAgentTurn(abortedGatewayStreamAndNoFurtherToolStart)
+ * rules:    BR-AG-STATE-001, BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-022
+ * boundary: in=AgentTurnCancellationIdentity(sessionId,turnId) | out=CancelledAgentTurnWithPersistedTerminalEvent(abortedGatewayStreamOrClosedClarificationWaitAndNoFurtherToolStart)
  */
 #[tauri::command]
 pub(crate) fn ag_cancel_turn(
@@ -382,22 +389,20 @@ pub(crate) fn ag_cancel_turn(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), IpcError> {
-    let parked_task_run_id = cancel_active_agent_turn(&state, &session_id, &turn_id)?;
-    if let Some(task_run_id) = parked_task_run_id {
-        if let Ok(conn) = state.db.lock() {
-            super::task_runtime::settle_task_run(
-                &conn,
-                &task_run_id,
-                &turn_id,
-                ag::task::TurnOutcome::Cancelled,
-            );
+    let outcome = cancel_active_agent_turn(&state, &session_id, &turn_id)?;
+    if outcome.awaiting_clarification {
+        super::turn_events::persist_parked_ag_turn_cancelled(&state, &app, &turn_id)?;
+        if let Some(task_run_id) = outcome.task_run_id {
+            if let Ok(conn) = state.db.lock() {
+                super::task_runtime::settle_task_run(
+                    &conn,
+                    &task_run_id,
+                    &turn_id,
+                    ag::task::TurnOutcome::Cancelled,
+                );
+            }
         }
-        let cancelled = ag::turn::transition(
-            ag::turn::TurnState::AwaitingClarification,
-            ag::turn::TurnEvent::Cancel,
-        )
-        .ok_or_else(super::turn_events::sm_error)?;
-        super::turn_events::emit_ag01(&app, &turn_id, cancelled);
+        finish_cancelled_parked_turn(&state, &session_id, &turn_id)?;
     }
     Ok(())
 }
@@ -476,7 +481,7 @@ pub(super) fn cancel_active_agent_turn(
     state: &AppState,
     session_id: &str,
     turn_id: &str,
-) -> Result<Option<String>, IpcError> {
+) -> Result<CancelActiveTurnOutcome, IpcError> {
     let mut turns = state
         .active_agent_turns
         .lock()
@@ -498,18 +503,43 @@ pub(super) fn cancel_active_agent_turn(
         ));
     }
     active.cancelled.store(true, Ordering::Release);
-    let parked_task_run_id = if active.phase == ActiveAgentTurnPhase::AwaitingClarification {
-        active.task_run_id.clone()
-    } else {
-        None
-    };
+    let awaiting_clarification = active.phase == ActiveAgentTurnPhase::AwaitingClarification;
+    let task_run_id = awaiting_clarification
+        .then(|| active.task_run_id.clone())
+        .flatten();
     if let Some(handle) = active.abort_handle.take() {
         handle.abort();
     }
-    if parked_task_run_id.is_some() {
-        turns.remove(session_id);
+    Ok(CancelActiveTurnOutcome {
+        awaiting_clarification,
+        task_run_id,
+    })
+}
+
+fn finish_cancelled_parked_turn(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<(), IpcError> {
+    let mut turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let should_remove = turns.get(session_id).is_some_and(|active| {
+        active.turn_id == turn_id
+            && active.phase == ActiveAgentTurnPhase::AwaitingClarification
+            && active.cancelled.load(Ordering::Acquire)
+    });
+    if !should_remove {
+        return Err(IpcError::new(
+            "AG_TURN_MISMATCH",
+            "已持久化取消终态，但等待身份已改变",
+            false,
+            false,
+        ));
     }
-    Ok(parked_task_run_id)
+    turns.remove(session_id);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -546,7 +576,13 @@ mod ag_execution_kernel_tests {
         assert_eq!(second_error.code, "AG_TURN_ACTIVE");
         let (abort_handle, _abort_registration) = futures_util::future::AbortHandle::new_pair();
         install_agent_turn_abort_handle(&state, "s1", "t1", abort_handle).unwrap();
-        assert_eq!(cancel_active_agent_turn(&state, "s1", "t1").unwrap(), None);
+        assert_eq!(
+            cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
+            CancelActiveTurnOutcome {
+                awaiting_clarification: false,
+                task_run_id: None,
+            }
+        );
         assert!(cancelled.load(Ordering::Acquire));
 
         drop(lease);
@@ -670,8 +706,35 @@ mod ag_execution_kernel_tests {
 
         assert_eq!(
             cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
-            Some("task-1".to_string())
+            CancelActiveTurnOutcome {
+                awaiting_clarification: true,
+                task_run_id: Some("task-1".to_string()),
+            }
         );
+        finish_cancelled_parked_turn(&state, "s1", "t1").unwrap();
+        assert_eq!(
+            error_code(register_active_agent_turn(&state, "ws1", "s1", "t1", true)),
+            "AG_CLARIFICATION_NOT_AWAITING"
+        );
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007
+    #[test]
+    fn cancelling_simple_parked_clarification_also_removes_resume_identity() {
+        let state = state();
+        let (lease, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
+        drop(lease);
+
+        assert_eq!(
+            cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
+            CancelActiveTurnOutcome {
+                awaiting_clarification: true,
+                task_run_id: None,
+            }
+        );
+        finish_cancelled_parked_turn(&state, "s1", "t1").unwrap();
         assert_eq!(
             error_code(register_active_agent_turn(&state, "ws1", "s1", "t1", true)),
             "AG_CLARIFICATION_NOT_AWAITING"

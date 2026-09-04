@@ -244,6 +244,7 @@ fn build_registry() -> CommandRegistry {
     reg.register("ag.save_session");
     reg.register("ag.save_turn");
     reg.register("ag.list_turns");
+    reg.register("ag.list_turn_events");
     reg.register("ag.delete_session");
     // AG-1.0-IMP-TASKRUN-UI-01：按会话列受限任务实例（SM-AG-04 状态/步骤，前端会话摘要呈现）。
     reg.register("ag.list_task_runs");
@@ -380,6 +381,9 @@ fn dispatch(
             "ag.save_session" => route_save_agent_session(&request, &state),
             "ag.save_turn" => route_save_agent_turn(&request, &state),
             "ag.list_turns" => route_list_agent_turns(&request, &state),
+            "ag.list_turn_events" => {
+                ag::history_routes::route_list_agent_turn_events(&request, &state)
+            }
             "ag.list_task_runs" => route_list_agent_task_runs(&request, &state),
             "ag.propose_decision" => route_propose_decision(&request, &state),
             "ag.resolve_decision" => route_resolve_decision(&request, &state),

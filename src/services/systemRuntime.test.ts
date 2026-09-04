@@ -273,7 +273,11 @@ describe("smListeners 启动控制", () => {
 
     await Promise.all([startSmListeners(), startSmListeners(), startSmListeners()]);
 
-    expect(listenMock).toHaveBeenCalledTimes(5);
+    expect(listenMock).toHaveBeenCalledTimes(4);
+    expect(listenMock).not.toHaveBeenCalledWith(
+      "sm:SM-AG-01:state_changed",
+      expect.any(Function),
+    );
   });
 });
 }

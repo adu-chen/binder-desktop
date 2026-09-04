@@ -165,10 +165,8 @@ pub fn submit_for_verdict(
 // ── PI-AG-WIRE-01：dev AI 网关 HTTP 流式调用（接 cloud/dev-gateway） ──────────────────
 //
 // 客户端只连 localhost dev GW（X-FORBID-001：不内置 provider SDK、无直连 provider）。GW 归一化 SSE
-// （event: chunk/done/error）→ 解析为 AgTurnEvent emit 到 Channel（承 BR-ENT-STATE-001 流式三终态）。
+// （event: chunk/done/error）→ 解析后回调 AG TurnEvent owner（承 BR-ENT-STATE-001 流式三终态）。
 // dev 门禁/密钥沿用 GW（真实服务端裁决 X-FORBID-002、BYOK 加密 GW-02 归正式版）。
-
-use crate::ipc::AgTurnEvent;
 
 const DEFAULT_GW_URL: &str = "http://localhost:8787";
 
@@ -426,15 +424,18 @@ impl StreamTraceCounters {
     }
 }
 
-pub async fn stream_round(
+pub async fn stream_round<F>(
     turn_id: &str,
     round_index: usize,
     provider: &str,
     model: &str,
     messages: &serde_json::Value,
     tools: &serde_json::Value,
-    channel: &tauri::ipc::Channel<AgTurnEvent>,
-) -> Result<RoundOutcome, IpcError> {
+    mut on_chunk: F,
+) -> Result<RoundOutcome, IpcError>
+where
+    F: FnMut(String) -> Result<(), IpcError>,
+{
     use futures_util::StreamExt;
 
     let url = format!("{}/invoke/stream", gw_base_url());
@@ -623,10 +624,7 @@ pub async fn stream_round(
                                 }),
                             );
                         }
-                        let _ = channel.send(AgTurnEvent::Chunk {
-                            turn_id: turn_id.to_string(),
-                            text: text.to_string(),
-                        });
+                        on_chunk(text.to_string())?;
                     }
                 }
                 "tool_calls" => {

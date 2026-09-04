@@ -1,7 +1,7 @@
 //! AgentTurn 请求装配、模型轮次与受控工具循环。
 
 use crate::ag::prompt_runtime::PROMPT_TOKEN_BUDGET;
-use crate::ipc::{AgTurnEvent, IpcError};
+use crate::ipc::{AgTurnEvent, AgTurnEventPayload, IpcError};
 use crate::types::{AgentContextFactsV1, ReferencePayload, AGENT_CONTEXT_FACTS_VERSION_V1};
 use crate::{ag, ent, workspace, AppState};
 use std::collections::BTreeSet;
@@ -16,7 +16,7 @@ use super::turn_control::{
 };
 use super::turn_events::{
     emit_ag01, emit_ag_turn_cancelled_from, emit_ag_turn_denied, emit_ag_turn_error_from,
-    settle_and_emit_ag_turn_error_from, sm_error,
+    settle_and_emit_ag_turn_error_from, sm_error, TurnEventEmitter,
 };
 use super::turn_prompt::{prepare_turn_prompt, PreparedTurnPrompt};
 use super::turn_reference::{build_turn_reference_runtime, TurnReferenceRuntime};
@@ -350,7 +350,8 @@ pub(crate) async fn ag_start_turn(
         ag::history::ensure_session_exists(&conn, &workspace_id_for_turn, &session_id)
             .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
         let draft_payload = ag::history::AgentTurnPayload {
-            version: 1,
+            version: 2,
+            last_event_seq: 0,
             user_message: ag::history::PersistedChatMessage {
                 id: format!("u-{turn_id}"),
                 role: "user".to_string(),
@@ -379,18 +380,26 @@ pub(crate) async fn ag_start_turn(
         Ok(())
     })();
     if let Err(error) = history_result {
-        settle_and_emit_ag_turn_error_from(
-            &state,
-            clarification_task_run_id.as_deref(),
-            &on_event,
-            &terminal_latch,
-            &app,
-            &turn_id,
-            &error,
-            TurnState::Assembling,
-        );
-        return Ok(());
+        // draft 尚未建立时不存在可追加的 TurnEvent；由 command error 返回，不能制造未持久化事件。
+        return Err(error);
     }
+    let event_emitter = TurnEventEmitter::new(&state, &on_event, &turn_id);
+    event_emitter.record_internal(
+        "turn_started",
+        serde_json::json!({
+            "runtimeProfile": &runtime_profile,
+            "clarificationResume": clarification_resume,
+        }),
+    )?;
+    event_emitter.record_internal(
+        "context_frozen",
+        serde_json::json!({
+            "contextVersion": &agent_context_facts.version,
+            "openDocCount": agent_context_facts.open_docs.len(),
+            "selectionCount": agent_context_facts.selections.len(),
+            "proposalFactCount": agent_context_facts.proposal_facts.len(),
+        }),
+    )?;
 
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：先校验显式 TaskRun 续片段；
     // 普通 AgentTurn 此时不创建 TaskRun。只有后续确定需要 TaskPlan，或工具真实产生任务级产物时，
@@ -517,7 +526,7 @@ pub(crate) async fn ag_start_turn(
             settle_and_emit_ag_turn_error_from(
                 &state,
                 task_run_id,
-                &on_event,
+                &event_emitter,
                 &terminal_latch,
                 &app,
                 &turn_id,
@@ -537,7 +546,7 @@ pub(crate) async fn ag_start_turn(
                     settle_and_emit_ag_turn_error_from(
                         &state,
                         task_run_id.as_deref(),
-                        &on_event,
+                        &event_emitter,
                         &terminal_latch,
                         &app,
                         &turn_id,
@@ -790,10 +799,12 @@ pub(crate) async fn ag_start_turn(
             task_run_id.as_deref(),
         ));
         emit_ag01(&app, &turn_id, s);
-        let _ = on_event.send(AgTurnEvent::ClarificationRequired {
-            turn_id: turn_id.clone(),
-            text: format!("需要你先确认：{reason}。请打开或明确指定要修改的当前文档。"),
-        });
+        event_emitter.emit(
+            &terminal_latch,
+            AgTurnEventPayload::ClarificationRequired {
+                text: format!("需要你先确认：{reason}。请打开或明确指定要修改的当前文档。"),
+            },
+        )?;
         return Ok(());
     }
 
@@ -821,7 +832,7 @@ pub(crate) async fn ag_start_turn(
                     );
                 }
                 emit_ag_turn_error_from(
-                    &on_event,
+                    &event_emitter,
                     &terminal_latch,
                     &app,
                     &turn_id,
@@ -874,7 +885,7 @@ pub(crate) async fn ag_start_turn(
             );
         }
         emit_ag_turn_error_from(
-            &on_event,
+            &event_emitter,
             &terminal_latch,
             &app,
             &turn_id,
@@ -909,7 +920,7 @@ pub(crate) async fn ag_start_turn(
             );
         }
         emit_ag_turn_cancelled_from(
-            &on_event,
+            &event_emitter,
             &terminal_latch,
             &app,
             &turn_id,
@@ -917,10 +928,15 @@ pub(crate) async fn ag_start_turn(
         );
         return Ok(());
     }
+    event_emitter.record_internal("gate_requested", serde_json::json!({"attempt": 1}))?;
     let gate = match ent::gateway::check_gate().await {
         Ok(ent::gateway::GateOutcome::Pass) => GateState::Passed,
         Ok(ent::gateway::GateOutcome::Deny) => GateState::Denied,
         Err(error) => {
+            event_emitter.record_internal(
+                "gate_evaluated",
+                serde_json::json!({"attempt": 1, "outcome": "error", "code": &error.code}),
+            )?;
             if let Ok(conn) = state.db.lock() {
                 settle_optional_task_run(
                     &conn,
@@ -929,10 +945,17 @@ pub(crate) async fn ag_start_turn(
                     ag::task::TurnOutcome::Failed,
                 );
             }
-            emit_ag_turn_denied(&on_event, &terminal_latch, &app, &turn_id, &error);
+            emit_ag_turn_denied(&event_emitter, &terminal_latch, &app, &turn_id, &error);
             return Ok(());
         }
     };
+    event_emitter.record_internal(
+        "gate_evaluated",
+        serde_json::json!({
+            "attempt": 1,
+            "outcome": if gate == GateState::Passed { "passed" } else { "denied" },
+        }),
+    )?;
     if gate != GateState::Passed {
         let error = ensure_gate_passed(gate).expect_err("非 Passed 门禁必须被拒绝");
         if let Ok(conn) = state.db.lock() {
@@ -943,7 +966,7 @@ pub(crate) async fn ag_start_turn(
                 ag::task::TurnOutcome::Failed,
             );
         }
-        emit_ag_turn_denied(&on_event, &terminal_latch, &app, &turn_id, &error);
+        emit_ag_turn_denied(&event_emitter, &terminal_latch, &app, &turn_id, &error);
         return Ok(());
     }
     if cancelled.load(Ordering::Acquire) {
@@ -956,7 +979,7 @@ pub(crate) async fn ag_start_turn(
             );
         }
         emit_ag_turn_cancelled_from(
-            &on_event,
+            &event_emitter,
             &terminal_latch,
             &app,
             &turn_id,
@@ -972,6 +995,7 @@ pub(crate) async fn ag_start_turn(
     let provider = provider.unwrap_or_else(|| "deepseek".to_string());
     let model = model.unwrap_or_else(|| ent::gateway::default_model(&provider));
 
+    drop(event_emitter);
     run_turn_tool_loop(
         state,
         app,

@@ -1,12 +1,68 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMock = vi.hoisted(() => {
+  const seqByTurn = new Map<string, number>();
   class MockChannel<T> {
-    onmessage: ((message: T) => void) | null = null;
+    private consumer: ((message: T) => void) | null = null;
+    private turnId = "";
+    private seq = 0;
+    private pendingToolIds = new Map<string, string[]>();
+
+    setTurnId(turnId: string) {
+      this.turnId = turnId;
+    }
+
+    set onmessage(consumer: ((message: T) => void) | null) {
+      this.consumer = consumer;
+    }
+
+    get onmessage(): ((message: T) => void) | null {
+      const consumer = this.consumer;
+      if (!consumer) return null;
+      return (message: T) => {
+        const raw = message as Record<string, unknown>;
+        const type = String(raw.type ?? "");
+        const previousSeq = this.turnId ? (seqByTurn.get(this.turnId) ?? 0) : this.seq;
+        const nextSeq = typeof raw.seq === "number" ? raw.seq : previousSeq + 1;
+        this.seq = Math.max(this.seq, nextSeq);
+        if (this.turnId) seqByTurn.set(this.turnId, Math.max(previousSeq, nextSeq));
+        const toolName = String(raw.toolName ?? raw.tool_name ?? "");
+        let toolCallId = String(raw.toolCallId ?? raw.tool_call_id ?? "");
+        if (type === "tool_request" && !toolCallId) {
+          toolCallId = `call-${nextSeq}`;
+          this.pendingToolIds.set(toolName, [...(this.pendingToolIds.get(toolName) ?? []), toolCallId]);
+        } else if (type === "tool_result" && !toolCallId) {
+          const pending = this.pendingToolIds.get(toolName) ?? [];
+          toolCallId = pending.shift() ?? `call-${nextSeq}`;
+          this.pendingToolIds.set(toolName, pending);
+        }
+        const diffId = String(raw.diffId ?? raw.diff_id ?? "");
+        consumer({
+          ...raw,
+          eventId: raw.eventId ?? `event-${nextSeq}`,
+          turnId: this.turnId || String(raw.turnId ?? raw.turn_id ?? ""),
+          seq: nextSeq,
+          occurredAt: raw.occurredAt ?? nextSeq,
+          payloadVersion: raw.payloadVersion ?? 1,
+          toolCallId,
+          toolName,
+          evidenceIds: raw.evidenceIds ?? [],
+          diffId,
+          proposalBatchId: raw.proposalBatchId ?? diffId,
+          groupIndex: raw.groupIndex ?? 1,
+          groupCount: raw.groupCount ?? 1,
+          relPath: raw.relPath ?? raw.rel_path,
+          taskRunId: raw.taskRunId ?? raw.task_run_id,
+          requestId: raw.requestId ?? raw.request_id,
+          stopReason: raw.stopReason ?? raw.stop_reason,
+        } as T);
+      };
+    }
   }
 
   return {
     Channel: MockChannel,
+    resetChannelState: () => seqByTurn.clear(),
     invoke: vi.fn(),
     convertFileSrc: (path: string) => `asset://localhost/${path}`,
   };
@@ -59,19 +115,37 @@ import {
   resolveDecisionAndContinue,
   startTurn,
   buildAgentContextFacts,
-  type AgTurnEvent,
 } from "./agService";
 
 const invokeMock = vi.mocked(invoke);
+type TestTurnEvent = Record<string, unknown>;
+const diffDetailsById = new Map<string, Record<string, unknown>>();
+
+function bindTurnChannel(invocation: Record<string, unknown>) {
+  const turnId = typeof invocation.turnId === "string" ? invocation.turnId : "";
+  const channel = invocation.onEvent as { setTurnId?: (value: string) => void } | undefined;
+  if (turnId) channel?.setTurnId?.(turnId);
+}
 
 function completeTurn(arg: unknown) {
-  const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+  bindTurnChannel(arg as Record<string, unknown>);
+  const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
   onEvent.onmessage?.({ type: "done", turn_id: "t", stop_reason: "stop" });
 }
 
 function dispatchOk(arg: unknown) {
-  const command = (arg as { request?: { command?: string } }).request?.command;
+  const request = (arg as { request?: { command?: string; params?: { diffIds?: string[] } } }).request;
+  const command = request?.command;
   if (command === "ws.list_docs") return { correlation_id: "ag-test", result: [] };
+  if (command === "de.list_diffs") {
+    return {
+      correlation_id: "ag-test",
+      result: (request?.params?.diffIds ?? []).flatMap((id) => {
+        const detail = diffDetailsById.get(id);
+        return detail ? [detail] : [];
+      }),
+    };
+  }
   if (command === "ag.resolve_decision") {
     return { correlation_id: "ag-test", result: { task_run_id: "task-confirmed", status: "executing" } };
   }
@@ -81,6 +155,8 @@ function dispatchOk(arg: unknown) {
 function mockTurnInvoke(handler: (arg: unknown) => void) {
   invokeMock.mockImplementation(async (command, arg) => {
     if (command === "dispatch") return dispatchOk(arg);
+    const invocation = arg as Record<string, unknown>;
+    if (command === "ag_start_turn") bindTurnChannel(invocation);
     handler(arg);
     return undefined;
   });
@@ -94,7 +170,7 @@ function agStartArg(): Record<string, unknown> {
 
 function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
   const has = (key: string) => Object.prototype.hasOwnProperty.call(patch, key);
-  return JSON.stringify({
+  const result = {
     summary: "已生成修改建议",
     diff_id: patch.diff_id ?? "diff-1",
     rel_path: patch.rel_path ?? "notes/current.md",
@@ -116,11 +192,22 @@ function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
       table_ops: patch.table_ops ?? null,
       image_ops: patch.image_ops ?? null,
     },
+  };
+  const diffId = String(result.diff_id);
+  diffDetailsById.set(diffId, {
+    diff_id: diffId,
+    target: { rel_path: result.rel_path },
+    status: "pending",
+    created_at: 1,
+    projection: result.projection,
   });
+  return JSON.stringify(result);
 }
 
 beforeEach(() => {
   invokeMock.mockReset();
+  tauriMock.resetChannelState();
+  diffDetailsById.clear();
   docServiceMock.ensureDocumentMediaDisplayBase.mockClear();
   docServiceMock.isDocxEditable.mockClear();
   docServiceMock.isDocxEditable.mockReturnValue(false);
@@ -634,7 +721,7 @@ describe("agService ReferencePayload 发送契约", () => {
     ];
 
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "error",
         turn_id: "t",
@@ -850,7 +937,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("diff_proposed 的 before/after 来自后端 projection，不取整篇 fallback", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段原文\n最后一段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_request",
         turn_id: "t",
@@ -890,7 +977,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("前端不再根据数字型 block_id 自行解析目标块", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段原文", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_request",
         turn_id: "t",
@@ -918,7 +1005,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("缺少后端 projection 时，diff_proposed 投影为 error 卡", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", diff_id: "diff-missing", rel_path: "notes/current.md" });
       completeTurn(arg);
     });
@@ -936,7 +1023,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("块级 projection 缺少 block_id 时投影为精准目标缺失错误", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -972,7 +1059,7 @@ describe("agService ReferencePayload 发送契约", () => {
     });
     const styleOps = [{ op: "set_mark", blockId: "b1", start: 0, end: 2, mark: { type: "bold" } }];
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -1037,7 +1124,7 @@ describe("agService ReferencePayload 发送契约", () => {
       }],
     };
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -1080,7 +1167,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("不可信 style_ops 投影不会进入可裁决 Diff", async () => {
     edStore.loadDoc("notes/current.docx", '<p data-block-id="b1">正文</p>', 101, null, "html");
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -1135,7 +1222,7 @@ describe("agService ReferencePayload 发送契约", () => {
       }],
     };
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -1191,7 +1278,7 @@ describe("agService ReferencePayload 发送契约", () => {
     edStore.loadDoc("notes/current.md", "旧全文", 101);
     edLocateMock.getActiveDocumentContent.mockReturnValue("实时旧全文");
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -1227,7 +1314,7 @@ describe("agService ReferencePayload 发送契约", () => {
   it("DiffProjection 保留 active_editor_session source，不降级为 active_editor", async () => {
     edStore.loadDoc("notes/current.md", "旧全文", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "tool_result",
         turn_id: "t",
@@ -1255,23 +1342,29 @@ describe("agStore migrated suite", () => {
     agStore.reset();
   });
 
-  describe("agStore SM-AG-01 回合投影（Task 2-E · X-FORBID-007）", () => {
-    it("applyTurnState：活动态→sending=true；终态/错误/Idle→sending=false", () => {
-      // 活动态门控输入
-      for (const s of ["Assembling", "AwaitingGate", "Streaming", "HandingOff"] as const) {
-        agStore.applyTurnState("t", s);
-        expect(agStore.getSnapshot().sending).toBe(true);
-      }
-      // 终态与错误态释放门控
-      for (const s of ["Completed", "Cancelled", "Denied", "TurnError", "Idle"] as const) {
-        agStore.applyTurnState("t", "Streaming"); // 先置 true
-        agStore.applyTurnState("t", s);
-        expect(agStore.getSnapshot().sending).toBe(false);
-      }
-    });
+  describe("agStore TurnEvent 单一归约投影（TERM-AG-022）", () => {
+    it("按 seq 归约、冻结终态，并允许澄清后的同 turn 恢复", () => {
+      const sessionId = agStore.getSnapshot().activeSessionId;
+      agStore.setActiveTurn(sessionId, "t");
+      expect(agStore.acceptTurnEvent("t", 2, "chunk")).toBe(true);
+      expect(agStore.acceptTurnEvent("t", 2, "tool_request")).toBe(false);
+      expect(agStore.acceptTurnEvent("t", 1, "chunk")).toBe(false);
+      expect(agStore.lastTurnEventSeq("t")).toBe(2);
+      expect(agStore.getSnapshot().sending).toBe(true);
 
-    it("setSending 乐观置 true 仍可用（点击即门控防双发）", () => {
-      agStore.setSending(true);
+      expect(agStore.acceptTurnEvent("t", 5, "done")).toBe(true);
+      expect(agStore.getSnapshot().sending).toBe(false);
+      expect(agStore.getSnapshot().activeTurn).toBeNull();
+      expect(agStore.acceptTurnEvent("t", 6, "tool_result")).toBe(false);
+      agStore.setActiveTurn(sessionId, "t");
+      expect(agStore.getSnapshot().activeTurn).toBeNull();
+
+      // 澄清只释放输入门控，不锁存终态；同一 turn 可用更大 seq 恢复。
+      agStore.setActiveTurn(sessionId, "t-clarify");
+      expect(agStore.acceptTurnEvent("t-clarify", 3, "clarification_required")).toBe(true);
+      expect(agStore.getSnapshot().sending).toBe(false);
+      agStore.setActiveTurn(sessionId, "t-clarify");
+      expect(agStore.acceptTurnEvent("t-clarify", 7, "chunk")).toBe(true);
       expect(agStore.getSnapshot().sending).toBe(true);
     });
   });
@@ -1442,12 +1535,12 @@ describe("Editor autocomplete 调用点接线（MODEL-CONFIG-01 丢失回归）"
 
 // covers: BR-AG-UI-001
 // AG-MSG-RENDER-01 · TERM-AG-011：事件流按时序构造消息片段（chunk→tool→chunk→tool→diff 交错），
-// 同名工具按事件到达顺序（FIFO）精确配对，不再 name+executing 首配错乱。
+// 同名工具按后端 toolCallId 精确配对，不再依赖 name+executing 或前端 FIFO 猜测。
 describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
   it("chunk/tool_request/tool_result/diff_proposed 交错构造 segments", async () => {
     edStore.loadDoc("notes/current.md", "第一段\n第二段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "先读取文档" });
       onEvent.onmessage?.({
         type: "tool_request",
@@ -1488,13 +1581,13 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     expect(assistant?.content).toBe("先读取文档再读取另一篇");
     expect(assistant?.segments).toEqual([
       { kind: "text", text: "先读取文档" },
-      { kind: "tool", toolCallId: expect.stringMatching(/^tc-/) },
+      { kind: "tool", toolCallId: "call-2" },
       { kind: "text", text: "再读取另一篇" },
-      { kind: "tool", toolCallId: expect.stringMatching(/^tc-/) },
-      { kind: "tool", toolCallId: expect.stringMatching(/^tc-/) },
+      { kind: "tool", toolCallId: "call-5" },
+      { kind: "tool", toolCallId: "call-7" },
       { kind: "diff", diffId: "diff-seq" },
     ]);
-    // 同名 read_doc 两次按 FIFO 精确配对：第一次成功、第二次失败（BR-AG-UI-001 修复 name 首配错乱）。
+    // 同名 read_doc 两次按 toolCallId 精确配对：第一次成功、第二次失败（BR-AG-UI-001）。
     const readTools = session.toolCalls.filter((t) => t.name === "read_doc");
     expect(readTools.map((t) => t.state)).toEqual(["done", "failed"]);
   });
@@ -1502,7 +1595,7 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
   it("无工具/无 diff 的纯文本回合产生单一 text 段", async () => {
     edStore.loadDoc("notes/current.md", "第一段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((message: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "好的" });
       completeTurn(arg);
     });
@@ -1513,13 +1606,47 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     const assistant = session.messages.find((message) => message.role === "assistant");
     expect(assistant?.segments).toEqual([{ kind: "text", text: "好的" }]);
   });
+
+  it("Channel 丢失终态时按 lastEventSeq 补流并经同一 reducer 完成", async () => {
+    let backendTurnId = "";
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "ag_start_turn") {
+        backendTurnId = String((arg as Record<string, unknown>).turnId);
+        return undefined;
+      }
+      const request = (arg as { request?: { command?: string; correlation_id?: string; params?: Record<string, unknown> } }).request;
+      if (request?.command === "ag.list_turn_events") {
+        expect(request.params).toMatchObject({ turnId: backendTurnId, afterSeq: 0 });
+        return {
+          correlation_id: request.correlation_id,
+          result: [{
+            eventId: `turn-event:${backendTurnId}:4`,
+            turnId: backendTurnId,
+            seq: 4,
+            occurredAt: 4,
+            payloadVersion: 1,
+            type: "done",
+            stopReason: "stop",
+          }],
+        };
+      }
+      return dispatchOk(arg);
+    });
+
+    await startTurn("只回复");
+
+    const assistant = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "assistant");
+    expect(assistant?.turnStatus).toBe("completed");
+    expect(agStore.lastTurnEventSeq(backendTurnId)).toBe(4);
+    expect(agStore.getSnapshot().sending).toBe(false);
+  });
 });
 
 describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
   it("clarification_required 投影为 clarifying、释放 command 且不伪造终态", async () => {
     edStore.loadDoc("notes/current.md", "第一段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((m: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({
         type: "clarification_required",
         turn_id: "t",
@@ -1544,8 +1671,9 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
       if (command === "dispatch") return dispatchOk(arg);
       if (command !== "ag_start_turn") return undefined;
       const invocation = arg as Record<string, unknown>;
+      bindTurnChannel(invocation);
       turnInvocations.push(invocation);
-      const onEvent = invocation.onEvent as { onmessage: ((m: AgTurnEvent) => void) | null };
+      const onEvent = invocation.onEvent as { onmessage: ((m: TestTurnEvent) => void) | null };
       if (turnInvocations.length === 1) {
         onEvent.onmessage?.({ type: "clarification_required", turn_id: "ignored", text: "澄清问题" });
       } else {
@@ -1584,8 +1712,9 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
       if (command === "dispatch") return dispatchOk(arg);
       if (command !== "ag_start_turn") return undefined;
       const invocation = arg as Record<string, unknown>;
+      bindTurnChannel(invocation);
       turnInvocations.push(invocation);
-      const onEvent = invocation.onEvent as { onmessage: ((m: AgTurnEvent) => void) | null };
+      const onEvent = invocation.onEvent as { onmessage: ((m: TestTurnEvent) => void) | null };
       if (turnInvocations.length === 1) {
         onEvent.onmessage?.({ type: "clarification_required", turn_id: "ignored", text: "澄清问题" });
       } else {
@@ -1618,14 +1747,30 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
   it("等待澄清时取消使用原 turn_id 并投影 Cancelled", async () => {
     edStore.loadDoc("notes/current.md", "第一段", 101);
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((m: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "clarification_required", turn_id: "ignored", text: "澄清问题" });
     });
     await startTurn("修改文档");
     const turnId = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "user")?.turnId;
-    invokeMock.mockImplementation(async (command, arg) => (
-      command === "dispatch" ? dispatchOk(arg) : undefined
-    ));
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "ag_cancel_turn") return undefined;
+      const request = (arg as { request?: { command?: string; correlation_id?: string } }).request;
+      if (request?.command === "ag.list_turn_events") {
+        return {
+          correlation_id: request.correlation_id,
+          result: [{
+            eventId: `turn-event:${turnId}:2`,
+            turnId,
+            seq: 2,
+            occurredAt: 2,
+            payloadVersion: 1,
+            type: "done",
+            stopReason: "cancelled",
+          }],
+        };
+      }
+      return dispatchOk(arg);
+    });
 
     await cancelActiveTurn();
 
@@ -1634,6 +1779,7 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
     const assistant = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "assistant");
     expect(assistant?.turnStatus).toBe("cancelled");
     expect(assistant?.streaming).toBe(false);
+    expect(agStore.lastTurnEventSeq(turnId ?? "")).toBe(2);
   });
 });
 
@@ -1703,7 +1849,7 @@ describe("agService 回合实时事件（AG-1.0-TASKRUN-REWORK-IMP-UI-01）", ()
   // step_progress 驱动当前动作；decision_request_proposed 置待裁决（done 不清除，等用户裁决）。
   it("keeps pending decision across turn end and clears on resolution", async () => {
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((m: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "step_progress", turn_id: "t", action: "tool", label: "read_doc" });
       onEvent.onmessage?.({
         type: "decision_request_proposed",
@@ -1729,7 +1875,7 @@ describe("agService 回合实时事件（AG-1.0-TASKRUN-REWORK-IMP-UI-01）", ()
   // decision_request_resolved → 清除待裁决与当前动作。
   it("clears pending decision and current action on resolution", async () => {
     mockTurnInvoke((arg) => {
-      const onEvent = (arg as { onEvent: { onmessage: ((m: AgTurnEvent) => void) | null } }).onEvent;
+      const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "step_progress", turn_id: "t", action: "generating", label: "" });
       onEvent.onmessage?.({
         type: "decision_request_proposed",

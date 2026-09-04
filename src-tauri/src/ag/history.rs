@@ -108,6 +108,9 @@ pub struct TurnFailure {
 #[serde(rename_all = "camelCase")]
 pub struct AgentTurnPayload {
     pub version: i64,
+    /// 展示缓存已归约到的最后一个安全 TurnEvent seq；旧 V1 记录缺省为 0。
+    #[serde(default)]
+    pub last_event_seq: u64,
     pub user_message: PersistedChatMessage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_message: Option<PersistedChatMessage>,
@@ -142,6 +145,7 @@ pub struct AgentSessionDeleteResult {
     pub deleted_sessions: usize,
     pub deleted_turns: usize,
     pub deleted_payloads: usize,
+    pub deleted_events: usize,
 }
 
 pub fn is_valid_status(status: &str) -> bool {
@@ -355,6 +359,70 @@ pub fn save_turn(
 
 /**
  * @GOV
+ * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-046
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-PERSIST-001
+ * term_ref: TERM-AG-001, TERM-AG-009, TERM-AG-022
+ * boundary: in=ExistingAgentTurnIdentityAndAgentTurnPayloadV2Projection | out=UpdatedRecoverableDisplayCacheAtCommittedEventSeq | does_not=createAgentTurnOverwriteRuntimeStatusEventOrderToolResultDecisionOrDiffFact
+ */
+pub fn save_turn_projection(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    turn_id: &str,
+    rel_path: Option<&str>,
+    payload: &AgentTurnPayload,
+) -> rusqlite::Result<()> {
+    if payload.version != 2 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "AgentTurnPayload projection writes require version=2".to_string(),
+        ));
+    }
+    let payload_ref = conn
+        .query_row(
+            "SELECT payload_ref FROM agent_turns \
+             WHERE turn_id = ?1 AND workspace_id = ?2 AND session_id = ?3",
+            params![turn_id, workspace_id, session_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    let committed_event_seq = conn.query_row(
+        "SELECT COALESCE(MAX(seq), 0) FROM agent_turn_events WHERE turn_id = ?1",
+        [turn_id],
+        |row| row.get::<_, u64>(0),
+    )?;
+    if payload.last_event_seq > committed_event_seq {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "lastEventSeq {} exceeds committed seq {committed_event_seq}",
+            payload.last_event_seq
+        )));
+    }
+    let now = now_millis();
+    let payload_json = serde_json::to_string(payload)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    conn.execute(
+        "UPDATE agent_turn_payloads \
+         SET payload_json = ?2, payload_size = ?3 \
+         WHERE payload_ref = ?1 AND workspace_id = ?4",
+        params![
+            payload_ref,
+            payload_json,
+            payload_json.len() as i64,
+            workspace_id
+        ],
+    )?;
+    conn.execute(
+        "UPDATE agent_turns SET rel_path = ?2, updated_at = ?3 \
+         WHERE turn_id = ?1 AND workspace_id = ?4 AND session_id = ?5",
+        params![turn_id, rel_path, now, workspace_id, session_id],
+    )?;
+    Ok(())
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-PERSIST-001-QUERY-AG-AG-TURN-003
  * type:     QUERY
  * chain:    AG-TURN
@@ -408,6 +476,12 @@ pub fn delete_session(
     session_id: &str,
 ) -> rusqlite::Result<AgentSessionDeleteResult> {
     let tx = conn.transaction()?;
+    let deleted_events = tx.execute(
+        "DELETE FROM agent_turn_events WHERE turn_id IN ( \
+           SELECT turn_id FROM agent_turns WHERE workspace_id = ?1 AND session_id = ?2 \
+         )",
+        params![workspace_id, session_id],
+    )?;
     let deleted_payloads = tx.execute(
         "DELETE FROM agent_turn_payloads WHERE workspace_id = ?1 AND payload_ref IN ( \
            SELECT payload_ref FROM agent_turns WHERE workspace_id = ?1 AND session_id = ?2 \
@@ -427,6 +501,7 @@ pub fn delete_session(
         deleted_sessions,
         deleted_turns,
         deleted_payloads,
+        deleted_events,
     })
 }
 
@@ -473,6 +548,7 @@ mod tests {
     fn payload(text: &str) -> AgentTurnPayload {
         AgentTurnPayload {
             version: 1,
+            last_event_seq: 0,
             user_message: PersistedChatMessage {
                 id: "u1".into(),
                 role: "user".into(),
@@ -529,7 +605,55 @@ mod tests {
         // 旧记录（无 segments 字段）→ None，前端降级沉底、不丢数据（BR-AG-PERSIST-001）。
         let legacy = r#"{"version":1,"userMessage":{"id":"u1","role":"user","content":"hi"},"assistantMessage":{"id":"a1","role":"assistant","content":"ok"},"toolSummaries":[],"diffRefs":[]}"#;
         let p2: AgentTurnPayload = serde_json::from_str(legacy).unwrap();
+        assert_eq!(p2.last_event_seq, 0);
         assert!(p2.assistant_message.unwrap().segments.is_none());
+    }
+
+    // covers: BR-AG-PERSIST-001, BR-AG-STATE-001
+    #[test]
+    fn projection_write_requires_v2_committed_cursor_and_preserves_runtime_status() {
+        let conn = fresh();
+        ensure_session(&conn, "ws1", "s1", "标题", "edit", 0, true).unwrap();
+        save_turn(
+            &conn,
+            "ws1",
+            "s1",
+            "t1",
+            Some("before.md"),
+            "completed",
+            &payload("hello"),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_turn_events \
+             (event_id, workspace_id, session_id, turn_id, seq, kind, payload_version, payload_json, occurred_at) \
+             VALUES ('e1', 'ws1', 's1', 't1', 1, 'done', 1, '{}', 1)",
+            [],
+        )
+        .unwrap();
+
+        let mut projection = payload("updated");
+        projection.version = 2;
+        projection.last_event_seq = 1;
+        save_turn_projection(&conn, "ws1", "s1", "t1", Some("after.md"), &projection).unwrap();
+
+        let turn = list_turns(&conn, "ws1", "s1").unwrap().remove(0);
+        assert_eq!(turn.status, "completed");
+        assert_eq!(turn.rel_path.as_deref(), Some("after.md"));
+        assert_eq!(turn.payload.version, 2);
+        assert_eq!(turn.payload.last_event_seq, 1);
+
+        projection.last_event_seq = 2;
+        assert!(
+            save_turn_projection(&conn, "ws1", "s1", "t1", Some("future.md"), &projection,)
+                .is_err()
+        );
+        assert_eq!(
+            list_turns(&conn, "ws1", "s1").unwrap()[0]
+                .rel_path
+                .as_deref(),
+            Some("after.md")
+        );
     }
 
     // covers: BR-AG-PERSIST-001
@@ -647,6 +771,14 @@ mod tests {
         )
         .unwrap();
         conn.execute(
+            "INSERT INTO agent_turn_events \
+             (event_id, workspace_id, session_id, turn_id, seq, kind, payload_version, payload_json, occurred_at) \
+             VALUES ('event-delete', 'ws1', 's1', 't1', 1, 'done', 1, '{}', 1), \
+                    ('event-keep', 'ws1', 's1-keep', 't1-keep', 1, 'done', 1, '{}', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
             "INSERT INTO pending_diffs (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at) \
              VALUES ('d1', 'ws1', 'a.md', 'AG', 'pending', 'dp1', 1)",
             [],
@@ -658,11 +790,20 @@ mod tests {
         assert_eq!(result.deleted_sessions, 1);
         assert_eq!(result.deleted_turns, 1);
         assert_eq!(result.deleted_payloads, 1);
+        assert_eq!(result.deleted_events, 1);
         let ws1_sessions = list_sessions(&conn, "ws1").unwrap();
         assert_eq!(ws1_sessions.sessions.len(), 1);
         assert_eq!(ws1_sessions.sessions[0].session_id, "s1-keep");
         assert!(list_turns(&conn, "ws1", "s1").unwrap().is_empty());
         assert_eq!(list_turns(&conn, "ws1", "s1-keep").unwrap().len(), 1);
+        let kept_event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_turn_events WHERE turn_id = 't1-keep'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept_event_count, 1);
         assert_eq!(list_sessions(&conn, "ws2").unwrap().sessions.len(), 1);
         assert_eq!(list_turns(&conn, "ws2", "s2").unwrap().len(), 1);
         let pending_count: i64 = conn

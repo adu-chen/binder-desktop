@@ -411,6 +411,33 @@ const MIGRATIONS: &[Migration] = &[
                 ON task_run_edit_targets(task_run_id, authorized_at);
         "#,
     },
+    Migration {
+        version: 17,
+        // Agent 1.0 append-only TurnEvent（AG-ADAPTIVE-RUNTIME-WP1-EVENTS-01）：运行事实按
+        // turn_id 共用单调 seq；安全 Channel 投影与内部 context/gate/provider 事件共享顺序。
+        // payload_json 不保存密钥、额外用户正文副本或模型隐藏推理。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS agent_turn_events (
+                event_id       TEXT PRIMARY KEY,
+                workspace_id   TEXT NOT NULL,
+                session_id     TEXT NOT NULL,
+                turn_id        TEXT NOT NULL,
+                seq            INTEGER NOT NULL,
+                kind           TEXT NOT NULL,
+                payload_version INTEGER NOT NULL,
+                payload_json   TEXT NOT NULL,
+                occurred_at    INTEGER NOT NULL,
+                UNIQUE(turn_id, seq)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_turn_events_workspace_turn_seq
+                ON agent_turn_events(workspace_id, turn_id, seq);
+            CREATE TRIGGER IF NOT EXISTS trg_agent_turn_events_no_update
+                BEFORE UPDATE ON agent_turn_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent_turn_events are append-only');
+                END;
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {
@@ -485,6 +512,14 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_meta", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, latest()); // 每个 version 恰一条
+        let turn_event_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_turn_events')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(turn_event_columns, 9);
     }
 
     // covers: BR-SYS-PERSIST-001

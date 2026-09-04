@@ -102,50 +102,87 @@ pub enum StreamEvent {
     },
 }
 
-/// AG 回合流式领域事件（A-AG-I-P-01 §2.1 · PI-AG-10C 契约冻结点）。
+/// AG 回合流式领域事件（A-AG-I-P-01 §2.1）。
 ///
 /// **与上面 `StreamEvent` 分层不同、非重复**：
 /// - `StreamEvent` 是通用 IPC 传输契约（dispatch 信封 + correlation_id，BR-SYS-STATE-002）。
-/// - `AgTurnEvent` 是 AG 回合**领域**事件，走 Tauri 原生 per-call `Channel<AgTurnEvent>`
-///   （SY-02 选型，不经 dispatch 信封；channel 本身即回合关联，故用 turn_id 而非 correlation_id）。
+/// - `AgTurnEvent` 是 append-only TurnEvent 的安全 wire 投影，走 Tauri 原生 per-call
+///   `Channel<AgTurnEvent>`（SY-02 选型，不经 dispatch 信封）。
 ///
-/// 三终态（Done / Error / Done{stop_reason:"cancelled"}）语义承 BR-SYS-STATE-002 的
-/// 完成/错误/中断，但因传输层不同（dedicated channel vs dispatch envelope）用独立 wire 类型，
-/// 不复用上面的 `StreamEvent`，避免把领域事件埋进通用 `data`。
-///
-/// 前端按 `type` 标签分发（PI-AG-10F）：chunk→appendToMessage、tool_request/tool_result→工具卡片、
-/// diff_proposed→deStore.stageDiff、done→finishMessage、error→pushError。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// envelope 字段使用 camelCase；flatten 的 payload 以 `type` + snake_case 区分分支。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgTurnEvent {
+    pub event_id: String,
+    pub turn_id: String,
+    pub seq: u64,
+    pub occurred_at: i64,
+    pub payload_version: u32,
+    #[serde(flatten)]
+    pub event: AgTurnEventPayload,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-DATA-AG-AG-TURN-043, BR-AG-STATE-002-DATA-AG-AG-TURN-043, BR-AG-PERSIST-001-DATA-AG-AG-TURN-043, BR-SYS-STATE-007-DATA-AG-AG-TURN-043
+ * type:     DATA
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-022
+ * boundary: in=SafePersistedTurnEventPayload | out=VersionedAgTurnEventPayload(chunkIntentRouteToolProposalDecisionWaitOrTerminal) | does_not=exposeGateContextProviderSecretsCapabilityGrantOrHiddenReasoning
+ */
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgTurnEvent {
+pub enum AgTurnEventPayload {
     /// 模型输出文本分片。
-    Chunk { turn_id: String, text: String },
+    Chunk { text: String },
+    /// 模型可见意图语义修订；projection 不包含授权对象。
+    IntentUpdated { revision: u64, projection: Value },
+    /// 当前可见候选路线；不是工具调度命令。
+    RouteUpdated {
+        revision: u64,
+        summary: String,
+        steps: Vec<Value>,
+    },
     /// 模型请求工具调用（SM-AG-02 激活）。
     ToolRequest {
-        turn_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        #[serde(rename = "toolName")]
         tool_name: String,
         params: Value,
     },
     /// 工具执行结果回注（供前端展示工具状态）。
     ToolResult {
-        turn_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        #[serde(rename = "toolName")]
         tool_name: String,
         result: String,
         success: bool,
+        #[serde(rename = "evidenceIds")]
+        evidence_ids: Vec<String>,
     },
     /// diff 已生成待用户裁决（ChangeProposal→DE 产出，X-FORBID-006）。
     DiffProposed {
-        turn_id: String,
+        #[serde(rename = "diffId")]
         diff_id: String,
+        #[serde(rename = "proposalBatchId")]
+        proposal_batch_id: String,
+        #[serde(rename = "groupIndex")]
+        group_index: u32,
+        #[serde(rename = "groupCount")]
+        group_count: u32,
+        #[serde(rename = "relPath")]
         rel_path: String,
         /// 受限任务实例关联（TERM-AG-015 · BR-SYS-STATE-008，UNC-09）：DiffCard 可经此关联 TaskRun。
+        #[serde(rename = "taskRunId")]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_run_id: Option<String>,
     },
     /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01 · 实时当前动作（A-AG-M-T-01 §7.2.2）：
     /// 信息流底部状态条数据源，不伪造（BR-SYS-STATE-008）。
     StepProgress {
-        turn_id: String,
         /// action：reading / tool / generating / proposing / deciding。
         action: String,
         label: String,
@@ -154,32 +191,62 @@ pub enum AgTurnEvent {
     },
     /// 任务级裁决请求（TERM-AG-017）：proposed → 等待确认（确认点唯一来源，三层分离）。
     DecisionRequestProposed {
-        turn_id: String,
+        #[serde(rename = "requestId")]
         request_id: String,
         kind: String,
         payload: Value,
     },
     /// 任务级裁决结果（confirm / cancel → TaskRun UserConfirm/UserCancel）。
     DecisionRequestResolved {
-        turn_id: String,
+        #[serde(rename = "requestId")]
         request_id: String,
         outcome: String,
     },
     /// 澄清等待：IntentResult.ambiguity=blocking 时等待用户输入的非终态事件（BR-SYS-STATE-007）。
     /// 回合不终结、不锁存终态；用户补充输入后以同 turn_id 受控重入，或在此阶段取消。
-    ClarificationRequired { turn_id: String, text: String },
+    ClarificationRequired { text: String },
     /// 回合正常完成（含 stop_reason:"cancelled" 中断终态）。
     Done {
-        turn_id: String,
+        #[serde(rename = "stopReason")]
         stop_reason: String,
     },
     /// 回合错误（含可重试标记）。
     Error {
-        turn_id: String,
         code: String,
         message: String,
         retriable: bool,
     },
+}
+
+impl AgTurnEventPayload {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Chunk { .. } => "chunk",
+            Self::IntentUpdated { .. } => "intent_updated",
+            Self::RouteUpdated { .. } => "route_updated",
+            Self::ToolRequest { .. } => "tool_request",
+            Self::ToolResult { .. } => "tool_result",
+            Self::DiffProposed { .. } => "diff_proposed",
+            Self::StepProgress { .. } => "step_progress",
+            Self::DecisionRequestProposed { .. } => "decision_request_proposed",
+            Self::DecisionRequestResolved { .. } => "decision_request_resolved",
+            Self::ClarificationRequired { .. } => "clarification_required",
+            Self::Done { .. } => "done",
+            Self::Error { .. } => "error",
+        }
+    }
+
+    pub fn terminal_status(&self) -> Option<&'static str> {
+        match self {
+            Self::Done { stop_reason } if stop_reason == "cancelled" => Some("cancelled"),
+            Self::Done { .. } => Some("completed"),
+            Self::Error { code, .. } if code.contains("GATE") || code.contains("401") => {
+                Some("gate_rejected")
+            }
+            Self::Error { .. } => Some("error"),
+            _ => None,
+        }
+    }
 }
 
 /**
@@ -266,44 +333,50 @@ mod tests {
     }
 
     // covers: BR-SYS-STATE-002
-    // AgTurnEvent（A-AG-I-P-01 §2.1）：六分支 serde 形态 tag=type + snake_case；
-    // 三终态语义（done / done{cancelled} / error）承 BR-SYS-STATE-002，与通用 StreamEvent 分层不同。
+    // AgTurnEvent（A-AG-I-P-01 §2.1）：envelope camelCase + payload tag=type/snake_case；
+    // event_id/seq/time/version 与安全 payload 同时往返。
     #[test]
     fn ag_turn_event_serializes_with_type_tag_and_has_terminal_states() {
-        let chunk = AgTurnEvent::Chunk {
+        let event = |payload| AgTurnEvent {
+            event_id: "evt:t1:1".into(),
             turn_id: "t1".into(),
-            text: "tok".into(),
+            seq: 1,
+            occurred_at: 42,
+            payload_version: 1,
+            event: payload,
         };
+        let chunk = event(AgTurnEventPayload::Chunk { text: "tok".into() });
         let j = serde_json::to_string(&chunk).unwrap();
         assert!(j.contains("\"type\":\"chunk\""), "tag=type/snake_case: {j}");
-        assert!(j.contains("turn_id"));
+        assert!(j.contains("\"eventId\":\"evt:t1:1\""));
+        assert!(j.contains("\"turnId\":\"t1\""));
+        assert!(j.contains("\"payloadVersion\":1"));
 
-        let diff = AgTurnEvent::DiffProposed {
-            turn_id: "t1".into(),
+        let diff = event(AgTurnEventPayload::DiffProposed {
             diff_id: "d1".into(),
+            proposal_batch_id: "pb1".into(),
+            group_index: 1,
+            group_count: 1,
             rel_path: "a.md".into(),
             task_run_id: None,
-        };
-        assert!(serde_json::to_string(&diff)
-            .unwrap()
-            .contains("\"type\":\"diff_proposed\""));
+        });
+        let diff_json = serde_json::to_string(&diff).unwrap();
+        assert!(diff_json.contains("\"type\":\"diff_proposed\""));
+        assert!(diff_json.contains("\"proposalBatchId\":\"pb1\""));
 
         // 三终态：完成 / 中断（done+cancelled）/ 错误
         let terminals = [
-            AgTurnEvent::Done {
-                turn_id: "t1".into(),
+            event(AgTurnEventPayload::Done {
                 stop_reason: "stop".into(),
-            },
-            AgTurnEvent::Done {
-                turn_id: "t1".into(),
+            }),
+            event(AgTurnEventPayload::Done {
                 stop_reason: "cancelled".into(),
-            },
-            AgTurnEvent::Error {
-                turn_id: "t1".into(),
+            }),
+            event(AgTurnEventPayload::Error {
                 code: "E".into(),
                 message: "m".into(),
                 retriable: false,
-            },
+            }),
         ];
         for ev in terminals {
             let s = serde_json::to_string(&ev).unwrap();

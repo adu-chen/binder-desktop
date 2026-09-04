@@ -11,10 +11,10 @@ use super::turn_control::{
 };
 use super::turn_events::{
     emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_done, emit_ag_turn_error,
-    settle_and_emit_ag_turn_error,
+    settle_and_emit_ag_turn_error, TurnEventEmitter,
 };
 use crate::ag;
-use crate::ipc::{AgTurnEvent, CommandRequest, IpcError};
+use crate::ipc::{AgTurnEvent, AgTurnEventPayload, CommandRequest, IpcError};
 use crate::workspace::routes::route_plan_workspace_operation;
 use crate::{ent, AppState};
 use std::sync::{
@@ -69,6 +69,32 @@ fn required_terminal_tool_error(
         true,
         false,
     )
+}
+
+/// Channel/补流只公开工具身份、目标路径和参数键，不复制查询正文、文档块或修改载荷。
+fn safe_tool_params(params: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = params.as_object() else {
+        return serde_json::json!({});
+    };
+    let mut keys = object.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    let rel_path = object
+        .get("relPath")
+        .or_else(|| object.get("path"))
+        .and_then(|value| value.as_str());
+    serde_json::json!({
+        "parameterKeys": keys,
+        "relPath": rel_path,
+    })
+}
+
+/// 模型继续推理仍接收本地完整结果；TurnEvent 安全投影只保存不会复制正文的执行摘要。
+fn safe_tool_result(tool_name: &str, success: bool) -> String {
+    if success {
+        format!("{tool_name} 执行成功")
+    } else {
+        format!("{tool_name} 执行失败")
+    }
 }
 
 /**
@@ -135,6 +161,7 @@ pub(super) async fn run_turn_tool_loop(
     required_terminal_tool: Option<String>,
     current_doc_requires_tool_read: bool,
 ) -> Result<(), IpcError> {
+    let event_emitter = TurnEventEmitter::new(&state, &on_event, &turn_id);
     let mut proposed_diff = false;
     let mut edit_blocked_reported = false;
     let mut project_reported = false;
@@ -164,7 +191,7 @@ pub(super) async fn run_turn_tool_loop(
                     settle_and_emit_ag_turn_error(
                         &state,
                         task_run_id.as_deref(),
-                        &on_event,
+                        &event_emitter,
                         &terminal_latch,
                         &app,
                         &turn_id,
@@ -186,19 +213,43 @@ pub(super) async fn run_turn_tool_loop(
                     ag::task::TurnOutcome::Cancelled,
                 );
             }
-            emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+            emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
             return Ok(());
         }
         if _round > 0 {
+            event_emitter
+                .record_internal("gate_requested", serde_json::json!({"attempt": _round + 1}))?;
             let gate_error = match ent::gateway::check_gate().await {
-                Ok(ent::gateway::GateOutcome::Pass) => None,
-                Ok(ent::gateway::GateOutcome::Deny) => Some(IpcError::new(
-                    "AG_GATE_DENIED",
-                    "续调门禁被服务端拒绝，本轮已停止。",
-                    false,
-                    true,
-                )),
-                Err(error) => Some(error),
+                Ok(ent::gateway::GateOutcome::Pass) => {
+                    event_emitter.record_internal(
+                        "gate_evaluated",
+                        serde_json::json!({"attempt": _round + 1, "outcome": "passed"}),
+                    )?;
+                    None
+                }
+                Ok(ent::gateway::GateOutcome::Deny) => {
+                    event_emitter.record_internal(
+                        "gate_evaluated",
+                        serde_json::json!({"attempt": _round + 1, "outcome": "denied"}),
+                    )?;
+                    Some(IpcError::new(
+                        "AG_GATE_DENIED",
+                        "续调门禁被服务端拒绝，本轮已停止。",
+                        false,
+                        true,
+                    ))
+                }
+                Err(error) => {
+                    event_emitter.record_internal(
+                        "gate_evaluated",
+                        serde_json::json!({
+                            "attempt": _round + 1,
+                            "outcome": "error",
+                            "code": &error.code,
+                        }),
+                    )?;
+                    Some(error)
+                }
             };
             if let Some(error) = gate_error {
                 advance_or_finish!(TlEv::LoopError);
@@ -210,7 +261,7 @@ pub(super) async fn run_turn_tool_loop(
                         ag::task::TurnOutcome::Failed,
                     );
                 }
-                emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
             }
         }
@@ -232,6 +283,14 @@ pub(super) async fn run_turn_tool_loop(
             audit_log.capture(audit);
         }
         let msgs = serde_json::Value::Array(provider_messages);
+        event_emitter.record_internal(
+            "provider_started",
+            serde_json::json!({
+                "roundIndex": _round + 1,
+                "provider": &provider,
+                "model": &model,
+            }),
+        )?;
         let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
         if let Err(error) =
             install_agent_turn_abort_handle(&state, &session_id, &turn_id, abort_handle)
@@ -240,7 +299,7 @@ pub(super) async fn run_turn_tool_loop(
             settle_and_emit_ag_turn_error(
                 &state,
                 task_run_id.as_deref(),
-                &on_event,
+                &event_emitter,
                 &terminal_latch,
                 &app,
                 &turn_id,
@@ -256,13 +315,21 @@ pub(super) async fn run_turn_tool_loop(
                 &model,
                 &msgs,
                 &tools,
-                &on_event,
+                |text| {
+                    event_emitter
+                        .emit(&terminal_latch, AgTurnEventPayload::Chunk { text })
+                        .map(|_| ())
+                },
             ),
             abort_registration,
         )
         .await
         {
             Err(_) => {
+                event_emitter.record_internal(
+                    "provider_finished",
+                    serde_json::json!({"roundIndex": _round + 1, "outcome": "cancelled"}),
+                )?;
                 advance_or_finish!(TlEv::Cancel);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
@@ -272,10 +339,18 @@ pub(super) async fn run_turn_tool_loop(
                         ag::task::TurnOutcome::Cancelled,
                     );
                 }
-                emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+                emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
                 return Ok(());
             }
             Ok(Err(error)) => {
+                event_emitter.record_internal(
+                    "provider_finished",
+                    serde_json::json!({
+                        "roundIndex": _round + 1,
+                        "outcome": "transport_error",
+                        "code": &error.code,
+                    }),
+                )?;
                 advance_or_finish!(TlEv::LoopError);
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
@@ -285,10 +360,23 @@ pub(super) async fn run_turn_tool_loop(
                         ag::task::TurnOutcome::Failed,
                     );
                 }
-                emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
             }
-            Ok(Ok(outcome)) => outcome,
+            Ok(Ok(outcome)) => {
+                event_emitter.record_internal(
+                    "provider_finished",
+                    serde_json::json!({
+                        "roundIndex": _round + 1,
+                        "outcome": match &outcome {
+                            ent::gateway::RoundOutcome::Failed(_) => "failed",
+                            ent::gateway::RoundOutcome::Done { .. } => "done",
+                            ent::gateway::RoundOutcome::ToolCalls(_) => "tool_calls",
+                        },
+                    }),
+                )?;
+                outcome
+            }
         };
         match round {
             ent::gateway::RoundOutcome::Failed(error) => {
@@ -301,7 +389,7 @@ pub(super) async fn run_turn_tool_loop(
                         ag::task::TurnOutcome::Failed,
                     );
                 }
-                emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                 return Ok(());
             }
             ent::gateway::RoundOutcome::Done { stop_reason } => {
@@ -343,7 +431,7 @@ pub(super) async fn run_turn_tool_loop(
                                 ag::task::TurnOutcome::Failed,
                             );
                         }
-                        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                        emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                         return Ok(());
                     }
                     Ok(false) => {}
@@ -357,7 +445,7 @@ pub(super) async fn run_turn_tool_loop(
                                 ag::task::TurnOutcome::Failed,
                             );
                         }
-                        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                        emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                         return Ok(());
                     }
                 }
@@ -380,7 +468,7 @@ pub(super) async fn run_turn_tool_loop(
                             ag::task::TurnOutcome::Failed,
                         );
                     }
-                    emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+                    emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                     return Ok(());
                 }
                 advance_or_finish!(TlEv::FinalAnswer);
@@ -392,7 +480,13 @@ pub(super) async fn run_turn_tool_loop(
                         ag::task::TurnOutcome::Completed,
                     );
                 }
-                emit_ag_turn_done(&on_event, &terminal_latch, &app, &turn_id, &stop_reason);
+                emit_ag_turn_done(
+                    &event_emitter,
+                    &terminal_latch,
+                    &app,
+                    &turn_id,
+                    &stop_reason,
+                );
                 return Ok(());
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
@@ -407,7 +501,7 @@ pub(super) async fn run_turn_tool_loop(
                     settle_and_emit_ag_turn_error(
                         &state,
                         task_run_id.as_deref(),
-                        &on_event,
+                        &event_emitter,
                         &terminal_latch,
                         &app,
                         &turn_id,
@@ -439,7 +533,7 @@ pub(super) async fn run_turn_tool_loop(
                                 ag::task::TurnOutcome::Cancelled,
                             );
                         }
-                        emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+                        emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
                         return Ok(());
                     }
                     advance_or_finish!(TlEv::ToolRequest);
@@ -459,24 +553,29 @@ pub(super) async fn run_turn_tool_loop(
                             ))
                         }
                     };
-                    let _ = on_event.send(AgTurnEvent::ToolRequest {
-                        turn_id: turn_id.clone(),
-                        tool_name: c.name.clone(),
-                        params: params.clone(),
-                    });
-                    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
-                    let _ = on_event.send(AgTurnEvent::StepProgress {
-                        turn_id: turn_id.clone(),
-                        action: if c.name == "propose_decision"
-                            || c.name == "plan_workspace_operation"
-                        {
-                            "deciding".to_string()
-                        } else {
-                            "tool".to_string()
+                    event_emitter.emit(
+                        &terminal_latch,
+                        AgTurnEventPayload::ToolRequest {
+                            tool_call_id: c.id.clone(),
+                            tool_name: c.name.clone(),
+                            params: safe_tool_params(&params),
                         },
-                        label: c.name.clone(),
-                        detail: None,
-                    });
+                    )?;
+                    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
+                    event_emitter.emit(
+                        &terminal_latch,
+                        AgTurnEventPayload::StepProgress {
+                            action: if c.name == "propose_decision"
+                                || c.name == "plan_workspace_operation"
+                            {
+                                "deciding".to_string()
+                            } else {
+                                "tool".to_string()
+                            },
+                            label: c.name.clone(),
+                            detail: None,
+                        },
+                    )?;
                     let mut diff_event_after_tool: Option<(String, String)> = None;
                     let mut decision_event_after_tool = None;
                     let mut preview_checkpoint_after_tool = false;
@@ -1009,7 +1108,7 @@ pub(super) async fn run_turn_tool_loop(
                                 ag::task::TurnOutcome::Cancelled,
                             );
                         }
-                        emit_ag_turn_cancelled(&on_event, &terminal_latch, &app, &turn_id);
+                        emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
                         return Ok(());
                     }
                     if validation_allows_execution {
@@ -1019,12 +1118,16 @@ pub(super) async fn run_turn_tool_loop(
                             TlEv::ExecFail
                         });
                     }
-                    let _ = on_event.send(AgTurnEvent::ToolResult {
-                        turn_id: turn_id.clone(),
-                        tool_name: c.name.clone(),
-                        result: result.clone(),
-                        success,
-                    });
+                    event_emitter.emit(
+                        &terminal_latch,
+                        AgTurnEventPayload::ToolResult {
+                            tool_call_id: c.id.clone(),
+                            tool_name: c.name.clone(),
+                            result: safe_tool_result(&c.name, success),
+                            success,
+                            evidence_ids: Vec::new(),
+                        },
+                    )?;
                     // AG-1.0-IMP-TASKRUN-01：真实工具事件驱动步骤态（BR-SYS-STATE-008，best-effort）。
                     if let (Some(task_run_id), Ok(conn)) = (task_run_id.as_deref(), state.db.lock())
                     {
@@ -1048,12 +1151,17 @@ pub(super) async fn run_turn_tool_loop(
                                 &format!("提案 {rel_path}"),
                             );
                         }
-                        let _ = on_event.send(AgTurnEvent::DiffProposed {
-                            turn_id: turn_id.clone(),
-                            diff_id,
-                            rel_path,
-                            task_run_id: task_run_id.clone(),
-                        });
+                        event_emitter.emit(
+                            &terminal_latch,
+                            AgTurnEventPayload::DiffProposed {
+                                proposal_batch_id: diff_id.clone(),
+                                group_index: 1,
+                                group_count: 1,
+                                diff_id,
+                                rel_path,
+                                task_run_id: task_run_id.clone(),
+                            },
+                        )?;
                     }
                     if end_after_diff_proposal && success {
                         // 每张 Diff 都终止当前模型片段，避免在旧 read_ctx 上产生补丁栈。LogicalState
@@ -1066,7 +1174,7 @@ pub(super) async fn run_turn_tool_loop(
                         }
                         advance_or_finish!(TlEv::Handoff);
                         emit_ag_turn_done(
-                            &on_event,
+                            &event_emitter,
                             &terminal_latch,
                             &app,
                             &turn_id,
@@ -1079,12 +1187,14 @@ pub(super) async fn run_turn_tool_loop(
                         return Ok(());
                     }
                     if let Some(decision) = decision_event_after_tool {
-                        let _ = on_event.send(AgTurnEvent::DecisionRequestProposed {
-                            turn_id: turn_id.clone(),
-                            request_id: decision.request_id,
-                            kind: decision.kind,
-                            payload: decision.payload,
-                        });
+                        event_emitter.emit(
+                            &terminal_latch,
+                            AgTurnEventPayload::DecisionRequestProposed {
+                                request_id: decision.request_id,
+                                kind: decision.kind,
+                                payload: decision.payload,
+                            },
+                        )?;
                         advance_or_finish!(TlEv::Handoff);
                         if let Ok(conn) = state.db.lock() {
                             // propose_decision 已将 TaskRun 置 WaitingConfirm；settle 只做同一真实状态的收束。
@@ -1096,7 +1206,7 @@ pub(super) async fn run_turn_tool_loop(
                             );
                         }
                         emit_ag_turn_done(
-                            &on_event,
+                            &event_emitter,
                             &terminal_latch,
                             &app,
                             &turn_id,
@@ -1137,7 +1247,7 @@ pub(super) async fn run_turn_tool_loop(
                 ag::task::TurnOutcome::Failed,
             );
         }
-        emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+        emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
         return Ok(());
     }
     advance_or_finish!(TlEv::LoopLimit);
@@ -1155,13 +1265,33 @@ pub(super) async fn run_turn_tool_loop(
             ag::task::TurnOutcome::Failed,
         );
     }
-    emit_ag_turn_error(&on_event, &terminal_latch, &app, &turn_id, &error);
+    emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-SYS-STATE-007, BR-AG-PERSIST-001
+    #[test]
+    fn safe_tool_projection_keeps_identity_but_not_document_or_edit_body() {
+        let params = serde_json::json!({
+            "path": "notes/a.md",
+            "query": "机密查询正文",
+            "new_text": "整段文档改写内容",
+        });
+        let safe = safe_tool_params(&params);
+        assert_eq!(safe["relPath"], "notes/a.md");
+        assert_eq!(
+            safe["parameterKeys"],
+            serde_json::json!(["new_text", "path", "query"])
+        );
+        let serialized = safe.to_string();
+        assert!(!serialized.contains("机密查询正文"));
+        assert!(!serialized.contains("整段文档改写内容"));
+        assert_eq!(safe_tool_result("read_doc", true), "read_doc 执行成功");
+    }
 
     #[test]
     fn terminal_tool_requirement_distinguishes_content_and_workspace_side_effects() {

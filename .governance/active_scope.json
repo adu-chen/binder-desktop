@@ -1,53 +1,70 @@
 {
-  "scope_id": "AG-ADAPTIVE-RUNTIME-PLAN-01",
-  "task_type": "GOVERNANCE_CHANGE",
-  "governance_phase": "PLAN",
-  "title": "Agent 1.0 自适应运行时实施与验证计划收敛",
+  "scope_id": "AG-ADAPTIVE-RUNTIME-WP1-EVENTS-01",
+  "task_type": "CODE_CHANGE",
+  "governance_phase": "IMPLEMENTATION",
+  "title": "Agent 1.0 TurnEvent 事实源收敛",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-03 人类确认按推荐方案完整执行；本阶段承接已 READY 的 AG-ADAPTIVE-RUNTIME-REQ-01 与 AG-ADAPTIVE-RUNTIME-DESIGN-01。",
-  "scope_reason": "需求和设计已唯一化，但活动执行计划、Agent 验证卡与 TaskRun 手动卡仍固化旧 Intent 授权、静态计划调度、report_project 完成门和同批卡互相失效语义；本 Scope 只把既有设计翻译为实施工作包与证据门禁，不新增功能。",
-  "issue_trace": ".governance/issues/AG-ADAPTIVE-RUNTIME-PLAN-01.md",
+  "confirmation_basis": "2026-09-03 人类确认按推荐方案完整执行；WP1 已在 READY 的 AG-ADAPTIVE-RUNTIME-PLAN-01 中明确范围、顺序与验收。",
+  "scope_reason": "当前 Channel 事件、agent_turns.status、前端 sending 与 SM 广播并列维护运行事实；本 Scope 只建立 append-only TurnEvent、同源安全投影、补流接口和前端顺序 reducer，不提前改变 Intent、CapabilityGrant、TaskRun 或 ProposalBatch 业务语义。",
+  "issue_trace": ".governance/issues/AG-ADAPTIVE-RUNTIME-WP1-EVENTS-01.md",
   "objectives": [
-    "建立 WP1-WP9 唯一实施顺序、依赖、代码边界、删除项和阶段退出条件",
-    "把 IntentResult、CapabilityGrant、TurnEvent、EvidenceLedger、TaskRun 投影和 ProposalBatch 的设计逐项映射到验证卡",
-    "撤销旧实现证据对已变更语义的当前 PARTIAL 裁决，保留其历史可追溯性",
-    "重写 TaskRun 人工验证，使其验证投影、同回合恢复和无后台调度",
-    "为每个后续 CODE_CHANGE Scope 给出明确进入门禁、自动化证据和系统验证责任"
+    "建立按 turn_id 单调编号且只追加的 TurnEvent 持久化表和写入边界",
+    "所有当前 AgTurnEvent 先持久化再经 Channel 投影，并补齐 eventId/seq/occurredAt/payloadVersion/toolCallId",
+    "终态事件与 agent_turns.status 在同一事务内落地，终态后拒绝迟到事件",
+    "增加 ag.list_turn_events(afterSeq) 安全补流并保证 workspace 隔离",
+    "把 ag.save_turn 降为 AgentTurnPayloadV2 展示缓存更新，不再覆盖运行状态或事件事实",
+    "前端以 seq reducer 去重、拒绝乱序回退和终态后事件，并移除 SM-AG-01 广播对 sending 的并列写入"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-ADAPTIVE-RUNTIME-PLAN-01.md",
-    "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
-    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
-    "docs/40_validation/A-VAL-X-V-05_TaskRun手动测试卡.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ".governance/issues/AG-ADAPTIVE-RUNTIME-WP1-EVENTS-01.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "src-tauri/src/db/mod.rs",
+    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/ag/turn_events.rs",
+    "src-tauri/src/ag/turn_control.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ag/turn_tool_loop.rs",
+    "src-tauri/src/ag/history.rs",
+    "src-tauri/src/ag/history_routes.rs",
+    "src-tauri/src/ent/gateway.rs",
+    "src-tauri/src/lib.rs",
+    "src/services/agService.ts",
+    "src/store/agStore.ts",
+    "src/services/smListeners.ts",
+    "src/services/agRuntime.test.ts",
+    "src/services/systemRuntime.test.ts"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "governance.config.json",
-    "L1/L2 需求与设计、生产代码、测试代码、上述清单外的计划和验证文档"
+    "Agent 需求/设计/计划真源、CapabilityGrant/TaskRun/ProposalBatch 实现、上述清单外生产与测试文件"
   ],
   "constraints": [
-    "不新增或改变 REQ、RULE、CHAIN、TERM、状态机、产品能力与 1.0 范围",
-    "计划不得成为运行时授权、状态或实现完成真源",
-    "旧自动化证据只能证明当时实现，不得继续证明已变化的当前契约",
-    "每个工作包只在独立 ADP Scope 中实施并由 changed_files 选择器决定测试",
-    "ADUS 自动生成区只由 governance:generate 更新"
+    "不新增 REQ/RULE/CHAIN/CONSTRAINT/TERM/STATE_MACHINE 静态定义",
+    "TERM-AG-022 已登记，本 Scope 的 TurnEvent owner 块必须真实引用",
+    "安全事件不持久化密钥、用户正文副本或模型隐藏推理",
+    "内部事件与安全投影共用同一 seq 空间，安全补流允许 seq 间隙但不得另造顺序",
+    "兼容物化缓存可缺失或滞后，但不得反写 status、工具结果、DecisionRequest、Diff 或事件顺序",
+    "不以删除测试、弱化断言或修改设计掩盖实现偏差"
   ],
   "acceptance_criteria": [
-    "活动计划只保留 WP1-WP9 与 G5 一套当前执行路线，无旧 Stage/WP 双重真源",
-    "每个工作包都有上游设计、生产范围、明确删除项、验证卡、退出条件和依赖",
-    "V-S6/V-S7/V-S11/V-S12/V-S13 语义与 G2 一致，并新增同批独立 DiffCard 的 V-S14",
-    "所有受 G2 语义变更影响的旧 PARTIAL 状态回到 DESIGNED，重新获得当前 Runtime Report 前不得升级",
-    "TaskRun 手动卡不要求静态游标、自动下一片段或同批兄弟卡互相失效",
-    "治理生成、审计、影响测试与 diff check 通过"
+    "agent_turn_events 迁移、单调 append、workspace 隔离、afterSeq 补流与 session 删除级联有自动化断言",
+    "当前所有 Channel AgTurnEvent 均由同一 append-and-project 边界产生且字段使用 camelCase wire",
+    "相同 tool name 的多次调用按 toolCallId 精确配对",
+    "重复/旧序号/终态后事件不改变前端消息、工具、Diff 或 sending 投影",
+    "ag.save_turn 不修改后端运行 status，AgentTurnPayloadV2 lastEventSeq 不得引用未来事件",
+    "changed_files 影响测试、完整 Rust 回归与 governance:audit 通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-OPT-EXEC", "status": "CONFIRMED", "question": "按推荐方案完整执行，并在每阶段自检进度与完成度"}
+    {"id": "HD-AG-OPT-EXEC", "status": "CONFIRMED", "question": "按推荐方案完整执行，并在每阶段自检进度与完成度"},
+    {"id": "HD-AG-WP1-SCOPE-EXPANSION", "status": "CONFIRMED", "question": "将 turn_control.rs 与 systemRuntime.test.ts 加入 WP1 Scope", "confirmed_at": "2026-09-04"}
   ],
   "stop_conditions": [],
-  "unresolved_items": []
+  "unresolved_items": [
+    "A-AG-M-T-01 §7.2.1 仍使用 turn_events 简写，而 X-SHARED-002 指向的 A-SYS-I-P-01 控制真源登记为 agent_turn_events；实现已服从共享控制真源，后续需独立文档修正 Scope 消除残余命名差异。"
+  ]
 }

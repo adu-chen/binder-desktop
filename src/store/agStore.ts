@@ -5,7 +5,7 @@ import type { MessageContentPart, ReferenceTokenAttrs } from "../services/refere
 /**
  * AG 会话状态投影层（AG-TURN · SM-AG-01 · X-FORBID-007）。
  * messages 是 AgentTurn（TERM-AG-001）会话视图；toolCalls 是 ToolCall（TERM-AG-002）状态投影。
- * 回合权威态归后端 SM-AG-01（sending 门控投影），前端只呈现与转达意图，不另立可漂移的并行回合态。
+ * 回合权威事实归后端 append-only TurnEvent；前端只按 seq 归约呈现与输入门控，不消费并列状态广播。
  *
  * 多标签会话（PI-AG-UI-01）：会话分组是**呈现层组织**（运行期内存态，非后端业务态）；
  * 关闭标签=归档（本次运行内经「历史会话」可重开），跨重启持久化随 BR-AG-PERSIST-001
@@ -133,16 +133,6 @@ export type RustTurnState =
   | "Cancelled"
   | "Denied";
 
-/** 回合“进行中”的活动态集合：sending（输入门控）= 处于这些态之一。其余（Idle/各终态/TurnError）→ 非进行中。 */
-const ACTIVE_TURN_STATES: ReadonlySet<RustTurnState> = new Set([
-  "Assembling",
-  "AwaitingGate",
-  "Streaming",
-  "HandingOff",
-  // AwaitingClarification 不在其中：澄清是等待用户输入的非终态（BR-SYS-STATE-007），
-  // 不阻塞输入门控——用户可回复并受控重入同一 AgentTurn，或直接取消。
-]);
-
 /** 任务步骤态（TERM-AG-016 · SM-AG-04 steps）。 */
 export type TaskStepViewStatus =
   | "pending"
@@ -239,9 +229,11 @@ export interface AgSession {
 interface AgState {
   sessions: AgSession[];
   activeSessionId: string;
-  /** 回合级全局门控（后端 SM-AG-01 单回合投影；一次仅一个活动回合）。 */
+  /** 回合级全局门控（TurnEvent 单一投影；一次仅一个活动回合）。 */
   sending: boolean;
   activeTurn: { sessionId: string; turnId: string } | null;
+  /** append-only TurnEvent 的前端归约游标；只接受更大 seq，首终态后永久冻结。 */
+  turnEventProjection: Record<string, { lastSeq: number; terminal: boolean }>;
   /** 回合实时当前动作（step_progress；null=无活动回合动作）。 */
   currentAction: TurnCurrentAction | null;
   /** 待用户裁决的任务级请求（DecisionRequest；null=无待裁决项）。 */
@@ -292,6 +284,7 @@ let state: AgState = {
   activeSessionId: initial.id,
   sending: false,
   activeTurn: null,
+  turnEventProjection: {},
   currentAction: null,
   pendingDecision: null,
 };
@@ -329,6 +322,7 @@ export const agStore = {
       activeSessionId: fresh.id,
       sending: false,
       activeTurn: null,
+      turnEventProjection: {},
       currentAction: null,
       pendingDecision: null,
     });
@@ -345,6 +339,7 @@ export const agStore = {
       activeSessionId: active,
       sending: false,
       activeTurn: null,
+      turnEventProjection: {},
       currentAction: null,
       pendingDecision: null,
     });
@@ -444,11 +439,9 @@ export const agStore = {
     });
   },
 
-  // ── 回合门控（SM-AG-01 投影，全局） ───────────────────────────────
-  setSending(sending: boolean) {
-    setState({ sending });
-  },
+  // ── 回合门控（TurnEvent 投影，全局） ──────────────────────────────
   setActiveTurn(sessionId: string, turnId: string) {
+    if (state.turnEventProjection[turnId]?.terminal) return;
     setState({ activeTurn: { sessionId, turnId }, sending: true });
   },
   clearActiveTurn(turnId?: string) {
@@ -456,16 +449,51 @@ export const agStore = {
     setState({ activeTurn: null, sending: false });
   },
   /**
-   * 投影后端 SM-AG-01 回合机转移（A-CORE-X-L-04 Task 2-E · X-FORBID-007）：由 smListeners 监听
-   * `sm:SM-AG-01:state_changed` 调用。sending（输入门控）= 回合处于活动态（Assembling/AwaitingGate/
-   * Streaming/HandingOff）；到达任一终态或 TurnError 即释放。消息流/工具卡仍由 Channel 投影（互不替代）。
+   * @GOV
+   * codes:    BR-AG-STATE-001-EFFECT-AG-AG-TURN-042, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-042, BR-SYS-STATE-008-EFFECT-AG-AG-TURN-042
+   * type:     EFFECT
+   * chain:    AG-TURN
+   * rules:    BR-AG-STATE-001, BR-SYS-STATE-007, BR-SYS-STATE-008
+   * term_ref: TERM-AG-022
+   * boundary: in=OrderedSafeTurnEventIdentityAndKind | out=MonotonicFrontendTurnProjectionCursorAndInputGate | consumer=agService | does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromCardState
    */
-  applyTurnState(_turnId: string, turnState: RustTurnState) {
-    const sending = ACTIVE_TURN_STATES.has(turnState);
+  acceptTurnEvent(turnId: string, eventSeq: number, eventType: string): boolean {
+    const current = state.turnEventProjection[turnId] ?? { lastSeq: 0, terminal: false };
+    if (!Number.isSafeInteger(eventSeq) || eventSeq <= current.lastSeq || current.terminal) {
+      return false;
+    }
+    const terminal = eventType === "done" || eventType === "error";
+    const waiting = eventType === "clarification_required";
+    const isActiveTurn = state.activeTurn?.turnId === turnId;
     setState({
-      sending,
-      activeTurn: sending || state.activeTurn?.turnId !== _turnId ? state.activeTurn : null,
+      turnEventProjection: {
+        ...state.turnEventProjection,
+        [turnId]: { lastSeq: eventSeq, terminal },
+      },
+      sending: isActiveTurn ? !terminal && !waiting : state.sending,
+      activeTurn: isActiveTurn && (terminal || waiting) ? null : state.activeTurn,
     });
+    return true;
+  },
+  seedTurnEventProjection(turnId: string, lastSeq: number, terminal: boolean) {
+    const current = state.turnEventProjection[turnId];
+    if (current && current.lastSeq >= lastSeq && (current.terminal || !terminal)) return;
+    setState({
+      turnEventProjection: {
+        ...state.turnEventProjection,
+        [turnId]: {
+          lastSeq: Math.max(current?.lastSeq ?? 0, lastSeq),
+          terminal: Boolean(current?.terminal || terminal),
+        },
+      },
+    });
+  },
+  lastTurnEventSeq(turnId: string): number {
+    return state.turnEventProjection[turnId]?.lastSeq ?? 0;
+  },
+  /** @deprecated SM-AG-01 广播已退出 Agent UI 投影；保留到旧测试消费者迁移，不再写任何状态。 */
+  applyTurnState(_turnId: string, _turnState: RustTurnState) {
+    // no-op：生产监听已删除，TurnEvent seq reducer 是唯一运行投影入口。
   },
 
   // ── 消息 / 工具卡（按会话定位：流式期间切标签不串会话） ───────────
@@ -559,11 +587,16 @@ export const agStore = {
     }));
   },
   /** 新增一条工具调用卡（executing）；返回卡 id（PI-AG-08D，投影 ToolRequest）。 */
-  addToolCall(sessionId: string, name: string, detail?: string, meta: Pick<ToolCallView, "turnId" | "anchorMessageId"> = {}): string {
-    const id = `tc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  addToolCall(
+    sessionId: string,
+    name: string,
+    detail?: string,
+    meta: Pick<ToolCallView, "turnId" | "anchorMessageId"> & { id?: string } = {},
+  ): string {
+    const { id = `tc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...viewMeta } = meta;
     mapSession(sessionId, (s) => ({
       ...s,
-      toolCalls: [...s.toolCalls, { id, name, state: "executing", detail, ...meta }],
+      toolCalls: [...s.toolCalls, { id, name, state: "executing", detail, ...viewMeta }],
     }));
     return id;
   },

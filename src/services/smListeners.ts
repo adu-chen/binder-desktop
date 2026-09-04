@@ -9,8 +9,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { deStore } from "../store/deStore";
 import { edStore } from "../store/edStore";
-import { agStore } from "../store/agStore";
-import type { SmDe01Payload, SmWs02Payload, SmWs01Payload, SmAg01Payload, SmDoc01Payload } from "../types/smEvents";
+import type { SmDe01Payload, SmWs02Payload, SmWs01Payload, SmDoc01Payload } from "../types/smEvents";
 
 const unlisteners: UnlistenFn[] = [];
 let startPromise: Promise<void> | null = null;
@@ -47,10 +46,6 @@ export async function startSmListeners(): Promise<void> {
     // SM-WS-01：保存机（Task 2-C）——instance_id 为 rel_path；Saving/Saved 投影到标签态。
     if (!await register<SmWs01Payload>("sm:SM-WS-01:state_changed", ({ payload }) => {
       edStore.applyWsSaveState(payload.instance_id, payload.state);
-    })) return;
-    // SM-AG-01：代理回合机（Task 2-E）——instance_id 为 turn_id；驱动 sending 输入门控。
-    if (!await register<SmAg01Payload>("sm:SM-AG-01:state_changed", ({ payload }) => {
-      agStore.applyTurnState(payload.instance_id, payload.state);
     })) return;
     // SM-DOC-01：docx 开/存转换机（PI-ED-07 #7）——OpenConverting 投影为会话加载反馈。
     if (!await register<SmDoc01Payload>("sm:SM-DOC-01:state_changed", ({ payload }) => {

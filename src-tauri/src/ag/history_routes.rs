@@ -74,7 +74,7 @@ pub(crate) fn route_save_agent_session(
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentTurnPayloadAndLifecycleStatus | out=PersistedAgentTurnHistory
+ * boundary: in=ExistingAgentTurnIdentityAndAgentTurnPayloadV2Projection | out=UpdatedAgentTurnDisplayCache | does_not=writeRuntimeStatusOrTurnEvent
  */
 pub(crate) fn route_save_agent_turn(
     request: &CommandRequest,
@@ -83,15 +83,6 @@ pub(crate) fn route_save_agent_turn(
     let ws = active_ws(state)?;
     let session_id = str_param(request, "sessionId", "AG_SESSION_ID_REQUIRED")?;
     let turn_id = str_param(request, "turnId", "AG_TURN_ID_REQUIRED")?;
-    let status = str_param(request, "status", "AG_TURN_STATUS_REQUIRED")?;
-    if !ag::history::is_valid_status(&status) {
-        return Err(IpcError::new(
-            "AG_TURN_STATUS_INVALID",
-            "未知代理回合历史状态",
-            false,
-            false,
-        ));
-    }
     let payload_value = request.params.get("payload").cloned().ok_or_else(|| {
         IpcError::new(
             "AG_TURN_PAYLOAD_REQUIRED",
@@ -104,13 +95,12 @@ pub(crate) fn route_save_agent_turn(
         .map_err(|e| IpcError::new("AG_TURN_PAYLOAD_INVALID", &e.to_string(), false, false))?;
     let rel_path = request.params.get("relPath").and_then(|v| v.as_str());
     let conn = lock_db(state)?;
-    ag::history::save_turn(
+    ag::history::save_turn_projection(
         &conn,
         &ws.workspace_id,
         &session_id,
         &turn_id,
         rel_path,
-        &status,
         &payload,
     )
     .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
@@ -135,6 +125,43 @@ pub(crate) fn route_list_agent_turns(
     let turns = ag::history::list_turns(&conn, &ws.workspace_id, &session_id)
         .map_err(|e| IpcError::new("AG_HISTORY_DB_ERROR", &e.to_string(), true, false))?;
     ws_json(&turns)
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-PERSIST-001-QUERY-AG-AG-TURN-047, BR-SYS-STATE-007-QUERY-AG-AG-TURN-047
+ * type:     QUERY
+ * chain:    AG-TURN
+ * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-022
+ * boundary: in=ActiveWorkspaceTurnIdAndOptionalAfterSeq | out=AscendingSafeAgTurnEventProjection | effect=IPC-ag.list_turn_events | does_not=returnInternalEventsOrCrossWorkspaceTurn
+ */
+pub(crate) fn route_list_agent_turn_events(
+    request: &CommandRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
+    let turn_id = str_param(request, "turnId", "AG_TURN_ID_REQUIRED")?;
+    let after_seq = request
+        .params
+        .get("afterSeq")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let conn = lock_db(state)?;
+    let events = ag::turn_events::list_safe_events(&conn, &ws.workspace_id, &turn_id, after_seq)
+        .map_err(|error| {
+            if matches!(error, rusqlite::Error::QueryReturnedNoRows) {
+                IpcError::new(
+                    "AG_TURN_NOT_FOUND",
+                    "回合不存在或不属于当前 workspace",
+                    false,
+                    false,
+                )
+            } else {
+                IpcError::new("AG_HISTORY_DB_ERROR", &error.to_string(), true, false)
+            }
+        })?;
+    ws_json(&events)
 }
 
 /// AG-1.0-IMP-TASKRUN-UI-01：`ag.list_task_runs` —— 按会话列受限任务实例
