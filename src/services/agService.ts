@@ -1620,6 +1620,8 @@ export async function startTurn(
     : undefined;
   const sessionId = decision?.sessionId ?? snap.activeSessionId;
   const session = snap.sessions.find((s) => s.id === sessionId);
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  if (!workspaceId) throw new Error("AG_CONTEXT_FACTS_WORKSPACE_REQUIRED");
   const clarification = !opts?.autoContinue ? clarifyingTurns.get(sessionId) : undefined;
   if (clarification && opts?.continuation) {
     throw new Error("澄清恢复不能与任务裁决或预览续片段混用");
@@ -1654,6 +1656,8 @@ export async function startTurn(
     .filter((m) => m.turnId !== turnId && !m.error && m.turnStatus !== "draft" && m.content.trim())
     .slice(-30)
     .map((m) => ({
+      workspaceId,
+      sessionId,
       role: m.role,
       content: m.content,
       relPath: m.relPath ?? null,

@@ -6,6 +6,278 @@ use crate::types::ReferencePayload;
 use crate::types::ReferenceSessionMessage;
 use crate::{active_ws, ag, str_param, AppState};
 
+pub(super) struct ReferenceContextProjection {
+    pub(super) text: String,
+    pub(super) source_type: ag::context::PromptSourceTypeV1,
+    pub(super) source_id: String,
+    pub(super) provenance: String,
+    pub(super) freshness: String,
+    pub(super) trust_level: ag::context::PromptTrustLevelV1,
+    pub(super) original_char_count: usize,
+    pub(super) truncation_reason: Option<String>,
+}
+
+fn current_unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn snapshot_freshness(
+    read_ctx: &ag::blocks::AgentReadContext,
+    rel_path: &str,
+    snapshot: &ag::blocks::AgentEditableSnapshot,
+) -> String {
+    if let Some(open) = read_ctx.open_snapshot(rel_path) {
+        format!(
+            "logical_state_captured_at={};session_version={};content_hash={}",
+            open.captured_at, open.session_version, open.content_hash
+        )
+    } else {
+        format!(
+            "disk_state_read_at={};baseline={}",
+            current_unix_ms(),
+            snapshot
+                .baseline
+                .map(|baseline| baseline.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        )
+    }
+}
+
+fn payload_original_chars(payload: &ReferencePayload) -> usize {
+    match payload {
+        ReferencePayload::Doc { .. } => 0,
+        ReferencePayload::Url { url, .. } => url.chars().count(),
+        ReferencePayload::Selection { text, .. } | ReferencePayload::LongText { text, .. } => {
+            text.chars().count()
+        }
+        ReferencePayload::Session { messages, .. } => messages
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum(),
+        ReferencePayload::Memory { content, .. }
+        | ReferencePayload::Knowledge { content, .. }
+        | ReferencePayload::Template { content, .. } => content.chars().count(),
+        ReferencePayload::File { read_content, .. } => read_content
+            .as_deref()
+            .map(|content| content.chars().count())
+            .unwrap_or(0),
+    }
+}
+
+fn payload_identity(
+    payload: &ReferencePayload,
+) -> (ag::context::PromptSourceTypeV1, String, String) {
+    match payload {
+        ReferencePayload::Doc { rel_path, .. } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!("doc:{rel_path}"),
+            "explicit_document_reference".to_string(),
+        ),
+        ReferencePayload::Selection {
+            rel_path,
+            block_id,
+            start,
+            end,
+            ..
+        } => (
+            ag::context::PromptSourceTypeV1::Selection,
+            format!(
+                "selection:{rel_path}#{block_id}:{}-{}",
+                start
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                end.map(|value| value.to_string())
+                    .unwrap_or_else(|| "?".to_string())
+            ),
+            "explicit_selection_reference".to_string(),
+        ),
+        ReferencePayload::Session { session_id, .. } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!("session:{session_id}"),
+            "explicit_session_snapshot".to_string(),
+        ),
+        ReferencePayload::Memory {
+            entry_id, title, ..
+        } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!(
+                "memory:{}",
+                entry_id
+                    .as_deref()
+                    .or(title.as_deref())
+                    .unwrap_or("unidentified")
+            ),
+            "explicit_memory_snapshot".to_string(),
+        ),
+        ReferencePayload::Knowledge {
+            entry_id, title, ..
+        } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!(
+                "knowledge:{}",
+                entry_id
+                    .as_deref()
+                    .or(title.as_deref())
+                    .unwrap_or("unidentified")
+            ),
+            "explicit_knowledge_snapshot".to_string(),
+        ),
+        ReferencePayload::Template {
+            template_id, name, ..
+        } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!(
+                "template:{}",
+                template_id.as_deref().unwrap_or(name.as_str())
+            ),
+            "explicit_template_snapshot".to_string(),
+        ),
+        ReferencePayload::Url { url, .. } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!("url:{}", ag::context::sha256_text(url)),
+            "explicit_url_metadata".to_string(),
+        ),
+        ReferencePayload::LongText { text, .. } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!("long_text:{}", ag::context::sha256_text(text)),
+            "explicit_text_snapshot".to_string(),
+        ),
+        ReferencePayload::File {
+            name,
+            path,
+            read_content,
+            ..
+        } => (
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            format!("file:{}", path.as_deref().unwrap_or(name)),
+            if read_content.is_some() {
+                "explicit_external_file_snapshot"
+            } else {
+                "explicit_external_file_metadata"
+            }
+            .to_string(),
+        ),
+    }
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-001-RB-AG-AG-TURN-017
+ * type:     RB
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-001
+ * term_ref: TERM-REF-003
+ * boundary: in=ReferencePayloadAndAgentReadContext | out=explicitReferenceContextBlock(validatedReadSnapshot) | delegate=reference::context::format_payload_context
+ */
+pub(super) fn build_reference_context_projection(
+    payload: &ReferencePayload,
+    read_ctx: Option<&ag::blocks::AgentReadContext>,
+    cap: usize,
+) -> ReferenceContextProjection {
+    use crate::reference::context::{DocRead, SelectionCheck};
+
+    let (source_type, source_id, mut provenance) = payload_identity(payload);
+    let mut original_char_count = payload_original_chars(payload);
+    let mut freshness = "submitted_for_current_turn".to_string();
+    let mut trust_level = ag::context::PromptTrustLevelV1::UserProvidedData;
+    let text = match payload {
+        ReferencePayload::Doc { rel_path, .. } => match read_ctx {
+            Some(ctx) => match ctx.snapshot(rel_path) {
+                Ok(snapshot) => {
+                    original_char_count = snapshot.content.chars().count();
+                    freshness = snapshot_freshness(ctx, rel_path, &snapshot);
+                    provenance = format!("{provenance}:{}", snapshot.source);
+                    trust_level = ag::context::PromptTrustLevelV1::CurrentFact;
+                    crate::reference::context::format_payload_context(
+                        payload,
+                        Some(DocRead::Loaded {
+                            content: &snapshot.content,
+                        }),
+                        None,
+                        cap,
+                    )
+                }
+                Err(error) => {
+                    freshness = format!("read_failed_at={}", current_unix_ms());
+                    provenance = format!("{provenance}:read_failed");
+                    crate::reference::context::format_payload_context(
+                        payload,
+                        Some(DocRead::Failed {
+                            code: &error.code,
+                            message: &error.message,
+                        }),
+                        None,
+                        cap,
+                    )
+                }
+            },
+            None => crate::reference::context::format_payload_context(
+                payload,
+                Some(DocRead::NoWorkspace),
+                None,
+                cap,
+            ),
+        },
+        ReferencePayload::Selection { rel_path, .. } => match read_ctx {
+            Some(ctx) => match ctx.snapshot(rel_path) {
+                Ok(snapshot) => {
+                    freshness = snapshot_freshness(ctx, rel_path, &snapshot);
+                    provenance = format!("{provenance}:{}", snapshot.source);
+                    let current_block = match payload {
+                        ReferencePayload::Selection { block_id, .. } => snapshot
+                            .blocks
+                            .iter()
+                            .find(|block| block.block_id.as_deref() == Some(block_id.as_str()))
+                            .map(|block| block.text.as_str()),
+                        _ => None,
+                    };
+                    let check =
+                        crate::reference::context::validate_selection(payload, current_block);
+                    if matches!(check, SelectionCheck::Located { .. }) {
+                        trust_level = ag::context::PromptTrustLevelV1::CurrentFact;
+                    }
+                    crate::reference::context::format_payload_context(
+                        payload,
+                        None,
+                        Some(check),
+                        cap,
+                    )
+                }
+                Err(_) => {
+                    freshness = format!("selection_stale_at={}", current_unix_ms());
+                    provenance = format!("{provenance}:read_failed");
+                    let check = SelectionCheck::Stale {
+                        reason: "当前文档块读取不可得",
+                    };
+                    crate::reference::context::format_payload_context(
+                        payload,
+                        None,
+                        Some(check),
+                        cap,
+                    )
+                }
+            },
+            None => crate::reference::context::format_payload_context(payload, None, None, cap),
+        },
+        _ => crate::reference::context::format_payload_context(payload, None, None, cap),
+    };
+    let truncation_reason = (original_char_count > cap)
+        .then(|| format!("source_exceeded_per_reference_cap:{original_char_count}>{cap}"));
+    ReferenceContextProjection {
+        text,
+        source_type,
+        source_id,
+        provenance,
+        freshness,
+        trust_level,
+        original_char_count,
+        truncation_reason,
+    }
+}
+
 /**
  * @GOV
  * codes:    BR-AG-DATA-001-QUERY-AG-AG-TURN-029
@@ -67,85 +339,16 @@ pub(super) fn reference_target_path(payload: &ReferencePayload) -> Option<&str> 
     }
 }
 
-/**
- * @GOV
- * codes:    BR-AG-DATA-001-RB-AG-AG-TURN-017
- * type:     RB
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-001
- * term_ref: TERM-REF-003
- * boundary: in=ReferencePayloadAndAgentReadContext | out=explicitReferenceContextBlock(validatedReadSnapshot) | delegate=reference::context::format_payload_context
- */
 /// 引用上下文读取+分派（AG 组装职责，REF-REFERENCE-REPAIR-01 F3）：doc/selection 经 AgentReadContext
 /// 读取（已打开文档优先 LogicalState），格式化与锚校验委托 reference::context（BR-REF-DATA-003 /
 /// BR-REF-VERIFY-001）；REF 模块不再持有 AG 类型，规则逻辑集中于 REF。
+#[cfg(test)]
 pub(super) fn format_reference_payload_context(
     payload: &ReferencePayload,
     read_ctx: Option<&ag::blocks::AgentReadContext>,
     cap: usize,
 ) -> String {
-    use crate::reference::context::DocRead;
-    match payload {
-        ReferencePayload::Doc { rel_path, .. } => {
-            let Some(ctx) = read_ctx else {
-                return crate::reference::context::format_payload_context(
-                    payload,
-                    Some(DocRead::NoWorkspace),
-                    None,
-                    cap,
-                );
-            };
-            match ctx.snapshot(rel_path) {
-                Ok(snapshot) => crate::reference::context::format_payload_context(
-                    payload,
-                    Some(DocRead::Loaded {
-                        content: &snapshot.content,
-                    }),
-                    None,
-                    cap,
-                ),
-                Err(e) => crate::reference::context::format_payload_context(
-                    payload,
-                    Some(DocRead::Failed {
-                        code: &e.code,
-                        message: &e.message,
-                    }),
-                    None,
-                    cap,
-                ),
-            }
-        }
-        ReferencePayload::Selection { .. } => {
-            let Some(ctx) = read_ctx else {
-                return crate::reference::context::format_payload_context(payload, None, None, cap);
-            };
-            let check = crate::reference::context::validate_selection(
-                payload,
-                selection_block_text(ctx, payload).as_deref(),
-            );
-            crate::reference::context::format_payload_context(payload, None, Some(check), cap)
-        }
-        _ => crate::reference::context::format_payload_context(payload, None, None, cap),
-    }
-}
-
-/// 经 AgentReadContext 取选区所在块的当前文本（LogicalState 优先；读取失败/块缺失 → None → 保守 Stale）。
-pub(super) fn selection_block_text(
-    read_ctx: &ag::blocks::AgentReadContext,
-    payload: &ReferencePayload,
-) -> Option<String> {
-    let ReferencePayload::Selection {
-        rel_path, block_id, ..
-    } = payload
-    else {
-        return None;
-    };
-    let snapshot = read_ctx.snapshot(rel_path).ok()?;
-    snapshot
-        .blocks
-        .iter()
-        .find(|b| b.block_id.as_deref() == Some(block_id.as_str()))
-        .map(|b| b.text.clone())
+    build_reference_context_projection(payload, read_ctx, cap).text
 }
 
 #[cfg(test)]
@@ -219,6 +422,40 @@ mod ag_reference_context_tests {
         let out = format_reference_payload_context(&long, None, 20);
         assert!(out.contains("引用长文本（60 字）"));
         assert!(out.contains("[引用长文本较长"));
+    }
+
+    // covers: BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-005
+    #[test]
+    fn reference_projection_records_identity_hash_budget_and_truncation() {
+        let payload = ReferencePayload::LongText {
+            text: "abcdef".repeat(1_000),
+            char_count: 6_000,
+            label: None,
+        };
+        let projection = build_reference_context_projection(&payload, None, 20);
+        assert!(projection.source_id.starts_with("long_text:"));
+        assert_eq!(projection.provenance, "explicit_text_snapshot");
+        assert_eq!(projection.freshness, "submitted_for_current_turn");
+        assert_eq!(projection.original_char_count, 6_000);
+        assert!(projection.truncation_reason.is_some());
+
+        let envelope = ag::context::prompt_data_envelope_with_budget(
+            projection.source_type,
+            &projection.source_id,
+            &projection.provenance,
+            &projection.freshness,
+            projection.trust_level,
+            &projection.text,
+            projection.original_char_count,
+            projection.truncation_reason.as_deref(),
+        );
+        assert_eq!(
+            envelope.content_hash,
+            ag::context::sha256_text(&projection.text)
+        );
+        assert_eq!(envelope.original_char_count, 6_000);
+        assert!(envelope.included_char_count < envelope.original_char_count);
+        assert!(envelope.truncation_reason.is_some());
     }
 
     #[test]

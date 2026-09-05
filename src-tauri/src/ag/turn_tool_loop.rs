@@ -229,6 +229,7 @@ pub(super) async fn run_turn_tool_loop(
     history: Vec<ag::context::HistTurn>,
     raw_prompt: String,
     mention_block: Option<String>,
+    reference_envelopes: Vec<ag::context::PromptDataEnvelopeV1>,
     active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
 ) -> Result<(), IpcError> {
     let event_emitter = TurnEventEmitter::new(&state, &on_event, &turn_id);
@@ -1573,10 +1574,7 @@ pub(super) async fn run_turn_tool_loop(
                     &history,
                     &raw_prompt,
                     mention_block.as_deref(),
-                    matches!(
-                        intent_result.side_effect_intent,
-                        ag::context::SideEffectIntentV2::ContentProposal
-                    ),
+                    &reference_envelopes,
                     proposed_diff,
                     &continuation_messages,
                     &capability_factors.decision_receipt_ids,

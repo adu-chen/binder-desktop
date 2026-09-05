@@ -46,6 +46,35 @@ fn require_runtime_profile(runtime_profile: Option<String>) -> Result<String, Ip
 
 /**
  * @GOV
+ * codes:    BR-AG-DATA-004-GUARD-AG-AG-TURN-049
+ * type:     GUARD
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-004
+ * term_ref: TERM-AG-001
+ * boundary: in=HistTurnWorkspaceAndAgentSessionIdentities | out=boolean(trueWhenEveryHistoryItemBelongsToCurrentWorkspaceAndAgentSession)
+ */
+fn validate_history_scope(
+    history: &[ag::context::HistTurn],
+    workspace_id: &str,
+    session_id: &str,
+) -> Result<(), IpcError> {
+    if history.iter().any(|turn| {
+        turn.workspace_id != workspace_id
+            || turn.session_id != session_id
+            || !matches!(turn.role.as_str(), "user" | "assistant")
+    }) {
+        return Err(IpcError::new(
+            "AG_HISTORY_SCOPE_MISMATCH",
+            "对话历史不属于当前 workspace/AgentSession，已在模型调用前拒绝注入",
+            false,
+            false,
+        ));
+    }
+    Ok(())
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-DATA-008-GUARD-AG-AG-TURN-042, BR-ED-DATA-008-GUARD-AG-AG-TURN-042, BR-SYS-DATA-008-GUARD-AG-AG-TURN-042
  * type:     GUARD
  * chain:    AG-TURN
@@ -306,6 +335,8 @@ pub(crate) async fn ag_start_turn(
             .ok_or_else(|| IpcError::new("WS_NO_ACTIVE", "无活动 workspace", false, false))?;
         (ws.workspace_id.clone(), ws.root_path.clone())
     };
+
+    validate_history_scope(&history, &workspace_id_for_turn, &session_id)?;
 
     validate_agent_context_facts(
         agent_context_facts.as_ref(),
@@ -692,8 +723,10 @@ pub(crate) async fn ag_start_turn(
         })
     })());
 
-    let TurnReferenceRuntime { mention_block } =
-        build_turn_reference_runtime(&mentions, &block_refs, &references, &read_ctx);
+    let TurnReferenceRuntime {
+        mention_block,
+        prompt_envelopes: reference_envelopes,
+    } = build_turn_reference_runtime(&mentions, &block_refs, &references, &read_ctx);
     let workspace_root = std::path::Path::new(&workspace_root_path);
     let mut explicit_edit_target_set = if let Some(task_run_id) = task_run_id.as_deref() {
         started_turn_or_finish!((|| {
@@ -825,7 +858,6 @@ pub(crate) async fn ag_start_turn(
     // 这段装配不调用 provider、ToolCall 或 Proposal；任一失败都保持在 Assembling 的错误路径。
     let ws_root: Option<String> = Some(workspace_root_path.clone());
     let explicit_edit_targets = explicit_edit_target_set.paths();
-    let requires_current_doc_tool_read = false;
     let PreparedTurnPrompt {
         current_doc_requires_tool_read,
         current_doc_prompt_coverage,
@@ -849,7 +881,7 @@ pub(crate) async fn ag_start_turn(
         &history,
         &initial_prompt,
         mention_block.as_deref(),
-        requires_current_doc_tool_read,
+        &reference_envelopes,
         false,
         &continuation_messages,
         &decision_receipt_ids,
@@ -1013,6 +1045,7 @@ pub(crate) async fn ag_start_turn(
         history,
         initial_prompt,
         mention_block,
+        reference_envelopes,
         active_snapshot,
     )
     .await
@@ -1021,6 +1054,35 @@ pub(crate) async fn ag_start_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn history(workspace_id: &str, session_id: &str) -> ag::context::HistTurn {
+        ag::context::HistTurn {
+            workspace_id: workspace_id.to_string(),
+            session_id: session_id.to_string(),
+            role: "user".to_string(),
+            content: "历史内容".to_string(),
+            rel_path: Some("notes/a.md".to_string()),
+            turn_id: Some("turn-old".to_string()),
+        }
+    }
+
+    // covers: BR-AG-DATA-004
+    #[test]
+    fn history_scope_rejects_cross_workspace_session_and_unknown_roles() {
+        assert!(validate_history_scope(&[history("ws-1", "s-1")], "ws-1", "s-1").is_ok());
+        for invalid in [
+            history("ws-2", "s-1"),
+            history("ws-1", "s-2"),
+            ag::context::HistTurn {
+                role: "system".to_string(),
+                ..history("ws-1", "s-1")
+            },
+        ] {
+            let error = validate_history_scope(&[invalid], "ws-1", "s-1")
+                .expect_err("wrong history identity must fail closed");
+            assert_eq!(error.code, "AG_HISTORY_SCOPE_MISMATCH");
+        }
+    }
 
     #[test]
     // covers: BR-AG-STATE-004

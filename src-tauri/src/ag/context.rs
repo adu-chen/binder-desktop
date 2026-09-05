@@ -723,12 +723,18 @@ pub enum PromptSourceTypeV1 {
     Selection,
     ExplicitReference,
     SessionHistory,
+    CurrentUserInput,
+    UserSupplement,
+    ToolResult,
+    DecisionResult,
+    ModelContinuation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptTrustLevelV1 {
     CurrentFact,
+    RuntimeObservation,
     UserProvidedData,
     HistoricalData,
 }
@@ -743,6 +749,10 @@ pub struct PromptDataEnvelopeV1 {
     pub content_hash: String,
     pub trust_level: PromptTrustLevelV1,
     pub token_count: usize,
+    pub original_char_count: usize,
+    pub included_char_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation_reason: Option<String>,
     pub payload: String,
 }
 
@@ -773,6 +783,29 @@ pub fn prompt_data_envelope(
     trust_level: PromptTrustLevelV1,
     payload: &str,
 ) -> PromptDataEnvelopeV1 {
+    prompt_data_envelope_with_budget(
+        source_type,
+        source_id,
+        provenance,
+        freshness,
+        trust_level,
+        payload,
+        payload.chars().count(),
+        None,
+    )
+}
+
+pub fn prompt_data_envelope_with_budget(
+    source_type: PromptSourceTypeV1,
+    source_id: &str,
+    provenance: &str,
+    freshness: &str,
+    trust_level: PromptTrustLevelV1,
+    payload: &str,
+    original_char_count: usize,
+    truncation_reason: Option<&str>,
+) -> PromptDataEnvelopeV1 {
+    let included_char_count = payload.chars().count();
     PromptDataEnvelopeV1 {
         source_type,
         source_id: source_id.to_string(),
@@ -780,7 +813,10 @@ pub fn prompt_data_envelope(
         freshness: freshness.to_string(),
         content_hash: sha256_text(payload),
         trust_level,
-        token_count: payload.chars().count().div_ceil(4),
+        token_count: included_char_count.div_ceil(4),
+        original_char_count,
+        included_char_count,
+        truncation_reason: truncation_reason.map(str::to_string),
         payload: payload.to_string(),
     }
 }
@@ -821,12 +857,29 @@ pub fn build_prompt_package_v2(
     messages: Vec<serde_json::Value>,
     tools: &serde_json::Value,
 ) -> PromptPackageV2 {
-    let trace_material = envelopes
-        .iter()
-        .map(|envelope| envelope.content_hash.as_str())
-        .chain(std::iter::once(tool_manifest_hash))
-        .collect::<Vec<_>>()
-        .join(":");
+    let trace_material = serde_json::to_string(&serde_json::json!({
+        "intentRevision": intent.revision,
+        "capabilityGrantId": capability_grant_id,
+        "toolManifestHash": tool_manifest_hash,
+        "sources": envelopes.iter().map(|envelope| serde_json::json!({
+            "sourceType": envelope.source_type,
+            "sourceId": envelope.source_id,
+            "provenance": envelope.provenance,
+            "freshness": envelope.freshness,
+            "contentHash": envelope.content_hash,
+            "trustLevel": envelope.trust_level,
+            "tokenCount": envelope.token_count,
+            "originalCharCount": envelope.original_char_count,
+            "includedCharCount": envelope.included_char_count,
+            "truncationReason": envelope.truncation_reason,
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{capability_grant_id}:{tool_manifest_hash}:{}",
+            intent.revision
+        )
+    });
     let estimated_tokens = estimate_serialized_input_tokens(&messages, tools);
     PromptPackageV2 {
         runtime_version: PROMPT_RUNTIME_VERSION_V2.to_string(),
@@ -937,6 +990,8 @@ pub fn layer_order() -> [LayerKind; 9] {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistTurn {
+    pub workspace_id: String,
+    pub session_id: String,
     pub role: String,
     pub content: String,
     #[serde(default)]
@@ -979,127 +1034,11 @@ pub fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> (Vec<Hi
     (kept_rev, dropped)
 }
 
-/// 意图沿用判定结果（TERM-AG-005 IntentCarryover，BR-AG-DATA-004）。
-/// None = 本轮为新请求，历史仅作背景；其余 = 本轮显式沿用历史意图，应提权参考。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Carryover {
-    None,
-    Refine,          // 修正追加（把刚才那段改成…）
-    Select,          // 显式选择（用第二个 / 按刚才说的）
-    ReferenceTarget, // 指代回指 / 续写（继续 / 接着 / 它 / 那个 / 上面）
-}
-
-/// 按当前文档归属分流后的历史。same_doc 可作为同文档 P1 背景；other_doc 只能在显式沿用时弱注入。
+/// 按当前文档归属分流后的历史。same_doc 可作为同文档 P1 背景；other_doc 始终只能弱注入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopedHistory {
     pub same_doc: Vec<HistTurn>,
     pub other_doc: Vec<HistTurn>,
-    pub dropped_cross_doc: usize,
-}
-
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
-}
-
-fn mentions_ordinal_choice(text: &str) -> bool {
-    [
-        "第一个方案",
-        "第二个方案",
-        "第三个方案",
-        "第一个版本",
-        "第二个版本",
-        "第三个版本",
-        "第一个回答",
-        "第二个回答",
-        "第三个回答",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle))
-}
-
-pub fn prompt_has_explicit_history_reference(prompt: &str) -> bool {
-    let p = prompt.trim();
-    contains_any(
-        p,
-        &[
-            "刚才",
-            "刚刚",
-            "上面",
-            "上一轮",
-            "上轮",
-            "前面",
-            "之前那",
-            "你刚写",
-            "你刚才",
-            "你上面",
-            "按刚才",
-            "按上面",
-            "用刚才",
-            "用上面",
-            "继续刚才",
-            "接着上面",
-        ],
-    ) || mentions_ordinal_choice(p)
-}
-
-/**
- * @GOV
- * codes:    BR-AG-DATA-004-DATA-AG-AG-TURN-003
- * type:     DATA
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-004
- * term_ref: TERM-AG-005
- * boundary: in=currentPromptAndHistoryPresence | out=Carryover(noneUnlessExplicitThenRefineSelectReferenceTarget)
- */
-/// 意图沿用判定（BR-AG-DATA-004）：默认弱化历史，仅当本轮显式沿用历史意图时提权。
-/// **dev 启发式**（识别策略延实现期：可换小模型/更细规则）；本函数锁「默认 None、显式沿用才非 None」机制。
-pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
-    if !has_history {
-        return Carryover::None;
-    }
-    let p = prompt.trim();
-    if !prompt_has_explicit_history_reference(p) {
-        return Carryover::None;
-    }
-    // 显式选择（沿用上一轮某个产出/方案）。
-    if contains_any(p, &["按刚才", "按上面", "用刚才", "用上面", "就用"])
-        || mentions_ordinal_choice(p)
-    {
-        return Carryover::Select;
-    }
-    // 修正追加（操作对象必须被显式锚定为历史产出）。
-    if contains_any(
-        p,
-        &[
-            "把刚才",
-            "把刚刚",
-            "把上面",
-            "把上一",
-            "刚才那",
-            "刚刚那",
-            "上面那",
-            "上一轮",
-        ],
-    ) && contains_any(
-        p,
-        &[
-            "改成",
-            "换成",
-            "短一点",
-            "长一点",
-            "再写",
-            "再短",
-            "再长",
-            "正式一点",
-            "重写",
-            "润色",
-            "优化",
-        ],
-    ) {
-        return Carryover::Refine;
-    }
-    // 指代回指 / 续写（延续上一轮目标）。
-    Carryover::ReferenceTarget
 }
 
 /**
@@ -1109,20 +1048,18 @@ pub fn decide_intent_carryover(prompt: &str, has_history: bool) -> Carryover {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-004
  * term_ref: TERM-AG-005
- * boundary: in=currentDocPathAndHistTurns | out=ScopedHistory(sameDocHistorySeparateCrossDocWeakOnlyWhenExplicit)
+ * boundary: in=currentDocPathAndIdentityValidatedHistTurns | out=ScopedHistory(sameDocHistoryAndCrossDocWeakCandidatesWithoutKeywordJudgment)
  */
 /// 历史归属分流（BR-AG-DATA-004）：有当前文档时，只有同 relPath 历史可作为同文档 P1 背景；
-/// 跨文档或无 relPath 的历史默认丢弃，只有显式沿用历史时才进入 other_doc，且调用方必须弱注入。
+/// 跨文档或无 relPath 的历史只进入有界弱候选。是否沿用由模型 IntentResult 表达，本层不解析关键词。
 pub fn scope_history_for_current_doc(
     turns: &[HistTurn],
     current_rel: Option<&str>,
-    carryover: Carryover,
 ) -> ScopedHistory {
     let Some(current) = current_rel.filter(|p| !p.trim().is_empty()) else {
         return ScopedHistory {
             same_doc: turns.to_vec(),
             other_doc: Vec::new(),
-            dropped_cross_doc: 0,
         };
     };
     let mut same_doc = Vec::new();
@@ -1134,20 +1071,9 @@ pub fn scope_history_for_current_doc(
             other_doc_all.push(turn.clone());
         }
     }
-    let dropped_cross_doc = if carryover == Carryover::None {
-        other_doc_all.len()
-    } else {
-        0
-    };
-    let other_doc = if carryover == Carryover::None {
-        Vec::new()
-    } else {
-        other_doc_all
-    };
     ScopedHistory {
         same_doc,
-        other_doc,
-        dropped_cross_doc,
+        other_doc: other_doc_all,
     }
 }
 
@@ -1194,6 +1120,8 @@ mod tests {
     #[test]
     fn select_recent_history_keeps_newest_drops_oldest() {
         let h = |r: &str, c: &str| HistTurn {
+            workspace_id: "ws-1".into(),
+            session_id: "session-1".into(),
             role: r.into(),
             content: c.into(),
             rel_path: None,
@@ -1211,59 +1139,12 @@ mod tests {
     }
 
     // covers: BR-AG-DATA-004
-    // PI-AG-09C：意图沿用判定——无历史/新话题=None；修正/选择/回指=对应类型（默认弱化、显式沿用提权）。
-    #[test]
-    fn intent_carryover_defaults_none_and_detects_carryover() {
-        // 无历史 → None（即便有沿用词）。
-        assert_eq!(decide_intent_carryover("继续写", false), Carryover::None);
-        // 新话题 → None。
-        assert_eq!(
-            decide_intent_carryover("帮我写一首关于春天的诗", true),
-            Carryover::None
-        );
-        // 泛编辑词没有显式历史回指时，不提权历史。
-        assert_eq!(decide_intent_carryover("再短一点", true), Carryover::None);
-        assert_eq!(
-            decide_intent_carryover("重写当前文档", true),
-            Carryover::None
-        );
-        assert_eq!(
-            decide_intent_carryover("把这篇优化一下", true),
-            Carryover::None
-        );
-        // 修正追加 / 显式选择 / 指代回指。
-        assert_eq!(
-            decide_intent_carryover("把刚才那段改成正式语气", true),
-            Carryover::Refine
-        );
-        assert_eq!(
-            decide_intent_carryover("用第二个方案", true),
-            Carryover::Select
-        );
-        assert_eq!(
-            decide_intent_carryover("继续刚才的方向", true),
-            Carryover::ReferenceTarget
-        );
-        assert_eq!(
-            decide_intent_carryover("接着上面写", true),
-            Carryover::ReferenceTarget
-        );
-        // 泛指当前任务/当前文档的词不应单独提权历史意图。
-        assert_eq!(
-            decide_intent_carryover("接下来优化这个文档", true),
-            Carryover::None
-        );
-        assert_eq!(
-            decide_intent_carryover("把它整理成三段", true),
-            Carryover::None
-        );
-    }
-
-    // covers: BR-AG-DATA-004
-    // 历史归属：当前文档只接收同 relPath 历史；跨文档历史默认丢弃，显式沿用时仅弱注入。
+    // 历史归属：同 relPath 与跨文档候选按身份分层，Prompt 层再对跨文档内容弱注入。
     #[test]
     fn scope_history_separates_same_doc_from_cross_doc() {
         let h = |rel: Option<&str>, c: &str| HistTurn {
+            workspace_id: "ws-1".into(),
+            session_id: "session-1".into(),
             role: "user".into(),
             content: c.into(),
             rel_path: rel.map(str::to_string),
@@ -1275,18 +1156,12 @@ mod tests {
             h(None, "旧版本无归属"),
         ];
 
-        let none = scope_history_for_current_doc(&turns, Some("b.md"), Carryover::None);
-        assert_eq!(none.same_doc.len(), 1);
-        assert_eq!(none.same_doc[0].content, "B 历史");
-        assert!(none.other_doc.is_empty());
-        assert_eq!(none.dropped_cross_doc, 2);
+        let scoped = scope_history_for_current_doc(&turns, Some("b.md"));
+        assert_eq!(scoped.same_doc.len(), 1);
+        assert_eq!(scoped.same_doc[0].content, "B 历史");
+        assert_eq!(scoped.other_doc.len(), 2);
 
-        let explicit = scope_history_for_current_doc(&turns, Some("b.md"), Carryover::Refine);
-        assert_eq!(explicit.same_doc.len(), 1);
-        assert_eq!(explicit.other_doc.len(), 2);
-        assert_eq!(explicit.dropped_cross_doc, 0);
-
-        let no_current = scope_history_for_current_doc(&turns, None, Carryover::None);
+        let no_current = scope_history_for_current_doc(&turns, None);
         assert_eq!(no_current.same_doc.len(), 3);
         assert!(no_current.other_doc.is_empty());
     }
@@ -1628,5 +1503,55 @@ mod tests {
         );
         assert!(package.context_trace_id.starts_with("ctx-"));
         assert!(package.estimated_tokens > 0);
+    }
+
+    // covers: BR-AG-DATA-002, BR-AG-DATA-004
+    #[test]
+    fn prompt_package_v2_trace_changes_with_dynamic_source_and_records_truncation() {
+        let intent = IntentResultV2::unresolved();
+        let base = prompt_data_envelope(
+            PromptSourceTypeV1::CurrentUserInput,
+            "user-input:t1",
+            "current_agent_turn_input",
+            "current_turn",
+            PromptTrustLevelV1::UserProvidedData,
+            "检查当前文档",
+        );
+        let truncated = prompt_data_envelope_with_budget(
+            PromptSourceTypeV1::ExplicitReference,
+            "doc:large.md",
+            "explicit_document_reference",
+            "disk_state_read_at=1;baseline=7",
+            PromptTrustLevelV1::CurrentFact,
+            "引用摘要",
+            50_000,
+            Some("source_exceeded_per_reference_cap"),
+        );
+        let messages = vec![serde_json::json!({"role":"user","content":"检查当前文档"})];
+        let tools = serde_json::json!([]);
+        let first = build_prompt_package_v2(
+            &intent,
+            std::slice::from_ref(&base),
+            "grant-1",
+            "manifest-1",
+            messages.clone(),
+            &tools,
+        );
+        let second = build_prompt_package_v2(
+            &intent,
+            &[base, truncated.clone()],
+            "grant-1",
+            "manifest-1",
+            messages,
+            &tools,
+        );
+
+        assert_ne!(first.context_trace_id, second.context_trace_id);
+        assert_eq!(truncated.original_char_count, 50_000);
+        assert_eq!(truncated.included_char_count, "引用摘要".chars().count());
+        assert_eq!(
+            truncated.truncation_reason.as_deref(),
+            Some("source_exceeded_per_reference_cap")
+        );
     }
 }
