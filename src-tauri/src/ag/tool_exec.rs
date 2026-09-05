@@ -8,241 +8,294 @@
 
 use crate::ipc::IpcError;
 use crate::types::{
-    AgentContextFactsV1, ProjectReportReadItemV1, ProjectReportV1, PROJECT_REPORT_VERSION_V1,
+    AgentContextFactsV1, EvidenceItemV1, EvidenceLedgerV1, ProjectReportFindingV2,
+    ProjectReportReadItemV2, ProjectReportUnreadItemV2, ProjectReportV2, PROJECT_REPORT_VERSION_V2,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-#[derive(Debug, Clone, Default)]
-pub struct ProjectReadEvidenceLedger {
-    entries: Vec<ProjectReportReadItemV1>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingEvidenceItem {
+    pub rel_path: String,
+    pub source: String,
+    pub coverage: String,
+    pub version_or_hash: String,
 }
 
-impl ProjectReadEvidenceLedger {
-    /**
-     * @GOV
-     * codes:    BR-AG-OBS-001-DATA-AG-AG-TOOL-043, BR-AG-DATA-008-DATA-AG-AG-TOOL-043
-     * type:     DATA
-     * chain:    AG-TURN, AG-TOOL
-     * rules:    BR-AG-OBS-001, BR-AG-DATA-008
-     * term_ref: TERM-AG-020, TERM-AG-021
-     * boundary: in=VerifiedAgentContextFactsAndCurrentDocumentPromptCoverage | out=ProjectReadEvidenceLedger(initialSessionAndPromptEvidence) | does_not=grantReadOrEditCapabilityOrTreatMetadataAsDocumentBody
-     */
-    pub fn from_turn_start(
-        facts: &AgentContextFactsV1,
-        active_doc_path: Option<&str>,
-        current_doc_prompt_coverage: Option<&str>,
-    ) -> Self {
-        let mut ledger = Self::default();
-        for fact in &facts.open_docs {
-            ledger.insert(ProjectReportReadItemV1 {
-                rel_path: fact.rel_path.clone(),
-                source: fact.source.clone(),
-                coverage: "session_metadata".to_string(),
-                evidence: "agent_context_facts".to_string(),
-            });
-        }
-        if let (Some(path), Some(coverage)) = (active_doc_path, current_doc_prompt_coverage) {
-            if let Some(fact) = facts.open_docs.iter().find(|fact| fact.rel_path == path) {
-                ledger.insert(ProjectReportReadItemV1 {
-                    rel_path: path.to_string(),
-                    source: fact.source.clone(),
-                    coverage: coverage.to_string(),
-                    evidence: "prompt_current_document".to_string(),
-                });
-            }
-        }
-        ledger
-    }
-
-    fn insert(&mut self, item: ProjectReportReadItemV1) {
-        if !self.entries.contains(&item) {
-            self.entries.push(item);
-        }
-    }
-
-    pub fn record_successful_tool(
-        &mut self,
-        ctx: &crate::ag::blocks::AgentReadContext,
-        name: &str,
-        args: &serde_json::Value,
-        result: &str,
-    ) {
-        let path_source = |path: &str| {
-            ctx.snapshot(path)
-                .map(|snapshot| snapshot.source)
-                .unwrap_or_else(|_| "workspace_disk_state".to_string())
-        };
-        match name {
-            "read_doc" => {
-                if let Some(path) = args.get("path").and_then(|value| value.as_str()) {
-                    self.insert(ProjectReportReadItemV1 {
-                        rel_path: path.to_string(),
-                        source: path_source(path),
-                        coverage: if args.get("blocks").is_some() {
-                            "selected_blocks"
-                        } else {
-                            "full_document"
-                        }
-                        .to_string(),
-                        evidence: "read_doc".to_string(),
-                    });
-                }
-            }
-            "list_blocks" | "list_tables" | "list_images" => {
-                if let Some(path) = args.get("path").and_then(|value| value.as_str()) {
-                    self.insert(ProjectReportReadItemV1 {
-                        rel_path: path.to_string(),
-                        source: path_source(path),
-                        coverage: "structure_index".to_string(),
-                        evidence: name.to_string(),
-                    });
-                }
-            }
-            "list_docs" => {
-                self.insert(ProjectReportReadItemV1 {
-                    rel_path: args
-                        .get("path")
-                        .and_then(|value| value.as_str())
-                        .filter(|path| !path.trim().is_empty())
-                        .unwrap_or(".")
-                        .to_string(),
-                    source: "workspace_index".to_string(),
-                    coverage: "workspace_structure".to_string(),
-                    evidence: "list_docs".to_string(),
-                });
-            }
-            "workspace_glob" => self.insert(ProjectReportReadItemV1 {
-                rel_path: ".".to_string(),
-                source: "workspace_index".to_string(),
-                coverage: "workspace_structure".to_string(),
-                evidence: "workspace_glob".to_string(),
-            }),
-            "search_text" => {
-                if let Ok(hits) = serde_json::from_str::<Vec<serde_json::Value>>(result) {
-                    for path in hits
-                        .iter()
-                        .filter_map(|hit| hit.get("rel_path").and_then(|value| value.as_str()))
-                    {
-                        self.insert(ProjectReportReadItemV1 {
-                            rel_path: path.to_string(),
-                            source: path_source(path),
-                            coverage: "search_excerpt".to_string(),
-                            evidence: "search_text".to_string(),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub fn validates(&self, item: &ProjectReportReadItemV1) -> bool {
-        self.entries.contains(item)
-    }
+fn snapshot_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> String {
+    snapshot
+        .content_hash
+        .clone()
+        .or_else(|| {
+            snapshot
+                .session_version
+                .map(|version| format!("session:{version}"))
+        })
+        .or_else(|| {
+            snapshot
+                .baseline
+                .map(|baseline| format!("baseline:{baseline}"))
+        })
+        .unwrap_or_else(|| crate::ag::context::sha256_text(&snapshot.content))
 }
 
 /**
  * @GOV
- * codes:    BR-AG-OBS-001-GUARD-AG-AG-TOOL-044, BR-SYS-DATA-008-GUARD-AG-AG-TOOL-044
- * type:     GUARD
- * chain:    AG-TOOL
- * rules:    BR-AG-OBS-001, BR-SYS-DATA-008
- * term_ref: TERM-AG-021
- * boundary: in=ProjectReportV1AndSameTurnReadEvidenceLedger | out=VerifiedStructuredProjectReportReceiptOrStableToolRejection | effect=memory | does_not=acceptUnprovenReadScopeOrCreateTaskRunDecisionProposalDiffOrDocumentWrite
+ * codes:    BR-AG-OBS-001-DATA-AG-AG-TOOL-043, BR-AG-DATA-008-DATA-AG-AG-TOOL-043, BR-SYS-DATA-008-DATA-AG-AG-TOOL-043
+ * type:     DATA
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-OBS-001, BR-AG-DATA-008, BR-SYS-DATA-008
+ * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
+ * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage
  */
-pub fn exec_project_report(
-    root: &Path,
-    args: &serde_json::Value,
-    ledger: &ProjectReadEvidenceLedger,
-) -> Result<String, IpcError> {
-    let report: ProjectReportV1 = serde_json::from_value(args.clone()).map_err(|error| {
-        IpcError::new(
-            "AG_PROJECT_REPORT_INVALID",
-            &format!("ProjectReport 结构无效：{error}"),
-            true,
-            false,
-        )
-    })?;
-    if report.version != PROJECT_REPORT_VERSION_V1 {
-        return Err(IpcError::new(
-            "AG_PROJECT_REPORT_VERSION_UNSUPPORTED",
-            "ProjectReport 版本未知",
-            false,
-            false,
-        ));
-    }
-    if report.requested_scope.is_empty()
-        || report.uncertainties.is_empty()
-        || report
-            .uncertainties
-            .iter()
-            .any(|value| value.trim().is_empty())
-    {
-        return Err(IpcError::new(
-            "AG_PROJECT_REPORT_DISCLOSURE_REQUIRED",
-            "ProjectReport 必须声明请求范围与至少一项不确定性（无已知不确定性时显式填写 none）",
-            true,
-            false,
-        ));
-    }
-    for scope in &report.requested_scope {
-        crate::workspace::resolve_in_workspace(root, scope)?;
-    }
-    for item in &report.read_items {
-        crate::workspace::resolve_in_workspace(root, &item.rel_path)?;
-        if !ledger.validates(item) {
-            return Err(IpcError::new(
-                "AG_PROJECT_REPORT_READ_EVIDENCE_MISMATCH",
-                &format!(
-                    "ProjectReport 已读项缺少本轮证据或来源/覆盖级别不匹配：{}",
-                    item.rel_path
-                ),
-                true,
-                false,
-            ));
-        }
-    }
-    for item in &report.unread_items {
-        crate::workspace::resolve_in_workspace(root, &item.rel_path)?;
-        if item.reason.trim().is_empty() {
-            return Err(IpcError::new(
-                "AG_PROJECT_REPORT_UNREAD_REASON_REQUIRED",
-                "ProjectReport 每个未读项必须说明原因",
-                true,
-                false,
-            ));
-        }
-    }
-    let read_paths = report
-        .read_items
+pub fn context_evidence(
+    facts: &AgentContextFactsV1,
+    active_doc_path: Option<&str>,
+    current_doc_prompt_coverage: Option<&str>,
+) -> Vec<PendingEvidenceItem> {
+    let mut items = facts
+        .open_docs
         .iter()
-        .map(|item| item.rel_path.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    for finding in &report.findings {
-        if finding.statement.trim().is_empty()
-            || !matches!(
-                finding.uncertainty.as_str(),
-                "none" | "low" | "medium" | "high"
-            )
-            || finding
-                .source_paths
+        .map(|fact| PendingEvidenceItem {
+            rel_path: fact.rel_path.clone(),
+            source: fact.source.clone(),
+            coverage: "session_metadata".to_string(),
+            version_or_hash: fact.content_hash.clone(),
+        })
+        .collect::<Vec<_>>();
+    if let (Some(path), Some(coverage)) = (active_doc_path, current_doc_prompt_coverage) {
+        if let Some(fact) = facts.open_docs.iter().find(|fact| fact.rel_path == path) {
+            items.push(PendingEvidenceItem {
+                rel_path: path.to_string(),
+                source: fact.source.clone(),
+                coverage: coverage.to_string(),
+                version_or_hash: fact.content_hash.clone(),
+            });
+        }
+    }
+    items
+}
+
+pub fn successful_tool_evidence(
+    ctx: &crate::ag::blocks::AgentReadContext,
+    name: &str,
+    args: &serde_json::Value,
+    result: &str,
+) -> Vec<PendingEvidenceItem> {
+    let from_path = |path: &str, coverage: &str| {
+        ctx.snapshot(path).ok().map(|snapshot| PendingEvidenceItem {
+            rel_path: path.to_string(),
+            source: snapshot.source.clone(),
+            coverage: coverage.to_string(),
+            version_or_hash: snapshot_version(&snapshot),
+        })
+    };
+    match name {
+        "read_doc" => args
+            .get("path")
+            .and_then(|value| value.as_str())
+            .and_then(|path| {
+                from_path(
+                    path,
+                    if args.get("blocks").is_some() {
+                        "selected_blocks"
+                    } else {
+                        "full_document"
+                    },
+                )
+            })
+            .into_iter()
+            .collect(),
+        "list_blocks" | "list_tables" | "list_images" => args
+            .get("path")
+            .and_then(|value| value.as_str())
+            .and_then(|path| from_path(path, "structure_index"))
+            .into_iter()
+            .collect(),
+        "list_docs" => vec![PendingEvidenceItem {
+            rel_path: args
+                .get("path")
+                .and_then(|value| value.as_str())
+                .filter(|path| !path.trim().is_empty())
+                .unwrap_or(".")
+                .to_string(),
+            source: "workspace_index".to_string(),
+            coverage: "workspace_structure".to_string(),
+            version_or_hash: crate::ag::context::sha256_text(result),
+        }],
+        "workspace_glob" => vec![PendingEvidenceItem {
+            rel_path: ".".to_string(),
+            source: "workspace_index".to_string(),
+            coverage: "workspace_structure".to_string(),
+            version_or_hash: crate::ag::context::sha256_text(result),
+        }],
+        "search_text" => serde_json::from_str::<Vec<serde_json::Value>>(result)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|hit| hit.get("rel_path").and_then(|value| value.as_str()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|path| from_path(path, "search_excerpt"))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+pub fn materialize_evidence(
+    workspace_id: &str,
+    turn_id: &str,
+    source_event_id: &str,
+    seq: u64,
+    identity_seed: &str,
+    pending: Vec<PendingEvidenceItem>,
+) -> Vec<EvidenceItemV1> {
+    pending
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let identity = format!(
+                "{workspace_id}\n{turn_id}\n{identity_seed}\n{}\n{}\n{}\n{}\n{index}",
+                item.rel_path, item.source, item.coverage, item.version_or_hash
+            );
+            EvidenceItemV1 {
+                evidence_id: format!("evidence:{}", crate::ag::context::sha256_text(&identity)),
+                workspace_id: workspace_id.to_string(),
+                turn_id: turn_id.to_string(),
+                rel_path: item.rel_path,
+                source: item.source,
+                coverage: item.coverage,
+                version_or_hash: item.version_or_hash,
+                source_event_id: source_event_id.to_string(),
+                seq,
+            }
+        })
+        .collect()
+}
+
+pub fn evidence_ids(
+    workspace_id: &str,
+    turn_id: &str,
+    identity_seed: &str,
+    pending: &[PendingEvidenceItem],
+) -> Vec<String> {
+    materialize_evidence(
+        workspace_id,
+        turn_id,
+        "",
+        0,
+        identity_seed,
+        pending.to_vec(),
+    )
+    .into_iter()
+    .map(|item| item.evidence_id)
+    .collect()
+}
+
+pub fn derive_project_report(
+    turn_id: &str,
+    requested_scope: Vec<String>,
+    ledger: &EvidenceLedgerV1,
+    model_findings: &[crate::ag::model_output::ModelFinalFindingV2],
+) -> ProjectReportV2 {
+    let mut grouped = BTreeMap::<(String, String, String), Vec<String>>::new();
+    for item in &ledger.evidence_items {
+        grouped
+            .entry((
+                item.rel_path.clone(),
+                item.source.clone(),
+                item.coverage.clone(),
+            ))
+            .or_default()
+            .push(item.evidence_id.clone());
+    }
+    let read_items = grouped
+        .into_iter()
+        .map(
+            |((rel_path, source, coverage), evidence_ids)| ProjectReportReadItemV2 {
+                rel_path,
+                source,
+                coverage,
+                evidence_ids,
+            },
+        )
+        .collect::<Vec<_>>();
+    let unread_items = requested_scope
+        .iter()
+        .filter(|scope| {
+            !ledger
+                .evidence_items
                 .iter()
-                .any(|path| !read_paths.contains(path.as_str()))
-        {
-            return Err(IpcError::new(
-                "AG_PROJECT_REPORT_FINDING_EVIDENCE_INVALID",
-                "ProjectReport finding 必须声明有效结论、不确定性，并且只能引用已读证据路径",
-                true,
-                false,
+                .any(|item| item.rel_path == **scope || (*scope == "." && item.rel_path == "."))
+        })
+        .map(|scope| ProjectReportUnreadItemV2 {
+            rel_path: scope.clone(),
+            reason: "本轮没有成功读取该范围".to_string(),
+        })
+        .collect::<Vec<_>>();
+    let by_id = ledger
+        .evidence_items
+        .iter()
+        .map(|item| (item.evidence_id.as_str(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut findings = Vec::new();
+    let mut uncertainties = Vec::new();
+    for finding in model_findings {
+        let referenced = finding
+            .evidence_ids
+            .iter()
+            .filter_map(|id| by_id.get(id.as_str()).copied())
+            .collect::<Vec<_>>();
+        let all_known = referenced.len() == finding.evidence_ids.len();
+        let content_supported = !referenced.is_empty()
+            && referenced.iter().all(|item| {
+                matches!(
+                    item.coverage.as_str(),
+                    "search_excerpt" | "selected_blocks" | "full_document"
+                )
+            });
+        if all_known && content_supported {
+            findings.push(ProjectReportFindingV2 {
+                statement: finding.statement.clone(),
+                evidence_ids: finding.evidence_ids.clone(),
+                uncertainty: finding.uncertainty.clone(),
+            });
+        } else {
+            uncertainties.push(format!(
+                "结论“{}”引用了未知证据或仅有非正文覆盖，未登记为已证实 finding",
+                finding.statement
             ));
         }
     }
-    Ok(serde_json::json!({
-        "status": "project_report_recorded",
-        "documentModified": false,
-        "report": report,
-    })
-    .to_string())
+    if ledger.evidence_items.is_empty() {
+        uncertainties.push("本轮没有成功读取项目内容".to_string());
+    }
+    for item in &read_items {
+        if matches!(
+            item.coverage.as_str(),
+            "session_metadata"
+                | "workspace_structure"
+                | "structure_index"
+                | "search_excerpt"
+                | "selected_blocks"
+        ) {
+            uncertainties.push(format!(
+                "{} 仅覆盖 {}，不代表已读取全文",
+                item.rel_path, item.coverage
+            ));
+        }
+    }
+    uncertainties.sort();
+    uncertainties.dedup();
+    ProjectReportV2 {
+        version: PROJECT_REPORT_VERSION_V2.to_string(),
+        turn_id: turn_id.to_string(),
+        evidence_through_seq: ledger.through_seq,
+        requested_scope,
+        read_items,
+        unread_items,
+        findings,
+        uncertainties,
+    }
 }
 
 fn path_arg(args: &serde_json::Value, tool: &str) -> Result<String, IpcError> {
@@ -976,14 +1029,68 @@ mod tests {
     // covers: BR-AG-DATA-008
     // covers: BR-SYS-DATA-008
     #[test]
-    fn project_report_accepts_only_same_turn_read_evidence() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("ag-project-report-{unique}"));
+    fn project_report_is_derived_from_runtime_evidence_and_downgrades_unknown_claims() {
+        let root = std::env::temp_dir().join(format!("ag-evidence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.md"), "正文").unwrap();
+        let read_ctx = ctx(&root);
+        let cases = [
+            (
+                "list_docs",
+                serde_json::json!({}),
+                "[]".to_string(),
+                "workspace_structure",
+            ),
+            (
+                "workspace_glob",
+                serde_json::json!({"pattern": "*.md"}),
+                "[\"a.md\"]".to_string(),
+                "workspace_structure",
+            ),
+            (
+                "search_text",
+                serde_json::json!({"query": "正文"}),
+                "[{\"rel_path\":\"a.md\",\"preview\":\"正文\"}]".to_string(),
+                "search_excerpt",
+            ),
+            (
+                "list_blocks",
+                serde_json::json!({"path": "a.md"}),
+                "{}".to_string(),
+                "structure_index",
+            ),
+            (
+                "read_doc",
+                serde_json::json!({"path": "a.md", "blocks": ["0"]}),
+                "{}".to_string(),
+                "selected_blocks",
+            ),
+            (
+                "read_doc",
+                serde_json::json!({"path": "a.md"}),
+                "{}".to_string(),
+                "full_document",
+            ),
+        ];
+        for (tool, args, result, expected_coverage) in cases {
+            let evidence = successful_tool_evidence(&read_ctx, tool, &args, &result);
+            assert!(
+                evidence
+                    .iter()
+                    .all(|item| item.coverage == expected_coverage),
+                "{tool} 必须保持独立 coverage"
+            );
+            assert!(!evidence.is_empty(), "{tool} 成功读取必须生成证据");
+        }
+        assert!(successful_tool_evidence(
+            &read_ctx,
+            "propose_edit",
+            &serde_json::json!({"path": "a.md"}),
+            "{}"
+        )
+        .is_empty());
+
         let facts = AgentContextFactsV1 {
             version: crate::types::AGENT_CONTEXT_FACTS_VERSION_V1.to_string(),
             workspace_id: "ws1".to_string(),
@@ -1002,31 +1109,59 @@ mod tests {
             selections: Vec::new(),
             proposal_facts: Vec::new(),
         };
-        let ledger =
-            ProjectReadEvidenceLedger::from_turn_start(&facts, Some("a.md"), Some("full_document"));
-        let valid = serde_json::json!({
-            "version": "project-report-v1",
-            "requestedScope": ["a.md"],
-            "readItems": [{
-                "relPath": "a.md",
-                "source": "active_editor",
-                "coverage": "full_document",
-                "evidence": "prompt_current_document"
-            }],
-            "unreadItems": [],
-            "findings": [{
-                "statement": "当前正文已读取",
-                "sourcePaths": ["a.md"],
-                "uncertainty": "none"
-            }],
-            "uncertainties": ["none"]
-        });
-        let receipt = exec_project_report(&root, &valid, &ledger).unwrap();
-        assert!(receipt.contains("project_report_recorded"));
-        let mut forged = valid;
-        forged["readItems"][0]["coverage"] = serde_json::json!("search_excerpt");
-        let error = exec_project_report(&root, &forged, &ledger).unwrap_err();
-        assert_eq!(error.code, "AG_PROJECT_REPORT_READ_EVIDENCE_MISMATCH");
+        let pending = context_evidence(&facts, Some("a.md"), Some("full_document"));
+        let projected_ids = evidence_ids("ws1", "t1", "turn-event:t1:2", &pending);
+        let items = materialize_evidence(
+            "ws1",
+            "t1",
+            "turn-event:t1:2",
+            2,
+            "turn-event:t1:2",
+            pending,
+        );
+        assert_eq!(
+            projected_ids,
+            items
+                .iter()
+                .map(|item| item.evidence_id.clone())
+                .collect::<Vec<_>>()
+        );
+        let full_id = items
+            .iter()
+            .find(|item| item.coverage == "full_document")
+            .unwrap()
+            .evidence_id
+            .clone();
+        let ledger = EvidenceLedgerV1 {
+            turn_id: "t1".to_string(),
+            through_seq: 2,
+            evidence_items: items,
+        };
+        let report = derive_project_report(
+            "t1",
+            vec!["a.md".to_string(), "missing.md".to_string()],
+            &ledger,
+            &[
+                crate::ag::model_output::ModelFinalFindingV2 {
+                    statement: "当前正文已读取".to_string(),
+                    evidence_ids: vec![full_id],
+                    uncertainty: "none".to_string(),
+                },
+                crate::ag::model_output::ModelFinalFindingV2 {
+                    statement: "伪造结论".to_string(),
+                    evidence_ids: vec!["evidence:unknown".to_string()],
+                    uncertainty: "low".to_string(),
+                },
+            ],
+        );
+        assert_eq!(report.version, PROJECT_REPORT_VERSION_V2);
+        assert_eq!(report.evidence_through_seq, 2);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.unread_items[0].rel_path, "missing.md");
+        assert!(report
+            .uncertainties
+            .iter()
+            .any(|item| item.contains("伪造结论")));
         let _ = std::fs::remove_dir_all(root);
     }
 }

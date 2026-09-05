@@ -1,34 +1,36 @@
 {
-  "scope_id": "AG-CONTEXT-PROMPT-WP4-01",
+  "scope_id": "AG-EVIDENCE-REPORT-WP5-01",
   "task_type": "CODE_CHANGE",
-  "governance_phase": "VALIDATION",
-  "title": "Context & Prompt 当前事实收敛",
+  "governance_phase": "IMPLEMENTATION",
+  "title": "EvidenceLedger 与运行时 ProjectReport 收敛",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行并持续要求继续；本项为已确认 A-AG-X-L-04 WP-AG10-04。",
-  "scope_reason": "按已注册 BR-AG-DATA-001/002/004/005/008 与 BR-AG-STATE-004 收敛当前事实、逐项来源、历史隔离、动态重装配和真实预算，不新增来源、工具或产品能力。",
-  "issue_trace": ".governance/issues/AG-CONTEXT-PROMPT-WP4-01.md",
+  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行并持续要求继续；本项为已确认 A-AG-X-L-04 WP-AG10-05。",
+  "scope_reason": "按 REQ-AG-009、BR-AG-OBS-001、BR-SYS-DATA-008 和 X-SHARED-002，以 TurnEvent 真实读取事实派生 EvidenceLedger 与 ProjectReportV2，删除模型可调用报告完成门，不新增需求、工具或执行链路。",
+  "issue_trace": ".governance/issues/AG-EVIDENCE-REPORT-WP5-01.md",
   "objectives": [
-    "使每次 provider 调用都包含当前有效 LogicalState、当前输入和同回合动态事实",
-    "为文档、逐项引用、历史、ToolResult、用户补充与裁决结果记录来源、freshness、hash、trust、token 与裁剪原因",
-    "移除生产 Prompt 路径的关键词 Carryover 与重复目标/策略判断",
-    "以后端 workspace/session 身份校验阻断错误历史注入，并保持显式跨来源内容只为 data-only",
-    "恢复真实总预算与确定性 P0/P1 截断门，保持工具 manifest 仅来自当前 CapabilityGrantV2"
+    "ContextFrozen 与成功只读 ToolResult 产生绑定 turn/source/version/hash/seq 的 EvidenceLedger 项",
+    "失败、跨 workspace、目录、搜索、结构、局部块和全文覆盖保持不同且不能互相冒充",
+    "模型 final 只可引用运行时生成的 evidence_id，未知或覆盖不足声明降为 uncertainty",
+    "运行时在最终回答到达后派生 ProjectReportV2 并作为安全 TurnEvent 投影",
+    "删除 report_project 注册、Prompt schema、强制完成门和模型自报 readItems 校验路径"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-CONTEXT-PROMPT-WP4-01.md",
+    ".governance/issues/AG-EVIDENCE-REPORT-WP5-01.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/blocks.rs",
-    "src-tauri/src/ag/reference_runtime.rs",
-    "src-tauri/src/ag/turn_reference.rs",
-    "src-tauri/src/ag/prompt_runtime.rs",
+    "src-tauri/src/types/mod.rs",
+    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/ag/model_output.rs",
     "src-tauri/src/ag/prompts.rs",
-    "src-tauri/src/ag/turn_prompt.rs",
+    "src-tauri/src/ag/tool_exec.rs",
+    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/ag/turn_events.rs",
     "src-tauri/src/ag/turn_runtime.rs",
     "src-tauri/src/ag/turn_tool_loop.rs",
-    "src/services/agService.ts"
+    "src/services/agService.ts",
+    "src/services/agRuntime.test.ts",
+    "src/store/agStore.ts"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -37,27 +39,27 @@
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "需求、设计、规则、协议、验证卡和计划文档",
+    "数据库 schema 与迁移",
     "cloud/dev-gateway/**",
-    "src-tauri/src/types/mod.rs 和 src-tauri/src/reference/** 的公共引用协议",
-    "WP5-WP9 的非必要生产文件"
+    "WP6 Task Projection、WP7 ProposalBatch、WP8 UI 展示与恢复、WP9 其他兼容清理"
   ],
   "constraints": [
-    "不新增工具、来源类型对应的产品能力、需求、规则或公共 ReferencePayload 协议",
-    "当前文档、引用、历史、ToolResult 与显式记忆/知识/模板正文一律不能授权目标、工具或副作用",
-    "当前输入与当前文档 P0 不静默截断；显式引用和历史 P1 裁剪必须确定、逐项可追踪",
-    "不以关键词决定 IntentCarryover、目标、工具或编辑策略；模型语义仍由 IntentResultV2 投影",
-    "不提前实现 WP5 Evidence/ProjectReport、WP6 Task Projection、WP7 ProposalBatch 或 WP8 UI"
+    "不新增模型可调用完成工具、读取能力或副作用入口",
+    "EvidenceLedger 只由同回合 ContextFrozen 和成功只读 ToolResult 派生，模型与前端不能写入",
+    "目录/定位、结构、搜索片段、选中块和全文覆盖必须保持不同",
+    "ProjectReport 是只读事件投影，不创建 TaskRun、DecisionRequest、Proposal、Diff 或写入授权",
+    "不因报告投影失败把已合法完成的普通回答伪装为工具未完成；投影一致性失败按 Finalizing 真实失败处理"
   ],
   "acceptance_criteria": [
-    "首次和循环 provider 调用都从当前 LogicalState、当前输入与同回合 continuation 重新构建 PromptPackage",
-    "逐项引用及动态事实 envelope 保留来源/freshness/hash/trust/token/truncation，且数据注入不能扩展 manifest 或 ExplicitEditTargetSet",
-    "生产 Prompt 路径不再调用关键词 Carryover/整篇对齐检测；历史只按身份、文档归属、近因和预算进入",
-    "后端在 Gate/provider 前拒绝非当前 workspace/session 的 HistTurn，前端为每条历史提交复合身份",
-    "总预算恢复为受控配置；长当前文档以 manifest 进入且 propose_edit 前必须真实读取",
-    "专项测试、同输入 test:plan/test:related、governance audit 全部通过"
+    "ToolResult.evidenceIds 由运行时生成且可从持久化 TurnEvent 重建同一 EvidenceLedger",
+    "证据包含 turn、through_seq、source_event_id、source、coverage、version_or_hash，失败读取不增加证据",
+    "ProjectReportV2 绑定 turn_id/evidence_through_seq，readItems 只引用有效 evidence_ids，部分/未知声明进入 unread/uncertainties",
+    "工具注册表、CapabilityGrant、Prompt manifest 和 ToolLoop 均不存在 report_project",
+    "模型可直接 final；内容提案和资源计划的既有终态工具门保持不变",
+    "V-S13 专项、同输入 test:plan/test:related 与 Issue Trace governance audit 全部通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-WP4-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-04 Context & Prompt", "confirmed_at": "2026-09-04"}
+    {"id": "HD-AG-WP5-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-05 Evidence & Report", "confirmed_at": "2026-09-04"}
   ],
   "stop_conditions": [],
   "unresolved_items": []

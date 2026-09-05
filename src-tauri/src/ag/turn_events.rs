@@ -2,9 +2,11 @@
 
 use super::task_runtime::settle_task_run;
 use crate::ipc::{AgTurnEvent, AgTurnEventPayload, IpcError};
+use crate::types::{EvidenceItemV1, EvidenceLedgerV1};
 use crate::{ag, sm_events, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TURN_EVENT_PAYLOAD_VERSION: u32 = 1;
@@ -33,10 +35,10 @@ fn event_db_error(error: impl std::fmt::Display) -> IpcError {
 }
 
 #[derive(Debug)]
-struct AppendedEvent {
-    event_id: String,
-    seq: u64,
-    occurred_at: i64,
+pub(super) struct AppendedEvent {
+    pub(super) event_id: String,
+    pub(super) seq: u64,
+    pub(super) occurred_at: i64,
 }
 
 fn append_event_record(
@@ -104,12 +106,12 @@ fn append_event_record(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-EFFECT-AG-AG-TURN-044, BR-AG-STATE-002-EFFECT-AG-AG-TURN-044, BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-044, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-044
+ * codes:    BR-AG-OBS-001-EFFECT-AG-AG-TURN-044, BR-AG-STATE-001-EFFECT-AG-AG-TURN-044, BR-AG-STATE-002-EFFECT-AG-AG-TURN-044, BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-044, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-044
  * type:     EFFECT
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
- * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-022
- * boundary: in=CurrentAgentTurnAndSafeOrInternalTurnEvent | out=AppendOnlyMonotonicTurnEventAndSameIdentityChannelOrAfterSeqProjection | effect=workspaceDb,IPC-ag_turn_stream | does_not=overwriteCommittedEventExposeInternalPayloadOrAppendAfterFirstTerminal
+ * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-022, TERM-AG-023
+ * boundary: in=CurrentAgentTurnAndSafeOrInternalTurnEventIncludingRuntimeEvidence | out=AppendOnlyMonotonicTurnEventSameIdentityChannelOrAfterSeqProjectionAndEvidenceSourceIdentity | effect=workspaceDb,IPC-ag_turn_stream | does_not=overwriteCommittedEventExposeInternalPayloadAcceptModelEvidenceOrAppendAfterFirstTerminal
  */
 pub(super) struct TurnEventEmitter<'a> {
     state: &'a AppState,
@@ -159,14 +161,40 @@ impl<'a> TurnEventEmitter<'a> {
             .map_err(event_db_error)
     }
 
+    pub(super) fn record_internal_event(
+        &self,
+        kind: &str,
+        payload: Value,
+    ) -> Result<Option<AppendedEvent>, IpcError> {
+        let payload_json = serde_json::to_string(&payload).map_err(event_db_error)?;
+        let mut conn = self.state.db.lock().map_err(|_| {
+            IpcError::new(
+                "WS_DB_BUSY",
+                "数据库连接繁忙，无法记录回合事件",
+                true,
+                false,
+            )
+        })?;
+        append_event_record(&mut conn, self.turn_id, kind, &payload_json, None)
+            .map_err(event_db_error)
+    }
+
     /// 安全事件必须先提交持久化，再使用完全相同的身份与 seq 投影到 Channel。
     pub(super) fn emit(
         &self,
         latch: &ag::turn::TerminalLatch,
         payload: AgTurnEventPayload,
     ) -> Result<bool, IpcError> {
+        Ok(self.emit_recorded(latch, payload)?.is_some())
+    }
+
+    pub(super) fn emit_recorded(
+        &self,
+        latch: &ag::turn::TerminalLatch,
+        payload: AgTurnEventPayload,
+    ) -> Result<Option<AppendedEvent>, IpcError> {
         if latch.is_set() || payload.terminal_status().is_some() {
-            return Ok(false);
+            return Ok(None);
         }
         let payload_json = serde_json::to_string(&payload).map_err(event_db_error)?;
         let appended = {
@@ -182,7 +210,7 @@ impl<'a> TurnEventEmitter<'a> {
                 .map_err(event_db_error)?
         };
         let Some(appended) = appended else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(channel) = self.channel else {
             return Err(IpcError::new(
@@ -193,7 +221,7 @@ impl<'a> TurnEventEmitter<'a> {
             ));
         };
         if let Err(error) = channel.send(AgTurnEvent {
-            event_id: appended.event_id,
+            event_id: appended.event_id.clone(),
             turn_id: self.turn_id.to_string(),
             seq: appended.seq,
             occurred_at: appended.occurred_at,
@@ -206,7 +234,7 @@ impl<'a> TurnEventEmitter<'a> {
                 self.turn_id, appended.seq
             );
         }
-        Ok(true)
+        Ok(Some(appended))
     }
 
     fn emit_terminal(
@@ -290,7 +318,7 @@ pub fn list_safe_events(
         "SELECT event_id, turn_id, seq, occurred_at, payload_version, payload_json \
          FROM agent_turn_events \
          WHERE workspace_id = ?1 AND turn_id = ?2 AND seq > ?3 AND kind IN ( \
-           'chunk','intent_updated','route_updated','tool_request','tool_result','diff_proposed', \
+           'chunk','intent_updated','route_updated','tool_request','tool_result','project_report','diff_proposed', \
            'step_progress','decision_request_proposed','decision_request_resolved', \
            'clarification_required','done','error' \
          ) ORDER BY seq ASC",
@@ -314,6 +342,94 @@ pub fn list_safe_events(
         })
     })?;
     rows.collect()
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-OBS-001-QUERY-AG-AG-TURN-048, BR-AG-PERSIST-001-QUERY-AG-AG-TURN-048, BR-SYS-DATA-008-QUERY-AG-AG-TURN-048
+ * type:     QUERY
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-OBS-001, BR-AG-PERSIST-001, BR-SYS-DATA-008
+ * term_ref: TERM-AG-021, TERM-AG-023
+ * boundary: in=WorkspaceScopedTurnAndAppendOnlyEvidenceEvents | out=EvidenceLedgerV1(validSameTurnSourceEventOrder) | does_not=acceptCrossWorkspaceFailedReadOrModelSuppliedEvidence
+ */
+pub(super) fn rebuild_evidence_ledger(
+    conn: &Connection,
+    workspace_id: &str,
+    turn_id: &str,
+) -> Result<EvidenceLedgerV1, IpcError> {
+    let owns_turn = conn
+        .query_row(
+            "SELECT 1 FROM agent_turns WHERE workspace_id = ?1 AND turn_id = ?2",
+            params![workspace_id, turn_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(event_db_error)?;
+    if owns_turn.is_none() {
+        return Err(IpcError::new(
+            "AG_EVIDENCE_TURN_SCOPE_INVALID",
+            "证据账本不属于当前 workspace/turn",
+            false,
+            false,
+        ));
+    }
+    let mut statement = conn
+        .prepare(
+            "SELECT payload_json FROM agent_turn_events \
+             WHERE workspace_id = ?1 AND turn_id = ?2 AND kind = 'evidence_recorded' \
+             ORDER BY seq ASC",
+        )
+        .map_err(event_db_error)?;
+    let rows = statement
+        .query_map(params![workspace_id, turn_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(event_db_error)?;
+    let mut items = BTreeMap::<String, EvidenceItemV1>::new();
+    for row in rows {
+        let payload_json = row.map_err(event_db_error)?;
+        let payload: Value = serde_json::from_str(&payload_json).map_err(event_db_error)?;
+        let recorded = serde_json::from_value::<Vec<EvidenceItemV1>>(
+            payload
+                .get("evidenceItems")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new())),
+        )
+        .map_err(event_db_error)?;
+        for item in recorded {
+            if item.workspace_id != workspace_id || item.turn_id != turn_id || item.seq == 0 {
+                continue;
+            }
+            let source_valid = conn
+                .query_row(
+                    "SELECT 1 FROM agent_turn_events \
+                     WHERE workspace_id = ?1 AND turn_id = ?2 AND event_id = ?3 AND seq = ?4",
+                    params![workspace_id, turn_id, item.source_event_id, item.seq],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(event_db_error)?
+                .is_some();
+            if source_valid {
+                items.entry(item.evidence_id.clone()).or_insert(item);
+            }
+        }
+    }
+    let mut evidence_items = items.into_values().collect::<Vec<_>>();
+    evidence_items.sort_by(|left, right| {
+        (left.seq, left.evidence_id.as_str()).cmp(&(right.seq, right.evidence_id.as_str()))
+    });
+    let through_seq = evidence_items
+        .iter()
+        .map(|item| item.seq)
+        .max()
+        .unwrap_or(0);
+    Ok(EvidenceLedgerV1 {
+        turn_id: turn_id.to_string(),
+        through_seq,
+        evidence_items,
+    })
 }
 
 pub(super) fn sm_error() -> IpcError {
@@ -361,10 +477,18 @@ pub(super) fn emit_ag_turn_done(
     app: &tauri::AppHandle,
     turn_id: &str,
     stop_reason: &str,
+    source: ag::turn::TurnState,
 ) -> bool {
     use ag::turn::{transition, TurnEvent, TurnState};
-    let Some(finalizing) = transition(TurnState::Streaming, TurnEvent::ModelFinal) else {
-        return false;
+    let finalizing = match source {
+        TurnState::Streaming => {
+            let Some(finalizing) = transition(TurnState::Streaming, TurnEvent::ModelFinal) else {
+                return false;
+            };
+            finalizing
+        }
+        TurnState::Finalizing => TurnState::Finalizing,
+        _ => return false,
     };
     let Some(completed) = transition(finalizing, TurnEvent::FinalizeOk) else {
         return false;
@@ -388,7 +512,9 @@ pub(super) fn emit_ag_turn_done(
         return false;
     }
     eprintln!("[ag-trace] turn_id={turn_id} terminal=completed stop_reason={stop_reason}");
-    emit_ag01(app, turn_id, finalizing);
+    if source == TurnState::Streaming {
+        emit_ag01(app, turn_id, finalizing);
+    }
     emit_ag01(app, turn_id, completed);
     true
 }
@@ -755,6 +881,52 @@ mod tests {
         let after = list_safe_events(&conn, "ws1", "t1", 2).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].seq, 3);
+    }
+
+    // covers: BR-AG-OBS-001, BR-AG-PERSIST-001, BR-SYS-DATA-008
+    #[test]
+    fn evidence_ledger_rebuilds_only_same_workspace_turn_source_events_in_order() {
+        let mut conn = fresh_turn();
+        let source = append_event_record(
+            &mut conn,
+            "t1",
+            "context_frozen",
+            &serde_json::json!({"contextVersion": "agent-context-facts-v1"}).to_string(),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let valid = crate::ag::tool_exec::materialize_evidence(
+            "ws1",
+            "t1",
+            &source.event_id,
+            source.seq,
+            &source.event_id,
+            vec![crate::ag::tool_exec::PendingEvidenceItem {
+                rel_path: "a.md".to_string(),
+                source: "active_editor".to_string(),
+                coverage: "full_document".to_string(),
+                version_or_hash: "h1".to_string(),
+            }],
+        );
+        let mut forged = valid[0].clone();
+        forged.workspace_id = "other".to_string();
+        forged.evidence_id = "evidence:forged".to_string();
+        append_event_record(
+            &mut conn,
+            "t1",
+            "evidence_recorded",
+            &serde_json::json!({"evidenceItems": [valid[0].clone(), forged]}).to_string(),
+            None,
+        )
+        .unwrap();
+
+        let ledger = rebuild_evidence_ledger(&conn, "ws1", "t1").unwrap();
+        assert_eq!(ledger.turn_id, "t1");
+        assert_eq!(ledger.through_seq, source.seq);
+        assert_eq!(ledger.evidence_items.len(), 1);
+        assert_eq!(ledger.evidence_items[0].source_event_id, source.event_id);
+        assert!(rebuild_evidence_ledger(&conn, "other", "t1").is_err());
     }
 
     // covers: BR-AG-PERSIST-001

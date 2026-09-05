@@ -258,12 +258,12 @@ fn validate_agent_context_facts(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-API-AG-AG-TURN-018, BR-AG-STATE-004-API-AG-AG-TURN-018, BR-AG-DATA-008-API-AG-AG-TURN-018, BR-ED-DATA-008-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018, BR-SYS-DATA-008-API-AG-AG-TURN-018
+ * codes:    BR-AG-OBS-001-API-AG-AG-TURN-018, BR-AG-STATE-001-API-AG-AG-TURN-018, BR-AG-STATE-004-API-AG-AG-TURN-018, BR-AG-DATA-008-API-AG-AG-TURN-018, BR-ED-DATA-008-API-AG-AG-TURN-018, BR-SYS-STATE-007-API-AG-AG-TURN-018, BR-SYS-DATA-008-API-AG-AG-TURN-018
  * type:     API
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-STATE-004, BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-STATE-007, BR-SYS-DATA-008
- * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnResumeAndAgentReadContext | out=AdaptiveModelToolEventStreamOrNonTerminalWaitAndOptionalTaskRunProjection | effect=IPC-ag_start_turn | delegate=require_runtime_profile,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=classifyIntentByKeywordsDefaultMissingRuntimeProfileCreateNewTurnForResumeBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
+ * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-AG-STATE-004, BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-STATE-007, BR-SYS-DATA-008
+ * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021, TERM-AG-023
+ * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnResumeAndAgentReadContext | out=AdaptiveModelToolEventStreamContextEvidenceOrNonTerminalWaitAndOptionalTaskRunProjection | effect=IPC-ag_start_turn | delegate=require_runtime_profile,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=classifyIntentByKeywordsDefaultMissingRuntimeProfileCreateNewTurnForResumeBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///
@@ -493,16 +493,6 @@ pub(crate) async fn ag_start_turn(
             "decisionResume": decision_resume,
         }),
     )?;
-    event_emitter.record_internal(
-        "context_frozen",
-        serde_json::json!({
-            "contextVersion": &agent_context_facts.version,
-            "openDocCount": agent_context_facts.open_docs.len(),
-            "selectionCount": agent_context_facts.selections.len(),
-            "proposalFactCount": agent_context_facts.proposal_facts.len(),
-        }),
-    )?;
-
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：先校验显式 TaskRun 续片段；
     // 普通 AgentTurn 此时不创建 TaskRun。只有后续确定需要 TaskPlan，或工具真实产生任务级产物时，
     // 才按需创建并绑定。应用启动时已清理陈旧活动态（重启不续跑）。
@@ -888,6 +878,49 @@ pub(crate) async fn ag_start_turn(
         1,
         6,
     ));
+    let context_evidence = ag::tool_exec::context_evidence(
+        &agent_context_facts,
+        active_doc_path.as_deref(),
+        current_doc_prompt_coverage,
+    );
+    let context_event = event_emitter
+        .record_internal_event(
+            "context_frozen",
+            serde_json::json!({
+                "contextVersion": &agent_context_facts.version,
+                "openDocCount": agent_context_facts.open_docs.len(),
+                "selectionCount": agent_context_facts.selections.len(),
+                "proposalFactCount": agent_context_facts.proposal_facts.len(),
+                "evidenceCoverage": context_evidence.iter().map(|item| serde_json::json!({
+                    "relPath": item.rel_path,
+                    "source": item.source,
+                    "coverage": item.coverage,
+                    "versionOrHash": item.version_or_hash,
+                })).collect::<Vec<_>>(),
+            }),
+        )?
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TURN_ALREADY_TERMINAL",
+                "冻结上下文证据时 AgentTurn 已终结",
+                false,
+                false,
+            )
+        })?;
+    let context_evidence = ag::tool_exec::materialize_evidence(
+        &workspace_id_for_turn,
+        &turn_id,
+        &context_event.event_id,
+        context_event.seq,
+        &context_event.event_id,
+        context_evidence,
+    );
+    if !context_evidence.is_empty() {
+        event_emitter.record_internal(
+            "evidence_recorded",
+            serde_json::json!({ "evidenceItems": context_evidence }),
+        )?;
+    }
 
     // 预算与实际 provider messages/tools 使用同一序列化口径，并在 Gate 前失败关闭。
     if ag::context::estimate_serialized_input_tokens(&messages, &tools) > PROMPT_TOKEN_BUDGET {

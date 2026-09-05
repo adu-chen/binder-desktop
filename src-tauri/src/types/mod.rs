@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
  * type:     DATA
  * chain:    DATA-MIGRATE
  * rules:    BR-SYS-DATA-002, BR-SYS-DATA-008
- * term_ref: TERM-AG-020, TERM-AG-021
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFactsV1,ProjectReportV1
+ * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFactsV1,EvidenceLedgerV1,ProjectReportV2
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -37,7 +37,7 @@ pub struct DocRef {
 }
 
 pub const AGENT_CONTEXT_FACTS_VERSION_V1: &str = "agent-context-facts-v1";
-pub const PROJECT_REPORT_VERSION_V1: &str = "project-report-v1";
+pub const PROJECT_REPORT_VERSION_V2: &str = "project-report-v2";
 
 /// TERM-AG-020：ED/DE/WS→AG 的版本化会话事实，不携带文档正文或授权。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,39 +85,64 @@ pub struct AgentContextFactsV1 {
     pub proposal_facts: Vec<AgentContextProposalFactV1>,
 }
 
-/// TERM-AG-021：ProjectReport 的可验证读取项。
+/// TERM-AG-023：运行时从同一 AgentTurn 的持久化读取事件派生的证据项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectReportReadItemV1 {
+pub struct EvidenceItemV1 {
+    pub evidence_id: String,
+    pub workspace_id: String,
+    pub turn_id: String,
     pub rel_path: String,
     pub source: String,
     pub coverage: String,
-    pub evidence: String,
+    pub version_or_hash: String,
+    pub source_event_id: String,
+    pub seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectReportUnreadItemV1 {
+pub struct EvidenceLedgerV1 {
+    pub turn_id: String,
+    pub through_seq: u64,
+    pub evidence_items: Vec<EvidenceItemV1>,
+}
+
+/// TERM-AG-021：由 EvidenceLedger 派生的 ProjectReport 已读项。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReportReadItemV2 {
+    pub rel_path: String,
+    pub source: String,
+    pub coverage: String,
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReportUnreadItemV2 {
     pub rel_path: String,
     pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectReportFindingV1 {
+pub struct ProjectReportFindingV2 {
     pub statement: String,
-    pub source_paths: Vec<String>,
+    pub evidence_ids: Vec<String>,
     pub uncertainty: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectReportV1 {
+pub struct ProjectReportV2 {
     pub version: String,
+    pub turn_id: String,
+    pub evidence_through_seq: u64,
     pub requested_scope: Vec<String>,
-    pub read_items: Vec<ProjectReportReadItemV1>,
-    pub unread_items: Vec<ProjectReportUnreadItemV1>,
-    pub findings: Vec<ProjectReportFindingV1>,
+    pub read_items: Vec<ProjectReportReadItemV2>,
+    pub unread_items: Vec<ProjectReportUnreadItemV2>,
+    pub findings: Vec<ProjectReportFindingV2>,
     pub uncertainties: Vec<String>,
 }
 

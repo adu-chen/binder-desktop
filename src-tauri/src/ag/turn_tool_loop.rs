@@ -20,6 +20,7 @@ use crate::ag;
 use crate::ipc::{AgTurnEvent, AgTurnEventPayload, CommandRequest, IpcError};
 use crate::workspace::routes::route_plan_workspace_operation;
 use crate::{ent, AppState};
+use std::collections::BTreeSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -83,7 +84,6 @@ fn terminal_tool_is_missing(
     required_terminal_tool: Option<&str>,
     proposed_diff: bool,
     edit_blocked_reported: bool,
-    project_reported: bool,
 ) -> bool {
     match required_terminal_tool {
         Some("propose_edit") => {
@@ -91,7 +91,6 @@ fn terminal_tool_is_missing(
         }
         // 成功的资源计划会在 DecisionRequest 事件分支提前结束；仍在模型循环中即尚未满足。
         Some("plan_workspace_operation") => true,
-        Some("report_project") => !project_reported,
         _ => false,
     }
 }
@@ -108,14 +107,6 @@ fn required_terminal_tool_error(
             false,
         );
     }
-    if required_terminal_tool == Some("report_project") {
-        return IpcError::new(
-            "AG_PROJECT_REPORT_REQUIRED",
-            "本轮是只读检查、搜索或分析请求，但尚未生成经读取证据核验的 ProjectReport；请先完成必要读取，再调用 report_project 如实列出已读、未读、来源与不确定性。",
-            true,
-            false,
-        );
-    }
     IpcError::new(
         "AG_EDIT_TOOL_REQUIRED",
         if any_tool_called {
@@ -126,6 +117,28 @@ fn required_terminal_tool_error(
         true,
         false,
     )
+}
+
+fn requested_report_scope(
+    intent: &ag::context::IntentResultV2,
+    active_doc_path: Option<&str>,
+) -> Vec<String> {
+    let mut scope = BTreeSet::new();
+    for candidate in &intent.target_candidates {
+        if let Some(path) = candidate.rel_path.as_deref() {
+            scope.insert(path.to_string());
+        } else if matches!(candidate.kind.as_str(), "current_document" | "selection") {
+            if let Some(path) = active_doc_path {
+                scope.insert(path.to_string());
+            }
+        } else if candidate.kind == "workspace" {
+            scope.insert(".".to_string());
+        }
+    }
+    if scope.is_empty() {
+        scope.insert(active_doc_path.unwrap_or(".").to_string());
+    }
+    scope.into_iter().collect()
 }
 
 /// Channel/补流只公开工具身份、目标路径和参数键，不复制查询正文、文档块或修改载荷。
@@ -196,8 +209,8 @@ fn advance_tool_loop(
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-STATE-008, BR-AG-OBS-001
- * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,exec_project_report | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021, TERM-AG-023
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,derive_project_report | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop(
@@ -243,11 +256,6 @@ pub(super) async fn run_turn_tool_loop(
     use ag::tool::{ToolLoopEvent as TlEv, ToolLoopState as TlSt};
     const MAX_ROUNDS: usize = 6;
     let mut current_doc_read_confirmed = !current_doc_requires_tool_read;
-    let mut project_read_evidence = ag::tool_exec::ProjectReadEvidenceLedger::from_turn_start(
-        &agent_context_facts,
-        active_doc_path.as_deref(),
-        current_doc_prompt_coverage,
-    );
     // AG-CTX-01：本轮是否调用过任何工具（用于区分"已读未提案"与"零工具调用"的失败文案）。
     let mut any_tool_called = false;
     // 完整 Prompt 审计只保留本次 AgentTurn 最后一次实际发给模型的请求；回合退出时由 Drop
@@ -580,7 +588,6 @@ pub(super) async fn run_turn_tool_loop(
                     required_terminal_tool,
                     proposed_diff,
                     edit_blocked_reported,
-                    false,
                 ) {
                     let error =
                         required_terminal_tool_error(required_terminal_tool, any_tool_called);
@@ -616,6 +623,61 @@ pub(super) async fn run_turn_tool_loop(
                     return Ok(());
                 }
                 advance_or_finish!(TlEv::FinalAnswer);
+                turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::ModelFinal)
+                    .ok_or_else(sm_error)?;
+                emit_ag01(&app, &turn_id, turn_state);
+                let report_result = (|| -> Result<bool, IpcError> {
+                    let evidence_ledger = {
+                        let conn = state.db.lock().map_err(|_| {
+                            IpcError::new(
+                                "WS_DB_BUSY",
+                                "数据库连接繁忙，无法派生 ProjectReport",
+                                true,
+                                false,
+                            )
+                        })?;
+                        super::turn_events::rebuild_evidence_ledger(
+                            &conn,
+                            &workspace_id_for_turn,
+                            &turn_id,
+                        )?
+                    };
+                    let project_report = ag::tool_exec::derive_project_report(
+                        &turn_id,
+                        requested_report_scope(&intent_result, active_doc_path.as_deref()),
+                        &evidence_ledger,
+                        &control.findings,
+                    );
+                    event_emitter.emit(
+                        &terminal_latch,
+                        AgTurnEventPayload::ProjectReport {
+                            report: project_report,
+                        },
+                    )
+                })();
+                match report_result {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(()),
+                    Err(error) => {
+                        if let Ok(conn) = state.db.lock() {
+                            settle_optional_task_run(
+                                &conn,
+                                task_run_id.as_deref(),
+                                &turn_id,
+                                ag::task::TurnOutcome::Failed,
+                            );
+                        }
+                        emit_ag_turn_error_from(
+                            &event_emitter,
+                            &terminal_latch,
+                            &app,
+                            &turn_id,
+                            &error,
+                            ag::turn::TurnState::Finalizing,
+                        );
+                        return Ok(());
+                    }
+                }
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
@@ -630,6 +692,7 @@ pub(super) async fn run_turn_tool_loop(
                     &app,
                     &turn_id,
                     &stop_reason,
+                    ag::turn::TurnState::Finalizing,
                 );
                 return Ok(());
             }
@@ -1070,25 +1133,6 @@ pub(super) async fn run_turn_tool_loop(
                                     }
                                 }
                             }
-                            ag::tool::ToolDecision::Allow if c.name == "report_project" => {
-                                match ws_root.as_deref() {
-                                    Some(root) => match ag::tool_exec::exec_project_report(
-                                        std::path::Path::new(root),
-                                        &params,
-                                        &project_read_evidence,
-                                    ) {
-                                        Ok(result) => (result, true),
-                                        Err(error) => (
-                                            format!("ProjectReport 校验失败：{}", error.message),
-                                            false,
-                                        ),
-                                    },
-                                    None => (
-                                        "无活动 workspace，无法核验 ProjectReport".to_string(),
-                                        false,
-                                    ),
-                                }
-                            }
                             // 任务级确认只创建 DecisionRequest，不修改文档或 Diff。成功后当前执行片段必须
                             // 停在 AwaitingDecision；由下方事件分派统一发送确认卡，但不得发送 Done。
                             ag::tool::ToolDecision::Allow if c.name == "propose_decision" => {
@@ -1364,10 +1408,6 @@ pub(super) async fn run_turn_tool_loop(
                     {
                         current_doc_read_confirmed = true;
                     }
-                    if success && c.name != "report_project" {
-                        project_read_evidence
-                            .record_successful_tool(&read_ctx, &c.name, &params, &result);
-                    }
                     if cancelled.load(Ordering::Acquire) {
                         advance_or_finish!(TlEv::Cancel);
                         if let Ok(conn) = state.db.lock() {
@@ -1388,16 +1428,47 @@ pub(super) async fn run_turn_tool_loop(
                             TlEv::ExecFail
                         });
                     }
-                    event_emitter.emit(
+                    let pending_evidence = if success {
+                        ag::tool_exec::successful_tool_evidence(
+                            &read_ctx, &c.name, &params, &result,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    let evidence_ids = ag::tool_exec::evidence_ids(
+                        &workspace_id_for_turn,
+                        &turn_id,
+                        &c.id,
+                        &pending_evidence,
+                    );
+                    let tool_result_event = event_emitter.emit_recorded(
                         &terminal_latch,
                         AgTurnEventPayload::ToolResult {
                             tool_call_id: c.id.clone(),
                             tool_name: c.name.clone(),
                             result: safe_tool_result(&c.name, success),
                             success,
-                            evidence_ids: Vec::new(),
+                            evidence_ids: evidence_ids.clone(),
                         },
                     )?;
+                    if let Some(source_event) = tool_result_event {
+                        let evidence_items = ag::tool_exec::materialize_evidence(
+                            &workspace_id_for_turn,
+                            &turn_id,
+                            &source_event.event_id,
+                            source_event.seq,
+                            &c.id,
+                            pending_evidence,
+                        );
+                        if !evidence_items.is_empty() {
+                            event_emitter.record_internal(
+                                "evidence_recorded",
+                                serde_json::json!({ "evidenceItems": evidence_items }),
+                            )?;
+                        }
+                    } else {
+                        return Ok(());
+                    }
                     // AG-1.0-IMP-TASKRUN-01：真实工具事件驱动步骤态（BR-SYS-STATE-008，best-effort）。
                     if let (Some(task_run_id), Ok(conn)) = (task_run_id.as_deref(), state.db.lock())
                     {
@@ -1433,10 +1504,20 @@ pub(super) async fn run_turn_tool_loop(
                             },
                         )?;
                     }
+                    let model_tool_result = if evidence_ids.is_empty() {
+                        result.clone()
+                    } else {
+                        serde_json::json!({
+                            "toolResult": serde_json::from_str::<serde_json::Value>(&result)
+                                .unwrap_or_else(|_| serde_json::Value::String(result.clone())),
+                            "evidenceIds": evidence_ids,
+                        })
+                        .to_string()
+                    };
                     let tool_message = serde_json::json!({
                         "role": "tool",
                         "tool_call_id": c.id,
-                        "content": result,
+                        "content": model_tool_result,
                     });
                     messages.push(tool_message.clone());
                     continuation_messages.push(tool_message);
@@ -1668,42 +1749,14 @@ mod tests {
 
     #[test]
     fn terminal_tool_requirement_distinguishes_content_and_workspace_side_effects() {
-        assert!(!terminal_tool_is_missing(None, false, false, false));
-        assert!(terminal_tool_is_missing(
-            Some("propose_edit"),
-            false,
-            false,
-            false
-        ));
-        assert!(!terminal_tool_is_missing(
-            Some("propose_edit"),
-            true,
-            false,
-            false
-        ));
-        assert!(!terminal_tool_is_missing(
-            Some("propose_edit"),
-            false,
-            true,
-            false
-        ));
+        assert!(!terminal_tool_is_missing(None, false, false));
+        assert!(terminal_tool_is_missing(Some("propose_edit"), false, false,));
+        assert!(!terminal_tool_is_missing(Some("propose_edit"), true, false,));
+        assert!(!terminal_tool_is_missing(Some("propose_edit"), false, true,));
         assert!(terminal_tool_is_missing(
             Some("plan_workspace_operation"),
             false,
             false,
-            false,
-        ));
-        assert!(terminal_tool_is_missing(
-            Some("report_project"),
-            false,
-            false,
-            false
-        ));
-        assert!(!terminal_tool_is_missing(
-            Some("report_project"),
-            false,
-            false,
-            true
         ));
         assert_eq!(
             required_terminal_tool_error(Some("plan_workspace_operation"), false).code,

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 mod system_tests;
+use crate::types::ProjectReportV2;
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -124,12 +125,12 @@ pub struct AgTurnEvent {
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-001-DATA-AG-AG-TURN-043, BR-AG-STATE-002-DATA-AG-AG-TURN-043, BR-AG-PERSIST-001-DATA-AG-AG-TURN-043, BR-SYS-STATE-007-DATA-AG-AG-TURN-043
+ * codes:    BR-AG-OBS-001-DATA-AG-AG-TURN-043, BR-AG-STATE-001-DATA-AG-AG-TURN-043, BR-AG-STATE-002-DATA-AG-AG-TURN-043, BR-AG-PERSIST-001-DATA-AG-AG-TURN-043, BR-SYS-STATE-007-DATA-AG-AG-TURN-043
  * type:     DATA
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
- * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-022
- * boundary: in=SafePersistedTurnEventPayload | out=VersionedAgTurnEventPayload(chunkIntentRouteToolProposalDecisionWaitOrTerminal) | does_not=exposeGateContextProviderSecretsCapabilityGrantOrHiddenReasoning
+ * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-021, TERM-AG-022
+ * boundary: in=SafePersistedTurnEventPayload | out=VersionedAgTurnEventPayload(chunkIntentRouteToolEvidenceReportProposalDecisionWaitOrTerminal) | does_not=exposeGateContextProviderSecretsCapabilityGrantOrHiddenReasoning
  */
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -163,6 +164,8 @@ pub enum AgTurnEventPayload {
         #[serde(rename = "evidenceIds")]
         evidence_ids: Vec<String>,
     },
+    /// Finalizing 从同回合 EvidenceLedger 派生的只读报告；不构成授权或完成工具。
+    ProjectReport { report: ProjectReportV2 },
     /// diff 已生成待用户裁决（ChangeProposal→DE 产出，X-FORBID-006）。
     DiffProposed {
         #[serde(rename = "diffId")]
@@ -226,6 +229,7 @@ impl AgTurnEventPayload {
             Self::RouteUpdated { .. } => "route_updated",
             Self::ToolRequest { .. } => "tool_request",
             Self::ToolResult { .. } => "tool_result",
+            Self::ProjectReport { .. } => "project_report",
             Self::DiffProposed { .. } => "diff_proposed",
             Self::StepProgress { .. } => "step_progress",
             Self::DecisionRequestProposed { .. } => "decision_request_proposed",

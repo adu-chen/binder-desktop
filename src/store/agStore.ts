@@ -206,6 +206,17 @@ export interface TaskPlanView {
   cursor: number;
 }
 
+export interface ProjectReportView {
+  version: "project-report-v2";
+  turnId: string;
+  evidenceThroughSeq: number;
+  requestedScope: string[];
+  readItems: { relPath: string; source: string; coverage: string; evidenceIds: string[] }[];
+  unreadItems: { relPath: string; reason: string }[];
+  findings: { statement: string; evidenceIds: string[]; uncertainty: string }[];
+  uncertainties: string[];
+}
+
 /** 一个标签会话（呈现层组织；持久化形状预留）。 */
 export interface AgSession {
   id: string;
@@ -239,6 +250,8 @@ interface AgState {
   currentAction: TurnCurrentAction | null;
   /** 待用户裁决的任务级请求（DecisionRequest；null=无待裁决项）。 */
   pendingDecision: PendingDecisionView | null;
+  /** Finalizing 派生的只读证据报告；不参与工具授权或回合完成判定。 */
+  projectReports: Record<string, ProjectReportView>;
 }
 
 const sid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -288,6 +301,7 @@ let state: AgState = {
   turnEventProjection: {},
   currentAction: null,
   pendingDecision: null,
+  projectReports: {},
 };
 const listeners = new Set<() => void>();
 
@@ -326,6 +340,7 @@ export const agStore = {
       turnEventProjection: {},
       currentAction: null,
       pendingDecision: null,
+      projectReports: {},
     });
   },
 
@@ -451,12 +466,12 @@ export const agStore = {
   },
   /**
    * @GOV
-   * codes:    BR-AG-STATE-001-EFFECT-AG-AG-TURN-042, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-042, BR-SYS-STATE-008-EFFECT-AG-AG-TURN-042
+   * codes:    BR-AG-OBS-001-EFFECT-AG-AG-TURN-042, BR-AG-STATE-001-EFFECT-AG-AG-TURN-042, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-042, BR-SYS-STATE-008-EFFECT-AG-AG-TURN-042
    * type:     EFFECT
    * chain:    AG-TURN
-   * rules:    BR-AG-STATE-001, BR-SYS-STATE-007, BR-SYS-STATE-008
-   * term_ref: TERM-AG-022
-   * boundary: in=OrderedSafeTurnEventIdentityAndKind | out=MonotonicFrontendTurnProjectionCursorAndInputGate | consumer=agService | does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromCardState
+   * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-SYS-STATE-007, BR-SYS-STATE-008
+   * term_ref: TERM-AG-021, TERM-AG-022
+   * boundary: in=OrderedSafeTurnEventIdentityKindAndDerivedProjectReport | out=MonotonicFrontendTurnProjectionCursorInputGateAndReadOnlyProjectReport | consumer=agService | does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromReportOrCardState
    */
   acceptTurnEvent(turnId: string, eventSeq: number, eventType: string): boolean {
     const current = state.turnEventProjection[turnId] ?? { lastSeq: 0, terminal: false };
@@ -491,6 +506,10 @@ export const agStore = {
   },
   lastTurnEventSeq(turnId: string): number {
     return state.turnEventProjection[turnId]?.lastSeq ?? 0;
+  },
+  projectProjectReport(turnId: string, report: ProjectReportView) {
+    if (report.turnId !== turnId || report.version !== "project-report-v2") return;
+    setState({ projectReports: { ...state.projectReports, [turnId]: report } });
   },
   /** @deprecated SM-AG-01 广播已退出 Agent UI 投影；保留到旧测试消费者迁移，不再写任何状态。 */
   applyTurnState(_turnId: string, _turnState: RustTurnState) {

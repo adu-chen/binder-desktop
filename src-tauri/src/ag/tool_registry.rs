@@ -154,7 +154,6 @@ pub(super) fn resolve_capability_grant_v2(
             "search_text",
             "read_doc",
             "list_blocks",
-            "report_project",
             "plan_workspace_operation",
             "propose_decision",
         ]
@@ -215,9 +214,6 @@ pub(super) fn resolve_capability_grant_v2(
         )
     }) {
         permitted_effect_paths.push("workspace.read".to_string());
-    }
-    if allowed_tools.iter().any(|tool| tool == "report_project") {
-        permitted_effect_paths.push("ag.project_report.compatibility".to_string());
     }
     if allowed_tools
         .iter()
@@ -800,10 +796,6 @@ pub const TOOLS: &[ToolDef] = &[
         permission: ToolPermission::ReadOnly,
     },
     ToolDef {
-        name: "report_project",
-        permission: ToolPermission::ReadOnly,
-    },
-    ToolDef {
         name: "plan_workspace_operation",
         permission: ToolPermission::TaskControl,
     },
@@ -872,62 +864,6 @@ pub fn tool_definitions_json(
                             "description": "可选。目录相对路径（如 \"文学作品\"）；传此参数时返回该目录的直接子项。"
                         }
                     },
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "report_project",
-                "description": "以结构化 ProjectReport 结束只读检查/搜索/分析。必须如实列出 requestedScope、可证明的 readItems、unreadItems、findings 和 uncertainties。readItems 必须逐字使用本轮证据：初始 AgentContextFacts 为 coverage=session_metadata/evidence=agent_context_facts；提示词完整当前文档为 full_document/prompt_current_document，长文档目录为 structure_index/prompt_current_document；read_doc 全文为 full_document/read_doc，blocks 参数为 selected_blocks/read_doc；list_blocks/list_tables/list_images 为 structure_index/同名工具；list_docs/workspace_glob 为 workspace_structure/同名工具；search_text 命中为 search_excerpt/search_text。目录和搜索片段不得声称读完正文。该工具只生成只读报告证据，不修改任何内容或授权。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "version": { "type": "string", "enum": ["project-report-v1"] },
-                        "requestedScope": { "type": "array", "items": { "type": "string" } },
-                        "readItems": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "relPath": { "type": "string" },
-                                    "source": { "type": "string" },
-                                    "coverage": { "type": "string", "enum": ["session_metadata", "workspace_structure", "structure_index", "search_excerpt", "selected_blocks", "full_document"] },
-                                    "evidence": { "type": "string" }
-                                },
-                                "required": ["relPath", "source", "coverage", "evidence"],
-                                "additionalProperties": false
-                            }
-                        },
-                        "unreadItems": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "relPath": { "type": "string" },
-                                    "reason": { "type": "string" }
-                                },
-                                "required": ["relPath", "reason"],
-                                "additionalProperties": false
-                            }
-                        },
-                        "findings": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "statement": { "type": "string" },
-                                    "sourcePaths": { "type": "array", "items": { "type": "string" } },
-                                    "uncertainty": { "type": "string", "enum": ["none", "low", "medium", "high"] }
-                                },
-                                "required": ["statement", "sourcePaths", "uncertainty"],
-                                "additionalProperties": false
-                            }
-                        },
-                        "uncertainties": { "type": "array", "minItems": 1, "items": { "type": "string" } }
-                    },
-                    "required": ["version", "requestedScope", "readItems", "unreadItems", "findings", "uncertainties"],
                     "additionalProperties": false
                 }
             }
@@ -1134,7 +1070,7 @@ mod tests {
 
     #[test]
     fn tools_registered_with_expected_permissions() {
-        assert_eq!(TOOLS.len(), 13);
+        assert_eq!(TOOLS.len(), 12);
         assert!(is_registered("read_doc"));
         assert!(is_registered("list_docs"));
         assert!(is_registered("search_text"));
@@ -1142,7 +1078,7 @@ mod tests {
         assert!(is_registered("list_tables"));
         assert!(is_registered("list_images"));
         assert!(is_registered("workspace_glob"));
-        assert!(is_registered("report_project"));
+        assert!(!is_registered("report_project"));
         assert!(!is_registered("move_doc"));
         assert!(!is_registered("create_folder"));
         assert!(is_registered("import_image_asset"));
@@ -1161,10 +1097,6 @@ mod tests {
         );
         assert_eq!(
             lookup("list_blocks").unwrap().permission,
-            ToolPermission::ReadOnly
-        );
-        assert_eq!(
-            lookup("report_project").unwrap().permission,
             ToolPermission::ReadOnly
         );
         assert_eq!(

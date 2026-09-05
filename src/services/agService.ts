@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { activeSession, agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
+import { activeSession, agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ProjectReportView, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffEffectStatus, type DiffView } from "../store/deStore";
 import { listActiveTables, parseTableEditPayload, summarizeTableOperation, type TableEditPayload } from "./edTableOps";
@@ -67,6 +67,7 @@ export type AgTurnEvent = AgTurnEventEnvelope & (
   | { type: "route_updated"; revision: number; summary: string; steps: unknown[] }
   | { type: "tool_request"; toolCallId: string; toolName: string; params: unknown }
   | { type: "tool_result"; toolCallId: string; toolName: string; result: string; success: boolean; evidenceIds: string[] }
+  | { type: "project_report"; report: ProjectReportView }
   | { type: "diff_proposed"; diffId: string; proposalBatchId: string; groupIndex: number; groupCount: number; relPath: string; taskRunId?: string }
   | { type: "step_progress"; action: string; label: string; detail?: string }
   | { type: "decision_request_proposed"; requestId: string; kind: string; payload: unknown }
@@ -1560,12 +1561,12 @@ export async function finishAssist(requestId: string, event: AssistFinishEvent):
 
 /**
  * @GOV
- * codes:    BR-SYS-STATE-007-EFFECT-AG-AG-TURN-035, BR-AG-STATE-001-EFFECT-AG-AG-TURN-035
+ * codes:    BR-AG-OBS-001-EFFECT-AG-AG-TURN-035, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-035, BR-AG-STATE-001-EFFECT-AG-AG-TURN-035
  * type:     EFFECT
  * chain:    AG-TURN
- * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
- * term_ref: TERM-AG-001
- * boundary: in=UserPromptOrClarificationForCurrentSession | out=NewOrSameIdentityAgentTurnInvocationAndMessageProjection | effect=memory,IPC-ag_start_turn | consumer=Composer | does_not=cancelClarifyingTurnOrCreateNewTurnIdForClarificationOrCrossSessionResume
+ * rules:    BR-AG-OBS-001, BR-SYS-STATE-007, BR-AG-STATE-001
+ * term_ref: TERM-AG-001, TERM-AG-021
+ * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=Composer | does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
  */
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。
@@ -2028,6 +2029,10 @@ export async function startTurn(
           const r = (ev.result ?? "").toString();
           agStore.resolveToolCallById(sessionId, ev.toolCallId, ev.success, r ? r.slice(0, 80) : undefined);
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          break;
+        }
+        case "project_report": {
+          agStore.projectProjectReport(turnId, ev.report);
           break;
         }
           default:

@@ -40,6 +40,16 @@ pub struct ModelRouteObservation {
     pub steps: Vec<String>,
 }
 
+/// 模型只能把结论关联到运行时生成的 evidence_id；是否成立由 Finalizing 校验。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelFinalFindingV2 {
+    pub statement: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    pub uncertainty: String,
+}
+
 /**
  * @GOV
  * codes:    BR-AG-DATA-004-GUARD-AG-AG-TURN-047, BR-AG-STATE-001-GUARD-AG-AG-TURN-047
@@ -47,7 +57,7 @@ pub struct ModelRouteObservation {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-004, BR-AG-STATE-001
  * term_ref: TERM-AG-012
- * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteAndNextActionWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsOrUnstructuredFirstIntent
+ * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence
  */
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -58,6 +68,8 @@ pub struct ModelTurnControl {
     pub route: ModelRouteObservation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clarification_question: Option<String>,
+    #[serde(default)]
+    pub findings: Vec<ModelFinalFindingV2>,
 }
 
 impl ModelTurnControl {
@@ -98,6 +110,21 @@ impl ModelTurnControl {
         {
             return Err(invalid("模型控制封套数组不得包含空项"));
         }
+        if self.findings.iter().any(|finding| {
+            finding.statement.trim().is_empty()
+                || !matches!(
+                    finding.uncertainty.as_str(),
+                    "none" | "low" | "medium" | "high"
+                )
+                || finding
+                    .evidence_ids
+                    .iter()
+                    .any(|evidence_id| evidence_id.trim().is_empty())
+        }) {
+            return Err(invalid(
+                "模型 findings 包含空结论、空证据 ID 或无效 uncertainty",
+            ));
+        }
         let blocking = self.intent.ambiguity == AmbiguityLevelV1::Blocking;
         match self.next_action {
             ModelNextAction::Clarify => {
@@ -109,10 +136,16 @@ impl ModelTurnControl {
                 {
                     return Err(invalid("clarify 必须对应 blocking ambiguity 和非空问题"));
                 }
+                if !self.findings.is_empty() {
+                    return Err(invalid("clarify 不得携带 final findings"));
+                }
             }
             ModelNextAction::Tool | ModelNextAction::Final => {
                 if blocking || self.clarification_question.is_some() {
                     return Err(invalid("blocking ambiguity 只能进入 clarify"));
+                }
+                if self.next_action == ModelNextAction::Tool && !self.findings.is_empty() {
+                    return Err(invalid("tool 动作不得携带 final findings"));
                 }
             }
         }
@@ -364,7 +397,7 @@ impl ModelOutputDecoder {
 pub fn protocol_prompt() -> &'static str {
     "[BINDER TURN OUTPUT PROTOCOL]\n\
 每个不含原生 tool_calls 的响应，必须以且只以一个 <binder-turn-control>{JSON}</binder-turn-control> 开始。\n\
-JSON 严格形状：{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"clarify|final\",\"intent\":{\"goal\":\"当前目标\",\"intentType\":\"answer|inspect|search|analyze|edit|create_document|organize_workspace\",\"targetCandidates\":[{\"kind\":\"current_document|selection|explicit_document|new_document|workspace\",\"relPath\":\"可选路径\"}],\"sideEffectIntent\":\"none|content_proposal|structure_plan\",\"ambiguity\":\"none|non_blocking|blocking\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"可见的简短路线\",\"steps\":[]},\"clarificationQuestion\":\"仅 clarify 时提供\"}。\n\
+JSON 严格形状：{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"clarify|final\",\"intent\":{\"goal\":\"当前目标\",\"intentType\":\"answer|inspect|search|analyze|edit|create_document|organize_workspace\",\"targetCandidates\":[{\"kind\":\"current_document|selection|explicit_document|new_document|workspace\",\"relPath\":\"可选路径\"}],\"sideEffectIntent\":\"none|content_proposal|structure_plan\",\"ambiguity\":\"none|non_blocking|blocking\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"可见的简短路线\",\"steps\":[]},\"clarificationQuestion\":\"仅 clarify 时提供\",\"findings\":[{\"statement\":\"结论\",\"evidenceIds\":[\"仅使用 ToolResult 给出的 ID\"],\"uncertainty\":\"none|low|medium|high\"}]}。findings 仅 final 可选；不得自造 evidence ID。\n\
 这不是隐藏推理：只写简短结论和候选步骤，不写思维链。它不授权工具。\n\
 若可直接回答，nextAction=final 并在封套后输出正文；若缺少必须信息，nextAction=clarify。需要工具时直接返回原生 tool_calls，并在每个工具参数的 _binderTurn 中提交同一份语义结论（nextAction=tool）；不要把 _binderTurn 当作领域参数。最终答复必须 nextAction=final；阻断澄清必须 nextAction=clarify 且 ambiguity=blocking。\n\
 [/BINDER TURN OUTPUT PROTOCOL]"

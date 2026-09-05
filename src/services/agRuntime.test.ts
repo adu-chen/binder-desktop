@@ -1592,11 +1592,25 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     expect(readTools.map((t) => t.state)).toEqual(["done", "failed"]);
   });
 
-  it("无工具/无 diff 的纯文本回合产生单一 text 段", async () => {
+  it("无工具/无 diff 的纯文本回合产生单一 text 段并只读投影 ProjectReportV2", async () => {
     edStore.loadDoc("notes/current.md", "第一段", 101);
     mockTurnInvoke((arg) => {
+      const runtimeTurnId = String((arg as Record<string, unknown>).turnId);
       const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
       onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "好的" });
+      onEvent.onmessage?.({
+        type: "project_report",
+        report: {
+          version: "project-report-v2",
+          turnId: runtimeTurnId,
+          evidenceThroughSeq: 3,
+          requestedScope: ["notes/current.md"],
+          readItems: [{ relPath: "notes/current.md", source: "active_editor", coverage: "full_document", evidenceIds: ["evidence:1"] }],
+          unreadItems: [],
+          findings: [],
+          uncertainties: [],
+        },
+      });
       completeTurn(arg);
     });
 
@@ -1605,6 +1619,12 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     const session = activeSession(agStore.getSnapshot());
     const assistant = session.messages.find((message) => message.role === "assistant");
     expect(assistant?.segments).toEqual([{ kind: "text", text: "好的" }]);
+    expect(Object.values(agStore.getSnapshot().projectReports)[0]).toMatchObject({
+      version: "project-report-v2",
+      evidenceThroughSeq: 3,
+      requestedScope: ["notes/current.md"],
+    });
+    expect(session.toolCalls).toHaveLength(0);
   });
 
   it("Channel 丢失终态时按 lastEventSeq 补流并经同一 reducer 完成", async () => {
