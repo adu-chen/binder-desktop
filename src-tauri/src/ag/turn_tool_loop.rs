@@ -154,6 +154,14 @@ fn safe_tool_result(tool_name: &str, success: bool) -> String {
     }
 }
 
+fn tool_is_visible_in_manifest(tools: &serde_json::Value, tool_name: &str) -> bool {
+    tools.as_array().is_some_and(|definitions| {
+        definitions
+            .iter()
+            .any(|definition| definition["function"]["name"].as_str() == Some(tool_name))
+    })
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038
@@ -189,7 +197,7 @@ fn advance_tool_loop(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-STATE-008, BR-AG-OBS-001
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021
- * boundary: in=PreparedPromptAgentContextFactsCurrentCapabilityGrantAndActiveAgentTurnWithOptionalTaskRun | out=ValidatedToolResultsProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=validate_requested_tool_for_grant,advance_tool_loop,exec_project_report | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideGrantOrTreatProjectReportAsAuthorizationOrWorkspaceOperationPlanAsContentProposal
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,exec_project_report | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop(
@@ -210,7 +218,7 @@ pub(super) async fn run_turn_tool_loop(
     mut current_doc_prompt_coverage: Option<&'static str>,
     mut messages: Vec<serde_json::Value>,
     mut tools: serde_json::Value,
-    mut capability_grant: ag::tool_registry::CapabilityGrantV1,
+    mut capability_factors: ag::tool_registry::CapabilityFactorsV2,
     read_ctx: ag::blocks::AgentReadContext,
     active_doc_path: Option<String>,
     explicit_edit_target_set: ag::target_set::ExplicitEditTargetSet,
@@ -245,6 +253,8 @@ pub(super) async fn run_turn_tool_loop(
     // 统一输出一次，避免工具续轮把前序 messages/tools 反复打印。
     let mut final_prompt_audit = prompt_audit_enabled().then(FinalPromptAuditLog::default);
     let mut tool_loop_state = TlSt::ModelStreaming;
+    let mut capability_use_tracker = ag::tool_registry::CapabilityGrantUseTrackerV2::default();
+    let mut remaining_tool_calls = capability_factors.remaining_tool_calls;
     let mut turn_state = ag::turn::TurnState::Streaming;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
@@ -820,15 +830,73 @@ pub(super) async fn run_turn_tool_loop(
                     let mut preview_checkpoint_after_tool = false;
                     let mut end_after_diff_proposal = false;
                     let mut mutation_guard = None;
-                    // 注册 + 当前 CapabilityGrant + 参数/范围校验后方可执行。TaskPlan 只作投影，
-                    // 不再调度模型工具或阻止模型依据新事实改线。
+                    // 每个 ToolCall 在真实 GatePassed 后重新取得一次性 CapabilityGrantV2。Prompt Manifest
+                    // 只决定模型当时可见的工具，不能拿来执行；TaskPlan/IntentResult/ToolResult 内容均不授权。
+                    let computed_at_seq = event_emitter
+                        .record_internal(
+                            "capability_grant_boundary",
+                            serde_json::json!({
+                                "toolCallId": &c.id,
+                                "gateAttempt": _round + 1,
+                                "remainingToolCalls": remaining_tool_calls,
+                            }),
+                        )?
+                        .ok_or_else(|| {
+                            IpcError::new(
+                                "AG_CAPABILITY_GRANT_TERMINAL",
+                                "AgentTurn 已终结，不能再计算工具执行授权",
+                                false,
+                                false,
+                            )
+                        })?;
+                    let mut action_factors = capability_factors.clone();
+                    action_factors.has_task_run = task_run_id.is_some();
+                    action_factors.gate_attempt = (_round + 1) as u32;
+                    action_factors.gate_passed = true;
+                    action_factors.remaining_tool_calls = remaining_tool_calls;
+                    action_factors.cancelled = cancelled.load(Ordering::Acquire);
+                    action_factors.terminal = terminal_latch.is_set();
+                    let execution_grant = ag::tool_registry::resolve_capability_grant_v2(
+                        &runtime_profile,
+                        &turn_id,
+                        &explicit_edit_target_set.paths(),
+                        action_factors,
+                        ag::tool_registry::CapabilityGrantPurposeV2::ToolCall {
+                            tool_call_id: c.id.clone(),
+                            computed_at_seq,
+                        },
+                    );
+                    event_emitter.record_internal(
+                        "capability_grant_computed",
+                        serde_json::json!({
+                            "grantId": &execution_grant.grant_id,
+                            "toolCallId": &c.id,
+                            "computedAtSeq": computed_at_seq,
+                            "authorizationFactsHash": &execution_grant.authorization_facts_hash,
+                            "allowedToolCount": execution_grant.allowed_tools.len(),
+                        }),
+                    )?;
+                    remaining_tool_calls = remaining_tool_calls.saturating_sub(1);
+                    let tool_was_visible = tool_is_visible_in_manifest(&tools, &c.name);
                     let tool_decision = arg_parse_error.is_none().then(|| {
-                        ag::tool_registry::validate_requested_tool_for_grant(
+                        let validated = ag::tool_registry::validate_requested_tool_for_grant(
                             &c.name,
                             &params,
-                            &capability_grant,
+                            &execution_grant,
                             &turn_id,
-                        )
+                            &c.id,
+                            computed_at_seq,
+                            ws_root.as_deref().map(std::path::Path::new),
+                            &mut capability_use_tracker,
+                        );
+                        if matches!(validated, ag::tool::ToolDecision::Allow) && !tool_was_visible {
+                            ag::tool::ToolDecision::Reject(format!(
+                                "工具 {} 不在当前 Prompt Tool Manifest 中",
+                                c.name
+                            ))
+                        } else {
+                            validated
+                        }
                     });
                     let scope_candidates =
                         if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
@@ -1433,8 +1501,9 @@ pub(super) async fn run_turn_tool_loop(
                     }
                     drop(mutation_guard);
                     let has_more_calls = call_index + 1 < calls.len();
-                    let provider_limit_reached = _round + 1 == MAX_ROUNDS && !has_more_calls;
-                    if provider_limit_reached {
+                    let loop_budget_reached =
+                        remaining_tool_calls == 0 || (_round + 1 == MAX_ROUNDS && !has_more_calls);
+                    if loop_budget_reached {
                         advance_or_finish!(TlEv::LoopLimit);
                         stop_after_current_tool = true;
                     } else if end_after_diff_proposal && success {
@@ -1450,7 +1519,7 @@ pub(super) async fn run_turn_tool_loop(
                         tool_loop_state = TlSt::ModelStreaming;
                     }
                 }
-                if _round + 1 == MAX_ROUNDS {
+                if _round + 1 == MAX_ROUNDS || remaining_tool_calls == 0 {
                     let error = IpcError::new(
                         "AG_TOOL_LOOP_LIMIT",
                         "工具循环达到上限，当前 AgentTurn 已中止；未完成步骤不会被标记为完成。",
@@ -1486,7 +1555,8 @@ pub(super) async fn run_turn_tool_loop(
                     current_doc_prompt_coverage: rebuilt_coverage,
                     messages: rebuilt_messages,
                     tools: rebuilt_tools,
-                    capability_grant: rebuilt_grant,
+                    capability_grant: _rebuilt_grant,
+                    capability_factors: rebuilt_factors,
                     prompt_package: rebuilt_package,
                 } = match prepare_turn_prompt(
                     &state,
@@ -1509,6 +1579,9 @@ pub(super) async fn run_turn_tool_loop(
                     ),
                     proposed_diff,
                     &continuation_messages,
+                    &capability_factors.decision_receipt_ids,
+                    (_round + 2) as u32,
+                    remaining_tool_calls,
                 ) {
                     Ok(prepared) => prepared,
                     Err(error) => {
@@ -1548,7 +1621,7 @@ pub(super) async fn run_turn_tool_loop(
                 }
                 messages = rebuilt_messages;
                 tools = rebuilt_tools;
-                capability_grant = rebuilt_grant;
+                capability_factors = rebuilt_factors;
                 prompt_package = rebuilt_package;
                 current_doc_prompt_coverage = rebuilt_coverage;
                 event_emitter.record_internal(
@@ -1681,5 +1754,31 @@ mod tests {
             .map(|offset| rebuild + offset)
             .expect("rebuilt PromptPackage must transition to AwaitingGate");
         assert!(tool_round_completed < rebuild && rebuild < assembled);
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn every_tool_call_recomputes_and_validates_a_bound_grant_before_executing() {
+        let source = include_str!("turn_tool_loop.rs");
+        let boundary = source
+            .find("\"capability_grant_boundary\"")
+            .expect("ToolCall must establish a fresh authorization boundary");
+        let recompute = source[boundary..]
+            .find("resolve_capability_grant_v2(")
+            .map(|offset| boundary + offset)
+            .expect("ToolCall must recompute CapabilityGrantV2");
+        let validate = source[recompute..]
+            .find("validate_requested_tool_for_grant(")
+            .map(|offset| recompute + offset)
+            .expect("fresh grant must be bound and validated");
+        let manifest_guard = source[validate..]
+            .find("tool_was_visible")
+            .map(|offset| validate + offset)
+            .expect("execution cannot expand beyond the current Prompt manifest");
+        let executing = source[manifest_guard..]
+            .find("TlEv::ValidateOk")
+            .map(|offset| manifest_guard + offset)
+            .expect("ToolExecuting must occur only after grant validation");
+        assert!(boundary < recompute && recompute < validate && validate < executing);
     }
 }

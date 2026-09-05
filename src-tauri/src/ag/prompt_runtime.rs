@@ -402,7 +402,7 @@ pub fn insert_runtime_control_message(
     intent: &context::IntentResultV2,
     prompt_package: &context::PromptPackageV2,
     envelopes: &[context::PromptDataEnvelopeV1],
-    capability_grant: &tool_registry::CapabilityGrantV1,
+    capability_grant: &tool_registry::CapabilityGrantV2,
     task_plan_runtime: Option<&serde_json::Value>,
 ) {
     let runtime_control = serde_json::json!({
@@ -797,11 +797,15 @@ mod tests {
     #[test]
     fn prompt_audit_keeps_only_final_model_request_without_duplicate_sections() {
         let intent = context::IntentResultV2::unresolved();
-        let grant = tool_registry::resolve_adaptive_capability_grant(
+        let grant = tool_registry::resolve_capability_grant_v2(
             super::super::turn::AGENT_EDIT_1_0_PROFILE,
             "turn-audit",
             &["notes/a.md".to_string()],
-            tool_registry::CapabilityFactorsV1::default(),
+            tool_registry::CapabilityFactorsV2 {
+                remaining_tool_calls: 6,
+                ..Default::default()
+            },
+            tool_registry::CapabilityGrantPurposeV2::PromptManifest,
         );
         let tools = tool_registry::tool_definitions_json_for_grant(&grant).unwrap();
         let tool_manifest_hash = context::sha256_text(
@@ -810,7 +814,7 @@ mod tests {
         let package = context::build_prompt_package_v2(
             &intent,
             &[],
-            &grant.grant_hash,
+            &grant.grant_id,
             &tool_manifest_hash,
             Vec::new(),
             &tools,

@@ -244,6 +244,57 @@ pub(crate) fn route_resolve_decision(
         .get("workspaceOperationPlanId")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
+    let operation_plan = if let Some(plan_id) = operation_plan_id.as_deref() {
+        let plan = workspace::operation::load_plan(&conn, plan_id)
+            .map_err(|error| {
+                IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false)
+            })?
+            .ok_or_else(|| {
+                IpcError::new(
+                    "WS_OPERATION_PLAN_NOT_FOUND",
+                    "WorkspaceOperationPlan 不存在",
+                    false,
+                    false,
+                )
+            })?;
+        if plan.workspace_id != ws.workspace_id
+            || plan.task_run_id.as_deref() != Some(decision_task_run_id.as_str())
+            || plan.decision_request_id.as_deref() != Some(request_id.as_str())
+        {
+            return Err(IpcError::new(
+                "AG_CAPABILITY_GRANT_DENIED",
+                "WorkspaceOperationPlan 与当前 workspace、TaskRun 或 DecisionRequest 不匹配",
+                false,
+                false,
+            ));
+        }
+        let session_id: String = conn
+            .query_row(
+                "SELECT session_id FROM task_runs WHERE task_run_id=?1 AND workspace_id=?2",
+                rusqlite::params![&decision_task_run_id, &ws.workspace_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        if outcome == "confirm" {
+            let source_turn_id = plan.source_turn_id.as_deref().ok_or_else(|| {
+                IpcError::new(
+                    "AG_CAPABILITY_GRANT_DENIED",
+                    "WorkspaceOperationPlan 缺少 source AgentTurn，不能生成运行时授权",
+                    false,
+                    false,
+                )
+            })?;
+            super::turn_control::validate_agent_turn_decision_resume(
+                state,
+                &session_id,
+                source_turn_id,
+                &request_id,
+            )?;
+        }
+        Some((plan, session_id))
+    } else {
+        None
+    };
     let confirmed_scope_targets =
         if decision_status != "resolved" && decision_kind == "scope" && outcome == "confirm" {
             let raw_paths = decision_payload
@@ -280,6 +331,27 @@ pub(crate) fn route_resolve_decision(
         } else {
             None
         };
+    // WorkspaceOperation 的 confirm 必须在 DecisionRequest 落库前取得原 AgentTurn 的效果锁。
+    // 这样取消若先发生，本次裁决保持 Proposed 且零副作用；若 confirm 先取得锁，取消等待
+    // 已开始的原子裁决与 WS 执行完成，避免“已确认但未执行”的半状态。
+    let _runtime_effect_guard = if outcome == "confirm" {
+        operation_plan
+            .as_ref()
+            .map(|(plan, session_id)| {
+                let source_turn_id = plan.source_turn_id.as_deref().ok_or_else(|| {
+                    IpcError::new(
+                        "AG_CAPABILITY_GRANT_DENIED",
+                        "WorkspaceOperationPlan 缺少 source AgentTurn，不能生成运行时授权",
+                        false,
+                        false,
+                    )
+                })?;
+                super::turn_control::lock_agent_turn_effect(state, session_id, source_turn_id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let (task_run_id, mut status, already_resolved) =
         ag::task::resolve_decision_with_scope_targets(
             &conn,
@@ -302,8 +374,49 @@ pub(crate) fn route_resolve_decision(
     let mut operation_receipt = None;
     let mut workspace_operation_items = None;
     let mut create_document_bundle = None;
-    if let Some(plan_id) = operation_plan_id {
+    if let Some((plan, _session_id)) = operation_plan {
+        let plan_id = plan.plan_id.clone();
         if outcome == "confirm" {
+            let source_turn_id = plan.source_turn_id.as_deref().ok_or_else(|| {
+                IpcError::new(
+                    "AG_CAPABILITY_GRANT_DENIED",
+                    "WorkspaceOperationPlan 缺少 source AgentTurn，不能生成运行时授权",
+                    false,
+                    false,
+                )
+            })?;
+            let computed_at_seq = now_millis().max(1) as u64;
+            let runtime_grant = ag::tool_registry::resolve_capability_grant_v2(
+                ag::turn::AGENT_EDIT_1_0_PROFILE,
+                source_turn_id,
+                &[],
+                ag::tool_registry::CapabilityFactorsV2 {
+                    has_task_run: true,
+                    decision_receipt_ids: vec![request_id.clone()],
+                    ..Default::default()
+                },
+                ag::tool_registry::CapabilityGrantPurposeV2::RuntimeWorkspaceEffect {
+                    plan_id: plan_id.clone(),
+                    decision_request_id: request_id.clone(),
+                    computed_at_seq,
+                },
+            );
+            if let ag::tool::ToolDecision::Reject(reason) =
+                ag::tool_registry::validate_workspace_operation_effect_for_grant(
+                    &runtime_grant,
+                    source_turn_id,
+                    &plan_id,
+                    &request_id,
+                    computed_at_seq,
+                )
+            {
+                return Err(IpcError::new(
+                    "AG_CAPABILITY_GRANT_DENIED",
+                    &reason,
+                    false,
+                    false,
+                ));
+            }
             match workspace::operation::execute_operation_plan(&conn, &ws, &plan_id, &request_id) {
                 Ok(receipt) => {
                     if receipt.final_status != crate::types::WorkspaceOperationStatus::Completed {
@@ -433,6 +546,57 @@ mod ag_task_plan_runtime_tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
+    fn runtime_state_with_workspace(root: &std::path::Path) -> (AppState, String) {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES (?1,?2,1,0)",
+            rusqlite::params!["ws-runtime", root.to_string_lossy()],
+        )
+        .unwrap();
+        let task_run_id =
+            ag::task::begin_turn(&conn, "ws-runtime", "session-runtime-effect", None).unwrap();
+        (
+            AppState {
+                db: Mutex::new(conn),
+                registry: crate::build_registry(),
+                assist_terminals: Mutex::new(HashMap::new()),
+                active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+            },
+            task_run_id,
+        )
+    }
+
+    fn park_runtime_decision(
+        state: &AppState,
+        task_run_id: &str,
+        turn_id: &str,
+        decision_request_id: &str,
+    ) {
+        let (lease, _, _, _, _) = ag::turn_control::register_active_agent_turn(
+            state,
+            "ws-runtime",
+            "session-runtime-effect",
+            turn_id,
+            ag::turn_control::AgentTurnResumeKind::New,
+        )
+        .unwrap();
+        ag::turn_control::park_agent_turn_for_decision(
+            state,
+            "session-runtime-effect",
+            turn_id,
+            task_run_id,
+            decision_request_id,
+            ag::turn_control::AgentTurnRuntimeCheckpoint {
+                intent: ag::context::IntentResultV2::unresolved(),
+                initial_prompt: "runtime effect test".to_string(),
+                continuation_messages: Vec::new(),
+            },
+        )
+        .unwrap();
+        drop(lease);
+    }
+
     // covers: BR-AG-DATA-003
     // covers: BR-SYS-STATE-008
     #[test]
@@ -557,6 +721,230 @@ mod ag_task_plan_runtime_tests {
                 .paths(),
             vec!["new/report.md"]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003
+    #[test]
+    fn confirmed_workspace_operation_recomputes_runtime_grant_before_ws_revalidation() {
+        let root = std::env::temp_dir().join(format!(
+            "binder-runtime-effect-grant-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("delete-me.md"), "body").unwrap();
+        let (state, task_run_id) = runtime_state_with_workspace(&root);
+        let decision_request_id = {
+            let conn = state.db.lock().unwrap();
+            let workspace = crate::types::WorkspaceRef {
+                workspace_id: "ws-runtime".to_string(),
+                root_path: root.to_string_lossy().to_string(),
+                is_active: true,
+            };
+            let plan = workspace::operation::plan_operation(
+                &conn,
+                &workspace,
+                &[workspace::operation::WorkspaceOperationIntent {
+                    kind: crate::types::WorkspaceOperationKind::DeleteResource,
+                    source_path: Some("delete-me.md".to_string()),
+                    target_path: None,
+                    resource_kind: Some(crate::types::WorkspaceResourceKind::File),
+                    recursive: false,
+                    restore_payload_ref: None,
+                }],
+                Some(&task_run_id),
+                Some("turn-runtime-effect"),
+                None,
+            )
+            .unwrap();
+            let decision = ag::task::propose_decision(
+                &conn,
+                &task_run_id,
+                "permission",
+                serde_json::json!({"workspaceOperationPlanId": plan.plan_id}),
+            )
+            .unwrap();
+            workspace::operation::bind_decision_request(&conn, &plan.plan_id, &decision.request_id)
+                .unwrap();
+            decision.request_id
+        };
+        park_runtime_decision(
+            &state,
+            &task_run_id,
+            "turn-runtime-effect",
+            &decision_request_id,
+        );
+
+        assert!(root.join("delete-me.md").exists());
+        let response = route_resolve_decision(
+            &CommandRequest {
+                command: "ag.resolve_decision".to_string(),
+                correlation_id: "runtime-effect-confirm".to_string(),
+                params: serde_json::json!({
+                    "requestId": decision_request_id,
+                    "outcome": "confirm"
+                }),
+            },
+            &state,
+        )
+        .unwrap();
+        assert!(!root.join("delete-me.md").exists());
+        assert!(!response["workspace_operation_receipt"].is_null());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-007, BR-SYS-STATE-008
+    #[test]
+    fn cancelled_awaiting_turn_rejects_workspace_effect_before_decision_resolution() {
+        let root = std::env::temp_dir().join(format!(
+            "binder-runtime-effect-cancelled-turn-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("keep.md"), "body").unwrap();
+        let (state, task_run_id) = runtime_state_with_workspace(&root);
+        let decision_request_id = {
+            let conn = state.db.lock().unwrap();
+            let workspace = crate::types::WorkspaceRef {
+                workspace_id: "ws-runtime".to_string(),
+                root_path: root.to_string_lossy().to_string(),
+                is_active: true,
+            };
+            let plan = workspace::operation::plan_operation(
+                &conn,
+                &workspace,
+                &[workspace::operation::WorkspaceOperationIntent {
+                    kind: crate::types::WorkspaceOperationKind::DeleteResource,
+                    source_path: Some("keep.md".to_string()),
+                    target_path: None,
+                    resource_kind: Some(crate::types::WorkspaceResourceKind::File),
+                    recursive: false,
+                    restore_payload_ref: None,
+                }],
+                Some(&task_run_id),
+                Some("turn-cancelled-effect"),
+                None,
+            )
+            .unwrap();
+            let decision = ag::task::propose_decision(
+                &conn,
+                &task_run_id,
+                "permission",
+                serde_json::json!({"workspaceOperationPlanId": plan.plan_id}),
+            )
+            .unwrap();
+            workspace::operation::bind_decision_request(&conn, &plan.plan_id, &decision.request_id)
+                .unwrap();
+            decision.request_id
+        };
+        park_runtime_decision(
+            &state,
+            &task_run_id,
+            "turn-cancelled-effect",
+            &decision_request_id,
+        );
+        ag::turn_control::cancel_active_agent_turn(
+            &state,
+            "session-runtime-effect",
+            "turn-cancelled-effect",
+        )
+        .unwrap();
+
+        let error = route_resolve_decision(
+            &CommandRequest {
+                command: "ag.resolve_decision".to_string(),
+                correlation_id: "runtime-effect-cancelled".to_string(),
+                params: serde_json::json!({
+                    "requestId": decision_request_id,
+                    "outcome": "confirm"
+                }),
+            },
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "AG_TURN_CANCELLED");
+        assert!(root.join("keep.md").exists());
+        let conn = state.db.lock().unwrap();
+        let decision = ag::task::pending_decision(&conn, &task_run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decision.request_id, decision_request_id);
+        assert_eq!(
+            decision.status,
+            crate::types::DecisionRequestStatus::Proposed
+        );
+        drop(conn);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-008
+    #[test]
+    fn workspace_operation_without_live_awaiting_turn_fails_before_decision_resolution() {
+        let root = std::env::temp_dir().join(format!(
+            "binder-runtime-effect-no-turn-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("keep.md"), "body").unwrap();
+        let (state, task_run_id) = runtime_state_with_workspace(&root);
+        let decision_request_id = {
+            let conn = state.db.lock().unwrap();
+            let workspace = crate::types::WorkspaceRef {
+                workspace_id: "ws-runtime".to_string(),
+                root_path: root.to_string_lossy().to_string(),
+                is_active: true,
+            };
+            let plan = workspace::operation::plan_operation(
+                &conn,
+                &workspace,
+                &[workspace::operation::WorkspaceOperationIntent {
+                    kind: crate::types::WorkspaceOperationKind::DeleteResource,
+                    source_path: Some("keep.md".to_string()),
+                    target_path: None,
+                    resource_kind: Some(crate::types::WorkspaceResourceKind::File),
+                    recursive: false,
+                    restore_payload_ref: None,
+                }],
+                Some(&task_run_id),
+                Some("turn-no-longer-active"),
+                None,
+            )
+            .unwrap();
+            let decision = ag::task::propose_decision(
+                &conn,
+                &task_run_id,
+                "permission",
+                serde_json::json!({"workspaceOperationPlanId": plan.plan_id}),
+            )
+            .unwrap();
+            workspace::operation::bind_decision_request(&conn, &plan.plan_id, &decision.request_id)
+                .unwrap();
+            decision.request_id
+        };
+        let error = route_resolve_decision(
+            &CommandRequest {
+                command: "ag.resolve_decision".to_string(),
+                correlation_id: "runtime-effect-denied".to_string(),
+                params: serde_json::json!({
+                    "requestId": decision_request_id,
+                    "outcome": "confirm"
+                }),
+            },
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "AG_TURN_NOT_AWAITING");
+        assert!(root.join("keep.md").exists());
+        let conn = state.db.lock().unwrap();
+        let decision = ag::task::pending_decision(&conn, &task_run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decision.request_id, decision_request_id);
+        assert_eq!(
+            decision.status,
+            crate::types::DecisionRequestStatus::Proposed
+        );
+        drop(conn);
         std::fs::remove_dir_all(root).unwrap();
     }
 

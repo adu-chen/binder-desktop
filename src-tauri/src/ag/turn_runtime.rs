@@ -766,6 +766,10 @@ pub(crate) async fn ag_start_turn(
             "content": prompt,
         }));
     }
+    let decision_receipt_ids = continuation_decision_request_id
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
     event_emitter.record_internal(
         if intent_result.revision == 0 {
             "intent_initialized"
@@ -828,6 +832,7 @@ pub(crate) async fn ag_start_turn(
         messages,
         tools,
         capability_grant,
+        capability_factors,
         prompt_package,
     } = started_turn_or_finish!(prepare_turn_prompt(
         &state,
@@ -847,6 +852,9 @@ pub(crate) async fn ag_start_turn(
         requires_current_doc_tool_read,
         false,
         &continuation_messages,
+        &decision_receipt_ids,
+        1,
+        6,
     ));
 
     // 预算与实际 provider messages/tools 使用同一序列化口径，并在 Gate 前失败关闭。
@@ -994,7 +1002,7 @@ pub(crate) async fn ag_start_turn(
         current_doc_prompt_coverage,
         messages,
         tools,
-        capability_grant,
+        capability_factors,
         read_ctx,
         active_doc_path,
         explicit_edit_target_set,

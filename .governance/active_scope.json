@@ -1,44 +1,38 @@
 {
-  "scope_id": "AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01",
+  "scope_id": "AG-DYNAMIC-CAPABILITY-WP3-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "Adaptive Turn Kernel 收敛",
+  "title": "Dynamic Capability 逐动作授权收敛",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行，并再次明确确认继续；本项为已确认 A-AG-X-L-04 WP-AG10-02。",
-  "scope_reason": "将现有关键词预判、静态整轮工具路线和伪完成续片段，收敛为模型语义驱动、ToolResult 后重新装配、逐次 Gate、澄清/裁决同回合恢复的 Adaptive Turn Kernel。",
-  "issue_trace": ".governance/issues/AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01.md",
+  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行并持续要求继续；本项为已确认 A-AG-X-L-04 WP-AG10-03。",
+  "scope_reason": "将 WP2 的无关键词兼容 grant 收敛为 CapabilityGrantV2：Prompt 只投影当前硬能力，每个 ToolCall 在当前 Gate、目标、格式、动态能力、裁决、预算、取消和终态事实下重新计算一次性授权。",
+  "issue_trace": ".governance/issues/AG-DYNAMIC-CAPABILITY-WP3-01.md",
   "objectives": [
-    "以模型结构化输出形成和修订 IntentResult/route，不再由关键词 resolver 决定生产语义",
-    "每次 ToolResult 后回到 Assembling，重建 PromptPackage 并在下一次 provider 调用前重新 Gate",
-    "使 AwaitingClarification/AwaitingDecision 成为可取消、可由合法用户事件恢复原 AgentTurn 的非终态",
-    "删除 StreamEnd/HandingOff 伪完成与 TaskPlan 驱动 final 的运行逻辑",
-    "保持 Proposal/Decision/工具/终态事实只追加、首终态唯一"
+    "分离工具注册、Prompt 可见工具投影与具体 ToolCall 执行授权",
+    "每个 ToolCall 生成绑定 turn_id、tool_call_id、当前事件序号与预算的一次性 CapabilityGrantV2",
+    "使未知、过期、未过 Gate、目标外、格式或动态能力不足、参数非法请求稳定失败关闭",
+    "移除 IntentResult.allowed_tools 的写入和消费，以及静态 intent×tool 授权函数",
+    "保持 propose_edit 的 AG/DE 双守与 WorkspaceOperation 仅 plan 可见、确认执行入口仅运行时内部可达"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01.md",
+    ".governance/issues/AG-DYNAMIC-CAPABILITY-WP3-01.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src-tauri/src/ag/mod.rs",
+    "scripts/test_governance.test.mjs",
     "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/history.rs",
-    "src-tauri/src/ag/model_output.rs",
-    "src-tauri/src/ag/turn.rs",
     "src-tauri/src/ag/tool.rs",
     "src-tauri/src/ag/tool_registry.rs",
-    "src-tauri/src/ag/turn_runtime.rs",
-    "src-tauri/src/ag/turn_prompt.rs",
-    "src-tauri/src/ag/turn_tool_loop.rs",
-    "src-tauri/src/ag/turn_control.rs",
-    "src-tauri/src/ag/turn_events.rs",
+    "src-tauri/src/ag/target_set.rs",
+    "src-tauri/src/ag/edit_runtime.rs",
     "src-tauri/src/ag/prompt_runtime.rs",
     "src-tauri/src/ag/prompts.rs",
+    "src-tauri/src/ag/turn_prompt.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ag/turn_tool_loop.rs",
     "src-tauri/src/ag/task.rs",
-    "src/components/ag/DecisionBar.tsx",
-    "src/services/agService.ts",
-    "src/store/agStore.ts",
-    "src/services/agRuntime.test.ts",
-    "scripts/test_governance.test.mjs"
+    "src-tauri/src/ag/task_runtime.rs",
+    "src-tauri/src/de/generate.rs"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -46,27 +40,27 @@
     "AGENTS.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "需求、设计、规则、协议和计划文档",
+    "需求、设计、规则、协议、验证卡和计划文档",
     "cloud/dev-gateway/**",
-    "WP3-WP7 的非必要生产文件"
+    "WP4-WP9 的非必要生产文件"
   ],
   "constraints": [
-    "不新增需求、规则、用户功能或外部工具；只实现已确认 Active 设计",
-    "IntentResult 不得成为授权对象；本工作包的 V1 grant 适配仅为 WP3 前的短期兼容层",
-    "不得自动重试或后台续跑，不得把等待态或 Proposal 伪装为完成",
-    "所有 provider 调用必须逐次真实 Gate；所有文档副作用继续只经既有 Proposal/Decision 边界",
-    "TaskRun/TaskPlan 在本包不再阻止模型路线，但完整纯投影迁移留给 WP6"
+    "不新增工具、产品能力、需求或规则；只实现 Active CapabilityGrant 与 ExplicitEditTargetSet 契约",
+    "Prompt 文本、IntentResult、TaskPlan、历史、ToolResult 内容和注册表存在均不得成为授权来源",
+    "执行授权必须绑定一次具体 ToolCall，动作完成、事实变化、取消或终态后不可复用",
+    "模型只可见 plan_workspace_operation，不得注册或暴露任何 WS execute 入口",
+    "不提前实现 WP4 Context Ledger、WP5 Evidence/ProjectReport、WP6 Task Projection 或 WP7 ProposalBatch"
   ],
   "acceptance_criteria": [
-    "生产主链不再调用关键词 resolver；初始 IntentResult 可 unresolved 并由模型结构输出更新",
-    "ToolResult 后 PromptPackage 的 intent revision/context trace/工具投影重新生成且下一次调用重新 Gate",
-    "SM-AG-01 状态与 Active 设计一致，不再存在 HandingOff/StreamEnd/HandoffOk/HandoffFail",
-    "澄清和裁决均暂停 provider/工具且使用原 turn_id 恢复；取消竞态和首终态锁存有效",
-    "循环上限、解析错误、Gate/provider/tool 错误均保留真实错误语义",
-    "相关测试、同输入 test:plan/test:related、governance audit 全部通过"
+    "生产链只使用 CapabilityGrantV2，且不存在 IntentResult.allowed_tools 的生产写入或消费",
+    "每个 ToolCall 在执行前重新计算 grant；错误 turn/call/seq、未过 Gate、零预算、取消、终态或重复使用均拒绝",
+    "grant ID 与 target/format/dynamic/decision/budget 硬事实确定性绑定，事实变化导致旧 grant 无效",
+    "Prompt tool manifest 只来自当前硬事实投影；隐藏、未知、目标外、参数非法工具不能到达 ToolExecuting",
+    "propose_edit 集合外目标在 AG 与 DE 两侧均于 PendingDiff 前拒绝；确认前 WS 零副作用且 execute 入口不在注册表",
+    "专项测试、同输入 test:plan/test:related、governance audit 全部通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-WP2-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-02 Adaptive Turn Kernel", "confirmed_at": "2026-09-04"}
+    {"id": "HD-AG-WP3-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-03 Dynamic Capability", "confirmed_at": "2026-09-04"}
   ],
   "stop_conditions": [],
   "unresolved_items": []

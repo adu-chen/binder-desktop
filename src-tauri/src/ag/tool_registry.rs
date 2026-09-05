@@ -9,40 +9,88 @@
 //! PI-AG-08B（与模型循环 PI-AG-11 配套，避免重复 lib.rs 既有 route_*）。本模块只持有注册与权限数据。
 
 use super::tool::{validate_tool, ToolDecision};
-use super::{
-    context::{IntentResultV1, IntentTypeV1, MutationV1},
-    turn::AGENT_EDIT_1_0_PROFILE,
-};
+use super::turn::AGENT_EDIT_1_0_PROFILE;
+use std::collections::BTreeSet;
 
 /// Prompt 装配时已核验的当前格式/动态事实；只用于继续收窄，不作为独立授权来源。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct CapabilityFactorsV1 {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct CapabilityFactorsV2 {
     pub(super) has_task_run: bool,
     pub(super) active_bdocx: bool,
     pub(super) table_ops_available: bool,
     pub(super) image_ops_available: bool,
+    pub(super) tools_frozen: bool,
+    pub(super) decision_receipt_ids: Vec<String>,
+    pub(super) gate_attempt: u32,
+    pub(super) gate_passed: bool,
+    pub(super) remaining_tool_calls: u32,
+    pub(super) cancelled: bool,
+    pub(super) terminal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CapabilityGrantV1 {
+pub struct CapabilityBudgetsV2 {
+    pub max_tool_calls: u32,
+    pub remaining_tool_calls: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CapabilityGrantPurposeV2 {
+    PromptManifest,
+    ToolCall {
+        tool_call_id: String,
+        computed_at_seq: u64,
+    },
+    RuntimeWorkspaceEffect {
+        plan_id: String,
+        decision_request_id: String,
+        computed_at_seq: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityGrantV2 {
     pub version: String,
+    pub grant_id: String,
     pub profile: String,
-    pub intent_id: String,
     pub turn_id: String,
+    pub computed_at_seq: u64,
     pub allowed_tools: Vec<String>,
     pub target_scope: Vec<String>,
     pub readable_scope: Vec<String>,
+    pub explicit_edit_targets_hash: String,
+    pub permitted_effect_paths: Vec<String>,
+    pub format_capability_hash: String,
+    pub dynamic_capability_hash: String,
+    pub decision_receipt_ids: Vec<String>,
+    pub budgets: CapabilityBudgetsV2,
+    pub expires_after_tool_call: Option<String>,
+    pub expires_after_runtime_effect: Option<String>,
+    pub grant_kind: String,
+    pub gate_attempt: u32,
+    pub gate_passed: bool,
     pub parameter_constraints: Vec<String>,
-    pub grant_hash: String,
+    pub authorization_facts_hash: String,
 }
 
-impl CapabilityGrantV1 {
+impl CapabilityGrantV2 {
     pub fn allows(&self, tool_name: &str) -> bool {
         self.allowed_tools
             .iter()
             .any(|allowed| allowed == tool_name)
     }
+
+    pub fn is_prompt_manifest(&self) -> bool {
+        self.grant_kind == "prompt_manifest"
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CapabilityGrantUseTrackerV2 {
+    consumed_grant_ids: BTreeSet<String>,
+    consumed_tool_call_ids: BTreeSet<String>,
 }
 
 /**
@@ -52,17 +100,54 @@ impl CapabilityGrantV1 {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-004
  * term_ref: TERM-AG-013, TERM-AG-014, TERM-AG-019
- * boundary: in=RuntimeProfileExplicitEditTargetSetAndCurrentFormatFacts | out=HardFactBootstrapCapabilityGrantIndependentOfIntentText | does_not=useIntentTaskPlanPromptHistoryOrRegistryPresenceAloneAsAuthorization
+ * boundary: in=RuntimeProfileExplicitEditTargetSetGateDecisionFormatDynamicBudgetCancellationTerminalAndToolCallFacts | out=PromptManifestProjectionOrSingleUseCapabilityGrantV2IndependentOfIntentText | does_not=useIntentTaskPlanPromptHistoryToolResultContentOrRegistryPresenceAloneAsAuthorization
  */
-/// WP2 的自适应回合 grant：不读取 IntentResult 或关键词，只按当前 profile、显式目标与格式事实收窄。
-/// grant 仍沿用 V1 wire 形状；动作级失效与确认事实的完整交集由 WP3 收敛。
-pub(super) fn resolve_adaptive_capability_grant(
+/// Prompt Manifest 与 ToolCall 执行授权共用同一硬事实算法。Prompt 投影不绑定动作，因此不可用于执行；
+/// 执行 grant 必须绑定真实 Gate 后的唯一 ToolCall 与 append-only 事件序号，校验尝试后立即失效。
+pub(super) fn resolve_capability_grant_v2(
     profile: &str,
     turn_id: &str,
     explicit_edit_targets: &[String],
-    factors: CapabilityFactorsV1,
-) -> CapabilityGrantV1 {
-    let mut allowed_tools = if profile == AGENT_EDIT_1_0_PROFILE {
+    mut factors: CapabilityFactorsV2,
+    purpose: CapabilityGrantPurposeV2,
+) -> CapabilityGrantV2 {
+    let execution_is_valid = match &purpose {
+        CapabilityGrantPurposeV2::PromptManifest => true,
+        CapabilityGrantPurposeV2::ToolCall {
+            tool_call_id,
+            computed_at_seq,
+        } => {
+            !tool_call_id.trim().is_empty()
+                && *computed_at_seq > 0
+                && factors.gate_passed
+                && factors.remaining_tool_calls > 0
+        }
+        CapabilityGrantPurposeV2::RuntimeWorkspaceEffect {
+            plan_id,
+            decision_request_id,
+            computed_at_seq,
+        } => {
+            !plan_id.trim().is_empty()
+                && !decision_request_id.trim().is_empty()
+                && *computed_at_seq > 0
+                && factors
+                    .decision_receipt_ids
+                    .iter()
+                    .any(|receipt| receipt == decision_request_id)
+        }
+    };
+    let is_runtime_workspace_effect = matches!(
+        &purpose,
+        CapabilityGrantPurposeV2::RuntimeWorkspaceEffect { .. }
+    );
+    let runtime_is_active = profile == AGENT_EDIT_1_0_PROFILE
+        && !factors.tools_frozen
+        && !factors.cancelled
+        && !factors.terminal
+        && factors.remaining_tool_calls > 0
+        && execution_is_valid
+        && !is_runtime_workspace_effect;
+    let mut allowed_tools = if runtime_is_active {
         vec![
             "list_docs",
             "workspace_glob",
@@ -76,13 +161,13 @@ pub(super) fn resolve_adaptive_capability_grant(
     } else {
         Vec::new()
     };
-    if !explicit_edit_targets.is_empty() && profile == AGENT_EDIT_1_0_PROFILE {
+    if !explicit_edit_targets.is_empty() && runtime_is_active {
         allowed_tools.extend(["propose_edit", "edit_blocked"]);
     }
-    if factors.active_bdocx && factors.table_ops_available {
+    if runtime_is_active && factors.active_bdocx && factors.table_ops_available {
         allowed_tools.push("list_tables");
     }
-    if factors.active_bdocx && factors.image_ops_available {
+    if runtime_is_active && factors.active_bdocx && factors.image_ops_available {
         allowed_tools.extend(["list_images", "import_image_asset"]);
     }
     allowed_tools.retain(|tool| is_registered(tool));
@@ -95,188 +180,251 @@ pub(super) fn resolve_adaptive_capability_grant(
     let mut target_scope = explicit_edit_targets.to_vec();
     target_scope.sort();
     target_scope.dedup();
+    factors.decision_receipt_ids.sort();
+    factors.decision_receipt_ids.dedup();
     let mut readable_scope = target_scope.clone();
-    readable_scope.extend([
-        "workspace_search".to_string(),
-        "workspace_read_all".to_string(),
-    ]);
-    let grant_hash = super::context::sha256_text(
-        &serde_json::to_string(&[
-            profile,
-            &allowed_tools.join(","),
-            &target_scope.join(","),
-            &format!("{factors:?}"),
-        ])
-        .unwrap_or_default(),
-    );
-    CapabilityGrantV1 {
-        version: "capability-grant-v1-adaptive".to_string(),
-        profile: profile.to_string(),
-        intent_id: "model-semantic-not-authority".to_string(),
-        turn_id: turn_id.to_string(),
-        allowed_tools,
-        target_scope,
-        readable_scope,
-        parameter_constraints: vec![
-            "active_workspace_only".to_string(),
-            "no_direct_document_write".to_string(),
-            "proposal_applies_on_user_confirm".to_string(),
-            "propose_edit_requires_explicit_edit_target_set".to_string(),
-            "workspace_effect_requires_decision_receipt".to_string(),
-        ],
-        grant_hash,
-    }
-}
-
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-DATA-AG-AG-TOOL-034, BR-AG-DATA-004-DATA-AG-AG-TOOL-034, BR-SYS-STATE-007-DATA-AG-AG-TOOL-034, BR-AG-OBS-001-DATA-AG-AG-TOOL-034
- * type:     DATA
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-002, BR-AG-DATA-004, BR-SYS-STATE-007, BR-AG-OBS-001
- * term_ref: TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-021
- * boundary: in=RuntimeProfileIntentResultExplicitEditTargetSetAndDynamicCapabilityFacts | out=CapabilityGrantFiveFactorIntersection | does_not=expandIntentAllowedToolsFromRegistryPromptFrontendHistoryOrDefaults
- */
-/// 以 IntentResult.allowed_tools 为上界，按 profile、任务、目标、副作用和格式/动态能力继续收窄。
-pub(super) fn resolve_capability_grant(
-    profile: &str,
-    turn_id: &str,
-    intent: &IntentResultV1,
-    explicit_edit_targets: &[String],
-    factors: CapabilityFactorsV1,
-) -> CapabilityGrantV1 {
-    let profile_valid = profile == AGENT_EDIT_1_0_PROFILE;
-    let scope_decision_requested = intent
-        .constraints
-        .iter()
-        .any(|constraint| constraint == "scope_decision_may_be_required");
-    let allowed_tools = if profile_valid {
-        intent
-            .allowed_tools
-            .iter()
-            .filter(|tool| is_registered(tool))
-            .filter(|tool| match tool.as_str() {
-                "propose_edit" => {
-                    intent.mutation == MutationV1::ProposeEdit && !explicit_edit_targets.is_empty()
-                }
-                "edit_blocked" => intent.intent_type == IntentTypeV1::Edit,
-                "plan_workspace_operation" => matches!(
-                    intent.mutation,
-                    MutationV1::ProposeCreate | MutationV1::PlanWorkspaceOperation
-                ),
-                "propose_decision" => {
-                    intent.intent_type == IntentTypeV1::Edit
-                        && scope_decision_requested
-                        && factors.has_task_run
-                }
-                "report_project" => matches!(
-                    intent.intent_type,
-                    IntentTypeV1::Inspect | IntentTypeV1::Search | IntentTypeV1::Analyze
-                ),
-                "list_tables" => factors.active_bdocx && factors.table_ops_available,
-                "list_images" | "import_image_asset" => {
-                    factors.active_bdocx && factors.image_ops_available
-                }
-                _ => true,
-            })
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let target_scope = if intent.intent_type == IntentTypeV1::Edit {
-        explicit_edit_targets.to_vec()
-    } else {
-        Vec::new()
-    };
-    let mut readable_scope = explicit_edit_targets.to_vec();
-    if let Some(current) = intent.target.rel_path.as_ref() {
-        if !readable_scope.contains(current) {
-            readable_scope.push(current.clone());
-        }
-    }
-    if intent.intent_type == IntentTypeV1::Search {
-        readable_scope.push("workspace_search".to_string());
-        readable_scope.push("workspace_read_all".to_string());
+    if runtime_is_active {
+        readable_scope.extend([
+            "workspace_search".to_string(),
+            "workspace_read_all".to_string(),
+        ]);
     }
     readable_scope.sort();
     readable_scope.dedup();
-    // 逐回合授权内容 hash（P8 修复）：由 profile + intent_type + 允许工具集 + 目标集派生，
-    // 工具集/目标变化即产生新 grant_hash，供审计与回归对比区分"同版本但不同授权"的回合。
-    let grant_hash = super::context::sha256_text(
-        &serde_json::to_string(&[
-            profile,
-            &format!("{:?}", intent.intent_type),
-            &allowed_tools.join(","),
-            &target_scope.join(","),
-            &format!("{factors:?}"),
-        ])
-        .unwrap_or_default(),
-    );
+    let explicit_edit_targets_hash = super::context::sha256_text(&target_scope.join("\n"));
+    let format_capability_hash = super::context::sha256_text(&format!(
+        "active_bdocx={};table_ops={};image_ops={}",
+        factors.active_bdocx, factors.table_ops_available, factors.image_ops_available
+    ));
+    let dynamic_capability_hash = super::context::sha256_text(&format!(
+        "has_task_run={};decision_receipts={}",
+        factors.has_task_run,
+        factors.decision_receipt_ids.join(",")
+    ));
+    let mut permitted_effect_paths = Vec::new();
+    if allowed_tools.iter().any(|tool| {
+        matches!(
+            tool.as_str(),
+            "list_docs"
+                | "workspace_glob"
+                | "search_text"
+                | "read_doc"
+                | "list_blocks"
+                | "list_tables"
+                | "list_images"
+        )
+    }) {
+        permitted_effect_paths.push("workspace.read".to_string());
+    }
+    if allowed_tools.iter().any(|tool| tool == "report_project") {
+        permitted_effect_paths.push("ag.project_report.compatibility".to_string());
+    }
+    if allowed_tools
+        .iter()
+        .any(|tool| tool == "plan_workspace_operation")
+    {
+        permitted_effect_paths.push("workspace.plan_operation".to_string());
+    }
+    if allowed_tools.iter().any(|tool| tool == "propose_decision") {
+        permitted_effect_paths.push("ag.decision.propose".to_string());
+    }
+    if allowed_tools.iter().any(|tool| tool == "propose_edit") {
+        permitted_effect_paths.push("de.generate_diff".to_string());
+    }
+    if allowed_tools.iter().any(|tool| tool == "edit_blocked") {
+        permitted_effect_paths.push("ag.edit_blocked".to_string());
+    }
+    if allowed_tools
+        .iter()
+        .any(|tool| tool == "import_image_asset")
+    {
+        permitted_effect_paths.push("doc.import_image_asset".to_string());
+    }
+    if is_runtime_workspace_effect
+        && execution_is_valid
+        && profile == AGENT_EDIT_1_0_PROFILE
+        && !factors.cancelled
+        && !factors.terminal
+    {
+        permitted_effect_paths.push("workspace.execute_operation".to_string());
+    }
+    permitted_effect_paths.sort();
+    let (computed_at_seq, expires_after_tool_call, expires_after_runtime_effect, grant_kind) =
+        match purpose {
+            CapabilityGrantPurposeV2::PromptManifest => {
+                (0, None, None, "prompt_manifest".to_string())
+            }
+            CapabilityGrantPurposeV2::ToolCall {
+                tool_call_id,
+                computed_at_seq,
+            } => (
+                computed_at_seq,
+                Some(tool_call_id),
+                None,
+                "tool_call".to_string(),
+            ),
+            CapabilityGrantPurposeV2::RuntimeWorkspaceEffect {
+                plan_id,
+                decision_request_id,
+                computed_at_seq,
+            } => (
+                computed_at_seq,
+                None,
+                Some(format!(
+                    "workspace.execute_operation:{plan_id}:{decision_request_id}"
+                )),
+                "runtime_effect".to_string(),
+            ),
+        };
     let mut parameter_constraints = vec![
         "active_workspace_only".to_string(),
         "no_direct_document_write".to_string(),
         "proposal_applies_on_user_confirm".to_string(),
         "propose_edit_requires_explicit_edit_target_set".to_string(),
+        "workspace_execute_requires_decision_receipt".to_string(),
     ];
-    if intent.intent_type == IntentTypeV1::CreateDocument {
-        parameter_constraints.push("new_document_requires_workspace_operation_plan".to_string());
-    }
-    if intent.intent_type == IntentTypeV1::OrganizeWorkspace {
-        parameter_constraints.push("workspace_resource_requires_operation_plan".to_string());
-    }
-    if factors.active_bdocx
-        && factors.table_ops_available
-        && intent
-            .allowed_tools
-            .iter()
-            .any(|tool| tool == "list_tables")
-    {
+    if factors.active_bdocx && factors.table_ops_available {
         parameter_constraints.push("bdocx_table_ops_allowed".to_string());
     }
-    if factors.active_bdocx
-        && factors.image_ops_available
-        && intent
-            .allowed_tools
-            .iter()
-            .any(|tool| tool == "list_images")
-    {
+    if factors.active_bdocx && factors.image_ops_available {
         parameter_constraints.push("bdocx_image_ops_allowed".to_string());
     }
-    if allowed_tools.iter().any(|tool| tool == "propose_decision") {
-        parameter_constraints.push("propose_decision_scope_only".to_string());
-    }
-    CapabilityGrantV1 {
-        version: "capability-grant-v1".to_string(),
+    let authorization_facts_hash = super::context::sha256_text(
+        &serde_json::to_string(&serde_json::json!({
+            "profile": profile,
+            "turnId": turn_id,
+            "computedAtSeq": computed_at_seq,
+            "allowedTools": &allowed_tools,
+            "readableScope": &readable_scope,
+            "explicitEditTargetsHash": &explicit_edit_targets_hash,
+            "permittedEffectPaths": &permitted_effect_paths,
+            "formatCapabilityHash": &format_capability_hash,
+            "dynamicCapabilityHash": &dynamic_capability_hash,
+            "decisionReceiptIds": &factors.decision_receipt_ids,
+            "remainingToolCalls": factors.remaining_tool_calls,
+            "expiresAfterToolCall": &expires_after_tool_call,
+            "expiresAfterRuntimeEffect": &expires_after_runtime_effect,
+            "grantKind": &grant_kind,
+            "gateAttempt": factors.gate_attempt,
+            "gatePassed": factors.gate_passed,
+            "cancelled": factors.cancelled,
+            "terminal": factors.terminal,
+        }))
+        .unwrap_or_default(),
+    );
+    let grant_id = format!("capability-grant:{}", authorization_facts_hash);
+    CapabilityGrantV2 {
+        version: "capability-grant-v2".to_string(),
+        grant_id,
         profile: profile.to_string(),
-        intent_id: intent.intent_id.clone(),
         turn_id: turn_id.to_string(),
+        computed_at_seq,
         allowed_tools,
         target_scope,
         readable_scope,
+        explicit_edit_targets_hash,
+        permitted_effect_paths,
+        format_capability_hash,
+        dynamic_capability_hash,
+        decision_receipt_ids: factors.decision_receipt_ids,
+        budgets: CapabilityBudgetsV2 {
+            max_tool_calls: 6,
+            remaining_tool_calls: factors.remaining_tool_calls,
+        },
+        expires_after_tool_call,
+        expires_after_runtime_effect,
+        grant_kind,
+        gate_attempt: factors.gate_attempt,
+        gate_passed: factors.gate_passed,
         parameter_constraints,
-        grant_hash,
+        authorization_facts_hash,
     }
+}
+
+/// 模型不可见的 WorkspaceOperation 执行守卫。它只消费绑定到同一 source turn、plan、
+/// DecisionRequest 与当前重算序号的 runtime effect grant；真实资源身份和基线仍由 WS 再校验。
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TOOL-040, BR-WS-STATE-003-GUARD-AG-AG-TOOL-040
+ * type:     GUARD
+ * chain:    AG-TOOL, WS-OPERATION
+ * rules:    BR-SYS-STATE-008, BR-WS-STATE-003
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-WS-003
+ * boundary: in=RuntimeEffectCapabilityGrantSourceTurnWorkspaceOperationPlanAndResolvedDecisionRequest | out=ExactInternalWorkspaceExecutionAuthorizationOrStableRejection | does_not=registerModelVisibleExecuteToolOrReplaceWorkspaceRevalidation
+ */
+pub(super) fn validate_workspace_operation_effect_for_grant(
+    grant: &CapabilityGrantV2,
+    turn_id: &str,
+    plan_id: &str,
+    decision_request_id: &str,
+    computed_at_seq: u64,
+) -> ToolDecision {
+    let expected_effect = format!("workspace.execute_operation:{plan_id}:{decision_request_id}");
+    if grant.profile != AGENT_EDIT_1_0_PROFILE
+        || grant.grant_kind != "runtime_effect"
+        || grant.turn_id != turn_id
+        || grant.computed_at_seq == 0
+        || grant.computed_at_seq != computed_at_seq
+        || grant.expires_after_tool_call.is_some()
+        || grant.expires_after_runtime_effect.as_deref() != Some(expected_effect.as_str())
+        || !grant
+            .decision_receipt_ids
+            .iter()
+            .any(|receipt| receipt == decision_request_id)
+        || !grant
+            .permitted_effect_paths
+            .iter()
+            .any(|effect| effect == "workspace.execute_operation")
+        || !grant.allowed_tools.is_empty()
+    {
+        return ToolDecision::Reject(
+            "WorkspaceOperation 运行时授权已过期或与当前确认事实不匹配".to_string(),
+        );
+    }
+    ToolDecision::Allow
 }
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-035, BR-SYS-STATE-007-GUARD-AG-AG-TOOL-035
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-035, BR-SYS-STATE-007-GUARD-AG-AG-TOOL-035, BR-AG-DATA-003-GUARD-AG-AG-TOOL-035, BR-WS-DATA-001-GUARD-AG-AG-TOOL-035
  * type:     GUARD
  * chain:    AG-TOOL
- * rules:    BR-AG-STATE-002, BR-SYS-STATE-007
- * term_ref: TERM-AG-014, TERM-AG-017
+ * rules:    BR-AG-STATE-002, BR-SYS-STATE-007, BR-AG-DATA-003, BR-WS-DATA-001
+ * term_ref: TERM-AG-014, TERM-AG-017, TERM-AG-019, TERM-WS-001
  * boundary: in=ToolCallParametersAndCurrentCapabilityGrant | out=RegisteredAllowedTargetedAndParameterValidToolCallOrStableRejection | does_not=upgradeGrantFromRepeatedFailureOrToolParameters
  */
 pub fn validate_requested_tool_for_grant(
     name: &str,
     params: &serde_json::Value,
-    grant: &CapabilityGrantV1,
+    grant: &CapabilityGrantV2,
     turn_id: &str,
+    tool_call_id: &str,
+    computed_at_seq: u64,
+    workspace_root: Option<&std::path::Path>,
+    use_tracker: &mut CapabilityGrantUseTrackerV2,
 ) -> ToolDecision {
-    if grant.profile != AGENT_EDIT_1_0_PROFILE || grant.turn_id != turn_id {
+    if grant.profile != AGENT_EDIT_1_0_PROFILE
+        || grant.turn_id != turn_id
+        || grant.computed_at_seq == 0
+        || grant.computed_at_seq != computed_at_seq
+        || grant.expires_after_tool_call.as_deref() != Some(tool_call_id)
+        || !grant.gate_passed
+        || grant.budgets.remaining_tool_calls == 0
+    {
         return ToolDecision::Reject("工具授权已过期或不属于当前回合".to_string());
     }
+    if use_tracker.consumed_grant_ids.contains(&grant.grant_id)
+        || use_tracker.consumed_tool_call_ids.contains(tool_call_id)
+    {
+        return ToolDecision::Reject("工具授权或 ToolCall 已使用，不能重复执行".to_string());
+    }
+    // 授权在第一次校验尝试即消费；参数失败、未知工具或执行失败都不能重用或扩权。
+    use_tracker
+        .consumed_grant_ids
+        .insert(grant.grant_id.clone());
+    use_tracker
+        .consumed_tool_call_ids
+        .insert(tool_call_id.to_string());
     let registered = is_registered(name);
     if !registered {
         return validate_tool(false, false, false);
@@ -284,7 +432,49 @@ pub fn validate_requested_tool_for_grant(
     if !grant.allows(name) {
         return ToolDecision::Reject(format!("工具 {name} 未获本轮 CapabilityGrant 授权"));
     }
+    if !params.is_object() {
+        return ToolDecision::Reject(format!("工具 {name} 参数必须是 JSON 对象"));
+    }
+    let normalize_workspace_path = |raw: &str| -> Result<String, String> {
+        let root =
+            workspace_root.ok_or_else(|| "缺少 active workspace，工具目标无法校验".to_string())?;
+        let absolute = crate::workspace::resolve_in_workspace(root, raw)
+            .map_err(|error| format!("工具目标越出 active workspace：{}", error.message))?;
+        let relative = absolute
+            .strip_prefix(root)
+            .map_err(|_| "工具目标无法归一到 active workspace".to_string())?;
+        let normalized = relative.to_string_lossy().replace('\\', "/");
+        if normalized.is_empty() {
+            return Err("workspace 根目录不能作为文档工具目标".to_string());
+        }
+        Ok(normalized)
+    };
     if name == "propose_decision" {
+        let kind = params.get("kind").and_then(|value| value.as_str());
+        let summary = params
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty());
+        if !matches!(
+            kind,
+            Some("permission" | "plan_choice" | "scope" | "manual_confirm")
+        ) || summary.is_none()
+            || params.get("detail").is_some_and(|value| !value.is_string())
+            || params.get("options").is_some_and(|value| {
+                !value.as_array().is_some_and(|options| {
+                    !options.is_empty()
+                        && options.iter().all(|option| {
+                            option
+                                .as_str()
+                                .is_some_and(|option| !option.trim().is_empty())
+                        })
+                })
+            })
+        {
+            return ToolDecision::Reject(
+                "propose_decision 的 kind、summary、detail 或 options 参数无效".to_string(),
+            );
+        }
         if grant
             .parameter_constraints
             .iter()
@@ -303,11 +493,15 @@ pub fn validate_requested_tool_for_grant(
         name,
         "read_doc" | "list_blocks" | "list_tables" | "list_images"
     ) {
-        let target = params
+        let raw_target = params
             .get("path")
             .and_then(|value| value.as_str())
             .unwrap_or("");
-        if !grant.readable_scope.iter().any(|allowed| allowed == target)
+        let target = match normalize_workspace_path(raw_target) {
+            Ok(target) => target,
+            Err(reason) => return ToolDecision::Reject(reason),
+        };
+        if !grant.readable_scope.iter().any(|allowed| allowed == &target)
             && !grant
                 .readable_scope
                 .iter()
@@ -330,14 +524,37 @@ pub fn validate_requested_tool_for_grant(
                     .to_string(),
             );
         }
-        let target = params
+        let raw_target = params
             .get("path")
             .and_then(|value| value.as_str())
             .unwrap_or("");
-        if target.trim().is_empty() {
+        if raw_target.trim().is_empty() {
             return ToolDecision::Reject("propose_edit 缺少目标 path".to_string());
         }
-        match params.get("operation").and_then(|value| value.as_str()) {
+        let target = match normalize_workspace_path(raw_target) {
+            Ok(target) => target,
+            Err(reason) => return ToolDecision::Reject(reason),
+        };
+        if !grant.target_scope.iter().any(|allowed| allowed == &target) {
+            return ToolDecision::Reject(format!(
+                "既有文档 {target} 不在当前 ExplicitEditTargetSet"
+            ));
+        }
+        let operation = params.get("operation").and_then(|value| value.as_str());
+        if !matches!(
+            operation,
+            Some(
+                "replace_block"
+                    | "replace_document"
+                    | "block_ops"
+                    | "style_ops"
+                    | "table_ops"
+                    | "image_ops"
+            )
+        ) {
+            return ToolDecision::Reject("propose_edit.operation 未注册或缺失".to_string());
+        }
+        match operation {
             Some("table_ops")
                 if !grant
                     .parameter_constraints
@@ -356,8 +573,54 @@ pub fn validate_requested_tool_for_grant(
             }
             _ => {}
         }
-        // 路径规范化及 targetScope 成员硬拒在 ag_propose_edit / DE 双层执行；本层只有参数，缺少
-        // workspace root，不能用原始字符串比较替代规范化成员判断。
+    }
+    if name == "list_docs" {
+        if params.get("path").is_some_and(|value| !value.is_string()) {
+            return ToolDecision::Reject("list_docs.path 必须是字符串".to_string());
+        }
+        if let Some(path) = params.get("path").and_then(|value| value.as_str()) {
+            if let Err(reason) = normalize_workspace_path(path) {
+                return ToolDecision::Reject(reason);
+            }
+        }
+    }
+    if name == "workspace_glob"
+        && !params
+            .get("pattern")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return ToolDecision::Reject("workspace_glob.pattern 必须是非空字符串".to_string());
+    }
+    if name == "search_text"
+        && params
+            .get("query")
+            .and_then(|value| value.as_str())
+            .is_none()
+    {
+        return ToolDecision::Reject("search_text.query 必须是字符串".to_string());
+    }
+    if name == "edit_blocked" {
+        let code = params
+            .get("code")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty() && value.len() <= 80);
+        let reason = params
+            .get("reason")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty() && value.len() <= 1000);
+        if code.is_none() || reason.is_none() {
+            return ToolDecision::Reject("edit_blocked 的 code/reason 参数无效".to_string());
+        }
+    }
+    if name == "import_image_asset" {
+        let source_path = params
+            .get("source_path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if let Err(reason) = normalize_workspace_path(source_path) {
+            return ToolDecision::Reject(reason);
+        }
     }
     if name == "plan_workspace_operation" {
         let operations = params
@@ -389,6 +652,62 @@ pub fn validate_requested_tool_for_grant(
             return ToolDecision::Reject(
                 "initialContent 只能与单个 create_document 操作绑定".to_string(),
             );
+        }
+        for operation in operations {
+            let kind = operation.get("kind").and_then(|value| value.as_str());
+            let resource_kind = operation
+                .get("resourceKind")
+                .and_then(|value| value.as_str());
+            if !matches!(
+                kind,
+                Some(
+                    "create_document"
+                        | "create_folder"
+                        | "rename_resource"
+                        | "move_resource"
+                        | "delete_resource"
+                )
+            ) || !matches!(resource_kind, Some("file" | "folder"))
+            {
+                return ToolDecision::Reject(
+                    "WorkspaceOperation 的 kind 或 resourceKind 无效".to_string(),
+                );
+            }
+            let requires_source = matches!(
+                kind,
+                Some("rename_resource" | "move_resource" | "delete_resource")
+            );
+            let requires_target = matches!(
+                kind,
+                Some("create_document" | "create_folder" | "rename_resource" | "move_resource")
+            );
+            if requires_source
+                && !operation
+                    .get("sourcePath")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                return ToolDecision::Reject(
+                    "WorkspaceOperation 缺少必需的 sourcePath".to_string(),
+                );
+            }
+            if requires_target
+                && !operation
+                    .get("targetPath")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                return ToolDecision::Reject(
+                    "WorkspaceOperation 缺少必需的 targetPath".to_string(),
+                );
+            }
+            for field in ["sourcePath", "targetPath"] {
+                if let Some(path) = operation.get(field).and_then(|value| value.as_str()) {
+                    if let Err(reason) = normalize_workspace_path(path) {
+                        return ToolDecision::Reject(reason);
+                    }
+                }
+            }
         }
     }
     validate_tool(true, true, false)
@@ -514,16 +833,6 @@ pub fn lookup(name: &str) -> Option<ToolDef> {
 /// 是否在注册清单内。
 pub fn is_registered(name: &str) -> bool {
     lookup(name).is_some()
-}
-
-/// 校验模型请求的工具（承 BR-AG-STATE-002 `validate_tool`）。
-///
-/// v1 策略：注册即在权限边界内；只读工具读 WS/DOC 编辑模型，结构工具经 WS 边界执行，propose_edit
-/// 经 ChangeProposal→DE 产出修改建议（非直写文档内容）。未注册 → Reject（含工具名，回注模型）。
-/// 细分权限场景（如某些只读工具的范围限制）属实现期运营策略，本函数锁「注册 + 无直写」校验机制。
-pub fn validate_requested_tool(name: &str) -> ToolDecision {
-    let registered = is_registered(name);
-    validate_tool(registered, registered, false)
 }
 
 /// 发送给模型的工具定义（OpenAI function-calling 格式）。
@@ -797,7 +1106,7 @@ pub fn tool_definitions_json(
 
 /// 只把逐回合授权的工具暴露给模型。注册表可以包含未来能力，但 1.0 模型不可枚举未授权项。
 pub fn tool_definitions_json_for_grant(
-    grant: &CapabilityGrantV1,
+    grant: &CapabilityGrantV2,
 ) -> Result<serde_json::Value, super::bdocx_capabilities::CapabilityValidationError> {
     let all = tool_definitions_json()?;
     let filtered = all
@@ -818,6 +1127,10 @@ pub fn tool_definitions_json_for_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_workspace_root() -> &'static std::path::Path {
+        std::path::Path::new("/tmp/binder-capability-grant-tests")
+    }
 
     #[test]
     fn tools_registered_with_expected_permissions() {
@@ -868,427 +1181,505 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unregistered_tool_is_rejected_with_name() {
-        match validate_requested_tool("rm_rf") {
-            ToolDecision::Reject(r) => assert!(r.contains("未在注册清单")),
-            ToolDecision::Allow => panic!("未注册工具应被拒绝"),
-        }
-    }
-
-    #[test]
-    fn all_registered_tools_pass_validation_including_task_decision() {
-        // 工具均合法放行：只读工具 + 结构操作 + 修改建议 + 任务级确认（均不直写文档内容）。
-        for t in [
-            "read_doc",
-            "list_docs",
-            "search_text",
-            "list_blocks",
-            "list_tables",
-            "list_images",
-            "report_project",
-            "plan_workspace_operation",
-            "import_image_asset",
-            "edit_blocked",
-            "propose_edit",
-            "propose_decision",
-        ] {
-            assert_eq!(
-                validate_requested_tool(t),
-                ToolDecision::Allow,
-                "{t} 应放行"
-            );
-        }
-    }
-
-    #[test]
-    fn capability_grant_is_minimal_and_registered_does_not_mean_authorized() {
-        let analyze = super::super::context::resolve_intent_result(
-            "t-analyze",
-            "只分析当前文档，不要修改",
-            Some("a.md"),
-            false,
-        );
-        let analyze_grant = resolve_capability_grant(
+    fn prompt_grant(
+        turn_id: &str,
+        targets: &[String],
+        factors: CapabilityFactorsV2,
+    ) -> CapabilityGrantV2 {
+        resolve_capability_grant_v2(
             AGENT_EDIT_1_0_PROFILE,
-            "t-analyze",
-            &analyze,
-            &[],
-            CapabilityFactorsV1::default(),
+            turn_id,
+            targets,
+            CapabilityFactorsV2 {
+                remaining_tool_calls: 6,
+                ..factors
+            },
+            CapabilityGrantPurposeV2::PromptManifest,
+        )
+    }
+
+    fn execution_grant(
+        turn_id: &str,
+        tool_call_id: &str,
+        seq: u64,
+        targets: &[String],
+        factors: CapabilityFactorsV2,
+    ) -> CapabilityGrantV2 {
+        resolve_capability_grant_v2(
+            AGENT_EDIT_1_0_PROFILE,
+            turn_id,
+            targets,
+            CapabilityFactorsV2 {
+                gate_attempt: 1,
+                gate_passed: true,
+                remaining_tool_calls: 6,
+                ..factors
+            },
+            CapabilityGrantPurposeV2::ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+                computed_at_seq: seq,
+            },
+        )
+    }
+
+    #[test]
+    fn prompt_manifest_is_hard_fact_projection_and_never_execution_authority() {
+        let without_target = prompt_grant("turn-1", &[], CapabilityFactorsV2::default());
+        let with_target = prompt_grant(
+            "turn-1",
+            &["a.md".to_string()],
+            CapabilityFactorsV2::default(),
         );
-        assert!(analyze_grant.allows("read_doc"));
-        assert!(analyze_grant.allows("list_blocks"));
-        assert!(analyze_grant.allows("report_project"));
-        assert!(!analyze_grant.allows("propose_decision"));
-        assert!(!analyze_grant.allows("propose_edit"));
-        assert!(!analyze_grant.allows("plan_workspace_operation"));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_edit",
-                &serde_json::json!({"path":"a.md"}),
-                &analyze_grant,
-                "t-analyze"
-            ),
-            ToolDecision::Reject(_)
-        ));
-
-        let defs = tool_definitions_json_for_grant(&analyze_grant).unwrap();
-        let names = defs
-            .as_array()
-            .unwrap()
+        assert!(without_target.is_prompt_manifest());
+        assert!(without_target.allows("read_doc"));
+        assert!(!without_target.allows("propose_edit"));
+        assert!(with_target.allows("propose_edit"));
+        assert_ne!(
+            without_target.explicit_edit_targets_hash,
+            with_target.explicit_edit_targets_hash
+        );
+        assert_ne!(without_target.grant_id, with_target.grant_id);
+        assert!(!with_target
+            .permitted_effect_paths
             .iter()
-            .filter_map(|definition| definition["function"]["name"].as_str())
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"read_doc"));
-        assert!(names.contains(&"report_project"));
-        assert!(!names.contains(&"propose_edit"));
-        assert!(!names.contains(&"propose_decision"));
-        assert!(!names.contains(&"plan_workspace_operation"));
+            .any(|path| path.contains("execute_operation")));
 
-        // Analyze 只读取当前/显式目标，不因处于 workspace 而读取任意文件。
-        assert!(!analyze_grant
-            .readable_scope
-            .contains(&"workspace_read_all".to_string()));
+        let mut tracker = CapabilityGrantUseTrackerV2::default();
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "read_doc",
-                &serde_json::json!({"path":"文学作品/白鹿原/白鹿原小说章节策划.docx"}),
-                &analyze_grant,
-                "t-analyze"
+                &serde_json::json!({"path":"a.md"}),
+                &with_target,
+                "turn-1",
+                "call-1",
+                1,
+                Some(test_workspace_root()),
+                &mut tracker,
             ),
             ToolDecision::Reject(_)
         ));
-        // 只读 IntentResult 即使具有候选目标成员，也不会获得 propose_edit 工具。
+    }
+
+    #[test]
+    fn execution_grant_binds_turn_call_seq_gate_budget_and_is_single_use() {
+        let grant = execution_grant(
+            "turn-1",
+            "call-1",
+            7,
+            &["a.md".to_string()],
+            CapabilityFactorsV2::default(),
+        );
+        let mut tracker = CapabilityGrantUseTrackerV2::default();
+        assert_eq!(
+            validate_requested_tool_for_grant(
+                "read_doc",
+                &serde_json::json!({"path":"a.md"}),
+                &grant,
+                "turn-1",
+                "call-1",
+                7,
+                Some(test_workspace_root()),
+                &mut tracker,
+            ),
+            ToolDecision::Allow
+        );
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "read_doc",
+                &serde_json::json!({"path":"a.md"}),
+                &grant,
+                "turn-1",
+                "call-1",
+                7,
+                Some(test_workspace_root()),
+                &mut tracker,
+            ),
+            ToolDecision::Reject(reason) if reason.contains("已使用")
+        ));
+
+        for (turn_id, call_id, seq) in [
+            ("other-turn", "call-1", 7),
+            ("turn-1", "other-call", 7),
+            ("turn-1", "call-1", 8),
+        ] {
+            assert!(matches!(
+                validate_requested_tool_for_grant(
+                    "read_doc",
+                    &serde_json::json!({"path":"a.md"}),
+                    &grant,
+                    turn_id,
+                    call_id,
+                    seq,
+                    Some(test_workspace_root()),
+                    &mut CapabilityGrantUseTrackerV2::default(),
+                ),
+                ToolDecision::Reject(_)
+            ));
+        }
+
+        for factors in [
+            CapabilityFactorsV2 {
+                gate_passed: false,
+                remaining_tool_calls: 6,
+                ..Default::default()
+            },
+            CapabilityFactorsV2 {
+                gate_passed: true,
+                remaining_tool_calls: 0,
+                ..Default::default()
+            },
+            CapabilityFactorsV2 {
+                gate_passed: true,
+                remaining_tool_calls: 6,
+                cancelled: true,
+                ..Default::default()
+            },
+            CapabilityFactorsV2 {
+                gate_passed: true,
+                remaining_tool_calls: 6,
+                terminal: true,
+                ..Default::default()
+            },
+        ] {
+            let denied = resolve_capability_grant_v2(
+                AGENT_EDIT_1_0_PROFILE,
+                "turn-1",
+                &["a.md".to_string()],
+                factors,
+                CapabilityGrantPurposeV2::ToolCall {
+                    tool_call_id: "call-denied".to_string(),
+                    computed_at_seq: 9,
+                },
+            );
+            assert!(denied.allowed_tools.is_empty());
+        }
+    }
+
+    #[test]
+    fn registered_unknown_parameter_and_target_boundaries_fail_closed() {
+        let grant = execution_grant(
+            "turn-2",
+            "call-plan",
+            10,
+            &[],
+            CapabilityFactorsV2::default(),
+        );
+        let invalid_plan = serde_json::json!({
+            "operations":[{"kind":"create_document","targetPath":"meeting.md","resourceKind":"file"}]
+        });
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "plan_workspace_operation",
+                &invalid_plan,
+                &grant,
+                "turn-2",
+                "call-plan",
+                10,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::Reject(_)
+        ));
+
+        let unknown = execution_grant(
+            "turn-2",
+            "call-unknown",
+            11,
+            &[],
+            CapabilityFactorsV2::default(),
+        );
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "execute_workspace_operation",
+                &serde_json::json!({}),
+                &unknown,
+                "turn-2",
+                "call-unknown",
+                11,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::Reject(_)
+        ));
+        assert!(!is_registered("execute_workspace_operation"));
+    }
+
+    #[test]
+    fn target_and_workspace_paths_are_normalized_before_tool_executing() {
+        let target_grant = execution_grant(
+            "turn-target",
+            "call-target-ok",
+            20,
+            &["docs/a.md".to_string()],
+            CapabilityFactorsV2::default(),
+        );
+        assert_eq!(
+            validate_requested_tool_for_grant(
+                "propose_edit",
+                &serde_json::json!({"path":"docs/./a.md","operation":"replace_block"}),
+                &target_grant,
+                "turn-target",
+                "call-target-ok",
+                20,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::Allow
+        );
+
+        let outside_target = execution_grant(
+            "turn-target",
+            "call-target-outside",
+            21,
+            &["docs/a.md".to_string()],
+            CapabilityFactorsV2::default(),
+        );
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "propose_edit",
-                &serde_json::json!({"path":"other.md","operation":"replace_document","content":"x"}),
-                &analyze_grant,
-                "t-analyze"
+                &serde_json::json!({"path":"docs/b.md","operation":"replace_block"}),
+                &outside_target,
+                "turn-target",
+                "call-target-outside",
+                21,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
             ),
-            ToolDecision::Reject(_)
+            ToolDecision::Reject(reason) if reason.contains("ExplicitEditTargetSet")
         ));
 
-        let edit = super::super::context::resolve_intent_result(
-            "t-edit-targets",
-            "修改当前文档并同步显式引用",
-            Some("a.md"),
-            false,
-        );
-        let edit_grant = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-edit-targets",
-            &edit,
-            &["a.md".to_string(), "ref.md".to_string()],
-            CapabilityFactorsV1::default(),
-        );
-        assert_eq!(edit_grant.target_scope, vec!["a.md", "ref.md"]);
-        assert!(edit_grant.allows("propose_edit"));
-        assert!(!edit_grant.allows("plan_workspace_operation"));
-        assert!(edit_grant
-            .parameter_constraints
-            .contains(&"propose_edit_requires_explicit_edit_target_set".to_string()));
-
-        let answer = super::super::context::resolve_intent_result("t-answer", "你好", None, false);
-        let answer_grant = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-answer",
-            &answer,
+        let escaped_read = execution_grant(
+            "turn-target",
+            "call-read-escape",
+            22,
             &[],
-            CapabilityFactorsV1::default(),
+            CapabilityFactorsV2::default(),
         );
-        assert!(!answer_grant.allows("propose_decision"));
         assert!(matches!(
             validate_requested_tool_for_grant(
-                "propose_decision",
-                &serde_json::json!({"kind":"manual_confirm", "summary":"确认"}),
-                &answer_grant,
-                "t-answer"
+                "read_doc",
+                &serde_json::json!({"path":"../outside.md"}),
+                &escaped_read,
+                "turn-target",
+                "call-read-escape",
+                22,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
             ),
-            ToolDecision::Reject(_)
+            ToolDecision::Reject(reason) if reason.contains("workspace")
         ));
-    }
 
-    #[test]
-    fn adaptive_grant_is_derived_from_hard_facts_not_keyword_intent() {
-        let without_target = resolve_adaptive_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-adaptive",
+        let escaped_plan = execution_grant(
+            "turn-target",
+            "call-plan-escape",
+            23,
             &[],
-            CapabilityFactorsV1::default(),
-        );
-        assert!(without_target.allows("read_doc"));
-        assert!(without_target.allows("search_text"));
-        assert!(without_target.allows("propose_decision"));
-        assert!(!without_target.allows("propose_edit"));
-
-        let with_target = resolve_adaptive_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-adaptive",
-            &["a.md".to_string()],
-            CapabilityFactorsV1::default(),
-        );
-        assert!(with_target.allows("propose_edit"));
-        assert_eq!(with_target.target_scope, vec!["a.md"]);
-        assert_eq!(with_target.intent_id, "model-semantic-not-authority");
-        assert_ne!(without_target.grant_hash, with_target.grant_hash);
-    }
-
-    #[test]
-    fn create_document_grant_uses_workspace_operation_plan_not_empty_base_proposal() {
-        let intent = super::super::context::resolve_intent_result(
-            "t-create",
-            "新建一份会议纪要",
-            None,
-            false,
-        );
-        let grant = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-create",
-            &intent,
-            &[],
-            CapabilityFactorsV1::default(),
-        );
-        // CreateDocument 获得资源计划工具；初始内容在确认前冻结，不能再走 base=empty 提案。
-        assert_eq!(
-            grant.allowed_tools,
-            vec!["list_docs", "plan_workspace_operation", "workspace_glob"]
+            CapabilityFactorsV2::default(),
         );
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "plan_workspace_operation",
                 &serde_json::json!({
-                    "operations":[{"kind":"create_document","targetPath":"meeting.md","resourceKind":"file"}],
-                    "initialContent":"# 会议纪要"
+                    "operations":[{
+                        "kind":"create_document",
+                        "targetPath":"../outside.md",
+                        "resourceKind":"file"
+                    }],
+                    "initialContent":"body"
                 }),
-                &grant,
-                "t-create"
+                &escaped_plan,
+                "turn-target",
+                "call-plan-escape",
+                23,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
             ),
-            ToolDecision::Allow
-        ));
-        // 新建不能退回普通内容提案的空基准路径。
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_edit",
-                &serde_json::json!({"path":"meeting.md","operation":"replace_document","content":"x"}),
-                &grant,
-                "t-create"
-            ),
-            ToolDecision::Reject(_)
+            ToolDecision::Reject(reason) if reason.contains("workspace")
         ));
     }
 
     #[test]
-    fn workspace_and_scope_decision_tools_are_narrowed_by_side_effect_and_task_run() {
-        let organize = super::super::context::resolve_intent_result(
-            "t-organize",
-            "把这个文件移动到归档目录",
-            Some("a.md"),
-            false,
-        );
-        assert_eq!(organize.intent_type, IntentTypeV1::OrganizeWorkspace);
-        let organize_grant = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-organize",
-            &organize,
-            &["a.md".to_string()],
-            CapabilityFactorsV1::default(),
-        );
-        assert!(organize_grant.allows("plan_workspace_operation"));
-        assert!(!organize_grant.allows("propose_edit"));
-        assert!(organize_grant.target_scope.is_empty());
+    fn malformed_registered_tool_parameters_fail_at_the_grant_boundary() {
+        for (seq, call_id, tool, params) in [
+            (
+                24,
+                "call-glob-invalid",
+                "workspace_glob",
+                serde_json::json!({}),
+            ),
+            (
+                25,
+                "call-decision-invalid",
+                "propose_decision",
+                serde_json::json!({"kind":"scope","summary":"","targetPaths":[]}),
+            ),
+            (
+                26,
+                "call-edit-invalid",
+                "propose_edit",
+                serde_json::json!({"path":"docs/a.md","operation":"direct_write"}),
+            ),
+        ] {
+            let targets = if tool == "propose_edit" {
+                vec!["docs/a.md".to_string()]
+            } else {
+                Vec::new()
+            };
+            let grant = execution_grant(
+                "turn-invalid-params",
+                call_id,
+                seq,
+                &targets,
+                CapabilityFactorsV2::default(),
+            );
+            assert!(matches!(
+                validate_requested_tool_for_grant(
+                    tool,
+                    &params,
+                    &grant,
+                    "turn-invalid-params",
+                    call_id,
+                    seq,
+                    Some(test_workspace_root()),
+                    &mut CapabilityGrantUseTrackerV2::default(),
+                ),
+                ToolDecision::Reject(_)
+            ));
+        }
+    }
 
-        let targets = vec!["a.md".to_string(), "b.md".to_string()];
-        let complex = super::super::context::resolve_intent_result_with_targets(
-            "t-scope",
-            "修改全部内容，必要时确认目标范围",
-            Some("a.md"),
-            false,
-            &targets,
-        );
-        assert!(complex
-            .allowed_tools
-            .contains(&"propose_decision".to_string()));
-        let without_task = resolve_capability_grant(
+    #[test]
+    fn confirmed_workspace_effect_uses_runtime_only_grant_and_exact_identity() {
+        let grant = resolve_capability_grant_v2(
             AGENT_EDIT_1_0_PROFILE,
-            "t-scope",
-            &complex,
-            &targets,
-            CapabilityFactorsV1::default(),
-        );
-        assert!(!without_task.allows("propose_decision"));
-
-        let with_task = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-scope",
-            &complex,
-            &targets,
-            CapabilityFactorsV1 {
+            "turn-effect",
+            &[],
+            CapabilityFactorsV2 {
                 has_task_run: true,
-                ..CapabilityFactorsV1::default()
+                decision_receipt_ids: vec!["decision-1".to_string()],
+                ..Default::default()
+            },
+            CapabilityGrantPurposeV2::RuntimeWorkspaceEffect {
+                plan_id: "plan-1".to_string(),
+                decision_request_id: "decision-1".to_string(),
+                computed_at_seq: 30,
             },
         );
-        assert!(with_task.allows("propose_decision"));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_decision",
-                &serde_json::json!({
-                    "kind": "scope",
-                    "summary": "确认新增目标",
-                    "targetPaths": ["b.md"]
-                }),
-                &with_task,
-                "t-scope"
+        assert!(grant.allowed_tools.is_empty());
+        assert!(!grant.is_prompt_manifest());
+        assert_eq!(grant.grant_kind, "runtime_effect");
+        assert_eq!(
+            validate_workspace_operation_effect_for_grant(
+                &grant,
+                "turn-effect",
+                "plan-1",
+                "decision-1",
+                30,
             ),
             ToolDecision::Allow
-        ));
+        );
         assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_decision",
-                &serde_json::json!({"kind": "manual_confirm", "summary": "确认"}),
-                &with_task,
-                "t-scope"
+            validate_workspace_operation_effect_for_grant(
+                &grant,
+                "turn-effect",
+                "plan-1",
+                "decision-other",
+                30,
             ),
             ToolDecision::Reject(_)
         ));
+
+        let no_receipt = resolve_capability_grant_v2(
+            AGENT_EDIT_1_0_PROFILE,
+            "turn-effect",
+            &[],
+            CapabilityFactorsV2::default(),
+            CapabilityGrantPurposeV2::RuntimeWorkspaceEffect {
+                plan_id: "plan-1".to_string(),
+                decision_request_id: "decision-1".to_string(),
+                computed_at_seq: 31,
+            },
+        );
+        assert!(!no_receipt
+            .permitted_effect_paths
+            .iter()
+            .any(|effect| effect == "workspace.execute_operation"));
     }
 
     #[test]
-    fn bdocx_advanced_tools_require_intent_format_and_dynamic_capability() {
+    fn format_and_dynamic_facts_narrow_advanced_bdocx_tools() {
         let targets = vec!["a.docx".to_string()];
-        let table = super::super::context::resolve_intent_result(
-            "t-table",
-            "把表格单元格底纹改为红色",
-            Some("a.docx"),
-            false,
-        );
-        assert!(table.allowed_tools.contains(&"list_tables".to_string()));
-        let no_dynamic = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-table",
-            &table,
-            &targets,
-            CapabilityFactorsV1::default(),
-        );
-        assert!(!no_dynamic.allows("list_tables"));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_edit",
-                &serde_json::json!({"path":"a.docx","operation":"table_ops"}),
-                &no_dynamic,
-                "t-table"
-            ),
-            ToolDecision::Reject(_)
-        ));
+        let plain = prompt_grant("turn-format", &targets, CapabilityFactorsV2::default());
+        assert!(!plain.allows("list_tables"));
+        assert!(!plain.allows("list_images"));
+        assert!(!plain.allows("import_image_asset"));
 
-        let inconsistent_table_facts = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-table",
-            &table,
+        let table = prompt_grant(
+            "turn-format",
             &targets,
-            CapabilityFactorsV1 {
-                active_bdocx: false,
-                table_ops_available: true,
-                ..CapabilityFactorsV1::default()
-            },
-        );
-        assert!(!inconsistent_table_facts.allows("list_tables"));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_edit",
-                &serde_json::json!({"path":"a.docx","operation":"table_ops"}),
-                &inconsistent_table_facts,
-                "t-table"
-            ),
-            ToolDecision::Reject(_)
-        ));
-
-        let table_dynamic = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-table",
-            &table,
-            &targets,
-            CapabilityFactorsV1 {
+            CapabilityFactorsV2 {
                 active_bdocx: true,
                 table_ops_available: true,
-                ..CapabilityFactorsV1::default()
+                ..Default::default()
             },
         );
-        assert!(table_dynamic.allows("list_tables"));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_edit",
-                &serde_json::json!({"path":"a.docx","operation":"table_ops"}),
-                &table_dynamic,
-                "t-table"
-            ),
-            ToolDecision::Allow
-        ));
+        assert!(table.allows("list_tables"));
+        assert!(!table.allows("list_images"));
 
-        let image = super::super::context::resolve_intent_result(
-            "t-image",
-            "在文档中插入图片",
-            Some("a.docx"),
-            false,
-        );
-        let image_dynamic = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-image",
-            &image,
+        let image = execution_grant(
+            "turn-format",
+            "call-image",
+            12,
             &targets,
-            CapabilityFactorsV1 {
+            CapabilityFactorsV2 {
                 active_bdocx: true,
                 image_ops_available: true,
-                ..CapabilityFactorsV1::default()
+                ..Default::default()
             },
         );
-        assert!(image_dynamic.allows("list_images"));
-        assert!(image_dynamic.allows("import_image_asset"));
+        assert!(image.allows("list_images"));
+        assert!(image.allows("import_image_asset"));
         assert!(matches!(
             validate_requested_tool_for_grant(
                 "propose_edit",
                 &serde_json::json!({"path":"a.docx","operation":"image_ops"}),
-                &image_dynamic,
-                "t-image"
+                &image,
+                "turn-format",
+                "call-image",
+                12,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
             ),
             ToolDecision::Allow
         ));
+        assert_ne!(plain.format_capability_hash, image.format_capability_hash);
+        assert_ne!(plain.grant_id, image.grant_id);
+    }
 
-        let inconsistent_image_facts = resolve_capability_grant(
-            AGENT_EDIT_1_0_PROFILE,
-            "t-image",
-            &image,
-            &targets,
-            CapabilityFactorsV1 {
-                active_bdocx: false,
-                image_ops_available: true,
-                ..CapabilityFactorsV1::default()
+    #[test]
+    fn decision_and_task_facts_change_grant_without_authorizing_ws_execute() {
+        let base = prompt_grant("turn-decision", &[], CapabilityFactorsV2::default());
+        let decided = prompt_grant(
+            "turn-decision",
+            &[],
+            CapabilityFactorsV2 {
+                has_task_run: true,
+                decision_receipt_ids: vec!["decision-1".to_string()],
+                ..Default::default()
             },
         );
-        assert!(!inconsistent_image_facts.allows("list_images"));
-        assert!(!inconsistent_image_facts.allows("import_image_asset"));
-        assert!(matches!(
-            validate_requested_tool_for_grant(
-                "propose_edit",
-                &serde_json::json!({"path":"a.docx","operation":"image_ops"}),
-                &inconsistent_image_facts,
-                "t-image"
-            ),
-            ToolDecision::Reject(_)
-        ));
-
-        let wrong_profile = resolve_capability_grant(
-            "unknown-profile",
-            "t-image",
-            &image,
-            &targets,
-            CapabilityFactorsV1 {
-                active_bdocx: true,
-                image_ops_available: true,
-                ..CapabilityFactorsV1::default()
-            },
+        assert_ne!(
+            base.dynamic_capability_hash,
+            decided.dynamic_capability_hash
         );
-        assert!(wrong_profile.allowed_tools.is_empty());
+        assert_ne!(base.grant_id, decided.grant_id);
+        assert_eq!(decided.decision_receipt_ids, vec!["decision-1"]);
+        assert!(decided.allows("plan_workspace_operation"));
+        assert!(!decided.allows("execute_workspace_operation"));
+        assert!(!decided
+            .permitted_effect_paths
+            .iter()
+            .any(|path| path.contains("execute_operation")));
     }
 
     #[test]

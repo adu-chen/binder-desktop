@@ -15,7 +15,8 @@ pub(super) struct PreparedTurnPrompt {
     pub(super) current_doc_prompt_coverage: Option<&'static str>,
     pub(super) messages: Vec<serde_json::Value>,
     pub(super) tools: serde_json::Value,
-    pub(super) capability_grant: ag::tool_registry::CapabilityGrantV1,
+    pub(super) capability_grant: ag::tool_registry::CapabilityGrantV2,
+    pub(super) capability_factors: ag::tool_registry::CapabilityFactorsV2,
     pub(super) prompt_package: ag::context::PromptPackageV2,
 }
 
@@ -26,7 +27,7 @@ pub(super) struct PreparedTurnPrompt {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-002, BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-005, TERM-AG-020
- * boundary: in=IntentRevisionAgentContextFactsCurrentDocumentReferenceHistoryToolResultsAndToolManifest | out=BudgetedPromptPackageV2MessagesAndCompatibilityCapabilityGrant | delegate=assemble_agent_turn_messages | consumer=PromptPackageV2
+ * boundary: in=IntentRevisionAgentContextFactsCurrentDocumentReferenceHistoryToolResultsAndCurrentHardCapabilityFacts | out=BudgetedPromptPackageV2MessagesAndPromptManifestCapabilityGrantV2 | delegate=assemble_agent_turn_messages | consumer=PromptPackageV2 | does_not=authorizeConcreteToolCallFromPromptOrIntentText
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_turn_prompt(
@@ -47,6 +48,9 @@ pub(super) fn prepare_turn_prompt(
     requires_current_doc_tool_read: bool,
     freeze_tools_after_proposal: bool,
     continuation_messages: &[serde_json::Value],
+    decision_receipt_ids: &[String],
+    gate_attempt: u32,
+    remaining_tool_calls: u32,
 ) -> Result<PreparedTurnPrompt, IpcError> {
     // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     // 2026-08-09：DOC_CTX_CAP 9000→16000（AG-LIMIT-01 扩大内联注入上限，长文档测试可直接编辑；G5 标定）。
@@ -125,27 +129,29 @@ pub(super) fn prepare_turn_prompt(
         &prompt,
     );
 
-    // WP2 生产链不再让 IntentResult/关键词决定授权；V1 仅是 grant 的暂存数据形状。
-    let mut capability_grant = ag::tool_registry::resolve_adaptive_capability_grant(
+    // Prompt 只获得当前硬事实的工具可见投影；它没有 ToolCall 绑定，不能直接作为执行授权。
+    let capability_factors = ag::tool_registry::CapabilityFactorsV2 {
+        has_task_run: task_run_id.is_some(),
+        active_bdocx,
+        table_ops_available: has_bdocx_tables,
+        // 图片插入需要先调用 list_images 发现受控资产；活动 BDocx 即具备查询动态能力，
+        // 具体图片实例能力仍由 ToolCall 执行层校验。
+        image_ops_available: active_bdocx,
+        tools_frozen: freeze_tools_after_proposal,
+        decision_receipt_ids: decision_receipt_ids.to_vec(),
+        gate_attempt,
+        gate_passed: false,
+        remaining_tool_calls,
+        cancelled: false,
+        terminal: false,
+    };
+    let capability_grant = ag::tool_registry::resolve_capability_grant_v2(
         runtime_profile,
         turn_id,
         explicit_edit_targets,
-        ag::tool_registry::CapabilityFactorsV1 {
-            has_task_run: task_run_id.is_some(),
-            active_bdocx,
-            table_ops_available: has_bdocx_tables,
-            // 图片插入需要先调用 list_images 发现受控资产；活动 BDocx 即具备查询动态能力，
-            // 具体图片实例能力仍由 ToolCall 执行层校验。
-            image_ops_available: active_bdocx,
-        },
+        capability_factors.clone(),
+        ag::tool_registry::CapabilityGrantPurposeV2::PromptManifest,
     );
-    if freeze_tools_after_proposal {
-        capability_grant.allowed_tools.clear();
-        capability_grant.grant_hash = ag::context::sha256_text(&format!(
-            "{}:proposal-recorded:no-more-tools",
-            capability_grant.grant_hash
-        ));
-    }
     let mut tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;
     ag::model_output::decorate_tool_definitions(&mut tools)?;
@@ -218,7 +224,7 @@ pub(super) fn prepare_turn_prompt(
     let preliminary_package = ag::context::build_prompt_package_v2(
         intent_result,
         &prompt_envelopes,
-        &capability_grant.grant_hash,
+        &capability_grant.grant_id,
         &tool_manifest_hash,
         assembled_messages.messages.clone(),
         &tools,
@@ -239,7 +245,7 @@ pub(super) fn prepare_turn_prompt(
     let prompt_package = ag::context::build_prompt_package_v2(
         intent_result,
         &prompt_envelopes,
-        &capability_grant.grant_hash,
+        &capability_grant.grant_id,
         &tool_manifest_hash,
         messages.clone(),
         &tools,
@@ -253,6 +259,7 @@ pub(super) fn prepare_turn_prompt(
         messages,
         tools,
         capability_grant,
+        capability_factors,
         prompt_package,
     })
 }
