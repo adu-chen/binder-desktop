@@ -134,7 +134,9 @@ function completeTurn(arg: unknown) {
 }
 
 function dispatchOk(arg: unknown) {
-  const request = (arg as { request?: { command?: string; params?: { diffIds?: string[] } } }).request;
+  const request = (arg as {
+    request?: { command?: string; params?: { diffIds?: string[]; outcome?: string } };
+  }).request;
   const command = request?.command;
   if (command === "ws.list_docs") return { correlation_id: "ag-test", result: [] };
   if (command === "de.list_diffs") {
@@ -147,7 +149,13 @@ function dispatchOk(arg: unknown) {
     };
   }
   if (command === "ag.resolve_decision") {
-    return { correlation_id: "ag-test", result: { task_run_id: "task-confirmed", status: "executing" } };
+    return {
+      correlation_id: "ag-test",
+      result: {
+        task_run_id: "task-confirmed",
+        status: request?.params?.outcome === "cancel" ? "cancelled" : "waiting",
+      },
+    };
   }
   return { correlation_id: "ag-test", result: { ok: true } };
 }
@@ -1816,12 +1824,17 @@ describe("agService TaskRun 查询（AG-1.0-IMP-TASKRUN-UI-01）", () => {
           result: [
             {
               task_run_id: "task-ws1-1-0",
-              status: "waiting_confirm",
-              intent_summary: "修改会议纪要",
-              steps: [
-                { step_id: "t1", kind: "tool", label: "read_doc", status: "ok" },
-                { step_id: "p1", kind: "propose", label: "提案 notes/a.md", status: "waiting_confirm" },
+              source_turn_ids: ["turn-1"],
+              through_seq: 8,
+              goal: "修改会议纪要",
+              status: "waiting",
+              observed_steps: [
+                { step_id: "t1", kind: "tool", label: "read_doc", status: "completed", depends_on: [], source_event_id: "e1", source_event_seq: 5 },
+                { step_id: "p1", kind: "propose", label: "提案 notes/a.md", status: "waiting", depends_on: [], source_event_id: "e2", source_event_seq: 8 },
               ],
+              waiting_on: ["decision-1"],
+              current_route_revision: 2,
+              candidate_steps: [],
               created_at: 1,
               updated_at: 2,
             },
@@ -1837,11 +1850,20 @@ describe("agService TaskRun 查询（AG-1.0-IMP-TASKRUN-UI-01）", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       taskRunId: "task-ws1-1-0",
-      status: "waiting_confirm",
-      intentSummary: "修改会议纪要",
+      status: "waiting",
+      goal: "修改会议纪要",
     });
-    expect(runs[0].steps[0]).toEqual({ stepId: "t1", kind: "tool", label: "read_doc", status: "ok" });
-    expect(runs[0].steps[1].status).toBe("waiting_confirm");
+    expect(runs[0].observedSteps[0]).toEqual({
+      stepId: "t1",
+      kind: "tool",
+      label: "read_doc",
+      status: "completed",
+      dependsOn: [],
+      sourceEventId: "e1",
+      sourceEventSeq: 5,
+      result: undefined,
+    });
+    expect(runs[0].observedSteps[1].status).toBe("waiting");
   });
 
   // covers: BR-SYS-STATE-008
@@ -1851,8 +1873,13 @@ describe("agService TaskRun 查询（AG-1.0-IMP-TASKRUN-UI-01）", () => {
     agStore.hydrateSessionTaskRuns(sessionId, [
       {
         taskRunId: "old-1",
-        status: "executing",
-        steps: [],
+        sourceTurnIds: ["old-turn"],
+        throughSeq: 1,
+        goal: "old",
+        status: "active",
+        observedSteps: [],
+        waitingOn: [],
+        candidateSteps: [],
         createdAt: 1,
         updatedAt: 1,
       },
@@ -2144,7 +2171,7 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
             correlation_id: "ag-test",
             result: {
               task_run_id: "task-create",
-              status: "executing",
+              status: "waiting",
               workspace_operation_receipt: {
                 operation_id: "operation-create",
                 plan_id: "plan-create",
@@ -2248,7 +2275,7 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
           correlation_id: "ag-test",
           result: {
             task_run_id: "task-create-failed",
-            status: "executing",
+            status: "waiting",
             workspace_operation_receipt: {
               operation_id: "operation-create-failed",
               plan_id: "plan-create-failed",
@@ -2484,23 +2511,25 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
   });
 
   // covers: BR-SYS-STATE-008
-  // 任务计划投影（TERM-AG-018）。
+  // 当前 route revision 投影（TERM-AG-018）不携带执行游标。
   it("projects task plans per session", () => {
     const sessionId = agStore.getSnapshot().activeSessionId;
     agStore.hydrateSessionPlans(sessionId, [
       {
         planId: "plan-1",
         taskRunId: "run-1",
-        cursor: 1,
-        steps: [
-          { stepId: "s1", seq: 0, kind: "read", label: "读取 a.md", deps: [], confirmPoint: false, status: "ok" },
-          { stepId: "s2", seq: 1, kind: "propose", label: "生成建议", deps: ["s1"], confirmPoint: true, status: "pending" },
+        throughSeq: 4,
+        routeRevision: 2,
+        summary: "读取后生成建议",
+        candidateSteps: [
+          { stepId: "s1", kind: "candidate", label: "读取 a.md", status: "candidate", dependsOn: [], sourceEventId: "e4", sourceEventSeq: 4 },
+          { stepId: "s2", kind: "candidate", label: "生成建议", status: "candidate", dependsOn: ["s1"], sourceEventId: "e4", sourceEventSeq: 4 },
         ],
       },
     ]);
     const plans = agStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.taskPlans ?? [];
-    expect(plans[0].steps[1].confirmPoint).toBe(true);
-    expect(plans[0].steps[1].deps).toEqual(["s1"]);
+    expect(plans[0].routeRevision).toBe(2);
+    expect(plans[0].candidateSteps[1].dependsOn).toEqual(["s1"]);
   });
 
   // covers: BR-SYS-STATE-008
@@ -2513,14 +2542,32 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
         return {
           correlation_id: "c",
           result: [
-            { task_run_id: "run-1", status: "executing", steps: [], created_at: 1, updated_at: 1 },
+            {
+              task_run_id: "run-1",
+              source_turn_ids: ["turn-1"],
+              through_seq: 2,
+              goal: "完成任务",
+              status: "active",
+              observed_steps: [],
+              waiting_on: [],
+              candidate_steps: [],
+              created_at: 1,
+              updated_at: 1,
+            },
           ],
         };
       }
       if (req.command === "ag.list_plans") {
         return {
           correlation_id: "c",
-          result: [{ plan_id: "plan-1", task_run_id: "run-1", cursor: 0, steps: [] }],
+          result: [{
+            plan_id: "plan-1",
+            task_run_id: "run-1",
+            through_seq: 2,
+            route_revision: 1,
+            summary: "当前路线",
+            candidate_steps: [],
+          }],
         };
       }
       return { correlation_id: "c", result: {} };

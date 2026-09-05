@@ -251,9 +251,8 @@ fn build_registry() -> CommandRegistry {
     // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：任务级裁决（DecisionRequest，三层分离）。
     reg.register("ag.propose_decision");
     reg.register("ag.resolve_decision");
-    // AG-1.0-TASKRUN-REWORK-CONTINUE-01：任务计划（TERM-AG-018）查询/登记。
+    // TaskPlan 仅保留 TurnEvent 派生查询；不存在外部登记或执行入口。
     reg.register("ag.list_plans");
-    reg.register("ag.create_plan");
     reg.register("ref.list_candidates");
     reg.register("ref.resolve_anchor");
     reg.register("ref.verify_anchor");
@@ -388,7 +387,6 @@ fn dispatch(
             "ag.propose_decision" => route_propose_decision(&request, &state),
             "ag.resolve_decision" => route_resolve_decision(&request, &state),
             "ag.list_plans" => route_list_plans(&request, &state),
-            "ag.create_plan" => route_create_plan(&request, &state),
             "ag.delete_session" => route_delete_agent_session(&request, &state),
             "ref.list_candidates" => route_ref_list_candidates(&request, &state),
             "ref.resolve_anchor" => route_ref_resolve_anchor(&request, &state),

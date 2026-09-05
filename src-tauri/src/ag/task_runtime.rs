@@ -1,4 +1,4 @@
-//! TaskRun、DecisionRequest 与 TaskPlan 的 command/runtime 编排。
+//! DecisionRequest 运行时与 TaskRun/TaskPlan 只读事件投影查询。
 
 use crate::ipc::{CommandRequest, IpcError};
 use crate::{active_ws, ag, lock_db, str_param, workspace, ws_json, AppState};
@@ -48,7 +48,7 @@ fn persist_completed_create_document_target(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015
- * boundary: in=AgentSessionIdentity | out=PersistedTaskRunProjections
+ * boundary: in=ActiveWorkspaceAgentSessionIdentity | out=TurnEventDerivedTaskRunProjectionV2List
  */
 pub(crate) fn route_list_agent_task_runs(
     request: &CommandRequest,
@@ -81,10 +81,10 @@ pub(super) fn settle_optional_task_run(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingConfirmTaskRun | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargets
+ * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingTaskProjection | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargetsScheduleTaskPlanOrStartProvider
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.propose_decision` —— 发起任务级裁决请求
-/// （TERM-AG-017；kind：permission/plan_choice/scope/manual_confirm；置 run waiting_confirm）。
+/// （TERM-AG-017；kind：permission/plan_choice/scope/manual_confirm；投影进入 Waiting）。
 pub(crate) fn route_propose_decision(
     request: &CommandRequest,
     state: &AppState,
@@ -176,10 +176,10 @@ pub(crate) fn route_propose_decision(
  * chain:    AG-TURN, AG-TOOL, WS-OPERATION
  * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019, TERM-WS-003
- * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=TaskRunStatusWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanOrTreatModelTextAsUserConfirmation
+ * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.resolve_decision` —— 任务级裁决
-/// （userConfirm/userCancel 真实入口；confirm → Executing，cancel → Cancelled）。
+/// confirm/cancel 只裁决对应请求；同回合恢复和后续 activity 由 AgentTurn 入口证明。
 pub(crate) fn route_resolve_decision(
     request: &CommandRequest,
     state: &AppState,
@@ -420,13 +420,19 @@ pub(crate) fn route_resolve_decision(
             match workspace::operation::execute_operation_plan(&conn, &ws, &plan_id, &request_id) {
                 Ok(receipt) => {
                     if receipt.final_status != crate::types::WorkspaceOperationStatus::Completed {
-                        status = ag::task::settle_turn(
+                        status = settle_task_run(
                             &conn,
                             &task_run_id,
+                            source_turn_id,
                             ag::task::TurnOutcome::Failed,
                         )
-                        .map_err(|e| {
-                            IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false)
+                        .ok_or_else(|| {
+                            IpcError::new(
+                                "AG_TASK_DB_ERROR",
+                                "TaskRun 失败状态未能落库",
+                                true,
+                                false,
+                            )
                         })?;
                     }
                     workspace_operation_items = workspace::operation::load_plan(&conn, &plan_id)
@@ -461,8 +467,12 @@ pub(crate) fn route_resolve_decision(
                     operation_receipt = Some(ws_json(&receipt)?);
                 }
                 Err(error) => {
-                    let _ =
-                        ag::task::settle_turn(&conn, &task_run_id, ag::task::TurnOutcome::Failed);
+                    let _ = settle_task_run(
+                        &conn,
+                        &task_run_id,
+                        source_turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
                     return Err(error);
                 }
             }
@@ -492,52 +502,30 @@ pub(crate) fn route_resolve_decision(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=TaskRunIdentity | out=PersistedTaskPlanProjections
+ * boundary: in=ActiveWorkspaceTaskRunIdentity | out=CurrentRouteDerivedTaskPlanProjectionV2
  */
-/// AG-1.0-TASKRUN-REWORK-CONTINUE-01：`ag.list_plans` —— 按 task_run_id 列出任务计划
-/// （TERM-AG-018，可展示操作计划：步骤/依赖/游标/授权/确认点）。
+/// `ag.list_plans` 是兼容查询名；结果只来自当前 route revision，不读取旧 task_plans 执行字段。
 pub(crate) fn route_list_plans(
     request: &CommandRequest,
     state: &AppState,
 ) -> Result<serde_json::Value, IpcError> {
+    let ws = active_ws(state)?;
     let task_run_id = str_param(request, "taskRunId", "AG_TASK_RUN_ID_REQUIRED")?;
     let conn = lock_db(state)?;
-    let plans = ag::task::list_plans_by_run(&conn, &task_run_id)
+    let run = ag::task::load_task_run(&conn, &task_run_id)
+        .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+        .ok_or_else(|| IpcError::new("AG_TASK_NOT_FOUND", "TaskRun 不存在", false, false))?;
+    if run.workspace_id != ws.workspace_id {
+        return Err(IpcError::new(
+            "AG_TASK_NOT_FOUND",
+            "TaskRun 不属于 active workspace",
+            false,
+            false,
+        ));
+    }
+    let plans = ag::task::list_plans_by_run(&conn, &ws.workspace_id, &run.session_id, &task_run_id)
         .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
     ws_json(&plans)
-}
-
-/**
- * @GOV
- * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-028
- * type:     EFFECT
- * chain:    AG-TURN
- * rules:    BR-SYS-STATE-008
- * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=TaskPlanV1Registration | out=PersistedTaskPlan
- */
-/// AG-1.0-TASKRUN-REWORK-CONTINUE-01：`ag.create_plan` —— 登记任务计划
-/// （供工具/后续 IntentResult 复杂目标接线调用；plan 为 TaskPlanV1 JSON）。
-pub(crate) fn route_create_plan(
-    request: &CommandRequest,
-    state: &AppState,
-) -> Result<serde_json::Value, IpcError> {
-    let plan: crate::types::TaskPlanV1 = request
-        .params
-        .get("plan")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .ok_or_else(|| {
-            IpcError::new(
-                "AG_PLAN_INVALID",
-                "plan 参数须为 TaskPlanV1 JSON",
-                false,
-                false,
-            )
-        })?;
-    let conn = lock_db(state)?;
-    ag::task::create_plan(&conn, &plan)
-        .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?;
-    ws_json(&serde_json::json!({ "ok": true }))
 }
 
 #[cfg(test)]
@@ -660,7 +648,7 @@ mod ag_task_plan_runtime_tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            crate::types::TaskRunStatus::Executing
+            ag::task::TaskRunStatus::Active
         );
         drop(conn);
         std::fs::remove_dir_all(root).unwrap();
@@ -949,7 +937,7 @@ mod ag_task_plan_runtime_tests {
     }
 
     // covers: BR-SYS-STATE-008
-    // TaskRun 创建后的统一失败出口必须把活动态收束为 Failed，不能遗留 executing。
+    // TaskRun 创建后的统一失败出口必须记录 Failed 投影事实。
     #[test]
     fn started_turn_failure_settles_task_run() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -969,25 +957,8 @@ mod ag_task_plan_runtime_tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            crate::types::TaskRunStatus::Failed,
+            ag::task::TaskRunStatus::Failed,
         );
-    }
-
-    // covers: BR-AG-DATA-002, BR-SYS-STATE-008
-    // RuntimeControl 只注入可审计的执行计划事实，明确当前就绪步骤，不注入模型推理或伪造完成态。
-    #[test]
-    fn task_plan_runtime_projection_exposes_only_current_ready_step() {
-        let plan = build_task_plan("task-runtime", &["a.md".to_string(), "b.md".to_string()]);
-        let projection = task_plan_runtime_projection(&plan);
-        assert_eq!(projection["planId"], "plan-task-runtime-1");
-        assert_eq!(projection["cursor"], 0);
-        assert_eq!(projection["currentReadyStep"]["stepId"], "read-0");
-        assert_eq!(projection["currentReadyStep"]["requiredTool"], "read_doc");
-        assert_eq!(projection["steps"].as_array().unwrap().len(), 4);
-        assert!(projection["executionRule"]
-            .as_str()
-            .unwrap()
-            .contains("Tool success or failure"));
     }
 }
 
@@ -998,90 +969,30 @@ pub(super) fn edit_intent_has_terminal_tool_result(
     proposed_diff || edit_blocked_reported
 }
 
-/// AG-1.0-IMP-TASKRUN-01：回合终态映射 TaskRun（SM-AG-04 settle，BR-SYS-STATE-008）。
-/// best-effort（DB 失败不阻塞回合）；回合→TaskRun 关联写入 agent_turns.task_run_id（UNC-09）。
-/// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：settle 不再接收"有提案"参数——WaitingConfirm 唯一来源
-/// 是未决 DecisionRequest（三层分离，A-AG-M-S-01 §2.2.2）。
+/// 回合终态先更新 Decision/续片段控制缓存，再追加 task_status_observed；展示层只消费后者。
 pub(super) fn settle_task_run(
     conn: &rusqlite::Connection,
     task_run_id: &str,
     turn_id: &str,
     outcome: ag::task::TurnOutcome,
-) {
-    let _ = ag::task::settle_turn(conn, task_run_id, outcome);
+) -> Option<ag::task::TaskRunStatus> {
     let _ = ag::task::link_turn(conn, turn_id, task_run_id);
-}
-
-/// AG-1.0-TASKRUN-REWORK-INTENT-01：按目标文档构造可展示 TaskPlan（TERM-AG-018）。
-/// 每文档一对步骤：读取（read_doc）→ 生成修改建议（propose_edit，确认点）；步骤依赖 read→propose。
-/// 计划不预授权；执行顺序和真实进度由工具调用/ToolResult 驱动。
-pub(super) fn build_task_plan(task_run_id: &str, paths: &[String]) -> crate::types::TaskPlanV1 {
-    use crate::types::{TaskPlanStepV1, TaskPlanV1, TaskStepStatus};
-    let now = now_millis();
-    let mut steps = Vec::new();
-    let mut seq = 0i32;
-    for (i, p) in paths.iter().enumerate() {
-        let read_id = format!("read-{i}");
-        steps.push(TaskPlanStepV1 {
-            step_id: read_id.clone(),
-            seq,
-            kind: "read".to_string(),
-            label: format!("读取 {p}"),
-            deps: Vec::new(),
-            required_grant: Some("read_doc".to_string()),
-            confirm_point: false,
-            status: TaskStepStatus::Pending,
-        });
-        seq += 1;
-        steps.push(TaskPlanStepV1 {
-            step_id: format!("propose-{i}"),
-            seq,
-            kind: "propose".to_string(),
-            label: format!("生成修改建议：{p}"),
-            deps: vec![read_id],
-            required_grant: Some("propose_edit".to_string()),
-            confirm_point: true,
-            status: TaskStepStatus::Pending,
-        });
-        seq += 1;
+    if let Ok(status) = ag::task::settle_turn(conn, task_run_id, outcome) {
+        let status_name = match status {
+            ag::task::TaskRunStatus::Active => "active",
+            ag::task::TaskRunStatus::Waiting => "waiting",
+            ag::task::TaskRunStatus::Completed => "completed",
+            ag::task::TaskRunStatus::Failed => "failed",
+            ag::task::TaskRunStatus::Cancelled => "cancelled",
+            ag::task::TaskRunStatus::Interrupted => "interrupted",
+        };
+        let _ = ag::task::record_projection_fact(
+            conn,
+            turn_id,
+            "task_status_observed",
+            serde_json::json!({"taskRunId": task_run_id, "status": status_name}),
+        );
+        return Some(status);
     }
-    TaskPlanV1 {
-        plan_id: format!("plan-{task_run_id}-1"),
-        task_run_id: task_run_id.to_string(),
-        steps,
-        cursor: 0,
-        created_at: now,
-        updated_at: now,
-    }
-}
-
-/// 将持久化 TaskPlan 投影到受信 RuntimeControl：只提供步骤、cursor 和当前可执行步骤，
-/// 不包含模型思维链，也不产生 CapabilityGrant 或文档状态变化。
-/**
- * @GOV
- * codes:    BR-AG-DATA-002-DATA-AG-AG-TURN-017, BR-SYS-STATE-008-DATA-AG-AG-TURN-017
- * type:     DATA
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-002, BR-SYS-STATE-008
- * term_ref: TERM-AG-018
- * boundary: in=PersistedTaskPlan | out=RuntimeControlTaskPlanProjection(currentReadyStepOnly) | consumer=TaskPlanV1
- */
-pub(super) fn task_plan_runtime_projection(plan: &crate::types::TaskPlanV1) -> serde_json::Value {
-    let current_ready_step = ag::task::current_ready_plan_step(plan).map(|step| {
-        serde_json::json!({
-            "stepId": step.step_id,
-            "seq": step.seq,
-            "kind": step.kind,
-            "label": step.label,
-            "requiredTool": step.required_grant,
-            "confirmPoint": step.confirm_point,
-        })
-    });
-    serde_json::json!({
-        "planId": plan.plan_id,
-        "cursor": plan.cursor,
-        "steps": plan.steps,
-        "currentReadyStep": current_ready_step,
-        "executionRule": "Only the currentReadyStep may advance the plan. Tool success or failure is the only source of step state; do not claim completion in text.",
-    })
+    None
 }

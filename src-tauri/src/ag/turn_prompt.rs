@@ -5,7 +5,6 @@ use super::prompt_runtime::{
     assemble_agent_turn_messages, build_current_doc_prompt_context,
     empty_current_doc_prompt_context, insert_runtime_control_message, DOC_CTX_CAP,
 };
-use super::task_runtime::task_plan_runtime_projection;
 use crate::ag;
 use crate::ipc::IpcError;
 use crate::AppState;
@@ -53,7 +52,7 @@ fn current_document_prompt_context(
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_turn_prompt(
-    state: &AppState,
+    _state: &AppState,
     runtime_profile: &str,
     turn_id: &str,
     session_id: &str,
@@ -158,14 +157,6 @@ pub(super) fn prepare_turn_prompt(
     let mut tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;
     ag::model_output::decorate_tool_definitions(&mut tools)?;
-    let task_plan_runtime = task_run_id.and_then(|task_run_id| {
-        state.db.lock().ok().and_then(|conn| {
-            ag::task::active_plan_by_run(&conn, task_run_id)
-                .ok()
-                .flatten()
-                .map(|plan| task_plan_runtime_projection(&plan))
-        })
-    });
     let tool_manifest_hash =
         ag::context::sha256_text(&serde_json::to_string(&tools).map_err(|error| {
             IpcError::new(
@@ -264,7 +255,7 @@ pub(super) fn prepare_turn_prompt(
         &preliminary_package,
         &prompt_envelopes,
         &capability_grant,
-        task_plan_runtime.as_ref(),
+        None,
     );
     assembled_messages
         .messages

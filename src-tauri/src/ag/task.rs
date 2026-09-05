@@ -1,14 +1,14 @@
-//! AG-1.0-IMP-TASKRUN-01 · 受限任务实例编排机 SM-AG-04 · AG-TURN / BR-SYS-STATE-008
+//! SM-AG-04 TaskRun/TaskPlan 事件投影与 DecisionRequest 控制事实。
 //!
-//! 同一用户目标内组织步骤/回合的受限编排（TERM-AG-015/016）：非后台队列、不自动重试、不跨重启续跑、
-//! 不越过确认点；真实工作状态只由回合/步骤/工具事件驱动。task_runs 表持久化（db 迁移 v11）；
-//! 应用启动时将陈旧活动态置 Interrupted（展示"中断可重试"，retry 创建新回合，不续跑）。
+//! `task_runs` 只保留稳定身份和 Decision/续片段所需控制态；用户可见 TaskRun/TaskPlan/TaskStep
+//! 一律从 append-only TurnEvent 重建，不含执行游标、计划授权或调度入口。
 
 use crate::types::{
-    DecisionRequestStatus, DecisionRequestV1, TaskPlanStepV1, TaskPlanV1, TaskRunStatus, TaskRunV1,
-    TaskStepStatus, TaskStepV1,
+    DecisionRequestStatus, DecisionRequestV1, TaskPlanProjectionV2, TaskRunProjectionStatusV2,
+    TaskRunProjectionV2, TaskStepProjectionStatusV2, TaskStepProjectionV2,
 };
 use rusqlite::{Connection, OptionalExtension};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,55 +22,26 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// SM-AG-04 事件（A-AG-M-S-01 §2.2 主表）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskRunEvent {
-    PlanApproved,
-    StepStarted,
-    StepOk,
-    StepFail,
-    WaitingConfirm,
-    UserConfirm,
-    UserCancel,
-    ClarificationNeeded,
-    Interrupt,
-    Retry,
-    Finish,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TaskRunStatus {
+    Active,
+    Waiting,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
 }
 
-/**
- * @GOV
- * codes:    BR-SYS-STATE-008-RB-AG-AG-TASK-001, BR-AG-STATE-001-RB-AG-AG-TASK-001
- * type:     RB
- * chain:    AG-TURN
- * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
- * boundary: in=TaskRunEvent | out=TaskRunStatus(noneWhenForbiddenNoBackgroundQueue)
- */
-/// SM-AG-04 转移引擎（BR-SYS-STATE-008）：返回 `None` = 无合法转移。forbidden：Executing→Completed
-/// 未经 finish；WaitingConfirm/WaitingClarification 未经用户裁决/补充不得推进；Interrupted→执行无
-/// 用户重试；任一态→后台队列不存在（本机无队列概念）。主表见 A-AG-M-S-01 §2.2。
-pub fn transition(state: TaskRunStatus, event: TaskRunEvent) -> Option<TaskRunStatus> {
-    use TaskRunEvent::{
-        ClarificationNeeded, Finish, Interrupt, PlanApproved, Retry, StepFail, StepOk, StepStarted,
-        UserCancel, UserConfirm, WaitingConfirm,
-    };
-    use TaskRunStatus as S;
-    let next = match (state, event) {
-        (S::Planned, PlanApproved) => S::Executing,
-        (S::Executing, StepStarted) => S::Executing,
-        (S::Executing, StepOk) => S::Executing,
-        (S::Executing, WaitingConfirm) => S::WaitingConfirm,
-        (S::Executing, ClarificationNeeded) => S::WaitingClarification,
-        (S::WaitingConfirm, UserConfirm) => S::Executing,
-        (S::WaitingConfirm, UserCancel) => S::Cancelled,
-        (S::Executing, StepFail) => S::Failed,
-        (S::Executing, Interrupt) => S::Interrupted,
-        (S::WaitingConfirm, Interrupt) | (S::WaitingClarification, Interrupt) => S::Interrupted,
-        (S::Interrupted, Retry) => S::Planned,
-        (S::Executing, Finish) => S::Completed,
-        _ => return None,
-    };
-    Some(next)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskRunControl {
+    pub task_run_id: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub status: TaskRunStatus,
+    pub intent_summary: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 /// 回合终态（lib.rs 回合循环映射）。
@@ -102,11 +73,12 @@ pub struct PreviewCheckpoint {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=TaskLevelProductRequirementAndAgentSessionIdentity | out=NewPersistedExecutingTaskRun(rejectsUnfinishedRunWithoutExplicitContinuation) | does_not=createTaskRunForSimpleAgentTurnOrSilentlyMergeUserGoals
+ * boundary: in=TurnEventBackedComplexRouteOrTaskLevelWaitingPointAndAgentSessionIdentity | out=StableTaskRunProjectionIdentity(rejectsUnfinishedRunWithoutExplicitContinuation) | does_not=createTaskRunForSimpleAgentTurnScheduleCandidateWorkOrSilentlyMergeUserGoals
  */
-/// 为已经判定需要任务级产物的执行路径取得 task_run_id。
+/// 为已有复杂路线或任务级等待事实取得稳定 task_run_id。该行只服务身份关联和裁决控制，
+/// 用户可见状态与步骤必须从 TurnEvent 重建。
 /// - 会话内存在**非终态** TaskRun → 拒绝；复用只能经携带稳定 task_run_id 的显式 continuation；
-/// - 否则新建（Planned→Executing）。
+/// - 否则新建 active 身份；不创建 TaskPlan 或候选执行项。
 /// 调用方不得把普通 AgentTurn 开始本身当成创建依据，也不得凭 session 猜测两个请求属于同一目标。
 pub fn begin_turn(
     conn: &Connection,
@@ -128,7 +100,7 @@ pub fn begin_turn(
     let now = now_millis();
     conn.execute(
         "INSERT INTO task_runs (task_run_id, workspace_id, session_id, status, intent_summary, steps_json, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, 'executing', ?4, '[]', ?5, ?5)",
+         VALUES (?1, ?2, ?3, 'active', ?4, '[]', ?5, ?5)",
         rusqlite::params![id, workspace_id, session_id, intent_summary, now],
     )?;
     Ok(id)
@@ -156,7 +128,7 @@ pub fn create_preview_checkpoint(
 ) -> rusqlite::Result<()> {
     let run_matches: Option<String> = conn
         .query_row(
-            "SELECT task_run_id FROM task_runs WHERE task_run_id=?1 AND workspace_id=?2 AND session_id=?3 AND status='executing'",
+            "SELECT task_run_id FROM task_runs WHERE task_run_id=?1 AND workspace_id=?2 AND session_id=?3 AND status IN ('active','executing')",
             rusqlite::params![task_run_id, workspace_id, session_id],
             |row| row.get(0),
         )
@@ -284,7 +256,7 @@ pub fn begin_preview_continuation(
         "UPDATE task_preview_checkpoints SET status='consumed', consumed_at=?1 \
          WHERE diff_id=?2 AND task_run_id=?3 AND workspace_id=?4 AND session_id=?5 AND turn_id=?6 AND rel_path=?7 \
          AND session_version=?8 AND content_hash=?9 AND status='acknowledged' \
-         AND EXISTS (SELECT 1 FROM task_runs r WHERE r.task_run_id=?3 AND r.workspace_id=?4 AND r.session_id=?5 AND r.status='executing')",
+         AND EXISTS (SELECT 1 FROM task_runs r WHERE r.task_run_id=?3 AND r.workspace_id=?4 AND r.session_id=?5 AND r.status IN ('active','executing'))",
         rusqlite::params![
             now_millis(),
             checkpoint.diff_id,
@@ -337,86 +309,11 @@ fn latest_non_terminal_id(
         .optional()
 }
 
-/// 记录工具步骤（真实工具事件驱动）：终态一次写入（ok/failed）。
-pub fn record_tool_step(
-    conn: &Connection,
-    task_run_id: &str,
-    step_id: &str,
-    label: &str,
-    ok: bool,
-) -> rusqlite::Result<()> {
-    let status = if ok { "ok" } else { "failed" };
-    append_step(conn, task_run_id, "tool", label, status, step_id)
-}
-
-/// 记录提案步骤（＝W1/W2/W3 确认点）：进入 waiting_confirm。
-pub fn record_proposal_step(
-    conn: &Connection,
-    task_run_id: &str,
-    step_id: &str,
-    label: &str,
-) -> rusqlite::Result<()> {
-    append_step(
-        conn,
-        task_run_id,
-        "propose",
-        label,
-        "waiting_confirm",
-        step_id,
-    )
-}
-
-fn append_step(
-    conn: &Connection,
-    task_run_id: &str,
-    kind: &str,
-    label: &str,
-    status: &str,
-    step_id: &str,
-) -> rusqlite::Result<()> {
-    let mut steps: Vec<TaskStepV1> = load_steps(conn, task_run_id)?;
-    steps.push(TaskStepV1 {
-        step_id: step_id.to_string(),
-        kind: kind.to_string(),
-        label: label.to_string(),
-        status: parse_step_status(status).unwrap_or(TaskStepStatus::Ok),
-    });
-    let json = serde_json::to_string(&steps).unwrap_or_else(|_| "[]".to_string());
-    conn.execute(
-        "UPDATE task_runs SET steps_json=?1, updated_at=?2 WHERE task_run_id=?3",
-        rusqlite::params![json, now_millis(), task_run_id],
-    )?;
-    Ok(())
-}
-
-fn load_steps(conn: &Connection, task_run_id: &str) -> rusqlite::Result<Vec<TaskStepV1>> {
-    let raw: String = conn
-        .query_row(
-            "SELECT steps_json FROM task_runs WHERE task_run_id=?1",
-            rusqlite::params![task_run_id],
-            |r| r.get(0),
-        )
-        .unwrap_or_else(|_| "[]".to_string());
-    Ok(serde_json::from_str(&raw).unwrap_or_default())
-}
-
-fn parse_step_status(s: &str) -> Option<TaskStepStatus> {
-    match s {
-        "pending" => Some(TaskStepStatus::Pending),
-        "running" => Some(TaskStepStatus::Running),
-        "waiting_confirm" => Some(TaskStepStatus::WaitingConfirm),
-        "ok" => Some(TaskStepStatus::Ok),
-        "failed" => Some(TaskStepStatus::Failed),
-        "cancelled" => Some(TaskStepStatus::Cancelled),
-        _ => None,
-    }
-}
-
-/// 回合终态映射（BR-SYS-STATE-008 · A-AG-M-S-01 §2.2.2 重构）：完成且有未决 DecisionRequest →
-/// WaitingConfirm（保持任务非终态，裁决后由原 AgentTurn 恢复）；完成无未决裁决 → Completed；
+/// 回合终态映射：完成且有未决 DecisionRequest → Waiting（裁决后由原 AgentTurn 恢复）；
+/// 完成无未决裁决 → Completed；
 /// 失败 → Failed；取消 → Cancelled。TaskRun 终态/Interrupted 不得被后到的 AgentTurn 结算覆写；
 /// 提案（Diff）不再驱动 waiting_confirm（三层分离）。
-pub fn settle_turn(
+pub(crate) fn settle_turn(
     conn: &Connection,
     task_run_id: &str,
     outcome: TurnOutcome,
@@ -447,10 +344,10 @@ pub fn settle_turn(
     }
     let status = match outcome {
         TurnOutcome::Completed if has_pending_preview_checkpoint(conn, task_run_id)? => {
-            TaskRunStatus::Executing
+            TaskRunStatus::Active
         }
         TurnOutcome::Completed if has_pending_decision(conn, task_run_id)? => {
-            TaskRunStatus::WaitingConfirm
+            TaskRunStatus::Waiting
         }
         TurnOutcome::Completed => TaskRunStatus::Completed,
         TurnOutcome::Failed => TaskRunStatus::Failed,
@@ -510,8 +407,8 @@ pub fn latest_pending_decision_for_session(
         .optional()
 }
 
-/// 发起任务级裁决请求（TERM-AG-017）：INSERT + 置 task_run 为 waiting_confirm。
-/// 仅此处可将 TaskRun 置 WaitingConfirm（confirm_point 唯一来源）。
+/// 发起任务级裁决请求（TERM-AG-017）：INSERT + 置 task_run 为 waiting。
+/// DecisionRequest 是任务等待的真实来源；TaskRun 只同步缓存 Waiting 投影。
 pub const DECISION_KINDS: &[&str] = &["permission", "plan_choice", "scope", "manual_confirm"];
 
 pub fn is_supported_decision_kind(kind: &str) -> bool {
@@ -564,7 +461,7 @@ fn frozen_scope_targets(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=ExecutingTaskRunAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingConfirmTaskRun | effect=workspaceDb | does_not=appendScopeTargetsBeforeConfirm
+ * boundary: in=ActiveTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=appendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection
  */
 pub fn propose_decision(
     conn: &Connection,
@@ -581,9 +478,9 @@ pub fn propose_decision(
     let run = load_task_run(conn, task_run_id)?.ok_or_else(|| {
         rusqlite::Error::InvalidParameterName(format!("unknown task run: {task_run_id}"))
     })?;
-    if run.status != TaskRunStatus::Executing {
+    if run.status != TaskRunStatus::Active {
         return Err(rusqlite::Error::InvalidParameterName(format!(
-            "task run is not executing: {task_run_id}"
+            "task run is not active: {task_run_id}"
         )));
     }
     if has_pending_decision(conn, task_run_id)? {
@@ -603,7 +500,7 @@ pub fn propose_decision(
         rusqlite::params![request_id, task_run_id, kind, payload.to_string(), now],
     )?;
     conn.execute(
-        "UPDATE task_runs SET status='waiting_confirm', updated_at=?1 WHERE task_run_id=?2",
+        "UPDATE task_runs SET status='waiting', updated_at=?1 WHERE task_run_id=?2",
         rusqlite::params![now, task_run_id],
     )?;
     Ok(DecisionRequestV1 {
@@ -618,6 +515,15 @@ pub fn propose_decision(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn resolve_decision(
+    conn: &Connection,
+    request_id: &str,
+    outcome: &str,
+) -> rusqlite::Result<(String, TaskRunStatus, bool)> {
+    resolve_decision_with_scope_targets(conn, request_id, outcome, None)
+}
+
 /**
  * @GOV
  * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-DECISION-002, BR-AG-DATA-003-EFFECT-AG-AG-DECISION-002
@@ -627,17 +533,9 @@ pub fn propose_decision(
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
  * boundary: in=DecisionRequestOutcomeAndRevalidatedFrozenScopeTargets | out=ResolvedDecisionTaskRunStatusAndAtomicExplicitEditTargetSetAppend | effect=workspaceDb | does_not=appendOnCancelMismatchOrReplayWithDifferentOutcome
  */
-/// 裁决任务级请求（userConfirm/userCancel 真实入口）：confirm → Executing（可自动下一片段），
-/// cancel → Cancelled。scope confirm 与 ExplicitEditTargetSet 追加在同一事务内完成。
-pub fn resolve_decision(
-    conn: &Connection,
-    request_id: &str,
-    outcome: &str,
-) -> rusqlite::Result<(String, TaskRunStatus, bool)> {
-    resolve_decision_with_scope_targets(conn, request_id, outcome, None)
-}
-
-pub fn resolve_decision_with_scope_targets(
+/// 裁决任务级请求：confirm 只解除等待条件并恢复原 AgentTurn，cancel 终结该路线。
+/// scope confirm 与 ExplicitEditTargetSet 追加在同一事务内完成；后续活动仍须由真实回合事件证明。
+pub(crate) fn resolve_decision_with_scope_targets(
     conn: &Connection,
     request_id: &str,
     outcome: &str,
@@ -695,7 +593,8 @@ pub fn resolve_decision_with_scope_targets(
         rusqlite::params![outcome, now, request_id],
     )?;
     let status = if outcome == "confirm" {
-        TaskRunStatus::Executing
+        // waitResolved 本身不能伪造 activityObserved；恢复原回合后的 provider/tool 事件才使投影 Active。
+        TaskRunStatus::Waiting
     } else {
         TaskRunStatus::Cancelled
     };
@@ -736,7 +635,7 @@ pub fn begin_confirmed_continuation(
             "SELECT r.task_run_id FROM task_runs r \
              JOIN decision_requests d ON d.task_run_id=r.task_run_id \
              WHERE r.task_run_id=?1 AND r.workspace_id=?2 AND r.session_id=?3 \
-             AND r.status='executing' AND d.request_id=?4 \
+             AND r.status IN ('waiting','active','executing') AND d.request_id=?4 \
              AND d.status='resolved' AND d.outcome='confirm'",
             rusqlite::params![task_run_id, workspace_id, session_id, decision_request_id],
             |r| r.get(0),
@@ -766,7 +665,7 @@ pub fn begin_resolved_decision_continuation(
              JOIN decision_requests d ON d.task_run_id=r.task_run_id \
              WHERE r.task_run_id=?1 AND r.workspace_id=?2 AND r.session_id=?3 \
              AND d.request_id=?4 AND d.status='resolved' \
-             AND ((d.outcome='confirm' AND r.status='executing') \
+             AND ((d.outcome='confirm' AND r.status IN ('waiting','active','executing')) \
                OR (d.outcome='cancel' AND r.status='cancelled'))",
             rusqlite::params![task_run_id, workspace_id, session_id, decision_request_id],
             |r| r.get(0),
@@ -817,6 +716,76 @@ fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequestV1> {
 
 /**
  * @GOV
+ * codes:    BR-SYS-STATE-007-EFFECT-AG-AG-TURN-047, BR-AG-STATE-001-EFFECT-AG-AG-TURN-047, BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-047
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-SYS-STATE-007, BR-AG-STATE-001, BR-AG-PERSIST-001
+ * term_ref: TERM-AG-015
+ * boundary: in=DerivedTaskProjectionFactBoundToExistingAgentTurn | out=AppendOnlyInternalTurnEvent | effect=workspaceDb | does_not=appendLateBusinessSideEffectsOrMutateSourceFacts
+ */
+pub fn record_projection_fact(
+    conn: &Connection,
+    turn_id: &str,
+    kind: &str,
+    payload: serde_json::Value,
+) -> rusqlite::Result<bool> {
+    let tx = conn.unchecked_transaction()?;
+    let identity = tx
+        .query_row(
+            "SELECT workspace_id, session_id, status FROM agent_turns WHERE turn_id=?1",
+            [turn_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((workspace_id, session_id, turn_status)) = identity else {
+        return Ok(false);
+    };
+    let is_recovery_observation = kind == "task_status_observed"
+        && payload.get("status").and_then(serde_json::Value::as_str) == Some("interrupted");
+    if !is_recovery_observation
+        && matches!(
+            turn_status.as_str(),
+            "completed" | "error" | "cancelled" | "gate_rejected"
+        )
+    {
+        return Ok(false);
+    }
+    let next_seq = tx.query_row(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_turn_events WHERE turn_id=?1",
+        [turn_id],
+        |row| row.get::<_, u64>(0),
+    )?;
+    let occurred_at = now_millis();
+    tx.execute(
+        "INSERT INTO agent_turn_events \
+         (event_id, workspace_id, session_id, turn_id, seq, kind, payload_version, payload_json, occurred_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)",
+        rusqlite::params![
+            format!("turn-event:{turn_id}:{next_seq}"),
+            workspace_id,
+            session_id,
+            turn_id,
+            next_seq,
+            kind,
+            payload.to_string(),
+            occurred_at,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// 应用启动清理（不跨重启续跑，BR-SYS-STATE-008）：把所有 workspace 的非终态 TaskRun 置
+/// Interrupted（展示"中断可重试"）；新回合 begin_turn 将新建（retry 创建新回合）。
+/// 此函数只能由应用启动恢复路径调用，不能在每个 AgentTurn 入口调用，否则会中断同一进程内的续片段。
+/**
+ * @GOV
  * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TURN-033, BR-AG-STATE-001-EFFECT-AG-AG-TURN-033
  * type:     EFFECT
  * chain:    AG-TURN
@@ -824,132 +793,85 @@ fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequestV1> {
  * term_ref: TERM-AG-015
  * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation)
  */
-/// 应用启动清理（不跨重启续跑，BR-SYS-STATE-008）：把所有 workspace 的非终态 TaskRun 置
-/// Interrupted（展示"中断可重试"）；新回合 begin_turn 将新建（retry 创建新回合）。
-/// 此函数只能由应用启动恢复路径调用，不能在每个 AgentTurn 入口调用，否则会中断同一进程内的续片段。
 pub fn mark_all_stale_as_interrupted(conn: &Connection) -> rusqlite::Result<usize> {
+    let mut statement = conn.prepare(
+        "SELECT r.task_run_id, \
+         (SELECT t.turn_id FROM agent_turns t WHERE t.task_run_id=r.task_run_id \
+          ORDER BY t.updated_at DESC, t.created_at DESC, t.turn_id DESC LIMIT 1) \
+         FROM task_runs r \
+         WHERE r.status NOT IN ('completed','failed','cancelled','interrupted') \
+         AND EXISTS (SELECT 1 FROM agent_turns t WHERE t.task_run_id=r.task_run_id)",
+    )?;
+    let linked = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
     let n = conn.execute(
         "UPDATE task_runs SET status='interrupted', updated_at=?1 \
          WHERE status NOT IN \
          ('completed','failed','cancelled','interrupted')",
         rusqlite::params![now_millis()],
     )?;
+    for (task_run_id, turn_id) in linked {
+        let _ = record_projection_fact(
+            conn,
+            &turn_id,
+            "task_status_observed",
+            serde_json::json!({"taskRunId": task_run_id, "status": "interrupted"}),
+        )?;
+    }
     Ok(n)
 }
 
-/// 读取 TaskRun（含步骤）。
-pub fn load_task_run(conn: &Connection, task_run_id: &str) -> rusqlite::Result<Option<TaskRunV1>> {
-    row_to_run(
-        conn
-            .query_row(
-                "SELECT task_run_id, workspace_id, session_id, status, intent_summary, steps_json, created_at, updated_at \
-                 FROM task_runs WHERE task_run_id=?1",
-                rusqlite::params![task_run_id],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, Option<String>>(4)?,
-                        r.get::<_, String>(5)?,
-                        r.get::<_, i64>(6)?,
-                        r.get::<_, i64>(7)?,
-                    ))
-                },
-            )
-            .optional()?,
-    )
-}
-
-/// AG-1.0-IMP-TASKRUN-UI-01：按会话列出 TaskRun（updated_at 倒序，最近在前），供前端会话摘要呈现。
-pub fn list_task_runs_by_session(
+/// 读取 TaskRun 身份/裁决控制缓存。展示状态不得直接消费此结构。
+pub(crate) fn load_task_run(
     conn: &Connection,
-    workspace_id: &str,
-    session_id: &str,
-) -> rusqlite::Result<Vec<TaskRunV1>> {
-    let mut stmt = conn.prepare(
-        "SELECT task_run_id, workspace_id, session_id, status, intent_summary, steps_json, created_at, updated_at \
-         FROM task_runs WHERE workspace_id=?1 AND session_id=?2 \
-         ORDER BY updated_at DESC",
-    )?;
-    let rows = stmt
-        .query_map(rusqlite::params![workspace_id, session_id], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<String>>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, i64>(6)?,
-                r.get::<_, i64>(7)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, ws, sess, status, summary, steps, created, updated)| TaskRunV1 {
-                task_run_id: id,
-                workspace_id: ws,
-                session_id: sess,
-                status: parse_run_status(&status).unwrap_or(TaskRunStatus::Planned),
-                intent_summary: summary,
-                steps: serde_json::from_str(&steps).unwrap_or_default(),
-                created_at: created,
-                updated_at: updated,
-            },
-        )
-        .collect())
-}
-
-fn row_to_run(
-    row: Option<(
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        i64,
-        i64,
-    )>,
-) -> rusqlite::Result<Option<TaskRunV1>> {
-    Ok(row.map(
-        |(id, ws, sess, status, summary, steps, created, updated)| TaskRunV1 {
-            task_run_id: id,
-            workspace_id: ws,
-            session_id: sess,
-            status: parse_run_status(&status).unwrap_or(TaskRunStatus::Planned),
-            intent_summary: summary,
-            steps: serde_json::from_str(&steps).unwrap_or_default(),
-            created_at: created,
-            updated_at: updated,
+    task_run_id: &str,
+) -> rusqlite::Result<Option<TaskRunControl>> {
+    conn.query_row(
+        "SELECT task_run_id, workspace_id, session_id, status, intent_summary, created_at, updated_at \
+         FROM task_runs WHERE task_run_id=?1",
+        rusqlite::params![task_run_id],
+        |row| {
+            Ok(TaskRunControl {
+                task_run_id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                session_id: row.get(2)?,
+                status: parse_run_status(&row.get::<_, String>(3)?)
+                    .unwrap_or(TaskRunStatus::Active),
+                intent_summary: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
         },
-    ))
+    )
+    .optional()
 }
 
-/// AG-1.0-TASKRUN-REWORK-INTENT-01：判定是否需要对当前目标建立 TaskPlan（TERM-AG-018）。
-/// 复杂 = 写意图（edit/create）+（多目标文档 或 单文档整篇改写信号）；简单单文档局部编辑直行不建。
-pub fn is_complex_target(is_write_intent: bool, target_paths: &[String], prompt: &str) -> bool {
-    if !is_write_intent || target_paths.is_empty() {
-        return false;
-    }
-    if target_paths.len() >= 2 {
-        return true;
-    }
-    [
-        "整篇",
-        "全文",
-        "整个文档",
-        "全部内容",
-        "所有段落",
-        "每一段",
-        "整体",
-    ]
-    .iter()
-    .any(|kw| prompt.contains(kw))
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TASK-004
+ * type:     GUARD
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-SYS-STATE-008
+ * term_ref: TERM-AG-015, TERM-AG-018
+ * boundary: in=ModelVisibleRouteRevisionTargetCandidatesAndConfirmationPoints | out=boolean（true 当 route证明复杂目标或跨可见片段）
+ */
+pub fn route_requires_task_projection(
+    route_steps: &[String],
+    confirmation_points: &[String],
+    target_paths: &[String],
+) -> bool {
+    let distinct_targets = target_paths.iter().collect::<BTreeSet<_>>().len();
+    !confirmation_points.is_empty() || route_steps.len() >= 3 || distinct_targets >= 2
+}
+
+/// 兼容 IntentResultV1 只读约束使用：多显式目标可提示 scope 决策，但不创建 TaskRun，
+/// 不读取 prompt 关键词，也不参与 CapabilityGrant。
+pub fn is_complex_target(_is_write_intent: bool, target_paths: &[String], _prompt: &str) -> bool {
+    target_paths.iter().collect::<BTreeSet<_>>().len() >= 2
 }
 
 /// 只有会产生任务级持久产物的动态工具才要求在执行前取得 TaskRun。
@@ -965,20 +887,21 @@ pub fn tool_requires_task_run(tool_name: &str) -> bool {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=AgentTurnTargetOrAllowedToolProduct | out=OptionalTaskRunIdentity(onlyForComplexPlanDecisionRequestOrWorkspaceOperationPlan)
+ * boundary: in=ModelVisibleComplexRouteOrTaskLevelWaitingTool | out=OptionalStableTaskRunProjectionIdentity | does_not=classifyPromptKeywordsCreateSimpleTurnProjectionOrExecuteCandidateRoute
  */
-pub fn begin_for_complex_target(
+pub fn begin_for_model_route(
     conn: &Connection,
     workspace_id: &str,
     session_id: &str,
-    is_write_intent: bool,
+    goal: &str,
+    route_steps: &[String],
+    confirmation_points: &[String],
     target_paths: &[String],
-    prompt: &str,
 ) -> rusqlite::Result<Option<String>> {
-    if !is_complex_target(is_write_intent, target_paths, prompt) {
+    if !route_requires_task_projection(route_steps, confirmation_points, target_paths) {
         return Ok(None);
     }
-    begin_turn(conn, workspace_id, session_id, Some("复杂目标计划")).map(Some)
+    begin_turn(conn, workspace_id, session_id, Some(goal)).map(Some)
 }
 
 pub fn begin_for_tool_product(
@@ -999,290 +922,360 @@ pub fn begin_for_tool_product(
     .map(Some)
 }
 
-/// AG-1.0-TASKRUN-REWORK-INTENT-01 · 保存 TaskPlan（TERM-AG-018，可展示操作计划，非思维链）：
-/// task_plans 主行 + task_plan_steps 明细。
-pub fn create_plan(conn: &Connection, plan: &TaskPlanV1) -> rusqlite::Result<()> {
-    let now = now_millis();
-    conn.execute(
-        "INSERT INTO task_plans (plan_id, task_run_id, plan_json, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            plan.plan_id,
-            plan.task_run_id,
-            serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string()),
-            now,
-            now
-        ],
+#[derive(Debug)]
+struct ProjectionEvent {
+    event_id: String,
+    turn_id: String,
+    seq: u64,
+    kind: String,
+    payload: serde_json::Value,
+    occurred_at: i64,
+}
+
+fn projection_events(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    task_run_id: &str,
+) -> rusqlite::Result<Vec<ProjectionEvent>> {
+    let mut statement = conn.prepare(
+        "SELECT e.event_id, e.turn_id, e.seq, e.kind, e.payload_json, e.occurred_at \
+         FROM agent_turn_events e JOIN agent_turns t ON t.turn_id=e.turn_id \
+         WHERE e.workspace_id=?1 AND e.session_id=?2 AND t.task_run_id=?3 \
+         ORDER BY e.occurred_at ASC, e.turn_id ASC, e.seq ASC",
     )?;
-    for step in &plan.steps {
-        conn.execute(
-            "INSERT OR REPLACE INTO task_plan_steps \
-             (step_id, plan_id, seq, kind, label, deps_json, required_grant, confirm_point, status, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            rusqlite::params![
-                step.step_id,
-                plan.plan_id,
-                step.seq,
-                step.kind,
-                step.label,
-                serde_json::to_string(&step.deps).unwrap_or_else(|_| "[]".to_string()),
-                step.required_grant,
-                if step.confirm_point { 1 } else { 0 },
-                serde_json::to_string(&step.status).unwrap_or_else(|_| "\"pending\"".to_string()),
-                now
-            ],
-        )?;
-    }
-    Ok(())
-}
-
-/// 当前 TaskRun 的唯一执行计划。复杂任务创建时保证至多一份；查询层仍保留 list 接口供历史展示。
-pub fn active_plan_by_run(
-    conn: &Connection,
-    task_run_id: &str,
-) -> rusqlite::Result<Option<TaskPlanV1>> {
-    Ok(list_plans_by_run(conn, task_run_id)?.into_iter().next())
-}
-
-/// 计划工具入口的结果：未追踪工具不推进计划；已启动步骤必须在真实 ToolResult 后收束。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanToolStart {
-    Untracked,
-    Started { plan_id: String, step_id: String },
-}
-
-fn is_plan_step_success(status: TaskStepStatus) -> bool {
-    status == TaskStepStatus::Ok
-}
-
-fn is_plan_step_terminal(status: TaskStepStatus) -> bool {
-    matches!(
-        status,
-        TaskStepStatus::Ok | TaskStepStatus::Failed | TaskStepStatus::Cancelled
-    )
-}
-
-fn first_ready_plan_step_index(plan: &TaskPlanV1) -> Option<usize> {
-    let mut ordered = plan.steps.iter().enumerate().collect::<Vec<_>>();
-    ordered.sort_by_key(|(_, step)| step.seq);
-    ordered.into_iter().find_map(|(index, step)| {
-        if step.status != TaskStepStatus::Pending || step.seq < plan.cursor {
-            return None;
-        }
-        let deps_ready = step.deps.iter().all(|dep_id| {
-            plan.steps
-                .iter()
-                .find(|candidate| candidate.step_id == *dep_id)
-                .map(|candidate| is_plan_step_success(candidate.status))
-                .unwrap_or(false)
-        });
-        deps_ready.then_some(index)
-    })
-}
-
-fn plan_next_cursor(plan: &TaskPlanV1) -> i32 {
-    plan.steps
-        .iter()
-        .filter(|step| is_plan_step_terminal(step.status))
-        .map(|step| step.seq + 1)
-        .max()
-        .unwrap_or(0)
-}
-
-fn persist_plan_state(
-    tx: &rusqlite::Transaction<'_>,
-    plan: &TaskPlanV1,
-    updated_at: i64,
-) -> rusqlite::Result<()> {
-    tx.execute(
-        "UPDATE task_plans SET plan_json=?1, updated_at=?2 WHERE plan_id=?3 AND task_run_id=?4",
-        rusqlite::params![
-            serde_json::to_string(plan).unwrap_or_else(|_| "{}".to_string()),
-            updated_at,
-            plan.plan_id,
-            plan.task_run_id,
-        ],
+    let rows = statement.query_map(
+        rusqlite::params![workspace_id, session_id, task_run_id],
+        |row| {
+            let payload_json: String = row.get(4)?;
+            Ok(ProjectionEvent {
+                event_id: row.get(0)?,
+                turn_id: row.get(1)?,
+                seq: row.get(2)?,
+                kind: row.get(3)?,
+                payload: serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null),
+                occurred_at: row.get(5)?,
+            })
+        },
     )?;
-    for step in &plan.steps {
-        tx.execute(
-            "UPDATE task_plan_steps SET status=?1, updated_at=?2 WHERE step_id=?3 AND plan_id=?4",
-            rusqlite::params![
-                serde_json::to_string(&step.status).unwrap_or_else(|_| "\"pending\"".to_string()),
-                updated_at,
-                step.step_id,
-                plan.plan_id,
-            ],
-        )?;
-    }
-    Ok(())
+    rows.collect()
 }
 
-fn plan_error(message: impl Into<String>) -> rusqlite::Error {
-    rusqlite::Error::InvalidParameterName(message.into())
-}
-
-/// 只允许启动当前依赖已满足的计划步骤。计划以 required_grant 对齐工具名；未登记在计划中的辅助工具
-/// 不推进 cursor，但仍由既有 CapabilityGrant 决定是否能调用。
-/**
- * @GOV
- * codes:    BR-SYS-STATE-008-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-001-GUARD-AG-AG-TASKPLAN-001, BR-AG-STATE-002-GUARD-AG-AG-TASKPLAN-001
- * type:     GUARD
- * chain:    AG-TURN
- * rules:    BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
- * term_ref: TERM-AG-018
- * boundary: in=TaskPlanCurrentCursorDependenciesAndRequestedTool | out=PlanToolStart(rejectOutOfOrderOrTerminalStep)
- */
-pub fn start_next_plan_step_for_tool(
-    conn: &Connection,
-    task_run_id: &str,
-    tool_name: &str,
-) -> rusqlite::Result<PlanToolStart> {
-    let Some(mut plan) = active_plan_by_run(conn, task_run_id)? else {
-        return Ok(PlanToolStart::Untracked);
-    };
-    if plan
-        .steps
-        .iter()
-        .any(|step| step.status == TaskStepStatus::Running)
-    {
-        return Err(plan_error("TaskPlan 已有运行中步骤，不能并行推进"));
-    }
-    if plan.steps.iter().any(|step| {
-        step.status == TaskStepStatus::Failed || step.status == TaskStepStatus::Cancelled
-    }) {
-        return Err(plan_error("TaskPlan 已有失败或取消步骤，不能继续执行"));
-    }
-    let tracked_tool = plan
-        .steps
-        .iter()
-        .any(|step| step.required_grant.as_deref() == Some(tool_name));
-    if !tracked_tool {
-        return Ok(PlanToolStart::Untracked);
-    }
-    let ready_index = first_ready_plan_step_index(&plan)
-        .ok_or_else(|| plan_error("TaskPlan 没有依赖已满足的待执行步骤"))?;
-    let ready_step = &plan.steps[ready_index];
-    if ready_step.required_grant.as_deref() != Some(tool_name) {
-        return Err(plan_error(format!(
-            "TaskPlan 当前应先执行 {}（{}），不能执行 {tool_name}",
-            ready_step.label,
-            ready_step.required_grant.as_deref().unwrap_or("未声明工具"),
-        )));
-    }
-    let step_id = ready_step.step_id.clone();
-    plan.steps[ready_index].status = TaskStepStatus::Running;
-    plan.updated_at = now_millis();
-    let tx = conn.unchecked_transaction()?;
-    persist_plan_state(&tx, &plan, plan.updated_at)?;
-    tx.commit()?;
-    Ok(PlanToolStart::Started {
-        plan_id: plan.plan_id,
-        step_id,
-    })
-}
-
-/// 将已启动步骤收束到真实 ToolResult。成功才推进 cursor；失败保持 cursor 并成为计划终止边界。
-/**
- * @GOV
- * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TASKPLAN-001, BR-AG-STATE-001-EFFECT-AG-AG-TASKPLAN-001
- * type:     EFFECT
- * chain:    AG-TURN
- * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
- * term_ref: TERM-AG-018
- * boundary: in=StartedTaskPlanStepAndToolResult | out=PersistedTaskPlanStepStatusAndCursor
- */
-pub fn finish_plan_step_for_tool(
-    conn: &Connection,
-    task_run_id: &str,
-    plan_id: &str,
-    step_id: &str,
-    success: bool,
-) -> rusqlite::Result<TaskPlanV1> {
-    let mut plan = active_plan_by_run(conn, task_run_id)?
-        .ok_or_else(|| plan_error(format!("TaskRun 不存在 TaskPlan: {task_run_id}")))?;
-    if plan.plan_id != plan_id {
-        return Err(plan_error("TaskPlan 身份不匹配，拒绝收束步骤"));
-    }
-    let step = plan
-        .steps
-        .iter_mut()
-        .find(|candidate| candidate.step_id == step_id)
-        .ok_or_else(|| plan_error(format!("TaskPlan 不存在步骤: {step_id}")))?;
-    if step.status != TaskStepStatus::Running {
-        return Err(plan_error(format!(
-            "TaskPlan 步骤未处于运行中状态: {step_id}"
-        )));
-    }
-    step.status = if success {
-        TaskStepStatus::Ok
-    } else {
-        TaskStepStatus::Failed
-    };
-    if success {
-        plan.cursor = plan_next_cursor(&plan);
-    }
-    plan.updated_at = now_millis();
-    let tx = conn.unchecked_transaction()?;
-    persist_plan_state(&tx, &plan, plan.updated_at)?;
-    tx.commit()?;
-    Ok(plan)
-}
-
-/// 当前计划是否还有未成功收束步骤。无计划的简单任务返回 false。
-pub fn has_incomplete_plan(conn: &Connection, task_run_id: &str) -> rusqlite::Result<bool> {
-    Ok(active_plan_by_run(conn, task_run_id)?
-        .map(|plan| {
-            plan.steps
-                .iter()
-                .any(|step| step.status != TaskStepStatus::Ok)
+fn candidate_steps(task_run_id: &str, route_event: &ProjectionEvent) -> Vec<TaskStepProjectionV2> {
+    route_event
+        .payload
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, value)| value.as_str().map(|label| (index, label)))
+        .map(|(index, label)| TaskStepProjectionV2 {
+            step_id: format!("candidate:{task_run_id}:{}:{index}", route_event.event_id),
+            kind: "candidate".to_string(),
+            label: label.to_string(),
+            status: TaskStepProjectionStatusV2::Candidate,
+            depends_on: if index == 0 {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "candidate:{task_run_id}:{}:{}",
+                    route_event.event_id,
+                    index - 1
+                )]
+            },
+            source_event_id: route_event.event_id.clone(),
+            source_event_seq: route_event.seq,
+            result: None,
         })
-        .unwrap_or(false))
+        .collect()
 }
 
-/// 供 RuntimeControl 使用的当前就绪步骤（非模型思维链，只公开结构化计划事实）。
-pub fn current_ready_plan_step(plan: &TaskPlanV1) -> Option<&TaskPlanStepV1> {
-    first_ready_plan_step_index(plan).and_then(|index| plan.steps.get(index))
+fn event_string<'a>(payload: &'a serde_json::Value, field: &str, legacy: &str) -> Option<&'a str> {
+    payload
+        .get(field)
+        .or_else(|| payload.get(legacy))
+        .and_then(serde_json::Value::as_str)
 }
 
-/// 按 run 列出 TaskPlan（updated_at 倒序）。
-pub fn list_plans_by_run(
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-QUERY-AG-AG-TASK-004, BR-AG-PERSIST-001-QUERY-AG-AG-TASK-004
+ * type:     QUERY
+ * chain:    AG-TURN
+ * rules:    BR-SYS-STATE-008, BR-AG-PERSIST-001
+ * term_ref: TERM-AG-015, TERM-AG-016, TERM-AG-018, TERM-AG-022
+ * boundary: in=AppendOnlyTurnEventsLinkedToTaskRunIdentity | out=DeterministicTaskRunProjectionV2WithObservedWaitingAndCurrentRouteFacts | does_not=readLegacyPlanCursorScheduleCandidateWorkOrMutateDecisionProposalToolAndWorkspaceFacts
+ */
+pub fn rebuild_task_projection(
     conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
     task_run_id: &str,
-) -> rusqlite::Result<Vec<TaskPlanV1>> {
-    let mut stmt = conn.prepare(
-        "SELECT plan_id, task_run_id, plan_json FROM task_plans \
-         WHERE task_run_id=?1 ORDER BY updated_at DESC",
+) -> rusqlite::Result<Option<TaskRunProjectionV2>> {
+    let control = load_task_run(conn, task_run_id)?;
+    let events = projection_events(conn, workspace_id, session_id, task_run_id)?;
+    if control.is_none() && events.is_empty() {
+        return Ok(None);
+    }
+    let mut source_turn_ids = Vec::new();
+    let mut through_seq = 0;
+    let mut goal = control
+        .as_ref()
+        .and_then(|row| row.intent_summary.clone())
+        .unwrap_or_default();
+    let mut status = TaskRunProjectionStatusV2::Projected;
+    let mut observed_steps = Vec::new();
+    let mut tool_steps = BTreeMap::<String, usize>::new();
+    let mut decision_steps = BTreeMap::<String, usize>::new();
+    let mut waiting_on = BTreeSet::new();
+    let mut latest_route: Option<&ProjectionEvent> = None;
+    let mut route_revision = None;
+    let mut created_at = control.as_ref().map(|row| row.created_at).unwrap_or(0);
+    let mut updated_at = control.as_ref().map(|row| row.updated_at).unwrap_or(0);
+
+    for event in &events {
+        if !source_turn_ids.contains(&event.turn_id) {
+            source_turn_ids.push(event.turn_id.clone());
+        }
+        through_seq = through_seq.max(event.seq);
+        if created_at == 0 || event.occurred_at < created_at {
+            created_at = event.occurred_at;
+        }
+        updated_at = updated_at.max(event.occurred_at);
+        match event.kind.as_str() {
+            "task_projected" => {
+                if let Some(value) = event.payload.get("goal").and_then(|value| value.as_str()) {
+                    goal = value.to_string();
+                }
+            }
+            "intent_updated" => {
+                if let Some(value) = event
+                    .payload
+                    .get("projection")
+                    .and_then(|value| value.get("goal"))
+                    .and_then(|value| value.as_str())
+                {
+                    goal = value.to_string();
+                }
+            }
+            "route_updated" => {
+                let revision = event
+                    .payload
+                    .get("revision")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                if route_revision.is_none_or(|current| revision >= current) {
+                    route_revision = Some(revision);
+                    latest_route = Some(event);
+                }
+            }
+            "provider_started" | "step_progress" => {
+                status = TaskRunProjectionStatusV2::Active;
+                waiting_on.clear();
+            }
+            "tool_request" => {
+                status = TaskRunProjectionStatusV2::Active;
+                waiting_on.clear();
+                let call_id = event_string(&event.payload, "toolCallId", "tool_call_id")
+                    .unwrap_or(&event.event_id)
+                    .to_string();
+                let label = event_string(&event.payload, "toolName", "tool_name")
+                    .unwrap_or("tool")
+                    .to_string();
+                tool_steps.insert(call_id, observed_steps.len());
+                observed_steps.push(TaskStepProjectionV2 {
+                    step_id: format!("observed:{}", event.event_id),
+                    kind: "tool".to_string(),
+                    label,
+                    status: TaskStepProjectionStatusV2::Active,
+                    depends_on: Vec::new(),
+                    source_event_id: event.event_id.clone(),
+                    source_event_seq: event.seq,
+                    result: None,
+                });
+            }
+            "tool_result" => {
+                let call_id =
+                    event_string(&event.payload, "toolCallId", "tool_call_id").unwrap_or_default();
+                if let Some(index) = tool_steps.get(call_id).copied() {
+                    let success = event
+                        .payload
+                        .get("success")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    observed_steps[index].status = if success {
+                        TaskStepProjectionStatusV2::Completed
+                    } else {
+                        TaskStepProjectionStatusV2::Failed
+                    };
+                    observed_steps[index].result =
+                        Some(if success { "completed" } else { "failed" }.to_string());
+                }
+            }
+            "diff_proposed" => observed_steps.push(TaskStepProjectionV2 {
+                step_id: format!("observed:{}", event.event_id),
+                kind: "proposal".to_string(),
+                label: event
+                    .payload
+                    .get("relPath")
+                    .or_else(|| event.payload.get("rel_path"))
+                    .and_then(|value| value.as_str())
+                    .map(|path| format!("Proposal: {path}"))
+                    .unwrap_or_else(|| "Proposal".to_string()),
+                status: TaskStepProjectionStatusV2::Completed,
+                depends_on: Vec::new(),
+                source_event_id: event.event_id.clone(),
+                source_event_seq: event.seq,
+                result: Some("proposed".to_string()),
+            }),
+            "decision_request_proposed" => {
+                status = TaskRunProjectionStatusV2::Waiting;
+                let request_id = event_string(&event.payload, "requestId", "request_id")
+                    .unwrap_or(&event.event_id)
+                    .to_string();
+                waiting_on.insert(format!("decision:{request_id}"));
+                decision_steps.insert(request_id, observed_steps.len());
+                observed_steps.push(TaskStepProjectionV2 {
+                    step_id: format!("observed:{}", event.event_id),
+                    kind: "decision".to_string(),
+                    label: "Waiting for decision".to_string(),
+                    status: TaskStepProjectionStatusV2::Waiting,
+                    depends_on: Vec::new(),
+                    source_event_id: event.event_id.clone(),
+                    source_event_seq: event.seq,
+                    result: None,
+                });
+            }
+            "decision_request_resolved" => {
+                let request_id =
+                    event_string(&event.payload, "requestId", "request_id").unwrap_or_default();
+                let outcome = event
+                    .payload
+                    .get("outcome")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("cancel");
+                waiting_on.remove(&format!("decision:{request_id}"));
+                if let Some(index) = decision_steps.get(request_id).copied() {
+                    observed_steps[index].status = if outcome == "confirm" {
+                        TaskStepProjectionStatusV2::Completed
+                    } else {
+                        TaskStepProjectionStatusV2::Cancelled
+                    };
+                    observed_steps[index].result = Some(outcome.to_string());
+                }
+                status = if outcome == "cancel" {
+                    TaskRunProjectionStatusV2::Cancelled
+                } else {
+                    TaskRunProjectionStatusV2::Waiting
+                };
+            }
+            "clarification_required" => {
+                status = TaskRunProjectionStatusV2::Waiting;
+                waiting_on.insert("clarification".to_string());
+            }
+            "task_status_observed" => {
+                status = match event
+                    .payload
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                {
+                    "active" => TaskRunProjectionStatusV2::Active,
+                    "waiting" => TaskRunProjectionStatusV2::Waiting,
+                    "completed" => TaskRunProjectionStatusV2::Completed,
+                    "failed" => TaskRunProjectionStatusV2::Failed,
+                    "cancelled" => TaskRunProjectionStatusV2::Cancelled,
+                    "interrupted" => TaskRunProjectionStatusV2::Interrupted,
+                    _ => status,
+                };
+            }
+            "error" => status = TaskRunProjectionStatusV2::Failed,
+            _ => {}
+        }
+    }
+    let candidate_steps = latest_route
+        .map(|event| candidate_steps(task_run_id, event))
+        .unwrap_or_default();
+    Ok(Some(TaskRunProjectionV2 {
+        task_run_id: task_run_id.to_string(),
+        workspace_id: workspace_id.to_string(),
+        session_id: session_id.to_string(),
+        source_turn_ids,
+        through_seq,
+        goal,
+        status,
+        observed_steps,
+        waiting_on: waiting_on.into_iter().collect(),
+        current_route_revision: route_revision,
+        candidate_steps,
+        created_at,
+        updated_at,
+    }))
+}
+
+pub fn list_task_runs_by_session(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+) -> rusqlite::Result<Vec<TaskRunProjectionV2>> {
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT task_run_id FROM agent_turns \
+         WHERE workspace_id=?1 AND session_id=?2 AND task_run_id IS NOT NULL",
     )?;
-    let rows = stmt
-        .query_map(rusqlite::params![task_run_id], |r| {
-            let plan_json: String = r.get(2)?;
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, plan_json))
+    let ids = statement
+        .query_map(rusqlite::params![workspace_id, session_id], |row| {
+            row.get::<_, String>(0)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
+    let mut projections = Vec::new();
+    for task_run_id in ids {
+        if let Some(projection) =
+            rebuild_task_projection(conn, workspace_id, session_id, &task_run_id)?
+        {
+            projections.push(projection);
+        }
+    }
+    projections.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(projections)
+}
+
+pub fn list_plans_by_run(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    task_run_id: &str,
+) -> rusqlite::Result<Vec<TaskPlanProjectionV2>> {
+    let Some(run) = rebuild_task_projection(conn, workspace_id, session_id, task_run_id)? else {
+        return Ok(Vec::new());
+    };
+    let Some(revision) = run.current_route_revision else {
+        return Ok(Vec::new());
+    };
+    let summary = projection_events(conn, workspace_id, session_id, task_run_id)?
         .into_iter()
-        .filter_map(|(plan_id, run_id, plan_json)| {
-            let mut plan: TaskPlanV1 = serde_json::from_str(&plan_json).unwrap_or(TaskPlanV1 {
-                plan_id: plan_id.clone(),
-                task_run_id: run_id.clone(),
-                steps: Vec::new(),
-                cursor: 0,
-                created_at: 0,
-                updated_at: 0,
-            });
-            plan.plan_id = plan_id;
-            plan.task_run_id = run_id;
-            Some(plan)
+        .filter(|event| event.kind == "route_updated")
+        .filter_map(|event| {
+            let event_revision = event.payload.get("revision")?.as_u64()?;
+            let summary = event.payload.get("summary")?.as_str()?.to_string();
+            (event_revision == revision).then_some(summary)
         })
-        .collect())
+        .last()
+        .unwrap_or_default();
+    Ok(vec![TaskPlanProjectionV2 {
+        plan_id: format!("plan:{task_run_id}:{revision}"),
+        task_run_id: task_run_id.to_string(),
+        through_seq: run.through_seq,
+        route_revision: revision,
+        summary,
+        candidate_steps: run.candidate_steps,
+    }])
 }
 
 fn parse_run_status(s: &str) -> Option<TaskRunStatus> {
     match s {
-        "planned" => Some(TaskRunStatus::Planned),
-        "executing" => Some(TaskRunStatus::Executing),
-        "waiting_confirm" => Some(TaskRunStatus::WaitingConfirm),
-        "waiting_clarification" => Some(TaskRunStatus::WaitingClarification),
+        "planned" | "active" | "executing" => Some(TaskRunStatus::Active),
+        "waiting" | "waiting_confirm" | "waiting_clarification" => Some(TaskRunStatus::Waiting),
         "completed" => Some(TaskRunStatus::Completed),
         "failed" => Some(TaskRunStatus::Failed),
         "cancelled" => Some(TaskRunStatus::Cancelled),
@@ -1302,9 +1295,9 @@ pub fn link_turn(conn: &Connection, turn_id: &str, task_run_id: &str) -> rusqlit
 
 #[cfg(test)]
 mod tests {
+    use super::TaskRunStatus::*;
     use super::*;
     use crate::db;
-    use crate::types::TaskRunStatus::*;
 
     fn fresh() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -1312,46 +1305,40 @@ mod tests {
         conn
     }
 
-    // covers: BR-SYS-STATE-008
-    // SM-AG-04 主表正路 + forbidden（无后台队列/未经裁决不推进/中断不自动续跑）。
-    #[test]
-    fn sm_ag04_transition_matrix() {
-        use crate::types::TaskRunStatus as S;
-        use TaskRunEvent as E;
-        assert_eq!(transition(S::Planned, E::PlanApproved), Some(S::Executing));
-        assert_eq!(transition(S::Executing, E::StepStarted), Some(S::Executing));
-        assert_eq!(transition(S::Executing, E::StepOk), Some(S::Executing));
-        assert_eq!(
-            transition(S::Executing, E::WaitingConfirm),
-            Some(S::WaitingConfirm)
-        );
-        assert_eq!(
-            transition(S::Executing, E::ClarificationNeeded),
-            Some(S::WaitingClarification)
-        );
-        assert_eq!(
-            transition(S::WaitingConfirm, E::UserConfirm),
-            Some(S::Executing)
-        );
-        assert_eq!(
-            transition(S::WaitingConfirm, E::UserCancel),
-            Some(S::Cancelled)
-        );
-        assert_eq!(transition(S::Executing, E::StepFail), Some(S::Failed));
-        assert_eq!(transition(S::Executing, E::Interrupt), Some(S::Interrupted));
-        assert_eq!(transition(S::Interrupted, E::Retry), Some(S::Planned));
-        assert_eq!(transition(S::Executing, E::Finish), Some(S::Completed));
-        // forbidden：Executing 未经 finish 不得 Completed；WaitingConfirm 未经裁决不得推进；Interrupted 无重试不得执行
-        assert_eq!(transition(S::WaitingConfirm, E::Finish), None);
-        assert_eq!(transition(S::WaitingConfirm, E::StepStarted), None);
-        assert_eq!(transition(S::WaitingConfirm, E::StepFail), None);
-        assert_eq!(transition(S::Interrupted, E::StepStarted), None);
-        assert_eq!(transition(S::Completed, E::StepStarted), None);
-        assert_eq!(transition(S::Interrupted, E::Finish), None);
+    fn insert_turn(conn: &Connection, turn_id: &str, session_id: &str, task_run_id: &str) {
+        conn.execute(
+            "INSERT INTO agent_turns (turn_id, workspace_id, session_id, rel_path, status, payload_ref, created_at, updated_at, task_run_id) \
+             VALUES (?1, 'ws1', ?2, 'notes/a.md', 'draft', ?1, 1, 1, ?3)",
+            rusqlite::params![turn_id, session_id, task_run_id],
+        )
+        .unwrap();
+    }
+
+    fn insert_event(
+        conn: &Connection,
+        turn_id: &str,
+        session_id: &str,
+        seq: u64,
+        kind: &str,
+        payload: serde_json::Value,
+    ) {
+        conn.execute(
+            "INSERT INTO agent_turn_events (event_id, workspace_id, session_id, turn_id, seq, kind, payload_version, payload_json, occurred_at) \
+             VALUES (?1, 'ws1', ?2, ?3, ?4, ?5, 1, ?6, ?4)",
+            rusqlite::params![
+                format!("turn-event:{turn_id}:{seq}"),
+                session_id,
+                turn_id,
+                seq,
+                kind,
+                payload.to_string()
+            ],
+        )
+        .unwrap();
     }
 
     // covers: BR-SYS-STATE-008
-    // 只有任务级产物入口才调用 begin_turn：首次新建 executing；非终态目标必须显式续接；终态后新建。
+    // 只有任务级产物入口才调用 begin_turn：首次新建 active；非终态目标必须显式续接；终态后新建。
     #[test]
     fn task_level_product_rejects_implicit_reuse_and_creates_after_terminal() {
         let conn = fresh();
@@ -1376,19 +1363,14 @@ mod tests {
     }
 
     // covers: BR-SYS-STATE-008
-    // 三层分离（A-AG-M-S-01 §2.2.2）：提案步骤只记步骤不驱动 run 状态；WaitingConfirm 唯一来源 =
-    // DecisionRequest；任意新消息不绕回 waiting_confirm（begin_turn 新建）；裁决 confirm → Executing。
+    // DecisionRequest 是 Waiting 的唯一任务级来源；任意新消息不绕过，confirm 只解除等待条件。
     #[test]
     fn decision_request_drives_waiting_confirm_and_resolution() {
         let conn = fresh();
         let id = begin_turn(&conn, "ws1", "s1", None).unwrap();
-        record_proposal_step(&conn, &id, "step-p1", "修改 notes/a.md").unwrap();
         let run = load_task_run(&conn, &id).unwrap().unwrap();
-        assert_eq!(run.steps.len(), 1);
-        assert_eq!(run.steps[0].status, TaskStepStatus::WaitingConfirm);
-        // 三层分离：提案步骤不改变 run 状态（仍 executing）
-        assert_eq!(run.status, Executing);
-        // 任务级裁决请求 → WaitingConfirm
+        assert_eq!(run.status, Active);
+        // 任务级裁决请求 → Waiting
         let dr = propose_decision(
             &conn,
             &id,
@@ -1397,14 +1379,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(dr.status, DecisionRequestStatus::Proposed);
-        assert_eq!(
-            load_task_run(&conn, &id).unwrap().unwrap().status,
-            WaitingConfirm
-        );
+        assert_eq!(load_task_run(&conn, &id).unwrap().unwrap().status, Waiting);
         assert!(has_pending_decision(&conn, &id).unwrap());
-        // settle 保持 WaitingConfirm（有未决裁决）
+        // settle 保持 Waiting（有未决裁决）
         let st = settle_turn(&conn, &id, TurnOutcome::Completed).unwrap();
-        assert_eq!(st, WaitingConfirm);
+        assert_eq!(st, Waiting);
         // 任意新消息不绕回：没有显式 continuation 时拒绝，不创建第二个 TaskRun。
         let error = begin_turn(&conn, "ws1", "s1", Some("继续")).unwrap_err();
         assert!(error.to_string().contains("explicit continuation"));
@@ -1412,10 +1391,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
-        // 裁决 confirm → Executing；恢复必须沿用同一 TaskRun，不能新建身份。
+        // 裁决 confirm 只解除等待条件；没有后续真实 activityObserved 时投影仍是 Waiting。
         let (resolved_run_id, st2, already_resolved) =
             resolve_decision(&conn, &dr.request_id, "confirm").unwrap();
-        assert_eq!(st2, Executing);
+        assert_eq!(st2, Waiting);
         assert_eq!(resolved_run_id, id);
         assert!(!already_resolved);
         assert!(!has_pending_decision(&conn, &id).unwrap());
@@ -1495,7 +1474,7 @@ mod tests {
             Some(&["b.md".to_string()]),
         )
         .unwrap();
-        assert_eq!(status, Executing);
+        assert_eq!(status, Waiting);
         assert!(!already_resolved);
         assert_eq!(
             crate::ag::target_set::load_for_task_run(&conn, &confirmed_id)
@@ -1551,7 +1530,7 @@ mod tests {
         assert!(has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
         assert_eq!(
             settle_turn(&conn, &task_run_id, TurnOutcome::Completed).unwrap(),
-            Executing,
+            Active,
             "等待真实预览时不得把 TaskRun 伪装为 completed"
         );
 
@@ -1584,17 +1563,14 @@ mod tests {
     }
 
     // covers: BR-SYS-STATE-008, BR-AG-STATE-002
-    // 模型/IPC 都必须经过同一个裁决守卫：仅受支持 kind、仅 executing、每个任务当前只可有一个 pending。
+    // 模型/IPC 都必须经过同一个裁决守卫：仅受支持 kind、仅 active、每个任务当前只可有一个 pending。
     #[test]
     fn decision_request_rejects_invalid_kind_and_duplicate_without_state_change() {
         let conn = fresh();
         let id = begin_turn(&conn, "ws1", "s1", None).unwrap();
 
         assert!(propose_decision(&conn, &id, "unknown", serde_json::json!({})).is_err());
-        assert_eq!(
-            load_task_run(&conn, &id).unwrap().unwrap().status,
-            Executing
-        );
+        assert_eq!(load_task_run(&conn, &id).unwrap().unwrap().status, Active);
 
         let decision = propose_decision(
             &conn,
@@ -1604,10 +1580,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decision.kind, "scope");
-        assert_eq!(
-            load_task_run(&conn, &id).unwrap().unwrap().status,
-            WaitingConfirm
-        );
+        assert_eq!(load_task_run(&conn, &id).unwrap().unwrap().status, Waiting);
         assert!(propose_decision(&conn, &id, "permission", serde_json::json!({})).is_err());
         assert_eq!(
             pending_decision(&conn, &id).unwrap().unwrap().request_id,
@@ -1616,174 +1589,36 @@ mod tests {
     }
 
     // covers: BR-SYS-STATE-008
-    // TaskPlan 持久化（TERM-AG-018）：保存/按 run 列出（可展示操作计划，非思维链）。
+    // 复杂度只来自模型可见路线/目标/等待点，不读取自然语言关键词。
     #[test]
-    fn task_plan_persists_and_lists() {
-        let conn = fresh();
-        let id = begin_turn(&conn, "ws1", "s1", Some("复合目标")).unwrap();
-        let plan = TaskPlanV1 {
-            plan_id: "plan-1".to_string(),
-            task_run_id: id.clone(),
-            steps: vec![
-                TaskPlanStepV1 {
-                    step_id: "s1".to_string(),
-                    seq: 0,
-                    kind: "read".to_string(),
-                    label: "读取 a.md".to_string(),
-                    deps: vec![],
-                    required_grant: Some("read_doc".to_string()),
-                    confirm_point: false,
-                    status: TaskStepStatus::Ok,
-                },
-                TaskPlanStepV1 {
-                    step_id: "s2".to_string(),
-                    seq: 1,
-                    kind: "propose".to_string(),
-                    label: "生成修改建议".to_string(),
-                    deps: vec!["s1".to_string()],
-                    required_grant: Some("propose_edit".to_string()),
-                    confirm_point: true,
-                    status: TaskStepStatus::WaitingConfirm,
-                },
-            ],
-            cursor: 2,
-            created_at: 1,
-            updated_at: 2,
-        };
-        create_plan(&conn, &plan).unwrap();
-        let plans = list_plans_by_run(&conn, &id).unwrap();
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].plan_id, "plan-1");
-        assert_eq!(plans[0].steps.len(), 2);
-        assert!(plans[0].steps[1].confirm_point);
-        assert_eq!(plans[0].steps[1].deps, vec!["s1".to_string()]);
-        assert_eq!(plans[0].cursor, 2);
-    }
-
-    // covers: BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
-    // 复杂任务的计划只由真实工具结果推进：依赖、running、成功 cursor 与失败终止均由持久计划状态决定。
-    #[test]
-    fn task_plan_executor_advances_only_the_next_ready_tool_result() {
-        let conn = fresh();
-        let task_run_id = begin_turn(&conn, "ws1", "s-plan", Some("读取并修改两份文档")).unwrap();
-        let plan = TaskPlanV1 {
-            plan_id: "plan-executor".to_string(),
-            task_run_id: task_run_id.clone(),
-            steps: vec![
-                TaskPlanStepV1 {
-                    step_id: "read-0".to_string(),
-                    seq: 0,
-                    kind: "read".to_string(),
-                    label: "读取 a.md".to_string(),
-                    deps: vec![],
-                    required_grant: Some("read_doc".to_string()),
-                    confirm_point: false,
-                    status: TaskStepStatus::Pending,
-                },
-                TaskPlanStepV1 {
-                    step_id: "propose-0".to_string(),
-                    seq: 1,
-                    kind: "propose".to_string(),
-                    label: "提案 a.md".to_string(),
-                    deps: vec!["read-0".to_string()],
-                    required_grant: Some("propose_edit".to_string()),
-                    confirm_point: true,
-                    status: TaskStepStatus::Pending,
-                },
-            ],
-            cursor: 0,
-            created_at: 1,
-            updated_at: 1,
-        };
-        create_plan(&conn, &plan).unwrap();
-
-        // 非计划工具可由既有 CapabilityGrant 单独决定，但绝不推进计划。
-        assert_eq!(
-            start_next_plan_step_for_tool(&conn, &task_run_id, "list_docs").unwrap(),
-            PlanToolStart::Untracked
-        );
-        assert_eq!(
-            active_plan_by_run(&conn, &task_run_id)
-                .unwrap()
-                .unwrap()
-                .cursor,
-            0
-        );
-        // 依赖未满足时，不可跳过 read 直接提案。
-        assert!(start_next_plan_step_for_tool(&conn, &task_run_id, "propose_edit").is_err());
-
-        let read_start = start_next_plan_step_for_tool(&conn, &task_run_id, "read_doc").unwrap();
-        let PlanToolStart::Started { plan_id, step_id } = read_start else {
-            panic!("read_doc 应启动当前就绪步骤");
-        };
-        assert_eq!(
-            active_plan_by_run(&conn, &task_run_id)
-                .unwrap()
-                .unwrap()
-                .steps[0]
-                .status,
-            TaskStepStatus::Running
-        );
-        let after_read =
-            finish_plan_step_for_tool(&conn, &task_run_id, &plan_id, &step_id, true).unwrap();
-        assert_eq!(after_read.cursor, 1);
-        assert_eq!(after_read.steps[0].status, TaskStepStatus::Ok);
-        assert_eq!(
-            current_ready_plan_step(&after_read).unwrap().step_id,
-            "propose-0"
-        );
-
-        let propose_start =
-            start_next_plan_step_for_tool(&conn, &task_run_id, "propose_edit").unwrap();
-        let PlanToolStart::Started { plan_id, step_id } = propose_start else {
-            panic!("propose_edit 应在 read 成功后启动");
-        };
-        let after_propose =
-            finish_plan_step_for_tool(&conn, &task_run_id, &plan_id, &step_id, true).unwrap();
-        assert_eq!(after_propose.cursor, 2);
-        assert!(current_ready_plan_step(&after_propose).is_none());
-        assert!(!has_incomplete_plan(&conn, &task_run_id).unwrap());
-        // 已收束的计划不得被重复工具调用推进。
-        assert!(start_next_plan_step_for_tool(&conn, &task_run_id, "read_doc").is_err());
-
-        let failed_task_run = begin_turn(&conn, "ws1", "s-failed-plan", Some("失败计划")).unwrap();
-        let mut failed_plan = plan.clone();
-        failed_plan.plan_id = "plan-failed".to_string();
-        failed_plan.task_run_id = failed_task_run.clone();
-        failed_plan.cursor = 0;
-        for step in &mut failed_plan.steps {
-            step.status = TaskStepStatus::Pending;
-        }
-        create_plan(&conn, &failed_plan).unwrap();
-        let PlanToolStart::Started { plan_id, step_id } =
-            start_next_plan_step_for_tool(&conn, &failed_task_run, "read_doc").unwrap()
-        else {
-            panic!("read_doc 应启动失败案例的首步");
-        };
-        let after_failure =
-            finish_plan_step_for_tool(&conn, &failed_task_run, &plan_id, &step_id, false).unwrap();
-        assert_eq!(after_failure.steps[0].status, TaskStepStatus::Failed);
-        assert!(has_incomplete_plan(&conn, &failed_task_run).unwrap());
-        assert!(start_next_plan_step_for_tool(&conn, &failed_task_run, "read_doc").is_err());
-    }
-
-    // covers: BR-SYS-STATE-008
-    // AG-1.0-TASKRUN-REWORK-INTENT-01：复杂目标判定（多文档 / 单文档整篇信号建计划；简单局部编辑直行）。
-    #[test]
-    fn complex_target_detection() {
+    fn route_projection_boundary_keeps_simple_turns_empty() {
         let one = vec!["a.md".to_string()];
         let two = vec!["a.md".to_string(), "b.md".to_string()];
-        // 写意图 + 多文档 → 建计划
-        assert!(is_complex_target(true, &two, "把两个文档统一风格"));
-        // 写意图 + 单文档整篇信号 → 建计划
-        assert!(is_complex_target(true, &one, "把整篇文档改成正式风格"));
-        // 写意图 + 单文档局部（无信号）→ 直行不建
-        assert!(!is_complex_target(true, &one, "把第一段加粗"));
-        // 只读意图 → 不建
-        assert!(!is_complex_target(false, &two, "总结两个文档"));
-        // 无目标 → 不建
-        assert!(!is_complex_target(true, &[], "你好"));
-        // 动态任务级产物 → 按需创建；普通读/写工具不创建。
+        assert!(!route_requires_task_projection(
+            &["answer".into()],
+            &[],
+            &one
+        ));
+        assert!(!route_requires_task_projection(
+            &["read".into(), "propose".into()],
+            &[],
+            &one
+        ));
+        assert!(route_requires_task_projection(
+            &["inspect".into(), "compare".into(), "report".into()],
+            &[],
+            &one
+        ));
+        assert!(route_requires_task_projection(
+            &["compare".into()],
+            &[],
+            &two
+        ));
+        assert!(route_requires_task_projection(
+            &["prepare".into()],
+            &["scope".into()],
+            &one
+        ));
         assert!(tool_requires_task_run("propose_decision"));
         assert!(tool_requires_task_run("plan_workspace_operation"));
         assert!(!tool_requires_task_run("read_doc"));
@@ -1796,11 +1631,29 @@ mod tests {
         let conn = fresh();
         let one = vec!["a.md".to_string()];
         assert_eq!(
-            begin_for_complex_target(&conn, "ws1", "s1", false, &one, "总结文档").unwrap(),
+            begin_for_model_route(
+                &conn,
+                "ws1",
+                "s1",
+                "总结文档",
+                &["answer".into()],
+                &[],
+                &one,
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
-            begin_for_complex_target(&conn, "ws1", "s1", true, &one, "把第一段加粗").unwrap(),
+            begin_for_model_route(
+                &conn,
+                "ws1",
+                "s1",
+                "把第一段加粗",
+                &["read".into(), "propose".into()],
+                &[],
+                &one,
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
@@ -1823,6 +1676,12 @@ mod tests {
     fn stale_active_runs_become_interrupted_on_startup() {
         let conn = fresh();
         let id = begin_turn(&conn, "ws1", "s1", None).unwrap();
+        insert_turn(&conn, "turn-recovery", "s1", &id);
+        conn.execute(
+            "UPDATE agent_turns SET status='completed' WHERE turn_id='turn-recovery'",
+            [],
+        )
+        .unwrap();
         let other_workspace_id = begin_turn(&conn, "ws2", "s2", None).unwrap();
         assert_eq!(
             mark_all_stale_as_interrupted(&conn).unwrap(),
@@ -1831,6 +1690,14 @@ mod tests {
         );
         let run = load_task_run(&conn, &id).unwrap().unwrap();
         assert_eq!(run.status, Interrupted);
+        assert_eq!(
+            rebuild_task_projection(&conn, "ws1", "s1", &id)
+                .unwrap()
+                .unwrap()
+                .status,
+            TaskRunProjectionStatusV2::Interrupted,
+            "来源回合已终态时仍必须可追加 Interrupted 恢复观察"
+        );
         let other_workspace_run = load_task_run(&conn, &other_workspace_id).unwrap().unwrap();
         assert_eq!(other_workspace_run.status, Interrupted);
         // 中断后新回合不沿用（新建）
@@ -1862,42 +1729,98 @@ mod tests {
         assert_eq!(got, task_id);
     }
 
-    // covers: BR-SYS-STATE-008
-    // AG-1.0-IMP-TASKRUN-UI-01：按会话列 TaskRun（倒序、含步骤）；空会话返回空列表；跨会话隔离。
+    // covers: BR-SYS-STATE-008, BR-AG-PERSIST-001
+    // 相同 TurnEvent 序列重建同一投影；route revision 替换候选路线，Decision 解除后无 activity 仍等待。
     #[test]
-    fn list_task_runs_by_session_orders_and_isolates() {
+    fn task_projection_rebuilds_route_activity_waiting_and_survives_cache_deletion() {
         let conn = fresh();
-        // 空会话 → []
         assert!(list_task_runs_by_session(&conn, "ws1", "s-empty")
             .unwrap()
             .is_empty());
-        // 会话 s1：回合1（完成）+ 回合2（进行中，含任务级裁决确认点）
-        let id1 = begin_turn(&conn, "ws1", "s1", Some("目标一")).unwrap();
-        let st = settle_turn(&conn, &id1, TurnOutcome::Completed).unwrap();
-        assert_eq!(st, Completed);
-        let id2 = begin_turn(&conn, "ws1", "s1", Some("目标二")).unwrap();
-        record_tool_step(&conn, &id2, "t1", "read_doc", true).unwrap();
-        record_proposal_step(&conn, &id2, "p1", "提案 notes/a.md").unwrap();
-        // 任务级裁决请求 → 回合完成保持 WaitingConfirm（非终态，等裁决后自动下一片段）
-        let _dr = propose_decision(&conn, &id2, "manual_confirm", serde_json::json!({})).unwrap();
-        let st2 = settle_turn(&conn, &id2, TurnOutcome::Completed).unwrap();
-        assert_eq!(st2, WaitingConfirm);
-        // 其他会话 s2 隔离
-        let id3 = begin_turn(&conn, "ws1", "s2", None).unwrap();
-        assert_ne!(id2, id3);
+        let task_run_id = begin_turn(&conn, "ws1", "s1", Some("检查两份材料")).unwrap();
+        insert_turn(&conn, "turn-1", "s1", &task_run_id);
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            1,
+            "task_projected",
+            serde_json::json!({"taskRunId": task_run_id, "goal": "检查两份材料"}),
+        );
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            2,
+            "route_updated",
+            serde_json::json!({"revision": 1, "summary": "旧路线", "steps": ["列出", "读取", "比较"]}),
+        );
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            3,
+            "tool_request",
+            serde_json::json!({"toolCallId": "call-1", "toolName": "list_docs"}),
+        );
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            4,
+            "tool_result",
+            serde_json::json!({"toolCallId": "call-1", "toolName": "list_docs", "success": true}),
+        );
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            5,
+            "route_updated",
+            serde_json::json!({"revision": 2, "summary": "修订路线", "steps": ["搜索", "比较", "说明"]}),
+        );
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            6,
+            "decision_request_proposed",
+            serde_json::json!({"requestId": "decision-1", "kind": "scope", "payload": {}}),
+        );
+        insert_event(
+            &conn,
+            "turn-1",
+            "s1",
+            7,
+            "decision_request_resolved",
+            serde_json::json!({"requestId": "decision-1", "outcome": "confirm"}),
+        );
 
-        let runs = list_task_runs_by_session(&conn, "ws1", "s1").unwrap();
-        assert_eq!(runs.len(), 2);
-        // 倒序：id2（更新更晚）在前
-        assert_eq!(runs[0].task_run_id, id2);
-        assert_eq!(runs[1].task_run_id, id1);
-        assert_eq!(runs[0].status, WaitingConfirm);
-        assert_eq!(runs[0].steps.len(), 2);
-        assert_eq!(runs[0].steps[0].status, TaskStepStatus::Ok);
-        assert_eq!(runs[0].steps[1].status, TaskStepStatus::WaitingConfirm);
-        // 跨会话：s2 只有自己的 run
-        let runs2 = list_task_runs_by_session(&conn, "ws1", "s2").unwrap();
-        assert_eq!(runs2.len(), 1);
-        assert_eq!(runs2[0].task_run_id, id3);
+        let first = rebuild_task_projection(&conn, "ws1", "s1", &task_run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.status, TaskRunProjectionStatusV2::Waiting);
+        assert_eq!(first.current_route_revision, Some(2));
+        assert_eq!(first.candidate_steps.len(), 3);
+        assert_eq!(first.candidate_steps[0].label, "搜索");
+        assert_eq!(first.observed_steps.len(), 2);
+        assert_eq!(
+            first.observed_steps[0].status,
+            TaskStepProjectionStatusV2::Completed
+        );
+        assert!(first.waiting_on.is_empty());
+
+        conn.execute(
+            "DELETE FROM task_plans WHERE task_run_id=?1",
+            [&task_run_id],
+        )
+        .unwrap();
+        let rebuilt = rebuild_task_projection(&conn, "ws1", "s1", &task_run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebuilt, first);
+        assert!(list_task_runs_by_session(&conn, "ws1", "s2")
+            .unwrap()
+            .is_empty());
     }
 }

@@ -2,8 +2,7 @@ import type { TaskPlanView } from "../../store/agStore";
 
 /**
  * PlanCard（TERM-AG-018 · AG-1.0-TASKRUN-REWORK-CONTINUE-01）。
- * 任务计划呈现：可展示操作计划（非思维链）——步骤列表、依赖、当前游标、确认点标记。
- * 只读呈现；真实执行进度由运行事件驱动。
+ * 当前候选路线的轻量投影。candidate 不承诺执行，也不显示授权或执行游标。
  */
 
 const STEP_KIND_LABEL: Record<string, string> = {
@@ -19,20 +18,17 @@ export function PlanCard({ plan }: { plan: TaskPlanView }) {
   return (
     <div className="plancard">
       <div className="plancard-head">
-        <span className="plancard-title">任务计划</span>
-        <span className="plancard-cursor">游标 {plan.cursor}/{plan.steps.length}</span>
+        <span className="plancard-title">当前路线</span>
+        <span className="plancard-cursor">修订 {plan.routeRevision}</span>
       </div>
+      <div className="plancard-summary">{plan.summary}</div>
       <ol className="plancard-steps">
-        {plan.steps.map((step) => {
-          const done = step.status === "ok" || step.status === "failed" || step.status === "cancelled";
-          const active = step.seq === plan.cursor - 1 && !done;
-          const deps = step.deps.length ? `依赖 ${step.deps.join(",")}` : "";
+        {plan.candidateSteps.map((step) => {
+          const deps = step.dependsOn.length ? `依赖 ${step.dependsOn.join(",")}` : "";
           return (
-            <li key={step.stepId} className={`planstep planstep-${step.status}${active ? " planstep-active" : ""}`}>
+            <li key={step.stepId} className={`planstep planstep-${step.status}`}>
               <span className="planstep-kind">{STEP_KIND_LABEL[step.kind] ?? step.kind}</span>
               <span className="planstep-label">{step.label}</span>
-              {step.confirmPoint && <span className="planstep-confirm">确认点</span>}
-              {step.requiredGrant && <span className="planstep-grant">{step.requiredGrant}</span>}
               {deps && <span className="planstep-deps">{deps}</span>}
             </li>
           );

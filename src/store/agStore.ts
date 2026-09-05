@@ -136,10 +136,10 @@ export type RustTurnState =
 
 /** 任务步骤态（TERM-AG-016 · SM-AG-04 steps）。 */
 export type TaskStepViewStatus =
-  | "pending"
-  | "running"
-  | "waiting_confirm"
-  | "ok"
+  | "candidate"
+  | "active"
+  | "waiting"
+  | "completed"
   | "failed"
   | "cancelled";
 
@@ -149,14 +149,17 @@ export interface TaskStepView {
   kind: string; // tool / propose / read / confirm
   label: string;
   status: TaskStepViewStatus;
+  dependsOn: string[];
+  sourceEventId: string;
+  sourceEventSeq: number;
+  result?: string;
 }
 
 /** 受限任务实例状态（TERM-AG-015 · SM-AG-04）。 */
 export type TaskRunViewStatus =
-  | "planned"
-  | "executing"
-  | "waiting_confirm"
-  | "waiting_clarification"
+  | "projected"
+  | "active"
+  | "waiting"
   | "completed"
   | "failed"
   | "cancelled"
@@ -165,9 +168,14 @@ export type TaskRunViewStatus =
 /** 受限任务实例（TERM-AG-015 · SM-AG-04）：会话内任务进度/步骤/确认点（只读呈现）。 */
 export interface TaskRunView {
   taskRunId: string;
+  sourceTurnIds: string[];
+  throughSeq: number;
+  goal: string;
   status: TaskRunViewStatus;
-  intentSummary?: string;
-  steps: TaskStepView[];
+  observedSteps: TaskStepView[];
+  waitingOn: string[];
+  currentRouteRevision?: number;
+  candidateSteps: TaskStepView[];
   createdAt: number;
   updatedAt: number;
 }
@@ -189,21 +197,23 @@ export interface PendingDecisionView {
 /** 任务计划步骤（TERM-AG-018 · TaskPlan）。 */
 export interface TaskPlanStepView {
   stepId: string;
-  seq: number;
   kind: string;
   label: string;
-  deps: string[];
-  requiredGrant?: string;
-  confirmPoint: boolean;
-  status: string;
+  status: TaskStepViewStatus;
+  dependsOn: string[];
+  sourceEventId: string;
+  sourceEventSeq: number;
+  result?: string;
 }
 
-/** 任务计划（TERM-AG-018 · TaskPlan）：可展示操作计划（步骤/依赖/游标/确认点）。 */
+/** TaskPlan：当前 route revision 的可展示候选路线，不是执行清单。 */
 export interface TaskPlanView {
   planId: string;
   taskRunId: string;
-  steps: TaskPlanStepView[];
-  cursor: number;
+  throughSeq: number;
+  routeRevision: number;
+  summary: string;
+  candidateSteps: TaskPlanStepView[];
 }
 
 export interface ProjectReportView {
@@ -232,9 +242,9 @@ export interface AgSession {
   turnsLoaded: boolean;
   /** 输入框草稿是标签级运行时状态，不随历史元数据持久化。 */
   composerDraft?: AgentComposerDraft;
-  /** 会话受限任务实例（TERM-AG-015）：最近 TaskRun 倒序，供会话摘要卡呈现（只读）。 */
+  /** 会话 TaskRun 事件投影：仅复杂目标存在。 */
   taskRuns?: TaskRunView[];
-  /** 任务计划（TERM-AG-018）：会话最近 run 的可展示操作计划（步骤/依赖/确认点）。 */
+  /** 最近复杂目标的当前候选路线投影。 */
   taskPlans?: TaskPlanView[];
 }
 

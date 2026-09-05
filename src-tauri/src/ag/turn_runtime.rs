@@ -612,7 +612,7 @@ pub(crate) async fn ag_start_turn(
     let task_run_id = match task_run_result {
         Ok(task_run_id) => task_run_id,
         Err(error) => {
-            // 已确认/已预览的续片段在身份核验阶段失败时，原 TaskRun 已可能处于 executing。
+            // 已确认/已预览的续片段在身份核验阶段失败时，原 TaskRun 已可能处于 waiting/active。
             // 必须使用请求携带的稳定身份收束，不能在建立局部 task_run_id 之前直接返回。
             let task_run_id = continuation_task_run_id
                 .as_deref()

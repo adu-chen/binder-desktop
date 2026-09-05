@@ -10,8 +10,7 @@ pub(crate) use super::history_routes::{
 };
 pub(crate) use super::reference_runtime::route_list_blocks;
 pub(crate) use super::task_runtime::{
-    route_create_plan, route_list_agent_task_runs, route_list_plans, route_propose_decision,
-    route_resolve_decision,
+    route_list_agent_task_runs, route_list_plans, route_propose_decision, route_resolve_decision,
 };
 pub(crate) use super::turn_control::{ag_ack_preview, ag_cancel_turn, ActiveAgentTurn};
 pub(crate) use super::turn_runtime::ag_start_turn;

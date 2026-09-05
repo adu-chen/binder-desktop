@@ -806,21 +806,43 @@ export async function persistAgentSessionsMetadata(): Promise<void> {
   );
 }
 
-/** AG-1.0-IMP-TASKRUN-UI-01 · 后端 `ag.list_task_runs` DTO（snake_case，与 TaskRunV1 对齐）。 */
+/** 后端 TurnEvent 派生 TaskRunProjectionV2 DTO。 */
 export interface TaskStepDto {
   step_id: string;
   kind: string;
   label: string;
   status: TaskStepViewStatus;
+  depends_on: string[];
+  source_event_id: string;
+  source_event_seq: number;
+  result?: string | null;
 }
 
 export interface TaskRunDto {
   task_run_id: string;
+  source_turn_ids: string[];
+  through_seq: number;
+  goal: string;
   status: TaskRunViewStatus;
-  intent_summary?: string | null;
-  steps: TaskStepDto[];
+  observed_steps: TaskStepDto[];
+  waiting_on: string[];
+  current_route_revision?: number | null;
+  candidate_steps: TaskStepDto[];
   created_at: number;
   updated_at: number;
+}
+
+function projectTaskStep(step: TaskStepDto) {
+  return {
+    stepId: step.step_id,
+    kind: step.kind,
+    label: step.label,
+    status: step.status,
+    dependsOn: step.depends_on,
+    sourceEventId: step.source_event_id,
+    sourceEventSeq: step.source_event_seq,
+    result: step.result ?? undefined,
+  };
 }
 
 /** 查询会话受限任务实例（SM-AG-04 状态/步骤，倒序）；映射为 TaskRunView 投影到 agStore。 */
@@ -828,9 +850,14 @@ export async function listSessionTaskRuns(sessionId: string): Promise<TaskRunVie
   const runs = await dispatchCall<TaskRunDto[]>("ag.list_task_runs", { sessionId });
   return runs.map((r) => ({
     taskRunId: r.task_run_id,
+    sourceTurnIds: r.source_turn_ids,
+    throughSeq: r.through_seq,
+    goal: r.goal,
     status: r.status,
-    intentSummary: r.intent_summary ?? undefined,
-    steps: r.steps.map((s) => ({ stepId: s.step_id, kind: s.kind, label: s.label, status: s.status })),
+    observedSteps: r.observed_steps.map(projectTaskStep),
+    waitingOn: r.waiting_on,
+    currentRouteRevision: r.current_route_revision ?? undefined,
+    candidateSteps: r.candidate_steps.map(projectTaskStep),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
@@ -859,8 +886,8 @@ function resolvedDecisionPostProcessingError(cause: unknown, taskRunId: string) 
   };
 }
 
-/** AG-1.0-TASKRUN-REWORK-IMP-UI-01：任务级裁决（TERM-AG-017，三层分离）——
- * confirm → TaskRun Executing（可自动下一片段）；cancel → Cancelled。返回已裁决的 run 身份。 */
+/** 任务级裁决（TERM-AG-017，三层分离）：confirm/cancel 后仍由原 AgentTurn 重新过 Gate，
+ * TaskRun 只投影已发生的裁决与后续活动，不因裁决预先进入执行态。 */
 export async function resolveDecision(
   requestId: string,
   outcome: "confirm" | "cancel",
@@ -1231,7 +1258,7 @@ export async function resolveDecisionAndContinue(
   const resolution = await resolveDecision(requestId, outcome);
   if (
     decisionTurn
-    && (resolution.status === "executing" || resolution.status === "cancelled")
+    && (resolution.status === "waiting" || resolution.status === "cancelled")
   ) {
     if (closeStore.getSnapshot().phase !== "idle") {
       await invoke("ag_cancel_turn", {
@@ -1251,39 +1278,34 @@ export async function resolveDecisionAndContinue(
 
 interface TaskPlanStepDto {
   step_id: string;
-  seq: number;
   kind: string;
   label: string;
-  deps: string[];
-  required_grant?: string | null;
-  confirm_point: boolean;
-  status: string;
+  status: TaskStepViewStatus;
+  depends_on: string[];
+  source_event_id: string;
+  source_event_seq: number;
+  result?: string | null;
 }
 
 interface TaskPlanDto {
   plan_id: string;
   task_run_id: string;
-  steps: TaskPlanStepDto[];
-  cursor: number;
+  through_seq: number;
+  route_revision: number;
+  summary: string;
+  candidate_steps: TaskPlanStepDto[];
 }
 
-/** AG-1.0-TASKRUN-REWORK-CONTINUE-01：按 task_run_id 列出任务计划（TERM-AG-018；snake→camel）。 */
+/** 按 task_run_id 查询当前 route revision 的 TaskPlan 只读投影。 */
 export async function listPlansByRun(taskRunId: string): Promise<TaskPlanView[]> {
   const plans = await dispatchCall<TaskPlanDto[]>("ag.list_plans", { taskRunId });
   return plans.map((p) => ({
     planId: p.plan_id,
     taskRunId: p.task_run_id,
-    cursor: p.cursor,
-    steps: p.steps.map((s) => ({
-      stepId: s.step_id,
-      seq: s.seq,
-      kind: s.kind,
-      label: s.label,
-      deps: s.deps,
-      requiredGrant: s.required_grant ?? undefined,
-      confirmPoint: s.confirm_point,
-      status: s.status,
-    })),
+    throughSeq: p.through_seq,
+    routeRevision: p.route_revision,
+    summary: p.summary,
+    candidateSteps: p.candidate_steps.map(projectTaskStep),
   }));
 }
 

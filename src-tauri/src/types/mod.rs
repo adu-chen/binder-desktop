@@ -508,53 +508,70 @@ pub struct MemoryInjection {
     pub origin_turn: String,
 }
 
-/// 受限任务实例状态（TERM-AG-015 · SM-AG-04，BR-SYS-STATE-008）。
-/// 非后台队列：不自动重试、不跨重启续跑、不越过确认点。
+/// TaskRun 事件投影状态（TERM-AG-015 · SM-AG-04，BR-SYS-STATE-008）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TaskRunStatus {
-    Planned,
-    Executing,
-    WaitingConfirm,
-    WaitingClarification,
+pub enum TaskRunProjectionStatusV2 {
+    Projected,
+    Active,
+    Waiting,
     Completed,
     Failed,
     Cancelled,
     Interrupted,
 }
 
-/// 任务步骤状态（TERM-AG-016 · SM-AG-04 steps）。
+/// TaskStep 只读投影状态；candidate 不承诺执行。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TaskStepStatus {
-    Pending,
-    Running,
-    WaitingConfirm,
-    Ok,
+pub enum TaskStepProjectionStatusV2 {
+    Candidate,
+    Active,
+    Waiting,
+    Completed,
     Failed,
     Cancelled,
 }
 
-/// 任务步骤（TERM-AG-016）：TaskRun 内有依赖的受限步骤。
+/// TaskStep 由一个真实 TurnEvent 或当前 route revision 派生，不是执行单元。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskStepV1 {
+pub struct TaskStepProjectionV2 {
     pub step_id: String,
-    /// 步骤类别：tool（工具调用）/ propose（提案＝W1/W2/W3 确认点）/ read / confirm。
     pub kind: String,
     pub label: String,
-    pub status: TaskStepStatus,
+    pub status: TaskStepProjectionStatusV2,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    pub source_event_id: String,
+    pub source_event_seq: u64,
+    pub result: Option<String>,
 }
 
-/// 受限任务实例（TERM-AG-015 · SM-AG-04）：同一用户目标内组织步骤/回合的编排实例。
-/// 真实工作状态只由回合/步骤/工具事件驱动；DiffCard 可经 task_run_id 关联（UNC-09）。
+/// TaskPlan 是模型当前可见 route revision 的只读投影；不含授权、游标或执行命令。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskRunV1 {
+pub struct TaskPlanProjectionV2 {
+    pub plan_id: String,
+    pub task_run_id: String,
+    pub through_seq: u64,
+    pub route_revision: u64,
+    pub summary: String,
+    pub candidate_steps: Vec<TaskStepProjectionV2>,
+}
+
+/// TaskRun 是复杂目标的 TurnEvent 可重建投影，不是调度器或后台队列。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRunProjectionV2 {
     pub task_run_id: String,
     pub workspace_id: String,
     pub session_id: String,
-    pub status: TaskRunStatus,
-    pub intent_summary: Option<String>,
-    pub steps: Vec<TaskStepV1>,
+    pub source_turn_ids: Vec<String>,
+    pub through_seq: u64,
+    pub goal: String,
+    pub status: TaskRunProjectionStatusV2,
+    pub observed_steps: Vec<TaskStepProjectionV2>,
+    pub waiting_on: Vec<String>,
+    pub current_route_revision: Option<u64>,
+    pub candidate_steps: Vec<TaskStepProjectionV2>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -581,34 +598,6 @@ pub struct DecisionRequestV1 {
     pub outcome: Option<String>,
     pub proposed_at: i64,
     pub resolved_at: Option<i64>,
-}
-
-/// 任务计划步骤（TERM-AG-018 · TaskPlan）：可展示操作计划的组成步骤。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskPlanStepV1 {
-    pub step_id: String,
-    pub seq: i32,
-    pub kind: String,
-    pub label: String,
-    /// 依赖的前置步骤 id 列表。
-    pub deps: Vec<String>,
-    /// 本步所需授权（capability 声明）；confirm_point 标记确认点。
-    pub required_grant: Option<String>,
-    pub confirm_point: bool,
-    pub status: TaskStepStatus,
-}
-
-/// 任务计划（TERM-AG-018 · TaskPlan）：IntentResult 判定复杂目标后创建的可展示操作计划（非模型思维链）；
-/// 保存步骤/依赖/当前游标/所需授权/确认点/阶段结果；执行按片段推进，每片段重新授权。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskPlanV1 {
-    pub plan_id: String,
-    pub task_run_id: String,
-    pub steps: Vec<TaskPlanStepV1>,
-    /// 当前游标（下一步 seq；0 起）。
-    pub cursor: i32,
-    pub created_at: i64,
-    pub updated_at: i64,
 }
 
 /// 知识召回载荷基线（主责 KB；KB→AG 传递）。

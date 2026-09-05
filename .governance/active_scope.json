@@ -1,36 +1,40 @@
 {
-  "scope_id": "AG-EVIDENCE-REPORT-WP5-01",
+  "scope_id": "AG-TASK-PROJECTION-WP6-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "EvidenceLedger 与运行时 ProjectReport 收敛",
+  "title": "TaskRun/TaskPlan 事件投影与 DecisionRequest 恢复收敛",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行并持续要求继续；本项为已确认 A-AG-X-L-04 WP-AG10-05。",
-  "scope_reason": "按 REQ-AG-009、BR-AG-OBS-001、BR-SYS-DATA-008 和 X-SHARED-002，以 TurnEvent 真实读取事实派生 EvidenceLedger 与 ProjectReportV2，删除模型可调用报告完成门，不新增需求、工具或执行链路。",
-  "issue_trace": ".governance/issues/AG-EVIDENCE-REPORT-WP5-01.md",
+  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行；2026-09-05 明确要求继续下一项，本项为已冻结 A-AG-X-L-04 WP-AG10-06。",
+  "scope_reason": "按 REQ-AG-015、BR-SYS-STATE-008 与 SM-AG-04，把 TaskRun/TaskPlan/TaskStep 收敛为 TurnEvent 派生只读投影，保留 DecisionRequest 同回合恢复事实，删除静态调度、游标、计划预授权与空 TaskRun。",
+  "issue_trace": ".governance/issues/AG-TASK-PROJECTION-WP6-01.md",
   "objectives": [
-    "ContextFrozen 与成功只读 ToolResult 产生绑定 turn/source/version/hash/seq 的 EvidenceLedger 项",
-    "失败、跨 workspace、目录、搜索、结构、局部块和全文覆盖保持不同且不能互相冒充",
-    "模型 final 只可引用运行时生成的 evidence_id，未知或覆盖不足声明降为 uncertainty",
-    "运行时在最终回答到达后派生 ProjectReportV2 并作为安全 TurnEvent 投影",
-    "删除 report_project 注册、Prompt schema、强制完成门和模型自报 readItems 校验路径"
+    "简单回答和简单单次编辑不创建 TaskRun/TaskPlan",
+    "复杂路线、跨执行片段或等待点才建立可由 TurnEvent 重建的 TaskRunProjectionV2",
+    "TaskPlan/TaskStep 只投影路线 revision、已发生事实、候选动作、等待与结果",
+    "DecisionRequest 绑定原 AgentTurn，confirm/cancel 后同一回合恢复并重新 Gate",
+    "中断仅投影 Interrupted；重试创建新 AgentTurn；投影查询和删除不驱动业务副作用",
+    "删除计划写入口、执行游标、required_grant、步骤调度器和关键词复杂度判定"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-EVIDENCE-REPORT-WP5-01.md",
+    ".governance/issues/AG-TASK-PROJECTION-WP6-01.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
     "src-tauri/src/types/mod.rs",
     "src-tauri/src/ipc/mod.rs",
-    "src-tauri/src/ag/model_output.rs",
-    "src-tauri/src/ag/prompts.rs",
-    "src-tauri/src/ag/tool_exec.rs",
-    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ag/runtime.rs",
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/task_runtime.rs",
+    "src-tauri/src/ag/turn_control.rs",
     "src-tauri/src/ag/turn_events.rs",
+    "src-tauri/src/ag/turn_prompt.rs",
     "src-tauri/src/ag/turn_runtime.rs",
     "src-tauri/src/ag/turn_tool_loop.rs",
     "src/services/agService.ts",
     "src/services/agRuntime.test.ts",
-    "src/store/agStore.ts"
+    "src/store/agStore.ts",
+    "src/components/ag/PlanCard.tsx"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -39,27 +43,29 @@
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
     "需求、设计、规则、协议、验证卡和计划文档",
-    "数据库 schema 与迁移",
+    "src-tauri/src/db/mod.rs 与数据库迁移",
     "cloud/dev-gateway/**",
-    "WP6 Task Projection、WP7 ProposalBatch、WP8 UI 展示与恢复、WP9 其他兼容清理"
+    "WP7 ProposalBatch、WP8 UI 恢复总收口、WP9 其他兼容清理"
   ],
   "constraints": [
-    "不新增模型可调用完成工具、读取能力或副作用入口",
-    "EvidenceLedger 只由同回合 ContextFrozen 和成功只读 ToolResult 派生，模型与前端不能写入",
-    "目录/定位、结构、搜索片段、选中块和全文覆盖必须保持不同",
-    "ProjectReport 是只读事件投影，不创建 TaskRun、DecisionRequest、Proposal、Diff 或写入授权",
-    "不因报告投影失败把已合法完成的普通回答伪装为工具未完成；投影一致性失败按 Finalizing 真实失败处理"
+    "不新增需求、工具、领域副作用或后台执行入口",
+    "TaskRun/TaskPlan/TaskStep 不保存 CapabilityGrant、执行游标或执行命令",
+    "投影不能调用 provider、工具、WS、DE、ED 或改变 ExplicitEditTargetSet",
+    "DecisionRequest 与 WorkspaceOperationPlan 继续作为独立真实事实，不降级为展示投影",
+    "DiffCard accept/reject 不推进 TaskRun；Proposal 只作为已发生事实投影",
+    "兼容表可保留只读迁移，但不得继续写入旧计划调度语义"
   ],
   "acceptance_criteria": [
-    "ToolResult.evidenceIds 由运行时生成且可从持久化 TurnEvent 重建同一 EvidenceLedger",
-    "证据包含 turn、through_seq、source_event_id、source、coverage、version_or_hash，失败读取不增加证据",
-    "ProjectReportV2 绑定 turn_id/evidence_through_seq，readItems 只引用有效 evidence_ids，部分/未知声明进入 unread/uncertainties",
-    "工具注册表、CapabilityGrant、Prompt manifest 和 ToolLoop 均不存在 report_project",
-    "模型可直接 final；内容提案和资源计划的既有终态工具门保持不变",
-    "V-S13 专项、同输入 test:plan/test:related 与 Issue Trace governance audit 全部通过"
+    "相同 TurnEvent 序列重建相同 TaskRunProjectionV2/TaskPlanProjectionV2",
+    "简单回合无 TaskRun；复杂路线/等待事实创建投影且候选步骤不自动执行",
+    "路线 revision 替换当前候选路线但保留历史事件",
+    "等待期间无 provider/tool 活动；wait resolved 后无 activityObserved 仍保持 Waiting",
+    "DecisionRequest confirm/cancel 恢复原 turn 并重新 Gate；错误身份、重复和跨 workspace 失败关闭",
+    "生产代码不存在 ag.create_plan、TaskStep scheduler、cursor 或 required_grant",
+    "V-S7 自动化、同输入 test:plan/test:related 与 Issue Trace governance audit 全部通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-WP5-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-05 Evidence & Report", "confirmed_at": "2026-09-04"}
+    {"id": "HD-AG-WP6-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-06", "confirmed_at": "2026-09-05"}
   ],
   "stop_conditions": [],
   "unresolved_items": []

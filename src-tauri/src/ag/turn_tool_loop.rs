@@ -80,6 +80,71 @@ fn apply_model_control(
     Ok(next)
 }
 
+fn ensure_route_task_projection(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    session_id: &str,
+    workspace_id: &str,
+    turn_id: &str,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    task_run_id: &mut Option<String>,
+    control: &ag::model_output::ModelTurnControl,
+) -> Result<(), IpcError> {
+    if task_run_id.is_some()
+        || !ag::task::route_requires_task_projection(
+            &control.route.steps,
+            &control.intent.confirmation_points,
+            &explicit_edit_target_set.paths(),
+        )
+    {
+        return Ok(());
+    }
+    let created = {
+        let conn = state.db.lock().map_err(|_| {
+            IpcError::new(
+                "WS_DB_BUSY",
+                "数据库连接繁忙，无法建立任务投影身份",
+                true,
+                false,
+            )
+        })?;
+        let created = ag::task::begin_for_model_route(
+            &conn,
+            workspace_id,
+            session_id,
+            &control.intent.goal,
+            &control.route.steps,
+            &control.intent.confirmation_points,
+            &explicit_edit_target_set.paths(),
+        )
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?
+        .ok_or_else(|| {
+            IpcError::new(
+                "AG_TASK_PROJECTION_DRIFT",
+                "复杂路线判据与 TaskRun 创建边界不一致",
+                false,
+                false,
+            )
+        })?;
+        ag::task::link_turn(&conn, turn_id, &created)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        *task_run_id = Some(created.clone());
+        ag::target_set::persist_for_task_run(&conn, &created, explicit_edit_target_set)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        created
+    };
+    bind_agent_turn_task_run(state, session_id, turn_id, &created)?;
+    emitter.record_internal(
+        "task_projected",
+        serde_json::json!({
+            "taskRunId": &created,
+            "goal": &control.intent.goal,
+            "reason": "complex_route",
+        }),
+    )?;
+    Ok(())
+}
+
 fn terminal_tool_is_missing(
     required_terminal_tool: Option<&str>,
     proposed_diff: bool,
@@ -521,6 +586,28 @@ pub(super) async fn run_turn_tool_loop(
                         return Ok(());
                     }
                 };
+                if let Err(error) = ensure_route_task_projection(
+                    &state,
+                    &event_emitter,
+                    &session_id,
+                    &workspace_id_for_turn,
+                    &turn_id,
+                    &explicit_edit_target_set,
+                    &mut task_run_id,
+                    &control,
+                ) {
+                    advance_or_finish!(TlEv::LoopError);
+                    settle_and_emit_ag_turn_error(
+                        &state,
+                        task_run_id.as_deref(),
+                        &event_emitter,
+                        &terminal_latch,
+                        &app,
+                        &turn_id,
+                        &error,
+                    );
+                    return Ok(());
+                }
                 match control.next_action {
                     ag::model_output::ModelNextAction::Clarify => {
                         let clarification_question = control
@@ -827,6 +914,28 @@ pub(super) async fn run_turn_tool_loop(
                         return Ok(());
                     }
                 };
+                if let Err(error) = ensure_route_task_projection(
+                    &state,
+                    &event_emitter,
+                    &session_id,
+                    &workspace_id_for_turn,
+                    &turn_id,
+                    &explicit_edit_target_set,
+                    &mut task_run_id,
+                    &control,
+                ) {
+                    advance_or_finish!(TlEv::LoopError);
+                    settle_and_emit_ag_turn_error(
+                        &state,
+                        task_run_id.as_deref(),
+                        &event_emitter,
+                        &terminal_latch,
+                        &app,
+                        &turn_id,
+                        &error,
+                    );
+                    return Ok(());
+                }
                 current_doc_requires_tool_read = matches!(
                     intent_result.side_effect_intent,
                     ag::context::SideEffectIntentV2::ContentProposal
@@ -996,7 +1105,8 @@ pub(super) async fn run_turn_tool_loop(
                         };
                     // 简单回合保持无 TaskRun。只有已获准的任务级工具真的到达执行边界时，
                     // 才在创建 DecisionRequest / WorkspaceOperationPlan 之前取得并绑定 TaskRun。
-                    let task_run_prepare_error =
+                    let task_run_was_missing = task_run_id.is_none();
+                    let mut task_run_prepare_error =
                         if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
                             && scope_candidates.is_ok()
                             && ag::task::tool_requires_task_run(&c.name)
@@ -1026,22 +1136,6 @@ pub(super) async fn run_turn_tool_loop(
                                             false,
                                         )
                                     })
-                                })
-                                .and_then(|task_run_id| {
-                                    ag::target_set::persist_for_task_run(
-                                        &conn,
-                                        &task_run_id,
-                                        &explicit_edit_target_set,
-                                    )
-                                    .map(|_| task_run_id)
-                                    .map_err(|error| {
-                                        IpcError::new(
-                                            "AG_TASK_DB_ERROR",
-                                            &error.to_string(),
-                                            true,
-                                            false,
-                                        )
-                                    })
                                 }),
                                 Err(_) => Err(IpcError::new(
                                     "WS_DB_BUSY",
@@ -1059,16 +1153,28 @@ pub(super) async fn run_turn_tool_loop(
                                         &turn_id,
                                         &created_task_run_id,
                                     ) {
-                                        Ok(()) => {
-                                            if let Ok(conn) = state.db.lock() {
-                                                let _ = ag::task::link_turn(
+                                        Ok(()) => match state.db.lock() {
+                                            Ok(conn) => ag::task::link_turn(
+                                                &conn,
+                                                &turn_id,
+                                                &created_task_run_id,
+                                            )
+                                            .and_then(|_| {
+                                                ag::target_set::persist_for_task_run(
                                                     &conn,
-                                                    &turn_id,
                                                     &created_task_run_id,
-                                                );
-                                            }
-                                            None
-                                        }
+                                                    &explicit_edit_target_set,
+                                                )
+                                            })
+                                            .err()
+                                            .map(|error| {
+                                                format!("TaskRun 无法固化当前回合范围：{error}")
+                                            }),
+                                            Err(_) => Some(
+                                                "数据库连接繁忙，无法固化 TaskRun 回合范围"
+                                                    .to_string(),
+                                            ),
+                                        },
                                         Err(error) => Some(format!(
                                             "TaskRun 无法绑定当前 AgentTurn：{}",
                                             error.message
@@ -1080,6 +1186,20 @@ pub(super) async fn run_turn_tool_loop(
                         } else {
                             None
                         };
+                    if task_run_prepare_error.is_none() && task_run_was_missing {
+                        if let Some(created_task_run_id) = task_run_id.as_deref() {
+                            if let Err(error) = event_emitter.record_internal(
+                                "task_projected",
+                                serde_json::json!({
+                                    "taskRunId": created_task_run_id,
+                                    "goal": &intent_result.goal,
+                                    "reason": "task_level_waiting_point",
+                                }),
+                            ) {
+                                task_run_prepare_error = Some(error.message);
+                            }
+                        }
+                    }
                     let execution_guard_error = if let Err(error) = &scope_candidates {
                         Some(error.message.clone())
                     } else if task_run_prepare_error.is_some() {
@@ -1469,29 +1589,7 @@ pub(super) async fn run_turn_tool_loop(
                     } else {
                         return Ok(());
                     }
-                    // AG-1.0-IMP-TASKRUN-01：真实工具事件驱动步骤态（BR-SYS-STATE-008，best-effort）。
-                    if let (Some(task_run_id), Ok(conn)) = (task_run_id.as_deref(), state.db.lock())
-                    {
-                        let _ = ag::task::record_tool_step(
-                            &conn,
-                            task_run_id,
-                            &format!("tool-{}-{}", turn_id, c.id),
-                            &c.name,
-                            success,
-                        );
-                    }
                     if let Some((diff_id, rel_path)) = diff_event_after_tool {
-                        // 提案＝W1/W2/W3 确认点（复用提案卡裁决，SM-AG-04 WaitingConfirm）。
-                        if let (Some(task_run_id), Ok(conn)) =
-                            (task_run_id.as_deref(), state.db.lock())
-                        {
-                            let _ = ag::task::record_proposal_step(
-                                &conn,
-                                task_run_id,
-                                &format!("propose-{diff_id}"),
-                                &format!("提案 {rel_path}"),
-                            );
-                        }
                         event_emitter.emit(
                             &terminal_latch,
                             AgTurnEventPayload::DiffProposed {
