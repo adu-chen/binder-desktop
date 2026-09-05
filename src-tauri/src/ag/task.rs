@@ -413,13 +413,38 @@ fn parse_step_status(s: &str) -> Option<TaskStepStatus> {
 }
 
 /// 回合终态映射（BR-SYS-STATE-008 · A-AG-M-S-01 §2.2.2 重构）：完成且有未决 DecisionRequest →
-/// WaitingConfirm（保持非终态，等待任务级裁决后自动下一片段）；完成无未决裁决 → Completed；
-/// 失败 → Failed；取消 → Cancelled。提案（Diff）不再驱动 waiting_confirm（三层分离）。
+/// WaitingConfirm（保持任务非终态，裁决后由原 AgentTurn 恢复）；完成无未决裁决 → Completed；
+/// 失败 → Failed；取消 → Cancelled。TaskRun 终态/Interrupted 不得被后到的 AgentTurn 结算覆写；
+/// 提案（Diff）不再驱动 waiting_confirm（三层分离）。
 pub fn settle_turn(
     conn: &Connection,
     task_run_id: &str,
     outcome: TurnOutcome,
 ) -> rusqlite::Result<TaskRunStatus> {
+    let current_status = conn
+        .query_row(
+            "SELECT status FROM task_runs WHERE task_run_id=?1",
+            rusqlite::params![task_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|status| parse_run_status(&status));
+    if let Some(
+        status @ (TaskRunStatus::Completed
+        | TaskRunStatus::Failed
+        | TaskRunStatus::Cancelled
+        | TaskRunStatus::Interrupted),
+    ) = current_status
+    {
+        return Ok(status);
+    }
+    if outcome == TurnOutcome::Cancelled {
+        conn.execute(
+            "UPDATE decision_requests SET status='resolved', outcome='cancel', resolved_at=?1 \
+             WHERE task_run_id=?2 AND status='proposed'",
+            rusqlite::params![now_millis(), task_run_id],
+        )?;
+    }
     let status = match outcome {
         TurnOutcome::Completed if has_pending_preview_checkpoint(conn, task_run_id)? => {
             TaskRunStatus::Executing
@@ -724,6 +749,50 @@ pub fn begin_confirmed_continuation(
         )?;
     }
     Ok(matched)
+}
+
+/// 同一 AgentTurn 的裁决恢复入口：confirm/cancel 均必须匹配已解决的 DecisionRequest 和所属任务身份。
+/// cancel 只终止该 TaskRun 投影，不把原 AgentTurn 伪装成取消终态；模型仍可基于结果形成最终说明。
+pub fn begin_resolved_decision_continuation(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    task_run_id: &str,
+    decision_request_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    let matched: Option<String> = conn
+        .query_row(
+            "SELECT r.task_run_id FROM task_runs r \
+             JOIN decision_requests d ON d.task_run_id=r.task_run_id \
+             WHERE r.task_run_id=?1 AND r.workspace_id=?2 AND r.session_id=?3 \
+             AND d.request_id=?4 AND d.status='resolved' \
+             AND ((d.outcome='confirm' AND r.status='executing') \
+               OR (d.outcome='cancel' AND r.status='cancelled'))",
+            rusqlite::params![task_run_id, workspace_id, session_id, decision_request_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(ref id) = matched {
+        conn.execute(
+            "UPDATE task_runs SET updated_at=?1 WHERE task_run_id=?2",
+            rusqlite::params![now_millis(), id],
+        )?;
+    }
+    Ok(matched)
+}
+
+pub fn resolved_decision_outcome(
+    conn: &Connection,
+    task_run_id: &str,
+    decision_request_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT outcome FROM decision_requests \
+         WHERE task_run_id=?1 AND request_id=?2 AND status='resolved'",
+        rusqlite::params![task_run_id, decision_request_id],
+        |row| row.get(0),
+    )
+    .optional()
 }
 
 fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequestV1> {
@@ -1343,7 +1412,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
-        // 裁决 confirm → Executing（可自动下一片段）；续片段必须沿用同一 TaskRun，不能新建身份。
+        // 裁决 confirm → Executing；恢复必须沿用同一 TaskRun，不能新建身份。
         let (resolved_run_id, st2, already_resolved) =
             resolve_decision(&conn, &dr.request_id, "confirm").unwrap();
         assert_eq!(st2, Executing);
@@ -1374,6 +1443,35 @@ mod tests {
         assert_eq!(replayed_status, Cancelled);
         assert!(replayed);
         assert!(resolve_decision(&conn, &dr.request_id, "confirm").is_err());
+        // cancel 只恢复原 AgentTurn 生成可见结论；后续回合完成不得覆写 TaskRun 的取消终态。
+        assert_eq!(
+            settle_turn(&conn, &id, TurnOutcome::Completed).unwrap(),
+            Cancelled
+        );
+    }
+
+    // covers: BR-SYS-STATE-008
+    // AgentTurn 从任意取消入口结束时，未决 DecisionRequest 也必须收敛为 cancel，不能遗留幽灵门禁。
+    #[test]
+    fn turn_cancellation_resolves_pending_decision_request() {
+        let conn = fresh();
+        let id = begin_turn(&conn, "ws1", "cancel-pending-decision", None).unwrap();
+        let dr = propose_decision(&conn, &id, "permission", serde_json::json!({})).unwrap();
+        assert!(has_pending_decision(&conn, &id).unwrap());
+
+        assert_eq!(
+            settle_turn(&conn, &id, TurnOutcome::Cancelled).unwrap(),
+            Cancelled
+        );
+        assert!(!has_pending_decision(&conn, &id).unwrap());
+        assert_eq!(
+            resolved_decision_outcome(&conn, &id, &dr.request_id).unwrap(),
+            Some("cancel".to_string())
+        );
+        assert_eq!(
+            latest_pending_decision_for_session(&conn, "ws1", "cancel-pending-decision").unwrap(),
+            None
+        );
     }
 
     // covers: BR-AG-DATA-003

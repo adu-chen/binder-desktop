@@ -1692,7 +1692,7 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
     expect(turnInvocations[1]?.turnId).toBe(turnInvocations[0]?.turnId);
     expect(turnInvocations[0]?.clarificationResume).toBe(false);
     expect(turnInvocations[1]?.clarificationResume).toBe(true);
-    expect(turnInvocations[1]?.prompt).toBe("修改文档\n\n补充说明：目标是 notes/current.md");
+    expect(turnInvocations[1]?.prompt).toBe("目标是 notes/current.md");
     expect(turnInvocations[1]?.mentions).toEqual(["notes/legacy.md"]);
     expect(turnInvocations[1]?.blockRefs).toEqual([
       { relPath: "notes/legacy.md", blockId: "b1", text: "旧引用" },
@@ -1739,7 +1739,7 @@ describe("澄清非终态（R5-A · BR-SYS-STATE-007）", () => {
     expect(turnInvocations[1]).toMatchObject({
       turnId: originalTurnId,
       clarificationResume: true,
-      prompt: "修改文档\n\n补充说明：目标是当前文档\n\n补充说明：并保持标题不变",
+      prompt: "目标是当前文档\n\n并保持标题不变",
     });
     expect(invokeMock.mock.calls.some(([command]) => command === "ag_cancel_turn")).toBe(false);
   });
@@ -1846,57 +1846,138 @@ describe("agService TaskRun 查询（AG-1.0-IMP-TASKRUN-UI-01）", () => {
 
 describe("agService 回合实时事件（AG-1.0-TASKRUN-REWORK-IMP-UI-01）", () => {
   // covers: BR-SYS-STATE-008
-  // step_progress 驱动当前动作；decision_request_proposed 置待裁决（done 不清除，等用户裁决）。
-  it("keeps pending decision across turn end and clears on resolution", async () => {
+  // decision_request_proposed 停放原回合并释放发送门控，不接受同一次 invocation 伪造的 done。
+  it("parks a pending decision as a nonterminal wait", async () => {
+    let invocation = 0;
     mockTurnInvoke((arg) => {
+      invocation += 1;
       const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
-      onEvent.onmessage?.({ type: "step_progress", turn_id: "t", action: "tool", label: "read_doc" });
-      onEvent.onmessage?.({
-        type: "decision_request_proposed",
-        turn_id: "t",
-        request_id: "decision-1",
-        kind: "permission",
-        payload: { summary: "需要读取敏感文档" },
-      });
-      completeTurn(arg);
+      if (invocation === 1) {
+        onEvent.onmessage?.({ type: "step_progress", turn_id: "t", action: "tool", label: "read_doc" });
+        onEvent.onmessage?.({
+          type: "decision_request_proposed",
+          turn_id: "t",
+          request_id: "decision-1",
+          kind: "permission",
+          payload: { summary: "需要读取敏感文档" },
+        });
+        completeTurn(arg);
+      } else {
+        onEvent.onmessage?.({
+          type: "decision_request_resolved",
+          turn_id: "t",
+          request_id: "decision-1",
+          outcome: "cancel",
+        });
+        completeTurn(arg);
+      }
     });
 
     await startTurn("读取文档并修改");
 
-    // 回合结束：当前动作清除，但待裁决保留（三层分离：等任务级裁决，不因回合终态消失）
-    expect(agStore.getSnapshot().currentAction).toBeNull();
+    expect(agStore.getSnapshot().sending).toBe(false);
+    expect(agStore.getSnapshot().currentAction).toMatchObject({ action: "deciding" });
     expect(agStore.getSnapshot().pendingDecision).toMatchObject({
       requestId: "decision-1",
       kind: "permission",
     });
+    await resolveDecisionAndContinue("decision-1", "cancel");
+    expect(agStore.getSnapshot().pendingDecision).toBeNull();
   });
 
   // covers: BR-SYS-STATE-008
-  // decision_request_resolved → 清除待裁决与当前动作。
-  it("clears pending decision and current action on resolution", async () => {
+  // 裁决恢复必须复用同一 turn/assistant，不插入替代用户消息；resolved 后再正常终结。
+  it("resumes the original turn identity and clears the decision on resolution", async () => {
+    const invocations: Array<Record<string, unknown>> = [];
     mockTurnInvoke((arg) => {
+      invocations.push(arg as Record<string, unknown>);
       const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
-      onEvent.onmessage?.({ type: "step_progress", turn_id: "t", action: "generating", label: "" });
-      onEvent.onmessage?.({
-        type: "decision_request_proposed",
-        turn_id: "t",
-        request_id: "decision-2",
-        kind: "plan_choice",
-        payload: { summary: "确认方案 A" },
-      });
-      onEvent.onmessage?.({
-        type: "decision_request_resolved",
-        turn_id: "t",
-        request_id: "decision-2",
-        outcome: "confirm",
-      });
-      completeTurn(arg);
+      if (invocations.length === 1) {
+        onEvent.onmessage?.({
+          type: "decision_request_proposed",
+          turn_id: "t",
+          request_id: "decision-2",
+          kind: "plan_choice",
+          payload: { summary: "确认方案 A" },
+        });
+      } else {
+        onEvent.onmessage?.({
+          type: "decision_request_resolved",
+          turn_id: "t",
+          request_id: "decision-2",
+          outcome: "confirm",
+        });
+        onEvent.onmessage?.({ type: "chunk", turn_id: "t", text: "已继续执行" });
+        completeTurn(arg);
+      }
     });
 
     await startTurn("按方案执行");
+    const sessionId = agStore.getSnapshot().activeSessionId;
+    const beforeResume = agStore.getSnapshot().sessions.find((session) => session.id === sessionId)?.messages ?? [];
+    const originalTurnId = String(invocations[0]?.turnId);
+    await resolveDecisionAndContinue("decision-2", "confirm");
 
+    expect(invocations).toHaveLength(2);
+    expect(invocations[1]).toMatchObject({
+      turnId: originalTurnId,
+      decisionResume: true,
+      clarificationResume: false,
+      continuationDecisionRequestId: "decision-2",
+    });
+    const afterResume = agStore.getSnapshot().sessions.find((session) => session.id === sessionId)?.messages ?? [];
+    expect(afterResume).toHaveLength(beforeResume.length);
+    expect(afterResume.filter((message) => message.turnId === originalTurnId && message.role === "user")).toHaveLength(1);
+    expect(afterResume.find((message) => message.turnId === originalTurnId && message.role === "assistant")?.content)
+      .toContain("已继续执行");
     expect(agStore.getSnapshot().pendingDecision).toBeNull();
     expect(agStore.getSnapshot().currentAction).toBeNull();
+  });
+
+  it("cancels a parked decision by its original turn identity", async () => {
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "decision_request_proposed",
+        turn_id: "t",
+        request_id: "decision-cancel",
+        kind: "manual_confirm",
+        payload: { summary: "等待确认" },
+      });
+    });
+    await startTurn("执行待确认任务");
+    const sessionId = agStore.getSnapshot().activeSessionId;
+    const turnId = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "user")?.turnId;
+    await expect(deleteAgentSession(sessionId)).rejects.toMatchObject({ code: "AG_TURN_ACTIVE" });
+
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "ag_cancel_turn") return undefined;
+      const request = (arg as { request?: { command?: string; correlation_id?: string } }).request;
+      if (request?.command === "ag.list_turn_events") {
+        return {
+          correlation_id: request.correlation_id,
+          result: [{
+            eventId: `turn-event:${turnId}:3`,
+            turnId,
+            seq: 3,
+            occurredAt: 3,
+            payloadVersion: 1,
+            type: "done",
+            stopReason: "cancelled",
+          }],
+        };
+      }
+      return dispatchOk(arg);
+    });
+
+    await cancelActiveTurn();
+
+    const cancelCall = invokeMock.mock.calls.find(([command]) => command === "ag_cancel_turn");
+    expect(cancelCall?.[1]).toMatchObject({ sessionId, turnId });
+    expect(agStore.getSnapshot().pendingDecision).toBeNull();
+    const assistant = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "assistant");
+    expect(assistant?.turnStatus).toBe("cancelled");
+    expect(assistant?.streaming).toBe(false);
   });
 });
 
@@ -2255,18 +2336,40 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
   });
 
   // covers: BR-SYS-STATE-008
-  // 任务级确认 confirm 后自动发起下一执行片段（同一 startTurn 链路，无手动输入）。
-  it("confirm triggers an automatic continuation turn", async () => {
-    let turnCount = 0;
+  // 任务级确认恢复产生裁决请求的原 AgentTurn，而不是自动创建新回合。
+  it("confirm resumes the parked AgentTurn", async () => {
+    const turns: Array<Record<string, unknown>> = [];
     mockTurnInvoke((arg) => {
-      turnCount += 1;
-      completeTurn(arg);
+      turns.push(arg as Record<string, unknown>);
+      const onEvent = (arg as { onEvent: { onmessage: ((m: TestTurnEvent) => void) | null } }).onEvent;
+      if (turns.length === 1) {
+        onEvent.onmessage?.({
+          type: "decision_request_proposed",
+          turn_id: "t",
+          request_id: "decision-live",
+          kind: "manual_confirm",
+          payload: { summary: "请确认" },
+        });
+      } else {
+        onEvent.onmessage?.({
+          type: "decision_request_resolved",
+          turn_id: "t",
+          request_id: "decision-live",
+          outcome: "confirm",
+        });
+        completeTurn(arg);
+      }
     });
-    await resolveDecisionAndContinue("decision-1", "confirm");
-    expect(turnCount).toBe(1);
-    expect(agStartArg()).toMatchObject({
+
+    await startTurn("执行需要确认的任务");
+    await resolveDecisionAndContinue("decision-live", "confirm");
+
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatchObject({
+      turnId: turns[0].turnId,
+      decisionResume: true,
       continuationTaskRunId: "task-confirmed",
-      continuationDecisionRequestId: "decision-1",
+      continuationDecisionRequestId: "decision-live",
     });
   });
 
@@ -2348,22 +2451,16 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
   });
 
   // covers: BR-SYS-STATE-008
-  // 连续 auto-continue 达到上限后停止（防死循环）；cancel 不续回合。
-  it("stops auto-continue at MAX and never continues on cancel", async () => {
+  // 仅有历史 DecisionRequest 投影、没有当前进程内 AwaitingDecision 身份时，不猜测并新建回合。
+  it("does not fabricate continuation turns for historical decisions", async () => {
     let turnCount = 0;
     mockTurnInvoke((arg) => {
       turnCount += 1;
       completeTurn(arg);
     });
-    // 手动发送重置连续 auto-continue 计数（与 startTurn 语义一致）。
-    await startTurn("手动发送");
-    turnCount = 0;
-    for (let i = 0; i < 4; i++) {
-      await resolveDecisionAndContinue(`d-${i}`, "confirm");
-    }
-    expect(turnCount).toBe(3); // 上限 3，最后一次不再自动续
-    await resolveDecisionAndContinue("d-final", "cancel");
-    expect(turnCount).toBe(3); // cancel 不续回合
+    await resolveDecisionAndContinue("historical-confirm", "confirm");
+    await resolveDecisionAndContinue("historical-cancel", "cancel");
+    expect(turnCount).toBe(0);
   });
 
   // covers: BR-SYS-STATE-008
@@ -2432,8 +2529,8 @@ describe("决策门控（AG-1.0-DECISION-CARD-01）", () => {
   });
 
   // covers: BR-SYS-STATE-008
-  // auto-continue 不受门控影响（裁决后自动续片段）。
-  it("auto-continue bypasses the gate", async () => {
+  // 历史待裁决项可被解析，但没有活动 AwaitingDecision 时不得伪造 AgentTurn。
+  it("resolves a historical pending decision without fabricating an AgentTurn", async () => {
     agStore.reset();
     agStore.setPendingDecision({ requestId: "d-2", kind: "plan_choice" });
     let turnCount = 0;
@@ -2442,7 +2539,7 @@ describe("决策门控（AG-1.0-DECISION-CARD-01）", () => {
       completeTurn(arg);
     });
     await resolveDecisionAndContinue("d-2", "confirm");
-    expect(turnCount).toBe(1); // auto-continue 正常续回合
+    expect(turnCount).toBe(0);
     agStore.setPendingDecision(null);
   });
 });

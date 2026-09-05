@@ -359,6 +359,38 @@ pub fn save_turn(
 
 /**
  * @GOV
+ * codes:    BR-AG-PERSIST-001-GUARD-AG-AG-TURN-048, BR-SYS-STATE-007-GUARD-AG-AG-TURN-048
+ * type:     GUARD
+ * chain:    AG-TURN
+ * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * term_ref: TERM-AG-001, TERM-AG-009, TERM-AG-022
+ * boundary: in=SameIdentityAgentTurnResumeRequest | out=ExistingDraftAgentTurnOrStableRejection | does_not=overwritePayloadStatusEventCursorOrCreateReplacementTurn
+ */
+pub fn ensure_turn_resumable(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    turn_id: &str,
+) -> rusqlite::Result<()> {
+    let status = conn
+        .query_row(
+            "SELECT status FROM agent_turns \
+             WHERE turn_id=?1 AND workspace_id=?2 AND session_id=?3",
+            params![turn_id, workspace_id, session_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    if status != "draft" {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "agent turn is not resumable: {status}"
+        )));
+    }
+    Ok(())
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-046
  * type:     EFFECT
  * chain:    AG-TURN
@@ -654,6 +686,30 @@ mod tests {
                 .as_deref(),
             Some("after.md")
         );
+    }
+
+    // covers: BR-AG-PERSIST-001, BR-SYS-STATE-007
+    #[test]
+    fn same_turn_resume_validates_draft_without_overwriting_projection() {
+        let conn = fresh();
+        ensure_session(&conn, "ws1", "s1", "标题", "edit", 0, true).unwrap();
+        let mut existing = payload("original");
+        existing.version = 2;
+        existing.last_event_seq = 3;
+        save_turn(&conn, "ws1", "s1", "t1", Some("a.md"), "draft", &existing).unwrap();
+
+        ensure_turn_resumable(&conn, "ws1", "s1", "t1").unwrap();
+        let preserved = list_turns(&conn, "ws1", "s1").unwrap().remove(0);
+        assert_eq!(preserved.status, "draft");
+        assert_eq!(preserved.payload.last_event_seq, 3);
+        assert_eq!(preserved.payload.user_message.content, "original");
+
+        conn.execute(
+            "UPDATE agent_turns SET status='completed' WHERE turn_id='t1'",
+            [],
+        )
+        .unwrap();
+        assert!(ensure_turn_resumable(&conn, "ws1", "s1", "t1").is_err());
     }
 
     // covers: BR-AG-PERSIST-001

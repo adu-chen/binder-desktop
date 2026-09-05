@@ -11,6 +11,76 @@ use sha2::{Digest, Sha256};
 
 pub const INTENT_VERSION_V1: &str = "intent-result-v1";
 pub const PROMPT_RUNTIME_VERSION_V1: &str = "prompt-runtime-v1";
+pub const PROMPT_RUNTIME_VERSION_V2: &str = "prompt-runtime-v2";
+
+/// Active 1.0 运行时意图语义。它只描述模型对当前目标的可见结论，不包含工具授权。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentTypeV2 {
+    Unresolved,
+    Answer,
+    Inspect,
+    Search,
+    Analyze,
+    Edit,
+    CreateDocument,
+    OrganizeWorkspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideEffectIntentV2 {
+    None,
+    ContentProposal,
+    StructurePlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentTargetCandidateV2 {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rel_path: Option<String>,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-004-DATA-AG-AG-TURN-046, BR-AG-STATE-001-DATA-AG-AG-TURN-046
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-004, BR-AG-STATE-001
+ * term_ref: TERM-AG-012
+ * boundary: in=ModelVisibleCurrentTurnSemanticProjection | out=VersionedIntentResultWithoutAuthorizationOrHiddenReasoning | does_not=containAllowedToolsOrOverrideExplicitEditTargetSet
+ */
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentResultV2 {
+    pub revision: u64,
+    pub source_event_seq: u64,
+    pub goal: String,
+    pub intent_type: IntentTypeV2,
+    pub target_candidates: Vec<IntentTargetCandidateV2>,
+    pub side_effect_intent: SideEffectIntentV2,
+    pub ambiguity: AmbiguityLevelV1,
+    pub required_context: Vec<String>,
+    pub confirmation_points: Vec<String>,
+}
+
+impl IntentResultV2 {
+    pub fn unresolved() -> Self {
+        Self {
+            revision: 0,
+            source_event_seq: 0,
+            goal: "unresolved".to_string(),
+            intent_type: IntentTypeV2::Unresolved,
+            target_candidates: Vec::new(),
+            side_effect_intent: SideEffectIntentV2::None,
+            ambiguity: AmbiguityLevelV1::None,
+            required_context: vec!["current_user_input".to_string()],
+            confirmation_points: Vec::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -783,6 +853,45 @@ pub struct PromptPackageV1 {
     pub raw_user_input: String,
     pub token_budget: usize,
     pub estimated_tokens: usize,
+}
+
+/// Active 1.0 每次 provider 调用前重新构建的内部 PromptPackage。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptPackageV2 {
+    pub runtime_version: String,
+    pub intent_revision: u64,
+    pub context_trace_id: String,
+    pub capability_grant_id: String,
+    pub tool_manifest_hash: String,
+    pub estimated_tokens: usize,
+    pub messages: Vec<serde_json::Value>,
+}
+
+pub fn build_prompt_package_v2(
+    intent: &IntentResultV2,
+    envelopes: &[PromptDataEnvelopeV1],
+    capability_grant_id: &str,
+    tool_manifest_hash: &str,
+    messages: Vec<serde_json::Value>,
+    tools: &serde_json::Value,
+) -> PromptPackageV2 {
+    let trace_material = envelopes
+        .iter()
+        .map(|envelope| envelope.content_hash.as_str())
+        .chain(std::iter::once(tool_manifest_hash))
+        .collect::<Vec<_>>()
+        .join(":");
+    let estimated_tokens = estimate_serialized_input_tokens(&messages, tools);
+    PromptPackageV2 {
+        runtime_version: PROMPT_RUNTIME_VERSION_V2.to_string(),
+        intent_revision: intent.revision,
+        context_trace_id: format!("ctx-{}", &sha256_text(&trace_material)[..16]),
+        capability_grant_id: capability_grant_id.to_string(),
+        tool_manifest_hash: tool_manifest_hash.to_string(),
+        estimated_tokens,
+        messages,
+    }
 }
 
 pub fn build_prompt_package(

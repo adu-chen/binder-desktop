@@ -12,7 +12,7 @@ pub enum ToolLoopState {
     ModelStreaming,
     ToolValidating,
     ToolExecuting,
-    ResultInjecting,
+    ResultRecording,
     LoopCompleted,
     LoopAborted,
 }
@@ -26,10 +26,11 @@ pub enum ToolLoopEvent {
     ValidateFail,
     ExecOk,
     ExecFail,
-    Injected,
+    Recorded,
+    ProposalRecorded,
+    DecisionHandoff,
     LoopLimit,
     LoopError,
-    Handoff,
     Cancel,
 }
 
@@ -55,11 +56,11 @@ pub fn is_terminal(state: ToolLoopState) -> bool {
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-002
- * boundary: in=ToolLoopEvent | out=ToolLoopState(validateGatedResultInjectedHandoffLoopLimitedErrorCancelTerminal)
+ * boundary: in=ToolLoopEvent | out=ToolLoopState(validateGatedResultRecordedProposalDecisionLoopLimitedErrorCancelTerminal)
  */
-/// SM-AG-02 转移引擎（BR-AG-STATE-002）：toolRequest→校验；validateFail 拒绝原因回注（→ResultInjecting，
-/// 不中断循环）；execOk/execFail 均回注（失败不中断）；injected 在**上限内**续调（→ModelStreaming），达
-/// **上限**→LoopAborted；循环级错误→LoopAborted；Proposal/DecisionRequest 移交→LoopCompleted；
+/// SM-AG-02 转移引擎（BR-AG-STATE-002）：toolRequest→校验；validateFail/execOk/execFail 均进入
+/// ResultRecording；记录完成、Proposal 或 DecisionRequest 后结束本次嵌套循环并回归 SM-AG-01；
+/// 达上限/循环级错误→LoopAborted；
 /// 任意非终态 cancel→LoopAborted（无半落盘）。返回 `None` = 无合法转移。
 pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoopState> {
     use ToolLoopEvent::*;
@@ -75,12 +76,11 @@ pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoop
         (ModelStreaming, ToolRequest) => ToolValidating,
         (ModelStreaming, FinalAnswer) => LoopCompleted,
         (ToolValidating, ValidateOk) => ToolExecuting,
-        (ToolValidating, ValidateFail) => ResultInjecting, // 拒绝原因回注
-        (ToolExecuting, ExecOk) => ResultInjecting,
-        (ToolExecuting, ExecFail) => ResultInjecting, // 失败回注不中断
-        (ResultInjecting, Injected) => ModelStreaming, // 上限内续调（计数由 loopLimit 事件区分）
-        (ResultInjecting, Handoff) => LoopCompleted,
-        (ResultInjecting, LoopLimit) => LoopAborted,
+        (ToolValidating, ValidateFail) => ResultRecording,
+        (ToolExecuting, ExecOk) => ResultRecording,
+        (ToolExecuting, ExecFail) => ResultRecording,
+        (ResultRecording, Recorded | ProposalRecorded | DecisionHandoff) => LoopCompleted,
+        (ResultRecording, LoopLimit) => LoopAborted,
         // 其余无合法转移（终态冻结；未校验不得执行；未注入不得续调）。
         _ => return None,
     };
@@ -131,26 +131,33 @@ mod tests {
             Some(ToolValidating)
         );
         assert_eq!(transition(ToolValidating, ValidateOk), Some(ToolExecuting));
-        assert_eq!(transition(ToolExecuting, ExecOk), Some(ResultInjecting));
-        assert_eq!(transition(ResultInjecting, Injected), Some(ModelStreaming));
+        assert_eq!(transition(ToolExecuting, ExecOk), Some(ResultRecording));
+        assert_eq!(transition(ResultRecording, Recorded), Some(LoopCompleted));
         // 校验失败/执行失败均回注，不中断循环
         assert_eq!(
             transition(ToolValidating, ValidateFail),
-            Some(ResultInjecting)
+            Some(ResultRecording)
         );
-        assert_eq!(transition(ToolExecuting, ExecFail), Some(ResultInjecting));
+        assert_eq!(transition(ToolExecuting, ExecFail), Some(ResultRecording));
         // 终答 / 上限
         assert_eq!(transition(ModelStreaming, FinalAnswer), Some(LoopCompleted));
-        assert_eq!(transition(ResultInjecting, Handoff), Some(LoopCompleted));
-        assert_eq!(transition(ResultInjecting, LoopLimit), Some(LoopAborted));
+        assert_eq!(
+            transition(ResultRecording, ProposalRecorded),
+            Some(LoopCompleted)
+        );
+        assert_eq!(
+            transition(ResultRecording, DecisionHandoff),
+            Some(LoopCompleted)
+        );
+        assert_eq!(transition(ResultRecording, LoopLimit), Some(LoopAborted));
         // 未校验不得执行
         assert_eq!(transition(ModelStreaming, ValidateOk), None);
         // 终态冻结
         for ev in [
             ToolRequest,
             ValidateOk,
-            Injected,
-            Handoff,
+            Recorded,
+            ProposalRecorded,
             LoopError,
             Cancel,
         ] {
@@ -167,7 +174,7 @@ mod tests {
             ModelStreaming,
             ToolValidating,
             ToolExecuting,
-            ResultInjecting,
+            ResultRecording,
         ] {
             assert_eq!(transition(s, Cancel), Some(LoopAborted));
         }
@@ -181,7 +188,7 @@ mod tests {
             ModelStreaming,
             ToolValidating,
             ToolExecuting,
-            ResultInjecting,
+            ResultRecording,
         ] {
             assert_eq!(transition(s, LoopError), Some(LoopAborted));
         }

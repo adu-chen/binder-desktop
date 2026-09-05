@@ -1,10 +1,10 @@
 //! 代理回合机 SM-AG-01 与门禁前置 · AG-TURN
 //! 规则：BR-AG-STATE-001（回合生命周期）/ BR-AG-VERIFY-001（门禁前置无绕过）
 //!
-//! 承接 A-AG-M-S-01 SM-AG-01：回合经 组装→门禁→流式→产出处置 完整生命周期；**通往模型调用（Streaming）
-//! 的唯一路径是 AwaitingGate + gatePassed**（门禁前置，结构上无绕过路径，BR-AG-VERIFY-001 / X-SEQ-001）；
-//! gateDenied/cancel 为终态不可绕过且无半落盘副作用；含修改建议的产出经 HandingOff 交 DE（X-FORBID-006，
-//! AG 无直写）。Agent 1.0 不包含 Build/CBT 接管或回落状态；回合持久化归 `ag::history`。
+//! 承接 A-AG-M-S-01 SM-AG-01：回合经组装→门禁→模型/工具自适应循环→最终核验完整生命周期；
+//! **通往模型调用（Streaming）的唯一路径是 AwaitingGate + gatePassed**（门禁前置，结构上无绕过路径，
+//! BR-AG-VERIFY-001 / X-SEQ-001）。澄清与裁决是同一 AgentTurn 的非终态等待，工具结果回到
+//! Assembling；gateDenied/cancel/error 为真实终态。Agent 1.0 不包含 Build/CBT 接管或回落状态。
 
 use crate::ipc::IpcError;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -53,16 +53,16 @@ impl TerminalLatch {
 }
 
 /// SM-AG-01 状态（A-AG-M-S-01 §2）。TurnError/Completed/Cancelled/Denied 为终态；
-/// AwaitingClarification 为等待用户输入的非终态（BR-SYS-STATE-007，澄清不终结回合）。
+/// AwaitingClarification/AwaitingDecision 为等待用户输入的非终态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnState {
     Idle,
     Assembling,
+    AwaitingClarification,
+    AwaitingDecision,
     AwaitingGate,
     Streaming,
-    HandingOff,
-    /// 澄清等待：IntentResult.ambiguity=blocking 时等待用户输入的非终态（BR-SYS-STATE-007）。
-    AwaitingClarification,
+    Finalizing,
     TurnError,
     Completed,
     Cancelled,
@@ -74,16 +74,19 @@ pub enum TurnState {
 pub enum TurnEvent {
     Send,
     Assembled,
-    ClarificationRequired,
-    ClarificationProvided,
     AssembleFail,
     GatePassed,
     GateDenied,
-    StreamEnd,
+    ModelClarification,
+    ClarificationProvided,
+    DecisionProposed,
+    DecisionResolved,
+    ToolRoundCompleted,
+    ModelFinal,
     StreamFail,
     Cancel,
-    HandoffOk,
-    HandoffFail,
+    FinalizeOk,
+    FinalizeFail,
 }
 
 /// 门禁裁决结果（AG 承接 SM-SYS-01 GatePassed/GateDenied；Offline=断网）。
@@ -108,35 +111,39 @@ pub fn is_terminal(state: TurnState) -> bool {
  * type:     RB
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-001, BR-SYS-STATE-007
- * boundary: in=TurnEvent | out=TurnState(clarificationRequiredWaitsAndOnlyClarificationProvidedResumesSameAgentTurnGateGatedToStreaming)
+ * boundary: in=TurnEvent | out=TurnState(modelToolWaitingFinalizationLifecycleWithGateGatedStreaming)
  */
-/// SM-AG-01 转移引擎（BR-AG-STATE-001 / BR-SYS-STATE-007）：**Streaming（模型调用）仅经
-/// AwaitingGate+gatePassed 可达**（门禁前置无绕过）；gateDenied→Denied 终态不可绕过；cancel→Cancelled
-/// 无半落盘；handoffOk→Completed（交 DE 完毕）；**澄清
-/// （ClarificationRequired）→AwaitingClarification 非终态，不终结回合；仅 ClarificationProvided 可使
-/// 同一 AgentTurn 回到 Assembling**。返回 `None` = 无合法转移（含全部 forbidden）。
+/// SM-AG-01 转移引擎。Streaming 仅经 AwaitingGate+GatePassed 可达；工具结果回 Assembling 后必须
+/// 重新装配和 Gate；澄清/裁决仅由对应用户事件恢复同一 AgentTurn；最终回答必须经 Finalizing 核验。
 pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
     use TurnEvent::*;
     use TurnState::*;
     let next = match (state, event) {
         (Idle, Send) => Assembling,
-        // 澄清是等待用户输入的非终态（BR-SYS-STATE-007），不终结回合。
-        (Assembling, ClarificationRequired) => AwaitingClarification,
-        // 用户补充说明只恢复原 AgentTurn；不是 Retry，也不创建新回合身份。
-        (AwaitingClarification, ClarificationProvided) => Assembling,
         (Assembling, Assembled) => AwaitingGate,
         (Assembling, AssembleFail) => TurnError,
         // 门禁前置：唯一通往 Streaming 的路径。
         (AwaitingGate, GatePassed) => Streaming,
         (AwaitingGate, GateDenied) => Denied,
-        (Streaming, StreamEnd) => HandingOff,
+        (Streaming, ModelClarification) => AwaitingClarification,
+        (AwaitingClarification, ClarificationProvided) => Assembling,
+        (Streaming, DecisionProposed) => AwaitingDecision,
+        (AwaitingDecision, DecisionResolved) => Assembling,
+        (Streaming, ToolRoundCompleted) => Assembling,
+        (Streaming, ModelFinal) => Finalizing,
         (Streaming, StreamFail) => TurnError,
         // 任一活动阶段取消都必须到达唯一 Cancelled 终态。
-        (Assembling | AwaitingClarification | AwaitingGate | Streaming | HandingOff, Cancel) => {
-            Cancelled
-        }
-        (HandingOff, HandoffOk) => Completed,
-        (HandingOff, HandoffFail) => TurnError,
+        (
+            Assembling
+            | AwaitingClarification
+            | AwaitingDecision
+            | AwaitingGate
+            | Streaming
+            | Finalizing,
+            Cancel,
+        ) => Cancelled,
+        (Finalizing, FinalizeOk) => Completed,
+        (Finalizing, FinalizeFail) => TurnError,
         // 其余无合法转移（终态冻结；无 gatePassed 不得 Streaming）。
         _ => return None,
     };
@@ -179,18 +186,14 @@ mod tests {
     use super::*;
 
     // covers: BR-AG-STATE-001
-    // 正路 + 门禁前置：Streaming 仅经 AwaitingGate+gatePassed 可达（无绕过）；gateDenied/cancel 终态。
+    // 正路 + 门禁前置：Streaming 仅经 AwaitingGate+gatePassed 可达；final 必经 Finalizing。
     #[test]
     fn lifecycle_streaming_only_reachable_through_gate() {
         assert_eq!(transition(Idle, Send), Some(Assembling));
         assert_eq!(transition(Assembling, Assembled), Some(AwaitingGate));
-        assert_eq!(
-            transition(Assembling, ClarificationRequired),
-            Some(AwaitingClarification)
-        );
         assert_eq!(transition(AwaitingGate, GatePassed), Some(Streaming));
-        assert_eq!(transition(Streaming, StreamEnd), Some(HandingOff));
-        assert_eq!(transition(HandingOff, HandoffOk), Some(Completed));
+        assert_eq!(transition(Streaming, ModelFinal), Some(Finalizing));
+        assert_eq!(transition(Finalizing, FinalizeOk), Some(Completed));
         // 门禁拒绝 → Denied 终态不可绕过
         assert_eq!(transition(AwaitingGate, GateDenied), Some(Denied));
         // 结构性门禁前置：除 AwaitingGate+gatePassed 外无任何状态可达 Streaming
@@ -198,8 +201,9 @@ mod tests {
             Idle,
             Assembling,
             AwaitingClarification,
+            AwaitingDecision,
             Streaming,
-            HandingOff,
+            Finalizing,
             TurnError,
             Completed,
             Denied,
@@ -218,7 +222,7 @@ mod tests {
     #[test]
     fn clarification_is_non_terminal_and_cancelable() {
         // 澄清 → AwaitingClarification（非终态）
-        let s = transition(Assembling, ClarificationRequired).unwrap();
+        let s = transition(Streaming, ModelClarification).unwrap();
         assert_eq!(s, AwaitingClarification);
         assert!(!is_terminal(s), "AwaitingClarification 不得判定为终态");
         assert_eq!(
@@ -228,12 +232,28 @@ mod tests {
         );
         // 澄清等待阶段取消 → Cancelled（任一活动阶段取消生效）
         assert_eq!(transition(AwaitingClarification, Cancel), Some(Cancelled));
-        // 澄清不产生模型调用/产出：澄清态无通往 Streaming/HandingOff 的转移
+        // 澄清不产生模型调用/产出：澄清态无直接通往 Streaming/Finalizing 的转移。
         assert_eq!(transition(AwaitingClarification, GatePassed), None);
-        assert_eq!(transition(AwaitingClarification, StreamEnd), None);
-        assert_eq!(transition(AwaitingClarification, HandoffOk), None);
+        assert_eq!(transition(AwaitingClarification, ModelFinal), None);
+        assert_eq!(transition(AwaitingClarification, FinalizeOk), None);
         assert_eq!(transition(TurnError, ClarificationProvided), None);
         assert_eq!(transition(Completed, ClarificationProvided), None);
+    }
+
+    // covers: BR-AG-STATE-001
+    // covers: BR-SYS-STATE-007
+    #[test]
+    fn tool_and_decision_paths_resume_assembling_without_completing() {
+        assert_eq!(transition(Streaming, ToolRoundCompleted), Some(Assembling));
+        let waiting = transition(Streaming, DecisionProposed).unwrap();
+        assert_eq!(waiting, AwaitingDecision);
+        assert!(!is_terminal(waiting));
+        assert_eq!(
+            transition(AwaitingDecision, DecisionResolved),
+            Some(Assembling)
+        );
+        assert_eq!(transition(AwaitingDecision, GatePassed), None);
+        assert_eq!(transition(AwaitingDecision, ModelFinal), None);
     }
 
     // covers: BR-AG-STATE-001
@@ -243,14 +263,15 @@ mod tests {
         for active in [
             Assembling,
             AwaitingClarification,
+            AwaitingDecision,
             AwaitingGate,
             Streaming,
-            HandingOff,
+            Finalizing,
         ] {
             assert_eq!(transition(active, Cancel), Some(Cancelled));
         }
         assert_eq!(transition(Streaming, StreamFail), Some(TurnError));
-        for ev in [Send, GatePassed, StreamEnd, HandoffOk, Cancel] {
+        for ev in [Send, GatePassed, ModelFinal, FinalizeOk, Cancel] {
             assert_eq!(transition(Completed, ev), None);
             assert_eq!(transition(Cancelled, ev), None);
             assert_eq!(transition(Denied, ev), None);

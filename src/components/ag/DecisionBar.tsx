@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { resolveDecision, resolveDecisionAndContinue } from "../../services/agService";
+import { resolveDecisionAndContinue } from "../../services/agService";
 import { activeSession, agStore, useAgStore } from "../../store/agStore";
 
 /**
@@ -7,7 +7,7 @@ import { activeSession, agStore, useAgStore } from "../../store/agStore";
  * 任务级裁决的独立固定裁决区（Composer 上方）：
  * - 回合 WaitingConfirm 时模型已停止生成，任务暂停等待用户决策；
  * - 类型化选项：permission（允许本次/拒绝）、plan_choice/scope/manual_confirm（确认并继续/取消）；
- * - 裁决后 confirm → 自动续下一执行片段；cancel → 终止；
+ * - confirm/cancel 都作为合法用户事件恢复产生该卡片的原 AgentTurn，由模型据实收束；
  * - 存在待裁决时 Composer 输入门控（见 Composer.send）。
  * 与 DiffCard（内容确认）完全分离：本区只承担授权/决策，不承担内容审阅。
  */
@@ -97,19 +97,15 @@ export function DecisionBar() {
       label: isWorkspaceOperation && outcome === "confirm" ? "正在核验并执行资源操作" : "正在提交你的决定",
     });
     try {
-      if (outcome === "confirm") {
-        const resolution = await resolveDecisionAndContinue(decision.requestId, outcome);
-        const receipt = resolution.workspaceOperationReceipt;
-        if (receipt && receipt.final_status !== "completed") {
-          const failed = receipt.item_receipts.filter((item) => item.status === "failed");
-          const compensated = receipt.compensation_receipts.filter((item) => item.status === "compensated");
-          appendOperationMessage(
-            `资源操作未完整完成：${receipt.final_status}。已补偿 ${compensated.length} 项，失败 ${failed.length} 项。${failed.map((item) => `${item.item_id}${item.error_message ? `：${item.error_message}` : ""}`).join("；")}`,
-            true,
-          );
-        }
-      } else {
-        await resolveDecision(decision.requestId, outcome);
+      const resolution = await resolveDecisionAndContinue(decision.requestId, outcome);
+      const receipt = resolution.workspaceOperationReceipt;
+      if (receipt && receipt.final_status !== "completed") {
+        const failed = receipt.item_receipts.filter((item) => item.status === "failed");
+        const compensated = receipt.compensation_receipts.filter((item) => item.status === "compensated");
+        appendOperationMessage(
+          `资源操作未完整完成：${receipt.final_status}。已补偿 ${compensated.length} 项，失败 ${failed.length} 项。${failed.map((item) => `${item.item_id}${item.error_message ? `：${item.error_message}` : ""}`).join("；")}`,
+          true,
+        );
       }
       agStore.setPendingDecision(null);
     } catch (cause) {

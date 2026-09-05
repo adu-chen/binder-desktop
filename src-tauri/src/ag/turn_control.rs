@@ -20,13 +20,30 @@ pub(crate) struct ActiveAgentTurn {
     abort_handle: Option<futures_util::future::AbortHandle>,
     phase: ActiveAgentTurnPhase,
     task_run_id: Option<String>,
+    decision_request_id: Option<String>,
     edit_target_set: ExplicitEditTargetSet,
+    runtime_checkpoint: Option<AgentTurnRuntimeCheckpoint>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AgentTurnRuntimeCheckpoint {
+    pub(super) intent: ag::context::IntentResultV2,
+    pub(super) initial_prompt: String,
+    pub(super) continuation_messages: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveAgentTurnPhase {
     Running,
     AwaitingClarification,
+    AwaitingDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentTurnResumeKind {
+    New,
+    Clarification,
+    Decision,
 }
 
 pub(super) struct ActiveAgentTurnLease {
@@ -37,7 +54,7 @@ pub(super) struct ActiveAgentTurnLease {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct CancelActiveTurnOutcome {
-    awaiting_clarification: bool,
+    parked_source: Option<ag::turn::TurnState>,
     task_run_id: Option<String>,
 }
 
@@ -45,8 +62,7 @@ impl Drop for ActiveAgentTurnLease {
     fn drop(&mut self) {
         if let Ok(mut turns) = self.active_turns.lock() {
             let should_remove = turns.get(&self.session_id).is_some_and(|turn| {
-                turn.turn_id == self.turn_id
-                    && turn.phase != ActiveAgentTurnPhase::AwaitingClarification
+                turn.turn_id == self.turn_id && turn.phase == ActiveAgentTurnPhase::Running
             });
             if should_remove {
                 turns.remove(&self.session_id);
@@ -62,20 +78,21 @@ impl Drop for ActiveAgentTurnLease {
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-019
- * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,clarificationResume) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
+ * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,resumeKind) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
  */
 pub(super) fn register_active_agent_turn(
     state: &AppState,
     workspace_id: &str,
     session_id: &str,
     turn_id: &str,
-    clarification_resume: bool,
+    resume_kind: AgentTurnResumeKind,
 ) -> Result<
     (
         ActiveAgentTurnLease,
         Arc<AtomicBool>,
         Option<String>,
         ExplicitEditTargetSet,
+        Option<AgentTurnRuntimeCheckpoint>,
     ),
     IpcError,
 > {
@@ -83,11 +100,11 @@ pub(super) fn register_active_agent_turn(
         .active_agent_turns
         .lock()
         .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
-    if clarification_resume {
+    if resume_kind != AgentTurnResumeKind::New {
         let active = turns.get_mut(session_id).ok_or_else(|| {
             IpcError::new(
-                "AG_CLARIFICATION_NOT_AWAITING",
-                "当前会话没有可恢复的澄清等待回合",
+                "AG_TURN_NOT_AWAITING",
+                "当前会话没有可恢复的等待回合",
                 false,
                 false,
             )
@@ -95,23 +112,28 @@ pub(super) fn register_active_agent_turn(
         if active.turn_id != turn_id {
             return Err(IpcError::new(
                 "AG_TURN_MISMATCH",
-                "补充说明不属于当前澄清等待回合",
+                "恢复请求不属于当前等待回合",
                 false,
                 false,
             ));
         }
         if active.workspace_id != workspace_id {
             return Err(IpcError::new(
-                "AG_CLARIFICATION_WORKSPACE_MISMATCH",
-                "澄清等待回合不属于当前 workspace",
+                "AG_TURN_RESUME_WORKSPACE_MISMATCH",
+                "等待回合不属于当前 workspace",
                 false,
                 false,
             ));
         }
-        if active.phase != ActiveAgentTurnPhase::AwaitingClarification {
+        let expected_phase = match resume_kind {
+            AgentTurnResumeKind::Clarification => ActiveAgentTurnPhase::AwaitingClarification,
+            AgentTurnResumeKind::Decision => ActiveAgentTurnPhase::AwaitingDecision,
+            AgentTurnResumeKind::New => unreachable!(),
+        };
+        if active.phase != expected_phase {
             return Err(IpcError::new(
-                "AG_CLARIFICATION_NOT_AWAITING",
-                "AgentTurn 当前不处于澄清等待态，禁止重复或终态重入",
+                "AG_TURN_RESUME_NOT_AWAITING",
+                "AgentTurn 当前不处于对应等待态，禁止错类、重复或终态重入",
                 false,
                 false,
             ));
@@ -119,13 +141,15 @@ pub(super) fn register_active_agent_turn(
         if active.cancelled.load(Ordering::Acquire) {
             return Err(IpcError::new(
                 "AG_TURN_CANCELLED",
-                "澄清等待回合已取消",
+                "等待回合已取消",
                 false,
                 false,
             ));
         }
         let task_run_id = active.task_run_id.clone();
         let edit_target_set = active.edit_target_set.clone();
+        let runtime_checkpoint = active.runtime_checkpoint.take();
+        active.decision_request_id = None;
         active.phase = ActiveAgentTurnPhase::Running;
         active.abort_handle = None;
         let cancelled = Arc::clone(&active.cancelled);
@@ -139,12 +163,13 @@ pub(super) fn register_active_agent_turn(
             cancelled,
             task_run_id,
             edit_target_set,
+            runtime_checkpoint,
         ));
     }
 
     if let Some(active) = turns.get(session_id) {
-        // 已发送取消信号但旧 command 尚未释放 lease 时，允许新 turn_id 接管；未取消活动态与
-        // AwaitingClarification 均须显式失败，不能把普通发送误当澄清恢复。
+        // 已发送取消信号但旧 command 尚未释放 lease 时，允许新 turn_id 接管；未取消活动态与等待态
+        // 均须显式失败，不能把普通发送误当恢复。
         if !active.cancelled.load(Ordering::Acquire) {
             return Err(IpcError::new(
                 "AG_TURN_ACTIVE",
@@ -165,7 +190,9 @@ pub(super) fn register_active_agent_turn(
             abort_handle: None,
             phase: ActiveAgentTurnPhase::Running,
             task_run_id: None,
+            decision_request_id: None,
             edit_target_set: ExplicitEditTargetSet::default(),
+            runtime_checkpoint: None,
         },
     );
     drop(turns);
@@ -178,6 +205,7 @@ pub(super) fn register_active_agent_turn(
         cancelled,
         None,
         ExplicitEditTargetSet::default(),
+        None,
     ))
 }
 
@@ -195,6 +223,7 @@ pub(super) fn park_agent_turn_for_clarification(
     session_id: &str,
     turn_id: &str,
     task_run_id: Option<&str>,
+    checkpoint: AgentTurnRuntimeCheckpoint,
 ) -> Result<(), IpcError> {
     let mut turns = state
         .active_agent_turns
@@ -222,6 +251,89 @@ pub(super) fn park_agent_turn_for_clarification(
     active.phase = ActiveAgentTurnPhase::AwaitingClarification;
     active.abort_handle = None;
     active.task_run_id = task_run_id.map(str::to_string);
+    active.decision_request_id = None;
+    active.runtime_checkpoint = Some(checkpoint);
+    Ok(())
+}
+
+pub(super) fn park_agent_turn_for_decision(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    task_run_id: &str,
+    decision_request_id: &str,
+    checkpoint: AgentTurnRuntimeCheckpoint,
+) -> Result<(), IpcError> {
+    let mut turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let active = turns
+        .get_mut(session_id)
+        .ok_or_else(|| IpcError::new("AG_TURN_NOT_ACTIVE", "Agent 回合已不再活动", false, false))?;
+    if active.turn_id != turn_id || active.phase != ActiveAgentTurnPhase::Running {
+        return Err(IpcError::new(
+            "AG_TURN_MISMATCH",
+            "裁决等待身份与当前活动回合不匹配",
+            false,
+            false,
+        ));
+    }
+    if active.cancelled.load(Ordering::Acquire) {
+        return Err(IpcError::new(
+            "AG_TURN_CANCELLED",
+            "已取消回合不能进入裁决等待",
+            false,
+            false,
+        ));
+    }
+    active.phase = ActiveAgentTurnPhase::AwaitingDecision;
+    active.abort_handle = None;
+    active.task_run_id = Some(task_run_id.to_string());
+    active.decision_request_id = Some(decision_request_id.to_string());
+    active.runtime_checkpoint = Some(checkpoint);
+    Ok(())
+}
+
+/// DecisionRequest 的具体身份必须在认领等待态之前校验。失败不改变 phase/checkpoint，避免错误重放
+/// 消耗合法的同回合恢复权。
+pub(super) fn validate_agent_turn_decision_resume(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    decision_request_id: &str,
+) -> Result<(), IpcError> {
+    let turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let active = turns.get(session_id).ok_or_else(|| {
+        IpcError::new(
+            "AG_TURN_NOT_AWAITING",
+            "当前会话没有可恢复的裁决等待回合",
+            false,
+            false,
+        )
+    })?;
+    if active.turn_id != turn_id
+        || active.phase != ActiveAgentTurnPhase::AwaitingDecision
+        || active.decision_request_id.as_deref() != Some(decision_request_id)
+    {
+        return Err(IpcError::new(
+            "AG_TURN_DECISION_MISMATCH",
+            "裁决恢复请求与当前 AgentTurn 正在等待的 DecisionRequest 不匹配",
+            false,
+            false,
+        ));
+    }
+    if active.cancelled.load(Ordering::Acquire) {
+        return Err(IpcError::new(
+            "AG_TURN_CANCELLED",
+            "裁决等待回合已取消",
+            false,
+            false,
+        ));
+    }
     Ok(())
 }
 
@@ -365,7 +477,7 @@ pub(super) fn lock_agent_turn_effect<'a>(
     if active.turn_id != turn_id || active.cancelled.load(Ordering::Acquire) {
         return Err(IpcError::new(
             "AG_TURN_CANCELLED",
-            "Agent 回合已取消，禁止产生新的文档修改建议",
+            "Agent 回合已取消，禁止产生新的提案或任务级控制事实",
             false,
             false,
         ));
@@ -390,8 +502,8 @@ pub(crate) fn ag_cancel_turn(
     app: tauri::AppHandle,
 ) -> Result<(), IpcError> {
     let outcome = cancel_active_agent_turn(&state, &session_id, &turn_id)?;
-    if outcome.awaiting_clarification {
-        super::turn_events::persist_parked_ag_turn_cancelled(&state, &app, &turn_id)?;
+    if let Some(source) = outcome.parked_source {
+        super::turn_events::persist_parked_ag_turn_cancelled(&state, &app, &turn_id, source)?;
         if let Some(task_run_id) = outcome.task_run_id {
             if let Ok(conn) = state.db.lock() {
                 super::task_runtime::settle_task_run(
@@ -503,15 +615,22 @@ pub(super) fn cancel_active_agent_turn(
         ));
     }
     active.cancelled.store(true, Ordering::Release);
-    let awaiting_clarification = active.phase == ActiveAgentTurnPhase::AwaitingClarification;
-    let task_run_id = awaiting_clarification
+    let parked_source = match active.phase {
+        ActiveAgentTurnPhase::AwaitingClarification => {
+            Some(ag::turn::TurnState::AwaitingClarification)
+        }
+        ActiveAgentTurnPhase::AwaitingDecision => Some(ag::turn::TurnState::AwaitingDecision),
+        ActiveAgentTurnPhase::Running => None,
+    };
+    let task_run_id = parked_source
+        .is_some()
         .then(|| active.task_run_id.clone())
         .flatten();
     if let Some(handle) = active.abort_handle.take() {
         handle.abort();
     }
     Ok(CancelActiveTurnOutcome {
-        awaiting_clarification,
+        parked_source,
         task_run_id,
     })
 }
@@ -527,7 +646,7 @@ fn finish_cancelled_parked_turn(
         .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
     let should_remove = turns.get(session_id).is_some_and(|active| {
         active.turn_id == turn_id
-            && active.phase == ActiveAgentTurnPhase::AwaitingClarification
+            && active.phase != ActiveAgentTurnPhase::Running
             && active.cancelled.load(Ordering::Acquire)
     });
     if !should_remove {
@@ -563,39 +682,51 @@ mod ag_execution_kernel_tests {
         }
     }
 
+    fn checkpoint() -> AgentTurnRuntimeCheckpoint {
+        AgentTurnRuntimeCheckpoint {
+            intent: ag::context::IntentResultV2::unresolved(),
+            initial_prompt: "initial request".to_string(),
+            continuation_messages: Vec::new(),
+        }
+    }
+
     // covers: BR-AG-STATE-001
     #[test]
     fn session_has_one_active_turn_and_cancel_reaches_backend_control() {
         let state = state();
-        let (lease, cancelled, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        let second_error = match register_active_agent_turn(&state, "ws1", "s1", "t2", false) {
-            Ok(_) => panic!("同 session 不得双活"),
-            Err(error) => error,
-        };
+        let (lease, cancelled, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        let second_error =
+            match register_active_agent_turn(&state, "ws1", "s1", "t2", AgentTurnResumeKind::New) {
+                Ok(_) => panic!("同 session 不得双活"),
+                Err(error) => error,
+            };
         assert_eq!(second_error.code, "AG_TURN_ACTIVE");
         let (abort_handle, _abort_registration) = futures_util::future::AbortHandle::new_pair();
         install_agent_turn_abort_handle(&state, "s1", "t1", abort_handle).unwrap();
         assert_eq!(
             cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
             CancelActiveTurnOutcome {
-                awaiting_clarification: false,
+                parked_source: None,
                 task_run_id: None,
             }
         );
         assert!(cancelled.load(Ordering::Acquire));
 
         drop(lease);
-        let (_next, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t2", false).unwrap();
+        let (_next, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t2", AgentTurnResumeKind::New)
+                .unwrap();
     }
 
     // covers: BR-AG-STATE-001
     #[test]
     fn cancel_rejects_wrong_or_missing_turn() {
         let state = state();
-        let (_lease, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let (_lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
         assert_eq!(
             cancel_active_agent_turn(&state, "s1", "wrong")
                 .unwrap_err()
@@ -615,37 +746,74 @@ mod ag_execution_kernel_tests {
     #[test]
     fn clarification_resume_claims_same_turn_once_and_rejects_identity_drift() {
         let state = state();
-        let (lease, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1")).unwrap();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1"), checkpoint())
+            .unwrap();
         drop(lease);
 
         assert_eq!(
-            error_code(register_active_agent_turn(&state, "ws1", "s2", "t1", true)),
-            "AG_CLARIFICATION_NOT_AWAITING"
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s2",
+                "t1",
+                AgentTurnResumeKind::Clarification
+            )),
+            "AG_TURN_NOT_AWAITING"
         );
         assert_eq!(
             error_code(register_active_agent_turn(
-                &state, "ws1", "s1", "wrong", true
+                &state,
+                "ws1",
+                "s1",
+                "wrong",
+                AgentTurnResumeKind::Clarification
             )),
             "AG_TURN_MISMATCH"
         );
         assert_eq!(
-            error_code(register_active_agent_turn(&state, "ws2", "s1", "t1", true)),
-            "AG_CLARIFICATION_WORKSPACE_MISMATCH"
+            error_code(register_active_agent_turn(
+                &state,
+                "ws2",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification
+            )),
+            "AG_TURN_RESUME_WORKSPACE_MISMATCH"
         );
 
-        let (resumed_lease, _, task_run_id, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
+        let (resumed_lease, _, task_run_id, _, resumed_checkpoint) = register_active_agent_turn(
+            &state,
+            "ws1",
+            "s1",
+            "t1",
+            AgentTurnResumeKind::Clarification,
+        )
+        .unwrap();
         assert_eq!(task_run_id.as_deref(), Some("task-1"));
+        assert!(resumed_checkpoint.is_some());
         assert_eq!(
-            error_code(register_active_agent_turn(&state, "ws1", "s1", "t1", true)),
-            "AG_CLARIFICATION_NOT_AWAITING"
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification
+            )),
+            "AG_TURN_RESUME_NOT_AWAITING"
         );
         drop(resumed_lease);
         assert_eq!(
-            error_code(register_active_agent_turn(&state, "ws1", "s1", "t1", true)),
-            "AG_CLARIFICATION_NOT_AWAITING"
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification
+            )),
+            "AG_TURN_NOT_AWAITING"
         );
     }
 
@@ -655,14 +823,22 @@ mod ag_execution_kernel_tests {
     #[test]
     fn simple_clarification_resumes_same_turn_without_task_run() {
         let state = state();
-        let (lease, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", None, checkpoint()).unwrap();
         drop(lease);
 
-        let (resumed_lease, _, task_run_id, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
+        let (resumed_lease, _, task_run_id, _, resumed_checkpoint) = register_active_agent_turn(
+            &state,
+            "ws1",
+            "s1",
+            "t1",
+            AgentTurnResumeKind::Clarification,
+        )
+        .unwrap();
         assert_eq!(task_run_id, None);
+        assert!(resumed_checkpoint.is_some());
         drop(resumed_lease);
     }
 
@@ -671,8 +847,9 @@ mod ag_execution_kernel_tests {
     #[test]
     fn clarification_keeps_a_monotonic_edit_target_set_without_creating_task_run() {
         let state = state();
-        let (lease, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
         let mut initial = ExplicitEditTargetSet::default();
         initial.insert_authorized(
             "a.md".to_string(),
@@ -680,13 +857,21 @@ mod ag_execution_kernel_tests {
             Some("t1".to_string()),
         );
         bind_agent_turn_edit_target_set(&state, "s1", "t1", &initial).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", None, checkpoint()).unwrap();
         drop(lease);
 
-        let (resumed_lease, _, task_run_id, resumed_targets) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", true).unwrap();
+        let (resumed_lease, _, task_run_id, resumed_targets, resumed_checkpoint) =
+            register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification,
+            )
+            .unwrap();
         assert_eq!(task_run_id, None);
         assert_eq!(resumed_targets.paths(), vec!["a.md"]);
+        assert!(resumed_checkpoint.is_some());
 
         let empty = ExplicitEditTargetSet::default();
         let error = bind_agent_turn_edit_target_set(&state, "s1", "t1", &empty).unwrap_err();
@@ -699,22 +884,30 @@ mod ag_execution_kernel_tests {
     #[test]
     fn cancelling_parked_clarification_removes_resume_identity_and_returns_task_run() {
         let state = state();
-        let (lease, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1")).unwrap();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", Some("task-1"), checkpoint())
+            .unwrap();
         drop(lease);
 
         assert_eq!(
             cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
             CancelActiveTurnOutcome {
-                awaiting_clarification: true,
+                parked_source: Some(ag::turn::TurnState::AwaitingClarification),
                 task_run_id: Some("task-1".to_string()),
             }
         );
         finish_cancelled_parked_turn(&state, "s1", "t1").unwrap();
         assert_eq!(
-            error_code(register_active_agent_turn(&state, "ws1", "s1", "t1", true)),
-            "AG_CLARIFICATION_NOT_AWAITING"
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification
+            )),
+            "AG_TURN_NOT_AWAITING"
         );
     }
 
@@ -722,22 +915,146 @@ mod ag_execution_kernel_tests {
     #[test]
     fn cancelling_simple_parked_clarification_also_removes_resume_identity() {
         let state = state();
-        let (lease, _, _, _) =
-            register_active_agent_turn(&state, "ws1", "s1", "t1", false).unwrap();
-        park_agent_turn_for_clarification(&state, "s1", "t1", None).unwrap();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        park_agent_turn_for_clarification(&state, "s1", "t1", None, checkpoint()).unwrap();
         drop(lease);
 
         assert_eq!(
             cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
             CancelActiveTurnOutcome {
-                awaiting_clarification: true,
+                parked_source: Some(ag::turn::TurnState::AwaitingClarification),
                 task_run_id: None,
             }
         );
         finish_cancelled_parked_turn(&state, "s1", "t1").unwrap();
         assert_eq!(
-            error_code(register_active_agent_turn(&state, "ws1", "s1", "t1", true)),
-            "AG_CLARIFICATION_NOT_AWAITING"
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification
+            )),
+            "AG_TURN_NOT_AWAITING"
         );
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007, BR-SYS-STATE-008
+    #[test]
+    fn decision_resume_claims_the_same_turn_and_checkpoint_exactly_once() {
+        let state = state();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        let expected = checkpoint();
+        park_agent_turn_for_decision(&state, "s1", "t1", "task-1", "decision-1", expected.clone())
+            .unwrap();
+        drop(lease);
+
+        assert_eq!(
+            validate_agent_turn_decision_resume(&state, "s1", "t1", "decision-old")
+                .unwrap_err()
+                .code,
+            "AG_TURN_DECISION_MISMATCH"
+        );
+        validate_agent_turn_decision_resume(&state, "s1", "t1", "decision-1").unwrap();
+
+        assert_eq!(
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Clarification,
+            )),
+            "AG_TURN_RESUME_NOT_AWAITING"
+        );
+        let (resumed_lease, _, task_run_id, _, resumed_checkpoint) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::Decision)
+                .unwrap();
+        assert_eq!(task_run_id.as_deref(), Some("task-1"));
+        assert_eq!(resumed_checkpoint.unwrap().intent, expected.intent);
+        assert_eq!(
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Decision,
+            )),
+            "AG_TURN_RESUME_NOT_AWAITING"
+        );
+        drop(resumed_lease);
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007
+    #[test]
+    fn cancelling_a_parked_decision_freezes_its_resume_identity() {
+        let state = state();
+        let (lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        park_agent_turn_for_decision(&state, "s1", "t1", "task-1", "decision-1", checkpoint())
+            .unwrap();
+        drop(lease);
+
+        assert_eq!(
+            cancel_active_agent_turn(&state, "s1", "t1").unwrap(),
+            CancelActiveTurnOutcome {
+                parked_source: Some(ag::turn::TurnState::AwaitingDecision),
+                task_run_id: Some("task-1".to_string()),
+            }
+        );
+        finish_cancelled_parked_turn(&state, "s1", "t1").unwrap();
+        assert_eq!(
+            error_code(register_active_agent_turn(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                AgentTurnResumeKind::Decision,
+            )),
+            "AG_TURN_NOT_AWAITING"
+        );
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007
+    #[test]
+    fn cancellation_waits_until_a_side_effect_fact_leaves_its_critical_section() {
+        let state = state();
+        let (_lease, cancelled, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        let effect_guard = lock_agent_turn_effect(&state, "s1", "t1").unwrap();
+
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let state_ref = &state;
+            scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                let result = cancel_active_agent_turn(state_ref, "s1", "t1");
+                done_tx.send(result).unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(done_rx
+                .recv_timeout(std::time::Duration::from_millis(25))
+                .is_err());
+            assert!(!cancelled.load(Ordering::Acquire));
+            drop(effect_guard);
+            assert_eq!(
+                done_rx
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .unwrap()
+                    .unwrap(),
+                CancelActiveTurnOutcome {
+                    parked_source: None,
+                    task_run_id: None,
+                }
+            );
+        });
+        assert!(cancelled.load(Ordering::Acquire));
     }
 }

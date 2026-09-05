@@ -130,7 +130,7 @@ impl<'a> TurnEventEmitter<'a> {
         }
     }
 
-    /// AwaitingClarification 的原 Channel 已关闭；取消仍写同一事件事实，随后由 afterSeq 补流。
+    /// 等待态的原 Channel 已关闭；取消仍写同一事件事实，随后由 afterSeq 补流。
     pub(super) fn without_channel(state: &'a AppState, turn_id: &'a str) -> Self {
         Self {
             state,
@@ -363,10 +363,10 @@ pub(super) fn emit_ag_turn_done(
     stop_reason: &str,
 ) -> bool {
     use ag::turn::{transition, TurnEvent, TurnState};
-    let Some(handing_off) = transition(TurnState::Streaming, TurnEvent::StreamEnd) else {
+    let Some(finalizing) = transition(TurnState::Streaming, TurnEvent::ModelFinal) else {
         return false;
     };
-    let Some(completed) = transition(handing_off, TurnEvent::HandoffOk) else {
+    let Some(completed) = transition(finalizing, TurnEvent::FinalizeOk) else {
         return false;
     };
     let emitted = emitter
@@ -388,7 +388,7 @@ pub(super) fn emit_ag_turn_done(
         return false;
     }
     eprintln!("[ag-trace] turn_id={turn_id} terminal=completed stop_reason={stop_reason}");
-    emit_ag01(app, turn_id, handing_off);
+    emit_ag01(app, turn_id, finalizing);
     emit_ag01(app, turn_id, completed);
     true
 }
@@ -439,14 +439,15 @@ pub(super) fn emit_ag_turn_cancelled_from(
     true
 }
 
-/// AwaitingClarification 已无活动 Channel；取消在数据库中原子锁存，再由安全补流返回同一事件。
+/// 非终态等待已无活动 Channel；取消在数据库中原子锁存，再由安全补流返回同一事件。
 pub(super) fn persist_parked_ag_turn_cancelled(
     state: &AppState,
     app: &tauri::AppHandle,
     turn_id: &str,
+    source: ag::turn::TurnState,
 ) -> Result<bool, IpcError> {
     let Some(cancelled) = terminal_transition(
-        ag::turn::TurnState::AwaitingClarification,
+        source,
         ag::turn::TurnEvent::Cancel,
         ag::turn::TurnState::Cancelled,
     ) else {
@@ -537,7 +538,7 @@ pub(super) fn emit_ag_turn_error_from(
     let event = match source {
         ag::turn::TurnState::Assembling => ag::turn::TurnEvent::AssembleFail,
         ag::turn::TurnState::Streaming => ag::turn::TurnEvent::StreamFail,
-        ag::turn::TurnState::HandingOff => ag::turn::TurnEvent::HandoffFail,
+        ag::turn::TurnState::Finalizing => ag::turn::TurnEvent::FinalizeFail,
         _ => return false,
     };
     let Some(turn_error) = terminal_transition(source, event, ag::turn::TurnState::TurnError)

@@ -4,7 +4,6 @@ use super::edit_support::{bdocx_structure_presence_from_context, capability_erro
 use super::prompt_runtime::{
     assemble_agent_turn_messages, build_current_doc_prompt_context,
     empty_current_doc_prompt_context, insert_runtime_control_message, DOC_CTX_CAP,
-    PROMPT_TOKEN_BUDGET,
 };
 use super::task_runtime::task_plan_runtime_projection;
 use crate::ag;
@@ -17,7 +16,7 @@ pub(super) struct PreparedTurnPrompt {
     pub(super) messages: Vec<serde_json::Value>,
     pub(super) tools: serde_json::Value,
     pub(super) capability_grant: ag::tool_registry::CapabilityGrantV1,
-    pub(super) prompt_package: ag::context::PromptPackageV1,
+    pub(super) prompt_package: ag::context::PromptPackageV2,
 }
 
 /**
@@ -27,7 +26,7 @@ pub(super) struct PreparedTurnPrompt {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-002, BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-005, TERM-AG-020
- * boundary: in=IntentAgentContextFactsCurrentDocumentReferenceHistoryAndToolManifest | out=BudgetedPromptPackageMessagesAndCapabilityGrant | delegate=assemble_agent_turn_messages | consumer=PromptPackageV1
+ * boundary: in=IntentRevisionAgentContextFactsCurrentDocumentReferenceHistoryToolResultsAndToolManifest | out=BudgetedPromptPackageV2MessagesAndCompatibilityCapabilityGrant | delegate=assemble_agent_turn_messages | consumer=PromptPackageV2
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_turn_prompt(
@@ -36,7 +35,7 @@ pub(super) fn prepare_turn_prompt(
     turn_id: &str,
     session_id: &str,
     task_run_id: Option<&str>,
-    intent_result: &ag::context::IntentResultV1,
+    intent_result: &ag::context::IntentResultV2,
     agent_context_facts: &crate::types::AgentContextFactsV1,
     explicit_edit_targets: &[String],
     read_ctx: &ag::blocks::AgentReadContext,
@@ -46,6 +45,8 @@ pub(super) fn prepare_turn_prompt(
     prompt: &str,
     mention_block: Option<&str>,
     requires_current_doc_tool_read: bool,
+    freeze_tools_after_proposal: bool,
+    continuation_messages: &[serde_json::Value],
 ) -> Result<PreparedTurnPrompt, IpcError> {
     // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     // 2026-08-09：DOC_CTX_CAP 9000→16000（AG-LIMIT-01 扩大内联注入上限，长文档测试可直接编辑；G5 标定）。
@@ -124,10 +125,10 @@ pub(super) fn prepare_turn_prompt(
         &prompt,
     );
 
-    let capability_grant = ag::tool_registry::resolve_capability_grant(
+    // WP2 生产链不再让 IntentResult/关键词决定授权；V1 仅是 grant 的暂存数据形状。
+    let mut capability_grant = ag::tool_registry::resolve_adaptive_capability_grant(
         runtime_profile,
         turn_id,
-        intent_result,
         explicit_edit_targets,
         ag::tool_registry::CapabilityFactorsV1 {
             has_task_run: task_run_id.is_some(),
@@ -138,8 +139,16 @@ pub(super) fn prepare_turn_prompt(
             image_ops_available: active_bdocx,
         },
     );
-    let tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
+    if freeze_tools_after_proposal {
+        capability_grant.allowed_tools.clear();
+        capability_grant.grant_hash = ag::context::sha256_text(&format!(
+            "{}:proposal-recorded:no-more-tools",
+            capability_grant.grant_hash
+        ));
+    }
+    let mut tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;
+    ag::model_output::decorate_tool_definitions(&mut tools)?;
     let task_plan_runtime = task_run_id.and_then(|task_run_id| {
         state.db.lock().ok().and_then(|conn| {
             ag::task::active_plan_by_run(&conn, task_run_id)
@@ -206,21 +215,35 @@ pub(super) fn prepare_turn_prompt(
             history_payload,
         ));
     }
-    let prompt_package = ag::context::build_prompt_package(
-        intent_result.clone(),
-        prompt_envelopes,
-        &prompt,
-        PROMPT_TOKEN_BUDGET,
+    let preliminary_package = ag::context::build_prompt_package_v2(
+        intent_result,
+        &prompt_envelopes,
+        &capability_grant.grant_hash,
         &tool_manifest_hash,
+        assembled_messages.messages.clone(),
+        &tools,
     );
     insert_runtime_control_message(
         &mut assembled_messages,
         &runtime_profile,
-        &prompt_package,
+        intent_result,
+        &preliminary_package,
+        &prompt_envelopes,
         &capability_grant,
         task_plan_runtime.as_ref(),
     );
+    assembled_messages
+        .messages
+        .extend(continuation_messages.iter().cloned());
     let messages = assembled_messages.messages;
+    let prompt_package = ag::context::build_prompt_package_v2(
+        intent_result,
+        &prompt_envelopes,
+        &capability_grant.grant_hash,
+        &tool_manifest_hash,
+        messages.clone(),
+        &tools,
+    );
     let _carryover = assembled_messages.carryover;
     let _dropped_cross_doc_history = assembled_messages.dropped_cross_doc_history;
 

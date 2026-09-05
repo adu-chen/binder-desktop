@@ -124,10 +124,11 @@ export interface ToolCallView {
 export type RustTurnState =
   | "Idle"
   | "Assembling"
+  | "AwaitingClarification"
+  | "AwaitingDecision"
   | "AwaitingGate"
   | "Streaming"
-  | "HandingOff"
-  | "AwaitingClarification"
+  | "Finalizing"
   | "TurnError"
   | "Completed"
   | "Cancelled"
@@ -463,7 +464,7 @@ export const agStore = {
       return false;
     }
     const terminal = eventType === "done" || eventType === "error";
-    const waiting = eventType === "clarification_required";
+    const waiting = eventType === "clarification_required" || eventType === "decision_request_proposed";
     const isActiveTurn = state.activeTurn?.turnId === turnId;
     setState({
       turnEventProjection: {

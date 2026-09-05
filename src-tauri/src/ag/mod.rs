@@ -24,6 +24,9 @@ pub mod task;
 /// AG Prompt Runtime · 动态消息装配、当前文档投影、provider 投影与最终请求审计。
 pub mod prompt_runtime;
 
+/// 模型可见意图/路线/下一动作的结构化控制封套。
+pub mod model_output;
+
 /// 系统提示词正文（编辑回合 + 两类 Assist，文本属实现期运营配置）。
 pub mod prompts;
 

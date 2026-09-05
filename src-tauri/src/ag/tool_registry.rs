@@ -47,6 +47,89 @@ impl CapabilityGrantV1 {
 
 /**
  * @GOV
+ * codes:    BR-AG-STATE-002-DATA-AG-AG-TOOL-039, BR-AG-DATA-004-DATA-AG-AG-TOOL-039
+ * type:     DATA
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-004
+ * term_ref: TERM-AG-013, TERM-AG-014, TERM-AG-019
+ * boundary: in=RuntimeProfileExplicitEditTargetSetAndCurrentFormatFacts | out=HardFactBootstrapCapabilityGrantIndependentOfIntentText | does_not=useIntentTaskPlanPromptHistoryOrRegistryPresenceAloneAsAuthorization
+ */
+/// WP2 的自适应回合 grant：不读取 IntentResult 或关键词，只按当前 profile、显式目标与格式事实收窄。
+/// grant 仍沿用 V1 wire 形状；动作级失效与确认事实的完整交集由 WP3 收敛。
+pub(super) fn resolve_adaptive_capability_grant(
+    profile: &str,
+    turn_id: &str,
+    explicit_edit_targets: &[String],
+    factors: CapabilityFactorsV1,
+) -> CapabilityGrantV1 {
+    let mut allowed_tools = if profile == AGENT_EDIT_1_0_PROFILE {
+        vec![
+            "list_docs",
+            "workspace_glob",
+            "search_text",
+            "read_doc",
+            "list_blocks",
+            "report_project",
+            "plan_workspace_operation",
+            "propose_decision",
+        ]
+    } else {
+        Vec::new()
+    };
+    if !explicit_edit_targets.is_empty() && profile == AGENT_EDIT_1_0_PROFILE {
+        allowed_tools.extend(["propose_edit", "edit_blocked"]);
+    }
+    if factors.active_bdocx && factors.table_ops_available {
+        allowed_tools.push("list_tables");
+    }
+    if factors.active_bdocx && factors.image_ops_available {
+        allowed_tools.extend(["list_images", "import_image_asset"]);
+    }
+    allowed_tools.retain(|tool| is_registered(tool));
+    allowed_tools.sort_unstable();
+    allowed_tools.dedup();
+    let allowed_tools = allowed_tools
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let mut target_scope = explicit_edit_targets.to_vec();
+    target_scope.sort();
+    target_scope.dedup();
+    let mut readable_scope = target_scope.clone();
+    readable_scope.extend([
+        "workspace_search".to_string(),
+        "workspace_read_all".to_string(),
+    ]);
+    let grant_hash = super::context::sha256_text(
+        &serde_json::to_string(&[
+            profile,
+            &allowed_tools.join(","),
+            &target_scope.join(","),
+            &format!("{factors:?}"),
+        ])
+        .unwrap_or_default(),
+    );
+    CapabilityGrantV1 {
+        version: "capability-grant-v1-adaptive".to_string(),
+        profile: profile.to_string(),
+        intent_id: "model-semantic-not-authority".to_string(),
+        turn_id: turn_id.to_string(),
+        allowed_tools,
+        target_scope,
+        readable_scope,
+        parameter_constraints: vec![
+            "active_workspace_only".to_string(),
+            "no_direct_document_write".to_string(),
+            "proposal_applies_on_user_confirm".to_string(),
+            "propose_edit_requires_explicit_edit_target_set".to_string(),
+            "workspace_effect_requires_decision_receipt".to_string(),
+        ],
+        grant_hash,
+    }
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-STATE-002-DATA-AG-AG-TOOL-034, BR-AG-DATA-004-DATA-AG-AG-TOOL-034, BR-SYS-STATE-007-DATA-AG-AG-TOOL-034, BR-AG-OBS-001-DATA-AG-AG-TOOL-034
  * type:     DATA
  * chain:    AG-TURN, AG-TOOL
@@ -924,6 +1007,31 @@ mod tests {
             ),
             ToolDecision::Reject(_)
         ));
+    }
+
+    #[test]
+    fn adaptive_grant_is_derived_from_hard_facts_not_keyword_intent() {
+        let without_target = resolve_adaptive_capability_grant(
+            AGENT_EDIT_1_0_PROFILE,
+            "t-adaptive",
+            &[],
+            CapabilityFactorsV1::default(),
+        );
+        assert!(without_target.allows("read_doc"));
+        assert!(without_target.allows("search_text"));
+        assert!(without_target.allows("propose_decision"));
+        assert!(!without_target.allows("propose_edit"));
+
+        let with_target = resolve_adaptive_capability_grant(
+            AGENT_EDIT_1_0_PROFILE,
+            "t-adaptive",
+            &["a.md".to_string()],
+            CapabilityFactorsV1::default(),
+        );
+        assert!(with_target.allows("propose_edit"));
+        assert_eq!(with_target.target_scope, vec!["a.md"]);
+        assert_eq!(with_target.intent_id, "model-semantic-not-authority");
+        assert_ne!(without_target.grant_hash, with_target.grant_hash);
     }
 
     #[test]

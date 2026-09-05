@@ -1,41 +1,72 @@
 {
-  "scope_id": "AG-ADAPTIVE-RUNTIME-DOC-NAME-01",
-  "task_type": "DOC_ONLY",
-  "governance_phase": "DESIGN",
-  "title": "Agent TurnEvent 持久化表名残差修正",
+  "scope_id": "AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01",
+  "task_type": "CODE_CHANGE",
+  "governance_phase": "VALIDATION",
+  "title": "Adaptive Turn Kernel 收敛",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认继续；WP1 运行报告已明确下一步独立修正该唯一命名残差。",
-  "scope_reason": "A-AG-M-T-01 §7.2.1 仍用 turn_events 简写且缺少共享基线列；只与 A-SYS-I-P-01 的唯一控制真源 agent_turn_events 对齐，不改变需求、规则、功能或运行逻辑。",
-  "issue_trace": null,
+  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行，并再次明确确认继续；本项为已确认 A-AG-X-L-04 WP-AG10-02。",
+  "scope_reason": "将现有关键词预判、静态整轮工具路线和伪完成续片段，收敛为模型语义驱动、ToolResult 后重新装配、逐次 Gate、澄清/裁决同回合恢复的 Adaptive Turn Kernel。",
+  "issue_trace": ".governance/issues/AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01.md",
   "objectives": [
-    "把 Agent 技术设计中的持久化表名和基线列对齐到共享数据结构真源 agent_turn_events",
-    "记录最小文档变更并刷新 ADUS"
+    "以模型结构化输出形成和修订 IntentResult/route，不再由关键词 resolver 决定生产语义",
+    "每次 ToolResult 后回到 Assembling，重建 PromptPackage 并在下一次 provider 调用前重新 Gate",
+    "使 AwaitingClarification/AwaitingDecision 成为可取消、可由合法用户事件恢复原 AgentTurn 的非终态",
+    "删除 StreamEnd/HandingOff 伪完成与 TaskPlan 驱动 final 的运行逻辑",
+    "保持 Proposal/Decision/工具/终态事实只追加、首终态唯一"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ".governance/issues/AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md",
+    "src-tauri/src/ag/mod.rs",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/history.rs",
+    "src-tauri/src/ag/model_output.rs",
+    "src-tauri/src/ag/turn.rs",
+    "src-tauri/src/ag/tool.rs",
+    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ag/turn_prompt.rs",
+    "src-tauri/src/ag/turn_tool_loop.rs",
+    "src-tauri/src/ag/turn_control.rs",
+    "src-tauri/src/ag/turn_events.rs",
+    "src-tauri/src/ag/prompt_runtime.rs",
+    "src-tauri/src/ag/prompts.rs",
+    "src-tauri/src/ag/task.rs",
+    "src/components/ag/DecisionBar.tsx",
+    "src/services/agService.ts",
+    "src/store/agStore.ts",
+    "src/services/agRuntime.test.ts",
+    "scripts/test_governance.test.mjs"
   ],
   "forbidden_files": [
     "ADU.md",
     "ADP.md",
     "AGENTS.md",
     "governance.config.json",
-    "需求、规则、链路、约束、术语、状态机定义及全部代码和测试"
+    "docs/00_core/A-CORE-C-P-01_APC.md",
+    "需求、设计、规则、协议和计划文档",
+    "cloud/dev-gateway/**",
+    "WP3-WP7 的非必要生产文件"
   ],
   "constraints": [
-    "不新增需求、规则、功能或逻辑",
-    "不修改 RULE/CHAIN/CONSTRAINT/TERM/REQ_MAP/STATE_MACHINE 标注块",
-    "共享数据结构契约 A-SYS-I-P-01 继续是字段与表名唯一控制真源"
+    "不新增需求、规则、用户功能或外部工具；只实现已确认 Active 设计",
+    "IntentResult 不得成为授权对象；本工作包的 V1 grant 适配仅为 WP3 前的短期兼容层",
+    "不得自动重试或后台续跑，不得把等待态或 Proposal 伪装为完成",
+    "所有 provider 调用必须逐次真实 Gate；所有文档副作用继续只经既有 Proposal/Decision 边界",
+    "TaskRun/TaskPlan 在本包不再阻止模型路线，但完整纯投影迁移留给 WP6"
   ],
   "acceptance_criteria": [
-    "Agent Active 设计不再出现 turn_events 持久化表名",
-    "表名、基线列、唯一性和删除语义与共享数据真源一致",
-    "ADUS 刷新且 governance:audit 通过"
+    "生产主链不再调用关键词 resolver；初始 IntentResult 可 unresolved 并由模型结构输出更新",
+    "ToolResult 后 PromptPackage 的 intent revision/context trace/工具投影重新生成且下一次调用重新 Gate",
+    "SM-AG-01 状态与 Active 设计一致，不再存在 HandingOff/StreamEnd/HandoffOk/HandoffFail",
+    "澄清和裁决均暂停 provider/工具且使用原 turn_id 恢复；取消竞态和首终态锁存有效",
+    "循环上限、解析错误、Gate/provider/tool 错误均保留真实错误语义",
+    "相关测试、同输入 test:plan/test:related、governance audit 全部通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-DOC-NAME-01", "status": "CONFIRMED", "question": "继续执行 WP1 后的独立文档命名残差修正", "confirmed_at": "2026-09-04"}
+    {"id": "HD-AG-WP2-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-02 Adaptive Turn Kernel", "confirmed_at": "2026-09-04"}
   ],
   "stop_conditions": [],
   "unresolved_items": []

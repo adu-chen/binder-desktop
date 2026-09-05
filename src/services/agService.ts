@@ -183,9 +183,16 @@ interface ClarifyingTurnIdentity {
   references: ReferencePayload[];
   mentions: string[];
   blockRefs: { relPath: string; blockId: string; text: string; start?: number; end?: number }[];
+  /** 已并入 UI 但尚未成功越过后端入口的补充说明；只在本地前置失败时累积。 */
+  pendingInput?: string;
 }
 /** 按 session 保留可受控重入的非终态 AgentTurn；不得按“最近回合”跨 session 猜测。 */
 const clarifyingTurns = new Map<string, ClarifyingTurnIdentity>();
+interface DecisionTurnIdentity extends ClarifyingTurnIdentity {
+  requestId: string;
+}
+/** 按 DecisionRequest 保留 AwaitingDecision 的原回合身份；裁决只恢复该回合，不创建替代回合。 */
+const decisionTurns = new Map<string, DecisionTurnIdentity>();
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 function mergeReferencePayloads(...groups: ReferencePayload[][]): ReferencePayload[] {
@@ -1148,9 +1155,6 @@ export interface WorkspaceOperationReceiptDto {
   invalidated_diff_ids?: string[];
 }
 
-/** AG-1.0-TASKRUN-REWORK-CONTINUE-01：连续 auto-continue 计数（防死循环；用户手动发送重置）。 */
-let autoContinueCount = 0;
-const MAX_AUTO_CONTINUE = 3;
 const previewAckInFlight = new Set<string>();
 
 /**
@@ -1216,21 +1220,27 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
   }
 }
 
-/** AG-1.0-TASKRUN-REWORK-CONTINUE-01：任务级裁决后自动续片段——confirm 自动发起下一执行片段
- * （沿用同 task_run_id，无需用户再输入聊天消息）；cancel 终止。连续续片段达到上限后停止（由用户手动继续）。 */
+/** 任务级裁决后恢复原 AgentTurn。confirm/cancel 都是模型可见的合法用户事件；
+ * 只有本进程仍持有 AwaitingDecision 身份时才恢复，历史任务裁决不会猜测或伪造回合。 */
 export async function resolveDecisionAndContinue(
   requestId: string,
   outcome: "confirm" | "cancel",
 ): Promise<Awaited<ReturnType<typeof resolveDecision>>> {
+  const decisionTurn = decisionTurns.get(requestId);
   const resolution = await resolveDecision(requestId, outcome);
   if (
-    outcome === "confirm"
-    && resolution.status === "executing"
-    && !resolution.createDocumentDiffId
-    && autoContinueCount < MAX_AUTO_CONTINUE
+    decisionTurn
+    && (resolution.status === "executing" || resolution.status === "cancelled")
   ) {
-    autoContinueCount += 1;
-    await startTurn("（任务继续）已确认任务级裁决，请继续执行当前任务。", {
+    if (closeStore.getSnapshot().phase !== "idle") {
+      await invoke("ag_cancel_turn", {
+        sessionId: decisionTurn.sessionId,
+        turnId: decisionTurn.turnId,
+      });
+      await projectParkedCancellation(decisionTurn);
+      return resolution;
+    }
+    await startTurn(decisionTurn.prompt, {
       autoContinue: true,
       continuation: { taskRunId: resolution.taskRunId, decisionRequestId: requestId },
     });
@@ -1349,7 +1359,9 @@ export function closeAgentSession(id: string): void {
 const turnSaveChain = new Map<string, Promise<void>>();
 
 export async function deleteAgentSession(sessionId: string): Promise<void> {
-  if (agStore.getSnapshot().sending || clarifyingTurns.has(sessionId)) {
+  const hasParkedDecision = [...decisionTurns.values()]
+    .some((decision) => decision.sessionId === sessionId);
+  if (agStore.getSnapshot().sending || clarifyingTurns.has(sessionId) || hasParkedDecision) {
     throw { code: "AG_TURN_ACTIVE", message: "代理回合进行中，暂不能删除会话" };
   }
   await Promise.allSettled([...turnSaveChain.values()]);
@@ -1570,17 +1582,15 @@ export async function startTurn(
     blockRefs?: { relPath: string; blockId: string; text: string; start?: number; end?: number }[];
     references?: ReferencePayload[];
     displayParts?: MessageContentPart[];
-    /** AG-1.0-TASKRUN-REWORK-CONTINUE-01：auto-continue 续片段（任务级确认后自动发起，不计入用户手动发送）。 */
+    /** 受控恢复入口；只供已确认的裁决或编辑器预览回执使用。 */
     autoContinue?: boolean;
-    /** 已确认的 DecisionRequest 所属任务；仅 auto-continue 续片段使用。 */
+    /** 已确认的 DecisionRequest 或预览回执所属任务。 */
     continuation?: { taskRunId: string; decisionRequestId?: string; previewDiffId?: string };
   },
 ): Promise<void> {
   const trimmed = prompt.trim();
   const submittedReferences = opts?.references ?? [];
   if (!trimmed && submittedReferences.length === 0) return;
-  // AG-1.0-TASKRUN-REWORK-CONTINUE-01：用户手动发送重置连续 auto-continue 计数。
-  if (!opts?.autoContinue) autoContinueCount = 0;
   if (opts?.continuation && !opts.autoContinue) {
     throw new Error("任务续片段只能由已确认的任务级裁决自动启动");
   }
@@ -1590,7 +1600,7 @@ export async function startTurn(
   ) {
     throw new Error("任务续片段必须且只能关联已确认裁决或已确认预览回执之一");
   }
-  // AG-1.0-DECISION-CARD-01：存在待裁决任务级请求时，手动发送被门控（auto-continue 除外）；
+  // AG-1.0-DECISION-CARD-01：存在待裁决任务级请求时，所有普通发送均被门控；
   // 必须先完成裁决（DecisionBar），避免"确认"等文本被当作新编辑请求触发 AG_EDIT_TOOL_REQUIRED。
   if (!opts?.autoContinue && agStore.getSnapshot().pendingDecision) {
     return;
@@ -1605,19 +1615,31 @@ export async function startTurn(
 
   // 回合归属会话：发起时的活动会话（此后用户切标签不影响本回合投影目标）。
   const snap = agStore.getSnapshot();
-  const sessionId = snap.activeSessionId;
+  const decision = opts?.autoContinue && opts.continuation?.decisionRequestId
+    ? decisionTurns.get(opts.continuation.decisionRequestId)
+    : undefined;
+  const sessionId = decision?.sessionId ?? snap.activeSessionId;
   const session = snap.sessions.find((s) => s.id === sessionId);
   const clarification = !opts?.autoContinue ? clarifyingTurns.get(sessionId) : undefined;
   if (clarification && opts?.continuation) {
     throw new Error("澄清恢复不能与任务裁决或预览续片段混用");
   }
-  const turnId = clarification?.turnId ?? `t-${Date.now()}-${(seq += 1)}`;
-  const effectivePrompt = clarification
-    ? `${clarification.prompt}${trimmed ? `\n\n补充说明：${trimmed}` : ""}`
-    : trimmed;
-  const references = mergeReferencePayloads(clarification?.references ?? [], submittedReferences);
-  const mentions = [...new Set([...(clarification?.mentions ?? []), ...(opts?.mentions ?? [])])];
-  const blockRefs = mergeLegacyBlockRefs(clarification?.blockRefs ?? [], opts?.blockRefs ?? []);
+  const turnId = clarification?.turnId ?? decision?.turnId ?? `t-${Date.now()}-${(seq += 1)}`;
+  const effectivePrompt = decision?.prompt ?? (clarification?.pendingInput
+    ? `${clarification.pendingInput}${trimmed ? `\n\n${trimmed}` : ""}`
+    : trimmed);
+  const references = mergeReferencePayloads(
+    clarification?.references ?? decision?.references ?? [],
+    submittedReferences,
+  );
+  const mentions = [...new Set([
+    ...(clarification?.mentions ?? decision?.mentions ?? []),
+    ...(opts?.mentions ?? []),
+  ])];
+  const blockRefs = mergeLegacyBlockRefs(
+    clarification?.blockRefs ?? decision?.blockRefs ?? [],
+    opts?.blockRefs ?? [],
+  );
   const turnEd = edStore.getSnapshot();
   const turnActiveDocTarget: ActiveDocTarget = {
     relPath: turnEd.openPath,
@@ -1644,13 +1666,15 @@ export async function startTurn(
     // 这样调用前失败仍能回到同一 AwaitingClarification，不会丢失原 AgentTurn。
     clarifyingTurns.set(sessionId, {
       ...clarification,
-      prompt: effectivePrompt,
+      pendingInput: effectivePrompt,
       references,
       mentions,
       blockRefs,
     });
     agStore.resumeClarifyingTurn(sessionId, turnId, trimmed, opts?.displayParts);
     assistantId = clarification.assistantMessageId;
+  } else if (decision) {
+    assistantId = decision.assistantMessageId;
   } else {
     agStore.pushMessage(sessionId, {
       id: uid(),
@@ -1682,6 +1706,7 @@ export async function startTurn(
     let settled = false;
     let terminalSeen = false;
     let pausedForClarification = false;
+    let pausedForDecision = false;
     let backendInvocationStarted = false;
     const finish = () => {
       if (settled) return;
@@ -1689,7 +1714,7 @@ export async function startTurn(
       resolve();
     };
     const failStart = (e: unknown) => {
-      if (terminalSeen || pausedForClarification) return;
+      if (terminalSeen || pausedForClarification || pausedForDecision) return;
       if (clarification && !backendInvocationStarted) {
         // 快照/装配尚未越过后端入口：保持原回合非终态，允许用户修复编辑器状态后继续补充。
         pausedForClarification = true;
@@ -1703,6 +1728,10 @@ export async function startTurn(
       if (clarification) {
         clarifyingTurns.delete(sessionId);
         // 后端入口一旦开始，调用失败时 best-effort 清除仍可能停放的同一回合，避免孤儿等待身份。
+        void invoke("ag_cancel_turn", { sessionId, turnId }).catch(() => undefined);
+      }
+      if (decision) {
+        decisionTurns.delete(decision.requestId);
         void invoke("ag_cancel_turn", { sessionId, turnId }).catch(() => undefined);
       }
       agStore.finishMessage(sessionId, assistantId);
@@ -1723,7 +1752,7 @@ export async function startTurn(
     let eventWork = Promise.resolve();
     const consumeEvent = (ev: AgTurnEvent) => {
       eventWork = eventWork.then(async () => {
-        if (terminalSeen || pausedForClarification) return;
+        if (terminalSeen || pausedForClarification || pausedForDecision) return;
         if (ev.turnId !== turnId || !agStore.acceptTurnEvent(turnId, ev.seq, ev.type)) return;
         switch (ev.type) {
         case "chunk":
@@ -1750,6 +1779,9 @@ export async function startTurn(
         case "done":
           terminalSeen = true;
           if (clarifyingTurns.get(sessionId)?.turnId === turnId) clarifyingTurns.delete(sessionId);
+          if (decision && decisionTurns.get(decision.requestId)?.turnId === turnId) {
+            decisionTurns.delete(decision.requestId);
+          }
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.stopReason === "cancelled" ? "cancelled" : "completed");
           void enqueueTurnSave(
@@ -1772,6 +1804,9 @@ export async function startTurn(
         case "error":
           terminalSeen = true;
           if (clarifyingTurns.get(sessionId)?.turnId === turnId) clarifyingTurns.delete(sessionId);
+          if (decision && decisionTurns.get(decision.requestId)?.turnId === turnId) {
+            decisionTurns.delete(decision.requestId);
+          }
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error");
           agStore.pushMessage(sessionId, {
@@ -1808,12 +1843,26 @@ export async function startTurn(
           });
           break;
         case "decision_request_proposed":
-          // AG-1.0-TASKRUN-REWORK-IMP-UI-01：任务级裁决请求（TERM-AG-017，三层分离）。
+          // AwaitingDecision 是原 AgentTurn 的非终态等待；保存稳定身份并释放输入门控。
           agStore.setPendingDecision({
             requestId: ev.requestId,
             kind: ev.kind,
             payload: ev.payload,
           });
+          agStore.setCurrentAction({ action: "deciding", label: "等待你的决策" });
+          decisionTurns.set(ev.requestId, {
+            requestId: ev.requestId,
+            sessionId,
+            turnId,
+            assistantMessageId: assistantId,
+            prompt: effectivePrompt,
+            references,
+            mentions,
+            blockRefs,
+          });
+          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          pausedForDecision = true;
+          finish();
           break;
         case "decision_request_resolved":
           agStore.setPendingDecision(null);
@@ -1989,6 +2038,19 @@ export async function startTurn(
       try {
         openDocSnapshots = await collectOpenDocSnapshotsReady(turnActiveDocTarget);
       } catch (e) {
+        if (decision) {
+          let projected = false;
+          try {
+            await invoke("ag_cancel_turn", { sessionId, turnId });
+            projected = await projectParkedCancellation(decision);
+          } catch {
+            decisionTurns.delete(decision.requestId);
+          }
+          if (projected) {
+            finish();
+            return;
+          }
+        }
         failStart(e);
         return;
       }
@@ -2012,6 +2074,7 @@ export async function startTurn(
       }
       backendInvocationStarted = true;
       if (clarification) clarifyingTurns.delete(sessionId);
+      if (decision) decisionTurns.delete(decision.requestId);
       try {
         await invoke("ag_start_turn", {
           turnId,
@@ -2033,15 +2096,16 @@ export async function startTurn(
           continuationDecisionRequestId: opts?.continuation?.decisionRequestId,
           continuationPreviewDiffId: opts?.continuation?.previewDiffId,
           clarificationResume: Boolean(clarification),
+          decisionResume: Boolean(decision),
           onEvent,
         });
         await eventWork;
-        if (!terminalSeen && !pausedForClarification) {
+        if (!terminalSeen && !pausedForClarification && !pausedForDecision) {
           const recovered = await listTurnEvents(turnId, agStore.lastTurnEventSeq(turnId));
           for (const event of recovered) consumeEvent(event);
           await eventWork;
         }
-        if (!terminalSeen && !pausedForClarification) {
+        if (!terminalSeen && !pausedForClarification && !pausedForDecision) {
           failStart({
             code: "AG_TURN_TERMINAL_MISSING",
             message: "Agent 回合结束但没有可恢复的终态事件",
@@ -2058,15 +2122,18 @@ export async function startTurn(
 export async function cancelActiveTurn(): Promise<void> {
   const snapshot = agStore.getSnapshot();
   const clarification = clarifyingTurns.get(snapshot.activeSessionId);
-  const active = snapshot.activeTurn ?? clarification;
+  const decision = [...decisionTurns.values()]
+    .find((candidate) => candidate.sessionId === snapshot.activeSessionId);
+  const parked = clarification ?? decision;
+  const active = snapshot.activeTurn ?? parked;
   if (!active) return;
   try {
     await invoke("ag_cancel_turn", {
       sessionId: active.sessionId,
       turnId: active.turnId,
     });
-    if (clarification?.turnId === active.turnId) {
-      const projected = await projectParkedCancellation(clarification);
+    if (parked?.turnId === active.turnId) {
+      const projected = await projectParkedCancellation(parked);
       if (!projected) {
         throw {
           code: "AG_TURN_TERMINAL_MISSING",
@@ -2077,31 +2144,39 @@ export async function cancelActiveTurn(): Promise<void> {
   } catch (error) {
     const code = (error as { code?: string })?.code;
     if (code !== "AG_TURN_NOT_ACTIVE") throw error;
-    if (clarification?.turnId === active.turnId) {
-      const projected = await projectParkedCancellation(clarification);
+    if (parked?.turnId === active.turnId) {
+      const projected = await projectParkedCancellation(parked);
       if (!projected) throw error;
     }
   }
 }
 
-async function projectParkedCancellation(clarification: ClarifyingTurnIdentity): Promise<boolean> {
+async function projectParkedCancellation(parked: ClarifyingTurnIdentity | DecisionTurnIdentity): Promise<boolean> {
   const events = await listTurnEvents(
-    clarification.turnId,
-    agStore.lastTurnEventSeq(clarification.turnId),
+    parked.turnId,
+    agStore.lastTurnEventSeq(parked.turnId),
   );
   for (const event of events) {
     if (
-      event.turnId !== clarification.turnId ||
+      event.turnId !== parked.turnId ||
       !agStore.acceptTurnEvent(event.turnId, event.seq, event.type)
     ) {
       continue;
     }
     if (event.type === "done" && event.stopReason === "cancelled") {
-      clarifyingTurns.delete(clarification.sessionId);
-      agStore.finishMessage(clarification.sessionId, clarification.assistantMessageId);
-      agStore.setTurnStatus(clarification.sessionId, clarification.turnId, "cancelled");
+      if (clarifyingTurns.get(parked.sessionId)?.turnId === parked.turnId) {
+        clarifyingTurns.delete(parked.sessionId);
+      }
+      if ("requestId" in parked) {
+        decisionTurns.delete(parked.requestId);
+        if (agStore.getSnapshot().pendingDecision?.requestId === parked.requestId) {
+          agStore.setPendingDecision(null);
+        }
+      }
+      agStore.finishMessage(parked.sessionId, parked.assistantMessageId);
+      agStore.setTurnStatus(parked.sessionId, parked.turnId, "cancelled");
       agStore.setCurrentAction(null);
-      void enqueueTurnSave(clarification.sessionId, clarification.turnId, "cancelled");
+      void enqueueTurnSave(parked.sessionId, parked.turnId, "cancelled");
       return true;
     }
   }
