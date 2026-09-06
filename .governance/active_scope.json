@@ -1,32 +1,21 @@
 {
-  "scope_id": "AG-REDUNDANCY-REMOVAL-WP9-01",
-  "task_type": "CODE_CHANGE",
-  "governance_phase": "IMPLEMENTATION",
-  "title": "Agent 1.0 第二真源与过期兼容实现清理",
-  "status": "READY",
+  "scope_id": "AG-G5-SYSTEM-VALIDATION-01",
+  "task_type": "DOC_ONLY",
+  "governance_phase": "VALIDATION",
+  "title": "Agent 1.0 最终 G5 系统验证",
+  "status": "BLOCKED",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行；WP1-WP8 已 READY，WP9 为冻结计划的最后实现工作包。",
-  "scope_reason": "按 WP-AG10-09，在当前消费者完成迁移后删除无生产调用的关键词 IntentResultV1/PromptPackageV1、前端 AG 状态广播空投影、旧 ProposalBatch 嵌套写入和旧 TaskPlan 缓存测试夹具。",
-  "issue_trace": ".governance/issues/AG-REDUNDANCY-REMOVAL-WP9-01.md",
+  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行；2026-09-06 WP1-WP9 已全部 READY。",
+  "scope_reason": "汇总当前提交的自动化证据，执行真实 provider 与 Tauri/WKWebView 系统观察；不修改需求、设计或代码。",
   "objectives": [
-    "删除无生产消费者的关键词 IntentResultV1 resolver、PromptPackageV1 和关联旧测试",
-    "删除前端不再消费的 SM-AG-01 广播类型、RustTurnState 和 applyTurnState 空入口",
-    "停止向 style_ops 新写入重复的 _proposalBatch 嵌套字段",
-    "移除 TaskRun 当前投影测试中对旧 task_plans 缓存表的依赖",
-    "证明 report_project、旧 WS 模型工具、静态 TaskPlan 执行器和旧授权字段在生产面为零"
+    "把 WP1-WP9 当前自动化证据回填到 Agent 1.0 唯一验证卡",
+    "验证至少一个真实 provider 的工具选择与 ToolResult 后继续回答",
+    "在 Binder Tauri/WKWebView 中验证发布阻断交互场景并如实记录结论"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-REDUNDANCY-REMOVAL-WP9-01.md",
-    "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src-tauri/src/ag/context.rs",
-    "src-tauri/src/ag/task.rs",
-    "src-tauri/src/ag/edit_runtime.rs",
-    "src-tauri/src/de/store.rs",
-    "src-tauri/tests/sm_broadcast.rs",
-    "src/store/agStore.ts",
-    "src/types/smEvents.ts",
-    "src/components/ag/AgentUI.test.tsx"
+    "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -34,30 +23,33 @@
     "AGENTS.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "需求、设计、规则、协议、状态机、验证卡和冻结计划文档",
-    "src-tauri/src/db/mod.rs",
-    "cloud/dev-gateway/**",
-    "当前 IntentResultV2、CapabilityGrantV2、TaskRun/TaskPlan V2 投影、TurnEvent、ProposalBatch 顶层字段",
-    "非 Agent 冗余与依赖升级"
+    "src/**",
+    "src-tauri/**",
+    "cloud/**",
+    "需求、设计、规则、协议与状态机语义"
   ],
   "constraints": [
-    "删除前必须有全库引用证据证明无当前生产消费者",
-    "不得删除旧工具名不存在、无授权字段和无静态执行器的负向回归断言",
-    "数据库历史迁移不得改写；兼容读取保留项须登记明确删除条件",
-    "测试只删除旧对象本身的断言，当前契约必须保留等价或更强覆盖",
-    "不新增需求、功能、状态、协议或替代抽象"
+    "自动化、真实 provider smoke 与真实 Binder UI 系统证据必须分开记录",
+    "不能用单元测试或网关直连冒充 Tauri/WKWebView 系统通过",
+    "不新增需求、功能、逻辑、规则、术语或验证场景"
   ],
-  "acceptance_criteria": [
-    "生产代码中不存在 IntentResultV1、关键词 resolver、PromptPackageV1 或 build_prompt_package",
-    "前端不存在 RustTurnState、SmAg01Payload 或 applyTurnState",
-    "新 Proposal payload 不再写 _proposalBatch，批次只存顶层 ProposalBatch/PendingDiff 字段",
-    "当前 TaskRun 投影测试不再读写旧 task_plans 缓存表",
-    "禁用标识扫描只剩负向测试、历史文档或登记的兼容保留项",
-    "同输入 test:plan/test:related、governance audit、格式和类型检查通过"
+  "phase_gate": {
+    "status": "passed",
+    "evidence": "G1/G2/G3 READY；WP1-WP9 各有 READY Runtime Report 和独立提交。"
+  },
+  "validation_results": {
+    "automation": "passed",
+    "real_provider_smoke": "passed",
+    "tauri_launch": "passed",
+    "interactive_ui_observation": "blocked"
+  },
+  "stop_conditions": [
+    {
+      "id": "SC-04",
+      "name": "VALIDATION_BLOCKED",
+      "reason": "Binder 已启动，但当前主机的 Computer Use 服务连续启动失败，无法执行和采集 DiffCard、等待态、重启、多 session/workspace 的可见系统观察。",
+      "recovery": "恢复 Computer Use 服务或由人类按 A-VAL-X-V-04/A-VAL-X-V-05 在目标 Binder 窗口执行并提供证据后，继续同一 G5 Scope。"
+    }
   ],
-  "human_decisions": [
-    {"id": "HD-AG-WP9-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-09", "confirmed_at": "2026-09-04"}
-  ],
-  "stop_conditions": [],
   "unresolved_items": []
 }

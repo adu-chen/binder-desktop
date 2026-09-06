@@ -365,13 +365,14 @@ WP1～09 全部 READY 后，按 A-VAL-X-V-04 在目标 macOS release build 或�
 | G1 需求唯一化 | READY | AG-ADAPTIVE-RUNTIME-REQ-01 Runtime Report |
 | G2 设计/协议/状态机唯一化 | READY | AG-ADAPTIVE-RUNTIME-DESIGN-01 Runtime Report |
 | G3 实施与验证计划 | READY | AG-ADAPTIVE-RUNTIME-PLAN-01 Runtime Report |
-| WP1～09 | PLANNED | 不继承旧实现完成裁决，逐包重新验证 |
-| G5 系统验证 | NOT_STARTED | WP1～09 READY 后进入 |
+| WP1～09 | READY | `f5596e5` / `107c06e` / `b0e9391` / `b046451` / `48a0a59` / `6838610` / `ad41fca` / `ec96ff2` / `e86f492`；各包均有 READY Runtime Report，同输入完整回归与治理审计通过 |
+| G5 系统验证 | BLOCKED | 2026-09-06 真实 DeepSeek 工具选择 smoke 与 Binder Tauri 启动通过；Computer Use 服务不可用，真实 WKWebView 交互、DiffCard 裁决、等待/重启与隔离场景未执行，详见 A-VAL-X-V-04 §11 |
 
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
+| 2026-09-06 | v2.1 | WP1～09 全部 READY；进入 G5 并完成当前自动化汇总、真实 provider smoke 与 Tauri 启动。因 Computer Use 服务不可用，系统交互证据保持 BLOCKED，不以自动化替代。 |
 | 2026-08-08 | v1.0 | 初版，按当时架构建立 8 个工作包和 Stage 0～6。 |
 | 2026-08-21 | v1.2 | 工作区资源操作改用 WorkspaceOperation、DecisionRequest 与 CreateDocumentBundle。 |
 | 2026-08-28 | v1.3 | 对齐 ExplicitEditTargetSet。 |

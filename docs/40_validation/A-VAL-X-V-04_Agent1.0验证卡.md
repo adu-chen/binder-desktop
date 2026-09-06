@@ -18,8 +18,9 @@
 | validation_id | `VAL-AG-1.0-CORE` |
 | phase | DESIGN；卡执行属各 IMPLEMENTATION Scope 与最终 VALIDATION/G5 |
 | owner / participants | CORE / AG、SYS、DE、ED、WS、ENT、GW、REF |
-| 当前状态 | V-C1～C3、V-R1/R2、V-S1～S14 全部 `DESIGNED`；当前无 `AUTOMATED`、`SYSTEM_PASS` 或 `PASS` 卡 |
-| 降级原因 | 2026-09-03 G1/G2 改变 IntentResult 授权、TaskRun 调度、ProjectReport 完成门和同批 DiffCard 生命周期；旧局部自动化仍可作回归素材，但不能证明当前契约 |
+| 当前状态 | V-C1～C3、V-R1/R2、V-S1～S14 全部 `AUTOMATED`；当前无 `SYSTEM_PASS` 或 `PASS` 卡 |
+| 自动化依据 | WP1～09 均有当前提交的 READY Runtime Report；2026-09-06 `e86f492` 同输入完整回归为前端 608/608、Rust lib 394/394、core_chain 5/5、sm_broadcast 4/4、TypeScript 与治理审计通过 |
+| G5 当前结果 | `BLOCKED`：真实 DeepSeek 的工具选择与 ToolResult 后续轮 smoke 已通过，Binder Tauri 已启动；但 Computer Use 服务连续启动失败，无法采集真实 WKWebView 交互、DiffCard 裁决、等待/重启和隔离观察 |
 | IMPLEMENTATION 门禁 | §8：Scope 声明卡 ID、规则/状态机、changed_files 和证据层；治理审计通过 |
 | G5 退出条件 | 发布阻断卡同时具备当前提交的自动化证据与真实 Tauri/WKWebView/provider/workspace 证据 |
 
@@ -70,7 +71,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 确认前文件、标签、内容 Diff 均为零；拒绝后计划终止，DiskState 不变，AgentTurn 如实结束或继续其他已允许路线 |
 | 自动化 | plan→cancel 零副作用；重复/错误身份裁决失败关闭；UI 无伪标签/卡 |
 | 系统观察 | 文件树、标签和磁盘均无目标；卡片说明资源影响 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.2 V-C2 · CreateDocumentBundle 确认与投影
 
@@ -80,7 +81,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 运行时在同一 AgentTurn 重验后调用 WS；先建立真实目标，再打开标签并投影普通内容 Diff；接受不重复创建，保存后重开一致 |
 | 自动化 | 调用顺序、身份、幂等、operation receipt、Proposal origin 与保存链 |
 | 系统观察 | 文件先出现，初始内容卡随后出现；无第二次资源确认 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.3 V-C3 · CreateDocumentBundle 安全拒绝
 
@@ -90,7 +91,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | A 仅在三重基线未变时执行专用补偿；B 旧卡失效但不删除当前文件、标签或内容 |
 | 自动化 | 三重 guard、补偿幂等、基线推进和错误恢复参数化测试 |
 | 系统观察 | 安全拒绝可恢复；发生后续工作时绝不误删 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.4 V-R1 · WorkspaceOperation 重验与 dirty 阻断
 
@@ -100,7 +101,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 确认前零副作用；运行时确认后重新计算 grant 并让 WS 重验；dirty 阻断；成功操作后相关 Diff/引用按真实结果失效或重绑 |
 | 自动化 | DecisionRequest 身份、grant 重算、WS revalidate、DE/ED/REF 消费者和磁盘断言 |
 | 系统观察 | 卡片影响范围与真实文件树一致；无模型直调低层文件命令 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.5 V-R2 · WorkspaceOperation 补偿、中断与恢复
 
@@ -110,7 +111,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | fail-fast、逆序补偿、逐项 receipt；补偿不完整为 PartialFailed；重启为 Interrupted 且不续跑；恢复重新计划和确认，冲突不覆盖 |
 | 自动化 | SM-WS-04 全转移、幂等、故障注入、重启、文件/目录类型化恢复 |
 | 系统观察 | 实际完成/补偿项清晰；只有一套恢复入口 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.6 V-S1 · 已有 LogicalState 的预览、裁决和保存
 
@@ -120,7 +121,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 以当前 LogicalState 为基准；预览后卡仍 pending；接受只裁决不重复应用；保存才更新 DiskState；重开一致 |
 | 自动化 | DE/ED 三态、未保存基线、save receipt、重开读取 |
 | 系统观察 | 绿增、卡状态和磁盘时点一致 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.7 V-S2 · 无 LogicalState 的后台 Proposal
 
@@ -130,7 +131,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 接受前磁盘不变；接受才原子落盘并产生一个时间轴节点；拒绝/过期零写入 |
 | 自动化 | background 分流、原子写、重复裁决和失败恢复 |
 | 系统观察 | 卡片目标明确，接受后真实文件改变 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.8 V-S3 · pending 打开迁移
 
@@ -140,7 +141,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 同一 payload 挂载到 LogicalState 并保持 pending；不再走后台落盘；身份和终态不重复 |
 | 自动化 | pendingDiffPromoted、路径切换、恢复和保存断言 |
 | 系统观察 | 打开后可见预览，卡仍可裁决 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.9 V-S4 · 跨 ProposalBatch 接力
 
@@ -150,7 +151,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | Batch2 只读取最新 LogicalState，不叠加旧 payload；新批预览可按既有基线规则使旧批卡失效；background pending 未迁移/裁决前不得作为编辑输入 |
 | 自动化 | 跨批 base revision/hash、旧卡 expiry、拒绝无任务级回滚、background guard |
 | 系统观察 | 新旧批关系清楚，旧卡不可误裁决 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §4.10 V-S5 · 保存 pending 与保存失败
 
@@ -160,7 +161,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 保存先把有效 pending 裁决为 accepted/awaiting_save 再落盘；失败保留 dirty 与待保存事实，不覆盖外部内容，不伪报成功 |
 | 自动化 | 保存即接受、冲突、失败重试、状态恢复 |
 | 系统观察 | 卡片、dirty、错误和磁盘一致 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ## §5 Agent 运行时卡
 
@@ -172,7 +173,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 澄清恢复原 AgentTurn；等待不显示工作中；取消停止未开始动作；TurnEvent seq 单调；首终态后迟到事件无卡片、文档或磁盘副作用 |
 | 自动化 | append/replay/乱序/身份/取消竞态/terminal_latch；前端相同事件重建相同状态 |
 | 系统观察 | 补充不新建 turn；停止后无新 token/tool/proposal；终态原因唯一 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.2 V-S7 · TaskRun/TaskPlan 可观察投影
 
@@ -182,7 +183,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 简单目标零 TaskRun；复杂任务从事件派生 TaskRun/TaskPlan；候选步骤不自动执行、不授予权限；路线可修订；Decision 恢复原 AgentTurn 并重验；重启不续跑，重试新建 turn |
 | 自动化 | 事件重建、简单/复杂、route revision、等待无 activity、投影删除无业务副作用、Decision 身份与同回合恢复 |
 | 系统观察 | 当前路线和已完成事实真实；无静态游标/后台推进；详见 A-VAL-X-V-05 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.3 V-S8 · 外部内容与显式记忆 data-only
 
@@ -192,7 +193,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 仅当前任务消费带来源的一次性内容；不可读只报元数据；不产生目标、授权或写入；记忆不自动检索、注入、创建或更新 |
 | 自动化 | 引用生命周期、来源/预算、Prompt 注入隔离、零 AST/KB/TPL 自动调用 |
 | 系统观察 | 已读/未读清楚，无隐式记忆行为 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.4 V-S9 · session/workspace 隔离与恢复
 
@@ -202,7 +203,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 事件、上下文、目标、证据、任务投影和卡片不串线；活动回合恢复为 Interrupted 或原等待/终态，不自动执行 |
 | 自动化 | 复合身份键、持久化查询、事件补流、前端 store 隔离 |
 | 系统观察 | 切换与重启后的信息流和文档状态一致 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.5 V-S10 · ExplicitEditTargetSet 双守
 
@@ -212,7 +213,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 只有用户可见且归一到当前 workspace 的身份可进入集合；确认原子追加，取消零追加；AG/DE 在 PendingDiff 前双重拒绝集合外目标；data-only 内容不扩权 |
 | 自动化 | 初始化、单调追加、持久化、Decision 身份/重放、CreateDocument 建盘后追加、AG/DE 双守和零 PendingDiff |
 | 系统观察 | 集合外提案明确阻断，无隐藏授权 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.6 V-S11 · 模型语义与动态 CapabilityGrant
 
@@ -222,7 +223,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | IntentResult 由模型输出并可 revision，不含 allowed_tools；本地提示不能冒充最终语义；每次 ToolCall 前按当前硬事实新建 grant，动作后失效；注册、Prompt、TaskPlan 和历史均不授权 |
 | 自动化 | 结构化模型输出、revision、硬事实组合/收窄、grant 过期、格式动态能力、未知/未授权/参数/目标/workspace 越界和重复失败不扩权 |
 | 系统观察 | Agent 能根据证据调整路线；工具可见/执行与当前事实一致；拒绝不导致僵死或偷偷扩权 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.7 V-S12 · 自适应模型—工具循环与真实事件
 
@@ -232,7 +233,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 每次 provider 前重装配并 Gate；每次工具前重算 grant；ToolResult 进入事件/上下文后模型可改线；等待无活动；错误/限额/取消真实终止；Proposal/Decision/final 各走唯一合法路径 |
 | 自动化 | 确定性 provider 脚本、调用计数/顺序、Gate 与 grant 次数、事件 replay、失败传播和首终态 |
 | 系统观察 | 工具卡顺序和当前动作与真实调用一致，不出现固定流程或完成后继续活动 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.8 V-S13 · EvidenceLedger 与运行时派生 ProjectReport
 
@@ -242,7 +243,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 仅成功读取进入 ledger，coverage 类型不互相冒充；evidence 与 turn/source/version/seq 绑定；ProjectReport 由最终回答和 ledger 派生，披露已读/未读/来源/不确定性；无 report_project 工具 |
 | 自动化 | evidence append/replay、coverage、失败/跨域、最终 through_seq、工具注册表/Prompt 无 report_project |
 | 系统观察 | 报告与实际工具卡一致，未读内容不伪装已分析 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ### §5.9 V-S14 · ProposalBatch 同批独立 DiffCard
 
@@ -252,7 +253,7 @@ provider 另行证明；二者不可互相替代。
 | 期望 | 一个 ProposalBatch 产生按连续且可独立裁决目标拆分的多卡；前端完整收齐后一次 ED 前向事务；每卡局部 fingerprint/inverse；裁决一张不改变兄弟卡；批内无 document_revision_advanced；下一批才按最新 LogicalState 触发旧批失效 |
 | 自动化 | group id/index/count、完整性、非重叠、原子预检、一次事务、局部 accept/reject、兄弟 pending、跨批 expiry、持久化/恢复；不支持 kind 强制单卡 |
 | 系统观察 | 不连续修改出现多张卡，可独立裁决；连续同块修改不被机械拆碎；最终内容和磁盘正确 |
-| 状态 | DESIGNED |
+| 状态 | AUTOMATED |
 
 ## §6 工作包—验证卡矩阵
 
@@ -310,17 +311,31 @@ provider 另行证明；二者不可互相替代。
 
 | validation_id | 当前可复用素材 | 当前必须重新证明 | 状态 |
 |---|---|---|---|
-| VAL-AG-ADAPTIVE-RUNTIME-01 | 既有 provider/工具/终态测试夹具 | TurnEvent→模型→ToolResult→再调用→final 的当前完整契约 | DESIGNED |
-| VAL-AG-DYNAMIC-GRANT-01 | 既有工具注册、目标和参数测试 | 无 IntentResult 授权、逐动作 grant 及变化后失效 | DESIGNED |
-| VAL-AG-EVIDENCE-REPORT-01 | 既有读取证据测试素材 | 无 report_project 工具的运行时派生报告 | DESIGNED |
-| VAL-AG-PROPOSAL-BATCH-01 | 既有 block_ops/DE/ED 测试素材 | 同批多卡一次预览与目标局部独立裁决 | DESIGNED |
-| VAL-AG-REAL-EXPERIENCE-01 | 既有 Tauri 启动与真实 provider 条件 | 非固定表达的意图泛化、工具选择、状态诚实和交互流畅性 | DESIGNED |
+| VAL-AG-ADAPTIVE-RUNTIME-01 | WP1/WP2/WP4 当前 Runtime Report；完整回归 | TurnEvent→模型→ToolResult→再调用→final 的真实 UI 顺序与故障观察 | AUTOMATED |
+| VAL-AG-DYNAMIC-GRANT-01 | WP3 当前 Runtime Report；授权/越权/失效自动化 | 真实模型请求在当前事实变化后的工具可见性与拒绝体验 | AUTOMATED |
+| VAL-AG-EVIDENCE-REPORT-01 | WP5 当前 Runtime Report；EvidenceLedger/ProjectReport 自动化 | 真实 UI 报告与工具卡、已读/未读和不确定性一致 | AUTOMATED |
+| VAL-AG-PROPOSAL-BATCH-01 | WP7/WP8 当前 Runtime Report；批次原子性与 UI reducer 自动化 | 真实不连续块多卡、逐卡裁决、保存重开 | AUTOMATED |
+| VAL-AG-REAL-EXPERIENCE-01 | 真实 DeepSeek 合成 smoke：主动 `read_doc`，ToolResult 后继续基于证据回答；Binder Tauri 启动成功 | 非固定表达的完整 Binder 工具选择、状态诚实和交互流畅性 | BLOCKED |
 | VAL-DOC-LIBREOFFICE-01 | 2026-09-03 非沙箱完整 Rust 套件通过 | 仅在后续 DOC/发布环境变更时回归，不是 Agent 当前阻断 | VERIFIED_NON_SANDBOX |
 
-## 变更记录
+## §11 2026-09-06 G5 执行记录
+
+| 字段 | 结果 |
+|---|---|
+| 提交 / 环境 | `e86f492`；macOS；Binder Tauri debug + WKWebView；本地 dev-gateway 8787 |
+| 自动化 | `AUTOMATED`：WP1～09 READY；最终同输入 `test:related` 在正常系统权限下前端 608/608、Rust lib 394/394、core_chain 5/5、sm_broadcast 4/4、TypeScript 与治理审计通过 |
+| 真实 provider smoke | `PASS`：DeepSeek 收到不含用户数据的合成“先检查 notes/a.md 再总结”请求后，主动发出 `read_doc`；回注合成 ToolResult 后继续流式输出基于证据的回答并正常 done |
+| Tauri 启动 | `PASS`：复用本机 1420 Vite 与 8787 网关，`target/debug/binder` 成功运行 |
+| 真实 UI 场景 | `BLOCKED`：Computer Use 服务在应用启动前后连续失败，无法操作或观察 Binder 窗口；未执行 §7 的 DiffCard、等待态、Decision、重启和多 session/workspace 场景 |
+| 负空间裁决 | 网关 smoke 不等于 Binder runtime/Tauri 系统通过；没有把自动化或 provider 直连提升为 `SYSTEM_PASS` |
+| 恢复动作 | Computer Use 恢复后，或人类按本文 §7 与 A-VAL-X-V-05 提供目标窗口证据后，从同一提交继续 G5；若发现缺陷，回退到对应 WP，修复后重跑 exact changed-files tests 和受影响系统场景 |
+| 最终裁决 | `BLOCKED`；19 张卡保持 `AUTOMATED`，零张 `SYSTEM_PASS` / `PASS` |
+
+## §12 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
+| 2026-09-06 | v2.1 | 汇总 WP1～09 当前自动化证据，19 张卡推进为 AUTOMATED；记录真实 DeepSeek 工具选择 smoke 与 Tauri 启动通过；因 Computer Use 服务不可用，G5 真实 UI 场景保持 BLOCKED。 |
 | 2026-08-14 | v1.0 | 建立 Agent 1.0 状态化链路验证卡。 |
 | 2026-08-21 | v1.1 | 新增 WorkspaceOperation/CreateDocumentBundle 场景。 |
 | 2026-08-27 | v1.2 | 澄清恢复统一为原 AgentTurn。 |
