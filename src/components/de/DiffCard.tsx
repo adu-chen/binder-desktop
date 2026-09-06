@@ -317,9 +317,9 @@ export function DiffCard({ diff }: { diff: DiffView }) {
       <div className="diffcard-row diffcard-row-title">
         <span className="diffcard-title" title={title}>{title}</span>
         {/* AG-TASK-01 F1b：批次徽标（第 x/y 批）。 */}
-        {diff.batch && (
-          <span className="diffcard-badge diffcard-batch" title={`批次 ${diff.batch.id}`}>
-            第 {diff.batch.index}/{diff.batch.total} 批
+        {diff.proposalBatch && (
+          <span className="diffcard-badge diffcard-batch" title={`提案批次 ${diff.proposalBatch.id}`}>
+            修改 {diff.proposalBatch.groupIndex}/{diff.proposalBatch.groupCount}
           </span>
         )}
         <span className="diffcard-badge">{STATE_BADGE[state]}</span>

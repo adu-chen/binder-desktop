@@ -6,6 +6,7 @@
 
 use super::generate::DiffPayload;
 use crate::ipc::IpcError;
+use crate::types::{PendingDiff, ProposalBatch};
 use rusqlite::{Connection, OptionalExtension};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,6 +60,41 @@ pub fn persist_payload(
         ],
     )?;
     Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-001-IO-DE-DE-DIFF-006, BR-DE-DATA-002-IO-DE-DE-DIFF-006
+ * type:     IO
+ * chain:    DE-DIFF
+ * rules:    BR-DE-DATA-001, BR-DE-DATA-002
+ * term_ref: TERM-DE-001, TERM-DE-004, TERM-DE-005
+ * boundary: in=CompleteProposalBatchPayloadsAndPendingDiffs | out=AtomicallyPersistedProposalBatchRows(allOrNone)
+ */
+pub fn persist_proposal_batch(
+    conn: &Connection,
+    batch: &ProposalBatch,
+    entries: &[(String, DiffPayload, PendingDiff)],
+) -> rusqlite::Result<()> {
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute(
+        "INSERT INTO proposal_batches \
+         (proposal_batch_id, workspace_id, turn_id, tool_call_id, grouping_version, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            batch.proposal_batch_id,
+            batch.workspace_id,
+            batch.turn_id,
+            batch.tool_call_id,
+            batch.grouping_version,
+            batch.created_at,
+        ],
+    )?;
+    for (payload_ref, payload, pending) in entries {
+        persist_payload(&transaction, payload_ref, payload)?;
+        crate::workspace::diff_apply::persist_diff(&transaction, pending)?;
+    }
+    transaction.commit()
 }
 
 /**
@@ -146,6 +182,9 @@ mod tests {
             &conn,
             &PendingDiff {
                 diff_id: "d1".into(),
+                proposal_batch_id: "d1".into(),
+                group_index: 1,
+                group_count: 1,
                 target: proposal.target.clone(),
                 origin_module: "AG".into(),
                 status: DiffStatus::Pending,
@@ -164,5 +203,65 @@ mod tests {
 
         let err = load_payload_for_diff(&conn, "missing").unwrap_err();
         assert_eq!(err.code, "DE_PAYLOAD_MISSING");
+    }
+
+    // covers: BR-DE-DATA-001, BR-DE-DATA-002
+    #[test]
+    fn proposal_batch_persistence_is_all_or_none() {
+        let conn = fresh();
+        let target = DocRef {
+            workspace_id: "ws1".into(),
+            rel_path: "a.md".into(),
+            doc_type: "md".into(),
+        };
+        let make = |diff_id: &str, payload_ref: &str| {
+            let proposal = ChangeProposal {
+                origin_task: "turn1".into(),
+                target: target.clone(),
+                after_content: diff_id.as_bytes().to_vec(),
+                before_snapshot: Some("base".into()),
+                style_ops: Some(format!(
+                    r#"{{"_proposalBatch":{{"id":"pb","groupIndex":1,"groupCount":2}}}}"#
+                )),
+            };
+            (
+                payload_ref.to_string(),
+                build_payload(&proposal),
+                PendingDiff {
+                    diff_id: diff_id.into(),
+                    proposal_batch_id: "pb".into(),
+                    group_index: if payload_ref == "p1" { 1 } else { 2 },
+                    group_count: 2,
+                    target: target.clone(),
+                    origin_module: "AG".into(),
+                    status: DiffStatus::Pending,
+                    created_at: 1,
+                    payload_ref: payload_ref.into(),
+                },
+            )
+        };
+        let entries = vec![make("duplicate", "p1"), make("duplicate", "p2")];
+        let batch = ProposalBatch {
+            proposal_batch_id: "pb".into(),
+            workspace_id: "ws1".into(),
+            turn_id: Some("turn1".into()),
+            tool_call_id: Some("call1".into()),
+            grouping_version: 1,
+            created_at: 1,
+        };
+        assert!(persist_proposal_batch(&conn, &batch, &entries).is_err());
+        let diff_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pending_diffs", [], |row| row.get(0))
+            .unwrap();
+        let payload_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM diff_payloads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!((diff_count, payload_count), (0, 0));
+        let batch_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM proposal_batches", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(batch_count, 0);
     }
 }

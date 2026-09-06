@@ -39,7 +39,7 @@ import {
   type EditSession,
   type TabState,
 } from "../../store/edStore";
-import { deStore, toGreenReview, useDeStore, type DiffView } from "../../store/deStore";
+import { deStore, resolveProposalBatchCohort, toGreenReview, useDeStore, type DiffView } from "../../store/deStore";
 import { assistStore, type AssistTarget } from "../../store/assistStore";
 import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
 import {
@@ -1721,10 +1721,10 @@ export function Editor() {
 
   /**
    * @GOV
-   * codes:    BR-CORE-STATE-001-EFFECT-ED-ED-EDIT-001, BR-CORE-STATE-003-EFFECT-ED-ED-EDIT-001
+   * codes:    BR-CORE-STATE-001-EFFECT-ED-ED-EDIT-001, BR-CORE-STATE-003-EFFECT-ED-ED-EDIT-001, BR-DE-DATA-001-EFFECT-ED-ED-EDIT-001, BR-DE-STATE-001-EFFECT-ED-ED-EDIT-001
    * type:     EFFECT
    * chain:    DE-DIFF, ED-EDIT, ED-DECOR
-   * rules:    BR-CORE-STATE-001, BR-CORE-STATE-003
+   * rules:    BR-CORE-STATE-001, BR-CORE-STATE-003, BR-DE-DATA-001, BR-DE-STATE-001
    * boundary: in=PendingDiffForOpenedLogicalState | out=ControlledLogicalStatePreviewAndGreenReview(noDiffCardLifecycleTransition)
    */
   // Pending diff 到达当前编辑器时先成为 ED 草稿内容；GreenReview 只标绿当前 after 内容。
@@ -1746,6 +1746,52 @@ export function Editor() {
       const hasImageOps = Boolean(d.imageOpsPayload);
       let imageDiffFinalized = false;
       if (d.relPath !== open || d.state !== "pending" || d.draftApplied || d.draftSaved) continue;
+      const cohort = resolveProposalBatchCohort(deStore.getSnapshot().diffs, d);
+      if (cohort.status === "waiting") continue;
+      if (cohort.status === "invalid") {
+        for (const invalid of cohort.diffs) {
+          deStore.markDraftPreviewFailed(invalid.diffId, cohort.reason);
+        }
+        continue;
+      }
+      if (cohort.status === "ready") {
+        if (cohort.diffs[0]?.diffId !== d.diffId) continue;
+        const session = open ? ed.sessions[open] : undefined;
+        const firstPayload = cohort.diffs[0]?.blockOpsPayload;
+        if (!session || !firstPayload) {
+          for (const item of cohort.diffs) {
+            deStore.markDraftPreviewFailed(item.diffId, "ED_PROPOSAL_BATCH_SESSION_MISSING");
+          }
+          continue;
+        }
+        const baseContent = serialize(editor, editFormat, contentFormat, open);
+        const combinedPayload = {
+          payloadVersion: firstPayload.payloadVersion,
+          base: firstPayload.base,
+          operations: cohort.diffs.flatMap((item) => item.blockOpsPayload?.operations ?? []),
+        };
+        const applied = applyStructuredBlockOperations(
+          editor,
+          combinedPayload,
+          "forward",
+          { sessionVersion: session.sessionVersion, contentHash: session.contentHash },
+        );
+        if (!applied.ok) {
+          for (const item of cohort.diffs) deStore.markDraftPreviewFailed(item.diffId, applied.reason);
+          continue;
+        }
+        const appliedContent = serialize(editor, editFormat, contentFormat, open);
+        for (const item of cohort.diffs) {
+          deStore.markDraftApplied(item.diffId, baseContent, tabState, appliedContent);
+        }
+        edStore.updateContent(open, appliedContent);
+        const appliedSession = edStore.getSnapshot().sessions[open];
+        const checkpoint = cohort.diffs.find((item) => item.previewContinuationRequired);
+        if (checkpoint && appliedSession?.content === appliedContent) {
+          void acknowledgePreviewAndContinue(checkpoint.diffId);
+        }
+        continue;
+      }
       const baseContent = serialize(editor, editFormat, contentFormat, open);
       const syntheticAfter = isSyntheticAfter(d.after);
       const failDraftPreview = (reason: string) => {

@@ -157,8 +157,8 @@ export interface DiffView {
   blockOps?: string[];
   blockOpsPayload?: StructuredBlockEditPayload;
   blockAffectedIds?: string[];
-  /** AG-TASK-01 F1b：批次元数据（整篇对齐分批；展示"第 x/y 批"徽标）。 */
-  batch?: { id: string; index: number; total: number };
+  /** ProposalBatch 只表达同一次模型提案的组内关联；各卡仍独立裁决。 */
+  proposalBatch?: { id: string; groupIndex: number; groupCount: number };
   /** 表格结构操作与其前后结构快照；table_ops 不得回退为 HTML 块替换。 */
   tableOps?: string[];
   tableOpsPayload?: TableEditPayload;
@@ -197,6 +197,69 @@ export interface DiffView {
   effectStatus?: DiffEffectStatus;
   /** 后端 terminal_reason 的历史投影，如 abnormal_exit。 */
   terminalReason?: string | null;
+}
+
+export type ProposalBatchCohort =
+  | { status: "single"; diffs: DiffView[] }
+  | { status: "waiting"; diffs: DiffView[] }
+  | { status: "invalid"; diffs: DiffView[]; reason: string }
+  | { status: "ready"; diffs: DiffView[] };
+
+function blockOperationTarget(operation: StructuredBlockEditPayload["operations"][number]): string {
+  if (operation.op === "insert_before" || operation.op === "insert_after" || operation.op === "append") {
+    const attrs = operation.afterNode && typeof operation.afterNode === "object"
+      ? (operation.afterNode as { attrs?: unknown }).attrs
+      : undefined;
+    const inserted = attrs && typeof attrs === "object"
+      ? (attrs as { blockId?: unknown }).blockId
+      : undefined;
+    return typeof inserted === "string" ? inserted : "";
+  }
+  return operation.blockId;
+}
+
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-001-RB-DE-DE-DIFF-007, BR-DE-STATE-001-RB-DE-DE-DIFF-007
+ * type:     RB
+ * chain:    DE-DIFF, ED-EDIT
+ * rules:    BR-DE-DATA-001, BR-DE-STATE-001
+ * term_ref: TERM-DE-001, TERM-DE-005
+ * boundary: in=PendingDiffViewsWithProposalBatchIdentity | out=ValidatedProposalBatchCohort(stableGroupOrderAndSharedBase) | effect=none
+ */
+/** 收齐并验证同文档 ProposalBatch cohort；失败只返回事实，不改变 DiffCard 或 LogicalState。 */
+export function resolveProposalBatchCohort(all: DiffView[], current: DiffView): ProposalBatchCohort {
+  const batch = current.proposalBatch;
+  if (!batch || batch.groupCount <= 1) return { status: "single", diffs: [current] };
+  const diffs = all
+    .filter((diff) => diff.proposalBatch?.id === batch.id)
+    .sort((left, right) => (
+      (left.proposalBatch?.groupIndex ?? 0) - (right.proposalBatch?.groupIndex ?? 0)
+    ));
+  if (diffs.length < batch.groupCount) return { status: "waiting", diffs };
+  if (diffs.length !== batch.groupCount || diffs.some((diff, index) => (
+    diff.proposalBatch?.groupCount !== batch.groupCount
+    || diff.proposalBatch.groupIndex !== index + 1
+    || diff.relPath !== current.relPath
+    || diff.patchKind !== "block_ops"
+    || diff.draftMode !== "current_editor"
+    || !diff.blockOpsPayload
+    || diff.baseSessionVersion !== current.baseSessionVersion
+    || diff.baseContentHash !== current.baseContentHash
+  ))) {
+    return { status: "invalid", diffs, reason: "DE_PROPOSAL_BATCH_INVALID" };
+  }
+  const targets = new Set<string>();
+  for (const diff of diffs) {
+    for (const operation of diff.blockOpsPayload?.operations ?? []) {
+      const target = blockOperationTarget(operation);
+      if (!target || targets.has(target)) {
+        return { status: "invalid", diffs, reason: "DE_PROPOSAL_BATCH_TARGET_OVERLAP" };
+      }
+      targets.add(target);
+    }
+  }
+  return { status: "ready", diffs };
 }
 
 interface DeState {

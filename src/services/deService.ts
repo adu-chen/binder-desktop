@@ -53,6 +53,9 @@ interface PendingDiffDto {
 
 export interface DiffDetailDto extends PendingDiffDto {
   projection?: {
+    proposal_batch_id?: string;
+    group_index?: number;
+    group_count?: number;
     patch_kind?: "replace_block" | "block_ops" | "replace_document" | "style_ops" | "table_ops" | "image_ops";
     block_id?: string | null;
     block_index?: number | null;

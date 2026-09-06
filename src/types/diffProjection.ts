@@ -12,6 +12,9 @@ export type AgentEditPatchKind =
 
 export interface DiffProjectionDto {
   diff_id: string;
+  proposal_batch_id: string;
+  group_index: number;
+  group_count: number;
   rel_path: string;
   patch_kind: AgentEditPatchKind;
   block_id?: string | null;
@@ -31,7 +34,6 @@ export interface DiffProjectionDto {
   block_ops?: unknown;
   table_ops?: unknown;
   image_ops?: unknown;
-  batch?: { id: string; index: number; total: number };
   preview_checkpoint_required?: boolean;
   cross_doc?: boolean | null;
 }

@@ -8,19 +8,17 @@ use super::edit_support::{
     style_ops_param,
 };
 use super::edit_table_runtime::table_ops_payload;
-use super::edit_types::{
-    AgentEditOperation, AgentProposeEditResult, BatchMeta, EditProjectionDraft,
-};
+use super::edit_types::{AgentEditOperation, AgentProposeEditResult, EditProjectionDraft};
 use crate::ipc::IpcError;
 use crate::types::DiffProjection;
 use crate::{active_ws, ag, doc, lock_db, workspace, AppState};
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017
+ * codes:    BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017, BR-DE-DATA-001-EFFECT-AG-AG-TOOL-017, BR-DE-DATA-002-EFFECT-AG-AG-TOOL-017
  * type:     EFFECT
  * chain:    AG-TOOL, DE-DIFF, ED-EDIT
- * rules:    BR-AG-STATE-002, BR-AG-DATA-003
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-DE-DATA-001, BR-DE-DATA-002
  * boundary: in=ValidatedAgentEditOperationAndAgentReadContext | out=PendingDiffAndDiffProjection | delegate=de::generate::generate_diff | does_not=createWorkspaceResourceOrWriteLogicalStateOrDiskState
  */
 /// PI-AG-08C/08E/08F + PI-AG-SEM-01 · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
@@ -37,39 +35,11 @@ pub(super) fn ag_propose_edit(
     read_ctx: &ag::blocks::AgentReadContext,
     current_rel: Option<&str>,
     explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    turn_id: &str,
+    tool_call_id: &str,
 ) -> Result<AgentProposeEditResult, IpcError> {
     use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
     use crate::types::LocateResult;
-
-    // AG-TASK-01 F1b：解析可选 batch 参数（{id,index,total}），校验 index<=total。
-    let batch = params
-        .get("batch")
-        .and_then(|v| v.as_object())
-        .map(|batch| {
-            let batch_id = batch
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let index = batch.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let total = batch.get("total").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-            if batch_id.is_empty() || index < 1 || total < 1 || index > total {
-                Err(IpcError::new(
-                    "AG_TOOL_ARG",
-                    "propose_edit batch 参数需为 {id,index,total}，且 1<=index<=total",
-                    false,
-                    false,
-                ))
-            } else {
-                Ok(BatchMeta {
-                    batch_id,
-                    index,
-                    total,
-                })
-            }
-        })
-        .transpose()?;
 
     let requested_rel_path = params
         .get("path")
@@ -212,7 +182,7 @@ pub(super) fn ag_propose_edit(
             false,
         ));
     }
-    let block_ops_json = if edit_operation == AgentEditOperation::BlockOps {
+    let block_ops_groups = if edit_operation == AgentEditOperation::BlockOps {
         let current = snapshot.as_ref().ok_or_else(|| {
             IpcError::new(
                 "AG_EDIT_BASE_REQUIRED",
@@ -221,20 +191,22 @@ pub(super) fn ag_propose_edit(
                 false,
             )
         })?;
-        Some(
-            serde_json::to_value(ag::block_ops::validate_and_build(params, current)?).map_err(
-                |error| {
+        let canonical = ag::block_ops::validate_and_build(params, current)?;
+        ag::block_ops::split_adjudication_groups(&canonical, current)?
+            .into_iter()
+            .map(|group| {
+                serde_json::to_value(group).map_err(|error| {
                     IpcError::new(
                         "AG_BLOCK_OPERATION_INVALID",
                         &format!("结构化块载荷序列化失败: {error}"),
                         false,
                         false,
                     )
-                },
-            )?,
-        )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
     } else {
-        None
+        vec![serde_json::Value::Null]
     };
     let table_ops_json = if edit_operation == AgentEditOperation::TableOps {
         let current = snapshot.as_ref().ok_or_else(|| {
@@ -281,169 +253,173 @@ pub(super) fn ag_propose_edit(
     } else {
         None
     };
-    // 复用现有可持久化 JSON 字段承载语义操作，避免把 TableOperation/ImageOperation
-    // 伪装为 after HTML；kind 负责在读取/执行侧禁止错误路径。
-    let style_ops = if let Some(block_ops) = &block_ops_json {
-        Some(
+    let proposal_batch_id = gen_id("proposal_batch");
+    let group_count = u32::try_from(block_ops_groups.len()).unwrap_or(u32::MAX);
+    let created_at = now_millis();
+    let mut persisted = Vec::with_capacity(block_ops_groups.len());
+    let mut projections = Vec::with_capacity(block_ops_groups.len());
+    for (offset, block_ops_value) in block_ops_groups.into_iter().enumerate() {
+        let group_index = u32::try_from(offset + 1).unwrap_or(u32::MAX);
+        let block_ops_json = (!block_ops_value.is_null()).then_some(block_ops_value);
+        let EditProjectionDraft {
+            after_content,
+            block_id,
+            block_index,
+            before_text,
+            after_text,
+            location_label,
+        } = build_edit_projection(
+            params,
+            edit_operation,
+            snapshot.as_ref(),
+            base_content_for_diff,
+            base_is_html,
+            &rel_path,
+            target_exists,
+            read_ctx,
+            style_ops_json.as_ref(),
+            block_ops_json.as_ref(),
+            table_ops_json.as_ref(),
+            image_ops_json.as_ref(),
+        )?;
+        let mut persisted_ops = if let Some(block_ops) = &block_ops_json {
             serde_json::json!({
                 "kind": "block_ops",
                 "payloadVersion": 1,
                 "payload": block_ops
             })
-            .to_string(),
-        )
-    } else if let Some(table_ops) = &table_ops_json {
-        Some(serde_json::json!({ "kind": "table_ops", "payload": table_ops }).to_string())
-    } else if let Some(image_ops) = &image_ops_json {
-        Some(
+        } else if let Some(table_ops) = &table_ops_json {
+            serde_json::json!({ "kind": "table_ops", "payload": table_ops })
+        } else if let Some(image_ops) = &image_ops_json {
             serde_json::json!({
                 "kind": "image_ops",
                 "payloadVersion": 1,
                 "payload": image_ops
             })
-            .to_string(),
-        )
-    } else {
-        style_ops_json.as_ref().map(|v| v.to_string())
-    };
-    // AG-TASK-01 F1b/F1c：批次元数据随 style_ops 落库（diff_payloads.style_ops 内 _batch 键），
-    // 供接受路由查询剩余批次并给出衔接提示。
-    let style_ops = if let Some(batch) = &batch {
-        let mut envelope: serde_json::Value = style_ops
-            .as_ref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(serde_json::Value::Object(Default::default()));
-        if let Some(object) = envelope.as_object_mut() {
+        } else {
+            style_ops_json
+                .clone()
+                .unwrap_or_else(|| serde_json::Value::Object(Default::default()))
+        };
+        if let Some(object) = persisted_ops.as_object_mut() {
             object.insert(
-                "_batch".to_string(),
+                "_proposalBatch".to_string(),
                 serde_json::json!({
-                    "id": batch.batch_id,
-                    "index": batch.index,
-                    "total": batch.total,
+                    "id": proposal_batch_id.clone(),
+                    "groupIndex": group_index,
+                    "groupCount": group_count,
+                }),
+            );
+            object.insert(
+                "_projection".to_string(),
+                serde_json::json!({
+                    "patchKind": match edit_operation {
+                        AgentEditOperation::ReplaceBlock => "replace_block",
+                        AgentEditOperation::BlockOps => "block_ops",
+                        AgentEditOperation::ReplaceDocument => "replace_document",
+                        AgentEditOperation::StyleOps => "style_ops",
+                        AgentEditOperation::TableOps => "table_ops",
+                        AgentEditOperation::ImageOps => "image_ops",
+                    },
+                    "blockId": block_id.clone(),
+                    "blockIndex": block_index,
+                    "beforeText": before_text.clone(),
+                    "afterText": after_text.clone(),
+                    "locationLabel": location_label.clone(),
+                    "draftMode": if target_is_current_editor { "current_editor" } else if target_is_open_session { "open_session" } else { "background" },
+                    "snapshotSource": snapshot.as_ref().map(|item| item.source.as_str()).unwrap_or("disk_snapshot"),
+                    "baseSessionVersion": snapshot.as_ref().and_then(|item| item.session_version),
+                    "baseContentHash": snapshot.as_ref().and_then(|item| item.content_hash.clone()),
                 }),
             );
         }
-        Some(envelope.to_string())
-    } else {
-        style_ops
-    };
-
-    let EditProjectionDraft {
-        after_content,
-        block_id: projection_block_id,
-        block_index: projection_block_index,
-        before_text: projection_before,
-        after_text: projection_after,
-        location_label: projection_location,
-    } = build_edit_projection(
-        params,
-        edit_operation,
-        snapshot.as_ref(),
-        base_content_for_diff,
-        base_is_html,
-        &rel_path,
-        target_exists,
-        read_ctx,
-        style_ops_json.as_ref(),
-        block_ops_json.as_ref(),
-        table_ops_json.as_ref(),
-        image_ops_json.as_ref(),
-    )?;
-
-    // 既有文档 → before_snapshot=Some（modify）；不存在 → None（新建，is_new_doc 派生）。
-    // BDocx 磁盘是二进制 docx，必须用当前编辑器 HTML 或 DOC 转换 HTML 作为 diff 基准，不能因 UTF-8
-    // 读取失败而误判为新文档。
-    let before_snapshot = if target_exists {
-        Some(base_content_for_diff.to_string())
-    } else {
-        None
-    };
-
-    let proposal = ChangeProposal {
-        origin_task: "ag_turn".to_string(),
-        target: crate::types::DocRef {
-            workspace_id: ws.workspace_id,
-            doc_type: doc_type_of(&rel_path),
+        let proposal = ChangeProposal {
+            origin_task: "ag_turn".to_string(),
+            target: crate::types::DocRef {
+                workspace_id: ws.workspace_id.clone(),
+                doc_type: doc_type_of(&rel_path),
+                rel_path: rel_path.clone(),
+            },
+            after_content: after_content.into_bytes(),
+            before_snapshot: target_exists.then(|| base_content_for_diff.to_string()),
+            style_ops: Some(persisted_ops.to_string()),
+        };
+        let diff_id = gen_id("diff");
+        let payload_ref = format!("pl_{diff_id}");
+        let mut pending = generate_diff(
+            &proposal,
+            &diff_id,
+            "AG",
+            &payload_ref,
+            created_at,
+            LocateResult::Located,
+        )?;
+        pending.proposal_batch_id = proposal_batch_id.clone();
+        pending.group_index = group_index;
+        pending.group_count = group_count;
+        persisted.push((payload_ref, build_payload(&proposal), pending));
+        projections.push(DiffProjection {
+            diff_id,
             rel_path: rel_path.clone(),
-        },
-        after_content: after_content.into_bytes(),
-        before_snapshot,
-        style_ops,
-    };
-    let diff_id = gen_id("diff");
-    let payload_ref = format!("pl_{diff_id}");
-    // 锚校验（既有须 Located；新建跳过）——失败 GenFailed 回报，不持久化（BR-DE-DATA-001）。
-    let pending = generate_diff(
-        &proposal,
-        &diff_id,
-        "AG",
-        &payload_ref,
-        now_millis(),
-        LocateResult::Located,
-    )?;
-    let payload = build_payload(&proposal);
-
-    let conn = lock_db(state)?;
-    crate::de::store::persist_payload(&conn, &payload_ref, &payload)
-        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
-    workspace::diff_apply::persist_diff(&conn, &pending)
-        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
-    let projection = DiffProjection {
-        diff_id: diff_id.clone(),
-        rel_path: rel_path.clone(),
-        patch_kind: match edit_operation {
-            AgentEditOperation::ReplaceBlock => "replace_block",
-            AgentEditOperation::BlockOps => "block_ops",
-            AgentEditOperation::ReplaceDocument => "replace_document",
-            AgentEditOperation::StyleOps => "style_ops",
-            AgentEditOperation::TableOps => "table_ops",
-            AgentEditOperation::ImageOps => "image_ops",
-        }
-        .to_string(),
-        block_id: projection_block_id,
-        block_index: projection_block_index,
-        before_text: projection_before,
-        after_text: projection_after,
-        location_label: projection_location,
-        draft_mode: if target_is_current_editor {
-            "current_editor"
-        } else if target_is_open_session {
-            "open_session"
-        } else {
-            "background"
-        }
-        .to_string(),
-        snapshot_source: snapshot
-            .as_ref()
-            .map(|s| match s.source.as_str() {
-                "active_editor" => "active_editor",
-                "active_editor_session" => "active_editor_session",
-                "open_editor_session" => "open_editor_session",
-                _ => "disk_snapshot",
-            })
-            .unwrap_or("disk_snapshot")
+            patch_kind: match edit_operation {
+                AgentEditOperation::ReplaceBlock => "replace_block",
+                AgentEditOperation::BlockOps => "block_ops",
+                AgentEditOperation::ReplaceDocument => "replace_document",
+                AgentEditOperation::StyleOps => "style_ops",
+                AgentEditOperation::TableOps => "table_ops",
+                AgentEditOperation::ImageOps => "image_ops",
+            }
             .to_string(),
-        base_session_version: snapshot.as_ref().and_then(|s| s.session_version),
-        base_content_hash: snapshot.as_ref().and_then(|s| s.content_hash.clone()),
-        style_ops: style_ops_json,
-        block_ops: block_ops_json,
-        table_ops: table_ops_json,
-        image_ops: image_ops_json,
-        batch: batch.as_ref().map(|b| {
-            serde_json::json!({
-                "id": b.batch_id,
-                "index": b.index,
-                "total": b.total,
-            })
-        }),
-        preview_checkpoint_required: target_is_current_editor || target_is_open_session,
-        // 跨文档内容目标标注（DiffCard「跨文档目标」提示 + 用户确认）。
-        cross_doc: Some(cross_doc),
+            block_id,
+            block_index,
+            before_text,
+            after_text,
+            location_label,
+            draft_mode: if target_is_current_editor {
+                "current_editor"
+            } else if target_is_open_session {
+                "open_session"
+            } else {
+                "background"
+            }
+            .to_string(),
+            snapshot_source: snapshot
+                .as_ref()
+                .map(|s| match s.source.as_str() {
+                    "active_editor" => "active_editor",
+                    "active_editor_session" => "active_editor_session",
+                    "open_editor_session" => "open_editor_session",
+                    _ => "disk_snapshot",
+                })
+                .unwrap_or("disk_snapshot")
+                .to_string(),
+            base_session_version: snapshot.as_ref().and_then(|s| s.session_version),
+            base_content_hash: snapshot.as_ref().and_then(|s| s.content_hash.clone()),
+            style_ops: style_ops_json.clone(),
+            block_ops: block_ops_json,
+            table_ops: table_ops_json.clone(),
+            image_ops: image_ops_json.clone(),
+            proposal_batch_id: proposal_batch_id.clone(),
+            group_index,
+            group_count,
+            preview_checkpoint_required: target_is_current_editor || target_is_open_session,
+            cross_doc: Some(cross_doc),
+        });
+    }
+    let conn = lock_db(state)?;
+    let batch = crate::types::ProposalBatch {
+        proposal_batch_id: proposal_batch_id.clone(),
+        workspace_id: ws.workspace_id,
+        turn_id: Some(turn_id.to_string()),
+        tool_call_id: Some(tool_call_id.to_string()),
+        grouping_version: 1,
+        created_at,
     };
+    crate::de::store::persist_proposal_batch(&conn, &batch, &persisted)
+        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
     Ok(AgentProposeEditResult {
-        diff_id,
+        proposal_batch_id,
         rel_path,
-        projection,
-        batch,
+        projections,
     })
 }

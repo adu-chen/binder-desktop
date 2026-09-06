@@ -998,7 +998,8 @@ pub(super) async fn run_turn_tool_loop(
                             detail: None,
                         },
                     )?;
-                    let mut diff_event_after_tool: Option<(String, String)> = None;
+                    let mut diff_events_after_tool: Vec<(String, u32, u32, String, String)> =
+                        Vec::new();
                     let mut decision_event_after_tool = None;
                     let mut preview_checkpoint_after_tool = false;
                     let mut end_after_diff_proposal = false;
@@ -1416,16 +1417,26 @@ pub(super) async fn run_turn_tool_loop(
                                                     &read_ctx,
                                                     active_doc_path.as_deref(),
                                                     &explicit_edit_target_set,
+                                                    &turn_id,
+                                                    &c.id,
                                                 )
                                             }
                                             Err(error) => Err(error),
                                         };
                                     match guarded_result {
                                         Ok(mut edit_result) => {
-                                            let needs_preview_checkpoint = matches!(
-                                                edit_result.projection.draft_mode.as_str(),
-                                                "current_editor" | "open_session"
-                                            );
+                                            let checkpoint_diff_id = edit_result
+                                                .projections
+                                                .first()
+                                                .filter(|projection| {
+                                                    matches!(
+                                                        projection.draft_mode.as_str(),
+                                                        "current_editor" | "open_session"
+                                                    )
+                                                })
+                                                .map(|projection| projection.diff_id.clone());
+                                            let needs_preview_checkpoint =
+                                                checkpoint_diff_id.is_some();
                                             if needs_preview_checkpoint {
                                                 if let Some(current_task_run_id) =
                                                     task_run_id.as_deref()
@@ -1438,7 +1449,9 @@ pub(super) async fn run_turn_tool_loop(
                                                                 &workspace_id_for_turn,
                                                                 &session_id,
                                                                 &turn_id,
-                                                                &edit_result.diff_id,
+                                                                checkpoint_diff_id
+                                                                    .as_deref()
+                                                                    .unwrap_or(""),
                                                                 &edit_result.rel_path,
                                                             )
                                                         }
@@ -1451,24 +1464,35 @@ pub(super) async fn run_turn_tool_loop(
                                                             preview_checkpoint_after_tool = true;
                                                         }
                                                         Err(error) => {
-                                                            edit_result
-                                                                .projection
-                                                                .preview_checkpoint_required =
-                                                                false;
+                                                            for projection in
+                                                                &mut edit_result.projections
+                                                            {
+                                                                projection
+                                                                    .preview_checkpoint_required =
+                                                                    false;
+                                                            }
                                                             // Diff 已经持久化。此处不得把它变成前端不可见的孤儿
                                                             // 提案，也绝不能在没有 checkpoint 的情况下续用旧 read_ctx。
                                                             eprintln!(
                                                                 "[ag-preview] checkpoint unavailable for diff {}: {error}",
-                                                                edit_result.diff_id
+                                                                checkpoint_diff_id.as_deref().unwrap_or("")
                                                             );
                                                         }
                                                     }
                                                 } else {
                                                     // 简单局部编辑不创建 TaskRun，也不伪造依赖任务身份的
                                                     // 自动续片段。Diff 仍作为当前 AgentTurn 的待审提案可见。
-                                                    edit_result
-                                                        .projection
-                                                        .preview_checkpoint_required = false;
+                                                    for projection in &mut edit_result.projections {
+                                                        projection.preview_checkpoint_required =
+                                                            false;
+                                                    }
+                                                }
+                                            }
+                                            if preview_checkpoint_after_tool {
+                                                for projection in
+                                                    edit_result.projections.iter_mut().skip(1)
+                                                {
+                                                    projection.preview_checkpoint_required = false;
                                                 }
                                             }
                                             proposed_diff = true;
@@ -1476,32 +1500,40 @@ pub(super) async fn run_turn_tool_loop(
                                             // 上继续续编；它没有 PreviewAck checkpoint，需经既有迁移或裁决后由
                                             // 人类下一次显式操作开启新片段。
                                             end_after_diff_proposal = true;
-                                            diff_event_after_tool = Some((
-                                                edit_result.diff_id.clone(),
-                                                edit_result.rel_path.clone(),
-                                            ));
-                                            // AG-TASK-01 F1b：结果携带批次元数据，供模型与前端展示"第 x/y 批"。
-                                            let mut result = serde_json::json!({
-                                                "summary": format!("已生成待确认修改建议（diff_id={}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」，不得声称已应用或已保存。", edit_result.diff_id),
-                                                "diff_id": edit_result.diff_id,
+                                            let group_count =
+                                                u32::try_from(edit_result.projections.len())
+                                                    .unwrap_or(u32::MAX);
+                                            diff_events_after_tool = edit_result
+                                                .projections
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(offset, projection)| {
+                                                    (
+                                                        edit_result.proposal_batch_id.clone(),
+                                                        u32::try_from(offset + 1)
+                                                            .unwrap_or(u32::MAX),
+                                                        group_count,
+                                                        projection.diff_id.clone(),
+                                                        edit_result.rel_path.clone(),
+                                                    )
+                                                })
+                                                .collect();
+                                            let diff_ids = edit_result
+                                                .projections
+                                                .iter()
+                                                .map(|projection| projection.diff_id.clone())
+                                                .collect::<Vec<_>>();
+                                            let result = serde_json::json!({
+                                                "summary": format!("已生成 {} 张可独立裁决的修改卡（proposal_batch_id={}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」，不得声称已应用或已保存。", group_count, edit_result.proposal_batch_id),
+                                                "proposal_batch_id": edit_result.proposal_batch_id,
+                                                "diff_ids": diff_ids,
                                                 "rel_path": edit_result.rel_path,
-                                                "projection": edit_result.projection,
+                                                "projections": edit_result.projections,
                                                 "proposal_status": "pending_user_review",
                                                 "editor_preview_status": "not_reported",
                                                 "disk_persistence_status": "not_saved",
                                                 "preview_checkpoint_required": preview_checkpoint_after_tool,
                                             });
-                                            if let Some(batch) = &edit_result.batch {
-                                                result["batch"] = serde_json::json!({
-                                                    "id": batch.batch_id,
-                                                    "index": batch.index,
-                                                    "total": batch.total,
-                                                });
-                                                result["summary"] = serde_json::Value::String(format!(
-                                                "已生成第 {}/{} 批待确认修改建议（batch_id={}，diff_id={}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」。",
-                                                batch.index, batch.total, batch.batch_id, edit_result.diff_id
-                                            ));
-                                            }
                                             (result.to_string(), true)
                                         }
                                         Err(e) => {
@@ -1589,13 +1621,15 @@ pub(super) async fn run_turn_tool_loop(
                     } else {
                         return Ok(());
                     }
-                    if let Some((diff_id, rel_path)) = diff_event_after_tool {
+                    for (proposal_batch_id, group_index, group_count, diff_id, rel_path) in
+                        diff_events_after_tool
+                    {
                         event_emitter.emit(
                             &terminal_latch,
                             AgTurnEventPayload::DiffProposed {
-                                proposal_batch_id: diff_id.clone(),
-                                group_index: 1,
-                                group_count: 1,
+                                proposal_batch_id,
+                                group_index,
+                                group_count,
                                 diff_id,
                                 rel_path,
                                 task_run_id: task_run_id.clone(),

@@ -161,6 +161,9 @@ pub enum DiffStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingDiff {
     pub diff_id: String,
+    pub proposal_batch_id: String,
+    pub group_index: u32,
+    pub group_count: u32,
     pub target: DocRef,
     /// 生成来源模块编码（DE / AG / CBT 等）。
     pub origin_module: String,
@@ -169,6 +172,17 @@ pub struct PendingDiff {
     pub created_at: i64,
     /// diff 内容载荷引用；内容形状归 DE，本结构仅占位。
     pub payload_ref: String,
+}
+
+/// 同一次已校验 ChangeProposal 的持久化关联；裁决终态仍只属于各 PendingDiff。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProposalBatch {
+    pub proposal_batch_id: String,
+    pub workspace_id: String,
+    pub turn_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub grouping_version: u32,
+    pub created_at: i64,
 }
 
 /// AG 生产、DE 持有、WS/ED/前端消费的统一待裁决投影（A-SYS-I-P-01 §3）。
@@ -191,7 +205,9 @@ pub(crate) struct DiffProjection {
     pub(crate) block_ops: Option<serde_json::Value>,
     pub(crate) table_ops: Option<serde_json::Value>,
     pub(crate) image_ops: Option<serde_json::Value>,
-    pub(crate) batch: Option<serde_json::Value>,
+    pub(crate) proposal_batch_id: String,
+    pub(crate) group_index: u32,
+    pub(crate) group_count: u32,
     pub(crate) preview_checkpoint_required: bool,
     pub(crate) cross_doc: Option<bool>,
 }
@@ -650,6 +666,9 @@ mod tests {
         };
         let diff = PendingDiff {
             diff_id: "d1".into(),
+            proposal_batch_id: "pb1".into(),
+            group_index: 1,
+            group_count: 1,
             target: doc.clone(),
             origin_module: "DE".into(),
             status: DiffStatus::Pending,
@@ -683,13 +702,15 @@ mod tests {
             block_ops: None,
             table_ops: None,
             image_ops: None,
-            batch: Some(serde_json::json!({ "id": "batch-1", "index": 1, "total": 2 })),
+            proposal_batch_id: "batch-1".into(),
+            group_index: 1,
+            group_count: 2,
             preview_checkpoint_required: true,
             cross_doc: Some(false),
         };
         let json = serde_json::to_value(projection).unwrap();
         assert_eq!(json["preview_checkpoint_required"], true);
-        assert_eq!(json["batch"]["id"], "batch-1");
+        assert_eq!(json["proposal_batch_id"], "batch-1");
         assert_eq!(json["cross_doc"], false);
     }
 

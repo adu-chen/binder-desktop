@@ -240,6 +240,9 @@ function projectionFromDetail(
   return {
     ...p,
     diff_id: diffId,
+    proposal_batch_id: p.proposal_batch_id ?? diffId,
+    group_index: p.group_index ?? 1,
+    group_count: p.group_count ?? 1,
     rel_path: detail?.target.rel_path ?? relPath,
     patch_kind: p.patch_kind,
     before_text: p.before_text ?? "",
@@ -727,6 +730,11 @@ function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<Dif
     blockOps: blockOpsPayload?.operations.map((operation) => (
       `${operation.blockId} · ${operation.expectedNodeType}`
     )),
+    proposalBatch: projection ? {
+      id: projection.proposal_batch_id ?? ref.diffId,
+      groupIndex: projection.group_index ?? 1,
+      groupCount: projection.group_count ?? 1,
+    } : undefined,
     tableOpsPayload,
     tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),
     imageOpsPayload,
@@ -2005,11 +2013,10 @@ export async function startTurn(
             blockOps: blockOpsPayload?.operations.map((operation) => (
               `${operation.blockId} · ${operation.expectedNodeType}`
             )),
-            // AG-TASK-01 F1b：批次元数据透传（DiffCard 批次徽标）。
-            batch: {
+            proposalBatch: {
               id: ev.proposalBatchId,
-              index: ev.groupIndex,
-              total: ev.groupCount,
+              groupIndex: ev.groupIndex,
+              groupCount: ev.groupCount,
             },
             tableOpsPayload,
             tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),

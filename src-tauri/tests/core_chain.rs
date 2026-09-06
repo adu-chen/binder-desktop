@@ -114,6 +114,9 @@ fn rejected_proposal_does_not_land() {
     let target = doc("b.md");
     let diff = PendingDiff {
         diff_id: "d3".into(),
+        proposal_batch_id: "d3".into(),
+        group_index: 1,
+        group_count: 1,
         target: target.clone(),
         origin_module: "AG".into(),
         status: DiffStatus::Pending,
@@ -185,6 +188,9 @@ fn lifecycle_sweep_expires_stale_pending() {
     for (id, created) in [("d_old", 0_i64), ("d_new", 9_000)] {
         let diff = PendingDiff {
             diff_id: id.into(),
+            proposal_batch_id: id.into(),
+            group_index: 1,
+            group_count: 1,
             target: doc("c.md"),
             origin_module: "AG".into(),
             status: DiffStatus::Pending,

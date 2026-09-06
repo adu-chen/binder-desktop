@@ -1643,7 +1643,9 @@ pub(crate) fn route_project_create_document_bundle(
         block_ops: None,
         table_ops: None,
         image_ops: None,
-        batch: None,
+        proposal_batch_id: diff_id.clone(),
+        group_index: 1,
+        group_count: 1,
         preview_checkpoint_required: true,
         cross_doc: Some(false),
     };

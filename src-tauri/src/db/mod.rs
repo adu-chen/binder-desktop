@@ -438,6 +438,32 @@ const MIGRATIONS: &[Migration] = &[
                 END;
         "#,
     },
+    Migration {
+        version: 18,
+        // ProposalBatch（TERM-DE-005 / BR-DE-DATA-001）：批次只持久化来源与分组版本，
+        // PendingDiff 直接保存批次身份和稳定组序；既有单卡数据无损迁移为一行一批。
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS proposal_batches (
+                proposal_batch_id TEXT PRIMARY KEY,
+                workspace_id      TEXT NOT NULL,
+                turn_id           TEXT,
+                tool_call_id      TEXT,
+                grouping_version  INTEGER NOT NULL,
+                created_at        INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_proposal_batches_workspace_time
+                ON proposal_batches(workspace_id, created_at);
+            ALTER TABLE pending_diffs ADD COLUMN proposal_batch_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE pending_diffs ADD COLUMN group_index INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE pending_diffs ADD COLUMN group_count INTEGER NOT NULL DEFAULT 1;
+            UPDATE pending_diffs SET proposal_batch_id = diff_id WHERE proposal_batch_id = '';
+            INSERT OR IGNORE INTO proposal_batches
+                (proposal_batch_id, workspace_id, turn_id, tool_call_id, grouping_version, created_at)
+                SELECT proposal_batch_id, workspace_id, NULL, NULL, 1, created_at FROM pending_diffs;
+            CREATE INDEX IF NOT EXISTS idx_pending_diffs_proposal_batch_group
+                ON pending_diffs(proposal_batch_id, group_index);
+        "#,
+    },
 ];
 
 fn now_millis() -> i64 {
@@ -674,5 +700,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(terminal_reason, None);
+    }
+
+    // covers: BR-SYS-PERSIST-001, BR-DE-DATA-001
+    // v18 将既有单卡无损登记为一行一批，避免重启恢复出现无批次身份的第二种活动结构。
+    #[test]
+    fn migration_v18_backfills_legacy_diff_batch_identity() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 17);
+        conn.execute(
+            "INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pending_diffs \
+             (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at) \
+             VALUES ('legacy-diff','ws1','a.md','AG','pending','p1',42)",
+            [],
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let identity: (String, u32, u32) = conn
+            .query_row(
+                "SELECT proposal_batch_id, group_index, group_count FROM pending_diffs WHERE diff_id='legacy-diff'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(identity, ("legacy-diff".into(), 1, 1));
+        let batch: (String, u32) = conn
+            .query_row(
+                "SELECT workspace_id, grouping_version FROM proposal_batches WHERE proposal_batch_id='legacy-diff'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(batch, ("ws1".into(), 1));
     }
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { deStore, toGreenReview, EXPIRED_REASON_TEXT, type DiffView } from "../store/deStore";
+import { deStore, resolveProposalBatchCohort, toGreenReview, EXPIRED_REASON_TEXT, type DiffView } from "../store/deStore";
 import { edStore } from "../store/edStore";
 import {
   acceptDiff,
@@ -12,6 +12,75 @@ import {
   rejectDiff,
 } from "./deService";
 import type { DocumentImageSnapshot } from "./edImageOps";
+
+// covers: BR-DE-DATA-001, BR-DE-STATE-001, BR-ED-STATE-001
+describe("ProposalBatch cohort 校验", () => {
+  const grouped = (id: string, groupIndex: number, groupCount = 2): DiffView => ({
+    diffId: id,
+    blockId: `p-${groupIndex}`,
+    relPath: "notes/a.docx",
+    title: id,
+    before: `before-${groupIndex}`,
+    after: `after-${groupIndex}`,
+    state: "pending",
+    patchKind: "block_ops",
+    draftMode: "current_editor",
+    baseSessionVersion: 7,
+    baseContentHash: "base-hash",
+    proposalBatch: { id: "proposal-1", groupIndex, groupCount },
+    blockOpsPayload: {
+      payloadVersion: 1,
+      base: { sessionVersion: 7, contentHash: "base-hash" },
+      operations: [{
+        op: "replace_node",
+        blockId: `p-${groupIndex}`,
+        fingerprint: `fp-${groupIndex}`,
+        expectedNodeType: "paragraph",
+        beforeNode: { type: "paragraph", attrs: { blockId: `p-${groupIndex}` } },
+        afterNode: { type: "paragraph", attrs: { blockId: `p-${groupIndex}` } },
+      }],
+    },
+  });
+
+  it("缺组时等待，乱序到达后按 group_index 形成完整 cohort", () => {
+    const first = grouped("d-1", 1);
+    const second = grouped("d-2", 2);
+    expect(resolveProposalBatchCohort([second], second).status).toBe("waiting");
+    const result = resolveProposalBatchCohort([second, first], second);
+    expect(result.status).toBe("ready");
+    expect(result.diffs.map((diff) => diff.diffId)).toEqual(["d-1", "d-2"]);
+  });
+
+  it("重复组序、基线漂移或目标重叠均失败关闭", () => {
+    const first = grouped("d-1", 1);
+    const duplicate = grouped("d-2", 1);
+    expect(resolveProposalBatchCohort([first, duplicate], first)).toMatchObject({ status: "invalid" });
+
+    const stale = { ...grouped("d-2", 2), baseContentHash: "other" };
+    expect(resolveProposalBatchCohort([first, stale], first)).toMatchObject({ status: "invalid" });
+
+    const overlap = grouped("d-2", 2);
+    overlap.blockOpsPayload = {
+      ...overlap.blockOpsPayload!,
+      operations: [{ ...overlap.blockOpsPayload!.operations[0], blockId: "p-1" }],
+    };
+    expect(resolveProposalBatchCohort([first, overlap], first)).toMatchObject({
+      status: "invalid",
+      reason: "DE_PROPOSAL_BATCH_TARGET_OVERLAP",
+    });
+  });
+
+  it("一张卡进入终态不改变同批兄弟卡", () => {
+    deStore.reset();
+    deStore.addDiff(grouped("d-1", 1));
+    deStore.addDiff(grouped("d-2", 2));
+    deStore.applyBackendState("d-1", "Rejected", true);
+    expect(deStore.getSnapshot().diffs.map((diff) => [diff.diffId, diff.state])).toEqual([
+      ["d-1", "rejected"],
+      ["d-2", "pending"],
+    ]);
+  });
+});
 
 // Migrated intact from src/services/deService.test.ts.
 {

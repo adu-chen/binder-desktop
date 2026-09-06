@@ -84,12 +84,25 @@ pub fn is_terminal(state: DiffApplyState) -> bool {
 /// 必须由 BR-SYS-STATE-005 在任何恢复前转 expired，不得恢复为可执行 diff。
 pub fn persist_diff(conn: &Connection, diff: &PendingDiff) -> rusqlite::Result<()> {
     conn.execute(
+        "INSERT OR IGNORE INTO proposal_batches \
+         (proposal_batch_id, workspace_id, turn_id, tool_call_id, grouping_version, created_at) \
+         VALUES (?1, ?2, NULL, NULL, 1, ?3)",
+        (
+            &diff.proposal_batch_id,
+            &diff.target.workspace_id,
+            diff.created_at,
+        ),
+    )?;
+    conn.execute(
         "INSERT INTO pending_diffs \
-         (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at) \
-         VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6)",
+         (diff_id, workspace_id, proposal_batch_id, group_index, group_count, rel_path, origin_module, status, payload_ref, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9)",
         (
             &diff.diff_id,
             &diff.target.workspace_id,
+            &diff.proposal_batch_id,
+            diff.group_index,
+            diff.group_count,
             &diff.target.rel_path,
             &diff.origin_module,
             &diff.payload_ref,
@@ -523,24 +536,27 @@ pub fn list_pending_diffs(
     status_filter: Option<&str>,
 ) -> rusqlite::Result<Vec<PendingDiff>> {
     let mut stmt = conn.prepare(
-        "SELECT diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at \
+        "SELECT diff_id, workspace_id, proposal_batch_id, group_index, group_count, rel_path, origin_module, status, payload_ref, created_at \
          FROM pending_diffs WHERE workspace_id = ?1 AND (?2 IS NULL OR status = ?2) \
          ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map((workspace_id, status_filter), |r| {
-        let rel_path: String = r.get(2)?;
-        let status: String = r.get(4)?;
+        let rel_path: String = r.get(5)?;
+        let status: String = r.get(7)?;
         Ok(PendingDiff {
             diff_id: r.get(0)?,
+            proposal_batch_id: r.get(2)?,
+            group_index: r.get(3)?,
+            group_count: r.get(4)?,
             target: DocRef {
                 workspace_id: r.get(1)?,
                 doc_type: doc_type_of(&rel_path),
                 rel_path,
             },
-            origin_module: r.get(3)?,
+            origin_module: r.get(6)?,
             status: parse_status(&status),
-            payload_ref: r.get(5)?,
-            created_at: r.get(6)?,
+            payload_ref: r.get(8)?,
+            created_at: r.get(9)?,
         })
     })?;
     rows.collect()
@@ -566,6 +582,9 @@ mod tests {
     fn sample_diff(id: &str) -> PendingDiff {
         PendingDiff {
             diff_id: id.into(),
+            proposal_batch_id: id.into(),
+            group_index: 1,
+            group_count: 1,
             target: DocRef {
                 workspace_id: "ws1".into(),
                 rel_path: "a.md".into(),

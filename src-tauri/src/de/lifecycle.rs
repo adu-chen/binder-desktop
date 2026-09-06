@@ -281,6 +281,9 @@ mod tests {
     fn seed_diff(conn: &Connection, id: &str, rel: &str, created_at: i64) {
         let d = PendingDiff {
             diff_id: id.into(),
+            proposal_batch_id: id.into(),
+            group_index: 1,
+            group_count: 1,
             target: DocRef {
                 workspace_id: "ws1".into(),
                 rel_path: rel.into(),
@@ -551,6 +554,9 @@ mod tests {
         .unwrap();
         let d1 = PendingDiff {
             diff_id: "d1".into(),
+            proposal_batch_id: "d1".into(),
+            group_index: 1,
+            group_count: 1,
             target: DocRef {
                 workspace_id: "ws1".into(),
                 rel_path: "a.md".into(),
@@ -563,6 +569,9 @@ mod tests {
         };
         let d2 = PendingDiff {
             diff_id: "d2".into(),
+            proposal_batch_id: "d2".into(),
+            group_index: 1,
+            group_count: 1,
             target: DocRef {
                 workspace_id: "ws2".into(),
                 rel_path: "b.md".into(),

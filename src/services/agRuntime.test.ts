@@ -1342,6 +1342,53 @@ describe("agService ReferencePayload 发送契约", () => {
     });
   });
 
+  // covers: BR-DE-DATA-001, BR-DE-STATE-001
+  it("同一 ProposalBatch 的 DiffProposed 逐卡投影并保留独立组序", async () => {
+    edStore.loadDoc("notes/current.md", "旧全文", 101);
+    projectionResult({
+      diff_id: "diff-group-1",
+      block_id: "b1",
+      block_index: 0,
+      base_session_version: 1,
+      base_content_hash: "base",
+      block_ops: { payloadVersion: 1, base: { sessionVersion: 1, contentHash: "base" }, operations: [{
+        op: "replace_node", blockId: "b1", fingerprint: "f1", expectedNodeType: "paragraph",
+        beforeNode: { type: "paragraph", attrs: { blockId: "b1" } },
+        afterNode: { type: "paragraph", attrs: { blockId: "b1" } },
+      }] },
+      patch_kind: "block_ops",
+    });
+    projectionResult({
+      diff_id: "diff-group-2",
+      block_id: "b3",
+      block_index: 2,
+      base_session_version: 1,
+      base_content_hash: "base",
+      block_ops: { payloadVersion: 1, base: { sessionVersion: 1, contentHash: "base" }, operations: [{
+        op: "replace_node", blockId: "b3", fingerprint: "f3", expectedNodeType: "paragraph",
+        beforeNode: { type: "paragraph", attrs: { blockId: "b3" } },
+        afterNode: { type: "paragraph", attrs: { blockId: "b3" } },
+      }] },
+      patch_kind: "block_ops",
+    });
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", proposalBatchId: "pb-1", groupIndex: 1, groupCount: 2, diff_id: "diff-group-1", rel_path: "notes/current.md" });
+      onEvent.onmessage?.({ type: "diff_proposed", turn_id: "t", proposalBatchId: "pb-1", groupIndex: 2, groupCount: 2, diff_id: "diff-group-2", rel_path: "notes/current.md" });
+      completeTurn(arg);
+    });
+
+    await startTurn("分别修改第一段和第三段");
+
+    expect(deStore.getSnapshot().diffs.map((diff) => ({
+      id: diff.diffId,
+      batch: diff.proposalBatch,
+    }))).toEqual([
+      { id: "diff-group-1", batch: { id: "pb-1", groupIndex: 1, groupCount: 2 } },
+      { id: "diff-group-2", batch: { id: "pb-1", groupIndex: 2, groupCount: 2 } },
+    ]);
+  });
+
 });
 
 // Migrated intact from agStore.test.ts.

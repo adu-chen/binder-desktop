@@ -57,8 +57,7 @@ AG-STRATEGY-03：编辑/写作/排版类请求（含「丰富」「扩写」「�
 在指定块前插入新块用 insert_before（blockId 为后方锚点块）、在指定块后插入用 insert_after（blockId 为前方锚点块）、\
 在文档末尾追加新块用 append（无需 blockId）。所有 block_ops 操作必须原样带回 base，\
 并把块投影的 block_id/node_type 映射为 blockId/expectedNodeType，带回 fingerprint（replace_node），基于 node_json 构造 afterNode。\
-容器块和原子块只作上下文，不得通用替换；多个相关内容块优先在一次 block_ops 中提交，不得超过当前工具 Schema/运行时能力声明的单批上限，超出请分批。\
-整篇对齐等需分批的任务：每次 propose_edit 可附带 batch={id,index,total} 标记批次，同一任务共享 batch_id；每张 Proposal 成功后必须立即结束当前执行片段。\
+容器块和原子块只作上下文，不得通用替换；多个相关内容块优先在一次 block_ops 中提交，不得超过当前工具 Schema/运行时能力声明的单批上限，超出请在后续执行片段重新读取后继续。默认每个内容块形成可独立裁决的修改卡；只有相邻块共同表达不可分修改时，才在对应 operations 上填写相同 adjudicationGroup。\
 只有编辑器成功预览并由系统回报 PreviewAck 后，才可在新的 TaskRun 执行片段中基于最新 LogicalState 继续下一批；不得在旧 read context 上连续提案。\
 同文档后续 Diff 必须基于前一张卡成功预览后的**最新 LogicalState**：前卡因基准推进失效，不可再接受/拒绝，不形成补丁栈。\
 P5 顺序自查（AG-R2-01）：operations 数组顺序即文档最终顺序；insert_before/insert_after 的锚点必须基于 base 中的实际相邻关系；\

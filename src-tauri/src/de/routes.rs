@@ -245,12 +245,7 @@ pub(crate) fn route_accept_draft_diff<R: tauri::Runtime>(
             crate::de::is_terminal(next),
         ),
     );
-    // AG-TASK-01 F1c：批次衔接提示——查询该 diff 的批次元数据，返回剩余批次供前端/模型继续。
-    let batch_remaining = batch_remaining_hint(&conn, &diff_id)?;
-    Ok(serde_json::json!({
-        "accepted": true,
-        "batch_remaining": batch_remaining,
-    }))
+    Ok(serde_json::json!({ "accepted": true }))
 }
 
 /**
@@ -281,39 +276,6 @@ pub(crate) fn route_promote_pending_diff_on_open(
         ));
     }
     Ok(serde_json::json!({ "diff_id": diff_id, "pending": true }))
-}
-
-/// AG-TASK-01 F1c：查询 diff 所属批次并返回剩余批次提示（无批次返回 None）。
-pub(crate) fn batch_remaining_hint(
-    conn: &rusqlite::Connection,
-    diff_id: &str,
-) -> Result<Option<String>, IpcError> {
-    let style_ops_json: Option<String> = conn
-        .query_row(
-            "SELECT p.style_ops FROM diff_payloads p \
-             JOIN pending_diffs d ON p.payload_ref = d.payload_ref \
-             WHERE d.diff_id = ?1",
-            [diff_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
-    let Some(style_ops_json) = style_ops_json else {
-        return Ok(None);
-    };
-    let envelope: serde_json::Value = serde_json::from_str(&style_ops_json).unwrap_or_default();
-    let Some(batch) = envelope.get("_batch") else {
-        return Ok(None);
-    };
-    let index = batch.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
-    let total = batch.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-    if index == 0 || total <= index {
-        return Ok(None);
-    }
-    Ok(Some(format!(
-        "已接受第 {index}/{total} 批修改；还有 {} 批未提交（batch_id={}），如任务未完成可继续提出剩余批次。",
-        total - index,
-        batch.get("id").and_then(|v| v.as_str()).unwrap_or("")
-    )))
 }
 
 /// 路由 `de.accept_diff`：后台/整篇 diff 经 SM-DE-01 守护（仅 Pending 可接受，三终态不可逆）
@@ -684,6 +646,7 @@ pub(crate) fn route_list_diff_details(
         .join(",");
     let sql = format!(
         "SELECT d.diff_id, d.workspace_id, d.rel_path, d.status, d.effect_status, d.terminal_reason, d.created_at, \
+                d.proposal_batch_id, d.group_index, d.group_count, \
                 p.before_snapshot, p.after_content, p.style_ops \
          FROM pending_diffs d LEFT JOIN diff_payloads p ON p.payload_ref = d.payload_ref \
          WHERE d.workspace_id = ? AND d.diff_id IN ({placeholders}) \
@@ -706,9 +669,12 @@ pub(crate) fn route_list_diff_details(
             let effect_status: String = r.get(4)?;
             let terminal_reason: Option<String> = r.get(5)?;
             let created_at: i64 = r.get(6)?;
-            let before_snapshot: Option<String> = r.get(7)?;
-            let after_content: Option<Vec<u8>> = r.get(8)?;
-            let style_ops_json: Option<String> = r.get(9)?;
+            let proposal_batch_id: String = r.get(7)?;
+            let group_index: u32 = r.get(8)?;
+            let group_count: u32 = r.get(9)?;
+            let before_snapshot: Option<String> = r.get(10)?;
+            let after_content: Option<Vec<u8>> = r.get(11)?;
+            let style_ops_json: Option<String> = r.get(12)?;
             let style_ops = style_ops_json
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
@@ -734,6 +700,7 @@ pub(crate) fn route_list_diff_details(
             let image_affected_block_ids = image_ops
                 .as_ref()
                 .and_then(|_| style_ops.get("imageAffectedBlockIds").cloned());
+            let projection_meta = style_ops.get("_projection").cloned();
             let after_text = after_content
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                 .unwrap_or_default();
@@ -781,7 +748,10 @@ pub(crate) fn route_list_diff_details(
                 "terminal_reason": terminal_reason,
                 "created_at": created_at,
                 "projection": {
-                    "patch_kind": if block_ops.is_some() {
+                    "proposal_batch_id": proposal_batch_id,
+                    "group_index": group_index,
+                    "group_count": group_count,
+                    "patch_kind": projection_meta.as_ref().and_then(|meta| meta.get("patchKind")).cloned().unwrap_or_else(|| serde_json::json!(if block_ops.is_some() {
                         "block_ops"
                     } else if table_ops.is_some() {
                         "table_ops"
@@ -789,16 +759,16 @@ pub(crate) fn route_list_diff_details(
                         "image_ops"
                     } else {
                         "replace_document"
-                    },
-                    "block_id": block_id,
-                    "block_index": null,
-                    "before_text": block_before_text.unwrap_or_else(|| before_snapshot.unwrap_or_default()),
-                    "after_text": block_after_text.unwrap_or(after_text),
-                    "location_label": "历史修改建议",
-                    "draft_mode": "background",
-                    "snapshot_source": "disk_snapshot",
-                    "base_session_version": null,
-                    "base_content_hash": null,
+                    })),
+                    "block_id": projection_meta.as_ref().and_then(|meta| meta.get("blockId")).cloned().unwrap_or_else(|| serde_json::json!(block_id)),
+                    "block_index": projection_meta.as_ref().and_then(|meta| meta.get("blockIndex")).cloned(),
+                    "before_text": projection_meta.as_ref().and_then(|meta| meta.get("beforeText")).cloned().unwrap_or_else(|| serde_json::json!(block_before_text.unwrap_or_else(|| before_snapshot.unwrap_or_default()))),
+                    "after_text": projection_meta.as_ref().and_then(|meta| meta.get("afterText")).cloned().unwrap_or_else(|| serde_json::json!(block_after_text.unwrap_or(after_text))),
+                    "location_label": projection_meta.as_ref().and_then(|meta| meta.get("locationLabel")).cloned().unwrap_or_else(|| serde_json::json!("历史修改建议")),
+                    "draft_mode": projection_meta.as_ref().and_then(|meta| meta.get("draftMode")).cloned().unwrap_or_else(|| serde_json::json!("background")),
+                    "snapshot_source": projection_meta.as_ref().and_then(|meta| meta.get("snapshotSource")).cloned().unwrap_or_else(|| serde_json::json!("disk_snapshot")),
+                    "base_session_version": projection_meta.as_ref().and_then(|meta| meta.get("baseSessionVersion")).cloned(),
+                    "base_content_hash": projection_meta.as_ref().and_then(|meta| meta.get("baseContentHash")).cloned(),
                     "style_ops": if block_ops.is_some() || table_ops.is_some() || image_ops.is_some() {
                         serde_json::Value::Null
                     } else {
@@ -854,6 +824,9 @@ mod image_diff_history_tests {
         .unwrap();
         let diff = crate::types::PendingDiff {
             diff_id: "d-image".into(),
+            proposal_batch_id: "d-image".into(),
+            group_index: 1,
+            group_count: 1,
             target: crate::types::DocRef {
                 workspace_id: "ws-image".into(),
                 rel_path: "notes/a.docx".into(),

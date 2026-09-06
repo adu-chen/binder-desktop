@@ -47,6 +47,8 @@ struct RequestedBlockOperation {
     // AG-TASK-01 F2：delete_node 无 afterNode（删除标记 null）。
     #[serde(default)]
     after_node: Option<Value>,
+    #[serde(default)]
+    adjudication_group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -58,6 +60,8 @@ pub struct StructuredBlockOperation {
     pub expected_node_type: String,
     pub before_node: Value,
     pub after_node: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjudication_group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -395,6 +399,7 @@ pub fn validate_and_build(
                     expected_node_type: operation.expected_node_type,
                     before_node: target.node_json.clone(),
                     after_node: operation.after_node.unwrap_or(Value::Null),
+                    adjudication_group: operation.adjudication_group,
                 });
             }
             "insert_before" | "insert_after" => {
@@ -462,6 +467,7 @@ pub fn validate_and_build(
                     expected_node_type: node_type.to_string(),
                     before_node: empty_before,
                     after_node: ensure_new_block_id(operation.after_node.unwrap_or(Value::Null)),
+                    adjudication_group: operation.adjudication_group,
                 });
             }
             "append" => {
@@ -501,6 +507,7 @@ pub fn validate_and_build(
                     expected_node_type: node_type.to_string(),
                     before_node: empty_before,
                     after_node: ensure_new_block_id(operation.after_node.unwrap_or(Value::Null)),
+                    adjudication_group: operation.adjudication_group,
                 });
             }
             // AG-TASK-01 F2：删除块。仅允许 role=content 且 capabilities 含 delete_node 的原子块；
@@ -548,6 +555,7 @@ pub fn validate_and_build(
                     expected_node_type: operation.expected_node_type,
                     before_node: target.node_json.clone(),
                     after_node: Value::Null,
+                    adjudication_group: operation.adjudication_group,
                 });
             }
             _ => {
@@ -563,6 +571,97 @@ pub fn validate_and_build(
         base,
         operations: canonical,
     })
+}
+
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-001-RB-DE-DE-DIFF-006
+ * type:     RB
+ * chain:    DE-DIFF
+ * rules:    BR-DE-DATA-001
+ * term_ref: TERM-DE-005
+ * boundary: in=CanonicalStructuredBlockEditPayloadAndStableDocumentOrder | out=IndependentAdjudicationGroupPayloads(stableOrderAndSharedBase) | effect=none
+ */
+pub fn split_adjudication_groups(
+    payload: &StructuredBlockEditPayload,
+    snapshot: &AgentEditableSnapshot,
+) -> Result<Vec<StructuredBlockEditPayload>, IpcError> {
+    let block_order = snapshot
+        .blocks
+        .iter()
+        .filter(|block| block.role == "content")
+        .enumerate()
+        .filter_map(|(position, block)| block.block_id.as_deref().map(|id| (id, position)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut ordered = payload
+        .operations
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(source_index, operation)| {
+            let position = if operation.op == "append" {
+                snapshot.blocks.len().saturating_add(source_index)
+            } else {
+                block_order
+                    .get(operation.block_id.as_str())
+                    .copied()
+                    .ok_or_else(|| invalid(format!("分组目标 {} 已失效", operation.block_id)))?
+            };
+            Ok((position, source_index, operation))
+        })
+        .collect::<Result<Vec<_>, IpcError>>()?;
+    ordered.sort_by_key(|(position, source_index, _)| (*position, *source_index));
+
+    let mut groups: Vec<Vec<(usize, StructuredBlockOperation)>> = Vec::new();
+    for (position, _, operation) in ordered {
+        let group_name = operation
+            .adjudication_group
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if let Some(name) = group_name {
+            if let Some(existing_index) = groups.iter().position(|group| {
+                group
+                    .first()
+                    .and_then(|(_, item)| item.adjudication_group.as_deref())
+                    == Some(name)
+            }) {
+                if existing_index + 1 != groups.len() {
+                    return Err(IpcError::new(
+                        "DE_INVALID_ADJUDICATION_GROUP",
+                        "adjudication_group 不能跨过其他独立裁决组",
+                        false,
+                        false,
+                    ));
+                }
+                let existing = &mut groups[existing_index];
+                let previous = existing
+                    .last()
+                    .map(|(position, _)| *position)
+                    .unwrap_or(position);
+                if position > previous.saturating_add(1) {
+                    return Err(IpcError::new(
+                        "DE_INVALID_ADJUDICATION_GROUP",
+                        "adjudication_group 只能合并文档顺序相邻的内容块",
+                        false,
+                        false,
+                    ));
+                }
+                existing.push((position, operation));
+                continue;
+            }
+        }
+        groups.push(vec![(position, operation)]);
+    }
+
+    Ok(groups
+        .into_iter()
+        .map(|group| StructuredBlockEditPayload {
+            payload_version: payload.payload_version,
+            base: payload.base.clone(),
+            operations: group.into_iter().map(|(_, operation)| operation).collect(),
+        })
+        .collect())
 }
 
 pub fn node_text(value: &Value) -> String {
@@ -620,6 +719,93 @@ mod tests {
                 capabilities: vec!["replace_node".into(), "style_ops".into()],
             }],
         }
+    }
+
+    fn three_block_snapshot() -> AgentEditableSnapshot {
+        let mut current = snapshot();
+        let template = current.blocks[0].clone();
+        current.blocks = (0..3)
+            .map(|index| AgentEditableBlock {
+                block_id: Some(format!("p-{index}")),
+                block_index: index,
+                text: format!("原文 {index}"),
+                node_json: serde_json::json!({
+                    "type": "paragraph",
+                    "attrs": {"blockId": format!("p-{index}"), "textAlign": null},
+                    "content": [{"type": "text", "text": format!("原文 {index}")}]
+                }),
+                block_attrs: serde_json::json!({"blockId": format!("p-{index}"), "textAlign": null}),
+                fingerprint: Some(format!("fp-{index}")),
+                ..template.clone()
+            })
+            .collect();
+        current
+    }
+
+    fn replace_params(groups: [Option<&str>; 3]) -> Value {
+        let operations = groups
+            .into_iter()
+            .enumerate()
+            .map(|(index, group)| {
+                let mut operation = serde_json::json!({
+                    "op": "replace_node",
+                    "blockId": format!("p-{index}"),
+                    "fingerprint": format!("fp-{index}"),
+                    "expectedNodeType": "paragraph",
+                    "afterNode": {
+                        "type": "paragraph",
+                        "attrs": {"blockId": format!("p-{index}"), "textAlign": null},
+                        "content": [{"type": "text", "text": format!("新文 {index}")}]
+                    }
+                });
+                if let Some(group) = group {
+                    operation["adjudicationGroup"] = Value::String(group.to_string());
+                }
+                operation
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": operations
+        })
+    }
+
+    // covers: BR-DE-DATA-001
+    #[test]
+    fn proposal_batch_defaults_to_independent_blocks_and_only_merges_named_neighbors() {
+        let current = three_block_snapshot();
+        let independent =
+            validate_and_build(&replace_params([None, None, None]), &current).unwrap();
+        let groups = split_adjudication_groups(&independent, &current).unwrap();
+        assert_eq!(groups.len(), 3);
+        assert!(groups.iter().all(|group| group.base == independent.base));
+
+        let adjacent = validate_and_build(
+            &replace_params([Some("lead"), Some("lead"), None]),
+            &current,
+        )
+        .unwrap();
+        let groups = split_adjudication_groups(&adjacent, &current).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.operations.len())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+    }
+
+    // covers: BR-DE-DATA-001
+    #[test]
+    fn proposal_batch_rejects_non_adjacent_forced_group() {
+        let current = three_block_snapshot();
+        let payload = validate_and_build(
+            &replace_params([Some("forced"), None, Some("forced")]),
+            &current,
+        )
+        .unwrap();
+        let error = split_adjudication_groups(&payload, &current).unwrap_err();
+        assert_eq!(error.code, "DE_INVALID_ADJUDICATION_GROUP");
     }
 
     #[test]

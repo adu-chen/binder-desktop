@@ -14,18 +14,9 @@ pub(super) enum AgentEditOperation {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(super) struct AgentProposeEditResult {
-    pub(super) diff_id: String,
+    pub(super) proposal_batch_id: String,
     pub(super) rel_path: String,
-    pub(super) projection: DiffProjection,
-    pub(super) batch: Option<BatchMeta>,
-}
-
-/// AG-TASK-01 F1b：批次元数据——batch_id 标识任务批次组，index/total 标识第几批。
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub(super) struct BatchMeta {
-    pub(super) batch_id: String,
-    pub(super) index: usize,
-    pub(super) total: usize,
+    pub(super) projections: Vec<DiffProjection>,
 }
 
 pub(super) struct EditProjectionDraft {

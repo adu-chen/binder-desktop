@@ -118,6 +118,9 @@ pub fn generate_diff(
     }
     Ok(PendingDiff {
         diff_id: diff_id.to_string(),
+        proposal_batch_id: diff_id.to_string(),
+        group_index: 1,
+        group_count: 1,
         target: proposal.target.clone(),
         origin_module: origin_module.to_string(),
         status: DiffStatus::Pending,

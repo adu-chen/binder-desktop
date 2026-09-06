@@ -936,6 +936,7 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                     "type": "object",
                     "properties": {
                         "op": { "const": "replace_node" },
+                        "adjudicationGroup": { "type": "string", "minLength": 1, "description": "仅当相邻块必须共同接受或拒绝时使用相同值；省略则每块独立成卡" },
                         "blockId": { "type": "string", "minLength": 1 },
                         "fingerprint": { "type": "string", "minLength": 1 },
                         "expectedNodeType": {
@@ -1003,6 +1004,7 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                     "type": "object",
                     "properties": {
                         "op": { "const": "delete_node" },
+                        "adjudicationGroup": { "type": "string", "minLength": 1, "description": "仅当相邻块必须共同接受或拒绝时使用相同值" },
                         "blockId": { "type": "string", "minLength": 1, "description": "要删除的块ID（role=content 且 capabilities 含 delete_node 的可删；容器/原子块不可删）" },
                         "expectedNodeType": {
                             "type": "string",
@@ -1016,6 +1018,7 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                     "type": "object",
                     "properties": {
                         "op": { "const": "insert_before" },
+                        "adjudicationGroup": { "type": "string", "minLength": 1, "description": "仅当相邻块必须共同接受或拒绝时使用相同值" },
                         "blockId": { "type": "string", "minLength": 1, "description": "锚点块ID，新块将插入到此块之前" },
                         "afterNode": {
                             "type": "object",
@@ -1064,6 +1067,7 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                     "type": "object",
                     "properties": {
                         "op": { "const": "insert_after" },
+                        "adjudicationGroup": { "type": "string", "minLength": 1, "description": "仅当相邻块必须共同接受或拒绝时使用相同值" },
                         "blockId": { "type": "string", "minLength": 1, "description": "锚点块ID，新块将插入到此块之后" },
                         "afterNode": {
                             "type": "object",
@@ -1110,6 +1114,7 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
                     "type": "object",
                     "properties": {
                         "op": { "const": "append" },
+                        "adjudicationGroup": { "type": "string", "minLength": 1, "description": "仅当相邻块必须共同接受或拒绝时使用相同值" },
                         "afterNode": {
                             "type": "object",
                             "properties": {
@@ -1189,17 +1194,6 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
             "operations": {
                 "oneOf": [block_operations.clone(), table_operations.clone(), image_operations.clone()]
             },
-            // AG-TASK-01 F1b：可选批次元数据（整篇对齐分批提交；1<=index<=total）。
-            "batch": {
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "minLength": 1 },
-                    "index": { "type": "integer", "minimum": 1 },
-                    "total": { "type": "integer", "minimum": 1 }
-                },
-                "required": ["id", "index", "total"],
-                "additionalProperties": false
-            }
         },
         "required": ["path", "operation"],
         "allOf": [
@@ -2075,6 +2069,8 @@ mod tests {
         assert!(serialized.contains("subscript"));
         assert!(serialized.contains("replace_node"));
         assert!(serialized.contains("expectedNodeType"));
+        assert!(serialized.contains("adjudicationGroup"));
+        assert!(schema["properties"].get("batch").is_none());
         assert!(serialized.contains("set_cell_background"));
         assert!(serialized.contains("insert_image"));
         assert!(serialized.contains("resize_image"));
