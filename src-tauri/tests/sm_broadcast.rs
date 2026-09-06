@@ -60,7 +60,7 @@ fn ws01_saving_broadcast_roundtrip() {
     assert_eq!(v["terminal"], false);
 }
 
-// SM-AG-01 回合机：turn_id 实例 + Streaming 活动态（前端 agStore.applyTurnState 据此驱动 sending）。
+// SM-AG-01 回合机：turn_id 实例 + Streaming 活动态，保留后端可观测性与集成契约；Agent UI 由 TurnEvent 驱动。
 #[test]
 fn ag01_streaming_broadcast_roundtrip() {
     let v = roundtrip(

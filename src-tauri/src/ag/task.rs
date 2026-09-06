@@ -868,12 +868,6 @@ pub fn route_requires_task_projection(
     !confirmation_points.is_empty() || route_steps.len() >= 3 || distinct_targets >= 2
 }
 
-/// 兼容 IntentResultV1 只读约束使用：多显式目标可提示 scope 决策，但不创建 TaskRun，
-/// 不读取 prompt 关键词，也不参与 CapabilityGrant。
-pub fn is_complex_target(_is_write_intent: bool, target_paths: &[String], _prompt: &str) -> bool {
-    target_paths.iter().collect::<BTreeSet<_>>().len() >= 2
-}
-
 /// 只有会产生任务级持久产物的动态工具才要求在执行前取得 TaskRun。
 /// 内容提案（propose_edit）仍属于 AgentTurn 产物；简单局部编辑不能因此升级为任务编排。
 pub fn tool_requires_task_run(tool_name: &str) -> bool {
@@ -1732,7 +1726,7 @@ mod tests {
     // covers: BR-SYS-STATE-008, BR-AG-PERSIST-001
     // 相同 TurnEvent 序列重建同一投影；route revision 替换候选路线，Decision 解除后无 activity 仍等待。
     #[test]
-    fn task_projection_rebuilds_route_activity_waiting_and_survives_cache_deletion() {
+    fn task_projection_rebuilds_route_activity_and_waiting_from_events() {
         let conn = fresh();
         assert!(list_task_runs_by_session(&conn, "ws1", "s-empty")
             .unwrap()
@@ -1810,11 +1804,6 @@ mod tests {
         );
         assert!(first.waiting_on.is_empty());
 
-        conn.execute(
-            "DELETE FROM task_plans WHERE task_run_id=?1",
-            [&task_run_id],
-        )
-        .unwrap();
         let rebuilt = rebuild_task_projection(&conn, "ws1", "s1", &task_run_id)
             .unwrap()
             .unwrap();

@@ -8,7 +8,6 @@
 
 import type { RustDiffState, RustDiffApplyState } from "../store/deStore";
 import type { RustSaveState } from "../store/edStore";
-import type { RustTurnState } from "../store/agStore";
 
 /** 统一广播载荷（泛型 S 收窄各机的 state 枚举）。 */
 export interface SmStatePayload<S extends string = string> {
@@ -30,9 +29,6 @@ export type SmWs02Payload = SmStatePayload<RustDiffApplyState> & { machine_id: "
 
 /** SM-WS-01 · 保存机（Task 2-C 已集成）；instance_id 为 rel_path。 */
 export type SmWs01Payload = SmStatePayload<RustSaveState> & { machine_id: "SM-WS-01" };
-
-/** SM-AG-01 · 代理回合机（Task 2-E 已集成）；instance_id 为 turn_id。 */
-export type SmAg01Payload = SmStatePayload<RustTurnState> & { machine_id: "SM-AG-01" };
 
 /** SM-DOC-01 · docx 开/存转换机（PI-ED-07 #7 加载反馈）；instance_id 为 rel_path。 */
 export type SmDoc01Payload = SmStatePayload<string> & { machine_id: "SM-DOC-01" };

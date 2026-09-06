@@ -220,9 +220,7 @@ mod tests {
                 target: target.clone(),
                 after_content: diff_id.as_bytes().to_vec(),
                 before_snapshot: Some("base".into()),
-                style_ops: Some(format!(
-                    r#"{{"_proposalBatch":{{"id":"pb","groupIndex":1,"groupCount":2}}}}"#
-                )),
+                style_ops: None,
             };
             (
                 payload_ref.to_string(),

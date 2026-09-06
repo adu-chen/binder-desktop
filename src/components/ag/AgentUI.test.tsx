@@ -121,7 +121,6 @@ beforeEach(() => {
   agServiceMock.uploadByok.mockReset();
   agServiceMock.cancelActiveTurn.mockReset();
   agStore.reset();
-  agStore.applyTurnState("test-turn", "Completed");
   wsStore.reset();
 });
 

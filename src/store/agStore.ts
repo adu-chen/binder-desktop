@@ -120,20 +120,6 @@ export interface ToolCallView {
   anchorMessageId?: string;
 }
 
-/** 后端 SM-AG-01 回合机运行态（Rust TurnState 的 Debug 名，A-AG-M-S-01 §2）。 */
-export type RustTurnState =
-  | "Idle"
-  | "Assembling"
-  | "AwaitingClarification"
-  | "AwaitingDecision"
-  | "AwaitingGate"
-  | "Streaming"
-  | "Finalizing"
-  | "TurnError"
-  | "Completed"
-  | "Cancelled"
-  | "Denied";
-
 /** 任务步骤态（TERM-AG-016 · SM-AG-04 steps）。 */
 export type TaskStepViewStatus =
   | "candidate"
@@ -555,11 +541,6 @@ export const agStore = {
     if (!isProjectReportView(report) || report.turnId !== turnId) return;
     setState({ projectReports: { ...state.projectReports, [turnId]: report } });
   },
-  /** @deprecated SM-AG-01 广播已退出 Agent UI 投影；保留到旧测试消费者迁移，不再写任何状态。 */
-  applyTurnState(_turnId: string, _turnState: RustTurnState) {
-    // no-op：生产监听已删除，TurnEvent seq reducer 是唯一运行投影入口。
-  },
-
   // ── 消息 / 工具卡（按会话定位：流式期间切标签不串会话） ───────────
   pushMessage(sessionId: string, msg: ChatMessage) {
     mapSession(sessionId, (s) => ({

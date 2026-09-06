@@ -303,14 +303,6 @@ pub(super) fn ag_propose_edit(
         };
         if let Some(object) = persisted_ops.as_object_mut() {
             object.insert(
-                "_proposalBatch".to_string(),
-                serde_json::json!({
-                    "id": proposal_batch_id.clone(),
-                    "groupIndex": group_index,
-                    "groupCount": group_count,
-                }),
-            );
-            object.insert(
                 "_projection".to_string(),
                 serde_json::json!({
                     "patchKind": match edit_operation {

@@ -1,38 +1,32 @@
 {
-  "scope_id": "AG-UI-RECOVERY-WP8-01",
+  "scope_id": "AG-REDUNDANCY-REMOVAL-WP9-01",
   "task_type": "CODE_CHANGE",
   "governance_phase": "IMPLEMENTATION",
-  "title": "Agent UI、恢复与迁移事实投影收敛",
+  "title": "Agent 1.0 第二真源与过期兼容实现清理",
   "status": "READY",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行；2026-09-05 明确要求继续下一步，本项为已冻结 A-AG-X-L-04 WP-AG10-08。",
-  "scope_reason": "按 REQ-AG-001/009、BR-AG-STATE-001、BR-AG-PERSIST-001、BR-AG-UI-001、BR-AG-OBS-001、BR-SYS-STATE-007/008 与 BR-DE-DATA-001/STATE-001，使 UI 和重启恢复只投影当前 TurnEvent、ProjectReport 与 ProposalBatch 事实。",
-  "issue_trace": ".governance/issues/AG-UI-RECOVERY-WP8-01.md",
+  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行；WP1-WP8 已 READY，WP9 为冻结计划的最后实现工作包。",
+  "scope_reason": "按 WP-AG10-09，在当前消费者完成迁移后删除无生产调用的关键词 IntentResultV1/PromptPackageV1、前端 AG 状态广播空投影、旧 ProposalBatch 嵌套写入和旧 TaskPlan 缓存测试夹具。",
+  "issue_trace": ".governance/issues/AG-REDUNDANCY-REMOVAL-WP9-01.md",
   "objectives": [
-    "等待态不显示工作中动画，终态和等待态不由卡片或 Promise 猜测",
-    "ProjectReport 在对应回合展示已读、未读、发现和不确定性",
-    "历史恢复从 workspace scoped 安全 TurnEvent 补回只读报告事实且不启动执行",
-    "AgentTurnPayloadV1 仅在读取边界转换为 V2 当前投影，新写入继续只允许 V2",
-    "ProposalBatch 身份、组序缺失或损坏时失败关闭，不生成可裁决卡"
+    "删除无生产消费者的关键词 IntentResultV1 resolver、PromptPackageV1 和关联旧测试",
+    "删除前端不再消费的 SM-AG-01 广播类型、RustTurnState 和 applyTurnState 空入口",
+    "停止向 style_ops 新写入重复的 _proposalBatch 嵌套字段",
+    "移除 TaskRun 当前投影测试中对旧 task_plans 缓存表的依赖",
+    "证明 report_project、旧 WS 模型工具、静态 TaskPlan 执行器和旧授权字段在生产面为零"
   ],
   "allowed_files": [
     ".governance/active_scope.json",
-    ".governance/issues/AG-UI-RECOVERY-WP8-01.md",
+    ".governance/issues/AG-REDUNDANCY-REMOVAL-WP9-01.md",
     "docs/00_core/A-CORE-C-R-01_ADUS.md",
-    "src/services/agService.ts",
-    "src/services/agRuntime.test.ts",
-    "src/services/deService.ts",
-    "src/services/deRuntime.test.ts",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/edit_runtime.rs",
+    "src-tauri/src/de/store.rs",
+    "src-tauri/tests/sm_broadcast.rs",
     "src/store/agStore.ts",
-    "src/components/ag/MessageList.tsx",
-    "src/components/ag/MessageFlow.tsx",
-    "src/components/ag/DecisionBar.tsx",
-    "src/components/ag/ProjectReportCard.tsx",
-    "src/components/ag/AgentUI.test.tsx",
-    "src/components/de/DiffCard.tsx",
-    "src/components/de/DiffReview.test.tsx",
-    "src/styles.css",
-    "scripts/test_governance.test.mjs"
+    "src/types/smEvents.ts",
+    "src/components/ag/AgentUI.test.tsx"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -40,30 +34,29 @@
     "AGENTS.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "需求、设计、规则、协议、状态机、验证卡和计划文档",
-    "src-tauri/**",
+    "需求、设计、规则、协议、状态机、验证卡和冻结计划文档",
+    "src-tauri/src/db/mod.rs",
     "cloud/dev-gateway/**",
-    "新增工具、编辑能力、任务语义或自动续跑入口",
-    "WP9 兼容清理与范围外重构"
+    "当前 IntentResultV2、CapabilityGrantV2、TaskRun/TaskPlan V2 投影、TurnEvent、ProposalBatch 顶层字段",
+    "非 Agent 冗余与依赖升级"
   ],
   "constraints": [
-    "不新增需求、功能、工具、授权或业务状态",
-    "恢复只查询和投影，不调用 ag_start_turn、工具、裁决或 Diff 接受入口",
-    "V1 只读转换不得回写旧 version 或旧字段",
-    "ProjectReport 只展示运行时已派生字段，不从消息正文推断",
-    "ProposalBatch 无法验证时卡片必须 error+readonly"
+    "删除前必须有全库引用证据证明无当前生产消费者",
+    "不得删除旧工具名不存在、无授权字段和无静态执行器的负向回归断言",
+    "数据库历史迁移不得改写；兼容读取保留项须登记明确删除条件",
+    "测试只删除旧对象本身的断言，当前契约必须保留等价或更强覆盖",
+    "不新增需求、功能、状态、协议或替代抽象"
   ],
   "acceptance_criteria": [
-    "工作动作显示动画，澄清、裁决和预览等待不显示动画",
-    "ProjectReport 按 turnId 呈现已读/未读/不确定性且跨 session 不串流",
-    "重启恢复读取安全事件补回 ProjectReport、使用最大 seq 锁定游标且不启动执行",
-    "V1 历史在内存归一为 V2；所有新 save payload 保持 version=2",
-    "实时和持久化 Diff 缺失、越界或不一致的 ProposalBatch 元数据时失败关闭",
-    "同输入 test:plan/test:related、governance audit、TypeScript 与格式检查通过"
+    "生产代码中不存在 IntentResultV1、关键词 resolver、PromptPackageV1 或 build_prompt_package",
+    "前端不存在 RustTurnState、SmAg01Payload 或 applyTurnState",
+    "新 Proposal payload 不再写 _proposalBatch，批次只存顶层 ProposalBatch/PendingDiff 字段",
+    "当前 TaskRun 投影测试不再读写旧 task_plans 缓存表",
+    "禁用标识扫描只剩负向测试、历史文档或登记的兼容保留项",
+    "同输入 test:plan/test:related、governance audit、格式和类型检查通过"
   ],
   "human_decisions": [
-    {"id": "HD-AG-WP8-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-08", "confirmed_at": "2026-09-05"},
-    {"id": "HD-AG-WP8-02", "status": "CONFIRMED", "question": "将 scripts/test_governance.test.mjs 纳入 Scope，仅同步 DE/AG 测试库存基线", "confirmed_at": "2026-09-06"}
+    {"id": "HD-AG-WP9-01", "status": "CONFIRMED", "question": "按推荐方案完整执行 WP-AG10-09", "confirmed_at": "2026-09-04"}
   ],
   "stop_conditions": [],
   "unresolved_items": []
