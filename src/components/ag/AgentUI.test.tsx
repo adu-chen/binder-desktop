@@ -752,3 +752,63 @@ describe("MessageFlow · 回合内时序交错", () => {
     expect(container.querySelector(".toolcard")).toBeTruthy();
   });
 });
+
+describe("Agent 当前事实呈现", () => {
+  it("等待编辑器时显示静态等待，不显示工作中动画", () => {
+    const sessionId = agStore.getSnapshot().activeSessionId;
+    agStore.setCurrentAction({
+      sessionId,
+      turnId: "t-wait",
+      action: "previewing",
+      label: "等待编辑器应用修改建议",
+    });
+
+    const { container } = render(<MessageList />);
+
+    expect(screen.getByText("等待编辑器应用修改建议")).toBeTruthy();
+    expect(container.querySelector(".turn-statusbar-waiting")).toBeTruthy();
+    expect(container.querySelector(".turn-statusbar-spinner")).toBeNull();
+  });
+
+  it("活动读取只在所属会话显示工作动画", () => {
+    const origin = agStore.getSnapshot().activeSessionId;
+    agStore.setCurrentAction({ sessionId: origin, turnId: "t-read", action: "reading", label: "notes/a.md" });
+    const other = agStore.newSession();
+    const { container } = render(<MessageList />);
+    expect(container.querySelector(".turn-statusbar")).toBeNull();
+
+    act(() => agStore.switchSession(origin));
+    expect(screen.getByText("正在读取 notes/a.md")).toBeTruthy();
+    expect(container.querySelector(".turn-statusbar-spinner")).toBeTruthy();
+    act(() => agStore.switchSession(other));
+  });
+
+  it("在对应 assistant 回合展示 ProjectReport 的已读、未读与不确定性", () => {
+    const sessionId = agStore.getSnapshot().activeSessionId;
+    agStore.pushMessage(sessionId, {
+      id: "report-answer",
+      role: "assistant",
+      content: "检查完成",
+      turnId: "t-report",
+      turnStatus: "completed",
+    });
+    agStore.projectProjectReport("t-report", {
+      version: "project-report-v2",
+      turnId: "t-report",
+      evidenceThroughSeq: 8,
+      requestedScope: ["notes/a.md", "notes/b.md"],
+      readItems: [{ relPath: "notes/a.md", source: "read_doc", coverage: "full_document", evidenceIds: ["e1"] }],
+      unreadItems: [{ relPath: "notes/b.md", reason: "read_failed" }],
+      findings: [{ statement: "标题需要统一", evidenceIds: ["e1"], uncertainty: "low" }],
+      uncertainties: ["notes/b.md 尚未读取"],
+    });
+
+    render(<MessageList />);
+
+    expect(screen.getByLabelText("项目报告")).toBeTruthy();
+    expect(screen.getByText("已读 1")).toBeTruthy();
+    expect(screen.getByText("未读 1")).toBeTruthy();
+    expect(screen.getByText("notes/b.md 尚未读取")).toBeTruthy();
+    expect(screen.getByText("不确定性：low")).toBeTruthy();
+  });
+});

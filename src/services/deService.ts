@@ -49,6 +49,21 @@ interface PendingDiffDto {
   effect_status?: "not_applicable" | "awaiting_save" | "saved" | "discarded_on_abnormal_exit";
   terminal_reason?: string | null;
   created_at: number;
+  projection?: {
+    proposal_batch_id?: string;
+    group_index?: number;
+    group_count?: number;
+    patch_kind?: DiffView["patchKind"];
+    block_id?: string | null;
+    block_index?: number | null;
+    before_text?: string;
+    after_text?: string;
+    location_label?: string;
+    draft_mode?: DiffView["draftMode"];
+    snapshot_source?: DiffView["snapshotSource"];
+    base_session_version?: number | null;
+    base_content_hash?: string | null;
+  };
 }
 
 export interface DiffDetailDto extends PendingDiffDto {
@@ -176,14 +191,41 @@ export async function loadPersistedDiffs(): Promise<void> {
     for (const d of list) {
       if (existing.has(d.diff_id)) continue;
       existing.add(d.diff_id);
+      const projection = d.projection;
+      const batchId = projection?.proposal_batch_id;
+      const groupIndex = projection?.group_index;
+      const groupCount = projection?.group_count;
+      const validBatch = typeof batchId === "string"
+        && Boolean(batchId.trim())
+        && Number.isSafeInteger(groupIndex)
+        && Number.isSafeInteger(groupCount)
+        && (groupIndex ?? 0) >= 1
+        && (groupCount ?? 0) >= 1
+        && (groupIndex ?? 0) <= (groupCount ?? 0);
       deStore.addDiff({
         diffId: d.diff_id,
-        blockId: "",
+        blockId: projection?.block_id ?? "",
+        blockIndex: projection?.block_index ?? null,
         relPath: d.target.rel_path,
-        title: `待裁决修改 ${d.target.rel_path}`,
-        before: "",
-        after: "",
-        state: "pending",
+        locationLabel: projection?.location_label ?? "历史修改建议",
+        patchKind: projection?.patch_kind,
+        draftMode: projection?.draft_mode,
+        snapshotSource: projection?.snapshot_source,
+        baseSessionVersion: projection?.base_session_version ?? undefined,
+        baseContentHash: projection?.base_content_hash ?? undefined,
+        title: validBatch
+          ? `待裁决修改 ${d.target.rel_path}`
+          : `待裁决修改批次信息不可用 ${d.target.rel_path}`,
+        before: projection?.before_text ?? "",
+        after: projection?.after_text ?? "",
+        state: validBatch ? "pending" : "error",
+        errorCode: validBatch ? undefined : "DE_PROPOSAL_BATCH_INVALID",
+        readonly: !validBatch,
+        proposalBatch: validBatch ? {
+          id: batchId!,
+          groupIndex: groupIndex!,
+          groupCount: groupCount!,
+        } : undefined,
         createdAt: d.created_at,
       });
     }

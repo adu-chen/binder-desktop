@@ -224,6 +224,7 @@ function projectionFromDetail(
   diffId: string,
   relPath: string,
   detail: DiffDetailDto | undefined,
+  expectedBatch?: { id: string; groupIndex: number; groupCount: number },
 ): DiffProjectionDto | null {
   const p = detail?.projection as Partial<DiffProjectionDto> | undefined;
   if (
@@ -237,12 +238,14 @@ function projectionFromDetail(
   ) {
     return null;
   }
+  const proposalBatch = proposalBatchFromProjection(p, expectedBatch);
+  if (!proposalBatch) return null;
   return {
     ...p,
     diff_id: diffId,
-    proposal_batch_id: p.proposal_batch_id ?? diffId,
-    group_index: p.group_index ?? 1,
-    group_count: p.group_count ?? 1,
+    proposal_batch_id: proposalBatch.id,
+    group_index: proposalBatch.groupIndex,
+    group_count: proposalBatch.groupCount,
     rel_path: detail?.target.rel_path ?? relPath,
     patch_kind: p.patch_kind,
     before_text: p.before_text ?? "",
@@ -251,6 +254,29 @@ function projectionFromDetail(
     draft_mode: p.draft_mode ?? "current_editor",
     snapshot_source: p.snapshot_source ?? "active_editor",
   };
+}
+
+function proposalBatchFromProjection(
+  projection: Pick<Partial<DiffProjectionDto>, "proposal_batch_id" | "group_index" | "group_count">,
+  expected?: { id: string; groupIndex: number; groupCount: number },
+): { id: string; groupIndex: number; groupCount: number } | null {
+  const id = projection.proposal_batch_id;
+  const groupIndex = projection.group_index;
+  const groupCount = projection.group_count;
+  if (
+    typeof id !== "string"
+    || !id.trim()
+    || !Number.isSafeInteger(groupIndex)
+    || !Number.isSafeInteger(groupCount)
+    || (groupIndex ?? 0) < 1
+    || (groupCount ?? 0) < 1
+    || (groupIndex ?? 0) > (groupCount ?? 0)
+  ) return null;
+  if (
+    expected
+    && (id !== expected.id || groupIndex !== expected.groupIndex || groupCount !== expected.groupCount)
+  ) return null;
+  return { id, groupIndex: groupIndex!, groupCount: groupCount! };
 }
 
 function summarizeStyleOp(op: StyleOp): string {
@@ -511,6 +537,26 @@ interface AgentTurnDto {
   updated_at: number;
 }
 
+/** V1 仅在读取边界转换为当前 V2 展示投影；转换结果只存在内存，不回写或延续旧字段。 */
+function toCurrentTurnProjection(turn: AgentTurnDto): AgentTurnDto & { payload: AgentTurnPayloadV2 } {
+  const payload = turn.payload;
+  return {
+    ...turn,
+    payload: {
+      version: 2,
+      lastEventSeq: Number.isSafeInteger(payload.lastEventSeq) && (payload.lastEventSeq ?? 0) >= 0
+        ? payload.lastEventSeq ?? 0
+        : 0,
+      userMessage: payload.userMessage,
+      assistantMessage: payload.assistantMessage,
+      toolSummaries: payload.toolSummaries ?? [],
+      diffRefs: payload.diffRefs ?? [],
+      failure: payload.failure,
+      incompleteReason: payload.incompleteReason,
+    },
+  };
+}
+
 function toSession(dto: AgentSessionDto): AgSession {
   return {
     id: dto.session_id,
@@ -690,6 +736,7 @@ function diffStateFromStatus(status: DiffDetailDto["status"]): DiffCardState {
 
 function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<DiffView> {
   const projection = detail.projection;
+  const proposalBatch = projection ? proposalBatchFromProjection(projection) : null;
   const styleOpsPayload = parseStyleOps(projection?.style_ops);
   const blockOpsPayload = parseStructuredBlockEditPayload(projection?.block_ops);
   const tableOpsPayload = parseTableOps(projection?.table_ops);
@@ -713,10 +760,13 @@ function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<Dif
     snapshotSource: projection?.snapshot_source,
     baseSessionVersion: projection?.base_session_version ?? undefined,
     baseContentHash: projection?.base_content_hash ?? undefined,
-    title: `历史修改建议 ${detail.target?.rel_path ?? ref.relPath}`,
+    title: proposalBatch
+      ? `历史修改建议 ${detail.target?.rel_path ?? ref.relPath}`
+      : `历史修改建议批次信息不可用 ${detail.target?.rel_path ?? ref.relPath}`,
     before: projection?.before_text ?? "",
     after: projection?.after_text ?? "",
-    state: diffStateFromStatus(detail.status),
+    state: proposalBatch ? diffStateFromStatus(detail.status) : "error",
+    errorCode: proposalBatch ? undefined : "DE_PROPOSAL_BATCH_INVALID",
     effectStatus: detail.effect_status,
     terminalReason: detail.terminal_reason,
     // 历史回合恢复的 diff 一律只读（BR-SYS-STATE-004/005，APP-CLOSE-DIFF-LIFECYCLE-01）：正常关闭
@@ -730,11 +780,7 @@ function hydratedDiffPatch(ref: TurnDiffRef, detail: DiffDetailDto): Partial<Dif
     blockOps: blockOpsPayload?.operations.map((operation) => (
       `${operation.blockId} · ${operation.expectedNodeType}`
     )),
-    proposalBatch: projection ? {
-      id: projection.proposal_batch_id ?? ref.diffId,
-      groupIndex: projection.group_index ?? 1,
-      groupCount: projection.group_count ?? 1,
-    } : undefined,
+    proposalBatch: proposalBatch ?? undefined,
     tableOpsPayload,
     tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),
     imageOpsPayload,
@@ -1232,7 +1278,12 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
 
   previewAckInFlight.add(diffId);
   try {
-    agStore.setCurrentAction({ action: "previewing", label: "已应用预览，正在校验最新文档状态" });
+    agStore.setCurrentAction({
+      sessionId: diff.sessionId,
+      turnId: diff.turnId,
+      action: "previewing",
+      label: "已应用预览，正在校验最新文档状态",
+    });
     await invoke<{ task_run_id: string; ready: boolean }>("ag_ack_preview", {
       taskRunId: diff.taskRunId,
       sessionId: diff.sessionId,
@@ -1334,16 +1385,31 @@ export async function refreshSessionPlans(sessionId: string): Promise<void> {
 export async function ensureAgentSessionTurns(sessionId: string): Promise<void> {
   const session = agStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (!session || session.turnsLoaded) return;
-  const turns = await dispatchCall<AgentTurnDto[]>("ag.list_turns", { sessionId });
+  const persistedTurns = await dispatchCall<AgentTurnDto[]>("ag.list_turns", { sessionId });
+  const turns = persistedTurns.map(toCurrentTurnProjection);
   const projected = projectTurns(turns);
   await hydrateDiffRefsForTurns(turns);
   agStore.hydrateSessionTurns(sessionId, projected.messages, projected.toolCalls);
   for (const turn of turns) {
-    agStore.seedTurnEventProjection(
-      turn.turn_id,
-      turn.payload.lastEventSeq ?? 0,
-      turn.status !== "draft" && turn.status !== "clarifying",
-    );
+    const recovered = await listTurnEvents(turn.turn_id, 0).catch(() => []);
+    const events = Array.isArray(recovered) ? recovered : [];
+    let lastSafeSeq = 0;
+    let eventTerminal = false;
+    for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
+      if (
+        event.turnId !== turn.turn_id
+        || !Number.isSafeInteger(event.seq)
+        || event.seq <= lastSafeSeq
+        || eventTerminal
+      ) continue;
+      lastSafeSeq = event.seq;
+      if (event.type === "project_report") {
+        agStore.projectProjectReport(turn.turn_id, event.report);
+      }
+      if (event.type === "done" || event.type === "error") eventTerminal = true;
+    }
+    agStore.seedTurnEventProjection(turn.turn_id, Math.max(turn.payload.lastEventSeq, lastSafeSeq),
+      eventTerminal || (turn.status !== "draft" && turn.status !== "clarifying"));
   }
   await refreshSessionTaskRuns(sessionId);
 }
@@ -1748,7 +1814,7 @@ export async function startTurn(
       settled = true;
       resolve();
     };
-    const failStart = (e: unknown) => {
+    const interruptStart = (_cause: unknown) => {
       if (terminalSeen || pausedForClarification || pausedForDecision) return;
       if (clarification && !backendInvocationStarted) {
         // 快照/装配尚未越过后端入口：保持原回合非终态，允许用户修复编辑器状态后继续补充。
@@ -1758,8 +1824,6 @@ export async function startTurn(
         finish();
         return;
       }
-      terminalSeen = true;
-      const err = e as { code?: string; message?: string };
       if (clarification) {
         clarifyingTurns.delete(sessionId);
         // 后端入口一旦开始，调用失败时 best-effort 清除仍可能停放的同一回合，避免孤儿等待身份。
@@ -1770,16 +1834,13 @@ export async function startTurn(
         void invoke("ag_cancel_turn", { sessionId, turnId }).catch(() => undefined);
       }
       agStore.finishMessage(sessionId, assistantId);
-      agStore.setTurnStatus(sessionId, turnId, err?.code?.includes("GATE") ? "gate_rejected" : "error");
-      agStore.pushMessage(sessionId, {
-        id: uid(),
-        role: "assistant",
-        content: err?.message ? `[${err.code ?? "?"}] ${err.message}` : String(e),
-        error: true,
-        turnId,
-        relPath: turnActiveDocPath ?? null,
-        turnStatus: err?.code?.includes("GATE") ? "gate_rejected" : "error",
-      });
+      // Promise/Channel 中断不是 AgentTurn 终态事实。保持 draft，允许用户显式以新 turn 重试；
+      // 只有安全 TurnEvent 的 Done/Error 才能投影 completed/error/cancelled/gate_rejected。
+      agStore.setTurnStatus(sessionId, turnId, "draft");
+      if (backendInvocationStarted) {
+        void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+      }
+      agStore.setCurrentAction(null);
       agStore.clearActiveTurn(turnId);
       finish();
     };
@@ -1830,7 +1891,12 @@ export async function startTurn(
           // AG-1.0-TASKRUN-REWORK-INTENT-01：回合终态后刷新任务计划（复杂目标已建 plan）。
           void refreshSessionPlans(sessionId);
           if (ev.stopReason === "waiting_preview") {
-            agStore.setCurrentAction({ action: "previewing", label: "等待编辑器应用修改建议" });
+            agStore.setCurrentAction({
+              sessionId,
+              turnId,
+              action: "previewing",
+              label: "等待编辑器应用修改建议",
+            });
           } else {
             agStore.setCurrentAction(null);
           }
@@ -1870,6 +1936,8 @@ export async function startTurn(
         case "step_progress":
           // AG-1.0-TASKRUN-REWORK-IMP-UI-01：实时当前动作（信息流底部状态条，BR-SYS-STATE-008 不伪造）。
           agStore.setCurrentAction({
+            sessionId,
+            turnId,
             action: (["reading", "tool", "generating", "proposing", "deciding"].includes(ev.action)
               ? ev.action
               : "tool") as "reading" | "tool" | "generating" | "proposing" | "deciding",
@@ -1880,11 +1948,13 @@ export async function startTurn(
         case "decision_request_proposed":
           // AwaitingDecision 是原 AgentTurn 的非终态等待；保存稳定身份并释放输入门控。
           agStore.setPendingDecision({
+            sessionId,
+            turnId,
             requestId: ev.requestId,
             kind: ev.kind,
             payload: ev.payload,
           });
-          agStore.setCurrentAction({ action: "deciding", label: "等待你的决策" });
+          agStore.setCurrentAction({ sessionId, turnId, action: "deciding", label: "等待你的决策" });
           decisionTurns.set(ev.requestId, {
             requestId: ev.requestId,
             sessionId,
@@ -1908,7 +1978,12 @@ export async function startTurn(
           // 当前编辑器命中的块级 diff 会先进入 ED 草稿，accept 只确认，save 再落盘。
           const detail = (await loadDiffDetails([ev.diffId]).catch(() => []))
             .find((candidate) => candidate.diff_id === ev.diffId);
-          const projection = projectionFromDetail(ev.diffId, ev.relPath, detail);
+          const eventBatch = {
+            id: ev.proposalBatchId,
+            groupIndex: ev.groupIndex,
+            groupCount: ev.groupCount,
+          };
+          const projection = projectionFromDetail(ev.diffId, ev.relPath, detail, eventBatch);
           let title = `AI 建议修改 ${ev.relPath}`;
           let state: "pending" | "error" = "pending";
           let errorCode: string | undefined;
@@ -1923,7 +1998,9 @@ export async function startTurn(
           if (!projection) {
             title = `⚠ 缺少修改载荷，请重试 · ${ev.relPath}`;
             state = "error";
-            errorCode = "DE_DIFF_PROJECTION_MISSING";
+            errorCode = detail?.projection
+              ? "DE_PROPOSAL_BATCH_INVALID"
+              : "DE_DIFF_PROJECTION_MISSING";
           } else if (
             projection.patch_kind === "replace_block" &&
             !mappedBlockId &&
@@ -2013,11 +2090,11 @@ export async function startTurn(
             blockOps: blockOpsPayload?.operations.map((operation) => (
               `${operation.blockId} · ${operation.expectedNodeType}`
             )),
-            proposalBatch: {
-              id: ev.proposalBatchId,
-              groupIndex: ev.groupIndex,
-              groupCount: ev.groupCount,
-            },
+            proposalBatch: projection ? {
+              id: projection.proposal_batch_id,
+              groupIndex: projection.group_index,
+              groupCount: projection.group_count,
+            } : undefined,
             tableOpsPayload,
             tableOps: tableOpsPayload?.operations.map(summarizeTableOperation),
             imageOpsPayload,
@@ -2067,7 +2144,7 @@ export async function startTurn(
           default:
             break;
         }
-      }).catch(failStart);
+      }).catch(interruptStart);
     };
     onEvent.onmessage = consumeEvent;
 
@@ -2089,7 +2166,7 @@ export async function startTurn(
             return;
           }
         }
-        failStart(e);
+        interruptStart(e);
         return;
       }
       const activeSnapshot = turnActiveDocPath
@@ -2107,7 +2184,7 @@ export async function startTurn(
           factBlockRefs,
         );
       } catch (e) {
-        failStart(e);
+        interruptStart(e);
         return;
       }
       backendInvocationStarted = true;
@@ -2144,13 +2221,13 @@ export async function startTurn(
           await eventWork;
         }
         if (!terminalSeen && !pausedForClarification && !pausedForDecision) {
-          failStart({
+          interruptStart({
             code: "AG_TURN_TERMINAL_MISSING",
             message: "Agent 回合结束但没有可恢复的终态事件",
           });
         }
       } catch (error) {
-        failStart(error);
+        interruptStart(error);
       }
     })();
   });

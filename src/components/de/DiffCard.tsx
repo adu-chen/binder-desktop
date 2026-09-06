@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { EXPIRED_REASON_TEXT, type DiffView } from "../../store/deStore";
+import { EXPIRED_REASON_TEXT, resolveProposalBatchCohort, useDeStore, type DiffView } from "../../store/deStore";
 import { acceptDiff, rejectDiff, generateSampleDiff } from "../../services/deService";
 import { revealBlock } from "../../services/edLocate";
 import { ContextMenu, type ContextMenuDef } from "../shell/ContextMenu";
@@ -239,17 +239,20 @@ function blockOperationDetails(diff: DiffView): Array<{
 
 /**
  * @GOV
- * codes:    BR-DE-DATA-002-RB-DE-DE-DIFF-003
+ * codes:    BR-DE-DATA-002-RB-DE-DE-DIFF-003, BR-DE-DATA-001-RB-DE-DE-DIFF-003, BR-DE-STATE-001-RB-DE-DE-DIFF-003
  * type:     RB
  * chain:    DE-DIFF
- * rules:    BR-DE-DATA-002
- * term_ref: TERM-DE-003, TERM-ED-008
- * boundary: in=ImageOperationDiffPayloadAndBeforeAfterSnapshots | out=StructuredImageOperationReviewCard(insertDeleteResizeMoveAlignmentWithBeforeAfterValues)
+ * rules:    BR-DE-DATA-001, BR-DE-DATA-002, BR-DE-STATE-001
+ * term_ref: TERM-DE-003, TERM-DE-005, TERM-ED-008
+ * boundary: in=PendingDiffWithValidatedProposalBatchAndBeforeAfterSnapshots | out=StructuredSeparatelyAdjudicableDiffCardOrReadOnlyBatchFailure | effect=none | does_not=inferMissingBatchIdentityOrEnableAdjudicationBeforeCompleteCohort
  */
 export function DiffCard({ diff }: { diff: DiffView }) {
+  const allDiffs = useDeStore().diffs;
   const { diffId, title, before, after, state } = diff;
   const busy = state === "validating" || state === "applying";
-  const readonly = Boolean(diff.readonly);
+  const batchCohort = resolveProposalBatchCohort(allDiffs, diff);
+  const batchUnavailable = batchCohort.status === "waiting" || batchCohort.status === "invalid";
+  const readonly = Boolean(diff.readonly || batchUnavailable);
   const [expanded, setExpanded] = useState(false);
   const [locateFailed, setLocateFailed] = useState(false);
   // DiffCard 右键（CTX-MENU-01）：仅 pending 且可裁决态提供接受/拒绝快捷入口。
@@ -275,7 +278,11 @@ export function DiffCard({ diff }: { diff: DiffView }) {
   const locationText = diff.relPath ? `${diff.relPath} · ${location}` : location;
   const beforeView = previewText(before);
   const afterView = previewText(after);
-  const detail = statusText(diff, locateFailed);
+  const detail = batchCohort.status === "waiting"
+    ? { text: "正在等待同批修改卡收齐；当前不可裁决", tone: "muted" as const }
+    : batchCohort.status === "invalid"
+      ? { text: `提案批次校验失败（${batchCohort.reason}）；当前不可裁决`, tone: "err" as const }
+      : statusText(diff, locateFailed);
   const styleSummary = hasStyleOps ? `样式 ${diff.styleOps?.length ?? 0} 项` : "";
   const blockSummary = hasBlockOps
     ? `结构化操作 ${diff.blockOpsPayload?.operations.length ?? 0} 项`

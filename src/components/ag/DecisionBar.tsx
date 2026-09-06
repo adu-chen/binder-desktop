@@ -33,7 +33,7 @@ export function DecisionBar() {
   const decision = state.pendingDecision;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!decision) return null;
+  if (!decision || (decision.sessionId && decision.sessionId !== activeSession(state).id)) return null;
 
   const label = KIND_LABEL[decision.kind] ?? "任务确认";
   const summary =
@@ -93,6 +93,8 @@ export function DecisionBar() {
     setBusy(true);
     setError("");
     agStore.setCurrentAction({
+      sessionId: decision.sessionId ?? activeSession(state).id,
+      turnId: decision.turnId ?? `decision:${decision.requestId}`,
       action: "deciding",
       label: isWorkspaceOperation && outcome === "confirm" ? "正在核验并执行资源操作" : "正在提交你的决定",
     });

@@ -7,6 +7,7 @@ import {
   applyOpenSessionDiff,
   expireStalePendingForPath,
   generateSampleDiff,
+  loadPersistedDiffs,
   persistImageDiffSnapshots,
   promotePendingDiffOnOpen,
   rejectDiff,
@@ -130,6 +131,57 @@ function lastCommand(): string {
 }
 
 describe("deService 草稿 diff 裁决", () => {
+  // covers: BR-DE-DATA-001, BR-DE-STATE-001
+  it("loadPersistedDiffs：只恢复批次元数据完整的可裁决卡，损坏批次失败关闭", async () => {
+    invokeMock.mockResolvedValue({
+      result: [
+        {
+          diff_id: "d-valid",
+          target: { rel_path: "notes/a.md" },
+          status: "pending",
+          created_at: 1,
+          projection: {
+            proposal_batch_id: "batch-1",
+            group_index: 1,
+            group_count: 2,
+            patch_kind: "replace_document",
+            before_text: "旧",
+            after_text: "新",
+          },
+        },
+        {
+          diff_id: "d-invalid",
+          target: { rel_path: "notes/b.md" },
+          status: "pending",
+          created_at: 2,
+          projection: {
+            proposal_batch_id: "batch-broken",
+            group_index: 3,
+            group_count: 2,
+            patch_kind: "replace_document",
+          },
+        },
+      ],
+    });
+
+    await loadPersistedDiffs();
+
+    expect(deStore.getSnapshot().diffs).toEqual([
+      expect.objectContaining({
+        diffId: "d-valid",
+        state: "pending",
+        proposalBatch: { id: "batch-1", groupIndex: 1, groupCount: 2 },
+      }),
+      expect.objectContaining({
+        diffId: "d-invalid",
+        state: "error",
+        readonly: true,
+        errorCode: "DE_PROPOSAL_BATCH_INVALID",
+        proposalBatch: undefined,
+      }),
+    ]);
+  });
+
   // covers: BR-DE-DATA-002
   it("persistImageDiffSnapshots：经受控 command 持久化完整前后图片快照", async () => {
     const before: DocumentImageSnapshot[] = [{

@@ -1126,6 +1126,30 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: 1.5px solid var(--gold-bg); border-top-color: var(--gold); animation: ed-spin 0.7s linear infinite;
 }
 .turn-statusbar-label { color: var(--ink-3); }
+.turn-statusbar-waiting { border-style: dashed; }
+
+.project-report {
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.project-report-head,
+.project-report-section li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.project-report-title,
+.project-report-section-title { font-weight: 600; }
+.project-report-cursor,
+.project-report-meta,
+.project-report-empty { color: var(--ink-3); font-size: 12px; }
+.project-report-section { margin-top: var(--sp-2); }
+.project-report-section ul { margin: var(--sp-1) 0 0; padding-left: 18px; }
+.project-report-section li { margin-top: 2px; }
 
 /* AG-1.0-DECISION-CARD-01 · 任务级裁决独立固定区（Composer 上方；任务暂停等决策）。 */
 .decisionbar {

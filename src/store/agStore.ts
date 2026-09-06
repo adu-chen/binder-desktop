@@ -182,6 +182,8 @@ export interface TaskRunView {
 
 /** 回合实时当前动作（AG-1.0-TASKRUN-REWORK-IMP-UI-01 · step_progress，BR-SYS-STATE-008）。 */
 export interface TurnCurrentAction {
+  sessionId: string;
+  turnId: string;
   action: "reading" | "tool" | "generating" | "proposing" | "deciding" | "previewing";
   label: string;
   detail?: string;
@@ -189,6 +191,8 @@ export interface TurnCurrentAction {
 
 /** 任务级裁决请求（TERM-AG-017）：待用户裁决（confirm/cancel → ag.resolve_decision）。 */
 export interface PendingDecisionView {
+  sessionId?: string;
+  turnId?: string;
   requestId: string;
   kind: string;
   payload?: unknown;
@@ -225,6 +229,36 @@ export interface ProjectReportView {
   unreadItems: { relPath: string; reason: string }[];
   findings: { statement: string; evidenceIds: string[]; uncertainty: string }[];
   uncertainties: string[];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isProjectReportView(value: unknown): value is ProjectReportView {
+  if (!value || typeof value !== "object") return false;
+  const report = value as Partial<ProjectReportView>;
+  return report.version === "project-report-v2"
+    && typeof report.turnId === "string"
+    && Number.isSafeInteger(report.evidenceThroughSeq)
+    && (report.evidenceThroughSeq ?? -1) >= 0
+    && isStringArray(report.requestedScope)
+    && Array.isArray(report.readItems)
+    && report.readItems.every((item) => Boolean(item)
+      && typeof item.relPath === "string"
+      && typeof item.source === "string"
+      && typeof item.coverage === "string"
+      && isStringArray(item.evidenceIds))
+    && Array.isArray(report.unreadItems)
+    && report.unreadItems.every((item) => Boolean(item)
+      && typeof item.relPath === "string"
+      && typeof item.reason === "string")
+    && Array.isArray(report.findings)
+    && report.findings.every((item) => Boolean(item)
+      && typeof item.statement === "string"
+      && isStringArray(item.evidenceIds)
+      && typeof item.uncertainty === "string")
+    && isStringArray(report.uncertainties);
 }
 
 /** 一个标签会话（呈现层组织；持久化形状预留）。 */
@@ -517,8 +551,8 @@ export const agStore = {
   lastTurnEventSeq(turnId: string): number {
     return state.turnEventProjection[turnId]?.lastSeq ?? 0;
   },
-  projectProjectReport(turnId: string, report: ProjectReportView) {
-    if (report.turnId !== turnId || report.version !== "project-report-v2") return;
+  projectProjectReport(turnId: string, report: unknown) {
+    if (!isProjectReportView(report) || report.turnId !== turnId) return;
     setState({ projectReports: { ...state.projectReports, [turnId]: report } });
   },
   /** @deprecated SM-AG-01 广播已退出 Agent UI 投影；保留到旧测试消费者迁移，不再写任何状态。 */

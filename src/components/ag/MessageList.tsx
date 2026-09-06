@@ -73,7 +73,12 @@ export function MessageList() {
           <div className={`msg msg-${m.role}${m.error ? " msg-error" : ""}`}>
             <span className="label msg-role">{m.role === "user" ? "你" : "AI"}</span>
             {m.role === "assistant" ? (
-              <MessageFlow message={m} toolCalls={toolCallsForMessage(m.id)} diffs={diffsForMessage(m.id)} />
+              <MessageFlow
+                message={m}
+                toolCalls={toolCallsForMessage(m.id)}
+                diffs={diffsForMessage(m.id)}
+                report={m.turnId ? state.projectReports[m.turnId] : undefined}
+              />
             ) : (
               <div className="msg-body">
                 {m.parts?.length ? <MessageParts parts={m.parts} /> : m.content}
@@ -113,9 +118,9 @@ export function MessageList() {
 
       {/* AG-1.0-DECISION-CARD-01：任务级裁决已迁移至 Composer 上方的 DecisionBar（独立固定区），
           信息流内不再渲染裁决卡；此处仅保留实时当前动作状态条。 */}
-      {state.currentAction && !state.pendingDecision && (
-        <div className="turn-statusbar">
-          <span className="turn-statusbar-spinner" aria-hidden />
+      {state.currentAction?.sessionId === session.id && !state.pendingDecision && (
+        <div className={`turn-statusbar${isWaitingAction(state.currentAction) ? " turn-statusbar-waiting" : ""}`}>
+          {!isWaitingAction(state.currentAction) && <span className="turn-statusbar-spinner" aria-hidden />}
           <span className="turn-statusbar-label">{currentActionLabel(state.currentAction)}</span>
         </div>
       )}
@@ -123,6 +128,10 @@ export function MessageList() {
       <div ref={endRef} />
     </div>
   );
+}
+
+function isWaitingAction(action: TurnCurrentAction): boolean {
+  return action.action === "deciding" || action.action === "previewing";
 }
 
 /** 实时当前动作人读文案（step_progress action → 中文）。 */

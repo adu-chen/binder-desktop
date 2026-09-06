@@ -184,6 +184,9 @@ function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
     rel_path: patch.rel_path ?? "notes/current.md",
     projection: {
       diff_id: patch.diff_id ?? "diff-1",
+      proposal_batch_id: patch.proposal_batch_id ?? patch.diff_id ?? "diff-1",
+      group_index: patch.group_index ?? 1,
+      group_count: patch.group_count ?? 1,
       rel_path: patch.rel_path ?? "notes/current.md",
       patch_kind: patch.patch_kind ?? "replace_block",
       block_id: has("block_id") ? patch.block_id : "b2",
@@ -507,6 +510,9 @@ describe("agService 历史恢复", () => {
               status: "accepted",
               created_at: 4,
               projection: {
+                proposal_batch_id: "d-accepted",
+                group_index: 1,
+                group_count: 1,
                 patch_kind: "replace_document",
                 before_text: "旧内容",
                 after_text: "新内容",
@@ -519,6 +525,9 @@ describe("agService 历史恢复", () => {
               status: "rejected",
               created_at: 5,
               projection: {
+                proposal_batch_id: "d-image",
+                group_index: 1,
+                group_count: 1,
                 patch_kind: "image_ops",
                 before_text: "当前图片 1 张",
                 after_text: "图片操作：插入 0 张，删除 1 张",
@@ -590,6 +599,29 @@ describe("agService 历史恢复", () => {
           ],
         };
       }
+      if (request.command === "ag.list_turn_events") {
+        return {
+          correlation_id: "hist",
+          result: [{
+            eventId: "event-report",
+            turnId: "t1",
+            seq: 7,
+            occurredAt: 7,
+            payloadVersion: 1,
+            type: "project_report",
+            report: {
+              version: "project-report-v2",
+              turnId: "t1",
+              evidenceThroughSeq: 6,
+              requestedScope: ["notes/a.md", "notes/unread.md"],
+              readItems: [{ relPath: "notes/a.md", source: "read_doc", coverage: "full_document", evidenceIds: ["e1"] }],
+              unreadItems: [{ relPath: "notes/unread.md", reason: "not_read" }],
+              findings: [],
+              uncertainties: ["notes/unread.md 未读取"],
+            },
+          }],
+        };
+      }
       return { correlation_id: "hist", result: { ok: true } };
     });
 
@@ -606,6 +638,12 @@ describe("agService 历史恢复", () => {
       relPath: "notes/a.md",
       toolCalls: [expect.objectContaining({ name: "read_doc", readonly: true, anchorMessageId: "a1" })],
     });
+    expect(agStore.getSnapshot().projectReports.t1).toMatchObject({
+      evidenceThroughSeq: 6,
+      unreadItems: [{ relPath: "notes/unread.md", reason: "not_read" }],
+    });
+    expect(agStore.lastTurnEventSeq("t1")).toBe(7);
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
     expect(deStore.getSnapshot().diffs).toEqual([
       expect.objectContaining({
         diffId: "d-accepted",
@@ -939,7 +977,10 @@ describe("agService ReferencePayload 发送契约", () => {
 
     expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
     const session = activeSession(agStore.getSnapshot());
-    expect(session.messages.some((m) => m.error && m.content.includes("AG_ACTIVE_SNAPSHOT_REQUIRED"))).toBe(true);
+    expect(session.messages.some((m) => m.error)).toBe(false);
+    expect(session.messages.find((m) => m.role === "user")?.turnStatus).toBe("draft");
+    expect(session.messages.find((m) => m.role === "assistant")?.turnStatus).toBe("draft");
+    expect(agStore.getSnapshot().activeTurn).toBeNull();
   });
 
   it("diff_proposed 的 before/after 来自后端 projection，不取整篇 fallback", async () => {
@@ -1347,6 +1388,9 @@ describe("agService ReferencePayload 发送契约", () => {
     edStore.loadDoc("notes/current.md", "旧全文", 101);
     projectionResult({
       diff_id: "diff-group-1",
+      proposal_batch_id: "pb-1",
+      group_index: 1,
+      group_count: 2,
       block_id: "b1",
       block_index: 0,
       base_session_version: 1,
@@ -1360,6 +1404,9 @@ describe("agService ReferencePayload 发送契约", () => {
     });
     projectionResult({
       diff_id: "diff-group-2",
+      proposal_batch_id: "pb-1",
+      group_index: 2,
+      group_count: 2,
       block_id: "b3",
       block_index: 2,
       base_session_version: 1,
@@ -1387,6 +1434,38 @@ describe("agService ReferencePayload 发送契约", () => {
       { id: "diff-group-1", batch: { id: "pb-1", groupIndex: 1, groupCount: 2 } },
       { id: "diff-group-2", batch: { id: "pb-1", groupIndex: 2, groupCount: 2 } },
     ]);
+  });
+
+  it("DiffProposed 与持久化 ProposalBatch 身份不一致时失败关闭", async () => {
+    edStore.loadDoc("notes/current.md", "旧全文", 101);
+    projectionResult({
+      diff_id: "diff-batch-mismatch",
+      proposal_batch_id: "persisted-batch",
+      group_index: 1,
+      group_count: 2,
+    });
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "diff_proposed",
+        turn_id: "t",
+        diff_id: "diff-batch-mismatch",
+        proposalBatchId: "event-batch",
+        groupIndex: 1,
+        groupCount: 2,
+        rel_path: "notes/current.md",
+      });
+      completeTurn(arg);
+    });
+
+    await startTurn("修改当前文档");
+
+    expect(deStore.getSnapshot().diffs[0]).toMatchObject({
+      diffId: "diff-batch-mismatch",
+      state: "error",
+      errorCode: "DE_PROPOSAL_BATCH_INVALID",
+      proposalBatch: undefined,
+    });
   });
 
 });
@@ -1682,6 +1761,32 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     expect(session.toolCalls).toHaveLength(0);
   });
 
+  it("字段损坏的 ProjectReport 安全事件不进入只读报告投影", async () => {
+    edStore.loadDoc("notes/current.md", "第一段", 101);
+    mockTurnInvoke((arg) => {
+      const runtimeTurnId = String((arg as Record<string, unknown>).turnId);
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({
+        type: "project_report",
+        report: {
+          version: "project-report-v2",
+          turnId: runtimeTurnId,
+          evidenceThroughSeq: 1,
+          requestedScope: ["notes/current.md"],
+          readItems: "corrupt",
+          unreadItems: [],
+          findings: [],
+          uncertainties: [],
+        },
+      });
+      completeTurn(arg);
+    });
+
+    await startTurn("只回复");
+
+    expect(Object.values(agStore.getSnapshot().projectReports)).toHaveLength(0);
+  });
+
   it("Channel 丢失终态时按 lastEventSeq 补流并经同一 reducer 完成", async () => {
     let backendTurnId = "";
     invokeMock.mockImplementation(async (command, arg) => {
@@ -1713,6 +1818,26 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     const assistant = activeSession(agStore.getSnapshot()).messages.find((message) => message.role === "assistant");
     expect(assistant?.turnStatus).toBe("completed");
     expect(agStore.lastTurnEventSeq(backendTurnId)).toBe(4);
+    expect(agStore.getSnapshot().sending).toBe(false);
+  });
+
+  it("Channel 与补流都没有终态时保持 draft，不由 Promise 猜测 error/completed", async () => {
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command === "ag_start_turn") return undefined;
+      const request = (arg as { request?: { command?: string; correlation_id?: string } }).request;
+      if (request?.command === "ag.list_turn_events") {
+        return { correlation_id: request.correlation_id, result: [] };
+      }
+      return dispatchOk(arg);
+    });
+
+    await startTurn("只回复");
+
+    const messages = activeSession(agStore.getSnapshot()).messages;
+    expect(messages.filter((message) => message.turnId).map((message) => message.turnStatus))
+      .toEqual(["draft", "draft"]);
+    expect(messages.some((message) => message.error)).toBe(false);
+    expect(agStore.getSnapshot().activeTurn).toBeNull();
     expect(agStore.getSnapshot().sending).toBe(false);
   });
 });

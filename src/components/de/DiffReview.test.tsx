@@ -491,6 +491,21 @@ describe("DiffCard 8 状态渲染（互斥）", () => {
 });
 
 describe("DiffCard 右键（CTX-MENU-01）", () => {
+  it("ProposalBatch 尚未收齐时显示静态等待并禁止裁决", () => {
+    const pending = card({
+      proposalBatch: { id: "batch-1", groupIndex: 1, groupCount: 2 },
+      patchKind: "block_ops",
+      draftMode: "current_editor",
+    });
+    deStore.addDiff(pending);
+    const { container } = render(<DiffCard diff={pending} />);
+
+    expect(screen.getByText(/正在等待同批修改卡收齐/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /接受/ })).toBeNull();
+    fireEvent.contextMenu(container.querySelector(".diffcard") as HTMLElement);
+    expect(screen.queryByRole("menuitem", { name: "接受" })).toBeNull();
+  });
+
   it("pending 态右键弹出接受/拒绝菜单项", () => {
     const { container } = renderCard({ state: "pending" });
     fireEvent.contextMenu(container.querySelector(".diffcard") as HTMLElement, { clientX: 5, clientY: 6 });
