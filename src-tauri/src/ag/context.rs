@@ -139,13 +139,76 @@ pub fn estimate_serialized_input_tokens(
     messages: &[serde_json::Value],
     tools: &serde_json::Value,
 ) -> usize {
-    let messages_chars = serde_json::to_string(messages)
-        .map(|value| value.chars().count())
-        .unwrap_or(0);
-    let tools_chars = serde_json::to_string(tools)
-        .map(|value| value.chars().count())
-        .unwrap_or(0);
-    (messages_chars + tools_chars).div_ceil(4)
+    measure_prompt_budget(messages, tools).estimated_tokens
+}
+
+/// The provider projection is shared by sending, the budget gate and optional request audits.
+pub fn provider_message_projection(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|message| {
+            let mut projected = message.clone();
+            if let Some(object) = projected.as_object_mut() {
+                object.remove("layer");
+            }
+            projected
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptBudgetMeasurement {
+    pub estimated_tokens: usize,
+    pub serialized_chars: usize,
+    pub message_framing_chars: usize,
+    pub tool_schema_chars: usize,
+    pub message_layers: std::collections::BTreeMap<String, usize>,
+}
+
+/**
+ * @GOV
+ * codes: BR-AG-DATA-002-DATA-AG-AG-TURN-055, BR-AG-DATA-005-DATA-AG-AG-TURN-055
+ * type: DATA
+ * chain: AG-TURN
+ * rules: BR-AG-DATA-002, BR-AG-DATA-005
+ * boundary: in=PromptMessagesAndToolSchema | out=ProviderProjectedSerializedCharacterLedgerAndApproximateTokenTotal | does_not=retainContentAlterAuthorizationOrTruncateRequiredSources
+ */
+pub fn measure_prompt_budget(
+    messages: &[serde_json::Value],
+    tools: &serde_json::Value,
+) -> PromptBudgetMeasurement {
+    // Value serialization to String is infallible; no zero-on-error budget fallback.
+    let projected = provider_message_projection(messages);
+    let chars = |value: &serde_json::Value| value.to_string().chars().count();
+    let mut message_layers = std::collections::BTreeMap::<String, usize>::new();
+    for (original, sent) in messages.iter().zip(&projected) {
+        let layer = original.get("layer").and_then(|v| v.as_str());
+        let known_layer = layer_order()
+            .into_iter()
+            .map(|k| k.as_str())
+            .find(|k| Some(*k) == layer);
+        let category =
+            known_layer.unwrap_or_else(|| match sent.get("role").and_then(|v| v.as_str()) {
+                Some("tool") => "tool_result",
+                Some("assistant") => "model_continuation",
+                Some("user") => "user_supplement",
+                Some("system") => "continuation_receipt",
+                _ => "unclassified",
+            });
+        *message_layers.entry(category.to_string()).or_default() += chars(sent);
+    }
+    let message_framing_chars = 2 + projected.len().saturating_sub(1);
+    let tool_schema_chars = chars(tools);
+    let serialized_chars =
+        message_layers.values().sum::<usize>() + message_framing_chars + tool_schema_chars;
+    PromptBudgetMeasurement {
+        estimated_tokens: serialized_chars.div_ceil(4),
+        serialized_chars,
+        message_framing_chars,
+        tool_schema_chars,
+        message_layers,
+    }
 }
 
 pub fn prompt_data_envelope(
@@ -336,29 +399,167 @@ pub fn cap_text(s: &str, max_chars: usize, note: &str) -> String {
     format!("{head}\n{note}")
 }
 
+#[derive(Debug)]
+pub(super) struct HistorySelection {
+    pub turns: Vec<HistTurn>,
+    pub dropped: usize,
+    pub excerpted: usize,
+}
+
+// Verbatim head/tail only, not a semantic summary. The omission is visible to the
+// model and the original message remains unchanged in the store/database.
+fn history_excerpt(content: &str, allowance: usize) -> Option<String> {
+    let count = content.chars().count();
+    if count <= allowance {
+        return Some(content.to_string());
+    }
+    let marker = format!(
+        "\n[历史原文摘录；中间已省略，非完整消息；originalChars={count}; sha256={}]\n",
+        sha256_text(content)
+    );
+    let visible = allowance.checked_sub(marker.chars().count())?;
+    if visible < 2 {
+        return None;
+    }
+    let head = visible.div_ceil(2);
+    let tail = content
+        .chars()
+        .rev()
+        .take(visible - head)
+        .collect::<Vec<_>>();
+    Some(
+        content.chars().take(head).collect::<String>()
+            + &marker
+            + &tail.into_iter().rev().collect::<String>(),
+    )
+}
+
+/// Keep recent complete conversation units. Only the newest oversized unit is
+/// excerpted; its user request gets first claim on capacity, never a lone large
+/// assistant answer that displaces every user constraint. Wire overhead is fitted
+/// by prepare_turn_prompt against the single complete-request budget afterwards.
 /**
  * @GOV
  * codes:    BR-AG-DATA-005-DATA-AG-AG-TURN-004
  * type:     DATA
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-005
- * boundary: in=HistTurnsAndCharBudget | out=RecentHistory(keepNewestDropOldestDeterministicWithDropCount)
+ * boundary: in=IdentityScopedHistTurnsAndDerivedCharAllowance | out=RecentHistorySelectionWithTurnGroupsMarkedVerbatimExcerptsAndDropCounts | does_not=mutatePersistedHistoryOrGrantAuthority
  */
-/// P1 历史层按预算保留**最近**若干轮（drop 最旧，确定性）。返回 (保留<按时序>, 丢弃数<可追溯>)。
-pub fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> (Vec<HistTurn>, usize) {
+pub(super) fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> HistorySelection {
+    if budget_chars == 0 {
+        return HistorySelection {
+            turns: Vec::new(),
+            dropped: turns.len(),
+            excerpted: 0,
+        };
+    }
+    let mut groups: Vec<&[HistTurn]> = Vec::new();
+    let mut start = 0;
+    for index in 1..turns.len() {
+        let previous = &turns[index - 1];
+        let current = &turns[index];
+        let new_group = match (&previous.turn_id, &current.turn_id) {
+            (Some(left), Some(right)) => left != right,
+            (None, None) => current.role == "user",
+            _ => true,
+        };
+        if new_group {
+            groups.push(&turns[start..index]);
+            start = index;
+        }
+    }
+    if start < turns.len() {
+        groups.push(&turns[start..]);
+    }
     let mut kept_rev = Vec::new();
     let mut used = 0usize;
-    for t in turns.iter().rev() {
-        let c = t.content.chars().count();
-        if used.saturating_add(c) > budget_chars {
-            break;
+    let mut excerpted = 0;
+    for group in groups.into_iter().rev() {
+        let remaining = budget_chars.saturating_sub(used);
+        let count = group
+            .iter()
+            .map(|turn| turn.content.chars().count())
+            .sum::<usize>();
+        if count <= remaining {
+            kept_rev.extend(group.iter().rev().cloned());
+            used += count;
+            continue;
         }
-        used += c;
-        kept_rev.push(t.clone());
+        if kept_rev.is_empty() && remaining > 0 {
+            let users = group
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.role == "user")
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            let others = group
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.role != "user")
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            let mut selected = vec![None; group.len()];
+            let mut remaining = remaining;
+            for (phase, (indices, reserve_answer)) in
+                [(&users, !others.is_empty()), (&others, false)]
+                    .into_iter()
+                    .enumerate()
+            {
+                if phase == 1
+                    && !users.is_empty()
+                    && users.iter().all(|&index| selected[index].is_none())
+                {
+                    // Never inject an answer from this unit after dropping every
+                    // user request that gives the answer its meaning.
+                    break;
+                }
+                let role_total = indices
+                    .iter()
+                    .map(|&index| group[index].content.chars().count())
+                    .sum::<usize>();
+                let mut role_allowance = if reserve_answer && role_total > remaining {
+                    remaining.div_ceil(2)
+                } else if reserve_answer {
+                    // Preserve all user constraints if they fit. Do not excerpt
+                    // a fitting request merely to give its answer half the room.
+                    role_total
+                } else {
+                    remaining
+                };
+                for (position, &index) in indices.iter().rev().enumerate() {
+                    let unprocessed = &indices[..indices.len() - position];
+                    let unprocessed_chars = unprocessed
+                        .iter()
+                        .map(|&index| group[index].content.chars().count())
+                        .sum::<usize>();
+                    let allowance = if unprocessed_chars <= role_allowance {
+                        group[index].content.chars().count()
+                    } else {
+                        role_allowance / unprocessed.len()
+                    };
+                    if let Some(content) = history_excerpt(&group[index].content, allowance) {
+                        let included = content.chars().count();
+                        let mut turn = group[index].clone();
+                        excerpted += usize::from(content != turn.content);
+                        turn.content = content;
+                        selected[index] = Some(turn);
+                        role_allowance -= included;
+                        remaining -= included;
+                    }
+                }
+            }
+            kept_rev.extend(selected.into_iter().rev().flatten());
+        }
+        break;
     }
     let dropped = turns.len() - kept_rev.len();
     kept_rev.reverse();
-    (kept_rev, dropped)
+    HistorySelection {
+        turns: kept_rev,
+        dropped,
+        excerpted,
+    }
 }
 
 /// 按当前文档归属分流后的历史。same_doc 可作为同文档 P1 背景；other_doc 始终只能弱注入。
@@ -409,6 +610,60 @@ mod tests {
     use super::*;
 
     // covers: BR-AG-DATA-002
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn budget_ledger_matches_wire_unicode_escaping_and_unknown_layers() {
+        let messages = vec![
+            serde_json::json!({"role":"user", "layer":"user_input", "content":"预算\n\"\\😀"}),
+            serde_json::json!({"role":"assistant", "layer":"PRIVATE_LAYER", "tool_calls":[{"id":"x", "arguments":"{\"a\":1}"}]}),
+            serde_json::json!({"role":"tool", "content":"PRIVATE_RESULT"}),
+        ];
+        let tools = serde_json::json!([{"name":"read_doc","description":"读取"}]);
+        let m = measure_prompt_budget(&messages, &tools);
+        let sent = provider_message_projection(&messages);
+        let actual = serde_json::to_string(&sent).unwrap().chars().count()
+            + tools.to_string().chars().count();
+        assert_eq!(m.serialized_chars, actual);
+        assert_eq!(m.estimated_tokens, actual.div_ceil(4));
+        assert_eq!(
+            m.message_layers.values().sum::<usize>()
+                + m.message_framing_chars
+                + m.tool_schema_chars,
+            actual
+        );
+        assert_eq!(m, measure_prompt_budget(&messages, &tools));
+        assert_eq!(
+            estimate_serialized_input_tokens(&sent, &tools),
+            m.estimated_tokens
+        );
+        let diagnostic = serde_json::to_string(&m).unwrap();
+        assert!(!diagnostic.contains("PRIVATE"));
+        assert!(!diagnostic.contains("预算"));
+        assert!(messages[0].get("layer").is_some());
+        assert!(sent.iter().all(|v| v.get("layer").is_none()));
+        let empty = measure_prompt_budget(&[], &serde_json::json!([]));
+        assert_eq!(empty.serialized_chars, 4);
+    }
+
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn budget_exact_threshold_uses_one_global_rounding_step() {
+        let limit = super::super::prompt_runtime::PROMPT_TOKEN_BUDGET;
+        let tools = serde_json::json!([]);
+        let base =
+            measure_prompt_budget(&[serde_json::json!({"role":"user","content":""})], &tools)
+                .serialized_chars;
+        for (delta, expected) in [(-1_i64, limit), (0, limit), (1, limit + 1)] {
+            let length = (limit * 4 - base) as i64 + delta;
+            let m = measure_prompt_budget(
+                &[serde_json::json!({"role":"user","content":"中".repeat(length as usize)})],
+                &tools,
+            );
+            assert_eq!(m.estimated_tokens, expected);
+        }
+    }
+
+    // covers: BR-AG-DATA-002
     // 层序唯一真源：LayerKind 固定为 System→RuntimeControl→IntentHint→AgentContextFacts→CurrentDocument→Reference→History→CrossDocHistory→User。
     #[test]
     fn layer_order_is_fixed_and_matches_enum() {
@@ -454,15 +709,70 @@ mod tests {
             rel_path: None,
             turn_id: None,
         };
-        let turns = vec![h("user", "aaaa"), h("assistant", "bbbb"), h("user", "cc")];
-        // 预算 6 字：从最近往前 "cc"(2)+"bbbb"(4)=6 放下，"aaaa" 丢弃。
-        let (kept, dropped) = select_recent_history(&turns, 6);
-        assert_eq!(dropped, 1);
-        assert_eq!(kept.len(), 2);
-        assert_eq!(kept[0].content, "bbbb"); // 时序：旧在前
-        assert_eq!(kept[1].content, "cc");
+        let turns = vec![
+            h("user", "aaaa"),
+            h("assistant", "bbbb"),
+            h("user", "cc"),
+            h("assistant", "dd"),
+        ];
+        // Keep the newest complete pair, not an orphaned answer from an older pair.
+        let selected = select_recent_history(&turns, 6);
+        assert_eq!(selected.dropped, 2);
+        assert_eq!(selected.excerpted, 0);
+        assert_eq!(selected.turns.len(), 2);
+        assert_eq!(selected.turns[0].content, "cc");
+        assert_eq!(selected.turns[1].content, "dd");
         // 预算 0：全丢弃。
-        assert_eq!(select_recent_history(&turns, 0).1, 3);
+        assert_eq!(select_recent_history(&turns, 0).dropped, 4);
+    }
+
+    // covers: BR-AG-DATA-004
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn oversized_latest_history_keeps_user_and_marks_unicode_answer_excerpt() {
+        let message = |role: &str, content: String| HistTurn {
+            workspace_id: "ws".into(),
+            session_id: "session".into(),
+            role: role.into(),
+            content,
+            rel_path: Some("a.txt".into()),
+            turn_id: Some("prior".into()),
+        };
+        let answer = format!("ANSWER-HEAD{}ANSWER-TAIL", "中😀\\\"".repeat(3000));
+        let history = vec![
+            message("user", "分析A/B组；只读，不修改。".into()),
+            message("assistant", answer.clone()),
+        ];
+        let selected = select_recent_history(&history, 900);
+        assert_eq!(selected.dropped, 0);
+        assert_eq!(selected.excerpted, 1);
+        assert_eq!(selected.turns[0], history[0]);
+        let excerpt = &selected.turns[1].content;
+        assert!(excerpt.starts_with("ANSWER-HEAD") && excerpt.ends_with("ANSWER-TAIL"));
+        assert!(excerpt.contains("非完整消息") && excerpt.contains(&sha256_text(&answer)));
+        assert!(
+            selected
+                .turns
+                .iter()
+                .map(|t| t.content.chars().count())
+                .sum::<usize>()
+                <= 900
+        );
+        assert_eq!(history[1].content, answer);
+        assert_eq!(select_recent_history(&history, 900).turns, selected.turns);
+        assert_eq!(select_recent_history(&history, 40).turns[0], history[0]);
+        let no_orphan = vec![
+            message("user", "用户约束".repeat(1000)),
+            message("assistant", "已确认".into()),
+        ];
+        assert!(select_recent_history(&no_orphan, 40).turns.is_empty());
+        let request_first = vec![
+            message("user", "请求约束".repeat(750)),
+            message("assistant", "回答内容".repeat(500)),
+        ];
+        let selected = select_recent_history(&request_first, 4000);
+        assert_eq!(selected.turns[0], request_first[0]);
+        assert_eq!(selected.excerpted, 1);
     }
 
     // covers: BR-AG-DATA-004

@@ -43,21 +43,24 @@ terminal_states: Completed, Cancelled, Denied, TurnError
 - **scope**：一次 `agent-edit-1.0` 代理回合（用户发起→产出处置完成/中断/拒绝；目标边界按 BR-AG-DATA-003）
 - **context**：回合输入（session_id + runtime_profile + prompt + 注入载荷 + open_doc_snapshots）、append-only TurnEvent、当前 IntentResult revision、AgentReadContext、PromptPackage、CapabilityGrant、真实 GateOutcome、CancellationToken、terminal_latch、流式缓冲、最终回复及已持久化 ProposalBatch 引用、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
 - **states**：Idle、Assembling、AwaitingClarification、AwaitingDecision、AwaitingGate、Streaming、Finalizing、Completed、Cancelled、Denied、TurnError
-- **events**：send、assembled、assembleFail、gatePassed、gateDenied、modelClarification、clarificationProvided、decisionProposed、decisionResolved、toolRoundCompleted、modelFinal、streamFail、cancel、finalizeOk、finalizeFail
-- **transitions（主表）**：
+- **events**：send、assembled、assembleFail、gatePassed、gateDenied、gateFailed、modelClarification、clarificationProvided、decisionProposed、decisionResolved、toolRoundCompleted、modelProtocolRejected、modelFinal、streamFail、cancel、finalizeOk、finalizeFail
+- **transitions（主表）**：2026-09-15 P00 将 v2 准入改为身份先行；下表为目标设计，生产实现待
+  P01-P08 验证。v1 仍按 I-P-01 的完整快照准入，不能把其校验失败冒充 v2 unavailable。
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
-| Idle | send | open_doc_snapshots 覆盖全部已打开文档且每项含 session_version/content_hash；active live 序列化成功；同 session 无其他活动回合 | Assembling | 写入/更新 AgentSession；创建 AgentTurn `draft`，追加 UserInputReceived；冻结 AgentContextFacts，IntentResult 初始为 unresolved；计算当前 Prompt 工具投影 |
-| Assembling | assembled | 已打开文档引用和 selection 均基于 AgentReadContext 校验通过；PromptPackage 角色/预算/作用域校验通过；terminal_latch 未锁定 | AwaitingGate | 追加 ContextFrozen/PromptPrepared；提交 SM-SYS-01 门禁（X-INTER-001） |
-| Assembling | assembleFail | OpenDocSnapshot 缺失/版本缺失/active live 序列化失败/注入锚失效 | TurnError | 统一错误形状；不得用 DiskState 或 loadedContent 旧快照兜底 |
+| Idle | send | workspace/session/turn/Profile 合法；v2 activeTarget/openResources 身份与可用性有效（v1 仍要求完整快照）；执行槽可用且同 session 无其他活动回合 | Assembling | 持久化 AgentSession/AgentTurn draft 与 UserInputReceived；冻结 AgentContextFacts 身份及 revision；不因无关资源未就绪拒绝；IntentResult 初始 unresolved |
+| Assembling | assembled | 本次实际注入的内容/锚均有有效版本；未就绪资源仅作为明确元数据；PromptPackage 角色/预算/作用域有效；terminal_latch 未锁定 | AwaitingGate | 追加 ContextFrozen/PromptPrepared；提交 SM-SYS-01 门禁（X-INTER-001）；不得由可用性替代 Gate |
+| Assembling | assembleFail | 载荷版本/身份非法，或本次必需内容采集失败、过期、超预算；无关资源 unavailable 本身不触发 | TurnError | 统一错误形状、装配阶段及下一步；不得用 DiskState 或 loadedContent 旧快照兜底；保留此前专业效果 |
 | AwaitingGate | gatePassed | 本次服务端 GateOutcome=GatePassed 且 verdict_id 可追踪 | Streaming | 追加 GatePassed/ProviderStarted；经 AiGateway 发起一次流式调用；本地常量/缓存/桩值不得触发 |
-| AwaitingGate | gateDenied | SM-SYS-01 GateDenied / 断网 | Denied | 明确拒绝（终态，不可绕过）；AgentTurn status=`gate_rejected` |
+| AwaitingGate | gateDenied | SM-SYS-01 GateDenied：合法 denied 或明确授权 HTTP 拒绝 | Denied | 明确拒绝（终态，不可绕过）；AgentTurn status=`gate_rejected` |
+| AwaitingGate | gateFailed | 认证/门禁不可达、超时、非授权 HTTP 异常、非法或未知响应 | TurnError | 保留原错误码、可重试标记和 gate 观察边界；不调用模型、不自动重试；此前工具证据保留，AgentTurn status=`error` |
 | Streaming | modelClarification | 模型可见输出明确缺少继续所需信息，且未产生副作用 | AwaitingClarification | 更新 IntentResult revision，追加 ClarificationRequested；停止 provider/工具，等待用户 |
 | AwaitingClarification | clarificationProvided | 用户向原 AgentTurn 补充所需信息；同 session 无其他活动回合 | Assembling | 追加 ClarificationProvided；重新冻结事实并装配；不创建新 AgentTurn、不沿用旧授权 |
 | Streaming | decisionProposed | 已形成不可变 DecisionRequest | AwaitingDecision | 追加 DecisionRequestProposed；停止 provider/工具，等待裁决 |
 | AwaitingDecision | decisionResolved | 对应请求已 confirm/cancel；confirm 涉及 WS 操作时，运行时基于当前终态/取消状态、确认回执与冻结 plan 重新计算 permitted_effect_paths，通过后才可请求 WS 重验执行 | Assembling | 追加 DecisionRequestResolved 与可选领域执行结果；重新装配，TaskRun 仅同步投影；不把 WS 执行入口暴露给模型 |
 | Streaming | toolRoundCompleted | SM-AG-02 已追加全部 ToolResult，且未产生等待/终态 | Assembling | 根据证据更新 IntentResult/EvidenceLedger 投影；下一次 provider 调用重新装配和 Gate |
+| Streaming | modelProtocolRejected | 完整响应控制校验未通过，仍有纠错/模型预算且未终结 | Assembling | 记录脱敏拒绝与纠错指令；不推断意图、不执行本批；重新装配、预算检查和 Gate |
 | Streaming | modelFinal | 模型已给出最终可见回答，且无未决 ToolCall/DecisionRequest；任何修改建议已通过工具形成 ProposalBatch | Finalizing | 追加 ModelFinal；核验最终回复、ProjectReport 投影与已持久化 ProposalBatch 引用，不接受绕过工具的直接修改载荷 |
 | Streaming | streamFail | — | TurnError | 统一错误形状（含可重试标记）；AgentTurn status=`error` |
 | Assembling / AwaitingClarification / AwaitingDecision / AwaitingGate / Streaming / Finalizing | cancel | terminal_latch 尚未锁定 | Cancelled | 触发 CancellationToken，终止已启动的流式请求、阻止新模型/工具/Proposal 副作用并追加唯一终态；无半落盘副作用；AgentTurn status=`cancelled` |
@@ -69,12 +72,12 @@ terminal_states: Completed, Cancelled, Denied, TurnError
   - Idle / Assembling → Streaming（未过门禁不得调用，对齐 SM-SYS-01 forbidden）
   - Denied → Streaming（被拒不得绕过门禁，终态）
   - Streaming → Completed（必须经 Finalizing 核验回复、报告投影与既有 Proposal 引用）
-  - Assembling → AwaitingGate 当已打开文档缺少 OpenDocSnapshot 或引用锚无法校验（不得以 DiskState 兜底进入模型）
+  - Assembling → AwaitingGate 当实际作为正文/有效编辑锚注入的打开文档缺少有效 OpenDocSnapshot（v2 可显式仅保留未就绪元数据，不伪称已读；v1 仍按完整准入校验）
   - 任意态 → 直接写盘（本机无写盘动作，X-FORBID-006）
   - Completed / Cancelled / Denied / TurnError → 任意其他状态或终态（terminal_latch 只允许首次锁定）
   - AwaitingClarification / AwaitingDecision → AwaitingGate / Streaming / Completed（未收到对应用户事件并重新完成 Assembling，不得推进或伪装完成）
 - **persistence_projection**：`send` 后先持久化 `draft`；`finalizeOk`→`completed`；
-  `modelClarification/decisionProposed` 保持 `draft` 非终态；`streamFail/finalizeFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
+  `modelClarification/decisionProposed` 保持 `draft` 非终态；`gateFailed/streamFail/finalizeFail/命令级错误`→`error`；`cancel`→`cancelled`；`gateDenied`→`gate_rejected`；
   应用崩溃/关闭/流式中断未收到终态时保持 `draft`，重启后只能显示未完成/可重试。
 - **acceptance_criteria**：不存在不经真实服务端 gatePassed 通往 Streaming 的路径；Denied 为终态且不可达
   Streaming；修改建议只能由 SM-AG-02 的 `propose_edit` 工具交 DE，Finalizing 不再生成修改；cancel 后无半落盘副作用；
@@ -84,6 +87,21 @@ terminal_states: Completed, Cancelled, Denied, TurnError
   任一工具结果后的 provider continuation 必须走 Assembling→AwaitingGate；事件流可确定性重建状态；
   状态集合中不存在 Build takeover/HandedOver/fallbackIn。
 - **test_matrix**：见 §5
+
+**P00 交接补充（沿用现有状态，不新建后台等待机）**：
+
+- 通用准入与专业内容就绪分开；专业采集只在当前 Assembling 或工具 Executing 内有界等待，超时/取消
+  必须收敛。按需追加 contextRevision 后重新装配，旧 ContextFrozen 仍不可变。
+- AwaitingDecision 的 requestId 是恢复身份，不能仅按“当前会话有等待”继续；A 消费后产生 B，
+  A 的 UI 收尾或迟到事件不得清理 B。澄清/裁决等待不占正在执行的槽，但归属仍在原 session。
+- 预览 checkpoint 继续保留专业 diffId/version/hash 校验；ack、预览、裁决和保存是不同事实。
+  重复回执不得重复继续，过期需明确失败/下一步；回执成功而继续失败不得伪称未发生预览。
+- 流缺少有效结束信号或模型控制非法必须按错误处理，不能默认 Completed；预算超限不是 Provider
+  拒绝的同义词。诊断区分失败边界和根因，生产错误处理不自动重试整个请求。
+- 取消后禁止启动新效果；已有专业效果按真实回执保留。无法核实效果时显示未核实和阻断重试，不把
+  cancelled 解释为“所有操作已回滚”；本节不放宽已有原子性/无半落盘约束。
+- 验收至少含无编辑器真实枚举、非法响应、连续确认 A→B、等待期间版本变化、重复回执、工具成功后
+  模型失败、唯一终态及会话切换；只通过问候不能证明 Binder 运行语义闭合。
 
 ### 2.1 澄清非终态与首终态契约（REQ-AG-007 / BR-SYS-STATE-007）
 
@@ -183,13 +201,14 @@ terminal_states: LoopCompleted, LoopAborted
 - **scope**：一次代理回合内的工具调用循环（首个工具请求出现→终轮答复/中止）
 - **context**：工具注册清单、当前运行事实、短生命周期 CapabilityGrant、AgentReadContext、循环计数与上限、当前工具请求/结果、CancellationToken、terminal_latch
 - **states**：ModelStreaming、ToolValidating、ToolExecuting、ResultRecording、LoopCompleted、LoopAborted
-- **events**：toolRequest、validateOk、validateFail、execOk、execFail、recorded、finalAnswer、proposalRecorded、decisionHandoff、loopLimit、loopError、cancel
+- **events**：toolRequest、validateOk、validateFail、execOk、execFail、recorded、finalAnswer、protocolRejected、proposalRecorded、decisionHandoff、loopLimit、loopError、cancel
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
 |---|---|---|---|---|
 | ModelStreaming | toolRequest | terminal_latch 未锁定 | ToolValidating | 按 RuntimeProfile、注册表、当前范围/目标/格式/动态能力、裁决、预算和取消状态计算 CapabilityGrant，再校验请求 |
 | ModelStreaming | finalAnswer | — | LoopCompleted | 终轮答复，回归 SM-AG-01 modelFinal |
+| ModelStreaming | protocolRejected | 本响应拒绝事实已记录，未执行本批工具 | LoopCompleted | 结束当前解析片段，回归 SM-AG-01 modelProtocolRejected；不伪造工具请求或工具执行 |
 | ToolValidating | validateOk | 工具已注册、属于刚计算的 CapabilityGrant 且目标/参数/权限有效 | ToolExecuting | 先追加/广播真实 ToolExecuting，再执行；只读经 AgentReadContext，写意图只生成 diff 建议 |
 | ToolValidating | validateFail | 未注册/当前未授权/越权/目标或参数失效 | ResultRecording | 记录结构化拒绝，不执行副作用 |
 | ToolExecuting | execOk | terminal_latch 未锁定 | ResultRecording | 追加成功 ToolResult；由事件重建 EvidenceLedger 的可证明覆盖 |
@@ -208,6 +227,10 @@ terminal_states: LoopCompleted, LoopAborted
 - **error_states**：无独立错误状态——单个工具执行失败经 execFail→ResultRecording 记录，后续由新 provider 轮次决定路线；
   循环级错误以 loopError 进入 LoopAborted，回归 SM-AG-01 TurnError，不得映射为 Completed/Done
 - **recovery_paths**：LoopAborted→SM-AG-01 TurnError/Cancelled 路径处置
+- **重复只读失败**：相同只读请求与错误重复出现时，不再继续工具尝试；保留失败回执及已有成功证据，在剩余原 Gate/预算/期限内回装配，只允许 final/clarify 说明未完成范围。后续原生工具批次执行前拒绝，不重放副作用；拒绝仍消耗既有纠错/模型额度。模型持续不合约、网络失败、取消或预算耗尽仍保留真实 error/cancelled，不能伪造业务成功。参数的跨字段条件在上下文采集前与执行器共用校验，快照版本/页边界在取快照后再次核验。
+- **收尾能力一致性**：可信 system 续行指令的 final-only 模式同时冻结 Prompt Manifest 和原生工具清单，不仅靠文字禁止。适用于重复只读失败及已有非只读操作后的协议修正；普通纠错和正常任务工具能力不变。用户/模型/工具消息不得通过同名字段伪造可信收尾指令。
+- **只读失败后澄清**：纯只读任务的收尾若选择 clarify，等待期间不执行；checkpoint 可释放该次只读失败的临时收尾限制，使真实用户补充范围后的受校验续行重新取得能力。原累计 Gate/模型/工具/协议预算与失败证据不重置。有任何既有非只读调用（含拒绝/未知回执）时，不通过此路径解除防重放保护。
+- **响应协议纠错**：正文/工具的缺失、损坏、冲突控制共享 AgentTurn 级最多两次纠错和六次模型调用预算；从已提交 TurnEvent 重建，等待/确认续行不得重置。无封套的普通前置说明有界隔离，只有原生工具携合法响应级控制时可舍弃该说明并继续；显式损坏控制不能被工具控制覆盖。正文纠错在唯一终态之前发生，保留原执行游标和证据；已有非只读调用时，正文纠错仅允许 final/clarify，不得重新提交工具。网络截断、供应商拒绝和取消不进入本协议纠错。
 - **forbidden_transitions**：
   - ToolValidating → ToolExecuting 无 validateOk（未注册/越权不得执行）
   - 已注册工具 → ToolExecuting 当其不在当前 CapabilityGrant（注册不等于当前获权）
@@ -289,7 +312,7 @@ terminal_states: Accepted, Dismissed
 ## §5 测试与验收（强制转移测试矩阵，APC §6/§10）
 
 - **SM-AG-01**：send→Assembling→AwaitingGate→gatePassed→Streaming→modelFinal→Finalizing→Completed
-  正路；gateDenied→Denied 终态且不可达 Streaming；cancel→Cancelled 无半落盘；finalizeFail/
+  正路；gateDenied→Denied 终态且不可达 Streaming；gateFailed→TurnError，首轮/工具续轮均不发送下一模型请求、保留既有证据、只写一个 error；cancel→Cancelled 无半落盘；finalizeFail/
   streamFail→TurnError 后原 AgentTurn 保持 error，用户显式重试须新建 AgentTurn 并从 Idle/send 启动；禁止 Idle/Assembling→Streaming 旁路；持久化投影覆盖
   completed/error/cancelled/gate_rejected/draft，draft 重启后不得显示为完成态；已打开文档缺
   OpenDocSnapshot 或 selection 校验失败时 assembleFail，不得进入 AwaitingGate。
@@ -347,6 +370,11 @@ terminal_states: Accepted, Dismissed
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-22 | v2.32 | 参数跨字段预检、重复只读失败受约束收尾、native清单冻结及纯只读用户澄清恢复；保留原累计预算和非只读防重放。 |
+| 2026-10-22 | v2.31 | 响应协议拒绝在终态前回装配/Gate；登记 SM-AG-01 modelProtocolRejected、SM-AG-02 protocolRejected、同回合纠错与模型预算、防重放边界。 |
+| 2026-10-06 | v2.30 | 人类确认上游门禁契约收敛：离线/超时/非法响应进入 gateFailed→TurnError，不冒充服务端拒绝；合法拒绝保持 Denied。 |
+| 2026-10-06 | v2.29 | 区分门禁调用 Err 与既有 GateOutcome::Deny，新增 gateFailed→TurnError；不修改 ENT 将离线转为 Deny 的现有契约，该差异单列待收敛。 |
+| 2026-09-15 | v2.28 | P00：定义 v2 身份先行、实际内容使用前校验的准入转移；保留 v1 严格路径，明确裁决身份、异步回执、取消/断流及效果未知的边界，待代码接入验证。 |
 | 2026-09-03 | v2.27 | AG-ADAPTIVE-RUNTIME-DESIGN-01：SM-AG-01 改为 append-only TurnEvent 驱动的模型/工具自适应循环，新增 AwaitingDecision 与 Finalizing；修改建议只由 SM-AG-02 `propose_edit` 交 DE；SM-AG-02 每次按硬事实计算 CapabilityGrant 并回上层统一重新 Gate；SM-AG-04 改为纯 TaskRun 投影机。 |
 | 2026-06-11 | v1.0 | 初版（AG G2 状态机件）：定义 SM-AG-01 代理回合机（组装/门禁/流式/HandingOff 交 DE，Denied 终态不可绕过）、SM-AG-02 工具调用循环机（校验/执行/回注/上限/写盘禁令，嵌套于回合 Streaming 段）、SM-AG-03 辅助回合机（autocomplete 与 inline-assist 同机承载：节流/门禁/装饰层/采纳即编辑/失败静默），均含 APC §6 必备字段；满足 X-SEQ-003；转移点登记（门禁/交 DE 单侧/采纳→SM-ED-01 双侧）；债务（DE 侧待 G2、CBT 接管未建模、嵌套调度与参数延实现期） |
 | 2026-07-04 | v2.0 | 双模式定义回写（人类裁决）：①SM-AG-01 takeover guard 判据换轴——「识别多文件构建意图」废止，改「构建触发：显式触发（指令/构建按钮，触发即确认）或项目级构建意图提议经确认」，移交携项目蓝图、构建在原对话窗口呈现；「Chat↔Build 接管」更名「构建移交/回落」；新增构建执行期禁发起新回合（前端 X-FORBID-007 投影门控）；②SM-AG-03：触发语义改快捷键手动+防抖/防重（原「节流」为自动触发遗留），新增 Presenting→refine→Requesting 多轮转移（局部修改，每轮过门禁、不持久化），test_matrix 同步 |

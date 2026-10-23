@@ -64,6 +64,29 @@ function isSaveConflict(e: IpcLikeError): boolean {
   return Boolean(e.code && SAVE_CONFLICT_CODES.has(e.code));
 }
 
+// 旧文本快照没有原始 baseline，不能把当前磁盘静默认作加载基准。
+// 首次保存仍走创建保护；仅在用户明确确认覆盖后读取当前基准，并保留读写间的冲突守卫。
+async function saveTextWithBaseline(
+  path: string, content: string, baseline: number | string | null, override: boolean,
+): Promise<number | string> {
+  if (baseline === null && override && edStore.getSnapshot().sessions[path]?.requiresBaselineConfirmation) {
+    const disk = await readDoc(path);
+    return saveDoc(path, content, disk.baseline, false);
+  }
+  return saveDoc(path, content, baseline, override);
+}
+
+function textSaveFailure(error: IpcLikeError, baseline: number | string | null, path: string): SaveOutcome {
+  if (baseline === null && error.code === "WS_EXISTS" && edStore.getSnapshot().sessions[path]?.requiresBaselineConfirmation) {
+    return {
+      ok: false,
+      message: "当前草稿缺少原始保存基准，磁盘已有同名文件。覆盖需要明确确认，未保存内容仍保留。",
+      conflict: true,
+    };
+  }
+  return { ok: false, message: error.message ?? String(error), conflict: isSaveConflict(error) };
+}
+
 /**
  * @GOV
  * codes:    BR-CORE-STATE-001-EFFECT-ED-WS-SAVE-001, BR-CORE-STATE-003-EFFECT-ED-WS-SAVE-001
@@ -317,7 +340,7 @@ export async function saveDocument(content: string, override = false): Promise<S
   const path = openPath;
   try {
     await acceptAppliedPendingDiffsForSave(path, content);
-    const newBaseline = await saveDoc(path, content, baseline, override);
+    const newBaseline = await saveTextWithBaseline(path, content, baseline, override);
     edStore.updateContent(path, content);
     edStore.setBaseline(path, newBaseline);
     const sess = edStore.getSnapshot().sessions[path];
@@ -330,7 +353,7 @@ export async function saveDocument(content: string, override = false): Promise<S
   } catch (e) {
     const err = e as IpcLikeError;
     edStore.setTabState(path, "dirty");
-    return { ok: false, message: err.message ?? String(e), conflict: isSaveConflict(err) };
+    return textSaveFailure(err, baseline, path);
   }
 }
 
@@ -355,7 +378,7 @@ export async function saveMarkdownDocument(
   const path = openPath;
   try {
     await acceptAppliedPendingDiffsForSave(path, logicalContent);
-    const newBaseline = await saveDoc(path, markdown, baseline, override);
+    const newBaseline = await saveTextWithBaseline(path, markdown, baseline, override);
     edStore.updateContent(path, logicalContent);
     edStore.setBaseline(path, newBaseline);
     const sess = edStore.getSnapshot().sessions[path];
@@ -370,7 +393,7 @@ export async function saveMarkdownDocument(
   } catch (e) {
     const err = e as IpcLikeError;
     edStore.setTabState(path, "dirty");
-    return { ok: false, message: err.message ?? String(e), conflict: isSaveConflict(err) };
+    return textSaveFailure(err, baseline, path);
   }
 }
 

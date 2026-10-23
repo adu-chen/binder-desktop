@@ -60,9 +60,10 @@ function loadModels(): ModelOption[] {
     const arr = JSON.parse(raw) as ModelOption[];
     if (!Array.isArray(arr) || arr.length === 0) return DEFAULT_MODELS;
     // 旧数据无 source 字段 → 归一为 preset（BR-AG-DATA-006 向后兼容读取）。
-    return arr
+    const normalized = arr
       .filter((m) => m && typeof m.provider === "string" && typeof m.model === "string")
-      .map((m) => ({ ...m, source: m.source === "byok" ? "byok" : "preset" }));
+      .map((m) => ({ ...m, source: (m.source === "byok" ? "byok" : "preset") as ModelOption["source"] }));
+    return normalized.length ? normalized : DEFAULT_MODELS;
   } catch {
     return DEFAULT_MODELS;
   }
@@ -93,8 +94,10 @@ interface ModelState {
 
 function init(): ModelState {
   const models = loadModels();
-  let selectedKey = canPersist ? localStorage.getItem(LS_SELECTED) ?? "" : "";
-  if (!models.some((m) => modelKey(m) === selectedKey)) selectedKey = modelKey(models[0]);
+  // Only a never-configured installation receives the initial default. A saved but now
+  // unavailable choice remains visible and must not silently switch to another model.
+  const savedKey = canPersist ? localStorage.getItem(LS_SELECTED) : null;
+  const selectedKey = savedKey === null ? modelKey(models[0]) : savedKey;
   return { models, selectedKey, capabilityPref: loadCapabilityPref() };
 }
 
@@ -125,34 +128,29 @@ export const modelStore = {
   getSnapshot(): ModelState {
     return state;
   },
-  /** 全局默认模型（列表兜底第一项，恒非空）。 */
+  /** 全局默认模型；已选项失效时显式失败，不回退第一项。 */
   current(): ModelOption {
-    return state.models.find((m) => modelKey(m) === state.selectedKey) ?? state.models[0];
+    const selected = state.models.find((m) => modelKey(m) === state.selectedKey);
+    if (!selected) throw new Error(`AG_MODEL_UNAVAILABLE：所选模型 ${state.selectedKey || "（空）"} 不可用，请重新选择。`);
+    return selected;
   },
   /** 设置全局默认模型。 */
   select(key: string) {
     if (state.models.some((m) => modelKey(m) === key)) setState({ ...state, selectedKey: key });
   },
-  /** 添加并选中；同 provider/model 去重（更新 label）。 */
+  /** 添加到目录但不改变已选模型；同 provider/model 去重（更新 label）。 */
   addModel(m: ModelOption) {
     const key = modelKey(m);
     const models = state.models.some((x) => modelKey(x) === key)
       ? state.models.map((x) => (modelKey(x) === key ? m : x))
       : [...state.models, m];
-    setState({ ...state, models, selectedKey: key });
+    setState({ ...state, models });
   },
-  /** 删除（至少保留一个）；删除选中项时回落第一项；显式偏好引用被删条目 → 回落跟随全局（BR-AG-DATA-007）。 */
+  /** 删除注册表条目，但保留用户选择的键以便显式提示不可用。 */
   removeModel(key: string) {
     if (state.models.length <= 1) return;
     const models = state.models.filter((m) => modelKey(m) !== key);
-    const selectedKey = state.selectedKey === key ? modelKey(models[0]) : state.selectedKey;
-    const capabilityPref: CapabilityPref = Object.fromEntries(
-      Object.entries(state.capabilityPref).map(([cap, pref]) => [
-        cap,
-        pref.mode === "explicit" && pref.modelKey === key ? { mode: "followGlobal" } : pref,
-      ]),
-    ) as CapabilityPref;
-    setState({ models, selectedKey, capabilityPref });
+    setState({ ...state, models });
   },
   /** 设置单项能力模型偏好（BR-AG-DATA-007）。 */
   setCapabilityPref(cap: AgentCapability, pref: ModelPrefValue) {
@@ -165,15 +163,24 @@ export const modelStore = {
    * chain:    AG-MODEL-CATALOG, AG-ASSIST, AG-TURN
    * rules:    BR-AG-DATA-007
    * term_ref: TERM-AG-010
-   * boundary: in=AgentCapabilityAndCapabilityPrefAndModelRegistry | out=ModelOption(resolvedExplicitPreferenceOrGlobalDefaultNeverDanglingModelKey)
+   * boundary: in=AgentCapabilityAndCapabilityPrefAndModelRegistry | out=ModelOptionOrExplicitUnavailableError(noSilentModelFallback)
    */
   resolveFor(cap: AgentCapability): ModelOption {
     const pref = state.capabilityPref[cap];
     if (pref.mode === "explicit") {
       const explicit = state.models.find((m) => modelKey(m) === pref.modelKey);
       if (explicit) return explicit;
+      throw new Error(`AG_MODEL_UNAVAILABLE：${cap} 所选模型 ${pref.modelKey} 不可用，请重新选择。`);
     }
-    return state.models.find((m) => modelKey(m) === state.selectedKey) ?? state.models[0];
+    return this.current();
+  },
+  /** 仅用于展示失效偏好；发送路径必须调用严格的 resolveFor。 */
+  availableFor(cap: AgentCapability): ModelOption | null {
+    try {
+      return this.resolveFor(cap);
+    } catch {
+      return null;
+    }
   },
   /**
    * @GOV
@@ -182,12 +189,12 @@ export const modelStore = {
    * chain:    AG-MODEL-CATALOG
    * rules:    BR-AG-DATA-006
    * term_ref: TERM-AG-010
-   * boundary: in=PresetModelOptionListFromCloud | out=models(presetEntriesReplacedByokEntriesPreservedSelectedKeyKeptValid)
+   * boundary: in=PresetModelOptionListFromCloud | out=models(presetEntriesReplacedByokEntriesPreservedSelectedKeyRetainedEvenWhenUnavailable)
    *           | effect=memory
    *           | does_not=persist_api_key
    *           | does_not=touch_byok_entries
    */
-  /** 合并云端预设清单（BR-AG-DATA-006）：替换 preset 条目、保留 byok 条目；空清单不改变注册表；原选中项被移除时回落第一项。 */
+  /** 合并云端预设清单；选中项消失时保留其键，发送显式失败。 */
   mergePresetModels(presetModels: ModelOption[]) {
     if (!presetModels.length) return;
     const seen = new Set<string>();
@@ -199,10 +206,7 @@ export const modelStore = {
       merged.push({ provider: m.provider, model: m.model, label: m.label, source: "preset" });
     }
     if (!merged.length) return;
-    const selectedKey = state.models.some((m) => modelKey(m) === state.selectedKey)
-      ? state.selectedKey
-      : modelKey(merged[0]);
-    setState({ ...state, models: merged, selectedKey });
+    setState({ ...state, models: merged });
   },
   /** 测试辅助：恢复到默认注册表与偏好（仅测试使用）。 */
   resetForTest() {

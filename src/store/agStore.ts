@@ -15,6 +15,14 @@ import type { MessageContentPart, ReferenceTokenAttrs } from "../services/refere
 /** 会话持久化兼容字段：Agent 1.0 运行时只开放 edit；build 仅保留后续 Profile 的加法式数据形状，不授予入口。 */
 export type AgMode = "edit" | "build";
 
+/** SYS I-P-01 P01: metadata only; identity is owned by the enclosing turn/event. */
+export interface AgentFailureDiagnostic {
+  version: 1;
+  observedAt: "context_assembly" | "runtime" | "gate" | "finalizing" | "tool_validation" | "tool_execution" | "frontend_start" | "frontend_invoke" | "event_recovery";
+  category: "core_context" | "model_protocol" | "authorization" | "professional_capability" | "ui_projection" | "unknown";
+  rootCauseStatus: "unknown";
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -26,6 +34,8 @@ export interface ChatMessage {
   turnId?: string;
   relPath?: string | null;
   turnStatus?: AgentTurnStatus;
+  /** 本地未完成诊断，不代表后端终态；持久化由 AgentTurn payload.failure 承载。 */
+  turnFailure?: { code: string; message: string; retriable: boolean; diagnostic?: AgentFailureDiagnostic };
   /** 回合内消息片段（TERM-AG-011 · BR-AG-UI-001）：assistant 消息按事件到达顺序交错排列
    *  text/tool/diff 片段；缺省（legacy 历史/降级）时渲染层沉底布局，不丢失数据。 */
   segments?: TurnSegment[];
@@ -110,6 +120,20 @@ export type ToolState =
   | "failed"
   | "skipped";
 
+/** Immutable execution receipt; never an authorization or saved-document state. */
+export interface ToolCallReceiptV1 {
+  version: "tool-call-receipt-v1";
+  workspaceId: string; sessionId: string; turnId: string;
+  toolCallId: string; toolName: string; capabilityId: string; grantId: string; attempt: 1;
+  executionStatus: "succeeded" | "rejected" | "failed";
+  completionStatus: "completed" | "waiting" | "blocked";
+  effectStatus: "not_applicable" | "not_started" | "proposal_created" | "resource_prepared" | "resource_executed" | "unknown";
+  references: { kind: "decision_request" | "pending_diff" | "workspace_operation_plan"; id: string }[];
+  failure: { code: string; retriable: boolean; reauthRequired: boolean } | null;
+  evidenceIds: string[];
+  nextAction: "none" | "await_user" | "respond_blocked" | "retry_explicitly" | "inspect_effect";
+}
+
 export interface ToolCallView {
   id: string;
   name: string;
@@ -118,6 +142,7 @@ export interface ToolCallView {
   readonly?: boolean;
   turnId?: string;
   anchorMessageId?: string;
+  executionReceipt?: ToolCallReceiptV1;
 }
 
 /** 任务步骤态（TERM-AG-016 · SM-AG-04 steps）。 */
@@ -455,7 +480,40 @@ export const agStore = {
   },
   /** AG-1.0-TASKRUN-REWORK-IMP-UI-01：待裁决任务级请求（DecisionRequest proposed）。 */
   setPendingDecision(decision: PendingDecisionView | null) {
-    setState({ pendingDecision: decision });
+    // Legacy workspace-timeline requests may omit sessionId; bind once at admission, never at render/receipt time.
+    setState({ pendingDecision: decision && !decision.sessionId
+      ? { ...decision, sessionId: state.activeSessionId } : decision });
+  },
+  /**
+   * @GOV
+   * codes: BR-SYS-STATE-007-EFFECT-AG-AG-TURN-059, BR-SYS-STATE-008-EFFECT-AG-AG-TURN-059
+   * type: EFFECT
+   * chain: AG-TURN
+   * rules: BR-SYS-STATE-007, BR-SYS-STATE-008
+   * term_ref: TERM-AG-017
+   * boundary: in=ExpectedDecisionRequestIdentity | out=MatchingPendingDecisionAndOwnedWaitingActionCleared | does_not=clearNewerDecisionRequestOrOtherTurnAction
+   */
+  clearPendingDecision(expected: Pick<PendingDecisionView, "requestId" | "sessionId" | "turnId">): boolean {
+    const pending = state.pendingDecision;
+    if (!pending || pending.requestId !== expected.requestId
+      || pending.sessionId !== expected.sessionId || pending.turnId !== expected.turnId) return false;
+    const action = state.currentAction;
+    setState({
+      pendingDecision: null,
+      ...(action?.action === "deciding" && action.sessionId === expected.sessionId && action.turnId === expected.turnId
+        ? { currentAction: null } : {}),
+    });
+    return true;
+  },
+  /** Clear only the exact action object installed by this asynchronous caller. */
+  clearCurrentAction(expected: TurnCurrentAction) {
+    if (state.currentAction === expected) setState({ currentAction: null });
+  },
+  /** Terminal/interrupt events may only clear the action owned by their AgentTurn. */
+  clearTurnAction(sessionId: string, turnId: string) {
+    if (state.currentAction?.sessionId === sessionId && state.currentAction.turnId === turnId) {
+      setState({ currentAction: null });
+    }
   },
   /** 设定活动会话模式（编辑/代理构建，TERM-AG-006/007）。 */
   setMode(mode: AgMode) {
@@ -625,10 +683,12 @@ export const agStore = {
     }));
   },
   /** 标记某个代理回合在当前会话内的持久化状态投影。 */
-  setTurnStatus(sessionId: string, turnId: string, status: AgentTurnStatus) {
+  setTurnStatus(sessionId: string, turnId: string, status: AgentTurnStatus, failure?: ChatMessage["turnFailure"]) {
     mapSession(sessionId, (s) => ({
       ...s,
-      messages: s.messages.map((m) => (m.turnId === turnId ? { ...m, turnStatus: status } : m)),
+      messages: s.messages.map((m) => (m.turnId === turnId ? {
+        ...m, turnStatus: status, turnFailure: status === "draft" ? failure : undefined,
+      } : m)),
     }));
   },
   /** 新增一条工具调用卡（executing）；返回卡 id（PI-AG-08D，投影 ToolRequest）。 */
@@ -660,11 +720,11 @@ export const agStore = {
     }));
   },
   /** 按 toolCallId 精确置终态（AG-MSG-RENDER-01 · BR-AG-UI-001）：修复同轮多个同名工具的配对错乱。 */
-  resolveToolCallById(sessionId: string, toolCallId: string, ok: boolean, detail?: string) {
+  resolveToolCallById(sessionId: string, toolCallId: string, ok: boolean, detail?: string, executionReceipt?: ToolCallReceiptV1) {
     mapSession(sessionId, (s) => ({
       ...s,
       toolCalls: s.toolCalls.map((t) =>
-        t.id === toolCallId ? { ...t, state: ok ? "done" : "failed", detail: detail ?? t.detail } : t,
+        t.id === toolCallId ? { ...t, state: ok ? "done" : "failed", detail: detail ?? t.detail, executionReceipt } : t,
       ),
     }));
   },

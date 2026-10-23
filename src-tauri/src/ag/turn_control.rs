@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
 };
@@ -23,6 +23,9 @@ pub(crate) struct ActiveAgentTurn {
     decision_request_id: Option<String>,
     edit_target_set: ExplicitEditTargetSet,
     runtime_checkpoint: Option<AgentTurnRuntimeCheckpoint>,
+    model_binding: Option<(String, String)>,
+    effects_in_flight: Arc<AtomicUsize>,
+    runtime_returned: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -61,8 +64,15 @@ pub(super) struct CancelActiveTurnOutcome {
 impl Drop for ActiveAgentTurnLease {
     fn drop(&mut self) {
         if let Ok(mut turns) = self.active_turns.lock() {
-            let should_remove = turns.get(&self.session_id).is_some_and(|turn| {
+            if let Some(turn) = turns.get_mut(&self.session_id).filter(|turn| {
                 turn.turn_id == self.turn_id && turn.phase == ActiveAgentTurnPhase::Running
+            }) {
+                turn.runtime_returned = true;
+            }
+            let should_remove = turns.get(&self.session_id).is_some_and(|turn| {
+                turn.turn_id == self.turn_id
+                    && turn.phase == ActiveAgentTurnPhase::Running
+                    && turn.effects_in_flight.load(Ordering::Acquire) == 0
             });
             if should_remove {
                 turns.remove(&self.session_id);
@@ -151,6 +161,7 @@ pub(super) fn register_active_agent_turn(
         let runtime_checkpoint = active.runtime_checkpoint.take();
         active.decision_request_id = None;
         active.phase = ActiveAgentTurnPhase::Running;
+        active.runtime_returned = false;
         active.abort_handle = None;
         let cancelled = Arc::clone(&active.cancelled);
         drop(turns);
@@ -168,6 +179,14 @@ pub(super) fn register_active_agent_turn(
     }
 
     if let Some(active) = turns.get(session_id) {
+        if active.effects_in_flight.load(Ordering::Acquire) != 0 {
+            return Err(IpcError::new(
+                "AG_EFFECT_PENDING",
+                "原回合能力仍在结算；请查询执行事实，禁止重放或接管写操作",
+                true,
+                false,
+            ));
+        }
         // 已发送取消信号但旧 command 尚未释放 lease 时，允许新 turn_id 接管；未取消活动态与等待态
         // 均须显式失败，不能把普通发送误当恢复。
         if !active.cancelled.load(Ordering::Acquire) {
@@ -193,6 +212,9 @@ pub(super) fn register_active_agent_turn(
             decision_request_id: None,
             edit_target_set: ExplicitEditTargetSet::default(),
             runtime_checkpoint: None,
+            model_binding: None,
+            effects_in_flight: Arc::new(AtomicUsize::new(0)),
+            runtime_returned: false,
         },
     );
     drop(turns);
@@ -207,6 +229,71 @@ pub(super) fn register_active_agent_turn(
         ExplicitEditTargetSet::default(),
         None,
     ))
+}
+
+/// The model is chosen once for a new turn. A resumed turn always uses its recorded choice,
+/// irrespective of omitted or changed UI preferences.
+pub(super) fn model_binding_for_resume(
+    state: &AppState,
+    workspace_id: &str,
+    session_id: &str,
+    turn_id: &str,
+    requested_provider: Option<&str>,
+    requested_model: Option<&str>,
+) -> Result<(String, String), IpcError> {
+    let turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let active = turns
+        .get(session_id)
+        .filter(|active| active.workspace_id == workspace_id && active.turn_id == turn_id)
+        .ok_or_else(|| IpcError::new("AG_TURN_MISMATCH", "恢复请求不属于原回合", false, false))?;
+    let bound = active.model_binding.clone().ok_or_else(|| {
+        IpcError::new(
+            "AG_MODEL_BINDING_MISSING",
+            "原回合缺少固定模型，禁止默认回退",
+            false,
+            false,
+        )
+    })?;
+    match (requested_provider, requested_model) {
+        (None, None) => Ok(bound),
+        (Some(provider), Some(model)) if provider == bound.0 && model == bound.1 => Ok(bound),
+        _ => Err(IpcError::new(
+            "AG_MODEL_BINDING_MISMATCH",
+            "续行模型与原回合不一致，禁止切换；请核对原回合状态",
+            false,
+            false,
+        )),
+    }
+}
+
+pub(super) fn bind_new_agent_turn_model(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    provider: &str,
+    model: &str,
+) -> Result<(), IpcError> {
+    let mut turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent 回合注册表繁忙", true, false))?;
+    let active = turns
+        .get_mut(session_id)
+        .filter(|active| active.turn_id == turn_id)
+        .ok_or_else(|| IpcError::new("AG_TURN_NOT_ACTIVE", "Agent 回合已不再活动", false, false))?;
+    if active.model_binding.is_some() {
+        return Err(IpcError::new(
+            "AG_MODEL_BINDING_CONFLICT",
+            "原回合模型不可重新绑定",
+            false,
+            false,
+        ));
+    }
+    active.model_binding = Some((provider.to_string(), model.to_string()));
+    Ok(())
 }
 
 /**
@@ -462,11 +549,49 @@ pub(super) fn install_agent_turn_abort_handle(
     Ok(())
 }
 
-pub(super) fn lock_agent_turn_effect<'a>(
-    state: &'a AppState,
+/// Read-only asynchronous boundaries share the active turn's cancellation handle.
+/// Dropping this future stops waiting; it never grants permission or retries effects.
+pub(super) async fn await_turn_operation<T>(
+    state: &AppState,
     session_id: &str,
     turn_id: &str,
-) -> Result<std::sync::MutexGuard<'a, HashMap<String, ActiveAgentTurn>>, IpcError> {
+    operation: impl std::future::Future<Output = Result<T, IpcError>>,
+) -> Result<T, IpcError> {
+    let (handle, registration) = futures_util::future::AbortHandle::new_pair();
+    install_agent_turn_abort_handle(state, session_id, turn_id, handle)?;
+    futures_util::future::Abortable::new(operation, registration)
+        .await
+        .map_err(|_| IpcError::new("AG_TURN_CANCELLED", "当前回合已取消。", false, false))?
+}
+
+pub(super) struct AgentTurnEffectLease {
+    turns: Arc<Mutex<HashMap<String, ActiveAgentTurn>>>,
+    session_id: String,
+    turn_id: String,
+    count: Arc<AtomicUsize>,
+}
+
+impl Drop for AgentTurnEffectLease {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::AcqRel);
+        if let Ok(mut turns) = self.turns.lock() {
+            let remove = turns.get(&self.session_id).is_some_and(|turn| {
+                turn.turn_id == self.turn_id
+                    && (turn.cancelled.load(Ordering::Acquire) || turn.runtime_returned)
+                    && turn.effects_in_flight.load(Ordering::Acquire) == 0
+            });
+            if remove {
+                turns.remove(&self.session_id);
+            }
+        }
+    }
+}
+
+pub(super) fn lock_agent_turn_effect(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<AgentTurnEffectLease, IpcError> {
     let turns = state
         .active_agent_turns
         .lock()
@@ -482,7 +607,13 @@ pub(super) fn lock_agent_turn_effect<'a>(
             false,
         ));
     }
-    Ok(turns)
+    active.effects_in_flight.fetch_add(1, Ordering::AcqRel);
+    Ok(AgentTurnEffectLease {
+        turns: Arc::clone(&state.active_agent_turns),
+        session_id: session_id.to_string(),
+        turn_id: turn_id.to_string(),
+        count: Arc::clone(&active.effects_in_flight),
+    })
 }
 
 /**
@@ -572,7 +703,19 @@ pub(crate) fn ag_ack_preview(
         session_version,
         content_hash,
     };
-    ag::task::acknowledge_preview_checkpoint(&conn, &checkpoint).map_err(|error| {
+    commit_preview_ack(&conn, &checkpoint)?;
+    Ok(serde_json::json!({ "task_run_id": task_run_id, "ready": true }))
+}
+
+// 同一数据库事务提交检查点和新建文档拒绝保护；后者失败不得留下不可重提的半份 ack。
+pub(super) fn commit_preview_ack(
+    conn: &rusqlite::Connection,
+    checkpoint: &ag::task::PreviewCheckpoint,
+) -> Result<(), IpcError> {
+    let tx = conn.unchecked_transaction().map_err(|error| {
+        IpcError::new("AG_PREVIEW_ACK_DB_ERROR", &error.to_string(), true, false)
+    })?;
+    ag::task::acknowledge_preview_checkpoint(&tx, checkpoint).map_err(|error| {
         IpcError::new(
             "AG_PREVIEW_ACK_REJECTED",
             &format!("预览回执未通过身份或状态校验：{error}"),
@@ -581,12 +724,13 @@ pub(crate) fn ag_ack_preview(
         )
     })?;
     workspace::operation::acknowledge_create_document_preview(
-        &conn,
+        &tx,
         &checkpoint.diff_id,
         checkpoint.session_version,
         &checkpoint.content_hash,
     )?;
-    Ok(serde_json::json!({ "task_run_id": task_run_id, "ready": true }))
+    tx.commit()
+        .map_err(|error| IpcError::new("AG_PREVIEW_ACK_DB_ERROR", &error.to_string(), true, false))
 }
 
 pub(super) fn cancel_active_agent_turn(
@@ -666,11 +810,65 @@ mod ag_execution_kernel_tests {
     use super::*;
     use crate::build_registry;
 
+    // covers: BR-SYS-STATE-008, BR-AG-DATA-001
+    #[test]
+    fn preview_ack_rolls_back_checkpoint_when_bundle_storage_fails() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
+        conn.execute("INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)", []).unwrap();
+        let task_run_id = ag::task::begin_turn(&conn, "ws1", "s1", None).unwrap();
+        conn.execute("INSERT INTO pending_diffs (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at) VALUES ('d1','ws1','a.txt','AG','pending','p1',1)", []).unwrap();
+        ag::task::create_preview_checkpoint(&conn, &task_run_id, "ws1", "s1", "t1", "d1", "a.txt")
+            .unwrap();
+        let checkpoint = ag::task::PreviewCheckpoint {
+            diff_id: "d1".into(),
+            task_run_id: task_run_id.clone(),
+            workspace_id: "ws1".into(),
+            session_id: "s1".into(),
+            turn_id: "t1".into(),
+            rel_path: "a.txt".into(),
+            session_version: 1,
+            content_hash: "hash".into(),
+        };
+        // 隔离内存库注入存储故障；执行真实生产事务/检查点/组合查询，不替换被测逻辑。
+        conn.execute(
+            "ALTER TABLE create_document_bundles RENAME TO unavailable_bundles",
+            [],
+        )
+        .unwrap();
+        assert!(commit_preview_ack(&conn, &checkpoint).is_err());
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM task_preview_checkpoints WHERE diff_id='d1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "awaiting_ack");
+        assert!(
+            ag::task::acknowledged_preview_checkpoint(&conn, &task_run_id, "ws1", "s1", "d1")
+                .unwrap()
+                .is_none()
+        );
+        conn.execute(
+            "ALTER TABLE unavailable_bundles RENAME TO create_document_bundles",
+            [],
+        )
+        .unwrap();
+        commit_preview_ack(&conn, &checkpoint).unwrap();
+        assert!(
+            ag::task::acknowledged_preview_checkpoint(&conn, &task_run_id, "ws1", "s1", "d1")
+                .unwrap()
+                .is_some()
+        );
+        assert!(commit_preview_ack(&conn, &checkpoint).is_err());
+    }
+
     fn state() -> AppState {
         AppState {
-            db: Mutex::new(Connection::open_in_memory().unwrap()),
+            db: std::sync::Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
             registry: build_registry(),
-            assist_terminals: Mutex::new(HashMap::new()),
+            assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
             active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -688,6 +886,47 @@ mod ag_execution_kernel_tests {
             initial_prompt: "initial request".to_string(),
             continuation_messages: Vec::new(),
         }
+    }
+
+    // covers: BR-AG-DATA-007
+    #[test]
+    fn resumed_turn_keeps_initial_model_even_when_client_selection_changes() {
+        let state = state();
+        let (_lease, _, _, _, _) =
+            register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                .unwrap();
+        bind_new_agent_turn_model(&state, "s1", "t1", "deepseek", "deepseek-v4-flash").unwrap();
+        assert_eq!(
+            model_binding_for_resume(&state, "ws1", "s1", "t1", None, None).unwrap(),
+            ("deepseek".to_string(), "deepseek-v4-flash".to_string())
+        );
+        assert_eq!(
+            error_code(bind_new_agent_turn_model(
+                &state,
+                "s1",
+                "t1",
+                "deepseek",
+                "deepseek-chat"
+            )),
+            "AG_MODEL_BINDING_CONFLICT"
+        );
+        assert_eq!(
+            error_code(model_binding_for_resume(
+                &state, "ws2", "s1", "t1", None, None
+            )),
+            "AG_TURN_MISMATCH"
+        );
+        assert_eq!(
+            error_code(model_binding_for_resume(
+                &state,
+                "ws1",
+                "s1",
+                "t1",
+                Some("deepseek"),
+                Some("deepseek-chat")
+            )),
+            "AG_MODEL_BINDING_MISMATCH"
+        );
     }
 
     // covers: BR-AG-STATE-001
@@ -718,6 +957,40 @@ mod ag_execution_kernel_tests {
         let (_next, _, _, _, _) =
             register_active_agent_turn(&state, "ws1", "s1", "t2", AgentTurnResumeKind::New)
                 .unwrap();
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007
+    #[test]
+    fn pending_turn_operation_cancels_before_or_during_wait_without_replay() {
+        use std::future::Future;
+        use std::task::{Context, Poll};
+        for cancel_before_poll in [false, true] {
+            let state = state();
+            let (lease, _, _, _, _) =
+                register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
+                    .unwrap();
+            let waker = futures_util::task::noop_waker();
+            let mut context = Context::from_waker(&waker);
+            let mut operation = Box::pin(await_turn_operation(
+                &state,
+                "s1",
+                "t1",
+                futures_util::future::pending::<Result<(), IpcError>>(),
+            ));
+            if !cancel_before_poll {
+                assert!(operation.as_mut().poll(&mut context).is_pending());
+            }
+            cancel_active_agent_turn(&state, "s1", "t1").unwrap();
+            match operation.as_mut().poll(&mut context) {
+                Poll::Ready(Err(error)) => assert_eq!(error.code, "AG_TURN_CANCELLED"),
+                _ => panic!("cancelled operation must stop waiting immediately"),
+            }
+            drop(operation);
+            drop(lease);
+            let (_next, _, _, _, _) =
+                register_active_agent_turn(&state, "ws1", "s1", "t2", AgentTurnResumeKind::New)
+                    .unwrap();
+        }
     }
 
     // covers: BR-AG-STATE-001
@@ -1022,7 +1295,7 @@ mod ag_execution_kernel_tests {
 
     // covers: BR-AG-STATE-001, BR-SYS-STATE-007
     #[test]
-    fn cancellation_waits_until_a_side_effect_fact_leaves_its_critical_section() {
+    fn cancellation_signals_without_waiting_for_effect_but_blocks_takeover_until_settled() {
         let state = state();
         let (_lease, cancelled, _, _, _) =
             register_active_agent_turn(&state, "ws1", "s1", "t1", AgentTurnResumeKind::New)
@@ -1039,14 +1312,9 @@ mod ag_execution_kernel_tests {
                 done_tx.send(result).unwrap();
             });
             started_rx.recv().unwrap();
-            assert!(done_rx
-                .recv_timeout(std::time::Duration::from_millis(25))
-                .is_err());
-            assert!(!cancelled.load(Ordering::Acquire));
-            drop(effect_guard);
             assert_eq!(
                 done_rx
-                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .recv_timeout(std::time::Duration::from_millis(100))
                     .unwrap()
                     .unwrap(),
                 CancelActiveTurnOutcome {
@@ -1054,6 +1322,23 @@ mod ag_execution_kernel_tests {
                     task_run_id: None,
                 }
             );
+            assert!(cancelled.load(Ordering::Acquire));
+            assert_eq!(
+                error_code(register_active_agent_turn(
+                    &state,
+                    "ws1",
+                    "s1",
+                    "t2",
+                    AgentTurnResumeKind::New
+                )),
+                "AG_EFFECT_PENDING"
+            );
+            drop(effect_guard);
+            let (new_lease, new_cancelled, _, _, _) =
+                register_active_agent_turn(&state, "ws1", "s1", "t2", AgentTurnResumeKind::New)
+                    .unwrap();
+            assert!(!new_cancelled.load(Ordering::Acquire));
+            drop(new_lease);
         });
         assert!(cancelled.load(Ordering::Acquire));
     }

@@ -173,10 +173,11 @@ use rusqlite::{Connection, OptionalExtension};
 use workspace::routes::*;
 
 /// 应用运行时状态：workspace.db 连接 + command 注册表（PI-FE-00 联通后端）。
+#[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) db: Mutex<Connection>,
+    pub(crate) db: Arc<Mutex<Connection>>,
     pub(crate) registry: CommandRegistry,
-    pub(crate) assist_terminals: Mutex<HashMap<String, ag::assist::AssistState>>,
+    pub(crate) assist_terminals: Arc<Mutex<HashMap<String, ag::assist::AssistState>>>,
     pub(crate) active_agent_turns: Arc<Mutex<HashMap<String, ag::runtime::ActiveAgentTurn>>>,
 }
 
@@ -301,7 +302,7 @@ fn route_edit_persistence_command<R: tauri::Runtime>(
 /// 统一 command 分发器（BR-SYS-DATA-003）：前端经此单一 Tauri 入口投递 CommandRequest 信封，
 /// 经注册表校验后路由到领域逻辑（X-SEQ-002）；未注册 command 一律按统一错误形状拒绝，不进入路由。
 /// 物理传输选型（单 dispatch vs per-command，SY-02）为 A 类债务，本入口落 envelope 路由骨架。
-#[tauri::command]
+#[tauri::command(async)]
 fn dispatch(
     app: tauri::AppHandle,
     request: CommandRequest,
@@ -458,16 +459,23 @@ pub fn run() {
                 );
             }
             app.manage(AppState {
-                db: Mutex::new(conn),
+                db: std::sync::Arc::new(Mutex::new(conn)),
                 registry: build_registry(),
-                assist_terminals: Mutex::new(HashMap::new()),
+                assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
                 active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
+            #[cfg(debug_assertions)]
+            if matches!(invoke.message.command(), "ag_verify_run" | "ag_verify_cancel") {
+                let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![ag::verification::ag_verify_run, ag::verification::ag_verify_cancel];
+                return handler(invoke);
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             dispatch,
             ag_start_turn,
+            ag::turn_runtime::ag_supply_context,
             ag_cancel_turn,
             ag_ack_preview,
             byok_upload,
@@ -476,7 +484,9 @@ pub fn run() {
             list_models,
             ag_request_assist,
             ag_finish_assist
-        ])
+        ];
+            handler(invoke)
+        })
         .build(tauri::generate_context!())
         .expect("error while building Binder")
         .run(|app_handle, event| {

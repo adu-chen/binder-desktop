@@ -163,6 +163,14 @@ pub enum AgTurnEventPayload {
         success: bool,
         #[serde(rename = "evidenceIds")]
         evidence_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diagnostic: Option<AgentFailureDiagnostic>,
+        #[serde(
+            rename = "executionReceipt",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        execution_receipt: Option<crate::types::ToolCallReceiptV1>,
     },
     /// Finalizing 从同回合 EvidenceLedger 派生的只读报告；不构成授权或完成工具。
     ProjectReport { report: ProjectReportV2 },
@@ -218,7 +226,72 @@ pub enum AgTurnEventPayload {
         code: String,
         message: String,
         retriable: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diagnostic: Option<AgentFailureDiagnostic>,
     },
+}
+
+/// Safe technical metadata, not execution evidence or an inferred root cause.
+/// Shared contract: SYS I-P-01 §3.1.1 (P01). No message/parameter content is copied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFailureDiagnostic {
+    pub version: u8,
+    pub observed_at: String,
+    pub category: String,
+    pub root_cause_status: String,
+}
+
+impl AgentFailureDiagnostic {
+    pub fn observed(observed_at: &str, code: &str) -> Self {
+        let category = match code {
+            "AG_PROMPT_BUDGET_EXCEEDED" => "core_context",
+            "AG_TOOL_TIMEOUT"
+            | "AG_TOOL_WORKER_FAILED"
+            | "AG_TOOL_DEADLINE_UNSAFE"
+            | "AG_TOOL_REPEATED_FAILURE"
+            | "AG_CAPABILITY_TIMEOUT"
+            | "AG_CAPABILITY_WORKER_FAILED"
+            | "AG_EFFECT_PENDING"
+            | "AG_EFFECT_FACT_UNAVAILABLE" => "core_control",
+            // Transport/schema failures do not establish an authorization denial or model fault.
+            "ENT_GATE_BAD_RESPONSE"
+            | "ENT_GATE_TIMEOUT"
+            | "ENT_GATE_UNREACHABLE"
+            | "ENT_GATE_HTTP_ERROR"
+            | "ENT_AUTH_TIMEOUT"
+            | "ENT_AUTH_UNREACHABLE"
+            | "ENT_AUTH_HTTP_ERROR"
+            | "ENT_CLIENT_SETUP"
+            | "ENT_AUTH_BAD_RESPONSE"
+            | "AG_GW_TIMEOUT"
+            | "AG_GW_STREAM_TIMEOUT" => "unknown",
+            "AG_MODEL_CONTROL_INVALID"
+            | "AG_TOOL_ARG"
+            | "AG_READ_PAGE_VERSION_REQUIRED"
+            | "AG_MODEL_CONTROL_MISSING"
+            | "AG_MODEL_CONTROL_CONFLICT"
+            | "AG_TOOL_ARGUMENTS_INVALID"
+            | "AG_GW_STREAM_INVALID_JSON"
+            | "AG_GW_STREAM_INCOMPLETE"
+            | "AG_MODEL_TOOL_ID_INVALID" => "model_protocol",
+            "AG_READ_PAGE_OUT_OF_RANGE" | "AG_READ_VERSION_STALE" | "AG_TOOL_RESULT_TOO_LARGE" => {
+                "core_context"
+            }
+            _ => match observed_at {
+                "context_assembly" => "core_context",
+                "gate" => "authorization",
+                "tool_execution" => "professional_capability",
+                _ => "unknown",
+            },
+        };
+        Self {
+            version: 1,
+            observed_at: observed_at.into(),
+            category: category.into(),
+            root_cause_status: "unknown".into(),
+        }
+    }
 }
 
 impl AgTurnEventPayload {
@@ -244,7 +317,9 @@ impl AgTurnEventPayload {
         match self {
             Self::Done { stop_reason } if stop_reason == "cancelled" => Some("cancelled"),
             Self::Done { .. } => Some("completed"),
-            Self::Error { code, .. } if code.contains("GATE") || code.contains("401") => {
+            Self::Error { code, .. }
+                if matches!(code.as_str(), "AG_GATE_DENIED" | "AG_GATE_OFFLINE") =>
+            {
                 Some("gate_rejected")
             }
             Self::Error { .. } => Some("error"),
@@ -263,7 +338,7 @@ impl AgTurnEventPayload {
  */
 /// command 注册表（BR-SYS-DATA-003）：跨进程调用必经已注册 command；
 /// 未注册的 command 一律按统一错误形状拒绝，不进入路由。
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CommandRegistry {
     registered: HashSet<String>,
 }
@@ -294,6 +369,100 @@ impl CommandRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-SYS-STATE-007, BR-AG-PERSIST-001
+    #[test]
+    fn failure_diagnostic_is_additive_and_does_not_claim_root_cause() {
+        let legacy = r#"{"type":"error","code":"E","message":"m","retriable":false}"#;
+        let event: AgTurnEventPayload = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(
+            event,
+            AgTurnEventPayload::Error {
+                diagnostic: None,
+                ..
+            }
+        ));
+        let diagnostic = AgentFailureDiagnostic::observed("runtime", "AG_PROMPT_BUDGET_EXCEEDED");
+        assert_eq!(diagnostic.category, "core_context");
+        assert_eq!(diagnostic.root_cause_status, "unknown");
+        assert_eq!(
+            AgentFailureDiagnostic::observed("runtime", "AG_MODEL_CONTROL_INVALID").category,
+            "model_protocol"
+        );
+        for code in ["AG_MODEL_CONTROL_CONFLICT", "AG_TOOL_ARGUMENTS_INVALID"] {
+            assert_eq!(
+                AgentFailureDiagnostic::observed("tool_validation", code).category,
+                "model_protocol"
+            );
+        }
+        for code in ["AG_GW_STREAM_INVALID_JSON", "AG_GW_STREAM_INCOMPLETE"] {
+            let diagnostic = AgentFailureDiagnostic::observed("runtime", code);
+            assert_eq!(diagnostic.observed_at, "runtime");
+            assert_eq!(diagnostic.category, "model_protocol");
+            assert_eq!(diagnostic.root_cause_status, "unknown");
+        }
+        assert_eq!(
+            AgentFailureDiagnostic::observed("runtime", "OTHER_MODEL_ERROR").category,
+            "unknown"
+        );
+        assert_eq!(
+            AgentFailureDiagnostic::observed("gate", "ENT_GATE_BAD_RESPONSE").category,
+            "unknown"
+        );
+        assert_eq!(
+            AgentFailureDiagnostic::observed("gate", "AG_GATE_DENIED").category,
+            "authorization"
+        );
+        for code in ["AG_GW_TIMEOUT", "AG_GW_STREAM_TIMEOUT"] {
+            assert_eq!(
+                AgentFailureDiagnostic::observed("runtime", code).category,
+                "unknown"
+            );
+        }
+        for code in [
+            "ENT_GATE_BAD_RESPONSE",
+            "ENT_GATE_TIMEOUT",
+            "ENT_GATE_UNREACHABLE",
+            "ENT_GATE_HTTP_ERROR",
+            "ENT_AUTH_TIMEOUT",
+            "ENT_AUTH_UNREACHABLE",
+            "ENT_AUTH_HTTP_ERROR",
+            "ENT_AUTH_BAD_RESPONSE",
+            "ENT_CLIENT_SETUP",
+            "AG_GW_TIMEOUT",
+            "UNRELATED_401",
+            "UNKNOWN_GATE_ERROR",
+        ] {
+            let event = AgTurnEventPayload::Error {
+                code: code.into(),
+                message: "failure".into(),
+                retriable: true,
+                diagnostic: None,
+            };
+            assert_eq!(event.terminal_status(), Some("error"));
+        }
+        for code in ["AG_GATE_DENIED", "AG_GATE_OFFLINE"] {
+            let event = AgTurnEventPayload::Error {
+                code: code.into(),
+                message: "denied".into(),
+                retriable: false,
+                diagnostic: None,
+            };
+            assert_eq!(event.terminal_status(), Some("gate_rejected"));
+        }
+        let failure = crate::ag::history::TurnFailure {
+            code: "E".into(),
+            message: "m".into(),
+            retriable: false,
+            diagnostic: Some(diagnostic.clone()),
+        };
+        let restored: crate::ag::history::TurnFailure =
+            serde_json::from_value(serde_json::to_value(failure).unwrap()).unwrap();
+        assert_eq!(restored.diagnostic, Some(diagnostic));
+        let old: crate::ag::history::TurnFailure =
+            serde_json::from_str(r#"{"code":"E","message":"m","retriable":false}"#).unwrap();
+        assert!(old.diagnostic.is_none());
+    }
 
     // covers: BR-SYS-OBS-002
     // 统一错误形状含四要素（code/message/retriable/reauth_required）且 serde 往返稳定。
@@ -380,6 +549,7 @@ mod tests {
                 code: "E".into(),
                 message: "m".into(),
                 retriable: false,
+                diagnostic: None,
             }),
         ];
         for ev in terminals {

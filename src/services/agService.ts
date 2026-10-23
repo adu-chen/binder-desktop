@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { ToolCallReceiptV1 } from "../store/agStore";
 import { activeSession, agStore, type AgentTurnStatus, type AgMode, type AgSession, type ChatMessage, type ProjectReportView, type TaskPlanView, type TaskRunView, type TaskRunViewStatus, type TaskStepViewStatus, type ToolCallView, type TurnSegment } from "../store/agStore";
 import { edStore, type ContentFormat, type EditFormat, type OpenDocSnapshot } from "../store/edStore";
 import { deStore, type DiffCardState, type DiffEffectStatus, type DiffView } from "../store/deStore";
@@ -19,6 +20,7 @@ import { tabsStore } from "../store/tabsStore";
 import { flushOpenEditorSessionSnapshots, openDocument } from "./edService";
 import { parseMarkdownForEditing } from "../components/ed/markdown/markdownCodec";
 import { workspaceShell } from "../store/workspaceShell";
+import { modelStore } from "../store/modelStore";
 
 /** 审计修复（2026-07-26 · D10）：HTML sanitize — 保留内联安全标签，剥离 script/iframe/on* 等。
  *  用于 replace_block 的 new_html 在进入后端前清洗。 */
@@ -44,6 +46,21 @@ import {
   projectAgentEditableBlocks,
 } from "./edBlockOps";
 import type { DiffProjectionDto } from "../types/diffProjection";
+import type { AgentFailureDiagnostic } from "../store/agStore";
+
+// Accept only the safe versioned projection; never spread opaque error objects into history.
+function failureDiagnostic(value: unknown): AgentFailureDiagnostic | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const d = value as Record<string, unknown>;
+  const stages = ["context_assembly", "runtime", "gate", "finalizing", "tool_validation", "tool_execution", "frontend_start", "frontend_invoke", "event_recovery"];
+  const categories = ["core_context", "model_protocol", "authorization", "professional_capability", "ui_projection", "unknown"];
+  if (d.version !== 1 || d.rootCauseStatus !== "unknown" || typeof d.observedAt !== "string" || typeof d.category !== "string" || !stages.includes(d.observedAt) || !categories.includes(d.category)) return undefined;
+  return { version: 1, observedAt: d.observedAt as AgentFailureDiagnostic["observedAt"], category: d.category as AgentFailureDiagnostic["category"], rootCauseStatus: "unknown" };
+}
+
+function diagnosticSummary(d: AgentFailureDiagnostic | undefined): string {
+  return d ? `（诊断阶段：${d.observedAt}；分类：${d.category}；根因未确认）` : "";
+}
 
 /**
  * AG 模块 Service 层。
@@ -66,7 +83,7 @@ export type AgTurnEvent = AgTurnEventEnvelope & (
   | { type: "intent_updated"; revision: number; projection: unknown }
   | { type: "route_updated"; revision: number; summary: string; steps: unknown[] }
   | { type: "tool_request"; toolCallId: string; toolName: string; params: unknown }
-  | { type: "tool_result"; toolCallId: string; toolName: string; result: string; success: boolean; evidenceIds: string[] }
+  | { type: "tool_result"; toolCallId: string; toolName: string; result: string; success: boolean; evidenceIds: string[]; diagnostic?: AgentFailureDiagnostic; executionReceipt?: unknown }
   | { type: "project_report"; report: ProjectReportView }
   | { type: "diff_proposed"; diffId: string; proposalBatchId: string; groupIndex: number; groupCount: number; relPath: string; taskRunId?: string }
   | { type: "step_progress"; action: string; label: string; detail?: string }
@@ -74,10 +91,63 @@ export type AgTurnEvent = AgTurnEventEnvelope & (
   | { type: "decision_request_resolved"; requestId: string; outcome: string }
   | { type: "clarification_required"; text: string }
   | { type: "done"; stopReason: string }
-  | { type: "error"; code: string; message: string; retriable: boolean }
+  | { type: "error"; code: string; message: string; retriable: boolean; diagnostic?: AgentFailureDiagnostic }
 );
 
 export const AGENT_EDIT_RUNTIME_PROFILE = "agent-edit-1.0" as const;
+
+/** Fail closed on a present but invalid receipt; absence alone is legacy-compatible. */
+export function validateToolCallReceipt(raw: unknown, identity: {
+  workspaceId: string; sessionId: string; turnId: string; toolCallId: string; toolName: string;
+}, success: boolean, evidenceIds: string[]): ToolCallReceiptV1 {
+  const invalid = () => { throw new Error("AG_TOOL_RECEIPT_INVALID"); };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid();
+  const r = raw as Record<string, unknown>;
+  if (r.version !== "tool-call-receipt-v1" || r.attempt !== 1) return invalid();
+  for (const [key, value] of Object.entries(identity)) if (!value || r[key] !== value) return invalid();
+  for (const key of ["capabilityId", "grantId"]) if (typeof r[key] !== "string" || !r[key]) return invalid();
+  if (!["succeeded", "rejected", "failed"].includes(String(r.executionStatus))
+    || !["completed", "waiting", "blocked"].includes(String(r.completionStatus))
+    || !["not_applicable", "not_started", "proposal_created", "resource_prepared", "resource_executed", "unknown"].includes(String(r.effectStatus))
+    || !["none", "await_user", "respond_blocked", "retry_explicitly", "inspect_effect"].includes(String(r.nextAction))) return invalid();
+  if (success !== (r.executionStatus === "succeeded")) return invalid();
+  if (!Array.isArray(r.evidenceIds) || r.evidenceIds.some(id => typeof id !== "string")
+    || JSON.stringify(r.evidenceIds) !== JSON.stringify(evidenceIds)) return invalid();
+  if (!Array.isArray(r.references) || r.references.some(ref => !ref || typeof ref !== "object"
+    || !["decision_request", "pending_diff", "workspace_operation_plan"].includes(ref.kind) || typeof ref.id !== "string" || !ref.id)) return invalid();
+  const failure = r.failure as Record<string, unknown> | null;
+  if (success ? failure !== null : !failure || typeof failure.code !== "string" || !failure.code
+    || typeof failure.retriable !== "boolean" || typeof failure.reauthRequired !== "boolean") return invalid();
+  if (r.completionStatus === "waiting" && (r.nextAction !== "await_user"
+    || !r.references.length || !["not_started", "proposal_created"].includes(String(r.effectStatus)))) return invalid();
+  if (r.completionStatus === "completed" && (r.nextAction !== "none"
+    || !["not_applicable", "resource_prepared", "resource_executed"].includes(String(r.effectStatus)) || !success)) return invalid();
+  if (r.effectStatus === "resource_executed" && (r.toolName !== "execute_workspace_operation"
+    || r.executionStatus !== "succeeded" || r.completionStatus !== "completed"
+    || !r.references.some(ref => ref.kind === "workspace_operation_plan"))) return invalid();
+  // Project only declared safe fields, not arbitrary document/error payload additions.
+  return {
+    ...identity, version: "tool-call-receipt-v1", attempt: 1,
+    capabilityId: r.capabilityId as string, grantId: r.grantId as string,
+    executionStatus: r.executionStatus as ToolCallReceiptV1["executionStatus"],
+    completionStatus: r.completionStatus as ToolCallReceiptV1["completionStatus"],
+    effectStatus: r.effectStatus as ToolCallReceiptV1["effectStatus"],
+    nextAction: r.nextAction as ToolCallReceiptV1["nextAction"],
+    references: r.references.map(ref => ({ kind: ref.kind, id: ref.id })),
+    evidenceIds: [...evidenceIds],
+    failure: failure ? { code: failure.code as string, retriable: failure.retriable as boolean, reauthRequired: failure.reauthRequired as boolean } : null,
+  };
+}
+
+function receiptSummary(receipt: ToolCallReceiptV1): string {
+  if (receipt.effectStatus === "unknown") return "操作效果待核对；不会自动重试。";
+  if (receipt.effectStatus === "proposal_created") return "已生成修改建议；不代表预览、接受或保存。";
+  if (receipt.completionStatus === "waiting") return "等待用户裁决；专业修改尚未执行。";
+  if (receipt.completionStatus === "blocked") return `请求受阻${receipt.failure ? ` [${receipt.failure.code}]` : ""}；不代表业务成功。`;
+  if (receipt.effectStatus === "resource_prepared") return "资源已准备；不代表文档已保存。";
+  if (receipt.effectStatus === "resource_executed") return "资源操作已执行；不代表文档修改已接受或保存。";
+  return "只读调用完成。";
+}
 export const AGENT_CONTEXT_FACTS_VERSION = "agent-context-facts-v1" as const;
 
 export interface AgentContextDocumentFact {
@@ -186,14 +256,20 @@ interface ClarifyingTurnIdentity {
   blockRefs: { relPath: string; blockId: string; text: string; start?: number; end?: number }[];
   /** 已并入 UI 但尚未成功越过后端入口的补充说明；只在本地前置失败时累积。 */
   pendingInput?: string;
+  activeTarget?: ActiveDocTarget;
+  contextRevision?: number;
+  modelBinding?: { provider: string; model: string };
 }
 /** 按 session 保留可受控重入的非终态 AgentTurn；不得按“最近回合”跨 session 猜测。 */
 const clarifyingTurns = new Map<string, ClarifyingTurnIdentity>();
 interface DecisionTurnIdentity extends ClarifyingTurnIdentity {
   requestId: string;
+  workspaceId: string;
 }
 /** 按 DecisionRequest 保留 AwaitingDecision 的原回合身份；裁决只恢复该回合，不创建替代回合。 */
 const decisionTurns = new Map<string, DecisionTurnIdentity>();
+const decisionsInFlight = new Set<string>();
+const decisionEffectUnknown = new Set<string>();
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 function mergeReferencePayloads(...groups: ReferencePayload[][]): ReferencePayload[] {
@@ -395,6 +471,115 @@ interface ActiveDocTarget {
   contentFormat: ContentFormat;
 }
 
+interface AgentContextFactsV2 {
+  version: "agent-context-facts-v2";
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  contextRevision: number;
+  activeTarget: { relPath: string; loadSeq: number } | null;
+  openResources: {
+    relPath: string;
+    availability: "not_requested" | "loading" | "ready" | "unavailable";
+    reasonCode: string | null;
+    snapshot: Omit<AgentContextDocumentFact, "relPath"> | null;
+  }[];
+  selections: (AgentContextFacts["selections"][number] & { validation: "unverified" | "valid" | "stale"; contextRevision: number })[];
+  proposalFacts: AgentContextFacts["proposalFacts"];
+}
+
+interface AgentContextRequest {
+  requestId: string;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  contextRevision: number;
+  paths: string[];
+  allDocuments: boolean;
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-008-DATA-AG-AG-TURN-054, BR-SYS-DATA-008-DATA-AG-AG-TURN-054
+ * type:     DATA
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-DATA-008, BR-SYS-DATA-008
+ * term_ref: TERM-AG-020
+ * boundary: in=FrozenAgentTurnTargetCurrentHostResourcesAndRequestedPaths | out=AgentContextFactsV2AndRequestedLogicalStateSnapshots | does_not=waitForUnrelatedEditorOrReadDiskOrChangeFrozenTarget
+ */
+function collectAgentContextV2(
+  turnId: string, sessionId: string, target: ActiveDocTarget, revision: number,
+  references: ReferencePayload[], blockRefs: ClarifyingTurnIdentity["blockRefs"],
+  previous?: AgentContextFactsV2, requested: string[] = [], allDocuments = false,
+): { facts: AgentContextFactsV2; snapshots: AgentOpenDocSnapshot[] } {
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  if (!workspaceId || (previous && previous.workspaceId !== workspaceId)) throw snapshotError("AG_CONTEXT_FACTS_IDENTITY_MISMATCH", "工作区已切换，请重新提交");
+  const initial = edStore.getSnapshot();
+  // ED keeps closed sessions as caches. Only tabs and the live active path prove an open resource.
+  const openPaths = new Set([...tabsStore.getSnapshot().tabs.filter((t) => t.kind === "doc").map((t) => t.path), ...(initial.openPath ? [initial.openPath] : [])]);
+  if (!previous && target.relPath) openPaths.add(target.relPath);
+  const allPaths = new Set([...openPaths, ...(previous?.openResources.map((r) => r.relPath) ?? [])]);
+  const wanted = new Set(allDocuments ? [...openPaths] : requested);
+  const pendingBinding = getActiveEditorBinding();
+  if (pendingBinding && wanted.has(pendingBinding.relPath)) flushBoundActiveEditor(initial);
+  const snapshots: AgentOpenDocSnapshot[] = [];
+  const resources: AgentContextFactsV2["openResources"] = [];
+  for (const relPath of allPaths) {
+    let snapshot: AgentOpenDocSnapshot | undefined;
+    let reasonCode: string | null = null;
+    let availability: AgentContextFactsV2["openResources"][number]["availability"] = "not_requested";
+    if (!openPaths.has(relPath)) {
+      availability = "unavailable"; reasonCode = "AG_CONTEXT_RESOURCE_CLOSED";
+    } else if (wanted.has(relPath)) {
+      const ed = edStore.getSnapshot();
+      const session = ed.sessions[relPath];
+      if (relPath === target.relPath && relPath === ed.openPath && ed.loadSeq !== target.loadSeq) {
+        availability = "unavailable"; reasonCode = "AG_CONTEXT_TARGET_STALE";
+      } else if (!session || session.content === null || session.converting) {
+        availability = "loading"; reasonCode = "AG_ACTIVE_SESSION_LOADING";
+      } else if (relPath === ed.openPath) {
+        const binding = getActiveEditorBinding();
+        if (bindingMatches(binding, relPath, ed.loadSeq, session.editFormat, session.contentFormat)) {
+          const content = getActiveDocumentContent(session.editFormat, session.contentFormat);
+          if (content !== null) {
+            edStore.updateContent(relPath, content);
+            snapshot = attachActiveStructuredSnapshots(edStore.getOpenSnapshots().filter((s) => s.relPath === relPath), relPath)[0];
+          } else { availability = "unavailable"; reasonCode = "AG_ACTIVE_SNAPSHOT_REQUIRED"; }
+        } else if (session.contentFormat === "html") {
+          availability = "loading"; reasonCode = "AG_ACTIVE_SESSION_LOADING";
+        } else {
+          snapshot = edStore.getOpenSnapshots("active_editor_session").find((s) => s.relPath === relPath);
+        }
+      } else {
+        snapshot = edStore.getOpenSnapshots("active_editor_session").find((s) => s.relPath === relPath);
+      }
+      if (snapshot) availability = "ready";
+    }
+    if (snapshot) snapshots.push(snapshot);
+    resources.push({ relPath, availability, reasonCode, snapshot: snapshot ? {
+      source: snapshot.source, editFormat: snapshot.editFormat, contentFormat: snapshot.contentFormat,
+      dirty: snapshot.dirty, baseline: snapshot.baseline == null ? null : String(snapshot.baseline),
+      sessionVersion: snapshot.sessionVersion, contentHash: snapshot.contentHash,
+    } : null });
+  }
+  const projection = buildAgentContextFacts(turnId, sessionId, [], references, blockRefs);
+  return { snapshots, facts: {
+    version: "agent-context-facts-v2", workspaceId, sessionId, turnId, contextRevision: revision,
+    activeTarget: target.relPath ? { relPath: target.relPath, loadSeq: target.loadSeq } : null,
+    openResources: resources,
+    selections: projection.selections.map((s) => {
+      const snapshot = snapshots.find((d) => d.relPath === s.relPath);
+      const block = snapshot?.blockSnapshots?.find((b) => b.blockId === s.blockId);
+      const ref = references.find((r) => r.kind === "selection" && r.relPath === s.relPath && r.blockId === s.blockId);
+      const originalText = ref?.kind === "selection" ? ref.text : blockRefs.find((r) => r.relPath === s.relPath && r.blockId === s.blockId)?.text;
+      const selectedText = block && s.start !== undefined && s.end !== undefined ? block.text.slice(s.start, s.end) : block?.text;
+      const validation = !snapshot ? "unverified" : block && originalText === selectedText ? "valid" : "stale";
+      return { ...s, validation, contextRevision: revision };
+    }),
+    proposalFacts: projection.proposalFacts,
+  } };
+}
+
 export type AgentOpenDocSnapshot = OpenDocSnapshot & {
   tableSnapshots?: ReturnType<typeof listActiveTables>;
   imageSnapshots?: ReturnType<typeof projectDocumentImages>;
@@ -512,7 +697,7 @@ interface AgentTurnPayloadV1 {
   assistantMessage?: PersistedChatMessage;
   toolSummaries: { id: string; name: string; inputSummary?: string; resultSummary?: string; state: string; anchorMessageId?: string }[];
   diffRefs: { diffId: string; relPath: string; anchorMessageId?: string }[];
-  failure?: { code: string; message: string; retriable: boolean };
+  failure?: ChatMessage["turnFailure"];
   incompleteReason?: "stream_interrupted" | "app_closed";
 }
 
@@ -523,13 +708,15 @@ interface AgentTurnPayloadV2 {
   assistantMessage?: PersistedChatMessage;
   toolSummaries: { id: string; name: string; inputSummary?: string; resultSummary?: string; state: string; anchorMessageId?: string }[];
   diffRefs: { diffId: string; relPath: string; anchorMessageId?: string }[];
-  failure?: { code: string; message: string; retriable: boolean };
+  failure?: ChatMessage["turnFailure"];
   incompleteReason?: "stream_interrupted" | "app_closed";
 }
 
 interface AgentTurnDto {
   turn_id: string;
   session_id: string;
+  workspace_id?: string;
+  execution_facts?: unknown[];
   rel_path?: string | null;
   status: AgentTurnStatus;
   payload: AgentTurnPayloadV1 | AgentTurnPayloadV2;
@@ -593,6 +780,7 @@ function messageFromPersisted(message: PersistedChatMessage, turn: AgentTurnDto)
     turnId: turn.turn_id,
     relPath: turn.rel_path ?? null,
     turnStatus: turn.status,
+    turnFailure: turn.status === "draft" && turn.payload.failure ? { ...turn.payload.failure, diagnostic: failureDiagnostic(turn.payload.failure.diagnostic) } : undefined,
     segments: message.segments,
   };
 }
@@ -610,7 +798,7 @@ function turnFailureMessage(turn: AgentTurnDto): ChatMessage | null {
   return {
     id: `hist-${turn.turn_id}-${turn.status}`,
     role: "assistant",
-    content,
+    content: content + diagnosticSummary(failureDiagnostic(failure?.diagnostic)),
     error: turn.status === "error" || turn.status === "gate_rejected",
     turnId: turn.turn_id,
     relPath: turn.rel_path ?? null,
@@ -951,6 +1139,34 @@ export async function resolveDecision(
   workspaceOperationReceipt?: WorkspaceOperationReceiptDto;
   createDocumentDiffId?: string;
 }> {
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  const key = `${workspaceId ?? ""}:${requestId}`;
+  if (decisionEffectUnknown.has(key)) {
+    throw { code: "AG_DECISION_EFFECT_UNKNOWN", message: "原裁决效果待核对，禁止重复提交。请核对原回合执行效果。", retriable: false };
+  }
+  const deadlineAt = Date.now() + 30_000;
+  const ownerSessionId = decisionTurns.get(requestId)?.sessionId ?? activeSession(agStore.getSnapshot()).id;
+  const assertDecisionContext = () => {
+    if (decisionEffectUnknown.has(key) || Date.now() >= deadlineAt) {
+      decisionEffectUnknown.add(key);
+      throw {code: "AG_DECISION_TIMEOUT_EFFECT_UNKNOWN", message: "原裁决等待已结束，禁止迟到结果继续后续操作。", retriable: false};
+    }
+    if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId) {
+      throw {code: "AG_DECISION_CONTEXT_CHANGED", message: "工作区已切换，原裁决不得在新工作区继续。"};
+    }
+  };
+  const bounded = async <T>(work: Promise<T>, submitted: boolean): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([work, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          if (submitted) decisionEffectUnknown.add(key);
+          reject({ code: submitted ? "AG_DECISION_TIMEOUT_EFFECT_UNKNOWN" : "AG_DECISION_PREPARATION_TIMEOUT",
+            message: submitted ? "裁决等待超时；服务端可能仍在执行。请核对执行效果，不会自动继续或重发。" : "裁决前置准备超时；尚未提交裁决，请就绪后重新操作。", retriable: !submitted });
+        }, Math.max(0, deadlineAt - Date.now()));
+      })]);
+    } finally { if (timer !== undefined) clearTimeout(timer); }
+  };
   const pendingDecision = agStore.getSnapshot().pendingDecision;
   const pendingPayload = pendingDecision?.requestId === requestId
     && pendingDecision.payload
@@ -958,9 +1174,12 @@ export async function resolveDecision(
     ? pendingDecision.payload as Record<string, unknown>
     : null;
   if (outcome === "confirm" && typeof pendingPayload?.workspaceOperationPlanId === "string") {
-    await flushOpenEditorSessionSnapshots();
+    await bounded(flushOpenEditorSessionSnapshots(), false);
   }
-  const result = await dispatchCall<{
+  if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId) {
+    throw { code: "AG_DECISION_CONTEXT_CHANGED", message: "工作区已切换，未提交原决策。" };
+  }
+  const result = await bounded(dispatchCall<{
     task_run_id: string;
     status: string;
     workspace_operation_receipt?: WorkspaceOperationReceiptDto | null;
@@ -970,10 +1189,14 @@ export async function resolveDecision(
   }>("ag.resolve_decision", {
     requestId,
     outcome,
-  });
+  }), true);
   try {
+    if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId) {
+      throw { code: "AG_DECISION_CONTEXT_CHANGED", message: "原决策已提交，但工作区已切换；未在新工作区继续或投影回执，请返回原工作区核查。" };
+    }
     let createDocumentDiffId: string | undefined;
-    if (result.workspace_operation_receipt) await loadDocs();
+    if (result.workspace_operation_receipt) await bounded(loadDocs(), true);
+    assertDecisionContext();
     for (const diffId of result.workspace_operation_receipt?.invalidated_diff_ids ?? []) {
       deStore.expireLocal(diffId, {
         expiredReason: "document_revision_advanced",
@@ -991,14 +1214,16 @@ export async function resolveDecision(
       }
       const effectiveItems = result.workspace_operation_items.filter((item) => completed.has(item.item_id));
       agStore.reconcileResourceReferences(effectiveItems);
-      await reconcileWorkspaceOperationTabs(
+      await bounded(reconcileWorkspaceOperationTabs(
         effectiveItems,
         Boolean(result.create_document_bundle),
-      );
+        assertDecisionContext,
+      ), true);
     }
     if (result.create_document_bundle) {
-      createDocumentDiffId = await projectCreateDocumentBundle(result.create_document_bundle);
+      createDocumentDiffId = await bounded(projectCreateDocumentBundle(result.create_document_bundle, ownerSessionId, assertDecisionContext), true);
     }
+    assertDecisionContext();
     return {
       taskRunId: result.task_run_id,
       status: result.status,
@@ -1028,8 +1253,10 @@ interface WorkspaceOperationItemDto {
 async function reconcileWorkspaceOperationTabs(
   items: WorkspaceOperationItemDto[],
   hasCreateBundle: boolean,
+  assertContext: () => void,
 ): Promise<void> {
   for (const item of [...items].sort((left, right) => left.seq - right.seq)) {
+    assertContext();
     const source = item.source_rel_path ?? "";
     const target = item.target_rel_path ?? "";
     const matchingTabs = tabsStore.getSnapshot().tabs.filter((tab) => (
@@ -1049,6 +1276,7 @@ async function reconcileWorkspaceOperationTabs(
       ));
       for (const tab of matchingTabs) tabsStore.close(tab.id, { force: true });
       for (const relPath of reopenTargets) {
+        assertContext();
         tabsStore.openDoc(relPath);
         await openDocument(relPath);
       }
@@ -1071,12 +1299,14 @@ interface CreateDocumentProjectionResult {
   projection?: DiffProjectionDto;
 }
 
-async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Promise<string | undefined> {
+async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto, ownerSessionId: string, assertContext: () => void): Promise<string | undefined> {
+  assertContext();
   const relPath = bundle.target.rel_path;
   tabsStore.openDoc(relPath);
   try {
     await openDocument(relPath);
   } catch (openError) {
+    assertContext();
     console.error("[create-document-trace]", {
       phase: "open_document",
       planId: bundle.plan_id,
@@ -1097,6 +1327,7 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Pro
     }
     throw { code: "ED_CREATE_BUNDLE_OPEN_FAILED_COMPENSATED", message: "新文档打开失败，已安全撤销创建", cause: openError };
   }
+  assertContext();
   const session = edStore.getSnapshot().sessions[relPath];
   if (!session || session.content === null) {
     throw { code: "ED_CREATE_BUNDLE_SESSION_MISSING", message: "新文档已创建，但编辑器未建立 LogicalState" };
@@ -1105,13 +1336,14 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Pro
   try {
     projected = await dispatchCall<CreateDocumentProjectionResult>("ws.project_create_document_bundle", {
       planId: bundle.plan_id,
-      sessionId: activeSession(agStore.getSnapshot()).id,
+      sessionId: ownerSessionId,
       relPath,
       beforeSnapshot: session.content,
       baseSessionVersion: session.sessionVersion,
       baseContentHash: session.contentHash,
     });
   } catch (projectionError) {
+    assertContext();
     console.error("[create-document-trace]", {
       phase: "project_initial_content",
       planId: bundle.plan_id,
@@ -1134,6 +1366,7 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto): Pro
     }
     throw { code: "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED", message: "初始内容投影失败，已安全撤销创建", cause: projectionError };
   }
+  assertContext();
   if (projected.projection_failed_compensated) {
     const tab = tabsStore.getSnapshot().tabs.find((candidate) => (
       candidate.kind === "doc" && candidate.path === relPath
@@ -1238,6 +1471,9 @@ export interface WorkspaceOperationReceiptDto {
 }
 
 const previewAckInFlight = new Set<string>();
+const previewContinuations = new Map<string, { sessionId: string; workspaceId: string }>();
+const previewAckEffectUnknown = new Set<string>();
+const PREVIEW_ACK_DEADLINE_MS = 15_000;
 
 /**
  * @GOV
@@ -1251,7 +1487,7 @@ const previewAckInFlight = new Set<string>();
 /** 只有 ED/DE 已成功标记 draftApplied 后才回报 PreviewAck，并由前端明确启动下一执行片段。
  * 此处不从 Diff payload 推断内容，也不会对 background Diff 或无 checkpoint 的卡片续编。 */
 export async function acknowledgePreviewAndContinue(diffId: string): Promise<void> {
-  if (previewAckInFlight.has(diffId)) return;
+  if (previewAckInFlight.has(diffId) || previewAckEffectUnknown.has(diffId)) return;
   const diff = deStore.getSnapshot().diffs.find((candidate) => candidate.diffId === diffId);
   if (
     !diff?.previewContinuationRequired
@@ -1264,75 +1500,145 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
   ) return;
   const session = edStore.getSnapshot().sessions[diff.relPath];
   if (!session || session.content === null) return;
-  if (diff.draftAfterContent !== undefined && session.content !== diff.draftAfterContent) {
-    await dispatchCall("de.expire_diff", {
-      diffId,
-      reason: "ED_DRAFT_BASE_ADVANCED",
-    });
-    deStore.expireLocal(diffId, {
-      expiredReason: "document_revision_advanced",
-      errorCode: "ED_DRAFT_BASE_ADVANCED",
-    });
-    return;
-  }
-
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  if (!workspaceId) return;
+  const action = {
+    sessionId: diff.sessionId,
+    turnId: diff.turnId,
+    action: "previewing" as const,
+    label: "已应用预览，正在校验最新文档状态",
+  };
   previewAckInFlight.add(diffId);
   try {
-    agStore.setCurrentAction({
-      sessionId: diff.sessionId,
-      turnId: diff.turnId,
-      action: "previewing",
-      label: "已应用预览，正在校验最新文档状态",
-    });
-    await invoke<{ task_run_id: string; ready: boolean }>("ag_ack_preview", {
-      taskRunId: diff.taskRunId,
-      sessionId: diff.sessionId,
-      turnId: diff.turnId,
-      diffId,
-      relPath: diff.relPath,
-      sessionVersion: session.sessionVersion,
-      contentHash: session.contentHash,
-    });
+    agStore.setCurrentAction(action);
+    if (diff.draftAfterContent !== undefined && session.content !== diff.draftAfterContent) {
+      await dispatchCall("de.expire_diff", { diffId, reason: "ED_DRAFT_BASE_ADVANCED" });
+      if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId === workspaceId) {
+        deStore.expireLocal(diffId, { expiredReason: "document_revision_advanced", errorCode: "ED_DRAFT_BASE_ADVANCED" });
+      }
+      throw new Error("AG_PREVIEW_CONTINUATION_STALE：预览基线已变化，未继续执行。");
+    }
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const receipt = await Promise.race([
+      invoke<{ task_run_id: string; ready: boolean }>("ag_ack_preview", {
+        taskRunId: diff.taskRunId,
+        sessionId: diff.sessionId,
+        turnId: diff.turnId,
+        diffId,
+        relPath: diff.relPath,
+        sessionVersion: session.sessionVersion,
+        contentHash: session.contentHash,
+      }),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject({
+          code: "AG_PREVIEW_ACK_TIMEOUT_EFFECT_UNKNOWN",
+          message: "预览回执在 15 秒内未返回；服务端可能已提交。已停止自动继续及本进程内重复确认，请核对任务状态后再决定下一步。",
+        }), PREVIEW_ACK_DEADLINE_MS);
+      }),
+    ]).finally(() => { if (deadline !== undefined) clearTimeout(deadline); });
+    const current = edStore.getSnapshot().sessions[diff.relPath];
+    const currentDiff = deStore.getSnapshot().diffs.find((candidate) => candidate.diffId === diffId);
+    if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId) {
+      throw new Error("AG_PREVIEW_CONTEXT_CHANGED：工作区已切换，未继续执行。");
+    }
+    if (!receipt?.ready || receipt.task_run_id !== diff.taskRunId) {
+      throw new Error("AG_PREVIEW_ACK_INVALID：预览回执不匹配，未继续执行。");
+    }
+    if (currentDiff?.state !== "pending" || !currentDiff.draftApplied
+      || currentDiff.sessionId !== diff.sessionId || currentDiff.taskRunId !== diff.taskRunId
+      || currentDiff.turnId !== diff.turnId || currentDiff.relPath !== diff.relPath
+      || current?.sessionVersion !== session.sessionVersion || current?.contentHash !== session.contentHash) {
+      throw new Error("AG_PREVIEW_CONTINUATION_STALE：文档或修改状态已变化，未继续执行。");
+    }
+    if (closeStore.getSnapshot().phase !== "idle") {
+      throw new Error("AG_PREVIEW_CLOSE_PENDING：应用正在关闭，未继续执行。");
+    }
+    previewContinuations.set(diffId, { sessionId: diff.sessionId, workspaceId });
     await startTurn("（编辑器预览已完成）请基于最新文档状态继续当前任务；若目标已完成，请直接给出简短结果。", {
       autoContinue: true,
       mentions: [diff.relPath],
       continuation: { taskRunId: diff.taskRunId, previewDiffId: diffId },
     });
   } catch (error) {
-    // Ack 被拒绝意味着基线已变化/卡片终态/身份不匹配；不重试、更不以旧快照续编。
+    // 不自动重试：传输失败不能证明服务端未提交。错误仅投影到仍存在的原工作区会话。
+    if ((error as { code?: string })?.code === "AG_PREVIEW_ACK_TIMEOUT_EFFECT_UNKNOWN") {
+      previewAckEffectUnknown.add(diffId);
+    }
     console.error("[ag-preview] continuation acknowledgement rejected", error);
-    agStore.setCurrentAction(null);
+    if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId === workspaceId
+      && agStore.getSnapshot().sessions.some((candidate) => candidate.id === diff.sessionId)) {
+      const failure = error as { code?: string; message?: string };
+      agStore.pushMessage(diff.sessionId, {
+        id: `preview-error-${diffId}-${Date.now()}`,
+        role: "assistant",
+        content: `预览继续未完成；不代表修改已接受或文件已保存。${failure?.code ? `[${failure.code}] ` : ""}${failure?.message ?? String(error)}`,
+        error: true,
+      });
+    }
   } finally {
+    agStore.clearCurrentAction(action);
+    previewContinuations.delete(diffId);
     previewAckInFlight.delete(diffId);
   }
 }
 
-/** 任务级裁决后恢复原 AgentTurn。confirm/cancel 都是模型可见的合法用户事件；
- * 只有本进程仍持有 AwaitingDecision 身份时才恢复，历史任务裁决不会猜测或伪造回合。 */
+/**
+ * @GOV
+ * codes: BR-SYS-STATE-007-EFFECT-AG-AG-TURN-060, BR-SYS-STATE-008-EFFECT-AG-AG-TURN-060
+ * type: EFFECT
+ * chain: AG-TURN, IPC-CALL
+ * rules: BR-SYS-STATE-007, BR-SYS-STATE-008
+ * term_ref: TERM-AG-017, TERM-AG-001
+ * boundary: in=DecisionRequestIdAndUserOutcome | out=SingleInFlightResolutionAndIdentityBoundAgentTurnContinuation | does_not=grantPermissionOrFabricateHistoricalTurn
+ */
 export async function resolveDecisionAndContinue(
   requestId: string,
   outcome: "confirm" | "cancel",
 ): Promise<Awaited<ReturnType<typeof resolveDecision>>> {
-  const decisionTurn = decisionTurns.get(requestId);
-  const resolution = await resolveDecision(requestId, outcome);
-  if (
-    decisionTurn
-    && (resolution.status === "waiting" || resolution.status === "cancelled")
-  ) {
-    if (closeStore.getSnapshot().phase !== "idle") {
-      await invoke("ag_cancel_turn", {
-        sessionId: decisionTurn.sessionId,
-        turnId: decisionTurn.turnId,
-      });
-      await projectParkedCancellation(decisionTurn);
-      return resolution;
-    }
-    await startTurn(decisionTurn.prompt, {
-      autoContinue: true,
-      continuation: { taskRunId: resolution.taskRunId, decisionRequestId: requestId },
-    });
+  if (decisionsInFlight.has(requestId)) {
+    throw { code: "AG_DECISION_IN_FLIGHT", message: "该决策正在提交，请等待结果。" };
   }
-  return resolution;
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  const pending = agStore.getSnapshot().pendingDecision;
+  const decisionTurn = decisionTurns.get(requestId);
+  if (decisionTurn && decisionTurn.workspaceId !== workspaceId) {
+    throw { code: "AG_DECISION_CONTEXT_CHANGED", message: "请返回该决策所属工作区后操作。" };
+  }
+  decisionsInFlight.add(requestId);
+  let resolvedTaskRunId: string | undefined;
+  try {
+    const resolution = await resolveDecision(requestId, outcome);
+    resolvedTaskRunId = resolution.taskRunId;
+    if (pending?.requestId === requestId) agStore.clearPendingDecision(pending);
+    if (
+      decisionTurn
+      && decisionTurns.get(requestId) === decisionTurn
+      && agStore.getSnapshot().sessions.some((session) => session.id === decisionTurn.sessionId)
+      && (resolution.status === "waiting" || resolution.status === "cancelled")
+    ) {
+      if (closeStore.getSnapshot().phase !== "idle") {
+        await invoke("ag_cancel_turn", {
+          sessionId: decisionTurn.sessionId,
+          turnId: decisionTurn.turnId,
+        });
+        await projectParkedCancellation(decisionTurn);
+        return resolution;
+      }
+      await startTurn(decisionTurn.prompt, {
+        autoContinue: true,
+        continuation: { taskRunId: resolution.taskRunId, decisionRequestId: requestId },
+      });
+    }
+    return resolution;
+  } catch (cause) {
+    const error = resolvedTaskRunId ? resolvedDecisionPostProcessingError(cause, resolvedTaskRunId) : cause;
+    if ((error as { decisionResolved?: boolean })?.decisionResolved && pending?.requestId === requestId) {
+      agStore.clearPendingDecision(pending);
+    }
+    throw error;
+  } finally {
+    decisionsInFlight.delete(requestId);
+  }
 }
 
 interface TaskPlanStepDto {
@@ -1419,6 +1725,94 @@ export async function listTurnEvents(turnId: string, afterSeq = 0): Promise<AgTu
   return dispatchCall<AgTurnEvent[]>("ag.list_turn_events", { turnId, afterSeq });
 }
 
+/**
+ * @GOV
+ * codes: BR-AG-PERSIST-001-QUERY-AG-AG-TURN-067, BR-SYS-STATE-007-QUERY-AG-AG-TURN-067
+ * type: QUERY
+ * chain: AG-TURN
+ * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * boundary: in=AgentTurnWorkspaceSessionIdentity | out=ValidatedTurnEventsToolCallReceiptsAndUnresolvedToolCallIds | does_not=RestoreAuthorizationExecuteToolsOrClaimAcceptanceOrSave
+ */
+/** 只查询持久执行事实；不复活授权、不恢复执行、不把专业对象引用推导为接受/保存。 */
+export async function queryTurnExecutionEvidence(identity: {
+  workspaceId: string; sessionId: string; turnId: string;
+}): Promise<{ events: AgTurnEvent[]; receipts: ToolCallReceiptV1[]; unresolvedToolCallIds: string[] }> {
+  const events = await listTurnEvents(identity.turnId);
+  if (!Array.isArray(events)) throw new Error("AG_RETRY_EVIDENCE_UNAVAILABLE");
+  let seq = 0;
+  let terminal = false;
+  const requests = new Map<string, string>();
+  const seen = new Set<string>();
+  const receipts: ToolCallReceiptV1[] = [];
+  for (const event of events) {
+    if (event.turnId !== identity.turnId || event.payloadVersion !== 1 || !Number.isSafeInteger(event.seq)
+      || event.seq <= seq || terminal) throw new Error("AG_RETRY_EVIDENCE_UNAVAILABLE");
+    seq = event.seq;
+    if (event.type === "tool_request") {
+      if (!event.toolCallId || seen.has(event.toolCallId)) throw new Error("AG_TOOL_RECEIPT_INVALID");
+      seen.add(event.toolCallId);
+      requests.set(event.toolCallId, event.toolName);
+    }
+    if (event.type === "tool_result" && event.executionReceipt !== undefined) {
+      if (requests.get(event.toolCallId) !== event.toolName) throw new Error("AG_TOOL_RECEIPT_INVALID");
+      receipts.push(validateToolCallReceipt(event.executionReceipt, { ...identity, toolCallId: event.toolCallId, toolName: event.toolName }, event.success, event.evidenceIds));
+      requests.delete(event.toolCallId);
+    }
+    terminal = event.type === "done" || event.type === "error";
+  }
+  return { events, receipts, unresolvedToolCallIds: [...requests.keys()] };
+}
+
+/** Queries late effect settlement separately; never resumes or retries a capability. */
+/**
+ * @GOV
+ * codes: BR-AG-PERSIST-001-QUERY-AG-AG-TURN-068, BR-SYS-STATE-007-QUERY-AG-AG-TURN-068
+ * type: QUERY
+ * chain: AG-TURN, IPC-CALL
+ * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
+ * boundary: in=WorkspaceScopedAgentSessionAndAgentTurnIdentity | out=ValidatedLateCapabilityEffectSummaryAndProfessionalObjectReferences | does_not=ExecuteCapabilityRestoreAuthorizationOrInferAcceptanceOrSave
+ */
+export async function inspectTurnEffects(sessionId: string, turnId: string): Promise<string> {
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  if (!workspaceId) throw new Error("AG_CONTEXT_FACTS_WORKSPACE_REQUIRED");
+  const turns = await dispatchCall<AgentTurnDto[]>("ag.list_turns", { sessionId });
+  if (workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId) throw new Error("AG_RETRY_CONTEXT_CHANGED");
+  if (!Array.isArray(turns)) throw new Error("AG_EFFECT_FACT_UNAVAILABLE");
+  const turn = turns.find(turn => turn.turn_id === turnId && turn.session_id === sessionId && turn.workspace_id === workspaceId);
+  if (!turn) throw new Error("AG_EFFECT_FACT_UNAVAILABLE");
+  const rawFacts = turn.execution_facts ?? [];
+  if (!Array.isArray(rawFacts)) throw new Error("AG_TOOL_RECEIPT_INVALID");
+  const starts = new Map<string, Record<string, unknown>>();
+  const settled = new Map<string, ToolCallReceiptV1>();
+  for (const raw of rawFacts) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("AG_TOOL_RECEIPT_INVALID");
+    const fact = raw as Record<string, unknown>; const id = fact.identity as Record<string, unknown>;
+    if (!id || id.workspaceId !== workspaceId || id.sessionId !== sessionId || id.turnId !== turnId
+      || typeof id.toolCallId !== "string" || !id.toolCallId || typeof id.toolName !== "string" || !id.toolName
+      || typeof id.capabilityId !== "string" || !id.capabilityId || typeof id.grantId !== "string" || !id.grantId || id.attempt !== 1)
+      throw new Error("AG_TOOL_RECEIPT_INVALID");
+    if (fact.phase === "started" && fact.receipt === null && !starts.has(id.toolCallId)) starts.set(id.toolCallId, id);
+    else if (fact.phase === "settled" && !settled.has(id.toolCallId)) {
+      const receipt = fact.receipt as Record<string, unknown>;
+      const checked = validateToolCallReceipt(receipt, { workspaceId, sessionId, turnId, toolCallId: id.toolCallId, toolName: id.toolName },
+        receipt?.executionStatus === "succeeded", []);
+      if (checked.capabilityId !== id.capabilityId || checked.grantId !== id.grantId) throw new Error("AG_TOOL_RECEIPT_INVALID");
+      settled.set(id.toolCallId, checked);
+    } else throw new Error("AG_TOOL_RECEIPT_INVALID");
+  }
+  for (const [call, receipt] of settled) {
+    const start = starts.get(call);
+    if (!start || start.toolName !== receipt.toolName || start.grantId !== receipt.grantId || start.capabilityId !== receipt.capabilityId)
+      throw new Error("AG_TOOL_RECEIPT_INVALID");
+  }
+  if (!starts.size) return "没有独立写能力执行记录；这不证明所有旧操作均无效果。不会重新执行。";
+  return [...starts.keys()].map(call => {
+    const receipt = settled.get(call);
+    if (!receipt) return `${call}：未结算或中断，效果待核对；禁止重放。`;
+    return `${call}：${receiptSummary(receipt)}${receipt.references.map(ref => ` ${ref.kind}=${ref.id}`).join("")}`;
+  }).join("\n");
+}
+
 export async function hydrateAgentHistory(): Promise<void> {
   try {
     const res = await dispatchCall<AgentSessionsResponse>("ag.list_sessions", {});
@@ -1473,7 +1867,7 @@ function enqueueTurnSave(
   turnId: string,
   status: AgentTurnStatus,
   relPath?: string | null,
-  failure?: { code: string; message: string; retriable: boolean },
+  failure?: ChatMessage["turnFailure"],
 ): Promise<void> {
   const prev = turnSaveChain.get(turnId) ?? Promise.resolve();
   const next = prev
@@ -1655,6 +2049,8 @@ export async function finishAssist(requestId: string, event: AssistFinishEvent):
   }
 }
 
+const retryRequests = new Set<string>();
+
 /**
  * @GOV
  * codes:    BR-AG-OBS-001-EFFECT-AG-AG-TURN-035, BR-SYS-STATE-007-EFFECT-AG-AG-TURN-035, BR-AG-STATE-001-EFFECT-AG-AG-TURN-035
@@ -1672,6 +2068,22 @@ export async function finishAssist(requestId: string, event: AssistFinishEvent):
  */
 export async function startTurn(
   prompt: string,
+  opts?: Parameters<typeof startTurnWithOptions>[1],
+): Promise<void> {
+  const retryKey = opts?.retryOf ? JSON.stringify([opts.retryOf.sessionId, opts.retryOf.turnId]) : undefined;
+  if (retryKey && retryRequests.has(retryKey)) {
+    throw new Error("AG_RETRY_ALREADY_PENDING：该回合的重试核验或执行仍在进行，未重复提交。");
+  }
+  if (retryKey) retryRequests.add(retryKey);
+  try {
+    await startTurnWithOptions(prompt, opts);
+  } finally {
+    if (retryKey) retryRequests.delete(retryKey);
+  }
+}
+
+async function startTurnWithOptions(
+  prompt: string,
   opts?: {
     provider?: string;
     model?: string;
@@ -1679,6 +2091,8 @@ export async function startTurn(
     blockRefs?: { relPath: string; blockId: string; text: string; start?: number; end?: number }[];
     references?: ReferencePayload[];
     displayParts?: MessageContentPart[];
+    /** 显式重试必须先核实原回合；不复用其执行身份或裁决。 */
+    retryOf?: { sessionId: string; turnId: string };
     /** 受控恢复入口；只供已确认的裁决或编辑器预览回执使用。 */
     autoContinue?: boolean;
     /** 已确认的 DecisionRequest 或预览回执所属任务。 */
@@ -1688,6 +2102,56 @@ export async function startTurn(
   const trimmed = prompt.trim();
   const submittedReferences = opts?.references ?? [];
   if (!trimmed && submittedReferences.length === 0) return;
+  if (opts?.retryOf) {
+    const origin = opts.retryOf;
+    const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+    const assertOrigin = () => {
+      const current = agStore.getSnapshot();
+      const source = current.sessions.find((s) => s.id === origin.sessionId)?.messages
+        .find((m) => m.role === "user" && m.turnId === origin.turnId);
+      if (!workspaceId || workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId
+        || current.activeSessionId !== origin.sessionId || current.activeTurn || current.sending
+        || current.pendingDecision || clarifyingTurns.has(origin.sessionId)
+        || opts.autoContinue || opts.continuation || source?.turnStatus !== "draft"
+        || (source.relPath ?? null) !== edStore.getSnapshot().openPath
+        || source.content !== prompt) {
+        throw new Error("AG_RETRY_CONTEXT_CHANGED：原回合、会话或工作区状态已变化，未重新执行。");
+      }
+    };
+    assertOrigin();
+    let events: AgTurnEvent[];
+    try {
+      events = (await queryTurnExecutionEvidence({ workspaceId: workspaceId!, sessionId: origin.sessionId, turnId: origin.turnId })).events;
+    } catch (error) {
+      if (error instanceof Error && ["AG_RETRY_EVIDENCE_UNAVAILABLE", "AG_TOOL_RECEIPT_INVALID"].includes(error.message)) {
+        throw new Error("AG_RETRY_EFFECT_UNVERIFIED：原回合证据不完整或身份不一致，未重新执行。");
+      }
+      throw new Error("AG_RETRY_EVIDENCE_UNAVAILABLE：无法读取原回合执行证据，未重新执行。");
+    }
+    if (!Array.isArray(events)) {
+      throw new Error("AG_RETRY_EVIDENCE_UNAVAILABLE：原回合证据格式无效，未重新执行。");
+    }
+    assertOrigin();
+    const readonlyTools = new Set(["read_doc", "list_docs", "workspace_glob", "search_text", "list_blocks", "list_tables", "list_images"]);
+    let previousSeq = 0;
+    const valid = events.length > 0 && events.every((event) => {
+      if (event.turnId !== origin.turnId || event.payloadVersion !== 1
+        || !Number.isSafeInteger(event.seq) || event.seq <= previousSeq) return false;
+      previousSeq = event.seq;
+      return true;
+    });
+    const terminal = events.filter((event) => event.type === "done" || event.type === "error");
+    const last = events[events.length - 1];
+    const safeTerminal = terminal.length === 1 && last === terminal[0]
+      && ((last?.type === "error" && last.retriable) || (last?.type === "done" && last.stopReason === "cancelled"));
+    const possibleEffect = events.some((event) =>
+      ((event.type === "tool_request" || event.type === "tool_result") && !readonlyTools.has(event.toolName))
+      || event.type === "diff_proposed" || event.type === "decision_request_proposed"
+      || event.type === "decision_request_resolved");
+    if (!valid || !safeTerminal || previousSeq < agStore.lastTurnEventSeq(origin.turnId) || possibleEffect) {
+      throw new Error("AG_RETRY_EFFECT_UNVERIFIED：原回合未确认结束或可能已产生操作；请先核对已有结果，未重新执行。");
+    }
+  }
   if (opts?.continuation && !opts.autoContinue) {
     throw new Error("任务续片段只能由已确认的任务级裁决自动启动");
   }
@@ -1715,7 +2179,15 @@ export async function startTurn(
   const decision = opts?.autoContinue && opts.continuation?.decisionRequestId
     ? decisionTurns.get(opts.continuation.decisionRequestId)
     : undefined;
-  const sessionId = decision?.sessionId ?? snap.activeSessionId;
+  const preview = opts?.autoContinue && opts.continuation?.previewDiffId
+    ? previewContinuations.get(opts.continuation.previewDiffId)
+    : undefined;
+  if (opts?.continuation?.previewDiffId && (!preview
+    || preview.workspaceId !== workspaceShell.getSnapshot().activeWorkspace?.workspaceId
+    || !snap.sessions.some((candidate) => candidate.id === preview.sessionId))) {
+    throw new Error("AG_PREVIEW_CONTEXT_CHANGED：预览所属会话已失效，未继续执行。");
+  }
+  const sessionId = decision?.sessionId ?? preview?.sessionId ?? snap.activeSessionId;
   const session = snap.sessions.find((s) => s.id === sessionId);
   const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
   if (!workspaceId) throw new Error("AG_CONTEXT_FACTS_WORKSPACE_REQUIRED");
@@ -1724,6 +2196,14 @@ export async function startTurn(
     throw new Error("澄清恢复不能与任务裁决或预览续片段混用");
   }
   const turnId = clarification?.turnId ?? decision?.turnId ?? `t-${Date.now()}-${(seq += 1)}`;
+  const selectedModel = clarification?.modelBinding ?? decision?.modelBinding
+    ?? (clarification || decision || preview ? undefined : (opts?.provider && opts?.model
+      ? { provider: opts.provider, model: opts.model }
+      : modelStore.resolveFor("agentEdit")));
+  if (!clarification && !decision && !preview && !selectedModel) throw new Error("AG_MODEL_SELECTION_INVALID：模型未选定，未发起请求。");
+  if (!clarification && !decision && !preview && Boolean(opts?.provider) !== Boolean(opts?.model)) {
+    throw new Error("AG_MODEL_SELECTION_INVALID：provider 与 model 必须同时指定。");
+  }
   const effectivePrompt = decision?.prompt ?? (clarification?.pendingInput
     ? `${clarification.pendingInput}${trimmed ? `\n\n${trimmed}` : ""}`
     : trimmed);
@@ -1740,13 +2220,14 @@ export async function startTurn(
     opts?.blockRefs ?? [],
   );
   const turnEd = edStore.getSnapshot();
-  const turnActiveDocTarget: ActiveDocTarget = {
+  const turnActiveDocTarget: ActiveDocTarget = decision?.activeTarget ?? clarification?.activeTarget ?? {
     relPath: turnEd.openPath,
     loadSeq: turnEd.loadSeq,
     editFormat: turnEd.editFormat,
     contentFormat: turnEd.contentFormat,
   };
   const turnActiveDocPath = turnActiveDocTarget.relPath ?? undefined;
+  let contextRevision = decision?.contextRevision ?? clarification?.contextRevision ?? 0;
 
   // 本轮之前的对话历史（PI-AG-09B）：传后端按预算保留最近（drop 最旧）。取本轮 user 入栈前的快照。
   const history = (session?.messages ?? [])
@@ -1814,8 +2295,26 @@ export async function startTurn(
       settled = true;
       resolve();
     };
-    const interruptStart = (_cause: unknown) => {
+    const interruptStart = (cause: unknown) => {
       if (terminalSeen || pausedForClarification || pausedForDecision) return;
+      // 安全透传真实原因（可诊断性修复）：后端命令错误不再被伪装成笼统“流被中断”。
+      const causeObj = cause && typeof cause === "object"
+        ? (cause as Record<string, unknown>)
+        : null;
+      const causeCode = typeof causeObj?.code === "string" && causeObj.code ? causeObj.code : undefined;
+      const causeMessage = typeof causeObj?.message === "string" && causeObj.message ? causeObj.message : undefined;
+      const failure = {
+            code: causeCode ?? "AG_TURN_INTERRUPTED",
+            message: causeMessage ?? "连接中断，本回合未完成，请重试。",
+            retriable: causeObj?.retriable === true,
+            diagnostic: {
+              version: 1,
+              observedAt: !backendInvocationStarted ? "frontend_start" : causeCode === "AG_TURN_TERMINAL_MISSING" ? "event_recovery" : "frontend_invoke",
+              category: !backendInvocationStarted ? "core_context" : "unknown",
+              rootCauseStatus: "unknown",
+            } as AgentFailureDiagnostic,
+          };
+      console.error(`[ag-interrupt] turn_id=${turnId} code=${failure.code}`);
       if (clarification && !backendInvocationStarted) {
         // 快照/装配尚未越过后端入口：保持原回合非终态，允许用户修复编辑器状态后继续补充。
         pausedForClarification = true;
@@ -1836,11 +2335,12 @@ export async function startTurn(
       agStore.finishMessage(sessionId, assistantId);
       // Promise/Channel 中断不是 AgentTurn 终态事实。保持 draft，允许用户显式以新 turn 重试；
       // 只有安全 TurnEvent 的 Done/Error 才能投影 completed/error/cancelled/gate_rejected。
-      agStore.setTurnStatus(sessionId, turnId, "draft");
+      agStore.setTurnStatus(sessionId, turnId, "draft", failure);
       if (backendInvocationStarted) {
-        void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+        // 诊断与模型正文分开；重启从 payload.failure 恢复到同一未完成提示。
+        void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath, failure);
       }
-      agStore.setCurrentAction(null);
+      agStore.clearTurnAction(sessionId, turnId);
       agStore.clearActiveTurn(turnId);
       finish();
     };
@@ -1850,6 +2350,13 @@ export async function startTurn(
       eventWork = eventWork.then(async () => {
         if (terminalSeen || pausedForClarification || pausedForDecision) return;
         if (ev.turnId !== turnId || !agStore.acceptTurnEvent(turnId, ev.seq, ev.type)) return;
+        // Receipt of a versioned event is not proof that a component rendered or a file was saved.
+        // Never spread ev: it can contain prompt text, tool arguments, paths and document content.
+        if (import.meta.env.DEV && ev.type !== "chunk") {
+          console.debug("[AG-AG-TURN] frontend_accepted:", JSON.stringify({
+            sessionId, turnId, eventId: ev.eventId, seq: ev.seq, eventType: ev.type,
+          }));
+        }
         switch (ev.type) {
         case "chunk":
           agStore.appendToMessage(sessionId, assistantId, ev.text);
@@ -1862,11 +2369,14 @@ export async function startTurn(
           clarifyingTurns.set(sessionId, {
             sessionId,
             turnId,
+            activeTarget: turnActiveDocTarget,
+            contextRevision,
             assistantMessageId: assistantId,
             prompt: effectivePrompt,
             references,
             mentions,
             blockRefs,
+            modelBinding: selectedModel,
           });
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           pausedForClarification = true;
@@ -1898,7 +2408,7 @@ export async function startTurn(
               label: "等待编辑器应用修改建议",
             });
           } else {
-            agStore.setCurrentAction(null);
+            agStore.clearTurnAction(sessionId, turnId);
           }
           finish();
           break;
@@ -1909,28 +2419,28 @@ export async function startTurn(
             decisionTurns.delete(decision.requestId);
           }
           agStore.finishMessage(sessionId, assistantId);
-          agStore.setTurnStatus(sessionId, turnId, ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error");
+          agStore.setTurnStatus(sessionId, turnId, ev.code === "AG_GATE_DENIED" || ev.code === "AG_GATE_OFFLINE" ? "gate_rejected" : "error");
           agStore.pushMessage(sessionId, {
             id: uid(),
             role: "assistant",
-            content: `[${ev.code}] ${ev.message}`,
+            content: `[${ev.code}] ${ev.message}${diagnosticSummary(failureDiagnostic(ev.diagnostic))}`,
             error: true,
             turnId,
             relPath: turnActiveDocPath ?? null,
-            turnStatus: ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error",
+            turnStatus: ev.code === "AG_GATE_DENIED" || ev.code === "AG_GATE_OFFLINE" ? "gate_rejected" : "error",
           });
           void enqueueTurnSave(
             sessionId,
             turnId,
-            ev.code.includes("GATE") || ev.code.includes("401") ? "gate_rejected" : "error",
+            ev.code === "AG_GATE_DENIED" || ev.code === "AG_GATE_OFFLINE" ? "gate_rejected" : "error",
             turnActiveDocPath,
-            { code: ev.code, message: ev.message, retriable: ev.retriable },
+            { code: ev.code, message: ev.message, retriable: ev.retriable, diagnostic: failureDiagnostic(ev.diagnostic) },
           );
           // AG-1.0-IMP-TASKRUN-UI-01：回合失败后刷新 TaskRun 摘要（Failed 终态已落库）。
           void refreshSessionTaskRuns(sessionId);
           // AG-1.0-TASKRUN-REWORK-INTENT-01：回合失败后刷新任务计划。
           void refreshSessionPlans(sessionId);
-          agStore.setCurrentAction(null);
+          agStore.clearTurnAction(sessionId, turnId);
           finish();
           break;
         case "step_progress":
@@ -1957,21 +2467,24 @@ export async function startTurn(
           agStore.setCurrentAction({ sessionId, turnId, action: "deciding", label: "等待你的决策" });
           decisionTurns.set(ev.requestId, {
             requestId: ev.requestId,
+            workspaceId,
             sessionId,
             turnId,
+            activeTarget: turnActiveDocTarget,
+            contextRevision,
             assistantMessageId: assistantId,
             prompt: effectivePrompt,
             references,
             mentions,
             blockRefs,
+            modelBinding: selectedModel,
           });
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           pausedForDecision = true;
           finish();
           break;
         case "decision_request_resolved":
-          agStore.setPendingDecision(null);
-          agStore.setCurrentAction(null);
+          agStore.clearPendingDecision({ requestId: ev.requestId, sessionId, turnId });
           break;
         case "diff_proposed": {
           // AI 经 propose_edit 生成了待裁决修改（PI-AG-08C）：投影为 diff 卡片；
@@ -2133,7 +2646,21 @@ export async function startTurn(
         case "tool_result": {
           // 工具卡 done/failed（PI-AG-08D）。结果摘要作 detail。
           const r = (ev.result ?? "").toString();
-          agStore.resolveToolCallById(sessionId, ev.toolCallId, ev.success, r ? r.slice(0, 80) : undefined);
+          const summary = r.slice(0, 80) + (!ev.success ? diagnosticSummary(failureDiagnostic(ev.diagnostic)) : "");
+          let receipt: ToolCallReceiptV1 | undefined;
+          try {
+            if (ev.executionReceipt !== undefined) {
+              const requested = agStore.getSnapshot().sessions.find(s => s.id === sessionId)?.toolCalls.find(t => t.id === ev.toolCallId);
+              if (!requested || requested.name !== ev.toolName || requested.turnId !== turnId) throw new Error("AG_TOOL_RECEIPT_INVALID");
+              receipt = validateToolCallReceipt(ev.executionReceipt,
+                { workspaceId, sessionId, turnId, toolCallId: ev.toolCallId, toolName: requested.name }, ev.success, ev.evidenceIds);
+            }
+            agStore.resolveToolCallById(sessionId, ev.toolCallId, ev.success,
+              receipt ? `${summary} · ${receiptSummary(receipt)}` : summary || undefined, receipt);
+          } catch {
+            agStore.resolveToolCallById(sessionId, ev.toolCallId, false,
+              "[AG_TOOL_RECEIPT_INVALID] 执行回执无法确认；请核对实际操作，不会自动重试。");
+          }
           void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
           break;
         }
@@ -2150,8 +2677,16 @@ export async function startTurn(
 
     void (async () => {
       let openDocSnapshots: OpenDocSnapshot[];
+      let agentContextFacts: AgentContextFactsV2;
+      const factBlockRefs = references.length ? [] : blockRefs;
+      const selectionPaths = [...new Set([
+        ...references.flatMap((r) => r.kind === "selection" ? [r.relPath] : []),
+        ...factBlockRefs.map((r) => r.relPath),
+      ])];
       try {
-        openDocSnapshots = await collectOpenDocSnapshotsReady(turnActiveDocTarget);
+        const captured = collectAgentContextV2(turnId, sessionId, turnActiveDocTarget, ++contextRevision, references, factBlockRefs, undefined, selectionPaths);
+        openDocSnapshots = captured.snapshots;
+        agentContextFacts = captured.facts;
       } catch (e) {
         if (decision) {
           let projected = false;
@@ -2173,20 +2708,26 @@ export async function startTurn(
         ? openDocSnapshots.find((s) => s.relPath === turnActiveDocPath)
         : undefined;
       const activeDocContent = activeSnapshot?.content;
-      let agentContextFacts: AgentContextFacts;
-      try {
-        const factBlockRefs = references.length ? [] : blockRefs;
-        agentContextFacts = buildAgentContextFacts(
-          turnId,
-          sessionId,
-          openDocSnapshots,
-          references,
-          factBlockRefs,
-        );
-      } catch (e) {
-        interruptStart(e);
-        return;
-      }
+      const onContextRequest = new Channel<AgentContextRequest>();
+      const admissionRevision = agentContextFacts.contextRevision;
+      let contextInventory = agentContextFacts;
+      onContextRequest.onmessage = (request) => {
+        if (settled || terminalSeen || request.workspaceId !== workspaceId || request.sessionId !== sessionId || request.turnId !== turnId) return;
+        if (!Number.isSafeInteger(request.contextRevision) || request.contextRevision <= admissionRevision) return;
+        try {
+          const captured = collectAgentContextV2(turnId, sessionId, turnActiveDocTarget, request.contextRevision, references, factBlockRefs, contextInventory, [...request.paths, ...selectionPaths], request.allDocuments);
+          // Keep the admission inventory: backend owns accepted revision and repeated acquisition after a failed response.
+          contextRevision = Math.max(contextRevision, request.contextRevision);
+          contextInventory = captured.facts;
+          void invoke("ag_supply_context", { response: { requestId: request.requestId, facts: captured.facts, snapshots: captured.snapshots } }).catch((error) => {
+            console.warn("Agent context response rejected", error);
+          });
+        } catch (error) {
+          // Identity loss cannot be repaired with old facts; cancel the owning turn rather than retarget it.
+          console.warn("Agent context collection failed", error);
+          void invoke("ag_cancel_turn", { sessionId, turnId }).catch((cancelError) => console.warn("Agent context cancellation failed", cancelError));
+        }
+      };
       backendInvocationStarted = true;
       if (clarification) clarifyingTurns.delete(sessionId);
       if (decision) decisionTurns.delete(decision.requestId);
@@ -2196,8 +2737,8 @@ export async function startTurn(
           sessionId,
           runtimeProfile: AGENT_EDIT_RUNTIME_PROFILE,
           prompt: effectivePrompt,
-          provider: opts?.provider,
-          model: opts?.model,
+          provider: selectedModel?.provider,
+          model: selectedModel?.model,
           activeDocPath: turnActiveDocPath,
           activeDocContent,
           activeDocFormat: activeSnapshot?.editFormat ?? turnActiveDocTarget.editFormat, // text|html（docx 块编辑用，PI-AG-08F）
@@ -2213,6 +2754,7 @@ export async function startTurn(
           clarificationResume: Boolean(clarification),
           decisionResume: Boolean(decision),
           onEvent,
+          onContextRequest,
         });
         await eventWork;
         if (!terminalSeen && !pausedForClarification && !pausedForDecision) {
@@ -2279,18 +2821,20 @@ async function projectParkedCancellation(parked: ClarifyingTurnIdentity | Decisi
       continue;
     }
     if (event.type === "done" && event.stopReason === "cancelled") {
+      if (import.meta.env.DEV) console.debug("[AG-AG-TURN] frontend_accepted:", JSON.stringify({
+        sessionId: parked.sessionId, turnId: parked.turnId, eventId: event.eventId,
+        seq: event.seq, eventType: event.type, source: "parked_cancellation_replay",
+      }));
       if (clarifyingTurns.get(parked.sessionId)?.turnId === parked.turnId) {
         clarifyingTurns.delete(parked.sessionId);
       }
       if ("requestId" in parked) {
         decisionTurns.delete(parked.requestId);
-        if (agStore.getSnapshot().pendingDecision?.requestId === parked.requestId) {
-          agStore.setPendingDecision(null);
-        }
+        agStore.clearPendingDecision({ requestId: parked.requestId, sessionId: parked.sessionId, turnId: parked.turnId });
       }
       agStore.finishMessage(parked.sessionId, parked.assistantMessageId);
       agStore.setTurnStatus(parked.sessionId, parked.turnId, "cancelled");
-      agStore.setCurrentAction(null);
+      agStore.clearTurnAction(parked.sessionId, parked.turnId);
       void enqueueTurnSave(parked.sessionId, parked.turnId, "cancelled");
       return true;
     }

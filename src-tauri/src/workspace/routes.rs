@@ -205,6 +205,176 @@ pub(crate) fn str_param_allow_empty(
 mod command_param_tests {
     use super::*;
 
+    // covers: BR-WS-STATE-003
+    // covers: BR-WS-DATA-003
+    // covers: BR-WS-OBS-002
+    #[test]
+    fn prepared_resource_route_rechecks_identity_and_current_db_without_rescanning() {
+        for change in [
+            "workspace",
+            "root",
+            "task",
+            "task-session",
+            "turn",
+            "turn-session",
+            "success",
+            "manual",
+            "scan-failure",
+        ] {
+            let root =
+                std::env::temp_dir().join(format!("binder-resource-lock-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(root.join("source.txt"), "original").unwrap();
+            let mut conn = Connection::open_in_memory().unwrap();
+            db::migrate(&mut conn).unwrap();
+            conn.execute("INSERT INTO workspaces(workspace_id,root_path,is_active,opened_at) VALUES ('ws',?1,1,0)", [root.to_string_lossy().as_ref()]).unwrap();
+            ag::history::ensure_session(&conn, "ws", "s", "isolation", "edit", 0, true).unwrap();
+            ag::history::save_turn(
+                &conn,
+                "ws",
+                "s",
+                "turn",
+                None,
+                "draft",
+                &ag::history::AgentTurnPayload {
+                    version: 1,
+                    last_event_seq: 0,
+                    user_message: ag::history::PersistedChatMessage {
+                        id: "u".into(),
+                        role: "user".into(),
+                        content: "test".into(),
+                        parts: None,
+                        streaming: None,
+                        error: None,
+                        segments: None,
+                    },
+                    assistant_message: None,
+                    tool_summaries: vec![],
+                    diff_refs: vec![],
+                    failure: None,
+                    incomplete_reason: None,
+                },
+            )
+            .unwrap();
+            let task = ag::task::begin_turn(&conn, "ws", "s", None).unwrap();
+            let state = AppState {
+                db: Arc::new(Mutex::new(conn)),
+                registry: build_registry(),
+                assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+                active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+            };
+            let request = CommandRequest {
+                command: "ws.plan_operation".into(),
+                correlation_id: "isolated".into(),
+                params: serde_json::json!({"taskRunId":task,"sourceTurnId":if change=="manual" {"audit-only-correlation"} else {"turn"},
+                "operations":[{"kind":"rename_resource","sourcePath":if change=="scan-failure" {"missing.txt"} else {"source.txt"},"targetPath":"target.txt","resourceKind":"file"}]}),
+            };
+            let result = plan_workspace_operation_with_prepare(
+                &request,
+                &state,
+                |ws, intents, task, turn, content| {
+                    let prepared =
+                        workspace::operation::prepare_operation(ws, intents, task, turn, content)?;
+                    let conn = state
+                        .db
+                        .try_lock()
+                        .expect("preparation cannot hold shared DB lock");
+                    match change {
+                        "workspace" => {
+                            conn.execute("UPDATE workspaces SET is_active=0", [])
+                                .unwrap();
+                        }
+                        "root" => {
+                            conn.execute(
+                                "UPDATE workspaces SET root_path=root_path||'-changed'",
+                                [],
+                            )
+                            .unwrap();
+                        }
+                        "task" => {
+                            conn.execute("UPDATE task_runs SET status='cancelled'", [])
+                                .unwrap();
+                        }
+                        "task-session" => {
+                            conn.execute("UPDATE task_runs SET session_id='other'", [])
+                                .unwrap();
+                        }
+                        "turn" => {
+                            conn.execute("UPDATE agent_turns SET status='cancelled'", [])
+                                .unwrap();
+                        }
+                        "turn-session" => {
+                            conn.execute("UPDATE agent_turns SET session_id='other'", [])
+                                .unwrap();
+                        }
+                        _ => {
+                            conn.execute("INSERT INTO ed_session_snapshots(workspace_id,rel_path,content,edit_format,dirty,session_version,content_hash,updated_at) VALUES ('ws','source.txt','logical','txt',1,1,'hash',0)",[]).unwrap();
+                        }
+                    }
+                    Ok(prepared)
+                },
+            );
+            let conn = state.db.lock().unwrap();
+            if matches!(change, "success" | "manual") {
+                let result = result.unwrap();
+                assert_eq!(
+                    result["plan"]["consequences"]["affected_sessions"],
+                    serde_json::json!(["source.txt"])
+                );
+                assert!(
+                    result["decision_request"]["requestId"].is_string()
+                        || result["decision_request"]["request_id"].is_string()
+                );
+                assert_eq!(
+                    conn.query_row("SELECT COUNT(*) FROM workspace_operation_plans", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                    1
+                );
+                assert_eq!(
+                    conn.query_row("SELECT COUNT(*) FROM decision_requests", [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    1
+                );
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.code,
+                    match change {
+                        "workspace" | "root" => "WS_OPERATION_WORKSPACE_MISMATCH",
+                        "task" | "task-session" => "AG_TASK_NOT_ACTIVE",
+                        "scan-failure" => "WS_OPERATION_SOURCE_NOT_FOUND",
+                        _ => "AG_TURN_CANCELLED",
+                    }
+                );
+                assert_eq!(
+                    conn.query_row("SELECT COUNT(*) FROM workspace_operation_plans", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                    0
+                );
+                assert_eq!(
+                    conn.query_row("SELECT COUNT(*) FROM decision_requests", [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(root.join("source.txt")).unwrap(),
+                "original"
+            );
+            assert!(!root.join("target.txt").exists());
+            drop(conn);
+            drop(state);
+            std::fs::remove_file(root.join("source.txt")).unwrap();
+            std::fs::remove_dir(&root).unwrap();
+        }
+    }
+
     #[test]
     fn empty_document_snapshot_and_decision_replay_preserve_runtime_contracts() {
         let request = CommandRequest {
@@ -240,9 +410,9 @@ mod command_param_tests {
         )
         .unwrap();
         let state = AppState {
-            db: Mutex::new(conn),
+            db: std::sync::Arc::new(Mutex::new(conn)),
             registry: build_registry(),
-            assist_terminals: Mutex::new(HashMap::new()),
+            assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
             active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
         };
         let resolve = |outcome: &str| CommandRequest {
@@ -1166,6 +1336,22 @@ pub(crate) fn route_plan_workspace_operation(
     request: &CommandRequest,
     state: &AppState,
 ) -> Result<serde_json::Value, IpcError> {
+    plan_workspace_operation_with_prepare(request, state, |ws, intents, task, turn, content| {
+        workspace::operation::prepare_operation(ws, intents, task, turn, content)
+    })
+}
+
+pub(crate) fn plan_workspace_operation_with_prepare(
+    request: &CommandRequest,
+    state: &AppState,
+    prepare: impl FnOnce(
+        &crate::types::WorkspaceRef,
+        &[workspace::operation::WorkspaceOperationIntent],
+        Option<&str>,
+        Option<&str>,
+        Option<&str>,
+    ) -> Result<workspace::operation::PreparedOperationPlan, IpcError>,
+) -> Result<serde_json::Value, IpcError> {
     let ws = active_ws(state)?;
     let task_run_id = str_param(request, "taskRunId", "AG_TASK_RUN_ID_REQUIRED")?;
     let source_turn_id = request
@@ -1206,25 +1392,127 @@ pub(crate) fn route_plan_workspace_operation(
                 false,
             )
         })?;
-    let conn = lock_db(state)?;
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
-    let task_workspace: Option<String> = tx
-        .query_row(
-            "SELECT workspace_id FROM task_runs WHERE task_run_id=?1",
+    // sourceTurnId is also an audit correlation for non-Agent UI routes (e.g. Timeline).
+    // Only an actual persisted AgentTurn carries turn authority; do not infer it from a prefix.
+    let initial_task: Option<(String, String)> = {
+        let conn = lock_db(state)?;
+        conn.query_row(
+            "SELECT workspace_id, session_id FROM task_runs WHERE task_run_id=?1",
             [&task_run_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
-    if task_workspace.as_deref() != Some(ws.workspace_id.as_str()) {
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?
+    };
+    if initial_task
+        .as_ref()
+        .is_none_or(|(workspace, _)| workspace != &ws.workspace_id)
+    {
         return Err(IpcError::new(
             "WS_OPERATION_WORKSPACE_MISMATCH",
             "TaskRun 与当前 workspace 不匹配",
             false,
             false,
         ));
+    }
+    let source_identity: Option<(String, String)> = if let Some(turn) = source_turn_id {
+        let conn = lock_db(state)?;
+        conn.query_row(
+            "SELECT workspace_id, session_id FROM agent_turns WHERE turn_id=?1",
+            [turn],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?
+    } else {
+        None
+    };
+    let prepared = prepare(
+        &ws,
+        &intents,
+        Some(&task_run_id),
+        source_turn_id,
+        initial_content_ref.as_deref(),
+    )?;
+    let conn = lock_db(state)?;
+    let current_ws = workspace::lifecycle::active_workspace(&conn)
+        .map_err(|error| IpcError::new("WS_ACTIVE_FAILED", &error.to_string(), true, false))?;
+    if current_ws.as_ref().is_none_or(|current| {
+        current.workspace_id != ws.workspace_id || current.root_path != ws.root_path
+    }) {
+        return Err(IpcError::new(
+            "WS_OPERATION_WORKSPACE_MISMATCH",
+            "资源扫描期间工作区已变化，未提交计划",
+            false,
+            false,
+        ));
+    }
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
+    let task_identity: Option<(String, String, String)> = tx
+        .query_row(
+            "SELECT workspace_id, session_id, status FROM task_runs WHERE task_run_id=?1",
+            [&task_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+    if task_identity
+        .as_ref()
+        .is_none_or(|(workspace, _, _)| workspace != &ws.workspace_id)
+    {
+        return Err(IpcError::new(
+            "WS_OPERATION_WORKSPACE_MISMATCH",
+            "TaskRun 与当前 workspace 不匹配",
+            false,
+            false,
+        ));
+    }
+    let (_, session, task_status) = task_identity.expect("checked task identity");
+    if initial_task.as_ref() != Some(&(ws.workspace_id.clone(), session.clone())) {
+        return Err(IpcError::new(
+            "AG_TASK_NOT_ACTIVE",
+            "扫描期间任务身份已变化，未提交计划",
+            false,
+            false,
+        ));
+    }
+    if matches!(
+        task_status.as_str(),
+        "completed" | "failed" | "cancelled" | "interrupted"
+    ) {
+        return Err(IpcError::new(
+            "AG_TASK_NOT_ACTIVE",
+            "资源扫描期间任务已结束，未提交计划",
+            false,
+            false,
+        ));
+    }
+    if let Some(turn) = source_turn_id {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_turns WHERE turn_id=?1)",
+                [turn],
+                |row| row.get(0),
+            )
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        if source_identity.is_some() || exists {
+            let owns: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_turns WHERE turn_id=?1 AND workspace_id=?2 AND session_id=?3 AND status NOT IN ('completed','error','cancelled','gate_rejected'))",
+            rusqlite::params![turn, ws.workspace_id, session], |row| row.get(0)
+        ).map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+            if !owns
+                || source_identity.as_ref() != Some(&(ws.workspace_id.clone(), session.clone()))
+            {
+                return Err(IpcError::new(
+                    "AG_TURN_CANCELLED",
+                    "源回合身份不匹配或已结束，未提交计划",
+                    false,
+                    false,
+                ));
+            }
+        }
     }
     if let (Some(payload_ref), Some(content)) = (initial_content_ref.as_deref(), initial_content) {
         workspace::operation::store_payload(
@@ -1236,14 +1524,7 @@ pub(crate) fn route_plan_workspace_operation(
         )
         .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?;
     }
-    let plan = workspace::operation::plan_operation(
-        &tx,
-        &ws,
-        &intents,
-        Some(&task_run_id),
-        source_turn_id,
-        initial_content_ref.as_deref(),
-    )?;
+    let plan = workspace::operation::commit_prepared_operation(&tx, prepared)?;
     if let Some(initial_content_ref) = plan.initial_content_ref.as_ref() {
         let create_item = plan
             .operation_items
@@ -1358,8 +1639,8 @@ pub(crate) fn route_execute_workspace_operation(
     let ws = active_ws(state)?;
     let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
     let request_id = str_param(request, "requestId", "AG_DECISION_REQUEST_ID_REQUIRED")?;
-    let conn = lock_db(state)?;
-    let receipt = workspace::operation::execute_operation_plan(&conn, &ws, &plan_id, &request_id)?;
+    let receipt =
+        workspace::operation::execute_operation_plan_shared(&state.db, &ws, &plan_id, &request_id)?;
     ws_json(&receipt)
 }
 

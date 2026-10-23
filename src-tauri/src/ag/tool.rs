@@ -22,6 +22,7 @@ pub enum ToolLoopState {
 pub enum ToolLoopEvent {
     ToolRequest,
     FinalAnswer,
+    ProtocolRejected,
     ValidateOk,
     ValidateFail,
     ExecOk,
@@ -75,6 +76,7 @@ pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoop
     let next = match (state, event) {
         (ModelStreaming, ToolRequest) => ToolValidating,
         (ModelStreaming, FinalAnswer) => LoopCompleted,
+        (ModelStreaming, ProtocolRejected) => LoopCompleted,
         (ToolValidating, ValidateOk) => ToolExecuting,
         (ToolValidating, ValidateFail) => ResultRecording,
         (ToolExecuting, ExecOk) => ResultRecording,
@@ -141,6 +143,11 @@ mod tests {
         assert_eq!(transition(ToolExecuting, ExecFail), Some(ResultRecording));
         // 终答 / 上限
         assert_eq!(transition(ModelStreaming, FinalAnswer), Some(LoopCompleted));
+        assert_eq!(
+            transition(ModelStreaming, ProtocolRejected),
+            Some(LoopCompleted)
+        );
+        assert_eq!(transition(ToolExecuting, ProtocolRejected), None);
         assert_eq!(
             transition(ResultRecording, ProposalRecorded),
             Some(LoopCompleted)

@@ -161,6 +161,8 @@ export interface EditSession {
   /** 加载基线哈希（后端 ws.read_doc / doc.open_for_edit 回；供保存校验）。 */
   baseline: number | string | null;
   tabState: TabState;
+  /** 仅恢复的旧文本快照缺少加载基准时允许发起显式覆盖裁决；新建会话不适用。 */
+  requiresBaselineConfirmation?: boolean;
   /** 编辑模型格式（EditFormat）。 */
   editFormat: EditFormat;
   /** content 编码；Markdown 终态模型为 html，源码保护路径为 text。 */
@@ -385,6 +387,7 @@ export const edStore = {
       sessions[snap.relPath] = {
         content: snap.content,
         baseline: snap.baseline ?? sessions[snap.relPath]?.baseline ?? null,
+        requiresBaselineConfirmation: snap.baseline == null && sessions[snap.relPath]?.baseline == null && snap.editFormat !== "html",
         tabState: snap.dirty ? "dirty" : "saved",
         editFormat: snap.editFormat,
         contentFormat: snap.contentFormat ?? (snap.editFormat === "html" || snap.editFormat === "html_file" ? "html" : "text"),

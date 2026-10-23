@@ -12,9 +12,19 @@ import { deleteAgentSession, startTurn } from "../../services/agService";
 import { AgentPanel } from "./AgentPanel";
 import { AutocompleteOverlay } from "./AutocompleteOverlay";
 import { Composer } from "./Composer";
+import { modelKey, modelStore } from "../../store/modelStore";
 import { MessageList } from "./MessageList";
 import { MessageFlow } from "./MessageFlow";
+import { ToolCallCard } from "./ToolCallCard";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { DecisionBar } from "./DecisionBar";
+import { AgentVerificationPanel } from "./AgentVerificationPanel";
+import { invoke } from "@tauri-apps/api/core";
+vi.mock("@tauri-apps/api/core", async (original) => ({
+  ...await original<typeof import("@tauri-apps/api/core")>(),
+  invoke: vi.fn(),
+  Channel: class { onmessage: ((event: unknown) => void) | null = null; },
+}));
 import type { ChatMessage, ToolCallView } from "../../store/agStore";
 
 /** DiffView 测试构造（AG-MSG-RENDER-01：MessageFlow 时序测试复用）。 */
@@ -39,6 +49,8 @@ const agServiceMock = vi.hoisted(() => ({
   switchAgentSession: vi.fn(),
   closeAgentSession: vi.fn(),
   cancelActiveTurn: vi.fn(),
+  resolveDecisionAndContinue: vi.fn(),
+  inspectTurnEffects: vi.fn(),
 }));
 
 vi.mock("../../services/agService", () => ({
@@ -49,6 +61,8 @@ vi.mock("../../services/agService", () => ({
   switchAgentSession: agServiceMock.switchAgentSession,
   closeAgentSession: agServiceMock.closeAgentSession,
   cancelActiveTurn: agServiceMock.cancelActiveTurn,
+  resolveDecisionAndContinue: agServiceMock.resolveDecisionAndContinue,
+  inspectTurnEffects: agServiceMock.inspectTurnEffects,
 }));
 
 vi.mock("../../services/deService", () => ({
@@ -117,16 +131,295 @@ function renderComposer() {
 }
 
 beforeEach(() => {
+  vi.mocked(invoke).mockReset();
   agServiceMock.startTurn.mockReset();
   agServiceMock.uploadByok.mockReset();
   agServiceMock.cancelActiveTurn.mockReset();
+  agServiceMock.resolveDecisionAndContinue.mockReset();
+  agServiceMock.inspectTurnEffects.mockReset();
   agStore.reset();
   wsStore.reset();
 });
 
 afterEach(cleanup);
 
+describe("development verification entry", () => {
+  // covers: BR-AG-UI-001
+  it("exposes production read recovery paths through the existing isolated selector", () => {
+    render(<AgentVerificationPanel />);
+    const selector=screen.getByLabelText("验证场景");
+    for (const scenario of ["page-contract-recovery","page-contract-exhausted","repeated-oversized-read","repeated-read-tools-blocked","read-failure-same-batch","read-failure-with-evidence","read-failure-gate-denied","read-failure-clarification"]) {
+      fireEvent.change(selector,{target:{value:scenario}});
+      expect((selector as HTMLSelectElement).value).toBe(scenario);
+    }
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  // covers: BR-AG-UI-001
+  it("batch entry preserves real receipts, stops on mismatch and does not manufacture a pass", async () => {
+    vi.mocked(invoke).mockImplementation(async (_command, args) => {
+      const scenario = (args as { scenario: string }).scenario;
+      return { status: "completed", events: [{ type: "done", stopReason: "stop" }], marker: scenario };
+    });
+    render(<AgentVerificationPanel />);
+    fireEvent.click(screen.getByText("批量运行核心验收"));
+    fireEvent.click(screen.getByText("批量运行核心验收"));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("status").textContent).toContain("批量验收失败，已核验 2/25");
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "ag_verify_run")).toHaveLength(3);
+    const evidence = JSON.parse(screen.getByLabelText("批量核心验收证据").textContent!);
+    expect(evidence[0]).toMatchObject({ scenario: "chat", matched: true, receipt: { marker: "chat" } });
+    expect(evidence[2]).toMatchObject({ scenario: "invalid-json", matched: false, receipt: { status: "completed" } });
+    expect((screen.getByText("批量运行核心验收") as HTMLButtonElement).disabled).toBe(false);
+  });
+  // covers: BR-AG-UI-001
+  it("shows actual receipts without declaring business success and blocks double start", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementation(async () => new Promise((resolve) => { finish = resolve; }));
+    render(<AgentVerificationPanel />);
+    fireEvent.click(screen.getByText("运行验证"));
+    fireEvent.click(screen.getByText("运行验证"));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(invoke).mock.calls[0][0]).toBe("ag_verify_run");
+    await act(async () => finish({ status: "error", events: [{ type: "error", code: "AG_MODEL_CONTROL_INVALID" }], modelToolMessages: [{ toolCallId: "observed-call", content: "observed-tool-output" }] }));
+    expect(screen.getByRole("status").textContent).toContain("不等于业务成功");
+    expect(screen.getByLabelText("运行证据").textContent).toContain("AG_MODEL_CONTROL_INVALID");
+    expect(screen.getByLabelText("工具回注证据").textContent).toContain("observed-tool-output");
+  });
+  // covers: BR-AG-UI-001
+  // covers: BR-AG-DATA-005
+  it("selects the isolated budget scenario and separates internal counts from safe events", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      status: "error",
+      events: [{ type: "error", code: "AG_PROMPT_BUDGET_EXCEEDED" }],
+      budgetChecks: [{ assemblyReason: "initial", exceeded: true, measurement: { messageLayers: { user: 120000 } } }],
+      requestCounts: { gate: 0, model: 0 },
+      modelToolMessages: [],
+    });
+    render(<AgentVerificationPanel />);
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "budget-initial" } });
+    fireEvent.click(screen.getByText("运行验证"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Agent 状态：error"));
+    expect(vi.mocked(invoke).mock.calls[0][1]).toEqual(expect.objectContaining({ scenario: "budget-initial" }));
+    expect(screen.getByLabelText("运行证据").textContent).toContain("AG_PROMPT_BUDGET_EXCEEDED");
+    expect(screen.getByLabelText("预算分项证据").textContent).toContain("messageLayers");
+    expect(screen.getByText(/隔离网关实际请求：Gate 0 次，模型 0 次/)).toBeTruthy();
+    vi.mocked(invoke).mockResolvedValue({
+      status: "error",
+      followUp: { turnId: "new-turn", sessionId: "session-1", status: "completed" },
+      events: [{ type: "error", turnId: "first-turn", code: "AG_PROMPT_BUDGET_EXCEEDED" }, { type: "done", turnId: "new-turn" }],
+      budgetChecks: [{ turnId: "first-turn", exceeded: true }, { turnId: "new-turn", exceeded: false }],
+      requestCounts: { gate: 1, model: 1 },
+      modelToolMessages: [],
+    });
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "budget-recovery" } });
+    fireEvent.click(screen.getByText("运行验证"));
+    await waitFor(() => expect(screen.getByLabelText("后续回合状态").textContent).toContain("new-turn：completed"));
+    expect(screen.getByLabelText("后续回合状态").textContent).toContain("session-1");
+    expect(vi.mocked(invoke).mock.calls[1][1]).toEqual(expect.objectContaining({ scenario: "budget-recovery" }));
+    expect(screen.getByLabelText("运行证据").textContent).toContain("first-turn");
+    expect(screen.getByText(/隔离网关实际请求：Gate 1 次，模型 1 次/)).toBeTruthy();
+  });
+  // covers: BR-AG-UI-001
+  // covers: BR-SYS-STATE-008
+  it("labels automatic decision continuation as core evidence rather than a user click", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      status: "completed",
+      events: [{ type: "decision_request_proposed", requestId: "A" }, { type: "decision_request_resolved", requestId: "A" }],
+      decisionTrace: [{ requestId: "A", taskRunId: "task-1", outcome: "confirm", alreadyResolved: false, duplicateAlreadyResolved: true }],
+      requestCounts: { gate: 3, model: 3 },
+      modelToolMessages: [],
+    });
+    render(<AgentVerificationPanel />);
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "decision-chain" } });
+    fireEvent.click(screen.getByText("运行验证"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Agent 状态：completed"));
+    expect(vi.mocked(invoke).mock.calls[0][1]).toEqual(expect.objectContaining({ scenario: "decision-chain" }));
+    expect(screen.getByLabelText("自动裁决证据").textContent).toContain("task-1");
+    expect(screen.getByLabelText("自动裁决证据").textContent).toContain("duplicateAlreadyResolved");
+    expect(screen.getByText(/非用户点击、非 DecisionBar 布局验收/)).toBeTruthy();
+  });
+  // covers: BR-AG-UI-001, BR-SYS-STATE-008
+  it("labels isolated preview and session evidence without claiming product success", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      status: "preview_guard_checked", events: [], requestCounts: { gate: 0, model: 0 },
+      previewTrace: { staleV2ContinuationRejected: true, matchingV1ContinuationOnce: true },
+      modelToolMessages: [],
+    });
+    render(<AgentVerificationPanel />);
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "preview-guard" } });
+    fireEvent.click(screen.getByText("运行验证"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("非 Agent 回合、非编辑器验收"));
+    expect(vi.mocked(invoke).mock.calls[0][1]).toEqual(expect.objectContaining({ scenario: "preview-guard" }));
+    expect(screen.getByLabelText("预览检查点证据").textContent).toContain("staleV2ContinuationRejected");
+    expect(screen.getByText(/不验证前端超时、实际编辑器、接受或保存/)).toBeTruthy();
+    vi.mocked(invoke).mockResolvedValue({
+      status: "session_memory_checked", events: [], requestCounts: { gate: 6, model: 6 },
+      promptTrace: [{ selectedMemory: true }, { selectedMemory: false }],
+      sessionTrace: { waitingTaskStatus: "waiting", crossSessionHistoryRejectedBeforeGate: true },
+      modelToolMessages: [],
+    });
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "session-memory" } });
+    fireEvent.click(screen.getByText("运行验证"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("非真实模型、非记忆库面板验收"));
+    expect(vi.mocked(invoke).mock.calls[1][1]).toEqual(expect.objectContaining({ scenario: "session-memory" }));
+    expect(screen.getByLabelText("会话装配证据").textContent).toContain("selectedMemory");
+    expect(screen.getByLabelText("会话状态证据").textContent).toContain("crossSessionHistoryRejectedBeforeGate");
+    expect(screen.getByText(/非实际标签切换布局验收/)).toBeTruthy();
+  });
+  // covers: BR-AG-UI-001
+  it("sends cancellation only to its verification identity and retains transport failure", async () => {
+    let fail!: (reason: unknown) => void;
+    let finishCancel!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementation(async (command) => command === "ag_verify_run"
+      ? new Promise((_, reject) => { fail = reject; }) : new Promise((resolve) => { finishCancel = resolve; }));
+    render(<AgentVerificationPanel />);
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "budget-recovery-delay" } });
+    fireEvent.click(screen.getByText("运行验证"));
+    const id = (vi.mocked(invoke).mock.calls[0][1] as { runId: string }).runId;
+    expect(vi.mocked(invoke).mock.calls[0][1]).toEqual(expect.objectContaining({ scenario: "budget-recovery-delay" }));
+    fireEvent.click(screen.getByText("取消验证"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("ag_verify_cancel", { runId: id }));
+    await act(async () => fail({ code: "AG_VERIFICATION_ERROR", message: "transport failed" }));
+    await act(async () => finishCancel(undefined));
+    expect(screen.getByRole("status").textContent).toContain("transport failed");
+  });
+  // covers: BR-AG-UI-001
+  it("releases the verification controls after a cancelled follow-up and permits another run", async () => {
+    let finishFirst!: (value: unknown) => void;
+    let runCount = 0;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "ag_verify_cancel") return undefined;
+      runCount += 1;
+      if (runCount === 1) return new Promise((resolve) => { finishFirst = resolve; });
+      return { status: "completed", events: [{ type: "done", stopReason: "stop" }], modelToolMessages: [] };
+    });
+    render(<AgentVerificationPanel />);
+    fireEvent.change(screen.getByLabelText("验证场景"), { target: { value: "budget-recovery-delay" } });
+    const runButton = screen.getByRole("button", { name: "运行验证" }) as HTMLButtonElement;
+    const cancelButton = screen.getByRole("button", { name: "取消验证" }) as HTMLButtonElement;
+    fireEvent.click(runButton);
+    expect(runButton.disabled).toBe(true);
+    fireEvent.click(cancelButton);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("已请求取消"));
+    await act(async () => finishFirst({
+      status: "error",
+      followUp: { turnId: "second-turn", sessionId: "same-session", status: "cancelled" },
+      events: [{ type: "error", turnId: "first-turn", code: "AG_PROMPT_BUDGET_EXCEEDED" }, { type: "done", turnId: "second-turn", stopReason: "cancelled" }],
+      modelToolMessages: [],
+    }));
+    expect(runButton.disabled).toBe(false);
+    expect(cancelButton.disabled).toBe(true);
+    expect(screen.getByLabelText("后续回合状态").textContent).toContain("second-turn：cancelled");
+    fireEvent.click(runButton);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Agent 状态：completed"));
+    expect(runCount).toBe(2);
+  });
+});
+
+describe("DecisionRequest identity isolation", () => {
+  function pending(requestId: string) {
+    return { requestId, sessionId: agStore.getSnapshot().activeSessionId, turnId: "turn-deciding", kind: "manual_confirm", payload: {summary: requestId} };
+  }
+
+  // covers: BR-SYS-STATE-007
+  // covers: BR-AG-UI-001
+  it("keeps successor request and action when the old submission finishes", async () => {
+    let finish!: (value: unknown) => void;
+    agServiceMock.resolveDecisionAndContinue.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    agStore.setPendingDecision(pending("A"));
+    render(<DecisionBar />);
+    const button = screen.getByRole("button", {name:"确认并继续"});
+    act(() => { fireEvent.click(button); fireEvent.click(button); });
+    expect(agServiceMock.resolveDecisionAndContinue).toHaveBeenCalledTimes(1);
+    const b = pending("B");
+    const action = {sessionId:b.sessionId,turnId:b.turnId,action:"deciding" as const,label:"等待 B"};
+    act(() => { agStore.setPendingDecision(b); agStore.setCurrentAction(action); });
+    expect((screen.getByRole("button", {name:"确认并继续"}) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => finish({status:"waiting"}));
+    expect(agStore.getSnapshot().pendingDecision).toEqual(b);
+    expect(agStore.getSnapshot().currentAction).toBe(action);
+    expect(screen.getByText("B")).not.toBeNull();
+  });
+
+  // covers: BR-SYS-STATE-007
+  it("does not leak old errors into the new request and permits a failed request retry", async () => {
+    let fail!: (cause: unknown) => void;
+    agServiceMock.resolveDecisionAndContinue.mockImplementationOnce(() => new Promise((_,reject) => {fail=reject;}));
+    agStore.setPendingDecision(pending("old"));
+    render(<DecisionBar />);
+    fireEvent.click(screen.getByRole("button", {name:"确认并继续"}));
+    const next = pending("next");
+    act(() => agStore.setPendingDecision(next));
+    await act(async () => fail({code:"OLD",message:"old failure",decisionResolved:true}));
+    expect(agStore.getSnapshot().pendingDecision).toEqual(next);
+    expect(screen.queryByText(/old failure/)).toBeNull();
+    expect(agStore.getSnapshot().sessions.find(s=>s.id===next.sessionId)?.messages.some(m=>m.error && m.content.includes("old failure"))).toBe(true);
+    agServiceMock.resolveDecisionAndContinue.mockRejectedValueOnce({code:"RETRY",message:"暂时失败"});
+    fireEvent.click(screen.getByRole("button", {name:"确认并继续"}));
+    await screen.findByText("[RETRY] 暂时失败");
+    expect(agStore.getSnapshot().pendingDecision).toEqual(next);
+    agServiceMock.resolveDecisionAndContinue.mockResolvedValueOnce({status:"completed"});
+    fireEvent.click(screen.getByRole("button", {name:"确认并继续"}));
+    await waitFor(() => expect(agStore.getSnapshot().pendingDecision).toBeNull());
+  });
+
+  // covers: BR-SYS-STATE-007
+  it("writes a delayed resource receipt only to the originating session", async () => {
+    let finish!: (value: unknown) => void;
+    agServiceMock.resolveDecisionAndContinue.mockImplementationOnce(() => new Promise(resolve => {finish=resolve;}));
+    const origin = pending("resource");
+    agStore.setPendingDecision({...origin,payload:{workspaceOperationPlanId:"plan",summary:"资源操作"}});
+    render(<DecisionBar />);
+    fireEvent.click(screen.getByRole("button",{name:"确认并执行"}));
+    let other = "";
+    act(() => { other = agStore.newSession(); });
+    expect(screen.queryByText("等待你的决策")).toBeNull();
+    await act(async () => finish({workspaceOperationReceipt:{final_status:"failed",item_receipts:[],compensation_receipts:[]}}));
+    const sessions=agStore.getSnapshot().sessions;
+    expect(sessions.find(s=>s.id===origin.sessionId)?.messages.some(m=>m.content.includes("资源操作未完整完成"))).toBe(true);
+    expect(sessions.find(s=>s.id===other)?.messages).toHaveLength(0);
+  });
+
+  // covers: BR-SYS-STATE-007
+  it("clears only matching request identity and never a replacement action object", () => {
+    const decision=pending("guard");
+    agStore.setPendingDecision(decision);
+    for (const wrong of [{...decision,sessionId:"other"},{...decision,turnId:"other"},{...decision,requestId:"other"}]) {
+      expect(agStore.clearPendingDecision(wrong)).toBe(false);
+      expect(agStore.getSnapshot().pendingDecision).toEqual(decision);
+    }
+    const old = {sessionId:decision.sessionId,turnId:decision.turnId,action:"tool" as const,label:"old"};
+    const replacement={...old};
+    agStore.setCurrentAction(replacement);
+    agStore.clearCurrentAction(old);
+    expect(agStore.getSnapshot().currentAction).toBe(replacement);
+    expect(agStore.clearPendingDecision(decision)).toBe(true);
+    expect(agStore.getSnapshot().currentAction).toBe(replacement);
+    agStore.setPendingDecision({requestId:"legacy-timeline",kind:"manual_confirm"});
+    const boundSession=agStore.getSnapshot().activeSessionId;
+    agStore.newSession();
+    expect(agStore.getSnapshot().pendingDecision?.sessionId).toBe(boundSession);
+    render(<DecisionBar />);
+    expect(screen.queryByText("等待你的决策")).toBeNull();
+  });
+});
+
 describe("Composer · 引用令牌", () => {
+  // covers: BR-AG-DATA-007
+  it("显示代理编辑的实际偏好，选择只改变代理编辑而不改全局默认", () => {
+    const models = modelStore.getSnapshot().models;
+    modelStore.select(modelKey(models[0]));
+    modelStore.setCapabilityPref("agentEdit", { mode: "explicit", modelKey: modelKey(models[1]) });
+    renderComposer();
+    const selector = screen.getByTitle("模型选择");
+    expect(selector.textContent).toContain(models[1].label);
+    fireEvent.click(selector);
+    fireEvent.click(screen.getByText(models[2].label));
+    expect(screen.getByTitle("模型选择").textContent).toContain(models[2].label);
+    expect(modelStore.getSnapshot().selectedKey).toBe(modelKey(models[0]));
+    expect(modelStore.resolveFor("agentEdit")).toEqual(models[2]);
+    modelStore.setCapabilityPref("agentEdit", { mode: "followGlobal" });
+  });
   // covers: BR-REF-DATA-004
   // SelectionRef 粘贴必须生成输入流内 ReferenceToken，并同步显示草稿引用。
   it("粘贴编辑器 SelectionRef 时在输入流和草稿区同时生成引用", async () => {
@@ -544,6 +837,25 @@ describe("AutocompleteOverlay migrated suite", () => {
 
 // Migrated intact from MessageList.test.tsx.
 describe("MessageList migrated suite", () => {
+  // covers: BR-AG-UI-001
+  // covers: BR-SYS-STATE-007
+  it("effect inspection is read-only and keeps late feedback in its original session", async () => {
+    const original = agStore.newSession();
+    agStore.pushMessage(original, { id: "query-original", role: "user", content: "修改", turnId: "old-turn", turnStatus: "draft" });
+    let resolve!: (value: string) => void;
+    agServiceMock.inspectTurnEffects.mockReturnValue(new Promise<string>(done => { resolve = done; }));
+    const { rerender } = render(<MessageList />);
+    fireEvent.click(screen.getByText("核对执行效果"));
+    expect(agServiceMock.inspectTurnEffects).toHaveBeenCalledWith(original, "old-turn");
+    expect((screen.getByText("核对执行效果") as HTMLButtonElement).disabled).toBe(true);
+    const other = agStore.newSession(); rerender(<MessageList />);
+    await act(async () => { resolve("已生成修改建议；不代表接受或保存。 pending_diff=real-diff"); });
+    expect(screen.queryByText(/pending_diff=real-diff/)).toBeNull();
+    agStore.switchSession(original); rerender(<MessageList />);
+    expect(screen.getByRole("status").textContent).toContain("pending_diff=real-diff");
+    expect(agServiceMock.startTurn).not.toHaveBeenCalled();
+    expect(agStore.getSnapshot().sessions.find(session => session.id === other)?.messages).toHaveLength(0);
+  });
   function visibleFlow(container: HTMLElement): string[] {
     return Array.from(container.querySelectorAll(".msg-body, .diffcard-title")).map((node) =>
       node.textContent?.trim() ?? "",
@@ -626,12 +938,27 @@ describe("MessageList migrated suite", () => {
       expect(screen.queryByText("未归属工具调用")).toBeNull();
     });
 
-    it("draft 重试保留引用 payload", () => {
+    it("活动回合不显示未完成，停止后仅显示一份诊断并允许重试", () => {
+      const sessionId = agStore.newSession();
+      agStore.pushMessage(sessionId, { id: "u1", role: "user", content: "你好", turnId: "t1", turnStatus: "draft" });
+      agStore.setActiveTurn(sessionId, "t1");
+      const { rerender } = render(<MessageList />);
+      expect(screen.queryByText("重试")).toBeNull();
+      agStore.setTurnStatus(sessionId, "t1", "draft", { code: "DB_ERROR", message: "数据库暂不可用", retriable: true, diagnostic: { version: 1, observedAt: "frontend_invoke", category: "unknown", rootCauseStatus: "unknown" } });
+      agStore.clearActiveTurn("t1");
+      rerender(<MessageList />);
+      expect(screen.getAllByText(/数据库暂不可用/)).toHaveLength(1);
+      expect(screen.getByText(/诊断阶段：frontend_invoke/).textContent).toContain("根因未确认");
+      expect(screen.getAllByText("重试")).toHaveLength(1);
+    });
+
+    it("draft 重试保留身份和引用，并展示被阻断的真实原因", async () => {
       const sessionId = agStore.newSession();
       agStore.pushMessage(sessionId, {
         id: "u1",
         role: "user",
         content: "请参考  修改",
+        turnId: "retry-source",
         turnStatus: "draft",
         parts: [
           { type: "text", text: "请参考 " },
@@ -647,14 +974,18 @@ describe("MessageList migrated suite", () => {
       });
 
       render(<MessageList />);
-      screen.getByText("重试").click();
+      vi.mocked(startTurn).mockRejectedValueOnce(new Error("AG_RETRY_EFFECT_UNVERIFIED：请先核对已有结果"));
+      fireEvent.click(screen.getByText("重试"));
 
       expect(vi.mocked(startTurn)).toHaveBeenCalledWith(
         "请参考  修改",
         expect.objectContaining({
           references: [{ kind: "doc", relPath: "notes/a.md" }],
+          retryOf: { sessionId, turnId: "retry-source" },
         }),
       );
+      expect((await screen.findByRole("status")).textContent).toContain("AG_RETRY_EFFECT_UNVERIFIED");
+      expect((screen.getByText("重试") as HTMLButtonElement).disabled).toBe(false);
     });
   });
 });
@@ -691,6 +1022,37 @@ describe("MessageMarkdown · GFM 渲染与安全", () => {
     const { container } = render(<MessageMarkdown content={"```mermaid\nflowchart LR\nA-->B\n```"} />);
     expect(container.querySelector("pre code")).toBeTruthy();
     expect(container.textContent).toContain("flowchart");
+  });
+});
+
+describe("ToolCallCard · 回执与可操作性一致", () => {
+  it("执行前拒绝明确显示未执行，且不提供没有处理逻辑的按钮", () => {
+    const tool: ToolCallView = {
+      id: "call-1", name: "workspace_glob", state: "failed", detail: "请求受阻，工具未执行",
+      executionReceipt: {
+        version: "tool-call-receipt-v1", workspaceId: "ws", sessionId: "s", turnId: "t",
+        toolCallId: "call-1", toolName: "workspace_glob", capabilityId: "workspace_read",
+        grantId: "grant", attempt: 1, executionStatus: "rejected", completionStatus: "blocked",
+        effectStatus: "not_started", references: [],
+        failure: { code: "AG_MODEL_CONTROL_CONFLICT", retriable: true, reauthRequired: false },
+        evidenceIds: [], nextAction: "retry_explicitly",
+      },
+    };
+    render(<ToolCallCard tool={tool} />);
+    expect(screen.getByText("受阻，未执行")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "跳过" })).toBeNull();
+    cleanup();
+    render(<ToolCallCard tool={{ id: "restored", name: "workspace_glob", state: "failed", detail: "请求受阻，工具未执行", readonly: true }} />);
+    expect(screen.getByText("未完成")).toBeTruthy();
+    expect(screen.getByText("请求受阻，工具未执行")).toBeTruthy();
+  });
+
+  it("等待确认卡不伪造授权按钮，实际裁决仍由 DecisionBar 提供", () => {
+    render(<ToolCallCard tool={{ id: "call-2", name: "plan_workspace_operation", state: "awaiting_confirmation" }} />);
+    expect(screen.getByText("需授权")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "授权" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
   });
 });
 

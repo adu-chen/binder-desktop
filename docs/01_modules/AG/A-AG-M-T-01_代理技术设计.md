@@ -243,8 +243,9 @@ zh: 代理上下文事实集
 en: AgentContextFacts
 forbidden: 上下文状态, 编辑器上下文, 项目上下文, AgentContext, context facts
 -->
-一次 AgentTurn 在进入 Prompt 装配前冻结的版本化只读事实载荷。它只包含当前 workspace 身份、活动与已打开
-编辑会话的路径/来源/格式/脏态/保存基准/LogicalState 版本、任务显式需要的 SelectionRef，以及关联
+AgentTurn 每次进入 Prompt 装配前冻结的版本化只读事实载荷，旧 revision 不可覆盖。v1 保留完整快照
+事实；v2 先冻结当前 workspace 与活动/已打开资源身份和可用性，按需取得后才包含
+来源/格式/脏态/保存基准/LogicalState 版本。另含任务显式需要的 SelectionRef，以及关联
 ChangeProposal 的身份与状态；文档正文继续由 OpenDocSnapshot/ReferencePayload 承载。该事实集是
 ED/DE/WS→AG 的跨模块投影，不授予读取集合之外的访问权，也不扩大 CapabilityGrant 或
 ExplicitEditTargetSet（BR-AG-DATA-008 / BR-SYS-DATA-008）。
@@ -319,7 +320,7 @@ AG 代理（本文 SSOT）——Agent 1.0 代理编辑（TERM-AG-008）面板：
 | 目标 | 当前活动文档与用户输入中指向 active workspace 既有文档的显式 ReferencePayload 身份可初始化 ExplicitEditTargetSet；引用内容保持 data-only，成员资格不单独授予写工具；工具发现目标另经 scope DecisionRequest 确认；新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认建盘后才追加目标并投影初始内容 Diff |
 | 工作策略 | 模型在运行时硬边界内理解目标、选择工具并根据 ToolResult 调整路线；新建文档仍固定走 CreateDocumentBundle，不产出空基准 ChangeProposal；简单目标只使用单个 AgentTurn，复杂或跨执行片段目标才派生 TaskRun/TaskPlan 投影，不启用后台队列或多 Agent |
 | 工具 | Prompt 只暴露运行时按当前事实计算的 CapabilityGrant；模型从中选择工具，执行器对每次请求重新计算并校验；文件移动/建目录、表格/图片高级操作仅在既有专项能力与动态条件同时满足时启用 |
-| 上下文 | 当前 LogicalState + 当前输入 + 显式引用 + 同文档必要历史；AST/KB/TPL 自动供给关闭 |
+| 上下文 | 当前输入 + 资源身份/可用性 + 显式引用 + 必要历史；v2 按需取得专业 LogicalState，取得后仍为文档主事实；v1 兼容边界见 I-P-01；AST/KB/TPL 自动供给关闭 |
 | Prompt | 统一 Prompt Runtime 装配；系统约束与 data-only 文档/引用分离；携 runtime version |
 | 产出 | 回答或 ChangeProposal；任何内容创建/修改均经 DE Diff 裁决 |
 | 会话 | workspace 隔离、本地恢复、单会话同一时刻一个活动回合 |
@@ -327,6 +328,55 @@ AG 代理（本文 SSOT）——Agent 1.0 代理编辑（TERM-AG-008）面板：
 
 前端可继续保存完整路线所需的 additive 字段，但 1.0 不得展示没有独立 Runtime Profile 的代理构建
 入口；延期能力未通过专项系统验证时必须 feature-gate，而不是依靠提示词声明“不要使用”。
+
+### §2.2 独立验证的运行边界（P00，2026-09-15）
+
+本节是已确认设计，不是实现或 G5 通过登记；承接 BR-AG-STATE-001/002、BR-AG-DATA-001/002/003/008、
+BR-AG-UI-001、BR-SYS-STATE-007/008、BR-SYS-DATA-008，不新增产品 Profile 或平行授权规则。
+
+Binder Agent 是嵌入本地文档工作台、围绕用户当前任务进行有限自主执行的文档协作 Agent。运行核心是
+Binder 任务间可复用的运行机制，不是脱离写作场景的通用聊天产品，也不是覆盖所有 Agent 类型的框架。
+
+| 决策 | 本阶段边界 | 实现责任 |
+|---|---|---|
+| 任务/自主范围 | 对话、读取分析、授权内 ChangeProposal 与既有 WorkspaceOperation；模型选择步骤，遇规定确认点等待 | AG 保持有限循环，不新增 Shell、后台队列或自动重试 |
+| 状态所有权 | AG 拥有运行身份/事件；ED/DE/DOC/WS 拥有专业状态；UI 只投影 | 核心不直接维护 ProseMirror、Block、LogicalState 或 DiskState |
+| 生效语义 | Agent 结束、专业操作成功、接受、保存分别证明 | 保留 DE 三分支，不把 ToolResult 成功推导为已保存 |
+| 用户并发操作 | 用户可编辑/切换文档；单执行槽，同会话最多一个活动 AgentTurn | 冻结请求目标；等待归属会话；版本漂移不得静默换目标 |
+| 权限 | RuntimeProfile、可信宿主事实、用户授权与逐调用 CapabilityGrant 共同收窄 | 不以模型、历史、读取结果或能力注册扩大范围 |
+| 上下文 | v2 通用准入不要求无关文档正文；按实际需求取得有效专业快照 | 已打开但未取得快照不等于未打开；禁止 DiskState 兜底 |
+| 记忆/恢复 | 有限会话历史、显式 MemorySelectionRef；恢复事实，不自动恢复执行 | AST 自动供给关闭；新请求重新核验；历史证据不复活授权 |
+| 外发与验证 | 本地优先不等于不外发；只向真实网关发送当前任务允许的必要上下文 | 不旁路 Gate；模型、核心、专业能力、UI、真实集成五线分证据 |
+
+**责任端口**：模型适配提供响应流；核心负责解析/预算/授权/调度/等待/终态；专业适配提供上下文、
+可用条件、参数校验、执行和专业回执；UI 展示安全事件并转达用户动作。模型传输测试替身只能替换该外部
+边界，必须经过生产解析、状态机与授权路径，不能直接制造 ToolResult 或 UI 成功。
+
+**最小能力契约要求**：声明能力/工具身份与版本、参数/结果 schema、上下文需求、可用条件、权限/效果类型、
+期限及结果规模、重试/回执查询策略、可信专业指令片段。调用关联 workspace/session/turn/task/tool/attempt、
+CapabilityGrant、目标版本、取消和期限；返回执行状态、效果状态、专业对象引用、错误/下一步及原始执行事实。
+共享字段归 SYS I-P-01，具体 wire DTO 在对应实施工作包前完成，不可由 AG/UI 自建近义真值。
+
+**等待与效果**：核心须从第一条基线支持带版本资源、异步回执、用户裁决、过期拒绝和效果分层；
+通用参数入口使用已发布 common 工具 schema 的 object/required/type/enum/items/数值边界校验，
+单次序列化参数上限 1 MiB、结构深度上限 32；专业 propose_edit 的结构规则继续归专业适配。
+只读执行等待期限 30 秒，取消或超时后丢弃迟到结果，不登记成功证据、不自动重试。
+底层同步读取可能继续收尾，因此不得把该包装用于写操作。受控复制、专业 Proposal 和任务控制能力
+经独立 owned 执行端口：原数据库和回合注册表共享句柄，不复制业务真值；短时注册锁只授予效果 lease，
+不覆盖整个耗时操作。核心等待上限 30 秒，取消可及时结束等待；未结算效果保留原身份并禁止接管或重放。
+端口先提交 started 身份，再执行能力，再提交 settled 安全回执，结算持久化成功后才能返回成功；
+未知/迟到结果归原调用的独立效果事实，既不回注新模型片段，也不改写原回合终态。查询契约见 SYS §3.1.0。
+同 AgentTurn 的历史 ToolCall 标识（含裁决恢复检查点）不得重复；整批身份非法时整批未执行。
+同一回合最多六轮模型调用及既有工具调用预算，裁决检查点恢复扣除先前已提交工具批次/调用数，
+不得通过反复等待和确认重置执行额度。用户等待不计模型/只读工具等待期限，可显式取消；
+网关和只读执行分别保留独立期限，而非宣称可以强制终止任意专业同步写入。
+无需理解回执背后的具体编辑器。回执只消费一次，旧操作只能更新/清理自己的身份；专业效果不确定时保留
+阻断与核对动作，不得自动重放。此处不新增跨进程自动续跑、普遍 exactly-once 或任务级回滚承诺。
+DecisionRequest 的等待恢复沿用同 AgentTurn；专业预览续片段沿用既有 TaskRun/checkpoint 路径，不混成同一语义。
+
+**失败分类**：模型传输、模型协议、核心上下文、核心控制、授权、专业能力、UI 投影、环境分别记录。
+每条失败区分“最先观察的边界”和“已确认根因”；模型结构错误被安全拒绝可证明核心错误路径，不证明业务成功。
+纯问候不因无关文档元数据缺少正文证据而生成 ProjectReport 噪声；请求相关报告仍受 BR-AG-OBS-001 约束。
 
 ## §3 代理回合（AG-TURN）
 
@@ -393,7 +443,7 @@ rule_id: BR-AG-VERIFY-001
 AG 发起的每一次模型调用——代理回合、工具循环内续调、局部修改、辅助续写——必须先经
 SM-SYS-01 达 GatePassed 并经 AiGateway 发起（X-SEQ-001 承接）；代码中不存在不经门禁通往模型
 调用的路径；GatePassed 必须来自本次服务端 GateOutcome，客户端预设常量、开发桩值或历史通过缓存
-不得驱动 AwaitingGate→Streaming；无有效订阅或断网时：代理/工具回合明确拒绝（统一错误形状），局部修改/辅助续写静默
+不得驱动 AwaitingGate→Streaming；无有效订阅时代理/工具回合明确拒绝；认证/门禁不可达、超时、非法响应或非授权 HTTP 异常返回调用错误，不冒充订阅拒绝。两类失败均不调用模型、不自动重试，显式新请求重新裁决，保留此前执行证据；局部修改/辅助续写静默
 不提供且不打断编辑。本规则是 SYS 门禁契约在 AG 的承接执行，不重定义裁决语义（裁决归服务端）。
 
 <!-- RULE
@@ -551,7 +601,7 @@ REF 注入载荷（@mention 与 ReferencePayload，含来源标识）、用户�
 可追溯（不静默丢弃显式注入）。预算数值与裁剪算法延实现期标定，本规则锁来源限定与裁剪优先级语义。
 已打开文档读取存在硬优先级：`source=active_editor/active_editor_session/open_editor_session` 的 LogicalState > 未打开文档
 DiskState；任何已打开文档不得从 DiskState 或 loadedContent 旧快照取上下文主事实。ReferencePayload.selection
-必须在发送时按当前 AgentReadContext 校验；无法校验的 selection 只能作为用户原始选区快照呈现，不得作为当前
+必须在作为当前文档事实或编辑锚使用前按当前 AgentReadContext 校验；无法校验的 selection 只能作为用户原始选区快照呈现，不得作为当前
 文档事实。
 `runtime_profile=agent-edit-1.0` 下 AST/KB/TPL 不做自动写入、检索或注入；只有用户当轮明确选择的项目记忆且来源可校验时，才可作为 data-only 引用进入本轮。未来 Profile 不得从 BR-AG-DATA-005 推导自动补强语义，须重新进入 REQUIREMENT/DESIGN Scope。
 
@@ -560,17 +610,22 @@ rule_id: BR-AG-DATA-008
 主链路: AG-TURN
 域: DATA
 -->
-每个 AgentTurn 必须在 PromptPackage 装配前冻结一个版本化 AgentContextFacts（TERM-AG-020），其跨模块
-字段基线归 BR-SYS-DATA-008。前端只从当前 active workspace 的 ED 会话真值、用户显式 SelectionRef 与
-DE ChangeProposal 投影组装；后端必须核验 workspace 身份、活动路径、OpenDocSnapshot 集合以及同路径
-source/sessionVersion/contentHash 等身份一致后才接受。已打开文档一律声明为 LogicalState 来源，活动文档
-与已打开非活动文档可区分；未打开文档不得伪装成编辑器事实。选区只在当前任务显式携带 SelectionRef 时
+每次 PromptPackage 装配前必须冻结版本化 AgentContextFacts（TERM-AG-020），其共享字段、版本及
+revision 归 BR-SYS-DATA-008。v1 保持完整快照准入；v2 先冻结 workspace/session/turn、活动目标及
+打开资源身份和可用性，不因无关资源正文未就绪阻断通用准入。前端只从 ED/DE/WS 真值及用户显式
+SelectionRef 组装；后端校验身份及可用性。只有声明 ready 的文档才可作为 LogicalState 内容事实，
+其 source/sessionVersion/contentHash 必须与实际 OpenDocSnapshot 一致；loading/unavailable 只能表示
+已知资源身份及阻塞原因，不得伪装已读。所需文档按需采集；已打开但快照缺失时禁止回退 DiskState。
+同一 AgentTurn 每次事实更新追加 revision 并重新装配、重新授权，不覆盖旧 ContextFrozen 证据。
+选区只在当前任务显式携带 SelectionRef 时
 进入，且必须带 relPath/blockId/range；兼容 `blockRefs` 必须先等价归一为本轮显式 SelectionFact。
 Proposal 事实只能投影当前 AgentSession，携带 diffId/sessionId/relPath/state/effectStatus/saved，不携带或改变内容。
 
 AgentContextFacts 作为独立 `AgentContextFacts` data-only Prompt 层注入，位于当前 IntentResult 投影之后、
 CurrentDocument 之前；不得并入 RuntimeControl、OpenDocSnapshot 或自然语言提示词。载荷缺失、版本未知、
-跨 workspace、活动路径不一致、打开文档来源或版本/hash 漂移时，必须在 Gate/provider/ToolCall 前失败关闭。
+跨 workspace 或冻结活动身份不一致必须失败关闭；v2 的显式 unavailable 不等于坏载荷。需要消费的文档
+来源或版本/hash 不一致时，在该内容注入或 ToolCall 执行前拒绝/重新获取；必需上下文仍不可用时明确失败，
+不以旧快照继续。绑定目标不得因用户切换活动标签改变。
 该载荷只供模型认识会话事实并由 ContextFrozen TurnEvent 初始化 EvidenceLedger，不授予额外读取、编辑、Proposal 或磁盘权限，
 也不得把打开标签、读取结果或 Proposal 路径加入 ExplicitEditTargetSet。
 
@@ -610,7 +665,7 @@ ChangeProposal/Diff，不写 LogicalState/DiskState，不扩大 CapabilityGrant 
 |---|---|---|
 | 系统提示词层 | 产品角色定位 + 硬约束边界声明（修改须经 diff 裁决、不得越权落盘、workspace 限界） | 设计锁边界，文本实现期 |
 | 工具/能力定义层 | 当轮 CapabilityGrant.allowed_tools 的精确契约投影；注册表/Profile 不得扩大允许集 | 允许集为当轮动态真值；具体工具实现归运行时 |
-| 上下文注入层 | 来源限定承 BR-AG-DATA-001（显式 @mention 不被静默丢弃）；已打开文档以 OpenDocSnapshot LogicalState 为当前轮主事实；仅用户明确选择的项目记忆可作 data-only 显式引用，自动记忆/知识/模板不装配。完整分层与**截断序**见 M-T-02 §2/§5（BR-AG-DATA-005，**当前文档 P0 不得静默截断**） | 顺序设计锁；截断序细化归 M-T-02 |
+| 上下文注入层 | 来源限定承 BR-AG-DATA-001；v2 按需取得专业上下文，已激活文档内容必须为有效 OpenDocSnapshot LogicalState；显式引用不被静默丢弃，显式记忆保持 data-only，自动补强关闭。P0 保留义务不等于所有请求必须注入当前文档；详见 M-T-02 §5 | 顺序设计锁；激活与截断细化归 M-T-02 |
 | 用户输入层 | 本轮 prompt / 编辑触发上下文 | — |
 
 **实现装配登记（2026-08-09，AG-PROMPT-STRUCTURE-FIX-01）**：生产装配以 `LayerKind` 枚举作为 BR-AG-DATA-002 的唯一实现投影
@@ -645,7 +700,8 @@ M-T-02 为准）→ 用户输入层；`agent-edit-1.0` 的两类回合采用结�
 来源、freshness、hash、trust 与 token 元数据，不得因数据正文含命令文字而获得指令权限；`agent-edit-1.0`
 不得自动检索或注入记忆、知识、模板。每次调用形成
 带 runtime/version、当前 intent revision、context trace、tool manifest hash 和预算结果的 PromptPackage；调试追踪
-默认不保存用户正文、密钥或会话令牌。本规则锁组装分层、注入顺序、可信边界与当前两类回合骨架差异
+默认不保存用户正文、密钥或会话令牌。专业指令由可信能力实现按当前激活条件提供，不永久并入全局系统
+常量；文档或历史中出现的专业指令文字仍为 data-only，不重新获得权限。本规则锁组装分层、注入顺序、可信边界与当前两类回合骨架差异
 （**截断序不在本规则，归 BR-AG-DATA-005，去重单一化**）。Build/CBT 的 Prompt 骨架不属于
 `agent-edit-1.0`，由未来独立 Profile 的需求与设计定义。
 
@@ -757,8 +813,8 @@ rule_id: BR-AG-DATA-007
 -->
 能力模型偏好解析必须满足：四个槽位（autocomplete / inline-assist / agent-edit / build）各自维护
 一项偏好，值为「跟随全局默认」或「显式指定 modelKey」二者之一；解析结果必须是注册表内存在的
-modelKey，注册表条目被删除后引用它的显式偏好回落为「跟随全局默认」，不得产出悬空 modelKey；
-解析为**纯同步逻辑**，不引入跨请求状态；解析出的 provider/model 仅作为调用参数传入既有链路，
+modelKey。仅首次安装、尚无选择记录时可以初始化默认模型；已保存的全局或能力显式选择即使因删除或清单同步而不可用，也必须保留原键并显式阻断调用，要求用户重新选择，禁止静默改为其他模型。
+解析为**纯同步逻辑**；发起 AgentTurn 时冻结解析所得 provider/model，同一回合的澄清、裁决、预览及工具结果续行均使用该绑定，不按界面当前偏好或网关默认值重新解析。解析出的 provider/model 仅作为调用参数传入既有链路，
 不改变门禁前置与服务端裁决路径（X-FORBID-002）。`build` 只保存后续 Profile 的偏好数据，不授予
 Agent 1.0 入口、调用、工具或 RuntimeProfile 能力。
 
@@ -1051,6 +1107,9 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-07 | v2.59 | 通用写能力接拥有生命周期的执行端口；30 秒等待期限、非阻塞取消、迟到效果独立核对及防重放；同步专业操作不承诺强杀/回滚，不改变编辑器或 DOCX 路线。 |
+| 2026-10-06 | v2.58 | 经人类确认同步 ENT/SYS：明确授权拒绝与认证/门禁调用失败分离，均禁止后续模型调用，保留执行证据且新请求重新裁决。 |
+| 2026-09-15 | v2.57 | P00：确认 Binder 独立验证运行边界；定义 v2 资源身份先行、按需专业快照及 revision，保留 v1 兼容、LogicalState 真值、授权/裁决/保存边界；仅设计，尚未证明生产实现。 |
 | 2026-09-04 | v2.56 | AG-ADAPTIVE-RUNTIME-DOC-NAME-01：仅将 §7.2.1 的 TurnEvent 持久化表名、基线列和删除语义对齐至共享数据结构唯一真源 `agent_turn_events`；不新增需求、规则、功能或逻辑。 |
 | 2026-09-03 | v2.55 | AG-ADAPTIVE-RUNTIME-DESIGN-01：IntentResult 改为模型驱动可修订语义投影并移除授权；CapabilityGrant 改为逐工具按硬事实计算；TaskRun/TaskPlan/TaskStep 投影化；注册 TurnEvent/EvidenceLedger；ProjectReport 改由真实证据派生并移除 report_project 完成门。 |
 | 2026-09-01 | v2.54 | AG-MAPPING-REGISTRY-CLOSURE-01：同步四条 DESIGN_PENDING 需求的 deferred 状态；REQ-AG-009 补充映射到 Agent 1.0 共享运行时对象专门约束 X-SHARED-002，不新增业务规则。 |

@@ -1968,6 +1968,35 @@ pub fn plan_operation(
     source_turn_id: Option<&str>,
     initial_content_ref: Option<&str>,
 ) -> Result<WorkspaceOperationPlan, IpcError> {
+    let prepared = prepare_operation(
+        workspace,
+        intents,
+        task_run_id,
+        source_turn_id,
+        initial_content_ref,
+    )?;
+    commit_prepared_operation(conn, prepared)
+}
+
+// Opaque, internal preparation token: callers cannot inject a plan or DB consequences.
+pub(crate) struct PreparedOperationPlan(WorkspaceOperationPlan);
+
+/**
+ * @GOV
+ * codes: BR-WS-STATE-003-QUERY-WS-WS-OPERATION-006, BR-WS-DATA-003-QUERY-WS-WS-OPERATION-006
+ * type: QUERY
+ * chain: WS-OPERATION
+ * rules: BR-WS-STATE-003, BR-WS-DATA-003
+ * term_ref: TERM-WS-003, TERM-WS-004
+ * boundary: in=WorkspaceRefAndResourceIntentsAndSourceTaskIdentity | out=FrozenPreparedWorkspaceOperationPlan | does_not=HoldDatabaseLockOrPersistPlanOrMutateDisk
+ */
+pub(crate) fn prepare_operation(
+    workspace: &WorkspaceRef,
+    intents: &[WorkspaceOperationIntent],
+    task_run_id: Option<&str>,
+    source_turn_id: Option<&str>,
+    initial_content_ref: Option<&str>,
+) -> Result<PreparedOperationPlan, IpcError> {
     if intents.is_empty() {
         return Err(operation_error(
             "WS_OPERATION_EMPTY",
@@ -2034,20 +2063,6 @@ pub fn plan_operation(
             }
         }
     }
-    let affected_sessions = query_affected_rows(
-        conn,
-        "SELECT rel_path FROM ed_session_snapshots WHERE workspace_id=?1",
-        &workspace.workspace_id,
-        &targets,
-    )
-    .map_err(|error| db_error("读取受影响编辑会话失败", error))?;
-    let affected_diffs = query_affected_rows(
-        conn,
-        "SELECT rel_path FROM pending_diffs WHERE workspace_id=?1 AND status='pending'",
-        &workspace.workspace_id,
-        &targets,
-    )
-    .map_err(|error| db_error("读取受影响内容 Diff 失败", error))?;
     let now = now_millis();
     let mut plan = WorkspaceOperationPlan {
         plan_id: generated_id("wop-plan"),
@@ -2060,8 +2075,8 @@ pub fn plan_operation(
         frozen_manifest,
         baseline_set,
         consequences: WorkspaceOperationConsequences {
-            affected_sessions,
-            affected_diffs,
+            affected_sessions: Vec::new(),
+            affected_diffs: Vec::new(),
             affected_references: Vec::new(),
             recursive_count: 0,
             recoverable: intents.iter().all(|intent| {
@@ -2076,6 +2091,40 @@ pub fn plan_operation(
         updated_at: now,
     };
     plan.consequences.recursive_count = recursive_count;
+    Ok(PreparedOperationPlan(plan))
+}
+
+/**
+ * @GOV
+ * codes: BR-WS-STATE-003-EFFECT-WS-WS-OPERATION-007, BR-WS-DATA-003-EFFECT-WS-WS-OPERATION-007, BR-WS-OBS-002-EFFECT-WS-WS-OPERATION-007
+ * type: EFFECT
+ * chain: WS-OPERATION
+ * rules: BR-WS-STATE-003, BR-WS-DATA-003, BR-WS-OBS-002
+ * term_ref: TERM-WS-003, TERM-WS-004
+ * boundary: in=PreparedWorkspaceOperationPlanAndCurrentDatabaseFacts | out=PersistedWaitingWorkspaceOperationPlan | effect=workspaceDb | does_not=ScanFilesystemOrExecuteResourceOperation
+ */
+pub(crate) fn commit_prepared_operation(
+    conn: &Connection,
+    prepared: PreparedOperationPlan,
+) -> Result<WorkspaceOperationPlan, IpcError> {
+    let mut plan = prepared.0;
+    let targets = affected_paths(&plan.operation_items);
+    let affected_sessions = query_affected_rows(
+        conn,
+        "SELECT rel_path FROM ed_session_snapshots WHERE workspace_id=?1",
+        &plan.workspace_id,
+        &targets,
+    )
+    .map_err(|error| db_error("读取受影响编辑会话失败", error))?;
+    let affected_diffs = query_affected_rows(
+        conn,
+        "SELECT rel_path FROM pending_diffs WHERE workspace_id=?1 AND status='pending'",
+        &plan.workspace_id,
+        &targets,
+    )
+    .map_err(|error| db_error("读取受影响内容 Diff 失败", error))?;
+    plan.consequences.affected_sessions = affected_sessions;
+    plan.consequences.affected_diffs = affected_diffs;
     insert_plan(conn, &plan).map_err(|error| db_error("持久化资源操作计划失败", error))?;
     plan = advance_plan(
         conn,
@@ -2155,8 +2204,40 @@ fn current_baselines(
 }
 
 /// WS-RESOURCE-WRITE-GUARD-01（F2，BR-WS-STATE-009）：采集单个资源的可恢复快照到 snapshot_ref。
+// This private access strategy preserves one execution algorithm for production and tests.
+// Shared access never lends a Connection across filesystem work.
+enum OperationDb<'a> {
+    Borrowed(&'a Connection),
+    Shared(&'a std::sync::Mutex<Connection>),
+}
+impl OperationDb<'_> {
+    fn with<T>(
+        &self,
+        action: impl FnOnce(&Connection) -> Result<T, IpcError>,
+    ) -> Result<T, IpcError> {
+        match self {
+            Self::Borrowed(conn) => action(conn),
+            Self::Shared(mutex) => {
+                let conn = mutex
+                    .lock()
+                    .map_err(|_| operation_error("WS_OPERATION_DB_ERROR", "数据库锁异常", true))?;
+                action(&conn)
+            }
+        }
+    }
+}
+
 pub fn snapshot_resource(
     conn: &Connection,
+    root: &Path,
+    rel_path: &str,
+    snapshot_ref: &str,
+) -> Result<(), IpcError> {
+    snapshot_resource_with_db(&OperationDb::Borrowed(conn), root, rel_path, snapshot_ref)
+}
+
+fn snapshot_resource_with_db(
+    db: &OperationDb<'_>,
     root: &Path,
     rel_path: &str,
     snapshot_ref: &str,
@@ -2203,8 +2284,10 @@ pub fn snapshot_resource(
             })?;
             (kind, Some(bytes))
         };
-        store_snapshot_member(conn, snapshot_ref, &relative, kind, content.as_deref())
-            .map_err(|error| db_error("保存资源快照失败", error))?;
+        db.with(|conn| {
+            store_snapshot_member(conn, snapshot_ref, &relative, kind, content.as_deref())
+                .map_err(|error| db_error("保存资源快照失败", error))
+        })?;
     }
     Ok(())
 }
@@ -2219,14 +2302,16 @@ fn rebase_snapshot_path(original_root: &str, target_root: &str, member: &str) ->
     format!("{target_root}/{suffix}")
 }
 
-fn restore_snapshot(
-    conn: &Connection,
+fn restore_snapshot_with_db(
+    db: &OperationDb<'_>,
     root: &Path,
     snapshot_ref: &str,
     target_root: Option<&str>,
 ) -> Result<(), IpcError> {
-    let members = load_snapshot_members(conn, snapshot_ref)
-        .map_err(|error| db_error("读取资源快照失败", error))?;
+    let members = db.with(|conn| {
+        load_snapshot_members(conn, snapshot_ref)
+            .map_err(|error| db_error("读取资源快照失败", error))
+    })?;
     let original_root = members
         .first()
         .map(|member| member.0.clone())
@@ -2291,7 +2376,7 @@ fn empty_document_bytes(rel_path: &str) -> Result<Vec<u8>, IpcError> {
 }
 
 fn execute_item(
-    conn: &Connection,
+    db: &OperationDb<'_>,
     root: &Path,
     operation_id: &str,
     item: &WorkspaceOperationItem,
@@ -2325,7 +2410,7 @@ fn execute_item(
         WorkspaceOperationKind::DeleteResource | WorkspaceOperationKind::DiscardCreatedResource => {
             let source = item.source_rel_path.as_deref().expect("validated source");
             let snapshot_ref = format!("wop-snapshot-{operation_id}-{}", item.seq);
-            snapshot_resource(conn, root, source, &snapshot_ref)?;
+            snapshot_resource_with_db(db, root, source, &snapshot_ref)?;
             let abs = super::resolve_in_workspace(root, source)?;
             if item.resource_kind == WorkspaceResourceKind::Folder {
                 super::fileops::delete_folder(&abs, item.recursive)?;
@@ -2341,14 +2426,14 @@ fn execute_item(
                 .restore_payload_ref
                 .as_deref()
                 .expect("validated restore payload");
-            restore_snapshot(conn, root, snapshot_ref, Some(target))?;
+            restore_snapshot_with_db(db, root, snapshot_ref, Some(target))?;
             Ok(Some(snapshot_ref.to_string()))
         }
     }
 }
 
-fn compensate_item(
-    conn: &Connection,
+fn compensate_item_with_db(
+    db: &OperationDb<'_>,
     root: &Path,
     item: &WorkspaceOperationItem,
     snapshot_ref: Option<&str>,
@@ -2380,7 +2465,7 @@ fn compensate_item(
                     false,
                 )
             })?;
-            restore_snapshot(conn, root, snapshot_ref, None)
+            restore_snapshot_with_db(db, root, snapshot_ref, None)
         }
         WorkspaceOperationKind::RestoreResource => {
             let target = item.target_rel_path.as_deref().expect("validated target");
@@ -2443,7 +2528,7 @@ fn load_progress(conn: &Connection, plan_id: &str) -> Result<WorkspaceOperationP
         .map(Option::unwrap_or_default)
 }
 
-fn load_outcome(
+pub(crate) fn load_outcome(
     conn: &Connection,
     plan_id: &str,
 ) -> Result<Option<WorkspaceOperationReceipt>, IpcError> {
@@ -2548,52 +2633,100 @@ pub fn execute_operation_plan(
     plan_id: &str,
     request_id: &str,
 ) -> Result<WorkspaceOperationReceipt, IpcError> {
-    let mut plan = load_plan(conn, plan_id)
-        .map_err(|error| db_error("读取资源操作计划失败", error))?
-        .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "资源操作计划不存在", false))?;
-    if plan.workspace_id != workspace.workspace_id {
-        return Err(operation_error(
-            "WS_OPERATION_WORKSPACE_MISMATCH",
-            "资源操作计划不属于当前 workspace",
-            false,
-        ));
-    }
-    decision_identity(conn, &plan, request_id, "confirm")?;
-    if let Some(receipt) = load_outcome(conn, plan_id)? {
+    execute_operation_plan_with_db(
+        &OperationDb::Borrowed(conn),
+        workspace,
+        plan_id,
+        request_id,
+        || {},
+    )
+}
+
+/** @GOV
+ * codes: BR-WS-STATE-003-EFFECT-WS-WS-OPERATION-008, BR-WS-PERSIST-003-EFFECT-WS-WS-OPERATION-008
+ * type: EFFECT
+ * chain: WS-OPERATION, AG-TURN
+ * rules: BR-WS-STATE-003, BR-WS-PERSIST-003
+ * term_ref: TERM-WS-003, TERM-WS-004
+ * boundary: in=ConfirmedWorkspaceOperationPlanAndSharedDatabaseHandle | out=PersistedWorkspaceOperationReceiptAndProgress | effect=workspaceDb,workspaceFiles | does_not=HoldSharedDatabaseDuringFilesystemWorkOrReplayClaimedPlan
+ */
+pub(crate) fn execute_operation_plan_shared(
+    db: &std::sync::Mutex<Connection>,
+    workspace: &WorkspaceRef,
+    plan_id: &str,
+    request_id: &str,
+) -> Result<WorkspaceOperationReceipt, IpcError> {
+    execute_operation_plan_with_db(
+        &OperationDb::Shared(db),
+        workspace,
+        plan_id,
+        request_id,
+        || {},
+    )
+}
+
+fn execute_operation_plan_with_db(
+    db: &OperationDb<'_>,
+    workspace: &WorkspaceRef,
+    plan_id: &str,
+    request_id: &str,
+    before_filesystem: impl FnOnce(),
+) -> Result<WorkspaceOperationReceipt, IpcError> {
+    let (mut plan, cached, operation_id) = db.with(|conn| {
+        let mut plan = load_plan(conn, plan_id)
+            .map_err(|error| db_error("读取资源操作计划失败", error))?
+            .ok_or_else(|| {
+                operation_error("WS_OPERATION_NOT_FOUND", "资源操作计划不存在", false)
+            })?;
+        if plan.workspace_id != workspace.workspace_id {
+            return Err(operation_error(
+                "WS_OPERATION_WORKSPACE_MISMATCH",
+                "资源操作计划不属于当前 workspace",
+                false,
+            ));
+        }
+        decision_identity(conn, &plan, request_id, "confirm")?;
+        if let Some(receipt) = load_outcome(conn, plan_id)? {
+            return Ok((plan, Some(receipt), String::new()));
+        }
+        if plan.status.is_terminal() || plan.status == WorkspaceOperationStatus::Interrupted {
+            if let Some(operation_id) = plan.operation_id.as_deref() {
+                if let Some(entry) = load_operation_entry(conn, operation_id)
+                    .map_err(|error| db_error("读取资源操作历史失败", error))?
+                {
+                    let receipt = WorkspaceOperationReceipt {
+                        operation_id: operation_id.to_string(),
+                        plan_id: plan.plan_id.clone(),
+                        final_status: entry.final_status,
+                        item_receipts: entry.item_receipts,
+                        compensation_receipts: entry.compensation_receipts,
+                        entry_id: Some(entry.entry_id),
+                        invalidated_diff_ids: Vec::new(),
+                    };
+                    persist_outcome(conn, plan_id, &receipt)?;
+                    return Ok((plan, Some(receipt), String::new()));
+                }
+            }
+            return Err(operation_error(
+                "WS_OPERATION_TERMINAL",
+                "资源操作已经终止，不能再次执行；恢复必须生成新计划",
+                false,
+            ));
+        }
+        let operation_id = generated_id("wop");
+        plan = advance_plan(
+            conn,
+            plan_id,
+            WorkspaceOperationEvent::UserConfirm,
+            Some(&operation_id),
+        )
+        .map_err(|error| db_error("进入资源操作重验阶段失败", error))?;
+        Ok((plan, None, operation_id))
+    })?;
+    if let Some(receipt) = cached {
         return Ok(receipt);
     }
-    if plan.status.is_terminal() || plan.status == WorkspaceOperationStatus::Interrupted {
-        if let Some(operation_id) = plan.operation_id.as_deref() {
-            if let Some(entry) = load_operation_entry(conn, operation_id)
-                .map_err(|error| db_error("读取资源操作历史失败", error))?
-            {
-                let receipt = WorkspaceOperationReceipt {
-                    operation_id: operation_id.to_string(),
-                    plan_id: plan.plan_id.clone(),
-                    final_status: entry.final_status,
-                    item_receipts: entry.item_receipts,
-                    compensation_receipts: entry.compensation_receipts,
-                    entry_id: Some(entry.entry_id),
-                    invalidated_diff_ids: Vec::new(),
-                };
-                persist_outcome(conn, plan_id, &receipt)?;
-                return Ok(receipt);
-            }
-        }
-        return Err(operation_error(
-            "WS_OPERATION_TERMINAL",
-            "资源操作已经终止，不能再次执行；恢复必须生成新计划",
-            false,
-        ));
-    }
-    let operation_id = generated_id("wop");
-    plan = advance_plan(
-        conn,
-        plan_id,
-        WorkspaceOperationEvent::UserConfirm,
-        Some(&operation_id),
-    )
-    .map_err(|error| db_error("进入资源操作重验阶段失败", error))?;
+    before_filesystem();
     trace_operation(
         "revalidation_started",
         plan_id,
@@ -2603,13 +2736,18 @@ pub fn execute_operation_plan(
     );
     let root = Path::new(&workspace.root_path);
     let targets = affected_paths(&plan.operation_items);
-    if let Some(dirty_path) = has_dirty_affected_session(conn, &plan.workspace_id, &targets)? {
-        let _ = advance_plan(
-            conn,
-            plan_id,
-            WorkspaceOperationEvent::BaselineDrift,
-            Some(&operation_id),
-        );
+    if let Some(dirty_path) =
+        db.with(|conn| has_dirty_affected_session(conn, &plan.workspace_id, &targets))?
+    {
+        let _ = db.with(|conn| {
+            advance_plan(
+                conn,
+                plan_id,
+                WorkspaceOperationEvent::BaselineDrift,
+                Some(&operation_id),
+            )
+            .map_err(|error| db_error("资源操作状态转移失败", error))
+        });
         trace_operation(
             "revalidation_failed",
             plan_id,
@@ -2625,12 +2763,15 @@ pub fn execute_operation_plan(
     }
     let current = current_baselines(root, &plan.baseline_set)?;
     if current != plan.baseline_set {
-        let _ = advance_plan(
-            conn,
-            plan_id,
-            WorkspaceOperationEvent::BaselineDrift,
-            Some(&operation_id),
-        );
+        let _ = db.with(|conn| {
+            advance_plan(
+                conn,
+                plan_id,
+                WorkspaceOperationEvent::BaselineDrift,
+                Some(&operation_id),
+            )
+            .map_err(|error| db_error("资源操作状态转移失败", error))
+        });
         trace_operation(
             "revalidation_failed",
             plan_id,
@@ -2644,15 +2785,17 @@ pub fn execute_operation_plan(
             false,
         ));
     }
-    plan = advance_plan(
-        conn,
-        plan_id,
-        WorkspaceOperationEvent::BaselineValid,
-        Some(&operation_id),
-    )
-    .map_err(|error| db_error("进入资源操作执行阶段失败", error))?;
+    plan = db.with(|conn| {
+        advance_plan(
+            conn,
+            plan_id,
+            WorkspaceOperationEvent::BaselineValid,
+            Some(&operation_id),
+        )
+        .map_err(|error| db_error("资源操作状态转移失败", error))
+    })?;
 
-    let mut progress = load_progress(conn, plan_id)?;
+    let mut progress = db.with(|conn| load_progress(conn, plan_id))?;
     let mut item_receipts = progress.item_receipts.clone();
     let mut completed: Vec<(&WorkspaceOperationItem, Option<String>)> = Vec::new();
     let mut failure: Option<IpcError> = None;
@@ -2668,8 +2811,8 @@ pub fn execute_operation_plan(
         };
         upsert_progress_receipt(&mut item_receipts, attempted);
         progress.item_receipts = item_receipts.clone();
-        persist_progress(conn, plan_id, &progress)?;
-        match execute_item(conn, root, &operation_id, item) {
+        db.with(|conn| persist_progress(conn, plan_id, &progress))?;
+        match execute_item(db, root, &operation_id, item) {
             Ok(snapshot_ref) => {
                 upsert_progress_receipt(
                     &mut item_receipts,
@@ -2684,7 +2827,7 @@ pub fn execute_operation_plan(
                     },
                 );
                 progress.item_receipts = item_receipts.clone();
-                persist_progress(conn, plan_id, &progress)?;
+                db.with(|conn| persist_progress(conn, plan_id, &progress))?;
                 completed.push((item, snapshot_ref));
                 trace_operation(
                     "item_receipt",
@@ -2708,7 +2851,7 @@ pub fn execute_operation_plan(
                     },
                 );
                 progress.item_receipts = item_receipts.clone();
-                persist_progress(conn, plan_id, &progress)?;
+                db.with(|conn| persist_progress(conn, plan_id, &progress))?;
                 failure = Some(error);
                 trace_operation(
                     "item_receipt",
@@ -2729,13 +2872,15 @@ pub fn execute_operation_plan(
             WorkspaceOperationEvent::AllItemsOk,
         )
     } else {
-        advance_plan(
-            conn,
-            plan_id,
-            WorkspaceOperationEvent::ItemFail,
-            Some(&operation_id),
-        )
-        .map_err(|error| db_error("进入资源操作补偿阶段失败", error))?;
+        db.with(|conn| {
+            advance_plan(
+                conn,
+                plan_id,
+                WorkspaceOperationEvent::ItemFail,
+                Some(&operation_id),
+            )
+            .map_err(|error| db_error("资源操作状态转移失败", error))
+        })?;
         let mut compensation_failed = false;
         for (item, snapshot_ref) in completed.into_iter().rev() {
             upsert_progress_receipt(
@@ -2751,8 +2896,8 @@ pub fn execute_operation_plan(
                 },
             );
             progress.compensation_receipts = compensation_receipts.clone();
-            persist_progress(conn, plan_id, &progress)?;
-            match compensate_item(conn, root, item, snapshot_ref.as_deref()) {
+            db.with(|conn| persist_progress(conn, plan_id, &progress))?;
+            match compensate_item_with_db(db, root, item, snapshot_ref.as_deref()) {
                 Ok(()) => upsert_progress_receipt(
                     &mut compensation_receipts,
                     WorkspaceOperationItemReceipt {
@@ -2782,7 +2927,7 @@ pub fn execute_operation_plan(
                 }
             }
             progress.compensation_receipts = compensation_receipts.clone();
-            persist_progress(conn, plan_id, &progress)?;
+            db.with(|conn| persist_progress(conn, plan_id, &progress))?;
         }
         if compensation_failed {
             (
@@ -2810,6 +2955,7 @@ pub fn execute_operation_plan(
     // 执行回执和终态。任一步失败时计划仍停留在 Executing/Compensating，启动恢复
     // 可依据 progress_json 将真实磁盘结果收束为 Interrupted，而不会出现“终态已写入、
     // 回执或时间轴缺失”的不可恢复窗口。
+    let receipt = db.with(|conn| {
     let transaction = conn
         .unchecked_transaction()
         .map_err(|error| db_error("启动资源操作收束事务失败", error))?;
@@ -2849,6 +2995,8 @@ pub fn execute_operation_plan(
     transaction
         .commit()
         .map_err(|error| db_error("提交资源操作收束事务失败", error))?;
+    Ok(receipt)
+    })?;
     trace_operation(
         "terminal",
         plan_id,
@@ -3146,6 +3294,107 @@ mod tests {
             "重复确认/执行不能重复写盘或历史"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    // covers: BR-WS-STATE-003
+    // covers: BR-WS-PERSIST-003
+    #[test]
+    fn shared_execution_releases_database_during_io_and_claims_once() {
+        let (conn, workspace, root) = temp_workspace("shared-execution");
+        std::fs::write(root.join("a.md"), b"original").unwrap();
+        let task =
+            crate::ag::task::begin_turn(&conn, &workspace.workspace_id, "session", None).unwrap();
+        let plan = plan_operation(
+            &conn,
+            &workspace,
+            &[WorkspaceOperationIntent {
+                kind: WorkspaceOperationKind::DeleteResource,
+                source_path: Some("a.md".into()),
+                target_path: None,
+                resource_kind: Some(WorkspaceResourceKind::File),
+                recursive: false,
+                restore_payload_ref: None,
+            }],
+            Some(&task),
+            Some("turn"),
+            None,
+        )
+        .unwrap();
+        let decision = crate::ag::task::propose_decision(
+            &conn,
+            &task,
+            "permission",
+            serde_json::json!({"workspaceOperationPlanId":plan.plan_id}),
+        )
+        .unwrap();
+        bind_decision_request(&conn, &plan.plan_id, &decision.request_id).unwrap();
+        crate::ag::task::resolve_decision(&conn, &decision.request_id, "confirm").unwrap();
+        let db = std::sync::Mutex::new(conn);
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let worker = scope.spawn(|| {
+                execute_operation_plan_with_db(
+                    &OperationDb::Shared(&db),
+                    &workspace,
+                    &plan.plan_id,
+                    &decision.request_id,
+                    move || {
+                        started_tx.send(()).unwrap();
+                        release_rx
+                            .recv_timeout(std::time::Duration::from_secs(3))
+                            .unwrap();
+                    },
+                )
+            });
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+            {
+                let conn = db
+                    .try_lock()
+                    .expect("slow resource work must not hold the core database");
+                crate::ag::task::settle_turn(&conn, &task, crate::ag::task::TurnOutcome::Cancelled)
+                    .unwrap();
+            }
+            assert!(
+                execute_operation_plan_shared(&db, &workspace, &plan.plan_id, &decision.request_id)
+                    .is_err(),
+                "an in-flight claim must not execute again"
+            );
+            release_tx.send(()).unwrap();
+            let receipt = worker.join().unwrap().unwrap();
+            assert_eq!(receipt.final_status, WorkspaceOperationStatus::Completed);
+            assert!(
+                !root.join("a.md").exists(),
+                "already-started execution is not a promised rollback"
+            );
+            let conn = db.lock().unwrap();
+            assert_eq!(
+                crate::ag::task::load_task_run(&conn, &task)
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                crate::ag::task::TaskRunStatus::Cancelled
+            );
+            assert_eq!(
+                load_outcome(&conn, &plan.plan_id)
+                    .unwrap()
+                    .unwrap()
+                    .operation_id,
+                receipt.operation_id
+            );
+            assert_eq!(
+                conn.query_row::<i64, _, _>(
+                    "SELECT COUNT(*) FROM workspace_operation_entries",
+                    [],
+                    |row| row.get(0)
+                )
+                .unwrap(),
+                1
+            );
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     // covers: BR-WS-STATE-003

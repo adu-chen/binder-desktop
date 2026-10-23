@@ -21,6 +21,7 @@ fn now_millis() -> i64 {
  * term_ref: TERM-AG-015, TERM-AG-019, TERM-WS-003
  * boundary: in=CompletedCreateDocumentBundleWithExistingWorkspaceResource | out=PersistedTaskRunExplicitEditTarget | effect=workspaceDb | does_not=authorizePlannedOrMissingResource
  */
+#[cfg(test)]
 fn persist_completed_create_document_target(
     conn: &rusqlite::Connection,
     workspace_root: &std::path::Path,
@@ -101,7 +102,7 @@ pub(crate) fn route_propose_decision(
     } else {
         None
     };
-    let conn = lock_db(state)?;
+    let mut conn = lock_db(state)?;
     if let Some(ws) = scope_workspace.as_ref() {
         let run = ag::task::load_task_run(&conn, &task_run_id)
             .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?
@@ -139,11 +140,34 @@ pub(crate) fn route_propose_decision(
             .collect::<Result<Vec<_>, _>>()?;
         let current = ag::target_set::load_for_task_run(&conn, &task_run_id)
             .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        drop(conn);
         let candidates = ag::target_set::validated_scope_candidates(
             std::path::Path::new(&ws.root_path),
             &raw_paths,
             &current,
         )?;
+        conn = lock_db(state)?;
+        let latest = ag::task::load_task_run(&conn, &task_run_id)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let active = workspace::lifecycle::active_workspace(&conn)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let targets = ag::target_set::load_for_task_run(&conn, &task_run_id)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        if latest.as_ref().is_none_or(|latest| {
+            latest.workspace_id != run.workspace_id
+                || latest.session_id != run.session_id
+                || latest.status != run.status
+        }) || active.as_ref().is_none_or(|active| {
+            active.workspace_id != ws.workspace_id || active.root_path != ws.root_path
+        }) || targets != current
+        {
+            return Err(IpcError::new(
+                "AG_DECISION_CONTEXT_CHANGED",
+                "路径校验期间任务或工作区已变化，未创建裁决请求",
+                false,
+                false,
+            ));
+        }
         let object = payload.as_object_mut().ok_or_else(|| {
             IpcError::new(
                 "AG_EDIT_TARGET_SCOPE_INVALID",
@@ -184,6 +208,23 @@ pub(crate) fn route_resolve_decision(
     request: &CommandRequest,
     state: &AppState,
 ) -> Result<serde_json::Value, IpcError> {
+    resolve_decision_with_executor(
+        request,
+        state,
+        workspace::operation::execute_operation_plan_shared,
+    )
+}
+
+fn resolve_decision_with_executor(
+    request: &CommandRequest,
+    state: &AppState,
+    executor: impl FnOnce(
+        &std::sync::Mutex<rusqlite::Connection>,
+        &crate::types::WorkspaceRef,
+        &str,
+        &str,
+    ) -> Result<crate::types::WorkspaceOperationReceipt, IpcError>,
+) -> Result<serde_json::Value, IpcError> {
     let request_id = str_param(request, "requestId", "AG_DECISION_REQUEST_ID_REQUIRED")?;
     let outcome = str_param(request, "outcome", "AG_DECISION_OUTCOME_REQUIRED")?;
     if outcome != "confirm" && outcome != "cancel" {
@@ -195,7 +236,7 @@ pub(crate) fn route_resolve_decision(
         ));
     }
     let ws = active_ws(state)?;
-    let conn = lock_db(state)?;
+    let mut conn = lock_db(state)?;
     let decision_row: Option<(String, String, String, String, Option<String>)> = conn
         .query_row(
             "SELECT task_run_id, kind, payload_json, status, outcome FROM decision_requests WHERE request_id=?1",
@@ -275,6 +316,29 @@ pub(crate) fn route_resolve_decision(
                 |row| row.get(0),
             )
             .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        if decision_status == "resolved" && outcome == "confirm" {
+            let receipt = workspace::operation::load_outcome(&conn, plan_id)?.ok_or_else(|| {
+                IpcError::new(
+                    "AG_EFFECT_PENDING",
+                    "裁决已提交，资源效果尚待结算；请查询原回合，不得再次执行",
+                    false,
+                    false,
+                )
+            })?;
+            let run = ag::task::load_task_run(&conn, &decision_task_run_id)
+                .map_err(|error| {
+                    IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
+                })?
+                .ok_or_else(|| {
+                    IpcError::new("AG_TASK_NOT_FOUND", "TaskRun 不存在", false, false)
+                })?;
+            return ws_json(&serde_json::json!({
+                "task_run_id": decision_task_run_id, "status": run.status,
+                "workspace_operation_receipt": receipt,
+                "workspace_operation_items": plan.operation_items,
+                "create_document_bundle": null, "already_resolved": true,
+            }));
+        }
         if outcome == "confirm" {
             let source_turn_id = plan.source_turn_id.as_deref().ok_or_else(|| {
                 IpcError::new(
@@ -295,45 +359,87 @@ pub(crate) fn route_resolve_decision(
     } else {
         None
     };
-    let confirmed_scope_targets =
-        if decision_status != "resolved" && decision_kind == "scope" && outcome == "confirm" {
-            let raw_paths = decision_payload
-                .get("targetPaths")
-                .and_then(|value| value.as_array())
-                .ok_or_else(|| {
+    let confirmed_scope_targets = if decision_status != "resolved"
+        && decision_kind == "scope"
+        && outcome == "confirm"
+    {
+        let raw_paths = decision_payload
+            .get("targetPaths")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_EDIT_TARGET_SCOPE_INVALID",
+                    "scope DecisionRequest 缺少冻结的 targetPaths",
+                    false,
+                    false,
+                )
+            })?
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
                     IpcError::new(
                         "AG_EDIT_TARGET_SCOPE_INVALID",
-                        "scope DecisionRequest 缺少冻结的 targetPaths",
+                        "scope DecisionRequest 的 targetPaths 必须是字符串路径",
                         false,
                         false,
                     )
-                })?
-                .iter()
-                .map(|value| {
-                    value.as_str().map(str::to_owned).ok_or_else(|| {
-                        IpcError::new(
-                            "AG_EDIT_TARGET_SCOPE_INVALID",
-                            "scope DecisionRequest 的 targetPaths 必须是字符串路径",
-                            false,
-                            false,
-                        )
-                    })
                 })
-                .collect::<Result<Vec<_>, _>>()?;
-            let current = ag::target_set::load_for_task_run(&conn, &decision_task_run_id).map_err(
-                |error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false),
-            )?;
-            Some(ag::target_set::validated_scope_candidates(
-                std::path::Path::new(&ws.root_path),
-                &raw_paths,
-                &current,
-            )?)
-        } else {
-            None
-        };
-    // WorkspaceOperation 的 confirm 必须在 DecisionRequest 落库前取得原 AgentTurn 的效果锁。
-    // 这样取消若先发生，本次裁决保持 Proposed 且零副作用；若 confirm 先取得锁，取消等待
-    // 已开始的原子裁决与 WS 执行完成，避免“已确认但未执行”的半状态。
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let current = ag::target_set::load_for_task_run(&conn, &decision_task_run_id)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let frozen_task: (String, String, String) = conn
+            .query_row(
+                "SELECT workspace_id,session_id,status FROM task_runs WHERE task_run_id=?1",
+                [&decision_task_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        drop(conn);
+        let candidates = ag::target_set::validated_scope_candidates(
+            std::path::Path::new(&ws.root_path),
+            &raw_paths,
+            &current,
+        )?;
+        conn = lock_db(state)?;
+        let latest: (String,String,String,Option<String>) = conn.query_row("SELECT task_run_id,payload_json,status,outcome FROM decision_requests WHERE request_id=?1", [&request_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))
+                .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let latest_task: (String, String, String) = conn
+            .query_row(
+                "SELECT workspace_id,session_id,status FROM task_runs WHERE task_run_id=?1",
+                [&decision_task_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let active = workspace::lifecycle::active_workspace(&conn)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        let targets = ag::target_set::load_for_task_run(&conn, &decision_task_run_id)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        if latest
+            != (
+                decision_task_run_id.clone(),
+                decision_payload_json.clone(),
+                decision_status.clone(),
+                resolved_outcome.clone(),
+            )
+            || latest_task != frozen_task
+            || targets != current
+            || active.as_ref().is_none_or(|active| {
+                active.workspace_id != ws.workspace_id || active.root_path != ws.root_path
+            })
+        {
+            return Err(IpcError::new(
+                "AG_DECISION_CONTEXT_CHANGED",
+                "路径校验期间裁决或任务已变化，未授权目标",
+                false,
+                false,
+            ));
+        }
+        Some(candidates)
+    } else {
+        None
+    };
+    // 先取得原 AgentTurn 的效果租约；已开始的资源执行独立结算，不阻塞取消终态。
     let _runtime_effect_guard = if outcome == "confirm" {
         operation_plan
             .as_ref()
@@ -374,7 +480,7 @@ pub(crate) fn route_resolve_decision(
     let mut operation_receipt = None;
     let mut workspace_operation_items = None;
     let mut create_document_bundle = None;
-    if let Some((plan, _session_id)) = operation_plan {
+    if let Some((plan, session_id)) = operation_plan {
         let plan_id = plan.plan_id.clone();
         if outcome == "confirm" {
             let source_turn_id = plan.source_turn_id.as_deref().ok_or_else(|| {
@@ -417,7 +523,28 @@ pub(crate) fn route_resolve_decision(
                     false,
                 ));
             }
-            match workspace::operation::execute_operation_plan(&conn, &ws, &plan_id, &request_id) {
+            drop(conn);
+            let execute = || executor(&state.db, &ws, &plan_id, &request_id);
+            let executed = if already_resolved {
+                execute()
+            } else {
+                super::capability_runtime::record_owned_execution(
+                    state,
+                    crate::types::ToolCallReceiptIdentityV1 {
+                        workspace_id: ws.workspace_id.clone(),
+                        session_id,
+                        turn_id: source_turn_id.into(),
+                        tool_call_id: format!("decision:{request_id}"),
+                        tool_name: "execute_workspace_operation".into(),
+                        capability_id: "workspace_operation".into(),
+                        grant_id: format!("decision:{request_id}:{computed_at_seq}"),
+                        attempt: 1,
+                    },
+                    execute,
+                )
+            };
+            let mut conn = lock_db(state)?;
+            match executed {
                 Ok(receipt) => {
                     if receipt.final_status != crate::types::WorkspaceOperationStatus::Completed {
                         status = settle_task_run(
@@ -452,15 +579,60 @@ pub(crate) fn route_resolve_decision(
                                     )
                                 })?
                         {
-                            persist_completed_create_document_target(
-                                &conn,
+                            drop(conn);
+                            let target = ag::target_set::normalize_existing_target(
                                 std::path::Path::new(&ws.root_path),
-                                &task_run_id,
-                                &plan_id,
-                                &bundle,
+                                &bundle.target.rel_path,
                             )?;
-                            if !already_resolved {
-                                create_document_bundle = Some(bundle);
+                            conn = lock_db(state)?;
+                            // 取消或切换任务之后仍保留操作证据，但不新增编辑授权。
+                            let run =
+                                ag::task::load_task_run(&conn, &task_run_id).map_err(|error| {
+                                    IpcError::new(
+                                        "AG_TASK_DB_ERROR",
+                                        &error.to_string(),
+                                        true,
+                                        false,
+                                    )
+                                })?;
+                            let active =
+                                workspace::lifecycle::active_workspace(&conn).map_err(|error| {
+                                    IpcError::new(
+                                        "AG_TASK_DB_ERROR",
+                                        &error.to_string(),
+                                        true,
+                                        false,
+                                    )
+                                })?;
+                            if active.as_ref().is_some_and(|active| {
+                                active.workspace_id == ws.workspace_id
+                                    && active.root_path == ws.root_path
+                            }) && run.as_ref().is_some_and(|run| {
+                                run.workspace_id == ws.workspace_id
+                                    && matches!(
+                                        run.status,
+                                        ag::task::TaskRunStatus::Active
+                                            | ag::task::TaskRunStatus::Waiting
+                                    )
+                            }) {
+                                ag::target_set::append_task_run_targets(
+                                    &conn,
+                                    &task_run_id,
+                                    &[target],
+                                    ag::target_set::SOURCE_CREATE_DOCUMENT_BUNDLE,
+                                    Some(&plan_id),
+                                )
+                                .map_err(|error| {
+                                    IpcError::new(
+                                        "AG_TASK_DB_ERROR",
+                                        &error.to_string(),
+                                        true,
+                                        false,
+                                    )
+                                })?;
+                                if !already_resolved {
+                                    create_document_bundle = Some(bundle);
+                                }
                             }
                         }
                     }
@@ -546,9 +718,9 @@ mod ag_task_plan_runtime_tests {
             ag::task::begin_turn(&conn, "ws-runtime", "session-runtime-effect", None).unwrap();
         (
             AppState {
-                db: Mutex::new(conn),
+                db: std::sync::Arc::new(Mutex::new(conn)),
                 registry: crate::build_registry(),
-                assist_terminals: Mutex::new(HashMap::new()),
+                assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
                 active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
             },
             task_run_id,
@@ -561,6 +733,35 @@ mod ag_task_plan_runtime_tests {
         turn_id: &str,
         decision_request_id: &str,
     ) {
+        {
+            let conn = state.db.lock().unwrap();
+            ag::history::ensure_session(
+                &conn,
+                "ws-runtime",
+                "session-runtime-effect",
+                "runtime",
+                "edit",
+                0,
+                true,
+            )
+            .unwrap();
+            let payload = serde_json::from_value(serde_json::json!({
+                "version": 1, "lastEventSeq": 0,
+                "userMessage": {"id": "request", "role": "user", "content": "resource operation"},
+                "toolSummaries": [], "diffRefs": []
+            }))
+            .unwrap();
+            ag::history::save_turn(
+                &conn,
+                "ws-runtime",
+                "session-runtime-effect",
+                turn_id,
+                None,
+                "draft",
+                &payload,
+            )
+            .unwrap();
+        }
         let (lease, _, _, _, _) = ag::turn_control::register_active_agent_turn(
             state,
             "ws-runtime",
@@ -606,9 +807,9 @@ mod ag_task_plan_runtime_tests {
         let invalid_task_run_id =
             ag::task::begin_turn(&conn, "ws-runtime", "session-invalid-scope", None).unwrap();
         let state = AppState {
-            db: Mutex::new(conn),
+            db: std::sync::Arc::new(Mutex::new(conn)),
             registry: crate::build_registry(),
-            assist_terminals: Mutex::new(HashMap::new()),
+            assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
             active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -715,70 +916,148 @@ mod ag_task_plan_runtime_tests {
     // covers: BR-AG-STATE-002, BR-SYS-STATE-008, BR-WS-STATE-003
     #[test]
     fn confirmed_workspace_operation_recomputes_runtime_grant_before_ws_revalidation() {
-        let root = std::env::temp_dir().join(format!(
-            "binder-runtime-effect-grant-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("delete-me.md"), "body").unwrap();
-        let (state, task_run_id) = runtime_state_with_workspace(&root);
-        let decision_request_id = {
-            let conn = state.db.lock().unwrap();
-            let workspace = crate::types::WorkspaceRef {
-                workspace_id: "ws-runtime".to_string(),
-                root_path: root.to_string_lossy().to_string(),
-                is_active: true,
-            };
-            let plan = workspace::operation::plan_operation(
-                &conn,
-                &workspace,
-                &[workspace::operation::WorkspaceOperationIntent {
-                    kind: crate::types::WorkspaceOperationKind::DeleteResource,
-                    source_path: Some("delete-me.md".to_string()),
-                    target_path: None,
-                    resource_kind: Some(crate::types::WorkspaceResourceKind::File),
-                    recursive: false,
-                    restore_payload_ref: None,
-                }],
-                Some(&task_run_id),
-                Some("turn-runtime-effect"),
-                None,
-            )
-            .unwrap();
-            let decision = ag::task::propose_decision(
-                &conn,
-                &task_run_id,
-                "permission",
-                serde_json::json!({"workspaceOperationPlanId": plan.plan_id}),
-            )
-            .unwrap();
-            workspace::operation::bind_decision_request(&conn, &plan.plan_id, &decision.request_id)
+        for cancel_during_execution in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "binder-runtime-effect-grant-{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("delete-me.md"), "body").unwrap();
+            let (state, task_run_id) = runtime_state_with_workspace(&root);
+            let decision_request_id = {
+                let conn = state.db.lock().unwrap();
+                let workspace = crate::types::WorkspaceRef {
+                    workspace_id: "ws-runtime".to_string(),
+                    root_path: root.to_string_lossy().to_string(),
+                    is_active: true,
+                };
+                let plan = workspace::operation::plan_operation(
+                    &conn,
+                    &workspace,
+                    &[workspace::operation::WorkspaceOperationIntent {
+                        kind: crate::types::WorkspaceOperationKind::DeleteResource,
+                        source_path: Some("delete-me.md".to_string()),
+                        target_path: None,
+                        resource_kind: Some(crate::types::WorkspaceResourceKind::File),
+                        recursive: false,
+                        restore_payload_ref: None,
+                    }],
+                    Some(&task_run_id),
+                    Some("turn-runtime-effect"),
+                    None,
+                )
                 .unwrap();
-            decision.request_id
-        };
-        park_runtime_decision(
-            &state,
-            &task_run_id,
-            "turn-runtime-effect",
-            &decision_request_id,
-        );
+                let decision = ag::task::propose_decision(
+                    &conn,
+                    &task_run_id,
+                    "permission",
+                    serde_json::json!({"workspaceOperationPlanId": plan.plan_id}),
+                )
+                .unwrap();
+                workspace::operation::bind_decision_request(
+                    &conn,
+                    &plan.plan_id,
+                    &decision.request_id,
+                )
+                .unwrap();
+                decision.request_id
+            };
+            park_runtime_decision(
+                &state,
+                &task_run_id,
+                "turn-runtime-effect",
+                &decision_request_id,
+            );
 
-        assert!(root.join("delete-me.md").exists());
-        let response = route_resolve_decision(
-            &CommandRequest {
+            assert!(root.join("delete-me.md").exists());
+            let request = CommandRequest {
                 command: "ag.resolve_decision".to_string(),
                 correlation_id: "runtime-effect-confirm".to_string(),
                 params: serde_json::json!({
                     "requestId": decision_request_id,
                     "outcome": "confirm"
                 }),
-            },
-            &state,
-        )
-        .unwrap();
-        assert!(!root.join("delete-me.md").exists());
-        assert!(!response["workspace_operation_receipt"].is_null());
-        std::fs::remove_dir_all(root).unwrap();
+            };
+            let response =
+                resolve_decision_with_executor(&request, &state, |db, ws, plan, decision| {
+                    assert!(
+                        db.try_lock().is_ok(),
+                        "executor must not inherit the shared database lock"
+                    );
+                    assert_eq!(
+                        route_resolve_decision(&request, &state).unwrap_err().code,
+                        "AG_EFFECT_PENDING"
+                    );
+                    if cancel_during_execution {
+                        let app = tauri::test::mock_builder()
+                            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                            .unwrap();
+                        ag::turn_control::cancel_active_agent_turn(
+                            &state,
+                            "session-runtime-effect",
+                            "turn-runtime-effect",
+                        )?;
+                        ag::turn_events::persist_parked_ag_turn_cancelled(
+                            &state,
+                            app.handle(),
+                            "turn-runtime-effect",
+                            ag::turn::TurnState::AwaitingDecision,
+                        )?;
+                        let conn = db.lock().unwrap();
+                        settle_task_run(
+                            &conn,
+                            &task_run_id,
+                            "turn-runtime-effect",
+                            ag::task::TurnOutcome::Cancelled,
+                        )
+                        .unwrap();
+                    }
+                    workspace::operation::execute_operation_plan_shared(db, ws, plan, decision)
+                })
+                .unwrap();
+            assert!(!root.join("delete-me.md").exists());
+            assert!(!response["workspace_operation_receipt"].is_null());
+            let repeated = route_resolve_decision(&request, &state).unwrap();
+            assert_eq!(repeated["already_resolved"], true);
+            assert_eq!(
+                repeated["workspace_operation_receipt"],
+                response["workspace_operation_receipt"]
+            );
+            {
+                let conn = state.db.lock().unwrap();
+                let facts = ag::capability_runtime::facts(
+                    &conn,
+                    "ws-runtime",
+                    Some(("session-runtime-effect", "turn-runtime-effect")),
+                )
+                .unwrap();
+                assert_eq!(facts.len(), 2);
+                let receipt = facts.iter().find_map(|fact| fact.receipt.as_ref()).unwrap();
+                assert_eq!(
+                    receipt.effect_status,
+                    crate::types::ToolCallEffectStatus::ResourceExecuted
+                );
+                if cancel_during_execution {
+                    assert_eq!(
+                        conn.query_row::<String, _, _>(
+                            "SELECT status FROM agent_turns WHERE turn_id='turn-runtime-effect'",
+                            [],
+                            |row| row.get(0)
+                        )
+                        .unwrap(),
+                        "cancelled"
+                    );
+                    assert_eq!(
+                        ag::task::load_task_run(&conn, &task_run_id)
+                            .unwrap()
+                            .unwrap()
+                            .status,
+                        ag::task::TaskRunStatus::Cancelled
+                    );
+                }
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     // covers: BR-AG-STATE-002, BR-SYS-STATE-007, BR-SYS-STATE-008

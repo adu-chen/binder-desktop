@@ -1184,8 +1184,8 @@ pub fn verify_docx_images(
 }
 
 /// 递归授权编辑媒体缓存中的文件进入 asset 协议 scope。只开放文件，不开放目录。
-pub(crate) fn authorize_media_files(
-    app: &tauri::AppHandle,
+pub(crate) fn authorize_media_files<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     dir: &std::path::Path,
 ) -> Result<(), IpcError> {
     use tauri::Manager;

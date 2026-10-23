@@ -1213,7 +1213,9 @@ export function Editor() {
         // ⌘S 保存：ws.save_doc（带加载基线，SM-WS-01）。
         if (key === "s") {
           event.preventDefault();
-          void saveCurrent();
+          void saveCurrent().then((outcome) => {
+            if (!outcome.ok) window.alert(outcome.message ?? "保存失败，编辑内容仍保留");
+          });
           return true;
         }
         // ⌘K InlineAssist：有选区时替换选区；无选区时按光标插入。
@@ -1606,7 +1608,7 @@ export function Editor() {
 
     const result = await saveSerialized(false);
     if (!result.ok && result.conflict) {
-      const confirmed = window.confirm("磁盘内容已在打开后变化。确定覆盖磁盘版本并保留当前编辑吗？");
+      const confirmed = window.confirm(`${result.message ?? "磁盘内容已在打开后变化。"}\n确定覆盖磁盘版本并保留当前编辑吗？`);
       if (confirmed) return saveSerialized(true);
     }
     return result;

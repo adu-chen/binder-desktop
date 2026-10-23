@@ -312,6 +312,52 @@ describe("edService 保存契约", () => {
     expect(edStore.getSnapshot().tabState).toBe("dirty");
   });
 
+  // covers: BR-ED-STATE-003, BR-WS-OBS-001
+  it("旧文本草稿缺基准且目标存在：先保留内容并要求确认，确认后仍检查读写竞态", async () => {
+    // 真正的新建会话不借旧快照恢复分支绕过 WS_EXISTS，即使传入 override 也不读盘冒认基准。
+    edStore.openDoc("new.txt");
+    edStore.updateContent("new.txt", "新建内容");
+    invokeMock.mockResolvedValueOnce(fail("WS_EXISTS"));
+    await expect(saveDocument("新建内容", true)).resolves.toMatchObject({ ok: false, conflict: false });
+    expect(commandNames()).toEqual(["ws.save_doc"]);
+    invokeMock.mockClear();
+    edStore.restoreSnapshots([{
+      relPath: "legacy.txt", content: "待保存正文", baseline: null, editFormat: "text",
+      contentFormat: "text", dirty: true, sessionVersion: 2, contentHash: "legacy", capturedAt: 1,
+      source: "open_editor_session",
+    }], "legacy.txt");
+    invokeMock.mockResolvedValueOnce(fail("WS_EXISTS"));
+    await expect(saveDocument("待保存正文")).resolves.toMatchObject({ ok: false, conflict: true });
+    expect(commandNames()).toEqual(["ws.save_doc"]);
+    expect(edStore.getSnapshot()).toMatchObject({ baseline: null, loadedContent: "待保存正文", tabState: "dirty" });
+
+    invokeMock.mockResolvedValueOnce(ok({ content: "外部版本", baseline: "12345678901234567890" }));
+    invokeMock.mockResolvedValueOnce(fail("WS_SAVE_CONFLICT"));
+    await expect(saveDocument("待保存正文", true)).resolves.toMatchObject({ ok: false, conflict: true });
+    expect(invokeMock.mock.calls[2][1]).toMatchObject({ request: {
+      command: "ws.save_doc", params: { baseline: "12345678901234567890", override: false },
+    } });
+    expect(edStore.getSnapshot().tabState).toBe("dirty");
+
+    invokeMock.mockResolvedValueOnce(ok({ content: "外部版本", baseline: "12345678901234567891" }));
+    invokeMock.mockResolvedValueOnce(ok({ baseline: "new-baseline" }));
+    invokeMock.mockResolvedValueOnce(ok({}));
+    await expect(saveDocument("待保存正文", true)).resolves.toEqual({ ok: true });
+    expect(edStore.getSnapshot().baseline).toBe("new-baseline");
+  });
+
+  it("旧草稿确认后读盘失败仍保持原始正文和脏态，不尝试写盘", async () => {
+    edStore.restoreSnapshots([{
+      relPath: "legacy.txt", content: "保留正文", baseline: null, editFormat: "text",
+      contentFormat: "text", dirty: true, sessionVersion: 2, contentHash: "legacy", capturedAt: 1,
+      source: "open_editor_session",
+    }], "legacy.txt");
+    invokeMock.mockResolvedValueOnce(fail("WS_READ_FAILED"));
+    await expect(saveDocument("保留正文", true)).resolves.toMatchObject({ ok: false });
+    expect(commandNames()).toEqual(["ws.read_doc"]);
+    expect(edStore.getSnapshot()).toMatchObject({ baseline: null, loadedContent: "保留正文", tabState: "dirty" });
+  });
+
   it("无打开文档 → 不保存", async () => {
     edStore.reset();
     const r = await saveDocument("x");

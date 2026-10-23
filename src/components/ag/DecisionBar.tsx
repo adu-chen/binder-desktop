@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { resolveDecisionAndContinue } from "../../services/agService";
-import { activeSession, agStore, useAgStore } from "../../store/agStore";
+import { activeSession, agStore, useAgStore, type PendingDecisionView, type TurnCurrentAction } from "../../store/agStore";
 
 /**
  * DecisionBar（TERM-AG-017 · AG-1.0-DECISION-CARD-01）。
@@ -31,9 +31,25 @@ const OPERATION_LABEL: Record<string, string> = {
 export function DecisionBar() {
   const state = useAgStore();
   const decision = state.pendingDecision;
+  if (!decision || (decision.sessionId && decision.sessionId !== activeSession(state).id)) return null;
+  const sessionId = decision.sessionId ?? activeSession(state).id;
+  return <DecisionRequestControls key={JSON.stringify([sessionId, decision.turnId, decision.requestId])} decision={decision} sessionId={sessionId} />;
+}
+
+/**
+ * @GOV
+ * codes: BR-SYS-STATE-007-EFFECT-AG-AG-TURN-058, BR-AG-UI-001-EFFECT-AG-AG-TURN-058
+ * type: EFFECT
+ * chain: AG-TURN
+ * rules: BR-SYS-STATE-007, BR-AG-UI-001
+ * term_ref: TERM-AG-017
+ * boundary: in=DecisionRequestAndOriginSession | out=IdentityScopedSubmissionFeedbackAndReceiptMessages | does_not=clearSuccessorDecisionOrRetargetReceiptToActiveSession
+ */
+function DecisionRequestControls({ decision, sessionId }: { decision: PendingDecisionView; sessionId: string }) {
+  const state = useAgStore();
+  const submitting = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!decision || (decision.sessionId && decision.sessionId !== activeSession(state).id)) return null;
 
   const label = KIND_LABEL[decision.kind] ?? "任务确认";
   const summary =
@@ -79,7 +95,6 @@ export function DecisionBar() {
   const failurePolicy = typeof payload?.failurePolicy === "string" ? payload.failurePolicy : "";
 
   const appendOperationMessage = (content: string, error = false) => {
-    const sessionId = activeSession(agStore.getSnapshot()).id;
     agStore.pushMessage(sessionId, {
       id: `workspace-operation-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       role: "assistant",
@@ -89,15 +104,17 @@ export function DecisionBar() {
   };
 
   const act = async (outcome: "confirm" | "cancel") => {
-    if (busy) return;
+    if (submitting.current || agStore.getSnapshot().pendingDecision !== decision) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
-    agStore.setCurrentAction({
-      sessionId: decision.sessionId ?? activeSession(state).id,
+    const action: TurnCurrentAction = {
+      sessionId,
       turnId: decision.turnId ?? `decision:${decision.requestId}`,
       action: "deciding",
       label: isWorkspaceOperation && outcome === "confirm" ? "正在核验并执行资源操作" : "正在提交你的决定",
-    });
+    };
+    agStore.setCurrentAction(action);
     try {
       const resolution = await resolveDecisionAndContinue(decision.requestId, outcome);
       const receipt = resolution.workspaceOperationReceipt;
@@ -109,7 +126,7 @@ export function DecisionBar() {
           true,
         );
       }
-      agStore.setPendingDecision(null);
+      agStore.clearPendingDecision(decision);
     } catch (cause) {
       const value = cause as { code?: string; message?: string; decisionResolved?: boolean };
       setError(value?.message ? `[${value.code ?? "?"}] ${value.message}` : String(cause));
@@ -124,13 +141,15 @@ export function DecisionBar() {
           ].includes(value.code ?? "")
         )
       ) {
-        if (isWorkspaceOperation) {
-          appendOperationMessage(value?.message ? `[${value.code ?? "?"}] ${value.message}` : String(cause), true);
-        }
-        agStore.setPendingDecision(null);
+        appendOperationMessage(
+          `${value.decisionResolved ? "决策已提交；后续处理未完成：" : ""}${value?.message ? `[${value.code ?? "?"}] ${value.message}` : String(cause)}`,
+          true,
+        );
+        agStore.clearPendingDecision(decision);
       }
     } finally {
-      agStore.setCurrentAction(null);
+      agStore.clearCurrentAction(action);
+      submitting.current = false;
       setBusy(false);
     }
   };

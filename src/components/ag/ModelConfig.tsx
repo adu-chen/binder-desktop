@@ -125,6 +125,7 @@ export function ModelConfig({ onClose }: { onClose: () => void }) {
   const renderCapabilityRow = (item: (typeof CAPABILITY_ITEMS)[number]) => {
     const pref = capabilityPref[item.cap];
     const currentValue = pref.mode === "explicit" ? pref.modelKey : FOLLOW_GLOBAL;
+    const unavailable = pref.mode === "explicit" && !models.some((model) => modelKey(model) === pref.modelKey);
     return (
       <div key={item.cap} className="modelcfg-cap-row">
         <span className="label modelcfg-cap-label">{item.label}</span>
@@ -142,7 +143,8 @@ export function ModelConfig({ onClose }: { onClose: () => void }) {
             );
           }}
         >
-          <option value={FOLLOW_GLOBAL}>跟随全局（{modelStore.current().label}）</option>
+          <option value={FOLLOW_GLOBAL}>跟随全局（{models.find((model) => modelKey(model) === selectedKey)?.label ?? "当前模型不可用"}）</option>
+          {unavailable && <option value={pref.modelKey}>不可用：{pref.modelKey}（请重新选择）</option>}
           {models.map((m) => {
             const key = modelKey(m);
             return (
@@ -152,6 +154,7 @@ export function ModelConfig({ onClose }: { onClose: () => void }) {
             );
           })}
         </select>
+        {unavailable && <span role="alert">所选模型已不在清单中，调用已暂停。</span>}
       </div>
     );
   };
@@ -165,6 +168,9 @@ export function ModelConfig({ onClose }: { onClose: () => void }) {
             ×
           </button>
         </div>
+        {!models.some((model) => modelKey(model) === selectedKey) && (
+          <p role="alert">全局所选模型 {selectedKey} 不可用；依赖全局的能力不会自动切换模型。</p>
+        )}
 
         <div className="modelcfg-sec">
           <span className="label">已配置模型 · 预设</span>

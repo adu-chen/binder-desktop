@@ -1,7 +1,7 @@
 //! AgentTurn append-only TurnEvent、Channel 安全投影与唯一终态输出。
 
 use super::task_runtime::settle_task_run;
-use crate::ipc::{AgTurnEvent, AgTurnEventPayload, IpcError};
+use crate::ipc::{AgTurnEvent, AgTurnEventPayload, AgentFailureDiagnostic, IpcError};
 use crate::types::{EvidenceItemV1, EvidenceLedgerV1};
 use crate::{ag, sm_events, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -10,6 +10,189 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TURN_EVENT_PAYLOAD_VERSION: u32 = 1;
+
+// Diagnostic projection only: never print event bodies, paths, arguments, or model text.
+// Keep this allowlist independent of safe Channel payloads, which may contain user content.
+fn audit_metadata(payload: &Value) -> Value {
+    audit_metadata_level(payload, true)
+}
+
+fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
+    let mut metadata = serde_json::Map::new();
+    for key in [
+        "intentType",
+        "ambiguity",
+        "sideEffectIntent",
+        "nextAction",
+        "revision",
+        "sourceEventSeq",
+        "clarificationResume",
+        "decisionResume",
+        "roundIndex",
+        "provider",
+        "model",
+        "contextVersion",
+        "contextRevision",
+        "deduplicatedCount",
+        "gateAttempt",
+        "remainingToolCalls",
+        "grantId",
+        "computedAtSeq",
+        "allowedToolCount",
+        "toolCallCount",
+        "nextRound",
+        "intentRevision",
+        "toolCallId",
+        "toolName",
+        "workspaceId",
+        "sessionId",
+        "turnId",
+        "capabilityId",
+        "taskRunId",
+        "requestId",
+        "diffId",
+        "status",
+        "success",
+        "code",
+        "retriable",
+        "stopReason",
+        "attempt",
+        "outcome",
+        "category",
+        "observedAt",
+        "rootCauseStatus",
+        "executionStatus",
+        "completionStatus",
+        "effectStatus",
+        "assemblyOrdinal",
+        "assemblyReason",
+        "nextModelCallOrdinal",
+        "estimatedTokens",
+        "serializedChars",
+        "toolSchemaChars",
+        "messageFramingChars",
+        "totalTokenLimit",
+        "continuationReserveTokens",
+        "tokenLimit",
+        "remainingInputTokens",
+        "exceeded",
+        "configVersion",
+        "estimator",
+        "correctionAttempt",
+        "prefixKind",
+        "rejectionStage",
+        "protocolVersion",
+        "finalOnly",
+        "providerCompletionSeen",
+        "hasExpectedHash",
+        "nonInitialPage",
+        "repeatedFailure",
+        "requestFingerprint",
+        "resultChars",
+        "resultLimitChars",
+        "readView",
+        "requestedBlockCount",
+        "requestedReadOffset",
+        "requestedLimitChars",
+        "requestedDirectoryLimit",
+        "returnedBlockCount",
+        "readOffset",
+        "readEndOffset",
+        "readTotalChars",
+        "readHasMore",
+        "readComplete",
+        "readVersion",
+        "historySubmittedCount",
+        "historyIncludedCount",
+        "historyDroppedCount",
+        "historyExcerptedCount",
+        "historyOriginalChars",
+        "historyIncludedChars",
+        "historyAllowanceChars",
+    ] {
+        if let Some(value) = payload.get(key) {
+            match value {
+                Value::Bool(_) | Value::Number(_) => {
+                    metadata.insert(key.into(), value.clone());
+                }
+                Value::String(text)
+                    if text.len() <= 160
+                        && text
+                            .bytes()
+                            .all(|ch| ch.is_ascii_alphanumeric() || b"_:-.".contains(&ch)) =>
+                {
+                    metadata.insert(key.into(), value.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    if include_containers {
+        for key in [
+            "projection",
+            "diagnostic",
+            "executionReceipt",
+            "identity",
+            "measurement",
+        ] {
+            if let Some(value) = payload.get(key).filter(|value| value.is_object()) {
+                // Read only fixed-depth metadata; never clone or traverse content-bearing objects.
+                let mut projected = audit_metadata_level(value, false);
+                if key == "executionReceipt" {
+                    if let Some(failure) = value.get("failure").filter(|value| value.is_object()) {
+                        projected
+                            .as_object_mut()
+                            .expect("metadata object")
+                            .insert("failure".into(), audit_metadata_level(failure, false));
+                    }
+                }
+                metadata.insert(key.into(), projected);
+            }
+        }
+    }
+    for key in [
+        "evidenceIds",
+        "steps",
+        "confirmationPoints",
+        "requiredContext",
+        "targetCandidates",
+        "evidenceItems",
+        "readyDocuments",
+    ] {
+        if let Some(items) = payload.get(key).and_then(Value::as_array) {
+            metadata.insert(format!("{key}Count"), Value::from(items.len()));
+        }
+    }
+    if let Some(layers) = payload.get("messageLayers").and_then(Value::as_object) {
+        let counts = layers
+            .iter()
+            .filter(|(_, value)| value.is_u64())
+            .filter(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    "agent_context_facts"
+                        | "current_user_input"
+                        | "current_document"
+                        | "explicit_reference"
+                        | "session_history"
+                        | "cross_document_history"
+                        | "intent_hint"
+                        | "runtime_control"
+                        | "system_prompt_final"
+                        | "model_continuation"
+                        | "tool_result"
+                        | "continuation_receipt"
+                        | "protocol_correction"
+                        | "protocol_correction_final_only"
+                        | "read_failure_final_only"
+                )
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        metadata.insert("messageLayers".into(), Value::Object(counts));
+    }
+    Value::Object(metadata)
+}
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -64,6 +247,15 @@ fn append_event_record(
         .optional()?
         .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
     if is_terminal_status(&current_status) {
+        if cfg!(debug_assertions) && kind != "chunk" {
+            eprintln!(
+                "[AG-AG-TURN] append_rejected: {}",
+                serde_json::json!({
+                    "workspaceId": workspace_id, "sessionId": session_id, "turnId": turn_id,
+                    "eventType": kind, "terminalStatus": current_status,
+                })
+            );
+        }
         return Ok(None);
     }
     let next_seq = tx.query_row(
@@ -97,6 +289,21 @@ fn append_event_record(
         )?;
     }
     tx.commit()?;
+    // Emit after commit: this line witnesses persistence, not UI rendering or business success.
+    // Streaming chunks remain persisted but are excluded from high-frequency console output.
+    if cfg!(debug_assertions) && kind != "chunk" {
+        let metadata = serde_json::from_str::<Value>(payload_json)
+            .map(|payload| audit_metadata(&payload))
+            .unwrap_or_else(|_| serde_json::json!({"metadataUnavailable": true}));
+        eprintln!(
+            "[AG-AG-TURN] committed: {}",
+            serde_json::json!({
+                "workspaceId": workspace_id, "sessionId": session_id, "turnId": turn_id,
+                "eventId": event_id, "seq": next_seq, "occurredAt": occurred_at,
+                "eventType": kind, "terminalStatus": terminal_status, "metadata": metadata,
+            })
+        );
+    }
     Ok(Some(AppendedEvent {
         event_id,
         seq: next_seq,
@@ -120,6 +327,24 @@ pub(super) struct TurnEventEmitter<'a> {
 }
 
 impl<'a> TurnEventEmitter<'a> {
+    /// Recover budgets from actual invocation/rejection facts, including text-only rounds and
+    /// attempts before a clarification/decision checkpoint. No prompt or response text is read.
+    pub(super) fn protocol_attempt_counts(&self) -> Result<(usize, usize), IpcError> {
+        let conn = self
+            .state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取回合调用预算", true, false))?;
+        conn.query_row(
+            "SELECT COALESCE(SUM(kind='provider_started'),0), \
+             COALESCE(SUM(kind IN ('model_control_rejected','tool_parameter_contract_rejected')),0) \
+             FROM agent_turn_events WHERE turn_id=?1",
+            [self.turn_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(event_db_error)
+    }
+
     pub(super) fn new(
         state: &'a AppState,
         channel: &'a tauri::ipc::Channel<AgTurnEvent>,
@@ -139,6 +364,64 @@ impl<'a> TurnEventEmitter<'a> {
             channel: None,
             turn_id,
         }
+    }
+
+    /**
+     * @GOV
+     * codes: BR-AG-DATA-005-IO-AG-AG-TURN-056, BR-AG-OBS-001-IO-AG-AG-TURN-056
+     * type: IO
+     * chain: AG-TURN
+     * rules: BR-AG-DATA-005, BR-AG-OBS-001
+     * boundary: in=PromptBudgetMeasurementAndHashedSourceProjections | out=OrderedPromptBudgetCheckpoint | effect=DB-agent_turn_events | does_not=storePromptContentOrAuthorizeModelInvocation
+     */
+    pub(super) fn record_prompt_budget(
+        &self,
+        reason: &str,
+        measurement: &ag::context::PromptBudgetMeasurement,
+        sources: Value,
+    ) -> Result<(), IpcError> {
+        let mut conn = self
+            .state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法记录预算证据", true, false))?;
+        let ordinal: i64 = conn.query_row(
+            "SELECT COUNT(*) + 1 FROM agent_turn_events WHERE turn_id=?1 AND kind='prompt_budget_checked'",
+            [self.turn_id], |row| row.get(0),
+        ).map_err(event_db_error)?;
+        let next_model_call: i64 = conn.query_row(
+            "SELECT COUNT(*) + 1 FROM agent_turn_events WHERE turn_id=?1 AND kind='provider_started'",
+            [self.turn_id], |row| row.get(0),
+        ).map_err(event_db_error)?;
+        let limit = ag::prompt_runtime::PROMPT_INPUT_LIMIT;
+        let payload = serde_json::json!({
+            "assemblyOrdinal": ordinal, "nextModelCallOrdinal": next_model_call, "assemblyReason": reason,
+            "estimator": "ceil_serialized_unicode_chars_div_4",
+            "configVersion": format!("prompt-budget-v3-total{}-reserve{}", ag::prompt_runtime::PROMPT_TOKEN_BUDGET, ag::prompt_runtime::CONTINUATION_RESERVE_TOKENS),
+            "totalTokenLimit": ag::prompt_runtime::PROMPT_TOKEN_BUDGET,
+            "continuationReserveTokens": ag::prompt_runtime::CONTINUATION_RESERVE_TOKENS,
+            "tokenLimit": limit, "measurement": measurement,
+            "remainingInputTokens": limit.saturating_sub(measurement.estimated_tokens),
+            "exceeded": measurement.estimated_tokens > limit,
+            "sourcesNonAdditive": sources,
+        });
+        let appended = append_event_record(
+            &mut conn,
+            self.turn_id,
+            "prompt_budget_checked",
+            &payload.to_string(),
+            None,
+        )
+        .map_err(event_db_error)?;
+        if appended.is_none() {
+            return Err(IpcError::new(
+                "AG_PROMPT_BUDGET_TERMINAL",
+                "AgentTurn 已结束，不能继续预算检查",
+                false,
+                false,
+            ));
+        }
+        Ok(())
     }
 
     /// 追加后端内部事件。payload 只允许安全元数据，不会投影到 Channel。
@@ -437,7 +720,11 @@ pub(super) fn sm_error() -> IpcError {
 }
 
 /// 广播 SM-AG-01 回合机转移（turn_id 为实例，A-CORE-X-L-04 Task 2-E）。
-pub(super) fn emit_ag01(app: &tauri::AppHandle, turn_id: &str, st: ag::turn::TurnState) {
+pub(super) fn emit_ag01<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    turn_id: &str,
+    st: ag::turn::TurnState,
+) {
     sm_events::emit_sm_state(
         app,
         sm_events::SmStatePayload::new(
@@ -450,7 +737,11 @@ pub(super) fn emit_ag01(app: &tauri::AppHandle, turn_id: &str, st: ag::turn::Tur
 }
 
 /// 广播 SM-AG-02 工具循环机转移（turn_id 为实例，A-CORE-X-L-04 Task 2-AG2）。
-pub(super) fn emit_ag02(app: &tauri::AppHandle, turn_id: &str, st: ag::tool::ToolLoopState) {
+pub(super) fn emit_ag02<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    turn_id: &str,
+    st: ag::tool::ToolLoopState,
+) {
     sm_events::emit_sm_state(
         app,
         sm_events::SmStatePayload::new(
@@ -471,10 +762,10 @@ fn terminal_transition(
     (next == expected && ag::turn::is_terminal(next)).then_some(next)
 }
 
-pub(super) fn emit_ag_turn_done(
+pub(super) fn emit_ag_turn_done<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     stop_reason: &str,
     source: ag::turn::TurnState,
@@ -519,19 +810,19 @@ pub(super) fn emit_ag_turn_done(
     true
 }
 
-pub(super) fn emit_ag_turn_cancelled(
+pub(super) fn emit_ag_turn_cancelled<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
 ) -> bool {
     emit_ag_turn_cancelled_from(emitter, latch, app, turn_id, ag::turn::TurnState::Streaming)
 }
 
-pub(super) fn emit_ag_turn_cancelled_from(
+pub(super) fn emit_ag_turn_cancelled_from<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     source: ag::turn::TurnState,
 ) -> bool {
@@ -566,9 +857,9 @@ pub(super) fn emit_ag_turn_cancelled_from(
 }
 
 /// 非终态等待已无活动 Channel；取消在数据库中原子锁存，再由安全补流返回同一事件。
-pub(super) fn persist_parked_ag_turn_cancelled(
+pub(super) fn persist_parked_ag_turn_cancelled<R: tauri::Runtime>(
     state: &AppState,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     source: ag::turn::TurnState,
 ) -> Result<bool, IpcError> {
@@ -594,10 +885,10 @@ pub(super) fn persist_parked_ag_turn_cancelled(
     Ok(emitted)
 }
 
-pub(super) fn emit_ag_turn_denied(
+pub(super) fn emit_ag_turn_denied<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     error: &IpcError,
 ) -> bool {
@@ -616,6 +907,7 @@ pub(super) fn emit_ag_turn_denied(
                 code: error.code.clone(),
                 message: error.message.clone(),
                 retriable: error.retriable,
+                diagnostic: Some(AgentFailureDiagnostic::observed("gate", &error.code)),
             },
         )
         .unwrap_or_else(|persist_error| {
@@ -636,10 +928,10 @@ pub(super) fn emit_ag_turn_denied(
     true
 }
 
-pub(super) fn emit_ag_turn_error(
+pub(super) fn emit_ag_turn_error<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     error: &IpcError,
 ) -> bool {
@@ -653,16 +945,17 @@ pub(super) fn emit_ag_turn_error(
     )
 }
 
-pub(super) fn emit_ag_turn_error_from(
+pub(super) fn emit_ag_turn_error_from<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     error: &IpcError,
     source: ag::turn::TurnState,
 ) -> bool {
     let event = match source {
         ag::turn::TurnState::Assembling => ag::turn::TurnEvent::AssembleFail,
+        ag::turn::TurnState::AwaitingGate => ag::turn::TurnEvent::GateFailed,
         ag::turn::TurnState::Streaming => ag::turn::TurnEvent::StreamFail,
         ag::turn::TurnState::Finalizing => ag::turn::TurnEvent::FinalizeFail,
         _ => return false,
@@ -679,6 +972,15 @@ pub(super) fn emit_ag_turn_error_from(
                 code: error.code.clone(),
                 message: error.message.clone(),
                 retriable: error.retriable,
+                diagnostic: Some(AgentFailureDiagnostic::observed(
+                    match source {
+                        ag::turn::TurnState::Assembling => "context_assembly",
+                        ag::turn::TurnState::AwaitingGate => "gate",
+                        ag::turn::TurnState::Finalizing => "finalizing",
+                        _ => "runtime",
+                    },
+                    &error.code,
+                )),
             },
         )
         .unwrap_or_else(|persist_error| {
@@ -700,12 +1002,12 @@ pub(super) fn emit_ag_turn_error_from(
 }
 
 /// AgentTurn 的统一失败出口：存在 TaskRun 时先尽力收束持久态，再发送唯一回合终态。
-pub(super) fn settle_and_emit_ag_turn_error(
+pub(super) fn settle_and_emit_ag_turn_error<R: tauri::Runtime>(
     state: &AppState,
     task_run_id: Option<&str>,
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     error: &IpcError,
 ) {
@@ -721,12 +1023,12 @@ pub(super) fn settle_and_emit_ag_turn_error(
     );
 }
 
-pub(super) fn settle_and_emit_ag_turn_error_from(
+pub(super) fn settle_and_emit_ag_turn_error_from<R: tauri::Runtime>(
     state: &AppState,
     task_run_id: Option<&str>,
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     turn_id: &str,
     error: &IpcError,
     source: ag::turn::TurnState,
@@ -778,12 +1080,165 @@ mod tests {
     }
 
     // covers: BR-AG-STATE-001, BR-SYS-STATE-007, BR-AG-PERSIST-001
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn budget_checkpoints_keep_stage_and_ordinals_across_emitter_recreation() {
+        let state = AppState {
+            db: std::sync::Arc::new(Mutex::new(fresh_turn())),
+            registry: build_registry(),
+            assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let measurement = ag::context::measure_prompt_budget(
+            &[serde_json::json!({"role":"user","content":"PRIVATE"})],
+            &serde_json::json!([]),
+        );
+        for (index, reason) in [
+            "initial",
+            "tool_result",
+            "decision_resume",
+            "preview_resume",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let emitter = TurnEventEmitter::without_channel(&state, "t1");
+            emitter
+                .record_prompt_budget(reason, &measurement, serde_json::json!([]))
+                .unwrap();
+            let payload: String = state.db.lock().unwrap().query_row(
+                "SELECT payload_json FROM agent_turn_events WHERE kind='prompt_budget_checked' ORDER BY seq DESC LIMIT 1", [], |r| r.get(0)).unwrap();
+            assert!(!payload.contains("PRIVATE"));
+            let payload: Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(payload["assemblyReason"], reason);
+            assert_eq!(payload["assemblyOrdinal"], index + 1);
+            assert_eq!(payload["nextModelCallOrdinal"], index + 1);
+            let audit = audit_metadata(&payload);
+            assert_eq!(audit["configVersion"], payload["configVersion"]);
+            assert_eq!(
+                audit["measurement"]["estimatedTokens"],
+                measurement.estimated_tokens
+            );
+            assert_eq!(audit["assemblyReason"], reason);
+            let sensitive = serde_json::json!({
+                "text":"PRIVATE", "message":"PRIVATE", "content":"PRIVATE", "params":{"path":"PRIVATE"},
+                "projection":{"goal":"PRIVATE", "intentType":"inspect", "targetCandidates":["PRIVATE"]},
+                "diagnostic":{"category":"model_protocol", "rawResponse":"PRIVATE"},
+                "executionReceipt":{"effectStatus":"unknown", "summary":"PRIVATE", "failure":{"code":"AG_EFFECT_PENDING", "message":"PRIVATE"}},
+                "toolName":"injected\nPRIVATE", "evidenceIds":["PRIVATE"]
+            });
+            let audit = audit_metadata(&sensitive);
+            assert!(!audit.to_string().contains("PRIVATE"));
+            assert_eq!(audit["projection"]["intentType"], "inspect");
+            assert_eq!(audit["executionReceipt"]["effectStatus"], "unknown");
+            assert_eq!(
+                audit["executionReceipt"]["failure"]["code"],
+                "AG_EFFECT_PENDING"
+            );
+            assert_eq!(audit["evidenceIdsCount"], 1);
+            let history = audit_metadata(&serde_json::json!({
+                "historySubmittedCount":4,"historyIncludedCount":2,"historyDroppedCount":2,
+                "historyExcerptedCount":1,"historyOriginalChars":10000,"historyIncludedChars":1000,
+                "historyAllowanceChars":1100,"historyText":"PRIVATE",
+            }));
+            assert_eq!(history["historyIncludedCount"], 2);
+            assert_eq!(history["historyExcerptedCount"], 1);
+            assert!(!history.to_string().contains("PRIVATE"));
+            assert!(audit.get("toolName").is_none());
+            emitter
+                .record_internal("provider_started", serde_json::json!({}))
+                .unwrap();
+            let rejection_kind = if index % 2 == 0 {
+                "model_control_rejected"
+            } else {
+                "tool_parameter_contract_rejected"
+            };
+            emitter
+                .record_internal(
+                    rejection_kind,
+                    serde_json::json!({"code":"AG_MODEL_CONTROL_INVALID"}),
+                )
+                .unwrap();
+            assert_eq!(
+                TurnEventEmitter::without_channel(&state, "t1")
+                    .protocol_attempt_counts()
+                    .unwrap(),
+                (index + 1, index + 1)
+            );
+            let audit = audit_metadata(&serde_json::json!({
+                "prefixKind":"plain_text","rejectionStage":"response_completion","correctionAttempt":index+1,
+                "finalOnly":true,"protocolVersion":"binder-response-v2","rawResponse":"PRIVATE"
+            }));
+            assert_eq!(audit["prefixKind"], "plain_text");
+            assert_eq!(audit["correctionAttempt"], index + 1);
+            assert!(!audit.to_string().contains("PRIVATE"));
+        }
+        let conn = state.db.lock().unwrap();
+        assert!(list_safe_events(&conn, "ws1", "t1", 0).unwrap().is_empty());
+        conn.execute(
+            "UPDATE agent_turns SET status='completed' WHERE turn_id='t1'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        assert!(TurnEventEmitter::without_channel(&state, "t1")
+            .record_prompt_budget("initial", &measurement, serde_json::json!([]))
+            .is_err());
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007, BR-AG-PERSIST-001
+    #[test]
+    fn failure_diagnostic_survives_safe_replay_without_changing_terminal_identity() {
+        let state = AppState {
+            db: Arc::new(Mutex::new(fresh_turn())),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let latch = ag::turn::TerminalLatch::default();
+        let emitter = TurnEventEmitter::without_channel(&state, "t1");
+        let diagnostic =
+            AgentFailureDiagnostic::observed("context_assembly", "AG_PROMPT_BUDGET_EXCEEDED");
+        assert!(emitter
+            .emit_terminal(
+                &latch,
+                ag::turn::TerminalKind::Error,
+                AgTurnEventPayload::Error {
+                    code: "AG_PROMPT_BUDGET_EXCEEDED".into(),
+                    message: "budget".into(),
+                    retriable: true,
+                    diagnostic: Some(diagnostic.clone()),
+                }
+            )
+            .unwrap());
+        assert!(!emitter
+            .emit_terminal(
+                &latch,
+                ag::turn::TerminalKind::Completed,
+                AgTurnEventPayload::Done {
+                    stop_reason: "stop".into()
+                }
+            )
+            .unwrap());
+        let conn = state.db.lock().unwrap();
+        let events = list_safe_events(&conn, "ws1", "t1", 0).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].turn_id, "t1");
+        assert_eq!(events[0].seq, 1);
+        assert!(
+            matches!(&events[0].event, AgTurnEventPayload::Error { diagnostic: Some(d), .. } if *d == diagnostic)
+        );
+        assert!(list_safe_events(&conn, "ws2", "t1", 0).is_err());
+        assert!(list_safe_events(&conn, "ws1", "t1", 1).unwrap().is_empty());
+    }
+
+    // covers: BR-AG-STATE-001, BR-SYS-STATE-007, BR-AG-PERSIST-001
     #[test]
     fn parked_turn_can_persist_cancelled_terminal_without_live_channel() {
         let state = AppState {
-            db: Mutex::new(fresh_turn()),
+            db: Arc::new(Mutex::new(fresh_turn())),
             registry: build_registry(),
-            assist_terminals: Mutex::new(HashMap::new()),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
             active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
         };
         let latch = ag::turn::TerminalLatch::default();

@@ -13,6 +13,58 @@ use crate::ipc::IpcError;
 use crate::types::DiffProjection;
 use crate::{active_ws, ag, doc, lock_db, workspace, AppState};
 
+/// Adapter keeps document algorithms behind the owned execution port.
+/**
+ * @GOV
+ * codes: BR-AG-STATE-002-EFFECT-AG-AG-TOOL-047, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-047
+ * type: EFFECT
+ * chain: AG-TOOL, DE-DIFF
+ * rules: BR-AG-STATE-002, BR-AG-DATA-003
+ * boundary: in=OwnedAuthorizedProposalRequestAndFrozenAgentReadContext | out=BoundedProposalWaitAndPersistentCapabilityEffectReceipt | delegate=capability_runtime::execute,ag_propose_edit | does_not=ChangeDocumentAlgorithmsOrAcceptDiffOrSaveFile
+ */
+pub(super) async fn execute_proposal<R: tauri::Runtime>(
+    state: AppState,
+    app: tauri::AppHandle<R>,
+    params: serde_json::Value,
+    read_ctx: ag::blocks::AgentReadContext,
+    current_rel: Option<String>,
+    targets: ag::target_set::ExplicitEditTargetSet,
+    identity: crate::types::ToolCallReceiptIdentityV1,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<AgentProposeEditResult, IpcError> {
+    let turn = identity.turn_id.clone();
+    let call = identity.tool_call_id.clone();
+    super::capability_runtime::execute(
+        state,
+        identity,
+        cancelled,
+        std::time::Duration::from_secs(30),
+        move |state| {
+            ag_propose_edit(
+                state,
+                &app,
+                &params,
+                &read_ctx,
+                current_rel.as_deref(),
+                &targets,
+                &turn,
+                &call,
+            )
+        },
+        |result| {
+            result
+                .projections
+                .iter()
+                .map(|projection| crate::types::ToolCallReceiptReferenceV1 {
+                    kind: crate::types::ToolCallReceiptReferenceKind::PendingDiff,
+                    id: projection.diff_id.clone(),
+                })
+                .collect()
+        },
+    )
+    .await
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-EFFECT-AG-AG-TOOL-017, BR-AG-DATA-003-EFFECT-AG-AG-TOOL-017, BR-DE-DATA-001-EFFECT-AG-AG-TOOL-017, BR-DE-DATA-002-EFFECT-AG-AG-TOOL-017
@@ -28,9 +80,9 @@ use crate::{active_ws, ag, doc, lock_db, workspace, AppState};
 /// 操作模式：纯文本块级（replace_block）、整篇（replace_document）、富文档块（block_ops）、
 /// 样式（style_ops）、表格（table_ops）与图片（image_ops）。
 /// 返回后端权威 DiffProjection；前端不得再从 tool_request 预测 before/after。
-pub(super) fn ag_propose_edit(
+pub(super) fn ag_propose_edit<R: tauri::Runtime>(
     state: &AppState,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
     params: &serde_json::Value,
     read_ctx: &ag::blocks::AgentReadContext,
     current_rel: Option<&str>,
@@ -49,6 +101,14 @@ pub(super) fn ag_propose_edit(
         .to_string();
 
     let ws = active_ws(state)?;
+    if std::path::Path::new(&ws.root_path) != read_ctx.root() {
+        return Err(IpcError::new(
+            "AG_CONTEXT_WORKSPACE_CHANGED",
+            "工作区身份已变化，未生成修改建议",
+            false,
+            false,
+        ));
+    }
     let rel_path = ag::target_set::normalize_existing_target(
         std::path::Path::new(&ws.root_path),
         &requested_rel_path,

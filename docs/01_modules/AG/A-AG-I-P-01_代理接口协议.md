@@ -102,7 +102,7 @@ pub enum AgTurnEventPayload {
 > 按实际发射顺序经 Channel
 > FIFO 到达前端；前端据此重建"正文↔工具卡↔Diff 卡"的交错时序（消息片段），接口分支本身不变。
 
-**ag_start_turn 命令签名**（独立 `tauri::command`，不走 dispatch 信封）：
+**ag_start_turn 现有 v1 命令签名**（独立 `tauri::command`，不走 dispatch 信封；P00 的 v2 设计见 §2.3，尚未接入）：
 
 ```rust
 #[tauri::command]
@@ -170,6 +170,11 @@ struct HistTurn {
 有限历史候选：同 `rel_path` 可作为同文档 P1 背景，其他历史只能以明确标注来源的弱摘要进入，均不得
 覆盖当前 OpenDocSnapshot。是否沿用由模型写入 IntentResult revision；后端不得通过关键词先行固定语义，
 历史身份也不得扩大 ExplicitEditTargetSet 或 CapabilityGrant。
+
+历史 wire DTO 不变。运行时只对本次模型输入生成有标记的历史摘录，不覆盖持久化消息；同 AgentTurn
+用户与助手消息优先作为一个对话单元处理。全文、摘录与未纳入历史必须可区分，摘录保留身份但不授予
+任何目标或工具权限。`history_assembled` 为内部脱敏事件，记录候选、纳入、丢弃、摘录数量、字符数及
+由完整请求剩余容量派生的历史额度；不作为用户回答、业务完成或长期记忆落库证据。
 
 ### §2.2 历史恢复接口（BR-AG-PERSIST-001）
 
@@ -266,7 +271,8 @@ A-SYS-I-P-01 RefInjection
 历史调用。
 
 `active_doc_content` 是兼容字段，必须与 `open_doc_snapshots` 中 `source=active_editor` 的同一路径内容一致。
-前端发起代理回合前必须采集全部已打开文档的 OpenDocSnapshot：激活文档取当前 ED 编辑器实时序列化内容；
+以下完整采集要求仅为 v1 兼容契约；v2 按 §2.3 实施，不得静默将 v1 缺失字段视为 v2。
+v1 前端发起代理回合前必须采集全部已打开文档的 OpenDocSnapshot：激活文档取当前 ED 编辑器实时序列化内容；
 已打开非激活文档取 `EditSession.content`、`sessionVersion` 与 `contentHash`。不得用打开时的
 `loadedContent` 旧快照作为代理回合主事实。active 文档读取有两种合法 source：`active_editor`
 表示 ProseMirror 当前绑定已与 `relPath/loadSeq/editFormat` 对齐并完成实时序列化；`active_editor_session`
@@ -278,7 +284,8 @@ active binding 尚未完成但目标 session LogicalState 已存在时，不得�
 不得退回 DiskState 读取。
 
 AG 内部必须建立 `AgentReadContext`：先按 `open_doc_snapshots.rel_path` 命中已打开文档 LogicalState，
-未命中时才读取 DiskState。`ReferencePayload.doc`、`ReferencePayload.selection`、`read_doc`、
+未命中且可信打开资源清单确认目标未打开时才读取 DiskState；v2 已打开但尚未采集的条目必须先取得
+LogicalState，不能仅凭快照未命中回退。`ReferencePayload.doc`、`ReferencePayload.selection`、`read_doc`、
 `search_text`、`ag.list_blocks`、`propose_edit` 的目标内容读取全部使用该上下文。`propose_edit`
 指向其他已打开文档时，必须读取该目标文档自身的 OpenDocSnapshot，不得复用当前激活文档快照；指向未打开文档时
 才允许读取目标文档 DiskState。
@@ -418,6 +425,65 @@ ModelFinalEnvelopeV2 派生 ProjectReport：只保留当前 turn、`evidence_thr
 足够的引用；未知/跨回合/覆盖不足的 finding 转入 uncertainties。该 envelope 不是工具调用或授权来源。
 默认不持久化额外用户正文副本、密钥或模型隐藏推理。
 
+### §2.3 v2 通用准入、按需上下文与独立验证（P00）
+
+**状态**：P03 已开始接入生产 v2 DTO、准入和宿主回传；当前验证结论见开发计划 §14.12，不以本节登记提升 G5。共享字段唯一来源为
+A-SYS-I-P-01 §3.1.1，状态转移为 A-AG-M-S-01 §2。v1 完整快照路径与历史读取保持原解释。
+v2 不新增产品 Profile；前后端通过显式 facts version 选择契约，在同一运行核心汇合，禁止两套执行真值。
+
+| step | actor | input | action/output | next / exception |
+|---|---|---|---|---|
+| 1 | UI→AG | 当前输入、workspace/session/turn、RuntimeProfile、显式引用 | 冻结 activeTarget/openResources 身份与可用性，持久化输入 | 身份无效拒绝；无关文档 loading 不拒绝 |
+| 2 | AG | AgentContextFacts v2、当前输入、必要历史 | 组装轻量 PromptPackage；专业正文未激活时不注入；经过真实 Gate | 非法版本/身份、预算失败→TurnError |
+| 3 | 模型→AG | 现有工具请求或可见上下文需求 | 核心校验协议/工具参数，专业适配核验读取范围与就绪性 | 需求不等于授权，不按关键词预判写权限 |
+| 4 | 专业适配→AG | 冻结目标、当前版本、需要的内容/结构 | 按需采集 LogicalState，记录新 contextRevision；核验后才执行读取/提案 | stale/unavailable→明确 ToolResult 或必需装配失败，不走旧磁盘兜底 |
+| 5 | AG | ToolResult/专业回执、当前事实 | 按现有状态机重新装配并 Gate；每次执行重新 grant | 不直接由 TaskPlan 调度、不自动重放 |
+
+**必需与可选**：显式引用必须保留选择及可用性事实；合法未就绪引用可作为元数据让模型解释缺口，
+不能伪称已读或作为编辑锚。纯对话和 workspace_glob 不要求文档正文；一旦动作需要正文/Block，
+必先取得有效快照。采集等待处于当前 Assembling 或工具 Executing 的有界操作，由取消信号及配置期限约束；
+期限届满返回明确 unavailable/错误，不新增无期限后台轮询。人工补充/裁决继续使用既有等待态。
+
+**目标稳定**：activeTarget 在提交时冻结；切换标签不重定向。继续必须携原 session/turn/task/request 身份，
+在使用资源前验证当前版本；旧 selection 和旧回执不能作用于新内容。资源清单而非快照命中决定 opened 状态。
+
+**兼容**：实现期将 `agent_context_facts` 改为受 version 分派的输入，v1 进入严格校验适配，v2 进入按需路径；
+`active_doc_content` 在 v2 未取得内容时允许省略，已提供则必须与对应 ready 快照一致，绝不作为兜底。
+重放旧事件只恢复事实；不把 v1 draft 转成 v2 活动执行。前后端仅一侧支持 v2 时显式不支持，不自动降级。
+
+**P03 物理接线（2026-09-20）**：`ag_start_turn` 新增可缺省 `onContextRequest` 专用 Channel；
+v1 旧调用不需要该 Channel，v2 的内容操作缺通道时返回 `AG_CONTEXT_HOST_UNAVAILABLE`。
+请求为 `{requestId,workspaceId,sessionId,turnId,contextRevision,paths,allDocuments}`；宿主经
+`ag_supply_context({response:{requestId,facts,snapshots}})` 回传完整 v2 事实及仅本次需要的快照。
+`requestId` 为运行时生成的 UUID；响应必须匹配待处理项的四项身份及精确 revision，一次消费。
+采集最多等待 5 秒，取消检查间隔最多 20ms，阻塞等待不占用异步执行线程；超时、取消、Future 丢弃后清除待处理项，
+迟到/重复/跨身份响应拒绝。回传正文不写入安全 TurnEvent，不进入全局核心提示词；ContextFrozen 仅记录版本/身份/可用性与证据元数据。
+初始请求不采集无关活动正文；显式选区按需核验。工具采集先过权限预检，随后仍计算并消费独立的真实执行 grant。
+`read_doc/list_blocks/list_tables/list_images/search_text/propose_edit` 请求所需事实；纯对话、list_docs、workspace_glob 不请求正文。
+每次有效采集追加 revision；恢复原 AgentTurn 要求 revision 大于已持久化版本且 activeTarget 相同。
+打开资源清单来自文档标签及活动路径，不能以 ED 保留的已关闭缓存代替；本 turn 曾打开后关闭的路径保留 unavailable，不能改走磁盘。
+读取失败不表示专业修改成功；资源不可用的安全工具结果附稳定错误码与重新提交提示。
+
+**确认/回执**：DecisionRequestResolved 只消费对应 requestId；按钮 Promise、迟到事件和 finally 只能
+清理自己的 session/turn/request。确认 A 后产生 B 时，A 收尾不得删除 B。DecisionBar 保持 Composer 上方
+固定区域，消息历史保留来源与裁决；当前会话只操作有效请求。专业预览继续区分提案生成、预览 applied/failed、
+ack 接受/拒绝、continuation 启动/失败；失败必须有可见原因和下一步，不只清空 loading 或打印 console。
+重复 ack 不重复启动；预览继续不等于接受，也不等于保存。专业状态由 DE/ED/WS 回执证明。
+
+P06 实现登记（2026-09-22）：DecisionBar 的 busy/error 绑定 session/turn/request，提交回执写原会话；
+请求清理使用三项精确匹配，按钮 finally 只清理自己安装的动作对象，终态只清理原 AgentTurn 的动作。
+服务在同一 requestId 提交期间拒绝重复调用（AG_DECISION_IN_FLIGHT），结束或失败后释放在途锁；
+仅保有原等待身份的请求可继续原 AgentTurn。工作区切换后的迟到结果拒绝在新工作区投影/继续
+（AG_DECISION_CONTEXT_CHANGED）；若裁决已成功，错误明确标记 decisionResolved，不把它说成未执行。
+旧调用未传 sessionId 时在 store 入站时固定会话，只保证入站之后不随活动会话漂移；不替代上游来源绑定。
+自动化状态见计划 §14.18；不承诺页面重启自动恢复或后端副作用重放，不修改确认权限与保存语义。
+
+**测试边界**：确定性模型响应只能替换传输源，字节分片/非法 JSON/缺结束必须经过生产解析与核心；
+如需受控 Gate 响应，只能在测试注入边界替代外部服务，不能删除 Gate 检查，不作为真实订阅通过证据。
+测试能力必须显式 test 标识且默认关闭，不允许覆盖生产工具或授予额外权限。真实 workspace_glob 和纯文本
+能力持续验证契约；核心套件不得初始化复杂编辑器、DOCX 转换或 LibreOffice。测试入口必须仅在开发/测试构建
+可用；不提供任意生产正文录制、用户库修改或通用脚本执行入口。具体 command 注册由 P02/P08 Scope 定义。
+
 ## §3 工具调用回注接口（AG-TOOL / SM-AG-02）
 
 | 接口 | 参数（语义） | 结果 | 特有错误/状态 | 归属 |
@@ -475,6 +541,19 @@ WS，WS 仍执行重验、幂等和 fail-fast 补偿。ProjectReport 也不是�
 > BDocx 的非当前文档读取必须先经 AgentReadContext：已打开时使用 OpenDocSnapshot，未打开时经 DOC 编辑链转为 HTML 后再分块；原生 `.docx` 不支持 `ag.list_blocks`，
 > 应回 `DOC_NOT_BDOCX`，避免把二进制 docx 当 UTF-8 文本或可编辑块列表处理。
 > 锚有效期 = 编辑会话内（BR-ED-DATA-004）：文档重开后 blockId 重建，agent 须重新 list_blocks。
+
+#### §4.1.1 模型只读工具的有界返回（P05）
+
+本节针对模型工具 `read_doc/list_blocks`，不改变上表 IPC `ag.list_blocks` 的完整块投影接口。
+
+- `read_doc(path, view?, offset?, limit_chars?, expected_hash?)` 默认为正文阅读视图（`view=text`）。返回去除编辑标记的正文 `content`、原来源/版本元数据、`source_content_format`、`version_hash`、`offset/end_offset/next_offset/total_chars/complete/has_more`；HTML 保留段落及表格行列分隔，不重复容器与子节点正文。offset 为阅读投影中的 Unicode 字符位置（不是块号、UTF-16编辑坐标），默认0；limit_chars 默认/最大10,000，实际每页还按原序列化安全上限收缩。非首页必须提供 expected_hash；应使用返回的 next_offset，不猜游标。长单段允许明确分片，但绝不截断 JSON 或编辑节点。
+- `read_doc(path, view=structure)` 保留原完整 content 与元数据；原 `read_doc(path, blocks=[...])` 默认保留结构视图，返回所选块的完整 node_json 等字段且省略全文。需要编辑节点时沿用此接口；任一块不存在即 AG_READ_BLOCK_NOT_FOUND，不返回部分成功。结构视图不能使用正文分页参数；正文 view 不与 blocks 混用。
+- `list_blocks(path, offset?, limit?, expected_hash?)` 返回轻量目录、`offset/total_blocks/next_offset/complete/version_hash`。默认 offset=0、limit=20，limit 范围1～50，为每页条目数上限；容量不足时减少完整条目，不截断条目，next_offset反映实际返回数量，禁止以offset+limit猜下一页。后续页必须携带上一页version_hash作为expected_hash。complete只表示本次目录覆盖全部块，不表示正文已读；末页不等于全目录返回。
+- `version_hash` 为完整 AgentEditableSnapshot 序列化的 SHA-256；`read_doc` 也接受 `expected_hash`。版本变化返回 `AG_READ_VERSION_STALE`，重新定位，不将新旧页拼作同一版本。此 hash 不替代编辑提案原有 contentHash/sessionVersion/fingerprint。
+- 只读结果按 JSON 字符串再次序列化后的字符数限制在运行时单次上限内，当前为12,000，不扩大该限制。正文阅读按容量成页；显式结构结果仍在超限时 AG_TOOL_RESULT_TOO_LARGE，编辑节点不可截断。目录页过大应减小 limit；大结构块可用正文视图阅读，但不等于取得可编辑完整节点。其他只读列表超限仍明确失败，不保证均支持分页。
+- 只有成功结果才能登记证据：正文单页从0覆盖至末尾（complete=true）或完整结构读取为 full_document；任何部分页（包括末页）及选块为 selected_blocks，目录为 structure_index。正文证据的覆盖范围同时记录 offset/end_offset/total_chars，跨页不自动升级全文；版本绑定成功返回值，不二次读取磁盘替换版本。分页是新的只读 ToolCall，仍受原授权、调用/Prompt预算和取消约束，不是自动重试或后台执行恢复。
+
+兼容：原 path 和 blocks 参数保留；需要原HTML/编辑模型全文须显式 view=structure，默认正文的 content_format=text 不可作为HTML编辑基准。IPC 块读取、授权、编辑和保存契约不变。本限制约束返回规模，不承诺底层文件读取内存有界。
 
 ### §4.2 富文档 BlockOperation
 
@@ -578,6 +657,12 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-23 | v1.42 | AG-HISTORY-BUDGET-01：历史wire不变，按身份保留连续对话单元、有标记原文摘录和脱敏装配证据；不改变授权。 |
+| 2026-10-23 | v1.41 | AG-BOUNDED-READING-01：正文/编辑结构视图分离、容量与版本绑定分页、目录自适应及保守页证据；编辑和保存边界不变。 |
+| 2026-09-22 | v1.40 | P06：请求身份清理、单次在途提交、原会话回执及工作区变化拒绝继续；保留恢复边界。 |
+| 2026-09-21 | v1.39 | P05：模型读取的单正文、选块完整性、目录分页和版本绑定；区分 IPC 与工具契约。 |
+| 2026-09-20 | v1.38 | P03：登记按需宿主 Channel/回传 command、一次消费与身份/版本/取消/超时边界；实现验收见计划 §14.12。 |
+| 2026-09-15 | v1.37 | P00：分离 v1 现行路径与 v2 按需准入设计；明确上下文取得、DecisionRequest/预览回执身份及开发验证入口边界，不改变生产授权与保存语义。 |
 | 2026-09-03 | v1.36 | AG-ADAPTIVE-RUNTIME-DESIGN-01：AgTurnEvent 改为带 seq 的 append-only 安全投影并新增 Intent/Route 事件；内部契约升级为 IntentResult/CapabilityGrant/PromptPackage V2、TurnEvent/EvidenceLedger 与任务投影；移除 report_project 和模型可见 WS 执行工具；ProposalBatch 支持多 DiffProjection。 |
 | 2026-08-30 | v1.26 | AG-CONFORMANCE-CODE-S4A：`ag_start_turn` 新增版本化 AgentContextFacts；新增只读 `report_project` 完成工具与同轮读取证据失败关闭协议。 |
 | 2026-08-31 | v1.35 | AG-DOC-CONSOLIDATION-01：事件协议收敛到当前十个 AgTurnEvent 分支；澄清复用原 turn_id 并回到 Assembling；CapabilityGrant 仅携带当轮精确允许集，每次 provider continuation 必须重新门禁；数值上限仅由运行时 manifest/schema/guard 作真源。 |

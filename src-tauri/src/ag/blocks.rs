@@ -141,6 +141,9 @@ pub struct OpenDocSnapshot {
 pub struct AgentReadContext {
     root: std::path::PathBuf,
     open_docs: HashMap<String, OpenDocSnapshot>,
+    resource_facts: Option<HashMap<String, crate::types::AgentContextResourceV2>>,
+    verified_disk_paths: std::collections::BTreeSet<String>,
+    disk_inventory_verified: bool,
 }
 
 impl AgentReadContext {
@@ -162,7 +165,101 @@ impl AgentReadContext {
         Ok(Self {
             root: root.to_path_buf(),
             open_docs: indexed,
+            resource_facts: None,
+            verified_disk_paths: Default::default(),
+            disk_inventory_verified: false,
         })
+    }
+
+    /**
+     * @GOV
+     * codes:    BR-AG-DATA-001-GUARD-AG-AG-TOOL-044, BR-AG-DATA-008-GUARD-AG-AG-TOOL-044
+     * type:     GUARD
+     * chain:    AG-TURN, AG-TOOL
+     * rules:    BR-AG-DATA-001, BR-AG-DATA-008
+     * term_ref: TERM-AG-020
+     * boundary: in=VerifiedResourceIdentitiesOpenDocSnapshotsAndRequestedPaths | out=AgentReadContextWithExplicitDiskReadBoundary | does_not=inferClosedResourceFromMissingSnapshot
+     */
+    pub fn with_resources(
+        root: &Path,
+        snapshots: Vec<OpenDocSnapshot>,
+        facts: &crate::types::AgentContextFactsV2,
+        requested: &[String],
+        all_documents: bool,
+    ) -> Result<Self, IpcError> {
+        let mut context = Self::new(root, snapshots)?;
+        let mut resources = HashMap::new();
+        for resource in &facts.open_resources {
+            crate::workspace::resolve_in_workspace(root, &resource.rel_path)?;
+            if resources
+                .insert(resource.rel_path.clone(), resource.clone())
+                .is_some()
+            {
+                return Err(IpcError::new(
+                    "AG_CONTEXT_FACTS_DUPLICATE_DOC",
+                    "打开资源身份重复",
+                    false,
+                    false,
+                ));
+            }
+        }
+        let paths = requested
+            .iter()
+            .map(|path| context.normalized_resource_path(path))
+            .collect::<Result<_, _>>()?;
+        context.resource_facts = Some(resources);
+        context.verified_disk_paths = paths;
+        context.disk_inventory_verified = all_documents;
+        Ok(context)
+    }
+
+    pub fn check_resource_available(&self, path: &str) -> Result<(), IpcError> {
+        if let Some(resources) = &self.resource_facts {
+            let normalized = self.normalized_resource_path(path)?;
+            if let Some(resource) = resources.get(&normalized) {
+                if resource.availability != crate::types::AgentResourceAvailabilityV2::Ready
+                    || !self.open_docs.contains_key(&normalized)
+                {
+                    return Err(IpcError::new(
+                        "AG_CONTEXT_RESOURCE_UNAVAILABLE",
+                        &format!(
+                            "文档 {path} 的逻辑态尚不可用（{}），请就绪后重新提交；未读取磁盘副本",
+                            resource
+                                .reason_code
+                                .as_deref()
+                                .unwrap_or("AG_CONTEXT_NOT_REQUESTED")
+                        ),
+                        true,
+                        false,
+                    ));
+                }
+            } else if !self.disk_inventory_verified
+                && !self.verified_disk_paths.contains(&normalized)
+            {
+                return Err(IpcError::new(
+                    "AG_CONTEXT_RESOURCE_UNVERIFIED",
+                    "读取前尚未核验资源是否打开，请先请求该文档",
+                    true,
+                    false,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn normalized_resource_path(&self, path: &str) -> Result<String, IpcError> {
+        let absolute = crate::workspace::resolve_in_workspace(&self.root, path)?;
+        absolute
+            .strip_prefix(&self.root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .map_err(|_| {
+                IpcError::new(
+                    "AG_CONTEXT_RESOURCE_INVALID",
+                    "资源路径不属于当前工作区",
+                    false,
+                    false,
+                )
+            })
     }
 
     pub fn root(&self) -> &Path {
@@ -170,10 +267,30 @@ impl AgentReadContext {
     }
 
     pub fn open_snapshot(&self, rel_path: &str) -> Option<&OpenDocSnapshot> {
-        self.open_docs.get(rel_path)
+        if self.resource_facts.is_some() {
+            self.normalized_resource_path(rel_path)
+                .ok()
+                .and_then(|path| self.open_docs.get(&path))
+        } else {
+            self.open_docs.get(rel_path)
+        }
     }
 
     pub fn table_snapshots(&self, rel_path: &str) -> Result<&[serde_json::Value], IpcError> {
+        if self.resource_facts.is_some() {
+            self.check_resource_available(rel_path)?;
+            if self
+                .open_snapshot(rel_path)
+                .is_some_and(|s| s.source != "active_editor")
+            {
+                return Err(IpcError::new(
+                    "AG_TABLE_EDIT_REQUIRES_ACTIVE_EDITOR",
+                    "表格结构需要当前活动编辑器快照",
+                    true,
+                    false,
+                ));
+            }
+        }
         self.open_snapshot(rel_path)
             .map(|snapshot| snapshot.table_snapshots.as_slice())
             .ok_or_else(|| {
@@ -221,6 +338,7 @@ impl AgentReadContext {
     }
 
     pub fn snapshot(&self, rel_path: &str) -> Result<AgentEditableSnapshot, IpcError> {
+        self.check_resource_available(rel_path)?;
         if let Some(open) = self.open_snapshot(rel_path) {
             if open.content_format == "html" && open.source == "active_editor" {
                 if open.block_snapshots.is_empty() {
@@ -498,6 +616,123 @@ pub fn block_texts(content: &str, is_html: bool) -> Vec<String> {
         .collect()
 }
 
+/**
+ * @GOV
+ * codes: BR-AG-DATA-005-DATA-AG-AG-TOOL-058
+ * type: DATA
+ * chain: AG-TOOL
+ * rules: BR-AG-DATA-005
+ * boundary: in=AgentEditableSnapshot | out=ReadingTextWithParagraphAndTableSeparators | does_not=ChangeEditorProjectionOrCreateEditBaseline
+ */
+/// Reading projection, not an edit baseline. Scan the original HTML once so parent
+/// containers never duplicate their descendants. Keep table cell/row boundaries.
+pub(super) fn reading_text(snapshot: &AgentEditableSnapshot) -> String {
+    if snapshot.content_format != "html" {
+        return snapshot.content.clone();
+    }
+    let html = &snapshot.content;
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut pos = 0;
+    let mut in_cell = false;
+    while pos < html.len() {
+        let rest = &html[pos..];
+        if rest.starts_with("<!--") {
+            pos += rest.find("-->").map_or(rest.len(), |end| end + 3);
+            continue;
+        }
+        if rest.starts_with('<') {
+            let mut quote = None;
+            let end = rest.char_indices().skip(1).find_map(|(at, ch)| {
+                if let Some(current) = quote {
+                    if ch == current {
+                        quote = None;
+                    }
+                } else if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                } else if ch == '>' {
+                    return Some(at);
+                }
+                None
+            });
+            let Some(end) = end else {
+                out.push_str(rest);
+                break;
+            };
+            let body = rest[1..end].trim();
+            let closing = body.starts_with('/');
+            let name = body
+                .trim_start_matches('/')
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            pos += end + 1;
+            if !closing && matches!(name.as_str(), "script" | "style" | "head") {
+                let close = format!("</{name}");
+                if let Some(at) = lower[pos..].find(&close) {
+                    pos += at;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            match (closing, name.as_str()) {
+                (false, "td" | "th") => in_cell = true,
+                (true, "td" | "th") => {
+                    in_cell = false;
+                    out.push('\t');
+                }
+                (true, "tr") => {
+                    if out.ends_with('\t') {
+                        out.pop();
+                    }
+                    out.push('\n');
+                }
+                (false, "br") => out.push('\n'),
+                (false, "img") => out.push_str("[图片]"),
+                (
+                    true,
+                    "p" | "div" | "li" | "blockquote" | "pre" | "h1" | "h2" | "h3" | "h4" | "h5"
+                    | "h6",
+                ) => out.push(if in_cell { ' ' } else { '\n' }),
+                _ => {}
+            }
+            continue;
+        }
+        if rest.starts_with('&') {
+            if let Some(end) = rest
+                .char_indices()
+                .take(13)
+                .find_map(|(at, ch)| (ch == ';').then_some(at))
+            {
+                let entity = &rest[1..end];
+                let decoded = decode_entity(entity).or_else(|| {
+                    let number = entity
+                        .strip_prefix("#x")
+                        .or_else(|| entity.strip_prefix("#X"))
+                        .and_then(|value| u32::from_str_radix(value, 16).ok())
+                        .or_else(|| {
+                            entity
+                                .strip_prefix('#')
+                                .and_then(|value| value.parse().ok())
+                        });
+                    number.and_then(char::from_u32)
+                });
+                if let Some(ch) = decoded {
+                    out.push(ch);
+                    pos += end + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = rest.chars().next().expect("nonempty HTML remainder");
+        out.push(ch);
+        pos += ch.len_utf8();
+    }
+    out
+}
+
 /// 把第 `index` 块替换为 `new_html`，返回整篇新内容。
 /// HTML：原串 in-place 替换该块 inner（非破坏）；text：替块后 join("\n")。越界返回 Err。
 /// 审计修复（2026-07-26 · D10）：不再 html_escape，new_html 保留内联样式（已由前端 sanitize）。
@@ -523,6 +758,36 @@ pub fn replace_block(
         let mut texts: Vec<String> = blocks.into_iter().map(|b| b.text).collect();
         texts[index] = new_html.to_string();
         Ok(texts.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod reading_projection_tests {
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn reading_projection_preserves_order_cells_entities_and_avoids_nested_duplicates() {
+        let html = "<head><style>hidden</style></head><p data-block-id='p' title='a > b'>甲&amp;&#x1F642;</p><!-- skip --><table><tr><th><p>名称</p></th><th><p>预算</p></th></tr><tr><td><p>Q7</p></td><td><p>81000</p></td></tr></table><ul><li><p>末尾</p></li></ul><script>unsafe</script>";
+        let snapshot = super::snapshot_from_content(
+            "a.html",
+            html,
+            "test",
+            None,
+            Some("html"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let reading = super::reading_text(&snapshot);
+        assert!(reading.starts_with("甲&🙂\n"));
+        assert!(reading.contains("名称 \t预算 \nQ7 \t81000 \n"));
+        assert_eq!(reading.matches("81000").count(), 1);
+        assert_eq!(reading.matches("末尾").count(), 1);
+        assert!(
+            !reading.contains("hidden")
+                && !reading.contains("unsafe")
+                && !reading.contains("data-block-id")
+        );
     }
 }
 

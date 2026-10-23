@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAgStore } from "../../store/agStore";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
@@ -6,6 +6,8 @@ import { DecisionBar } from "./DecisionBar";
 import { DiffAllActionsBar } from "../de/DiffAllActionsBar";
 import { startReferenceDrag } from "../../services/referenceDrag";
 import { closeAgentSession, deleteAgentSession, newAgentSession, switchAgentSession } from "../../services/agService";
+
+const VerificationPanel = import.meta.env.DEV ? lazy(() => import("./AgentVerificationPanel").then((m) => ({ default: m.AgentVerificationPanel }))) : null;
 
 /**
  * 代理编辑面板 AgentPanel（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01）。
@@ -52,6 +54,7 @@ export function AgentPanel() {
 
   return (
     <div className="chatpanel">
+      {VerificationPanel && <Suspense fallback={null}><VerificationPanel /></Suspense>}
       <div className="agtabs">
         <div className="agtabs-list" role="tablist">
           {open.map((s) => (

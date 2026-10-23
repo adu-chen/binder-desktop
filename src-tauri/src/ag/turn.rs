@@ -77,11 +77,13 @@ pub enum TurnEvent {
     AssembleFail,
     GatePassed,
     GateDenied,
+    GateFailed,
     ModelClarification,
     ClarificationProvided,
     DecisionProposed,
     DecisionResolved,
     ToolRoundCompleted,
+    ModelProtocolRejected,
     ModelFinal,
     StreamFail,
     Cancel,
@@ -125,11 +127,13 @@ pub fn transition(state: TurnState, event: TurnEvent) -> Option<TurnState> {
         // 门禁前置：唯一通往 Streaming 的路径。
         (AwaitingGate, GatePassed) => Streaming,
         (AwaitingGate, GateDenied) => Denied,
+        (AwaitingGate, GateFailed) => TurnError,
         (Streaming, ModelClarification) => AwaitingClarification,
         (AwaitingClarification, ClarificationProvided) => Assembling,
         (Streaming, DecisionProposed) => AwaitingDecision,
         (AwaitingDecision, DecisionResolved) => Assembling,
         (Streaming, ToolRoundCompleted) => Assembling,
+        (Streaming, ModelProtocolRejected) => Assembling,
         (Streaming, ModelFinal) => Finalizing,
         (Streaming, StreamFail) => TurnError,
         // 任一活动阶段取消都必须到达唯一 Cancelled 终态。
@@ -196,6 +200,8 @@ mod tests {
         assert_eq!(transition(Finalizing, FinalizeOk), Some(Completed));
         // 门禁拒绝 → Denied 终态不可绕过
         assert_eq!(transition(AwaitingGate, GateDenied), Some(Denied));
+        assert_eq!(transition(AwaitingGate, GateFailed), Some(TurnError));
+        assert_eq!(transition(TurnError, GatePassed), None);
         // 结构性门禁前置：除 AwaitingGate+gatePassed 外无任何状态可达 Streaming
         for from in [
             Idle,
@@ -245,6 +251,11 @@ mod tests {
     #[test]
     fn tool_and_decision_paths_resume_assembling_without_completing() {
         assert_eq!(transition(Streaming, ToolRoundCompleted), Some(Assembling));
+        assert_eq!(
+            transition(Streaming, ModelProtocolRejected),
+            Some(Assembling)
+        );
+        assert_eq!(transition(Completed, ModelProtocolRejected), None);
         let waiting = transition(Streaming, DecisionProposed).unwrap();
         assert_eq!(waiting, AwaitingDecision);
         assert!(!is_terminal(waiting));

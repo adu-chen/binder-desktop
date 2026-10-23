@@ -839,9 +839,9 @@ mod image_diff_history_tests {
         };
         workspace::diff_apply::persist_diff(&conn, &diff).unwrap();
         AppState {
-            db: Mutex::new(conn),
+            db: std::sync::Arc::new(Mutex::new(conn)),
             registry: build_registry(),
-            assist_terminals: Mutex::new(HashMap::new()),
+            assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
             active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
         }
     }

@@ -13,13 +13,18 @@ export function sse(res, event, data) {
 }
 
 // 通用 provider SSE 读取：逐行解析 `data: {...}`，跳过 [DONE] 与心跳。
-async function pumpProviderSse(resp, onJson) {
+async function pumpProviderSse(resp, onJson, onStage) {
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let firstByteSeen = false;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    if (!firstByteSeen && value?.length) {
+      firstByteSeen = true;
+      onStage?.('upstream_first_byte');
+    }
     buf += decoder.decode(value, { stream: true });
     let nl;
     while ((nl = buf.indexOf('\n')) >= 0) {
@@ -38,37 +43,74 @@ async function pumpProviderSse(resp, onJson) {
 }
 
 // OpenAI 兼容（OpenAI + DeepSeek）：Bearer + chat/completions 流式 + tool_calls 累积。
-async function streamOpenAiCompat(provider, { model, messages, apiKey, tools }, res) {
+async function streamOpenAiCompat(provider, { model, messages, apiKey, tools }, res, { signal, onStage }) {
   const reqBody = { model, messages, stream: true };
   if (Array.isArray(tools) && tools.length) reqBody.tools = tools;
   const resp = await fetch(provider.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify(reqBody),
+    signal,
   });
+  onStage?.('upstream_headers', { status: resp.status });
   if (!resp.ok) {
+    onStage?.('upstream_http_error', { status: resp.status });
     sse(res, 'error', { code: `HTTP_${resp.status}`, message: await resp.text(), retriable: resp.status >= 500 });
     return;
   }
   const toolAcc = {};
-  await pumpProviderSse(resp, (json) => {
-    const choice = json.choices?.[0];
-    if (!choice) return;
-    if (choice.delta?.content) sse(res, 'chunk', { text: choice.delta.content });
-    const tcs = choice.delta?.tool_calls;
-    if (Array.isArray(tcs)) {
-      for (const tc of tcs) {
-        const i = tc.index ?? 0;
-        toolAcc[i] = toolAcc[i] || { id: '', name: '', arguments: '' };
-        if (tc.id) toolAcc[i].id = tc.id;
-        if (tc.function?.name) toolAcc[i].name = tc.function.name;
-        if (tc.function?.arguments) toolAcc[i].arguments += tc.function.arguments;
+  const startedAt = performance.now();
+  const deltaActivity = {
+    reasoningDeltaCount: 0,
+    contentDeltaCount: 0,
+    firstReasoningMs: null,
+    lastReasoningMs: null,
+    firstContentMs: null,
+    lastContentMs: null,
+  };
+  let lastProgressAt = 0;
+  try {
+    await pumpProviderSse(resp, (json) => {
+      const choice = json.choices?.[0];
+      if (!choice) return;
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      // Reasoning text is neither user-facing content nor a completion signal. A throttled,
+      // content-free event keeps the client informed while the provider is actively working.
+      if (choice.delta?.reasoning_content) {
+        deltaActivity.reasoningDeltaCount++;
+        deltaActivity.firstReasoningMs ??= elapsedMs;
+        deltaActivity.lastReasoningMs = elapsedMs;
+        if (lastProgressAt === 0 || elapsedMs - lastProgressAt >= 5000) {
+          lastProgressAt = elapsedMs || 1;
+          sse(res, 'progress', { phase: 'reasoning' });
+          onStage?.('upstream_reasoning_progress', {
+            reasoningDeltaCount: deltaActivity.reasoningDeltaCount,
+          });
+        }
       }
-    }
-    const finish = choice.finish_reason;
-    if (finish === 'tool_calls') sse(res, 'tool_calls', { tool_calls: Object.values(toolAcc) });
-    else if (finish) sse(res, 'done', { stop_reason: finish });
-  });
+      if (choice.delta?.content) {
+        deltaActivity.contentDeltaCount++;
+        deltaActivity.firstContentMs ??= elapsedMs;
+        deltaActivity.lastContentMs = elapsedMs;
+        sse(res, 'chunk', { text: choice.delta.content });
+      }
+      const tcs = choice.delta?.tool_calls;
+      if (Array.isArray(tcs)) {
+        for (const tc of tcs) {
+          const i = tc.index ?? 0;
+          toolAcc[i] = toolAcc[i] || { id: '', name: '', arguments: '' };
+          if (tc.id) toolAcc[i].id = tc.id;
+          if (tc.function?.name) toolAcc[i].name = tc.function.name;
+          if (tc.function?.arguments) toolAcc[i].arguments += tc.function.arguments;
+        }
+      }
+      const finish = choice.finish_reason;
+      if (finish === 'tool_calls') sse(res, 'tool_calls', { tool_calls: Object.values(toolAcc) });
+      else if (finish) sse(res, 'done', { stop_reason: finish });
+    }, onStage);
+  } finally {
+    onStage?.('upstream_delta_summary', deltaActivity);
+  }
 }
 
 // OpenAI 格式 messages → Anthropic（system 抽顶层；tool_calls→tool_use；role:tool→user tool_result）。
@@ -106,7 +148,7 @@ function toAnthropicTools(tools) {
 }
 
 // Anthropic Messages API：请求/tools 翻译 + tool_use 流式解析。
-async function streamAnthropic(provider, { model, messages, apiKey, maxTokens, tools }, res) {
+async function streamAnthropic(provider, { model, messages, apiKey, maxTokens, tools }, res, { signal, onStage }) {
   const { system, messages: amsgs } = toAnthropicMessages(messages);
   const body = { model, messages: amsgs, stream: true, max_tokens: maxTokens || 4096 };
   if (system) body.system = system;
@@ -117,28 +159,51 @@ async function streamAnthropic(provider, { model, messages, apiKey, maxTokens, t
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify(body),
+    signal,
   });
+  onStage?.('upstream_headers', { status: resp.status });
   if (!resp.ok) {
+    onStage?.('upstream_http_error', { status: resp.status });
     sse(res, 'error', { code: `HTTP_${resp.status}`, message: await resp.text(), retriable: resp.status >= 500 });
     return;
   }
   const toolAcc = {};
+  const startedAt = performance.now();
+  let lastProgressAt = -5000;
+  let upstreamProgressCount = 0;
+  const emitUpstreamProgress = () => {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (elapsedMs - lastProgressAt < 5000) return;
+    lastProgressAt = elapsedMs;
+    upstreamProgressCount++;
+    sse(res, 'progress', { phase: 'upstream' });
+    onStage?.('upstream_keepalive_progress', { upstreamProgressCount });
+  };
   await pumpProviderSse(resp, (json) => {
-    if (json.type === 'content_block_start' && json.content_block?.type === 'tool_use') {
+    if (json.type === 'ping') {
+      emitUpstreamProgress();
+    } else if (json.type === 'content_block_start' && json.content_block?.type === 'tool_use') {
       toolAcc[json.index] = { id: json.content_block.id, name: json.content_block.name, arguments: '' };
+      emitUpstreamProgress();
     } else if (json.type === 'content_block_delta') {
       if (json.delta?.type === 'text_delta') sse(res, 'chunk', { text: json.delta.text });
-      else if (json.delta?.type === 'input_json_delta' && toolAcc[json.index]) toolAcc[json.index].arguments += json.delta.partial_json || '';
+      else if (json.delta?.type === 'input_json_delta' && toolAcc[json.index]) {
+        toolAcc[json.index].arguments += json.delta.partial_json || '';
+        emitUpstreamProgress();
+      } else if (json.delta?.type === 'thinking_delta' || json.delta?.type === 'signature_delta') {
+        // Neither hidden thinking nor signatures are user-facing response content.
+        emitUpstreamProgress();
+      }
     } else if (json.type === 'message_delta' && json.delta?.stop_reason) {
       const stop = json.delta.stop_reason;
       if (stop === 'tool_use') sse(res, 'tool_calls', { tool_calls: Object.values(toolAcc) });
       else sse(res, 'done', { stop_reason: stop });
     }
-  });
+  }, onStage);
 }
 
 /** 按 provider.kind 路由到对应适配器，输出归一化 SSE。 */
-export async function streamProvider(provider, args, res) {
-  if (provider.kind === 'anthropic') await streamAnthropic(provider, args, res);
-  else await streamOpenAiCompat(provider, args, res);
+export async function streamProvider(provider, args, res, options = {}) {
+  if (provider.kind === 'anthropic') await streamAnthropic(provider, args, res, options);
+  else await streamOpenAiCompat(provider, args, res, options);
 }

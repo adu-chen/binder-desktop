@@ -25,12 +25,17 @@ mod edit_persistence_system_tests {
             };
         }
         let routed = route_edit_persistence_command(&request, &state, &app).unwrap_or_else(|| {
-            Err(IpcError::new(
-                "IPC_ROUTE_MISSING",
-                "G5 持久化 harness 收到范围外 command",
-                false,
-                false,
-            ))
+            // 快照路由不依赖桌面 Runtime；与生产 dispatch 一样直接调用真实处理器。
+            match request.command.as_str() {
+                "ed.persist_session_snapshot" => route_persist_session_snapshot(&request, &state),
+                "ed.list_session_snapshots" => route_list_session_snapshots(&state),
+                _ => Err(IpcError::new(
+                    "IPC_ROUTE_MISSING",
+                    "G5 持久化 harness 收到范围外 command",
+                    false,
+                    false,
+                )),
+            }
         });
         match routed {
             Ok(result) => CommandResponse {
@@ -65,9 +70,9 @@ mod edit_persistence_system_tests {
         workspace::lifecycle::open_workspace(&mut conn, &root.to_string_lossy()).unwrap();
         mock_builder()
             .manage(AppState {
-                db: Mutex::new(conn),
+                db: std::sync::Arc::new(Mutex::new(conn)),
                 registry: build_registry(),
-                assist_terminals: Mutex::new(HashMap::new()),
+                assist_terminals: std::sync::Arc::new(Mutex::new(HashMap::new())),
                 active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
             })
             .invoke_handler(tauri::generate_handler![mock_dispatch])
@@ -110,6 +115,64 @@ mod edit_persistence_system_tests {
         response
             .result
             .unwrap_or_else(|| panic!("{command} 缺少 result"))
+    }
+
+    // covers: BR-ED-DATA-008, BR-WS-OBS-001, BR-WS-PERSIST-001
+    #[test]
+    fn text_snapshot_restores_baseline_and_saves_existing_file_through_ipc() {
+        let (root, _) = temp_workspace("text_snapshot_baseline", "");
+        let app = app_for(&root);
+        let webview = tauri::WebviewWindowBuilder::new(&app, "snapshot-test", Default::default())
+            .build()
+            .unwrap();
+        for (name, format, content_format, draft) in [
+            ("plain.txt", "text", "text", "粘贴正文\n第二行"),
+            ("note.md", "markdown", "text", "# Markdown 草稿"),
+            ("page.html", "html_file", "html", "<p>HTML 草稿</p>"),
+        ] {
+            let rel_path = format!("notes/{name}");
+            let path = root.join(&rel_path);
+            std::fs::write(&path, "").unwrap();
+            let opened = invoke(
+                &webview,
+                "ws.read_doc",
+                serde_json::json!({"relPath": rel_path}),
+            );
+            let baseline = opened["baseline"].as_str().unwrap();
+            invoke(
+                &webview,
+                "ed.persist_session_snapshot",
+                serde_json::json!({"snapshot": {
+                    "relPath": rel_path, "content": draft, "baseline": baseline,
+                    "editFormat": format, "contentFormat": content_format,
+                    "source": "open_editor_session", "dirty": true, "sessionVersion": 2,
+                    "contentHash": "draft-hash", "capturedAt": 1
+                }}),
+            );
+            let restored = invoke(&webview, "ed.list_session_snapshots", serde_json::json!({}));
+            let snapshot = restored["snapshots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|snapshot| snapshot["relPath"] == rel_path)
+                .unwrap();
+            assert_eq!(snapshot["content"], draft);
+            assert_eq!(snapshot["baseline"], baseline);
+            assert_eq!(snapshot["dirty"], true);
+            assert_eq!(snapshot["editFormat"], format);
+            let saved = invoke(
+                &webview,
+                "ws.save_doc",
+                serde_json::json!({
+                    "relPath": rel_path, "content": draft, "baseline": snapshot["baseline"], "override": false
+                }),
+            );
+            assert_ne!(saved["baseline"], opened["baseline"]);
+            assert_eq!(std::fs::read_to_string(path).unwrap(), draft);
+        }
+        drop(webview);
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn generate_diff(

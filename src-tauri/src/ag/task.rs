@@ -174,8 +174,9 @@ pub fn acknowledge_preview_checkpoint(
         .query_row(
             "SELECT d.diff_id FROM pending_diffs d \
              JOIN task_runs r ON r.workspace_id=d.workspace_id \
-             WHERE d.diff_id=?1 AND d.status='pending' AND r.task_run_id=?2",
-            rusqlite::params![checkpoint.diff_id, checkpoint.task_run_id],
+             WHERE d.diff_id=?1 AND d.status='pending' AND r.task_run_id=?2 \
+             AND d.workspace_id=?3 AND d.rel_path=?4 AND r.session_id=?5 AND r.status IN ('active','executing')",
+            rusqlite::params![checkpoint.diff_id, checkpoint.task_run_id, checkpoint.workspace_id, checkpoint.rel_path, checkpoint.session_id],
             |row| row.get(0),
         )
         .optional()?;
@@ -256,7 +257,8 @@ pub fn begin_preview_continuation(
         "UPDATE task_preview_checkpoints SET status='consumed', consumed_at=?1 \
          WHERE diff_id=?2 AND task_run_id=?3 AND workspace_id=?4 AND session_id=?5 AND turn_id=?6 AND rel_path=?7 \
          AND session_version=?8 AND content_hash=?9 AND status='acknowledged' \
-         AND EXISTS (SELECT 1 FROM task_runs r WHERE r.task_run_id=?3 AND r.workspace_id=?4 AND r.session_id=?5 AND r.status IN ('active','executing'))",
+         AND EXISTS (SELECT 1 FROM task_runs r WHERE r.task_run_id=?3 AND r.workspace_id=?4 AND r.session_id=?5 AND r.status IN ('active','executing')) \
+         AND EXISTS (SELECT 1 FROM pending_diffs d WHERE d.diff_id=?2 AND d.workspace_id=?4 AND d.rel_path=?7 AND d.status='pending')",
         rusqlite::params![
             now_millis(),
             checkpoint.diff_id,
@@ -461,7 +463,7 @@ fn frozen_scope_targets(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=ActiveTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=appendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection
+ * boundary: in=ActiveOrActivityObservedTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=treatDecisionResolutionAloneAsActivityAppendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection
  */
 pub fn propose_decision(
     conn: &Connection,
@@ -478,7 +480,16 @@ pub fn propose_decision(
     let run = load_task_run(conn, task_run_id)?.ok_or_else(|| {
         rusqlite::Error::InvalidParameterName(format!("unknown task run: {task_run_id}"))
     })?;
-    if run.status != TaskRunStatus::Active {
+    // confirm 只解除等待，控制缓存保持 Waiting；恢复回合的真实 provider/tool 事件
+    // 已使 TurnEvent 投影回到 Active。第二次裁决应读取这份事实，而不是要求缓存
+    // 在 waitResolved 时提前伪造 Active。
+    let activity_observed = if run.status == TaskRunStatus::Waiting {
+        rebuild_task_projection(conn, &run.workspace_id, &run.session_id, task_run_id)?
+            .is_some_and(|projection| projection.status == TaskRunProjectionStatusV2::Active)
+    } else {
+        false
+    };
+    if run.status != TaskRunStatus::Active && !activity_observed {
         return Err(rusqlite::Error::InvalidParameterName(format!(
             "task run is not active: {task_run_id}"
         )));
@@ -488,11 +499,7 @@ pub fn propose_decision(
             "task run already has a pending decision: {task_run_id}"
         )));
     }
-    let request_id = format!(
-        "decision-{}-{}",
-        task_run_id,
-        now_millis() - (TASK_SEQ.fetch_add(1, Ordering::Relaxed) as i64 % 1000)
-    );
+    let request_id = format!("decision-{}-{}", task_run_id, uuid::Uuid::new_v4());
     let now = now_millis();
     conn.execute(
         "INSERT INTO decision_requests (request_id, task_run_id, kind, payload_json, status, outcome, proposed_at, resolved_at) \
@@ -1545,6 +1552,29 @@ mod tests {
         assert!(acknowledge_preview_checkpoint(&conn, &valid).is_err());
         assert!(has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
 
+        for terminal in ["accepted", "rejected", "expired"] {
+            conn.execute(
+                "UPDATE pending_diffs SET status=?1 WHERE diff_id='diff-preview'",
+                [terminal],
+            )
+            .unwrap();
+            assert_eq!(begin_preview_continuation(&conn, &valid).unwrap(), None);
+            assert!(acknowledged_preview_checkpoint(
+                &conn,
+                &task_run_id,
+                "ws1",
+                "s-preview",
+                "diff-preview"
+            )
+            .unwrap()
+            .is_some());
+        }
+        conn.execute(
+            "UPDATE pending_diffs SET status='pending' WHERE diff_id='diff-preview'",
+            [],
+        )
+        .unwrap();
+
         let mut stale = valid.clone();
         stale.content_hash = "old-hash".to_string();
         assert_eq!(begin_preview_continuation(&conn, &stale).unwrap(), None);
@@ -1579,6 +1609,74 @@ mod tests {
         assert_eq!(
             pending_decision(&conn, &id).unwrap().unwrap().request_id,
             decision.request_id
+        );
+    }
+
+    // covers: BR-SYS-STATE-008, BR-AG-STATE-002
+    // waitResolved 不足以提第二张卡；同 TaskRun 的真实续片段 ToolRequest 才可重新裁决。
+    #[test]
+    fn decision_request_requires_resumed_activity_before_next_decision() {
+        let conn = fresh();
+        let task_run_id = begin_turn(&conn, "ws1", "s1", None).unwrap();
+        insert_turn(&conn, "turn-decision-chain", "s1", &task_run_id);
+        let first = propose_decision(
+            &conn,
+            &task_run_id,
+            "manual_confirm",
+            serde_json::json!({ "summary": "A" }),
+        )
+        .unwrap();
+        insert_event(
+            &conn,
+            "turn-decision-chain",
+            "s1",
+            1,
+            "decision_request_proposed",
+            serde_json::json!({"requestId": first.request_id}),
+        );
+        resolve_decision(&conn, &first.request_id, "confirm").unwrap();
+        insert_event(
+            &conn,
+            "turn-decision-chain",
+            "s1",
+            2,
+            "decision_request_resolved",
+            serde_json::json!({"requestId": first.request_id, "outcome": "confirm"}),
+        );
+        assert_eq!(
+            load_task_run(&conn, &task_run_id).unwrap().unwrap().status,
+            Waiting
+        );
+        assert!(propose_decision(
+            &conn,
+            &task_run_id,
+            "manual_confirm",
+            serde_json::json!({ "summary": "B" }),
+        )
+        .is_err());
+        assert!(!has_pending_decision(&conn, &task_run_id).unwrap());
+
+        insert_event(
+            &conn,
+            "turn-decision-chain",
+            "s1",
+            3,
+            "tool_request",
+            serde_json::json!({"toolCallId": "call-B", "toolName": "propose_decision"}),
+        );
+        let second = propose_decision(
+            &conn,
+            &task_run_id,
+            "manual_confirm",
+            serde_json::json!({ "summary": "B" }),
+        )
+        .unwrap();
+        assert_ne!(second.request_id, first.request_id);
+        assert_eq!(second.task_run_id, task_run_id);
+        assert!(has_pending_decision(&conn, &task_run_id).unwrap());
+        assert_eq!(
+            load_task_run(&conn, &task_run_id).unwrap().unwrap().status,
+            Waiting
         );
     }
 

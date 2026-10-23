@@ -278,25 +278,42 @@ describe("modelStore 能力偏好与来源分层", () => {
   });
 
   // covers: BR-AG-DATA-007
-  // 被显式偏好引用的注册表条目删除后，偏好回落为跟随全局，不产出悬空 modelKey。
-  it("falls back to followGlobal after the explicit model is removed", () => {
+  // 被显式偏好引用的条目删除后，原选择保留且发送失败，不偷偷切换。
+  it("keeps an unavailable explicit choice instead of falling back", () => {
     const snap = modelStore.getSnapshot();
     const target = snap.models[1];
     const key = modelKey(target);
     modelStore.setCapabilityPref("inlineAssist", { mode: "explicit", modelKey: key });
     modelStore.removeModel(key);
 
-    expect(modelStore.getSnapshot().capabilityPref.inlineAssist).toEqual({ mode: "followGlobal" });
-    expect(modelStore.resolveFor("inlineAssist")).toEqual(modelStore.current());
+    expect(modelStore.getSnapshot().capabilityPref.inlineAssist).toEqual({ mode: "explicit", modelKey: key });
+    expect(() => modelStore.resolveFor("inlineAssist")).toThrow("AG_MODEL_UNAVAILABLE");
+  });
+
+  // covers: BR-AG-DATA-007
+  it("does not replace a removed global choice or a preset missing from refreshed catalog", () => {
+    const selected = modelStore.getSnapshot().models[1];
+    const selectedKey = modelKey(selected);
+    modelStore.select(selectedKey);
+    modelStore.removeModel(selectedKey);
+    expect(modelStore.getSnapshot().selectedKey).toBe(selectedKey);
+    expect(() => modelStore.resolveFor("agentEdit")).toThrow("AG_MODEL_UNAVAILABLE");
+
+    modelStore.addModel(selected);
+    modelStore.mergePresetModels([{ provider: "deepseek", model: "deepseek-chat", label: "DeepSeek Chat", source: "preset" }]);
+    expect(modelStore.getSnapshot().selectedKey).toBe(selectedKey);
+    expect(() => modelStore.resolveFor("agentEdit")).toThrow("AG_MODEL_UNAVAILABLE");
   });
 
   // covers: BR-AG-DATA-006
   // 默认清单为 preset；手动添加的模型为 byok 来源，注册表保留来源标记。
   it("keeps source layering across preset defaults and byok additions", () => {
     expect(modelStore.getSnapshot().models.every((m) => m.source === "preset")).toBe(true);
+    const selectedBeforeAdd = modelStore.getSnapshot().selectedKey;
 
     modelStore.addModel({ provider: "openai", model: "gpt-4o", label: "GPT-4o", source: "byok" });
     const added = modelStore.getSnapshot().models.find((m) => m.model === "gpt-4o");
     expect(added?.source).toBe("byok");
+    expect(modelStore.getSnapshot().selectedKey).toBe(selectedBeforeAdd);
   });
 });

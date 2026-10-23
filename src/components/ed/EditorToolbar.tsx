@@ -111,6 +111,7 @@ export function EditorToolbar({
 }) {
   const [, tick] = useReducer((count: number) => count + 1, 0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveMessage, setSaveMessage] = useState("");
   const [findQuery, setFindQuery] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [findMessage, setFindMessage] = useState("");
@@ -249,11 +250,14 @@ export function EditorToolbar({
   const saveCurrent = async () => {
     if (saveState === "saving") return;
     setSaveState("saving");
+    setSaveMessage("");
     try {
       const outcome = await triggerActiveSave();
       setSaveState(outcome.ok ? "saved" : "error");
-    } catch {
+      if (!outcome.ok) setSaveMessage(outcome.message ?? "保存失败，编辑内容仍保留");
+    } catch (error) {
       setSaveState("error");
+      setSaveMessage((error as { message?: string })?.message ?? "保存失败，编辑内容仍保留");
     }
   };
   const sourceTextarea = () => editor.view?.dom.closest(".editor-host")?.querySelector<HTMLTextAreaElement>(".editor-source-view") ?? null;
@@ -380,7 +384,7 @@ export function EditorToolbar({
         </div>
         {saveState !== "idle" && (
           <span className={"ed-tb-save-state " + saveState} role="status">
-            {saveState === "saved" ? "已保存" : saveState === "error" ? "保存失败" : "正在保存"}
+            {saveState === "saved" ? "已保存" : saveState === "error" ? `保存失败：${saveMessage}` : "正在保存"}
           </span>
         )}
         <Sep />

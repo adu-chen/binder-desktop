@@ -120,6 +120,23 @@ describe("EditorToolbar · 格式工具集", () => {
     fireEvent.change(select, { target: { value: "Times New Roman" } });
     expect(setFontFamily).toHaveBeenCalledWith("'Times New Roman'");
   });
+  // covers: BR-ED-STATE-003
+  it("保存失败展示具体原因，重试成功清除错误", async () => {
+    const editor = {
+      chain: () => ({}), isActive: () => false, getAttributes: () => ({}),
+      can: () => ({ undo: () => true, redo: () => true }), on: vi.fn(), off: vi.fn(),
+    } as unknown as Editor;
+    vi.mocked(triggerActiveSave).mockResolvedValueOnce({ ok: false, message: "磁盘已有同名文件，请确认覆盖" });
+    render(<EditorToolbar editor={editor} zoom={1} onZoomIn={vi.fn()} onZoomOut={vi.fn()}
+      onZoomReset={vi.fn()} editFormat="text" />);
+    fireEvent.click(screen.getByRole("button", { name: "保存 ⌘S" }));
+    await screen.findByText("保存失败：磁盘已有同名文件，请确认覆盖");
+    fireEvent.click(screen.getByRole("button", { name: "保存 ⌘S" }));
+    await screen.findByText("已保存");
+    expect(screen.queryByText(/磁盘已有同名文件/)).toBeNull();
+    vi.mocked(triggerActiveSave).mockClear();
+  });
+
   it("纯文本模式保留两行工具栏，保存复用活动编辑器路由且不渲染富文本或对象操作", async () => {
     const chain: Record<string, (...args: unknown[]) => unknown> = {};
     for (const name of ["focus", "undo", "redo"]) chain[name] = () => chain;

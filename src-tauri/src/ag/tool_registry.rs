@@ -431,6 +431,25 @@ pub fn validate_requested_tool_for_grant(
     if !params.is_object() {
         return ToolDecision::Reject(format!("工具 {name} 参数必须是 JSON 对象"));
     }
+    if serde_json::to_vec(params).map_or(true, |bytes| bytes.len() > 1024 * 1024) {
+        return ToolDecision::Reject("工具参数超过 1 MiB 上限，本次未执行".into());
+    }
+    if !parameter_depth_is_bounded(params, 0) {
+        return ToolDecision::Reject("工具参数结构超过 32 层上限，本次未执行".into());
+    }
+    if let Some(schema) = common_tool_definitions_json()
+        .as_array()
+        .and_then(|definitions| {
+            definitions
+                .iter()
+                .find(|definition| definition["function"]["name"] == name)
+                .map(|definition| definition["function"]["parameters"].clone())
+        })
+    {
+        if let Err(reason) = validate_common_parameters(&schema, params, 0) {
+            return ToolDecision::Reject(format!("工具 {name} 参数不符合声明：{reason}"));
+        }
+    }
     let normalize_workspace_path = |raw: &str| -> Result<String, String> {
         let root =
             workspace_root.ok_or_else(|| "缺少 active workspace，工具目标无法校验".to_string())?;
@@ -445,6 +464,12 @@ pub fn validate_requested_tool_for_grant(
         }
         Ok(normalized)
     };
+    if let Err(error) = super::tool_exec::validate_read_arguments(name, params) {
+        return ToolDecision::Reject(format!(
+            "工具 {name} 参数不符合声明：[{}] {}",
+            error.code, error.message
+        ));
+    }
     if name == "propose_decision" {
         let kind = params.get("kind").and_then(|value| value.as_str());
         let summary = params
@@ -759,6 +784,10 @@ pub enum ToolPermission {
 pub struct ToolDef {
     pub name: &'static str,
     pub permission: ToolPermission,
+    /// 专业能力归属仅用于声明与调度；注册存在本身绝不授予执行权限。
+    pub capability_id: &'static str,
+    /// v2 宿主内容只在实际 ToolCall 获权后按需采集。
+    pub requires_fresh_host_context: bool,
 }
 
 /// v1 工具集（A-AG-X-L-02 PI-AG-08）。
@@ -770,50 +799,74 @@ pub const TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "read_doc",
         permission: ToolPermission::ReadOnly,
+        capability_id: "document_read",
+        requires_fresh_host_context: true,
     },
     ToolDef {
         name: "list_docs",
         permission: ToolPermission::ReadOnly,
+        capability_id: "workspace_read",
+        requires_fresh_host_context: false,
     },
     ToolDef {
         name: "search_text",
         permission: ToolPermission::ReadOnly,
+        capability_id: "document_read",
+        requires_fresh_host_context: true,
     },
     ToolDef {
         name: "list_blocks",
         permission: ToolPermission::ReadOnly,
+        capability_id: "document_read",
+        requires_fresh_host_context: true,
     },
     ToolDef {
         name: "workspace_glob",
         permission: ToolPermission::ReadOnly,
+        capability_id: "workspace_read",
+        requires_fresh_host_context: false,
     },
     ToolDef {
         name: "list_tables",
         permission: ToolPermission::ReadOnly,
+        capability_id: "document_read",
+        requires_fresh_host_context: true,
     },
     ToolDef {
         name: "list_images",
         permission: ToolPermission::ReadOnly,
+        capability_id: "document_read",
+        requires_fresh_host_context: true,
     },
     ToolDef {
         name: "plan_workspace_operation",
         permission: ToolPermission::TaskControl,
+        capability_id: "workspace_operation",
+        requires_fresh_host_context: false,
     },
     ToolDef {
         name: "import_image_asset",
         permission: ToolPermission::StructureWrite,
+        capability_id: "document_media",
+        requires_fresh_host_context: false,
     },
     ToolDef {
         name: "edit_blocked",
         permission: ToolPermission::WriteIntent,
+        capability_id: "document_edit",
+        requires_fresh_host_context: false,
     },
     ToolDef {
         name: "propose_edit",
         permission: ToolPermission::WriteIntent,
+        capability_id: "document_edit",
+        requires_fresh_host_context: true,
     },
     ToolDef {
         name: "propose_decision",
         permission: ToolPermission::TaskControl,
+        capability_id: "task_decision",
+        requires_fresh_host_context: false,
     },
 ];
 
@@ -827,12 +880,88 @@ pub fn is_registered(name: &str) -> bool {
     lookup(name).is_some()
 }
 
+// Common 工具只使用此处支持的 schema 子集；专业组合 schema 不在此解释。
+fn parameter_depth_is_bounded(params: &serde_json::Value, depth: usize) -> bool {
+    depth <= 32
+        && match params {
+            serde_json::Value::Array(items) => items
+                .iter()
+                .all(|value| parameter_depth_is_bounded(value, depth + 1)),
+            serde_json::Value::Object(fields) => fields
+                .values()
+                .all(|value| parameter_depth_is_bounded(value, depth + 1)),
+            _ => true,
+        }
+}
+
+fn validate_common_parameters(
+    schema: &serde_json::Value,
+    params: &serde_json::Value,
+    depth: usize,
+) -> Result<(), &'static str> {
+    if depth > 32 {
+        return Err("结构层级过深");
+    }
+    let matches_type = match schema["type"].as_str() {
+        Some("object") => params.is_object(),
+        Some("array") => params.is_array(),
+        Some("string") => params.is_string(),
+        Some("boolean") => params.is_boolean(),
+        Some("integer") => params.is_i64() || params.is_u64(),
+        None => true,
+        _ => false,
+    };
+    if !matches_type {
+        return Err("字段类型错误");
+    }
+    if schema["enum"]
+        .as_array()
+        .is_some_and(|values| !values.contains(params))
+    {
+        return Err("枚举值错误");
+    }
+    if let Some(object) = params.as_object() {
+        if schema["required"].as_array().is_some_and(|keys| {
+            keys.iter()
+                .any(|key| key.as_str().is_none_or(|key| !object.contains_key(key)))
+        }) {
+            return Err("缺少必需字段");
+        }
+        for (key, value) in object {
+            if let Some(child) = schema["properties"].get(key) {
+                validate_common_parameters(child, value, depth + 1)?;
+            } else if schema["additionalProperties"] == false {
+                return Err("存在未声明字段");
+            }
+        }
+    }
+    if let Some(items) = params.as_array() {
+        if schema["minItems"]
+            .as_u64()
+            .is_some_and(|min| items.len() < min as usize)
+        {
+            return Err("数组数量不足");
+        }
+        if let Some(child) = schema.get("items") {
+            for item in items {
+                validate_common_parameters(child, item, depth + 1)?;
+            }
+        }
+    }
+    if let Some(number) = params.as_f64() {
+        if schema["minimum"].as_f64().is_some_and(|min| number < min)
+            || schema["maximum"].as_f64().is_some_and(|max| number > max)
+        {
+            return Err("数值超出边界");
+        }
+    }
+    Ok(())
+}
+
 /// 发送给模型的工具定义（OpenAI function-calling 格式）。
 /// dev：只读工具 + 结构工具 + propose_edit 写意图工具；propose_edit 走 ChangeProposal→DE，不直接写文档内容。
-pub fn tool_definitions_json(
-) -> Result<serde_json::Value, super::bdocx_capabilities::CapabilityValidationError> {
-    let propose_edit_parameters = super::bdocx_capabilities::propose_edit_parameters_schema()?;
-    Ok(serde_json::json!([
+fn common_tool_definitions_json() -> serde_json::Value {
+    serde_json::json!([
         {
             "type": "function",
             "function": {
@@ -970,12 +1099,16 @@ pub fn tool_definitions_json(
             "type": "function",
             "function": {
                 "name": "read_doc",
-                "description": "读取当前工作区内指定相对路径文档的内容。省略 blocks 时返回完整内容；传入 blocks（块 id 或块索引数组）时只返回指定块的完整投影（含 node_json，供 propose_edit block_ops 从 node_json 复制节点构造 afterNode）。注意：当前编辑器打开的文档已在上下文提供，无需用本工具重复读取。",
+                "description": "读取workspace文档。默认正文view=text，去除HTML/编辑结构并按容量成页；根据has_more/next_offset继续读取，不能把一页当全文。非首页必须传上一页version_hash为expected_hash。readonly限制编辑，不禁止读取表格正文。需要编辑节点时传blocks（默认structure）；需要原HTML全文时显式view=structure，结构结果超限会失败，不截断JSON/节点。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" },
-                        "blocks": { "type": "array", "items": { "type": "string" }, "description": "可选：需要读取的块 id 或块索引数组（如 [\"b_xxx\", \"0\"]），只返回这些块的完整投影" }
+                        "view": { "type": "string", "enum": ["text", "structure"], "description": "默认text正文分页；blocks默认structure完整编辑投影，不能与text混用" },
+                        "offset": { "type": "integer", "minimum": 0, "description": "text阅读游标，默认0；后续使用返回的next_offset，不是块号" },
+                        "limit_chars": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "text页字符上限，默认10000；实际按序列化安全预算装页" },
+                        "blocks": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "需要读取的块 id 或块索引数组；任一不存在即失败" },
+                        "expected_hash": { "type": "string", "description": "list_blocks 返回的 version_hash；若提供则版本不匹配时拒绝读取，跨步骤/分页读取应提供" }
                     },
                     "required": ["path"]
                 }
@@ -997,10 +1130,15 @@ pub fn tool_definitions_json(
             "type": "function",
             "function": {
                 "name": "list_blocks",
-                "description": "读取指定文档的块目录（轻量投影，不含 node_json/完整文本）。返回 block_id/block_index/node_type/role/parent_block_id/depth/text(前40字)/fingerprint/capabilities；需要某块完整投影（node_json）时调用 read_doc 并传入 blocks 参数。当前富文档直接返回 ProseMirror 层级投影；只有 capabilities 含 replace_node 的 content 块可用于 block_ops，容器与原子块只读。",
+                "description": "读取指定文档的块目录（轻量投影，不含 node_json/完整文本）。返回 block_id/block_index/node_type/role/parent_block_id/depth/text(前40字)/fingerprint/capabilities；需要某块完整投影（node_json）时调用 read_doc 并传入非空 blocks 字符串数组。第一页 offset 默认为0，可省 expected_hash；后续页 offset>0 必须传上一页返回的 version_hash 作为 expected_hash，否则调用会被拒绝。当前富文档直接返回 ProseMirror 层级投影；只有 capabilities 含 replace_node 的 content 块可用于 block_ops，容器与原子块只读。",
                 "parameters": {
                     "type": "object",
-                    "properties": { "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" } },
+                    "properties": {
+                        "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" },
+                        "offset": { "type": "integer", "minimum": 0, "description": "目录起点（不是块编号或页码），首次调用省略或传0；offset>0 必须携带上一页 version_hash 作为 expected_hash，后续起点仅使用上一页返回的 next_offset" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "每页块数，默认20；返回 next_offset、total_blocks、version_hash，不代表全文已读" },
+                        "expected_hash": { "type": "string", "description": "上一页的 version_hash，版本变化时重新开始" }
+                    },
                     "required": ["path"]
                 }
             }
@@ -1028,23 +1166,42 @@ pub fn tool_definitions_json(
                     "required": ["path"]
                 }
             }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "propose_edit",
-                "description": "对文档提出待用户裁决的修改建议，不直接写盘。工具成功只表示 pending 建议卡已生成，不表示编辑器预览已应用、用户已接受或文件已保存；没有客户端状态回执时，回复只能说「已提出建议，待确认」。纯文本局部编辑使用 replace_block。当前 BDocx 的整篇重写只有运行时声明确认无表格且无图片时才可用 replace_document + 完整 HTML；否则 replace_document 会被后端拒绝，既有文字内容用 block_ops，表格/图片分别用 table_ops/image_ops。block_ops 只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交。可用 insert_before/insert_after/append 插入一个新的 heading 块；replace_node 必须保留既有块类型，不能把既有段落转换为标题。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档受保护结构。",
-                "parameters": propose_edit_parameters
-            }
         }
-    ]))
+    ])
+}
+
+fn propose_edit_definition_json(
+) -> Result<serde_json::Value, super::bdocx_capabilities::CapabilityValidationError> {
+    let propose_edit_parameters = super::bdocx_capabilities::propose_edit_parameters_schema()?;
+    Ok(serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "propose_edit",
+            "description": "对文档提出待用户裁决的修改建议，不直接写盘。工具成功只表示 pending 建议卡已生成，不表示编辑器预览已应用、用户已接受或文件已保存；没有客户端状态回执时，回复只能说「已提出建议，待确认」。纯文本局部编辑使用 replace_block。当前 BDocx 的整篇重写只有运行时声明确认无表格且无图片时才可用 replace_document + 完整 HTML；否则 replace_document 会被后端拒绝，既有文字内容用 block_ops，表格/图片分别用 table_ops/image_ops。block_ops 只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交。可用 insert_before/insert_after/append 插入一个新的 heading 块；replace_node 必须保留既有块类型，不能把既有段落转换为标题。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档受保护结构。",
+            "parameters": propose_edit_parameters
+        }
+    }))
+}
+
+pub fn tool_definitions_json(
+) -> Result<serde_json::Value, super::bdocx_capabilities::CapabilityValidationError> {
+    let mut all = common_tool_definitions_json();
+    all.as_array_mut()
+        .expect("tool definitions must be an array")
+        .push(propose_edit_definition_json()?);
+    Ok(all)
 }
 
 /// 只把逐回合授权的工具暴露给模型。注册表可以包含未来能力，但 1.0 模型不可枚举未授权项。
 pub fn tool_definitions_json_for_grant(
     grant: &CapabilityGrantV2,
 ) -> Result<serde_json::Value, super::bdocx_capabilities::CapabilityValidationError> {
-    let all = tool_definitions_json()?;
+    let mut all = common_tool_definitions_json();
+    if grant.allows("propose_edit") {
+        all.as_array_mut()
+            .expect("tool definitions must be an array")
+            .push(propose_edit_definition_json()?);
+    }
     let filtered = all
         .as_array()
         .into_iter()
@@ -1057,12 +1214,267 @@ pub fn tool_definitions_json_for_grant(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let mut filtered = filtered;
+    for definition in &mut filtered {
+        if definition["function"]["name"] != "propose_edit" {
+            continue;
+        }
+        let table_allowed = grant
+            .parameter_constraints
+            .iter()
+            .any(|value| value == "bdocx_table_ops_allowed");
+        let image_allowed = grant
+            .parameter_constraints
+            .iter()
+            .any(|value| value == "bdocx_image_ops_allowed");
+        // Do not advertise table/image routes in a generic description after their
+        // schemas have been removed. Format-specific instructions remain separately gated.
+        definition["function"]["description"] = "对已授权既有文档生成待裁决修改建议，不直接写盘。成功不表示预览、接受或保存。只选择operation枚举及当前文档声明允许的操作；精确节点修改先read_doc(blocks)取得完整结构、base及fingerprint，正文阅读页不是HTML编辑载荷。新建文档用plan_workspace_operation。".into();
+        let allowed = |operation: &str| match operation {
+            "table_ops" => table_allowed,
+            "image_ops" => image_allowed,
+            _ => true,
+        };
+        let parameters = &mut definition["function"]["parameters"];
+        if let Some(operations) = parameters["properties"]["operation"]["enum"].as_array_mut() {
+            operations.retain(|operation| operation.as_str().is_some_and(allowed));
+        }
+        if let Some(conditions) = parameters["allOf"].as_array_mut() {
+            conditions.retain(|condition| {
+                condition
+                    .pointer("/if/properties/operation/const")
+                    .and_then(|value| value.as_str())
+                    .is_none_or(allowed)
+            });
+        }
+        // The manifest uses parallel block/table/image variants; derive their identity
+        // from their op constants, never from a numeric branch position.
+        let manifest = super::bdocx_capabilities::manifest()?;
+        if let Some(variants) = parameters
+            .pointer_mut("/properties/operations/oneOf")
+            .and_then(|value| value.as_array_mut())
+        {
+            variants.retain(|variant| {
+                let ops = variant
+                    .pointer("/items/oneOf")
+                    .and_then(|value| value.as_array());
+                let first = ops
+                    .and_then(|ops| ops.first())
+                    .and_then(|op| op.pointer("/properties/op/const"))
+                    .and_then(|value| value.as_str());
+                match first {
+                    Some("replace_node") => true,
+                    Some(op) => {
+                        if manifest
+                            .table_ops
+                            .operations
+                            .iter()
+                            .any(|item| item.op == op)
+                        {
+                            table_allowed
+                        } else if manifest
+                            .image_ops
+                            .operations
+                            .iter()
+                            .any(|item| item.op == op)
+                        {
+                            image_allowed
+                        } else {
+                            true
+                        }
+                    }
+                    None => true,
+                }
+            });
+        }
+        if !table_allowed {
+            parameters["properties"]
+                .as_object_mut()
+                .expect("schema properties")
+                .remove("target");
+        }
+        parameters["properties"]["path"]["description"] = "既有文档的已授权目标路径；新建文档必须使用plan_workspace_operation，不能凭不存在的path创建。".into();
+        parameters["properties"]["operation"]["description"] =
+            "只选择本enum列出的操作；base/fingerprint及具体格式能力仍由执行器核验。".into();
+    }
     Ok(serde_json::Value::Array(filtered))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-AG-STATE-002, BR-AG-DATA-002
+    #[test]
+    fn prompt_tools_prune_only_unavailable_operations_without_duplicate_names() {
+        let plain = prompt_grant(
+            "turn-compact",
+            &["a.html".into()],
+            CapabilityFactorsV2::default(),
+        );
+        let mut compact = tool_definitions_json_for_grant(&plain).unwrap();
+        let before = tool_definitions_json().unwrap();
+        let full_propose = before
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["function"]["name"] == "propose_edit")
+            .unwrap();
+        let propose = compact
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["function"]["name"] == "propose_edit")
+            .unwrap();
+        let encoded = propose.to_string();
+        assert!(!encoded.contains("set_cell_background") && !encoded.contains("insert_image"));
+        assert!(
+            encoded.contains("replace_node")
+                && encoded.contains("fingerprint")
+                && encoded.contains("style_ops")
+        );
+        assert!(encoded.len() < full_propose.to_string().len());
+        let all = prompt_grant(
+            "turn-compact",
+            &["a.bdocx".into()],
+            CapabilityFactorsV2 {
+                active_bdocx: true,
+                table_ops_available: true,
+                image_ops_available: true,
+                ..Default::default()
+            },
+        );
+        let complete = tool_definitions_json_for_grant(&all).unwrap();
+        let all_propose = complete
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["function"]["name"] == "propose_edit")
+            .unwrap();
+        assert_eq!(
+            all_propose["function"]["parameters"]["properties"]["operations"],
+            full_propose["function"]["parameters"]["properties"]["operations"]
+        );
+        assert_eq!(
+            all_propose["function"]["parameters"]["allOf"],
+            full_propose["function"]["parameters"]["allOf"]
+        );
+        for (table, image) in [(true, false), (false, true)] {
+            let grant = prompt_grant(
+                "mixed-dynamic-capabilities",
+                &["a.bdocx".into()],
+                CapabilityFactorsV2 {
+                    active_bdocx: true,
+                    table_ops_available: table,
+                    image_ops_available: image,
+                    ..Default::default()
+                },
+            );
+            let definitions = tool_definitions_json_for_grant(&grant).unwrap();
+            let definition = definitions
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|tool| tool["function"]["name"] == "propose_edit")
+                .unwrap();
+            let schema = definition["function"]["parameters"].to_string();
+            assert_eq!(schema.contains("set_cell_background"), table);
+            assert_eq!(schema.contains("insert_image"), image);
+        }
+        let names = compact
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(names.len(), compact.as_array().unwrap().len());
+        assert_eq!(names, plain.allowed_tools.iter().cloned().collect());
+        let propose_chars = propose.to_string().chars().count();
+        super::super::model_output::decorate_tool_definitions(&mut compact).unwrap();
+        eprintln!(
+            "[AG-AG-TURN] compact_schema_measurement: {}",
+            serde_json::json!({"nativeToolCount":names.len(),"serializedChars":compact.to_string().chars().count(),"proposeBeforeChars":full_propose.to_string().chars().count(),"proposeAfterChars":propose_chars})
+        );
+    }
+
+    // covers: BR-AG-STATE-002
+    #[test]
+    fn common_parameter_contract_rejects_shape_without_consuming_effects() {
+        for (name, params) in [
+            ("workspace_glob", serde_json::json!({"pattern":1})),
+            (
+                "workspace_glob",
+                serde_json::json!({"pattern":"*", "extra":true}),
+            ),
+            (
+                "list_blocks",
+                serde_json::json!({"path":"a.md", "limit":51}),
+            ),
+            (
+                "list_blocks",
+                serde_json::json!({"path":"a.md", "offset":0.5}),
+            ),
+            ("read_doc", serde_json::json!({"path":"a.md", "blocks":[1]})),
+            ("read_doc", serde_json::json!({"path":"a.md", "blocks":[]})),
+            (
+                "read_doc",
+                serde_json::json!({"path":"a.md", "blocks":[""]}),
+            ),
+            ("read_doc", serde_json::json!({"path":"   "})),
+            (
+                "list_blocks",
+                serde_json::json!({"path":"a.md", "offset":1}),
+            ),
+            (
+                "list_blocks",
+                serde_json::json!({"path":"a.md", "offset":1,"expected_hash":""}),
+            ),
+            (
+                "plan_workspace_operation",
+                serde_json::json!({"operations":[{"kind":"delete_resource", "resourceKind":"file", "recursive":"yes"}]}),
+            ),
+        ] {
+            let grant = execution_grant(
+                "turn-1",
+                "call-1",
+                7,
+                &["a.md".into()],
+                CapabilityFactorsV2::default(),
+            );
+            let mut tracker = CapabilityGrantUseTrackerV2::default();
+            assert!(
+                matches!(
+                    validate_requested_tool_for_grant(
+                        name,
+                        &params,
+                        &grant,
+                        "turn-1",
+                        "call-1",
+                        7,
+                        Some(test_workspace_root()),
+                        &mut tracker
+                    ),
+                    ToolDecision::Reject(_)
+                ),
+                "{name}"
+            );
+            assert!(tracker.consumed_tool_call_ids.contains("call-1"));
+        }
+        let grant = execution_grant("turn-1", "call-1", 7, &[], CapabilityFactorsV2::default());
+        let params = serde_json::json!({"pattern":"x".repeat(1024 * 1024)});
+        assert!(
+            matches!(validate_requested_tool_for_grant("workspace_glob", &params, &grant, "turn-1", "call-1", 7, Some(test_workspace_root()), &mut CapabilityGrantUseTrackerV2::default()), ToolDecision::Reject(reason) if reason.contains("1 MiB"))
+        );
+        let mut nested = serde_json::json!(true);
+        for _ in 0..32 {
+            nested = serde_json::json!({"level": nested});
+        }
+        assert!(parameter_depth_is_bounded(&nested, 0));
+        assert!(!parameter_depth_is_bounded(
+            &serde_json::json!({"extra":nested}),
+            0
+        ));
+    }
 
     fn test_workspace_root() -> &'static std::path::Path {
         std::path::Path::new("/tmp/binder-capability-grant-tests")
@@ -1110,6 +1522,93 @@ mod tests {
         assert_eq!(
             lookup("propose_decision").unwrap().permission,
             ToolPermission::TaskControl
+        );
+    }
+
+    #[test]
+    fn capability_declarations_cover_every_exposed_tool_and_host_context_boundary() {
+        let definitions = tool_definitions_json().unwrap();
+        let names = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|definition| definition["function"]["name"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(names.len(), TOOLS.len());
+        for tool in TOOLS {
+            assert!(names.contains(tool.name), "schema missing: {}", tool.name);
+            assert!(!tool.capability_id.is_empty());
+        }
+        for name in [
+            "read_doc",
+            "search_text",
+            "list_blocks",
+            "list_tables",
+            "list_images",
+            "propose_edit",
+        ] {
+            assert!(lookup(name).unwrap().requires_fresh_host_context, "{name}");
+        }
+        for name in ["workspace_glob", "list_docs", "propose_decision"] {
+            assert!(!lookup(name).unwrap().requires_fresh_host_context, "{name}");
+        }
+        assert_eq!(
+            lookup("workspace_glob").unwrap().capability_id,
+            "workspace_read"
+        );
+        assert_eq!(lookup("read_doc").unwrap().capability_id, "document_read");
+    }
+
+    #[test]
+    fn read_only_manifest_does_not_expose_document_edit_schema() {
+        let grant = prompt_grant("turn-read-only", &[], CapabilityFactorsV2::default());
+        let definitions = tool_definitions_json_for_grant(&grant).unwrap();
+        let names = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|definition| definition["function"]["name"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert!(names.contains("workspace_glob"));
+        assert!(names.contains("read_doc"));
+        assert!(!names.contains("propose_edit"));
+        assert!(!names.contains("list_tables"));
+        assert!(names.iter().all(|name| grant.allows(name)));
+    }
+
+    #[test]
+    fn bounded_read_schema_explains_runtime_pagination_and_oversize_contract() {
+        let definitions = common_tool_definitions_json();
+        let find = |name: &str| {
+            definitions
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|definition| definition["function"]["name"] == name)
+                .unwrap()
+        };
+        let list_blocks = find("list_blocks");
+        assert!(list_blocks["function"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("offset>0 必须传上一页返回的 version_hash"));
+        assert!(
+            list_blocks["function"]["parameters"]["properties"]["offset"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("offset>0 必须携带上一页 version_hash")
+        );
+        let read_doc = find("read_doc");
+        let description = read_doc["function"]["description"].as_str().unwrap();
+        assert!(description.contains("结构结果超限会失败，不截断JSON/节点"));
+        assert!(description.contains("默认正文view=text") && description.contains("next_offset"));
+        assert_eq!(
+            read_doc["function"]["parameters"]["properties"]["limit_chars"]["maximum"],
+            10000
+        );
+        assert_eq!(
+            read_doc["function"]["parameters"]["properties"]["view"]["enum"],
+            serde_json::json!(["text", "structure"])
         );
     }
 

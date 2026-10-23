@@ -256,8 +256,13 @@ export function Composer() {
   const agState = useAgStore();
   const { sending } = agState;
   const session = activeSession(agState);
-  const { models, selectedKey } = useModelStore();
-  const currentModel = modelStore.current();
+  const { models, capabilityPref } = useModelStore();
+  const currentModel = modelStore.availableFor("agentEdit");
+  const resumingClarification = session.messages.some((message) => message.turnStatus === "clarifying");
+  const agentModelKey = capabilityPref.agentEdit.mode === "explicit"
+    ? capabilityPref.agentEdit.modelKey
+    : modelStore.getSnapshot().selectedKey;
+  const [modelError, setModelError] = useState("");
   const { docs } = useWsStore();
 
   const [draft, setDraft] = useState<AgentComposerDraft>(() => session.composerDraft ?? emptyComposerDraft());
@@ -370,12 +375,16 @@ export function Composer() {
     }
     const snapshot = serializeEditor(editor);
     if (!snapshot.prompt.trim() && snapshot.references.length === 0) return;
-    const sendModel = modelStore.resolveFor("agentEdit");
-    void startTurn(snapshot.prompt, {
+    if (!currentModel && !resumingClarification) {
+      setModelError(`AG_MODEL_UNAVAILABLE：所选模型 ${agentModelKey} 不可用，请先重新选择。`);
+      return;
+    }
+    setModelError("");
+    void Promise.resolve(startTurn(snapshot.prompt, {
       references: snapshot.references,
       displayParts: snapshot.parts,
-      provider: sendModel.provider,
-      model: sendModel.model,
+    })).catch((error: unknown) => {
+      setModelError(error instanceof Error ? error.message : "模型选择不可用，未发送请求。");
     });
     editor.commands.clearContent(true);
     const emptyDraft = emptyComposerDraft();
@@ -518,10 +527,11 @@ export function Composer() {
                   setModelPop((v) => !v);
                 }}
               >
-                {currentModel.label}{" "}
-                <span className="label cbar-pop-src">{currentModel.source === "byok" ? "BYOK" : "预设"}</span>{" "}
+                {currentModel?.label ?? `模型不可用：${agentModelKey}`}{" "}
+                {currentModel && <span className="label cbar-pop-src">{currentModel.source === "byok" ? "BYOK" : "预设"}</span>}{" "}
                 <span className="cbar-caret">▾</span>
               </button>
+              {resumingClarification && <span className="label" title="补充说明会沿用原回合模型">续行沿用原模型</span>}
               {modelPop && (
                 <div className="cbar-pop" role="menu">
                   {models.map((m) => {
@@ -529,13 +539,14 @@ export function Composer() {
                     return (
                       <button
                         key={key}
-                        className={`cbar-pop-item${selectedKey === key ? " selected" : ""}`}
+                        className={`cbar-pop-item${agentModelKey === key ? " selected" : ""}`}
                         onClick={() => {
-                          modelStore.select(key);
+                          modelStore.setCapabilityPref("agentEdit", { mode: "explicit", modelKey: key });
+                          setModelError("");
                           setModelPop(false);
                         }}
                       >
-                        {selectedKey === key ? "✓ " : ""}
+                        {agentModelKey === key ? "✓ " : ""}
                         {m.label}
                         <span className="label cbar-pop-src">{m.source === "byok" ? "BYOK" : "预设"}</span>
                         <span className="label cbar-pop-hint">{key}</span>
@@ -568,6 +579,7 @@ export function Composer() {
       </div>
 
       {configOpen && <ModelConfig onClose={() => setConfigOpen(false)} />}
+      {modelError && <p role="alert" className="muted">{modelError}</p>}
     </div>
   );
 }

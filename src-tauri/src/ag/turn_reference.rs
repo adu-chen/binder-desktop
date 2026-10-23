@@ -8,6 +8,7 @@ use crate::types::ReferencePayload;
 pub(super) struct TurnReferenceRuntime {
     pub(super) mention_block: Option<String>,
     pub(super) prompt_envelopes: Vec<ag::context::PromptDataEnvelopeV1>,
+    pub(super) deduplicated_count: usize,
 }
 
 /**
@@ -28,6 +29,39 @@ pub(super) fn build_turn_reference_runtime(
     let mut parts = Vec::new();
     let mut prompt_envelopes = Vec::new();
     let mut reference_chars = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    let mut deduplicated_count = 0;
+    let mut append_payload = |payload: &ReferencePayload| {
+        let identified = match payload {
+            ReferencePayload::Doc { .. }
+            | ReferencePayload::Selection { .. }
+            | ReferencePayload::Session { .. }
+            | ReferencePayload::Url { .. } => true,
+            ReferencePayload::Memory { entry_id, .. }
+            | ReferencePayload::Knowledge { entry_id, .. } => {
+                entry_id.as_ref().is_some_and(|id| !id.is_empty())
+            }
+            ReferencePayload::Template { template_id, .. } => {
+                template_id.as_ref().is_some_and(|id| !id.is_empty())
+            }
+            ReferencePayload::File { path, .. } => {
+                path.as_ref().is_some_and(|path| !path.is_empty())
+            }
+            ReferencePayload::LongText { .. } => false,
+        };
+        if identified
+            && !seen.insert(serde_json::to_string(payload).expect("reference serialization"))
+        {
+            deduplicated_count += 1;
+            None
+        } else {
+            Some(build_reference_context_projection(
+                payload,
+                Some(read_ctx),
+                MENTION_CAP,
+            ))
+        }
+    };
     let mut append_projection =
         |mut projection: super::reference_runtime::ReferenceContextProjection| {
             let remaining = REFERENCE_TOTAL_CAP.saturating_sub(reference_chars);
@@ -63,11 +97,9 @@ pub(super) fn build_turn_reference_runtime(
             rel_path: rel_path.clone(),
             label: None,
         };
-        append_projection(build_reference_context_projection(
-            &payload,
-            Some(read_ctx),
-            MENTION_CAP,
-        ));
+        if let Some(projection) = append_payload(&payload) {
+            append_projection(projection);
+        }
     }
     for block_ref in block_refs {
         if block_ref.text.trim().is_empty() {
@@ -81,18 +113,14 @@ pub(super) fn build_turn_reference_runtime(
             text: block_ref.text.clone(),
             label: None,
         };
-        append_projection(build_reference_context_projection(
-            &payload,
-            Some(read_ctx),
-            MENTION_CAP,
-        ));
+        if let Some(projection) = append_payload(&payload) {
+            append_projection(projection);
+        }
     }
     for reference in references {
-        append_projection(build_reference_context_projection(
-            reference,
-            Some(read_ctx),
-            MENTION_CAP,
-        ));
+        if let Some(projection) = append_payload(reference) {
+            append_projection(projection);
+        }
     }
     let mention_block = (!parts.is_empty()).then(|| {
         format!(
@@ -104,12 +132,59 @@ pub(super) fn build_turn_reference_runtime(
     TurnReferenceRuntime {
         mention_block,
         prompt_envelopes,
+        deduplicated_count,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-AG-DATA-001, BR-AG-DATA-005
+    #[test]
+    fn reference_dedup_is_local_exact_and_identity_sensitive() {
+        let ctx = ag::blocks::AgentReadContext::new(std::path::Path::new("."), vec![]).unwrap();
+        let doc = ReferencePayload::Doc {
+            rel_path: "p05-missing.txt".into(),
+            label: None,
+        };
+        let anon = ReferencePayload::LongText {
+            text: "same".into(),
+            char_count: 4,
+            label: None,
+        };
+        let selection = ReferencePayload::Selection {
+            rel_path: "p05-missing.txt".into(),
+            block_id: "block-1".into(),
+            start: Some(0),
+            end: Some(4),
+            text: "same".into(),
+            label: None,
+        };
+        let refs = vec![
+            doc.clone(),
+            ReferencePayload::Doc {
+                rel_path: "different.txt".into(),
+                label: None,
+            },
+            anon.clone(),
+            anon,
+            selection.clone(),
+        ];
+        let first = build_turn_reference_runtime(&["p05-missing.txt".into()], &[], &refs, &ctx);
+        assert_eq!(first.deduplicated_count, 1);
+        assert_eq!(first.prompt_envelopes.len(), 5);
+        let again = build_turn_reference_runtime(&[], &[], &[doc], &ctx);
+        assert_eq!(again.deduplicated_count, 0);
+        let mut changed = selection.clone();
+        if let ReferencePayload::Selection { text, .. } = &mut changed {
+            *text = "new!".into();
+        }
+        let selections =
+            build_turn_reference_runtime(&[], &[], &[selection.clone(), selection, changed], &ctx);
+        assert_eq!(selections.deduplicated_count, 1);
+        assert_eq!(selections.prompt_envelopes.len(), 2);
+    }
 
     // covers: BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-005
     #[test]

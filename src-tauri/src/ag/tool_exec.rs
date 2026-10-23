@@ -8,11 +8,141 @@
 
 use crate::ipc::IpcError;
 use crate::types::{
-    AgentContextFactsV1, EvidenceItemV1, EvidenceLedgerV1, ProjectReportFindingV2,
-    ProjectReportReadItemV2, ProjectReportUnreadItemV2, ProjectReportV2, PROJECT_REPORT_VERSION_V2,
+    EvidenceItemV1, EvidenceLedgerV1, ProjectReportFindingV2, ProjectReportReadItemV2,
+    ProjectReportUnreadItemV2, ProjectReportV2, PROJECT_REPORT_VERSION_V2,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-DATA-AG-AG-TOOL-044, BR-SYS-DATA-008-DATA-AG-AG-TOOL-044
+ * type:     DATA
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002, BR-SYS-DATA-008
+ * term_ref: TERM-AG-002, TERM-AG-014
+ * boundary: in=ToolCallReceiptIdentityV1AndExecutionFactsAndArtifactReferences | out=ToolCallReceiptV1 | does_not=authorizeExecutionOrClaimAcceptanceOrSaveOrReplay
+ */
+pub(super) fn tool_call_receipt(
+    identity: crate::types::ToolCallReceiptIdentityV1,
+    validation_allowed: bool,
+    success: bool,
+    failure: Option<&IpcError>,
+    references: Vec<crate::types::ToolCallReceiptReferenceV1>,
+    evidence_ids: Vec<String>,
+) -> crate::types::ToolCallReceiptV1 {
+    use crate::types::*;
+    let registered = super::tool_registry::lookup(&identity.tool_name);
+    let read_only = registered
+        .is_some_and(|tool| tool.permission == super::tool_registry::ToolPermission::ReadOnly);
+    let execution_status = if !validation_allowed {
+        ToolCallExecutionStatus::Rejected
+    } else if success {
+        ToolCallExecutionStatus::Succeeded
+    } else {
+        ToolCallExecutionStatus::Failed
+    };
+    let (completion_status, effect_status, next_action) = if !validation_allowed {
+        (
+            ToolCallCompletionStatus::Blocked,
+            ToolCallEffectStatus::NotStarted,
+            ToolCallNextAction::RespondBlocked,
+        )
+    } else if !success {
+        if read_only || identity.tool_name == "edit_blocked" {
+            (
+                ToolCallCompletionStatus::Blocked,
+                ToolCallEffectStatus::NotApplicable,
+                if failure.is_some_and(|error| error.retriable) {
+                    ToolCallNextAction::RetryExplicitly
+                } else {
+                    ToolCallNextAction::RespondBlocked
+                },
+            )
+        } else {
+            (
+                ToolCallCompletionStatus::Blocked,
+                ToolCallEffectStatus::Unknown,
+                ToolCallNextAction::InspectEffect,
+            )
+        }
+    } else if identity.tool_name == "edit_blocked" {
+        (
+            ToolCallCompletionStatus::Blocked,
+            ToolCallEffectStatus::NotApplicable,
+            ToolCallNextAction::RespondBlocked,
+        )
+    } else if matches!(
+        identity.tool_name.as_str(),
+        "propose_decision" | "plan_workspace_operation"
+    ) && references.iter().any(|reference| {
+        reference.kind == ToolCallReceiptReferenceKind::DecisionRequest && !reference.id.is_empty()
+    }) {
+        (
+            ToolCallCompletionStatus::Waiting,
+            ToolCallEffectStatus::NotStarted,
+            ToolCallNextAction::AwaitUser,
+        )
+    } else if identity.tool_name == "propose_edit"
+        && references.iter().any(|reference| {
+            reference.kind == ToolCallReceiptReferenceKind::PendingDiff && !reference.id.is_empty()
+        })
+    {
+        (
+            ToolCallCompletionStatus::Waiting,
+            ToolCallEffectStatus::ProposalCreated,
+            ToolCallNextAction::AwaitUser,
+        )
+    } else if identity.tool_name == "import_image_asset" {
+        (
+            ToolCallCompletionStatus::Completed,
+            ToolCallEffectStatus::ResourcePrepared,
+            ToolCallNextAction::None,
+        )
+    } else if read_only {
+        (
+            ToolCallCompletionStatus::Completed,
+            ToolCallEffectStatus::NotApplicable,
+            ToolCallNextAction::None,
+        )
+    } else {
+        // Missing adapter evidence is never upgraded to completed/saved from result text.
+        (
+            ToolCallCompletionStatus::Blocked,
+            ToolCallEffectStatus::Unknown,
+            ToolCallNextAction::InspectEffect,
+        )
+    };
+    let failure = (!validation_allowed || !success).then(|| {
+        let fallback = IpcError::new(
+            if validation_allowed {
+                "AG_TOOL_EXECUTION_FAILED"
+            } else {
+                "AG_TOOL_REJECTED"
+            },
+            "工具失败；没有可用的细分错误码",
+            false,
+            false,
+        );
+        let error = failure.unwrap_or(&fallback);
+        ToolCallFailureV1 {
+            code: error.code.clone(),
+            retriable: error.retriable,
+            reauth_required: error.reauth_required,
+        }
+    });
+    ToolCallReceiptV1 {
+        version: ToolCallReceiptVersion::V1,
+        identity,
+        execution_status,
+        completion_status,
+        effect_status,
+        references,
+        failure,
+        evidence_ids,
+        next_action,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingEvidenceItem {
@@ -49,12 +179,12 @@ fn snapshot_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> Stri
  * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage
  */
 pub fn context_evidence(
-    facts: &AgentContextFactsV1,
+    facts: &crate::types::AgentContextFacts,
     active_doc_path: Option<&str>,
     current_doc_prompt_coverage: Option<&str>,
 ) -> Vec<PendingEvidenceItem> {
-    let mut items = facts
-        .open_docs
+    let documents = facts.ready_documents();
+    let mut items = documents
         .iter()
         .map(|fact| PendingEvidenceItem {
             rel_path: fact.rel_path.clone(),
@@ -64,7 +194,7 @@ pub fn context_evidence(
         })
         .collect::<Vec<_>>();
     if let (Some(path), Some(coverage)) = (active_doc_path, current_doc_prompt_coverage) {
-        if let Some(fact) = facts.open_docs.iter().find(|fact| fact.rel_path == path) {
+        if let Some(fact) = documents.iter().find(|fact| fact.rel_path == path) {
             items.push(PendingEvidenceItem {
                 rel_path: path.to_string(),
                 source: fact.source.clone(),
@@ -90,14 +220,34 @@ pub fn successful_tool_evidence(
             version_or_hash: snapshot_version(&snapshot),
         })
     };
+    // Read evidence binds the exact successful result, not a second disk read that may have changed.
+    let from_returned_snapshot = |path: &str, coverage: &str| -> Option<PendingEvidenceItem> {
+        let returned: serde_json::Value = serde_json::from_str(result).ok()?;
+        let path = path.trim();
+        if returned.get("rel_path")?.as_str()? != path {
+            return None;
+        }
+        Some(PendingEvidenceItem {
+            rel_path: path.to_string(),
+            source: returned.get("source")?.as_str()?.to_string(),
+            coverage: coverage.to_string(),
+            version_or_hash: returned.get("version_hash")?.as_str()?.to_string(),
+        })
+    };
     match name {
         "read_doc" => args
             .get("path")
             .and_then(|value| value.as_str())
             .and_then(|path| {
-                from_path(
+                from_returned_snapshot(
                     path,
-                    if args.get("blocks").is_some() {
+                    if args.get("blocks").is_some()
+                        || serde_json::from_str::<serde_json::Value>(result)
+                            .ok()
+                            .is_some_and(|returned| {
+                                returned.get("complete") == Some(&serde_json::Value::Bool(false))
+                            })
+                    {
                         "selected_blocks"
                     } else {
                         "full_document"
@@ -106,7 +256,13 @@ pub fn successful_tool_evidence(
             })
             .into_iter()
             .collect(),
-        "list_blocks" | "list_tables" | "list_images" => args
+        "list_blocks" => args
+            .get("path")
+            .and_then(|value| value.as_str())
+            .and_then(|path| from_returned_snapshot(path, "structure_index"))
+            .into_iter()
+            .collect(),
+        "list_tables" | "list_images" => args
             .get("path")
             .and_then(|value| value.as_str())
             .and_then(|path| from_path(path, "structure_index"))
@@ -458,7 +614,346 @@ pub fn exec_edit_blocked(args: &serde_json::Value) -> Result<String, IpcError> {
 
 /// 执行只读工具，返回回注模型的结果文本（JSON 序列化）。`ctx` 持有 active workspace 根与打开文档
 /// LogicalState 覆盖层（X-FORBID-004）。
+fn read_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> String {
+    crate::ag::context::sha256_text(
+        &serde_json::to_string(snapshot).expect("snapshot serialization"),
+    )
+}
+
+fn verify_read_version(
+    args: &serde_json::Value,
+    snapshot: &crate::ag::blocks::AgentEditableSnapshot,
+) -> Result<(), IpcError> {
+    if let Some(expected) = args.get("expected_hash") {
+        if expected.as_str() != Some(read_version(snapshot).as_str()) {
+            return Err(IpcError::new(
+                "AG_READ_VERSION_STALE",
+                "文档版本已变化，请从当前版本重新读取，不得拼接旧页。",
+                true,
+                false,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn page_integer(
+    args: &serde_json::Value,
+    key: &str,
+    default: usize,
+    max: usize,
+) -> Result<usize, IpcError> {
+    match args.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n <= max)
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_TOOL_ARG",
+                    "分页参数必须为范围内的非负整数",
+                    false,
+                    false,
+                )
+            }),
+    }
+}
+
+/// Snapshot-independent read contracts must agree at preflight and direct execution.
+/// Do not repair arguments here: in particular, never invent a pagination version.
+pub(super) fn validate_read_arguments(
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<(), IpcError> {
+    if matches!(
+        name,
+        "read_doc" | "list_blocks" | "list_tables" | "list_images"
+    ) {
+        path_arg(args, name)?;
+    }
+    if args
+        .get("expected_hash")
+        .is_some_and(|hash| hash.as_str().is_none_or(|hash| hash.trim().is_empty()))
+    {
+        return Err(IpcError::new(
+            "AG_TOOL_ARG",
+            "expected_hash 必须是非空版本字符串；首次读取请省略，不得填空值。",
+            false,
+            false,
+        ));
+    }
+    if name == "read_doc"
+        && args.get("blocks").is_some_and(|blocks| {
+            blocks.as_array().is_none_or(|blocks| {
+                blocks.is_empty()
+                    || blocks
+                        .iter()
+                        .any(|block| block.as_str().is_none_or(|block| block.trim().is_empty()))
+            })
+        })
+    {
+        return Err(IpcError::new(
+            "AG_TOOL_ARG",
+            "read_doc.blocks 必须是非空块标识字符串数组；首次整篇读取请省略 blocks。",
+            false,
+            false,
+        ));
+    }
+    if name == "read_doc" {
+        let view = args.get("view").and_then(|value| value.as_str());
+        if args.get("view").is_some() && !matches!(view, Some("text" | "structure")) {
+            return Err(IpcError::new(
+                "AG_TOOL_ARG",
+                "read_doc.view 仅支持 text 或 structure。",
+                false,
+                false,
+            ));
+        }
+        let structure = view == Some("structure") || args.get("blocks").is_some();
+        if (view == Some("text") && args.get("blocks").is_some())
+            || (structure && (args.get("offset").is_some() || args.get("limit_chars").is_some()))
+        {
+            return Err(IpcError::new(
+                "AG_TOOL_ARG",
+                "正文分页与编辑结构读取不能混用；blocks/structure 不接受 offset/limit_chars。",
+                false,
+                false,
+            ));
+        }
+        if !structure {
+            let offset = page_integer(args, "offset", 0, usize::MAX)?;
+            if page_integer(args, "limit_chars", 10_000, 10_000)? == 0 {
+                return Err(IpcError::new(
+                    "AG_TOOL_ARG",
+                    "limit_chars 必须在 1..10000 内。",
+                    false,
+                    false,
+                ));
+            }
+            if offset > 0 && args.get("expected_hash").is_none() {
+                return Err(IpcError::new("AG_READ_PAGE_VERSION_REQUIRED", "正文非首页缺少 expected_hash；请使用上一页返回的 next_offset 和 version_hash。offset 是阅读文本Unicode字符位置，不是块号。", false, false));
+            }
+        }
+    }
+    if name == "list_blocks" {
+        let offset = page_integer(args, "offset", 0, usize::MAX)?;
+        let limit = page_integer(args, "limit", 20, 50)?;
+        if limit == 0 {
+            return Err(IpcError::new(
+                "AG_TOOL_ARG",
+                "list_blocks.limit 必须在 1..50 内。",
+                false,
+                false,
+            ));
+        }
+        if offset > 0 && args.get("expected_hash").is_none() {
+            return Err(IpcError::new("AG_READ_PAGE_VERSION_REQUIRED", "非首页分页缺少 expected_hash。请先调用 list_blocks(path, offset=0) 取得 version_hash 和 next_offset，再使用返回的 next_offset 与 version_hash 读取下一页；offset 不是块编号。", false, false));
+        }
+    }
+    Ok(())
+}
+
+fn serialized_result_chars(result: &str) -> usize {
+    serde_json::to_string(result)
+        .expect("String serialization")
+        .chars()
+        .count()
+}
+
+/**
+ * @GOV
+ * codes: BR-AG-DATA-005-DATA-AG-AG-TOOL-059, BR-AG-OBS-001-DATA-AG-AG-TOOL-059
+ * type: DATA
+ * chain: AG-TOOL
+ * rules: BR-AG-DATA-005, BR-AG-OBS-001
+ * boundary: in=AgentEditableSnapshotAndValidatedReadingCursor | out=SerializedReadingPageWithVersionRangeAndNextCursor | does_not=TruncateEditNodesOrUpgradePartialCoverage
+ */
+fn reading_page(
+    snapshot: &crate::ag::blocks::AgentEditableSnapshot,
+    args: &serde_json::Value,
+) -> Result<String, IpcError> {
+    let text = crate::ag::blocks::reading_text(snapshot);
+    let chars: Vec<char> = text.chars().collect();
+    let offset = page_integer(args, "offset", 0, usize::MAX)?;
+    if offset > chars.len() {
+        return Err(IpcError::new(
+            "AG_READ_PAGE_OUT_OF_RANGE",
+            "正文游标超出当前阅读投影；请从 offset=0 重新读取，不得猜测游标。",
+            true,
+            false,
+        ));
+    }
+    let limit = page_integer(args, "limit_chars", 10_000, 10_000)?;
+    let mut page = serde_json::json!({
+        "rel_path": snapshot.rel_path, "editable_kind": snapshot.editable_kind,
+        "source": snapshot.source, "source_content_format": snapshot.content_format,
+        "content_format": "text", "view": "text", "baseline": snapshot.baseline,
+        "session_version": snapshot.session_version, "content_hash": snapshot.content_hash,
+        "version_hash": read_version(snapshot), "offset": offset, "total_chars": chars.len(),
+    });
+    let mut render = |end: usize| {
+        page["content"] = chars[offset..end].iter().collect::<String>().into();
+        page["end_offset"] = end.into();
+        page["next_offset"] = if end < chars.len() {
+            end.into()
+        } else {
+            serde_json::Value::Null
+        };
+        page["complete"] = (offset == 0 && end == chars.len()).into();
+        page["has_more"] = (end < chars.len()).into();
+        page.to_string()
+    };
+    let max_end = offset.saturating_add(limit).min(chars.len());
+    let mut low = offset;
+    let mut high = max_end;
+    let mut best = None;
+    // Bound the actual escaped result, not an assumed tokens/characters ratio.
+    while low <= high {
+        let end = low + (high - low) / 2;
+        let candidate = render(end);
+        if serialized_result_chars(&candidate)
+            <= super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS
+        {
+            best = Some((end, candidate));
+            low = end + 1;
+        } else if end == 0 {
+            break;
+        } else {
+            high = end - 1;
+        }
+    }
+    match best {
+        Some((end, result)) if end > offset || offset == chars.len() => Ok(result),
+        _ => Err(IpcError::new(
+            "AG_TOOL_RESULT_TOO_LARGE",
+            "正文页元数据已超过安全预算，无法产生前进页；本次不登记已读证据。",
+            true,
+            false,
+        )),
+    }
+}
+
+/**
+ * @GOV
+ * codes: BR-AG-DATA-005-GUARD-AG-AG-TOOL-057, BR-AG-OBS-001-GUARD-AG-AG-TOOL-057
+ * type: GUARD
+ * chain: AG-TOOL
+ * rules: BR-AG-DATA-005, BR-AG-OBS-001
+ * boundary: in=AuthorizedReadOnlyToolArgumentsAndAgentReadContext | out=CompleteBoundedToolResultOrExplicitFailure | does_not=TruncateStructuredBlocksOrClaimFailedReadsAsEvidence
+ */
 pub fn exec_read_only(
+    ctx: &crate::ag::blocks::AgentReadContext,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<String, IpcError> {
+    validate_read_arguments(name, args)?;
+    let result = exec_read_only_unbounded(ctx, name, args)?;
+    let result_chars = serialized_result_chars(&result);
+    if matches!(name, "read_doc" | "list_blocks") {
+        eprintln!(
+            "[AG-AG-TOOL] read_budget: {}",
+            serde_json::json!({
+                "toolName": name, "requestFingerprint": crate::ag::context::sha256_text(&args.to_string()),
+                "resultChars": result_chars, "resultLimitChars": super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
+                "exceeded": result_chars > super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
+            })
+        );
+    }
+    if result_chars > super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS {
+        return Err(IpcError::new("AG_TOOL_RESULT_TOO_LARGE", "结构或列表结果超过单次预算，未返回截断正文、JSON或编辑节点。阅读可改用 read_doc(view=text) 正文分页；编辑用 list_blocks 定位后缩小 blocks；本次不登记已读证据。", true, false));
+    }
+    Ok(result)
+}
+
+/**
+ * @GOV
+ * codes: BR-AG-STATE-002-GUARD-AG-AG-TOOL-045, BR-SYS-STATE-007-GUARD-AG-AG-TOOL-045
+ * type: GUARD
+ * chain: AG-TOOL
+ * rules: BR-AG-STATE-002, BR-SYS-STATE-007
+ * boundary: in=AuthorizedReadOnlyToolCallAndFrozenAgentReadContextAndCancellationSignal | out=ReadOnlyToolResultOrDeadlineCancellationWorkerFailure | does_not=ExecuteWritesOrInjectLateResultsOrRetryAutomatically
+ */
+pub(super) async fn exec_read_only_with_deadline(
+    ctx: crate::ag::blocks::AgentReadContext,
+    name: String,
+    args: serde_json::Value,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<String, IpcError> {
+    if !super::tool_registry::lookup(&name)
+        .is_some_and(|tool| tool.permission == super::tool_registry::ToolPermission::ReadOnly)
+    {
+        return Err(IpcError::new(
+            "AG_TOOL_DEADLINE_UNSAFE",
+            "写操作不可进入可丢弃结果的只读执行器",
+            false,
+            false,
+        ));
+    }
+    await_read_operation(
+        move || exec_read_only(&ctx, &name, &args),
+        cancelled,
+        std::time::Duration::from_secs(30),
+    )
+    .await
+}
+
+async fn await_read_operation(
+    operation: impl FnOnce() -> Result<String, IpcError> + Send + 'static,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    timeout: std::time::Duration,
+) -> Result<String, IpcError> {
+    use std::sync::atomic::Ordering;
+    if cancelled.load(Ordering::Acquire) {
+        return Err(IpcError::new(
+            "AG_TURN_CANCELLED",
+            "当前回合已取消",
+            false,
+            false,
+        ));
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    tauri::async_runtime::spawn_blocking(move || {
+        // 取消/期限结束后接收端销毁，迟到结果不进入事件或模型回注。
+        let _ = sender.send(operation());
+    });
+    tauri::async_runtime::spawn_blocking(move || loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(IpcError::new(
+                "AG_TURN_CANCELLED",
+                "当前回合已取消",
+                false,
+                false,
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(IpcError::new(
+                "AG_TOOL_TIMEOUT",
+                "只读工具等待超过期限，未返回成功证据；可显式重试",
+                true,
+                false,
+            ));
+        }
+        match receiver.recv_timeout(remaining.min(std::time::Duration::from_millis(20))) {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(IpcError::new(
+                    "AG_TOOL_WORKER_FAILED",
+                    "只读执行线程异常结束",
+                    true,
+                    false,
+                ))
+            }
+        }
+    })
+    .await
+    .map_err(|_| IpcError::new("AG_TOOL_WORKER_FAILED", "只读等待线程异常结束", true, false))?
+}
+
+fn exec_read_only_unbounded(
     ctx: &crate::ag::blocks::AgentReadContext,
     name: &str,
     args: &serde_json::Value,
@@ -525,12 +1020,24 @@ pub fn exec_read_only(
         "read_doc" => {
             let rel = path_arg(args, "read_doc")?;
             let snapshot = ctx.snapshot(&rel)?;
+            verify_read_version(args, &snapshot)?;
+            if args.get("blocks").is_none()
+                && args.get("view").and_then(|value| value.as_str()) != Some("structure")
+            {
+                return reading_page(&snapshot, args);
+            }
             // AG-CTX-01：read_doc 支持 blocks 范围参数（可选）——只返回指定块的完整投影
             // （含 node_json，供 block_ops 提案从 node_json 复制节点构造 afterNode）；
-            // 省略 blocks 参数时返回完整内容（向后兼容）。轻量索引走 list_blocks。
-            if let Some(blocks) = args.get("blocks").and_then(|value| value.as_array()) {
+            // 省略 blocks 参数时只返回完整 content 与元数据，不重复块正文。轻量索引走 list_blocks。
+            if let Some(requested) = args.get("blocks") {
+                let blocks = requested.as_array().ok_or_else(|| {
+                    IpcError::new("AG_TOOL_ARG", "blocks 必须是非空字符串数组", false, false)
+                })?;
                 let wanted: Vec<&str> = blocks.iter().filter_map(|value| value.as_str()).collect();
-                if wanted.is_empty() {
+                if wanted.is_empty()
+                    || wanted.len() != blocks.len()
+                    || wanted.iter().any(|s| s.is_empty())
+                {
                     return Err(IpcError::new(
                         "AG_TOOL_ARG",
                         "read_doc blocks 参数必须是块 id/索引数组且不能为空",
@@ -548,8 +1055,22 @@ pub fn exec_read_only(
                     })
                     .cloned()
                     .collect::<Vec<_>>();
+                if wanted.iter().any(|wanted| {
+                    !filtered.iter().any(|b| {
+                        b.block_id.as_deref() == Some(*wanted)
+                            || b.block_index.to_string() == *wanted
+                    })
+                }) {
+                    return Err(IpcError::new(
+                        "AG_READ_BLOCK_NOT_FOUND",
+                        "请求的块不存在；请重新取得 list_blocks，不得将空结果视为已读。",
+                        true,
+                        false,
+                    ));
+                }
                 let mut slim = serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null);
                 if let Some(object) = slim.as_object_mut() {
+                    object.insert("version_hash".to_string(), read_version(&snapshot).into());
                     object["blocks"] = serde_json::to_value(&filtered)
                         .unwrap_or(serde_json::Value::Array(Vec::new()));
                     // 只返回目标块时省略整篇 content（块投影已含 text/node_json）。
@@ -557,16 +1078,31 @@ pub fn exec_read_only(
                 }
                 return Ok(slim.to_string());
             }
-            Ok(serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".into()))
+            // A full read carries one complete body. Structured blocks are requested explicitly.
+            let mut full = serde_json::to_value(&snapshot).expect("snapshot serialization");
+            full.as_object_mut()
+                .expect("snapshot object")
+                .remove("blocks");
+            full["version_hash"] = read_version(&snapshot).into();
+            Ok(full.to_string())
         }
         "list_blocks" => {
             let rel = path_arg(args, "list_blocks")?;
             let snapshot = ctx.snapshot(&rel)?;
+            verify_read_version(args, &snapshot)?;
+            let offset = page_integer(args, "offset", 0, usize::MAX)?;
+            let limit = page_integer(args, "limit", 20, 50)?;
+            if offset > snapshot.blocks.len() {
+                return Err(IpcError::new("AG_READ_PAGE_OUT_OF_RANGE", "分页起点超出当前块目录；请从 list_blocks(path, offset=0) 重新取得 next_offset 和 version_hash，不得猜测页码或块编号。", true, false));
+            }
+            let total = snapshot.blocks.len();
             // AG-CTX-01：list_blocks 轻量投影——只返回块目录（无 node_json/全文/marks/attrs），
             // 结构性压缩（Claude Code Tool Result Budget 同思路），模型提案时经 read_doc(blocks) 按需取完整块。
             let directory = snapshot
                 .blocks
                 .iter()
+                .skip(offset)
+                .take(limit)
                 .map(|block| {
                     let mut entry = serde_json::Map::new();
                     entry.insert(
@@ -615,14 +1151,33 @@ pub fn exec_read_only(
                     serde_json::Value::Object(entry)
                 })
                 .collect::<Vec<_>>();
-            Ok(serde_json::to_string(&serde_json::json!({
+            let mut page = serde_json::json!({
                 "rel_path": snapshot.rel_path,
                 "editable_kind": snapshot.editable_kind,
                 "content_format": snapshot.content_format,
                 "source": snapshot.source,
+                "version_hash": read_version(&snapshot),
+                "offset": offset,
+                "total_blocks": total,
+                "next_offset": (offset + directory.len() < total).then_some(offset + directory.len()),
+                "complete": offset == 0 && directory.len() == total,
                 "blocks": directory,
-            }))
-            .unwrap_or_else(|_| "{}".into()))
+            });
+            // limit is a maximum entry count, not a promise to overrun the byte
+            // budget. Remove only whole directory entries and publish the real cursor.
+            while serialized_result_chars(&page.to_string())
+                > super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS
+            {
+                let entries = page["blocks"].as_array_mut().expect("directory array");
+                if entries.len() <= 1 {
+                    break;
+                }
+                entries.pop();
+                let end = offset + entries.len();
+                page["next_offset"] = end.into();
+                page["complete"] = false.into();
+            }
+            Ok(page.to_string())
         }
         "list_tables" => {
             let rel = path_arg(args, "list_tables")?;
@@ -667,8 +1222,437 @@ pub fn exec_read_only(
 mod tests {
     use super::*;
 
+    // covers: BR-AG-STATE-002
+    // covers: BR-SYS-STATE-007
+    #[test]
+    fn read_deadline_cancellation_and_late_results_do_not_become_success() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use std::time::Duration;
+        tauri::async_runtime::block_on(async {
+            let cancelled = Arc::new(AtomicBool::new(false));
+            assert_eq!(
+                await_read_operation(
+                    || Ok("real result".into()),
+                    cancelled.clone(),
+                    Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
+                "real result"
+            );
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+            let result = await_read_operation(
+                move || {
+                    started_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(80));
+                    finished_tx.send(()).unwrap();
+                    Ok("late result".into())
+                },
+                cancelled.clone(),
+                Duration::from_millis(10),
+            )
+            .await;
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(result.unwrap_err().code, "AG_TOOL_TIMEOUT");
+            finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let flag = cancelled.clone();
+            let cancel = std::thread::spawn(move || {
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                flag.store(true, Ordering::Release);
+            });
+            let result = await_read_operation(
+                move || {
+                    started_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(80));
+                    Ok("cancelled result".into())
+                },
+                cancelled.clone(),
+                Duration::from_secs(1),
+            )
+            .await;
+            assert_eq!(result.unwrap_err().code, "AG_TURN_CANCELLED");
+            cancel.join().unwrap();
+            assert_eq!(
+                await_read_operation(
+                    || panic!("cancelled work must not start"),
+                    cancelled,
+                    Duration::from_secs(1)
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "AG_TURN_CANCELLED"
+            );
+            assert_eq!(
+                await_read_operation(
+                    || panic!("explicit worker failure"),
+                    Arc::new(AtomicBool::new(false)),
+                    Duration::from_secs(1)
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "AG_TOOL_WORKER_FAILED"
+            );
+        });
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-DATA-008
+    #[test]
+    fn tool_receipts_distinguish_execution_effect_and_authorization() {
+        use crate::types::*;
+        let identity = |name: &str| ToolCallReceiptIdentityV1 {
+            workspace_id: "ws".into(),
+            session_id: "session".into(),
+            turn_id: "turn".into(),
+            tool_call_id: "call".into(),
+            tool_name: name.into(),
+            capability_id: "capability".into(),
+            grant_id: "grant".into(),
+            attempt: 1,
+        };
+        let failure = IpcError::new("AG_READ_FAILED", "PRIVATE_ERROR_CONTENT", true, false);
+        let read = tool_call_receipt(
+            identity("read_doc"),
+            true,
+            false,
+            Some(&failure),
+            vec![],
+            vec![],
+        );
+        assert_eq!(read.execution_status, ToolCallExecutionStatus::Failed);
+        assert_eq!(read.effect_status, ToolCallEffectStatus::NotApplicable);
+        assert_eq!(read.next_action, ToolCallNextAction::RetryExplicitly);
+        let serialized = serde_json::to_value(&read).unwrap();
+        assert!(!serialized.to_string().contains("PRIVATE_ERROR_CONTENT"));
+        assert_eq!(
+            serde_json::from_value::<ToolCallReceiptV1>(serialized.clone()).unwrap(),
+            read
+        );
+        let mut invalid = serialized.clone();
+        invalid["version"] = serde_json::json!("tool-call-receipt-v2");
+        assert!(serde_json::from_value::<ToolCallReceiptV1>(invalid).is_err());
+        let mut invalid = serialized;
+        invalid["effectStatus"] = serde_json::json!("saved");
+        assert!(serde_json::from_value::<ToolCallReceiptV1>(invalid).is_err());
+        let rejected =
+            tool_call_receipt(identity("propose_edit"), false, false, None, vec![], vec![]);
+        assert_eq!(rejected.execution_status, ToolCallExecutionStatus::Rejected);
+        assert_eq!(rejected.effect_status, ToolCallEffectStatus::NotStarted);
+        let failed_write = tool_call_receipt(
+            identity("propose_edit"),
+            true,
+            false,
+            Some(&failure),
+            vec![],
+            vec![],
+        );
+        assert_eq!(failed_write.effect_status, ToolCallEffectStatus::Unknown);
+        assert_eq!(failed_write.next_action, ToolCallNextAction::InspectEffect);
+        for (name, kind, expected_effect) in [
+            (
+                "propose_edit",
+                ToolCallReceiptReferenceKind::PendingDiff,
+                ToolCallEffectStatus::ProposalCreated,
+            ),
+            (
+                "propose_decision",
+                ToolCallReceiptReferenceKind::DecisionRequest,
+                ToolCallEffectStatus::NotStarted,
+            ),
+        ] {
+            let absent = tool_call_receipt(identity(name), true, true, None, vec![], vec![]);
+            assert_eq!(absent.completion_status, ToolCallCompletionStatus::Blocked);
+            let waiting = tool_call_receipt(
+                identity(name),
+                true,
+                true,
+                None,
+                vec![ToolCallReceiptReferenceV1 {
+                    kind,
+                    id: "real-artifact".into(),
+                }],
+                vec![],
+            );
+            assert_eq!(waiting.completion_status, ToolCallCompletionStatus::Waiting);
+            assert_eq!(waiting.effect_status, expected_effect);
+            assert_eq!(waiting.next_action, ToolCallNextAction::AwaitUser);
+        }
+        let blocked = tool_call_receipt(identity("edit_blocked"), true, true, None, vec![], vec![]);
+        assert_eq!(blocked.execution_status, ToolCallExecutionStatus::Succeeded);
+        assert_eq!(blocked.completion_status, ToolCallCompletionStatus::Blocked);
+    }
+
+    // covers: BR-AG-DATA-005, BR-AG-OBS-001
+    #[test]
+    fn bounded_reads_preserve_whole_results_and_versioned_pages() {
+        let dir = std::env::temp_dir().join(format!("ag-p05-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = (0..25)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.join("a.txt"), &body).unwrap();
+        let read_ctx = ctx(&dir);
+        let call = |name: &str, args: serde_json::Value| -> serde_json::Value {
+            serde_json::from_str(&exec_read_only(&read_ctx, name, &args).unwrap()).unwrap()
+        };
+        let full = call("read_doc", serde_json::json!({"path":"a.txt"}));
+        assert_eq!(full["content"], body);
+        assert!(full.get("blocks").is_none());
+        let first = call("list_blocks", serde_json::json!({"path":"a.txt"}));
+        assert_eq!(first["blocks"].as_array().unwrap().len(), 20);
+        assert_eq!(first["total_blocks"], 25);
+        assert_eq!(first["next_offset"], 20);
+        assert_eq!(first["complete"], false);
+        assert_eq!(first["version_hash"], full["version_hash"]);
+        let second = call(
+            "list_blocks",
+            serde_json::json!({"path":"a.txt","offset":20,"expected_hash":first["version_hash"]}),
+        );
+        assert_eq!(second["blocks"].as_array().unwrap().len(), 5);
+        assert!(second["next_offset"].is_null());
+        assert_eq!(second["complete"], false);
+        let selected_args = serde_json::json!({"path":"a.txt","blocks":["24"],"expected_hash":first["version_hash"]});
+        let selected = call("read_doc", selected_args.clone());
+        assert_eq!(selected["blocks"][0]["text"], "line 24");
+        assert!(selected.get("content").is_none());
+        assert_eq!(
+            successful_tool_evidence(&read_ctx, "read_doc", &selected_args, &selected.to_string())
+                [0]
+            .coverage,
+            "selected_blocks"
+        );
+        assert_eq!(
+            successful_tool_evidence(
+                &read_ctx,
+                "list_blocks",
+                &serde_json::json!({"path":"a.txt"}),
+                &first.to_string()
+            )[0]
+            .coverage,
+            "structure_index"
+        );
+        for args in [
+            serde_json::json!({"path":"a.txt","limit":0}),
+            serde_json::json!({"path":"a.txt","limit":51}),
+            serde_json::json!({"path":"a.txt","offset":-1}),
+        ] {
+            assert_eq!(
+                exec_read_only(&read_ctx, "list_blocks", &args)
+                    .unwrap_err()
+                    .code,
+                "AG_TOOL_ARG"
+            );
+        }
+        assert_eq!(
+            exec_read_only(
+                &read_ctx,
+                "list_blocks",
+                &serde_json::json!({"path":"a.txt","offset":20})
+            )
+            .unwrap_err()
+            .code,
+            "AG_READ_PAGE_VERSION_REQUIRED"
+        );
+        assert_eq!(exec_read_only(&read_ctx,"list_blocks",&serde_json::json!({"path":"a.txt","offset":26,"expected_hash":first["version_hash"]})).unwrap_err().code,"AG_READ_PAGE_OUT_OF_RANGE");
+        let end = call(
+            "list_blocks",
+            serde_json::json!({"path":"a.txt","offset":25,"expected_hash":first["version_hash"]}),
+        );
+        assert!(end["blocks"].as_array().unwrap().is_empty());
+        assert!(end["next_offset"].is_null());
+        for blocks in [
+            serde_json::json!([]),
+            serde_json::json!([1]),
+            serde_json::json!("1"),
+        ] {
+            assert_eq!(
+                exec_read_only(
+                    &read_ctx,
+                    "read_doc",
+                    &serde_json::json!({"path":"a.txt","blocks":blocks})
+                )
+                .unwrap_err()
+                .code,
+                "AG_TOOL_ARG"
+            );
+        }
+        assert_eq!(
+            exec_read_only(
+                &read_ctx,
+                "read_doc",
+                &serde_json::json!({"path":"a.txt","blocks":["0","missing"]})
+            )
+            .unwrap_err()
+            .code,
+            "AG_READ_BLOCK_NOT_FOUND"
+        );
+        std::fs::write(dir.join("a.txt"), format!("{body}\nchanged")).unwrap();
+        assert_eq!(
+            successful_tool_evidence(&read_ctx, "read_doc", &selected_args, &selected.to_string())
+                [0]
+            .version_or_hash,
+            first["version_hash"].as_str().unwrap()
+        );
+        for name in ["list_blocks", "read_doc"] {
+            assert_eq!(
+                exec_read_only(
+                    &read_ctx,
+                    name,
+                    &serde_json::json!({"path":"a.txt","expected_hash":first["version_hash"]})
+                )
+                .unwrap_err()
+                .code,
+                "AG_READ_VERSION_STALE"
+            );
+        }
+        std::fs::write(dir.join("huge.txt"), "\"\\汉".repeat(12_000)).unwrap();
+        for args in [
+            serde_json::json!({"path":"huge.txt","view":"structure"}),
+            serde_json::json!({"path":"huge.txt","blocks":["0"]}),
+        ] {
+            assert_eq!(
+                exec_read_only(&read_ctx, "read_doc", &args)
+                    .unwrap_err()
+                    .code,
+                "AG_TOOL_RESULT_TOO_LARGE"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     fn ctx(root: &Path) -> crate::ag::blocks::AgentReadContext {
         crate::ag::blocks::AgentReadContext::new(root, Vec::new()).unwrap()
+    }
+
+    // covers: BR-AG-DATA-005, BR-AG-OBS-001
+    #[test]
+    fn directory_pages_fit_budget_and_return_actual_next_entry() {
+        let dir =
+            std::env::temp_dir().join(format!("ag-directory-budget-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let html = (0..80)
+            .map(|index| {
+                format!(
+                    "<p data-block-id='{}-{index}'>目录条目{index}</p>",
+                    "x".repeat(180)
+                )
+            })
+            .collect::<String>();
+        std::fs::write(dir.join("a.html"), html).unwrap();
+        let read_ctx = ctx(&dir);
+        let mut offset = 0;
+        let mut hash: Option<String> = None;
+        let mut indexes = Vec::new();
+        loop {
+            let mut args = serde_json::json!({"path":"a.html","offset":offset,"limit":50});
+            if let Some(hash) = &hash {
+                args["expected_hash"] = hash.clone().into();
+            }
+            let result = exec_read_only(&read_ctx, "list_blocks", &args).unwrap();
+            assert!(
+                serialized_result_chars(&result)
+                    <= super::super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS
+            );
+            let page: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let entries = page["blocks"].as_array().unwrap();
+            assert!(!entries.is_empty() && entries.len() < 50);
+            indexes.extend(
+                entries
+                    .iter()
+                    .map(|block| block["block_index"].as_u64().unwrap()),
+            );
+            hash = Some(page["version_hash"].as_str().unwrap().into());
+            if let Some(next) = page["next_offset"].as_u64() {
+                assert_eq!(next as usize, offset + entries.len());
+                offset = next as usize;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(indexes, (0..80).collect::<Vec<u64>>());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // covers: BR-AG-DATA-005, BR-AG-OBS-001, BR-AG-STATE-002
+    #[test]
+    fn text_pages_advance_within_original_budget_without_false_full_read() {
+        let dir = std::env::temp_dir().join(format!("ag-reading-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = "首行\n\"\\汉🙂\n".repeat(2400);
+        std::fs::write(dir.join("long.txt"), &body).unwrap();
+        let read_ctx = ctx(&dir);
+        let mut offset = 0;
+        let mut version: Option<String> = None;
+        let mut assembled = String::new();
+        let mut pages = 0;
+        loop {
+            let mut args = serde_json::json!({"path":"long.txt","offset":offset});
+            if let Some(hash) = &version {
+                args["expected_hash"] = serde_json::Value::String(hash.clone());
+            }
+            let result = exec_read_only(&read_ctx, "read_doc", &args).unwrap();
+            assert!(
+                serialized_result_chars(&result)
+                    <= super::super::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS
+            );
+            let page: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(page["content_format"], "text");
+            assert_eq!(page["complete"], false);
+            assert_eq!(page["offset"], offset);
+            assert_eq!(
+                successful_tool_evidence(&read_ctx, "read_doc", &args, &result)[0].coverage,
+                "selected_blocks"
+            );
+            assembled.push_str(page["content"].as_str().unwrap());
+            version = Some(page["version_hash"].as_str().unwrap().to_string());
+            pages += 1;
+            assert!(pages < 20, "pagination must make progress");
+            if let Some(next) = page["next_offset"].as_u64() {
+                assert!(next as usize > offset);
+                offset = next as usize;
+            } else {
+                assert_eq!(page["has_more"], false);
+                break;
+            }
+        }
+        assert!(pages > 1);
+        assert_eq!(
+            assembled, body,
+            "all Unicode and escaped characters must survive"
+        );
+        for args in [
+            serde_json::json!({"path":"long.txt","offset":1}),
+            serde_json::json!({"path":"long.txt","limit_chars":0}),
+            serde_json::json!({"path":"long.txt","limit_chars":10001}),
+            serde_json::json!({"path":"long.txt","view":"text","blocks":["0"]}),
+            serde_json::json!({"path":"long.txt","view":"structure","offset":0}),
+            serde_json::json!({"path":"long.txt","view":"unknown"}),
+        ] {
+            assert!(exec_read_only(&read_ctx, "read_doc", &args).is_err());
+        }
+        let args = serde_json::json!({"path":"long.txt","offset":999999,"expected_hash":version});
+        assert_eq!(
+            exec_read_only(&read_ctx, "read_doc", &args)
+                .unwrap_err()
+                .code,
+            "AG_READ_PAGE_OUT_OF_RANGE"
+        );
+        let stale = serde_json::json!({"path":"long.txt","offset":offset,"expected_hash":version});
+        std::fs::write(dir.join("long.txt"), "changed").unwrap();
+        assert_eq!(
+            exec_read_only(&read_ctx, "read_doc", &stale)
+                .unwrap_err()
+                .code,
+            "AG_READ_VERSION_STALE"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn active_block(
@@ -912,6 +1896,20 @@ mod tests {
         .unwrap();
         assert!(out.contains("table_1"));
         assert!(out.contains("session_version"));
+        let selected: serde_json::Value = serde_json::from_str(
+            &exec_read_only(
+                &ctx,
+                "read_doc",
+                &serde_json::json!({"path":"a.docx","blocks":["table-context"]}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            selected["blocks"][0]["node_json"],
+            ctx.snapshot("a.docx").unwrap().blocks[0].node_json
+        );
+        assert!(selected.get("content").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1036,44 +2034,35 @@ mod tests {
         std::fs::write(root.join("a.md"), "正文").unwrap();
         let read_ctx = ctx(&root);
         let cases = [
-            (
-                "list_docs",
-                serde_json::json!({}),
-                "[]".to_string(),
-                "workspace_structure",
-            ),
+            ("list_docs", serde_json::json!({}), "workspace_structure"),
             (
                 "workspace_glob",
                 serde_json::json!({"pattern": "*.md"}),
-                "[\"a.md\"]".to_string(),
                 "workspace_structure",
             ),
             (
                 "search_text",
                 serde_json::json!({"query": "正文"}),
-                "[{\"rel_path\":\"a.md\",\"preview\":\"正文\"}]".to_string(),
                 "search_excerpt",
             ),
             (
                 "list_blocks",
                 serde_json::json!({"path": "a.md"}),
-                "{}".to_string(),
                 "structure_index",
             ),
             (
                 "read_doc",
                 serde_json::json!({"path": "a.md", "blocks": ["0"]}),
-                "{}".to_string(),
                 "selected_blocks",
             ),
             (
                 "read_doc",
                 serde_json::json!({"path": "a.md"}),
-                "{}".to_string(),
                 "full_document",
             ),
         ];
-        for (tool, args, result, expected_coverage) in cases {
+        for (tool, args, expected_coverage) in cases {
+            let result = exec_read_only(&read_ctx, tool, &args).unwrap();
             let evidence = successful_tool_evidence(&read_ctx, tool, &args, &result);
             assert!(
                 evidence
@@ -1083,6 +2072,15 @@ mod tests {
             );
             assert!(!evidence.is_empty(), "{tool} 成功读取必须生成证据");
         }
+        for tool in ["read_doc", "list_blocks"] {
+            assert!(successful_tool_evidence(
+                &read_ctx,
+                tool,
+                &serde_json::json!({"path":"a.md"}),
+                "{}"
+            )
+            .is_empty());
+        }
         assert!(successful_tool_evidence(
             &read_ctx,
             "propose_edit",
@@ -1091,7 +2089,7 @@ mod tests {
         )
         .is_empty());
 
-        let facts = AgentContextFactsV1 {
+        let facts = crate::types::AgentContextFactsV1 {
             version: crate::types::AGENT_CONTEXT_FACTS_VERSION_V1.to_string(),
             workspace_id: "ws1".to_string(),
             turn_id: "t1".to_string(),
@@ -1109,7 +2107,11 @@ mod tests {
             selections: Vec::new(),
             proposal_facts: Vec::new(),
         };
-        let pending = context_evidence(&facts, Some("a.md"), Some("full_document"));
+        let pending = context_evidence(
+            &crate::types::AgentContextFacts::V1(facts),
+            Some("a.md"),
+            Some("full_document"),
+        );
         let projected_ids = evidence_ids("ws1", "t1", "turn-event:t1:2", &pending);
         let items = materialize_evidence(
             "ws1",

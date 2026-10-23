@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
  * chain:    DATA-MIGRATE
  * rules:    BR-SYS-DATA-002, BR-SYS-DATA-008
  * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFactsV1,EvidenceLedgerV1,ProjectReportV2
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFacts,AgentContextFactsV1,AgentContextFactsV2,EvidenceLedgerV1,ProjectReportV2,ToolCallReceiptV1
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -37,7 +37,119 @@ pub struct DocRef {
 }
 
 pub const AGENT_CONTEXT_FACTS_VERSION_V1: &str = "agent-context-facts-v1";
+pub const AGENT_CONTEXT_FACTS_VERSION_V2: &str = "agent-context-facts-v2";
 pub const PROJECT_REPORT_VERSION_V2: &str = "project-report-v2";
+
+/// Separate effect facts, not TurnEvents; settlement may arrive after a terminal event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityExecutionFactV1 {
+    pub identity: ToolCallReceiptIdentityV1,
+    pub phase: CapabilityExecutionPhase,
+    pub receipt: Option<ToolCallReceiptV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityExecutionPhase {
+    Started,
+    Settled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolCallReceiptVersion {
+    #[serde(rename = "tool-call-receipt-v1")]
+    V1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallExecutionStatus {
+    Succeeded,
+    Rejected,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallCompletionStatus {
+    Completed,
+    Waiting,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallEffectStatus {
+    NotApplicable,
+    NotStarted,
+    ProposalCreated,
+    ResourcePrepared,
+    ResourceExecuted,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallNextAction {
+    None,
+    AwaitUser,
+    RespondBlocked,
+    RetryExplicitly,
+    InspectEffect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallReceiptReferenceKind {
+    DecisionRequest,
+    PendingDiff,
+    WorkspaceOperationPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallReceiptReferenceV1 {
+    pub kind: ToolCallReceiptReferenceKind,
+    pub id: String,
+}
+
+/// Safe metadata only: raw IpcError.message remains in the model tool response, not the public event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallFailureV1 {
+    pub code: String,
+    pub retriable: bool,
+    pub reauth_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallReceiptIdentityV1 {
+    pub workspace_id: String,
+    pub session_id: String,
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub capability_id: String,
+    pub grant_id: String,
+    pub attempt: u32,
+}
+
+/// SYS §3.1.0: immutable observation, never an authorization or mutable professional effect state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallReceiptV1 {
+    pub version: ToolCallReceiptVersion,
+    #[serde(flatten)]
+    pub identity: ToolCallReceiptIdentityV1,
+    pub execution_status: ToolCallExecutionStatus,
+    pub completion_status: ToolCallCompletionStatus,
+    pub effect_status: ToolCallEffectStatus,
+    pub references: Vec<ToolCallReceiptReferenceV1>,
+    pub failure: Option<ToolCallFailureV1>,
+    pub evidence_ids: Vec<String>,
+    pub next_action: ToolCallNextAction,
+}
 
 /// TERM-AG-020：ED/DE/WS→AG 的版本化会话事实，不携带文档正文或授权。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +195,144 @@ pub struct AgentContextFactsV1 {
     pub open_docs: Vec<AgentContextDocumentFactV1>,
     pub selections: Vec<AgentContextSelectionFactV1>,
     pub proposal_facts: Vec<AgentContextProposalFactV1>,
+}
+
+/// V2 separates resource identity from acquired LogicalState. No defaults for required facts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextActiveTargetV2 {
+    pub rel_path: String,
+    pub load_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentResourceAvailabilityV2 {
+    NotRequested,
+    Loading,
+    Ready,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextSnapshotFactV2 {
+    pub source: String,
+    pub edit_format: String,
+    pub content_format: String,
+    pub dirty: bool,
+    pub baseline: Option<String>,
+    pub session_version: u64,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextResourceV2 {
+    pub rel_path: String,
+    pub availability: AgentResourceAvailabilityV2,
+    pub reason_code: Option<String>,
+    pub snapshot: Option<AgentContextSnapshotFactV2>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSelectionValidationV2 {
+    Unverified,
+    Valid,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextSelectionFactV2 {
+    pub rel_path: String,
+    pub block_id: String,
+    pub start: Option<usize>,
+    pub end: Option<usize>,
+    pub validation: AgentSelectionValidationV2,
+    pub context_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextFactsV2 {
+    pub version: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub turn_id: String,
+    pub context_revision: u64,
+    pub active_target: Option<AgentContextActiveTargetV2>,
+    pub open_resources: Vec<AgentContextResourceV2>,
+    pub selections: Vec<AgentContextSelectionFactV2>,
+    pub proposal_facts: Vec<AgentContextProposalFactV1>,
+}
+
+impl AgentContextFactsV2 {
+    pub fn ready_documents(&self) -> Vec<AgentContextDocumentFactV1> {
+        self.open_resources
+            .iter()
+            .filter_map(|resource| {
+                if resource.availability != AgentResourceAvailabilityV2::Ready {
+                    return None;
+                }
+                resource
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| AgentContextDocumentFactV1 {
+                        rel_path: resource.rel_path.clone(),
+                        source: snapshot.source.clone(),
+                        edit_format: snapshot.edit_format.clone(),
+                        content_format: snapshot.content_format.clone(),
+                        dirty: snapshot.dirty,
+                        baseline: snapshot.baseline.clone(),
+                        session_version: snapshot.session_version,
+                        content_hash: snapshot.content_hash.clone(),
+                    })
+            })
+            .collect()
+    }
+}
+
+/// Version dispatch is explicit; V2 is never deserialized through the V1 shape.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum AgentContextFacts {
+    V1(AgentContextFactsV1),
+    V2(AgentContextFactsV2),
+}
+
+impl AgentContextFacts {
+    pub fn version(&self) -> &str {
+        match self {
+            Self::V1(f) => &f.version,
+            Self::V2(f) => &f.version,
+        }
+    }
+    pub fn ready_documents(&self) -> Vec<AgentContextDocumentFactV1> {
+        match self {
+            Self::V1(f) => f.open_docs.clone(),
+            Self::V2(f) => f.ready_documents(),
+        }
+    }
+    pub fn revision(&self) -> Option<u64> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(f) => Some(f.context_revision),
+        }
+    }
+    pub fn selection_count(&self) -> usize {
+        match self {
+            Self::V1(f) => f.selections.len(),
+            Self::V2(f) => f.selections.len(),
+        }
+    }
+    pub fn proposal_count(&self) -> usize {
+        match self {
+            Self::V1(f) => f.proposal_facts.len(),
+            Self::V2(f) => f.proposal_facts.len(),
+        }
+    }
 }
 
 /// TERM-AG-023：运行时从同一 AgentTurn 的持久化读取事件派生的证据项。

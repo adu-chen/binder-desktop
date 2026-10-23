@@ -17,6 +17,21 @@ pub(super) struct PreparedTurnPrompt {
     pub(super) capability_grant: ag::tool_registry::CapabilityGrantV2,
     pub(super) capability_factors: ag::tool_registry::CapabilityFactorsV2,
     pub(super) prompt_package: ag::context::PromptPackageV2,
+    pub(super) budget_measurement: ag::context::PromptBudgetMeasurement,
+    pub(super) budget_sources: serde_json::Value,
+    pub(super) history_selection: serde_json::Value,
+}
+
+/// Only trusted continuation instructions restrict a response to final/clarify.
+/// Keep native tools, Prompt Manifest and execution guards aligned, not prompt-only.
+pub(super) fn final_only_continuation(messages: &[serde_json::Value]) -> bool {
+    messages.iter().any(|message| {
+        message["role"] == "system"
+            && matches!(
+                message["layer"].as_str(),
+                Some("protocol_correction_final_only" | "read_failure_final_only")
+            )
+    })
 }
 
 fn current_document_prompt_context(
@@ -58,7 +73,7 @@ pub(super) fn prepare_turn_prompt(
     session_id: &str,
     task_run_id: Option<&str>,
     intent_result: &ag::context::IntentResultV2,
-    agent_context_facts: &crate::types::AgentContextFactsV1,
+    agent_context_facts: &crate::types::AgentContextFacts,
     explicit_edit_targets: &[String],
     read_ctx: &ag::blocks::AgentReadContext,
     active_doc_path: Option<&str>,
@@ -108,29 +123,6 @@ pub(super) fn prepare_turn_prompt(
         )
     })?;
 
-    // 历史选择必须先于 PromptPackage 构建，确保 trace 中的历史 envelope 与实际模型输入完全一致。
-    // 为 Runtime 控制层预留固定空间后，按同文档优先、跨文档弱候选规则确定性保留最近历史。
-    // 2026-08-09：CTX_BUDGET_CHARS 16000→24000、RUNTIME_CONTROL_RESERVE_CHARS 4000→6000
-    // （AG-LIMIT-01 与 DOC_CTX_CAP 扩大联动，避免长文档内联后历史预算归零）。
-    let history_budget = ag::prompt_runtime::history_budget_chars(
-        ag::prompts::SYSTEM_PROMPT_CHAT,
-        doc_ctx.as_deref(),
-        &prompt,
-        mention_block.as_deref(),
-    )
-    .saturating_sub(agent_context_facts_json.chars().count());
-    let mut assembled_messages = assemble_agent_turn_messages(
-        ag::prompts::SYSTEM_PROMPT_CHAT,
-        None,
-        &history,
-        active_doc_path.as_deref(),
-        history_budget,
-        mention_block.as_deref(),
-        Some(&agent_context_facts_json),
-        doc_ctx.as_deref(),
-        &prompt,
-    );
-
     // Prompt 只获得当前硬事实的工具可见投影；它没有 ToolCall 绑定，不能直接作为执行授权。
     let capability_factors = ag::tool_registry::CapabilityFactorsV2 {
         has_task_run: task_run_id.is_some(),
@@ -139,7 +131,7 @@ pub(super) fn prepare_turn_prompt(
         // 图片插入需要先调用 list_images 发现受控资产；活动 BDocx 即具备查询动态能力，
         // 具体图片实例能力仍由 ToolCall 执行层校验。
         image_ops_available: active_bdocx,
-        tools_frozen: freeze_tools_after_proposal,
+        tools_frozen: freeze_tools_after_proposal || final_only_continuation(continuation_messages),
         decision_receipt_ids: decision_receipt_ids.to_vec(),
         gate_attempt,
         gate_passed: false,
@@ -154,6 +146,11 @@ pub(super) fn prepare_turn_prompt(
         capability_factors.clone(),
         ag::tool_registry::CapabilityGrantPurposeV2::PromptManifest,
     );
+    let capability_instructions = ag::prompt_runtime::capability_instructions(
+        &capability_grant,
+        &current_doc_prompt_context.edit_instructions,
+    );
+
     let mut tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;
     ag::model_output::decorate_tool_definitions(&mut tools)?;
@@ -166,118 +163,202 @@ pub(super) fn prepare_turn_prompt(
                 false,
             )
         })?);
-    let mut prompt_envelopes = Vec::new();
-    prompt_envelopes.push(ag::context::prompt_data_envelope(
-        ag::context::PromptSourceTypeV1::AgentContextFacts,
-        turn_id,
-        "verified_editor_proposal_workspace_projection",
-        "frozen_at_turn_start",
-        ag::context::PromptTrustLevelV1::CurrentFact,
-        &agent_context_facts_json,
-    ));
-    if let (Some(path), Some(context)) = (active_doc_path.as_deref(), doc_ctx.as_deref()) {
-        let freshness = read_ctx
-            .open_snapshot(path)
-            .map(|snapshot| {
-                format!(
-                    "logical_state_captured_at={};session_version={};content_hash={}",
-                    snapshot.captured_at, snapshot.session_version, snapshot.content_hash
-                )
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-        let original_char_count = active_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.content.chars().count())
-            .unwrap_or_else(|| context.chars().count());
-        let truncation_reason = current_doc_requires_tool_read
-            .then_some("full_document_body_replaced_by_traceable_block_manifest");
-        prompt_envelopes.push(ag::context::prompt_data_envelope_with_budget(
-            ag::context::PromptSourceTypeV1::CurrentDocument,
-            path,
-            "active_editor_logical_state",
-            &freshness,
+    // Fit history only after measuring all mandatory sources, native schemas,
+    // RuntimeControl, JSON escaping and same-turn receipts. Rebuild the exact
+    // same envelopes/messages for each candidate; never trim execution evidence.
+    let assemble = |history_allowance: usize| {
+        let mut assembled_messages = assemble_agent_turn_messages(
+            ag::prompts::SYSTEM_PROMPT_CHAT,
+            None,
+            history,
+            active_doc_path,
+            history_allowance,
+            mention_block,
+            Some(&agent_context_facts_json),
+            doc_ctx.as_deref(),
+            prompt,
+        );
+        let mut prompt_envelopes = Vec::new();
+        prompt_envelopes.push(ag::context::prompt_data_envelope(
+            ag::context::PromptSourceTypeV1::AgentContextFacts,
+            turn_id,
+            "verified_editor_proposal_workspace_projection",
+            "frozen_at_turn_start",
             ag::context::PromptTrustLevelV1::CurrentFact,
-            context,
-            original_char_count,
-            truncation_reason,
+            &agent_context_facts_json,
         ));
-    }
-    prompt_envelopes.extend(reference_envelopes.iter().cloned());
-    if let Some(history_payload) = assembled_messages.history_payload.as_deref() {
-        let original_history_chars = history
-            .iter()
-            .map(|turn| turn.content.chars().count())
-            .sum::<usize>();
-        let truncation_reason = (assembled_messages.dropped_history > 0).then(|| {
-            format!(
-                "oldest_history_dropped_by_budget:{}",
-                assembled_messages.dropped_history
-            )
+        if let (Some(path), Some(context)) = (active_doc_path.as_deref(), doc_ctx.as_deref()) {
+            let freshness = read_ctx
+                .open_snapshot(path)
+                .map(|snapshot| {
+                    format!(
+                        "logical_state_captured_at={};session_version={};content_hash={}",
+                        snapshot.captured_at, snapshot.session_version, snapshot.content_hash
+                    )
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            let original_char_count = active_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.content.chars().count())
+                .unwrap_or_else(|| context.chars().count());
+            let truncation_reason = current_doc_requires_tool_read
+                .then_some("full_document_body_replaced_by_traceable_block_manifest");
+            prompt_envelopes.push(ag::context::prompt_data_envelope_with_budget(
+                ag::context::PromptSourceTypeV1::CurrentDocument,
+                path,
+                "active_editor_logical_state",
+                &freshness,
+                ag::context::PromptTrustLevelV1::CurrentFact,
+                context,
+                original_char_count,
+                truncation_reason,
+            ));
+        }
+        prompt_envelopes.extend(reference_envelopes.iter().cloned());
+        if let Some(history_payload) = assembled_messages.history_payload.as_deref() {
+            let original_history_chars = history
+                .iter()
+                .map(|turn| turn.content.chars().count())
+                .sum::<usize>();
+            let truncation_reason = (assembled_messages.dropped_history > 0
+                || assembled_messages.excerpted_history > 0)
+                .then(|| {
+                    format!(
+                        "history_projection:dropped={};excerpted={}",
+                        assembled_messages.dropped_history, assembled_messages.excerpted_history,
+                    )
+                });
+            prompt_envelopes.push(ag::context::prompt_data_envelope_with_budget(
+                ag::context::PromptSourceTypeV1::SessionHistory,
+                &session_id,
+                "same_session_persisted_history",
+                &format!(
+                    "workspace={};session={session_id};before_current_turn",
+                    match agent_context_facts {
+                        crate::types::AgentContextFacts::V1(f) => &f.workspace_id,
+                        crate::types::AgentContextFacts::V2(f) => &f.workspace_id,
+                    }
+                ),
+                ag::context::PromptTrustLevelV1::HistoricalData,
+                history_payload,
+                original_history_chars,
+                truncation_reason.as_deref(),
+            ));
+        }
+        prompt_envelopes.push(ag::context::prompt_data_envelope(
+            ag::context::PromptSourceTypeV1::CurrentUserInput,
+            &format!("user-input:{turn_id}"),
+            "current_agent_turn_input",
+            "current_turn",
+            ag::context::PromptTrustLevelV1::UserProvidedData,
+            prompt,
+        ));
+        prompt_envelopes.extend(continuation_prompt_envelopes(
+            turn_id,
+            continuation_messages,
+        ));
+        let preliminary_package = ag::context::build_prompt_package_v2(
+            intent_result,
+            &prompt_envelopes,
+            &capability_grant.grant_id,
+            &tool_manifest_hash,
+            assembled_messages.messages.clone(),
+            &tools,
+        );
+        insert_runtime_control_message(
+            &mut assembled_messages,
+            &runtime_profile,
+            intent_result,
+            &preliminary_package,
+            &prompt_envelopes,
+            &capability_grant,
+            None,
+            &capability_instructions,
+        );
+        assembled_messages
+            .messages
+            .extend(continuation_messages.iter().cloned());
+        let history_selection = serde_json::json!({
+            "historySubmittedCount": history.len(),
+            "historyIncludedCount": assembled_messages.included_history,
+            "historyDroppedCount": assembled_messages.dropped_history,
+            "historyExcerptedCount": assembled_messages.excerpted_history,
+            "historyOriginalChars": history.iter().map(|turn|turn.content.chars().count()).sum::<usize>(),
+            "historyIncludedChars": assembled_messages.included_history_chars,
+            "historyAllowanceChars": history_allowance,
         });
-        prompt_envelopes.push(ag::context::prompt_data_envelope_with_budget(
-            ag::context::PromptSourceTypeV1::SessionHistory,
-            &session_id,
-            "same_session_persisted_history",
-            &format!(
-                "workspace={};session={session_id};before_current_turn",
-                agent_context_facts.workspace_id
-            ),
-            ag::context::PromptTrustLevelV1::HistoricalData,
-            history_payload,
-            original_history_chars,
-            truncation_reason.as_deref(),
-        ));
+        let messages = assembled_messages.messages;
+        let prompt_package = ag::context::build_prompt_package_v2(
+            intent_result,
+            &prompt_envelopes,
+            &capability_grant.grant_id,
+            &tool_manifest_hash,
+            messages.clone(),
+            &tools,
+        );
+        let budget_measurement = ag::context::measure_prompt_budget(&messages, &tools);
+        // Source projections overlap message layers: diagnostic provenance, not additive ledger rows.
+        let budget_sources = serde_json::json!(prompt_envelopes.iter().map(|e| serde_json::json!({
+        "sourceType": e.source_type,
+        "sourceIdHash": ag::context::sha256_text(&e.source_id),
+        "freshnessHash": ag::context::sha256_text(&e.freshness),
+        "contentHash": e.content_hash,
+        "originalChars": e.original_char_count,
+        "includedChars": e.included_char_count,
+        "transformReason": if e.truncation_reason.is_some() { "existing_source_projection" } else { "none" },
+        "transformReasonHash": e.truncation_reason.as_deref().map(ag::context::sha256_text),
+    })).collect::<Vec<_>>());
+        PreparedTurnPrompt {
+            current_doc_requires_tool_read,
+            current_doc_prompt_coverage,
+            messages,
+            tools: tools.clone(),
+            capability_grant: capability_grant.clone(),
+            capability_factors: capability_factors.clone(),
+            prompt_package,
+            budget_measurement,
+            budget_sources,
+            history_selection,
+        }
+    };
+    let mut prepared = assemble(0);
+    let serialized_limit = ag::prompt_runtime::PROMPT_INPUT_LIMIT * 4;
+    // Mandatory over-budget sources must still reach the existing pre-Gate
+    // failure path. An empty history cannot make them legal.
+    if prepared.budget_measurement.serialized_chars > serialized_limit || history.is_empty() {
+        return Ok(prepared);
     }
-    prompt_envelopes.push(ag::context::prompt_data_envelope(
-        ag::context::PromptSourceTypeV1::CurrentUserInput,
-        &format!("user-input:{turn_id}"),
-        "current_agent_turn_input",
-        "current_turn",
-        ag::context::PromptTrustLevelV1::UserProvidedData,
-        prompt,
-    ));
-    prompt_envelopes.extend(continuation_prompt_envelopes(
-        turn_id,
-        continuation_messages,
-    ));
-    let preliminary_package = ag::context::build_prompt_package_v2(
-        intent_result,
-        &prompt_envelopes,
-        &capability_grant.grant_id,
-        &tool_manifest_hash,
-        assembled_messages.messages.clone(),
-        &tools,
-    );
-    insert_runtime_control_message(
-        &mut assembled_messages,
-        &runtime_profile,
-        intent_result,
-        &preliminary_package,
-        &prompt_envelopes,
-        &capability_grant,
-        None,
-    );
-    assembled_messages
-        .messages
-        .extend(continuation_messages.iter().cloned());
-    let messages = assembled_messages.messages;
-    let prompt_package = ag::context::build_prompt_package_v2(
-        intent_result,
-        &prompt_envelopes,
-        &capability_grant.grant_id,
-        &tool_manifest_hash,
-        messages.clone(),
-        &tools,
-    );
-    Ok(PreparedTurnPrompt {
-        current_doc_requires_tool_read,
-        current_doc_prompt_coverage,
-        messages,
-        tools,
-        capability_grant,
-        capability_factors,
-        prompt_package,
-    })
+    let mut low = 1;
+    let mut high = serialized_limit
+        .saturating_sub(prepared.budget_measurement.serialized_chars)
+        .min(
+            history
+                .iter()
+                .map(|turn| turn.content.chars().count())
+                .sum(),
+        );
+    let largest = assemble(high);
+    if largest.budget_measurement.serialized_chars <= serialized_limit {
+        return Ok(largest);
+    }
+    if high == 0 {
+        return Ok(prepared);
+    }
+    high -= 1;
+    // Numeric allowance search is bounded by the complete-request capacity, not
+    // input history length. Keep only measured fitting candidates, including
+    // omission markers, provenance labels and envelope overhead.
+    while low <= high {
+        let allowance = low + (high - low) / 2;
+        let candidate = assemble(allowance);
+        if candidate.budget_measurement.serialized_chars <= serialized_limit {
+            prepared = candidate;
+            low = allowance + 1;
+        } else {
+            high = allowance - 1;
+        }
+    }
+    Ok(prepared)
 }
 
 fn continuation_prompt_envelopes(
@@ -343,7 +424,201 @@ fn continuation_prompt_envelopes(
 
 #[cfg(test)]
 mod tests {
+    // covers: BR-AG-DATA-002, BR-AG-DATA-008, BR-SYS-DATA-008
+    #[test]
+    fn only_trusted_finalization_instructions_freeze_tools() {
+        for layer in ["read_failure_final_only", "protocol_correction_final_only"] {
+            assert!(super::final_only_continuation(&[
+                serde_json::json!({"role":"system","layer":layer})
+            ]));
+            for role in ["user", "assistant", "tool"] {
+                assert!(!super::final_only_continuation(&[
+                    serde_json::json!({"role":role,"layer":layer})
+                ]));
+            }
+        }
+        assert!(!super::final_only_continuation(&[
+            serde_json::json!({"role":"system","layer":"protocol_correction"})
+        ]));
+    }
     use super::*;
+
+    fn prepared_history(
+        history: &[ag::context::HistTurn],
+        prompt: &str,
+        continuation: &[serde_json::Value],
+    ) -> PreparedTurnPrompt {
+        let state = AppState {
+            db: std::sync::Arc::new(std::sync::Mutex::new(
+                rusqlite::Connection::open_in_memory().unwrap(),
+            )),
+            registry: crate::build_registry(),
+            assist_terminals: Default::default(),
+            active_agent_turns: Default::default(),
+        };
+        let read_ctx =
+            ag::blocks::AgentReadContext::new(std::path::Path::new("."), vec![]).unwrap();
+        let facts = crate::types::AgentContextFacts::V2(serde_json::from_value(serde_json::json!({
+            "version":"agent-context-facts-v2", "workspaceId":"ws", "sessionId":"session",
+            "turnId":"current", "contextRevision":1, "activeTarget":{"relPath":"a.html","loadSeq":1},
+            "openResources":[{"relPath":"a.html","availability":"not_requested","reasonCode":null,"snapshot":null}],
+            "selections":[],"proposalFacts":[],
+        })).unwrap());
+        let reference = "EXPLICIT-REFERENCE：只读，不修改";
+        let envelope = ag::context::prompt_data_envelope(
+            ag::context::PromptSourceTypeV1::ExplicitReference,
+            "reference-1",
+            "explicit_selection",
+            "current",
+            ag::context::PromptTrustLevelV1::UserProvidedData,
+            reference,
+        );
+        prepare_turn_prompt(
+            &state,
+            ag::turn::AGENT_EDIT_1_0_PROFILE,
+            "current",
+            "session",
+            None,
+            &ag::context::IntentResultV2::unresolved(),
+            &facts,
+            &["a.html".into()],
+            &read_ctx,
+            Some("a.html"),
+            None,
+            history,
+            prompt,
+            Some(reference),
+            &[envelope],
+            false,
+            continuation,
+            &[],
+            1,
+            6,
+        )
+        .unwrap()
+    }
+
+    fn history_pair(answer: String) -> Vec<ag::context::HistTurn> {
+        [
+            ("user", "HISTORY-USER：分析A/B；只读，不修改。".into()),
+            ("assistant", answer),
+        ]
+        .into_iter()
+        .map(|(role, content)| ag::context::HistTurn {
+            workspace_id: "ws".into(),
+            session_id: "session".into(),
+            role: role.into(),
+            content,
+            rel_path: Some("a.html".into()),
+            turn_id: Some("prior".into()),
+        })
+        .collect()
+    }
+
+    // covers: BR-AG-DATA-002
+    // covers: BR-AG-DATA-004
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn production_history_assembly_preserves_long_prior_answer_without_a_second_budget() {
+        for count in [2868, 3863, 12_000] {
+            let answer = format!("ANSWER-HEAD{}ANSWER-TAIL", "文".repeat(count));
+            let history = history_pair(answer.clone());
+            let prepared = prepared_history(&history, "同样分析其他测试组", &[]);
+            let visible = prepared
+                .messages
+                .iter()
+                .find(|m| m["layer"] == ag::context::LayerKind::History.as_str())
+                .unwrap();
+            assert!(visible["content"]
+                .as_str()
+                .unwrap()
+                .contains("[DATA-ONLY session_history]"));
+            assert!(visible["content"].as_str().unwrap().contains(&answer));
+            assert!(visible["content"]
+                .as_str()
+                .unwrap()
+                .contains("HISTORY-USER"));
+            assert_eq!(prepared.history_selection["historyIncludedCount"], 2);
+            assert_eq!(prepared.history_selection["historyDroppedCount"], 0);
+            assert_eq!(prepared.history_selection["historyExcerptedCount"], 0);
+            assert!(
+                prepared.budget_measurement.estimated_tokens
+                    <= ag::prompt_runtime::PROMPT_INPUT_LIMIT
+            );
+            assert_eq!(
+                ag::context::measure_prompt_budget(&prepared.messages, &prepared.tools),
+                prepared.budget_measurement
+            );
+            assert!(!prepared
+                .history_selection
+                .to_string()
+                .contains("HISTORY-USER"));
+        }
+    }
+
+    // covers: BR-AG-DATA-001
+    // covers: BR-AG-DATA-004
+    // covers: BR-AG-DATA-005
+    #[test]
+    fn history_fitting_counts_escaping_and_keeps_current_request_references_and_receipts() {
+        let history = history_pair(format!(
+            "ANSWER-HEAD{}ANSWER-TAIL",
+            "中😀\\\"".repeat(100_000)
+        ));
+        let continuation = vec![
+            serde_json::json!({"role":"assistant","content":null,"tool_calls":[{"id":"read-1","type":"function","function":{"name":"read_doc","arguments":"{}"}}]}),
+            serde_json::json!({"role":"tool","tool_call_id":"read-1","content":format!("ACTUAL-RECEIPT{}", "中".repeat(40_000))}),
+        ];
+        let prompt = "CURRENT-REQUEST：按刚才口径继续；不要修改。";
+        let prepared = prepared_history(&history, prompt, &continuation);
+        assert!(
+            prepared.budget_measurement.estimated_tokens <= ag::prompt_runtime::PROMPT_INPUT_LIMIT
+        );
+        assert_eq!(prepared.history_selection["historyIncludedCount"], 2);
+        assert_eq!(prepared.history_selection["historyExcerptedCount"], 1);
+        let visible = prepared
+            .messages
+            .iter()
+            .find(|m| m["layer"] == ag::context::LayerKind::History.as_str())
+            .unwrap()["content"]
+            .as_str()
+            .unwrap();
+        for marker in ["HISTORY-USER", "ANSWER-HEAD", "ANSWER-TAIL", "非完整消息"] {
+            assert!(visible.contains(marker));
+        }
+        assert!(prepared
+            .messages
+            .iter()
+            .any(|message| message["role"] == "user" && message["content"] == prompt));
+        assert!(prepared.messages.iter().any(|message| message["content"]
+            .as_str()
+            .is_some_and(|s| s.contains("EXPLICIT-REFERENCE"))));
+        assert_eq!(
+            &prepared.messages[prepared.messages.len() - continuation.len()..],
+            continuation.as_slice()
+        );
+        assert_eq!(
+            prepared.tools,
+            prepared_history(&[], prompt, &continuation).tools
+        );
+        assert_eq!(
+            prepared.capability_grant.allowed_tools,
+            prepared_history(&[], prompt, &continuation)
+                .capability_grant
+                .allowed_tools
+        );
+        assert_eq!(history[1].content.chars().count(), 400_022);
+        let mandatory = "CURRENT-OVERSIZE".repeat(ag::prompt_runtime::PROMPT_INPUT_LIMIT);
+        let rejected = prepared_history(&history, &mandatory, &continuation);
+        assert!(
+            rejected.budget_measurement.estimated_tokens > ag::prompt_runtime::PROMPT_INPUT_LIMIT
+        );
+        assert_eq!(rejected.history_selection["historyIncludedCount"], 0);
+        assert!(rejected
+            .messages
+            .iter()
+            .any(|message| message["content"] == mandatory));
+    }
 
     // covers: BR-AG-DATA-001, BR-AG-DATA-004
     #[test]

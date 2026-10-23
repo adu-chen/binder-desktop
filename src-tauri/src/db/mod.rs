@@ -13,6 +13,33 @@ struct Migration {
     sql: &'static str,
 }
 
+/// agent_turn_events 结构 DDL（与已执行的 v17 同构；v19 前向补建漂移库缺失的结构）。
+/// 索引/触发器名在 SQLite 中全局唯一：旧构建若已把同名对象挂在旧表上，
+/// `IF NOT EXISTS` 会静默跳过，故先 DROP 再 CREATE，保证新表真正获得索引与 append-only 触发器。
+const AGENT_TURN_EVENTS_TABLE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS agent_turn_events (
+        event_id       TEXT PRIMARY KEY,
+        workspace_id   TEXT NOT NULL,
+        session_id     TEXT NOT NULL,
+        turn_id        TEXT NOT NULL,
+        seq            INTEGER NOT NULL,
+        kind           TEXT NOT NULL,
+        payload_version INTEGER NOT NULL,
+        payload_json   TEXT NOT NULL,
+        occurred_at    INTEGER NOT NULL,
+        UNIQUE(turn_id, seq)
+    );
+    DROP INDEX IF EXISTS idx_agent_turn_events_workspace_turn_seq;
+    CREATE INDEX IF NOT EXISTS idx_agent_turn_events_workspace_turn_seq
+        ON agent_turn_events(workspace_id, turn_id, seq);
+    DROP TRIGGER IF EXISTS trg_agent_turn_events_no_update;
+    CREATE TRIGGER IF NOT EXISTS trg_agent_turn_events_no_update
+        BEFORE UPDATE ON agent_turn_events
+        BEGIN
+            SELECT RAISE(ABORT, 'agent_turn_events are append-only');
+        END;
+"#;
+
 /// 迁移序列。每次 schema 变更**追加**一条（version 单调递增），不改既有。
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -464,6 +491,19 @@ const MIGRATIONS: &[Migration] = &[
                 ON pending_diffs(proposal_batch_id, group_index);
         "#,
     },
+    Migration {
+        version: 19,
+        // 迁移漂移修复（AG-ADAPTIVE-RUNTIME-WP1-EVENTS-01 升级路径）：早期构建在 schema_meta
+        // 推进后仍把回合事件写入旧表名 turn_events，使创建 agent_turn_events 的 v17 不会重跑。
+        // v19 前向补建同构结构（幂等），并在 migrate() 中同事务调用 reconcile_legacy_turn_events
+        // 归一旧行；不回改已执行的 v17。健康库为 no-op。
+        sql: AGENT_TURN_EVENTS_TABLE_SQL,
+    },
+    Migration {
+        version: 20,
+        // v19 已在真实库执行；以新版本修复七列旧表，不能依赖重跑 v19。
+        sql: "",
+    },
 ];
 
 fn now_millis() -> i64 {
@@ -499,6 +539,12 @@ pub fn migrate(conn: &mut Connection) -> rusqlite::Result<i64> {
     for m in MIGRATIONS.iter().filter(|m| m.version > from) {
         let tx = conn.transaction()?;
         tx.execute_batch(m.sql)?;
+        if m.version == 19 {
+            reconcile_legacy_turn_events(&tx)?;
+        }
+        if m.version == 20 {
+            migrate_legacy_turn_event_rows(&tx)?;
+        }
         tx.execute(
             "INSERT INTO schema_meta (schema_version, applied_at) VALUES (?1, ?2)",
             (m.version, now_millis()),
@@ -506,6 +552,123 @@ pub fn migrate(conn: &mut Connection) -> rusqlite::Result<i64> {
         tx.commit()?;
     }
     Ok(current_version(conn))
+}
+
+/// v19 归一：健康库（无 turn_events）为 no-op；若早期构建遗留同名事件表，将其仍符合
+/// agent_turn_events 列形状的行幂等并入（INSERT OR IGNORE 依赖 UNIQUE(turn_id, seq)），
+/// 保留原始 event_id/seq，使 afterSeq 补流与证据账本不受影响。列形状不兼容时仅告警不阻塞启动。
+fn reconcile_legacy_turn_events(conn: &Connection) -> rusqlite::Result<()> {
+    let legacy_present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'turn_events'",
+        [],
+        |row| row.get(0),
+    )?;
+    if legacy_present == 0 {
+        return Ok(());
+    }
+    const EVENT_COLUMNS: [&str; 9] = [
+        "event_id",
+        "workspace_id",
+        "session_id",
+        "turn_id",
+        "seq",
+        "kind",
+        "payload_version",
+        "payload_json",
+        "occurred_at",
+    ];
+    let mut present = std::collections::HashSet::<String>::new();
+    {
+        let mut statement = conn.prepare("SELECT name FROM pragma_table_info('turn_events')")?;
+        let names = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for name in names {
+            present.insert(name?);
+        }
+    }
+    if !EVENT_COLUMNS.iter().all(|column| present.contains(*column)) {
+        eprintln!("[db] 检测到旧表 turn_events，但列与 agent_turn_events 不兼容，跳过事件归一");
+        return Ok(());
+    }
+    let column_list = EVENT_COLUMNS.join(", ");
+    let copied = conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO agent_turn_events ({column_list}) \
+             SELECT {column_list} FROM turn_events"
+        ),
+        [],
+    )?;
+    if copied > 0 {
+        eprintln!("[db] 已将 turn_events 的 {copied} 行回合事件归一至 agent_turn_events");
+    }
+    Ok(())
+}
+
+/// 真实七列旧表从 AgentTurn 补回 workspace/session，保留事件身份、seq 与 created_at。
+/// 无法确定归属或已有同身份不同事实时回滚本次迁移；不伪造归属、不覆盖当前事件。
+fn migrate_legacy_turn_event_rows(conn: &Connection) -> rusqlite::Result<()> {
+    let columns = conn
+        .prepare("SELECT name FROM pragma_table_info('turn_events')")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let common = [
+        "event_id",
+        "turn_id",
+        "seq",
+        "kind",
+        "payload_version",
+        "payload_json",
+    ];
+    let current_shape = ["workspace_id", "session_id", "occurred_at"]
+        .iter()
+        .all(|column| columns.contains(*column));
+    if !common.iter().all(|column| columns.contains(*column))
+        || (!current_shape && !columns.contains("created_at"))
+    {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "AG_EVENT_MIGRATION_SCHEMA: unsupported legacy turn_events columns".into(),
+        ));
+    }
+    let projection = if current_shape {
+        "SELECT e.event_id,e.workspace_id,e.session_id,e.turn_id,e.seq,e.kind,e.payload_version,e.payload_json,e.occurred_at FROM turn_events e"
+    } else {
+        "SELECT e.event_id,t.workspace_id,t.session_id,e.turn_id,e.seq,e.kind,e.payload_version,e.payload_json,e.created_at AS occurred_at FROM turn_events e LEFT JOIN agent_turns t ON t.turn_id=e.turn_id"
+    };
+    // 校验整个来源再插入，允许完全相同的重复行，禁止 INSERT OR IGNORE 静默丢弃冲突事实。
+    let invalid: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM ({projection}) WHERE workspace_id IS NULL OR trim(workspace_id)='' OR session_id IS NULL OR trim(session_id)=''"),
+        [], |row| row.get(0),
+    )?;
+    if invalid != 0 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "AG_EVENT_MIGRATION_IDENTITY: legacy events have no recoverable workspace/session"
+                .into(),
+        ));
+    }
+    let conflicts: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM ({projection}) old JOIN agent_turn_events current
+            ON current.event_id=old.event_id OR (current.turn_id=old.turn_id AND current.seq=old.seq)
+            WHERE current.event_id IS NOT old.event_id OR current.workspace_id IS NOT old.workspace_id
+            OR current.session_id IS NOT old.session_id OR current.turn_id IS NOT old.turn_id
+            OR current.seq IS NOT old.seq OR current.kind IS NOT old.kind
+            OR current.payload_version IS NOT old.payload_version OR current.payload_json IS NOT old.payload_json
+            OR current.occurred_at IS NOT old.occurred_at"),
+        [], |row| row.get(0),
+    )?;
+    if conflicts != 0 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "AG_EVENT_MIGRATION_CONFLICT: legacy and current event facts disagree".into(),
+        ));
+    }
+    conn.execute(
+        &format!("INSERT INTO agent_turn_events (event_id,workspace_id,session_id,turn_id,seq,kind,payload_version,payload_json,occurred_at)
+            SELECT * FROM ({projection}) old WHERE NOT EXISTS (SELECT 1 FROM agent_turn_events current WHERE current.event_id=old.event_id)"),
+        [],
+    )?;
+    // 已迁移行仍保留在旧表作为升级证据；生产读取仅使用 agent_turn_events。
+    Ok(())
 }
 
 /// 打开（或创建）workspace.db 并迁移到最新版本——重启恢复入口。
@@ -739,5 +902,237 @@ mod tests {
             )
             .unwrap();
         assert_eq!(batch, ("ws1".into(), 1));
+    }
+
+    fn seed_real_legacy_events(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE turn_events (
+                event_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                kind TEXT NOT NULL, payload_version INTEGER NOT NULL,
+                payload_json TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(turn_id,seq)
+            );
+            INSERT INTO agent_turns (turn_id,workspace_id,session_id,payload_ref,created_at)
+                VALUES ('old-turn','ws-old','session-old','payload-old',40);
+            INSERT INTO turn_events VALUES ('old-event','old-turn',1,'turn_started',1,'{}',42);
+        "#,
+        )
+        .unwrap();
+    }
+
+    // covers: BR-SYS-PERSIST-001
+    // covers: BR-AG-PERSIST-001
+    #[test]
+    fn migration_v20_preserves_real_seven_column_events_from_v18_and_v19() {
+        for version in [18, 19] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            migrate_to(&mut conn, version);
+            seed_real_legacy_events(&conn);
+            if version == 18 {
+                conn.execute_batch("DROP TABLE agent_turn_events;").unwrap();
+            }
+            assert_eq!(migrate(&mut conn).unwrap(), latest());
+            let identity: (String,String,i64,String) = conn.query_row(
+                "SELECT workspace_id,session_id,occurred_at,payload_json FROM agent_turn_events WHERE event_id='old-event'",
+                [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+            ).unwrap();
+            assert_eq!(
+                identity,
+                ("ws-old".into(), "session-old".into(), 42, "{}".into())
+            );
+            assert_eq!(
+                agent_turn_event_rows(&conn),
+                vec![("old-event".into(), 1, "turn_started".into())]
+            );
+            assert_eq!(migrate(&mut conn).unwrap(), latest());
+            assert_eq!(agent_turn_event_rows(&conn).len(), 1);
+            assert!(has_agent_turn_event_structure(&conn));
+        }
+    }
+
+    // covers: BR-SYS-PERSIST-001
+    // covers: BR-AG-PERSIST-001
+    #[test]
+    fn migration_v20_rolls_back_missing_identity_and_conflicting_facts() {
+        for defect in ["orphan", "session", "event_conflict", "seq_conflict"] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            migrate_to(&mut conn, 19);
+            seed_real_legacy_events(&conn);
+            match defect {
+                "orphan" => {
+                    conn.execute("DELETE FROM agent_turns", []).unwrap();
+                }
+                "session" => {
+                    conn.execute("UPDATE agent_turns SET session_id=NULL", [])
+                        .unwrap();
+                }
+                _ => {
+                    let event_id = if defect == "event_conflict" {
+                        "old-event"
+                    } else {
+                        "different-event"
+                    };
+                    conn.execute("INSERT INTO agent_turn_events VALUES (?1,'ws-old','session-old','old-turn',1,'chunk',1,'{}',42)", [event_id]).unwrap();
+                }
+            }
+            let before = agent_turn_event_rows(&conn);
+            let error = migrate(&mut conn).unwrap_err().to_string();
+            let expected = if defect == "orphan" || defect == "session" {
+                "AG_EVENT_MIGRATION_IDENTITY"
+            } else {
+                "AG_EVENT_MIGRATION_CONFLICT"
+            };
+            assert!(error.contains(expected), "{defect}: {error}");
+            assert_eq!(current_version(&conn), 19);
+            assert_eq!(agent_turn_event_rows(&conn), before);
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM turn_events", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+    }
+
+    // covers: BR-SYS-PERSIST-001
+    #[test]
+    fn migration_v20_accepts_identical_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 19);
+        seed_real_legacy_events(&conn);
+        conn.execute_batch("INSERT INTO agent_turn_events VALUES ('old-event','ws-old','session-old','old-turn',1,'turn_started',1,'{}',42)").unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), latest());
+        assert_eq!(agent_turn_event_rows(&conn).len(), 1);
+    }
+
+    fn has_agent_turn_event_structure(conn: &Connection) -> bool {
+        let table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_turn_events'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' \
+                 AND name='idx_agent_turn_events_workspace_turn_seq' AND tbl_name='agent_turn_events'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let trigger: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' \
+                 AND name='trg_agent_turn_events_no_update' AND tbl_name='agent_turn_events'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        table == 1 && index == 1 && trigger == 1
+    }
+
+    fn agent_turn_event_rows(conn: &Connection) -> Vec<(String, i64, String)> {
+        conn.prepare("SELECT event_id, seq, kind FROM agent_turn_events ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    // 同构改名夹具；真实七列旧表另由 migration_v20 测试覆盖。
+    #[test]
+    fn migration_v19_normalizes_legacy_turn_events_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 18);
+        // 模拟早期构建形态：表改名后触发器/索引仍占同名（全局唯一），v19 必须先 DROP 再建。
+        conn.execute_batch("ALTER TABLE agent_turn_events RENAME TO turn_events;")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO turn_events \
+             (event_id,workspace_id,session_id,turn_id,seq,kind,payload_version,payload_json,occurred_at) \
+             VALUES \
+             ('turn-event:t1:1','ws1','s1','t1',1,'turn_started',1,'{\"runtimeProfile\":\"edit\"}',100), \
+             ('turn-event:t1:2','ws1','s1','t1',2,'context_frozen',1,'{\"openDocCount\":1}',101)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(migrate(&mut conn).unwrap(), latest());
+        assert!(has_agent_turn_event_structure(&conn));
+        assert_eq!(
+            agent_turn_event_rows(&conn),
+            vec![
+                ("turn-event:t1:1".to_string(), 1, "turn_started".to_string()),
+                (
+                    "turn-event:t1:2".to_string(),
+                    2,
+                    "context_frozen".to_string()
+                ),
+            ]
+        );
+        // 幂等：再次迁移版本不涨、行不重复。
+        assert_eq!(migrate(&mut conn).unwrap(), latest());
+        assert_eq!(agent_turn_event_rows(&conn).len(), 2);
+        let version_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_meta", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version_rows, latest());
+    }
+
+    // 健康库（无 turn_events）：v19 为 no-op，不丢既有行、不新建旧表。
+    #[test]
+    fn migration_v19_is_noop_without_legacy_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 18);
+        conn.execute(
+            "INSERT INTO agent_turn_events \
+             (event_id,workspace_id,session_id,turn_id,seq,kind,payload_version,payload_json,occurred_at) \
+             VALUES ('turn-event:t1:1','ws1','s1','t1',1,'chunk',1,'{\"text\":\"A\"}',100)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(migrate(&mut conn).unwrap(), latest());
+        assert!(has_agent_turn_event_structure(&conn));
+        assert_eq!(agent_turn_event_rows(&conn).len(), 1);
+        let legacy: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_events'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy, 0);
+    }
+
+    // 文件级升级夹具：覆盖“从旧迁移形态升级后的真实持久数据库”跨重启场景。
+    #[test]
+    fn file_db_upgrade_from_legacy_turn_events_survives_restart() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("binder_upgrade_legacy_{}.db", now_millis()));
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrate_to(&mut conn, 19);
+            seed_real_legacy_events(&conn);
+        }
+        {
+            // 升级后首次启动：漂移被修复并归一。
+            let conn = open_and_migrate(&path).unwrap();
+            assert!(has_agent_turn_event_structure(&conn));
+            assert_eq!(agent_turn_event_rows(&conn).len(), 1);
+        }
+        {
+            // 日常再次启动：结构仍在、迁移幂等。
+            let conn = open_and_migrate(&path).unwrap();
+            assert!(has_agent_turn_event_structure(&conn));
+            assert_eq!(agent_turn_event_rows(&conn).len(), 1);
+            let version_rows: i64 = conn
+                .query_row("SELECT COUNT(*) FROM schema_meta", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version_rows, latest());
+        }
+        let _ = std::fs::remove_file(&path);
     }
 }

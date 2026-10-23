@@ -203,7 +203,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.ED.frontend_owned).toBe(11);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'ED')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(240);
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(243); // ED-TEXT-SAVE-REPAIR-01：旧草稿保存恢复 +2，错误展示重试 +1。
     expect(inventory.modules.SYS.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'SYS')
@@ -219,7 +219,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.AG.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'AG')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(118); // AG-MSG-RENDER-01：AgentUI +10（Markdown 渲染/时序）、agRuntime +2（消息片段时序）；AG-1.0-IMP-CLARIFICATION-01：agRuntime +2（澄清非终态，BR-SYS-STATE-007，人类批准基线调整 92→94）；AG-1.0-IMP-TASKRUN-UI-01：agRuntime +2（TaskRun 查询/失败保持，BR-SYS-STATE-008，人类批准基线调整 94→96）；AG-1.0-TASKRUN-REWORK-IMP-UI-01：agRuntime +2（回合实时事件，96→98）；AG-1.0-TASKRUN-REWORK-CONTINUE-01：agRuntime +3（auto-continue 等，98→101）；AG-1.0-TASKRUN-REWORK-INTENT-01：agRuntime +1（刷新会话任务计划，101→102）；AG-1.0-DECISION-CARD-01：agRuntime +2（决策门控/auto-continue 绕过），人类批准基线调整 102→104；AG-1.0-DIFF-PREVIEW-ACK-CHAIN-01：agRuntime +1（PreviewAck 后 fresh LogicalState continuation，104→105）；AG-DELETE-PROJECTION-01：agRuntime +1（delete_doc 投影透传为确认卡，105→106）；AG-CONFORMANCE-CODE-S3A：agRuntime +2（同 turn_id 受控重入、调用前快照失败保留等待身份，人类批准基线调整 106→108）；AG-CONFORMANCE-CODE-S3B：agRuntime +1（无 TaskRun 的简单 Diff 不确认、不自动续片段，人类批准基线调整 108→109）；AG-CONFORMANCE-CODE-S4A：agRuntime +1（AgentContextFacts 对 LogicalState/Selection/AgentSession Proposal 的直接投影，人类批准基线调整 109→110）；AG-ADAPTIVE-RUNTIME-WP2-KERNEL-01：agRuntime +1（DecisionRequest 取消/确认均恢复原 AgentTurn，完整执行确认后 110→111）；AG-PROPOSAL-BATCH-WP7-01：agRuntime +1（同批事件逐卡投影，111→112）；AG-UI-RECOVERY-WP8-01：AgentUI/agRuntime +6（等待态、session 隔离、ProjectReport 展示/恢复/损坏拒绝、缺终态不伪造，人类确认 112→118）
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(155); // AgentUI 51 + agRuntime 83 + assistRuntime 21；AG-READ-CONTRACT-RECOVERY-01 新增隔离恢复入口接线回归，保持精确计数。
     expect(inventory.modules.PRV.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'PRV')

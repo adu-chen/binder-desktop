@@ -1,21 +1,901 @@
 {
-  "scope_id": "AG-G5-SYSTEM-VALIDATION-01",
-  "task_type": "DOC_ONLY",
+  "scope_id": "AG-CLOSURE-REPAIR-01",
+  "task_type": "CODE_CHANGE",
   "governance_phase": "VALIDATION",
-  "title": "Agent 1.0 最终 G5 系统验证",
+  "title": "Agent 闭合审计修复",
   "status": "BLOCKED",
   "confirmation": "YES",
-  "confirmation_basis": "2026-09-04 人类确认按推荐方案完整执行；2026-09-06 WP1-WP9 已全部 READY。",
-  "scope_reason": "汇总当前提交的自动化证据，执行真实 provider 与 Tauri/WKWebView 系统观察；不修改需求、设计或代码。",
+  "history_budget_work_package": {
+    "id": "AG-HISTORY-BUDGET-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation_basis": "2026-10-23 用户明确要求执行历史装配修复，并客观审计各口径限额、必要时调整；沿用本会话已确认核心文件范围，不解除父 G5 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.62",
+    "allowed_files": ["src-tauri/src/ag/context.rs", "src-tauri/src/ag/prompt_runtime.rs", "src-tauri/src/ag/turn_prompt.rs", "src-tauri/src/ag/turn_events.rs", "src-tauri/src/ag/turn_runtime.rs", "src-tauri/src/ag/turn_tool_loop.rs", "src-tauri/src/ag/verification.rs", "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md", "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md", "docs/00_core/A-CORE-C-R-01_ADUS.md", ".governance/active_scope.json"],
+    "constraints": ["保留所有既有改动、父任务 BLOCKED、权限/版本/裁决/防重放及六次模型/工具累计预算。", "不改用户数据库、文档或编辑器/DOCX；不新增真实模型请求、依赖或测试文件。", "历史始终为带来源的 DATA-ONLY；摘录明确标记缺失，不伪造语义摘要；当前输入、显式引用和同回合执行回执不得静默裁剪。"],
+    "validation": ["最终精确13文件test:plan/test:related均exit0，未缩减选择器命令：前端652/652、Rust474/474、core_chain5/5、sm_broadcast4/4、doc-tests和governance:audit通过；包含最后用户请求优先/零额度/禁止孤立回答边界修正。", "生产装配覆盖2868/3863/12000字符回答、Unicode转义/摘录hash/原件保留、引用及同回合回执不可裁剪；真实核心只读后续行历史可见，必需输入超限零Gate/模型调用；不同会话仍拒绝。", "合成活动HTML正文40000字符四页、五次真实核心模型请求，100000字符历史压力下每次保留用户需求及助手首尾；估算35933/40520/43904/43904/43904，无虚假全文升级。仅模型传输固定，不模拟被测核心。", "真实Binder现有隔离窗口批量25/25、原8恢复契约8/8和长历史六请求布尔检查通过；最后两项极限边界修正前的窗口证据单列，最终源码窗口已重编译启动但因审批服务额度不可用未重验。", "前端build、Rust格式和diff空白检查通过；首次测试构造编译失败和旧24000配置断言失败保留于计划，修正后最终全量通过，未弱化超限/零证据断言。"],
+    "unresolved_items": ["真实Provider自主语义及更小上下文BYOK模型仍需独立标定；开发预算不是供应商上下文容量承诺，未新增付费请求。", "最终边界修正后的窗口重验因审批服务额度限制未执行；最终自动化已覆盖，不绕过审批；原窗口验证不充当最终窗口或真实Provider验收。", "历史中段摘录不保证语义召回；同回合必需内容仍可能超限，六次模型/工具额度不变；不承诺无限文档、历史或所有工具永不失败。", "父AG-CLOSURE-REPAIR-01保持BLOCKED，不提升G5或专业编辑/接受/保存状态，保留全部既有未提交修改。"]
+  },
+  "bounded_reading_work_package": {
+    "id": "AG-BOUNDED-READING-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-23 用户明确要求按上一轮分析优化实现并审计、适当精简工具定义与提示词；延续既有已授权文件范围和能力内工具失败修复授权，不解除父任务 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.61",
+    "test_compatibility_extension": {"files":["src-tauri/src/ag/turn_runtime.rs"],"basis":"该文件已在父任务已确认 allowed_files 内；本次仅将原超大结构读取的既有测试显式指定view=structure，继续断言真实失败、零成功证据和失败后收尾；默认正文分页由新增生产核心场景另验，不删除旧断言。"},
+    "allowed_files": ["src-tauri/src/ag/blocks.rs", "src-tauri/src/ag/tool_exec.rs", "src-tauri/src/ag/tool_registry.rs", "src-tauri/src/ag/prompt_runtime.rs", "src-tauri/src/ag/prompts.rs", "src-tauri/src/ag/turn_prompt.rs", "src-tauri/src/ag/turn_tool_loop.rs", "src-tauri/src/ag/turn_events.rs", "src-tauri/src/ag/verification.rs", "src-tauri/src/ipc/mod.rs", "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md", "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md", "docs/00_core/A-CORE-C-R-01_ADUS.md", ".governance/active_scope.json"],
+    "constraints": ["保留现有全部未提交修改，不修改用户文档或数据库，不改编辑器/DOCX引擎。", "保留 Gate、单次结果与总预算、取消/期限、版本及写操作防重放守卫，不新增真实模型费用或发送用户数据。", "新增正文分页只在同版本下连续读取；页尾不升级全文证据；结构读取仍完整返回或明确失败。"],
+    "validation": ["最终精确15文件test:plan/test:related均exit0，未缩减选择器命令：前端652/652、Rust470/470、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过。", "真实生产核心+合成活动HTML：16250字符正文两次同版本分页、三次Gate/模型请求、无遗漏重复、无假全文证据；九工具输入预算保持原上限内。最终schema33092字符（原42739），完整动态能力分支保持原约束。", "真实Binder窗口现有隔离批量25/25、原8项恢复回执8/8；是固定传输与隔离数据，不是新正文场景的真实Provider自主决策或专业编辑器验收。", "前端build、Rust格式与diff空白检查通过；新增读取容量/范围日志只含固定字段、数值、哈希，不输出正文或完整Prompt。"],
+    "unresolved_items": ["本包未新发起真实Provider调用，不能承诺模型不提前final或网络/订阅永不失败。", "分页账本保持保守覆盖，不自动把末页或多页升级为全文；整体快照仍在内存，不承诺任意大文档/畸形HTML/视觉表格布局重建。", "父任务BLOCKED和专业接受/保存、G5发布状态不提升；其余列表过大、真实权限或专业上下文不可用仍明确失败。"]
+  },
+  "read_contract_recovery_work_package": {
+    "id": "AG-READ-CONTRACT-RECOVERY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-22 用户明确授权系统审计并解决能力内、权限内工具调用及交互中断，不限定阶段性修复；保留父任务 BLOCKED 与全部既有改动。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.60",
+    "allowed_files": ["src-tauri/src/ag/tool_exec.rs", "src-tauri/src/ag/tool_registry.rs", "src-tauri/src/ag/turn_tool_loop.rs", "src-tauri/src/ag/turn_prompt.rs", "src-tauri/src/ag/turn_events.rs", "src-tauri/src/ag/verification.rs", "src-tauri/src/ipc/mod.rs", "src/components/ag/AgentVerificationPanel.tsx", "src/components/ag/AgentUI.test.tsx", "scripts/test_governance.test.mjs", ".governance/active_scope.json", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md", "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md", "docs/00_core/A-CORE-C-R-01_ADUS.md"],
+    "frontend_validation_extension": {"files":["src/components/ag/AgentVerificationPanel.tsx","src/components/ag/AgentUI.test.tsx","scripts/test_governance.test.mjs"],"basis":"用户本轮终极目标和既有自行前端窗口验证授权；已确认运行中 Binder 已重编译且 Accessibility 可用。仅把8个本轮生产核心场景接入现有隔离下拉框/批量入口，不新增调试平台或操作用户文档。新增1个AG入口测试使已有inventory精确断言154→155，必须同步而不取消断言，不改测试治理规则或选择器。"},
+    "constraints": ["不改用户数据库/文档、编辑器或 DOCX 引擎；不放宽授权/版本校验/结果安全限制。", "不以自动重放写操作恢复；所有恢复受原模型/Gate/工具预算、取消与期限控制。", "诊断只记录固定分类及布尔值，不记录工具原始参数、Prompt、正文或凭据。"],
+    "validation": ["精确15文件 test:plan/test:related 均通过且未缩减命令：前端652/652、tsc、Rust466/466、core_chain5/5、sm_broadcast4/4、doc-tests、governance:audit。另 test:governance21/21、build、Rust格式、diff空白检查通过。", "真实Binder新编译窗口由AI经Accessibility运行隔离批量入口，25/25终态匹配；逐项从实际窗口的回执核对新增8场景的错误码、执行状态、调用计数、native工具冻结/恢复及证据保留，8/8符合要求。不是实际专业编辑或真实Gate验收。", "用户独立授权最多8个真实DeepSeek合成请求；收紧最终工具清单前7/8合约匹配，1/8在final-only请求中选择edit_blocked，不伪记全通过；该响应形状已通过生产核心回放，最终收尾native清单为空且不执行。"],
+    "unresolved_items": ["旧日志未保存具体offset数字，不能回溯模型为何选择该参数，不能宣称所有历史样本已完整复现。", "8次真实Provider探针不是最终完整AgentTurn成功率统计；最终清单收紧后未新增真实请求抽样，不保证模型/网络永不失败。", "父G5及实际专业编辑、接受/保存验收不提升；本包只签收已证实读取中断链的修复及自动/真实窗口隔离验证。"]
+  },
+  "confirmation_basis": "2026-09-08 人类明确授权根据需求与审计结果按步骤修复并逐项自检验证；纳入已有 db/mod.rs 与 agService.ts 未提交修改。2026-09-15 人类在本会话明确确认 P00 五份设计文件、原计划/验证卡、Scope 记录及脚本生成 ADUS 的范围扩展；既有 confirmation=YES 保持不变。",
+  "gateway_trace_work_package": {
+    "id": "AG-GW-TRACE-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-13 人类在独立对话中先确认本地开发网关 server.mjs、providers.mjs 的诊断及取消修复，再确认客户端 gateway.rs 传递回合诊断身份；父 AG-CLOSURE-REPAIR-01 保持 BLOCKED。",
+    "scope_reason": "仅补 CLOUD-INVOKE 的脱敏阶段追踪、请求身份和客户端断开向上游传播取消，不改变门禁、模型选择、SSE 业务协议或自动重试。",
+    "issue_trace": {
+      "user_visible_symptom": "同会话取消后新 AgentTurn 在模型请求阶段等待约 180 秒，以 AG_GW_TIMEOUT 结束；旧日志无法判定本地网关是否收到请求、上游是否响应。",
+      "entry_point": "src-tauri/src/ent/gateway.rs::stream_round → cloud/dev-gateway/server.mjs POST /invoke/stream → providers.mjs::streamProvider",
+      "rules": [
+        "BR-ENT-STATE-001",
+        "BR-SYS-OBS-001",
+        "BR-SYS-DATA-004",
+        "X-SEQ-001"
+      ],
+      "chains": [
+        "CLOUD-GATE",
+        "CLOUD-INVOKE"
+      ],
+      "producer_blocks": [
+        "src-tauri/src/ent/gateway.rs::CLOUD-INVOKE file-level"
+      ],
+      "consumer_blocks": [
+        "cloud/dev-gateway/server.mjs::/invoke/stream",
+        "cloud/dev-gateway/providers.mjs::streamProvider"
+      ],
+      "empty_rule_blocks": "本次路径未新增或修改 rules:[] 代码块；临时云网关依 EXEMPTION-GW-DEV-01 不进入客户端 @GOV 注册。",
+      "boundary_assumptions": "只传递 AgentTurn 身份和轮次作为诊断头；模型正文仍仅瞬时经过网关，不进入日志或持久化。",
+      "runtime_assumptions": "客户端取消或 180 秒请求期限导致连接关闭；本地网关依据连接 close 中止对应 fetch，不隐式重放请求。",
+      "invariant_risks": "必须保持先门禁后模型、模型选择不变、统一 SSE 业务事件不变；提前发送 HTTP 头只改变无首字节时的超时观测阶段。",
+      "validation_plan": "检查脱敏阶段与取消传播，Rust HTTP fixture 断言回合头；以相同 changed_files 执行 test:plan/test:related，真实 Provider 与窗口行为另列未验证。"
+    },
+    "allowed_files": [
+      "cloud/dev-gateway/server.mjs",
+      "cloud/dev-gateway/providers.mjs",
+      "src-tauri/src/ent/gateway.rs",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "不记录 Prompt、工具参数、令牌、密钥或模型输出；不调用真实 Provider 验证。",
+      "保留已有未提交修改，不解除父任务 BLOCKED。"
+    ],
+    "validation": [
+      "Node 语法与提供者流式/AbortSignal 内存测试通过；真实 server.mjs 处理函数的内存替身测试覆盖即时响应头、阶段身份、断线取消及日志不含测试令牌/密钥。",
+      "test:plan 对四个精确变更文件通过；首次受限 test:related 的前端 642/642 通过，Rust 16 项因本地端口权限及 LibreOffice 子进程环境失败，不计通过。",
+      "相同四文件在允许本机测试服务的环境中 test:related exit 0：前端 642/642、Rust 458/458、core_chain 5/5、sm_broadcast 4/4、doc-tests 与 governance:audit 通过。"
+    ],
+    "unresolved_items": [
+      "运行中的旧网关进程不会自动加载代码；真实 Binder 窗口和真实 Provider 的阶段日志与取消传播尚未验，不据自动化宣称本次历史超时的上游根因已经确定。"
+    ]
+  },
+  "stream_reliability_work_package": {
+    "id": "AG-STREAM-RELIABILITY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "VALIDATING",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-14 人类在收到两个故障的阶段诊断、独立范围和保留父任务 BLOCKED 的说明后明确回复确认；详细 Issue Trace 与实施顺序见 Agent 开发计划 §14.57。",
+    "scope_reason": "只修复模型控制冲突的执行前拒绝归因，以及隐藏推理长流与整轮期限的错配；保留 Gate、原工具执行算法、真实文档和父 G5 阻断。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.57",
+    "allowed_files": [
+      "cloud/dev-gateway/providers.mjs",
+      "cloud/dev-gateway/providers.test.mjs",
+      "cloud/dev-gateway/server.mjs",
+      "src-tauri/src/ent/gateway.rs",
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ipc/mod.rs",
+      "src/services/agService.ts",
+      "src/components/ag/ToolCallCard.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "scripts/test_governance.test.mjs",
+      "src/services/agRuntime.test.ts",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "不输出、持久化或显示 reasoning_content、Prompt、工具参数、令牌和密钥；进度事件不是回答或完成证据。",
+      "冲突控制封套继续整批拒绝，不按首份控制信息执行；不新增隐式副作用重试。",
+      "不得中断现有 8787 网关/Binder；诊断使用隔离端口和测试会话；保留所有未提交用户改动。",
+      "2026-10-14 人类在 ToolCallCard 最小范围询问后回复继续：仅修正误导状态与无处理按钮；新增组件断言引起的 scripts/test_governance.test.mjs 计数同步为测试治理必需项；父 AG-CLOSURE-REPAIR-01 保持 BLOCKED。"
+    ],
+    "validation": {
+      "automated": "固定网关适配 4 项、模型控制 9 项、工具回执/组件定向及本机 HTTP 活跃/停滞测试通过；最终实际变更文件 test:related exit 0：前端 648/648、Rust lib 460/460、core_chain 5/5、sm_broadcast 4/4、TypeScript、doc-tests 与 governance:audit 均通过。",
+      "system": "独立 8788 真实 DeepSeek 约 3.68 秒 progress→chunk→done；实际 Binder 隔离入口批量 17/17 终态匹配，均不覆盖真实历史 194 秒或随机控制冲突复现。",
+      "unresolved_items": [
+        "历史第三轮流没有逐帧类型、首轮冲突没有原始字段值；无法追溯供应商内部生成原因。",
+        "真实生产交互的冲突卡片与超过 180 秒长流尚未重新出现，系统级特定场景保持待证。",
+        "直接网关 README 的 progress 协议说明等待本轮 Scope 扩展答复。"
+      ],
+      "2026-10-22_rerun": "按本工作包精确 changed_files 重新执行 test:plan 通过；受限环境首次 test:related 前端 651/651、TypeScript 通过，但 Rust 445/461，16 项本机环回端口受限，另 LibreOffice signal 6，均不计通过。获准本机测试服务后原样重跑 test:related exit 0：前端 651/651、Rust 461/461、core_chain 5/5、sm_broadcast 4/4、doc-tests、TypeScript、governance:audit 通过。另 test:governance 21/21、npm run build、rustfmt --edition 2021 --check（本包 Rust 文件）、git diff --check 通过。真实生产冲突/超过旧期限场景仍未复现；本次未改 README，Scope 外的该协议说明继续待授权。"
+    }
+  },
+  "response_protocol_work_package": {
+    "id": "AG-RESPONSE-PROTOCOL-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-22 用户在响应协议根因审计和完整修复方案后明确要求修复；包含统一判定/纠错、必要状态机与诊断、生产入口测试及计划/验证留痕。",
+    "scope_reason": "正文封套失败绕过既有工具纠错，且普通前置说明可能提前拒绝合法原生工具；修复响应级判定、同回合有界纠错及事实归因。",
+    "allowed_files": [
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/tool.rs",
+      "src-tauri/src/ag/turn.rs",
+      "src-tauri/src/ag/verification.rs",
+      ".governance/active_scope.json",
+      "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "constraints": [
+      "保留父 AG-CLOSURE-REPAIR-01 BLOCKED 和全部既有未提交改动。",
+      "不改 Gate/权限/专业编辑算法或用户文件，不自动重放写操作，不记录正文/Prompt/完整参数/凭据。",
+      "普通前置说明不作为语义来源；明确损坏或冲突控制仍整批拒绝；纠错不重置调用计数和已执行证据。"
+    ],
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.59",
+    "phase_gate": {"status":"passed","evidence":"沿用 BR-AG-STATE-001/002、BR-AG-DATA-004/005、BR-AG-OBS-001、X-SEQ-001；同步既有状态机，不引入专业能力。"},
+    "validation": [
+      "精确12文件 test:plan 通过；最终同输入 test:related exit 0：前端651/651、Rust464/464、core_chain5/5、sm_broadcast4/4、doc-tests、governance:audit通过。",
+      "生产入口固定传输新增18场景覆盖正文缺失/非法/不完整/空回答后的纠正、前置说明+原生工具、显式损坏控制拒绝、纠错耗尽、已有读取证据、确认后正文/工具协议防重放、参数/控制共享计数、六次模型上限，以及纠错中Gate拒绝/取消/断流/HTTP402。所有场景验证同回合唯一终态、Gate/模型次数、零非法工具执行及无未验证正文泄漏。",
+      "test:governance21/21、npm run build（含TypeScript）、7个Rust文件rustfmt --check、git diff --check通过。首次沙箱内定向生产测试因环回端口Operation not permitted失败，获准本机测试权限后定向及多轮完整关联回归通过，环境失败不计通过。"
+    ],
+    "unresolved_items": ["HTTP_402 为独立供应商余额问题，本包不更改账号、密钥或计费配置；不保证真实模型永远输出合规响应。"]
+  },
+  "tool_reliability_work_package": {
+    "id": "AG-TOOL-RELIABILITY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "VALIDATING",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-22 人类在收到工具调用失败的代码审计和独立修复范围后明确回复确认；仅限本工作包列出的 Agent 核心/验证/计划/验收卡文件，父 AG-CLOSURE-REPAIR-01 保持 BLOCKED。",
+    "scope_reason": "修复工具参数/控制协议错误后的有界纠错与工具预算归属、只读工具重复失败收敛和超限读取的可行动回注；不更改 Gate、权限、专业编辑算法、DOCX/编辑器或真实用户文档。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.58",
+    "allowed_files": [
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/tool_exec.rs",
+      "src-tauri/src/ag/tool_registry.rs",
+      "src-tauri/src/ag/verification.rs",
+      ".governance/active_scope.json",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md"
+    ],
+    "constraints": [
+      "模型输出和工具参数继续失败关闭；冲突/非法控制不得执行，不截断或伪造读取证据。",
+      "纠错有明确上限；同一只读工具、同一规范化参数、同一失败码重复失败时必须确定性结束，不自动重放写操作。",
+      "诊断不得记录正文、查询值、完整参数、Prompt、令牌或密钥；仅允许安全错误码、工具名、参数键、阶段和次数。",
+      "保留所有现有未提交改动，不修改 DOCX/编辑器/权限/Gate/用户文件，不解除父 AG-CLOSURE-REPAIR-01 BLOCKED。"
+    ],
+    "phase_gate": {
+      "status": "passed",
+      "evidence": "沿用 BR-AG-STATE-002、BR-AG-DATA-005、BR-AG-OBS-001、X-SEQ-001 与 AG-TURN/AG-TOOL；本切片只调整失败回注、尝试预算归属、只读失败收敛及 schema/提示的一致性，不引入新授权或副作用。"
+    },
+    "mapping_chain": {
+      "status": "complete",
+      "evidence": "生产入口 run_agent_turn/run_tool_loop → parse_tool_batch/validate_requested_tool_for_grant → exec_read_only → tool_result/下一轮装配；固定 transport 仍进入真实生产解析、Gate、工具授权和状态机。"
+    },
+    "test_impact": {
+      "changed_files": [
+        "src-tauri/src/ag/model_output.rs",
+        "src-tauri/src/ag/turn_tool_loop.rs",
+        "src-tauri/src/ag/tool_exec.rs",
+        "src-tauri/src/ag/tool_registry.rs",
+        "src-tauri/src/ag/verification.rs",
+        ".governance/active_scope.json",
+        "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+        "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md"
+      ],
+      "selection": ["frontend-full", "typescript", "rust-full", "governance:audit"]
+    },
+    "validation": [
+      "精确八文件 test:plan 通过；首次受限 test:related 保留为失败证据（前端 651/651，通过；Rust 因本机环回权限及 LibreOffice signal 6 未通过，不计 pass）。获准本机测试服务后，同一 test:related exit 0：前端 651/651、Rust 464/464、core_chain 5/5、sm_broadcast 4/4、doc-tests、TypeScript、governance:audit 通过。",
+      "test:governance 21/21、npm run build、本工作包 Rust 文件 rustfmt --edition 2021 --check、git diff --check 通过；build 存在既有 bundle 大 chunk 警告。",
+      "固定 transport 真实生产入口已覆盖一次协议/参数纠正、纠错耗尽、同参同错误只读失败收敛，以及全文超限后改用块目录/选定块读取成功；断言 Gate/模型次数、rejected/not_started、无全文 evidence、精确覆盖、错误/成功终态且无第三次模型请求。未验证真实 Provider 随机错误及 T01–T07 在桌面面板逐场点选；副作用/效果未知的专项手动边界仍待验，父 AG-CLOSURE-REPAIR-01 保持 BLOCKED。"
+    ],
+    "unresolved_items": [
+      "真实供应商偶发控制格式/工具参数质量不能由核心代码保证；本包验证的是确定性拒绝、有限纠错和失败回执闭合。",
+      "不验证生产 DOCX 编辑、真实编辑器确认卡、文件保存或模型回答质量；父 G5 状态不变。"
+    ]
+  },
+  "model_binding_work_package": {
+    "id": "AG-MODEL-BINDING-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "IMPLEMENTATION",
+    "status": "VALIDATING",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-13 人类明确要求按模型绑定方案修复，并确认新增偏好、Composer、ModelConfig、需求及测试文件范围；父任务继续 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.55",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.56",
+    "validation": "最终15文件 test:related exit0；前端642/642、Rust458/458、core_chain5/5、sm_broadcast4/4、TypeScript、doc-tests、治理审计通过。首次沙箱端口拒绝16项不计通过；真实窗口和真实Provider续行未验。",
+    "allowed_files": [
+      "src/store/modelStore.ts",
+      "src/store/assistRuntime.test.ts",
+      "src/components/ag/Composer.tsx",
+      "src/components/ag/ModelConfig.tsx",
+      "src/services/agService.ts",
+      "src/services/agRuntime.test.ts",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_control.rs",
+      "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
+      "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      ".governance/active_scope.json",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md",
+      "scripts/test_governance.test.mjs"
+    ],
+    "constraints": [
+      "同一 AgentTurn 所有模型调用固定首次 provider/model；确认、澄清和预览续行不得静默默认回退。",
+      "选中模型缺失时保留偏好并显式阻断；不触及 DOCX、编辑器或真实用户文档。",
+      "不解除父任务 BLOCKED；保留并避让现有未提交改动。"
+    ]
+  },
+  "core_m2_work_package": {
+    "id": "AG-CORE-M2-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-10-02 人类明确确认独立 P09–P15 通用核心 Scope；2026-10-06 授权 turn.rs、ipc/mod.rs、现有状态机设计、必要测试计数同步与脚本刷新 ADUS，以及仅隔离验证面板窗口操作；随后明确回复确认，追加 ENT 订阅门控技术设计、SYS 云接口契约、AG 技术设计三份契约同步，区分授权拒绝与调用失败，不放宽门禁。原 G5 父任务 BLOCKED 保持。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.39、§14.51、§14.53",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.54；M2/P09–P15 在已声明的通用运行边界内 READY：最终41文件 test:related exit0，前端639/Rust456/core_chain5/sm_broadcast4/tsc/doc-tests/audit全通过；build、test:governance21、fmt/diff通过。当前Binder窗口17/17完整回执核对；真实取消终态与确认后资源执行独立结算、防重复执行已验。专业/真实Provider验收与父G5仍BLOCKED，不宣称完整Agent业务成功或自动恢复。",
+    "pending_database_lock_extension": {
+      "status": "confirmed",
+      "files": [
+        "src-tauri/src/workspace/operation.rs",
+        "src-tauri/src/workspace/routes.rs"
+      ],
+      "reason": "移出资源计划文件扫描/基线计算的共享 DB 临界区，提交时重新校验身份及数据库后果；不改资源类型或编辑器。operation.rs 新增范围，routes.rs 原初始化范围需扩展。",
+      "proposal": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.50",
+      "authorization": "2026-10-08 人类明确回复确认锁边界扩展；SC-01 解除，父 G5 BLOCKED 保持。"
+    },
+    "pending_execution_contract_extension": {
+      "status": "confirmed",
+      "authorization": "2026-10-07 人类明确回复确认必要执行端口范围扩展；恢复同一 P09–P15 通用核心工作包，原 G5 BLOCKED 保持。",
+      "files": [
+        "src-tauri/src/ag/capability_runtime.rs",
+        "src-tauri/src/ag/edit_runtime.rs",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/ag/task_runtime.rs",
+        "src-tauri/src/ipc/system_tests.rs",
+        "src-tauri/src/reference/routes.rs",
+        "src-tauri/src/workspace/routes.rs",
+        "src-tauri/src/de/routes.rs"
+      ],
+      "reason": "独立能力执行端口与安全共享句柄生命周期：慢写取消/期限、迟到效果核对和重复执行防护；非编辑算法或 DOCX 引擎替换。原子效果锁仍可阻塞核心取消，不能靠手动验证或只读超时包装关闭。",
+      "proposal": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.48；扩展已获确认，按独立端口、共享句柄、迟到效果核对实施。"
+    },
+    "allowed_files": [
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/context.rs",
+      "src-tauri/src/ag/prompt_runtime.rs",
+      "src-tauri/src/ag/turn_prompt.rs",
+      "src-tauri/src/ag/prompts.rs",
+      "src-tauri/src/ag/tool_registry.rs",
+      "src-tauri/src/ag/tool_exec.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/turn_control.rs",
+      "src-tauri/src/ag/task.rs",
+      "src-tauri/src/ag/history.rs",
+      "src-tauri/src/ag/verification.rs",
+      "src-tauri/src/ag/mod.rs",
+      "src-tauri/src/ent/gateway.rs",
+      "src/services/agService.ts",
+      "src/store/agStore.ts",
+      "src/components/ag/AgentPanel.tsx",
+      "src/components/ag/DecisionBar.tsx",
+      "src/components/ag/MessageList.tsx",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "src/services/agRuntime.test.ts",
+      ".governance/active_scope.json",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "src-tauri/src/ag/turn.rs",
+      "src-tauri/src/ipc/mod.rs",
+      "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
+      "scripts/test_governance.test.mjs",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md",
+      "docs/01_modules/ENT/A-ENT-M-T-01_订阅门控技术设计.md",
+      "docs/01_modules/SYS/A-SYS-I-P-03_云接口契约.md",
+      "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+      "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+      "src-tauri/src/types/mod.rs",
+      "src-tauri/src/ag/capability_runtime.rs",
+      "src-tauri/src/ag/edit_runtime.rs",
+      "src-tauri/src/lib.rs",
+      "src-tauri/src/ag/task_runtime.rs",
+      "src-tauri/src/ipc/system_tests.rs",
+      "src-tauri/src/reference/routes.rs",
+      "src-tauri/src/workspace/routes.rs",
+      "src-tauri/src/de/routes.rs",
+      "src-tauri/src/workspace/operation.rs"
+    ],
+    "contract_extension_files": [
+      "docs/01_modules/ENT/A-ENT-M-T-01_订阅门控技术设计.md",
+      "docs/01_modules/SYS/A-SYS-I-P-03_云接口契约.md",
+      "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md"
+    ],
+    "pending_result_contract_extension": {
+      "files": [
+        "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+        "src-tauri/src/types/mod.rs"
+      ],
+      "reason": "P10 共享能力结果/效果回执字段必须归 SYS 唯一契约，不在 AG/UI 私建近义真值；旧专业状态仍权威，不改编辑器、DOCX 引擎或用户文档。",
+      "status": "confirmed",
+      "authorization": "2026-10-07 人类明确回复确认，追加这两个共享契约文件；其余代码/测试沿用已授权通用核心 Scope，原 G5 BLOCKED 保留。",
+      "proposal": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.45"
+    },
+    "constraints": [
+      "不修改 DOCX 引擎、专业编辑器、真实用户文档或云端权限；不解除原 G5 BLOCKED。",
+      "新增独立适配文件或触及未授权 SYS/其他模块前另行说明必要性并取得范围确认；三份 contract_extension_files 已明确授权。",
+      "固定模型只替换外部传输，生产解析、Gate、授权、状态和证据路径不得 mock。",
+      "用实际 changed_files 执行 test:plan/test:related，并将自动化与真实窗口证据分开记录。"
+    ],
+    "validation": [
+      "P10 部分：能力声明与按需上下文、只读清单不构建 BDocx 修改 schema、纯对话无工具/无 ProjectReport 的定向 Rust 用例通过。",
+      "P12 部分：真实本机 HTTP 网关响应头停顿及 SSE 中途停顿分别返回 AG_GW_TIMEOUT、AG_GW_STREAM_TIMEOUT；测试 1/1。",
+      "修正 schema 文字回归后，精确六文件 test:plan 与获准权限下 test:related exit 0：前端 635/635、Rust 440/440、core_chain 5/5、sm_broadcast 4/4、doc-tests、governance:audit 通过；test:governance 21/21、npm run build、rustfmt（本轮主要修改文件）及 git diff --check 通过。首次关联回归 Rust 439/440 的失败不计通过。",
+      "2026-10-08 精确41文件最终关联回归全通过；首轮Rust454/455失败保留，修正独立场景状态污染，不弱化unknown效果守卫。真实窗口17/17，四个执行端口取消/期限均终态先落库，资源恢复扫描不提交计划或确认，文件不变。",
+      "2026-10-08 裁决执行隔离最终同一41文件 test:related exit0：前端639/639、Rust456/456、core_chain5/5、sm_broadcast4/4、tsc/doc-tests/audit通过；build/test:governance21/fmt/diff通过。当前Binder17/17完整JSON核对；真实资源算法暂停可落取消TaskRun、重复领取拒绝；真实AG取消终态不被迟到执行改写，resource_executed独立结算、重复确认同回执；前端30秒期限与迟到不重发/不继续通过。首失败计数差异、私有字段编译与GOV重复保留。"
+    ],
+    "unresolved_items": [
+      "未知写效果仍保守unknown/inspect_effect，阻止工作区重放；无自动调解、普遍exactly-once或跨进程自动续跑。",
+      "P14有限历史/显式引用与真实SQLite重开已验，不是自动长期记忆；真实Provider、生产DecisionBar/记忆面板和专业编辑验收归M3/G5。"
+    ],
+    "pending_decision_execution_extension": {
+      "status": "confirmed",
+      "files": [
+        "src-tauri/src/workspace/operation.rs",
+        "src-tauri/src/ag/task_runtime.rs",
+        "src/services/agService.ts"
+      ],
+      "reason": "已确认本次范围明确不改资源执行/补偿。本次总审计发现裁决真实资源执行、scope文件校验仍持共享DB锁，前端直接等待；需扩展这些现有文件的职责边界及已授权原测试/计划/验证卡，隔离文件执行和裁决期限/迟到效果，不改资源种类、确认权限、快照/补偿业务、DOCX或编辑器。",
+      "proposal": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.52",
+      "authorization": "2026-10-08 人类明确回复确认裁决/资源执行边界扩展；沿用已授权核心及原测试，父G5不解除。"
+    }
+  },
+  "h05_preview_work_package": {
+    "id": "H05",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "IMPLEMENTATION",
+    "status": "VALIDATING",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-10-01 人类在看到 H05 精确文件范围后明确回复确认；不解除父 G5 或完整 M1 阻断。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.35",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.36",
+    "allowed_files": [
+      "src-tauri/src/ag/verification.rs",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "src/services/agService.ts",
+      "src/services/agRuntime.test.ts",
+      "src-tauri/src/ag/task.rs",
+      "src-tauri/src/ag/turn_control.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json",
+      "scripts/test_governance.test.mjs",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "validation": [
+      "定向前端服务/组件 125/125 与新增 Rust 隔离检查点 1/1 通过。",
+      "精确 11 文件 test:plan 选出前端全量、TypeScript、Rust 全量与治理审计；获准权限下 test:related exit 0：前端 635/635、Rust 单元 437/437、core_chain 5/5、sm_broadcast 4/4、doc-tests、TypeScript、治理审计通过；test:governance 21/21，ADUS 337 @GOV 块、111 资产、1065 用例。",
+      "首次受限测试因 9 项本地端口权限与 1 项 LibreOffice signal 6 失败；首次获准复验因两项隔离测试并行争用生产单实例租约失败；测试序列化后原样完整复验通过。两次失败不计通过。",
+      "人类开发版 preview-guard 回执：非 Agent 回合/非编辑器验收，Gate/模型 0/0，六项检查点守卫字段 true；AI 独立重跑前端预览定向 7/7、Rust preview 名称筛选 8/8（直接相关 3 项）通过。真实编辑器 H05 系统验收仍未执行。"
+    ],
+    "unresolved_items": [
+      "真实编辑器与可控迟到 RPC 的开发版 H05 系统验收未执行；跨重启效果未知查询与恢复未实现。"
+    ]
+  },
+  "h07_session_memory_work_package": {
+    "id": "H07",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "VALIDATING",
+    "authorization": "2026-10-01 人类在收到 H07 精确验证范围后回复‘按照建议进入下一步’；仅授权该隔离自动化切片，不解除父 G5 或 M1 系统验证阻断。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.37",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.38",
+    "allowed_files": [
+      "src-tauri/src/ag/verification.rs",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "src/services/agRuntime.test.ts",
+      "src/services/referencePayload.test.ts",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json"
+    ],
+    "changed_files": [
+      "src-tauri/src/ag/verification.rs",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "src/services/agRuntime.test.ts",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json"
+    ],
+    "validation": [
+      "定向前端服务/组件 125/125 与真实核心隔离场景 1/1 通过。",
+      "精确七文件 test:plan 选择前端全量、TypeScript、Rust 全量和治理审计；test:related exit 0：前端 635/635、Rust 单元 437/437、core_chain 5/5、sm_broadcast 4/4、doc-tests、TypeScript、治理审计通过。",
+      "test:governance 21/21；npm run build 通过，生产 dist 无 H07 固定场景字符串。"
+    ],
+    "unresolved_items": [
+      "H07 实际 MemoryPanel 点击、真实会话标签/等待状态及重启恢复未执行；固定模型与隔离临时数据库不证明真实模型理解或完整 M1。桌面控制工具因外部沙箱 TIOCSTI 错误不可用。"
+    ]
+  },
+  "m1_verification_work_package": {
+    "id": "P08-G",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "VALIDATING",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-09-29 人类在收到精确 P08 最小验证入口文件范围提案后要求进行下一步 M1 补齐；授权仅覆盖该提案列出的隔离入口、现有测试与记录文件，不解除父 G5 阻断。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.33",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.34",
+    "allowed_files": [
+      "src-tauri/src/ag/verification.rs",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json",
+      "scripts/test_governance.test.mjs",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "forbidden_files": [
+      "src/components/ag/AgentPanel.tsx",
+      "src/services/agService.ts",
+      "src-tauri/src/ag/task.rs",
+      "src-tauri/src/ag/turn_control.rs",
+      "src-tauri/src/ent/gateway.rs"
+    ],
+    "scope_reason": "同一隔离 AgentSession 的预算错误后新 AgentTurn 与真实 DecisionRequest 重复裁决补证，不替代生产 UI、预览或专业能力验收。",
+    "validation": [
+      "P08-G budget-recovery executes a failed budget turn followed by a distinct completed AgentTurn in the same isolated AgentSession; budget-recovery-delay cancels that second turn through the original development run identity; decision-chain repeats each real DecisionRequest resolution and observes already_resolved without duplicate continuation. Targeted Rust core 1/1 and AgentUI 43/43 passed after the last semantic change.",
+      "Final exact six-file test:plan and test:related exited 0: frontend 632/632, TypeScript, Rust unit 436/436, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit passed. test:governance 21/21; governance:generate unchanged at 337 GOV blocks, 111 assets, 1061 cases; npm run build passed and production dist has no development scenario strings.",
+      "2026-09-29 user-run development UI samples: budget rejection 89877>19904 followed by independent completed turn 5874<19904 in same session, Gate/model 1/1; delayed variant followed by cancelled turn, Gate/model 1/1; decision A/B each resolved once with one done, Gate/model 3/3, both duplicateAlreadyResolved=true. Earlier delayed completed sample has no cancel-click evidence and is not counted as cancellation. Follow-up UI control reset was not manually observed.",
+      "Additional AgentUI regression verifies simulated cancellation receipt unlocks controls and permits another run. First broad frontend run failed only because fixed AG test count 142 needed 143; after count correction sandboxed Rust failed 9 loopback tests plus one LibreOffice worker; exact final six-file test:plan/test:related rerun with required permission exited 0: frontend 633/633, Rust 436/436, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit. TypeScript, test:governance 21/21 and diff check passed; regenerated ADUS has 337 GOV blocks, 111 assets, 1062 tests. Complete M1 and G5 remain unclosed."
+    ],
+    "unresolved_items": [
+      "Cancel-after-return button state still needs direct development UI observation; H04 real DecisionBar clicks/position, H05 async preview receipt, H07 session/explicit memory, and all remaining M1-card evidence need separate validation. Parent G5 remains BLOCKED."
+    ]
+  },
+  "ongoing_p08_work_package": {
+    "id": "P08",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "VALIDATING",
+    "slice": "P08 DecisionRequest 核心继续隔离入口；预算与首批七场景已分别收束，不是全部 P08 闭合",
+    "slice_status": "READY",
+    "authorization": "2026-09-25 人类确认 P08 开发隔离入口；2026-09-29 人类明确收束预算切片并要求继续下一步；发现第二裁决被拒后，人类明确确认将 task.rs 与 turn_tool_loop.rs 纳入本切片生产修复范围；人类提供两次 P08-F 运行证据并确认分项记录、进入下一开发阶段。",
+    "scope": "固定手动裁决请求验证同 AgentTurn 的 A→B 真实核心等待、裁决与恢复；按人类确认仅在 task.rs/turn_tool_loop.rs 修复等待解除后真实活动与第二次裁决门禁不一致。不改变确认即等待的语义、权限、预算、编辑器或 DOCX。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.27",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.29-§14.30",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "src-tauri/src/ag/verification.rs",
+      "src-tauri/src/ag/task.rs",
+      "scripts/test_governance.test.mjs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "validation": [
+      "2026-09-29 user-run P08-E budget verification observed initial 89877>19904 at Gate/model 0/0 and tool-result 126240>19904 after one real workspace_glob at Gate/model 1/1; human explicitly closed this budget slice, but budget-error then pure-chat UI isolation remains unobserved.",
+      "2026-09-29 P08-F initial Rust real-core scenario failed: A was proposed/confirmed but B had no pending DecisionRequest. Human confirmed production scope extension. New focused guard test first exposed a second UNIQUE constraint failure in old requestId generation; both failures were repaired in task.rs, without changing turn_tool_loop.rs or weakening assertions.",
+      "2026-09-29 final exact 9-file test:plan/test:related exit 0: frontend 632/632, TypeScript, Rust unit 433/433, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit. Fixed HTTP A→B scenario passed with real AgentTurn core; first sandboxed attempt failed only on local loopback permission, approved-permission rerun passed. test:governance 21/21, npm run build, rustfmt check passed; production dist excludes development fixture strings. Generated ADUS counts 337 GOV blocks, 111 test assets, 1058 test cases. This was an automatic-test snapshot before manual P08-F; it is not complete P08/M1/G5 evidence.",
+      "2026-09-29 user-run P08-F twice: each safe event stream has A proposed/resolved(confirm), B proposed/resolved(confirm), and one done in one AgentTurn; distinct requestIds belong to the same TaskRun. First run separately reports Gate/model 3/3 and initial/decision_resume/decision_resume budget estimates 5881/6473/7044 below 19904. Second run supplies safe events only. Core continuation slice manual observation passed; decisionTrace UI display, H04 and full P08/M1/G5 remain unverified."
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "P08-F core manual path passed, but development panel decisionTrace display remains unobserved; H04 real DecisionBar placement/click and complete P08/M1/G5 remain unclosed. Budget-error then pure-chat UI isolation was not observed; real provider/network root cause for other failures remains unknown."
+    ]
+  },
+  "active_work_package": {
+    "id": "P09",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "confirmation_basis": "2026-09-29 人类在阅读 §14.31 P09 精确 Scope 提案后明确回复‘确认’；仅确认该工作包所列文件和语义，不解除父 G5 BLOCKED 或 P08 未完成项。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.31",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.32",
+    "scope_reason": "模型协议与流完整性：先锁定 AgentTurn 和辅助路径的生产字节解析、控制封套及原文件内测试；不改门禁、编辑器、DOCX 或云端网关。",
+    "allowed_files": [
+      "src-tauri/src/ent/gateway.rs",
+      "src-tauri/src/ag/model_output.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json",
+      "scripts/test_governance.test.mjs",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "read_only_consumers": [
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/assist_runtime.rs",
+      "cloud/dev-gateway/providers.mjs"
+    ],
+    "changed_files": [
+      "src-tauri/src/ent/gateway.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      ".governance/active_scope.json",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "validation": [
+      "2026-09-29 test-first 网关逐字节中文/表情用例在旧解析器失败、修复后通过；网关定向 14/14。",
+      "精确五文件 test:plan 与获准权限下 test:related exit 0：前端 632/632、Rust unit 436/436、core_chain 5/5、sm_broadcast 4/4、TypeScript、doc-tests、governance:audit；test:governance 21/21，ADUS 337 GOV 块、111 资产、1061 用例，rustfmt/diff check 通过。首次受限沙箱全量测试因本地端口权限及 LibreOffice signal 6 失败，不算通过。",
+      "P09 仅自动化解析契约 READY；H02 真实应用、真实 provider、显式重试与工具零误执行系统验收 NOT_RUN。"
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "P08/M1/G5 仍未整体闭合；H02 真实应用与 provider 验收不能由固定字节流自动化替代。",
+      "非法 SSE 结构与非法 JSON 共用现有 AG_GW_STREAM_INVALID_JSON 错误码；若需细粒度代码和单帧流量上限须另立范围。"
+    ]
+  },
+  "completed_p07_work_package": {
+    "id": "P07",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-09-22 人类确认 task.rs、turn_control.rs 扩展；其余沿用原范围，父 G5 不解除。",
+    "scope": "预览回执身份、版本、终态与单次继续保护及回执原子性，不改变接受或保存语义。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.19",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.20",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src/services/agService.ts",
+      "src/services/agRuntime.test.ts",
+      "src-tauri/src/ag/task.rs",
+      "src-tauri/src/ag/turn_control.rs",
+      "scripts/test_governance.test.mjs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "validation": [
+      "Exact 9-file test:plan and approved full test:related passed (exit 0): frontend 628/628, TypeScript, Rust unit 430/430, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit. Service 79/79, governance self-tests and Rust preview_ 5/5 passed. Initial Array.at test typing failure corrected without target changes. Initial sandbox full run failed 9 Rust tests (8 local TCP permission errors, 1 LibreOffice signal 6); not pass evidence. Generated index 335 GOV blocks, 110 test assets, 1051 tests. Only P07 current-process preview guard/transaction work package READY; no real provider or WKWebView validation."
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "真实 UI/provider、V-M1-06 全卡未验，父 G5 保持 BLOCKED。跨工作区迟到失败不写入新工作区，但原工作区错误历史持久投影仍未验证；不承诺未知 RPC 自动重试或跨重启执行恢复。P06 TimelinePanel 上游来源缺口保持范围外。"
+    ]
+  },
+  "completed_p06_work_package": {
+    "id": "P06",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-09-22 人类明确确认 DecisionBar.tsx 扩展，其他文件沿用原已确认范围；父 G5 不解除。",
+    "scope": "DecisionRequest 身份绑定清理、连续裁决、重复提交与迟到回执隔离；不改专业执行或 DOCX 引擎。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.17",
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.18",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src/components/ag/DecisionBar.tsx",
+      "src/store/agStore.ts",
+      "src/services/agService.ts",
+      "src/components/ag/AgentUI.test.tsx",
+      "src/services/agRuntime.test.ts",
+      "scripts/test_governance.test.mjs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "validation": [
+      "Exact 11-file test:plan/test:related passed (exit 0): frontend 624/624, TypeScript, Rust unit 429/429, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit passed. Final targeted AgentUI 39/39, agRuntime 75/75 and governance 21/21 passed. Generated index: 335 GOV blocks, 110 test assets, 1046 tests. Component/service tests control external boundaries, not the tested decision/store logic. Only P06 current-process decision isolation work package READY; no real provider/WKWebView system validation."
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "真实 provider/WKWebView、V-M1-05 全卡与父 G5 未验；P07 预览 ack 链待验。不承诺跨重启恢复、RPC 不确定结果自动重试或后端持久幂等恢复。",
+      "TimelinePanel 恢复入口 await 后未携带原会话身份，入站前切会话可能错误归属；属于上游 WS 入口，待独立 Scope，本次未修改。"
+    ]
+  },
+  "completed_p05_work_package": {
+    "id": "P05",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-09-21 人类确认 tool_registry.rs 和 turn_reference.rs 扩展；其余源文件与记录沿用已授权范围，父 G5 不解除。",
+    "scope": "显式引用保守去重、读取结果有界与目录分页、继续空间预留；不提高总预算、不截断结构化操作或虚报全文证据。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.15",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src-tauri/src/ag/prompt_runtime.rs",
+      "src-tauri/src/ag/tool_exec.rs",
+      "src-tauri/src/ag/tool_registry.rs",
+      "src-tauri/src/ag/turn_reference.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+      "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.16",
+    "validation": [
+      "Exact 13-file test:plan/test:related passed after correcting old empty-result evidence fixtures to execute real read-only tools: frontend 615/615, Rust unit 429/429, core_chain 5/5, sm_broadcast 4/4, governance:audit passed (exit 0). test:governance 21/21 and TypeScript passed. First full run was 428/429 Rust and is not pass evidence. Fixed full production-entry oversized read fails without full-read evidence and safely reinjects failure; initial/continuation budget denial remains covered. No real provider/UI validation; only P05 bounded-injection/read work package READY."
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "真实模型/UI 标定及分页遵循率未验证；不承诺任意大单块、无限累积工具结果、跨用途投影去重或底层流式内存限额。现有显式引用裁剪策略保留。P06/P07/P08、M1 和父 G5 未关闭。"
+    ]
+  },
+  "completed_p04_work_package": {
+    "id": "P04",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-09-21 人类确认将 context.rs 与 prompt_runtime.rs 纳入 P04；其余调用链及记录沿用原授权，不解除父 G5。",
+    "scope": "统一模型发送投影与预算口径，四类装配阶段安全分项证据及超限失败关闭；不提高上限，不改变专业效果或自动重试。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.13",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src-tauri/src/ag/context.rs",
+      "src-tauri/src/ag/prompt_runtime.rs",
+      "src-tauri/src/ag/turn_prompt.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.14",
+    "validation": [
+      "Exact 11-file test:plan/test:related passed (exit 0): frontend 615/615, Rust unit 425/425, core_chain 5/5, sm_broadcast 4/4, governance:audit passed. cargo check --tests and test:governance 21/21 passed. Initial/tool-result budget denial has full production-entry evidence; decision/preview stage and persistent ordinals have unit/database evidence, not complete UI workflow evidence. No real provider calibration/UI; only P04 accounting/diagnostic work package READY."
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "真实 provider 标定、真实 UI、P05 规模治理及父 G5 尚未完成。"
+    ]
+  },
+  "completed_p03_work_package": {
+    "id": "P03",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-09-19 人类确认 types/mod.rs、ag/blocks.rs、ag/tool_exec.rs；2026-09-20 确认 lib.rs 仅注册上下文回传入口。原 Scope 内调用链、测试与记录沿用授权；不解除父 G5。",
+    "scope": "AgentContextFacts v2 版本分派、资源身份与可用性分离、按需宿主回传、读取前版本核验与独立验证；不更换文档底座。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.11",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src-tauri/src/types/mod.rs",
+      "src-tauri/src/lib.rs",
+      "src-tauri/src/ag/blocks.rs",
+      "src-tauri/src/ag/tool_exec.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_prompt.rs",
+      "src/services/agService.ts",
+      "src/services/agRuntime.test.ts",
+      "scripts/test_governance.test.mjs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+      "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+      "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.12",
+    "validation": [
+      "Exact 16-file test:plan/test:related passed: full frontend suite, TypeScript, Rust 420 unit + 5 core_chain + 4 sm_broadcast; governance:audit passed with 23 existing TERM_ORPHAN warnings. test:governance 21/21 passed. Targeted agRuntime 70/70, context_v2 2/2, context_response 1/1 and complete fixed HTTP V2 AgentTurn integration 1/1 passed. No real provider/UI system validation; only P03 automated work package READY."
+    ],
+    "stop_conditions": [],
+    "unresolved_items": [
+      "真实 provider/UI、裁决继续的端到端验收未执行；M1/G5 不提升，父 G5 BLOCKED 保持。P04 预算分项、P05 注入、P06 裁决、P07 回执、P08 手动入口按原计划继续。"
+    ]
+  },
+  "completed_p02_work_package": {
+    "id": "P02",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "IMPLEMENTATION",
+    "status": "READY",
+    "authorization": "2026-09-18 人类确认 gateway.rs；2026-09-19 人类确认 edit_runtime.rs 与 doc/image_media.rs 的 Runtime 泛型签名扩展；保留生产门禁与授权，父 G5 SC-04 不解除。",
+    "scope": "生产字节流解析、固定 HTTP 响应经完整 AgentTurn 入口、真实只读工具及终态证据；专业文件仅 Runtime 类型签名扩展。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.7",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src-tauri/src/ent/gateway.rs",
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/edit_runtime.rs",
+      "src-tauri/src/doc/image_media.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "previous_slice_validation": [
+      "New fixed transport tests initially failed to compile due to an unavailable tokio test macro; replaced with the existing Tauri async runtime, no dependency added.",
+      "Targeted fixed_ tests passed 7/7, including 6 new tests; governance tests passed 21/21; generate discovered 1015 tests in 110 assets.",
+      "Exact 5-file test:plan selected frontend-full, rust-full and governance:audit. Complete test:related passed with approved normal-system permissions: frontend 612/612, Rust lib 410/410, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit passed (exit 0).",
+      "Independent governance:audit passed; semantic review confirms the shared parser emits RoundOutcome only, with no permission or AgentTurn terminal ownership."
+    ],
+    "validation": [
+      "Initial sandbox fixed_runtime run failed at local TCP bind (PermissionDenied), before Agent execution; not pass evidence.",
+      "First approved HTTP integration run exposed test-server nonblocking accepted sockets on macOS; explicitly restored blocking reads with 5-second timeouts, without changing Agent logic or weakening assertions.",
+      "Final targeted fixed_ tests passed 13/13 with local HTTP fixture permissions: 5 complete production AgentTurn scenarios, 1 poll-local endpoint isolation test, 6 previous parser cases and 1 existing test.",
+      "Cumulative P02 exact 10-file test:plan and complete test:related passed (exit 0): frontend 612/612, Rust lib 416/416, core_chain 5/5, sm_broadcast 4/4, doc-tests and final governance:audit passed. Approved normal-system permissions used for local HTTP and existing LibreOffice tests.",
+      "Final test:governance passed 21/21; generate stable at 1021 tests and 110 assets; no added physical test file. Semantic review and diff check passed. No real provider, cloud subscription service, or manual UI validation; parent G5 remains BLOCKED."
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.10",
+    "stop_conditions": [],
+    "pending_scope_extension": {
+      "files": [
+        "src-tauri/src/ag/edit_runtime.rs",
+        "src-tauri/src/doc/image_media.rs"
+      ],
+      "intent": "仅将 ag_propose_edit 与 authorize_media_files 的固定 AppHandle 参数扩为现有 tauri::Runtime 泛型，允许真实 AgentTurn 使用项目既有 MockRuntime；不改图片/文档算法、权限、保存语义或引擎。",
+      "reason": "run_turn_tool_loop -> ag_propose_edit -> authorize_media_files 固定 Wry 类型阻止在不启动真实桌面 UI 的情况下编译完整生产路径；不得替换这些业务函数制造通过。",
+      "authorization": "2026-09-19 人类明确确认两个文件扩展，解除本项 SC-01；父 G5 保留。"
+    },
+    "unresolved_items": [
+      "Complete production AgentTurn entry, permission denial, real workspace_glob/read_doc failure, reassembly and terminal replay have deterministic integration evidence; V-M1-02 manual/remaining scenarios and G5 remain unclosed.",
+      "P09 retains UTF-8 split decoding, malformed SSE, duplicate/invalid completion event and assist_complete completeness risks; this slice only repairs missing text completion and trailing partial frames."
+    ]
+  },
+  "completed_p01_work_package": {
+    "id": "P01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "IMPLEMENTATION",
+    "status": "READY",
+    "authorization": "人类在具体列明 turn_events.rs、ipc/mod.rs、history.rs 扩展及原 Scope 内消费者/测试后回复‘继续下一步’，确认 P01 实现；不解除 G5 系统验收阻断。",
+    "scope": "仅失败诊断的安全字段、事件/历史/前端投影及测试；不改变 IpcError 四字段、授权、终态、自动重试或专业效果。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.5",
+    "changed_files": [
+      ".governance/active_scope.json",
+      "src-tauri/src/ipc/mod.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/history.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src/services/agService.ts",
+      "src/store/agStore.ts",
+      "src/components/ag/MessageList.tsx",
+      "src/services/agRuntime.test.ts",
+      "src/components/ag/AgentUI.test.tsx",
+      "scripts/test_governance.test.mjs",
+      "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md"
+    ],
+    "validation": [
+      "test:plan passed on exact 14 changed files; frontend-full, TypeScript, rust-full, governance:audit selected.",
+      "test:governance passed 21/21; frontend full passed 612/612; TypeScript passed.",
+      "Complete test:related passed with approved normal-system permissions: Rust lib 404/404, core_chain 5/5, sm_broadcast 4/4, governance:audit passed. Existing cargo run build lock was waited out, never terminated.",
+      "Final frontend diagnostic tests rerun after strict field-type guard: 102/102; TypeScript rerun passed; 2 new Rust diagnostic tests passed.",
+      "generate passed: 1009 discovered tests, no added physical test file; audit retained 23 pre-existing TERM_ORPHAN warnings.",
+      "No real provider or manual UI verification. P01 diagnostic baseline only; M1/M2/M3 and parent G5 remain unclosed."
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.6",
+    "unresolved_items": [
+      "P02 transport fixtures, P04 budget accounting, P06/P07 decision/preview detail and G5 system validation remain pending; unknown root causes are not inferred from diagnostics."
+    ]
+  },
+  "previous_work_package": {
+    "id": "P00",
+    "task_type": "GOVERNANCE_CHANGE",
+    "governance_phase": "DESIGN",
+    "status": "READY",
+    "scope": "仅落实已确认的运行边界、v2 按需上下文契约、M1/M2/M3 计划与验证；不修改生产代码或测试实现，不启用自动重试，不更换文档底座。",
+    "authorization": "用户回复‘确认’，允许上一条回复所列 P00 文件范围扩展；此授权只解除 P00 文档工作的范围/设计准备阻断，不解除父 Scope 的 G5 SC-04。",
+    "implementation_gate": "P01-P08 尚未进入代码 PATCHING；分别完成 Issue Trace、精确文件 Scope 和验证选择后推进。",
+    "validation": [
+      "2026-09-15: governance:generate passed; ADUS generated from the current worktree, no manual index edit.",
+      "test:governance passed: 21/21, 110 assets, 1006 discovered tests, zero unmapped/unowned/focused/skipped tests.",
+      "test:plan passed for the exact 9 P00 documentation/governance files; selected frontend-full, rust-full, governance:audit.",
+      "First sandbox test:related failed: frontend 611/611; Rust lib 401/402, LibreOffice DOC_PREVIEW_WORKER_CRASH signal 6. This run is not pass evidence.",
+      "Identical test:related input rerun with approved normal-system permissions passed: frontend full; Rust lib 402/402, core_chain 5/5, sm_broadcast 4/4; governance:audit passed.",
+      "Semantic review preserves v1 interpretation, LogicalState source, Gate and grant ownership, identity-bound continuation and separate effect evidence. v2 implementation remains an explicit gap.",
+      "No real provider/UI or new M1/M2/M3 cards executed in P00; all new cards remain DESIGNED. Parent G5 remains BLOCKED."
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.4",
+    "unresolved_items": [
+      "P01-P24 are planned, not implemented; production v2 and development verification entry do not exist yet.",
+      "Existing audit reports 23 TERM_ORPHAN warnings; no new TERM or code annotations were added in P00.",
+      "P01/P02 require their own Issue Trace and exact source/test file scope before code patching; original G5 SC-04 is not cleared by design delivery."
+    ]
+  },
+  "scope_reason": "回退 WP1/WP2/WP8 修复真实旧库迁移、模型控制协议及错误恢复；G5 保持待验。；以实际定位到的 MessageList/AgentUI 消费者落实错误恢复修复。；新增回归改变动态测试计数，纳入既有治理自测断言。",
   "objectives": [
-    "把 WP1-WP9 当前自动化证据回填到 Agent 1.0 唯一验证卡",
-    "验证至少一个真实 provider 的工具选择与 ToolResult 后继续回答",
-    "在 Binder Tauri/WKWebView 中验证发布阻断交互场景并如实记录结论"
+    "R1: 真实旧库、v19已升级库、冲突与重启迁移",
+    "R2: 模型语义传输与工具循环可靠性",
+    "R3: 启动失败诊断、持久化与恢复",
+    "R4: 完整关联回归、真实验证与状态回填"
   ],
   "allowed_files": [
+    "src/components/ag/AgentPanel.tsx",
+    "src/components/ag/AgentVerificationPanel.tsx",
+    "src-tauri/src/ag/verification.rs",
+    "src-tauri/src/ag/mod.rs",
+    "src-tauri/src/ag/task.rs",
+    "src-tauri/src/ag/turn_control.rs",
+    "src/components/ag/DecisionBar.tsx",
+    "src-tauri/src/ag/tool_registry.rs",
+    "src-tauri/src/ag/turn_reference.rs",
+    "src-tauri/src/ag/context.rs",
+    "src-tauri/src/ag/prompt_runtime.rs",
+    "src-tauri/src/types/mod.rs",
+    "src-tauri/src/ag/blocks.rs",
+    "src-tauri/src/ag/tool_exec.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/ag/edit_runtime.rs",
+    "src-tauri/src/doc/image_media.rs",
+    "src-tauri/src/ent/gateway.rs",
+    "cloud/dev-gateway/server.mjs",
+    "cloud/dev-gateway/providers.mjs",
+    "cloud/dev-gateway/providers.test.mjs",
+    "src-tauri/src/ag/turn_events.rs",
+    "src-tauri/src/ipc/mod.rs",
+    "src-tauri/src/ag/history.rs",
     ".governance/active_scope.json",
+    "src-tauri/src/db/mod.rs",
+    "src-tauri/src/ag/model_output.rs",
+    "src-tauri/src/ag/turn_tool_loop.rs",
+    "src-tauri/src/ag/turn_prompt.rs",
+    "src-tauri/src/ag/turn_runtime.rs",
+    "src-tauri/src/ag/turn.rs",
+    "src-tauri/src/ag/tool.rs",
+    "src-tauri/src/ag/prompts.rs",
+    "src/services/agService.ts",
+    "src/services/agRuntime.test.ts",
+    "src/store/agStore.ts",
+    "src/components/ag/MessageFlow.tsx",
     "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
-    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md"
+    "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",
+    "src/components/ag/MessageList.tsx",
+    "src/components/ag/ToolCallCard.tsx",
+    "src/components/ag/AgentUI.test.tsx",
+    "scripts/test_governance.test.mjs",
+    "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+    "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+    "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+    "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
+    "docs/01_modules/SYS/A-SYS-I-P-01_数据结构定义.md",
+    "docs/00_core/A-CORE-C-R-01_ADUS.md"
   ],
   "forbidden_files": [
     "ADU.md",
@@ -23,33 +903,164 @@
     "AGENTS.md",
     "governance.config.json",
     "docs/00_core/A-CORE-C-P-01_APC.md",
-    "src/**",
-    "src-tauri/**",
-    "cloud/**",
-    "需求、设计、规则、协议与状态机语义"
+    "cloud/dev-gateway/.env"
   ],
   "constraints": [
-    "自动化、真实 provider smoke 与真实 Binder UI 系统证据必须分开记录",
-    "不能用单元测试或网关直连冒充 Tauri/WKWebView 系统通过",
-    "不新增需求、功能、逻辑、规则、术语或验证场景"
+    "生产修复保持当前授权、裁决、保存语义；P00 经人类确认可修订按需上下文准入及配套设计/状态机，不新增产品能力或隐式授权；新契约不得伪称现有实现已通过",
+    "P00/P01 历史交付保持；2026-09-18 人类明确回复确认，将 ent/gateway.rs 纳入 P02 固定模型传输与生产解析验证范围；ADUS 只能由 governance:generate 更新；其他未提交改动保持原状",
+    "按实际 changed_files 执行 test:plan/test:related；沿用已有测试资产",
+    "不直接修改用户数据库，使用隔离夹具",
+    "区分自动化、真实 provider 与真实 UI 证据"
   ],
   "phase_gate": {
     "status": "passed",
-    "evidence": "G1/G2/G3 READY；WP1-WP9 各有 READY Runtime Report 和独立提交。"
+    "evidence": "G1/G2/G3已确认；用户授权回退缺陷修复。M-T-02 §9允许实现期选择模型语义传输格式。"
   },
   "validation_results": {
-    "automation": "passed",
-    "real_provider_smoke": "passed",
-    "tauri_launch": "passed",
-    "interactive_ui_observation": "blocked"
+    "test_plan": "passed: exact 12 changed files; selected frontend full, TypeScript, Rust full, governance audit",
+    "test_related_sandbox": "failed only at LibreOffice child process signal 6 after frontend 611/611 and Rust 401/402; classified environment-specific, not used as pass evidence",
+    "test_related_non_sandbox": "passed with identical input: frontend 611/611; TypeScript passed; Rust lib 402/402, core_chain 5/5, sm_broadcast 4/4; governance audit passed",
+    "test_governance": "passed: 21/21; 1006 discovered tests; 0 unmapped sources, unowned tests, focused/skipped tests, or warnings",
+    "semantic_audit": "passed for DATA-MIGRATE, model response-level IntentResult transport, per-call CapabilityGrant validation, and draft failure projection; no authorization or terminal-state broadening",
+    "real_provider": "passed: deepseek-chat and deepseek-reasoner each completed synthetic greeting/read_doc/ToolResult/final with current 1470-char protocol; additional greeting sample 5/5 each; one initial reasoner envelope miss was observed before subsequent passes",
+    "real_tauri_runtime": "partial: live process started after repaired source; workspace DB is schema v20 with 1072 current events, 0 legacy rows, 0 unresolved identities and 0 duplicate event_id or turn+seq; current workspace/history/DiffCard/composer rendered in WKWebView screenshot",
+    "real_tauri_ui": "partial: macOS Accessibility UI control succeeded. A greeting on the long-open PPT failed before turn creation with AG_ACTIVE_SESSION_LOADING; the same synthetic greeting on empty.txt completed in about 7 seconds with intent=answer, route summary=direct greeting response, correct visible answer, 117 ordered events and one done terminal. The UI also appended a ProjectReport with 8 session-metadata uncertainties, creating substantial greeting noise. DiffCard adjudication, wait/restart and isolation remain unexecuted."
   },
   "stop_conditions": [
-    {
-      "id": "SC-04",
-      "name": "VALIDATION_BLOCKED",
-      "reason": "Binder 已启动，但当前主机的 Computer Use 服务连续启动失败，无法执行和采集 DiffCard、等待态、重启、多 session/workspace 的可见系统观察。",
-      "recovery": "恢复 Computer Use 服务或由人类按 A-VAL-X-V-04/A-VAL-X-V-05 在目标 Binder 窗口执行并提供证据后，继续同一 G5 Scope。"
-    }
+    "SC-04: 真实 UI 最小问候已部分通过，但长时间打开的 PPT 仍因 AG_ACTIVE_SESSION_LOADING 在建回合前失败，且普通问候强制附带 8 项 session_metadata 不确定性报告；DiffCard、等待/重启和隔离场景未执行，整体 G5 不得提升。"
   ],
-  "unresolved_items": []
+  "unresolved_items": [
+    "G5存在实际runtime缺陷，不能仅归因于Computer Use。",
+    "真实 Tauri/WKWebView 的 empty.txt 问候已验证；PPT active session 初始化失败仍需定位，读取、编辑、多卡裁决、错误恢复和重启场景尚未验证。",
+    "ProjectReport 按当前设计在纯问候后仍展示所有打开会话的 session_metadata 不确定性，技术上可追溯但交互噪声显著；是否调整展示属于设计收敛点，不在本次交互测试中直接修改。"
+  ],
+  "recovery": [
+    "DeepSeek 当前协议 smoke 与 empty.txt 真实 UI 问候已完成。下一步先定位 PPT active session 长期 loading，并在可确认外发上下文的隔离场景中执行错误重试、读取、编辑、DiffCard、等待/重启和多 session/workspace 验证；不得对不确定绑定目标的历史重试按钮盲点。"
+  ],
+  "text_save_repair_work_package": {
+    "id": "ED-TEXT-SAVE-REPAIR-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "IMPLEMENTATION",
+    "status": "READY",
+    "authorization": "2026-10-14 用户在收到缺失保存基准和错误提示问题分析后明确要求“修复这个问题”；仅执行该修复，不解除父任务阻断。",
+    "allowed_files": [
+      "src-tauri/src/ed/routes.rs",
+      "src-tauri/src/ipc/system_tests.rs",
+      "src/services/edService.ts",
+      "src/services/edRuntime.test.ts",
+      "src/components/ed/Editor.tsx",
+      "src/components/ed/EditorToolbar.tsx",
+      "src/components/ed/EditorControls.test.tsx",
+      ".governance/active_scope.json",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md",
+      "scripts/test_governance.test.mjs",
+      "src/store/edStore.ts"
+    ],
+    "issue_trace": {
+      "1_symptom": "已存在的 injection.txt 和 rename-target.txt 是空磁盘文件，编辑快照 dirty 且含正文；反复保存失败。",
+      "2_entry": "Editor.tsx::saveCurrent -> edService.ts::saveDocument -> ws.save_doc；workspaceService.ts::hydrateEditorState -> ed.list_session_snapshots",
+      "3_rules": [
+        "BR-ED-STATE-003",
+        "BR-ED-DATA-008",
+        "BR-WS-OBS-001",
+        "BR-WS-PERSIST-001",
+        "X-FORBID-004",
+        "X-FORBID-008"
+      ],
+      "4_chains": [
+        "ED-EDIT",
+        "WS-FS",
+        "WS-SAVE",
+        "IPC-CALL"
+      ],
+      "5_producers": [
+        "BR-ED-DATA-002-RB-ED-ED-EDIT-012 / src/services/edService.ts；ed/routes.rs::route_persist_session_snapshot（现有快照存储路由）"
+      ],
+      "6_consumers": [
+        "BR-ED-STATE-003-EFFECT-ED-ED-EDIT-013 / src/services/edService.ts；workspace/routes.rs::route_save_doc；EditorToolbar.tsx::saveCurrent"
+      ],
+      "7_empty_rule_blocks": "涉及快照路由无 @GOV 块；沿用现有存储适配边界，无新增 rules:[]；不变更既有 triage。",
+      "8_boundary_assumptions": "快照保留 LogicalState 和加载时磁盘基准；不得拿当前磁盘冒充历史基准。路径无 lifecycle_assumption/document_snapshot 显式字段。",
+      "9_runtime_assumptions": "baseline=null 仍代表创建。旧草稿目标存在时必须先返回冲突，用户显式覆盖后读取当前基准并使用普通保存守卫；不改变后端创建保护。",
+      "10_invariants": "不得丢失草稿、静默覆盖外部编辑或忽略磁盘变化；不直接修用户数据库或磁盘文档。",
+      "11_validation": "既有 IPC 资产新增文本快照持久化/恢复/保存和外部冲突；服务测试覆盖旧草稿确认/拒绝/读盘失败；组件覆盖错误详情与重试；按 changed_files test:plan/test:related 含治理审计。检查 Saving -> Saved/SaveError 路由及 null 基准创建拒绝保持。"
+    },
+    "unresolved_items": [
+      "Running Binder window has not been restarted or manually verified; this is code/automated-test delivery, not a claim that the two user files were saved.",
+      "Parent AG-CLOSURE-REPAIR-01 G5 BLOCKED status and existing uncommitted changes are retained."
+    ],
+    "test_inventory_update": "既有治理自测 ED 动态用例断言 240→243，仅反映本修复新增的3项前端回归，物理文件预算不变。",
+    "scope_refinement": "仅旧文本快照恢复会话标记 requiresBaselineConfirmation；真正新建会话遇同名目标仍保留 WS_EXISTS 拒绝覆盖，不进入恢复分支。",
+    "final_state": "READY",
+    "changed_files": [
+      "src-tauri/src/ed/routes.rs",
+      "src-tauri/src/ipc/system_tests.rs",
+      "src/services/edService.ts",
+      "src/services/edRuntime.test.ts",
+      "src/components/ed/Editor.tsx",
+      "src/components/ed/EditorToolbar.tsx",
+      "src/components/ed/EditorControls.test.tsx",
+      ".governance/active_scope.json",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md",
+      "scripts/test_governance.test.mjs",
+      "src/store/edStore.ts"
+    ],
+    "scope": {
+      "mode": "explicit",
+      "status": "confirmed",
+      "evidence": "用户在问题分析后明确要求修复；仅本独立修复工作包，父 Scope 状态保持。"
+    },
+    "phase_gate": {
+      "status": "passed",
+      "evidence": "既有 ED-EDIT/WS-SAVE、保存冲突规则和快照恢复设计覆盖本修复；不改状态机或用户授权边界。"
+    },
+    "mapping_chain": {
+      "status": "complete",
+      "evidence": "BR-ED-DATA-008/BR-ED-STATE-003 -> 快照路由/会话恢复/保存确认 -> 既有 IPC、服务和组件测试资产。"
+    },
+    "test_impact": {
+      "changed_files": [
+        "src-tauri/src/ed/routes.rs",
+        "src-tauri/src/ipc/system_tests.rs",
+        "src/services/edService.ts",
+        "src/services/edRuntime.test.ts",
+        "src/components/ed/Editor.tsx",
+        "src/components/ed/EditorToolbar.tsx",
+        "src/components/ed/EditorControls.test.tsx",
+        ".governance/active_scope.json",
+        "docs/00_core/A-CORE-C-R-01_ADUS.md",
+        "scripts/test_governance.test.mjs",
+        "src/store/edStore.ts"
+      ],
+      "direct_modules": [
+        "AG",
+        "CORE",
+        "DE",
+        "ED",
+        "PCG",
+        "SYS",
+        "WS"
+      ],
+      "selection": [
+        "frontend-full",
+        "typescript",
+        "rust-full",
+        "governance:audit"
+      ]
+    },
+    "validation": [
+      "governance:generate passed: 112 physical assets, 1101 discovered tests; no new physical test file.",
+      "Initial frontend run: 650 passed, 1 failed at exact inventory count (240 vs 243); synchronized assertion to the three added frontend regressions, not relaxed.",
+      "Initial sandbox full run: frontend 651/651, TypeScript passed; Rust 443/461 passed. Existing local TCP/LibreOffice permissions and new harness IPC_ROUTE_MISSING failed; this is not pass evidence.",
+      "Connected test harness snapshot commands to real production handlers; no mock snapshot/save algorithms.",
+      "Final exact 11-file test:plan and test:related passed, exit 0, using approved local fixture/LibreOffice permissions: frontend 651/651, TypeScript, Rust lib 461/461, core_chain 5/5, sm_broadcast 4/4, doc-tests and governance:audit.",
+      "New IPC regression covers TXT, Markdown source and HTML file baseline roundtrip and physical save; service regressions cover explicit legacy recovery, unchanged new-document WS_EXISTS rejection, read/write race refusal and read failure preserving dirty content; component regression covers error detail and successful retry.",
+      "Semantic review: baseline envelope stripped before LogicalState; no guessed historical baseline; recovery restricted to restored missing-baseline text sessions, only explicit confirmation reads current disk and still uses guard override=false. Genuine new sessions retain WS_EXISTS protection.",
+      "git diff --check passed. No real desktop save, restart or modification of user workspace documents/database performed."
+    ],
+    "stop_conditions": [],
+    "recovery": [
+      "New test harness route omission repaired without replacing production logic; environment-dependent tests rerun with normal local permissions; full suite passed."
+    ]
+  }
 }

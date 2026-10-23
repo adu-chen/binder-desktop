@@ -5,6 +5,7 @@
 // 安全：BYOK 信封加密入库（kms.mjs，KEK 与密文分离）；平台/请求 key 仅内存用、不落盘、不写日志（REQ-GW-006）。
 
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { PROVIDERS, sse, streamProvider } from './providers.mjs';
 import { login } from './auth.mjs';
 import { checkGate } from './gate.mjs';
@@ -32,9 +33,24 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+function traceHeader(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : null;
+}
+
+function invokeTrace(req) {
+  const requestId = randomUUID();
+  const turnId = traceHeader(req.headers['x-binder-turn-id']);
+  const modelCallRound = traceHeader(req.headers['x-binder-round-index']);
+  const startedAt = performance.now();
+  return (phase, details = {}) => {
+    // 仅记录关联身份、阶段和耗时；不记录请求正文、响应正文、令牌或密钥。
+    console.info(`[GW-INVOKE] ${JSON.stringify({ requestId, turnId, modelCallRound, phase, elapsedMs: Math.round(performance.now() - startedAt), ...details })}`);
+  };
+}
+
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Binder-Turn-Id, X-Binder-Round-Index');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -100,19 +116,40 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && req.url === '/invoke/stream') {
+    const trace = invokeTrace(req);
+    const abortController = new AbortController();
+    let disconnected = false;
+    const onDisconnect = () => {
+      if (res.writableEnded || disconnected) return;
+      disconnected = true;
+      trace('client_disconnected');
+      abortController.abort();
+    };
+    res.once('close', onDisconnect);
+    res.once('finish', () => trace('response_finished'));
+    req.once('aborted', onDisconnect);
+    trace('request_received');
     let body;
     try {
       body = await readJson(req);
     } catch {
+      if (abortController.signal.aborted) return;
+      trace('request_rejected', { reason: 'invalid_json' });
       return json(res, 400, { error: 'invalid json' });
     }
+    if (abortController.signal.aborted) return;
+    trace('request_body_parsed');
     const name = body.provider || 'openai';
     const provider = PROVIDERS[name];
-    if (!provider) return json(res, 400, { error: `unknown provider: ${name}`, providers: Object.keys(PROVIDERS) });
+    if (!provider) {
+      trace('request_rejected', { reason: 'unknown_provider' });
+      return json(res, 400, { error: `unknown provider: ${name}`, providers: Object.keys(PROVIDERS) });
+    }
 
     // 门禁前置（X-SEQ-001）：必经裁决。令牌问题→401（客户端重登录）；额度/订阅→429（不重登录，PI-GW-DEV-05）。
     const verdict = checkGate(body.token);
     if (verdict.verdict !== 'passed') {
+      trace('request_rejected', { reason: 'gate_denied' });
       const code = verdict.reauth_required ? 401 : 429;
       return json(res, code, {
         error: 'gate_denied',
@@ -127,20 +164,36 @@ const server = createServer(async (req, res) => {
 
     // 密钥优先级：请求体 api_key > BYOK 代持 > 平台 env。不落盘、不记录。
     const apiKey = body.api_key || getByokKey(name) || process.env[`GW_${name.toUpperCase()}_KEY`];
-    if (!apiKey) return json(res, 401, { error: `no api key for ${name}（BYOK 或 env GW_${name.toUpperCase()}_KEY）` });
-    if (!body.model || !Array.isArray(body.messages)) return json(res, 400, { error: 'require { model, messages[] }' });
+    if (!apiKey) {
+      trace('request_rejected', { reason: 'missing_api_key' });
+      return json(res, 401, { error: `no api key for ${name}（BYOK 或 env GW_${name.toUpperCase()}_KEY）` });
+    }
+    if (!body.model || !Array.isArray(body.messages)) {
+      trace('request_rejected', { reason: 'invalid_request_shape' });
+      return json(res, 400, { error: 'require { model, messages[] }' });
+    }
 
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.flushHeaders();
+    trace('response_headers_sent');
     try {
+      trace('upstream_request_started', { provider: name, model: traceHeader(body.model) });
       await streamProvider(
         provider,
         { model: body.model, messages: body.messages, apiKey, maxTokens: body.max_tokens, tools: body.tools },
         res,
+        { signal: abortController.signal, onStage: trace },
       );
+      trace('upstream_stream_finished');
     } catch (e) {
-      sse(res, 'error', { code: 'GW_STREAM_ERR', message: String(e?.message || e), retriable: true });
+      if (abortController.signal.aborted) {
+        trace('upstream_cancelled');
+      } else {
+        trace('upstream_failed', { errorName: traceHeader(e?.name) || 'Error' });
+        sse(res, 'error', { code: 'GW_STREAM_ERR', message: String(e?.message || e), retriable: true });
+      }
     }
-    res.end();
+    if (!res.destroyed && !res.writableEnded) res.end();
     return;
   }
 

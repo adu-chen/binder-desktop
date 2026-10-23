@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { activeSession, useAgStore, type TurnCurrentAction } from "../../store/agStore";
 import { useDeStore } from "../../store/deStore";
 import type { MessageContentPart, ReferencePayload } from "../../services/referencePayload";
@@ -6,7 +6,7 @@ import { DiffList } from "../de/DiffList";
 import { ToolCallCard } from "./ToolCallCard";
 import { PlanCard } from "./PlanCard";
 import { MessageFlow } from "./MessageFlow";
-import { startTurn } from "../../services/agService";
+import { startTurn, inspectTurnEffects } from "../../services/agService";
 
 /**
  * @GOV
@@ -28,6 +28,41 @@ export function MessageList() {
   const session = activeSession(state);
   const { messages, toolCalls } = session;
   const endRef = useRef<HTMLDivElement>(null);
+  const [retryFeedback, setRetryFeedback] = useState<Record<string, string>>({});
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const retryingRef = useRef(false);
+  const [effectFeedback, setEffectFeedback] = useState<Record<string, string>>({});
+  const [inspecting, setInspecting] = useState<string | null>(null);
+  const inspectMessage = async (message: typeof messages[number]) => {
+    if (!message.turnId || inspecting) return;
+    const key = `${session.id}:${message.id}`;
+    setInspecting(key);
+    try {
+      const feedback = await inspectTurnEffects(session.id, message.turnId);
+      setEffectFeedback(previous => ({ ...previous, [key]: feedback }));
+    }
+    catch (error) { setEffectFeedback(previous => ({ ...previous, [key]: error instanceof Error ? error.message : "执行事实查询失败；不会重放。" })); }
+    finally { setInspecting(null); }
+  };
+  const retryMessage = async (message: typeof messages[number]) => {
+    const key = `${session.id}:${message.id}`;
+    if (retryingRef.current) return;
+    if (!message.turnId) {
+      setRetryFeedback((previous) => ({ ...previous, [key]: "原回合身份缺失，无法核对已有操作，未重新执行。" }));
+      return;
+    }
+    retryingRef.current = true;
+    setRetrying(key);
+    setRetryFeedback((previous) => ({ ...previous, [key]: "" }));
+    try {
+      await startTurn(message.content, { displayParts: message.parts, references: referencesFromParts(message.parts), retryOf: { sessionId: session.id, turnId: message.turnId } });
+    } catch (error) {
+      setRetryFeedback((previous) => ({ ...previous, [key]: error instanceof Error ? error.message : "重试核验失败，未重新执行。" }));
+    } finally {
+      retryingRef.current = false;
+      setRetrying(null);
+    }
+  };
   /** 贴底跟随标记（修复流式会话流跳动）：用户向上滚动离开底部阈值后暂停自动拉底，回到底部后恢复。
    *  流式 chunk 高频到达时若每次都 smooth 滚动，动画互相打断会造成上下抖动，故贴底时用非动画直接置底。 */
   const stickToBottomRef = useRef(true);
@@ -86,15 +121,24 @@ export function MessageList() {
               </div>
             )}
           </div>
-          {m.role === "user" && m.turnStatus === "draft" && (
+          {m.role === "user" && m.turnStatus === "draft" && (!state.activeTurn || state.activeTurn.turnId !== m.turnId) && (
             <div className="msg msg-assistant msg-error">
               <span className="label msg-role">AI</span>
               <div className="msg-body">
                 本回合未完成。
-                <button className="ghost" onClick={() => void startTurn(m.content, { displayParts: m.parts, references: referencesFromParts(m.parts) })}>
+                {m.turnFailure && <span> {m.turnFailure.message}（{m.turnFailure.code}） </span>}
+                {m.turnFailure?.diagnostic && <span>诊断阶段：{m.turnFailure.diagnostic.observedAt}；分类：{m.turnFailure.diagnostic.category}；根因未确认。</span>}
+                <button className="ghost" disabled={retrying !== null || state.sending} onClick={() => void retryMessage(m)}>
                   重试
                 </button>
+                {retryFeedback[`${session.id}:${m.id}`] && <span role="status"> {retryFeedback[`${session.id}:${m.id}`]} </span>}
               </div>
+            </div>
+          )}
+          {m.role === "user" && m.turnId && !state.sending && (
+            <div className="msg-effect-inspection">
+              <button className="ghost" disabled={inspecting !== null} onClick={() => void inspectMessage(m)}>核对执行效果</button>
+              {effectFeedback[`${session.id}:${m.id}`] && <pre role="status">{effectFeedback[`${session.id}:${m.id}`]}</pre>}
             </div>
           )}
         </Fragment>

@@ -76,11 +76,10 @@ pub(crate) fn route_persist_session_snapshot(
             false,
         )
     })?;
-    let persisted_content = if snapshot.edit_format == "html" {
-        doc::image_media::encode_snapshot_content(&snapshot.content, snapshot_baseline)
-    } else {
-        snapshot.content.clone()
-    };
+    // 所有编辑格式均须保留加载基准；否则恢复后的既有文本文件会被误判为新建。
+    // 复用内部 envelope，读取时解包，不让存储元数据进入 LogicalState。
+    let persisted_content =
+        doc::image_media::encode_snapshot_content(&snapshot.content, snapshot_baseline);
     let conn = lock_db(state)?;
     conn.execute(
         "INSERT OR REPLACE INTO ed_session_snapshots \

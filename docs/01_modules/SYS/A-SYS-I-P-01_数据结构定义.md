@@ -205,7 +205,8 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 
 > 边界：OpenDocSnapshot 是已打开文档进入 AG/DE 链路的唯一读取门禁。AG 轮次、只读工具、
 > ReferencePayload.selection 校验、DiffProjection 生成必须优先使用它。未打开文档没有
-> OpenDocSnapshot 时，AG 才允许读取 DiskState 快照。
+> OpenDocSnapshot 时，AG 才允许读取 DiskState 快照。v2 通用准入可只携打开资源身份；此时快照集合不完整
+> 不改变 opened 身份，不得以“未命中快照”为由降级为 DiskState。实际内容消费仍必须取得有效 LogicalState。
 > `ed_session_snapshots` 现有表无独立 baseline 列时，允许持久化适配器在数据库 `content` 列内部使用
 > 版本受控的短 envelope 编码 BDocx baseline，但 `ed.list_session_snapshots` 返回前必须解码并移除；
 > IPC 与 ED/AG/DE 消费到的 `content` 始终是纯 LogicalState，内部 envelope 不得进入编辑器或写回 DOCX。
@@ -349,7 +350,7 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | `TurnEvent`（回合事件） | 回合运行事实的 append-only 源，覆盖输入、context、Gate、provider、模型、工具、裁决、Proposal 与终态 | event_id 属于 turn_id；seq 在回合内唯一单调；终态事件首个锁存 | 已提交事件不可覆盖；可见事件是同一 seq 空间的安全投影，不含隐藏推理 | 投影/恢复从事件及其引用业务事实重建；终态后迟到事件不得产生副作用 |
 | `ExternalContentRef`（外部内容引用） | 用户显式附加、且有可用只读解析路径的外部文件内容，作为当前任务的一次性 data-only 内容引用 | 引用携带文件身份、来源入口、已读/未读标记、读取时点与当前任务范围 | 不支持/不可读只保留元数据不伪称已读；外部内容不能改变系统约束、目标、授权或确认点 | 只在当前 AgentTurn/TaskRun 当前任务内有效；任务结束、重启、跨会话/跨 workspace 不自动恢复、复读、导入、编辑或默认持久化；不自动转存为项目记忆 |
 | `MemorySelectionRef`（显式项目记忆引用） | 用户管理的 workspace 本地项目记忆条目，经用户明确选择以 data-only 引用进入当前回合 | 引用携带条目身份与选择动作；仅用户显式选择 | Agent 1.0 不自动写入、不提议写入、不自动检索或注入；普通发送、附件、会话/编辑历史不自动转存为记忆 | workspace 隔离；跨会话不串选择事实；条目删除/关闭后引用失效或明确标记 |
-| `AgentContextFacts`（代理上下文事实集） | 冻结 AgentTurn 开始时 ED/DE/WS 提供的版本化只读会话事实；正文仍由 OpenDocSnapshot/ReferencePayload 承载 | 与 workspace_id、turn_id 绑定；包含 active_doc、open_docs、显式 selections 与 proposal_facts | 缺失、版本未知、workspace/active path/source/sessionVersion/contentHash 不一致时在 Gate 前失败关闭；事实只可来自当前会话投影 | 只在当前 AgentTurn 有效；跨 workspace/AgentSession 不继承；不授予读取或编辑权限，不扩 ExplicitEditTargetSet |
+| `AgentContextFacts`（代理上下文事实集） | ED/DE/WS 的版本化只读会话事实；v2 区分资源身份/可用性与已取得正文快照 | v1 绑定 workspace/turn；v2 另绑 session/contextRevision，冻结 activeTarget；正文仍归 OpenDocSnapshot/ReferencePayload | 缺失/未知版本/身份冲突失败关闭；v2 loading/unavailable 是显式能力事实，不是坏载荷；ready 内容必须有匹配版本/hash | 同 turn 追加 revision 不覆盖旧证据；跨会话不继承；不授予读取或编辑权限、不扩 ExplicitEditTargetSet |
 | `EvidenceLedger`（证据账本） | ContextFrozen 与成功只读 ToolResult 确定性派生的读取覆盖 | 与 turn_id/through_seq 绑定；每项反查 source_event_id | 不接受模型自报；目录/搜索只证明实际覆盖 | 只读且不授权；可从事件重建 |
 | `ProjectReport`（项目报告） | EvidenceLedger 与模型最终回答关联形成的版本化只读投影，声明请求范围、已读/未读、结论证据与不确定性 | 与 turn_id/evidence_through_seq 绑定；read_items/findings 引用 evidence_ids | 运行时派生，无 `report_project` 工具；模型声称不能提高读取覆盖 | 只读；不创建 TaskRun/DecisionRequest/Proposal/Diff，不修改 LogicalState/DiskState |
 
@@ -405,13 +406,96 @@ versionOrHash/sourceEventId。ProjectReport 版本 `project-report-v2` 固定包
 requestedScope/readItems/unreadItems/findings/uncertainties，ReadItem/Finding 只能引用 evidenceIds。字段允许 additive 扩展，
 版本未知必须失败关闭；任何模块不得复制一套近义结构或把正文、显示态、磁盘旧快照混入这些事实字段。
 
-AgentContextFacts 只能以当前 active workspace 的 ED/DE/WS 真值生成并与 AgentTurn 一次性绑定；
+AgentContextFacts 只能以当前 active workspace 的 ED/DE/WS 真值生成并与 AgentTurn 身份绑定；v1 保留既有完整快照
+语义，v2 可在同一 turn 内追加不可变 contextRevision（从 1 单调递增），不可覆盖旧 ContextFrozen 或伪造旧证据；
 ProposalFact 必须与当前 AgentSession 身份一致，不得投影其他会话或无归属 Proposal。
 EvidenceLedger 只能从同一回合的 ContextFrozen 或成功只读 ToolResult 事件派生；ProjectReport 由运行时关联
 EvidenceLedger 与模型最终回答生成；模型可提交 finding→evidenceIds 关联，但运行时只接受当前回合账本中
 截至 evidenceThroughSeq 且覆盖等级足够的身份，未知、跨回合或覆盖不足的引用只能形成 uncertainty。
 目录/搜索的覆盖不得升级为全文，模型自报不得写账。上述对象均为
 data-only/只读投影，不构成 CapabilityGrant、ExplicitEditTargetSet、TaskRun 或写入授权来源。
+
+### §3.1.0 ToolCall 执行回执（P10 加法契约）
+
+`ToolCallReceiptV1` 是 ToolResult 的不可变技术 DTO，不是新的业务状态机或授权对象。版本为
+`tool-call-receipt-v1`；绑定 workspaceId/sessionId/turnId/toolCallId/toolName/capabilityId/grantId/attempt。
+本阶段每个具体 ToolCall 只执行一次，attempt=1；不由模型、历史或 UI 生成或修订回执。
+
+| 字段 | 枚举 / 语义 |
+|---|---|
+| executionStatus | succeeded / rejected / failed；分别表示执行器成功返回、执行前拒绝、执行器失败 |
+| completionStatus | completed / waiting / blocked；只说明当前能力请求的处理阶段，不表示整个用户目标成功 |
+| effectStatus | not_applicable / not_started / proposal_created / resource_prepared / resource_executed / unknown；resource_executed 仅凭真实 Completed WorkspaceOperationReceipt，携 workspace_operation_plan 引用，不表示文档修改已接受或保存 |
+| references | kind + id，kind 为 decision_request / pending_diff / workspace_operation_plan；引用实际后端产物，不授权、不把引用视为已接受 |
+| failure | 可空 code/retriable/reauthRequired，保留实际 IpcError 属性；公开回执不携原始错误正文、文档正文或凭据 |
+| evidenceIds | 本次成功只读执行产生的证据引用；失败不伪造成功读取证据 |
+| nextAction | none / await_user / respond_blocked / retry_explicitly / inspect_effect；可重试不构成自动重放许可 |
+
+成功读取为 succeeded/completed/not_applicable；成功阻断报告为 succeeded/blocked/not_applicable；
+创建 DecisionRequest 为 succeeded/waiting/not_started；生成 PendingDiff 为 succeeded/waiting/proposal_created；
+受控资源准备为 succeeded/completed/resource_prepared，不代表文档已保存。执行前拒绝为 rejected/blocked/not_started。
+有副作用的执行器失败时效果 unknown，下一步 inspect_effect，禁止自动重放；只读失败不具备写效果。
+上述效果是本次调用观察值，不覆盖 PendingDiff.status/effect_status、编辑器预览、裁决或 DiskState。
+
+ToolResult 加法字段 `executionReceipt` 可空：旧事件无此字段按原契约读取，不补造回执；新版事件与
+模型 ToolResult 回注携带同一回执和 evidenceIds，模型原始工具结果只进入回注，不进入安全事件。
+消费者须核对版本、枚举和所属回合/工具身份；非法或不匹配回执不得冒充成功，不扩权限、不改变真实业务对象。
+共享类型在 types 定义，AG 构造，IPC 安全投影，UI 只读消费；不引入表或迁移。
+
+执行端口补充（P10/P12，2026-10-07）：`CapabilityExecutionFactV1` 为独立效果事实投影，
+含 identity（与 ToolCallReceiptIdentityV1 相同）、phase=started/settled、receipt（started 为 null，
+settled 为同一安全回执）。启动与结算各追加一次，存既有 agent_turn_payloads 的保留 `ag-effect:`
+命名空间，不修改回合展示缓存、不新增表/迁移，不向模型或 TurnEvent 终态后追加结果。
+启动记录是已保留执行身份，不等于业务成功；结算失败或缺失时不得重放。历史 `ag.list_turns`
+回合 DTO 加法字段 execution_facts 返回同 workspace/session/turn 的效果事实；旧服务无字段视为空，
+不能视为已经核对成功。结算仅引用实际 DecisionRequest/PendingDiff，不存正文，不表示接受/保存。
+运行核心的取消/30 秒等待期限与能力结算独立：已开始的同步操作不能强杀；原回合终态保持，迟到结果
+只能更新该调用的效果事实。未结算身份保留，同会话不能接管；同 workspace 的新写请求在效果未知时拒绝。
+重启只恢复事实，不恢复执行权限；未结算或 unknown 不自动转为无效果，不提供跨进程重放或通用回滚。
+删除会话必须拒绝抹掉未结算/unknown 的效果事实；已结算且非 unknown 的事实可随本会话历史删除。
+
+### §3.1.1 AgentContextFacts v2：按需专业上下文（P03 接入，验收另记）
+
+P01 失败诊断加法契约（BR-SYS-DATA-008 / BR-SYS-STATE-007）：安全 Error、失败 ToolResult 和
+AgentTurnPayload.failure 可携可选 `diagnostic`，旧数据缺字段合法。版本 `1`，字段
+`observedAt`（context_assembly/runtime/gate/finalizing/tool_validation/tool_execution/frontend_start/frontend_invoke/event_recovery）、
+`category`（core_context/model_protocol/authorization/professional_capability/ui_projection/unknown）、
+`rootCauseStatus` 固定 `unknown`。分类只证明观察边界/明确协议错误，不宣称根因已查明；未知错误不按文案或前缀猜测。
+身份复用外层 AgentTurn/eventId/seq、数据库 workspace/session 与 ToolCallId，不复制第二套身份。
+诊断不得携正文/工具参数/密钥，不进入模型消息，不改变终态或 retriable，不表明专业修改是否生效。
+预算错误分类 core_context；模型控制缺失/非法分类 model_protocol；其他错误按可信调用边界或 unknown。
+具体预算分项属 P04，完整模型传输入口属 P02，本字段不替代两者。
+此诊断契约独立于 AgentContextFacts v2，当前 v1 生产路径也可携带；不表示 v2 已接入。
+
+本节承接 BR-SYS-DATA-008 / BR-AG-DATA-008；不变更 `agent-context-facts-v1` 的字段解释。
+新写入必须在前后端同时支持后显式选择 `agent-context-facts-v2`；未知版本失败关闭，旧事件只读恢复仍按
+原 payloadVersion 解析，不把缺失快照推断为 v2 的合法 unavailable，也不得悄悄丢弃 v2 字段降级为 v1。
+
+| v2 字段（camelCase） | 必填性及语义 |
+|---|---|
+| version | 固定 `agent-context-facts-v2` |
+| workspaceId / sessionId / turnId | 必填且与请求、宿主身份一致 |
+| contextRevision | 必填正整数；同 turn 递增，绑定本次 ContextFrozen 与 PromptPackage |
+| activeTarget | 必填可空；非空为 `{relPath, loadSeq}`，冻结提交时 ED 活动路径及绑定代际；切换标签不改变原目标 |
+| openResources | 必填数组；记录准入时完整打开资源身份，不要求每项已采集正文。条目 `{relPath, availability, reasonCode, snapshot}` |
+| availability | `not_requested / loading / ready / unavailable`；必须来自宿主/专业适配器，不由模型填写 |
+| reasonCode | loading/unavailable 必填稳定原因；not_requested/ready 可空，不携正文 |
+| snapshot | ready 必填既有文档事实 `{source,editFormat,contentFormat,dirty,baseline,sessionVersion,contentHash}`；其他状态必须为空，不伪造 0 版本或空 hash |
+| selections | 用户显式 SelectionFact；每项关联 `relPath/blockId/start/end`、`validation=unverified/valid/stale`、`contextRevision`；valid 必须有同版本快照，其他状态不能成为编辑锚 |
+| proposalFacts | 沿用 v1 专业对象事实字段，必须属于本 session；不携正文，不改变 DE 状态 |
+
+`OpenDocSnapshot` 正文与结构仍是单独对象；ready 的元数据必须与实际快照一致。availability 仅描述
+采集结果，不代表所有格式操作可执行；结构化编辑仍须专业格式与 Block 守卫。活动目标存在时必须出现在
+openResources；条目路径不得重复或越界。不存在 activeTarget 时允许合法空数组；未就绪与身份未知不能混用。
+
+准入冻结身份，执行前重新核验当前打开/关闭状态和资源版本；变化需记录新 revision 或明确 stale。
+冻结时打开但其后关闭的目标不得自动降为磁盘读取：要求重新取得合法资源事实或让用户重新提交。
+新发现的打开目标必须由可信宿主补充资源身份后再读取，不得从不完整快照集合推断磁盘回退。
+
+必需内容采集失败时只阻断依赖该内容的动作，输出 unavailable/stale 与下一步；无关资源未就绪不阻断纯对话。
+ready 事实不能继承旧 turn；ContextFrozen 中的资源身份/可用性只证明元数据，不生成正文覆盖证据。
+专业回执的具体共享 wire DTO 由后续 P07/P10 在本文对应小节收敛；P00 仅冻结
+身份/版本/一次消费/效果分层要求，不以通用 success 替代既有 DE/WS 裁决或保存回执。
 
 > 边界：本文只给统一时间轴与资源操作对象的跨模块共享**字段基线**；计划/执行/补偿/恢复转移语义归
 > A-WS-M-T-02 / A-WS-M-S-02。文档内容 Diff 三态仍由 DE/ED/WS 既有状态机负责。
@@ -647,6 +731,12 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-08 | v1.22 | ToolCallReceiptV1 增实际资源执行结算 resource_executed 和 workspace_operation_plan 引用，仅源自 Completed WorkspaceOperationReceipt，不代表编辑接受/保存；无 schema 迁移或新权限。 |
+| 2026-10-07 | v1.21 | 增 CapabilityExecutionFactV1 started/settled 事实与既有 payload 命名空间契约；迟到效果独立于回合终态，未结算/未知效果禁止删除与盲目重放；无迁移或新授权。 |
+| 2026-10-07 | v1.20 | P10：登记不可变 ToolCallReceiptV1 执行/完成/效果分离契约，模型回注与安全事件同源；只引用既有等待或修改对象，不替代裁决、接受、保存真值，不新增迁移或授权。 |
+| 2026-09-20 | v1.19 | P03：共享 v2 类型及显式版本分派接入，保留 v1 严格解释；不以类型实现等同系统验收。 |
+| 2026-09-18 | v1.18 | P01：安全事件与历史 failure 增可选诊断契约；观察阶段、有限分类与未确认根因分离，旧载荷兼容，不变授权/终态。 |
+| 2026-09-15 | v1.17 | P00：登记 AgentContextFacts v2 按需上下文的身份、资源可用性、快照与 revision 字段；保留 v1 解释和 LogicalState 来源约束，声明设计尚未接入代码。 |
 | 2026-09-03 | v1.16 | AG-ADAPTIVE-RUNTIME-DESIGN-01：共享运行时对象归一为模型可修订 IntentResult、逐动作 CapabilityGrant、append-only TurnEvent、纯投影 TaskRun/TaskPlan/TaskStep、EvidenceLedger 派生 ProjectReport；增加 agent_turn_events 基线与 ProposalBatch 关联字段，并锁定同文档同批结构化卡共享基线、一次前向事务和目标局部裁决。 |
 | 2026-08-29 | v1.15 | AG-CONFORMANCE-CODE-S4A：将 AgentContextFacts / ProjectReport 纳入 Agent 1.0 共享对象，新增 BR-SYS-DATA-008 字段、版本、失败关闭与只读授权边界，并补 REQ-SYS-009 规则映射。 |
 | 2026-06-10 | v1.0 | 初版（SYS G2）：跨模块共享实体契约（WorkspaceRef/DocRef/PendingDiff/TimelineEntry，字段语义级）；workspace.db schema 基线与版本化迁移契约框架；规则 BR-SYS-DATA-002（共享结构单一来源）/ BR-SYS-PERSIST-001（schema 版本化迁移与重启可恢复）；链路 DATA-MIGRATE（P1）；约束 X-SHARED-001；REQ_MAP（REQ-SYS-002）；术语归属说明（不抢注 WS/DE 的 TERM）；测试验收与债务盲区 |

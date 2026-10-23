@@ -193,9 +193,9 @@ req_id: REQ-AG-006
 title: 能力模型独立配置
 owner_module: AG
 status: active
-summary: 模型设置可为辅助续写 Autocomplete、局部修改 InlineAssist、代理编辑 AgentEdit，以及后续 Profile 的代理构建 BuildMode 分别保存 provider/model 偏好，默认跟随全局默认模型、可显式指定覆盖；模型分预设（云端下发、订阅可调用）与 BYOK（用户自带密钥、网关代持）两类来源分层呈现与选择；保存 BuildMode 偏好不代表 Agent 1.0 启用 Build 调用，模型配置的密钥语义仍受 X-FORBID-001 约束（客户端不持密钥）
+summary: 模型设置可为辅助续写 Autocomplete、局部修改 InlineAssist、代理编辑 AgentEdit，以及后续 Profile 的代理构建 BuildMode 分别保存 provider/model 偏好，首次默认跟随全局默认模型、可显式指定覆盖；已选模型不可用时须提示并停止调用，不得静默回退；AgentTurn 开始后固定模型，确认、澄清及预览续行不可切换；模型分预设（云端下发、订阅可调用）与 BYOK（用户自带密钥、网关代持）两类来源分层呈现与选择；保存 BuildMode 偏好不代表 Agent 1.0 启用 Build 调用，模型配置的密钥语义仍受 X-FORBID-001 约束（客户端不持密钥）
 source_doc: MODEL-CONFIG-FIX-PLAN-01（2026-08-06 人类四项确认）、A-GW-M-D-01（预设模型演进边界 GW-06）
-acceptance: 四个偏好槽位在模型配置界面可分别选择「跟随全局」或指定独立模型；Agent 1.0 只验收已开放的辅助续写、局部修改和代理编辑调用按偏好解析 provider/model；BuildMode 仅保留后续 Profile 的配置数据，不产生入口、调用、工具授权或 1.0 验收义务；预设模型与 BYOK 模型在界面分层展示且来源可辨；密钥不落客户端、不因模型配置引入新密钥路径
+acceptance: 四个偏好槽位在模型配置界面可分别选择「跟随全局」或指定独立模型；Agent 1.0 只验收已开放的辅助续写、局部修改和代理编辑调用按偏好解析 provider/model；界面显示与实际发送同源，已选项缺失时保留原偏好、提示并拒绝调用；同一 AgentTurn 在工具、确认、澄清和预览后所有模型请求保持首次 provider/model，不因默认模型变化而切换；BuildMode 仅保留后续 Profile 的配置数据，不产生入口、调用、工具授权或 1.0 验收义务；预设模型与 BYOK 模型在界面分层展示且来源可辨；密钥不落客户端、不因模型配置引入新密钥路径
 open_issues: 预设模型清单云端下发契约（GET /models）与订阅档位映射归云 GW/LIC；能力偏好持久化并入统一设置体系后立项
 -->
 

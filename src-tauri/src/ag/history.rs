@@ -102,6 +102,8 @@ pub struct TurnFailure {
     pub code: String,
     pub message: String,
     pub retriable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<crate::ipc::AgentFailureDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +126,7 @@ pub struct AgentTurnPayload {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentTurnRecord {
+    pub execution_facts: Vec<crate::types::CapabilityExecutionFactV1>,
     pub turn_id: String,
     pub session_id: String,
     pub workspace_id: String,
@@ -479,6 +482,11 @@ pub fn list_turns(
             rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
         })?;
         Ok(AgentTurnRecord {
+            execution_facts: super::capability_runtime::facts(
+                conn,
+                workspace_id,
+                Some((session_id, &r.get::<_, String>(0)?)),
+            )?,
             turn_id: r.get(0)?,
             session_id: r.get(1)?,
             workspace_id: r.get(2)?,
@@ -508,6 +516,8 @@ pub fn delete_session(
     session_id: &str,
 ) -> rusqlite::Result<AgentSessionDeleteResult> {
     let tx = conn.transaction()?;
+    let deleted_effect_facts =
+        super::capability_runtime::delete_settled_session_facts(&tx, workspace_id, session_id)?;
     let deleted_events = tx.execute(
         "DELETE FROM agent_turn_events WHERE turn_id IN ( \
            SELECT turn_id FROM agent_turns WHERE workspace_id = ?1 AND session_id = ?2 \
@@ -532,7 +542,7 @@ pub fn delete_session(
     Ok(AgentSessionDeleteResult {
         deleted_sessions,
         deleted_turns,
-        deleted_payloads,
+        deleted_payloads: deleted_payloads + deleted_effect_facts,
         deleted_events,
     })
 }
@@ -615,6 +625,103 @@ mod tests {
             failure: None,
             incomplete_reason: None,
         }
+    }
+
+    // covers: BR-AG-PERSIST-001
+    // covers: BR-SYS-STATE-007, BR-SYS-STATE-008
+    #[test]
+    fn file_database_reopen_preserves_history_but_never_restores_execution_authority() {
+        let path = std::env::temp_dir().join(format!(
+            "binder-core-reopen-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                if let Err(error) = std::fs::remove_file(&self.0) {
+                    eprintln!("temporary recovery database cleanup failed: {error}");
+                    if !std::thread::panicking() {
+                        panic!("temporary recovery database cleanup failed");
+                    }
+                }
+            }
+        }
+        let _cleanup = Cleanup(path.clone());
+        let task_id;
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            db::migrate(&mut conn).unwrap();
+            conn.execute("INSERT INTO workspaces (workspace_id, root_path, is_active, opened_at) VALUES ('ws1','/w',1,0)", []).unwrap();
+            ensure_session(&conn, "ws1", "s1", "历史", "edit", 0, true).unwrap();
+            let mut snapshot = payload("original request");
+            snapshot.tool_summaries.clear();
+            snapshot.diff_refs.clear();
+            save_turn(&conn, "ws1", "s1", "t1", None, "draft", &snapshot).unwrap();
+            task_id = crate::ag::task::begin_turn(&conn, "ws1", "s1", None).unwrap();
+            crate::ag::task::link_turn(&conn, "t1", &task_id).unwrap();
+            crate::ag::task::propose_decision(
+                &conn,
+                &task_id,
+                "manual_confirm",
+                serde_json::json!({"summary":"等待"}),
+            )
+            .unwrap();
+        }
+        let mut reopened = Connection::open(&path).unwrap();
+        db::migrate(&mut reopened).unwrap();
+        assert_eq!(
+            crate::ag::task::mark_all_stale_as_interrupted(&reopened).unwrap(),
+            1
+        );
+        assert_eq!(
+            crate::ag::task::mark_all_stale_as_interrupted(&reopened).unwrap(),
+            0
+        );
+        assert_eq!(
+            list_turns(&reopened, "ws1", "s1").unwrap()[0]
+                .payload
+                .user_message
+                .content,
+            "original request"
+        );
+        assert!(list_turns(&reopened, "ws1", "other-session")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            crate::ag::task::load_task_run(&reopened, &task_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            crate::ag::task::TaskRunStatus::Interrupted
+        );
+        let state = crate::AppState {
+            db: std::sync::Arc::new(std::sync::Mutex::new(reopened)),
+            registry: crate::build_registry(),
+            assist_terminals: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            active_agent_turns: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+        };
+        assert!(
+            matches!(crate::ag::turn_control::register_active_agent_turn(&state, "ws1", "s1", "t1", crate::ag::turn_control::AgentTurnResumeKind::Decision), Err(error) if error.code == "AG_TURN_NOT_AWAITING")
+        );
+        let (_lease, _, _, _, _) = crate::ag::turn_control::register_active_agent_turn(
+            &state,
+            "ws1",
+            "s1",
+            "new-turn",
+            crate::ag::turn_control::AgentTurnResumeKind::New,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::ag::task::load_task_run(&state.db.lock().unwrap(), &task_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            crate::ag::task::TaskRunStatus::Interrupted
+        );
     }
 
     // covers: BR-AG-PERSIST-001, BR-AG-UI-001

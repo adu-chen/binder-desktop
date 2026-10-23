@@ -202,7 +202,7 @@ terminal_states: GateDenied, InvokeCompleted, InvokeError
 - **scope**：客户端一次"登录态维持 + 单次模型调用门控"的完整生命周期
 - **context**：会话令牌、令牌有效期、门禁裁决结果、调用模式（套餐 / BYOK 透传）
 - **states**：Unauthenticated、Authenticated、GateChecking、GatePassed、Invoking、InvokeCompleted、GateDenied、InvokeError
-- **events**：login、loginOk、loginFail、startModelCall、gateAllow、gateDeny、invokeStart、invokeStreamEnd、invokeFail、sessionExpire、logout
+- **events**：login、loginOk、loginFail、startModelCall、gateAllow、gateDeny、gateFail、invokeStart、invokeStreamEnd、invokeFail、sessionExpire、logout
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
@@ -212,19 +212,21 @@ terminal_states: GateDenied, InvokeCompleted, InvokeError
 | Authenticated | startModelCall | 令牌未过期 | GateChecking | 提交令牌过门禁 |
 | GateChecking | gateAllow | 服务端裁决有效订阅 | GatePassed | — |
 | GateChecking | gateDeny | 无有效订阅 | GateDenied | 拒绝原因（不可绕过）|
+| GateChecking | gateFail | 不可达、超时、非授权 HTTP 异常、响应非法或未知裁决 | InvokeError | 统一调用错误；无裁决不得调用模型 |
 | GatePassed | invokeStart | — | Invoking | 经网关发起（计量/BYOK 透传）|
 | Invoking | invokeStreamEnd | — | InvokeCompleted | 流式回显完成 |
 | Invoking | invokeFail | — | InvokeError | 统一错误形状（可重试标记）|
 | Authenticated/GateChecking/Invoking | sessionExpire | — | Unauthenticated | 令牌失效，要求重认证 |
 | Authenticated | logout | — | Unauthenticated | 清会话 |
 
-- **error_states**：InvokeError（recovery：按可重试标记回 GatePassed 重试，或回 Authenticated）；sessionExpire 走 recovery 回 Unauthenticated 重认证
-- **recovery_paths**：InvokeError→（可重试）GatePassed；任意态 sessionExpire→Unauthenticated→login
+- **error_states**：InvokeError 为本次调用终态；可重试标记仅允许显式新请求，不表示自动重放。sessionExpire 走 recovery 回 Unauthenticated 重认证
+- **recovery_paths**：显式新请求从 Authenticated→GateChecking 重新裁决；无凭据先登录。任意态 sessionExpire→Unauthenticated→login；原错误记录保留
 - **forbidden_transitions**：
   - Unauthenticated → Invoking（未认证不得调用）
   - Authenticated → Invoking（未过门禁不得调用）
   - GateDenied → Invoking（被拒不得绕过门禁）
   - GateChecking → Invoking（未取得 gateAllow 不得调用）
+  - InvokeError → GatePassed/Invoking（不得复用此前授权或自动继续）
 - **acceptance_criteria**：无 gateAllow 不存在通往 Invoking 的路径；GateDenied 为终态且不可转 Invoking；未认证态一切调用被拒
 - **test_matrix**：见 §10（强制转移测试覆盖上述 transitions 与 forbidden_transitions）
 
@@ -237,14 +239,14 @@ terminal_states: GateDenied, InvokeCompleted, InvokeError
 | 认证·登录 | CLOUD-AUTH | 成功后持有会话令牌；失败返回统一错误形状（BR-SYS-STATE-001） |
 | 认证·续期 | CLOUD-AUTH | 令牌过期前刷新；失败回落未认证态 |
 | 认证·登出 | CLOUD-AUTH | 清除会话，回未认证态 |
-| 门禁·校验 | CLOUD-GATE | 提交令牌→服务端裁决；返回 allow/deny + 不可绕过的拒绝原因（BR-SYS-VERIFY-001、X-FORBID-002）|
+| 门禁·校验 | CLOUD-GATE | 提交令牌→有效 allow/deny；不可达、超时、非法响应返回调用错误而非 deny；两种失败均不调用模型（BR-SYS-VERIFY-001、X-FORBID-002）|
 | 网关·调用 | CLOUD-INVOKE | 仅在 GatePassed 后可发起；套餐计量或 BYOK 透传；流式回显（BR-SYS-DATA-001、X-SEQ-001）|
 
 ## §8 异常恢复（APC §5 G2）
 
 - **认证失败 / 令牌过期**：进入 Unauthenticated，上层提示重新登录；不得以过期令牌发起门禁或调用。
 - **门禁拒绝**：终态 GateDenied，向上层返回不可绕过拒绝原因；不得本地"假通过"（X-FORBID-002）。
-- **网关错误**：InvokeError 携可重试标记；可重试者回 GatePassed 重试有限次，否则上抛统一错误形状。
+- **门禁调用错误 / 网关错误**：InvokeError 携可重试标记，不自动重试；显式新请求必须重新提交门禁，不回 GatePassed 复用授权。401/403 或合法 denied 才构成明确拒绝；429/5xx 可显式重试，其他非成功 HTTP 不可重试。dev 凭据刷新最多一次，重复 reauth_required 不得放行；认证网络失败保留认证阶段错误。
 - **流式中断**：按 IPC 流式契约（REQ-SYS-001）的中断语义处理，状态保持可恢复，不产生半落盘副作用（落盘归 WS/DE，不在本契约）。
 
 ## §9 需求到规则映射（REQ_MAP）
@@ -314,6 +316,7 @@ status: mapped
 
 - **状态机转移测试矩阵（强制，APC §6/§10）**：覆盖 §6 全部 transitions 与 forbidden_transitions；
   重点断言：无 gateAllow 不可达 Invoking；GateDenied 不可转 Invoking；Unauthenticated/Authenticated 直达 Invoking 被拒。
+  首轮/工具续轮分别覆盖断连、响应头/体超时、429/5xx/400、非法/未知响应和重复重认证；无下一模型请求，既有工具结果不重放；重试必须新裁决。
 - **规则 covers**：BR-SYS-VERIFY-001 / BR-SYS-DATA-001 / BR-SYS-STATE-001 / BR-SYS-OBS-001 各有 `// covers: BR-SYS-*` 断言（实现于 ENT/ACCT G4）。
 - **约束验证**：X-FORBID-001（客户端无密钥落地路径）、X-SEQ-001（调用前必过门禁）、X-FORBID-002（无本地绕过）在集成测试中验证。
 - **验收标准**：无有效订阅时模型调用被拒；客户端不存明文密钥；门禁无客户端绕过路径；BYOK 经网关透传且不计额度——对齐 REQ-CORE-008 / REQ-SYS-005 验收。
@@ -340,5 +343,6 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-06 | v1.2 | 人类确认门禁调用错误与服务端拒绝分离；gateFail 失败关闭；删除错误后直接复用 GatePassed 的恢复路径，新请求重新裁决。 |
 | 2026-06-10 | v1.0 | 初版（SYS G2）：云接口契约 SSOT；注册 TERM-CLOUD-001~004；定义 CLOUD-AUTH/GATE/INVOKE 三链路、BR-SYS-STATE/VERIFY/DATA/OBS-001 四规则、X-FORBID-001/SEQ-001/FORBID-002 三约束、SM-SYS-01 会话与订阅门禁状态机；REQ_MAP 承接 REQ-SYS-005；测试矩阵/验收/债务盲区；锁定 A-SYS-C-T-01 须先于 generate |
 | 2026-06-12 | v1.1 | 人类确认产品承诺升格：新增 BR-SYS-DATA-004（网关内容不留存——调用内容瞬时过境不持久化、仅留脱敏计量元数据；BYOK 密钥加密保管与用户身份数据分离；作为云端 GW 独立 APC 前置约束，弱化即产品边界变更）；REQ_MAP 补 REQ-SYS-005→BR-SYS-DATA-004 |
