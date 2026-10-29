@@ -4064,7 +4064,7 @@ mod tests {
         assert!(!exposed_names.contains(&ag::model_output::TOOL_BATCH_NAME));
         assert!(invokes[0].1["messages"]
             .to_string()
-            .contains("后续独立只读工具可省略 _binderTurn"));
+            .contains("每次业务工具调用的 arguments 顶层都必须包含完整 _binderTurn"));
         assert!(evidence.events.iter().any(|(kind, payload)| {
             kind == "tool_transport_observed"
                 && payload["protocolVersion"] == ag::model_output::DIRECT_TOOL_PROTOCOL

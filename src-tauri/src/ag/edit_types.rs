@@ -19,6 +19,7 @@ pub(super) struct AgentProposeEditResult {
     pub(super) projections: Vec<DiffProjection>,
 }
 
+#[derive(Debug)]
 pub(super) struct EditProjectionDraft {
     pub(super) after_content: String,
     pub(super) block_id: Option<String>,

@@ -88,12 +88,20 @@ pub(super) fn guard_propose_edit_target(target_exists: bool) -> Result<(), IpcEr
     Ok(())
 }
 
+/// Per-card ceiling for `block_ops`. Operations beyond this are split into further cards of the
+/// same size by `block_ops::split_adjudication_groups`, so a long chapter never has to be
+/// resubmitted: one call may carry several cards.
+pub(crate) const MAX_BLOCK_OPS_PER_BATCH: usize = 64;
+/// Per-call ceiling. Five cards (the single-turn batch budget) of the per-card size.
+pub(crate) const MAX_BLOCK_OPS_PER_CALL: usize = MAX_BLOCK_OPS_PER_BATCH * 5;
+/// Hard ceiling on the serialized `operations` payload. The count alone does not bound the
+/// context: a few blocks can still carry an entire chapter. Bytes are the real budget.
+pub(crate) const MAX_BLOCK_OPS_BYTES_PER_BATCH: usize = 64 * 1024;
+
 pub(super) fn resolve_agent_edit_operation(
     params: &serde_json::Value,
     target_exists: bool,
 ) -> Result<AgentEditOperation, IpcError> {
-    // P1 预算修复（AG-R2-01）：单批 block_ops 操作数上限（实现期配置）。
-    const MAX_BLOCK_OPS_PER_BATCH: usize = 24;
     let operation = params
         .get("operation")
         .and_then(|v| v.as_str())
@@ -121,6 +129,11 @@ pub(super) fn resolve_agent_edit_operation(
         .get("operations")
         .and_then(|v| v.as_array())
         .map(|v| v.len())
+        .unwrap_or(0);
+    let block_ops_bytes = params
+        .get("operations")
+        .and_then(|v| serde_json::to_string(v).ok())
+        .map(|serialized| serialized.len())
         .unwrap_or(0);
     let has_structured_base = params.get("base").is_some();
 
@@ -222,13 +235,35 @@ pub(super) fn resolve_agent_edit_operation(
                 false,
             ))
         }
-        // P1 预算修复（AG-R2-01）：单批 block_ops 操作数上限，防止模型一次提交超大载荷
-        // 撑爆上下文；超限要求分批提交（1.0 分批原子提交，等价于多次 propose_edit）。
-        AgentEditOperation::BlockOps if has_table_ops && block_ops_len > MAX_BLOCK_OPS_PER_BATCH => {
+        // 单次调用上限：数量与序列化字节双重门禁，防止模型一次提交超大载荷撑爆上下文。
+        // 单张卡仍按 MAX_BLOCK_OPS_PER_BATCH 切分；一个调用可以带多张卡，因此这里放行到
+        // 单回合批预算（5 张卡）为止，模型不必为了凑数把一章拆成多次重提。
+        AgentEditOperation::BlockOps if has_table_ops && block_ops_len > MAX_BLOCK_OPS_PER_CALL => {
+            let batches = block_ops_len.div_ceil(MAX_BLOCK_OPS_PER_CALL);
+            let plan = (0..batches)
+                .map(|index| {
+                    let start = index * MAX_BLOCK_OPS_PER_CALL + 1;
+                    let end = (start + MAX_BLOCK_OPS_PER_CALL - 1).min(block_ops_len);
+                    format!("{start}–{end}")
+                })
+                .collect::<Vec<_>>()
+                .join("、");
             Err(IpcError::new(
                 "AG_TOOL_ARG",
                 &format!(
-                    "operation=block_ops 单批操作数 {block_ops_len} 超过上限 {MAX_BLOCK_OPS_PER_BATCH}；请分批提交，每批最多 {MAX_BLOCK_OPS_PER_BATCH} 个操作"
+                    "operation=block_ops 单次调用操作数 {block_ops_len} 超过上限 {MAX_BLOCK_OPS_PER_CALL}；请按区间 {plan} 分次提交；同一章连续追加用相同 adjudicationGroup 合成一张卡，正文末尾追加请使用 append"
+                ),
+                false,
+                false,
+            ))
+        }
+        AgentEditOperation::BlockOps
+            if has_table_ops && block_ops_bytes > MAX_BLOCK_OPS_BYTES_PER_BATCH =>
+        {
+            Err(IpcError::new(
+                "AG_TOOL_ARG",
+                &format!(
+                    "operation=block_ops 单批序列化载荷 {block_ops_bytes} 字节超过上限 {MAX_BLOCK_OPS_BYTES_PER_BATCH} 字节；请减少单批内容或分批提交"
                 ),
                 false,
                 false,

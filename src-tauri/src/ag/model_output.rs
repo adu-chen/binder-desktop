@@ -333,7 +333,11 @@ fn control_schema() -> serde_json::Value {
     })
 }
 
-/// A direct response needs one control. Later calls may omit the redundant copy.
+/// Every direct business call carries the response control at its arguments top level. A JSON
+/// Schema describes one call and cannot express "first call of this response", so an optional
+/// control would be accepted by the schema and then rejected by the runtime whenever the call
+/// happened to be the response's only one. The runtime still keeps the first control as
+/// canonical and tolerates an identical redundant copy on later calls.
 pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), IpcError> {
     let definitions = tools.as_array_mut().ok_or_else(|| {
         IpcError::new(
@@ -374,9 +378,9 @@ pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), Ip
             })?;
         let mut response_control_schema = control_schema();
         response_control_schema["description"] = serde_json::Value::String(if read_only {
-            "响应级语义控制：同一响应首个只读工具必须提供，后续独立只读工具可省略".to_string()
+            "响应级语义控制：每次只读工具调用的 arguments 顶层都必须提供完整 _binderTurn；同一响应内各调用语义一致，运行时保留首个为主控制。不得嵌套进 params、calls 或任何传输封套。".to_string()
         } else {
-            "单独提交的有副作用工具必须提供完整响应级语义控制".to_string()
+            "响应级语义控制：有副作用工具须单独提交，并在 arguments 顶层提供完整 _binderTurn；不得嵌套进 params、calls 或任何传输封套。".to_string()
         });
         properties.insert("_binderTurn".to_string(), response_control_schema);
         let required = parameters
@@ -391,12 +395,12 @@ pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), Ip
                     false,
                 )
             })?;
-        // JSON Schema describes one call, not its position in a response-level group.
-        // Independent reads can share one control; effectful calls are always solitary
-        // and continue to require their own full control in the model-visible schema.
-        if read_only {
-            required.retain(|field| field != "_binderTurn");
-        } else if !required.iter().any(|field| field == "_binderTurn") {
+        // JSON Schema describes one call, not its position in a response-level group. The
+        // model-visible contract must therefore be position-independent: every business call
+        // carries the control, and the runtime keeps the first one as canonical. Keeping the
+        // field optional for read-only tools is what let a lone read-only call be accepted by
+        // the schema and rejected by the runtime, so it is no longer optional.
+        if !required.iter().any(|field| field == "_binderTurn") {
             required.push(serde_json::Value::String("_binderTurn".to_string()));
         }
     }
@@ -931,11 +935,11 @@ pub(super) fn parse_tool_batch_detailed_with_policy(
         let mut rejection = ControlProtocolRejection::invalid(
             "control_missing",
             "_binderTurn",
-            "缺少响应级语义，请在工具参数提交控制封套",
+            "缺少响应级语义，请在工具 arguments 顶层提交控制封套",
         );
         rejection.error=IpcError::new(
         "AG_MODEL_CONTROL_MISSING",
-        "本次请求未执行：缺少响应级语义。请在首个工具参数的 _binderTurn 提交完整语义结论，后续独立只读调用可省略。",
+        "本次请求未执行：工具 arguments 顶层缺少 _binderTurn。请在每次业务工具调用的 arguments 顶层补全完整 _binderTurn（version、nextAction=tool、intent、route），并保留原有业务参数；不要使用 calls/control 传输封套，也不要把它嵌套进 params。",
         true, false,
     );
         rejection
@@ -1142,7 +1146,7 @@ final可选阶段说明：completion={\"status\":\"report_only\",\"reason\":\"�
 pub fn direct_protocol_prompt() -> &'static str {
     "[BINDER TURN OUTPUT PROTOCOL — DIRECT BUSINESS TOOLS]\n\
 无原生 tool_calls 的回复必须先输出一个 <binder-turn-control>合法 JSON 对象</binder-turn-control>，再输出正文。final/clarify 的控制仍包含 version、nextAction、intent、route；所有属性和字符串使用双引号，不输出占位符或 Markdown 围栏。\n\
-需要工具时只调用本轮 API 原生工具清单中的业务函数（如 workspace_glob、read_doc、plan_workspace_operation），不要构造额外的传输函数或 calls 数组。首个业务工具的 arguments 必须包含完整 _binderTurn，值为 version=binder-turn-control-v1、nextAction=tool、intent 和 route；后续独立只读工具可省略 _binderTurn，避免重复生成任务语义。若重复提交，每份必须是完整合法的 tool 控制；运行时保留主控制，逐项授权只看真实参数和 CapabilityGrant。有副作用工具必须单独提交且保持严格控制校验。多个独立只读工具可在同一响应提交，但不得跨依赖或等待点；提案、计划或裁决必须单独提交。_binderTurn 是当前响应的语义结论，不是授权。\n\
+需要工具时只调用本轮 API 原生工具清单中的业务函数（如 workspace_glob、read_doc、plan_workspace_operation），不要构造额外的传输函数、calls 数组或 control 包裹层。每次业务工具调用的 arguments 顶层都必须包含完整 _binderTurn，值为 version=binder-turn-control-v1、nextAction=tool、intent 和 route；同一响应内多个调用的 _binderTurn 必须语义一致，运行时保留首个为主控制，逐项授权只看真实参数和 CapabilityGrant。控制必须直接位于 arguments 顶层，不能嵌套进 params 或任何子对象；纠错重发、重试和后续新响应同样必须重新携带。有副作用工具必须单独提交且保持严格控制校验。多个独立只读工具可在同一响应提交，但不得跨依赖或等待点；提案、计划或裁决必须单独提交。_binderTurn 是当前响应的语义结论，不是授权。\n\
 工具示例：调用原生 workspace_glob，arguments={\"pattern\":\"*.txt\",\"_binderTurn\":{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"tool\",\"intent\":{\"goal\":\"定位 TXT 文件\",\"intentType\":\"inspect\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"列出候选文件\",\"steps\":[]}}}。不要在 content 中打印工具 JSON、伪工具标记或 nextAction=tool 的文本封套；只有实际原生工具调用才会执行。\n\
 澄清示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"clarify\",\"intent\":{\"goal\":\"确定目标\",\"intentType\":\"organize_workspace\",\"targetCandidates\":[],\"sideEffectIntent\":\"structure_plan\",\"ambiguity\":\"blocking\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"等待目标补充\",\"steps\":[]},\"clarificationQuestion\":\"要处理哪份文件？\"}</binder-turn-control>要处理哪份文件？\n\
 直接回答示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"final\",\"intent\":{\"goal\":\"回应问候\",\"intentType\":\"answer\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"直接回应\",\"steps\":[]}}</binder-turn-control>你好，有什么需要我帮忙？\n\
@@ -1334,9 +1338,8 @@ mod tests {
             &[direct("plan_workspace_operation")]
         )
         .is_ok());
-        assert!(
-            direct_protocol_prompt().contains("首个业务工具的 arguments 必须包含完整 _binderTurn")
-        );
+        assert!(direct_protocol_prompt()
+            .contains("每次业务工具调用的 arguments 顶层都必须包含完整 _binderTurn"));
         assert!(!direct_protocol_prompt().contains(TOOL_BATCH_NAME));
     }
 
@@ -1589,7 +1592,9 @@ mod tests {
             }
         }]);
         decorate_tool_definitions(&mut tools).unwrap();
-        assert!(!tools[0]["function"]["parameters"]["required"]
+        // Read-only tools must also declare the control as required: the schema describes a
+        // single call and cannot mark it "only the response's first call needs this".
+        assert!(tools[0]["function"]["parameters"]["required"]
             .as_array()
             .unwrap()
             .iter()
@@ -1641,10 +1646,13 @@ mod tests {
         let (_, params) = parse_tool_batch(&[second], Some(expected.clone())).unwrap();
         assert_eq!(params, vec![serde_json::json!({"path":"b.md"})]);
 
-        assert_eq!(
-            parse_tool_batch(&[second], None).unwrap_err().code,
-            "AG_MODEL_CONTROL_MISSING"
-        );
+        // A lone read-only call without the control is exactly the shape that used to loop to
+        // AG_MODEL_CORRECTION_LIMIT: the schema accepted it, the runtime rejected it. The
+        // rejection must name the required position and forbid the old transport envelope.
+        let missing = parse_tool_batch(&[second], None).unwrap_err();
+        assert_eq!(missing.code, "AG_MODEL_CONTROL_MISSING");
+        assert!(missing.message.contains("arguments 顶层"));
+        assert!(missing.message.contains("calls/control"));
         let mut different = expected.clone();
         different.intent.goal = "private goal must not enter diagnostics".into();
         let accepted = parse_tool_batch_detailed(&[&first], Some(different.clone())).unwrap();

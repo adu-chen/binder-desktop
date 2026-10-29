@@ -22,6 +22,37 @@ pub(super) struct PreparedTurnPrompt {
     pub(super) history_selection: serde_json::Value,
 }
 
+/// 跨回合续办：把本会话仍在等待裁决的 AG 提案显式带给下一回合。
+/// 这些提案已经落库（pending_diffs/proposal_facts），这里只做投影，不新建状态；
+/// 事实缺失或不属于本会话时不注入，避免把别处的待裁决卡伪装成本轮上下文。
+fn edit_resume_message(
+    facts: &crate::types::AgentContextFacts,
+    session_id: &str,
+) -> Option<String> {
+    let crate::types::AgentContextFacts::V2(facts) = facts else {
+        return None;
+    };
+    let pending: Vec<_> = facts
+        .proposal_facts
+        .iter()
+        .filter(|fact| fact.state == "pending" && !fact.saved && fact.session_id == session_id)
+        .collect();
+    if pending.is_empty() {
+        return None;
+    }
+    let summary = pending
+        .iter()
+        .take(8)
+        .map(|fact| format!("{}#{}", fact.rel_path, fact.diff_id))
+        .collect::<Vec<_>>()
+        .join("、");
+    Some(format!(
+        "[EDIT RESUME] 本会话仍有 {} 张待裁决的修改卡：{}。继续编辑前先核对它们的裁决状态：仍未裁决时就基于同一 base 继续，不要重新读取全文或重复提交同一提案；已接受/拒绝则按最新正文重新确认锚点。",
+        pending.len(),
+        summary
+    ))
+}
+
 /// Only trusted continuation instructions restrict a response to final/clarify.
 /// Keep native tools, Prompt Manifest and execution guards aligned, not prompt-only.
 pub(super) fn final_only_continuation(messages: &[serde_json::Value]) -> bool {
@@ -314,8 +345,15 @@ pub(super) fn prepare_turn_prompt(
         );
         assembled_messages.messages.push(serde_json::json!({
             "role":"system", "layer":if budget_closing {"execution_budget_final_only"} else {"execution_budget"},
-            "content":format!("[TRUSTED EXECUTION BUDGET] maxModelCalls={}; remainingModelCalls={remaining_models}; maxToolCalls={}; remainingToolCalls={remaining_tool_calls}; maxCorrectionsPerCategory={}; finalReserve={}; budgetClosing={budget_closing}. 控制封套和参数错误分别累计，各有上限。{} 额度属于原AgentTurn，等待/确认不重置，不能自行提高。", policy.max_model_calls, policy.max_tool_calls, policy.max_corrections, policy.final_reserve, if budget_closing {"本次只允许final说明部分结果、已有事实及未完成范围；禁止工具和新的等待，不得宣称业务全完成。"} else {"按剩余额度安排必要动作，预留最终说明。"}),
+            "content":format!("[TRUSTED EXECUTION BUDGET] maxModelCalls={}; remainingModelCalls={remaining_models}; maxToolCalls={}; remainingToolCalls={remaining_tool_calls}; maxCorrectionsPerCategory={}; finalReserve={}; budgetClosing={budget_closing}. remainingModelCalls/remainingToolCalls 是还可用次数，不是已用次数。控制封套和参数错误分别累计，各有上限。{} 额度属于原AgentTurn，等待/确认不重置，不能自行提高。", policy.max_model_calls, policy.max_tool_calls, policy.max_corrections, policy.final_reserve, if budget_closing {"本次只允许final说明部分结果、已有事实及未完成范围；禁止工具和新的等待，不得宣称业务全完成。"} else {"剩余工具调用>0 时不得声称额度用尽或提前收工；请继续推进未完成的工作，只在真正接近上限时才预留最终说明。"}),
         }));
+        if let Some(resume) = edit_resume_message(agent_context_facts, session_id) {
+            assembled_messages.messages.push(serde_json::json!({
+                "role": "system",
+                "layer": "edit_resume_context",
+                "content": resume,
+            }));
+        }
         assembled_messages
             .messages
             .extend(continuation_messages.iter().cloned());
@@ -583,7 +621,10 @@ mod tests {
         assert!(names.contains(&"workspace_glob"));
         assert!(!names.contains(&ag::model_output::TOOL_BATCH_NAME));
         let messages = serde_json::to_string(&prepared.messages).unwrap();
-        assert!(messages.contains("首个业务工具的 arguments 必须包含完整 _binderTurn"));
+        assert!(messages.contains("每次业务工具调用的 arguments 顶层都必须包含完整 _binderTurn"));
+        // 预算语义必须说清"剩余"不是"已用"，否则模型会误报额度用尽并提前收工。
+        assert!(messages.contains("是还可用次数，不是已用次数"));
+        assert!(messages.contains("剩余工具调用>0 时不得声称额度用尽"));
         assert!(!messages.contains(ag::model_output::TOOL_BATCH_NAME));
     }
 
@@ -758,5 +799,31 @@ mod tests {
         assert!(envelopes
             .iter()
             .all(|envelope| envelope.freshness.starts_with("same_turn_sequence=")));
+    }
+
+    // covers: BR-AG-DATA-002
+    #[test]
+    fn edit_resume_message_projects_only_this_session_pending_proposals() {
+        let facts = |state: &str, saved: bool| {
+            crate::types::AgentContextFacts::V2(
+                serde_json::from_value(serde_json::json!({
+                    "version":"agent-context-facts-v2","workspaceId":"ws","sessionId":"session",
+                    "turnId":"current","contextRevision":1,"activeTarget":null,
+                    "openResources":[],"selections":[],
+                    "proposalFacts":[{
+                        "diffId":"d1","sessionId":"session","relPath":"a.html",
+                        "state":state,"effectStatus":null,"saved":saved
+                    }],
+                }))
+                .unwrap(),
+            )
+        };
+        let pending = edit_resume_message(&facts("pending", false), "session").unwrap();
+        assert!(pending.contains("[EDIT RESUME]"));
+        assert!(pending.contains("a.html#d1"));
+        assert!(pending.contains("不要重新读取全文"));
+        assert!(edit_resume_message(&facts("accepted", false), "session").is_none());
+        assert!(edit_resume_message(&facts("pending", true), "session").is_none());
+        assert!(edit_resume_message(&facts("pending", false), "other-session").is_none());
     }
 }

@@ -266,11 +266,11 @@ fn block_ops_rejects_conflicting_anchor_usage() {
 }
 
 // covers: BR-AG-DATA-005
-// P1（AG-R2-01）：block_ops 单批操作数上限——超限要求分批。
+// 单次调用上限：只有超过单回合卡预算才拒绝，并给出可执行拆分区间。
 #[test]
 fn block_ops_rejects_oversized_batch() {
     let mut operations = Vec::new();
-    for i in 0..25 {
+    for i in 0..=MAX_BLOCK_OPS_PER_CALL {
         operations.push(serde_json::json!({
             "op": "replace_node",
             "blockId": format!("p-{i}"),
@@ -290,7 +290,63 @@ fn block_ops_rejects_oversized_batch() {
     )
     .unwrap_err();
     assert_eq!(err.code, "AG_TOOL_ARG");
-    assert!(err.message.contains("分批"));
+    // 拒绝必须给出可执行的拆分计划，而不是只报"超限"。
+    assert!(err.message.contains("adjudicationGroup"));
+    assert!(err.message.contains(&format!("1–{MAX_BLOCK_OPS_PER_CALL}")));
+    assert!(err.message.contains("append"));
+}
+
+// covers: BR-AG-DATA-005
+// 一章 90 块不再被退回：单次上限放行，落卡时按每 64 个自动拆成两张卡。
+#[test]
+fn block_ops_accepts_long_chapter_within_single_call_cap() {
+    let mut operations = Vec::new();
+    for i in 0..90 {
+        operations.push(serde_json::json!({
+            "op": "append",
+            "afterNode": { "type": "paragraph", "text": format!("段落 {i}") }
+        }));
+    }
+    let resolved = resolve_agent_edit_operation(
+        &json!({
+            "path": "notes/a.docx",
+            "operation": "block_ops",
+            "base": { "sessionVersion": 1, "contentHash": "h1" },
+            "operations": operations
+        }),
+        true,
+    )
+    .unwrap();
+    assert_eq!(resolved, AgentEditOperation::BlockOps);
+}
+
+// covers: BR-AG-DATA-005
+// 数量在限内但序列化载荷超限时同样拒绝：字节才是真正的上下文预算。
+#[test]
+fn block_ops_rejects_oversized_serialized_payload() {
+    let mut operations = Vec::new();
+    // 远小于数量上限，但单块正文足够大，序列化后超过字节上限。
+    for i in 0..8 {
+        operations.push(serde_json::json!({
+            "op": "replace_node",
+            "blockId": format!("p-{i}"),
+            "fingerprint": "fp",
+            "expectedNodeType": "paragraph",
+            "afterNode": { "type": "paragraph", "text": "文".repeat(MAX_BLOCK_OPS_BYTES_PER_BATCH / 4) }
+        }));
+    }
+    let err = resolve_agent_edit_operation(
+        &json!({
+            "path": "notes/a.docx",
+            "operation": "block_ops",
+            "base": { "sessionVersion": 1, "contentHash": "h1" },
+            "operations": operations
+        }),
+        true,
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "AG_TOOL_ARG");
+    assert!(err.message.contains("字节"));
 }
 
 #[test]

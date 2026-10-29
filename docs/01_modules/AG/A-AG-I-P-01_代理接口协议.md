@@ -435,7 +435,7 @@ ModelFinalEnvelopeV2 派生 ProjectReport：只保留当前 turn、`evidence_thr
 
 | 契约 | 当前实现与约束 |
 |---|---|
-| 新工具传输 | 新AgentTurn原生暴露grant允许的业务函数；一次响应只需一份合法`_binderTurn`：首工具提交，后续独立只读工具可省略；只读工具schema将字段设为可选，独立提交的有副作用工具仍标必填；不暴露`binder_tool_batch`，不额外扩大能力 |
+| 新工具传输 | 新AgentTurn原生暴露grant允许的业务函数；每次业务工具调用的arguments顶层都必须携带完整`_binderTurn`，同一响应内语义一致；运行时保留首个为主控制，后续相同的只读副本只记为观察，不回退到批次；控制不得嵌套进params、calls或任何传输封套。模型可见schema对所有业务工具都标必填——schema按单次调用描述，无法表达“仅响应首个需要”，可选字段会让唯一的只读调用被schema接受却被运行时拒绝（AG-CONTROL-ENVELOPE-CONTRACT-01）。不暴露`binder_tool_batch`，不额外扩大能力 |
 | 同链有限纠错 | 拒绝仅回注冻结协议对应说明；新回合不提示旧`binder_tool_batch`提交方式，不回退到批次或其他执行器。控制封套与参数错误分别累计纠错、各有上限，成功调用不清零；纠正响应仍重进同一解析、Gate/grant和执行链，受总模型调用上限约束 |
 | 空文档与参数纠正 | create_document必须提供确认前冻结的非空initialContent；空HTML正文使用合法空页面骨架，不传空串或空白。缺失/无效载荷明确返回字段与约束，保持rejected/blocked/not_started；仅在原剩余额度内以新调用ID修正参数，不能重复已执行操作。失败说明仍须合法final/clarify控制，不能把无封套正文自动补成模型结论 |
 | 本地明文诊断 | 开发模式显式MODEL_IO开关可记录模型实际请求与归一化返回；长记录分为有唯一记录ID、序号/总数、UTF-8总长度和SHA-256的短行，完整重组才能作为原文证据。默认关闭、不记录系统密钥/认证头，不持久化额外正文到运行数据库。上游只记录参数指纹/字节数与固定帧错误类别，不记录隐藏推理或供应商密钥 |
@@ -796,3 +796,4 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 | 2026-10-28 | v1.36 | 直接工具schema将`_binderTurn`标必填；新模型分页统一`cursor/next_cursor`，参数与控制封套分别有限纠错，历史分页参数保留执行兼容。 |
 | 2026-10-28 | v1.37 | 真实只读多工具回合复验后统一响应级控制：只读schema允许后续省略副本，合法只读副本只作观察；有副作用及旧冻结协议继续严格。已知文字定点检索块身份，非法游标仍拒绝。 |
 | 2026-10-27 | v1.35 | 新AgentTurn传输改为授权业务函数直接暴露；`_binderTurn`承载响应级语义，历史批次回合按冻结版本续行，不改变逐项授权与确认/保存边界。 |
+| 2026-10-29 | v1.38 | AG-CONTROL-ENVELOPE-CONTRACT-01：撤回 v1.37 的“只读schema允许后续省略副本”。schema按单次调用描述、无法表达“仅响应首个需要”，可选字段使唯一的只读调用先被schema接受、再被运行时判`AG_MODEL_CONTROL_MISSING`，连续三次即触发`AG_MODEL_CORRECTION_LIMIT`（见 turn t-1793264617525-6）。改为所有业务工具必填`_binderTurn`；运行时仍保留首个为主控制、相同只读副本只记观察；提示词与纠错说明同步明确“arguments顶层、不得嵌套params/calls封套、重试必须补全完整控制”。 |

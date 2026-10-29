@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-const MAX_OPERATIONS: usize = 32;
+// 单次调用可携带的操作数上限来自运行时单一来源；每张卡的切分上限另由
+// `edit_support::MAX_BLOCK_OPS_PER_BATCH` 负责，二者不得再各自写死数字。
+const MAX_OPERATIONS: usize = crate::ag::edit_support::MAX_BLOCK_OPS_PER_CALL;
 const MAX_TEXT_UTF16: usize = 200_000;
 const WRITABLE_NODE_TYPES: &[&str] = &["paragraph", "heading", "codeBlock"];
 const INLINE_NODE_TYPES: &[&str] = &["text", "hardBreak"];
@@ -618,8 +620,9 @@ pub fn split_adjudication_groups(
             .adjudication_group
             .as_deref()
             .map(str::trim)
-            .filter(|name| !name.is_empty());
-        if let Some(name) = group_name {
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        if let Some(name) = group_name.as_deref() {
             if let Some(existing_index) = groups.iter().position(|group| {
                 group
                     .first()
@@ -654,7 +657,10 @@ pub fn split_adjudication_groups(
         groups.push(vec![(position, operation)]);
     }
 
-    Ok(groups
+    // 裁决粒度按设计保持"每块独立成卡"：显式 adjudication_group 才合并为一张卡。
+    // 单次调用上限已放宽到单回合卡预算，章节较长时不再整批退回。
+    let chunked = groups;
+    Ok(chunked
         .into_iter()
         .map(|group| StructuredBlockEditPayload {
             payload_version: payload.payload_version,
@@ -952,5 +958,42 @@ mod tests {
             validate_and_build(&params, &current).unwrap_err().code,
             "AG_BLOCK_OPERATION_INVALID"
         );
+    }
+
+    // covers: BR-AG-DATA-001
+    // 一章 90 段不再因为操作数整批退回：未分组时逐块成卡，显式 adjudication_group 时合成一张卡。
+    #[test]
+    fn long_block_ops_are_accepted_and_grouped_by_adjudication_group() {
+        let current = three_block_snapshot();
+        let append = |index: usize, group: Option<&str>| {
+            let mut operation = serde_json::json!({
+                "op": "append",
+                "afterNode": {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": format!("段落 {index}")}]
+                }
+            });
+            if let Some(group) = group {
+                operation["adjudicationGroup"] = Value::String(group.to_string());
+            }
+            operation
+        };
+
+        let ungrouped = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": (0..90).map(|index| append(index, None)).collect::<Vec<_>>()
+        });
+        let canonical = validate_and_build(&ungrouped, &current).unwrap();
+        let groups = split_adjudication_groups(&canonical, &current).unwrap();
+        assert_eq!(groups.len(), 90, "未分组时每块独立成卡");
+
+        let grouped = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": (0..90).map(|index| append(index, Some("第十二章"))).collect::<Vec<_>>()
+        });
+        let canonical = validate_and_build(&grouped, &current).unwrap();
+        let groups = split_adjudication_groups(&canonical, &current).unwrap();
+        assert_eq!(groups.len(), 1, "同一章显式分组后合成一张卡");
+        assert_eq!(groups[0].operations.len(), 90);
     }
 }

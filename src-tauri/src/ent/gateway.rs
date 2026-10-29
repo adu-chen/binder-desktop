@@ -1305,6 +1305,14 @@ fn runtime_build_id() -> &'static str {
             include_str!("../ag/turn_runtime.rs"),
             include_str!("../ag/task.rs"),
             include_str!("../ag/prompt_runtime.rs"),
+            include_str!("../ag/turn_prompt.rs"),
+            include_str!("../ag/edit_projection.rs"),
+            include_str!("../ag/edit_types.rs"),
+            // 编辑门禁与提案构造也属于运行时契约：纳入构建号，避免"代码变了、构建号没变"
+            // 让真实窗口无法证明跑的是哪一版。
+            include_str!("../ag/edit_support.rs"),
+            include_str!("../ag/block_ops.rs"),
+            include_str!("../ag/bdocx_capabilities.rs"),
         ] {
             hash.update(source.as_bytes());
         }

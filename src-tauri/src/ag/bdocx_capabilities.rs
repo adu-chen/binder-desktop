@@ -929,7 +929,13 @@ pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationErr
     let block_operations = json!({
         "type": "array",
         "minItems": 1,
-        "maxItems": 32,
+        // Projected from the runtime guard so the schema can never declare a batch legal that
+        // the executor then rejects. Do not hardcode a number here.
+        "maxItems": crate::ag::edit_support::MAX_BLOCK_OPS_PER_CALL,
+        "description": format!(
+            "单次最多 {} 个操作；同一章连续追加用相同 adjudicationGroup 合成一张卡，写完一章直接提交，不需要自己分批",
+            crate::ag::edit_support::MAX_BLOCK_OPS_PER_CALL
+        ),
         "items": {
             "oneOf": [
                 {
@@ -1280,7 +1286,7 @@ pub fn bdocx_rewrite_route_instruction(has_tables: bool, has_images: bool) -> St
         (false, false) => "",
     };
     if protected.is_empty() {
-        "[当前 BDocx 重写路由] 当前快照未检测到表格或图片。用户要求整篇重写或大幅重排时，可用 propose_edit operation=replace_document 并提交完整 HTML；不得提交片段，也不得在新内容中引入 table 或 img。局部文字修改仍使用 block_ops。新增小标题可用 block_ops 的 insert_before/insert_after/append 插入 afterNode.type=heading；replace_node 必须保留既有块的 node type，不能把既有段落转换成标题，既有块的类型转换为人工专属。".to_string()
+        "[当前 BDocx 重写路由] 当前快照未检测到表格或图片。用户要求整篇重写或大幅重排时，可用 propose_edit operation=replace_document 并提交完整 HTML；不得提交片段，也不得在新内容中引入 table 或 img。局部文字修改仍使用 block_ops。新增小标题可用 block_ops 的 insert_before/insert_after/append 插入 afterNode.type=heading；正文末尾追加多段必须使用多个 append（不需要锚点），禁止对同一末块重复 insert_after；replace_node 必须保留既有块的 node type，不能把既有段落转换成标题，既有块的类型转换为人工专属。".to_string()
     } else {
         format!(
             "[当前 BDocx 重写路由] 当前快照检测到{protected}。replace_document 已被禁止，后端会拒绝该操作；包括大幅改写在内的既有文字内容只能用 block_ops，表格只能用 table_ops，图片只能用 image_ops。新增小标题仍可用 block_ops 的 insert_before/insert_after/append 插入 afterNode.type=heading；replace_node 必须保留既有块的 node type，不能把既有段落转换成标题，既有块的类型转换为人工专属。"
@@ -1387,7 +1393,7 @@ pub fn prompt_projection() -> Result<String, CapabilityValidationError> {
         .collect::<Vec<_>>()
         .join("；");
     Ok(format!(
-        "[当前 BDocx 编辑能力声明]\nmanifestId={} version={} sha256={}\n格式：editable_kind={} content_format={}。\n文档操作：{}。整篇改写路由以同一条当前文档运行时声明中的表格/图片状态为准：两者都不存在时，才可用 replace_document 提交完整 HTML；任一存在时，replace_document 被禁止，既有文字内容使用 block_ops，表格/图片分别使用 table_ops/image_ops。block_ops 必须基于活动 ProseMirror LogicalState，只命中 capabilities=replace_node 的内容块，原样带回 sessionVersion/contentHash、blockId、fingerprint、expectedNodeType 与 node attrs；容器/原子块只读，多块同批原子提交。新增 heading 块可用 insert_before/insert_after/append；replace_node 必须保留既有块类型，既有块的类型转换是人工专属。不得使用 replace_block 或原始 HTML 绕过受保护结构。\nStyleOp（range 为块内纯文本半开区间，单位={}，批内原子）：marks={}；blockAttrs={}；最多 {} 项。\nTableOperation（必须先 list_tables，并原样带回 sessionVersion/contentHash/tableId/fingerprint；还须服从当前 capabilities 与 moveDirections）：{}。\nImageOperation（必须先 list_images，并原样带回 sessionVersion/contentHash、稳定 imageId/当前 fingerprint、动态 capabilities/resizeBounds/moveDirections；插入还须带回 assetId/sourcePath/sourceHash；允许插入、删除、按宽度缩放、独立图片段落上下移动与 left/center/right 对齐；同一图片单批可各含至多一个 {}，{} 必须独占；禁止远程/绝对/越界来源且不得删除项目源文件）：{}。\n图片理解边界：list_images 只提供图片元数据与相邻文本语境，不提供图片像素、OCR 或视觉识别；不得把语境推断表述为看懂图片画面。workspace 内非受控图片先调用 import_image_asset 复制准备，不得移动或删除源引用；确实无法安全提案时调用 edit_blocked 说明原因。\n人工专属、代理不可调用：{}。\nDiff 等级：replace_block={}；block_ops={}；replace_document={}；style_ops={}；table_ops={}；image_ops={}。\nDOCX 往返等级：{}。非 verified 项保存重开后可能变化；不得向用户声称完全保真。",
+        "[当前 BDocx 编辑能力声明]\nmanifestId={} version={} sha256={}\n格式：editable_kind={} content_format={}。\n文档操作：{}。整篇改写路由以同一条当前文档运行时声明中的表格/图片状态为准：两者都不存在时，才可用 replace_document 提交完整 HTML；任一存在时，replace_document 被禁止，既有文字内容使用 block_ops，表格/图片分别使用 table_ops/image_ops。block_ops 必须基于活动 ProseMirror LogicalState，只命中 capabilities=replace_node 的内容块，原样带回 sessionVersion/contentHash、blockId、fingerprint、expectedNodeType 与 node attrs；容器/原子块只读，多块同批原子提交。新增 heading 块可用 insert_before/insert_after/append；正文末尾追加多段必须使用多个 append（append 不需要锚点），禁止对同一末块重复 insert_after，否则整批按锚点冲突拒绝；同一章连续追加使用相同 adjudicationGroup，使整章合成一张卡裁决，不同章使用不同组名；replace_node 必须保留既有块类型，既有块的类型转换是人工专属。不得使用 replace_block 或原始 HTML 绕过受保护结构。\nStyleOp（range 为块内纯文本半开区间，单位={}，批内原子）：marks={}；blockAttrs={}；最多 {} 项。\nTableOperation（必须先 list_tables，并原样带回 sessionVersion/contentHash/tableId/fingerprint；还须服从当前 capabilities 与 moveDirections）：{}。\nImageOperation（必须先 list_images，并原样带回 sessionVersion/contentHash、稳定 imageId/当前 fingerprint、动态 capabilities/resizeBounds/moveDirections；插入还须带回 assetId/sourcePath/sourceHash；允许插入、删除、按宽度缩放、独立图片段落上下移动与 left/center/right 对齐；同一图片单批可各含至多一个 {}，{} 必须独占；禁止远程/绝对/越界来源且不得删除项目源文件）：{}。\n图片理解边界：list_images 只提供图片元数据与相邻文本语境，不提供图片像素、OCR 或视觉识别；不得把语境推断表述为看懂图片画面。workspace 内非受控图片先调用 import_image_asset 复制准备，不得移动或删除源引用；确实无法安全提案时调用 edit_blocked 说明原因。\n人工专属、代理不可调用：{}。\nDiff 等级：replace_block={}；block_ops={}；replace_document={}；style_ops={}；table_ops={}；image_ops={}。\nDOCX 往返等级：{}。非 verified 项保存重开后可能变化；不得向用户声称完全保真。",
         value.manifest_id,
         value.version,
         manifest_sha256(),
@@ -2065,6 +2071,18 @@ mod tests {
             table_items.as_array().unwrap().len(),
             manifest().unwrap().table_ops.operations.len()
         );
+        // 模型可见上限必须与运行时判定同源：任何一方另写数字都会让"schema 合法却被拒"复发。
+        assert_eq!(
+            schema["allOf"][1]["then"]["properties"]["operations"]["maxItems"].as_u64(),
+            Some(crate::ag::edit_support::MAX_BLOCK_OPS_PER_CALL as u64),
+            "block_ops schema maxItems 必须引用运行时单次上限"
+        );
+        // 生成粒度：schema 必须说明系统会自动拆卡，模型写完一章直接提交即可。
+        let ops_description = schema["allOf"][1]["then"]["properties"]["operations"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(ops_description.contains("写完一章直接提交"));
+        assert!(ops_description.contains("adjudicationGroup"));
         let serialized = schema.to_string();
         assert!(serialized.contains("subscript"));
         assert!(serialized.contains("replace_node"));

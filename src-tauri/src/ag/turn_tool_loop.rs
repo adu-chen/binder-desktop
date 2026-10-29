@@ -126,7 +126,7 @@ fn correction_instruction_for_protocol(final_only: bool, protocol: &str) -> serd
         } else if protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
             "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清（包括工具失败、受阻或解释错误）都须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。修正未执行参数可在原剩余额度内用新调用ID提交一次binder_tool_batch，参数含唯一control及calls[{toolName,params}]，业务params不重复控制；不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
         } else {
-            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。可在原剩余额度内用新调用ID直接调用本轮授权的业务工具，每个工具arguments携带一致的_binderTurn语义；多项仅限独立只读，计划、提案和裁决须单项提交。不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
+            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。可在原剩余额度内用新调用ID直接调用本轮授权的业务工具：每次调用的arguments顶层都必须带完整_binderTurn，并完整保留原有业务参数；不要使用calls/control传输封套，也不要把_binderTurn嵌套进params。若上次被拒原因是缺少_binderTurn，重试时必须补上完整控制，不能沿用被拒参数。多项仅限独立只读，计划、提案和裁决须单项提交。不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
         }
     })
 }
@@ -1440,7 +1440,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         .unwrap_or(&stop_reason)
                 };
                 if budget_closing || control.completion.is_some() {
-                    event_emitter.record_internal("completion_stage", serde_json::json!({"completionStatus":final_stop_reason,"budgetClosing":budget_closing}))?;
+                    // 记录收尾时的剩余额度：回合以 partial 结束却仍有余量，说明是模型提前收工，
+                    // 而不是门禁拦停。把两个计数一起落事件，事后可直接区分"真耗尽"和"误报"。
+                    event_emitter.record_internal("completion_stage", serde_json::json!({"completionStatus":final_stop_reason,"budgetClosing":budget_closing,"remainingToolCalls":remaining_tool_calls,"remainingRounds":remaining_rounds}))?;
                     event_emitter.emit(&terminal_latch, AgTurnEventPayload::Chunk { text: if budget_closing { "\n\n本次执行额度已到，尚未完成的范围未被标记为完成。此前结果和效果记录保留；需要继续时请明确提出，未知效果须先核对。" } else { "\n\n以上为当前阶段说明，不是资源已修改或已进入正式确认等待的凭证；实际效果以执行回执为准。" }.into() })?;
                 }
                 if let Ok(conn) = state.db.lock() {

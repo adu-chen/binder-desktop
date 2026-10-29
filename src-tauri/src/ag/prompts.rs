@@ -40,7 +40,7 @@ read_doc 默认返回轻量正文页，has_more=true 时将上一页 next_cursor
 工作区内原生 .docx 可只读读取，经转换投影返回内容，不因此获得编辑权限。"###;
 
 pub const WORKSPACE_OPERATION_BATCH_TRANSPORT: &str = "本段提及的业务工具是唯一原生 binder_tool_batch 的 calls[].toolName 值；只提交一个 binder_tool_batch({control,calls:[{toolName,params}]})，业务 params 不含控制字段。";
-pub const WORKSPACE_OPERATION_DIRECT_TRANSPORT: &str = "本段提及的业务工具是本轮可直接调用的原生函数；首个工具的 arguments 携带完整 _binderTurn 语义控制，后续独立只读工具可省略，业务权限仍以 CapabilityGrant 和执行回执为准。不要构造额外的传输封套。";
+pub const WORKSPACE_OPERATION_DIRECT_TRANSPORT: &str = "本段提及的业务工具是本轮可直接调用的原生函数；每次调用的 arguments 顶层都携带完整 _binderTurn 语义控制（同一响应内语义一致），不得嵌套进 params 或传输封套，业务权限仍以 CapabilityGrant 和执行回执为准。";
 
 pub const WORKSPACE_OPERATION_INSTRUCTIONS: &str = r###"- 工作区感知按层级进行（AG-WS-LAYERED-01）：先通过 list_docs 看工作区概览（顶层目录与文件计数）；需要了解某目录内部时以 list_docs 的 path 参数展开其直接子项（一层）；按文件名定位可用 workspace_glob 的 pattern 参数；文档正文一律用 read_doc（可带 blocks 按块读取）或 search_text，列表工具永不返回正文。工作区较小时 list_docs 会直接给出全部文件，属正常豁免。新建文档或调整资源结构的任务：先以 list_docs 概览判断目标位置，再以 plan_workspace_operation 生成不可变计划和独立确认卡，不逐目录遍历。
 - 用户明确要求“空 TXT/零字节 TXT”时，只提交单个 create_document/file、.txt 目标路径及 createEmpty=true；省略 initialContent，确认后直接创建零字节文件，不生成初始内容 Diff。不要为了绕开空内容校验虚构标题或正文。“空HTML文档”只表示正文为空，仍提交合法页面骨架（例如<!DOCTYPE html><html><head><meta charset="utf-8"></head><body></body></html>）作为 initialContent，不能用空字符串/空白代替冻结初始内容。若参数被明确拒绝且not_started，在原剩余额度内按字段反馈修正、使用新调用ID；不要要求用户再次授权同一任务。已有执行/未知效果不得重放。工具失败说明仍必须遵循回合输出协议，不能省略final/clarify控制封套。
@@ -172,6 +172,9 @@ mod tests {
         assert!(prompt.contains("superscript"));
         assert!(prompt.contains("set_cell_background"));
         assert!(prompt.contains("人工专属"));
+        // 尾插语义：多段追加必须走 append，不能对同一末块重复 insert_after。
+        assert!(prompt.contains("正文末尾追加多段必须使用多个 append"));
+        assert!(prompt.contains("禁止对同一末块重复 insert_after"));
     }
 
     #[test]

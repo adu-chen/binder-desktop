@@ -124,30 +124,32 @@ pub(super) fn build_edit_projection(
             let operations = payload["operations"]
                 .as_array()
                 .expect("validated block operations");
-            let first_block_id = operations
-                .first()
-                .and_then(|operation| operation.get("blockId"))
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    IpcError::new(
-                        "AG_BLOCK_OPERATION_INVALID",
-                        "结构化块载荷缺少首个 blockId",
-                        false,
-                        false,
-                    )
-                })?;
             let current = snapshot
                 .as_ref()
                 .expect("block_ops requires existing snapshot");
-            let first_block = current
-                .blocks
+            // append 不带锚点，不能被要求解析"首个锚"：只有真正携带 blockId 的操作才参与
+            // 锚定解析。整批 append 时用文末最后一块做投影定位（仅展示用，不参与校验）。
+            let first_block = operations
                 .iter()
-                .find(|block| block.block_id.as_deref() == Some(first_block_id))
-                .ok_or_else(|| {
-                    IpcError::new("AG_ANCHOR_LOST", "结构化块首个锚已失效", true, false)
-                })?;
-            projection_block_id = Some(first_block_id.to_string());
-            projection_block_index = Some(first_block.block_index);
+                .find_map(|operation| {
+                    operation
+                        .get("blockId")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|id| !id.trim().is_empty())
+                })
+                .map(|id| {
+                    current
+                        .blocks
+                        .iter()
+                        .find(|block| block.block_id.as_deref() == Some(id))
+                        .ok_or_else(|| {
+                            IpcError::new("AG_ANCHOR_LOST", "结构化块首个锚已失效", true, false)
+                        })
+                })
+                .transpose()?
+                .or_else(|| current.blocks.last());
+            projection_block_id = first_block.and_then(|block| block.block_id.clone());
+            projection_block_index = first_block.map(|block| block.block_index);
             projection_before = operations
                 .iter()
                 .map(|operation| {
@@ -180,7 +182,10 @@ pub(super) fn build_edit_projection(
                 .collect::<Vec<_>>()
                 .join("\n");
             projection_location = if operations.len() == 1 {
-                format!("Block {}", first_block.block_index)
+                match first_block {
+                    Some(block) => format!("Block {}", block.block_index),
+                    None => "文末追加".to_string(),
+                }
             } else {
                 format!("{} 个独立内容块", operations.len())
             };
@@ -360,4 +365,102 @@ pub(super) fn build_edit_projection(
         after_text: projection_after,
         location_label: projection_location,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ag::blocks::{AgentEditableBlock, AgentEditableSnapshot};
+
+    fn snapshot() -> AgentEditableSnapshot {
+        AgentEditableSnapshot {
+            rel_path: "a.html".into(),
+            editable_kind: "bdocx".into(),
+            source: "active_editor".into(),
+            content_format: "html".into(),
+            content: "<p data-block-id=\"last\">末块</p>".into(),
+            baseline: Some(1),
+            session_version: Some(1),
+            content_hash: Some("h".into()),
+            blocks: vec![AgentEditableBlock {
+                block_id: Some("last".into()),
+                block_index: 0,
+                node_type: Some("paragraph".into()),
+                block_type: Some("paragraph".into()),
+                role: "content".into(),
+                parent_block_id: None,
+                depth: 0,
+                ordinal: 0,
+                text: "末块".into(),
+                marks: vec![],
+                block_attrs: serde_json::json!({}),
+                node_json: serde_json::json!({}),
+                fingerprint: Some("fp".into()),
+                capabilities: vec!["replace_node".into()],
+            }],
+        }
+    }
+
+    // append 没有锚点，不能要求解析"首个锚"：整批 append 必须能生成投影。
+    #[test]
+    fn append_only_block_ops_does_not_require_anchor() {
+        let payload = serde_json::json!({
+            "base": {"sessionVersion": 1, "contentHash": "h"},
+            "operations": [
+                {"op": "append", "blockId": "", "afterNode": {"type":"paragraph","content":[{"type":"text","text":"新增一"}]}},
+                {"op": "append", "blockId": "", "afterNode": {"type":"paragraph","content":[{"type":"text","text":"新增二"}]}}
+            ]
+        });
+        let snap = snapshot();
+        let read_ctx =
+            ag::blocks::AgentReadContext::new(std::path::Path::new("."), vec![]).unwrap();
+        let draft = build_edit_projection(
+            &serde_json::json!({"path":"a.html","operation":"block_ops"}),
+            AgentEditOperation::BlockOps,
+            Some(&snap),
+            &snap.content,
+            true,
+            "a.html",
+            true,
+            &read_ctx,
+            None,
+            Some(&payload),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(draft.block_id.as_deref(), Some("last"));
+        assert_eq!(draft.block_index, Some(0));
+        assert!(draft.after_text.contains("新增二"));
+    }
+
+    // 带 blockId 但锚已失效时仍必须报 AG_ANCHOR_LOST，不能被 append 的宽松逻辑放行。
+    #[test]
+    fn stale_insert_anchor_still_fails_closed() {
+        let payload = serde_json::json!({
+            "base": {"sessionVersion": 1, "contentHash": "h"},
+            "operations": [
+                {"op": "insert_after", "blockId": "gone", "afterNode": {"type":"paragraph","content":[{"type":"text","text":"新"}]}}
+            ]
+        });
+        let snap = snapshot();
+        let read_ctx =
+            ag::blocks::AgentReadContext::new(std::path::Path::new("."), vec![]).unwrap();
+        let error = build_edit_projection(
+            &serde_json::json!({"path":"a.html","operation":"block_ops"}),
+            AgentEditOperation::BlockOps,
+            Some(&snap),
+            &snap.content,
+            true,
+            "a.html",
+            true,
+            &read_ctx,
+            None,
+            Some(&payload),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "AG_ANCHOR_LOST");
+    }
 }
