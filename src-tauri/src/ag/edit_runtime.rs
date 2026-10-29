@@ -34,13 +34,16 @@ pub(super) async fn execute_proposal<R: tauri::Runtime>(
 ) -> Result<AgentProposeEditResult, IpcError> {
     let turn = identity.turn_id.clone();
     let call = identity.tool_call_id.clone();
-    super::capability_runtime::execute(
+    let effect_boundary = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_boundary = effect_boundary.clone();
+    super::capability_runtime::execute_with_effect_boundary(
         state,
         identity,
         cancelled,
         std::time::Duration::from_secs(30),
+        Some(effect_boundary),
         move |state| {
-            ag_propose_edit(
+            ag_propose_edit_with_effect_boundary(
                 state,
                 &app,
                 &params,
@@ -49,6 +52,7 @@ pub(super) async fn execute_proposal<R: tauri::Runtime>(
                 &targets,
                 &turn,
                 &call,
+                Some(&worker_boundary),
             )
         },
         |result| {
@@ -89,6 +93,31 @@ pub(super) fn ag_propose_edit<R: tauri::Runtime>(
     explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
     turn_id: &str,
     tool_call_id: &str,
+) -> Result<AgentProposeEditResult, IpcError> {
+    ag_propose_edit_with_effect_boundary(
+        state,
+        app,
+        params,
+        read_ctx,
+        current_rel,
+        explicit_edit_target_set,
+        turn_id,
+        tool_call_id,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ag_propose_edit_with_effect_boundary<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    params: &serde_json::Value,
+    read_ctx: &ag::blocks::AgentReadContext,
+    current_rel: Option<&str>,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    turn_id: &str,
+    tool_call_id: &str,
+    effect_boundary: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<AgentProposeEditResult, IpcError> {
     use crate::de::generate::{build_payload, generate_diff, ChangeProposal};
     use crate::types::LocateResult;
@@ -467,6 +496,11 @@ pub(super) fn ag_propose_edit<R: tauri::Runtime>(
         grouping_version: 1,
         created_at,
     };
+    // Before this atomic transaction there is no persisted proposal or pending diff. Once it
+    // starts, any failure remains effect-unknown until the original identity is inspected.
+    if let Some(boundary) = effect_boundary {
+        boundary.store(true, std::sync::atomic::Ordering::Release);
+    }
     crate::de::store::persist_proposal_batch(&conn, &batch, &persisted)
         .map_err(|e| IpcError::new("DE_DB_ERROR", &e.to_string(), true, false))?;
     Ok(AgentProposeEditResult {

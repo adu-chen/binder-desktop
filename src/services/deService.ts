@@ -488,6 +488,9 @@ export async function rejectDiff(diffId: string): Promise<void> {
           }
         : {}),
     });
+    // The original parked AgentTurn is ended by the backend for create-bundle
+    // rejection/expiry. Notify its owner instead of leaving a save wait behind.
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("binder:diff-settled", { detail: { diffId } }));
     if (result.status === "expired") {
       deStore.expireLocal(diffId, {
         expiredReason: "document_revision_advanced",

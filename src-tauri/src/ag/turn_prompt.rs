@@ -29,7 +29,11 @@ pub(super) fn final_only_continuation(messages: &[serde_json::Value]) -> bool {
         message["role"] == "system"
             && matches!(
                 message["layer"].as_str(),
-                Some("protocol_correction_final_only" | "read_failure_final_only")
+                Some(
+                    "protocol_correction_final_only"
+                        | "read_failure_final_only"
+                        | "execution_budget_final_only"
+                )
             )
     })
 }
@@ -87,6 +91,7 @@ pub(super) fn prepare_turn_prompt(
     decision_receipt_ids: &[String],
     gate_attempt: u32,
     remaining_tool_calls: u32,
+    capacity: ag::prompt_runtime::ModelCapacity,
 ) -> Result<PreparedTurnPrompt, IpcError> {
     // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     // 2026-08-09：DOC_CTX_CAP 9000→16000（AG-LIMIT-01 扩大内联注入上限，长文档测试可直接编辑；G5 标定）。
@@ -124,14 +129,39 @@ pub(super) fn prepare_turn_prompt(
     })?;
 
     // Prompt 只获得当前硬事实的工具可见投影；它没有 ToolCall 绑定，不能直接作为执行授权。
+    let emitter = super::turn_events::TurnEventEmitter::without_channel(_state, turn_id);
+    let transport_protocol = emitter.frozen_transport_protocol()?.ok_or_else(|| {
+        IpcError::new(
+            "AG_MODEL_PROTOCOL_VERSION_UNSUPPORTED",
+            "AgentTurn 尚未冻结模型工具传输协议",
+            false,
+            false,
+        )
+    })?;
+    let policy = emitter.execution_policy()?;
+    let used_models = emitter.protocol_attempt_counts()?.0;
+    let remaining_tool_calls = remaining_tool_calls.min(
+        super::turn_tool_loop::continuation_execution_budget(
+            continuation_messages,
+            policy.max_tool_calls,
+            policy.max_model_calls,
+        )
+        .0,
+    );
+    let remaining_models = policy.max_model_calls.saturating_sub(used_models);
+    let budget_closing = policy.final_reserve > 0
+        && (remaining_models <= policy.final_reserve || remaining_tool_calls == 0);
     let capability_factors = ag::tool_registry::CapabilityFactorsV2 {
+        execution_policy: policy,
         has_task_run: task_run_id.is_some(),
         active_bdocx,
         table_ops_available: has_bdocx_tables,
         // 图片插入需要先调用 list_images 发现受控资产；活动 BDocx 即具备查询动态能力，
         // 具体图片实例能力仍由 ToolCall 执行层校验。
         image_ops_available: active_bdocx,
-        tools_frozen: freeze_tools_after_proposal || final_only_continuation(continuation_messages),
+        tools_frozen: budget_closing
+            || freeze_tools_after_proposal
+            || final_only_continuation(continuation_messages),
         decision_receipt_ids: decision_receipt_ids.to_vec(),
         gate_attempt,
         gate_passed: false,
@@ -149,11 +179,17 @@ pub(super) fn prepare_turn_prompt(
     let capability_instructions = ag::prompt_runtime::capability_instructions(
         &capability_grant,
         &current_doc_prompt_context.edit_instructions,
+        &transport_protocol,
     );
 
     let mut tools = ag::tool_registry::tool_definitions_json_for_grant(&capability_grant)
         .map_err(capability_error_to_ipc)?;
-    ag::model_output::decorate_tool_definitions(&mut tools)?;
+    let direct_transport = transport_protocol != ag::model_output::BATCH_TOOL_PROTOCOL;
+    if direct_transport {
+        ag::model_output::decorate_tool_definitions(&mut tools)?;
+    } else {
+        tools = ag::model_output::batch_tool_definitions(&tools);
+    }
     let tool_manifest_hash =
         ag::context::sha256_text(&serde_json::to_string(&tools).map_err(|error| {
             IpcError::new(
@@ -274,7 +310,12 @@ pub(super) fn prepare_turn_prompt(
             &capability_grant,
             None,
             &capability_instructions,
+            &transport_protocol,
         );
+        assembled_messages.messages.push(serde_json::json!({
+            "role":"system", "layer":if budget_closing {"execution_budget_final_only"} else {"execution_budget"},
+            "content":format!("[TRUSTED EXECUTION BUDGET] maxModelCalls={}; remainingModelCalls={remaining_models}; maxToolCalls={}; remainingToolCalls={remaining_tool_calls}; maxCorrectionsPerCategory={}; finalReserve={}; budgetClosing={budget_closing}. 控制封套和参数错误分别累计，各有上限。{} 额度属于原AgentTurn，等待/确认不重置，不能自行提高。", policy.max_model_calls, policy.max_tool_calls, policy.max_corrections, policy.final_reserve, if budget_closing {"本次只允许final说明部分结果、已有事实及未完成范围；禁止工具和新的等待，不得宣称业务全完成。"} else {"按剩余额度安排必要动作，预留最终说明。"}),
+        }));
         assembled_messages
             .messages
             .extend(continuation_messages.iter().cloned());
@@ -322,7 +363,7 @@ pub(super) fn prepare_turn_prompt(
         }
     };
     let mut prepared = assemble(0);
-    let serialized_limit = ag::prompt_runtime::PROMPT_INPUT_LIMIT * 4;
+    let serialized_limit = capacity.input_tokens() * 4;
     // Mandatory over-budget sources must still reach the existing pre-Gate
     // failure path. An empty history cannot make them legal.
     if prepared.budget_measurement.serialized_chars > serialized_limit || history.is_empty() {
@@ -448,14 +489,26 @@ mod tests {
         prompt: &str,
         continuation: &[serde_json::Value],
     ) -> PreparedTurnPrompt {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO workspaces (workspace_id,root_path,is_active,opened_at) VALUES ('ws','.',1,0);
+             INSERT INTO agent_sessions (session_id,workspace_id,title,mode,archived,open_index,is_active,created_at,updated_at)
+               VALUES ('session','ws','test','edit',0,0,1,0,0);
+             INSERT INTO agent_turn_payloads (payload_ref,workspace_id,payload_json,payload_size,created_at)
+               VALUES ('payload','ws','{}',2,0);
+             INSERT INTO agent_turns (turn_id,workspace_id,payload_ref,created_at,session_id,status,updated_at)
+               VALUES ('current','ws','payload',0,'session','draft',0);",
+        )
+        .unwrap();
         let state = AppState {
-            db: std::sync::Arc::new(std::sync::Mutex::new(
-                rusqlite::Connection::open_in_memory().unwrap(),
-            )),
+            db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
             registry: crate::build_registry(),
             assist_terminals: Default::default(),
             active_agent_turns: Default::default(),
         };
+        let emitter = ag::turn_events::TurnEventEmitter::without_channel(&state, "current");
+        emitter.freeze_transport_protocol().unwrap();
         let read_ctx =
             ag::blocks::AgentReadContext::new(std::path::Path::new("."), vec![]).unwrap();
         let facts = crate::types::AgentContextFacts::V2(serde_json::from_value(serde_json::json!({
@@ -494,6 +547,7 @@ mod tests {
             &[],
             1,
             6,
+            ag::prompt_runtime::model_capacity("deepseek", "deepseek-chat"),
         )
         .unwrap()
     }
@@ -513,6 +567,24 @@ mod tests {
             turn_id: Some("prior".into()),
         })
         .collect()
+    }
+
+    // covers: BR-AG-DATA-004, BR-AG-STATE-002
+    #[test]
+    fn new_turn_prompt_exposes_business_tools_without_batch_wrapper() {
+        let prepared = prepared_history(&[], "列出 TXT 文件", &[]);
+        let names = prepared
+            .tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"workspace_glob"));
+        assert!(!names.contains(&ag::model_output::TOOL_BATCH_NAME));
+        let messages = serde_json::to_string(&prepared.messages).unwrap();
+        assert!(messages.contains("首个业务工具的 arguments 必须包含完整 _binderTurn"));
+        assert!(!messages.contains(ag::model_output::TOOL_BATCH_NAME));
     }
 
     // covers: BR-AG-DATA-002

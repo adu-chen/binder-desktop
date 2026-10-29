@@ -43,7 +43,7 @@ terminal_states: Completed, Cancelled, Denied, TurnError
 - **scope**：一次 `agent-edit-1.0` 代理回合（用户发起→产出处置完成/中断/拒绝；目标边界按 BR-AG-DATA-003）
 - **context**：回合输入（session_id + runtime_profile + prompt + 注入载荷 + open_doc_snapshots）、append-only TurnEvent、当前 IntentResult revision、AgentReadContext、PromptPackage、CapabilityGrant、真实 GateOutcome、CancellationToken、terminal_latch、流式缓冲、最终回复及已持久化 ProposalBatch 引用、历史持久化状态（completed/error/cancelled/gate_rejected/draft）
 - **states**：Idle、Assembling、AwaitingClarification、AwaitingDecision、AwaitingGate、Streaming、Finalizing、Completed、Cancelled、Denied、TurnError
-- **events**：send、assembled、assembleFail、gatePassed、gateDenied、gateFailed、modelClarification、clarificationProvided、decisionProposed、decisionResolved、toolRoundCompleted、modelProtocolRejected、modelFinal、streamFail、cancel、finalizeOk、finalizeFail
+- **events**：send、assembled、assembleFail、gatePassed、gateDenied、gateFailed、modelClarification、clarificationProvided、decisionProposed、decisionResolved、operationFailed、toolRoundCompleted、modelProtocolRejected、modelFinal、streamFail、cancel、finalizeOk、finalizeFail
 - **transitions（主表）**：2026-09-15 P00 将 v2 准入改为身份先行；下表为目标设计，生产实现待
   P01-P08 验证。v1 仍按 I-P-01 的完整快照准入，不能把其校验失败冒充 v2 unavailable。
 
@@ -59,6 +59,7 @@ terminal_states: Completed, Cancelled, Denied, TurnError
 | AwaitingClarification | clarificationProvided | 用户向原 AgentTurn 补充所需信息；同 session 无其他活动回合 | Assembling | 追加 ClarificationProvided；重新冻结事实并装配；不创建新 AgentTurn、不沿用旧授权 |
 | Streaming | decisionProposed | 已形成不可变 DecisionRequest | AwaitingDecision | 追加 DecisionRequestProposed；停止 provider/工具，等待裁决 |
 | AwaitingDecision | decisionResolved | 对应请求已 confirm/cancel；confirm 涉及 WS 操作时，运行时基于当前终态/取消状态、确认回执与冻结 plan 重新计算 permitted_effect_paths，通过后才可请求 WS 重验执行 | Assembling | 追加 DecisionRequestResolved 与可选领域执行结果；重新装配，TaskRun 仅同步投影；不把 WS 执行入口暴露给模型 |
+| AwaitingDecision | operationFailed | 已确认领域操作或后处理失败且仍属原draft回合 | TurnError | 冻结后续执行；结算领域效果、TaskRun投影，核心输出结果说明并提交唯一error；不追加模型请求 |
 | Streaming | toolRoundCompleted | SM-AG-02 已追加全部 ToolResult，且未产生等待/终态 | Assembling | 根据证据更新 IntentResult/EvidenceLedger 投影；下一次 provider 调用重新装配和 Gate |
 | Streaming | modelProtocolRejected | 完整响应控制校验未通过，仍有纠错/模型预算且未终结 | Assembling | 记录脱敏拒绝与纠错指令；不推断意图、不执行本批；重新装配、预算检查和 Gate |
 | Streaming | modelFinal | 模型已给出最终可见回答，且无未决 ToolCall/DecisionRequest；任何修改建议已通过工具形成 ProposalBatch | Finalizing | 追加 ModelFinal；核验最终回复、ProjectReport 投影与已持久化 ProposalBatch 引用，不接受绕过工具的直接修改载荷 |
@@ -95,6 +96,7 @@ terminal_states: Completed, Cancelled, Denied, TurnError
 - AwaitingDecision 的 requestId 是恢复身份，不能仅按“当前会话有等待”继续；A 消费后产生 B，
   A 的 UI 收尾或迟到事件不得清理 B。澄清/裁决等待不占正在执行的槽，但归属仍在原 session。
 - 预览 checkpoint 继续保留专业 diffId/version/hash 校验；ack、预览、裁决和保存是不同事实。
+- 带初始内容的单独创建与组合创建共用原AwaitingDecision保存等待，不因空文件已创建提前结束。普通预览续片段只消费原请求与冻结模型，不生成虚假用户消息；入场即携带检查点对应的新快照（不能等模型再次请求上下文），旧AgentTurn终态不变。缺失原绑定、已失败TaskRun或版本变化不得自动恢复。
   重复回执不得重复继续，过期需明确失败/下一步；回执成功而继续失败不得伪称未发生预览。
 - 流缺少有效结束信号或模型控制非法必须按错误处理，不能默认 Completed；预算超限不是 Provider
   拒绝的同义词。诊断区分失败边界和根因，生产错误处理不自动重试整个请求。
@@ -102,6 +104,8 @@ terminal_states: Completed, Cancelled, Denied, TurnError
   cancelled 解释为“所有操作已回滚”；本节不放宽已有原子性/无半落盘约束。
 - 验收至少含无编辑器真实枚举、非法响应、连续确认 A→B、等待期间版本变化、重复回执、工具成功后
   模型失败、唯一终态及会话切换；只通过问候不能证明 Binder 运行语义闭合。
+
+**完整工作流增量（2026-10-24人类批准）**：已确认资源的初始内容失败归同一AgentTurn，领域效果先结算、失败说明后提交唯一error；不得因前端投影抛错遗留draft。等待保存是原裁决续行的非终态，预览ack不越过保存依赖；真实保存及领域重验完成后才恢复。TaskRun只是这些事件的投影，不授予检查点或执行权限。错误终态前允许核心生成无模型/无工具的确定性结果说明，任务失败与交互已交付可以并存；首终态后仍禁止新效果。
 
 ### 2.1 澄清非终态与首终态契约（REQ-AG-007 / BR-SYS-STATE-007）
 
@@ -230,7 +234,8 @@ terminal_states: LoopCompleted, LoopAborted
 - **重复只读失败**：相同只读请求与错误重复出现时，不再继续工具尝试；保留失败回执及已有成功证据，在剩余原 Gate/预算/期限内回装配，只允许 final/clarify 说明未完成范围。后续原生工具批次执行前拒绝，不重放副作用；拒绝仍消耗既有纠错/模型额度。模型持续不合约、网络失败、取消或预算耗尽仍保留真实 error/cancelled，不能伪造业务成功。参数的跨字段条件在上下文采集前与执行器共用校验，快照版本/页边界在取快照后再次核验。
 - **收尾能力一致性**：可信 system 续行指令的 final-only 模式同时冻结 Prompt Manifest 和原生工具清单，不仅靠文字禁止。适用于重复只读失败及已有非只读操作后的协议修正；普通纠错和正常任务工具能力不变。用户/模型/工具消息不得通过同名字段伪造可信收尾指令。
 - **只读失败后澄清**：纯只读任务的收尾若选择 clarify，等待期间不执行；checkpoint 可释放该次只读失败的临时收尾限制，使真实用户补充范围后的受校验续行重新取得能力。原累计 Gate/模型/工具/协议预算与失败证据不重置。有任何既有非只读调用（含拒绝/未知回执）时，不通过此路径解除防重放保护。
-- **响应协议纠错**：正文/工具的缺失、损坏、冲突控制共享 AgentTurn 级最多两次纠错和六次模型调用预算；从已提交 TurnEvent 重建，等待/确认续行不得重置。无封套的普通前置说明有界隔离，只有原生工具携合法响应级控制时可舍弃该说明并继续；显式损坏控制不能被工具控制覆盖。正文纠错在唯一终态之前发生，保留原执行游标和证据；已有非只读调用时，正文纠错仅允许 final/clarify，不得重新提交工具。网络截断、供应商拒绝和取消不进入本协议纠错。
+- **响应协议与动作交接纠错**：正文/工具的缺失、损坏、冲突控制以及缺少必要动作产物共享 AgentTurn 级最多两次纠错和冻结模型调用预算（开发默认12次）；从已提交 TurnEvent 重建，等待/确认续行不得重置。无封套的普通前置说明有界隔离，只有原生工具携合法响应级控制时可舍弃该说明并继续；显式损坏控制不能被工具控制覆盖。资源请求缺少计划时在正文释放前拒绝并有界纠正，不从文字制造确认；最终分析/阻断/无需操作须显式说明阶段和原因，不宣称已修改。正文纠错在唯一终态之前发生，保留原执行游标和证据；已有非只读调用时，正文纠错仅允许 final/clarify，不得重新提交工具。网络截断、供应商拒绝和取消不进入本协议纠错。
+- **执行额度主动收尾**：工具默认16次；模型总额中预留2次。进入预留或工具耗尽后，原生工具冻结，仍经原Gate/上下文预算/期限进行final收尾，不再创建无法继续的等待。额度不足以取得合规回答时，核心仅依据真实回执输出未完成说明。done/budget_exhausted表示本次执行结束而非业务成功，TaskRun保留失败/未完成。新用户续办使用新身份、重新核验效果和授权，不能自动重放非只读动作。
 - **forbidden_transitions**：
   - ToolValidating → ToolExecuting 无 validateOk（未注册/越权不得执行）
   - 已注册工具 → ToolExecuting 当其不在当前 CapabilityGrant（注册不等于当前获权）
@@ -366,10 +371,20 @@ terminal_states: Accepted, Dismissed
 2. REQ-AG-010/012/014/016 若形成新的状态化链路，须在各自 DESIGN Scope 建机并登记；当前不预建状态。
 3. P2 Build/CBT 只有在人类确认新的 RuntimeProfile 需求后，才可设计新的跨模块状态机。
 
+### 正常停止与交付完整性说明（2026-10-25）
+
+`done.stopReason=answer_incomplete`仍走已有Finalizing→Completed，表示该AgentTurn已结束且存在正文结构未闭合风险，不是网络失败、业务成功或可执行恢复凭证。保留原供应商stop原因和正文摘要的内部TurnEvent；前端历史恢复展示相同风险，不自动调用模型或工具。句末没有标点不构成该风险规则，结构检查不保证任意语义残缺均可检测。
+
+裁决恢复的confirm/cancel仍只解除原等待条件。恢复模型必须消费同身份后端资源回执及接受/保存事实；资源步骤成功不强制TaskRun整体Completed，真正partial/blocked及未知效果继续保持原不变量。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-25 | v2.36 | 正常停止与正文结构风险分离，保留既有Completed转移及TaskRun真实未完成语义；裁决恢复消费真实效果。 |
+| 2026-10-24 | v2.35 | 单独创建与组合操作共用原保存等待；预览续片段不生成用户消息，绑定原请求/模型和入场新快照，不复活旧终态。 |
+| 2026-10-24 | v2.34 | 完整工作流：保存等待不以TaskRun状态授予权限；operationFailed收尾、拒绝取消及核心失败说明与唯一终态分开。 |
+| 2026-10-23 | v2.33 | 资源交接前置校验、额度冻结和工具清空收尾；budget_exhausted仅结束执行，不提升TaskRun业务完成。 |
 | 2026-10-22 | v2.32 | 参数跨字段预检、重复只读失败受约束收尾、native清单冻结及纯只读用户澄清恢复；保留原累计预算和非只读防重放。 |
 | 2026-10-22 | v2.31 | 响应协议拒绝在终态前回装配/Gate；登记 SM-AG-01 modelProtocolRejected、SM-AG-02 protocolRejected、同回合纠错与模型预算、防重放边界。 |
 | 2026-10-06 | v2.30 | 人类确认上游门禁契约收敛：离线/超时/非法响应进入 gateFailed→TurnError，不冒充服务端拒绝；合法拒绝保持 Denied。 |

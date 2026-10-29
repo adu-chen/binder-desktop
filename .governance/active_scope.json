@@ -5,6 +5,387 @@
   "title": "Agent 闭合审计修复",
   "status": "BLOCKED",
   "confirmation": "YES",
+  "proposal_effect_recovery_work_package": {
+    "id": "AG-PROPOSAL-EFFECT-RECOVERY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "authorization": "沿用户已确认的 AG 通用核心 Scope 与 2026-10-07 独立能力执行端口扩展；2026-10-29 用户反馈修复后仍报错，要求继续修复同一链路。父 G5 BLOCKED 不解除。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.78",
+    "allowed_files": [
+      "src-tauri/src/ag/capability_runtime.rs",
+      "src-tauri/src/ag/edit_runtime.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "只收敛已证实的提案持久化前错误；已进入持久化、效果不明或其他能力仍失败关闭。",
+      "历史原始效果事实和回合终态不改写；不碰用户数据库、文档、DE/WS 执行器及确认保存规则。",
+      "模型长度截断和非法 cursor 单独留待分批契约验证，不以本修复宣称闭合。"
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.78",
+    "validation": {
+      "cargo_fmt_check": "passed",
+      "git_diff_check": "passed",
+      "capability_runtime_targeted": "6/6 passed",
+      "test_plan": "passed; selected npm test, full Rust tests, governance audit",
+      "test_related": "passed in normal local execution: frontend 676/676, Rust library 517/517, related integration tests and governance audit",
+      "real_window": "not yet verified after this code change"
+    },
+    "unresolved_items": [
+      "Same-session earlier turn stopped at provider output limit (stopReason=length, 16382/16384 output tokens) while generating incomplete propose_edit arguments; long-content batching requires separate work.",
+      "One read cursor was guessed and rejected with AG_READ_CURSOR_INVALID; that turn recovered, and the cursor contract remains strict.",
+      "User's live Binder window has not been restarted and retested on this patch."
+    ]
+  },
+  "read_only_control_recovery_work_package": {
+    "id": "AG-READ-ONLY-CONTROL-RECOVERY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "authorization": "2026-10-28 用户在最近三轮真实读取失败审计后明确要求按建议修复；父 G5 BLOCKED 保持不变。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.77",
+    "allowed_files": [
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/turn_prompt.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/verification.rs",
+      "src-tauri/src/ag/prompts.rs",
+      "src-tauri/src/ag/tool_registry.rs",
+      "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+      "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "只收敛直接工具协议的只读响应控制与已知文字块定位；旧冻结批次及有副作用工具继续严格校验。",
+      "非法分页凭证仍拒绝，路径、版本、CapabilityGrant、确认、取消及未知效果保护不变。",
+      "不修改用户文档、数据库、WS/DE 执行器或凭据；自动化与真实 Provider/窗口证据分开。"
+    ],
+    "stop_conditions": [],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.77",
+    "validation": {
+      "automated": "定向解析1/1、隔离真实核心1/1、固定回合23/23；实际脏文件 test:plan/test:related 最终退出码0，前端676/676、Rust库514/514、TypeScript、集成测试与governance:audit通过；cargo fmt与git diff --check通过。",
+      "system": "真实 DeepSeek 与 Binder 用户窗口尚未复验；父 G5 保持 BLOCKED。"
+    },
+    "unresolved_items": [
+      "真实模型是否持续遵循首项单控制和已知文字定点定位需在更新后的应用窗口复验。"
+    ]
+  },
+  "tool_contract_recovery_work_package": {
+    "id": "AG-TOOL-CONTRACT-RECOVERY-02",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "authorization": "2026-10-28 用户要求按建议修复，并适当放宽模型可恢复校验；父 G5 BLOCKED 保持不变。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.76",
+    "allowed_files": [
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/tool_registry.rs",
+      "src-tauri/src/ag/tool_exec.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_prompt.rs",
+      "src-tauri/src/ag/prompts.rs",
+      "src-tauri/src/ag/verification.rs",
+      "src-tauri/src/ipc/mod.rs",
+      "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+      "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+      "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "只改新模型可见的直接工具/分页契约与有限纠错；历史冻结调用保留原执行校验。",
+      "不放宽 CapabilityGrant、Gate、版本完整性、用户确认、取消或未知效果边界。",
+      "不修改用户文件或 WS/DE 写入执行器；自动化验证与真实 Provider/窗口证据分开。"
+    ],
+    "stop_conditions": [],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.76",
+    "validation": {
+      "automated": "2026-10-28 实际脏文件集合 test:plan/test:related 通过；前端 676/676、TypeScript、Rust lib 513/513、core_chain 5/5、sm_broadcast 4/4、doc-tests 与 governance:audit 退出码 0；cargo fmt --all --check、git diff --check 通过。",
+      "contract": "模型可见原生工具明确要求 _binderTurn；read_doc/list_blocks 通过 next_cursor 原样续页且保留路径/版本校验；参数拒绝与控制拒绝各自有限纠错，原冻结协议及权限/写入保护保持不变。固定 HTTP 隔离场景和全量 Rust 回归通过。",
+      "system": "未在真实 DeepSeek 与 Binder 前端窗口复验本修复，不推断真实任务完成率；父 G5 仍 BLOCKED。"
+    },
+    "unresolved_items": [
+      "真实 Provider 对新工具 schema、翻页 cursor 和用户窗口连续交互的行为尚需更新应用后的系统复验。",
+      "共享 Rust 构建缓存两次出现依赖产物缺失；改用独立临时构建目录后完整关联回归通过，此环境现象不归因为 Agent 产品缺陷。"
+    ]
+  },
+  "direct_tool_transport_work_package": {
+    "id": "AG-DIRECT-TOOL-TRANSPORT-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-10-27 用户明确要求取消 binder_tool_batch 模型侧封套、生成完整方案并执行；父 G5 BLOCKED 不解除。沿已确认根 Scope 内文件实施，不修改用户数据。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.75",
+    "allowed_files": [
+      "src-tauri/src/ag/model_output.rs",
+      "src-tauri/src/ag/turn_events.rs",
+      "src-tauri/src/ag/turn_prompt.rs",
+      "src-tauri/src/ag/prompt_runtime.rs",
+      "src-tauri/src/ag/prompts.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/verification.rs",
+      "src/components/ag/AgentVerificationPanel.tsx",
+      "src/components/ag/AgentUI.test.tsx",
+      "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md",
+      "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md",
+      "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+      "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "仅新 AgentTurn 采用直接原生业务工具；已冻结的批次和旧独立工具回合按原协议续行，不自动回退或重放。",
+      "保留模型响应级 IntentResult/候选路线、逐项 CapabilityGrant、DecisionRequest、WorkspaceOperationPlan、取消与未知效果保护。",
+      "先整组校验后执行；不以简化封套为由吞异常、修补模型 JSON 或扩权。",
+      "既有未提交改动属于原工作树，按实际改动集合运行影响选择和关联回归；自动化与真实模型/窗口证据分开。"
+    ],
+    "stop_conditions": [],
+    "validation": {
+      "automated": "2026-10-27 续测：实际脏文件集合 test:plan 通过；本机权限下 test:related 退出码 0，包含前端 673/673、TypeScript、Rust 全量及 governance:audit。cargo fmt --all --check 与 git diff --check 退出码 0。",
+      "contract": "Rust 全量首次执行 512/513，通过用例揭示一条旧批次字段断言仍预期 calls；按当前直接工具诊断契约更新为 _binderTurn 与 $control 后，定向测试 1/1、完整关联回归通过。",
+      "system": "未运行真实 Provider 或用户前端窗口验证；不以自动化回归推断实际模型成功率或业务创建完成。父 G5 仍 BLOCKED。"
+    },
+    "unresolved_items": [
+      "受限沙箱初跑 Rust 有 33 项因本地端口权限与 LibreOffice 子进程失败；同一全量关联测试在获准本机权限下退出码 0，不作为产品缺陷结论。",
+      "真实模型直接工具调用与前端窗口全链路尚未验证；本切片 READY 不解除父 G5。"
+    ]
+  },
+  "tool_envelope_recovery_work_package": {
+    "id": "AG-TOOL-ENVELOPE-RECOVERY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation": "YES",
+    "authorization": "2026-10-27 用户在工具封套与创建收尾修复方案后要求继续；本切片只修原链协议拒绝后的模型续行与模型可见工具说明，不解除父 G5 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.74",
+    "allowed_files": [
+      "src-tauri/src/ag/prompts.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/ag/verification.rs",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "仅原生 binder_tool_batch 原链；不新增并行、回退或自动执行链。",
+      "协议拒绝仍失败关闭且计入原纠错与模型调用上限；不自动修补 JSON、重放已执行或效果未知操作。",
+      "保留全部既有未提交改动；自动化结果不替代真实模型与用户窗口验证。"
+    ],
+    "stop_conditions": [],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.74",
+    "validation": {
+      "automated": "实际改动集合的 test:plan 与 test:related 均通过；定向三项真实 AG 核心固定 HTTP 回归通过，cargo fmt --check、git diff --check、Scope JSON 校验通过。首次完整关联回归暴露两项旧测试仍要求畸形调用回注模型；按新不变量更新其断言后重跑通过，未删去内部拒绝和零执行断言。",
+      "contract": "整批协议拒绝仍产生内部拒绝事件与 not_started 回执；下次模型请求收到字段级纠错，不含未执行畸形参数和对应工具回注；随后合法 workspace_glob 仍可执行，累计纠错上限不变。",
+      "system": "未重启用户 Binder/网关，未做真实 DeepSeek 或窗口创建；父 G5 保持 BLOCKED。"
+    },
+    "unresolved_items": [
+      "当前切片不更换模型工具 schema；若真实模型持续生成畸形参数，需要独立契约验证与范围裁决。",
+      "真实创建后的业务完成判定和独立读回仍需后续工作包。"
+    ]
+  },
+  "empty_txt_creation_work_package": {
+    "id": "AG-EMPTY-TXT-CREATE-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-10-26 用户确认将 AG 功能需求加入已确认 Scope，并再次确认仅扩展 WS 确认卡路由文案；修复明确要求的零字节 TXT 创建，父 G5 保持 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.73",
+    "allowed_files": [
+      "docs/01_modules/AG/A-AG-M-D-01_代理功能需求描述.md",
+      "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md",
+      "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md",
+      "src-tauri/src/ag/tool_registry.rs",
+      "src-tauri/src/ag/prompts.rs",
+      "src-tauri/src/ag/turn_tool_loop.rs",
+      "src-tauri/src/ag/turn_runtime.rs",
+      "src-tauri/src/workspace/routes.rs",
+      "docs/00_core/A-CORE-C-R-01_ADUS.md",
+      ".governance/active_scope.json"
+    ],
+    "constraints": [
+      "只允许显式空 TXT 走既有 WorkspaceOperationPlan→DecisionRequest→WS 重验创建；非空文档及空正文 HTML 保留 CreateDocumentBundle。",
+      "不改用户文件或数据库、不请求真实模型、不自动确认、接受、保存或重放旧操作。",
+      "保留全部既有未提交改动；自动化与真实窗口验证分开报告。"
+    ],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.73",
+    "validation": {
+      "automated": "实际50文件test:plan/test:related通过：前端673/673、TypeScript、Rust库509/509、core_chain5/5、sm_broadcast4/4、governance:audit；test:governance、生产build、Rust格式与diff检查通过。",
+      "contract": "固定HTTP传输配真实AG核心生成唯一确认卡且确认前无文件；真实WS路由与原执行器确认后创建零字节TXT、无CreateDocumentBundle，取消确认后仍无文件；非空与错误标记路径保持验证。",
+      "system": "未做真实模型或用户窗口创建/确认验证；父G5继续BLOCKED。"
+    },
+    "unresolved_items": ["真实Binder窗口与Provider自主选择createEmpty参数尚未验证；需在更新应用后核对确认卡及零字节磁盘结果。"]
+  },
+  "preset_frontend_sync_work_package": {
+    "id": "AG-PRESET-FRONTEND-SYNC-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-10-25 用户在前端缺少 DeepSeek Flash 的诊断后要求同步前端，并明确选择保留旧选择、由用户手动切换；不解除父 G5 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.72",
+    "allowed_files": ["src/store/modelStore.ts", "src/components/ag/Composer.tsx", "src/components/ag/AgentUI.test.tsx", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", ".governance/active_scope.json"],
+    "constraints": ["保留已保存 deepseek-chat 与其他选项；Flash 只由用户显式点击后用于 Agent。", "不修改后端、云端、密钥、用户数据、权限、预算和实际工具执行。", "保留仓库全部既有未提交改动；自动化与实际窗口验证分开报告。"],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.72",
+    "validation": {
+      "automated": "最终49文件test:plan/test:related通过：前端673/673、TypeScript、Rust lib502/502、core_chain5/5、sm_broadcast4/4、governance:audit；生产build与diff检查通过。",
+      "contract": "菜单打开刷新云端清单，保留旧Chat选择，点击Flash才改代理编辑偏好；刷新失败提示且不自动发回合。",
+      "system": "未重启用户Binder或网关、未做实际窗口切换与真实Provider调用；父G5保持BLOCKED。"
+    },
+    "unresolved_items": ["真实窗口菜单、运行中网关返回清单以及Flash实际调用待用户更新应用后核验；这不是代码切片自动化通过的推论。"]
+  },
+  "deepseek_capacity_work_package": {
+    "id": "AG-DEEPSEEK-CAPACITY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-10-25 用户在服务契约、额度与超时审计方案后要求按顺序实施优化，并再次要求继续；本独立工作包不解除父 G5 阻断，不改变原 confirmation 字段。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.71",
+    "allowed_files": ["cloud/dev-gateway/server.mjs", "cloud/dev-gateway/providers.mjs", "cloud/dev-gateway/providers.test.mjs", "src-tauri/src/ag/prompt_runtime.rs", "src-tauri/src/ag/turn_prompt.rs", "src-tauri/src/ag/turn_runtime.rs", "src-tauri/src/ag/turn_tool_loop.rs", "src-tauri/src/ag/turn_events.rs", "src-tauri/src/ent/gateway.rs", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", "docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md", "scripts/test_governance.test.mjs", ".governance/active_scope.json"],
+    "constraints": ["保留现有 deepseek-chat 用户默认与存储，不迁移已保存模型。", "不改权限/确认/保存或工具调用次数上限；不自动重放副作用、半截 JSON 或旧失败回合。", "新增模型的容量是服务侧有界策略，不宣称精确 tokenizer、真实供应商成功率或 G5 闭合。", "保留全部既有未提交改动；禁止读取或输出密钥、用户文档正文。"],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.71",
+    "validation": {
+      "automated": "最终47文件test:plan/test:related均通过：前端673/673、TypeScript、Rust lib502/502、core_chain5/5、sm_broadcast4/4、main/doc-tests及governance:audit通过；test:governance21/21、build、格式/语法/diff检查通过。",
+      "contract": "云端适配17/17；本地HTTP夹具证明Flash请求max_tokens=16384、整轮1200000ms和静默90000ms；无内容工具参数进度及审计白名单有测试，旧预设不迁移。",
+      "system": "未请求真实DeepSeek；本地网关未运行且当前shell无平台凭据；用户窗口长任务与历史超时归因仍待实测。父G5保持BLOCKED。"
+    },
+    "unresolved_items": ["真实 DeepSeek 长篇请求与用户窗口验证尚未执行；本地网关在本工作包启动时未运行。", "容量仍为估算 token 与有界策略，不保证任意长任务单轮完成；若真实供应商拒绝，应先依据安全用量和日志复核。"]
+  },
+  "output_capacity_recovery_work_package": {
+    "id": "AG-OUTPUT-CAPACITY-RECOVERY-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "2026-10-25 用户在最新length截断、输出预算未接线、失败正文恢复和日志缺片分析后明确要求修复；沿用已确认文件范围，confirmation保持YES，父G5保持BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.70",
+    "allowed_files": ["src-tauri/src/ag/prompt_runtime.rs","src-tauri/src/ag/turn_events.rs","src-tauri/src/ag/turn_runtime.rs","src-tauri/src/ent/gateway.rs","cloud/dev-gateway/server.mjs","cloud/dev-gateway/providers.mjs","cloud/dev-gateway/providers.test.mjs","src/services/agService.ts","src/services/agRuntime.test.ts","scripts/test_governance.test.mjs","docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md","docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md","docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md","docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md","docs/00_core/A-CORE-C-R-01_ADUS.md",".governance/active_scope.json"],
+    "constraints": ["不改用户文件或数据库、不新增Provider付费调用；不重启用户应用、不重放旧任务。", "保留Gate、grant、12模型/16工具/2纠错及确认保存屏障；长度截断不执行半截参数，不增加降级或备用执行链。", "统一48k完整请求容量与8k显式输出预留；这是有界开发策略，不宣称适配任意BYOK模型的真实tokenizer或全部长任务。", "敏感明文仅沿显式开发日志开关写入独立0600临时文件；普通持久事件只保存脱敏数值与摘要。"],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.70",
+    "validation": {
+      "automated": "最终实际47文件test:plan/test:related均exit0：前端671/671、TypeScript、Rust lib499/499、core_chain5/5、sm_broadcast4/4、main/doc-tests及governance:audit通过；独立test:governance21/21、生产build、Rust格式、JS语法与diff检查通过。",
+      "contract": "实际出站HTTP包含max_tokens=8192；固定上游字节验证usage尾帧、length与待定参数不可执行、私有日志、错误正文保存与只读恢复；不mock运行核心或权限。",
+      "system": "未向真实Provider发送本工作包新请求，未重启用户进程或操作真实文档/数据库；按OC01/OC02等待新构建实际窗口验证。父G5仍BLOCKED。"
+    },
+    "unresolved_items": ["真实Provider长HTML创建及实际用户确认/保存需要用户重启后验证，不以固定传输自动化冒充。", "8192输出限额无法保证任意长生成单轮完成；若真实模型仍返回length，需依据实际usage及脱敏参数摘要继续归因。"]
+  },
+  "completion_evidence_work_package": {
+    "id": "AG-COMPLETION-EVIDENCE-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "用户2026-10-25明确要求合并前两轮结论分步执行修复；沿用已确认AG/ENT/云网关/前端及配套设计计划文件，不解除父G5阻断。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.69",
+    "constraints": [
+      "保留既有未提交改动；不改用户数据库或文档、不自动接受保存、不重放副作用、不新增备用模型或执行链。",
+      "正文完整性仅结构风险提示，不用标点或模型自述证明完整，不新增强制结尾封套；真实Provider提前stop的历史根因仍待原始证据。",
+      "先完成代码和确定性验证；实际Binder/网关重启及真实窗口接受保存由用户显式操作，不读取或输出凭据。"
+    ],
+    "allowed_files": ["src-tauri/src/ag/task.rs","src-tauri/src/ag/task_runtime.rs","src-tauri/src/ag/model_output.rs","src-tauri/src/ag/turn_runtime.rs","src-tauri/src/ag/turn_tool_loop.rs","src-tauri/src/ag/turn_events.rs","src-tauri/src/ent/gateway.rs","cloud/dev-gateway/server.mjs","cloud/dev-gateway/providers.mjs","cloud/dev-gateway/providers.test.mjs","src/components/ag/MessageList.tsx","src/components/ag/AgentUI.test.tsx","scripts/test_governance.test.mjs","docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md","docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md","docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md","docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md","docs/00_core/A-CORE-C-R-01_ADUS.md",".governance/active_scope.json"],
+    "runtime_report": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.69",
+    "validation": {
+      "automated": "最终实际45文件test:plan/test:related均exit0：前端665/665（含网关11）、TypeScript、Rust lib496/496、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过；test:governance21/21、生产build、JS语法/Rust格式/diff检查通过。",
+      "contract": "原生产解析/运行核心验证正文与工具参数同口径摘要、缺失/身份或摘要不符、原始非法JSON不修补、stop与length、结构风险无自动续写、真实临时创建接受保存事实及五重身份隔离；无mock核心逻辑。",
+      "system": "未调用真实Provider、未重启Binder/网关、未操作用户文档或数据库。只读health仍无gatewayBuild，实际进程待用户重启后核验。CE01～03窗口结果尚未执行，父G5仍BLOCKED。"
+    },
+    "stop_conditions": [],
+    "unresolved_items": [
+      "需用户处理草稿后重启网关与Binder；先核对构建指纹再做CE02长回答及CE03真实确认/接受/保存。",
+      "历史正常stop残缺正文及batch_json_invalid没有完整上游原文，不能回溯断言均由模型或旧网关造成。",
+      "结构风险检查不能识别任意语义残缺；摘要一致只证明两观察点之间未变化，不证明回答/业务完整或模型与上游装配谁有错。"
+    ]
+  },
+  "create_contract_trace_work_package": {
+    "id": "AG-CREATE-CONTRACT-TRACE-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "authorization": "用户在9999.html真实日志分析后要求修复，沿用父任务已确认文件范围；不解除父G5 BLOCKED。",
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.68",
+    "constraints": ["不改用户文档/数据库、不新增付费模型请求或执行器，不放宽权限/接受/保存及未知效果保护。", "仅统一创建参数契约、失败回注及原链有限纠错；修复已复现上游静默丢帧与诊断长行截断。", "真实Provider成功率与实际窗口另列未验证；全部既有改动保留。"],
+    "validation": {
+      "automated": "最终实际45个changed_files的test:plan/test:related均exit0：前端663/663（含网关10/10）、TypeScript、Rust lib492/492、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过；test:governance21/21、生产build、Rust格式/JS语法/diff检查通过。",
+      "contract": "真实核心+临时目录/内存库/固定HTTP：空创建参数拒绝→无文本控制响应隔离→同链纠错后唯一真实确认等待；连续三次参数拒绝触顶；无资源落盘或内容Diff。SSE逐字节/多字节/畸形/截断/处理异常与>64KiB日志分片重组及缺/重复检测通过。",
+      "retry_record": "补强磁盘和waiting回执断言后的首次最终重跑在前端治理inventory用例发生10秒超时及worker onTaskUpdate超时，未报告Agent业务断言失败。原配置治理21/21、该用例223ms复跑通过；随后同一最终45文件test:plan/test:related全部exit0。没有调整超时、并发配置或断言；测试运行超时的系统级根因未确认，不将失败记录删除。",
+      "system": "未调用真实Provider、未执行本版窗口/实际HTML编辑器接受保存，不把固定传输等同于生产语义成功率；父G5仍BLOCKED。"
+    },
+    "unresolved_items": ["真实Provider与窗口最小复验按VAL CT05另行执行；历史batch_json_invalid不能由本包回溯确定根因。", "日志分片避免单行64KiB截断并能检测缺片，但不保证第三方采集器或人工复制不丢整条记录；本机明文调试默认关闭，不公开或提交。"]
+  },
+  "workflow_completion_work_package": {
+    "id": "AG-WORKFLOW-COMPLETION-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "preview_lifecycle_validation": {"automated":"最终40个实际改动文件test:plan/test:related均exit0：前端657/657、TypeScript、Rust492/492、core_chain5/5、sm_broadcast4/4、doc-tests和governance:audit通过。前端定向139/139、test:governance21/21、build、Rust格式及diff检查通过；112测试资产/1138动态用例。","scope":"单独/组合创建15分支；真实预览入口4分支；原模型/会话/快照、无虚构用户发言、原消息锚、内部回复缓存与历史恢复、等待态不误报重试。","system":"实际窗口工具两次启动失败，未执行最终窗口补验，不引用先前窗口通过记录替代本版证据；未新增真实Provider调用，父G5仍BLOCKED。"},
+    "history_projection_dependency": {"file":"src-tauri/src/ag/history.rs","basis":"该文件已在父任务人类确认allowed_files内。本次只投影原turn_started内部续片段来源，修复重新打开会话后虚假用户消息复现；不修改数据库schema、用户数据或历史终态，不恢复执行权。"},
+    "preview_lifecycle_iteration": {"authorization":"用户在最新真实创建/预览交互审计后要求执行修复。","issue_trace":"docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.67","constraints":["带初始内容的单独创建与组合创建共用原保存屏障及原确认续行；不伪造用户消息，不复活已结束回合。","普通预览仍走现有检查点续片段，绑定原请求/模型/会话；不新增执行器或降级链路，不自动接受/保存。","不修改用户文件/数据库、不新增真实Provider调用；保留父BLOCKED与全部既有改动。"]},
+    "focused_iteration": {"authorization":"用户要求集中链路修复，不新增并行或降级链路。","issue_trace":"docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.66","files":["src-tauri/src/ag/model_output.rs","src-tauri/src/ag/turn_tool_loop.rs","src-tauri/src/ag/turn_events.rs","src-tauri/src/ag/turn_runtime.rs","src-tauri/src/ag/verification.rs","docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md","docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md","docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md",".governance/active_scope.json","docs/00_core/A-CORE-C-R-01_ADUS.md"],"constraints":["仅修同一批次解析、回注、有限纠错、原执行器链；不新增恢复执行器、协议回退或能力。","保持12模型/16工具/2纠错额度和真实副作用/未知效果防重放；仅真实同身份拒绝且未执行回执可排除效果风险。","不新增付费模型调用，不改用户数据库或文档；字段诊断只输出schema固定路径/类别，不输出未知键名或正文。"]},
+    "confirmation_basis": "2026-10-24 用户在完整F1–F7/P0–P5方案后要求完成修复，授权本次AG/WS/DE/ED确认、组合资源安全、结果收尾与响应级协议契约实现；父G5仍BLOCKED。",
+    "allowed_files": ["src-tauri/src/ag/model_output.rs", "src-tauri/src/ag/tool_registry.rs", "src-tauri/src/ag/turn_prompt.rs", "src-tauri/src/ag/prompts.rs", "src-tauri/src/ag/turn_tool_loop.rs", "src-tauri/src/ag/turn_runtime.rs", "src-tauri/src/ag/turn_events.rs", "src-tauri/src/ag/turn_control.rs", "src-tauri/src/ag/task.rs", "src-tauri/src/ag/task_runtime.rs", "src-tauri/src/ag/verification.rs", "src-tauri/src/ag/turn.rs", "src-tauri/src/types/mod.rs", "src-tauri/src/workspace/operation.rs", "src-tauri/src/workspace/routes.rs", "src-tauri/src/ipc/mod.rs", "src-tauri/src/ipc/system_tests.rs", "src/services/agService.ts", "src/services/agRuntime.test.ts", "src/services/edService.ts", "src/services/edRuntime.test.ts", "src/store/agStore.ts", "src/components/ag/DecisionBar.tsx", "src/components/ag/MessageList.tsx", "src/components/ag/AgentVerificationPanel.tsx", "src/components/ag/AgentUI.test.tsx", "scripts/test_governance.test.mjs", "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md", "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md", "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", "docs/01_modules/WS/A-WS-M-T-02_工作区资源操作技术设计.md", "docs/01_modules/WS/A-WS-M-S-02_工作区资源操作状态机设计.md", "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md", "docs/00_core/A-CORE-C-R-01_ADUS.md", ".governance/active_scope.json"],
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.65",
+    "documentation_dependency": {"file":"docs/01_modules/SYS/A-SYS-M-S-01_状态机总图.md","basis":"WS状态机原有变更要求指定同步总图；仅登记本次已批准保存屏障及失败回流的跨模块转移，不改SYS通用规则或新增状态机。"},
+    "dispatch_dependency": {"file":"src-tauri/src/lib.rs","basis":"本轮完整交互闭合需要在客户端切工作区/后处理失败时通知后端原回合；仅注册和接线ag.finish_operation_interaction，不提供模型工具、不执行资源、不改变已有终态。该组合根亦在父已确认Scope内。"},
+    "constraints": ["不改用户文档或数据库，不更换DOCX/编辑器，不新增依赖；保留全部既有改动。", "不提升权限/额度，不自动接受或保存，不以TaskRun展示状态授予执行资格；历史终态不可覆盖。", "测试使用真实生产路由/临时文件；固定模型只替代传输，不替代核心逻辑。真实模型外发只在已有明确额度授权内进行，否则单列未验证。"],
+    "scope_refinement": {"files":["src-tauri/src/ag/context.rs","src-tauri/src/ag/capability_runtime.rs","src-tauri/src/de/routes.rs","src/services/deService.ts"],"basis":"同一响应级协议必须在实际发送投影和预算计量处一致；保存屏障的已知资源效果必须进入既有owned-execution事实；拒绝初始内容必须结束原等待而非遗留draft。均为本次完整工作流的直接消费者，不增加能力或授权。"},
+    "progress": ["P0–P5及用户要求的同批次主链集中迭代完成；§14.66修复原纠错回注不一致、被拒包装器误触发效果保护和批次诊断抹平。没有新增并行/降级执行器或协议回退。","仅本工作包READY；父AG-CLOSURE-REPAIR-01与G5继续BLOCKED，不将业务失败改判成功。"],
+    "validation": [
+      "§14.66最终实际39文件test:plan/test:related均exit0：前端657/657、TypeScript、Rust491/491、core_chain5/5、sm_broadcast4/4、doc-tests及audit。AG专项253/253；test:governance21/21、build、fmt、diff检查通过。",
+      "同一最终Binder进程25098两轮实际窗口31/31、关键契约14/14；加深原native场景为5模型/3业务成功/2执行前拒绝后恢复。缺失/冲突/跨身份/未知效果回执不能解除保护，第三次拒绝仍触及原累计上限；新增2项Rust测试，不新增物理测试资产。",
+      "最终实际39文件test:plan/test:related均exit0，未缩减选择器：前端657/657、TypeScript、Rust lib489/489、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过；包含最后非递归目录补偿守卫。",
+      "test:governance21/21、前端生产build、Rust格式及diff检查通过；112测试资产/1135动态用例，新增3项前端和4项Rust测试，未新增物理测试文件或依赖。",
+      "最终源码冻结后，真实Binder进程22142窗口经现有隔离入口31/31终态匹配、14/14关键契约；10个错误回合均先给事实说明再唯一error，长历史6请求通过。此前两轮相同31场景亦通过，重编译瞬态空窗口不计通过。",
+      "真实临时TXT与生产确认/投影/ack/接受/保存/执行路由覆盖8分支；旧组合补偿3分支及现有目录补偿反例验证外部文件不被递归删除、旧计划终态/历史不被覆盖。新工具schema同grant为7071字符，对照旧13752字符；保持原授权与累计额度。"
+    ],
+    "unresolved_items": [
+      "§14.67最终版本实际窗口补验未完成：Computer Use服务两次返回Sky Computer Use service startup request failed；自动化与真实临时路由通过不冒充窗口布局/实际编辑器接受保存验收。旧失败任务和用户文件未自动恢复或改写。",
+      "没有新增真实Provider付费请求，额外最多6次合成抽查尚未明确授权；不承诺模型/网络永不失败或复合任务语义成功率。",
+      "固定传输窗口验证不等于真实专业编辑器接受/保存布局及全部文档格式验收，父G5不提升。",
+      "历史事故中旧文件未自动恢复；快照保留，恢复用户数据需另行确认。失败交付依赖持久库可写及客户端可补流；进程/数据库不可用不承诺必达，也不跨重启恢复旧执行权。"
+    ]
+  },
+  "tool_control_compatibility_work_package": {
+    "id":"AG-TOOL-CONTROL-COMPAT-01", "task_type":"CODE_CHANGE", "governance_phase":"VALIDATION", "status":"READY",
+    "confirmation_basis":"用户在本轮持久事件溯源与控制源/描述差异/精准诊断/累计上限修复建议后明确要求修复；沿用同会话已确认核心Scope，不解除父G5 BLOCKED。",
+    "allowed_files":["src-tauri/src/ag/model_output.rs","src-tauri/src/ag/turn_tool_loop.rs","src-tauri/src/ag/turn_events.rs","src-tauri/src/ag/turn_runtime.rs","src-tauri/src/ag/verification.rs","src-tauri/src/ipc/mod.rs","src/components/ag/AgentVerificationPanel.tsx","src/components/ag/AgentUI.test.tsx","docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md","docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md","docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md","docs/00_core/A-CORE-C-R-01_ADUS.md",".governance/active_scope.json"],
+    "issue_trace":"docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.64",
+    "constraints":["仅兼容goal/route.summary/route.steps描述差异；控制源固定，动作/类型/目标/副作用/歧义/上下文/确认约束仍严格，所有副本先独立校验。", "不调大12/16/2额度，不对成功清零；不重放写操作、不改用户文档/数据库、不新增Provider请求或依赖。", "日志只记录固定原因/字段路径/来源/工具序号及计数，不记录原值/未知键名/Prompt/正文。"],
+    "validation":[
+      "最终实际23文件test:plan/test:related均exit0，未缩减命令：前端654/654、tsc、Rust485/485、core_chain5/5、sm_broadcast4/4、doc-tests与governance:audit通过；test:governance21/21、build、rustfmt及diff检查通过。",
+      "最终版本真实Binder窗口由AI运行现有隔离批量入口，30/30终态匹配，回执深核验13/13；新增三工具描述差异场景3次真实只读成功/2次模型/0拒绝，累计纠错场景4次模型/1次成功/3次固定原因诊断，分类model_protocol。",
+      "新增5个Rust测试并增强既有共享控制与入口断言：动作/类型/目标/歧义/副作用/上下文/确认差异仍拒绝；未知键、坏枚举/类型/组合及畸形副本不被兼容；字段/来源日志不泄露原值。旧断言按用户批准契约更新并以实质冲突负向矩阵加强，不删除安全断言。"
+    ],
+    "unresolved_items":[
+      "历史回合两次INVALID只保留错误码，不能回溯确定具体坏字段；本包修复已证实描述误冲突，并补未来拒绝诊断，不伪称所有历史根因已确定。",
+      "serde无具体字段路径时显式记录$control，不推断未知位置或输出原值；供应商仍可返回真正非法协议或实质矛盾，保留有界失败，不提高纠错上限。未新增真实Provider请求。",
+      "父G5保持BLOCKED；窗口为固定传输+真实核心/临时数据，不替代真实模型语义成功率及专业编辑/接受/保存验收。"
+    ]
+  },
+  "action_handoff_budget_work_package": {
+    "id": "AG-ACTION-HANDOFF-BUDGET-01",
+    "task_type": "CODE_CHANGE",
+    "governance_phase": "VALIDATION",
+    "status": "READY",
+    "confirmation_basis": "2026-10-23 用户在完整动作交接、额度预留及安全续办方案后明确要求执行修复；父G5保持BLOCKED，不扩大专业编辑或真实模型外发授权。",
+    "allowed_files": ["src-tauri/src/ag/model_output.rs", "src-tauri/src/ag/prompts.rs", "src-tauri/src/ag/tool_registry.rs", "src-tauri/src/ag/prompt_runtime.rs", "src-tauri/src/ag/turn_prompt.rs", "src-tauri/src/ag/turn_events.rs", "src-tauri/src/ag/turn_runtime.rs", "src-tauri/src/ag/turn_tool_loop.rs", "src-tauri/src/ag/verification.rs", "src/services/agService.ts", "src/services/agRuntime.test.ts", "src/store/agStore.ts", "src/components/ag/MessageList.tsx", "src/components/ag/AgentUI.test.tsx", "src/components/ag/AgentVerificationPanel.tsx", "scripts/test_governance.test.mjs", "docs/01_modules/AG/A-AG-M-T-01_代理技术设计.md", "docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md", "docs/01_modules/AG/A-AG-I-P-01_代理接口协议.md", "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md", "docs/40_validation/A-VAL-X-V-04_Agent1.0验证卡.md", "docs/00_core/A-CORE-C-R-01_ADUS.md", ".governance/active_scope.json"],
+    "issue_trace": "docs/01_modules/AG/A-AG-X-L-04_代理1.0开发与验证计划.md §14.63",
+    "constraints": ["不删除完成条件、授权、版本或防重放守卫；模型文字不授予权限；分析清单不自动建文件。", "默认模型12次、工具16次、共享纠错2次；模型预留2次收尾；每回合冻结并持久计数，等待不重置。保留低额度反例，不放宽断言。", "仅临时夹具及固定模型传输；不改用户文档/数据库、不新增付费模型调用、不改DOCX或编辑器、不新增依赖。"],
+    "validation": [
+      "最终精确22文件test:plan/test:related均exit0，未缩减选择器：前端654/654、tsc、Rust480/480、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过。test:governance21/21、build、rustfmt和diff检查通过。",
+      "真实Binder最新开发窗口由AI经Accessibility运行28项隔离批量验收，28/28终态匹配；逐项深核验原8项和新增3项契约11/11，长历史6请求标记符合。确认卡由隔离入口自动裁决，不是用户点击布局或真实Provider成功率验收。",
+      "真实临时两HTML/四TXT执行9次只读加回答，10次模型；缺计划→澄清/真实计划/阶段报告分流，假等待正文未释放；低工具额度收尾、持续非法收尾、同批额度、Gate失败/取消保真、冻结策略恢复及只读新回合防重放均有生产核心断言。"
+    ],
+    "unresolved_items": [
+      "不承诺模型语义和网络永不失败；本包没有新增真实Provider抽查。Prompt、结果大小和能力期限仍有独立安全上限。",
+      "显式续办只允许完整只读旧回合；未知效果或非只读旧回合必须先核对后发起新请求，不支持任意断点自动重放。阶段判断不是业务成功证明。",
+      "父G5/AG-CLOSURE-REPAIR-01仍BLOCKED；实际专业编辑、接受与保存验收不提升。"
+    ]
+  },
   "history_budget_work_package": {
     "id": "AG-HISTORY-BUDGET-01",
     "task_type": "CODE_CHANGE",

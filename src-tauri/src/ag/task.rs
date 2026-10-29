@@ -133,7 +133,17 @@ pub fn create_preview_checkpoint(
             |row| row.get(0),
         )
         .optional()?;
-    if run_matches.is_none() {
+    if run_matches.is_none()
+        && !confirmed_bundle_checkpoint_owner(
+            conn,
+            task_run_id,
+            workspace_id,
+            session_id,
+            turn_id,
+            rel_path,
+            None,
+        )?
+    {
         return Err(rusqlite::Error::InvalidParameterName(
             "preview checkpoint requires the active task run".to_string(),
         ));
@@ -180,7 +190,17 @@ pub fn acknowledge_preview_checkpoint(
             |row| row.get(0),
         )
         .optional()?;
-    if pending_diff.is_none() {
+    if pending_diff.is_none()
+        && !confirmed_bundle_checkpoint_owner(
+            conn,
+            &checkpoint.task_run_id,
+            &checkpoint.workspace_id,
+            &checkpoint.session_id,
+            &checkpoint.turn_id,
+            &checkpoint.rel_path,
+            Some(&checkpoint.diff_id),
+        )?
+    {
         return Err(rusqlite::Error::InvalidParameterName(
             "preview acknowledgement requires a pending diff".to_string(),
         ));
@@ -207,6 +227,31 @@ pub fn acknowledge_preview_checkpoint(
         ));
     }
     Ok(())
+}
+
+// A confirmed resource operation can be active while its TaskRun projection is still waiting.
+// Only the exact live turn/decision/plan/bundle may bridge that projection boundary.
+fn confirmed_bundle_checkpoint_owner(
+    conn: &Connection,
+    run: &str,
+    workspace: &str,
+    session: &str,
+    turn: &str,
+    path: &str,
+    diff: Option<&str>,
+) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM task_runs r \
+        JOIN agent_turns t ON t.task_run_id=r.task_run_id \
+        JOIN workspace_operation_plans p ON p.task_run_id=r.task_run_id AND p.source_turn_id=t.turn_id \
+        JOIN create_document_bundles b ON b.plan_id=p.plan_id AND b.operation_id=p.operation_id \
+        JOIN decision_requests d ON d.request_id=p.decision_request_id AND d.task_run_id=r.task_run_id \
+        WHERE r.task_run_id=?1 AND r.workspace_id=?2 AND r.session_id=?3 AND r.status IN ('waiting','active','executing') \
+        AND t.turn_id=?4 AND t.session_id=?3 AND t.workspace_id=?2 AND t.status='draft' \
+        AND p.workspace_id=?2 AND p.status IN ('completed','awaiting_content') \
+        AND b.workspace_id=?2 AND b.target_rel_path=?5 AND b.status IN ('projecting_initial_diff','initial_diff_pending') \
+        AND d.status='resolved' AND d.outcome='confirm' AND (?6 IS NULL OR (b.initial_diff_id=?6 \
+        AND EXISTS(SELECT 1 FROM pending_diffs x WHERE x.diff_id=?6 AND x.workspace_id=?2 AND x.rel_path=?5 AND x.status='pending'))))",
+        rusqlite::params![run,workspace,session,turn,path,diff], |row| row.get(0))
 }
 
 /// 读取已确认但尚未消费的 checkpoint，供续片段入口先比对新采集的 OpenDocSnapshot。
@@ -699,6 +744,95 @@ pub fn resolved_decision_outcome(
         |row| row.get(0),
     )
     .optional()
+}
+
+/**
+ * @GOV
+ * codes: BR-AG-DATA-004-QUERY-AG-AG-TURN-052, BR-SYS-STATE-008-QUERY-AG-AG-TURN-052
+ * type: QUERY
+ * chain: AG-TURN, WS-OPERATION
+ * rules: BR-AG-DATA-004, BR-SYS-STATE-008
+ * term_ref: TERM-AG-017, TERM-AG-015
+ * boundary: in=OriginalWorkspaceSessionTurnTaskAndResolvedDecisionIdentity | out=IdentityBoundDecisionAndWorkspaceOperationEffectProjection | does_not=authorizeExecutionReadDocumentBodyInferSaveFromConfirmationOrRewriteTaskOutcome
+ */
+pub(super) fn resolved_decision_receipt(
+    conn: &Connection,
+    workspace: &str,
+    session: &str,
+    turn: &str,
+    run: &str,
+    request: &str,
+) -> Result<Option<serde_json::Value>, crate::ipc::IpcError> {
+    use crate::ipc::IpcError;
+    let db_error =
+        |e: rusqlite::Error| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false);
+    let invalid = || {
+        IpcError::new(
+            "AG_TASK_CONTINUATION_INVALID",
+            "裁决效果与原回合身份或执行版本不匹配，未恢复执行",
+            false,
+            false,
+        )
+    };
+    let decision: Option<(String,Option<String>)> = conn.query_row(
+        "SELECT d.outcome,json_extract(d.payload_json,'$.workspaceOperationPlanId') FROM decision_requests d \
+         JOIN task_runs r ON r.task_run_id=d.task_run_id JOIN agent_turns t ON t.task_run_id=r.task_run_id \
+         WHERE r.workspace_id=?1 AND r.session_id=?2 AND t.turn_id=?3 AND t.workspace_id=?1 AND t.session_id=?2 \
+         AND r.task_run_id=?4 AND d.request_id=?5 AND d.status='resolved'",
+        rusqlite::params![workspace,session,turn,run,request], |row|Ok((row.get(0)?,row.get(1)?)),
+    ).optional().map_err(db_error)?;
+    let Some((outcome, plan_id)) = decision else {
+        return Ok(None);
+    };
+    let mut fact = serde_json::json!({"version":"decision-result-v2","workspaceId":workspace,"sessionId":session,
+        "turnId":turn,"taskRunId":run,"requestId":request,"outcome":outcome,
+        "workspaceOperation":null,"readBackVerified":false});
+    if let Some(plan_id) = plan_id {
+        let plan = crate::workspace::operation::load_plan(conn, &plan_id)
+            .map_err(db_error)?
+            .ok_or_else(invalid)?;
+        if plan.workspace_id != workspace
+            || plan.task_run_id.as_deref() != Some(run)
+            || plan.source_turn_id.as_deref() != Some(turn)
+            || plan.decision_request_id.as_deref() != Some(request)
+        {
+            return Err(invalid());
+        }
+        let receipt = crate::workspace::operation::load_outcome(conn, &plan_id)?;
+        if receipt.as_ref().is_some_and(|r| {
+            r.plan_id != plan_id || Some(r.operation_id.as_str()) != plan.operation_id.as_deref()
+        }) {
+            return Err(invalid());
+        }
+        let mut content = serde_json::Value::Null;
+        if let Some(bundle) =
+            crate::workspace::operation::load_create_document_bundle(conn, &plan_id)
+                .map_err(db_error)?
+        {
+            if bundle.target.workspace_id != workspace || bundle.operation_id != plan.operation_id {
+                return Err(invalid());
+            }
+            let diff = if let Some(id) = bundle.initial_diff_id.as_deref() {
+                conn.query_row("SELECT status,effect_status FROM pending_diffs WHERE diff_id=?1 AND workspace_id=?2 AND rel_path=?3",
+                    rusqlite::params![id,workspace,bundle.target.rel_path],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))).optional().map_err(db_error)?
+            } else {
+                None
+            };
+            let saved = bundle.status == "saved"
+                && diff
+                    .as_ref()
+                    .is_some_and(|(s, e)| s == "accepted" && e == "saved");
+            content = serde_json::json!({"bundleStatus":bundle.status,"targetPath":bundle.target.rel_path,
+                "diffId":bundle.initial_diff_id,"diffStatus":diff.as_ref().map(|d|&d.0),
+                "effectStatus":diff.as_ref().map(|d|&d.1),"saveVerified":saved});
+        }
+        let items:Vec<_>=plan.operation_items.iter().map(|item|serde_json::json!({
+            "itemId":item.item_id,"kind":item.kind,"sourcePath":item.source_rel_path,"targetPath":item.target_rel_path,
+        })).collect();
+        fact["workspaceOperation"] = serde_json::json!({"planId":plan_id,"planStatus":plan.status,
+            "operationId":plan.operation_id,"receipt":receipt,"items":items,"content":content});
+    }
+    Ok(Some(fact))
 }
 
 fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequestV1> {

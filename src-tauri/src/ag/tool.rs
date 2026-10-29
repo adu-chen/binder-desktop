@@ -40,6 +40,11 @@ pub enum ToolLoopEvent {
 pub enum ToolDecision {
     Allow,
     Reject(String), // 拒绝原因（回注模型）
+    InvalidArguments {
+        field: &'static str,
+        constraint: &'static str,
+        message: String,
+    },
 }
 
 /// 终态判定。

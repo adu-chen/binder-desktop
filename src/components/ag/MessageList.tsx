@@ -6,7 +6,7 @@ import { DiffList } from "../de/DiffList";
 import { ToolCallCard } from "./ToolCallCard";
 import { PlanCard } from "./PlanCard";
 import { MessageFlow } from "./MessageFlow";
-import { startTurn, inspectTurnEffects } from "../../services/agService";
+import { startTurn, inspectTurnEffects, continueSavedResourceGroup } from "../../services/agService";
 
 /**
  * @GOV
@@ -33,6 +33,19 @@ export function MessageList() {
   const retryingRef = useRef(false);
   const [effectFeedback, setEffectFeedback] = useState<Record<string, string>>({});
   const [inspecting, setInspecting] = useState<string | null>(null);
+  const [resumingSavedGroup,setResumingSavedGroup]=useState(false);
+  const continueSaved = async (message: typeof messages[number]) => {
+    if (!message.awaitingResourceSave || resumingSavedGroup) return;
+    const key=`${session.id}:${message.id}`;
+    setResumingSavedGroup(true);
+    try {
+      const feedback=await continueSavedResourceGroup(message.awaitingResourceSave.requestId);
+      setEffectFeedback(previous=>({...previous,[key]:feedback}));
+    } catch(error) {
+      const failure=error as {message?:string};
+      setEffectFeedback(previous=>({...previous,[key]:failure?.message??String(error)}));
+    } finally { setResumingSavedGroup(false); }
+  };
   const inspectMessage = async (message: typeof messages[number]) => {
     if (!message.turnId || inspecting) return;
     const key = `${session.id}:${message.id}`;
@@ -55,7 +68,8 @@ export function MessageList() {
     setRetrying(key);
     setRetryFeedback((previous) => ({ ...previous, [key]: "" }));
     try {
-      await startTurn(message.content, { displayParts: message.parts, references: referencesFromParts(message.parts), retryOf: { sessionId: session.id, turnId: message.turnId } });
+      await startTurn(message.content, { displayParts: message.parts, references: referencesFromParts(message.parts), retryOf: { sessionId: session.id, turnId: message.turnId,
+        ...(message.completionReason === "budget_exhausted" ? { continuationOnly: true } : {}) } });
     } catch (error) {
       setRetryFeedback((previous) => ({ ...previous, [key]: error instanceof Error ? error.message : "重试核验失败，未重新执行。" }));
     } finally {
@@ -121,7 +135,10 @@ export function MessageList() {
               </div>
             )}
           </div>
-          {m.role === "user" && m.turnStatus === "draft" && (!state.activeTurn || state.activeTurn.turnId !== m.turnId) && (
+          {m.role === "user" && m.turnStatus === "draft" && (!state.activeTurn || state.activeTurn.turnId !== m.turnId)
+            && !(state.pendingDecision?.sessionId === session.id && state.pendingDecision.turnId === m.turnId)
+            && !messages.some(message => message.turnId === m.turnId && message.awaitingResourceSave)
+            && (
             <div className="msg msg-assistant msg-error">
               <span className="label msg-role">AI</span>
               <div className="msg-body">
@@ -140,6 +157,28 @@ export function MessageList() {
               <button className="ghost" disabled={inspecting !== null} onClick={() => void inspectMessage(m)}>核对执行效果</button>
               {effectFeedback[`${session.id}:${m.id}`] && <pre role="status">{effectFeedback[`${session.id}:${m.id}`]}</pre>}
             </div>
+          )}
+          {m.role === "user" && m.turnStatus === "completed" && m.completionReason === "budget_exhausted" && (
+            <div className="msg-budget-summary" role="status">
+              本次额度已到，仍有未完成内容；不代表业务成功。
+              <button className="ghost" disabled={retrying !== null || state.sending} onClick={() => void retryMessage(m)}>继续未完成部分</button>
+              <span>{retryFeedback[`${session.id}:${m.id}`]}</span>
+            </div>
+          )}
+          {m.role === "assistant" && m.awaitingResourceSave && (
+            <div className="msg-resource-save" role="status">
+              等待审阅并保存 {m.awaitingResourceSave.path}；原任务尚未完成，后续操作未执行。
+              <button className="ghost" disabled={resumingSavedGroup || state.sending} onClick={()=>void continueSaved(m)}>核对已保存内容并继续</button>
+              {effectFeedback[`${session.id}:${m.id}`] && <span>{effectFeedback[`${session.id}:${m.id}`]}</span>}
+            </div>
+          )}
+          {m.role === "user" && m.completionReason === "answer_incomplete" && (
+            <div className="msg-stage-summary" role="status">
+              响应流已结束，但回答可能未完整（存在未闭合的表格或代码结构）。已保留正文；可在输入框明确要求继续回答。不会自动重试工具或重复执行操作。
+            </div>
+          )}
+          {m.role === "user" && ["partial", "blocked", "report_only", "no_op"].includes(m.completionReason ?? "") && (
+            <div className="msg-stage-summary">当前阶段已结束；不是操作完成、正式等待确认或文件已保存的凭证。</div>
           )}
         </Fragment>
       ))}

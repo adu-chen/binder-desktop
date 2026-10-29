@@ -18,7 +18,7 @@ export type AgMode = "edit" | "build";
 /** SYS I-P-01 P01: metadata only; identity is owned by the enclosing turn/event. */
 export interface AgentFailureDiagnostic {
   version: 1;
-  observedAt: "context_assembly" | "runtime" | "gate" | "finalizing" | "tool_validation" | "tool_execution" | "frontend_start" | "frontend_invoke" | "event_recovery";
+  observedAt: "context_assembly" | "runtime" | "gate" | "finalizing" | "tool_validation" | "tool_execution" | "operation_post_processing" | "frontend_start" | "frontend_invoke" | "event_recovery";
   category: "core_context" | "model_protocol" | "authorization" | "professional_capability" | "ui_projection" | "unknown";
   rootCauseStatus: "unknown";
 }
@@ -34,6 +34,10 @@ export interface ChatMessage {
   turnId?: string;
   relPath?: string | null;
   turnStatus?: AgentTurnStatus;
+  /** 后端 done 的阶段原因；completed 只表示回合结束。 */
+  completionReason?: string;
+  /** 本进程真实活动回合的保存依赖入口；不持久恢复授权。 */
+  awaitingResourceSave?: { requestId: string; path: string };
   /** 本地未完成诊断，不代表后端终态；持久化由 AgentTurn payload.failure 承载。 */
   turnFailure?: { code: string; message: string; retriable: boolean; diagnostic?: AgentFailureDiagnostic };
   /** 回合内消息片段（TERM-AG-011 · BR-AG-UI-001）：assistant 消息按事件到达顺序交错排列
@@ -657,6 +661,10 @@ export const agStore = {
       ),
     }));
   },
+  /** 保存等待仅是原活动回合的可见操作入口，不恢复执行授权。 */
+  setResourceSaveWait(sessionId: string, id: string, wait?: ChatMessage["awaitingResourceSave"]) {
+    mapSession(sessionId,s=>({...s,messages:s.messages.map(m=>m.id===id?{...m,awaitingResourceSave:wait}:m)}));
+  },
   /** 关闭当前 text 段并追加 tool 段（TERM-AG-011）：工具调用在正文时序位置内嵌。 */
   addToolSegment(sessionId: string, id: string, toolCallId: string) {
     mapSession(sessionId, (s) => ({
@@ -688,10 +696,15 @@ export const agStore = {
       ...s,
       messages: s.messages.map((m) => (m.turnId === turnId ? {
         ...m, turnStatus: status, turnFailure: status === "draft" ? failure : undefined,
+        awaitingResourceSave: ["draft","clarifying"].includes(status) ? m.awaitingResourceSave : undefined,
       } : m)),
     }));
   },
   /** 新增一条工具调用卡（executing）；返回卡 id（PI-AG-08D，投影 ToolRequest）。 */
+  setTurnCompletionReason(sessionId: string, turnId: string, reason: string) {
+    mapSession(sessionId, (s) => ({ ...s, messages: s.messages.map((m) =>
+      m.turnId === turnId ? { ...m, completionReason: reason } : m) }));
+  },
   addToolCall(
     sessionId: string,
     name: string,

@@ -425,6 +425,67 @@ ModelFinalEnvelopeV2 派生 ProjectReport：只保留当前 turn、`evidence_thr
 足够的引用；未知/跨回合/覆盖不足的 finding 转入 uncertainties。该 envelope 不是工具调用或授权来源。
 默认不持久化额外用户正文副本、密钥或模型隐藏推理。
 
+#### 完整工作流与失败交付（AG-WORKFLOW-COMPLETION-01）
+
+人类2026-10-24批准的增量：任务结果、专业效果与交互交付分别记录。错误不是成功；执行停止后先冻结证据和逐项效果，再输出运行核心的最小结果说明，最后提交唯一error终态。模型解释只在原Gate、期限和预留额度允许时进行，不能作为失败交付的必需依赖；核心说明不调用模型/工具、不授予权限、不证明无效果。取消不追加模型调用；断开的Channel通过持久事件补流，不重放执行。
+
+新回合模型直接提交已授权业务工具调用，首个调用的`_binderTurn`承载响应级control，schema仍来自现有工具注册表；业务执行仍逐项计算grant。其余调用无需重复控制；多项仅限相互独立的只读调用，涉及计划、提案或裁决时整组只允许一项。旧在途/历史保持冻结版本边界。读取/分析/待授权创建/已授权恢复分别核对完成范围，report_only不能被展示为整项业务完成。
+
+确认后的初始内容检查点必须核验已确认冻结计划、原workspace/session/turn/operation、当前资源和Diff身份，不以TaskRun展示状态作为授权。创建内容与其他资源组合时，后续非创建操作等待绑定初始内容真正保存；等待不自动接受/保存，用户保存事件才触发原冻结依赖的重验。源对象漂移或原回合取消/终结时不得继续，重复确认不重放。失败补偿只报告实际覆盖范围；前端失败必须持久结算原AgentTurn，不遗留永久draft。
+
+| 契约 | 当前实现与约束 |
+|---|---|
+| 新工具传输 | 新AgentTurn原生暴露grant允许的业务函数；一次响应只需一份合法`_binderTurn`：首工具提交，后续独立只读工具可省略；只读工具schema将字段设为可选，独立提交的有副作用工具仍标必填；不暴露`binder_tool_batch`，不额外扩大能力 |
+| 同链有限纠错 | 拒绝仅回注冻结协议对应说明；新回合不提示旧`binder_tool_batch`提交方式，不回退到批次或其他执行器。控制封套与参数错误分别累计纠错、各有上限，成功调用不清零；纠正响应仍重进同一解析、Gate/grant和执行链，受总模型调用上限约束 |
+| 空文档与参数纠正 | create_document必须提供确认前冻结的非空initialContent；空HTML正文使用合法空页面骨架，不传空串或空白。缺失/无效载荷明确返回字段与约束，保持rejected/blocked/not_started；仅在原剩余额度内以新调用ID修正参数，不能重复已执行操作。失败说明仍须合法final/clarify控制，不能把无封套正文自动补成模型结论 |
+| 本地明文诊断 | 开发模式显式MODEL_IO开关可记录模型实际请求与归一化返回；长记录分为有唯一记录ID、序号/总数、UTF-8总长度和SHA-256的短行，完整重组才能作为原文证据。默认关闭、不记录系统密钥/认证头，不持久化额外正文到运行数据库。上游只记录参数指纹/字节数与固定帧错误类别，不记录隐藏推理或供应商密钥 |
+| 执行前拒绝证明 | 防重放不能仅按包装器名称推断效果。只消费原回合内部生成、同workspace/session/turn/toolCallId/toolName唯一匹配的完整ToolCallReceiptV1：rejected/blocked/not_started、有failure、无references/evidence且respond_blocked，才排除该请求的副作用风险。缺失、冲突、在途/未知效果及已产生非只读效果仍保守停止工具；这不是授权或自动重放 |
+| 格式诊断 | 新回合直接按各业务工具schema与响应级语义守卫校验；旧批次回合保留既有typed反序列化和安全路径诊断。诊断不输出坏值、未知键名或serde原始消息 |
+| 调用组边界 | 新回合同一模型响应多项仅独立只读；提案/确认/资源计划必须单项，不能跨越预览或确认依赖。旧批次回合仍按冻结的1–16项契约解析，不作为新回合回退路径 |
+| 执行与回注 | 新回合每个原生业务工具ID各有原生结果和独立grant、结果及证据；旧批次回合保留虚拟子调用及聚合Provider结果的历史投影，预算计量与实际发送投影同源 |
+| 版本 | 原AgentTurn记录`transport_protocol_frozen`。新回合`native-business-tool-v1`；既有`binder-tool-batch-v1`回合与无版本的在途legacy回合按各自冻结协议续行；旧历史不重写，仍走同一生产执行守卫 |
+| 部分交付 | 沿用IntentResult/候选route与completion.reason逐项说明当前读取/分析、待授权清单、恢复计划的范围；候选不等于已执行；completion不授予创建/保存权限 |
+| 失败交付 | 内部`interaction_result`保留成功/失败工具数、操作组状态、未结算/未知效果数；用户收到核心chunk再收到原始error，不伪造done；本实现确定性收尾不新增模型请求 |
+| 保存等待 | 回执`final_status=awaiting_content`；ack返回`awaiting_save`；明确显示等待保存并提供“核对已保存内容并继续”。保存事件与显式核对均重新走同一原决策，不重放已完成项 |
+| 拒绝/取消/重启 | 拒绝经基线守卫补偿并结束原等待；取消不续办；重启只记录Interrupted，不恢复旧确认权限；保存等待入口只属于本进程活动身份 |
+
+宿主后处理失败通知：`ag.finish_operation_interaction({workspaceId,sessionId,turnId,requestId,code})`仅供客户端完成已确认资源请求的错误收束，不在模型工具清单。code只接受受控的切工作区/确认效果未知超时/后处理失败；通过DB核对完整原身份、已confirm计划和活动裁决等待。只追加原回合结果/终态，不读取/修改资源、不撤销确认或重放；已有终态原样返回。允许报告已离开的原workspace，因为这不是跨workspace执行授权。客户端通知与补流有2秒交付保护，超时保留未知状态和原错误，不重复发送操作；真正数据库/进程不可用仍不保证消息必达。
+
+旧Completed计划本身及原资源历史均不反写；补偿追加新历史、最新组合回执表达失败/部分效果。仅当前AwaitingContent等非终态经合法ItemFail/Compensation转移结算，用户说明消费最新回执而非把旧资源Completed当整组成功。
+
+日志只记录版本、固定原因/阶段、ID、数值、哈希；不输出完整Prompt、控制原值或文档正文。确定性失败说明不依赖Provider可用性；数据库或窗口连接本身不可用时仍须诚实报告投影/交付失败，不能承诺故障基础设施下必达。
+
+#### 原生多工具控制来源与兼容（AG-TOOL-CONTROL-COMPAT-01）
+
+同一响应主控制唯一：存在合法文本控制时取文本，否则取首个含`_binderTurn`的工具。工具无需重复填写控制；新直接工具响应的独立只读调用中，
+后续副本若存在仍须独立合法且`nextAction=tool`，但不作为新的任务级意图；其字段差异仅记录固定字段名，主控制及各项业务参数原样保留。
+这一兼容只适用于运行时已验证的只读直接工具组；有副作用工具和历史冻结协议仍严格要求副本的动作、意图类型、目标候选、副作用意图、歧义、上下文需求、确认点一致，
+仅`intent.goal / route.summary / route.steps`允许不同。该兼容不修改参数、不扩大grant、不覆盖已解析控制、不放行畸形副本，
+也不合并或执行副本路线；无主控制、非法副本、非只读组的实质控制矛盾仍整批未执行。纠错额度按回合累计，成功不清零。协议诊断应包含固定reasonCode、fieldPath、controlSource、toolIndex；
+反序列化不能精确定位时明示`$control`，不从原始异常回显用户值或未知键名，不伪称已确定具体字段。
+
+#### 执行额度与动作交接（AG-ACTION-HANDOFF-BUDGET-01）
+
+`binder-turn-control-v1` 保持兼容；`final` 可选 `completion:{status,reason}`。status 仅允许
+`report_only / blocked / no_op / partial`，reason 非空且最多 2000 字符；tool/clarify 不接受此字段。
+该字段是模型阶段判断，不是授权或已修改凭证，不接受 `waiting/awaiting_confirm`。
+资源请求没有真实计划时，普通 final 在正文展示前拒绝并进入原有共享有界纠错；模型应生成
+`plan_workspace_operation`、提出阻断性澄清，或如实声明阶段结果。已成功产生的同回合计划回执在续行时保留，不能再次强制生成计划。
+
+唯一开发侧 `ExecutionBudgetPolicy` 默认模型 12 次、工具 16 次、共享协议纠错 2 次、模型收尾预留 2 次；
+四项分别计量，不合并成 token 上限，也不允许模型调大。策略于回合首次进入时冻结为内部
+`execution_budget_frozen` 事实；调用/纠错从持久事件恢复，澄清/裁决不重置。旧在途无冻结记录但已有调用的回合沿用旧 6/6 硬边界。
+`execution_budget_checked` 只记录计数与收尾标记，不记录正文/参数。Prompt token、单工具结果及能力期限仍各自负责不同风险。
+
+工具归零或进入模型预留额度后，native tools 清空，禁止新工具和新等待，只允许依据既有事实收尾。
+模型不能提供合规收尾时，在硬额度/纠错上限内由运行时输出最小未完成说明；网络/Gate/取消仍走原有真实错误/取消出口。
+`done.stopReason=budget_exhausted` 表示执行额度收尾，**不是业务完成**；存在 TaskRun 时未完成任务不标为 Completed。
+`done.stopReason=report_only/blocked/no_op/partial` 表示上述阶段结果，不创建裁决等待、不表示接受或保存。
+
+前端保留阶段原因并从真实事件恢复；额度收尾显示“继续未完成部分”。该按钮仅在原回合证据完整且只读时
+创建新回合、重新核验上下文和 Gate；不复用旧执行身份/裁决。有修改/未知工具/提案/裁决记录时拒绝自动续办，
+要求先核对效果后明确发起下一请求。它不是任意任务的断点重放或后台自动恢复。
+
 ### §2.3 v2 通用准入、按需上下文与独立验证（P00）
 
 **状态**：P03 已开始接入生产 v2 DTO、准入和宿主回传；当前验证结论见开发计划 §14.12，不以本节登记提升 G5。共享字段唯一来源为
@@ -546,10 +607,11 @@ WS，WS 仍执行重验、幂等和 fail-fast 补偿。ProjectReport 也不是�
 
 本节针对模型工具 `read_doc/list_blocks`，不改变上表 IPC `ag.list_blocks` 的完整块投影接口。
 
-- `read_doc(path, view?, offset?, limit_chars?, expected_hash?)` 默认为正文阅读视图（`view=text`）。返回去除编辑标记的正文 `content`、原来源/版本元数据、`source_content_format`、`version_hash`、`offset/end_offset/next_offset/total_chars/complete/has_more`；HTML 保留段落及表格行列分隔，不重复容器与子节点正文。offset 为阅读投影中的 Unicode 字符位置（不是块号、UTF-16编辑坐标），默认0；limit_chars 默认/最大10,000，实际每页还按原序列化安全上限收缩。非首页必须提供 expected_hash；应使用返回的 next_offset，不猜游标。长单段允许明确分片，但绝不截断 JSON 或编辑节点。
+- `read_doc(path, view?, cursor?, limit_chars?, blocks?, expected_hash?)` 默认为正文阅读视图（`view=text`）。返回去除编辑标记的正文 `content`、原来源/版本元数据、`source_content_format`、`version_hash`、`offset/end_offset/next_offset/next_cursor/total_chars/complete/has_more`；HTML 保留段落及表格行列分隔，不重复容器与子节点正文。模型侧正文续页只将 `next_cursor` 原样传回 `cursor`，第一页省略；游标绑定路径和版本，版本变化返回 stale，不得猜测偏移。`limit_chars` 默认/最大10,000，实际每页还按原序列化安全上限收缩。结构/块读取可单独提供 `expected_hash`，不能与正文游标混用。长单段允许明确分片，但绝不截断 JSON 或编辑节点。
 - `read_doc(path, view=structure)` 保留原完整 content 与元数据；原 `read_doc(path, blocks=[...])` 默认保留结构视图，返回所选块的完整 node_json 等字段且省略全文。需要编辑节点时沿用此接口；任一块不存在即 AG_READ_BLOCK_NOT_FOUND，不返回部分成功。结构视图不能使用正文分页参数；正文 view 不与 blocks 混用。
-- `list_blocks(path, offset?, limit?, expected_hash?)` 返回轻量目录、`offset/total_blocks/next_offset/complete/version_hash`。默认 offset=0、limit=20，limit 范围1～50，为每页条目数上限；容量不足时减少完整条目，不截断条目，next_offset反映实际返回数量，禁止以offset+limit猜下一页。后续页必须携带上一页version_hash作为expected_hash。complete只表示本次目录覆盖全部块，不表示正文已读；末页不等于全目录返回。
-- `version_hash` 为完整 AgentEditableSnapshot 序列化的 SHA-256；`read_doc` 也接受 `expected_hash`。版本变化返回 `AG_READ_VERSION_STALE`，重新定位，不将新旧页拼作同一版本。此 hash 不替代编辑提案原有 contentHash/sessionVersion/fingerprint。
+- `list_blocks(path, cursor?, limit?)` 返回轻量目录、`offset/total_blocks/next_offset/next_cursor/complete/version_hash`。第一页省略 cursor；后续页只将上一页 `next_cursor` 原样传回。默认 limit=20，范围1～50，为每页条目数上限；容量不足时减少完整条目，不截断条目。complete只表示本次目录覆盖全部块，不表示正文已读；末页不等于全目录返回。
+- 已知标题、占位句或关键词的精确块定位先使用现有 `search_text(query)` 返回的 `block_id/block_index`，再以 `read_doc(blocks)` 取目标完整投影；`list_blocks` 用于确需遍历目录结构的场景。搜索结果仍是片段证据，不能当作目标块已完整读取。不存在上一页实际 `next_cursor` 时不得猜造游标；非法游标继续拒绝。
+- `version_hash` 为完整 AgentEditableSnapshot 序列化的 SHA-256；`read_doc` 的结构/块读取也接受 `expected_hash`。模型侧分页游标包含偏移、路径摘要和该版本哈希，不是授权凭据；版本变化返回 `AG_READ_VERSION_STALE`，重新定位，不将新旧页拼作同一版本。冻结历史调用的 `offset/expected_hash` 仍按原契约校验，但不再出现在新模型分页 schema 中。此 hash 不替代编辑提案原有 contentHash/sessionVersion/fingerprint。
 - 只读结果按 JSON 字符串再次序列化后的字符数限制在运行时单次上限内，当前为12,000，不扩大该限制。正文阅读按容量成页；显式结构结果仍在超限时 AG_TOOL_RESULT_TOO_LARGE，编辑节点不可截断。目录页过大应减小 limit；大结构块可用正文视图阅读，但不等于取得可编辑完整节点。其他只读列表超限仍明确失败，不保证均支持分页。
 - 只有成功结果才能登记证据：正文单页从0覆盖至末尾（complete=true）或完整结构读取为 full_document；任何部分页（包括末页）及选块为 selected_blocks，目录为 structure_index。正文证据的覆盖范围同时记录 offset/end_offset/total_chars，跨页不自动升级全文；版本绑定成功返回值，不二次读取磁盘替换版本。分页是新的只读 ToolCall，仍受原授权、调用/Prompt预算和取消约束，不是自动重试或后台执行恢复。
 
@@ -653,10 +715,40 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 - 外部内容、项目记忆等 P1 能力只有完成各自 DESIGN Scope 后才扩展消费接口；当前不得由 `ReferencePayload` 类型存在推断能力已开放。
 - 历史保留策略覆盖 200MB 软上限、软归档与用户删除单个历史会话。
 
+### 预览续行身份契约（§14.67修复）
+
+带初始内容的创建（含单独创建）统一等待原资源计划的真实保存屏障；预览ack只记录检查点，不启动第二AgentTurn。原裁决回合保持等待，接受不等于保存，保存后经原裁决入口重验并一次续行。初始内容卡的sessionId/turnId/anchorMessageId归属原助手消息，不能掉入未归属建议区。
+
+普通提案预览沿用已存在的检查点续片段协议：冻结原用户请求、provider/model、会话及工作区；新片段不插入role=user、不伪造用户输入、不复活旧终态。只有真实回执和新快照验证通过才提交，缺失原身份不得猜用当前全局模型；后端终态/取消/一次消费保护仍有效。
+
+历史列表增加只读`internal_continuation`来源投影，取自同workspace/session/turn的运行时turn_started.previewContinuationDiffId；不由前端历史缓存提供，不参与执行授权。旧记录缺失时按普通记录读取，不按正文猜测来源。内部片段沿用旧payload中的原请求快照以支持审计，但恢复UI不把它插入用户发言；实际助手回复仍从后端事件归约恢复，不恢复自动继续资格。
+
+### 运行结束取证与裁决结果回注（2026-10-25）
+
+- 供应商正常stop只表示流已结束，不证明回答语义完整。结束证据记录原停止原因、客户端/网关构建指纹、同口径可见原文长度/摘要及接收计数；元数据不承载授权或额外正文。旧网关缺构建/摘要时明确记为缺失，不伪造验证通过。
+- 工具响应携带同一归一化链路的argument_proofs（原调用身份、字节数、摘要），客户端记录并核对后再交既有协议/权限校验。摘要相同不代表JSON合法或调用已授权；不一致先拒绝整批，缺失明确记为null。该证据只能定位网关上游装配与客户端之间是否发生变化，不能仅凭摘要证明模型与上游装配谁有错。
+- 纯正文的明显未闭合结构（如孤立表头或未闭合代码围栏）只生成“回答可能未完整”的风险提示，保留正文和正常停止证据；不凭句末标点判失败、不新增强制结尾封套、不自动模型续写或工具重放。用户可通过既有输入明确要求继续；这不是后台恢复承诺。
+- DecisionRequest恢复除confirm/cancel外，必须从后端原身份关联的资源计划/执行回执及CreateDocumentBundle/PendingDiff事实注入结构化数据，区分资源执行、内容接受、文件保存和未读回复核。不得再次注入初始正文、把确认等同保存、扩大权限或把单项保存等同整项需求完成。真实partial/blocked判定仍保留。
+
+### 输出容量与失败恢复补充（2026-10-25）
+
+`/invoke/stream`的客户端请求显式携带`max_tokens=8192`，与完整请求预算的输出预留同源；dev网关将正整数原样传递至OpenAI兼容和Anthropic适配器，无字段时保持原调用者兼容，不静默吞掉已传参数。运营配置和模型上限不是执行授权。
+
+归一化`done`可增加`completion_observation`：`requestedMaxTokens`、白名单`usage`及`pendingToolArguments`（index、字节数、SHA256、JSON是否合法；不是可执行工具请求）。usage缺失为null，不假填0；保留原stop_reason及text_proof。length/max_tokens不得生成ToolCalls，客户端记录脱敏观察后仍进入原唯一失败出口；未知会话、权限、工具/保存状态不得由这些数值推导。
+
+失败正文与`payload.failure`分开保存，错误消息不得替代先前正文；旧错误缓存可从同turnId、单调seq、首终态之前的chunk只读恢复，重复或终态后事件不参与。恢复展示不恢复执行资格，不将错误诊断当作后续模型正文。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-25 | v1.49 | 显式max_tokens、容量/未完成参数观察及失败正文与诊断分别持久恢复；截断不执行半截批次。 |
+| 2026-10-25 | v1.48 | 结束原因/运行版本/正文摘要取证、结构风险提示与同身份裁决效果回注；不新增自动执行或权限。 |
+| 2026-10-24 | v1.47 | 空HTML冻结初始内容、字段级参数纠正、失败文本控制与本机分片审计完整性契约；不增加执行权。 |
+| 2026-10-24 | v1.46 | 预览续行原请求/模型/快照契约、单独创建保存屏障及运行时来源派生的内部片段历史投影；无虚构用户发言和新执行权。 |
+| 2026-10-24 | v1.45 | AG-WORKFLOW-COMPLETION-01：单控制工具批、Provider同源回注/预算、保存依赖、整组补偿与失败说明/唯一终态契约。 |
+| 2026-10-23 | v1.44 | 响应主控制固定、描述字段兼容与实质冲突区分；固定原因/位置诊断及累计纠错提示，不放宽授权。 |
+| 2026-10-23 | v1.43 | 动作交接阶段结果、回合冻结额度、工具冻结收尾及只读显式新回合续办契约；不提升业务完成或写入权限。 |
 | 2026-10-23 | v1.42 | AG-HISTORY-BUDGET-01：历史wire不变，按身份保留连续对话单元、有标记原文摘录和脱敏装配证据；不改变授权。 |
 | 2026-10-23 | v1.41 | AG-BOUNDED-READING-01：正文/编辑结构视图分离、容量与版本绑定分页、目录自适应及保守页证据；编辑和保存边界不变。 |
 | 2026-09-22 | v1.40 | P06：请求身份清理、单次在途提交、原会话回执及工作区变化拒绝继续；保留恢复边界。 |
@@ -701,3 +793,6 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 | 2026-08-08 | v1.32 | 对齐 agent-edit-1.0：ag_start_turn 增显式 runtime_profile 且 1.0 只允许 agent-edit；cancel 绑定后端 CancellationToken；基于 BR-AG-DATA-002/004/005 与 BR-AG-STATE-002 冻结 IntentResultV1/PromptDataEnvelopeV1/PromptPackageV1/CapabilityGrantV1 内部契约；终态首次锁定；新建文档统一 base=empty ChangeProposal，BuildMode 未接独立 Runtime 时拒绝 |
 | 2026-08-14 | v1.33 | AG-1.0-IMP-CLARIFICATION-01：AgTurnEvent 增 ClarificationRequired 非终态事件（BR-SYS-STATE-007）；AgentTurnStatus 增 clarifying；SM-AG-01 澄清语义同步（澄清不锁存终态/不发 Done，用户补充经新回合、澄清等待可取消）。 |
 | 2026-08-21 | v1.34 | 工作区资源操作基线重构：结构/删除工具统一为 plan_workspace_operation + DecisionRequest + execute_workspace_operation；禁止 Agent 直调低层 WS 文件命令或生成资源 DiffCard；新建使用 CreateDocumentBundle。 |
+| 2026-10-28 | v1.36 | 直接工具schema将`_binderTurn`标必填；新模型分页统一`cursor/next_cursor`，参数与控制封套分别有限纠错，历史分页参数保留执行兼容。 |
+| 2026-10-28 | v1.37 | 真实只读多工具回合复验后统一响应级控制：只读schema允许后续省略副本，合法只读副本只作观察；有副作用及旧冻结协议继续严格。已知文字定点检索块身份，非法游标仍拒绝。 |
+| 2026-10-27 | v1.35 | 新AgentTurn传输改为授权业务函数直接暴露；`_binderTurn`承载响应级语义，历史批次回合按冻结版本续行，不改变逐项授权与确认/保存边界。 |

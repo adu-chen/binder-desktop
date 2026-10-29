@@ -190,6 +190,10 @@ DecisionRequest 前置裁决——WS-OPERATION 链仅限 Agent 意图（2026-08-
 - 操作成功后由同一提交协调更新 DocRef、编辑器标签、活动文档、BDocx 清单与后续引用；历史引用保留发送时快照。
 - 外部修改发生在卡片生成与确认之间时，计划 expired，不能借旧确认覆盖或删除变化后的资源。
 
+### 5.1 组合操作的保存屏障（2026-10-24人类批准）
+
+绑定初始内容的计划（包括单独创建和组合操作），创建后统一返回awaiting_content而非completed。冻结内容的初始Diff经普通接受/保存链落盘前，非创建项不得执行，原AgentTurn保持裁决等待；确认卡必须说明这个等待。WS持久进度是执行游标，TaskPlan不是调度器。保存后仅在原确认、原身份、有效基线和未终结AgentTurn均成立时解除屏障；重复提交只查询既有回执。失败保留实际文件和可恢复快照，报告逐项补偿范围，不能把撤销创建等同整组撤销。此规则不授予自动接受、自动保存或后台重启执行能力。
+
 ## 6. CreateDocumentBundle
 
 初始内容必须在确认前生成并冻结，但确认前不创建文件、不显示可裁决 DiffCard：
@@ -301,6 +305,8 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
+| 2026-10-24 | v1.4 | 将已有真实保存屏障统一到含初始内容的单独创建；原确认/回合保持等待，资源存在不等于内容已保存。 |
+| 2026-10-24 | v1.3 | 组合初始内容真实保存屏障、保存后重验、旧组整组补偿及只清理空目录；保留历史条目和部分效果。 |
 | 2026-08-21 | v1.0 | 根据人类确认的八项决策建立 WorkspaceOperation/WorkspaceOperationPlan、前置裁决直接写盘、统一 WorkspaceTimeline、CreateDocumentBundle、fail-fast 补偿、dirty 阻断与 TaskRun 边界。 |
 | 2026-08-22 | v1.1 | WS-RESOURCE-WRITE-GUARD-01：WS-OPERATION 链推进 active（integration_test=deferred: G5）并收窄为 Agent 意图；新增 BR-WS-STATE-009（人工文件树删除/重命名安全底线：dirty 阻断、快照/时间轴可恢复、内容 Diff 失效）；REQ-MAP REQ-WS-008/010 → BR-WS-STATE-009。 |
 | 2026-09-03 | v1.2 | AG-ADAPTIVE-RUNTIME-DESIGN-01：资源操作执行协调归 AgentTurn 运行时；TaskRun 降为事件派生的可选观察投影，不再承担确认恢复、步骤终止或执行编排。 |

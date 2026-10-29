@@ -116,13 +116,17 @@ fn start_fact(conn: &Connection, identity: &ToolCallReceiptIdentityV1) -> Result
         let settlement = previous.iter().find(|item| {
             item.phase == CapabilityExecutionPhase::Settled && item.identity == fact.identity
         });
-        if settlement.is_none()
-            || settlement
-                .and_then(|item| item.receipt.as_ref())
-                .is_some_and(|receipt| {
+        let unresolved = match settlement {
+            None => true,
+            Some(item) => match item.receipt.as_ref() {
+                None => true,
+                Some(receipt) => {
                     receipt.effect_status == crate::types::ToolCallEffectStatus::Unknown
-                })
-        {
+                        && !legacy_proposal_precommit_failure(conn, item).map_err(db_error)?
+                }
+            },
+        };
+        if unresolved {
             return Err(IpcError::new(
                 "AG_EFFECT_PENDING",
                 "工作区存在未结算或效果未知的能力；请核对原执行事实，禁止再次写入",
@@ -149,6 +153,40 @@ fn start_fact(conn: &Connection, identity: &ToolCallReceiptIdentityV1) -> Result
             receipt: None,
         },
     )
+}
+
+/// Older builds classified every failed write adapter as an unknown effect. A propose_edit
+/// AG_TOOL_ARG is emitted before persist_proposal_batch, and that store commits its batch and
+/// pending diffs in one transaction. Require the absence of that exact call's batch as a second
+/// independent proof; never infer no effect for any other error or tool.
+fn legacy_proposal_precommit_failure(
+    conn: &Connection,
+    fact: &CapabilityExecutionFactV1,
+) -> rusqlite::Result<bool> {
+    let Some(receipt) = fact.receipt.as_ref() else {
+        return Ok(false);
+    };
+    if fact.identity.tool_name != "propose_edit"
+        || receipt.effect_status != crate::types::ToolCallEffectStatus::Unknown
+        || receipt
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str())
+            != Some("AG_TOOL_ARG")
+        || !receipt.references.is_empty()
+    {
+        return Ok(false);
+    }
+    let batch_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM proposal_batches WHERE workspace_id=?1 AND turn_id=?2 AND tool_call_id=?3)",
+        params![
+            fact.identity.workspace_id,
+            fact.identity.turn_id,
+            fact.identity.tool_call_id
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(!batch_exists)
 }
 
 pub(super) fn delete_settled_session_facts(
@@ -246,6 +284,10 @@ pub(super) fn record_owned_execution(
             receipt.effect_status = crate::types::ToolCallEffectStatus::ResourceExecuted;
             receipt.completion_status = crate::types::ToolCallCompletionStatus::Completed;
             receipt.next_action = crate::types::ToolCallNextAction::None;
+        } else if effect.final_status == crate::types::WorkspaceOperationStatus::AwaitingContent {
+            receipt.effect_status = crate::types::ToolCallEffectStatus::ResourceExecuted;
+            receipt.completion_status = crate::types::ToolCallCompletionStatus::Waiting;
+            receipt.next_action = crate::types::ToolCallNextAction::AwaitUser;
         }
     }
     let conn = state
@@ -275,6 +317,23 @@ pub(super) async fn execute<T: Send + 'static>(
     identity: ToolCallReceiptIdentityV1,
     cancelled: Arc<AtomicBool>,
     timeout: Duration,
+    operation: impl FnOnce(&AppState) -> Result<T, IpcError> + Send + 'static,
+    references: impl FnOnce(&T) -> Vec<ToolCallReceiptReferenceV1> + Send + 'static,
+) -> Result<T, IpcError> {
+    execute_with_effect_boundary(
+        state, identity, cancelled, timeout, None, operation, references,
+    )
+    .await
+}
+
+/// A proposal adapter may prove that failure happened before its only persistence boundary.
+/// All other adapters keep the conservative unknown-effect receipt.
+pub(super) async fn execute_with_effect_boundary<T: Send + 'static>(
+    state: AppState,
+    identity: ToolCallReceiptIdentityV1,
+    cancelled: Arc<AtomicBool>,
+    timeout: Duration,
+    effect_boundary: Option<Arc<AtomicBool>>,
     operation: impl FnOnce(&AppState) -> Result<T, IpcError> + Send + 'static,
     references: impl FnOnce(&T) -> Vec<ToolCallReceiptReferenceV1> + Send + 'static,
 ) -> Result<T, IpcError> {
@@ -323,7 +382,7 @@ pub(super) async fn execute<T: Send + 'static>(
                         ))
                     });
             let refs = result.as_ref().map(references).unwrap_or_default();
-            let receipt = super::tool_exec::tool_call_receipt(
+            let mut receipt = super::tool_exec::tool_call_receipt(
                 identity.clone(),
                 true,
                 result.is_ok(),
@@ -331,6 +390,15 @@ pub(super) async fn execute<T: Send + 'static>(
                 refs,
                 vec![],
             );
+            if result.is_err()
+                && identity.tool_name == "propose_edit"
+                && effect_boundary
+                    .as_ref()
+                    .is_some_and(|entered| !entered.load(Ordering::Acquire))
+            {
+                receipt.effect_status = crate::types::ToolCallEffectStatus::NotStarted;
+                receipt.next_action = crate::types::ToolCallNextAction::RespondBlocked;
+            }
             let conn = state
                 .db
                 .lock()
@@ -473,6 +541,180 @@ mod tests {
     }
 
     // covers: BR-AG-STATE-002
+    // covers: BR-AG-PERSIST-001
+    // covers: BR-DE-DATA-001
+    #[test]
+    fn proposal_parameter_failure_before_commit_is_not_an_unknown_effect() {
+        let (root, state) = state();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (_lease, cancelled, _, _, _) =
+            register_active_agent_turn(&state, "ws", "session", "turn", AgentTurnResumeKind::New)
+                .unwrap();
+        let read_ctx = crate::ag::blocks::AgentReadContext::new(&root.0, vec![]).unwrap();
+        let mut targets = crate::ag::target_set::ExplicitEditTargetSet::default();
+        targets.insert_authorized(
+            "notes.txt".into(),
+            crate::ag::target_set::SOURCE_EXPLICIT_REFERENCE,
+            None,
+        );
+        let error = tauri::async_runtime::block_on(crate::ag::edit_runtime::execute_proposal(
+            state.clone(),
+            app.handle().clone(),
+            serde_json::json!({"path":"notes.txt","operation":"replace_block"}),
+            read_ctx,
+            None,
+            targets,
+            identity(),
+            cancelled,
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, "AG_TOOL_ARG");
+        let conn = state.db.lock().unwrap();
+        let records = facts(&conn, "ws", Some(("session", "turn"))).unwrap();
+        assert_eq!(records.len(), 2);
+        let receipt = records
+            .iter()
+            .find(|fact| fact.phase == CapabilityExecutionPhase::Settled)
+            .and_then(|fact| fact.receipt.as_ref())
+            .unwrap();
+        assert_eq!(
+            receipt.effect_status,
+            crate::types::ToolCallEffectStatus::NotStarted
+        );
+        assert_eq!(receipt.failure.as_ref().unwrap().code, "AG_TOOL_ARG");
+        let batches: i64 = conn
+            .query_row("SELECT COUNT(*) FROM proposal_batches", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(batches, 0);
+        drop(conn);
+        add_turn(&state, "other", "new");
+        let mut next = identity();
+        next.session_id = "other".into();
+        next.turn_id = "new".into();
+        next.tool_call_id = "new-operation".into();
+        start_fact(&state.db.lock().unwrap(), &next).unwrap();
+    }
+
+    // covers: BR-AG-STATE-002
+    // covers: BR-AG-PERSIST-001
+    #[test]
+    fn legacy_proposal_argument_error_requires_no_batch_proof_before_new_effect() {
+        for batch_exists in [false, true] {
+            let (_root, state) = state();
+            let original = identity();
+            let receipt = super::super::tool_exec::tool_call_receipt(
+                original.clone(),
+                true,
+                false,
+                Some(&IpcError::new(
+                    "AG_TOOL_ARG",
+                    "invalid edit arguments",
+                    false,
+                    false,
+                )),
+                vec![],
+                vec![],
+            );
+            assert_eq!(
+                receipt.effect_status,
+                crate::types::ToolCallEffectStatus::Unknown
+            );
+            let conn = state.db.lock().unwrap();
+            persist_fact(
+                &conn,
+                &CapabilityExecutionFactV1 {
+                    identity: original.clone(),
+                    phase: CapabilityExecutionPhase::Started,
+                    receipt: None,
+                },
+            )
+            .unwrap();
+            persist_fact(
+                &conn,
+                &CapabilityExecutionFactV1 {
+                    identity: original.clone(),
+                    phase: CapabilityExecutionPhase::Settled,
+                    receipt: Some(receipt.clone()),
+                },
+            )
+            .unwrap();
+            if batch_exists {
+                conn.execute(
+                    "INSERT INTO proposal_batches (proposal_batch_id,workspace_id,turn_id,tool_call_id,grouping_version,created_at) VALUES ('old-batch','ws','turn','operation',1,0)",
+                    [],
+                )
+                .unwrap();
+            }
+            drop(conn);
+            add_turn(&state, "other", "new");
+            let mut next = original;
+            next.session_id = "other".into();
+            next.turn_id = "new".into();
+            next.tool_call_id = "new-operation".into();
+            let result = start_fact(&state.db.lock().unwrap(), &next);
+            if batch_exists {
+                assert_eq!(result.unwrap_err().code, "AG_EFFECT_PENDING");
+            } else {
+                result.unwrap();
+                let records =
+                    facts(&state.db.lock().unwrap(), "ws", Some(("session", "turn"))).unwrap();
+                let settled = records
+                    .iter()
+                    .find(|fact| fact.phase == CapabilityExecutionPhase::Settled)
+                    .unwrap();
+                assert_eq!(
+                    settled.receipt.as_ref().unwrap().effect_status,
+                    crate::types::ToolCallEffectStatus::Unknown,
+                    "historical receipt must remain unchanged"
+                );
+            }
+        }
+    }
+
+    // covers: BR-AG-STATE-002
+    // covers: BR-AG-PERSIST-001
+    #[test]
+    fn failure_after_proposal_commit_boundary_remains_unknown() {
+        let (_root, state) = state();
+        let (_lease, cancelled, _, _, _) =
+            register_active_agent_turn(&state, "ws", "session", "turn", AgentTurnResumeKind::New)
+                .unwrap();
+        let boundary = Arc::new(AtomicBool::new(false));
+        let worker_boundary = boundary.clone();
+        let result = tauri::async_runtime::block_on(execute_with_effect_boundary::<()>(
+            state.clone(),
+            identity(),
+            cancelled,
+            Duration::from_secs(1),
+            Some(boundary),
+            move |_| {
+                worker_boundary.store(true, Ordering::Release);
+                Err(IpcError::new(
+                    "DE_DB_ERROR",
+                    "commit outcome unavailable",
+                    true,
+                    false,
+                ))
+            },
+            |_| vec![],
+        ));
+        assert_eq!(result.unwrap_err().code, "DE_DB_ERROR");
+        let records = facts(&state.db.lock().unwrap(), "ws", Some(("session", "turn"))).unwrap();
+        let settled = records
+            .iter()
+            .find(|fact| fact.phase == CapabilityExecutionPhase::Settled)
+            .unwrap();
+        assert_eq!(
+            settled.receipt.as_ref().unwrap().effect_status,
+            crate::types::ToolCallEffectStatus::Unknown
+        );
+    }
+
+    // covers: BR-AG-STATE-002
     // covers: BR-SYS-STATE-007
     // covers: BR-AG-PERSIST-001
     #[test]
@@ -574,7 +816,23 @@ mod tests {
                 0,
             )
             .unwrap();
-            assert_eq!(events_before.len(), 1);
+            assert_eq!(events_before.len(), if cancel { 1 } else { 2 });
+            assert_eq!(
+                events_before
+                    .iter()
+                    .filter(|e| matches!(
+                        e.event,
+                        crate::ipc::AgTurnEventPayload::Done { .. }
+                            | crate::ipc::AgTurnEventPayload::Error { .. }
+                    ))
+                    .count(),
+                1
+            );
+            if !cancel {
+                assert!(
+                    matches!(&events_before[0].event, crate::ipc::AgTurnEventPayload::Chunk {text} if text.contains("已停止启动后续操作") && text.contains("1 项执行未结算"))
+                );
+            }
             drop(lease);
             assert_eq!(
                 facts(&state.db.lock().unwrap(), "ws", Some(("session", "turn")))
@@ -855,7 +1113,18 @@ mod tests {
                 0,
             )
             .unwrap();
-            assert_eq!(events.len(), 1);
+            assert_eq!(events.len(), if cancel { 1 } else { 2 });
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| matches!(
+                        e.event,
+                        crate::ipc::AgTurnEventPayload::Done { .. }
+                            | crate::ipc::AgTurnEventPayload::Error { .. }
+                    ))
+                    .count(),
+                1
+            );
             release_tx.send(()).unwrap();
             let deadline = Instant::now() + Duration::from_secs(3);
             loop {

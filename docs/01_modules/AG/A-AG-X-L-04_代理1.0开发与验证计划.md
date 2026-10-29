@@ -1694,10 +1694,486 @@ Task Runtime Report：task_type=CODE_CHANGE；governance_phase=VALIDATION；fina
 
 unresolved_items：未新增真实Provider请求，不能用确定性装配通过承诺随机模型理解或所有工具调用成功；未知较小上下文BYOK需要模型元数据/精确token校准，48000只是开发估算政策；历史中段被摘录的语义细节不保证召回，同回合累计必需内容仍可能超限；超过五页顺序读取可能受六次模型额度阻断，本包不扩展执行语义。最后一轮窗口重验因审批服务额度不可用未执行，此为验证环境限制，非已发现功能失败，不经其他通道规避。父AG-CLOSURE-REPAIR-01保持BLOCKED，不提升G5、专业编辑接受/保存或发布状态；未修改用户文档/数据库，未新增依赖或物理测试文件。
 
+### §14.63 AG-ACTION-HANDOFF-BUDGET-01（2026-10-23）
+
+修改前Issue Trace：① t-1792809078356-1四次工具成功、四次Gate通过、一次协议纠正成功，最终final仍声明structure_plan但没有计划/正式等待，错误AG_WORKSPACE_PLAN_TOOL_REQUIRED；② run_agent_turn→run_turn_tool_loop→响应协议/产物检查→TaskRun结算；③ BR-AG-STATE-001/002、BR-AG-DATA-002/003/004/005、BR-AG-PERSIST-001、BR-AG-OBS-001、BR-AG-UI-001及X-SEQ-001；④ AG-TURN/AG-TOOL；⑤ model_output控制、tool_registry能力策略、模型响应；⑥ turn_tool_loop/turn_events与前端状态消费者；⑦ 无新增空rules块，技术配置类型复用既有规则；⑧ 模型阶段说明不构成授权或真实执行事实，历史不提供新鲜度证明；⑨ 预算跨等待累计、取消及未知效果守卫保留；⑩ 风险为把报告当执行、无限纠正、旧授权重放、正文先释放再失败、工具归零阻止解释；⑪ 固定真实核心重放缺计划→计划交接/澄清/显式阻断，真实临时多文件读取、低额度收尾/批次上限/取消/Gate失败/防重放及完整关联回归，窗口证据另列。
+
+用户已批准上一轮完整方案。Scope见active_scope的独立工作包，父G5保持BLOCKED。先改契约：默认模型12/工具16/纠错2，预留2模型收尾；配置从可信入口冻结到原回合事件，不由模型传入；既有六次场景用明确低额度策略继续验证。资源final缺产物前置纠正；可显式report_only/blocked/no_op/partial但必须有非空原因且不当作执行成功或正式等待。已有非只读请求不通过纠正恢复工具。额度收尾不重放操作，模型持续非法时只输出可信最小事实；普通继续入口新身份、原事实核对与新授权，不实现无限或跨重启自动执行。
+
+实施结果：资源final缺计划在正文释放前进入共享有界纠错，真实确认卡与阶段报告分开；同回合成功计划回执在确认续行保留，不重复强制生成计划。可选completion只表达阶段，不产生权限/等待/效果证据。执行额度由单处策略定义，冻结事件+实际调用事件恢复，工具归零或进入预留区后清空native工具并收尾；收尾模型持续违规时输出可信最小未完成说明，Gate/网络/取消不伪装成该路径。前端显示阶段原因和显式续办，后者只允许原回合证据完整且只读的新身份请求；有副作用可能时先核对效果。
+
+Task Runtime Report（READY，仅本工作包；不提升父G5）：
+
+- task_type：CODE_CHANGE；confirmation=YES；父AG-CLOSURE-REPAIR-01/G5仍BLOCKED；无新增规则/术语/依赖、无数据库迁移、无用户文档改动、无新增付费Provider请求。
+- changed_files：22个，实际git diff清单作为test:plan/test:related输入：ag/{model_output,prompts,tool_registry,turn_events,turn_prompt,turn_runtime,turn_tool_loop,verification}.rs；前端agService/agRuntime.test/agStore/MessageList/AgentUI.test/AgentVerificationPanel；测试inventory精确计数断言；接口、技术、状态机、开发计划、验证卡；active_scope；脚本生成ADUS。
+- 自动化验证：新增6个Rust测试（阶段协议、冻结策略恢复、缺计划纠正/阶段分流、9次真实读取、软额度/非法收尾、同批工具额度与Gate取消保真），既有集成测试覆盖新增三个开发入口；新增2个前端测试并增强历史终态恢复断言。最终精确22文件test:plan/test:related均exit0：前端654/654、tsc、Rust480/480、core_chain5/5、sm_broadcast4/4、doc-tests、governance:audit；没有缩减命令。test:governance21/21、build、rustfmt和diff检查已通过；构建保留既有大chunk/dead_code警告，不为绿灯修改范围外模块。
+- 系统/窗口验证：AI经Accessibility在真实Binder最新开发窗口执行28项隔离批量验收，28/28终态匹配；进一步从真实窗口回执核验既有8项及新增3项关键契约，11/11；长历史窗口装配6请求标记符合。新增action-handoff-plan为真实临时TXT计划→自动确认→原回合续行，3次模型、1计划、1裁决、无重复计划；不是用户手点DecisionBar布局或真实Provider验收。execution-budget-wrap为2次模型、1只读成功、后续native工具0、budget_exhausted；阶段报告为2次模型、0工具、1缺计划纠错且无假等待正文。
+- 首次失败与处理：受限Rust端口绑定16项PermissionDenied未计通过；授权本机端口后14/16通过，2项等待路径暴露旧测试夹具“必须终态释放”假设，补为等待真实事件+唯一保留身份及零终态断言，终态仍要求释放。完整首轮477/480：2项历史装配夹具缺事件表，改真实迁移初始化；1项把后端draft错当frontend clarifying，改核对draft+真实澄清事件。没有删除/弱化测试或mock核心；工具回注保持连续顺序。
+- unresolved_items：本包不承诺模型永远理解正确、Provider永不超时或大文档无限处理；Prompt与单结果大小/能力期限仍有独立上限。未知效果的任意任务断点重放不支持；续办入口对此拒绝并要求核对，不自动执行。纯分析/no_op仍是模型阶段判断，不是机器证明业务已完成。父G5、专业编辑/接受/保存仍独立未提升。
+- 取证位置：本机临时日志`/private/tmp/binder-action-{plan-final,related-final,testgov,build,audit,window-evidence}.log`；临时日志非项目权威资产，长期结论以本节与active_scope摘要为准。
+- phase_gate=passed（既有G1～G4修复授权，非G5晋级）；mapping_chain=complete（REQ-AG-001/015→上述既有AG规则→技术/状态机/接口契约→真实运行与前端→核心/集成/组件断言）；test_impact=22精确文件、AG等10直接模块→16受影响模块，frontend-full+rust-full+audit；stop_conditions=无当前代码正确性阻断；recovery=首次夹具/环境失败已定位并完整重跑，不删除守卫/测试、不mock核心。
+
+### §14.64 AG-TOOL-CONTROL-COMPAT-01（2026-10-23）
+
+修改前Issue Trace：① t-1792812324700-1四次模型响应：三工具批次因goal/route描述差异整批拒绝；一次INVALID；一次list_docs成功；再一次INVALID触发累计3>2。实际执行仅1工具，未读HTML/TXT正文。② run_agent_turn→run_turn_tool_loop→model_output::parse_tool_batch→纠错/事件→ToolResult/终态。③ BR-AG-STATE-001/002、BR-AG-DATA-004/005、BR-AG-OBS-001、BR-SYS-STATE-007、X-SEQ-001。④ AG-TURN/AG-TOOL。⑤ model_output GUARD-AG-AG-TURN-047、tool_registry及模型输出；⑥ turn_tool_loop RB-AG-AG-TOOL-018、turn_events EFFECT-AG-AG-TURN-044及IPC诊断/验证入口。⑦ 没有新增空rules块；技术错误类型不作为业务TERM。⑧ 控制不是授权、领域参数必须经当前grant校验、原控制源不可被后续描述覆盖，假设保持。⑨ 全批预检后执行、等待/成功不重置累计纠错、已非只读请求不得重放，假设保持。⑩ 兼容范围过宽会丢失目标/动作矛盾；日志泄露原值；仅调大次数掩盖问题；把历史INVALID缺证据当已溯源。⑪ 三工具描述差异真实执行、硬字段矛盾/畸形副本全批不执行、拒绝→成功→拒绝的持久计数、固定脱敏原因与真实窗口既有入口及完整关联回归。
+
+Phase Gate：CODE_CHANGE，用户已按分析授权修复；同会话原Scope覆盖目标文件，父G5保持BLOCKED。先明确契约：一份主控制（文本优先，否则首个工具携带者），后续副本独立合法且仅goal/route.summary/route.steps可不同；固定保留主控制、不拼接步骤、不改变能力授权，记录描述字段名而非原值。其他控制差异仍整批拒绝。新增typed拒绝原因/位置/来源/序号，不为历史缺证据编造根因。原累计上限保留但改正“连续失败”措辞与诊断分类。先测试再签收，不新增真实模型请求。
+
+实现：只归一化三个允许描述字段后进行整对象比较，其余字段（包括未来新增字段）默认严格；描述观察不替换主控制、领域参数或实际grant。所有副本先独立结构和组合校验，损坏不能被合法主控制掩盖。现有公共parse/take接口保持兼容，生产循环使用带诊断版本；诊断固定reasonCode/fieldPath/controlSource/toolIndex，serde无字段路径时明确$control。拒绝及描述观察进入同回合内部事件和脱敏日志，现有隔离入口导出安全protocolTrace/descriptionTrace。纠错上限仍2次、回合累计不清零；错误提示明确累计，AG_MODEL_CORRECTION_LIMIT归为model_protocol，rootCauseStatus不虚构为已确认。
+
+Task Runtime Report（READY，仅本包；父G5仍BLOCKED）：task_type=CODE_CHANGE；scope=explicit/confirmed；phase_gate=passed（沿用G1～G4修复授权，非G5晋级）；mapping_chain=complete（REQ-AG-001/015→上述既有AG规则→接口控制契约→模型解析/循环/事件/IPC→单元与真实生产入口断言）。changed_files=本包13文件：model_output、turn_tool_loop、turn_events、turn_runtime、verification、ipc/mod.rs、AgentVerificationPanel/AgentUI.test、AG接口/本计划/验证卡、active_scope及脚本生成ADUS；test_impact输入全部23个实际未提交变更文件，包含前工作包遗留修改，不覆盖或丢弃；10个直接模块/16个受影响模块、frontend-full+rust-full+audit。
+
+验证设计与已见证据：新增5个Rust测试（实质冲突矩阵、畸形副本/隐私、日志投影、三工具真实执行、跨成功累计纠错）；增强既有控制共享测试，原“描述不同必须冲突”预期依新授权契约改为主控制保持/描述观察断言，同时新增实质差异负向矩阵，不删除安全断言。协议单元12/12；最终整对象严格比较版本的实际23文件test:plan/test:related均exit0：前端654/654、tsc、Rust485/485、core_chain5/5、sm_broadcast4/4、doc-tests、governance:audit；test:governance21/21、build、rustfmt及diff检查通过，既有chunk/dead_code警告未顺手改动。现有开发入口新增2场景，不新增测试文件/依赖/Provider费用/用户文档变更。无首次代码或断言失败；本机测试端口和真实窗口通过已授权环境执行，不用沙箱拒绝制造功能结论。
+
+系统/窗口证据：AI经Accessibility在最终已重编译的真实Binder窗口运行现有隔离入口，30/30终态匹配；逐项深核验既有11项与新增2项契约13/13，长历史6请求标记符合。tool-description-compatible为3工具真实成功、2模型、0拒绝、2份不含原值的描述观察且主来源不变；protocol-cumulative为4模型、1成功、拒绝计数1/2/3及固定原因/来源，最终分类model_protocol。热编译切换时一次读取旧PID返回window_unavailable，选择最终进程后重新完整运行，不把失效窗口算产品失败或通过。stop_conditions=无当前正确性阻断；recovery=无需放宽权限/额度/断言，无自动重放写操作。
+
+unresolved_items：旧回合第2/4次INVALID未保存具体校验原因，不能回溯宣称已知具体坏字段；本包修复首批三描述差异误拒绝，并使后续INVALID可分类定位。不承诺供应商永不生成非法控制；实质矛盾、畸形结构、真实权限/上下文/网络错误仍可明确失败，不盲目提高上限。未新增真实Provider抽查，不把固定传输当自主语义成功率；父G5与专业编辑/接受/保存未提升。临时取证日志为`/private/tmp/binder-control-{related-final,unit,testgov,build,audit,window-evidence-final}.log`，长期摘要留在本节与active_scope。
+
+### §14.65 AG-WORKFLOW-COMPLETION-01（2026-10-24）
+
+本包目标：授权范围内复合请求→真实读取→前置确认→资源/初始内容→异常补偿→结果回复→唯一终态。任务失败不等于交互失联；不保证模型永远合约，不提升父G5。用户在完整F1–F7方案后要求“完成修复”，覆盖AG与WS/DE/ED必要衔接，不改用户工作区。
+
+修改前Issue Trace（十一项）：
+1. 两个真实AgentTurn首批因响应控制副本的类型/候选/上下文/确认差异被拒；纠正后正常。方案乙确认后资源两项成功，初始Diff检查点失败；仅删除新空文件，旧删除未恢复；TaskRun failed而AgentTurn draft。
+2. startTurn→run_turn_tool_loop→model_output；DecisionBar→resolveDecisionAndContinue→task_runtime::route_resolve_decision→WS execute→project_create_document_bundle→task::create_preview_checkpoint。
+3. BR-AG-STATE-001/002、BR-AG-DATA-004/005、BR-AG-PERSIST-001、BR-AG-OBS-001、BR-SYS-STATE-007/008、BR-WS-STATE-003、BR-WS-DATA-003、BR-WS-OBS-002、BR-WS-PERSIST-003、X-SEQ-001、X-FORBID-004。
+4. AG-TURN→AG-TOOL→WS-OPERATION→DE-DIFF/ED-EDIT→WS-SAVE；失败回到AG-TURN结果收尾。
+5. 模型控制GUARD-AG-AG-TURN-047、WS计划EFFECT-WS-WS-OPERATION-007、执行EFFECT-WS-WS-OPERATION-008、确认task_runtime。
+6. task::create_preview_checkpoint EFFECT-AG-AG-TURN-032、workspace/routes投影/保存、agService确认接线、turn_events EFFECT-AG-AG-TURN-044、DecisionBar/MessageList。
+7. 本路径无新增rules:[]；新增协议/结果辅助结构为技术契约，不引入游离业务TERM；沿用已注册AgentTurn/ToolCall/WorkspaceOperation。
+8. TaskRun/TaskPlan为可重建投影而非执行权限；内容预览、接受和保存独立；不得用waiting宽放所有检查点。路径未另有lifecycle_assumption/document_snapshot字段。
+9. 唯一终态、持久累计额度、Gate、路径/版本/身份和非只读防重放保持；确认只授权冻结资源计划，收尾禁止新副作用；前端异常须回到原身份。
+10. 重复控制承载诱发误拒绝；资源完成不等于初始内容可用；局部补偿误当全组回滚；包装错误隐藏原因；错误后永久draft；组合保存可能触发无授权删除，必须显式冻结依赖并重验。
+11. 真实路由和临时文件复现waiting检查点；创建+删除失败/部分补偿/重复裁决/基线漂移；协议多工具批次与非法反例；错误收尾/取消/超时/重启归属；精确changed_files test:plan/test:related、审计、build和实际窗口。模型固定传输不替代真实解析/WS/事务。
+
+实施顺序：P0日志/代码/只读DB与磁盘取证→P1契约→P2确认/组合安全→P3结果收尾→P4唯一批次协议→P5全链验证。设计增量源自人类批准的新需求，旧失败/终态记录不反写；交付以以下Runtime Report为准。
+
+#### 实现与复核结论
+
+| 问题 | 已核实的根因/责任边界 | 修复 |
+|---|---|---|
+| 首批工具多次受阻 | 同一响应在多个业务函数参数重复携带控制，模型对类型/候选/上下文/确认的不同描述形成真实协议冲突；不是文件读取能力没权限 | 新回合只声明一个binder_tool_batch，单份control；现有注册表生成业务联合schema，逐项仍走原grant/参数/路径/预算/取消守卫；旧副本兼容只供旧回合，不继续扩张等价字段 |
+| 确认后初始Diff失败 | 确认先把TaskRun投影设Waiting，创建checkpoint却只认Active/Executing；投影在模型续行前发生 | 以原draft回合、已confirm请求、冻结plan/operation、bundle、pending diff及ED当前版本/解码正文验证精确桥接，不放宽一般Waiting任务 |
+| 新文件空、旧文件先删 | 资源两项completed先于初始内容投影/保存；资源创建与可用内容没有依赖屏障 | 有初始内容且含非创建项时进入AwaitingContent；确认/预览/接受均不解锁；真实保存后单次领取，同源保存基线和原源对象重验，只执行未执行项；保存失败保留等待 |
+| 只删新文件被误称全组回滚 | 投影失败补偿只覆盖CreateDocumentBundle，忽略同组删除回执/快照 | 整组先预检再逆向恢复实际已完成同胞；逐项journal，最后清新目标和空目录；外部基线变化不覆盖，缓存/历史明确PartialFailed；原completed历史不可改 |
+| 后处理失败后TaskRun failed、AgentTurn draft | 领域和前端投影异常不回到原AgentTurn终态路径 | operationFailed从原AwaitingDecision收束；领域事实、TaskRun投影、确定性核心结果说明、唯一error按原身份持久化；无Channel通过afterSeq投影。拒绝初始内容取消原等待 |
+| 交互只显示异常或无法续办 | 后端错误与前端消息收尾/已保存回调未接通 | 原assistant接收持久说明，明确失败/等待/取消；保存等待显示对象和显式核对按钮；异步切会话仍绑定原session，终态清入口；不把接受或工具成功说成已保存 |
+
+F1沿用IntentResult、候选route和completion.reason表达读取/分析、待授权建议及已要求恢复的不同阶段；没有以关键词解析另造一套“真实意图”，也没有把模型列清单当执行凭证。F2–F7分别落在唯一批次传输、精确检查点、保存依赖/整组补偿、核心结果交付、前端原身份及冻结版本/防重放。阶段声明仍不是完整业务已完成的证据。
+
+安全复核：默认模型12/工具16/纠错2/收尾预留2不变；无新增依赖；未关闭Gate、路径、版本或测试；新协议仅改变控制承载，不替换专业执行器。取消不启动解释模型；在途能力结果仍独立结算，失败说明明确未结算/未知数量，不宣称“取消=无效果”。保存等待只支持一份绑定初始内容对应一个创建文档；多独立内容应分计划，不把同一载荷默默绑定多个文件。
+
+#### Task Runtime Report（最终验证完成）
+
+- task_type: CODE_CHANGE；governance_phase: VALIDATION；final_state: READY（仅本工作包）。
+- scope: 独立AG-WORKFLOW-COMPLETION-01；39个实际dirty文件（含保留的既有改动）见active_scope及精确test:plan；必要直接消费者context/capability_runtime/DE拒绝链、SYS跨模块总图及lib调度接线已注明理由。父AG-CLOSURE-REPAIR-01/G5保持BLOCKED。
+- issue_trace: 本节修改前十一项；scope.mode=explicit、status=confirmed；phase_gate=passed（人类批准F1–F7及完整修复授权，既有G1–G4承接，非G5晋级）。mapping_chain=complete：REQ-AG-001/015→本节列明AG/SYS/WS规则→AG-TURN/AG-TOOL/WS-OPERATION/DE-DIFF/WS-SAVE→既有@GOV边界→真实核心、适配与窗口分层断言。
+- changed_files: 修改active_scope、脚本生成ADUS、AG接口/状态机/技术/计划、SYS总图、WS技术/状态机、VAL卡、既有测试计数脚本；Rust ag/{capability_runtime,context,model_output,prompts,task,task_runtime,tool_registry,turn,turn_control,turn_events,turn_prompt,turn_runtime,turn_tool_loop,verification}.rs、de/routes.rs、ipc/mod.rs、lib.rs、types/mod.rs、workspace/{operation,routes}.rs；前端ag/{AgentUI.test,AgentVerificationPanel,DecisionBar,MessageList}.tsx、services/{agRuntime.test,agService,deService}.ts、store/agStore.ts。无新建/删除文件；保留同会话既有改动。
+- test_impact: 最终实际39文件精确test:plan通过；直接归属AG/CBT/CORE/DE/ED/ENT/PCG/REF/SYS/WS，扩展ACCT/AG/AST/CBT/CORE/DE/DOC/ED/ENT/KB/PCG/PRV/REF/SYS/TPL/WS；选择frontend-full、TypeScript、rust-full及audit，未缩减命令。最终源代码（含最后非递归目录补偿守卫）test:related exit0：前端657/657、TypeScript、Rust lib489/489、core_chain5/5、sm_broadcast4/4、doc-tests、governance:audit全部通过。
+- test:governance 21/21，inventory审计passed；generate 112物理资产/1135动态用例。新增3项前端及4项Rust测试，沿用原文件；精确AG前端断言160=53+86+21，没有放宽文件预算或数量检查。build、定向前端139/139及格式/空白检查已通过。
+- 真实窗口：最终源代码冻结后，AI通过macOS Accessibility操作Binder进程22142的已有隔离入口，31/31终态匹配、深层契约14/14、长历史6请求检查通过；10个error回合均有核心说明先于error且该turn仅一终态。此前两轮31/31及14/14亦通过，但不代替最终冻结版本证据；中途热重编译造成旧PID/空树/零回执的观察不计通过。新批次真实两个只读工具成功、两次固定模型请求、一个Provider聚合回注。只固定传输与临时数据，不冒充真实Provider自主行为或专业编辑器接受/保存验收。
+- 全资源工作流自动化8分支：成功、投影事务故障、源基线变化、执行取消、初始Diff拒绝、重启、保存失败后显式读基线再试、客户端中途切workspace后的原身份错误收束；实际生产确认/投影/ack/接受/保存/依赖执行路由，不mock核心。旧组合3分支：恢复删除快照、外部冲突保留现场、创建目录仅空目录补偿；旧计划终态及历史均不反写，最新组合回执独立。前端服务测试覆盖切会话归属、保存前零模型续行、无关保存无效、重复保存不重放及拒绝/后处理失败清等待。
+- 精简与安全结果：同一真实测试grant的native schema为7071字符，旧逐工具封套schema为13752字符，减少约49%；发送与预算使用同一消息投影。wrapper仅是传输形式，不是新增CapabilityGrant权限。现有通用目录补偿也改为空目录删除；增强既有断言验证外部文件存在时拒绝补偿，不递归删除，移除测试夹具后空目录才可补偿。
+- 语义审计：对本包涉及的候选边界与原规则原文复核，AgentTurn/ToolCall/IntentResult/CapabilityGrant/TurnEvent及WorkspaceOperationPlan/DecisionRequest/LogicalState/DiskState实体一致；结果交付不更改唯一终态、TaskRun不是授权、确认不等于内容保存、领域回执才是资源效果证据。保存屏障等待的是绑定初始内容，不引入资源Diff或第二次资源确认。未发现本包新增术语漂移；23项既有TERM_ORPHAN告警保留，不顺手修改注册表。
+- 首次失败完整保留：sandbox本机端口/LibreOffice限制；新schema曾被旧“只查顶层工具名”的manifest检查拒绝，已接通schema内业务名且保留fresh grant；更小schema使旧超限夹具不再超限，按实际输入上限构造超限而保留零请求断言；Option返回值误用、bundle测试初始状态命名、ES目标不支持at、Node测试无window及新测试mock未登记导出已修正。旧事件数量断言改为“说明+唯一error”，保留取消唯一done和迟到事件不可改写全部断言；无删除/忽略测试。
+- stop_conditions: 本工作包无未解除项；父G5原BLOCKED独立保留。recovery: 上述局部失败均定位后原精确选择全量重跑，未跳hook/弱化断言/扩大额度/自动重放写操作。证据日志：`/private/tmp/binder-workflow-testplan-final39.log`、`/private/tmp/binder-workflow-release-validation.log`、`/private/tmp/binder-workflow-testgov-final.log`、`/private/tmp/binder-workflow-build-final.log`、`/private/tmp/binder-workflow-frozen-window-evidence.log`（本机临时日志，不是用户文档或发布验收资产）。报告/状态最终回填后另行generate和只读audit，不将文档回填伪称再次运行生产回归。
+
+unresolved_items / 交付边界：
+1. 本轮未新增真实Provider付费请求；旧最多8次额度不复用，额外最多6次合成抽查仍待明确授权。不承诺供应商永远合法、网络永不超时或模型必然完整履行复合需求；本包保证已验证边界内安全受阻与可解释收尾，不把业务失败改成功。
+2. DOCX/BDocx复杂初始化、真实用户文档的编辑/接受/保存及父G5不在本包签收；真实窗口的资源保存按钮布局和全部专业格式不由固定传输验收覆盖。核心生产路由已用真实TXT磁盘读写验证。
+3. 历史事故现场与已删旧文件未在本轮自动恢复；旧删除快照仍保留，恢复真实用户文件须另行确认，不能以代码修复伪称历史数据已复原。
+4. 核心失败交付依赖持久库可写及客户端可补流；进程/数据库本身不可用时不承诺消息必达，重启不自动恢复旧执行权限。显示完整失败说明也不代表业务目标完成。
+
+### §14.66 单批次主链纠错完整性复核与修复（2026-10-24）
+
+用户最新实际AgentTurn `t-1792836392211-1`：第1次provider调用list_docs成功；第2/3次均在NativeBatch反序列化阶段拒绝（batch_schema_invalid/$batch、rejected/blocked/not_started）；第4次工具schema由23987字符变为[]，最终done(blocked)。未发生正文读取、预算超限、专业保存或网关超时。上一节固定合法批次验证不足以签收真实协议纠错链，本迭代重开同一工作包，不新建并行实现。
+
+修改前Issue Trace（十一项）：
+1. 表象为两次binder_tool_batch受阻后任务结束；真实拒绝原因尚不能细分到字段。
+2. 原入口run_agent_turn→run_turn_tool_loop→expand_native_batch→parse_tool_batch_detailed→原逐工具执行器→回注→prepare_turn_prompt。
+3. BR-AG-STATE-001/002、BR-AG-DATA-004/005、BR-AG-OBS-001、BR-SYS-STATE-007。
+4. AG-TURN/AG-TOOL，同一回合及冻结协议，不新增链路。
+5. model_output的schema/解析及ControlProtocolRejection生产者；执行器生成真实ToolCallReceiptV1。
+6. turn_tool_loop的失败回注、has_non_read_calls及correction_final_only；turn_events的脱敏诊断；verification既有入口。
+7. 沿用既有@GOV和TERM；不新增rules:[]、静态规则或业务概念。
+8. 包装器不是业务能力；原回合内部结构化执行回执是执行边界事实，不以模型正文或工具名推断已产生效果。
+9. 未解析批次绝不执行；真实副作用、在途/未知效果、缺失或冲突回执仍保护；纠错仅重进原解析/授权/执行链，不恢复旧权限。
+10. 已证实两处系统缺陷：新批次失败回注仍提示旧_binderTurn；被拒包装器按未知非只读名称触发final-only清空工具。另所有serde错误被抹为$batch，历史具体坏字段无法复原。
+11. 验证合法→畸形→畸形→合法同链恢复、实际同身份拒绝证明、缺失/冲突/未知效果保护、持续畸形累计上限、字段诊断脱敏及原请求/聚合回注身份；最终实际changed_files选择全量回归和既有窗口入口。
+
+Scope为同一AG-WORKFLOW-COMPLETION-01已授权文件的集中迭代；启动时PATCHING，最终结论见下方Runtime Report。保持原额度、Gate、取消、保存、路径/版本守卫，不加并行或降级执行路径。没有真实Provider新抽查授权，不外发用户数据。
+
+实现：
+- 原expand_native_batch仍是批次接受入口，typed反序列化及原语义检查不放宽；失败后只做诊断观察，区分JSON语法/未完整、缺字段、未知字段、类型/枚举、重复字段。路径只由schema固定字段生成，数组为[]，未知字段报父对象，不输出坏值或未知键名；已被typed控制接受的可选字段也被诊断识别，不能误归因为空findings。
+- 原失败回注按已冻结传输说明纠正方式；native仅要求control+calls，不再提示旧_binderTurn提交。现有legacy冻结回合不被迁移，不新增协议回退、宽松解析、第二执行器或额外权限。
+- 原has_non_read_calls继续保护非只读请求，但读取同一continuation内唯一完整ToolCallReceiptV1；只有同workspace/session/turn/toolCallId/toolName、rejected/blocked/not_started、respond_blocked、有failure且无对象引用/证据时，才证明该请求未跨执行边界。无回执、重复/冲突回执、错身份、已执行/等待/未知效果和任何其他非只读请求均不解除防重放。安全判断不以wrapper名称放行，也不消费模型声称的无效果。
+- 仍按原共享累计纠错上限停止；合法纠正重新进入原批次解析、逐工具fresh grant、参数/路径/版本校验、实际执行、独立证据及Provider聚合回注。没有增加额度或成功后清零。
+- 加深既有native-tool-batch隔离场景，而非新增调试入口：先成功列目录→缺calls拒绝→坏calls元素拒绝→原链双只读成功→final；5次模型、3个成功业务工具、2个not_started拒绝。单元反例验证第三次拒绝触顶；已有副作用/未知效果不因包装器或后续拒绝而重放。
+
+#### Task Runtime Report（本迭代完成）
+
+- task_type=CODE_CHANGE；governance_phase=VALIDATION；final_state=READY（仅同一工作包内集中修复，不提升父G5）。issue_trace=本节；scope.mode=explicit/status=confirmed，人类“集中链路修复”授权及既有allowed_files承接；phase_gate=passed，既有需求/设计/计划与本节修改前Trace齐备。mapping_chain=complete：REQ-AG-001/015→上列AG/SYS规则→AG-TURN/AG-TOOL原@GOV边界→生产核心与回执反例；没有新增RULE/CHAIN/TERM或执行路径。
+- changed_files：本迭代直接修改model_output.rs、turn_tool_loop.rs、turn_events.rs、turn_runtime.rs、verification.rs及AG接口/计划、VAL卡、active_scope，ADUS由脚本生成；原同会话其他改动保留。最终实际dirty39文件以`/private/tmp/binder-focused-chain-plan.log`的完整输入为准。test_impact直接AG/CBT/CORE/DE/ED/ENT/PCG/REF/SYS/WS、扩展16模块，frontend-full/tsc/rust-full/audit；未缩减选择器。
+- validation：Agent专项253/253通过；最终完整39文件test:plan/test:related均exit0，前端657/657、TypeScript、Rust lib491/491、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit全部通过。test:governance21/21、build、Rust格式和diff空白检查通过；112测试资产/1137动态用例，新增2项Rust测试且不新增物理文件、依赖或前端测试资产数量。日志分别为`/private/tmp/binder-focused-chain-ag3.log`、`binder-focused-chain-plan.log`、`binder-focused-chain-related.log`、`binder-focused-chain-testgov.log`、`binder-focused-chain-build.log`。
+- 系统层证据单列：最终源码冻结后Binder进程25098，AI经既有隔离入口连续两轮31/31、深层14/14，长历史6请求、10错误回合说明先于唯一error均通过。两轮native场景均5模型、3业务成功、2执行前拒绝、最终4个Provider历史回注，其中双工具只一个聚合回注；原调用ID、逐项证据及工具可用性保持。第二轮中间22/31观察不是通过，完成后重新核对31/31。窗口日志`/private/tmp/binder-focused-chain-window-evidence.log`及`binder-focused-chain-window-evidence2.log`；固定的仅模型传输，执行真实解析/授权/临时文件核心，不冒充真实Provider生成或专业编辑器验收。
+- safety/semantic_review：与BR-AG-STATE-002及BR-SYS-STATE-007原文复核，包装器不构成CapabilityGrant；ToolCallReceiptV1证明未执行不等于新授权。效果保护不消费模型正文；后续合法请求仍fresh grant、预算及终态检查；原首终态和已执行/在途/未知效果守卫保留。诊断辅助仅在原解析已经拒绝时观察格式，不形成另一条接受或执行链；未发现本迭代新增实体漂移。
+- recovery：首次测试编译错误为typed控制测试串的序列化写法；第二轮251/253，抓到诊断未识别合法默认findings及上限夹具复用toolCallId，被真实防重放正确拦截。分别修正诊断和夹具后原AG全量、最终精确选择全量通过，未删除/减弱断言；失败日志不计通过。stop_conditions=本迭代无未解除项，父G5原BLOCKED独立保持。报告/Scope最终回填后再generate及只读audit，不把文档回填声称为再次运行生产回归。
+
+unresolved_items：历史样本只存batch_schema_invalid/$batch，不能回溯声称具体字段已定位；新诊断补未来证据。没有新增真实Provider付费抽查，不以固定响应与实际窗口隔离验收冒充真实模型语义成功率；真实模型持续非法仍应在原上限内结束而非无限重试。父G5继续BLOCKED；未改用户文件、数据库或专业编辑器，旧文件未自动恢复。
+
+### §14.67 创建初始内容与预览续行的原身份闭合（2026-10-24）
+
+修改前 Issue Trace（十一项）：
+1. 真实回合t-1792837866152-2的文件资源创建成功，初始Diff仍pending、文件0字节；原TaskRun已failed，检查点acknowledged，前端自动增加用户未输入的消息并报AG_MODEL_SELECTION_INVALID。
+2. 原入口resolveDecisionAndContinue→projectCreateDocumentBundle→编辑器预览→acknowledgePreviewAndContinue→startTurnWithOptions；保存经现有resumeSavedResourceGroups返回原裁决入口。
+3. 沿用BR-AG-STATE-001/002、BR-AG-DATA-001、BR-SYS-STATE-007/008、BR-WS-PERSIST-003，不新增规则。
+4. AG-TURN/DE-DIFF/ED-EDIT及工作区资源原链，不建设第二执行器。
+5. 资源执行器只对含非创建项的初始内容设置AwaitingContent；纯创建过早Completed。创建投影未绑定anchorMessageId。
+6. 预览消费方生成虚构role=user且丢失原provider/model；既有测试替身不检查必填模型，未覆盖真实入口拒绝。
+7. 沿用原@GOV/TERM及已确认AG-WORKFLOW-COMPLETION-01 Scope，父G5保持BLOCKED。
+8. 文件存在、预览应用、内容接受、磁盘保存和Agent终态分别取证；预览ack不能授予资源续行或保存资格。
+9. 带初始内容的创建统一等待真实保存；原确认仍绑定同一AgentTurn，保存后只重验剩余项。无初始内容创建保留原行为。
+10. 普通提案预览仍由原检查点授权下一片段，但使用冻结原用户请求/模型/会话，不插入用户消息，不复用已结束turnId。缺失原身份明确停止，不猜全局模型；已终止TaskRun仍由后端拒绝。
+11. 生产路由临时TXT覆盖单独/组合创建、预览/接受不解锁、保存一次续行、拒绝/取消/补偿；前端覆盖原消息锚、无虚假用户消息、模型切换后冻结绑定、会话及迟到隔离。实际changed_files执行完整影响计划/回归，既有窗口验证独立列证据。
+
+实施契约先同步AG接口和WS状态机；保留取消、版本、一次消费、基线及未知效果保护，不改用户数据或发起付费模型请求。历史恢复复核发现内部片段的请求快照会再次被展示为用户输入；沿用父任务已明确授权的history.rs，增加由运行时事件派生的只读来源投影，不修改持久schema、旧记录或终态，不恢复执行权。最终证据见以下Runtime Report。
+
+加深恢复断言时，首次最终40文件回归为前端657通过、Rust491/492：新增断言揭示去掉UI用户消息后，原前端缓存保存函数因找不到user而不保存内部片段助手正文。保持原缓存/事件权威边界，在同一保存函数中传入原请求快照（不插入UI消息），并在澄清/裁决等待时保留该快照。前端断言实际ag.save_turn载荷含完整助手回复，后端以实际安全事件构造同契约缓存再经真实save_turn_projection/list_turns验证恢复；不把只有运行时无前端的夹具误当缓存已经保存。等待裁决/保存是正常非终态，不显示错误“未完成/重试”；真正无等待身份的draft诊断仍保留。
+
+#### Task Runtime Report（本迭代交付）
+
+- task_type=CODE_CHANGE，governance_phase=VALIDATION，final_state=READY，仅本次既有工作包内创建/预览交互修复，不提升父AG-CLOSURE-REPAIR-01/G5。scope=explicit/confirmed；human_authorization=用户“执行修复/继续”；新增消费者history.rs已在父任务人类确认allowed_files，修改前已说明必要性并登记依赖。phase_gate=passed，REQ-AG-001/015→既有AG/SYS/WS规则→原链@GOV→测试映射完整；无新增RULE/CHAIN/TERM、执行器或协议降级。
+- 实现：含绑定初始内容的单独创建也进入原AwaitingContent；原确认AgentTurn在预览/接受时不恢复模型，真实保存后仍经原裁决、原冻结模型及当前基线重验。初始内容Diff绑定原assistantMessageId并加入原消息片段；拒绝/取消清除保存等待入口。普通提案保留既有检查点下一执行片段，但冻结原请求/模型/会话，并在入场携带确切新快照，不增加虚构role=user；缺失原绑定明确停止。历史internal_continuation来自后端同身份turn_started元数据，仅展示投影、不授予权限；原缓存保存函数通过请求快照保留内部回复及等待后的恢复，重新打开会话不把请求快照当新用户发言。
+- changed_files：本迭代生产直接为agService.ts、MessageList.tsx、ag/history.rs、ag/turn_runtime.rs、workspace/operation.rs、workspace/routes.rs；加深现有agRuntime/AgentUI、task_runtime及turn_runtime测试，AG接口/状态机、WS设计/状态机、SYS总图、计划/VAL卡、active_scope；ADUS脚本生成。保留全部此前改动，最终实际40文件清单及10直接模块/16影响模块见`/private/tmp/binder-preview-plan-final.log`。未新增物理测试文件、依赖或付费模型调用。
+- validation.automated：最终40文件同输入test:plan/test:related均exit0，未缩减选择器命令；前端657/657、TypeScript、Rust lib492/492、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过。定向前端139/139、test:governance21/21（112资产/1138动态用例）、生产build、Rust格式及diff检查通过。完整日志`/private/tmp/binder-preview-related-final.log`；其余为`binder-preview-front4.log`、`binder-preview-testgov-final.log`、`binder-preview-build-final.log`。新增1项Rust运行入口测试，扩展既有矩阵而不增加前端测试物理资产或弱化原断言。
+- validation.contract：真实生产资源路由/临时TXT验证原组合8分支及单独创建7分支；预览、接受与重复确认均不越过保存屏障，实际保存后只执行剩余项，拒绝/取消/重启/保存失败/投影补偿保留原守卫。真实run_agent_turn验证合法新快照一次消费，缺失/过期快照和failed TaskRun均零模型请求拒绝，旧parent终态不变；真实安全事件→save_turn_projection→list_turns保留回复且来源标记不由前端缓存伪造。前端实际请求字段/保存载荷及恢复投影覆盖冻结模型、切会话、重复/迟到、无来源拒绝、消息锚和无虚假用户发言；不是实际编辑器布局验收。
+- validation.system：实际窗口工具两次返回`Sky Computer Use service startup request failed`，本版没有窗口通过证据；未绕过窗口工具使用其他自动化技术，亦未把上一版31场景结果算作本版窗口验证。固定模型只替代传输，不能证明真实Provider自主语义成功率或网络永不失败。父G5保持BLOCKED。
+- recovery：最初新增测试载荷类型编译错误修正后定向通过；39文件初轮全量通过后，新增40文件的缓存恢复断言暴露上述保存遗漏，修复原函数。随后前端缓存断言揭示手写测试Channel未绑定新turnId，真实身份守卫正确拒绝该测试chunk；仅修正夹具身份，未放宽生产校验，最终139定向和40文件全回归通过。失败日志`binder-preview-workflow.log`、`binder-preview-related2.log`、`binder-preview-front3.log`、`binder-preview-related3.log`不计通过。
+- safety_review：预览/接受/保存/业务成功仍独立；不复活旧终态，不从TaskRun展示或历史来源标记授予执行权，不新增自动重试/接受/保存，不调额度或放宽版本/路径/取消/未知效果保护。report回填后重新generate及只读audit，代码冻结后无额外可执行修改。
+
+unresolved_items：实际窗口/真实编辑器接受保存布局待补验；真实Provider未新增抽查，不能承诺模型永不返回非法协议。历史失败任务、pending建议和用户文件不自动恢复，必须先核对实际效果，不能重放旧请求来“修复”历史。既有23个TERM_ORPHAN警告及前端大包提示不在本次修复范围，不将其作为本切片失败或G5已闭合的依据。
+
+### §14.68 AG-CREATE-CONTRACT-TRACE-01（2026-10-24）
+
+1. 症状：真实9999.html创建先因空initialContent被拒，随后文本响应缺控制封套；同回合纠错成功后进入真实确认/awaiting_content，不能把等待当完成或error。四条请求诊断均在65536字节截断，不代表模型输入被截断。
+2. 入口：tool_registry::validate_requested_tool_for_grant、turn_tool_loop::run_tool_loop、ent::gateway::stream_round，以及dev-gateway providers::streamProvider。
+3. 规则：BR-AG-STATE-001/002、BR-AG-DATA-003/004/005、BR-AG-OBS-001、BR-ENT-STATE-001、BR-SYS-OBS-001，X-SEQ-001/X-FORBID-001/004/006；沿用既有规则，不增执行能力。
+4. 链路：AG-TURN→CLOUD-GATE→CLOUD-INVOKE→AG-TOOL→WS-OPERATION；原保存屏障不变。
+5. 生产者：既有GUARD-AG-AG-TOOL-035（tool_registry.rs）产出校验裁决；prompts.rs/model_output.rs及providers.mjs提供冻结schema、协议和归一化响应。
+6. 消费者：RB-AG-AG-TOOL-018（turn_tool_loop.rs）回注并累计纠错；RB-ENT-CLOUD-INVOKE-002（gateway.rs）接收响应；原资源计划/裁决/保存消费者保持既有职责。
+7. 空规则块：本迭代不增加业务入口或rules:[]；日志按ADU §5.5，测试沿用既有资产。
+8. boundary假设：完整初始内容在确认前冻结；空正文不等于参数缺失；rejected/blocked/not_started与完整同身份回执证明该次尚未执行，不证明其他旧操作无效果。
+9. 运行时假设：保持每次Gate/grant、唯一调用ID、12模型/16工具/2累计纠错、可见输出隔离、取消与保存屏障。坏参数不得静默修JSON后执行，损坏上游帧不得被当心跳吞掉。
+10. 不变量风险：不得将参数可纠正误当权限可扩张；不得因丢失日志片段宣称模型输出损坏；不得把被拒说明作为成功或伪造final控制。
+11. 验证：空/空白/缺失/合法HTML参数与schema一致性；真实核心中参数拒绝→无封套响应→纠错→确认等待及累计上限；SSE逐字节/UTF-8/心跳/损坏帧/尾帧/回调异常；大于64KiB诊断分片重组、指纹与缺片检测。实际changed_files运行test:plan/test:related及audit，云适配沿现有providers.test.mjs验证。无真实模型或用户文件改动。
+
+Scope：仅父已确认的tool.rs、tool_registry.rs、prompts.rs、model_output.rs、turn_tool_loop.rs、turn_runtime.rs、task_runtime.rs、turn_events.rs、ent/gateway.rs、cloud/dev-gateway/providers.mjs/providers.test.mjs/server.mjs及现有AG接口/计划/验证卡、active_scope与脚本生成ADUS。task_runtime为ToolDecision枚举的直接消费者，保持执行前门禁穷尽处理；turn_events仅投影固定字段/约束诊断，不输出参数正文。CODE_CHANGE/IMPLEMENTATION，confirmation沿用YES；本工作包结果不提升父G5。
+
+#### Task Runtime Report（本迭代交付）
+
+- task_type=CODE_CHANGE，governance_phase=VALIDATION，final_state=READY，仅AG-CREATE-CONTRACT-TRACE-01；scope=explicit/confirmed，沿用用户最新“修复”与父已确认文件；父AG-CLOSURE-REPAIR-01/G5继续BLOCKED。既有REQ-AG-007/008及AG/ENT/SYS规则→原调用链→既有测试映射，未新增RULE/CHAIN/TERM、依赖、备用执行器或协议回退。
+- 根因边界：本次真实样本证实空initialContent与原运行时冻结内容契约冲突，且一次失败解释缺文本控制；后续同链纠错已进入真实确认/awaiting_content，并无该样本预算耗尽/最终error证据。原schema未声明非空/条件必填，旧通用拒绝不含字段，易反复无效请求。另以生产Provider解析器复现catch同时吞JSON解析和onJson处理错误，可在丢失中帧后继续拼接参数；这是确定代码缺陷，但不能冒充历史batch_json_invalid已被证明由其导致。
+- 实现：schema补条件必填、minLength/非空白及空正文HTML骨架说明；运行时在原身份/权限/大小/深度守卫之后返回固定字段/约束的InvalidArguments，模型收到AG_TOOL_ARG和notExecuted/新调用ID要求，回执仍rejected/blocked/not_started。工具结果配对后沿原系统反馈有限纠错，失败/受阻正文同样要求文本控制；不自动制造控制、不修JSON后执行，不重放已执行/未知效果，不清累计纠错。ToolDecision执行消费者保持穷尽拒绝。
+- 传输与日志：Provider共用完整SSE事件解析，UTF8/JSON坏帧或缺尾帧明确GW_PROVIDER_PROTOCOL，处理回调异常直接传播，不再伪装心跳。正常注释、空心跳、CRLF多data行与DONE可用。上下游仅增加参数/可见文本的UTF8长度和SHA256，失败摘要streamComplete=false；不输出隐藏推理或认证凭据。本机显式开发明文审计的长记录按UTF8安全边界分片，含record_id/序号/总数/总字节/整记录hash；单行含换行≤8192字节，原记录完整保留在fragment中；默认及release关闭。
+- changed_files：本轮新增/加深生产修改为ag/tool.rs、tool_registry.rs、prompts.rs、model_output.rs、turn_tool_loop.rs、task_runtime.rs、turn_events.rs、ent/gateway.rs及cloud/dev-gateway/providers.mjs/server.mjs；扩展原turn_runtime、tool_registry、model_output、turn_events、gateway和providers.test既有测试资产；同步AG接口/计划/VAL卡、active_scope，ADUS脚本生成。全部前次未提交改动保留，最终实际git diff为45文件，选择器不缩减，112注册测试资产/1138动态用例不变（云端6个新增case由npm test另行实际执行）。
+- validation.automated：同一最终可执行源码的test:plan/test:related均exit0；前端663/663、TypeScript、Rust lib492/492、core_chain5/5、sm_broadcast4/4、doc-tests及governance:audit通过。额外定向生产网关解析10/10、真实运行核心动作交接与注册表契约测试通过；test:governance21/21、生产build、Rust格式、JS语法和diff检查通过。无skip/only/ignore、测试弱化或mock掉被测核心。
+- validation.contract：原HTTP/运行核心/临时工作区/内存库回放“空参数拒绝→无封套说明→合法骨架”恰好3模型请求、唯一真实DecisionRequest、draft等待、无终态/资源落盘/内容Diff，未框定正文不可见；连续第三次参数拒绝仍原累计触顶。合法内容、缺失/null/空串/空白/错类型、多create、旧授权重用/错回合均有断言。上游逐字节/中文/引号/中帧损坏/非法UTF8/未完成尾帧/完成后损坏/回调异常和两种适配器回归通过；>64KiB/最坏转义/超长身份日志均重组等于原JSON，缺片/重复的长度或hash不符，不会签收原文。
+- validation.system：本轮未发起任何真实Provider请求，未使用真实用户数据库或文档，未执行本版实际窗口/HTML编辑器接受保存；CT05仅设计，不写PASS。awaiting_content仍是需用户接受/保存的原屏障，不作为交互error或业务完成。修复不能保证生产模型永不返回非法协议，不能把本包自动化通过扩大为通用Agent/G5闭合。
+- recovery：第一次完整45文件影响回归通过后，额外补强确认前目标文件确实不存在和成功回执waiting/not_started的直接断言；此后首次最终重跑在前端治理inventory用例发生10秒超时，同时worker onTaskUpdate超时，未报告Agent业务断言失败且未进入Rust命令。原样治理自测21/21、该用例223ms通过，再按最终45文件原样执行test:plan/test:related全部exit0（663/492/5/4、类型与audit）；新磁盘断言真实执行通过。未调整超时/并发配置、不弱化断言、不跳过测试。只能确认该次属于测试运行超时，未确认系统暂停/I/O/调度的具体原因，不把原失败记成通过。
+- safety_review：Gate、grant、唯一调用ID、2累计纠错及执行额度/取消/版本/路径/未知效果/确认/保存守卫不变；正常工具成功不清除旧失败。参数可修正不代表新权限，日志缺片不代表网络输入或模型输出损坏。最终代码冻结后仅回填报告与脚本生成索引，再只读审计；未git提交或恢复旧用户文件。
+
+unresolved_items：真实Provider最小空HTML创建与实际窗口按CT05另验；历史封套事故没有原始字节者仍不能回溯归因。分片仅防单行截断并提供完整性检查，不保证外部日志采集/复制不丢整条记录。旧TERM_ORPHAN、文档工具unused警告、locale及前端大包提示保留，不在本次修复范围；旧失败任务不自动重放。
+
+### §14.69 AG-COMPLETION-EVIDENCE-01（2026-10-25）
+
+1. 症状：纯回答正文停在半个表头而done/stop；前一创建已saved但恢复回答称未收到效果，工具批次曾因非法JSON被拒后纠正。
+2. 入口：turn_tool_loop::run_tool_loop→ent::gateway::stream_round→providers::streamProvider；turn_runtime的decision_resume及MessageList终态展示。
+3. 规则：沿用BR-AG-STATE-001/002、BR-AG-DATA-004/005、BR-AG-OBS-001、BR-AG-PERSIST-001、BR-ENT-STATE-001、BR-SYS-STATE-007/008、BR-SYS-OBS-001及X-SEQ-001/X-FORBID-004/006，不新增权限或业务规则源。
+4. 链路：AG-TURN→CLOUD-GATE→CLOUD-INVOKE→AG-TOOL→WS-OPERATION，裁决/内容保存后回到原AG-TURN。
+5. 生产者：RB-ENT-CLOUD-INVOKE-002与providers.mjs归一化响应；WS既有计划/组合创建/裁决回执；task.rs的身份绑定查询。
+6. 消费者：RB-AG-AG-TOOL-018、turn_runtime原裁决恢复、EFFECT-AG-AG-TURN-035/042和MessageList现有终态投影；不新增执行器。
+7. 空规则块：不增加rules:[]业务入口；日志按ADU§5.5，技术摘要辅助函数由原链边界覆盖。
+8. boundary假设：供应商stop证明生成停止，不证明正文/业务完整；同口径摘要才可比较。保存事实从DB按原workspace/session/turn/task/decision/plan关联读取，不信前端布尔值。
+9. 运行时假设：保持Gate、冻结模型、原调用/纠错额度、取消、唯一终态及保存屏障；不自动续写或重放工具。技术版本/指纹不是授权。
+10. 不变量风险：疑似未闭合Markdown只能提示，不能误造网络错误；已保存不代表全文需求满足；旧失败任务不自动复活。父G5保持BLOCKED。
+11. 验证：生产SSE解析逐字节/损坏/尾帧/正常stop但残缺正文；上下游指纹与版本缺失；真实核心保存决策事实的身份隔离、无正文/授权注入；UI历史恢复显示风险。沿既有测试资产，最终实际changed_files运行test:plan/test:related/audit，无真实Provider或用户资源变更。
+
+Scope：现有AG task/model_output/turn_runtime/turn_tool_loop/turn_events、ENT gateway、云providers/server及providers.test、MessageList/AgentUI与既有测试资产，AG接口/状态机/计划/VAL、active_scope与生成ADUS。用户本轮修复请求承接既有YES；不扩专业引擎或产品范围。
+
+#### Task Runtime Report（本次代码交付）
+
+- task_type：CODE_CHANGE；governance_phase：VALIDATION；final_state：READY，仅AG-COMPLETION-EVIDENCE-01代码/自动化切片；父AG-CLOSURE-REPAIR-01与G5仍BLOCKED。issue_trace为本节十一项，scope=explicit/confirmed，沿用父及已确认workflow工作包范围和用户最新修复指令，无新专业能力或执行路线。
+- phase_gate：passed，既有AG/ENT/SYS需求、设计、状态机及本节计划覆盖；mapping_chain：complete，既有BR-AG-STATE-001/002、BR-AG-DATA-004、BR-AG-OBS-001、BR-SYS-STATE-007/008、BR-ENT-STATE-001→原调用链与新增身份绑定只读QUERY→既有生产测试资产。未新增RULE/CHAIN/TERM、DB表或依赖。
+- 实现：客户端由编译时源码冻结构建指纹，网关由启动时源码冻结指纹，health与响应头可核对而不消耗模型请求。provider保留真实stop原因；同一原响应携带正文/工具参数长度、SHA256及片段数/调用身份，客户端匹配后再交原解析和权限校验。不匹配拒绝、缺失为null而非认证通过，JSON原文从不自动修补。回合持久记录原停止原因、接收/正文摘要、工具参数JSON错误位置及版本，普通诊断无正文、凭据或隐藏推理。
+- 正文：正常stop且已验证控制后，明显孤立表头/未闭合代码只投影answer_incomplete风险，保留正文/真实stop和唯一正常终态；不靠句号硬判、不伪造网络错误、不补结束语、不自动续写。真实length/max_tokens/content_filter及坏帧/EOF/摘要异常仍错误收束。该检查不是完整语义证明。
+- 裁决回注：后端按workspace/session/turn/task/decision，再核验plan/operation/bundle/diff关联，读取真实逐项执行及内容接受/保存状态；不重新读取或注入初始正文、不信前端saved布尔值、不将确认当保存。原回合恢复消费该data-only JSON，saveVerified与readBackVerified分开；旧等待ToolResult不再是唯一效果信息。模型真正partial/blocked和既有TaskRun终态不强行改为成功。
+- changed_files（本轮新增改动）：ag/task.rs、task_runtime.rs、model_output.rs、turn_runtime.rs、turn_tool_loop.rs、turn_events.rs、ent/gateway.rs；cloud/dev-gateway/server.mjs、providers.mjs、providers.test.mjs；MessageList.tsx、AgentUI.test.tsx；scripts/test_governance.test.mjs；AG接口/状态机/本计划/VAL、active_scope和脚本生成ADUS。全部此前未提交改动保留，最终git diff仍45文件。
+- test_impact：按最终实际45文件运行test:plan和同输入test:related，不缩减。direct_modules=AG/CBT/CORE/DE/ED/ENT/PCG/REF/SYS/WS；affected_modules为全部16模块；selection=frontend-full、typescript、rust-full、governance:audit。112注册测试资产、1143动态用例；只增加既有资产内的测试，不新增物理测试文件。AG前端实际用例断言160→161对应新增一项风险展示测试，不弱化断言。
+- validation.automated：最终完整test:plan/test:related均exit0；前端665/665（其中真实Provider适配器固定字节传输11项）、TypeScript、Rust lib496/496、core_chain5/5、sm_broadcast4/4、doc-tests0和治理审计通过；test:governance21/21、生产build、Rust格式/JS语法/git diff --check通过。补强参数端到端摘要前两次完整回归也通过，但最终证据采用补强后的496项版本。
+- validation.contract：生产SSE解析跨字节/UTF8、坏帧/尾帧/正常停止/真实截断；正文摘要错误不能done；参数摘要匹配但原本非法JSON保持原样并交原校验，身份/摘要错配或缺项在工具校验前拒绝。生产核心固定HTTP中同一正文保留、结构风险只发一个done且无额外工具/模型，旧网关明确缺版本证据；临时TXT真实创建/预览/接受/保存路由覆盖保存前false/后true、五重身份错配、无正文重复注入及partial_failed不伪成功。临时传输替换不mock被测运行核心/保存逻辑。
+- validation.system：本轮没有真实Provider外发、窗口点击或实际用户文件保存，不宣布生产成功率/语义完整或G5闭合。只读health仍返回旧结构且缺gatewayBuild；用户需重启原网关与Binder，按VAL CE01～03补验。新接口允许先核对版本，无需为了查版本消耗模型调用。
+- semantic_review：QUERY-AG-AG-TURN-052与BR-AG-DATA-004/BR-SYS-STATE-008对齐，只读身份绑定事实不改变授权；RB-ENT-CLOUD-INVOKE-002新增证据回调仍不发AgentTurn终态；RB-AG-AG-TOOL-018保持唯一终态与Gate/grant/12模型/16工具/2纠错/保存屏障；MessageList只展示已持久化风险，不生成执行。未发现本次边界与规则冲突。
+- stop_conditions：本代码切片无未解除项；父G5原阻断不变。recovery：首次网关定向旧断言仅允许旧done对象，新增proof使1/10失败；改为精确断言stop_reason及全部proof字段后通过，不放宽到任意数据或吞错。其余本次最终自动化无失败。既有unused、locale和前端大包警告不在本次扩大处理。
+- unresolved_items：用户重启与CE01～03实际窗口待执行；历史原文缺失不能回溯证明模型或旧网关根因；摘要只证明两观察点一致，结构提示有盲区，不作为语义/业务闭合声明。不恢复旧失败任务，不自动接受/保存，不提交Git。
+
+### §14.70 AG-OUTPUT-CAPACITY-RECOVERY-01（2026-10-25）
+
+1. 用户症状：t-1792915929137-3澄清后创建含原作和续写的HTML时length中断；尚无工具执行或计划，历史缓存只剩错误消息。
+2. 入口：turn_runtime→turn_tool_loop→gateway::stream_round→server→streamProvider；失败经TurnEventEmitter::failure_summary、agService::enqueueTurnSave与ensureAgentSessionTurns恢复。
+3. 相关规则：BR-AG-DATA-004/005、BR-AG-OBS-001、BR-AG-PERSIST-001、BR-AG-STATE-001/002、BR-ENT-STATE-001、BR-SYS-STATE-007及X-SEQ-001/X-FORBID-004/006；不新增业务规则或授权。
+4. 链路：AG-TURN→CLOUD-GATE→CLOUD-INVOKE→AG-TOOL；本次事故未进入WS-OPERATION。
+5. 生产者：prompt_runtime完整请求预算；RB-ENT-CLOUD-INVOKE-002和providers.mjs归一化流；EFFECT-AG-AG-TURN-035/042及原失败说明。
+6. 消费者：turn_events内部审计、原运行核心唯一错误出口、agService持久化/历史展示；现有agRuntime/provider/Rust内联测试资产。
+7. 空规则块：不新增rules:[]入口；日志按ADU§5.5，技术数值归一化由既有调用边界覆盖。
+8. boundary假设：length只证明容量相关截断，缺usage时不能推断确切阈值；正文hash不覆盖工具参数；历史错误消息不是助手正文。保持快照/身份与原工具执行器不变。
+9. 运行时假设：每个调用显式发送同一输出预留；48k估算不是供应商真实上下文声明，BYOK不自动换模型/回退；12/16/2不变。
+10. 不变量风险：不可把length改判成功、自动拼接执行半截JSON或重放资源；失败正文和诊断分开持久/恢复，不将诊断提升为模型历史或用户授权。明文日志默认关闭、开发显式开启且0600临时文件。
+11. 验证：实际适配器捕获出站HTTP体核验max_tokens；usage-only尾帧、length含部分工具参数、EOF/坏帧、隐私白名单；Rust归一化解析及真实核心无工具执行/唯一error；前端错误前正文保存、历史恢复/去重和迟到事件冻结。最终以实际changed_files运行test:plan/test:related、audit、类型/构建；真实Provider和用户窗口分证据。
+
+实施顺序与退出标准：P1统一48k总量、8192显式输出和输入余量，客户端至实际HTTP请求断言通过；P2补输出限额/实际usage/未完成工具参数脱敏摘要，length不得发ToolCalls；P3修失败正文保存及旧错误缓存由原事件账本只读恢复，错误诊断仍单独展示且不污染模型历史；P4开发明文审计直接落0600独立临时文件，重组/hash验证不再依赖控制台；P5完整影响回归通过，才交付代码切片。生产成功率、用户文档创建保存及G5不随自动化提升；不预先建设分段生成框架。
+
+Task Runtime Report（本工作包，2026-10-25）：
+
+- task_type/scope：CODE_CHANGE；AG-OUTPUT-CAPACITY-RECOVERY-01 仅关闭本节 P1～P5 的代码与确定性验证。父 AG-CLOSURE-REPAIR-01 继续 BLOCKED；既有未提交改动原样保留。
+- changed_files/test_impact：按最终实际 47 个改动文件运行 `test:plan`，再以同一输入运行 `test:related`。选择器指定前端全量、TypeScript、Rust 全量与治理审计；没有改用人工挑选的小集合。
+- validation.automated：最终两条治理命令均 exit 0；前端 671/671（含 Provider 适配器 15 项、AG Runtime 88 项），TypeScript 通过；Rust lib 499/499、core_chain 5/5、sm_broadcast 4/4、main/doc-tests 0 项且通过；governance:audit 通过。独立 `test:governance` 21/21、生产 build、Rust 格式、JS 语法及 diff 检查亦已通过；最终文档/索引更新后再次核对治理审计。
+- validation.contract：实际出站请求断言 `max_tokens=8192`，输入估算余量为 39808；OpenAI 兼容与 Anthropic 适配均在原请求链传值。固定传输覆盖 usage 尾帧、`length` 携未完整工具参数、畸形尾帧/EOF、唯一错误终态、零工具执行及失败正文单独保存；私有 0600 临时日志测试覆盖长记录分片。测试仅固定上游字节，不替代被测解析器、运行核心、权限或持久化逻辑。
+- 根因与修复：本次实测事故的 `finish_reason=length` 是上游完整响应未产生，不能把局部内容或工具参数当完成；此前客户端的输出预留未传给 OpenAI 兼容请求，同时前端失败缓存用诊断覆盖了可见正文。现已把同一限额送达真实 HTTP 请求，记录安全用量与待定参数摘要；失败保持错误终态和原执行证据，保留可见正文并从旧事件账本只读恢复。
+- 失败与复核：首次完整回归在审计投影括号范围上发生编译错误；修正后第二次完整回归 498/499，原有 `descriptionFields` 安全投影断言发现回归。恢复固定字段白名单及既有计数投影位置后，最终完整回归通过 499/499；未删测试、弱化断言或绕过检查。普通沙箱下本机监听受限，完整 Rust 回归在允许临时 localhost 测试的权限下运行。旧的未完成 Provider 请求没有被重放。
+- validation.system / unresolved_items：没有向真实 Provider 发出本工作包的新请求、没有重启用户网关或 Binder、没有操作用户文档或数据库。需在保存草稿后重启原网关与应用，先核对构建身份，再按验证卡 OC01/OC02 执行长 HTML 创建与失败后切换/重启显示检查。8192 是本阶段有界输出策略，不保证任意长生成一次完成；若仍见 `length`，需用实际 usage 与脱敏待定参数摘要判断输出限额和模型行为。自动化通过不等于用户文档创建、接受、保存或 G5 闭合。
+
+### §14.71 AG-DEEPSEEK-CAPACITY-01（2026-10-25）
+
+Issue Trace（实施前；本节只覆盖服务侧模型契约与同一调用链的容量/期限，父 G5 保持 BLOCKED）：
+
+1. 用户可见症状：简单对话可完成，但长篇创作在工具前出现 `AG_GW_STREAM_TIMEOUT`；旧预设名与当前 DeepSeek 官方模型名、输出规模和默认思考模式未对齐。现有日志不能证明全部历史超时都由同一阈值造成。
+2. 入口点：`src-tauri/src/ag/turn_runtime.rs::ag_start_turn` 装配请求；`src-tauri/src/ent/gateway.rs::stream_round` 出站；`cloud/dev-gateway/providers.mjs::streamOpenAiCompat` 调用供应商。
+3. 相关规则：BR-AG-DATA-002/004/005/006/007/008、BR-AG-OBS-001、BR-AG-STATE-001/002、BR-ENT-STATE-001、BR-SYS-STATE-007/008；X-SEQ-001、X-FORBID-001/004/006。不改授权规则或模型注册表字段。
+4. 相关链路：AG-TURN → CLOUD-GATE → CLOUD-INVOKE → AG-TOOL；本次不进入 WS-OPERATION。
+5. 生产者块：BR-AG-DATA-005-DATA-AG-AG-TURN-011 位于 `src-tauri/src/ag/prompt_runtime.rs`；BR-AG-DATA-002-DATA-AG-AG-TURN-031 位于 `src-tauri/src/ag/turn_prompt.rs`；BR-AG-OBS-001-API-AG-AG-TURN-018 位于 `src-tauri/src/ag/turn_runtime.rs`；网关适配器位于 `cloud/dev-gateway/providers.mjs`（现有非 @GOV 云端脚本）。
+6. 消费者块：BR-AG-DATA-005-IO-AG-AG-TURN-056 位于 `src-tauri/src/ag/turn_events.rs`；BR-AG-STATE-002-RB-AG-AG-TOOL-018 位于 `src-tauri/src/ag/turn_tool_loop.rs`；BR-ENT-STATE-001-RB-ENT-CLOUD-INVOKE-002 位于 `src-tauri/src/ent/gateway.rs`；云端预设列表位于 `cloud/dev-gateway/server.mjs`。
+7. 路径上的空规则块：上述目标路径未发现需要新分类的 `rules: []` 块；仅改已登记主链与现有云端适配器，不新增空规则入口。
+8. boundary 假设：同一 AgentTurn 的模型绑定冻结；工具结果与历史只作为 data-only 进入装配；预算预检在 Gate 前；网关响应只能产出完成或错误，不能授权工具。现有块未声明额外 `lifecycle_assumption=` 或 `document_snapshot=`；本次不改变文档快照语义。
+9. 运行时假设：模型供应商在每次请求中仍由已冻结 provider/model 决定；一个受支持模型配置必须同时用于输入预检、`max_tokens` 和预算事件。默认 48k/8192 保持旧模型行为；新模型容量是有界开发配置而非精确 tokenizer 或供应商保底。现有块未声明额外 `caller_context=` 或 `runtime_guard=`。
+10. 疑似不变量破坏：若只增大单个预算口径，会放行无法完成的请求；若默认思考模式下携工具却不回放 `reasoning_content`，可能触发上游 400。故新 `deepseek-flash` 明确使用非思考模式，旧预设与用户已保存选择不迁移；不自动重放半截工具参数或副作用。未发现需要改变确认/保存权限的不变量。
+11. 验证计划：固定字节供应商适配测试核对新模型出站字段与工具参数进度；Rust 测试核对模型策略、预算装配/记录、真实出站 `max_tokens` 与超时终态；实际 changed_files 运行 `test:plan`/`test:related` 和 `governance:audit`。检查 request_started→budget_checked→provider_started→terminal 序列及超时无工具执行；真实 Provider 与窗口另列，不拿固定传输冒充。triage 中保留历史真实超时根因未知，不改为已证实。
+
+Scope Lock：允许修改 `cloud/dev-gateway/{server.mjs,providers.mjs,providers.test.mjs}`、`src-tauri/src/ag/{prompt_runtime.rs,turn_prompt.rs,turn_runtime.rs,turn_tool_loop.rs,turn_events.rs}`、`src-tauri/src/ent/gateway.rs`、本计划、`docs/01_modules/AG/A-AG-M-T-02_提示词架构设计.md`、`.governance/active_scope.json`，以及因动态测试计数直接消费而必要的 `scripts/test_governance.test.mjs`。其他文件默认禁止，尤其不改用户文档、模型选择存储、权限/确认/保存逻辑。用户“按顺序实施优化”及随后“继续”是本独立范围的实施授权，不解除父 G5 阻断。
+
+实施顺序：P1 保留旧预设并为 `deepseek-flash` 提供明确非思考请求契约；P2 同源容量策略贯穿预算、审计与出站额度；P3 区分活跃流与静默/整轮期限并补取证；P4 完整影响回归及实际服务抽查。仅 P1–P3 自动化通过不宣称 G5/真实长篇任务闭合；P4 无运行服务时按证据缺口报告。
+
+Task Runtime Report（本独立工作包；2026-10-25）：
+
+- task_type / phase / state：`CODE_CHANGE` / `VALIDATION` / 代码工作包 `READY`；父 `AG-CLOSURE-REPAIR-01` 仍 `BLOCKED`。Issue Trace、确认范围与阶段门禁见本节上文；没有修改用户文档、持久模型选择、确认/保存或权限逻辑。
+- changed_files：本工作包修改云网关 `server.mjs`、`providers.mjs` 与其测试，Rust `ag/{prompt_runtime,turn_prompt,turn_runtime,turn_tool_loop,turn_events}.rs`、`ent/gateway.rs`，本计划、提示词架构设计与 `.governance/active_scope.json`。仓库其他既有未提交改动保留，不归属本工作包。
+- mapping_chain / phase_gate：同一冻结的 provider/model 决定预算预检、历史装配额度、出站 `max_tokens`、模型整轮/静默期限及脱敏审计；旧 `deepseek-chat` 默认不迁移。新增 `deepseek-flash` 采用明确非思考契约，避免工具续轮缺失 `reasoning_content`。既有确认与副作用门禁没有被放宽。
+- test_impact：实际 `git diff --name-only` 的 47 个脏文件送入 `test:plan` 与同一输入的 `test:related`；选择器扩展为前端全量、TypeScript、Rust 全量及治理审计。最终 `test:related` exit 0：前端 673/673、Rust 库 502/502、core_chain 5/5、sm_broadcast 4/4、main/doc-tests、TypeScript 与 `governance:audit` 均通过；另有 `test:governance` 21/21、生产 build、Rust 格式、JS 语法及 diff 检查通过。
+- validation.contract：云端适配测试 17/17，覆盖 Flash 非思考字段、旧预设不变与工具参数活动的无内容进度；Rust 本地 HTTP 夹具验证实际请求 `max_tokens=16384`、整轮 1200000 ms 与静默 90000 ms，未模拟运行核心或权限。新增审计字段只接受数值白名单，并有不泄露 Prompt/工具正文的断言。初次普通沙箱中本机监听与 LibreOffice worker 受限造成测试失败；允许临时本机测试后完整回归通过，未绕过测试或更改断言。
+- validation.system / stop_conditions / recovery：本机 8787 网关未运行，当前 shell 未提供 DeepSeek 平台凭据；本工作包未发送真实 Provider 请求、未重启 Binder/网关、未做用户窗口长篇或文件验收。没有代码/治理 Stop Condition；真实服务抽查、长篇创作的实际停顿/完成表现及用户窗口证据仍待具备运行服务时验证。不能由固定夹具推出历史超时均为旧阈值所致，也不能宣称任意长任务不会超限。旧失败回合及任何副作用均未自动重放。
+- unresolved_items：正式上线前选择新 `deepseek-flash` 预设并重启相应进程，在合成数据上记录 `request_started → budget_checked → provider_started → terminal`、安全用量与是否工具执行；先完成一轮简单和一轮长任务，再决定是否调容量。当前仍使用估算 token、保守 128k 输入配置而非供应商公布窗口的精确 tokenizer；真实供应商若拒绝请求，必须以其安全诊断重新校准，不盲目继续放宽。
+
+### §14.72 AG-PRESET-FRONTEND-SYNC-01（2026-10-25）
+
+Issue Trace（实施前；仅修前端模型清单展示，父 G5 保持 BLOCKED）：
+
+1. 症状：云端 `/models` 已列出 `deepseek-flash`，聊天区模型菜单仍可能只显示本地保存的旧清单；用户无法在该入口手动切换。
+2. 入口：`Composer.tsx` 的「模型选择」菜单读取 `modelStore.models`；目前只有打开 `ModelConfig.tsx` 才调用 `listPresetModels`。
+3. 规则：BR-AG-DATA-006（PresetModel 清单来源分层）、BR-AG-DATA-007（已保存模型选择不得静默迁移），关联 X-FORBID-001（不得保存密钥）。
+4. 链路：AG-MODEL-CATALOG → AG-TURN；本次仅改变目录同步和显式选择入口，不触及回合模型冻结、调用或工具执行。
+5. 生产者：`cloud/dev-gateway/server.mjs` 的 `/models` 清单及 `agService.ts::listPresetModels`；两者已有 Flash 条目和调用路由。
+6. 消费者：`modelStore.ts::mergePresetModels` 与 `Composer.tsx` 下拉菜单；`AgentUI.test.tsx` 为既有直接 UI 测试资产。
+7. 空规则块：目标文件没有需要新增的 `rules: []` 业务块；沿用已登记 AG-MODEL-CATALOG 和现有来源字段。
+8. boundary 假设：本地默认列表只是断网兜底，在线预设以 `/models` 为准；旧 `selectedKey` 和四项能力偏好原样保留，BYOK 条目不被云端覆盖。
+9. 运行时假设：打开菜单时执行一次异步清单刷新；刷新失败仅提示并继续展示本地目录，不自动换模型、不发 AgentTurn。
+10. 不变量风险：刷新不能把用户的 Chat 选择迁到 Flash；失效选择仍明确报不可用；本次不更改后端 `default_model`、预算、权限、真实文档或服务端配置。
+11. 验证：既有组件测试以网关清单注入 Flash，核验菜单可见、旧选择不变、仅点击后切换；检查失败提示、无自动发起回合。按实际 changed_files 执行 test:plan/test:related 和治理审计；真实应用窗口与运行网关另列未验证。
+
+Scope Lock：仅 `src/store/modelStore.ts`、`src/components/ag/Composer.tsx`、`src/components/ag/AgentUI.test.tsx`、本计划和 `.governance/active_scope.json`。用户明确选择「保留旧选择、让用户手动切换」；本独立工作包不改变父 AG-CLOSURE-REPAIR-01 的 BLOCKED 状态，不迁移已有本地偏好。
+
+Task Runtime Report（本独立前端工作包）：
+
+- task_type / state：`CODE_CHANGE` / 代码与自动化切片 `READY`；父 G5 仍 `BLOCKED`。仅新增本地 Flash 兜底条目与聊天菜单打开时的网关清单刷新；刷新失败展示提示并保留本地清单，未改后端、网关或持久选择迁移。
+- changed_files：本工作包仅修改 `src/store/modelStore.ts`、`src/components/ag/Composer.tsx`、`src/components/ag/AgentUI.test.tsx`、本计划和 `.governance/active_scope.json`；其他既有脏文件保留。最终仓库总计 49 个脏文件送入 `test:plan` 与同一输入的 `test:related`，选择前端全量、TypeScript、Rust 全量及治理审计。
+- validation.automated：菜单组件既有资产 54/54；完整关联回归经允许本机临时测试资源后 exit 0，前端 673/673、Rust 库 502/502、core_chain 5/5、sm_broadcast 4/4、TypeScript 与 governance:audit 均通过；生产 build 与 `git diff --check` 通过。
+- validation.contract：组件在网关返回不同标签的 Flash 后才显示该在线标签，旧 Chat 全局选择及代理编辑显式选择保持，用户点击后仅代理编辑改为 Flash；网关刷新失败仍保留所选模型并提示重开重试，不自动发 AgentTurn。现有 BYOK 合并和失效选择门禁保持原实现。
+- recovery / unresolved_items：首次普通沙箱完整回归中 Rust 本机监听遭系统拒绝、LibreOffice worker 崩溃，不能记为通过；在允许临时本机测试资源后原选择器完整复跑通过，没有改测试、断言或权限逻辑。未重启真实 Binder/网关，也未在用户窗口手动核验菜单；实际服务若不可达会显示同步失败，不能据此宣称 Flash 已可调用或 G5 闭合。
+
+### §14.73 AG-EMPTY-TXT-CREATE-01：零字节 TXT 创建 Issue Trace（2026-10-26）
+
+1. 用户可见症状：用户明确要求创建空 TXT，模型两次提交空白 `initialContent` 均被 `non_blank_frozen_content` 拒绝；改为非空文字后虽创建成功，却不再是空文件。
+2. 入口点：`ag::turn_tool_loop::run_turn_tool_loop` 接收模型 `plan_workspace_operation` 工具调用，`ag::tool_registry::validate_requested_tool_for_grant` 校验参数，随后由 `workspace::routes::route_plan_workspace_operation` 生成确认请求。
+3. 相关规则：BR-AG-STATE-002、BR-SYS-STATE-007、BR-SYS-STATE-008、BR-WS-STATE-003、BR-WS-DATA-003、BR-WS-OBS-002、X-FORBID-006；需求源为 REQ-AG-008/011。
+4. 相关链路：AG-TURN → AG-TOOL → WS-OPERATION。明确空 TXT 仍沿用同一个资源计划和前置裁决链；非空新文档仍进入 CreateDocumentBundle 后续内容链。
+5. 生产者块：`BR-AG-STATE-002-GUARD-AG-AG-TOOL-035` 位于 `src-tauri/src/ag/tool_registry.rs`；`BR-AG-STATE-002-RB-AG-AG-TOOL-018` 位于 `src-tauri/src/ag/turn_tool_loop.rs`。
+6. 消费者块：`BR-WS-STATE-003-API-WS-WS-OPERATION-002` 位于 `src-tauri/src/workspace/routes.rs`；后续由现有 WS 操作状态机消费冻结计划和真实 DecisionRequest。
+7. 路径上的空规则块：上述生产者和消费者块均有已注册规则；此路径未发现 `rules: []` 块，无需新增 triage 分类。
+8. boundary 假设：相关块未声明 `lifecycle_assumption=` 或 `document_snapshot=`；维持「参数先验证、确认前不落盘、WS 重新核验」边界，不以模型文字或参数取得权限。
+9. 运行时假设：相关块未声明 `caller_context=` 或 `runtime_guard=`；实际运行仍须持当前 CapabilityGrant、原 turn/task 身份及确认回执，零字节标记不能绕过这些守卫。
+10. 疑似不变量破坏：若仅放开空 `initialContent`，会生成无意义的初始内容 Diff；若无标记地省略内容，会把非空创建误转为空创建；若确认卡仍提示内容保存，会误导用户。修复必须显式限定单一 `.txt` 目标，并保持非空及 HTML 旧契约。
+11. 验证计划：在既有 Rust 测试资产验证缺内容/空白拒绝、显式零字节 TXT 允许、错误后缀/混合计划/无创建拒绝、HTML 空正文骨架仍绑定；固定传输核心验证仅生成确认卡且确认前零落盘；WS 临时目录验证确认后零字节、无初始 Diff，拒绝不落盘。核对 `tool_request → tool_result(waiting) → decision_request_proposed → decision_request_resolved → operation_entry` 和终态；本切片无空规则 triage 条目。以实际 changed_files 执行 `test:plan/test:related`、生成索引和治理审计，真实窗口另列未验证。
+
+Scope Lock：用户两次确认范围扩展；仅修改 AG 需求/技术设计/本计划、AG 既有工具契约/提示词/主循环/测试、WS 确认卡路由文案、`.governance/active_scope.json` 及脚本生成的 ADUS。父 G5 维持 BLOCKED；不改 WS 执行核心、用户文件、凭据或模型供应商配置。
+
+#### Task Runtime Report（本独立工作包；2026-10-26）
+
+- task_type / state：`CODE_CHANGE` / `READY`，仅零字节 TXT 创建切片；父 G5 仍为 `BLOCKED`。人类确认了 AG 需求/设计/工具契约与 WS 确认卡文案的范围扩展；Issue Trace 和 Scope Lock 见本节前文。未改 WS 执行核心、用户文件、模型服务或密钥。
+- 实现：模型工具契约新增显式 `createEmpty=true`。AG 在当前 CapabilityGrant 与参数校验之后仅允许单个 `.txt` 的 `create_document/file` 且省略 `initialContent`；缺省标记的普通创建继续要求冻结非空初始内容，空正文 HTML 继续使用合法页面骨架。沿原 `WorkspaceOperationPlan → DecisionRequest → WS 重验/执行`，确认卡明确说明确认后创建零字节文件、无初始内容 Diff 或后续保存。WS 路由复核该标记与操作形状，不能靠直调路由伪造确认文案。
+- changed_files：本切片修改 AG 需求、技术设计、本计划、AG `tool_registry.rs`/`prompts.rs`/`turn_runtime.rs` 及 WS `routes.rs`、`active_scope.json`；ADUS 由脚本生成。仓库内其他先前未提交改动保持原状；实际 50 个脏文件全部交给 `test:plan` 与同一输入的 `test:related`，未主观缩小影响选择。未增加新执行器、依赖或物理测试文件。
+- validation.automated：`governance:generate`、50 文件 `test:plan` 和最终同输入 `test:related` 均 exit 0；前端 673/673、TypeScript、Rust 库 509/509、core_chain 5/5、sm_broadcast 4/4、doc-tests、`governance:audit` 通过。`test:governance`、`cargo fmt --check`、`git diff --check`、生产 `npm run build` 均通过。构建仅提示既有大包告警，不构成本切片失败。
+- validation.contract：真实 AG 运行核心配固定 HTTP 传输，单次模型工具请求生成唯一 DecisionRequest，工具回执为 `succeeded/waiting/not_started`，确认前临时工作区无目标文件、无错误终态；真实 WS 路由和原执行器经确认后创建零字节 TXT，数据库无 CreateDocumentBundle，确认卡文案与实际效果一致；取消确认后目标文件仍不存在。测试同时保留并验证普通创建缺失/空白内容拒绝、合法 HTML 骨架允许；显式空标记与 HTML、混合操作、非文件创建或初始内容并用均拒绝。固定传输不证明真实模型必然会选择正确参数。
+- recovery / stop_conditions：首次注册表定向测试误用与授权冻结身份不符的调用 ID，按既有防重放守卫正确拒绝；仅修正测试夹具。普通沙箱中 AG HTTP 测试因临时 localhost 监听被系统拒绝，获本机测试资源权限后原样重跑通过；未放宽生产授权、删除断言或跳过测试。当前代码切片无未解除 Stop Condition。
+- validation.system / unresolved_items：未重启或操作用户 Binder 窗口、网关、数据库与文档，未向真实 Provider 发请求。实际窗口仍须用“创建空的 TXT 文件，命名为小城故事，放工作区根目录”核对单张确认卡、确认前文件不存在、确认后 `小城故事.txt` 大小为 0 字节且无空内容 Diff；真实模型若仍提交错误参数，应按新回执另行取证。父 G5 及整个通用 Agent 验收不因本切片通过而闭合。
+
+### 14.74 原链工具封套拒绝后的续行隔离（AG-TOOL-ENVELOPE-RECOVERY-01）
+
+**Issue Trace（CODE_CHANGE / IMPLEMENTATION；独立工作包，不解除父 G5 阻断）**
+
+1. 用户可见症状：真实创建任务中，模型返回缺字段、截断的 `binder_tool_batch` 或混合原生调用；本批未执行，连续拒绝后回合中断。成功创建的另一回合也不能证明该拒绝路径稳定。
+2. 入口点：`turn_tool_loop.rs::run_turn_tool_loop` 接收 `RoundOutcome::ToolCalls`，经 `model_output.rs::expand_native_batch` 与 `parse_tool_batch_detailed` 校验；`prompts.rs::WORKSPACE_OPERATION_INSTRUCTIONS` 是模型可见工具说明。
+3. 相关规则：`BR-AG-STATE-001`、`BR-AG-STATE-002`、`BR-AG-DATA-004`、`BR-AG-OBS-001`、`BR-SYS-STATE-008`、`X-SEQ-001`，均在 ADUS 注册；本切片不改静态规则。
+4. 相关链路：`AG-TURN → AG-TOOL → CLOUD-GATE → CLOUD-INVOKE`；拒绝后只沿原 `Assembling → Gate → ModelStreaming` 续行。
+5. 生产者块：`BR-AG-STATE-002-RB-AG-AG-TOOL-018` 位于 `turn_tool_loop.rs`，生成校验拒绝、内部事件和模型续行；`prompts.rs` 提供运营提示词文本，按既有设计不以 `@GOV` 引用规则。
+6. 消费者块：`model_output.rs` 的 `binder_tool_batch` 解析与 `turn_runtime.rs` 固定传输回归，原工具授权/执行仍消费通过校验的单份控制与业务参数。
+7. 路径上的空规则块：本切片不新增 `rules: []` 块；既有协议解析和运行循环均有规则映射，提示词文本按技术设计为实现期配置。
+8. boundary 假设：模型输出不可信；响应拒绝必须先于工具执行，拒绝参数不能成为新授权；`ToolCall` 回执、证据和唯一终态由运行时记录。保留所有已执行/效果未知动作的原边界。
+9. 运行时假设：每次模型调用仍先过 Gate；纠错与模型调用额度累计、不因成功工具清零；等待和恢复不得重放历史操作。新续行只移除**未执行的畸形参数样本**，不能抹除实际执行回执。
+10. 疑似不变量破坏：若把畸形参数回注当修复或让拒绝调用再次执行，会破坏失败关闭和防重放；若无条件删除工具历史会破坏已执行事实。故只对整批协议拒绝且 `not_started` 的模型可见续行做隔离，内部审计及安全事件保留。
+11. 验证计划：固定 HTTP 经真实 `run_agent_turn` 回放缺 `calls`、JSON 不完整和后续合法工具调用；断言拒绝轮零业务执行、下一模型请求不含畸形原参数、合法轮仍能执行且累计上限不变；运行实际改动文件的 `test:plan`/`test:related` 和治理审计，真实模型/窗口另列未验证。
+
+**Scope Lock**：仅 `src-tauri/src/ag/{prompts,turn_tool_loop,turn_runtime,verification}.rs`、本计划与 `.governance/active_scope.json`；`verification.rs` 只同步既有隔离测试对“拒绝调用不回注模型”的新不变量，不弱化内部拒绝事件和执行前保护断言。不改 Provider、WS 执行器或用户数据。用户在修复方案后明确要求继续，独立工作包 `confirmation=YES`；父 G5 保持 `BLOCKED`。
+
+**Task Runtime Report（本切片）**：根因定位为整批 `control_error` 分支虽然计入纠错次数，却未设置下轮纠错提示；同时畸形原参数和失败工具消息被写入模型续行。实现将 `binder_tool_batch` 的外层/内层字段区别写明，整批拒绝时设置字段级安全纠错，并仅从模型可见续行移除**未执行**的畸形批次；内部 ToolResult、执行前拒绝回执、安全事件与累计上限仍保留。固定 HTTP 的真实 AG 核心测试覆盖缺 `calls` 与截断 JSON 两种拒绝，均证实无业务工具执行、下一请求不含畸形参数、合法重试执行；截断 JSON 的实际诊断是 `batch_json_incomplete`。首次完整 `test:related` 失败：两项旧测试仍要求拒绝回执进入模型请求，另一测试因并行锁中毒连带失败；将旧测试改为明确断言拒绝回执不回注、内部拒绝事件仍在、有效调用仍成功。补充截断 JSON 用例时，首次测试把诊断类别误写成 `batch_json_invalid` 而失败，仅按实际生产诊断修正预期；最终三项定向测试与加入新用例后的同一实际改动集合 `test:plan` / `test:related` 均 exit 0，`cargo fmt --all --check`、`git diff --check` 与 Scope JSON 校验通过。未重启用户应用或网关，未运行真实 Provider/窗口复验；不推断畸形批次生成率、长任务成功率或 HTML 创建业务闭合。另行只读审计表明 `completion.status=partial` 目前按设计令 TaskRun 为 Failed，而 `saveVerified=true` 只证明文件已保存、`readBackVerified=false` 表示尚未读回复核；不能仅凭“文件已创建”就把整项任务改判成功。本切片不修改该收尾逻辑，须用真实创建回执核对到底是模型自行声明 partial，还是业务步骤确有遗漏。父 G5 仍为 `BLOCKED`；创建后业务完成判定及严格 schema 兼容另列后续独立事项。
+
+### 14.75 取消模型侧 `binder_tool_batch` 的直接业务工具协议（AG-DIRECT-TOOL-TRANSPORT-01）
+
+**Issue Trace（CODE_CHANGE / IMPLEMENTATION；父 G5 保持 BLOCKED）**
+
+1. 症状：相同创建、读取等请求已多次出现 `binder_tool_batch` 参数缺字段、非法 JSON 或响应控制无效；整批受阻时业务工具未执行。真实固定输入抽查也曾得到合法与非法的上游参数，不能把所有失败归于执行器。
+2. 入口：`turn_prompt.rs::prepare_turn_prompt` 将授权业务工具折叠为唯一模型可见批次；`prompt_runtime.rs` 与 `prompts.rs` 提示该协议；`turn_tool_loop.rs::run_turn_tool_loop` 展开并执行；`model_output.rs` 投影历史。
+3. 静态规则：`BR-AG-STATE-001/002`、`BR-AG-DATA-002/004/005`、`BR-AG-OBS-001`、`BR-SYS-STATE-008`、`X-FORBID-006`；规则不因传输形式而放松。
+4. 链路：`AG-TURN → AG-TOOL → CLOUD-GATE → CLOUD-INVOKE`，以及确认后的 `WS-OPERATION`；改变模型可见协议，不改变业务执行端口。
+5. 生产者：`model_output.rs` 的工具 schema、控制解析及历史投影；`turn_events.rs` 的回合协议冻结；`turn_prompt.rs` 的本轮工具清单。
+6. 消费者：`turn_tool_loop.rs` 的响应级语义、整组校验、逐项授权/回执；`context.rs` 的实际 Provider 消息/预算投影；前端继续消费业务级 ToolRequest/ToolResult。
+7. 空规则块：本切片不新增 `rules:[]` 或 @GOV 块；若现有边界注释与新传输不符，按真实职责核对，不制造治理注释通过。
+8. 边界假设：模型输出是非可信请求，`IntentResult`/路线不是授权；确认、保存、未知效果、防重放和终态只由运行时事实决定。旧批次历史和等待回合不可迁移或重写。
+9. 运行时假设：新回合冻结为独立原生业务工具协议；首个工具参数提交一份响应级 `_binderTurn`，其余同响应工具不得提交实质冲突控制。文本 final/clarify 仍用现有控制封套。旧批次与旧独立回合继续各自冻结的协议，绝不在失败时换执行链。
+10. 不变量：模型不能以直接调用绕过当前工具 Manifest；多项只能独立只读，非只读单项提交；整组工具 ID、JSON、控制和组合边界校验先于任何业务执行；每项仍独立取得一次性 CapabilityGrant 和 ToolCallReceipt。
+11. 验证：覆盖新回合清单/提示/版本、合法直接调用、缺失/冲突控制、混合协议及多写整组拒绝、旧批次历史与续行、确认等待、原 Gate/grant、预算与错误收尾；运行实际 changed_files 的 `test:plan`、同输入 `test:related` 和治理审计；真实模型/窗口另记未验证。
+
+**方案和顺序**：①冻结 `native-business-tool-v1` 新版本、保留两种历史版本；②向模型直接暴露 CapabilityGrant 过滤后的业务工具，提示词按冻结版本生成；③新版本整组校验后交给原逐项执行链，不引入新的业务执行器；④旧批次的虚拟子调用和 Provider 历史投影仅留兼容；⑤回归、静态审计和真实运行验证分层报告。代价是模型仍需在首个工具参数提交语义控制，且供应商仍可能生成非法业务 JSON；本切片不得宣称所有模型协议错误归零。
+
+**Scope Lock**：沿人类已确认的 `AG-CLOSURE-REPAIR-01` 根 Scope，仅修改 `.governance/active_scope.json` 中本工作包列出的代码、AG 验证入口/测试与设计/计划文档；不碰用户文档、数据库、WS/DE 执行器、凭据或网关服务。原隔离场景名称及夹具必须与新协议同步，不能留一个恒失败的旧批次场景。用户本轮明确要求方案并执行，父任务的真实 UI 阻断继续保留。
+
+**Task Runtime Report（首次验证，保留历史）**：新回合冻结`native-business-tool-v1`并直接暴露 CapabilityGrant 过滤的业务工具；首个调用用`_binderTurn`提交响应级语义。运行时在展开/逐项执行前拒绝混合协议和含非只读操作的多工具组；直接工具各自进入原授权、回执和Provider历史。旧批次协议及虚拟子调用投影只为已冻结历史回合保留，不作为新回合回退。新回合提示、纠错提示及隔离验证场景已同步，不再向模型展示批次工具名称；未改WS/DE执行器或用户文件。实际变更集合的`test:plan`选择前端全量、TypeScript、Rust全量和治理审计；`npm test`的673项、`npx tsc --noEmit`、`npm run governance:audit`、`cargo test --lib --no-run`、`cargo fmt --all --check`和`git diff --check`通过。`npm run test:related`完成前端/类型检查、编译Rust测试后，测试程序停在`Running unittests`无输出；独立`cargo test --lib`及测试程序`--list`同样停在启动处，已停止挂起进程。`DYLD_PRINT_INITIALIZERS=1`仅观察到动态库初始化输出最终停在SkyLight附近，不能据此确定根因。首次验证时Rust断言未实际执行，工作包依SC-04暂留BLOCKED；后续续测结果如下，不以首次阻断推断产品逻辑。真实Provider模型和前端窗口行为未在本切片验收。
+
+**Task Runtime Report（2026-10-27 续测，工作包 READY；父 G5 仍 BLOCKED）**：再次按实际脏文件集合运行`test:plan`，选择前端全量、TypeScript、Rust全量和治理审计。受限沙箱首次完整运行时，Rust 480/513通过、33项失败；失败点为本地测试HTTP监听被系统拒绝及LibreOffice子进程崩溃，不把该轮记为通过。在获准本机权限下，Rust 512/513通过，唯一失败落在直接工具拒绝测试仍断言旧批次字段`calls`；生产解析实际使用`_binderTurn`与`$control`。核对生产诊断字段后只修正该过期测试断言，定向重跑1/1通过；再以同一实际改动集合运行完整`test:related`，退出码0，含前端673/673、TypeScript、Rust全量与`governance:audit`。`cargo fmt --all --check`和`git diff --check`亦通过。Rust测试程序启动较慢但实际运行并结束，首次“启动停滞”不再作为本切片阻断。此处只证明自动化契约与回归；没有真实Provider生成参数、实际用户窗口操作或业务创建成功证据，不提升父G5。
+
+桌面窗口控制入口也返回`Sky Computer Use service startup request failed`；这是另一条环境观察，不将其推断为Rust测试停滞的确定根因。
+
+### 14.76 直接工具契约与分页纠错收敛（AG-TOOL-CONTRACT-RECOVERY-02）
+
+**Issue Trace（实施前，2026-10-28）**
+
+1. 用户可见症状：真实 AgentTurn 先后两次以 `AG_READ_PAGE_VERSION_REQUIRED` 拒绝翻页，第三次成功；随后工具参数缺 `_binderTurn` 被拒，累计纠错触顶为 `AG_MODEL_CORRECTION_LIMIT`。五次 Provider 请求均完整返回，但任务中断。
+2. 入口点：`turn_tool_loop.rs::run_tool_loop` 接收原生 ToolCall；`model_output.rs::decorate_tool_definitions` 生成模型工具定义；`tool_exec.rs::validate_read_arguments` 与只读执行入口消费分页参数。
+3. 相关规则：`BR-AG-STATE-002`、`BR-AG-DATA-001`、`BR-AG-DATA-004`、`BR-AG-OBS-001`、`BR-AG-VERIFY-001`、`X-FORBID-004`、`X-FORBID-006`。
+4. 相关链路：`AG-TURN → AG-TOOL`；只读分页保持在 `AG-TOOL`，不进入 `WS-OPERATION`。
+5. 生产者块：`BR-AG-DATA-004-GUARD-AG-AG-TURN-047` 位于 `model_output.rs`；`BR-AG-STATE-002-DATA-AG-AG-TOOL-039` 位于 `tool_registry.rs`；`BR-AG-STATE-002-DATA-AG-AG-TOOL-044` 位于 `tool_exec.rs`。
+6. 消费者块：`BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038` 位于 `turn_tool_loop.rs`；`BR-AG-STATE-002-GUARD-AG-AG-TOOL-045` 位于 `tool_exec.rs`；`BR-AG-STATE-002-EFFECT-AG-AG-TURN-044` 位于 `turn_events.rs`。
+7. 路径上的空规则块：本切片不新增 `rules: []` 块；上述核心路径已映射正式规则，不以空规则块规避审计。
+8. boundary 假设：模型输出非可信，工具定义不授权；分页只读必须绑定同一路径、同一版本的快照。现有 @GOV 的快照/生命周期假设仍成立；下一页不得在版本变化后拼接旧页。
+9. 运行时假设：新 AgentTurn 使用冻结的直接业务工具协议，旧冻结协议不迁移；逐次 Provider 请求、每项 CapabilityGrant 与终态仍受原运行时控制。原生工具的模型参数必须与运行时接受条件一致。
+10. 疑似不变量破坏：若直接放行缺语义控制、伪造分页版本或合并错误计数时无限纠错，将违反授权/证据/失败关闭边界；本切片仅改善模型可见契约与有限恢复，不触碰写入确认、版本重验、取消或效果未知保护。
+11. 验证计划：定向测试缺控制、同响应控制冲突、分页首尾/跨路径/版本失效、参数拒绝后控制纠错、累计上限与旧协议；检查拒绝事件→纠错请求→成功只读回执/终态顺序；按实际 changed_files 运行 `test:plan`、`test:related`、`governance:audit`，并将真实窗口与 Provider 验证单列。无新增 triage 项；未闭合的系统验证写入本节 Runtime Report。
+
+**Scope Lock**：用户本轮要求按建议修复并适当放宽模型可恢复校验；沿已确认 `AG-CLOSURE-REPAIR-01` 根 Scope，允许改动 `model_output.rs`、`tool_registry.rs`、`tool_exec.rs`、`turn_events.rs`、`turn_tool_loop.rs`、`turn_prompt.rs`、`prompts.rs`、`verification.rs`、本计划与 AG 接口/技术设计文档及 `.governance/active_scope.json`。验证时发现新游标错误码需接入公共诊断分类，范围增加 `src-tauri/src/ipc/mod.rs` 的单项错误码映射，不改 IPC 错误结构或授权逻辑。禁止修改授权、WS/DE 写入执行器、用户文件、凭据和治理控制文件。父 G5 `BLOCKED` 不解除。
+
+**实施判据**：模型侧原生工具 schema 应声明 `_binderTurn` 为必填；只读翻页模型侧使用单个 `cursor`，返回 `next_cursor`，运行时仍核验路径和快照版本；参数拒绝与响应控制拒绝各有独立有限纠错次数，且仍受 Provider 总调用上限约束。历史 `offset/expected_hash` 仅供已冻结历史调用兼容，不作为新模型工具定义。
+
+**Task Runtime Report（2026-10-28，仅本工作包 READY，父 G5 仍 BLOCKED）**
+
+- `task_type: CODE_CHANGE`；`governance_phase: VALIDATION`；`final_state: READY`；`issue_trace: §14.76`。`scope: explicit/confirmed`；`phase_gate: passed`，沿已确认根 Scope，验证发现的 IPC 诊断码映射已记录为本工作包必要扩展；`mapping_chain: complete`，本节规则、AG-TOOL 路径、代码块与固定 HTTP/单元测试相互对应。
+- `changed_files`：AG 的 `model_output.rs`、`tool_registry.rs`、`tool_exec.rs`、`turn_events.rs`、`turn_tool_loop.rs`、`turn_prompt.rs`、`prompts.rs`、`verification.rs`；`ipc/mod.rs` 的单项分类；AG 接口/技术/提示词文档、本计划及 `.governance/active_scope.json`。本工作包没有触碰 WS/DE 执行器、用户文件、凭据、授权与写入确认边界。仓库中其他既有未提交改动原样保留。
+- `test_impact`：按实际脏文件集合运行 `test:plan`，选择前端全量、TypeScript、Rust 全量和治理审计；随后以同一集合运行 `test:related`。最终退出码 0：前端 676/676、TypeScript、Rust 库 513/513、`core_chain` 5/5、`sm_broadcast` 4/4、doc-tests 与 `governance:audit` 均通过；`cargo fmt --all --check`、`git diff --check` 通过。新隔离场景覆盖分页游标首尾/跨路径/旧版本、参数与控制各自纠错及累计上限、真实核心回合的拒绝→纠错→成功只读回执。
+- `recovery`：首次完整 Rust 回归在共享构建缓存中两次遇到依赖 `.rmeta` 产物缺失，独立临时目标目录重建后进入测试；初跑 508/513，5 项失败均为旧提示词措辞或旧单一纠错序号的过期断言。逐项核对生产行为后更新断言，未删减测试或弱化失败关闭条件；重跑完整关联回归通过。
+- `stop_conditions: 无（仅本工作包）`；`unresolved_items`：真实 DeepSeek 对新 schema 与 cursor 的输出、Binder 实际窗口连续交互尚未系统复验，不能以自动化推断中断问题已在用户环境彻底消失；父 G5 原 BLOCKED 不解除。共享缓存产物消失是独立构建环境现象，隔离目录回归已通过，不据此归因 Agent 逻辑。
+
+### 14.77 多只读工具语义控制与占位块定位收敛（AG-READ-ONLY-CONTROL-RECOVERY-01）
+
+**Issue Trace（实施前，2026-10-28）**
+
+1. 用户可见症状：三轮正文续写任务中，`read_doc`/`list_blocks` 同响应被 `AG_MODEL_CONTROL_CONFLICT` 整批拒绝；`list_blocks` 在没有有效上一页返回值时收到 cursor，被 `AG_READ_CURSOR_INVALID` 拒绝。其余只读工具成功，但模型以阶段结果结束，正文提案未提交。
+2. 入口点：`turn_tool_loop.rs::run_tool_loop` 接收 Provider 原生工具组；`model_output.rs::decorate_tool_definitions` 暴露参数 schema，`parse_tool_batch_detailed` 解析响应控制；`prompts.rs::DOCUMENT_READ_INSTRUCTIONS` 指导块定位。
+3. 相关规则：`BR-AG-DATA-004`、`BR-AG-STATE-002`、`BR-AG-DATA-005`、`BR-AG-OBS-001`、`BR-AG-VERIFY-001`、`X-FORBID-004`、`X-FORBID-006`。
+4. 相关链路：`AG-TURN → AG-TOOL`；定点检索与目录分页均是只读 `AG-TOOL`，不进入 `WS-OPERATION`。
+5. 生产者块：`BR-AG-DATA-004-GUARD-AG-AG-TURN-047` 位于 `model_output.rs`；`BR-AG-STATE-002-DATA-AG-AG-TOOL-039` 位于 `tool_registry.rs`；系统/专业提示词层位于 `prompts.rs`。
+6. 消费者块：`BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038` 位于 `turn_tool_loop.rs`；`BR-AG-STATE-002-GUARD-AG-AG-TOOL-045` 位于 `tool_exec.rs`；模型后续轮次消费原 ToolCallReceipt。
+7. 路径上的空规则块：本切片不新增 `rules: []`；上述核心路径已有规则映射。若审计发现未分类块，先登记 triage。
+8. boundary 假设：Provider 语义副本不可信；授权只由当前 CapabilityGrant 决定，单个只读工具仍受参数与版本校验。已知文字可由既有 `search_text` 返回块 ID；分页 cursor 绑定同一路径和快照版本。
+9. 运行时假设：仅新直接工具协议允许多个独立只读工具同响应；有副作用工具单独提交；已冻结旧协议维持原行为。兼容处理不得自动修补工具业务参数或生成游标。
+10. 疑似不变量破坏：若放行有副作用工具的矛盾控制、把非法游标当第一页或跳过版本重验，会扩大动作边界或伪造读取证据；只读副本兼容不改变业务参数、授权与主控制。
+11. 验证计划：覆盖直接工具单主控制、独立合法只读副本差异、有副作用副本仍严格拒绝、缺失/畸形控制失败关闭、非法 cursor/跨路径/版本失效仍拒绝、已知文字检索到块 ID 的读取路径；检查拒绝→纠错→只读回执事件序列。按实际脏文件运行 `test:plan`、同输入 `test:related` 与治理审计；真实 Provider/窗口复验另列。无新 triage 项。
+
+**Scope Lock**：沿已确认根 Scope，只修改 `.governance/active_scope.json` 本工作包列出的代码和 AG 文档；不改用户文件、WS/DE 写入、授权、数据库、Gate 或分页安全校验。父 G5 的 `BLOCKED` 状态不变。
+
+**方案顺序**：先统一接口协议与模型 schema，使一个响应只需一份完整控制；再对已验证为独立只读的多工具组解析重复副本而保留主控制和参数原样；最后让已知占位文本使用现有 `search_text` 定位块 ID，`list_blocks` 仅用于确需遍历目录时复制真实 `next_cursor`。先跑定向回归，再跑选择器要求的完整关联回归；系统验收独立记录。
+
+**Task Runtime Report（2026-10-28，本工作包 READY；父 G5 仍 BLOCKED）**：`task_type=CODE_CHANGE`，`governance_phase=VALIDATION`，Scope 为人类已确认根范围内的独立工作包，映射 `BR-AG-DATA-004/BR-AG-STATE-002 → AG-TURN/AG-TOOL → model_output/turn_tool_loop/turn_events → 固定 HTTP 与 Rust 回归`。改动限于本工作包登记的 AG 源码、测试、接口/提示词文档、计划和 Scope 记录；未改 WS/DE 写入执行器、用户数据、Gate 或非法游标守卫。
+
+新直接工具组的只读函数 schema 将 `_binderTurn` 设为可选，提示词要求首项提交一份；有副作用函数仍必填且独立提交。运行时仅在工具清单确认全为只读时观察合法副本差异并保持主控制、业务参数和逐项 grant 原样；缺主控制、畸形副本、非 tool 动作与有副作用组仍失败关闭。安全日志仅记录固定差异字段名。已知占位文字改由既有 `search_text` 定位块身份，再用 `read_doc(blocks)` 取完整节点；没有放行猜造 cursor、跨路径或旧版本续页。
+
+验证：定向解析测试 1/1、隔离真实核心多只读场景 1/1、固定回合 23/23 通过；`cargo fmt --all --check` 与 `git diff --check` 通过。按当前实际脏文件运行 `test:plan`，选择前端全量、TypeScript、Rust 全量和治理审计；同输入 `test:related` 最终退出码 0，含前端 676/676、Rust 库 514/514、相关集成测试、TypeScript 和 `governance:audit`。首次隔离场景在受限本机端口权限下失败，获准本机回环测试后通过；首次全量 Rust 512/514 通过，另两条测试仍断言旧的只读控制一致措辞/拒绝路径，改为检查新契约与畸形副本拒绝后定向和全量复跑通过，未跳过测试。
+
+`unresolved_items`：尚未在用户当前 DeepSeek 配置和 Binder 真实窗口重跑正文续写任务；提示词能引导定点定位，但模型是否持续选择该路径仍需系统证据。此自动化结果只证明修复链路与回归，不将三轮历史中断追认为业务完成，也不提升父 G5 状态。`stop_conditions`：本工作包无；真实系统验收保留在父任务。
+
+### 14.78 提案前置失败被误记为未知效果（AG-PROPOSAL-EFFECT-RECOVERY-01）
+
+**Issue Trace（实施前，2026-10-29）**
+
+1. 用户可见症状：真实 `propose_edit` 先因 `AG_TOOL_ARG` 失败，随后同工作区的新 `propose_edit` 报 `AG_EFFECT_PENDING`，即使后者参数合法也不能生成修改建议。另一回合在长工具参数生成到输出上限时以 `AG_GW_STREAM_INCOMPLETE` 结束；该回合未提交提案。
+2. 入口点：`turn_tool_loop.rs::run_tool_loop` 接收 `propose_edit`；`edit_runtime.rs::execute_proposal/ag_propose_edit` 生成批次；`capability_runtime.rs::execute/start_fact` 记录效果并阻止未知效果后的新写入。
+3. 相关规则：`BR-AG-STATE-002`、`BR-AG-PERSIST-001`、`BR-SYS-STATE-007`、`BR-DE-DATA-001`、`BR-DE-DATA-002`、`X-FORBID-006`。
+4. 相关链路：`AG-TURN → AG-TOOL → DE-DIFF`；确认/保存仍由原链路处理。
+5. 生产者块：`BR-AG-STATE-002-EFFECT-AG-AG-TOOL-047` 位于 `edit_runtime.rs`；`BR-DE-DATA-001-IO-DE-DE-DIFF-006` 位于 `de/store.rs`，原子持久化 ProposalBatch 与 PendingDiff。
+6. 消费者块：`BR-AG-STATE-002-EFFECT-AG-AG-TOOL-046` 和 `BR-AG-PERSIST-001-QUERY-AG-AG-TOOL-046` 位于 `capability_runtime.rs`；`BR-AG-STATE-002-DATA-AG-AG-TOOL-044` 位于 `tool_exec.rs`。
+7. 路径上的空规则块：本切片无新增 `rules: []`，相关边界已映射正式规则。
+8. boundary 假设：提案持久化前的参数/节点失败没有产生 Diff；一旦开始原子批次提交，失败仍按效果未知处理。既有确认、保存、授权与重复执行边界保持。
+9. 运行时假设：历史 CapabilityExecutionFact 追加保存，不重写旧回合终态；历史 `AG_TOOL_ARG` 仅在同身份 `proposal_batches` 缺失且代码路径可证明未到持久化点时，才可判为无提案效果。
+10. 疑似不变量破坏：宽泛地把所有写工具失败视为无效果会允许重复执行；删除旧效果事实会破坏追溯。本修复保持未知效果失败关闭，只对有执行阶段证据的提案前置失败收敛。
+11. 验证计划：测试新 `propose_edit` 前置失败结算 `not_started`、已进入批次提交后仍为 `unknown`、历史无批次的 `AG_TOOL_ARG` 不再误挡新工具、有批次/其他未知错误继续阻断；检查 started→settled→后续新调用顺序和旧事实保留。按实际脏文件执行 `test:plan/test:related` 与治理审计；真实窗口复验单列。无新增 triage 项。
+
+**Scope Lock**：沿人类已确认的通用核心 Scope 及 2026-10-07 执行端口扩展，限 `capability_runtime.rs`、`edit_runtime.rs`、既有 AG 测试、本文档和 `.governance/active_scope.json`。不改 DE/WS 执行器、用户数据库、用户文档、模型网关或确认/保存规则。父 G5 `BLOCKED` 保持。
+
+**实施顺序**：先为提案执行端口传递“是否已进入原子持久化”阶段标记；再让前置错误以 `not_started` 留回执；最后对历史 `AG_TOOL_ARG + propose_edit` 仅在原 ProposalBatch 不存在时证明无提案效果，保留原始事实。长度截断与非法 cursor 是独立现象：前者需长内容分批契约专项，后者保持拒绝并允许模型纠正，不在本切片放宽。
+
+**Task Runtime Report（2026-10-29，工作包 READY；父 G5 仍 BLOCKED）**：在 `capability_runtime.rs` 的独立执行端口加入提案持久化边界标记；`edit_runtime.rs` 只在进入 `persist_proposal_batch` 前保持边界未触发。新 `propose_edit` 若在参数/节点准备阶段失败，持久回执记 `effectStatus=not_started`，后续合法写请求不再被该事实误挡；一旦进入提交边界，失败仍记 `unknown` 并阻断重放。历史 `AG_TOOL_ARG` 只在同一 workspace/turn/toolCall 身份查不到 `proposal_batches` 且回执无效果引用时被守卫视为前置失败；旧回执及旧回合终态不改写。
+
+验证：`cargo fmt --all --check`、`git diff --check` 通过；执行端口定向 6/6 通过，包括真实 `ag_propose_edit` 参数失败、历史无/有批次分支、提交边界后效果未知。以本工作包实际四个变更文件运行 `npm run test:plan`，选择前端全量、Rust 全量和治理审计；同输入 `test:related` 在正常本机执行退出码 0，前端 676/676、Rust 库 517/517、相关集成测试与治理审计通过。受限执行环境中的首次全量 Rust 回归因本地网络监听和 LibreOffice 子进程系统权限失败；新测试也暴露了对数据库同毫秒排序的错误假设，已改为按 `Settled` 阶段定位并复验。未跳过或弱化测试。
+
+`unresolved_items`：用户当前窗口尚未加载此改动并复测，不能宣称真实任务已完成。同会话另一回合的 `AG_GW_STREAM_INCOMPLETE` 有 provider `stopReason=length`、输出用量 16382/16384 token、未闭合工具参数 51480 字节的证据；它属于长内容分批契约，未在本工作包修复。一次模型猜造 cursor 被 `AG_READ_CURSOR_INVALID` 拒绝后自行恢复；本工作包不放宽 cursor 校验。父 G5 保持 `BLOCKED`。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
+| 2026-10-29 | v3.55 | §14.78 补录提案前置失败效果判定修复、自动化回归与仍待处理的真实窗口和长输出问题；父 G5 维持 BLOCKED。 |
+| 2026-10-29 | v3.54 | §14.78 登记提案前置失败误记未知效果的真实回合溯源、执行端口修复范围及验证计划；父 G5 保持 BLOCKED。 |
+| 2026-10-28 | v3.52 | §14.76 直接工具控制声明、单游标只读分页和分类有限纠错；结果以本节 Runtime Report 为准，父 G5 不提升。 |
+| 2026-10-28 | v3.53 | §14.77 多只读控制副本与已知占位块定位的 Issue Trace、Scope 和回归记录；父 G5 维持原状态。 |
+| 2026-10-27 | v3.51 | §14.75 续测：修正直接工具协议的一条旧字段断言，定向与完整关联回归通过；本切片 READY，真实Provider/窗口待验，父G5仍BLOCKED。 |
+| 2026-10-27 | v3.50 | §14.75：取消新回合模型侧批次传输，改为直接业务工具；旧冻结批次只保留历史兼容。Rust测试编译成功但执行器启动停滞，工作包依SC-04保持BLOCKED。 |
+| 2026-10-27 | v3.49 | §14.74：整批工具封套拒绝后的字段级纠错与未执行参数模型续行隔离；定向及完整关联回归通过，真实模型/窗口待验，父 G5 不提升。 |
+| 2026-10-26 | v3.48 | §14.73：零字节 TXT 创建的 Issue Trace、最小范围与验证计划；不提升父 G5 状态。 |
+| 2026-10-25 | v3.47 | §14.72：前端预设清单同步的 Issue Trace 与独立 Scope；保持旧模型选择，由用户显式切换。 |
+| 2026-10-25 | v3.46 | §14.71：DeepSeek 模型契约与容量/期限主链的 Issue Trace、Scope Lock 和分阶段验证边界。 |
+| 2026-10-25 | v3.45 | §14.70：输出预算接线、length用量/参数取证、失败正文恢复及私有明文日志；结果以本节Runtime Report为准。 |
+| 2026-10-25 | v3.44 | §14.69：构建/正文与参数端到端证据、正文残缺风险和真实裁决效果回注；最终45文件回归通过，CE01～03窗口待用户重启后验证。 |
+| 2026-10-24 | v3.43 | §14.68：空创建字段契约与原链有限纠错、Provider坏帧失败关闭、模型IO分片与指纹；45文件完整回归通过，真实Provider/窗口边界保留。 |
+| 2026-10-24 | v3.42 | §14.67：初始内容单独/组合创建统一保存屏障；普通预览冻结请求/模型及入场快照，去掉虚构用户消息并补齐历史恢复/回复缓存，等待态不误报错误重试。 |
+| 2026-10-24 | v3.41 | 同一批次主链集中修复：冻结协议回注一致、同身份执行前拒绝证明、字段级脱敏诊断及连续拒绝后恢复/累计触顶验证，不新增并行或降级链路。 |
+| 2026-10-24 | v3.40 | AG-WORKFLOW-COMPLETION-01：完成单份控制协议、确认检查点、真实保存依赖、整组安全补偿及原回合失败交付；记录最终39文件全回归与真实窗口31场景，独立工作包READY，父G5不提升。 |
+| 2026-10-23 | v3.39 | AG-TOOL-CONTROL-COMPAT-01：控制主来源固定、描述兼容/实质严格、INVALID脱敏定位及累计拒绝语义；同轮真实事件溯源与分层验证。 |
+| 2026-10-23 | v3.38 | AG-ACTION-HANDOFF-BUDGET-01：动作交接、阶段报告、冻结执行策略、保留额度收尾与安全只读续办；记录真实核心及窗口分层证据，不提升父G5。 |
 | 2026-10-23 | v3.37 | AG-HISTORY-BUDGET-01：历史整段丢失溯源、统一完整请求容量与独立限额审计、实施及验证方案。 |
 | 2026-10-23 | v3.36 | AG-BOUNDED-READING-01：阅读结果有界分页、目录容量自适应、工具契约/提示词精简与数值诊断；生产核心、窗口隔离和最终完整回归，真实Provider边界单列。 |
 | 2026-10-22 | v3.35 | AG-READ-CONTRACT-RECOVERY-01：共用参数组合校验、精确失败分类、受约束收尾及可信澄清恢复；真实模型反例回放、完整关联回归与真实Binder隔离窗口25/25及8项深核验。 |

@@ -10,7 +10,7 @@ import {
   type AgentComposerDraft,
 } from "../../store/agStore";
 import { modelKey, modelStore, useModelStore } from "../../store/modelStore";
-import { cancelActiveTurn, startTurn } from "../../services/agService";
+import { cancelActiveTurn, listPresetModels, startTurn } from "../../services/agService";
 import { useWsStore } from "../../store/wsStore";
 import {
   DOC_REF_MIME,
@@ -268,10 +268,38 @@ export function Composer() {
   const [draft, setDraft] = useState<AgentComposerDraft>(() => session.composerDraft ?? emptyComposerDraft());
   const [atQuery, setAtQuery] = useState<MentionQuery | null>(null);
   const [modelPop, setModelPop] = useState(false);
+  const [modelCatalogStatus, setModelCatalogStatus] = useState("");
+  const modelCatalogRequestRef = useRef(0);
   const [configOpen, setConfigOpen] = useState(false);
   const [gateNotice, setGateNotice] = useState(false);
   const draftSessionIdRef = useRef(session.id);
   const applyingSessionDraftRef = useRef(false);
+
+  useEffect(() => () => {
+    modelCatalogRequestRef.current += 1;
+  }, []);
+
+  const refreshPresetCatalog = () => {
+    const requestId = ++modelCatalogRequestRef.current;
+    setModelCatalogStatus("正在同步预设模型…");
+    void listPresetModels()
+      .then((list) => {
+        if (modelCatalogRequestRef.current !== requestId) return;
+        if (!list.length) {
+          setModelCatalogStatus("预设清单为空；当前显示本地清单");
+          return;
+        }
+        modelStore.mergePresetModels(
+          list.map((model) => ({ provider: model.provider, model: model.model, label: model.label, source: "preset" as const })),
+        );
+        setModelCatalogStatus("");
+      })
+      .catch(() => {
+        if (modelCatalogRequestRef.current === requestId) {
+          setModelCatalogStatus("预设清单同步失败；当前显示本地清单，重新打开可重试");
+        }
+      });
+  };
 
   const refreshDraft = (editor: TipTapEditor) => {
     if (applyingSessionDraftRef.current) return;
@@ -524,6 +552,7 @@ export function Composer() {
                 title="模型选择"
                 aria-haspopup="menu"
                 onClick={() => {
+                  if (!modelPop) refreshPresetCatalog();
                   setModelPop((v) => !v);
                 }}
               >
@@ -534,6 +563,7 @@ export function Composer() {
               {resumingClarification && <span className="label" title="补充说明会沿用原回合模型">续行沿用原模型</span>}
               {modelPop && (
                 <div className="cbar-pop" role="menu">
+                  {modelCatalogStatus && <div className="cbar-pop-item muted" role="status">{modelCatalogStatus}</div>}
                   {models.map((m) => {
                     const key = modelKey(m);
                     return (

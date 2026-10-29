@@ -252,6 +252,7 @@ fn build_registry() -> CommandRegistry {
     // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：任务级裁决（DecisionRequest，三层分离）。
     reg.register("ag.propose_decision");
     reg.register("ag.resolve_decision");
+    reg.register("ag.finish_operation_interaction");
     // TaskPlan 仅保留 TurnEvent 派生查询；不存在外部登记或执行入口。
     reg.register("ag.list_plans");
     reg.register("ref.list_candidates");
@@ -387,6 +388,9 @@ fn dispatch(
             "ag.list_task_runs" => route_list_agent_task_runs(&request, &state),
             "ag.propose_decision" => route_propose_decision(&request, &state),
             "ag.resolve_decision" => route_resolve_decision(&request, &state),
+            "ag.finish_operation_interaction" => {
+                ag::task_runtime::route_finish_operation_interaction(&request, &state)
+            }
             "ag.list_plans" => route_list_plans(&request, &state),
             "ag.delete_session" => route_delete_agent_session(&request, &state),
             "ref.list_candidates" => route_ref_list_candidates(&request, &state),

@@ -115,6 +115,8 @@ import {
   resolveDecision,
   requestAssist,
   resolveDecisionAndContinue,
+  resumeSavedResourceGroups,
+  refreshSettledResourceGroup,
   startTurn,
   buildAgentContextFacts,
   validateToolCallReceipt,
@@ -217,6 +219,7 @@ function projectionResult(patch: Partial<Record<string, unknown>> = {}) {
       snapshot_source: patch.snapshot_source ?? "active_editor",
       base_session_version: has("base_session_version") ? patch.base_session_version : null,
       base_content_hash: has("base_content_hash") ? patch.base_content_hash : null,
+      preview_checkpoint_required: patch.preview_checkpoint_required ?? false,
       style_ops: patch.style_ops ?? null,
       block_ops: patch.block_ops ?? null,
       table_ops: patch.table_ops ?? null,
@@ -549,6 +552,41 @@ describe("requestAssist 契约", () => {
 describe("agService 历史恢复", () => {
   // covers: BR-AG-PERSIST-001
   // covers: BR-SYS-STATE-007
+  it("旧错误缓存从原事件恢复失败正文，去重且忽略跨回合及终态后片段，不恢复执行权", async () => {
+    const failure = { code: "AG_GW_STREAM_INCOMPLETE", message: "长度截断", retriable: true };
+    invokeMock.mockImplementation(async (command, arg) => {
+      if (command !== "dispatch") return undefined;
+      const request = (arg as { request: { command: string } }).request;
+      if (request.command === "ag.list_sessions") return { correlation_id: "h", result: {
+        active_session_id: "recovered", sessions: [{ session_id: "recovered", title: "恢复", mode: "edit",
+          archived: false, open_index: 0, is_active: true, created_at: 1, updated_at: 2 }] } };
+      if (request.command === "ag.list_turns") return { correlation_id: "h", result: [{
+        turn_id: "failed-turn", session_id: "recovered", status: "error", created_at: 1, updated_at: 2,
+        payload: { version: 2, lastEventSeq: 3, userMessage: { id: "u", role: "user", content: "创建" },
+          assistantMessage: { id: "old-error", role: "assistant", content: "只有错误码", error: true },
+          toolSummaries: [], diffRefs: [], failure },
+      }] };
+      if (request.command === "ag.list_turn_events") return { correlation_id: "h", result: [
+        { turnId: "failed-turn", seq: 1, type: "chunk", text: "任务未完成，尚无计划。" },
+        { turnId: "failed-turn", seq: 1, type: "chunk", text: "重复片段" },
+        { turnId: "other-turn", seq: 2, type: "chunk", text: "其他回合" },
+        { turnId: "failed-turn", seq: 3, type: "error", ...failure },
+        { turnId: "failed-turn", seq: 4, type: "chunk", text: "迟到污染" },
+      ] };
+      return { correlation_id: "h", result: [] };
+    });
+    await hydrateAgentHistory();
+    const session = activeSession(agStore.getSnapshot());
+    expect(session.messages.map(m => m.content)).toEqual(["创建", "任务未完成，尚无计划。", expect.stringContaining("长度截断")]);
+    expect(session.messages.filter(m => m.error)).toHaveLength(1);
+    expect(agStore.getSnapshot().activeTurn).toBeNull();
+    expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
+    expect(invokeMock.mock.calls.some(([command, arg]) => command === "dispatch"
+      && (arg as {request:{command:string}}).request.command === "ag.save_turn")).toBe(false);
+  });
+
+  // covers: BR-AG-PERSIST-001
+  // covers: BR-SYS-STATE-007
   it("重启将 failure 恢复到未完成提示，保持 assistant 正文原样且不自动续跑", async () => {
     const failure = { code: "AG_EVENT_DB_ERROR", message: "事件表不可用", retriable: true };
     invokeMock.mockImplementation(async (command, arg) => {
@@ -568,15 +606,20 @@ describe("agService 历史恢复", () => {
             assistantMessage: { id: "a", role: "assistant", content: "" },
             toolSummaries: [], diffRefs: [], failure, incompleteReason: "stream_interrupted",
           },
+        }, {
+          turn_id:"internal-preview",session_id:"recovered",internal_continuation:true,status:"completed",created_at:3,updated_at:4,
+          payload:{version:2,lastEventSeq:0,userMessage:{id:"original-request-copy",role:"user",content:"内部续片段的原请求快照，不是新发言"},assistantMessage:{id:"internal-answer",role:"assistant",content:"预览后的实际回复"},toolSummaries:[],diffRefs:[]},
         }],
       };
       return { correlation_id: "hist", result: [] };
     });
     await hydrateAgentHistory();
     const messages = activeSession(agStore.getSnapshot()).messages;
-    expect(messages).toHaveLength(2);
+    expect(messages).toHaveLength(3);
     expect(messages[0]).toMatchObject({ turnStatus: "draft", turnFailure: failure });
     expect(messages[1].content).toBe("");
+    expect(messages[2].content).toBe("预览后的实际回复");
+    expect(messages.filter(message=>message.role==="user").map(message=>message.content)).toEqual(["你好"]);
     expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
   });
 
@@ -726,7 +769,7 @@ describe("agService 历史恢复", () => {
               findings: [],
               uncertainties: ["notes/unread.md 未读取"],
             },
-          }],
+          }, { eventId:"budget-terminal",turnId:"t1",seq:8,occurredAt:8,payloadVersion:1,type:"done",stopReason:"budget_exhausted" }],
         };
       }
       return { correlation_id: "hist", result: { ok: true } };
@@ -739,6 +782,7 @@ describe("agService 历史恢复", () => {
       id: "u1",
       relPath: "notes/a.md",
       turnId: "t1",
+      completionReason: "budget_exhausted",
     });
     expect(session?.messages[1]).toMatchObject({
       id: "a1",
@@ -749,7 +793,7 @@ describe("agService 历史恢复", () => {
       evidenceThroughSeq: 6,
       unreadItems: [{ relPath: "notes/unread.md", reason: "not_read" }],
     });
-    expect(agStore.lastTurnEventSeq("t1")).toBe(7);
+    expect(agStore.lastTurnEventSeq("t1")).toBe(8);
     expect(invokeMock.mock.calls.some(([command]) => command === "ag_start_turn")).toBe(false);
     expect(deStore.getSnapshot().diffs).toEqual([
       expect.objectContaining({
@@ -1121,6 +1165,35 @@ describe("agService ReferencePayload 发送契约", () => {
   });
 
   // covers: BR-SYS-STATE-007, BR-AG-PERSIST-001
+  it("错误前失败说明独立保存，诊断不覆盖正文，也不成为下一次模型历史", async () => {
+    edStore.loadDoc("notes/a.md", "A 文档", 1);
+    const failure = { code: "AG_GW_STREAM_INCOMPLETE", message: "长度截断", retriable: true };
+    mockTurnInvoke((arg) => {
+      const onEvent = (arg as { onEvent: { onmessage: ((message: TestTurnEvent) => void) | null } }).onEvent;
+      onEvent.onmessage?.({ type: "chunk", text: "失败基线：工具未执行，不重放。" });
+      onEvent.onmessage?.({ type: "error", ...failure });
+      onEvent.onmessage?.({ type: "chunk", text: "迟到内容" });
+      completeTurn(arg);
+    });
+    await startTurn("创建测试文档");
+    await vi.waitFor(() => {
+      const saves = invokeMock.mock.calls.filter(([command, arg]) => command === "dispatch"
+        && (arg as {request:{command:string}}).request.command === "ag.save_turn");
+      const latest = saves[saves.length - 1]?.[1] as {request:{params:{payload:{assistantMessage:{content:string;error?:boolean};failure:unknown}}}};
+      expect(latest.request.params.payload.assistantMessage).toMatchObject({content: "失败基线：工具未执行，不重放。"});
+      expect(latest.request.params.payload.assistantMessage.error).not.toBe(true);
+      expect(latest.request.params.payload.failure).toMatchObject(failure);
+    });
+    const session = activeSession(agStore.getSnapshot());
+    expect(session.messages.filter(m => m.error)).toHaveLength(1);
+    expect(session.messages.some(m => m.content === "迟到内容")).toBe(false);
+    mockTurnInvoke(completeTurn);
+    await startTurn("你好");
+    const starts = invokeMock.mock.calls.filter(([command]) => command === "ag_start_turn");
+    const last = starts[starts.length - 1]?.[1] as {history:unknown};
+    expect(JSON.stringify(last.history)).not.toMatch(/失败基线|长度截断|迟到内容/);
+  });
+
   it("失败诊断只消费安全字段，错误不污染下一次模型历史", async () => {
     edStore.loadDoc("notes/a.md", "A 文档", 1);
     const diagnostic = { version: 1, observedAt: "runtime", category: "core_context", rootCauseStatus: "unknown" };
@@ -2133,6 +2206,41 @@ describe("startTurn 回合内消息片段时序（AG-MSG-RENDER-01）", () => {
     expect(agStore.getSnapshot().sending).toBe(false);
   });
 
+  it("预算收尾可显式新回合续办，只读证据允许，可能有副作用时不重放", async () => {
+    mockTurnInvoke((arg) => {
+      (arg as {onEvent:{onmessage:((m:TestTurnEvent)=>void)|null}}).onEvent.onmessage?.({type:"done",stopReason:"budget_exhausted"});
+    });
+    await startTurn("读取剩余文件");
+    const sessionId = agStore.getSnapshot().activeSessionId;
+    const source = activeSession(agStore.getSnapshot()).messages.find(m=>m.role==="user")!;
+    expect(source.turnStatus).toBe("completed");
+    expect(source.completionReason).toBe("budget_exhausted");
+    const event = (seq:number,payload:Record<string,unknown>)=>({eventId:`budget-${seq}`,turnId:source.turnId,seq,occurredAt:seq,payloadVersion:1,...payload});
+    let evidence = [event(1,{type:"done",stopReason:"stop"})];
+    invokeMock.mockImplementation(async (command,arg)=>{
+      if(command==="ag_start_turn") {
+        bindTurnChannel(arg as Record<string,unknown>);
+        (arg as {onEvent:{onmessage:((m:TestTurnEvent)=>void)|null}}).onEvent.onmessage?.({type:"done",stopReason:"stop"});
+        return undefined;
+      }
+      const request=(arg as {request?:{command?:string;correlation_id?:string}}).request;
+      if(request?.command==="ag.list_turn_events") return {correlation_id:request.correlation_id,result:evidence};
+      return dispatchOk(arg);
+    });
+    const retryOf={sessionId,turnId:source.turnId!,continuationOnly:true};
+    await expect(startTurn(source.content,{retryOf})).rejects.toThrow("AG_RETRY_EFFECT_UNVERIFIED");
+    evidence=[event(1,{type:"tool_request",toolCallId:"write",toolName:"plan_workspace_operation",params:{}}),event(2,{type:"done",stopReason:"budget_exhausted"})];
+    await expect(startTurn(source.content,{retryOf})).rejects.toThrow("AG_RETRY_EFFECT_UNVERIFIED");
+    expect(invokeMock.mock.calls.filter(([cmd])=>cmd==="ag_start_turn")).toHaveLength(1);
+    evidence=[event(1,{type:"tool_request",toolCallId:"read",toolName:"workspace_glob",params:{}}),event(2,{type:"done",stopReason:"budget_exhausted"})];
+    await startTurn(source.content,{retryOf});
+    const calls=invokeMock.mock.calls.filter(([cmd])=>cmd==="ag_start_turn");
+    expect(calls).toHaveLength(2);
+    expect((calls[1][1] as {turnId:string}).turnId).not.toBe(source.turnId);
+    expect((calls[1][1] as {prompt:string}).prompt).toContain("不得重放既有副作用");
+    expect(activeSession(agStore.getSnapshot()).messages.find(m=>m.id===source.id)?.completionReason).toBe("budget_exhausted");
+  });
+
   it("Channel 无终态保持 draft；重试核对终态和效果，不盲目重复执行", async () => {
     invokeMock.mockImplementation(async (command, arg) => {
       if (command === "ag_start_turn") return undefined;
@@ -3064,6 +3172,90 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
     });
   });
 
+  // covers: BR-SYS-STATE-008, BR-AG-STATE-001, BR-WS-PERSIST-003
+  it("defers a resource group until save and keeps rejection in the original interaction", async () => {
+    for (const scenario of ["saved","rejected","single-saved","single-rejected"]) {
+      agStore.reset(); deStore.reset(); edStore.reset(); tabsStore.reset();
+      const turns:Array<Record<string,unknown>>=[];
+      const requestId=`save-barrier-${scenario}`;
+      let saved=false;
+      mockTurnInvoke(arg=>{
+        turns.push(arg as Record<string,unknown>);
+        if (turns.length===1) (arg as {onEvent:{onmessage:(event:TestTurnEvent)=>void}}).onEvent.onmessage({type:"decision_request_proposed",request_id:requestId,kind:"permission",payload:{workspaceOperationPlanId:"save-plan"}});
+        else completeTurn(arg);
+      });
+      const prompt = scenario.startsWith("single-") ? "创建含初始内容的新文件" : "创建新文件并在内容保存后删除旧文件";
+      await startTurn(prompt);
+      const owner=agStore.getSnapshot().activeSessionId;
+      const anchor = agStore.getSnapshot().sessions.find(session=>session.id===owner)?.messages.find(message=>message.role==="assistant")?.id;
+      const original=invokeMock.getMockImplementation()!;
+      invokeMock.mockImplementation(async(command,arg)=>{
+        if (command==="ag_ack_preview") return {task_run_id:"save-run",ready:true,awaiting_save:true};
+        if (command!=="dispatch") return original(command,arg);
+        const request=(arg as {request:{command:string}}).request;
+        let result:unknown;
+        if (request.command==="ag.resolve_decision") result={task_run_id:"save-run",status:"waiting",workspace_operation_receipt:{operation_id:"save-op",plan_id:"save-plan",final_status:saved?"completed":"awaiting_content",item_receipts:[{item_id:"create",seq:0,status:"completed"}],compensation_receipts:[],entry_id:"save-entry"},...(saved?{}:{create_document_bundle:{plan_id:"save-plan",target:{rel_path:"new.txt"},status:"resource_created"}})};
+        else if(request.command==="ws.read_doc") result={content:"",baseline:"empty-disk"};
+        else if(request.command==="ws.project_create_document_bundle") result={diff_id:"save-diff",task_run_id:"save-run",source_turn_id:turns[0].turnId,projection:{diff_id:"save-diff",rel_path:"new.txt",patch_kind:"replace_document",before_text:"",after_text:"NEW CONTENT",draft_mode:"current_editor",base_session_version:1,base_content_hash:"empty"}};
+        else if(request.command==="ag.list_turn_events") result=[{eventId:"saved-core-summary",turnId:turns[0].turnId,seq:100,occurredAt:1,payloadVersion:1,type:"chunk",text:"已拒绝初始内容，同组后续操作不会执行。"},{eventId:"saved-core-done",turnId:turns[0].turnId,seq:101,occurredAt:2,payloadVersion:1,type:"done",stopReason:"cancelled"}];
+        else return dispatchOk(arg);
+        return {correlation_id:"save-test",result};
+      });
+      const other=agStore.newSession();
+      await resolveDecisionAndContinue(requestId,"confirm");
+      expect(turns).toHaveLength(1);
+      expect(deStore.getSnapshot().diffs[0].sessionId).toBe(owner);
+      expect(deStore.getSnapshot().diffs[0].anchorMessageId).toBe(anchor);
+      expect(agStore.getSnapshot().sessions.find(session=>session.id===owner)?.messages.find(message=>message.id===anchor)?.segments)
+        .toContainEqual({kind:"diff",diffId:"save-diff"});
+      expect(agStore.getSnapshot().sessions.find(session=>session.id===owner)?.messages.slice(-1)[0]?.content).toContain("等待你保存");
+      deStore.markDraftApplied("save-diff");
+      await acknowledgePreviewAndContinue("save-diff");
+      expect(turns).toHaveLength(1);
+      if (scenario.endsWith("saved")) {
+        await resumeSavedResourceGroups("other.txt");
+        expect(turns).toHaveLength(1);
+        saved=true;
+        await resumeSavedResourceGroups("new.txt");
+        await vi.waitFor(()=>expect(turns).toHaveLength(2));
+        expect(turns[1]).toMatchObject({sessionId:owner,turnId:turns[0].turnId,decisionResume:true});
+        expect(turns[1]).toMatchObject({provider:turns[0].provider,model:turns[0].model,prompt});
+        await resumeSavedResourceGroups("new.txt");
+        expect(turns).toHaveLength(2);
+      } else {
+        await refreshSettledResourceGroup("save-diff");
+        await vi.waitFor(()=>expect(agStore.getSnapshot().sessions.find(session=>session.id===owner)?.messages.slice(-1)[0]?.content).toContain("已拒绝初始内容"));
+        expect(turns).toHaveLength(1);
+        expect(agStore.getSnapshot().currentAction).toBeNull();
+        expect(agStore.getSnapshot().sessions.find(session=>session.id===owner)?.messages.find(message=>message.id===anchor)?.awaitingResourceSave).toBeUndefined();
+      }
+      expect(agStore.getSnapshot().sessions.find(session=>session.id===other)?.messages).toHaveLength(0);
+      expect(agStore.getSnapshot().sessions.find(session=>session.id===owner)?.messages.filter(message=>message.role==="user").map(message=>message.content)).toEqual([prompt]);
+    }
+  });
+
+  // covers: BR-SYS-STATE-007, BR-AG-STATE-001
+  it("delivers persisted core failure and a unique error after decision postprocessing", async () => {
+    let turns=0;
+    mockTurnInvoke(arg=>{++turns; (arg as {onEvent:{onmessage:(event:TestTurnEvent)=>void}}).onEvent.onmessage({type:"decision_request_proposed",request_id:"postprocess-failure",kind:"permission",payload:{}});});
+    await startTurn("准备资源计划");
+    const session=agStore.getSnapshot().activeSessionId;
+    const turn=agStartArg().turnId;
+    const original=invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async(command,arg)=>{
+      if(command!=="dispatch") return original(command,arg);
+      const request=(arg as {request:{command:string}}).request;
+      if(request.command==="ag.resolve_decision") throw {code:"WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED",decisionResolved:true,taskRunId:"failure-run"};
+      if(request.command==="ag.list_turn_events") return {correlation_id:"core",result:[{eventId:"core-summary",turnId:turn,seq:100,occurredAt:1,payloadVersion:1,type:"chunk",text:"任务未完成；资源创建已补偿，不会自动重放。"},{eventId:"core-error",turnId:turn,seq:101,occurredAt:2,payloadVersion:1,type:"error",code:"DE_DB_ERROR",message:"投影失败",retriable:false}]};
+      return dispatchOk(arg);
+    });
+    await expect(resolveDecisionAndContinue("postprocess-failure","confirm")).rejects.toMatchObject({decisionResolved:true});
+    expect(turns).toBe(1);
+    expect(agStore.getSnapshot().sessions.find(s=>s.id===session)?.messages.slice(-1)[0]?.content).toContain("资源创建已补偿");
+    expect(agStore.getSnapshot().currentAction).toBeNull();
+    expect(agStore.getSnapshot().pendingDecision).toBeNull();
+  });
+
   // covers: BR-SYS-STATE-008
   // 任务级确认恢复产生裁决请求的原 AgentTurn，而不是自动创建新回合。
   it("confirm resumes the parked AgentTurn", async () => {
@@ -3114,29 +3306,32 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
   // covers: BR-SYS-STATE-008, BR-AG-DATA-001
   // 只有 editor 已把 Diff 应用到 LogicalState 后，才向后端确认 checkpoint 并以新快照启动续片段。
   it("preview acknowledgement starts exactly one fresh-snapshot continuation", async () => {
+    const selected = modelStore.getSnapshot().models[1];
+    modelStore.setCapabilityPref("agentEdit", { mode:"explicit", modelKey:modelKey(selected) });
+    projectionResult({diff_id:"diff-preview",preview_checkpoint_required:true});
+    mockTurnInvoke(arg=>{
+      (arg as {onEvent:{onmessage:(event:TestTurnEvent)=>void}}).onEvent.onmessage({type:"diff_proposed",diff_id:"diff-preview",rel_path:"notes/current.md",task_run_id:"task-preview"});
+      completeTurn(arg);
+    });
     edStore.loadDoc("notes/current.md", "预览前", 101);
+    await startTurn("修改当前文档后核对结果");
+    const parent = agStartArg();
+    modelStore.setCapabilityPref("agentEdit", { mode:"explicit", modelKey:modelKey(modelStore.getSnapshot().models[0]) });
     edStore.updateContent("notes/current.md", "预览后");
     const session = edStore.getSnapshot().sessions["notes/current.md"];
-    deStore.addDiff({
-      diffId: "diff-preview",
-      sessionId: activeSession(agStore.getSnapshot()).id,
-      turnId: "turn-preview",
-      taskRunId: "task-preview",
-      relPath: "notes/current.md",
-      blockId: "b1",
-      title: "预览建议",
-      before: "预览前",
-      after: "预览后",
-      state: "pending",
-      draftApplied: true,
-      previewContinuationRequired: true,
-    });
+    deStore.markDraftApplied("diff-preview");
+    invokeMock.mockClear();
     let turns = 0;
     invokeMock.mockImplementation(async (command, arg) => {
       if (command === "ag_ack_preview") return { task_run_id: "task-preview", ready: true };
       if (command === "ag_start_turn") {
+        expect(arg).toMatchObject({provider:selected.provider,model:selected.model,prompt:parent.prompt});
+        bindTurnChannel(arg as Record<string, unknown>);
+        // Match the real backend's admission requirement, not only a later context callback.
+        expect((arg as {openDocSnapshots:unknown[]}).openDocSnapshots).toContainEqual(expect.objectContaining({relPath:"notes/current.md",sessionVersion:session.sessionVersion,contentHash:session.contentHash}));
         turns += 1;
         requestContext(arg, ["notes/current.md"]);
+        (arg as {onEvent:{onmessage:(event:TestTurnEvent)=>void}}).onEvent.onmessage({type:"chunk",text:"预览核验结束"});
         completeTurn(arg);
         return undefined;
       }
@@ -3149,7 +3344,7 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
     expect(turns).toBe(1);
     expect(invokeMock).toHaveBeenCalledWith("ag_ack_preview", expect.objectContaining({
       taskRunId: "task-preview",
-      turnId: "turn-preview",
+      turnId: parent.turnId,
       diffId: "diff-preview",
       relPath: "notes/current.md",
       sessionVersion: session.sessionVersion,
@@ -3160,18 +3355,35 @@ describe("auto-continue（AG-1.0-TASKRUN-REWORK-CONTINUE-01）", () => {
       continuationPreviewDiffId: "diff-preview",
       continuationDecisionRequestId: undefined,
     });
-    expect(agStartArg().openDocSnapshots).toEqual([]);
+    expect(agStartArg().turnId).not.toBe(parent.turnId);
+    await vi.waitFor(()=>expect(invokeMock.mock.calls.some(([command,arg])=>command==="dispatch"
+      && (arg as {request:{command:string;params:{turnId?:string;payload?:{assistantMessage?:{content:string}}}}}).request.command==="ag.save_turn"
+      && (arg as {request:{params:{turnId?:string}}}).request.params.turnId===agStartArg().turnId
+      && (arg as {request:{params:{payload?:{assistantMessage?:{content:string}}}}}).request.params.payload?.assistantMessage?.content==="预览核验结束")).toBe(true));
+    expect(activeSession(agStore.getSnapshot()).messages.filter(message=>message.role==="user").map(message=>message.content)).toEqual(["修改当前文档后核对结果"]);
     expect(lastContextResponse().snapshots[0])
       .toMatchObject({ content: "预览后", sessionVersion: session.sessionVersion, contentHash: session.contentHash });
+    // A restored/foreign diff with no frozen origin must not borrow the global model.
+    deStore.addDiff({diffId:"preview-no-origin",sessionId:activeSession(agStore.getSnapshot()).id,turnId:"unknown-parent",taskRunId:"task-preview",relPath:"notes/current.md",blockId:"b1",title:"历史建议",before:"前",after:"后",state:"pending",draftApplied:true,previewContinuationRequired:true});
+    await acknowledgePreviewAndContinue("preview-no-origin");
+    expect(turns).toBe(1);
+    expect(activeSession(agStore.getSnapshot()).messages.slice(-1)[0]?.content).toContain("AG_PREVIEW_ORIGIN_UNAVAILABLE");
+    expect(activeSession(agStore.getSnapshot()).messages.filter(message=>message.role==="user")).toHaveLength(1);
+    modelStore.setCapabilityPref("agentEdit", { mode:"followGlobal" });
   });
 
   // covers: BR-SYS-STATE-008, BR-AG-DATA-001
   it("preview receipt preserves origin session and suppresses concurrent submission", async () => {
     edStore.loadDoc("notes/current.md", "preview", 101);
     const origin = activeSession(agStore.getSnapshot()).id;
-    deStore.addDiff({ diffId: "p07-session", sessionId: origin, turnId: "p07-turn", taskRunId: "p07-task",
-      relPath: "notes/current.md", blockId: "b1", title: "preview", before: "before", after: "preview",
-      state: "pending", draftApplied: true, previewContinuationRequired: true });
+    projectionResult({diff_id:"p07-session",preview_checkpoint_required:true});
+    mockTurnInvoke(arg=>{
+      (arg as {onEvent:{onmessage:(event:TestTurnEvent)=>void}}).onEvent.onmessage({type:"diff_proposed",diff_id:"p07-session",rel_path:"notes/current.md",task_run_id:"p07-task"});
+      completeTurn(arg);
+    });
+    await startTurn("检查预览结果");
+    deStore.markDraftApplied("p07-session");
+    invokeMock.mockClear();
     let release!: (value: unknown) => void;
     invokeMock.mockImplementation(async (command, arg) => {
       if (command === "ag_ack_preview") return new Promise((resolve) => { release = resolve; });

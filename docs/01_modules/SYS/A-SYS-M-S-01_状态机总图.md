@@ -149,6 +149,7 @@ constraint_id: X-SEQ-003
   决定后续路线；SM-AG-04 只投影 Waiting/Active，不自动推进依赖步骤。
   资源卡不进入 SM-DE-01；受影响内容 Diff 仅在资源执行成功后因基线推进失效。CreateDocumentBundle 在
   资源创建成功后再进入 SM-DE-01 投影初始内容 Diff。重启使两侧未终态都进入 Interrupted，旧确认不得重放。
+  2026-10-24完整工作流增量：有绑定初始内容时（包括单独创建），SM-WS-04统一进入AwaitingContent；真实预览、接受仍不解锁。用户实际保存后，以原决策/回合/保存基线再核验并执行剩余项；TaskRun仍不调度。打开/投影/预览失败通过operationFailed使原AwaitingDecision→TurnError，先交付核心结果说明再提交唯一错误终态；拒绝初始内容取消原等待。旧组合补偿恢复全组实际已完成项，部分恢复不得宣称全组回滚。
 - **AgentTurn 澄清等待（非终态）**：模型输出澄清请求后进入等待用户输入的非终态，不是
   SM-AG-01 的 Completed；取消可在任一活动阶段进入终态，首终态后迟到事件/工具不得产生文档、卡片或落盘
   副作用（BR-SYS-STATE-007）。SM-AG-01 必须与 IPC 流式终态契约（BR-SYS-STATE-002）对齐。
@@ -259,6 +260,8 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-24 | v1.20 | 单独创建初始内容统一承接既有AwaitingContent保存屏障，不新增执行状态机或模型恢复分支。 |
+| 2026-10-24 | v1.19 | 同步AG/WS/DE/ED完整工作流转移：保存屏障、确认身份检查点、后处理失败/拒绝回流原回合及整组补偿；不改变Gate或授权。 |
 | 2026-09-03 | v1.18 | AG-ADAPTIVE-RUNTIME-DESIGN-01：SM-AG-04 登记改为 TurnEvent 派生 TaskRun 投影机；工具结果统一回 SM-AG-01 重装配/门禁；DecisionRequest/WorkspaceOperation 改由 AgentTurn 驱动，TaskRun 不再调度。 |
 | 2026-06-10 | v1.0 | 初版（SYS G2 末件）：状态机总图框架与注册清单（登记 APC §6 核心链，SM-SYS-01 active 其余 planned）；注册前置约束 X-SEQ-003（对齐 ADP SC-06/07）、跨模块转移契约框架 X-INTER-001；流式终态与 BR-SYS-STATE-002 对齐；REQ_MAP（REQ-SYS-003）；术语归属说明；债务盲区（SY-04 总图未闭合、autocomplete/inline-assist 归属待定） |
 | 2026-06-10 | v1.1 | WS G2 回填（owner 模块登记，§11.3）：§3 总图清单 save 行 planned→active 回填 machine_id=SM-WS-01，新增「diff 落盘（WS 侧）SM-WS-02」「时间轴还原 SM-WS-03」两行（A-WS-M-S-01 定义）；§5 X-INTER-001「diff accepted→落盘」转移点登记 WS 侧机 SM-WS-02（DE 侧待 DE G2）；§10 SY-04 债务由「未闭合」更新为「部分闭合」（SYS+WS 已 active，余模块 planned） |

@@ -219,7 +219,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.AG.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'AG')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(155); // AgentUI 51 + agRuntime 83 + assistRuntime 21；AG-READ-CONTRACT-RECOVERY-01 新增隔离恢复入口接线回归，保持精确计数。
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(163); // AgentUI 54 + agRuntime 88 + assistRuntime 21；新增失败正文保存/旧缓存恢复两项，物理测试文件不增加。
     expect(inventory.modules.PRV.frontend_owned).toBe(2);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'PRV')

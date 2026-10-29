@@ -266,11 +266,14 @@ impl AgentFailureDiagnostic {
             | "ENT_AUTH_BAD_RESPONSE"
             | "AG_GW_TIMEOUT"
             | "AG_GW_STREAM_TIMEOUT" => "unknown",
+            "AG_OPERATION_INTERACTION_INTERRUPTED" => "ui_projection",
             "AG_MODEL_CONTROL_INVALID"
             | "AG_TOOL_ARG"
+            | "AG_READ_CURSOR_INVALID"
             | "AG_READ_PAGE_VERSION_REQUIRED"
             | "AG_MODEL_CONTROL_MISSING"
             | "AG_MODEL_CONTROL_CONFLICT"
+            | "AG_MODEL_CORRECTION_LIMIT"
             | "AG_TOOL_ARGUMENTS_INVALID"
             | "AG_GW_STREAM_INVALID_JSON"
             | "AG_GW_STREAM_INCOMPLETE"
@@ -281,7 +284,7 @@ impl AgentFailureDiagnostic {
             _ => match observed_at {
                 "context_assembly" => "core_context",
                 "gate" => "authorization",
-                "tool_execution" => "professional_capability",
+                "tool_execution" | "operation_post_processing" => "professional_capability",
                 _ => "unknown",
             },
         };
@@ -389,7 +392,12 @@ mod tests {
             AgentFailureDiagnostic::observed("runtime", "AG_MODEL_CONTROL_INVALID").category,
             "model_protocol"
         );
-        for code in ["AG_MODEL_CONTROL_CONFLICT", "AG_TOOL_ARGUMENTS_INVALID"] {
+        for code in [
+            "AG_MODEL_CONTROL_CONFLICT",
+            "AG_TOOL_ARGUMENTS_INVALID",
+            "AG_READ_CURSOR_INVALID",
+            "AG_MODEL_CORRECTION_LIMIT",
+        ] {
             assert_eq!(
                 AgentFailureDiagnostic::observed("tool_validation", code).category,
                 "model_protocol"

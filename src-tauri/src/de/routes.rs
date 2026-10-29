@@ -463,12 +463,17 @@ pub(crate) fn route_reject_diff<R: tauri::Runtime>(
                     app,
                     sm_events::SmStatePayload::new("SM-DE-01", &diff_id, "Rejected", true),
                 );
-                return Ok(serde_json::json!({
+                let response = serde_json::json!({
                     "diff_id": diff_id,
                     "status": "rejected",
                     "resource_discarded": true,
                     "workspace_timeline_entry_id": entry.entry_id,
-                }));
+                });
+                drop(conn);
+                if let Some(bundle) = &create_bundle {
+                    ag::turn_events::finish_rejected_operation(state, &bundle.plan_id)?;
+                }
+                return Ok(response);
             }
             Ok(None) => {}
             Err(error) if error.code == "WS_CREATE_BUNDLE_BASELINE_ADVANCED" => {
@@ -477,14 +482,25 @@ pub(crate) fn route_reject_diff<R: tauri::Runtime>(
                     app,
                     sm_events::SmStatePayload::new("SM-DE-01", &diff_id, "Expired", true),
                 );
-                return Ok(serde_json::json!({
+                let response = serde_json::json!({
                     "diff_id": diff_id,
                     "status": "expired",
                     "resource_discarded": false,
                     "reason": error.code,
-                }));
+                });
+                drop(conn);
+                if let Some(bundle) = &create_bundle {
+                    ag::turn_events::finish_failed_operation(state, &bundle.plan_id, &error)?;
+                }
+                return Ok(response);
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                drop(conn);
+                if let Some(bundle) = &create_bundle {
+                    ag::turn_events::finish_failed_operation(state, &bundle.plan_id, &error)?;
+                }
+                return Err(error);
+            }
         }
     }
     // ① 集成：经 SM-DE-01 守护当前态——已终态不得重复拒绝。

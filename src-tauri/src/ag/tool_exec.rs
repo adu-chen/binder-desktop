@@ -620,10 +620,72 @@ fn read_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> String {
     )
 }
 
+/// A page token binds the next offset to the exact document identity and snapshot.
+/// It is a continuation token, not an authorization credential.
+fn next_read_cursor(rel_path: &str, offset: usize, version: &str) -> String {
+    format!(
+        "v1:{offset}:{version}:{}",
+        crate::ag::context::sha256_text(rel_path)
+    )
+}
+
+fn decode_read_cursor(
+    args: &serde_json::Value,
+    rel_path: &str,
+) -> Result<Option<(usize, String)>, IpcError> {
+    let Some(value) = args.get("cursor") else {
+        return Ok(None);
+    };
+    let token = value.as_str().ok_or_else(|| {
+        IpcError::new(
+            "AG_READ_CURSOR_INVALID",
+            "分页 cursor 必须是上一页返回的 next_cursor。",
+            false,
+            false,
+        )
+    })?;
+    let parts = token.split(':').collect::<Vec<_>>();
+    if parts.len() != 4
+        || parts[0] != "v1"
+        || parts[1].parse::<usize>().is_err()
+        || parts[2].len() != 64
+        || !parts[2].bytes().all(|byte| byte.is_ascii_hexdigit())
+        || parts[3] != crate::ag::context::sha256_text(rel_path)
+    {
+        return Err(IpcError::new(
+            "AG_READ_CURSOR_INVALID",
+            "分页 cursor 无效或不属于此文档；请从第一页重新读取。",
+            false,
+            false,
+        ));
+    }
+    Ok(Some((
+        parts[1].parse().expect("checked offset"),
+        parts[2].to_owned(),
+    )))
+}
+
+fn read_page_offset(args: &serde_json::Value, rel_path: &str) -> Result<usize, IpcError> {
+    match decode_read_cursor(args, rel_path)? {
+        Some((offset, _)) => Ok(offset),
+        None => page_integer(args, "offset", 0, usize::MAX),
+    }
+}
+
 fn verify_read_version(
     args: &serde_json::Value,
     snapshot: &crate::ag::blocks::AgentEditableSnapshot,
 ) -> Result<(), IpcError> {
+    if let Some((_, expected)) = decode_read_cursor(args, &snapshot.rel_path)? {
+        if expected != read_version(snapshot) {
+            return Err(IpcError::new(
+                "AG_READ_VERSION_STALE",
+                "文档版本已变化，请从当前版本重新读取，不得拼接旧页。",
+                true,
+                false,
+            ));
+        }
+    }
     if let Some(expected) = args.get("expected_hash") {
         if expected.as_str() != Some(read_version(snapshot).as_str()) {
             return Err(IpcError::new(
@@ -683,6 +745,20 @@ pub(super) fn validate_read_arguments(
             false,
         ));
     }
+    if args.get("cursor").is_some() {
+        if args.get("offset").is_some() || args.get("expected_hash").is_some() {
+            return Err(IpcError::new(
+                "AG_TOOL_ARG",
+                "cursor 不得与 offset/expected_hash 混用。",
+                false,
+                false,
+            ));
+        }
+        if matches!(name, "read_doc" | "list_blocks") {
+            let rel_path = path_arg(args, name)?;
+            decode_read_cursor(args, &rel_path)?;
+        }
+    }
     if name == "read_doc"
         && args.get("blocks").is_some_and(|blocks| {
             blocks.as_array().is_none_or(|blocks| {
@@ -712,17 +788,20 @@ pub(super) fn validate_read_arguments(
         }
         let structure = view == Some("structure") || args.get("blocks").is_some();
         if (view == Some("text") && args.get("blocks").is_some())
-            || (structure && (args.get("offset").is_some() || args.get("limit_chars").is_some()))
+            || (structure
+                && (args.get("offset").is_some()
+                    || args.get("cursor").is_some()
+                    || args.get("limit_chars").is_some()))
         {
             return Err(IpcError::new(
                 "AG_TOOL_ARG",
-                "正文分页与编辑结构读取不能混用；blocks/structure 不接受 offset/limit_chars。",
+                "正文分页与编辑结构读取不能混用；blocks/structure 不接受 cursor/offset/limit_chars。",
                 false,
                 false,
             ));
         }
         if !structure {
-            let offset = page_integer(args, "offset", 0, usize::MAX)?;
+            let offset = read_page_offset(args, &path_arg(args, name)?)?;
             if page_integer(args, "limit_chars", 10_000, 10_000)? == 0 {
                 return Err(IpcError::new(
                     "AG_TOOL_ARG",
@@ -731,13 +810,13 @@ pub(super) fn validate_read_arguments(
                     false,
                 ));
             }
-            if offset > 0 && args.get("expected_hash").is_none() {
+            if offset > 0 && args.get("cursor").is_none() && args.get("expected_hash").is_none() {
                 return Err(IpcError::new("AG_READ_PAGE_VERSION_REQUIRED", "正文非首页缺少 expected_hash；请使用上一页返回的 next_offset 和 version_hash。offset 是阅读文本Unicode字符位置，不是块号。", false, false));
             }
         }
     }
     if name == "list_blocks" {
-        let offset = page_integer(args, "offset", 0, usize::MAX)?;
+        let offset = read_page_offset(args, &path_arg(args, name)?)?;
         let limit = page_integer(args, "limit", 20, 50)?;
         if limit == 0 {
             return Err(IpcError::new(
@@ -747,7 +826,7 @@ pub(super) fn validate_read_arguments(
                 false,
             ));
         }
-        if offset > 0 && args.get("expected_hash").is_none() {
+        if offset > 0 && args.get("cursor").is_none() && args.get("expected_hash").is_none() {
             return Err(IpcError::new("AG_READ_PAGE_VERSION_REQUIRED", "非首页分页缺少 expected_hash。请先调用 list_blocks(path, offset=0) 取得 version_hash 和 next_offset，再使用返回的 next_offset 与 version_hash 读取下一页；offset 不是块编号。", false, false));
         }
     }
@@ -775,11 +854,11 @@ fn reading_page(
 ) -> Result<String, IpcError> {
     let text = crate::ag::blocks::reading_text(snapshot);
     let chars: Vec<char> = text.chars().collect();
-    let offset = page_integer(args, "offset", 0, usize::MAX)?;
+    let offset = read_page_offset(args, &snapshot.rel_path)?;
     if offset > chars.len() {
         return Err(IpcError::new(
             "AG_READ_PAGE_OUT_OF_RANGE",
-            "正文游标超出当前阅读投影；请从 offset=0 重新读取，不得猜测游标。",
+            "正文游标超出当前阅读投影；请从第一页重新读取，不得猜测游标。",
             true,
             false,
         ));
@@ -797,6 +876,11 @@ fn reading_page(
         page["end_offset"] = end.into();
         page["next_offset"] = if end < chars.len() {
             end.into()
+        } else {
+            serde_json::Value::Null
+        };
+        page["next_cursor"] = if end < chars.len() {
+            next_read_cursor(&snapshot.rel_path, end, &read_version(snapshot)).into()
         } else {
             serde_json::Value::Null
         };
@@ -1090,10 +1174,10 @@ fn exec_read_only_unbounded(
             let rel = path_arg(args, "list_blocks")?;
             let snapshot = ctx.snapshot(&rel)?;
             verify_read_version(args, &snapshot)?;
-            let offset = page_integer(args, "offset", 0, usize::MAX)?;
+            let offset = read_page_offset(args, &snapshot.rel_path)?;
             let limit = page_integer(args, "limit", 20, 50)?;
             if offset > snapshot.blocks.len() {
-                return Err(IpcError::new("AG_READ_PAGE_OUT_OF_RANGE", "分页起点超出当前块目录；请从 list_blocks(path, offset=0) 重新取得 next_offset 和 version_hash，不得猜测页码或块编号。", true, false));
+                return Err(IpcError::new("AG_READ_PAGE_OUT_OF_RANGE", "分页起点超出当前块目录；请从第一页重新取得 next_cursor，不得猜测页码或块编号。", true, false));
             }
             let total = snapshot.blocks.len();
             // AG-CTX-01：list_blocks 轻量投影——只返回块目录（无 node_json/全文/marks/attrs），
@@ -1160,6 +1244,7 @@ fn exec_read_only_unbounded(
                 "offset": offset,
                 "total_blocks": total,
                 "next_offset": (offset + directory.len() < total).then_some(offset + directory.len()),
+                "next_cursor": (offset + directory.len() < total).then(|| next_read_cursor(&snapshot.rel_path, offset + directory.len(), &read_version(&snapshot))),
                 "complete": offset == 0 && directory.len() == total,
                 "blocks": directory,
             });
@@ -1175,6 +1260,8 @@ fn exec_read_only_unbounded(
                 entries.pop();
                 let end = offset + entries.len();
                 page["next_offset"] = end.into();
+                page["next_cursor"] =
+                    next_read_cursor(&snapshot.rel_path, end, &read_version(&snapshot)).into();
                 page["complete"] = false.into();
             }
             Ok(page.to_string())
@@ -1409,6 +1496,7 @@ mod tests {
         assert_eq!(first["blocks"].as_array().unwrap().len(), 20);
         assert_eq!(first["total_blocks"], 25);
         assert_eq!(first["next_offset"], 20);
+        assert!(first["next_cursor"].is_string());
         assert_eq!(first["complete"], false);
         assert_eq!(first["version_hash"], full["version_hash"]);
         let second = call(
@@ -1417,6 +1505,33 @@ mod tests {
         );
         assert_eq!(second["blocks"].as_array().unwrap().len(), 5);
         assert!(second["next_offset"].is_null());
+        let cursor_second = call(
+            "list_blocks",
+            serde_json::json!({"path":"a.txt","cursor":first["next_cursor"]}),
+        );
+        assert_eq!(cursor_second["blocks"], second["blocks"]);
+        assert!(cursor_second["next_cursor"].is_null());
+        std::fs::write(dir.join("b.txt"), "different").unwrap();
+        assert_eq!(
+            exec_read_only(
+                &read_ctx,
+                "list_blocks",
+                &serde_json::json!({"path":"b.txt","cursor":first["next_cursor"]})
+            )
+            .unwrap_err()
+            .code,
+            "AG_READ_CURSOR_INVALID"
+        );
+        assert_eq!(
+            exec_read_only(
+                &read_ctx,
+                "list_blocks",
+                &serde_json::json!({"path":"a.txt","cursor":first["next_cursor"],"offset":20})
+            )
+            .unwrap_err()
+            .code,
+            "AG_TOOL_ARG"
+        );
         assert_eq!(second["complete"], false);
         let selected_args = serde_json::json!({"path":"a.txt","blocks":["24"],"expected_hash":first["version_hash"]});
         let selected = call("read_doc", selected_args.clone());
@@ -1467,6 +1582,17 @@ mod tests {
         );
         assert!(end["blocks"].as_array().unwrap().is_empty());
         assert!(end["next_offset"].is_null());
+        std::fs::write(dir.join("a.txt"), format!("{body}\nchanged")).unwrap();
+        assert_eq!(
+            exec_read_only(
+                &read_ctx,
+                "list_blocks",
+                &serde_json::json!({"path":"a.txt","cursor":first["next_cursor"]})
+            )
+            .unwrap_err()
+            .code,
+            "AG_READ_VERSION_STALE"
+        );
         for blocks in [
             serde_json::json!([]),
             serde_json::json!([1]),
@@ -1493,7 +1619,6 @@ mod tests {
             .code,
             "AG_READ_BLOCK_NOT_FOUND"
         );
-        std::fs::write(dir.join("a.txt"), format!("{body}\nchanged")).unwrap();
         assert_eq!(
             successful_tool_evidence(&read_ctx, "read_doc", &selected_args, &selected.to_string())
                 [0]
@@ -1590,12 +1715,13 @@ mod tests {
         let read_ctx = ctx(&dir);
         let mut offset = 0;
         let mut version: Option<String> = None;
+        let mut cursor: Option<String> = None;
         let mut assembled = String::new();
         let mut pages = 0;
         loop {
-            let mut args = serde_json::json!({"path":"long.txt","offset":offset});
-            if let Some(hash) = &version {
-                args["expected_hash"] = serde_json::Value::String(hash.clone());
+            let mut args = serde_json::json!({"path":"long.txt"});
+            if let Some(token) = &cursor {
+                args["cursor"] = serde_json::Value::String(token.clone());
             }
             let result = exec_read_only(&read_ctx, "read_doc", &args).unwrap();
             assert!(
@@ -1611,14 +1737,20 @@ mod tests {
                 "selected_blocks"
             );
             assembled.push_str(page["content"].as_str().unwrap());
-            version = Some(page["version_hash"].as_str().unwrap().to_string());
+            if let Some(hash) = &version {
+                assert_eq!(page["version_hash"], hash.as_str());
+            } else {
+                version = Some(page["version_hash"].as_str().unwrap().to_string());
+            }
             pages += 1;
             assert!(pages < 20, "pagination must make progress");
             if let Some(next) = page["next_offset"].as_u64() {
                 assert!(next as usize > offset);
                 offset = next as usize;
+                cursor = Some(page["next_cursor"].as_str().unwrap().to_owned());
             } else {
                 assert_eq!(page["has_more"], false);
+                assert!(page["next_cursor"].is_null());
                 break;
             }
         }
@@ -1646,6 +1778,16 @@ mod tests {
         );
         let stale = serde_json::json!({"path":"long.txt","offset":offset,"expected_hash":version});
         std::fs::write(dir.join("long.txt"), "changed").unwrap();
+        assert_eq!(
+            exec_read_only(
+                &read_ctx,
+                "read_doc",
+                &serde_json::json!({"path":"long.txt","cursor":cursor})
+            )
+            .unwrap_err()
+            .code,
+            "AG_READ_VERSION_STALE"
+        );
         assert_eq!(
             exec_read_only(&read_ctx, "read_doc", &stale)
                 .unwrap_err()

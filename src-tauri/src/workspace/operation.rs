@@ -91,6 +91,7 @@ fn status_text(status: WorkspaceOperationStatus) -> &'static str {
         WorkspaceOperationStatus::WaitingConfirm => "waiting_confirm",
         WorkspaceOperationStatus::Revalidating => "revalidating",
         WorkspaceOperationStatus::Executing => "executing",
+        WorkspaceOperationStatus::AwaitingContent => "awaiting_content",
         WorkspaceOperationStatus::Compensating => "compensating",
         WorkspaceOperationStatus::Completed => "completed",
         WorkspaceOperationStatus::Rejected => "rejected",
@@ -107,6 +108,7 @@ fn parse_status(status: &str) -> rusqlite::Result<WorkspaceOperationStatus> {
         "waiting_confirm" => Ok(WorkspaceOperationStatus::WaitingConfirm),
         "revalidating" => Ok(WorkspaceOperationStatus::Revalidating),
         "executing" => Ok(WorkspaceOperationStatus::Executing),
+        "awaiting_content" => Ok(WorkspaceOperationStatus::AwaitingContent),
         "compensating" => Ok(WorkspaceOperationStatus::Compensating),
         "completed" => Ok(WorkspaceOperationStatus::Completed),
         "rejected" => Ok(WorkspaceOperationStatus::Rejected),
@@ -130,6 +132,8 @@ pub enum WorkspaceOperationEvent {
     BaselineDrift,
     ItemFail,
     AllItemsOk,
+    ContentRequired,
+    ContentSaved,
     CompensationOk,
     CompensationFail,
     Interrupt,
@@ -158,9 +162,12 @@ pub fn transition(
         (Revalidating, BaselineDrift) => Some(Expired),
         (Executing, ItemFail) => Some(Compensating),
         (Executing, AllItemsOk) => Some(Completed),
+        (Executing, ContentRequired) => Some(AwaitingContent),
+        (AwaitingContent, ContentSaved) => Some(Executing),
+        (AwaitingContent, ItemFail) => Some(Compensating),
         (Compensating, CompensationOk) => Some(FailedCompensated),
         (Compensating, CompensationFail) => Some(PartialFailed),
-        (Revalidating | Executing | Compensating, Interrupt) => Some(Interrupted),
+        (Revalidating | Executing | AwaitingContent | Compensating, Interrupt) => Some(Interrupted),
         _ => None,
     }
 }
@@ -954,11 +961,40 @@ pub fn mark_create_document_bundles_saved_for_path(
     workspace_id: &str,
     rel_path: &str,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
+    let mut stmt=conn.prepare("SELECT plan_id FROM create_document_bundles WHERE workspace_id=?1 AND target_rel_path=?2 AND status='initial_diff_accepted'")?;
+    let plans = stmt
+        .query_map(params![workspace_id, rel_path], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    if plans.is_empty() {
+        return Ok(0);
+    }
+    let root: String = conn.query_row(
+        "SELECT root_path FROM workspaces WHERE workspace_id=?1",
+        [workspace_id],
+        |row| row.get(0),
+    )?;
+    let baseline = capture_baseline(Path::new(&root), rel_path)
+        .map_err(|e| rusqlite::Error::InvalidParameterName(e.code))?;
+    let tx = conn.unchecked_transaction()?;
+    for plan in plans {
+        store_payload(
+            &tx,
+            &format!("wop-saved-{plan}"),
+            workspace_id,
+            "saved_content_baseline",
+            &baseline,
+        )?;
+    }
+    let changed = tx.execute(
         "UPDATE create_document_bundles SET status='saved', updated_at=?3 \
          WHERE workspace_id=?1 AND target_rel_path=?2 AND status='initial_diff_accepted'",
         params![workspace_id, rel_path, now_millis()],
-    )
+    )?;
+    tx.commit()?;
+    Ok(changed)
 }
 
 pub fn acknowledge_create_document_preview(
@@ -1146,6 +1182,7 @@ fn compensate_create_document_preprojection_failure(
             false,
         ));
     }
+    restore_bundle_siblings(conn, workspace, &bundle, &create_entry)?;
     let abs =
         super::resolve_in_workspace(Path::new(&workspace.root_path), &bundle.target.rel_path)?;
     let rollback_bytes = std::fs::read(&abs).map_err(|error| {
@@ -1172,6 +1209,8 @@ fn compensate_create_document_preprojection_failure(
         )?;
         return Err(error);
     }
+    journal_bundle_target_compensation(conn, &bundle, &create_entry)?;
+    finish_bundle_directories(conn, workspace, &bundle, &create_entry)?;
     let compensation_operation_id = format!("{operation_id}-{failure_suffix}");
     let entry = WorkspaceOperationEntry {
         entry_id: generated_id("wop-entry"),
@@ -1229,6 +1268,27 @@ fn persist_bundle_compensation(
     let transaction = conn.unchecked_transaction()?;
     append_operation_entry(&transaction, entry)?;
     upsert_create_document_bundle(&transaction, bundle)?;
+    // Original resource history is immutable; the current group receipt must reflect rollback.
+    if let Some(mut outcome) = load_outcome(&transaction, &bundle.plan_id)
+        .map_err(|error| rusqlite::Error::InvalidParameterName(error.code))?
+    {
+        outcome.final_status = WorkspaceOperationStatus::FailedCompensated;
+        outcome.entry_id = Some(entry.entry_id.clone());
+        outcome.compensation_receipts = outcome
+            .item_receipts
+            .iter()
+            .filter(|receipt| receipt.status == WorkspaceOperationItemStatus::Completed)
+            .cloned()
+            .map(|mut receipt| {
+                receipt.status = WorkspaceOperationItemStatus::Compensated;
+                receipt.completed_at = now_millis();
+                receipt
+            })
+            .collect();
+        persist_outcome(&transaction, &bundle.plan_id, &outcome)
+            .map_err(|error| rusqlite::Error::InvalidParameterName(error.code))?;
+        settle_bundle_compensation_state(&transaction, &bundle.plan_id, true)?;
+    }
     if let Some(diff_id) = expired_diff_id {
         transaction.execute(
             "UPDATE pending_diffs SET status='expired', terminal_reason='create_resource_compensated' \
@@ -1242,6 +1302,236 @@ fn persist_bundle_compensation(
         )?;
     }
     transaction.commit()
+}
+
+fn settle_bundle_compensation_state(
+    conn: &Connection,
+    plan_id: &str,
+    complete: bool,
+) -> rusqlite::Result<()> {
+    let Some(plan) = load_plan(conn, plan_id)? else {
+        return Ok(());
+    };
+    // Legacy Completed describes the original resource commit. Never rewrite that
+    // terminal; append compensation history and expose the latest group receipt.
+    if plan.status.is_terminal() || plan.status == WorkspaceOperationStatus::Interrupted {
+        return Ok(());
+    }
+    if plan.status != WorkspaceOperationStatus::Compensating {
+        advance_plan(
+            conn,
+            plan_id,
+            WorkspaceOperationEvent::ItemFail,
+            plan.operation_id.as_deref(),
+        )?;
+    }
+    advance_plan(
+        conn,
+        plan_id,
+        if complete {
+            WorkspaceOperationEvent::CompensationOk
+        } else {
+            WorkspaceOperationEvent::CompensationFail
+        },
+        plan.operation_id.as_deref(),
+    )?;
+    Ok(())
+}
+
+// Legacy groups may already have deleted/renamed siblings before projection. Restore them
+// before deleting the new empty file, and never overwrite an externally advanced baseline.
+fn restore_bundle_siblings(
+    conn: &Connection,
+    workspace: &WorkspaceRef,
+    bundle: &CreateDocumentBundle,
+    original: &WorkspaceOperationEntry,
+) -> Result<(), IpcError> {
+    if original.item_receipts.is_empty() {
+        return Ok(());
+    }
+    let plan = load_plan(conn, &bundle.plan_id)
+        .map_err(|error| db_error("读取组合补偿计划失败", error))?
+        .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "组合补偿计划不存在", false))?;
+    let root = Path::new(&workspace.root_path);
+    let siblings = plan
+        .operation_items
+        .iter()
+        .rev()
+        .filter(|item| item.target_rel_path.as_deref() != Some(bundle.target.rel_path.as_str()))
+        .filter_map(|item| {
+            original
+                .item_receipts
+                .iter()
+                .find(|receipt| {
+                    receipt.item_id == item.item_id
+                        && receipt.status == WorkspaceOperationItemStatus::Completed
+                })
+                .map(|receipt| (item, receipt))
+        })
+        .collect::<Vec<_>>();
+    // Validate the whole group before undoing any sibling; no partial restore on a
+    // known pre-existing collision. Each real undo is then journaled separately.
+    for (item, _) in &siblings {
+        let paths = affected_paths(std::slice::from_ref(item));
+        for path in paths {
+            let expected = original
+                .after_manifest
+                .iter()
+                .find(|baseline| baseline.rel_path == path)
+                .ok_or_else(|| {
+                    operation_error(
+                        "WS_CREATE_BUNDLE_BASELINE_MISSING",
+                        "组合补偿缺少执行后基线",
+                        false,
+                    )
+                })?;
+            if capture_baseline(root, &path)? != *expected {
+                record_bundle_partial_failure(conn, workspace, bundle)?;
+                return Err(operation_error(
+                    "WS_CREATE_BUNDLE_PARTIAL_FAILED",
+                    "同组资源已变化，未覆盖新内容；创建与删除尚未全部撤销，请核对逐项效果",
+                    false,
+                ));
+            }
+        }
+    }
+    for (item, receipt) in siblings {
+        if item.kind == WorkspaceOperationKind::CreateFolder {
+            continue;
+        }
+        if let Err(error) = compensate_item_with_db(
+            &OperationDb::Borrowed(conn),
+            root,
+            item,
+            receipt.snapshot_ref.as_deref(),
+        ) {
+            record_bundle_partial_failure(conn, workspace, bundle)?;
+            return Err(error);
+        }
+        journal_bundle_compensation(conn, bundle, receipt)?;
+    }
+    Ok(())
+}
+
+fn journal_bundle_compensation(
+    conn: &Connection,
+    bundle: &CreateDocumentBundle,
+    receipt: &WorkspaceOperationItemReceipt,
+) -> Result<(), IpcError> {
+    let mut progress = load_progress(conn, &bundle.plan_id)?;
+    let mut compensated = receipt.clone();
+    compensated.status = WorkspaceOperationItemStatus::Compensated;
+    compensated.completed_at = now_millis();
+    upsert_progress_receipt(&mut progress.compensation_receipts, compensated);
+    persist_progress(conn, &bundle.plan_id, &progress)
+}
+
+fn journal_bundle_target_compensation(
+    conn: &Connection,
+    bundle: &CreateDocumentBundle,
+    original: &WorkspaceOperationEntry,
+) -> Result<(), IpcError> {
+    if original.item_receipts.is_empty() {
+        return Ok(());
+    }
+    let plan = load_plan(conn, &bundle.plan_id)
+        .map_err(|error| db_error("读取创建补偿计划失败", error))?
+        .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "创建补偿计划不存在", false))?;
+    if let Some(receipt) = original.item_receipts.iter().find(|receipt| {
+        receipt.status == WorkspaceOperationItemStatus::Completed
+            && plan.operation_items.iter().any(|item| {
+                item.item_id == receipt.item_id
+                    && item.target_rel_path.as_deref() == Some(bundle.target.rel_path.as_str())
+            })
+    }) {
+        journal_bundle_compensation(conn, bundle, receipt)?;
+    }
+    Ok(())
+}
+
+fn record_bundle_partial_failure(
+    conn: &Connection,
+    workspace: &WorkspaceRef,
+    bundle: &CreateDocumentBundle,
+) -> Result<(), IpcError> {
+    let progress = load_progress(conn, &bundle.plan_id)?;
+    let plan = load_plan(conn, &bundle.plan_id)
+        .map_err(|error| db_error("读取补偿计划失败", error))?
+        .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "组合补偿计划不存在", false))?;
+    let operation_id = bundle.operation_id.as_deref().unwrap_or(&bundle.plan_id);
+    let mut entry = entry_from_receipts(
+        &plan,
+        &generated_id("wop-partial"),
+        progress.item_receipts.clone(),
+        progress.compensation_receipts.clone(),
+        after_manifest(Path::new(&workspace.root_path), &plan.operation_items),
+        WorkspaceOperationStatus::PartialFailed,
+    );
+    entry.restore_kind = "create_document_partial_compensation".into();
+    let receipt = WorkspaceOperationReceipt {
+        operation_id: operation_id.into(),
+        plan_id: bundle.plan_id.clone(),
+        final_status: WorkspaceOperationStatus::PartialFailed,
+        item_receipts: progress.item_receipts,
+        compensation_receipts: progress.compensation_receipts,
+        entry_id: Some(entry.entry_id.clone()),
+        invalidated_diff_ids: Vec::new(),
+    };
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| db_error("开始部分补偿记录失败", error))?;
+    append_operation_entry(&tx, &entry).map_err(|error| db_error("记录部分补偿历史失败", error))?;
+    tx.execute(
+        "UPDATE create_document_bundles SET status='partial_failed' WHERE plan_id=?1",
+        [&bundle.plan_id],
+    )
+    .map_err(|error| db_error("记录组合补偿失败", error))?;
+    settle_bundle_compensation_state(&tx, &bundle.plan_id, false)
+        .map_err(|error| db_error("记录组合计划失败", error))?;
+    persist_outcome(&tx, &bundle.plan_id, &receipt)?;
+    tx.commit()
+        .map_err(|error| db_error("提交部分补偿记录失败", error))
+}
+
+fn finish_bundle_directories(
+    conn: &Connection,
+    workspace: &WorkspaceRef,
+    bundle: &CreateDocumentBundle,
+    original: &WorkspaceOperationEntry,
+) -> Result<(), IpcError> {
+    if original.item_receipts.is_empty() {
+        return Ok(());
+    }
+    let plan = load_plan(conn, &bundle.plan_id)
+        .map_err(|error| db_error("读取目录补偿计划失败", error))?
+        .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "目录补偿计划不存在", false))?;
+    for item in plan
+        .operation_items
+        .iter()
+        .rev()
+        .filter(|item| item.kind == WorkspaceOperationKind::CreateFolder)
+    {
+        let Some(receipt) = original.item_receipts.iter().find(|receipt| {
+            receipt.item_id == item.item_id
+                && receipt.status == WorkspaceOperationItemStatus::Completed
+        }) else {
+            continue;
+        };
+        let path = super::resolve_in_workspace(
+            Path::new(&workspace.root_path),
+            item.target_rel_path.as_deref().expect("validated folder"),
+        )?;
+        if let Err(error) = std::fs::remove_dir(path) {
+            record_bundle_partial_failure(conn, workspace, bundle)?;
+            return Err(operation_error(
+                "WS_CREATE_BUNDLE_PARTIAL_FAILED",
+                format!("只允许补偿空目录，目录未删除：{error}；请核对逐项回执"),
+                false,
+            ));
+        }
+        journal_bundle_compensation(conn, bundle, receipt)?;
+    }
+    Ok(())
 }
 
 fn restore_compensated_document(
@@ -1325,6 +1615,11 @@ pub fn discard_created_resource_if_guard_matches(
             false,
         ));
     }
+    let original = load_operation_entry(conn, &guard.operation_id)
+        .map_err(|error| db_error("读取拒绝补偿原资源历史失败", error))?;
+    if let Some(original) = &original {
+        restore_bundle_siblings(conn, workspace, &bundle, original)?;
+    }
     let abs =
         super::resolve_in_workspace(Path::new(&workspace.root_path), &bundle.target.rel_path)?;
     let rollback_bytes = std::fs::read(&abs).map_err(|error| {
@@ -1350,6 +1645,10 @@ pub fn discard_created_resource_if_guard_matches(
             &error,
         )?;
         return Err(error);
+    }
+    if let Some(original) = &original {
+        journal_bundle_target_compensation(conn, &bundle, original)?;
+        finish_bundle_directories(conn, workspace, &bundle, original)?;
     }
     let operation_id = format!("{}-discard", guard.operation_id);
     let receipt = WorkspaceOperationItemReceipt {
@@ -1439,6 +1738,10 @@ pub fn compensate_create_document_projection_failure(
             false,
         ));
     }
+    let original = load_operation_entry(conn, &guard.operation_id)
+        .map_err(|error| db_error("读取组合补偿历史失败", error))?
+        .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "组合补偿历史不存在", false))?;
+    restore_bundle_siblings(conn, workspace, &bundle, &original)?;
     let abs =
         super::resolve_in_workspace(Path::new(&workspace.root_path), &bundle.target.rel_path)?;
     let rollback_bytes = std::fs::read(&abs).map_err(|error| {
@@ -1490,6 +1793,8 @@ pub fn compensate_create_document_projection_failure(
         final_status: WorkspaceOperationStatus::FailedCompensated,
         created_at: now_millis(),
     };
+    journal_bundle_target_compensation(conn, &bundle, &original)?;
+    finish_bundle_directories(conn, workspace, &bundle, &original)?;
     bundle.status = "projection_failed_compensated".into();
     if let Err(error) =
         persist_bundle_compensation(conn, &entry, &bundle, bundle.initial_diff_id.as_deref())
@@ -1521,7 +1826,7 @@ pub fn compensate_create_document_projection_failure(
 pub fn interrupt_nonterminal_plans(conn: &Connection) -> rusqlite::Result<usize> {
     let mut stmt = conn.prepare(
         "SELECT plan_id FROM workspace_operation_plans \
-         WHERE status IN ('planning','waiting_confirm','revalidating','executing','compensating')",
+         WHERE status IN ('planning','waiting_confirm','revalidating','executing','awaiting_content','compensating')",
     )?;
     let plan_ids = stmt
         .query_map([], |row| row.get::<_, String>(0))?
@@ -1552,9 +1857,7 @@ pub fn interrupt_nonterminal_plans(conn: &Connection) -> rusqlite::Result<usize>
         if progress.item_receipts.is_empty() && progress.compensation_receipts.is_empty() {
             continue;
         }
-        if load_operation_entry(conn, operation_id)?.is_some() {
-            continue;
-        }
+        let previous_entry = load_operation_entry(conn, operation_id)?;
         let root_path: Option<String> = conn
             .query_row(
                 "SELECT root_path FROM workspaces WHERE workspace_id=?1",
@@ -1566,7 +1869,7 @@ pub fn interrupt_nonterminal_plans(conn: &Connection) -> rusqlite::Result<usize>
             .as_deref()
             .map(|root| after_manifest(Path::new(root), &plan.operation_items))
             .unwrap_or_default();
-        let entry = entry_from_receipts(
+        let mut entry = entry_from_receipts(
             &plan,
             operation_id,
             progress.item_receipts.clone(),
@@ -1574,6 +1877,9 @@ pub fn interrupt_nonterminal_plans(conn: &Connection) -> rusqlite::Result<usize>
             after,
             WorkspaceOperationStatus::Interrupted,
         );
+        if previous_entry.is_some() {
+            entry.operation_id = format!("{operation_id}-interrupted");
+        }
         append_operation_entry(conn, &entry)?;
         let receipt = WorkspaceOperationReceipt {
             operation_id: operation_id.to_string(),
@@ -2010,6 +2316,19 @@ pub(crate) fn prepare_operation(
         .enumerate()
         .map(|(seq, intent)| validate_intent(root, intent, seq))
         .collect::<Result<Vec<_>, _>>()?;
+    if initial_content_ref.is_some()
+        && items
+            .iter()
+            .filter(|item| item.kind == WorkspaceOperationKind::CreateDocument)
+            .count()
+            != 1
+    {
+        return Err(operation_error(
+            "WS_CREATE_BUNDLE_INVALID",
+            "一份初始内容只允许绑定一个新文件；多个新文件须分别审阅",
+            false,
+        ));
+    }
     let targets = affected_paths(&items);
     let mut baseline_set = Vec::new();
     for path in &targets {
@@ -2446,7 +2765,9 @@ fn compensate_item_with_db(
         }
         WorkspaceOperationKind::CreateFolder => {
             let target = item.target_rel_path.as_deref().expect("validated target");
-            super::fileops::delete_folder(&super::resolve_in_workspace(root, target)?, true)
+            // Rollback of our directory creation is not permission to recursively
+            // remove files created by another actor after that creation.
+            super::fileops::delete_folder(&super::resolve_in_workspace(root, target)?, false)
         }
         WorkspaceOperationKind::RenameResource | WorkspaceOperationKind::MoveResource => {
             let source = item.source_rel_path.as_deref().expect("validated source");
@@ -2665,6 +2986,75 @@ pub(crate) fn execute_operation_plan_shared(
     )
 }
 
+fn fail_saved_group_guard(
+    db: &OperationDb<'_>,
+    plan: &WorkspaceOperationPlan,
+    root: &Path,
+    error: IpcError,
+) -> Result<WorkspaceOperationReceipt, IpcError> {
+    let after = after_manifest(root, &plan.operation_items);
+    db.with(|conn| {
+        let progress = load_progress(conn, &plan.plan_id)?;
+        let operation_id = plan
+            .operation_id
+            .as_deref()
+            .ok_or_else(|| operation_error("WS_OPERATION_NOT_FOUND", "缺少原操作身份", false))?;
+        let entry = entry_from_receipts(
+            plan,
+            &format!("{operation_id}-saved-guard"),
+            progress.item_receipts.clone(),
+            progress.compensation_receipts.clone(),
+            after.clone(),
+            WorkspaceOperationStatus::PartialFailed,
+        );
+        let receipt = WorkspaceOperationReceipt {
+            operation_id: operation_id.into(),
+            plan_id: plan.plan_id.clone(),
+            final_status: WorkspaceOperationStatus::PartialFailed,
+            item_receipts: progress.item_receipts,
+            compensation_receipts: progress.compensation_receipts,
+            entry_id: Some(entry.entry_id.clone()),
+            invalidated_diff_ids: Vec::new(),
+        };
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| db_error("启动保存屏障失败结算失败", e))?;
+        advance_plan(
+            &tx,
+            &plan.plan_id,
+            WorkspaceOperationEvent::ItemFail,
+            Some(operation_id),
+        )
+        .map_err(|e| db_error("记录保存后重验失败", e))?;
+        advance_plan(
+            &tx,
+            &plan.plan_id,
+            WorkspaceOperationEvent::CompensationFail,
+            Some(operation_id),
+        )
+        .map_err(|e| db_error("记录部分效果失败", e))?;
+        append_operation_entry(&tx, &entry).map_err(|e| db_error("记录部分效果历史失败", e))?;
+        store_payload(
+            &tx,
+            &format!("wop-failure-{}", plan.plan_id),
+            &plan.workspace_id,
+            "operation_failure",
+            &serde_json::json!({"code":error.code,"phase":"saved_content_revalidation"}),
+        )
+        .map_err(|e| db_error("记录重验失败原因", e))?;
+        persist_outcome(&tx, &plan.plan_id, &receipt)?;
+        tx.commit().map_err(|e| db_error("提交部分效果失败", e))?;
+        trace_operation(
+            "saved_content_revalidation_failed",
+            &plan.plan_id,
+            Some(operation_id),
+            None,
+            Some(&error.code),
+        );
+        Ok(receipt)
+    })
+}
+
 fn execute_operation_plan_with_db(
     db: &OperationDb<'_>,
     workspace: &WorkspaceRef,
@@ -2672,7 +3062,7 @@ fn execute_operation_plan_with_db(
     request_id: &str,
     before_filesystem: impl FnOnce(),
 ) -> Result<WorkspaceOperationReceipt, IpcError> {
-    let (mut plan, cached, operation_id) = db.with(|conn| {
+    let (mut plan, cached, operation_id, resuming_content) = db.with(|conn| {
         let mut plan = load_plan(conn, plan_id)
             .map_err(|error| db_error("读取资源操作计划失败", error))?
             .ok_or_else(|| {
@@ -2687,7 +3077,35 @@ fn execute_operation_plan_with_db(
         }
         decision_identity(conn, &plan, request_id, "confirm")?;
         if let Some(receipt) = load_outcome(conn, plan_id)? {
-            return Ok((plan, Some(receipt), String::new()));
+            let saved = plan.status == WorkspaceOperationStatus::AwaitingContent
+                && load_create_document_bundle(conn, plan_id)
+                    .map_err(|error| db_error("读取保存依赖失败", error))?
+                    .is_some_and(|bundle| bundle.status == "saved");
+            if !saved {
+                return Ok((plan, Some(receipt), String::new(), false));
+            }
+            let operation_id = receipt.operation_id.clone();
+            let transaction = conn
+                .unchecked_transaction()
+                .map_err(|error| db_error("领取保存后阶段事务失败", error))?;
+            plan = advance_plan(
+                &transaction,
+                plan_id,
+                WorkspaceOperationEvent::ContentSaved,
+                Some(&operation_id),
+            )
+            .map_err(|error| db_error("解除保存屏障失败", error))?;
+            // Claim once before filesystem work. A concurrent replay cannot re-enter this phase.
+            transaction
+                .execute(
+                    "UPDATE workspace_operation_plans SET outcome_json=NULL WHERE plan_id=?1",
+                    [plan_id],
+                )
+                .map_err(|error| db_error("领取保存后执行阶段失败", error))?;
+            transaction
+                .commit()
+                .map_err(|error| db_error("提交保存后执行阶段失败", error))?;
+            return Ok((plan, None, operation_id, true));
         }
         if plan.status.is_terminal() || plan.status == WorkspaceOperationStatus::Interrupted {
             if let Some(operation_id) = plan.operation_id.as_deref() {
@@ -2704,7 +3122,7 @@ fn execute_operation_plan_with_db(
                         invalidated_diff_ids: Vec::new(),
                     };
                     persist_outcome(conn, plan_id, &receipt)?;
-                    return Ok((plan, Some(receipt), String::new()));
+                    return Ok((plan, Some(receipt), String::new(), false));
                 }
             }
             return Err(operation_error(
@@ -2721,7 +3139,7 @@ fn execute_operation_plan_with_db(
             Some(&operation_id),
         )
         .map_err(|error| db_error("进入资源操作重验阶段失败", error))?;
-        Ok((plan, None, operation_id))
+        Ok((plan, None, operation_id, false))
     })?;
     if let Some(receipt) = cached {
         return Ok(receipt);
@@ -2735,15 +3153,66 @@ fn execute_operation_plan_with_db(
         Some("revalidating"),
     );
     let root = Path::new(&workspace.root_path);
-    let targets = affected_paths(&plan.operation_items);
+    if resuming_content {
+        let saved: Option<WorkspaceResourceBaseline> = db.with(|conn| {
+            load_payload(conn, &format!("wop-saved-{}", plan.plan_id))
+                .map_err(|e| db_error("读取保存基线失败", e))
+        })?;
+        let saved_matches = if let Some(saved) = saved {
+            capture_baseline(root, &saved.rel_path)? == saved
+        } else {
+            false
+        };
+        if !saved_matches {
+            return fail_saved_group_guard(
+                db,
+                &plan,
+                root,
+                operation_error(
+                    "WS_OPERATION_BASELINE_DRIFT",
+                    "新文件在保存后发生变化，未执行依赖操作",
+                    false,
+                ),
+            );
+        }
+    }
+    let remaining_items: Vec<_> = plan
+        .operation_items
+        .iter()
+        .filter(|item| {
+            !resuming_content
+                || !matches!(
+                    item.kind,
+                    WorkspaceOperationKind::CreateDocument | WorkspaceOperationKind::CreateFolder
+                )
+        })
+        .cloned()
+        .collect();
+    let targets = affected_paths(&remaining_items);
     if let Some(dirty_path) =
         db.with(|conn| has_dirty_affected_session(conn, &plan.workspace_id, &targets))?
     {
+        if resuming_content {
+            return fail_saved_group_guard(
+                db,
+                &plan,
+                root,
+                operation_error(
+                    "WS_OPERATION_DIRTY_TARGET",
+                    "保存后旧资源存在未保存修改，未执行后续操作；新文件已保存",
+                    false,
+                ),
+            );
+        }
         let _ = db.with(|conn| {
             advance_plan(
                 conn,
                 plan_id,
-                WorkspaceOperationEvent::BaselineDrift,
+                if resuming_content {
+                    WorkspaceOperationEvent::ItemFail
+                } else {
+                    WorkspaceOperationEvent::BaselineDrift
+                },
                 Some(&operation_id),
             )
             .map_err(|error| db_error("资源操作状态转移失败", error))
@@ -2761,13 +3230,35 @@ fn execute_operation_plan_with_db(
             false,
         ));
     }
-    let current = current_baselines(root, &plan.baseline_set)?;
-    if current != plan.baseline_set {
+    let frozen: Vec<_> = plan
+        .baseline_set
+        .iter()
+        .filter(|baseline| !resuming_content || targets.contains(&baseline.rel_path))
+        .cloned()
+        .collect();
+    let current = current_baselines(root, &frozen)?;
+    if current != frozen {
+        if resuming_content {
+            return fail_saved_group_guard(
+                db,
+                &plan,
+                root,
+                operation_error(
+                    "WS_OPERATION_BASELINE_DRIFT",
+                    "保存后旧资源基线变化，未执行后续操作；新文件已保存",
+                    false,
+                ),
+            );
+        }
         let _ = db.with(|conn| {
             advance_plan(
                 conn,
                 plan_id,
-                WorkspaceOperationEvent::BaselineDrift,
+                if resuming_content {
+                    WorkspaceOperationEvent::ItemFail
+                } else {
+                    WorkspaceOperationEvent::BaselineDrift
+                },
                 Some(&operation_id),
             )
             .map_err(|error| db_error("资源操作状态转移失败", error))
@@ -2785,21 +3276,42 @@ fn execute_operation_plan_with_db(
             false,
         ));
     }
-    plan = db.with(|conn| {
-        advance_plan(
-            conn,
-            plan_id,
-            WorkspaceOperationEvent::BaselineValid,
-            Some(&operation_id),
-        )
-        .map_err(|error| db_error("资源操作状态转移失败", error))
-    })?;
+    if !resuming_content {
+        plan = db.with(|conn| {
+            advance_plan(
+                conn,
+                plan_id,
+                WorkspaceOperationEvent::BaselineValid,
+                Some(&operation_id),
+            )
+            .map_err(|error| db_error("资源操作状态转移失败", error))
+        })?;
+    }
 
     let mut progress = db.with(|conn| load_progress(conn, plan_id))?;
     let mut item_receipts = progress.item_receipts.clone();
     let mut completed: Vec<(&WorkspaceOperationItem, Option<String>)> = Vec::new();
     let mut failure: Option<IpcError> = None;
+    // Creating the empty resource does not complete a request with initial content.
+    // Single creates use the same saved-content barrier as composite operations.
+    let content_barrier = !resuming_content && plan.initial_content_ref.is_some();
     for item in &plan.operation_items {
+        if resuming_content
+            && item_receipts.iter().any(|receipt| {
+                receipt.item_id == item.item_id
+                    && receipt.status == WorkspaceOperationItemStatus::Completed
+            })
+        {
+            continue;
+        }
+        if content_barrier
+            && !matches!(
+                item.kind,
+                WorkspaceOperationKind::CreateDocument | WorkspaceOperationKind::CreateFolder
+            )
+        {
+            continue;
+        }
         let attempted = WorkspaceOperationItemReceipt {
             item_id: item.item_id.clone(),
             seq: item.seq,
@@ -2866,7 +3378,12 @@ fn execute_operation_plan_with_db(
     }
 
     let mut compensation_receipts = progress.compensation_receipts.clone();
-    let (final_status, terminal_event) = if failure.is_none() {
+    let (final_status, terminal_event) = if failure.is_none() && content_barrier {
+        (
+            WorkspaceOperationStatus::AwaitingContent,
+            WorkspaceOperationEvent::ContentRequired,
+        )
+    } else if failure.is_none() {
         (
             WorkspaceOperationStatus::Completed,
             WorkspaceOperationEvent::AllItemsOk,
@@ -2929,7 +3446,7 @@ fn execute_operation_plan_with_db(
             progress.compensation_receipts = compensation_receipts.clone();
             db.with(|conn| persist_progress(conn, plan_id, &progress))?;
         }
-        if compensation_failed {
+        if compensation_failed || resuming_content {
             (
                 WorkspaceOperationStatus::PartialFailed,
                 WorkspaceOperationEvent::CompensationFail,
@@ -2943,9 +3460,14 @@ fn execute_operation_plan_with_db(
     };
 
     let current_after = after_manifest(root, &plan.operation_items);
+    let entry_operation_id = if resuming_content {
+        format!("{operation_id}-content-saved")
+    } else {
+        operation_id.clone()
+    };
     let entry = entry_from_receipts(
         &plan,
-        &operation_id,
+        &entry_operation_id,
         item_receipts.clone(),
         compensation_receipts.clone(),
         current_after,
@@ -2975,7 +3497,7 @@ fn execute_operation_plan_with_db(
     };
     append_operation_entry(&transaction, &entry)
         .map_err(|error| db_error("记录 WorkspaceTimeline 资源条目失败", error))?;
-    if final_status == WorkspaceOperationStatus::Completed {
+    if matches!(final_status, WorkspaceOperationStatus::Completed | WorkspaceOperationStatus::AwaitingContent) && !resuming_content {
         transaction
             .execute(
                 "UPDATE create_document_bundles SET operation_id=?2, status='resource_created', updated_at=?3 \
@@ -3496,6 +4018,28 @@ mod tests {
             "WS_OPERATION_NOT_RECOVERABLE",
             "已经补偿的完成项不得再次出现在恢复计划里"
         );
+        std::fs::create_dir(root.join("created-folder")).unwrap();
+        std::fs::write(root.join("created-folder/external.txt"), b"EXTERNAL").unwrap();
+        let folder = WorkspaceOperationItem {
+            item_id: "created-folder".into(),
+            seq: 0,
+            kind: WorkspaceOperationKind::CreateFolder,
+            source_rel_path: None,
+            target_rel_path: Some("created-folder".into()),
+            resource_kind: WorkspaceResourceKind::Folder,
+            recursive: false,
+            restore_payload_ref: None,
+        };
+        assert!(
+            compensate_item_with_db(&OperationDb::Borrowed(&conn), &root, &folder, None).is_err()
+        );
+        assert_eq!(
+            std::fs::read(root.join("created-folder/external.txt")).unwrap(),
+            b"EXTERNAL"
+        );
+        std::fs::remove_file(root.join("created-folder/external.txt")).unwrap();
+        compensate_item_with_db(&OperationDb::Borrowed(&conn), &root, &folder, None).unwrap();
+        assert!(!root.join("created-folder").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3756,6 +4300,149 @@ mod tests {
             "projection_failed_compensated"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    // covers: BR-WS-PERSIST-003, BR-WS-STATE-003, BR-WS-OBS-002
+    #[test]
+    fn legacy_bundle_compensation_restores_all_siblings_without_overwriting_external_changes() {
+        for scenario in ["restore", "external", "directory"] {
+            let (conn, workspace, root) = temp_workspace(&format!("legacy-bundle-{scenario}"));
+            std::fs::write(root.join("old.txt"), "OLD-SNAPSHOT").unwrap();
+            let run =
+                crate::ag::task::begin_turn(&conn, &workspace.workspace_id, "legacy-session", None)
+                    .unwrap();
+            let target = if scenario == "directory" {
+                "newdir/new.txt"
+            } else {
+                "new.txt"
+            };
+            let mut intents = Vec::new();
+            if scenario == "directory" {
+                intents.push(WorkspaceOperationIntent {
+                    kind: WorkspaceOperationKind::CreateFolder,
+                    source_path: None,
+                    target_path: Some("newdir".into()),
+                    resource_kind: Some(WorkspaceResourceKind::Folder),
+                    recursive: false,
+                    restore_payload_ref: None,
+                });
+            }
+            intents.push(WorkspaceOperationIntent {
+                kind: WorkspaceOperationKind::CreateDocument,
+                source_path: None,
+                target_path: Some(target.into()),
+                resource_kind: Some(WorkspaceResourceKind::File),
+                recursive: false,
+                restore_payload_ref: None,
+            });
+            intents.push(WorkspaceOperationIntent {
+                kind: WorkspaceOperationKind::DeleteResource,
+                source_path: Some("old.txt".into()),
+                target_path: None,
+                resource_kind: Some(WorkspaceResourceKind::File),
+                recursive: false,
+                restore_payload_ref: None,
+            });
+            // A real resource execution without the new content dependency reproduces
+            // the old persisted resource-first group; compensation is production code.
+            let plan = plan_operation(
+                &conn,
+                &workspace,
+                &intents,
+                Some(&run),
+                Some("legacy-turn"),
+                None,
+            )
+            .unwrap();
+            let decision = crate::ag::task::propose_decision(
+                &conn,
+                &run,
+                "permission",
+                serde_json::json!({"workspaceOperationPlanId":plan.plan_id}),
+            )
+            .unwrap();
+            bind_decision_request(&conn, &plan.plan_id, &decision.request_id).unwrap();
+            crate::ag::task::resolve_decision(&conn, &decision.request_id, "confirm").unwrap();
+            let executed =
+                execute_operation_plan(&conn, &workspace, &plan.plan_id, &decision.request_id)
+                    .unwrap();
+            assert_eq!(executed.final_status, WorkspaceOperationStatus::Completed);
+            assert!(!root.join("old.txt").exists());
+            upsert_create_document_bundle(
+                &conn,
+                &CreateDocumentBundle {
+                    plan_id: plan.plan_id.clone(),
+                    workspace_id: workspace.workspace_id.clone(),
+                    target: DocRef {
+                        workspace_id: workspace.workspace_id.clone(),
+                        rel_path: target.into(),
+                        doc_type: "txt".into(),
+                    },
+                    initial_content_ref: "legacy-content".into(),
+                    operation_id: Some(executed.operation_id.clone()),
+                    initial_diff_id: None,
+                    rejection_guard_ref: None,
+                    status: "resource_created".into(),
+                },
+            )
+            .unwrap();
+            if scenario == "external" {
+                std::fs::write(root.join("old.txt"), "EXTERNAL").unwrap();
+            }
+            let compensation =
+                compensate_create_document_open_failure(&conn, &workspace, &plan.plan_id);
+            if scenario == "external" {
+                assert_eq!(
+                    compensation.unwrap_err().code,
+                    "WS_CREATE_BUNDLE_PARTIAL_FAILED"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(root.join("old.txt")).unwrap(),
+                    "EXTERNAL"
+                );
+                assert!(root.join(target).exists());
+                assert_eq!(
+                    load_outcome(&conn, &plan.plan_id)
+                        .unwrap()
+                        .unwrap()
+                        .final_status,
+                    WorkspaceOperationStatus::PartialFailed
+                );
+            } else {
+                assert_eq!(
+                    compensation.unwrap().final_status,
+                    WorkspaceOperationStatus::FailedCompensated
+                );
+                assert_eq!(
+                    std::fs::read_to_string(root.join("old.txt")).unwrap(),
+                    "OLD-SNAPSHOT"
+                );
+                assert!(!root.join(target).exists());
+                assert!(!root.join("newdir").exists());
+                assert_eq!(
+                    load_outcome(&conn, &plan.plan_id)
+                        .unwrap()
+                        .unwrap()
+                        .compensation_receipts
+                        .len(),
+                    intents.len()
+                );
+                assert_eq!(
+                    load_operation_entry(&conn, &executed.operation_id)
+                        .unwrap()
+                        .unwrap()
+                        .final_status,
+                    WorkspaceOperationStatus::Completed,
+                    "original history is immutable"
+                );
+            }
+            assert_eq!(
+                load_plan(&conn, &plan.plan_id).unwrap().unwrap().status,
+                WorkspaceOperationStatus::Completed,
+                "legacy plan terminal cannot be rewritten by later compensation"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     // covers: BR-WS-DATA-003

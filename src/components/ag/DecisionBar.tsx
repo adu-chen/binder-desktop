@@ -118,7 +118,7 @@ function DecisionRequestControls({ decision, sessionId }: { decision: PendingDec
     try {
       const resolution = await resolveDecisionAndContinue(decision.requestId, outcome);
       const receipt = resolution.workspaceOperationReceipt;
-      if (receipt && receipt.final_status !== "completed") {
+      if (receipt && receipt.final_status !== "completed" && receipt.final_status !== "awaiting_content") {
         const failed = receipt.item_receipts.filter((item) => item.status === "failed");
         const compensated = receipt.compensation_receipts.filter((item) => item.status === "compensated");
         appendOperationMessage(

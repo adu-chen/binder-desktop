@@ -126,6 +126,8 @@ pub struct AgentTurnPayload {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentTurnRecord {
+    /// Display provenance only, derived from runtime events; never execution authority.
+    pub internal_continuation: bool,
     pub execution_facts: Vec<crate::types::CapabilityExecutionFactV1>,
     pub turn_id: String,
     pub session_id: String,
@@ -472,7 +474,9 @@ pub fn list_turns(
     session_id: &str,
 ) -> rusqlite::Result<Vec<AgentTurnRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT t.turn_id, t.session_id, t.workspace_id, t.rel_path, t.status, p.payload_json, t.created_at, t.updated_at \
+        "SELECT t.turn_id, t.session_id, t.workspace_id, t.rel_path, t.status, p.payload_json, t.created_at, t.updated_at, \
+         EXISTS(SELECT 1 FROM agent_turn_events e WHERE e.workspace_id=t.workspace_id AND e.session_id=t.session_id AND e.turn_id=t.turn_id \
+           AND e.kind='turn_started' AND json_type(e.payload_json,'$.previewContinuationDiffId')='text') \
          FROM agent_turns t JOIN agent_turn_payloads p ON p.payload_ref = t.payload_ref \
          WHERE t.workspace_id = ?1 AND t.session_id = ?2 ORDER BY t.created_at ASC",
     )?;
@@ -482,6 +486,7 @@ pub fn list_turns(
             rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
         })?;
         Ok(AgentTurnRecord {
+            internal_continuation: r.get(8)?,
             execution_facts: super::capability_runtime::facts(
                 conn,
                 workspace_id,

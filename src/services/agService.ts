@@ -52,7 +52,7 @@ import type { AgentFailureDiagnostic } from "../store/agStore";
 function failureDiagnostic(value: unknown): AgentFailureDiagnostic | undefined {
   if (!value || typeof value !== "object") return undefined;
   const d = value as Record<string, unknown>;
-  const stages = ["context_assembly", "runtime", "gate", "finalizing", "tool_validation", "tool_execution", "frontend_start", "frontend_invoke", "event_recovery"];
+  const stages = ["context_assembly", "runtime", "gate", "finalizing", "tool_validation", "tool_execution", "operation_post_processing", "frontend_start", "frontend_invoke", "event_recovery"];
   const categories = ["core_context", "model_protocol", "authorization", "professional_capability", "ui_projection", "unknown"];
   if (d.version !== 1 || d.rootCauseStatus !== "unknown" || typeof d.observedAt !== "string" || typeof d.category !== "string" || !stages.includes(d.observedAt) || !categories.includes(d.category)) return undefined;
   return { version: 1, observedAt: d.observedAt as AgentFailureDiagnostic["observedAt"], category: d.category as AgentFailureDiagnostic["category"], rootCauseStatus: "unknown" };
@@ -259,6 +259,8 @@ interface ClarifyingTurnIdentity {
   activeTarget?: ActiveDocTarget;
   contextRevision?: number;
   modelBinding?: { provider: string; model: string };
+  /** Original request cache for an internal fragment; never a new UI user message. */
+  requestSnapshot?: PersistedChatMessage;
 }
 /** 按 session 保留可受控重入的非终态 AgentTurn；不得按“最近回合”跨 session 猜测。 */
 const clarifyingTurns = new Map<string, ClarifyingTurnIdentity>();
@@ -268,8 +270,49 @@ interface DecisionTurnIdentity extends ClarifyingTurnIdentity {
 }
 /** 按 DecisionRequest 保留 AwaitingDecision 的原回合身份；裁决只恢复该回合，不创建替代回合。 */
 const decisionTurns = new Map<string, DecisionTurnIdentity>();
+const savedGroupWaits = new Map<string, { path: string; workspaceId: string; sessionId: string; turnId: string }>();
+export async function refreshSettledResourceGroup(diffId: string | undefined): Promise<void> {
+  const diff = deStore.getSnapshot().diffs.find(diff => diff.diffId === diffId);
+  for (const [requestId,wait] of savedGroupWaits) {
+    const owner = decisionTurns.get(requestId);
+    if (owner && wait.turnId === diff?.turnId && wait.path === diff.relPath) {
+      await projectParkedCancellation(owner);
+    }
+  }
+}
+export async function resumeSavedResourceGroups(path: string | undefined): Promise<void> {
+  const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
+  for (const [requestId, wait] of savedGroupWaits) {
+    if (wait.path !== path || wait.workspaceId !== workspaceId
+      || !decisionTurns.has(requestId) || decisionsInFlight.has(requestId)) continue;
+    // Saving is an explicit user action. Backend still checks the original decision,
+    // saved bundle, turn cancellation, all source baselines and a single effect lease.
+    await resolveDecisionAndContinue(requestId, "confirm");
+  }
+}
+export async function continueSavedResourceGroup(requestId: string): Promise<string> {
+  if (!savedGroupWaits.has(requestId) || !decisionTurns.has(requestId)) {
+    throw new Error("原等待已结束或未在本进程恢复，不会重放操作；请先核对执行效果。");
+  }
+  const resolution=await resolveDecisionAndContinue(requestId,"confirm");
+  return resolution.workspaceOperationReceipt?.final_status === "awaiting_content"
+    ? "初始内容尚未保存；后续操作未执行。请先接受并保存新文件。"
+    : "已核对原操作组；后续状态以原回合及执行回执为准。";
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("binder:diff-settled", event => { void refreshSettledResourceGroup((event as CustomEvent<{diffId?: string}>).detail?.diffId).catch(error => console.error("[ag-result] parked result query failed",error)); });
+  window.addEventListener("binder:doc-saved", event => { void resumeSavedResourceGroups((event as CustomEvent<{path?: string}>).detail?.path).catch(error => console.error("[ag-result] saved group continuation failed",error)); });
+}
 const decisionsInFlight = new Set<string>();
 const decisionEffectUnknown = new Set<string>();
+async function boundFailureDelivery<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work,new Promise<never>((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error("原回合结果收束/补流等待超时；后端可能已提交，请核对历史，不会重发操作。")),2000);
+    })]);
+  } finally { if(timer!==undefined) clearTimeout(timer); }
+}
 const uid = () => `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 function mergeReferencePayloads(...groups: ReferencePayload[][]): ReferencePayload[] {
@@ -713,6 +756,8 @@ interface AgentTurnPayloadV2 {
 }
 
 interface AgentTurnDto {
+  /** Backend runtime provenance; display only, never continuation permission. */
+  internal_continuation?: boolean;
   turn_id: string;
   session_id: string;
   workspace_id?: string;
@@ -832,13 +877,18 @@ function projectTurns(turns: AgentTurnDto[]): { messages: ChatMessage[]; toolCal
   const messages: ChatMessage[] = [];
   const toolCalls: ToolCallView[] = [];
   for (const turn of turns) {
-    messages.push(messageFromPersisted(turn.payload.userMessage, turn));
+    if (!turn.internal_continuation) messages.push(messageFromPersisted(turn.payload.userMessage, turn));
     let assistantAnchor: string | undefined;
     let assistant: ChatMessage | null = null;
     if (turn.payload.assistantMessage) {
       assistant = messageFromPersisted(turn.payload.assistantMessage, turn);
       assistantAnchor = assistant.id;
       messages.push(assistant);
+      // A diagnostic must not replace the independently persisted visible answer.
+      if (turn.payload.failure && !assistant.error && (turn.status === "error" || turn.status === "gate_rejected")) {
+        const diagnostic = turnFailureMessage(turn);
+        if (diagnostic) messages.push(diagnostic);
+      }
     } else {
       const fallback = turnFailureMessage(turn);
       if (fallback) {
@@ -1394,9 +1444,11 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto, owne
     : projection.after_text;
   deStore.addDiff({
     diffId: projected.diff_id,
-    sessionId: activeSession(agStore.getSnapshot()).id,
+    sessionId: ownerSessionId,
     turnId: projected.source_turn_id,
     taskRunId: projected.task_run_id,
+    anchorMessageId: agStore.getSnapshot().sessions.find(candidate => candidate.id === ownerSessionId)
+      ?.messages.find(message => message.role === "assistant" && message.turnId === projected.source_turn_id)?.id,
     createdAt: Date.now(),
     blockId: "",
     blockIndex: null,
@@ -1416,6 +1468,8 @@ async function projectCreateDocumentBundle(bundle: CreateDocumentBundleDto, owne
     draftPreviewState: "queued",
     readonly: false,
   });
+  const anchor = deStore.getSnapshot().diffs.find(diff => diff.diffId === projected.diff_id)?.anchorMessageId;
+  if (anchor) agStore.addDiffSegment(ownerSessionId, anchor, projected.diff_id);
   return projected.diff_id;
 }
 
@@ -1440,6 +1494,7 @@ export async function compensateCreateDocumentPreviewFailure(diffId: string): Pr
       expiredReason: "apply_replace_failed",
       errorCode: "WS_CREATE_BUNDLE_PREVIEW_FAILED_COMPENSATED",
     });
+    window.dispatchEvent(new CustomEvent("binder:diff-settled", { detail: { diffId } }));
     return true;
   } catch (error) {
     console.error("[workspace-operation] create document preview compensation failed", error);
@@ -1460,6 +1515,7 @@ export interface WorkspaceOperationReceiptDto {
   plan_id: string;
   final_status:
     | "completed"
+    | "awaiting_content"
     | "failed_compensated"
     | "partial_failed"
     | "expired"
@@ -1471,7 +1527,7 @@ export interface WorkspaceOperationReceiptDto {
 }
 
 const previewAckInFlight = new Set<string>();
-const previewContinuations = new Map<string, { sessionId: string; workspaceId: string }>();
+const previewContinuations = new Map<string, ClarifyingTurnIdentity & { workspaceId: string }>();
 const previewAckEffectUnknown = new Set<string>();
 const PREVIEW_ACK_DEADLINE_MS = 15_000;
 
@@ -1520,7 +1576,7 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
     }
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const receipt = await Promise.race([
-      invoke<{ task_run_id: string; ready: boolean }>("ag_ack_preview", {
+      invoke<{ task_run_id: string; ready: boolean; awaiting_save?: boolean }>("ag_ack_preview", {
         taskRunId: diff.taskRunId,
         sessionId: diff.sessionId,
         turnId: diff.turnId,
@@ -1544,6 +1600,10 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
     if (!receipt?.ready || receipt.task_run_id !== diff.taskRunId) {
       throw new Error("AG_PREVIEW_ACK_INVALID：预览回执不匹配，未继续执行。");
     }
+    if (receipt.awaiting_save || [...savedGroupWaits.values()].some(wait => wait.turnId === diff.turnId && wait.path === diff.relPath && wait.workspaceId === workspaceId)) {
+      agStore.setCurrentAction({ ...action, action: "deciding", label: "初始内容已预览；等待你接受并保存新文件，任务尚未完成" });
+      return;
+    }
     if (currentDiff?.state !== "pending" || !currentDiff.draftApplied
       || currentDiff.sessionId !== diff.sessionId || currentDiff.taskRunId !== diff.taskRunId
       || currentDiff.turnId !== diff.turnId || currentDiff.relPath !== diff.relPath
@@ -1553,8 +1613,12 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
     if (closeStore.getSnapshot().phase !== "idle") {
       throw new Error("AG_PREVIEW_CLOSE_PENDING：应用正在关闭，未继续执行。");
     }
-    previewContinuations.set(diffId, { sessionId: diff.sessionId, workspaceId });
-    await startTurn("（编辑器预览已完成）请基于最新文档状态继续当前任务；若目标已完成，请直接给出简短结果。", {
+    const origin = previewContinuations.get(diffId);
+    if (!origin || origin.turnId !== diff.turnId || origin.sessionId !== diff.sessionId
+      || origin.workspaceId !== workspaceId || !origin.modelBinding?.provider || !origin.modelBinding.model) {
+      throw new Error("AG_PREVIEW_ORIGIN_UNAVAILABLE：原请求或模型绑定不可用，未创建替代请求；请核对任务状态。");
+    }
+    await startTurn(origin.prompt, {
       autoContinue: true,
       mentions: [diff.relPath],
       continuation: { taskRunId: diff.taskRunId, previewDiffId: diffId },
@@ -1610,6 +1674,24 @@ export async function resolveDecisionAndContinue(
     const resolution = await resolveDecision(requestId, outcome);
     resolvedTaskRunId = resolution.taskRunId;
     if (pending?.requestId === requestId) agStore.clearPendingDecision(pending);
+    if (resolution.workspaceOperationReceipt?.final_status === "awaiting_content") {
+      const diff = deStore.getSnapshot().diffs.find(diff => diff.diffId === resolution.createDocumentDiffId);
+      if (decisionTurn && diff?.relPath && workspaceId) {
+        const firstWait = !savedGroupWaits.has(requestId);
+        savedGroupWaits.set(requestId, { path: diff.relPath, workspaceId, sessionId: decisionTurn.sessionId, turnId: decisionTurn.turnId });
+        agStore.setResourceSaveWait(decisionTurn.sessionId,decisionTurn.assistantMessageId,{requestId,path:diff.relPath});
+        if (firstWait) agStore.appendToMessage(decisionTurn.sessionId, decisionTurn.assistantMessageId,
+          "\n\n新文件资源已创建，初始内容仍需审阅与保存。等待你保存后才会重验原任务及剩余操作；不会自动接受或保存，也不会提前执行同组后续操作。接受不等于保存。");
+        agStore.setCurrentAction({ sessionId: decisionTurn.sessionId, turnId: decisionTurn.turnId, action: "deciding", label: "等待保存新文件；原任务尚未完成" });
+      }
+      return resolution;
+    }
+    savedGroupWaits.delete(requestId);
+    if (decisionTurn) agStore.setResourceSaveWait(decisionTurn.sessionId,decisionTurn.assistantMessageId);
+    if (decisionTurn && resolution.workspaceOperationReceipt && !["completed","awaiting_content"].includes(resolution.workspaceOperationReceipt.final_status)) {
+      await projectParkedCancellation(decisionTurn);
+      return resolution;
+    }
     if (
       decisionTurn
       && decisionTurns.get(requestId) === decisionTurn
@@ -1632,6 +1714,20 @@ export async function resolveDecisionAndContinue(
     return resolution;
   } catch (cause) {
     const error = resolvedTaskRunId ? resolvedDecisionPostProcessingError(cause, resolvedTaskRunId) : cause;
+    const failureCode=(error as {code?:string})?.code;
+    let originalInteractionSettled=false;
+    if (decisionTurn && ((error as {decisionResolved?:boolean})?.decisionResolved || failureCode === "AG_DECISION_TIMEOUT_EFFECT_UNKNOWN")) {
+      try {
+        const notice=await boundFailureDelivery(dispatchCall<{settled?:boolean;already_terminal?:boolean}>("ag.finish_operation_interaction",{
+          workspaceId:decisionTurn.workspaceId,sessionId:decisionTurn.sessionId,turnId:decisionTurn.turnId,requestId,
+          code:failureCode === "AG_DECISION_CONTEXT_CHANGED" || failureCode === "AG_DECISION_TIMEOUT_EFFECT_UNKNOWN" ? failureCode : "AG_DECISION_POSTPROCESSING_FAILED",
+        }));
+        originalInteractionSettled=notice?.settled===true || notice?.already_terminal===true;
+      } catch (settlementError) { console.error("[ag-result] original interaction settlement unavailable",settlementError); }
+    }
+    if (decisionTurn && ((error as { decisionResolved?: boolean })?.decisionResolved || originalInteractionSettled)) {
+      await boundFailureDelivery(projectParkedCancellation(decisionTurn)).catch(settlementError => { console.error("[ag-result] original interaction replay unavailable",settlementError); return false; });
+    }
     if ((error as { decisionResolved?: boolean })?.decisionResolved && pending?.requestId === requestId) {
       agStore.clearPendingDecision(pending);
     }
@@ -1693,12 +1789,36 @@ export async function ensureAgentSessionTurns(sessionId: string): Promise<void> 
   if (!session || session.turnsLoaded) return;
   const persistedTurns = await dispatchCall<AgentTurnDto[]>("ag.list_turns", { sessionId });
   const turns = persistedTurns.map(toCurrentTurnProjection);
+  const recoveredByTurn = new Map<string, AgTurnEvent[]>();
+  for (const turn of turns) {
+    const recovered = await listTurnEvents(turn.turn_id, 0).catch((error) => {
+      console.error("ag.list_turn_events history recovery failed", turn.turn_id, error);
+      return [];
+    });
+    const safe: AgTurnEvent[] = [];
+    let seq = 0;
+    let terminal = false;
+    for (const event of [...(Array.isArray(recovered) ? recovered : [])].sort((a, b) => a.seq - b.seq)) {
+      if (terminal || event.turnId !== turn.turn_id || !Number.isSafeInteger(event.seq) || event.seq <= seq) continue;
+      seq = event.seq;
+      safe.push(event);
+      terminal = event.type === "done" || event.type === "error";
+    }
+    recoveredByTurn.set(turn.turn_id, safe);
+    const previous = turn.payload.assistantMessage;
+    if ((turn.status === "error" || turn.status === "gate_rejected") && (!previous?.content || previous.error)) {
+      const body = safe.filter((event): event is Extract<AgTurnEvent, {type: "chunk"}> => event.type === "chunk")
+        .map(event => event.text).join("");
+      if (body) turn.payload.assistantMessage = {
+        id: `hist-${turn.turn_id}-body`, role: "assistant", content: body, streaming: false, error: false,
+      };
+    }
+  }
   const projected = projectTurns(turns);
   await hydrateDiffRefsForTurns(turns);
   agStore.hydrateSessionTurns(sessionId, projected.messages, projected.toolCalls);
   for (const turn of turns) {
-    const recovered = await listTurnEvents(turn.turn_id, 0).catch(() => []);
-    const events = Array.isArray(recovered) ? recovered : [];
+    const events = recoveredByTurn.get(turn.turn_id) ?? [];
     let lastSafeSeq = 0;
     let eventTerminal = false;
     for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
@@ -1712,6 +1832,7 @@ export async function ensureAgentSessionTurns(sessionId: string): Promise<void> 
       if (event.type === "project_report") {
         agStore.projectProjectReport(turn.turn_id, event.report);
       }
+      if (event.type === "done") agStore.setTurnCompletionReason(sessionId, turn.turn_id, event.stopReason);
       if (event.type === "done" || event.type === "error") eventTerminal = true;
     }
     agStore.seedTurnEventProjection(turn.turn_id, Math.max(turn.payload.lastEventSeq, lastSafeSeq),
@@ -1868,6 +1989,7 @@ function enqueueTurnSave(
   status: AgentTurnStatus,
   relPath?: string | null,
   failure?: ChatMessage["turnFailure"],
+  requestSnapshot?: PersistedChatMessage,
 ): Promise<void> {
   const prev = turnSaveChain.get(turnId) ?? Promise.resolve();
   const next = prev
@@ -1876,11 +1998,12 @@ function enqueueTurnSave(
       const session = agStore.getSnapshot().sessions.find((s) => s.id === sessionId);
       if (!session) return;
       const turnMessages = session.messages.filter((m) => m.turnId === turnId);
-      const user = turnMessages.find((m) => m.role === "user");
+      const user = turnMessages.find((m) => m.role === "user") ?? requestSnapshot;
       if (!user) return;
       const assistants = turnMessages.filter((m) => m.role === "assistant");
-      const assistant =
-        [...assistants].reverse().find((m) => m.content.trim() || m.error) ?? assistants[0];
+      const newest = [...assistants].reverse();
+      const assistant = newest.find(m => !m.error && m.content.trim())
+        ?? newest.find(m => !m.error) ?? assistants[0];
       const diffRefs = deStore
         .getSnapshot()
         .diffs.filter((d) => d.turnId === turnId)
@@ -2092,7 +2215,7 @@ async function startTurnWithOptions(
     references?: ReferencePayload[];
     displayParts?: MessageContentPart[];
     /** 显式重试必须先核实原回合；不复用其执行身份或裁决。 */
-    retryOf?: { sessionId: string; turnId: string };
+    retryOf?: { sessionId: string; turnId: string; continuationOnly?: boolean };
     /** 受控恢复入口；只供已确认的裁决或编辑器预览回执使用。 */
     autoContinue?: boolean;
     /** 已确认的 DecisionRequest 或预览回执所属任务。 */
@@ -2112,7 +2235,10 @@ async function startTurnWithOptions(
       if (!workspaceId || workspaceShell.getSnapshot().activeWorkspace?.workspaceId !== workspaceId
         || current.activeSessionId !== origin.sessionId || current.activeTurn || current.sending
         || current.pendingDecision || clarifyingTurns.has(origin.sessionId)
-        || opts.autoContinue || opts.continuation || source?.turnStatus !== "draft"
+        || opts.autoContinue || opts.continuation || !source
+        || (origin.continuationOnly
+          ? source.turnStatus !== "completed" || source.completionReason !== "budget_exhausted"
+          : source.turnStatus !== "draft")
         || (source.relPath ?? null) !== edStore.getSnapshot().openPath
         || source.content !== prompt) {
         throw new Error("AG_RETRY_CONTEXT_CHANGED：原回合、会话或工作区状态已变化，未重新执行。");
@@ -2143,7 +2269,9 @@ async function startTurnWithOptions(
     const terminal = events.filter((event) => event.type === "done" || event.type === "error");
     const last = events[events.length - 1];
     const safeTerminal = terminal.length === 1 && last === terminal[0]
-      && ((last?.type === "error" && last.retriable) || (last?.type === "done" && last.stopReason === "cancelled"));
+      && (origin.continuationOnly
+        ? last?.type === "done" && last.stopReason === "budget_exhausted"
+        : (last?.type === "error" && last.retriable) || (last?.type === "done" && last.stopReason === "cancelled"));
     const possibleEffect = events.some((event) =>
       ((event.type === "tool_request" || event.type === "tool_result") && !readonlyTools.has(event.toolName))
       || event.type === "diff_proposed" || event.type === "decision_request_proposed"
@@ -2196,7 +2324,7 @@ async function startTurnWithOptions(
     throw new Error("澄清恢复不能与任务裁决或预览续片段混用");
   }
   const turnId = clarification?.turnId ?? decision?.turnId ?? `t-${Date.now()}-${(seq += 1)}`;
-  const selectedModel = clarification?.modelBinding ?? decision?.modelBinding
+  const selectedModel = clarification?.modelBinding ?? decision?.modelBinding ?? preview?.modelBinding
     ?? (clarification || decision || preview ? undefined : (opts?.provider && opts?.model
       ? { provider: opts.provider, model: opts.model }
       : modelStore.resolveFor("agentEdit")));
@@ -2204,23 +2332,25 @@ async function startTurnWithOptions(
   if (!clarification && !decision && !preview && Boolean(opts?.provider) !== Boolean(opts?.model)) {
     throw new Error("AG_MODEL_SELECTION_INVALID：provider 与 model 必须同时指定。");
   }
-  const effectivePrompt = decision?.prompt ?? (clarification?.pendingInput
+  const effectivePrompt = decision?.prompt ?? preview?.prompt ?? (clarification?.pendingInput
     ? `${clarification.pendingInput}${trimmed ? `\n\n${trimmed}` : ""}`
-    : trimmed);
+    : opts?.retryOf?.continuationOnly
+      ? `继续以下原请求尚未完成的部分。已有结果只作历史参考，当前对象须重新核验；不得重放既有副作用，不确定的效果须先核对。\n原请求：${trimmed}`
+      : trimmed);
   const references = mergeReferencePayloads(
-    clarification?.references ?? decision?.references ?? [],
+    clarification?.references ?? decision?.references ?? preview?.references ?? [],
     submittedReferences,
   );
   const mentions = [...new Set([
-    ...(clarification?.mentions ?? decision?.mentions ?? []),
+    ...(clarification?.mentions ?? decision?.mentions ?? preview?.mentions ?? []),
     ...(opts?.mentions ?? []),
   ])];
   const blockRefs = mergeLegacyBlockRefs(
-    clarification?.blockRefs ?? decision?.blockRefs ?? [],
+    clarification?.blockRefs ?? decision?.blockRefs ?? preview?.blockRefs ?? [],
     opts?.blockRefs ?? [],
   );
   const turnEd = edStore.getSnapshot();
-  const turnActiveDocTarget: ActiveDocTarget = decision?.activeTarget ?? clarification?.activeTarget ?? {
+  const turnActiveDocTarget: ActiveDocTarget = decision?.activeTarget ?? clarification?.activeTarget ?? preview?.activeTarget ?? {
     relPath: turnEd.openPath,
     loadSeq: turnEd.loadSeq,
     editFormat: turnEd.editFormat,
@@ -2231,7 +2361,8 @@ async function startTurnWithOptions(
 
   // 本轮之前的对话历史（PI-AG-09B）：传后端按预算保留最近（drop 最旧）。取本轮 user 入栈前的快照。
   const history = (session?.messages ?? [])
-    .filter((m) => m.turnId !== turnId && !m.error && m.turnStatus !== "draft" && m.content.trim())
+    .filter((m) => m.turnId !== turnId && !m.error && m.turnStatus !== "draft" && m.content.trim()
+      && !(m.role === "assistant" && (m.turnStatus === "error" || m.turnStatus === "gate_rejected")))
     .slice(-30)
     .map((m) => ({
       workspaceId,
@@ -2258,7 +2389,9 @@ async function startTurnWithOptions(
   } else if (decision) {
     assistantId = decision.assistantMessageId;
   } else {
-    agStore.pushMessage(sessionId, {
+    // A preview is an internal continuation of the original request, not user input.
+    // Keep its new execution identity without fabricating a role=user message.
+    if (!preview) agStore.pushMessage(sessionId, {
       id: uid(),
       role: "user",
       content: trimmed,
@@ -2283,6 +2416,10 @@ async function startTurnWithOptions(
   void persistAgentSessionsMetadata();
 
   const onEvent = new Channel<AgTurnEvent>();
+  const requestSnapshot = clarification?.requestSnapshot ?? decision?.requestSnapshot
+    ?? (preview ? { id: `u-${turnId}`, role: "user" as const, content: effectivePrompt } : undefined);
+  const saveCurrentTurn = (status: AgentTurnStatus, relPath?: string | null, failure?: ChatMessage["turnFailure"]) =>
+    enqueueTurnSave(sessionId, turnId, status, relPath, failure, requestSnapshot);
 
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -2338,7 +2475,7 @@ async function startTurnWithOptions(
       agStore.setTurnStatus(sessionId, turnId, "draft", failure);
       if (backendInvocationStarted) {
         // 诊断与模型正文分开；重启从 payload.failure 恢复到同一未完成提示。
-        void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath, failure);
+        void saveCurrentTurn("draft", turnActiveDocPath, failure);
       }
       agStore.clearTurnAction(sessionId, turnId);
       agStore.clearActiveTurn(turnId);
@@ -2377,8 +2514,9 @@ async function startTurnWithOptions(
             mentions,
             blockRefs,
             modelBinding: selectedModel,
+            requestSnapshot,
           });
-          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          void saveCurrentTurn("draft", turnActiveDocPath);
           pausedForClarification = true;
           finish();
           break;
@@ -2390,9 +2528,8 @@ async function startTurnWithOptions(
           }
           agStore.finishMessage(sessionId, assistantId);
           agStore.setTurnStatus(sessionId, turnId, ev.stopReason === "cancelled" ? "cancelled" : "completed");
-          void enqueueTurnSave(
-            sessionId,
-            turnId,
+          agStore.setTurnCompletionReason(sessionId, turnId, ev.stopReason);
+          void saveCurrentTurn(
             ev.stopReason === "cancelled" ? "cancelled" : "completed",
             turnActiveDocPath,
           );
@@ -2429,9 +2566,7 @@ async function startTurnWithOptions(
             relPath: turnActiveDocPath ?? null,
             turnStatus: ev.code === "AG_GATE_DENIED" || ev.code === "AG_GATE_OFFLINE" ? "gate_rejected" : "error",
           });
-          void enqueueTurnSave(
-            sessionId,
-            turnId,
+          void saveCurrentTurn(
             ev.code === "AG_GATE_DENIED" || ev.code === "AG_GATE_OFFLINE" ? "gate_rejected" : "error",
             turnActiveDocPath,
             { code: ev.code, message: ev.message, retriable: ev.retriable, diagnostic: failureDiagnostic(ev.diagnostic) },
@@ -2478,8 +2613,9 @@ async function startTurnWithOptions(
             mentions,
             blockRefs,
             modelBinding: selectedModel,
+            requestSnapshot,
           });
-          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          void saveCurrentTurn("draft", turnActiveDocPath);
           pausedForDecision = true;
           finish();
           break;
@@ -2569,6 +2705,14 @@ async function startTurnWithOptions(
             state = "error";
             errorCode = "AG_IMAGE_OPERATION_INVALID";
           }
+          if (projection?.preview_checkpoint_required === true) {
+            previewContinuations.set(ev.diffId, {
+              sessionId, turnId, assistantMessageId: assistantId, workspaceId,
+              prompt: effectivePrompt, references, mentions, blockRefs,
+              activeTarget: turnActiveDocTarget, contextRevision,
+              modelBinding: selectedModel ? { ...selectedModel } : undefined,
+            });
+          }
           deStore.addDiff({
             diffId: ev.diffId,
             sessionId,
@@ -2627,7 +2771,7 @@ async function startTurnWithOptions(
           }
           // 消息片段（TERM-AG-011）：DiffCard 内嵌于回合内时序位置（紧随其产出工具/正文）。
           agStore.addDiffSegment(sessionId, assistantId, ev.diffId);
-          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          void saveCurrentTurn("draft", turnActiveDocPath);
           break;
         }
         case "tool_request": {
@@ -2640,7 +2784,7 @@ async function startTurnWithOptions(
           });
           // 消息片段（TERM-AG-011）：工具调用内嵌于正文时序位置。
           agStore.addToolSegment(sessionId, assistantId, toolCallId);
-          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          void saveCurrentTurn("draft", turnActiveDocPath);
           break;
         }
         case "tool_result": {
@@ -2661,7 +2805,7 @@ async function startTurnWithOptions(
             agStore.resolveToolCallById(sessionId, ev.toolCallId, false,
               "[AG_TOOL_RECEIPT_INVALID] 执行回执无法确认；请核对实际操作，不会自动重试。");
           }
-          void enqueueTurnSave(sessionId, turnId, "draft", turnActiveDocPath);
+          void saveCurrentTurn("draft", turnActiveDocPath);
           break;
         }
         case "project_report": {
@@ -2684,7 +2828,13 @@ async function startTurnWithOptions(
         ...factBlockRefs.map((r) => r.relPath),
       ])];
       try {
-        const captured = collectAgentContextV2(turnId, sessionId, turnActiveDocTarget, ++contextRevision, references, factBlockRefs, undefined, selectionPaths);
+        // Preview admission consumes an exact versioned checkpoint before the model
+        // can request context. Supply only that fresh snapshot, not a later callback.
+        const previewPath = opts?.continuation?.previewDiffId
+          ? deStore.getSnapshot().diffs.find(diff => diff.diffId === opts.continuation?.previewDiffId)?.relPath
+          : undefined;
+        const captured = collectAgentContextV2(turnId, sessionId, turnActiveDocTarget, ++contextRevision, references, factBlockRefs, undefined,
+          [...new Set([...selectionPaths, ...(previewPath ? [previewPath] : [])])]);
         openDocSnapshots = captured.snapshots;
         agentContextFacts = captured.facts;
       } catch (e) {
@@ -2820,7 +2970,8 @@ async function projectParkedCancellation(parked: ClarifyingTurnIdentity | Decisi
     ) {
       continue;
     }
-    if (event.type === "done" && event.stopReason === "cancelled") {
+    if (event.type === "chunk") agStore.appendToMessage(parked.sessionId, parked.assistantMessageId, event.text);
+    if (event.type === "error" || (event.type === "done" && event.stopReason === "cancelled")) {
       if (import.meta.env.DEV) console.debug("[AG-AG-TURN] frontend_accepted:", JSON.stringify({
         sessionId: parked.sessionId, turnId: parked.turnId, eventId: event.eventId,
         seq: event.seq, eventType: event.type, source: "parked_cancellation_replay",
@@ -2830,12 +2981,15 @@ async function projectParkedCancellation(parked: ClarifyingTurnIdentity | Decisi
       }
       if ("requestId" in parked) {
         decisionTurns.delete(parked.requestId);
+        savedGroupWaits.delete(parked.requestId);
+        agStore.setResourceSaveWait(parked.sessionId, parked.assistantMessageId);
         agStore.clearPendingDecision({ requestId: parked.requestId, sessionId: parked.sessionId, turnId: parked.turnId });
       }
       agStore.finishMessage(parked.sessionId, parked.assistantMessageId);
-      agStore.setTurnStatus(parked.sessionId, parked.turnId, "cancelled");
+      const status = event.type === "error" ? "error" : "cancelled";
+      agStore.setTurnStatus(parked.sessionId, parked.turnId, status);
       agStore.clearTurnAction(parked.sessionId, parked.turnId);
-      void enqueueTurnSave(parked.sessionId, parked.turnId, "cancelled");
+      void enqueueTurnSave(parked.sessionId, parked.turnId, status, undefined, undefined, parked.requestSnapshot);
       return true;
     }
   }

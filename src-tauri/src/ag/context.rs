@@ -144,15 +144,9 @@ pub fn estimate_serialized_input_tokens(
 
 /// The provider projection is shared by sending, the budget gate and optional request audits.
 pub fn provider_message_projection(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    messages
-        .iter()
-        .map(|message| {
-            let mut projected = message.clone();
-            if let Some(object) = projected.as_object_mut() {
-                object.remove("layer");
-            }
-            projected
-        })
+    super::model_output::project_native_batch_history(messages)
+        .into_iter()
+        .map(|(message, _)| message)
         .collect()
 }
 
@@ -182,8 +176,8 @@ pub fn measure_prompt_budget(
     let projected = provider_message_projection(messages);
     let chars = |value: &serde_json::Value| value.to_string().chars().count();
     let mut message_layers = std::collections::BTreeMap::<String, usize>::new();
-    for (original, sent) in messages.iter().zip(&projected) {
-        let layer = original.get("layer").and_then(|v| v.as_str());
+    for (sent, source_layer) in super::model_output::project_native_batch_history(messages) {
+        let layer = source_layer.as_deref();
         let known_layer = layer_order()
             .into_iter()
             .map(|k| k.as_str())
@@ -196,7 +190,7 @@ pub fn measure_prompt_budget(
                 Some("system") => "continuation_receipt",
                 _ => "unclassified",
             });
-        *message_layers.entry(category.to_string()).or_default() += chars(sent);
+        *message_layers.entry(category.to_string()).or_default() += chars(&sent);
     }
     let message_framing_chars = 2 + projected.len().saturating_sub(1);
     let tool_schema_chars = chars(tools);

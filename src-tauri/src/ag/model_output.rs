@@ -70,20 +70,98 @@ pub struct ModelTurnControl {
     pub clarification_question: Option<String>,
     #[serde(default)]
     pub findings: Vec<ModelFinalFindingV2>,
+    /// A stage outcome, never an authorization or proof of a resource effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<ModelCompletion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelCompletion {
+    pub status: String,
+    pub reason: String,
+}
+
+/// Fixed diagnostic vocabulary only; never retain provider values or serde's raw error text.
+#[derive(Debug)]
+pub(super) struct ControlProtocolRejection {
+    pub error: IpcError,
+    reason_code: &'static str,
+    field_path: String,
+    control_source: Option<String>,
+    tool_index: Option<usize>,
+}
+
+impl ControlProtocolRejection {
+    fn invalid(reason: &'static str, path: &str, message: &str) -> Self {
+        Self {
+            error: IpcError::new(
+                "AG_MODEL_CONTROL_INVALID",
+                &format!("[{reason}] {message}（字段：{path}）"),
+                true,
+                false,
+            ),
+            reason_code: reason,
+            field_path: path.into(),
+            control_source: None,
+            tool_index: None,
+        }
+    }
+    pub(super) fn diagnostic(&self) -> serde_json::Value {
+        serde_json::json!({"reasonCode":self.reason_code,"fieldPath":self.field_path,
+            "controlSource":self.control_source,"toolIndex":self.tool_index})
+    }
+    fn at(mut self, source: &str, index: usize) -> Self {
+        self.control_source = Some(source.into());
+        self.tool_index = Some(index);
+        self
+    }
 }
 
 impl ModelTurnControl {
     pub fn validate(&self) -> Result<(), IpcError> {
-        let invalid =
-            |message: &str| IpcError::new("AG_MODEL_CONTROL_INVALID", message, true, false);
+        self.validate_detailed()
+            .map_err(|rejection| rejection.error)
+    }
+
+    fn validate_detailed(&self) -> Result<(), ControlProtocolRejection> {
+        let invalid = ControlProtocolRejection::invalid;
         if self.version != "binder-turn-control-v1" {
-            return Err(invalid("模型控制封套版本不受支持"));
+            return Err(invalid(
+                "version_unsupported",
+                "version",
+                "模型控制封套版本不受支持",
+            ));
+        }
+        if let Some(completion) = &self.completion {
+            if self.next_action != ModelNextAction::Final
+                || !matches!(
+                    completion.status.as_str(),
+                    "report_only" | "blocked" | "no_op" | "partial"
+                )
+                || completion.reason.trim().is_empty()
+                || completion.reason.chars().count() > 2000
+            {
+                return Err(invalid("completion_invalid", "completion", "completion仅final可选，status须为report_only/blocked/no_op/partial并有非空reason；不能以此制造等待或执行证据"));
+            }
         }
         if self.intent.intent_type == IntentTypeV2::Unresolved {
-            return Err(invalid("模型输出不得把 unresolved 作为已解析意图"));
+            return Err(invalid(
+                "intent_unresolved",
+                "intent.intentType",
+                "模型输出不得把 unresolved 作为已解析意图",
+            ));
         }
         if self.intent.goal.trim().is_empty() || self.route.summary.trim().is_empty() {
-            return Err(invalid("模型控制封套缺少 goal 或 route.summary"));
+            return Err(invalid(
+                "description_empty",
+                if self.intent.goal.trim().is_empty() {
+                    "intent.goal"
+                } else {
+                    "route.summary"
+                },
+                "模型控制封套缺少 goal 或 route.summary",
+            ));
         }
         if self.intent.target_candidates.iter().any(|candidate| {
             !matches!(
@@ -98,17 +176,32 @@ impl ModelTurnControl {
                 .as_deref()
                 .is_some_and(|path| path.trim().is_empty())
         }) {
-            return Err(invalid("模型控制封套包含无效 target candidate"));
+            return Err(invalid(
+                "target_candidate_invalid",
+                "intent.targetCandidates",
+                "模型控制封套包含无效 target candidate",
+            ));
         }
-        if self
-            .intent
-            .required_context
-            .iter()
-            .chain(self.intent.confirmation_points.iter())
-            .chain(self.route.steps.iter())
-            .any(|item| item.trim().is_empty())
-        {
-            return Err(invalid("模型控制封套数组不得包含空项"));
+        if let Some(field) = [
+            (&self.intent.required_context, "intent.requiredContext"),
+            (
+                &self.intent.confirmation_points,
+                "intent.confirmationPoints",
+            ),
+            (&self.route.steps, "route.steps"),
+        ]
+        .into_iter()
+        .find_map(|(items, path)| {
+            items
+                .iter()
+                .any(|item| item.trim().is_empty())
+                .then_some(path)
+        }) {
+            return Err(invalid(
+                "control_array_item_empty",
+                field,
+                "模型控制封套数组不得包含空项",
+            ));
         }
         if self.findings.iter().any(|finding| {
             finding.statement.trim().is_empty()
@@ -122,6 +215,8 @@ impl ModelTurnControl {
                     .any(|evidence_id| evidence_id.trim().is_empty())
         }) {
             return Err(invalid(
+                "finding_invalid",
+                "findings",
                 "模型 findings 包含空结论、空证据 ID 或无效 uncertainty",
             ));
         }
@@ -134,18 +229,34 @@ impl ModelTurnControl {
                         .as_deref()
                         .is_some_and(|question| !question.trim().is_empty())
                 {
-                    return Err(invalid("clarify 必须对应 blocking ambiguity 和非空问题"));
+                    return Err(invalid(
+                        "clarification_contract_invalid",
+                        "clarificationQuestion",
+                        "clarify 必须对应 blocking ambiguity 和非空问题",
+                    ));
                 }
                 if !self.findings.is_empty() {
-                    return Err(invalid("clarify 不得携带 final findings"));
+                    return Err(invalid(
+                        "clarification_has_findings",
+                        "findings",
+                        "clarify 不得携带 final findings",
+                    ));
                 }
             }
             ModelNextAction::Tool | ModelNextAction::Final => {
                 if blocking || self.clarification_question.is_some() {
-                    return Err(invalid("blocking ambiguity 只能进入 clarify"));
+                    return Err(invalid(
+                        "action_ambiguity_conflict",
+                        "intent.ambiguity",
+                        "blocking ambiguity 只能进入 clarify",
+                    ));
                 }
                 if self.next_action == ModelNextAction::Tool && !self.findings.is_empty() {
-                    return Err(invalid("tool 动作不得携带 final findings"));
+                    return Err(invalid(
+                        "tool_has_findings",
+                        "findings",
+                        "tool 动作不得携带 final findings",
+                    ));
                 }
             }
         }
@@ -222,7 +333,7 @@ fn control_schema() -> serde_json::Value {
     })
 }
 
-/// 工具可承载一份响应级语义；不要求每个领域工具重复同一控制结构。
+/// A direct response needs one control. Later calls may omit the redundant copy.
 pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), IpcError> {
     let definitions = tools.as_array_mut().ok_or_else(|| {
         IpcError::new(
@@ -233,6 +344,11 @@ pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), Ip
         )
     })?;
     for definition in definitions {
+        let read_only = definition
+            .pointer("/function/name")
+            .and_then(serde_json::Value::as_str)
+            .and_then(super::tool_registry::lookup)
+            .is_some_and(|tool| tool.permission == super::tool_registry::ToolPermission::ReadOnly);
         let parameters = definition
             .pointer_mut("/function/parameters")
             .and_then(serde_json::Value::as_object_mut)
@@ -256,38 +372,385 @@ pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), Ip
                     false,
                 )
             })?;
-        properties.insert("_binderTurn".to_string(), control_schema());
+        let mut response_control_schema = control_schema();
+        response_control_schema["description"] = serde_json::Value::String(if read_only {
+            "响应级语义控制：同一响应首个只读工具必须提供，后续独立只读工具可省略".to_string()
+        } else {
+            "单独提交的有副作用工具必须提供完整响应级语义控制".to_string()
+        });
+        properties.insert("_binderTurn".to_string(), response_control_schema);
+        let required = parameters
+            .entry("required")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_TOOL_MANIFEST_INVALID",
+                    "工具 parameters.required 必须是数组",
+                    false,
+                    false,
+                )
+            })?;
+        // JSON Schema describes one call, not its position in a response-level group.
+        // Independent reads can share one control; effectful calls are always solitary
+        // and continue to require their own full control in the model-visible schema.
+        if read_only {
+            required.retain(|field| field != "_binderTurn");
+        } else if !required.iter().any(|field| field == "_binderTurn") {
+            required.push(serde_json::Value::String("_binderTurn".to_string()));
+        }
     }
     Ok(())
 }
 
 pub fn take_tool_control(params: &mut serde_json::Value) -> Result<ModelTurnControl, IpcError> {
+    take_tool_control_detailed(params).map_err(|rejection| rejection.error)
+}
+
+pub const TOOL_BATCH_NAME: &str = "binder_tool_batch";
+pub const DIRECT_TOOL_PROTOCOL: &str = "native-business-tool-v1";
+pub const BATCH_TOOL_PROTOCOL: &str = "binder-tool-batch-v1";
+pub const LEGACY_TOOL_PROTOCOL: &str = "legacy-tool-control-v1";
+
+/// Check the frozen model-facing transport before expanding or executing any business call.
+/// Historical batch and legacy turns retain their original wire contracts.
+pub(super) fn validate_transport_call_group(
+    protocol: &str,
+    calls: &[crate::ent::gateway::GwToolCall],
+) -> Result<(), ControlProtocolRejection> {
+    let has_batch = calls.iter().any(|call| call.name == TOOL_BATCH_NAME);
+    if protocol == BATCH_TOOL_PROTOCOL {
+        if !has_batch {
+            return Err(ControlProtocolRejection::invalid(
+                "transport_protocol_mismatch",
+                "$batch",
+                "本原回合冻结为批次工具协议，不能改用独立工具",
+            ));
+        }
+    } else if has_batch {
+        return Err(ControlProtocolRejection::invalid(
+            "transport_protocol_mismatch",
+            "$batch",
+            "本原回合冻结为独立业务工具协议，不能提交批次工具",
+        ));
+    }
+    if protocol == DIRECT_TOOL_PROTOCOL
+        && calls.len() > 1
+        && calls.iter().any(|call| {
+            !super::tool_registry::lookup(&call.name).is_some_and(|tool| {
+                tool.permission == super::tool_registry::ToolPermission::ReadOnly
+            })
+        })
+    {
+        return Err(ControlProtocolRejection::invalid(
+            "direct_dependency_unsupported",
+            "tool_calls",
+            "同一响应的多个独立工具只能是只读调用；计划、提案或裁决须单独提交",
+        ));
+    }
+    Ok(())
+}
+
+/// One provider call carries one response control and a typed batch from the same registry.
+pub(super) fn batch_tool_definitions(definitions: &serde_json::Value) -> serde_json::Value {
+    let variants: Vec<_> = definitions.as_array().into_iter().flatten().map(|definition| {
+        serde_json::json!({"type":"object","description":definition["function"]["description"],"properties":{
+            "toolName":{"type":"string","enum":[definition["function"]["name"]]},
+            "params":definition["function"]["parameters"]
+        },"required":["toolName","params"],"additionalProperties":false})
+    }).collect();
+    if variants.is_empty() {
+        return serde_json::json!([]);
+    }
+    serde_json::json!([{"type":"function","function":{
+        "name":TOOL_BATCH_NAME,
+        "description":"Transport envelope only, not an extra capability: submit ONE control and business calls limited to CapabilityGrant.allowedTools. Multiple calls must be independent read-only; proposals/decisions/resource plans alone. No embedded _binderTurn in params.",
+        "parameters":{"type":"object","properties":{
+            "control":control_schema(),"calls":{"type":"array","minItems":1,"maxItems":16,"items":{"oneOf":variants}}
+        },"required":["control","calls"],"additionalProperties":false}
+    }}])
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeBatch {
+    control: ModelTurnControl,
+    calls: Vec<NativeBusinessCall>,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeBusinessCall {
+    tool_name: String,
+    params: serde_json::Value,
+}
+
+// Diagnostic inspection only. Paths come exclusively from this fixed schema, never from
+// provider keys or values. The original typed deserializer remains the acceptance boundary.
+fn batch_schema_issue(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    path: &str,
+) -> Option<(&'static str, String)> {
+    let matches_type = |kind: &str| match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "null" => value.is_null(),
+        _ => false,
+    };
+    let correct_type = match &schema["type"] {
+        serde_json::Value::String(kind) => matches_type(kind),
+        serde_json::Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(|kind| kind.as_str())
+            .any(matches_type),
+        _ => true,
+    };
+    if !correct_type {
+        return Some(("schema_type_invalid", path.into()));
+    }
+    if let Some(options) = schema["enum"].as_array() {
+        if !options.contains(value) {
+            return Some(("schema_enum_invalid", path.into()));
+        }
+    }
+    if let Some(object) = value.as_object() {
+        let properties = schema["properties"].as_object();
+        let child_path = |key: &str| {
+            if path == "$batch" {
+                key.into()
+            } else {
+                format!("{path}.{key}")
+            }
+        };
+        for required in schema["required"].as_array().into_iter().flatten() {
+            if let Some(key) = required.as_str() {
+                if !object.contains_key(key) {
+                    return Some(("schema_missing_field", child_path(key)));
+                }
+            }
+        }
+        if schema["additionalProperties"] == false
+            && object
+                .keys()
+                .any(|key| !properties.is_some_and(|p| p.contains_key(key)))
+        {
+            return Some(("schema_unknown_field", path.into()));
+        }
+        for (key, child_schema) in properties.into_iter().flatten() {
+            if let Some(child) = object.get(key) {
+                if let Some(issue) = batch_schema_issue(child, child_schema, &child_path(key)) {
+                    return Some(issue);
+                }
+            }
+        }
+    }
+    if let Some(array) = value.as_array() {
+        for child in array {
+            if let Some(issue) = batch_schema_issue(child, &schema["items"], &format!("{path}[]")) {
+                return Some(issue);
+            }
+        }
+    }
+    None
+}
+
+fn native_batch_rejection(argument: &str, error: &serde_json::Error) -> ControlProtocolRejection {
+    let (reason, path) = match serde_json::from_str::<serde_json::Value>(argument) {
+        Err(json_error) => (
+            if json_error.is_eof() {
+                "batch_json_incomplete"
+            } else {
+                "batch_json_invalid"
+            },
+            "$batch".into(),
+        ),
+        Ok(value) => {
+            let mut diagnostic_control = control_schema();
+            // Typed controls also accept these known optional fields. Do not blame an
+            // accepted empty findings/default field for a different deserialization error.
+            diagnostic_control["properties"]["findings"] = serde_json::json!({"type":"array","items":{"type":"object","properties":{
+                "statement":{"type":"string"},"evidenceIds":{"type":"array","items":{"type":"string"}},"uncertainty":{"type":"string"}
+            },"required":["statement","uncertainty"],"additionalProperties":false}});
+            diagnostic_control["properties"]["clarificationQuestion"] =
+                serde_json::json!({"type":["string","null"]});
+            diagnostic_control["properties"]["completion"] = serde_json::json!({"type":["object","null"],"properties":{"status":{"type":"string"},"reason":{"type":"string"}},"required":["status","reason"],"additionalProperties":false});
+            let schema = serde_json::json!({"type":"object","properties":{
+                "control":diagnostic_control,"calls":{"type":"array","items":{
+                    "type":"object","properties":{"toolName":{"type":"string"},"params":{"type":"object"}},
+                    "required":["toolName","params"],"additionalProperties":false
+                }}},"required":["control","calls"],"additionalProperties":false});
+            batch_schema_issue(&value, &schema, "$batch").unwrap_or_else(|| {
+                // Never return serde's raw message: unknown fields/variants may contain secrets.
+                let reason = if error.to_string().starts_with("duplicate field") {
+                    "schema_duplicate_field"
+                } else {
+                    "schema_invalid"
+                };
+                (reason, "$batch".into())
+            })
+        }
+    };
+    ControlProtocolRejection::invalid(
+        reason,
+        &path,
+        "批次参数不符合当前schema；请修正该位置，原值不回显",
+    )
+    .at("tool[0]", 0)
+}
+
+pub(super) fn expand_native_batch(
+    calls: &[crate::ent::gateway::GwToolCall],
+) -> Result<Option<Vec<crate::ent::gateway::GwToolCall>>, ControlProtocolRejection> {
+    if !calls.iter().any(|call| call.name == TOOL_BATCH_NAME) {
+        return Ok(None);
+    }
+    let invalid = |reason, path, message| {
+        ControlProtocolRejection::invalid(reason, path, message).at("tool[0]", 0)
+    };
+    if calls.len() != 1 || calls[0].name != TOOL_BATCH_NAME || calls[0].id.trim().is_empty() {
+        return Err(invalid(
+            "batch_transport_conflict",
+            "$batch",
+            "一次响应只能提交一个批次",
+        ));
+    }
+    let batch: NativeBatch = serde_json::from_str(&calls[0].arguments)
+        .map_err(|error| native_batch_rejection(&calls[0].arguments, &error))?;
+    batch.control.validate_detailed()?;
+    if batch.control.next_action != ModelNextAction::Tool
+        || batch.calls.is_empty()
+        || batch.calls.len() > 16
+    {
+        return Err(invalid(
+            "batch_action_invalid",
+            "calls",
+            "批次须为tool动作且包含1至16个调用",
+        ));
+    }
+    let mut expanded = Vec::with_capacity(batch.calls.len());
+    for (index, call) in batch.calls.into_iter().enumerate() {
+        let Some(object) = call.params.as_object() else {
+            return Err(invalid(
+                "arguments_not_object",
+                "params",
+                "业务参数必须是对象",
+            ));
+        };
+        if object.contains_key("_binderTurn") || call.tool_name == TOOL_BATCH_NAME {
+            return Err(invalid(
+                "batch_nested_control",
+                "params",
+                "业务参数不得重复控制或嵌套批次",
+            ));
+        }
+        expanded.push(crate::ent::gateway::GwToolCall {
+            id: format!("{}:{index}", calls[0].id),
+            name: call.tool_name,
+            arguments: call.params.to_string(),
+        });
+    }
+    if expanded.len() > 1
+        && expanded.iter().any(|call| {
+            !super::tool_registry::lookup(&call.name).is_some_and(|tool| {
+                tool.permission == super::tool_registry::ToolPermission::ReadOnly
+            })
+        })
+    {
+        return Err(invalid(
+            "batch_dependency_unsupported",
+            "calls",
+            "非只读操作须单独提交，不能跨越确认或预览点",
+        ));
+    }
+    let mut first: serde_json::Value =
+        serde_json::from_str(&expanded[0].arguments).expect("serialized object");
+    first["_binderTurn"] = serde_json::to_value(batch.control).expect("typed control");
+    expanded[0].arguments = first.to_string();
+    Ok(Some(expanded))
+}
+
+/// Internal virtual calls retain per-tool identity/evidence; provider history retains its one
+/// native call and exactly one aggregated reply. This is a transport adapter, not an executor.
+pub(super) fn project_native_batch_history(
+    messages: &[serde_json::Value],
+) -> Vec<(serde_json::Value, Option<String>)> {
+    let mut projected = Vec::new();
+    let mut pending: Option<(String, Vec<serde_json::Value>)> = None;
+    for message in messages {
+        if message["role"] == "tool" {
+            if let Some((_, results)) = pending.as_mut() {
+                results.push(serde_json::json!({"toolCallId":message["tool_call_id"],"content":message["content"]}));
+                continue;
+            }
+        }
+        if let Some((parent, results)) = pending.take() {
+            projected.push((serde_json::json!({"role":"tool","tool_call_id":parent,"content":serde_json::json!({"results":results}).to_string()}),None));
+        }
+        let mut sent = message.clone();
+        let layer = sent
+            .as_object_mut()
+            .and_then(|o| o.remove("layer"))
+            .and_then(|v| v.as_str().map(str::to_owned));
+        if let Some(batch) = sent.as_object_mut().and_then(|o| o.remove("nativeBatch")) {
+            let id = batch["id"].as_str().unwrap_or("").to_string();
+            sent["tool_calls"] = serde_json::json!([batch]);
+            pending = Some((id, Vec::new()));
+        }
+        projected.push((sent, layer));
+    }
+    if let Some((parent, results)) = pending {
+        projected.push((serde_json::json!({"role":"tool","tool_call_id":parent,"content":serde_json::json!({"results":results}).to_string()}),None));
+    }
+    projected
+}
+
+fn take_tool_control_detailed(
+    params: &mut serde_json::Value,
+) -> Result<ModelTurnControl, ControlProtocolRejection> {
     let control = params
         .as_object_mut()
         .and_then(|object| object.remove("_binderTurn"))
         .ok_or_else(|| {
-            IpcError::new(
+            let mut rejection = ControlProtocolRejection::invalid(
+                "control_missing",
+                "_binderTurn",
+                "ToolCall 缺少 _binderTurn 语义封套",
+            );
+            rejection.error = IpcError::new(
                 "AG_MODEL_CONTROL_MISSING",
                 "ToolCall 缺少 _binderTurn 语义封套",
                 true,
                 false,
-            )
+            );
+            rejection
         })?;
     let control: ModelTurnControl = serde_json::from_value(control).map_err(|error| {
-        IpcError::new(
-            "AG_MODEL_CONTROL_INVALID",
-            &format!("ToolCall 的 _binderTurn 不是合法结构：{error}"),
-            true,
-            false,
+        let text = error.to_string();
+        let reason = if text.starts_with("missing field") {
+            "schema_missing_field"
+        } else if text.starts_with("unknown field") {
+            "schema_unknown_field"
+        } else if text.starts_with("unknown variant") {
+            "schema_enum_invalid"
+        } else if text.starts_with("invalid type") {
+            "schema_type_invalid"
+        } else {
+            "schema_invalid"
+        };
+        // serde_json::from_value has no field path. Do not invent one or expose unknown keys/values.
+        ControlProtocolRejection::invalid(
+            reason,
+            "$control",
+            "ToolCall 的 _binderTurn 结构无效；请按工具schema提交，原值不回显",
         )
     })?;
-    control.validate()?;
+    control.validate_detailed()?;
     if control.next_action != ModelNextAction::Tool {
-        return Err(IpcError::new(
-            "AG_MODEL_CONTROL_INVALID",
+        return Err(ControlProtocolRejection::invalid(
+            "tool_action_required",
+            "nextAction",
             "ToolCall 的 nextAction 必须为 tool",
-            true,
-            false,
         ));
     }
     Ok(control)
@@ -339,39 +802,107 @@ fn changed_control_fields(left: &ModelTurnControl, right: &ModelTurnControl) -> 
     fields
 }
 
-/** 一次响应只需要一份模型语义，来自文本封套或任意一个工具。
- * 所有出现的副本必须相同；缺失、冲突或损坏返回校验失败，调用方回注而非执行。
+/** 一次响应只需要一份模型语义。主控制固定为文本或首个工具提供者。
+ * 后续副本独立合法，只有描述字段可不同；实质冲突或损坏仍整批拒绝。
  */
 pub fn parse_tool_batch(
     arguments: &[&str],
     output_control: Option<ModelTurnControl>,
 ) -> Result<(ModelTurnControl, Vec<serde_json::Value>), IpcError> {
+    parse_tool_batch_detailed(arguments, output_control)
+        .map(|batch| (batch.control, batch.params))
+        .map_err(|rejection| rejection.error)
+}
+
+#[derive(Debug)]
+pub(super) struct ParsedToolBatch {
+    pub control: ModelTurnControl,
+    pub params: Vec<serde_json::Value>,
+    pub observations: Vec<serde_json::Value>,
+}
+
+pub(super) fn parse_tool_batch_detailed(
+    arguments: &[&str],
+    output_control: Option<ModelTurnControl>,
+) -> Result<ParsedToolBatch, ControlProtocolRejection> {
+    parse_tool_batch_detailed_with_policy(arguments, output_control, false)
+}
+
+/// Only a prevalidated group of independent read-only direct tools may treat further
+/// complete controls as redundant observations. Tool arguments and the canonical
+/// response control are never rewritten; effectful and legacy groups stay strict.
+pub(super) fn parse_tool_batch_detailed_with_policy(
+    arguments: &[&str],
+    output_control: Option<ModelTurnControl>,
+    independent_read_only_direct_group: bool,
+) -> Result<ParsedToolBatch, ControlProtocolRejection> {
     let mut batch_control = output_control;
     let mut control_source = batch_control.as_ref().map(|_| "text".to_string());
-    let mut parsed = Vec::with_capacity(arguments.len());
-    for (index, argument) in arguments.iter().enumerate() {
-        let mut params: serde_json::Value = serde_json::from_str(argument).map_err(|_| {
-            IpcError::new(
-                "AG_TOOL_ARGUMENTS_INVALID",
-                "工具参数不是合法 JSON 对象",
-                true,
-                false,
-            )
+    if let Some(control) = batch_control.as_ref() {
+        control.validate_detailed().map_err(|mut rejection| {
+            rejection.control_source = Some("text".into());
+            rejection
         })?;
+    }
+    let mut parsed = Vec::with_capacity(arguments.len());
+    let mut observations = Vec::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        let source = format!("tool[{index}]");
+        let arguments_invalid = || {
+            let mut rejection = ControlProtocolRejection::invalid(
+                "arguments_not_object",
+                "$arguments",
+                "工具参数必须是合法 JSON 对象",
+            )
+            .at(&source, index);
+            rejection.error.code = "AG_TOOL_ARGUMENTS_INVALID".into();
+            rejection
+        };
+        let mut params: serde_json::Value =
+            serde_json::from_str(argument).map_err(|_| arguments_invalid())?;
         if !params.is_object() {
-            return Err(IpcError::new(
-                "AG_TOOL_ARGUMENTS_INVALID",
-                "工具参数必须为对象",
-                true,
-                false,
-            ));
+            return Err(arguments_invalid());
         }
         if params.get("_binderTurn").is_some() {
-            let control = take_tool_control(&mut params)?;
+            let control = take_tool_control_detailed(&mut params)
+                .map_err(|rejection| rejection.at(&source, index))?;
+            if control.next_action != ModelNextAction::Tool {
+                return Err(ControlProtocolRejection::invalid(
+                    "tool_action_required",
+                    "nextAction",
+                    "工具响应的 nextAction 必须为 tool",
+                )
+                .at(&source, index));
+            }
             if let Some(expected) = batch_control.as_ref() {
-                if expected != &control {
-                    let fields = changed_control_fields(expected, &control).join(",");
-                    return Err(IpcError::new(
+                let changed = changed_control_fields(expected, &control);
+                let conflicts: Vec<_> = changed
+                    .iter()
+                    .copied()
+                    .filter(|field| {
+                        !matches!(*field, "intent.goal" | "route.summary" | "route.steps")
+                    })
+                    .collect();
+                // Normalize only the three explicitly compatible descriptions, then compare
+                // the whole object. Future fields stay strict even before diagnostics names them.
+                let mut comparable = control.clone();
+                comparable.intent.goal = expected.intent.goal.clone();
+                comparable.route.summary = expected.route.summary.clone();
+                comparable.route.steps = expected.route.steps.clone();
+                if expected != &comparable && !independent_read_only_direct_group {
+                    let path = conflicts.first().copied().unwrap_or("$control");
+                    let fields = if conflicts.is_empty() {
+                        "$control".into()
+                    } else {
+                        conflicts.join(",")
+                    };
+                    let mut rejection = ControlProtocolRejection::invalid(
+                        "control_decision_conflict",
+                        path,
+                        "同一响应的动作或范围结论冲突",
+                    )
+                    .at(&source, index);
+                    rejection.error = IpcError::new(
                         "AG_MODEL_CONTROL_CONFLICT",
                         &format!(
                             "同一响应的语义结论冲突（{} 与 tool[{index}]；差异字段：{fields}）",
@@ -379,32 +910,57 @@ pub fn parse_tool_batch(
                         ),
                         true,
                         false,
-                    ));
+                    );
+                    return Err(rejection);
                 }
+                if !changed.is_empty() {
+                    if independent_read_only_direct_group {
+                        observations.push(serde_json::json!({"canonicalSource":control_source,"controlSource":source,"toolIndex":index,"controlFields":changed}));
+                    } else {
+                        observations.push(serde_json::json!({"canonicalSource":control_source,"controlSource":source,"toolIndex":index,"descriptionFields":changed}));
+                    }
+                }
+            } else {
+                batch_control = Some(control);
+                control_source = Some(source);
             }
-            batch_control = Some(control);
-            control_source = Some(format!("tool[{index}]"));
         }
         parsed.push(params);
     }
-    let control = batch_control.ok_or_else(|| IpcError::new(
+    let control = batch_control.ok_or_else(|| {
+        let mut rejection = ControlProtocolRejection::invalid(
+            "control_missing",
+            "_binderTurn",
+            "缺少响应级语义，请在工具参数提交控制封套",
+        );
+        rejection.error=IpcError::new(
         "AG_MODEL_CONTROL_MISSING",
-        "本次请求未执行：缺少响应级语义。请在首个工具参数的 _binderTurn 提交一份完整语义结论，再提交需要的工具。",
+        "本次请求未执行：缺少响应级语义。请在首个工具参数的 _binderTurn 提交完整语义结论，后续独立只读调用可省略。",
         true, false,
-    ))?;
-    control.validate()?;
+    );
+        rejection
+    })?;
+    control.validate_detailed()?;
     if control.next_action != ModelNextAction::Tool {
-        return Err(IpcError::new(
-            "AG_MODEL_CONTROL_INVALID",
+        let mut rejection = ControlProtocolRejection::invalid(
+            "tool_action_required",
+            "nextAction",
             "工具响应的 nextAction 必须为 tool",
-            true,
-            false,
-        ));
+        );
+        rejection.control_source = control_source;
+        return Err(rejection);
     }
-    Ok((control, parsed))
+    Ok(ParsedToolBatch {
+        control,
+        params: parsed,
+        observations,
+    })
 }
 
 impl ModelOutputDecoder {
+    pub(super) fn parsed_control(&self) -> Option<&ModelTurnControl> {
+        self.control.as_ref()
+    }
     pub fn push(&mut self, chunk: &str) -> Result<Vec<String>, IpcError> {
         if self.control.is_some() {
             return Ok((!chunk.is_empty())
@@ -535,22 +1091,254 @@ impl ModelOutputDecoder {
             "plain_text"
         }
     }
+
+    /// A fixed diagnostic for correction prompts, never an alternate control source. In
+    /// particular, a complete JSON object followed by a non-Binder closing marker is still
+    /// rejected; its action only helps explain why no native tool call was executed.
+    pub(super) fn response_rejection_kind(&self) -> &'static str {
+        let text_tool_action = self
+            .control
+            .as_ref()
+            .is_some_and(|control| control.next_action == ModelNextAction::Tool)
+            || self
+                .pending
+                .trim_start()
+                .strip_prefix(CONTROL_OPEN)
+                .and_then(|body| {
+                    serde_json::Deserializer::from_str(body)
+                        .into_iter::<ModelTurnControl>()
+                        .next()
+                        .and_then(Result::ok)
+                })
+                .is_some_and(|control| control.next_action == ModelNextAction::Tool);
+        if text_tool_action {
+            "text_tool_action"
+        } else if self.rejection.is_some() {
+            "control_invalid"
+        } else if self.pending.trim_start().starts_with(CONTROL_OPEN) {
+            "control_incomplete"
+        } else {
+            "control_missing"
+        }
+    }
 }
 
 pub fn protocol_prompt() -> &'static str {
     "[BINDER TURN OUTPUT PROTOCOL]\n\
-每个不含原生 tool_calls 的响应，以一个 <binder-turn-control>合法 JSON 对象</binder-turn-control> 开始。所有属性名和字符串必须使用双引号；不能输出 JSON 占位符、单引号或枚举选项串。\n\
+每个不含原生 tool_calls 的响应（包括工具失败、受阻说明、结束或取消说明），以一个 <binder-turn-control>合法 JSON 对象</binder-turn-control> 开始，再输出用户正文；不能直接以Markdown标题或解释开头。所有属性名和字符串必须使用双引号；不能输出 JSON 占位符、单引号或枚举选项串。\n\
 属性及枚举以工具 schema 和下列合法示例为准，不得把多个枚举值拼为字符串。findings 仅 final 可选，包含 statement、evidenceIds、uncertainty（none、low、medium、high 中一个）；不得自造 evidence ID。final/tool 不得携带 clarificationQuestion。\n\
+运行时状态中的 revision/sourceEventSeq 由系统维护，不属于模型输出的 control.intent；control.intent 只填写工具 schema 列出的字段。调用 binder_tool_batch 时参数必须同时包含 control 和 calls，不能把 control 只写在正文封套中。\n\
 澄清示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"clarify\",\"intent\":{\"goal\":\"确定目标\",\"intentType\":\"organize_workspace\",\"targetCandidates\":[],\"sideEffectIntent\":\"structure_plan\",\"ambiguity\":\"blocking\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"等待目标补充\",\"steps\":[]},\"clarificationQuestion\":\"要处理哪份文件？\"}</binder-turn-control>要处理哪份文件？\n\
-原生 workspace_glob 的参数示例：{\"pattern\":\"*.txt\",\"_binderTurn\":{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"tool\",\"intent\":{\"goal\":\"定位文本文件\",\"intentType\":\"inspect\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"只读列出候选\",\"steps\":[]}}}\n\
+原生工具只调用binder_tool_batch一次，参数包含control和calls。它只是传输封套，不是新增业务能力；calls[].toolName必须属于本轮CapabilityGrant.allowedTools。control是本响应唯一语义（version=binder-turn-control-v1，nextAction=tool，intent和route按schema填写）；calls示例：[{\"toolName\":\"workspace_glob\",\"params\":{\"pattern\":\"*.txt\"}}]。业务params中不写_binderTurn。多个独立只读调用可以同批；计划、提案或裁决须单独一项，不跨等待点批量提交。\n\
+需要工具时只能通过API原生tool_calls提交binder_tool_batch；绝不能把nextAction=tool的控制对象、函数调用JSON或供应商内部工具标记打印到content。文本中的工具意图不会执行；若本轮不能提交原生工具调用，只能用final或clarify完整封套如实说明尚未执行。\n\
 最小问候示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"final\",\"intent\":{\"goal\":\"回应问候\",\"intentType\":\"answer\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"直接回应\",\"steps\":[]}}</binder-turn-control>你好，有什么需要我帮忙？\n这不是隐藏推理：只写简短结论和候选步骤，不写思维链。它不授权工具。\n\
-若可直接回答，nextAction=final 并在封套后输出正文；若缺少必须信息，nextAction=clarify。需要工具时直接返回原生 tool_calls，并在首个工具参数的 _binderTurn 中提交一份响应级语义结论（nextAction=tool）；后续工具不重复。也可在文本封套中提交这份结论，二者择一；不要把 _binderTurn 当作领域参数。最终答复必须 nextAction=final；阻断澄清必须 nextAction=clarify 且 ambiguity=blocking。\n\
+若可直接回答，nextAction=final 并在封套后输出正文；若缺少必须信息，nextAction=clarify。需要工具时仅提交一个binder_tool_batch，不同时输出文本控制或多份控制。最终答复必须nextAction=final；阻断澄清必须nextAction=clarify且ambiguity=blocking。control和候选路线均不是授权，实际调用仍由运行时逐项核验。\n\
+final可选阶段说明：completion={\"status\":\"report_only\",\"reason\":\"本次仅列候选清单，未创建文件\"}。status仅report_only/blocked/no_op/partial四选一且reason非空；不是执行凭证。待裁决必须调用实际工具，缺信息用clarify，不能用此字段假造等待。\n\
 [/BINDER TURN OUTPUT PROTOCOL]"
+}
+
+/// New turns expose the authorized business tools directly. Tool semantics are still model
+/// supplied, but no transport function or calls[] wrapper is model-visible.
+pub fn direct_protocol_prompt() -> &'static str {
+    "[BINDER TURN OUTPUT PROTOCOL — DIRECT BUSINESS TOOLS]\n\
+无原生 tool_calls 的回复必须先输出一个 <binder-turn-control>合法 JSON 对象</binder-turn-control>，再输出正文。final/clarify 的控制仍包含 version、nextAction、intent、route；所有属性和字符串使用双引号，不输出占位符或 Markdown 围栏。\n\
+需要工具时只调用本轮 API 原生工具清单中的业务函数（如 workspace_glob、read_doc、plan_workspace_operation），不要构造额外的传输函数或 calls 数组。首个业务工具的 arguments 必须包含完整 _binderTurn，值为 version=binder-turn-control-v1、nextAction=tool、intent 和 route；后续独立只读工具可省略 _binderTurn，避免重复生成任务语义。若重复提交，每份必须是完整合法的 tool 控制；运行时保留主控制，逐项授权只看真实参数和 CapabilityGrant。有副作用工具必须单独提交且保持严格控制校验。多个独立只读工具可在同一响应提交，但不得跨依赖或等待点；提案、计划或裁决必须单独提交。_binderTurn 是当前响应的语义结论，不是授权。\n\
+工具示例：调用原生 workspace_glob，arguments={\"pattern\":\"*.txt\",\"_binderTurn\":{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"tool\",\"intent\":{\"goal\":\"定位 TXT 文件\",\"intentType\":\"inspect\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"列出候选文件\",\"steps\":[]}}}。不要在 content 中打印工具 JSON、伪工具标记或 nextAction=tool 的文本封套；只有实际原生工具调用才会执行。\n\
+澄清示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"clarify\",\"intent\":{\"goal\":\"确定目标\",\"intentType\":\"organize_workspace\",\"targetCandidates\":[],\"sideEffectIntent\":\"structure_plan\",\"ambiguity\":\"blocking\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"等待目标补充\",\"steps\":[]},\"clarificationQuestion\":\"要处理哪份文件？\"}</binder-turn-control>要处理哪份文件？\n\
+直接回答示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"final\",\"intent\":{\"goal\":\"回应问候\",\"intentType\":\"answer\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"直接回应\",\"steps\":[]}}</binder-turn-control>你好，有什么需要我帮忙？\n\
+final 可选 completion={\"status\":\"report_only\",\"reason\":\"本轮仅列出清单，未创建文件\"}；它不是工具回执。findings 仅 final 可选，证据 ID 只能引用真实运行时证据。revision/sourceEventSeq 由系统维护，不能放入模型 intent。缺少必要信息用 clarify 且 ambiguity=blocking；实际执行、等待和效果只凭运行时回执，不由 control 授权或证明。\n\
+[/BINDER TURN OUTPUT PROTOCOL]"
+}
+
+/// A structural warning, never proof of a transport error or semantic completeness.
+/// In particular, a missing period or a short answer is not a failure condition.
+pub(super) fn answer_structure_warning(body: &str) -> Option<&'static str> {
+    let mut fence: Option<(char, usize)> = None;
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if line.len() - trimmed.len() > 3 {
+            continue;
+        }
+        let first = trimmed.chars().next().unwrap_or(' ');
+        if !matches!(first, '`' | '~') {
+            continue;
+        }
+        let count = trimmed.chars().take_while(|c| *c == first).count();
+        if count < 3 {
+            continue;
+        }
+        match fence {
+            None => fence = Some((first, count)),
+            Some((mark, width))
+                if mark == first && count >= width && trimmed[count..].trim().is_empty() =>
+            {
+                fence = None
+            }
+            _ => {}
+        }
+    }
+    if fence.is_some() {
+        return Some("unclosed_code_fence");
+    }
+    let last_paragraph = body.trim_end().rsplit("\n\n").next().unwrap_or("");
+    let lines: Vec<_> = last_paragraph
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if lines.len() == 1
+        && lines[0].trim_start().starts_with('|')
+        && lines[0].chars().filter(|c| *c == '|').count() >= 2
+    {
+        return Some("dangling_table_header");
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-AG-OBS-001, BR-AG-STATE-001
+    #[test]
+    fn incomplete_structure_is_a_warning_not_a_punctuation_gate() {
+        assert_eq!(
+            answer_structure_warning("说明\n\n| 层级 | 你实际拥有的 | 能说什"),
+            Some("dangling_table_header")
+        );
+        assert_eq!(
+            answer_structure_warning("```text\n中文🙂"),
+            Some("unclosed_code_fence")
+        );
+        for complete in [
+            "你好",
+            "plain answer without punctuation",
+            "```text\n中文🙂\n```",
+            "| A | B |\n|---|---|\n| 1 | 2 |",
+            "x | y",
+            "",
+        ] {
+            assert_eq!(answer_structure_warning(complete), None, "{complete}");
+        }
+    }
+
+    // covers: BR-AG-DATA-004, BR-AG-STATE-002, BR-AG-DATA-005
+    #[test]
+    fn response_batch_has_one_control_and_preserves_provider_reply_identity() {
+        let mut decoder = ModelOutputDecoder::default();
+        decoder.push(&control("tool", "none", None)).unwrap();
+        let c = decoder.finish().unwrap();
+        let native=crate::ent::gateway::GwToolCall {id:"parent".into(),name:TOOL_BATCH_NAME.into(),arguments:serde_json::json!({"control":c,"calls":[
+            {"toolName":"list_docs","params":{}},{"toolName":"workspace_glob","params":{"pattern":"*.txt"}}
+        ]}).to_string()};
+        let calls = expand_native_batch(&[native.clone()]).unwrap().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "parent:0");
+        assert_eq!(calls[1].id, "parent:1");
+        assert!(!calls[1].arguments.contains("_binderTurn"));
+        let history = vec![
+            serde_json::json!({"role":"assistant","content":null,"tool_calls":calls.iter().map(|call|serde_json::json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments}})).collect::<Vec<_>>(),
+            "nativeBatch":{"id":native.id,"type":"function","function":{"name":native.name,"arguments":native.arguments}}}),
+            serde_json::json!({"role":"tool","tool_call_id":"parent:0","content":"RESULT_A"}),
+            serde_json::json!({"role":"tool","tool_call_id":"parent:1","content":"RESULT_B"}),
+        ];
+        let projected = super::super::context::provider_message_projection(&history);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0]["tool_calls"].as_array().unwrap().len(), 1);
+        assert_eq!(projected[1]["tool_call_id"], "parent");
+        assert!(projected[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("RESULT_A"));
+        assert!(projected[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("RESULT_B"));
+        assert!(!projected[0].to_string().contains("nativeBatch"));
+        let measurement =
+            super::super::context::measure_prompt_budget(&history, &serde_json::json!([]));
+        assert_eq!(
+            measurement.serialized_chars,
+            serde_json::to_string(&projected).unwrap().chars().count() + 2
+        );
+        for bad in [
+            serde_json::json!({"control":c,"calls":[{"toolName":"list_docs","params":{"_binderTurn":c}}]}),
+            serde_json::json!({"control":c,"calls":[{"toolName":"list_docs","params":{}},{"toolName":"plan_workspace_operation","params":{}}]}),
+            serde_json::json!({"control":c,"calls":[]}),
+            serde_json::json!({"control":c,"calls":[],"extra":"SECRET"}),
+        ] {
+            let rejected = expand_native_batch(&[crate::ent::gateway::GwToolCall {
+                arguments: bad.to_string(),
+                ..native.clone()
+            }])
+            .unwrap_err();
+            assert!(!rejected.error.message.contains("SECRET"));
+        }
+        let mut bad_enum =
+            serde_json::json!({"control":c,"calls":[{"toolName":"list_docs","params":{}}]});
+        bad_enum["control"]["intent"]["intentType"] = serde_json::json!("PRIVATE_ENUM");
+        let mut bad_array = serde_json::json!({"control":c,"calls":[]});
+        bad_array["control"]["route"]["steps"] = serde_json::json!([5]);
+        for (argument, reason, path) in [
+            ("{".into(), "batch_json_incomplete", "$batch"),
+            // A typed enum error before a truncated tail must not hide JSON EOF.
+            ("{\"control\":{\"version\":\"PRIVATE_ENUM\"},\"calls\":[".into(), "batch_json_incomplete", "$batch"),
+            ("{PRIVATE}".into(), "batch_json_invalid", "$batch"),
+            (serde_json::json!({"control":c}).to_string(), "schema_missing_field", "calls"),
+            (serde_json::json!({"control":c,"calls":[{"toolName":5,"params":{}}]}).to_string(), "schema_type_invalid", "calls[].toolName"),
+            (serde_json::json!({"control":c,"calls":[{"toolName":"list_docs","params":{},"PRIVATE_KEY":"SECRET"}]}).to_string(), "schema_unknown_field", "calls[]"),
+            (bad_enum.to_string(), "schema_enum_invalid", "control.intent.intentType"),
+            (bad_array.to_string(), "schema_type_invalid", "control.route.steps[]"),
+            (format!("{{\"control\":{c},\"control\":{c},\"calls\":[]}}",c=serde_json::to_string(&c).unwrap()), "schema_duplicate_field", "$batch"),
+        ] {
+            let rejected = expand_native_batch(&[crate::ent::gateway::GwToolCall { arguments:argument, ..native.clone() }]).unwrap_err();
+            let diagnostic = rejected.diagnostic();
+            assert_eq!(diagnostic["reasonCode"], reason);
+            assert_eq!(diagnostic["fieldPath"], path);
+            assert_eq!(diagnostic["controlSource"], "tool[0]");
+            assert!(!diagnostic.to_string().contains("PRIVATE"));
+            assert!(!rejected.error.message.contains("SECRET"));
+        }
+    }
+
+    // covers: BR-AG-DATA-004, BR-AG-STATE-002
+    #[test]
+    fn direct_transport_accepts_independent_reads_and_rejects_mixed_or_effect_groups() {
+        let direct = |name: &str| crate::ent::gateway::GwToolCall {
+            id: format!("id-{name}"),
+            name: name.into(),
+            arguments: "{}".into(),
+        };
+        let reads = vec![direct("workspace_glob"), direct("list_docs")];
+        assert!(validate_transport_call_group(DIRECT_TOOL_PROTOCOL, &reads).is_ok());
+        assert_eq!(
+            validate_transport_call_group(DIRECT_TOOL_PROTOCOL, &[direct(TOOL_BATCH_NAME)])
+                .unwrap_err()
+                .diagnostic()["reasonCode"],
+            "transport_protocol_mismatch"
+        );
+        assert_eq!(
+            validate_transport_call_group(BATCH_TOOL_PROTOCOL, &[direct("list_docs")])
+                .unwrap_err()
+                .diagnostic()["reasonCode"],
+            "transport_protocol_mismatch"
+        );
+        let mixed = vec![direct("workspace_glob"), direct("plan_workspace_operation")];
+        assert_eq!(
+            validate_transport_call_group(DIRECT_TOOL_PROTOCOL, &mixed)
+                .unwrap_err()
+                .diagnostic()["reasonCode"],
+            "direct_dependency_unsupported"
+        );
+        assert!(validate_transport_call_group(
+            DIRECT_TOOL_PROTOCOL,
+            &[direct("plan_workspace_operation")]
+        )
+        .is_ok());
+        assert!(
+            direct_protocol_prompt().contains("首个业务工具的 arguments 必须包含完整 _binderTurn")
+        );
+        assert!(!direct_protocol_prompt().contains(TOOL_BATCH_NAME));
+    }
 
     // covers: BR-AG-DATA-004
     // covers: BR-AG-STATE-001
@@ -758,8 +1546,36 @@ mod tests {
         );
     }
 
+    // covers: BR-AG-STATE-001, BR-AG-STATE-002
     #[test]
-    fn tool_manifest_allows_batch_control_and_executor_strips_it_from_domain_params() {
+    fn text_tool_intent_with_wrong_closer_is_diagnostic_only() {
+        let mut decoder = ModelOutputDecoder::default();
+        let malformed =
+            control("tool", "none", None).replace(CONTROL_CLOSE, "</｜｜DSML｜｜ parameter>");
+        assert!(decoder.push(&malformed).unwrap().is_empty());
+        assert_eq!(decoder.response_rejection_kind(), "text_tool_action");
+        assert_eq!(
+            decoder.finish().unwrap_err().code,
+            "AG_MODEL_CONTROL_INCOMPLETE"
+        );
+
+        let mut plain = ModelOutputDecoder::default();
+        plain
+            .push("正文里提到 nextAction=tool 也不是工具调用")
+            .unwrap();
+        assert_eq!(plain.response_rejection_kind(), "control_missing");
+        let mut final_control = ModelOutputDecoder::default();
+        final_control
+            .push(&control("final", "none", None).replace(CONTROL_CLOSE, "</wrong>"))
+            .unwrap();
+        assert_eq!(
+            final_control.response_rejection_kind(),
+            "control_incomplete"
+        );
+    }
+
+    #[test]
+    fn tool_manifest_allows_one_response_control_and_executor_strips_it_from_domain_params() {
         let mut tools = serde_json::json!([{
             "type": "function",
             "function": {
@@ -774,6 +1590,19 @@ mod tests {
         }]);
         decorate_tool_definitions(&mut tools).unwrap();
         assert!(!tools[0]["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "_binderTurn"));
+        assert!(tools[0]["function"]["parameters"]["properties"]["_binderTurn"].is_object());
+        let mut effectful = serde_json::json!([{
+            "type":"function",
+            "function":{"name":"plan_workspace_operation","parameters":{
+                "type":"object","properties":{},"required":[],"additionalProperties":false
+            }}
+        }]);
+        decorate_tool_definitions(&mut effectful).unwrap();
+        assert!(effectful[0]["function"]["parameters"]["required"]
             .as_array()
             .unwrap()
             .iter()
@@ -818,19 +1647,30 @@ mod tests {
         );
         let mut different = expected.clone();
         different.intent.goal = "private goal must not enter diagnostics".into();
-        let conflict = parse_tool_batch(&[&first], Some(different)).unwrap_err();
-        assert_eq!(conflict.code, "AG_MODEL_CONTROL_CONFLICT");
-        assert!(conflict.message.contains("text 与 tool[0]"));
-        assert!(conflict.message.contains("intent.goal"));
-        assert!(!conflict.message.contains("private goal"));
+        let accepted = parse_tool_batch_detailed(&[&first], Some(different.clone())).unwrap();
+        assert_eq!(accepted.control, different); // 文本主控制不被工具副本替换。
+        assert_eq!(accepted.observations[0]["canonicalSource"], "text");
+        assert_eq!(
+            accepted.observations[0]["descriptionFields"],
+            serde_json::json!(["intent.goal"])
+        );
+        assert!(!serde_json::to_string(&accepted.observations)
+            .unwrap()
+            .contains("private goal"));
         let mut changed = expected.clone();
         changed.route.summary = "private route must not enter diagnostics".into();
         let conflicting_second =
             serde_json::json!({"path": "b.md", "_binderTurn": changed}).to_string();
-        let conflict = parse_tool_batch(&[&first, &conflicting_second], None).unwrap_err();
-        assert!(conflict.message.contains("tool[0] 与 tool[1]"));
-        assert!(conflict.message.contains("route.summary"));
-        assert!(!conflict.message.contains("private route"));
+        let accepted = parse_tool_batch_detailed(&[&first, &conflicting_second], None).unwrap();
+        assert_eq!(accepted.control, expected); // 首工具主控制不被后续子路线覆盖。
+        assert_eq!(accepted.params[1], serde_json::json!({"path":"b.md"}));
+        assert_eq!(
+            accepted.observations[0]["descriptionFields"],
+            serde_json::json!(["route.summary"])
+        );
+        assert!(!serde_json::to_string(&accepted.observations)
+            .unwrap()
+            .contains("private route"));
         assert_eq!(
             parse_tool_batch(&["[]"], Some(expected.clone()))
                 .unwrap_err()
@@ -852,6 +1692,166 @@ mod tests {
                 .unwrap_err()
                 .code,
             "AG_MODEL_CONTROL_INVALID"
+        );
+    }
+
+    // covers: BR-AG-DATA-004, BR-AG-STATE-002
+    #[test]
+    fn independent_direct_reads_keep_one_control_without_accepting_invalid_copies() {
+        let mut decoder = ModelOutputDecoder::default();
+        decoder.push(&control("tool", "none", None)).unwrap();
+        let canonical = decoder.finish().unwrap();
+        let mut changed = serde_json::to_value(&canonical).unwrap();
+        changed["intent"]["requiredContext"] = serde_json::json!(["target block"]);
+        let first = serde_json::json!({"path":"a.md","_binderTurn":canonical}).to_string();
+        let second = serde_json::json!({"path":"b.md","_binderTurn":changed}).to_string();
+        let accepted =
+            parse_tool_batch_detailed_with_policy(&[&first, &second], None, true).unwrap();
+        assert_eq!(accepted.control, canonical);
+        assert_eq!(accepted.params[0], serde_json::json!({"path":"a.md"}));
+        assert_eq!(accepted.params[1], serde_json::json!({"path":"b.md"}));
+        assert_eq!(
+            accepted.observations[0]["controlFields"],
+            serde_json::json!(["intent.requiredContext"])
+        );
+        assert_eq!(
+            parse_tool_batch_detailed(&[&first, &second], None)
+                .unwrap_err()
+                .error
+                .code,
+            "AG_MODEL_CONTROL_CONFLICT"
+        );
+
+        let tool_only = serde_json::json!({"path":"b.md"}).to_string();
+        assert!(parse_tool_batch_detailed_with_policy(&[&first, &tool_only], None, true).is_ok());
+        assert_eq!(
+            parse_tool_batch_detailed_with_policy(&[&tool_only], None, true)
+                .unwrap_err()
+                .error
+                .code,
+            "AG_MODEL_CONTROL_MISSING"
+        );
+
+        let mut stale_copy = serde_json::to_value(&canonical).unwrap();
+        stale_copy["nextAction"] = serde_json::json!("final");
+        let invalid = serde_json::json!({"path":"b.md","_binderTurn":stale_copy}).to_string();
+        assert_eq!(
+            parse_tool_batch_detailed_with_policy(&[&first, &invalid], None, true)
+                .unwrap_err()
+                .diagnostic()["reasonCode"],
+            "tool_action_required"
+        );
+        let text_canonical =
+            parse_tool_batch_detailed_with_policy(&[&second], Some(canonical.clone()), true)
+                .unwrap();
+        assert_eq!(text_canonical.control, canonical);
+    }
+
+    // covers: BR-AG-DATA-004, BR-AG-STATE-002
+    #[test]
+    fn duplicate_description_compatibility_never_accepts_changed_decision_fields() {
+        let mut decoder = ModelOutputDecoder::default();
+        decoder.push(&control("tool", "none", None)).unwrap();
+        let canonical = decoder.finish().unwrap();
+        let original = serde_json::to_value(&canonical).unwrap();
+        for (path, value) in [
+            ("/intent/intentType", serde_json::json!("search")),
+            (
+                "/intent/sideEffectIntent",
+                serde_json::json!("structure_plan"),
+            ),
+            ("/intent/ambiguity", serde_json::json!("non_blocking")),
+            (
+                "/intent/targetCandidates",
+                serde_json::json!([{"kind":"explicit_document","relPath":"PRIVATE_TARGET"}]),
+            ),
+            (
+                "/intent/requiredContext",
+                serde_json::json!(["PRIVATE_CONTEXT"]),
+            ),
+            (
+                "/intent/confirmationPoints",
+                serde_json::json!(["PRIVATE_CONFIRM"]),
+            ),
+        ] {
+            let mut changed = original.clone();
+            *changed.pointer_mut(path).unwrap() = value;
+            let first = serde_json::json!({"path":"a.md","_binderTurn":original}).to_string();
+            let second = serde_json::json!({"path":"b.md","_binderTurn":changed}).to_string();
+            let rejection = parse_tool_batch_detailed(&[&first, &second], None).unwrap_err();
+            assert_eq!(rejection.error.code, "AG_MODEL_CONTROL_CONFLICT");
+            assert!(rejection.error.message.contains("tool[0] 与 tool[1]"));
+            assert_eq!(rejection.diagnostic()["toolIndex"], 1);
+            assert_eq!(
+                rejection.diagnostic()["reasonCode"],
+                "control_decision_conflict"
+            );
+            assert!(
+                !format!("{}{}", rejection.error.message, rejection.diagnostic())
+                    .contains("PRIVATE")
+            );
+        }
+    }
+
+    // covers: BR-AG-DATA-004, BR-AG-STATE-002
+    #[test]
+    fn invalid_duplicate_has_typed_location_without_provider_values() {
+        let mut decoder = ModelOutputDecoder::default();
+        decoder.push(&control("tool", "none", None)).unwrap();
+        let canonical = serde_json::to_value(decoder.finish().unwrap()).unwrap();
+        let first = serde_json::json!({"pattern":"*","_binderTurn":canonical}).to_string();
+        for (path, value, reason, field) in [
+            (
+                "/nextAction",
+                serde_json::json!("PRIVATE_ENUM"),
+                "schema_enum_invalid",
+                "$control",
+            ),
+            (
+                "/intent/goal",
+                serde_json::json!(123),
+                "schema_type_invalid",
+                "$control",
+            ),
+            (
+                "/intent/goal",
+                serde_json::json!(" "),
+                "description_empty",
+                "intent.goal",
+            ),
+            (
+                "/intent/ambiguity",
+                serde_json::json!("blocking"),
+                "action_ambiguity_conflict",
+                "intent.ambiguity",
+            ),
+            (
+                "/nextAction",
+                serde_json::json!("final"),
+                "tool_action_required",
+                "nextAction",
+            ),
+        ] {
+            let mut changed = canonical.clone();
+            *changed.pointer_mut(path).unwrap() = value;
+            let second = serde_json::json!({"pattern":"*","_binderTurn":changed}).to_string();
+            let rejection = parse_tool_batch_detailed(&[&first, &second], None).unwrap_err();
+            assert_eq!(rejection.error.code, "AG_MODEL_CONTROL_INVALID");
+            assert_eq!(rejection.diagnostic()["reasonCode"], reason);
+            assert_eq!(rejection.diagnostic()["fieldPath"], field);
+            assert_eq!(rejection.diagnostic()["controlSource"], "tool[1]");
+            assert!(
+                !format!("{}{}", rejection.error.message, rejection.diagnostic())
+                    .contains("PRIVATE")
+            );
+        }
+        let mut changed = canonical;
+        changed["PRIVATE_UNKNOWN_KEY"] = serde_json::json!("PRIVATE_BODY");
+        let rejected = take_tool_control_detailed(&mut serde_json::json!({"_binderTurn":changed}))
+            .unwrap_err();
+        assert_eq!(rejected.diagnostic()["reasonCode"], "schema_unknown_field");
+        assert!(
+            !format!("{}{}", rejected.error.message, rejected.diagnostic()).contains("PRIVATE")
         );
     }
 
@@ -885,17 +1885,48 @@ mod tests {
             decoder.finish().unwrap().next_action,
             ModelNextAction::Clarify
         );
-        let native = prompt
-            .split("原生 workspace_glob 的参数示例：")
-            .nth(1)
-            .unwrap()
-            .split('\n')
-            .next()
-            .unwrap();
+        assert!(prompt.contains("原生工具只调用binder_tool_batch一次"));
+        assert!(prompt.contains("revision/sourceEventSeq 由系统维护"));
+        assert!(prompt.contains("参数必须同时包含 control 和 calls"));
+        let mut decoder = ModelOutputDecoder::default();
+        decoder.push(&control("tool", "none", None)).unwrap();
+        let tool_control = decoder.finish().unwrap();
+        let native = crate::ent::gateway::GwToolCall {id:"native-example".into(),name:TOOL_BATCH_NAME.into(),arguments:serde_json::json!({"control":tool_control,"calls":[{"toolName":"workspace_glob","params":{"pattern":"*.txt"}}]}).to_string()};
+        let expanded = expand_native_batch(&[native]).unwrap().unwrap();
         assert_eq!(
-            parse_tool_batch(&[native], None).unwrap().0.next_action,
+            parse_tool_batch(&[&expanded[0].arguments], None)
+                .unwrap()
+                .0
+                .next_action,
             ModelNextAction::Tool
         );
+    }
+
+    // covers: BR-AG-STATE-001, BR-AG-DATA-004
+    #[test]
+    fn stage_completion_is_not_authorization_waiting_or_tool_control() {
+        let mut decoder = ModelOutputDecoder::default();
+        decoder.push(&control("final", "none", None)).unwrap();
+        let original = decoder.finish().unwrap();
+        for status in ["report_only", "blocked", "no_op", "partial"] {
+            let mut current = original.clone();
+            current.completion = Some(ModelCompletion {
+                status: status.into(),
+                reason: "当前仅报告，未操作".into(),
+            });
+            current.validate().unwrap();
+            current.next_action = ModelNextAction::Tool;
+            assert!(current.validate().is_err());
+            current.next_action = ModelNextAction::Final;
+            current.completion.as_mut().unwrap().reason = " ".into();
+            assert!(current.validate().is_err());
+        }
+        let mut current = original;
+        current.completion = Some(ModelCompletion {
+            status: "awaiting_confirm".into(),
+            reason: "等待".into(),
+        });
+        assert!(current.validate().is_err());
     }
 
     #[test]

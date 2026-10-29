@@ -43,6 +43,7 @@ function diff(patch: Partial<DiffView>): DiffView {
 
 const agServiceMock = vi.hoisted(() => ({
   startTurn: vi.fn(),
+  listPresetModels: vi.fn(),
   uploadByok: vi.fn(),
   deleteAgentSession: vi.fn(),
   newAgentSession: vi.fn(() => "s-new"),
@@ -51,10 +52,12 @@ const agServiceMock = vi.hoisted(() => ({
   cancelActiveTurn: vi.fn(),
   resolveDecisionAndContinue: vi.fn(),
   inspectTurnEffects: vi.fn(),
+  continueSavedResourceGroup: vi.fn(),
 }));
 
 vi.mock("../../services/agService", () => ({
   startTurn: agServiceMock.startTurn,
+  listPresetModels: agServiceMock.listPresetModels,
   uploadByok: agServiceMock.uploadByok,
   deleteAgentSession: agServiceMock.deleteAgentSession,
   newAgentSession: agServiceMock.newAgentSession,
@@ -63,6 +66,7 @@ vi.mock("../../services/agService", () => ({
   cancelActiveTurn: agServiceMock.cancelActiveTurn,
   resolveDecisionAndContinue: agServiceMock.resolveDecisionAndContinue,
   inspectTurnEffects: agServiceMock.inspectTurnEffects,
+  continueSavedResourceGroup: agServiceMock.continueSavedResourceGroup,
 }));
 
 vi.mock("../../services/deService", () => ({
@@ -133,10 +137,13 @@ function renderComposer() {
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
   agServiceMock.startTurn.mockReset();
+  agServiceMock.listPresetModels.mockReset();
+  agServiceMock.listPresetModels.mockResolvedValue([]);
   agServiceMock.uploadByok.mockReset();
   agServiceMock.cancelActiveTurn.mockReset();
   agServiceMock.resolveDecisionAndContinue.mockReset();
   agServiceMock.inspectTurnEffects.mockReset();
+  agServiceMock.continueSavedResourceGroup.mockReset();
   agStore.reset();
   wsStore.reset();
 });
@@ -148,7 +155,7 @@ describe("development verification entry", () => {
   it("exposes production read recovery paths through the existing isolated selector", () => {
     render(<AgentVerificationPanel />);
     const selector=screen.getByLabelText("验证场景");
-    for (const scenario of ["page-contract-recovery","page-contract-exhausted","repeated-oversized-read","repeated-read-tools-blocked","read-failure-same-batch","read-failure-with-evidence","read-failure-gate-denied","read-failure-clarification"]) {
+    for (const scenario of ["page-contract-recovery","page-contract-exhausted","repeated-oversized-read","repeated-read-tools-blocked","read-failure-same-batch","read-failure-with-evidence","read-failure-gate-denied","read-failure-clarification","tool-description-compatible","protocol-cumulative","native-business-tools"]) {
       fireEvent.change(selector,{target:{value:scenario}});
       expect((selector as HTMLSelectElement).value).toBe(scenario);
     }
@@ -164,7 +171,7 @@ describe("development verification entry", () => {
     fireEvent.click(screen.getByText("批量运行核心验收"));
     fireEvent.click(screen.getByText("批量运行核心验收"));
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByRole("status").textContent).toContain("批量验收失败，已核验 2/25");
+    expect(screen.getByRole("status").textContent).toContain("批量验收失败，已核验 2/31");
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "ag_verify_run")).toHaveLength(3);
     const evidence = JSON.parse(screen.getByLabelText("批量核心验收证据").textContent!);
     expect(evidence[0]).toMatchObject({ scenario: "chat", matched: true, receipt: { marker: "chat" } });
@@ -406,18 +413,33 @@ describe("DecisionRequest identity isolation", () => {
 
 describe("Composer · 引用令牌", () => {
   // covers: BR-AG-DATA-007
-  it("显示代理编辑的实际偏好，选择只改变代理编辑而不改全局默认", () => {
+  it("聊天菜单同步 Flash 预设，但保留旧选择直到用户手动切换", async () => {
     const models = modelStore.getSnapshot().models;
-    modelStore.select(modelKey(models[0]));
-    modelStore.setCapabilityPref("agentEdit", { mode: "explicit", modelKey: modelKey(models[1]) });
+    const chatKey = "deepseek/deepseek-chat";
+    const flashKey = "deepseek/deepseek-flash";
+    modelStore.select(chatKey);
+    modelStore.setCapabilityPref("agentEdit", { mode: "explicit", modelKey: chatKey });
+    agServiceMock.listPresetModels.mockResolvedValueOnce([
+      { provider: "deepseek", model: "deepseek-flash", label: "DeepSeek Flash（网关）", source: "preset" },
+      ...models.filter((model) => modelKey(model) !== flashKey),
+    ]);
     renderComposer();
     const selector = screen.getByTitle("模型选择");
-    expect(selector.textContent).toContain(models[1].label);
+    expect(selector.textContent).toContain("DeepSeek Chat");
     fireEvent.click(selector);
-    fireEvent.click(screen.getByText(models[2].label));
-    expect(screen.getByTitle("模型选择").textContent).toContain(models[2].label);
-    expect(modelStore.getSnapshot().selectedKey).toBe(modelKey(models[0]));
-    expect(modelStore.resolveFor("agentEdit")).toEqual(models[2]);
+    await waitFor(() => expect(screen.getByText("DeepSeek Flash（网关）")).toBeTruthy());
+    expect(agServiceMock.listPresetModels).toHaveBeenCalledTimes(1);
+    expect(modelStore.getSnapshot().selectedKey).toBe(chatKey);
+    expect(modelKey(modelStore.resolveFor("agentEdit"))).toBe(chatKey);
+    fireEvent.click(screen.getByText("DeepSeek Flash（网关）"));
+    expect(screen.getByTitle("模型选择").textContent).toContain("DeepSeek Flash（网关）");
+    expect(modelStore.getSnapshot().selectedKey).toBe(chatKey);
+    expect(modelKey(modelStore.resolveFor("agentEdit"))).toBe(flashKey);
+    agServiceMock.listPresetModels.mockRejectedValueOnce(new Error("gateway unavailable"));
+    fireEvent.click(screen.getByTitle("模型选择"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("预设清单同步失败"));
+    expect(modelKey(modelStore.resolveFor("agentEdit"))).toBe(flashKey);
+    expect(agServiceMock.startTurn).not.toHaveBeenCalled();
     modelStore.setCapabilityPref("agentEdit", { mode: "followGlobal" });
   });
   // covers: BR-REF-DATA-004
@@ -950,6 +972,48 @@ describe("MessageList migrated suite", () => {
       expect(screen.getAllByText(/数据库暂不可用/)).toHaveLength(1);
       expect(screen.getByText(/诊断阶段：frontend_invoke/).textContent).toContain("根因未确认");
       expect(screen.getAllByText("重试")).toHaveLength(1);
+    });
+
+    // covers: BR-AG-UI-001, BR-SYS-STATE-008
+    it("保存依赖有显式核对入口且终态后消失，不伪称自动保存", async () => {
+      const session=agStore.getSnapshot().activeSessionId;
+      agStore.pushMessage(session,{id:"save-user",role:"user",turnId:"save-turn",turnStatus:"draft",content:"创建新文件"});
+      agStore.pushMessage(session,{id:"save-wait",role:"assistant",turnId:"save-turn",content:"新文件内容待审阅",awaitingResourceSave:{requestId:"save-request",path:"new.txt"}});
+      agServiceMock.continueSavedResourceGroup.mockResolvedValue("初始内容尚未保存；后续操作未执行。");
+      render(<MessageList/>);
+      expect(screen.getByText(/原任务尚未完成，后续操作未执行/)).toBeTruthy();
+      expect(screen.queryByText(/本回合未完成/)).toBeNull();
+      expect(screen.queryByText("重试")).toBeNull();
+      fireEvent.click(screen.getByText("核对已保存内容并继续"));
+      await waitFor(()=>expect(agServiceMock.continueSavedResourceGroup).toHaveBeenCalledWith("save-request"));
+      expect(await screen.findByText("初始内容尚未保存；后续操作未执行。")).toBeTruthy();
+      act(()=>agStore.setTurnStatus(session,"save-turn","cancelled"));
+      expect(screen.queryByText("核对已保存内容并继续")).toBeNull();
+      expect(agServiceMock.startTurn).not.toHaveBeenCalled();
+    });
+
+    // covers: BR-AG-UI-001, BR-AG-OBS-001
+    it("正常流结束但正文结构疑似残缺时显示风险，不自动重试或改写正文", () => {
+      const sessionId=agStore.newSession();
+      agStore.pushMessage(sessionId,{id:"cut-user",role:"user",content:"解释相关",turnId:"cut-turn",turnStatus:"completed",completionReason:"answer_incomplete"});
+      agStore.pushMessage(sessionId,{id:"cut-answer",role:"assistant",turnId:"cut-turn",content:"| 层级 | 能说什"});
+      render(<MessageList/>);
+      expect(screen.getByText(/回答可能未完整/)).toBeTruthy();
+      expect(screen.getByText(/能说什/)).toBeTruthy();
+      expect(screen.queryByText("重试")).toBeNull();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("额度收尾不展示成功或错误重试，显式续办保留来源并显示效果核验阻断", async () => {
+      const sessionId=agStore.newSession();
+      agStore.pushMessage(sessionId,{id:"budget-user",role:"user",content:"读取剩余文件",turnId:"budget-origin",turnStatus:"completed",completionReason:"budget_exhausted"});
+      render(<MessageList/>);
+      expect(screen.queryByText("重试")).toBeNull();
+      expect(screen.getByText(/仍有未完成内容/)).toBeTruthy();
+      vi.mocked(startTurn).mockRejectedValueOnce(new Error("AG_RETRY_EFFECT_UNVERIFIED：先核对已有结果"));
+      fireEvent.click(screen.getByRole("button",{name:"继续未完成部分"}));
+      await waitFor(()=>expect(screen.getByText(/AG_RETRY_EFFECT_UNVERIFIED/)).toBeTruthy());
+      expect(startTurn).toHaveBeenCalledWith("读取剩余文件",expect.objectContaining({retryOf:{sessionId,turnId:"budget-origin",continuationOnly:true}}));
     });
 
     it("draft 重试保留身份和引用，并展示被阻断的真实原因", async () => {

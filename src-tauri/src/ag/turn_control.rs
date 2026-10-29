@@ -384,7 +384,7 @@ pub(super) fn park_agent_turn_for_decision(
 
 /// DecisionRequest 的具体身份必须在认领等待态之前校验。失败不改变 phase/checkpoint，避免错误重放
 /// 消耗合法的同回合恢复权。
-pub(super) fn validate_agent_turn_decision_resume(
+pub(crate) fn validate_agent_turn_decision_resume(
     state: &AppState,
     session_id: &str,
     turn_id: &str,
@@ -704,7 +704,11 @@ pub(crate) fn ag_ack_preview(
         content_hash,
     };
     commit_preview_ack(&conn, &checkpoint)?;
-    Ok(serde_json::json!({ "task_run_id": task_run_id, "ready": true }))
+    let awaiting_save: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM create_document_bundles b JOIN workspace_operation_plans p ON p.plan_id=b.plan_id WHERE b.initial_diff_id=?1 AND p.status='awaiting_content')", [&checkpoint.diff_id], |row|row.get(0))
+        .map_err(|error| IpcError::new("AG_PREVIEW_ACK_DB_ERROR", &error.to_string(), true, false))?;
+    Ok(
+        serde_json::json!({ "task_run_id": task_run_id, "ready": true, "awaiting_save":awaiting_save }),
+    )
 }
 
 // 同一数据库事务提交检查点和新建文档拒绝保护；后者失败不得留下不可重提的半份 ack。
@@ -777,6 +781,40 @@ pub(super) fn cancel_active_agent_turn(
         parked_source,
         task_run_id,
     })
+}
+
+pub(super) fn release_failed_parked_turn(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<(), IpcError> {
+    let mut turns = state
+        .active_agent_turns
+        .lock()
+        .map_err(|_| IpcError::new("AG_TURN_REGISTRY_BUSY", "Agent回合注册表繁忙", true, false))?;
+    if let Some(turn) = turns
+        .get_mut(session_id)
+        .filter(|turn| turn.turn_id == turn_id)
+    {
+        turn.cancelled.store(true, Ordering::Release);
+        turn.runtime_returned = true;
+        // Keep an in-flight lease registered until its real effect settles.
+        turn.phase = ActiveAgentTurnPhase::Running;
+        if let Some(abort) = turn.abort_handle.take() {
+            abort.abort();
+        }
+    }
+    if turns.get(session_id).is_some_and(|turn| {
+        turn.turn_id == turn_id && turn.effects_in_flight.load(Ordering::Acquire) == 0
+    }) {
+        if let Some(turn) = turns.remove(session_id) {
+            turn.cancelled.store(true, Ordering::Release);
+            if let Some(abort) = turn.abort_handle {
+                abort.abort();
+            }
+        }
+    }
+    Ok(())
 }
 
 fn finish_cancelled_parked_turn(

@@ -12,9 +12,81 @@ use super::tool::{validate_tool, ToolDecision};
 use super::turn::AGENT_EDIT_1_0_PROFILE;
 use std::collections::BTreeSet;
 
+/// Trusted execution policy, not a model-supplied permission or provider token budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ExecutionBudgetPolicy {
+    pub max_model_calls: usize,
+    pub max_tool_calls: u32,
+    pub max_corrections: usize,
+    pub final_reserve: usize,
+}
+
+impl Default for ExecutionBudgetPolicy {
+    fn default() -> Self {
+        Self {
+            max_model_calls: 12,
+            max_tool_calls: 16,
+            max_corrections: 2,
+            final_reserve: 2,
+        }
+    }
+}
+
+impl ExecutionBudgetPolicy {
+    pub(super) fn legacy() -> Self {
+        Self {
+            max_model_calls: 6,
+            max_tool_calls: 6,
+            max_corrections: 2,
+            final_reserve: 0,
+        }
+    }
+    pub(super) fn valid(self) -> bool {
+        self.max_model_calls > 0
+            && self.max_model_calls <= 12
+            && self.max_tool_calls > 0
+            && self.max_tool_calls <= 16
+            && self.max_corrections <= 2
+            && self.final_reserve < self.max_model_calls
+    }
+}
+
+#[cfg(any(test, debug_assertions))]
+thread_local! { static VERIFICATION_POLICY: std::cell::Cell<Option<ExecutionBudgetPolicy>> = const { std::cell::Cell::new(None) }; }
+
+pub(super) fn configured_execution_policy() -> ExecutionBudgetPolicy {
+    #[cfg(any(test, debug_assertions))]
+    if let Some(policy) = VERIFICATION_POLICY.with(|slot| slot.get()) {
+        return policy;
+    }
+    ExecutionBudgetPolicy::default()
+}
+
+#[cfg(any(test, debug_assertions))]
+pub(super) async fn with_verification_execution_policy<F: std::future::Future>(
+    policy: ExecutionBudgetPolicy,
+    future: F,
+) -> F::Output {
+    assert!(policy.valid());
+    struct Restore(Option<ExecutionBudgetPolicy>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            VERIFICATION_POLICY.with(|slot| slot.set(self.0));
+        }
+    }
+    futures_util::pin_mut!(future);
+    futures_util::future::poll_fn(|cx| {
+        let _restore = Restore(VERIFICATION_POLICY.with(|slot| slot.replace(Some(policy))));
+        future.as_mut().poll(cx)
+    })
+    .await
+}
+
 /// Prompt 装配时已核验的当前格式/动态事实；只用于继续收窄，不作为独立授权来源。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct CapabilityFactorsV2 {
+    pub(super) execution_policy: ExecutionBudgetPolicy,
     pub(super) has_task_run: bool,
     pub(super) active_bdocx: bool,
     pub(super) table_ops_available: bool,
@@ -324,7 +396,7 @@ pub(super) fn resolve_capability_grant_v2(
         dynamic_capability_hash,
         decision_receipt_ids: factors.decision_receipt_ids,
         budgets: CapabilityBudgetsV2 {
-            max_tool_calls: 6,
+            max_tool_calls: factors.execution_policy.max_tool_calls,
             remaining_tool_calls: factors.remaining_tool_calls,
         },
         expires_after_tool_call,
@@ -436,6 +508,56 @@ pub fn validate_requested_tool_for_grant(
     }
     if !parameter_depth_is_bounded(params, 0) {
         return ToolDecision::Reject("工具参数结构超过 32 层上限，本次未执行".into());
+    }
+    // This is the same pre-confirmation contract exposed by the manifest below.
+    // Report a correctable parameter issue only after identity and authorization checks.
+    if name == "plan_workspace_operation" {
+        if let Some(operations) = params.get("operations").and_then(|value| value.as_array()) {
+            let creates = operations
+                .iter()
+                .filter(|item| {
+                    item.get("kind").and_then(|value| value.as_str()) == Some("create_document")
+                })
+                .count();
+            if creates > 0 && creates != 1 {
+                return ToolDecision::InvalidArguments {
+                    field: "operations",
+                    constraint: "single_create_document",
+                    message:
+                        "同一计划只能包含一个create_document；此前未执行，请重新核对计划范围。"
+                            .into(),
+                };
+            }
+            if let Some(create_empty) = params.get("createEmpty") {
+                if create_empty != true
+                    || operations.len() != 1
+                    || creates != 1
+                    || operations[0]
+                        .get("resourceKind")
+                        .and_then(|value| value.as_str())
+                        != Some("file")
+                    || !operations[0]
+                        .get("targetPath")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|path| path.ends_with(".txt"))
+                    || params.get("initialContent").is_some()
+                {
+                    return ToolDecision::InvalidArguments {
+                        field: "createEmpty",
+                        constraint: "single_zero_byte_txt_create",
+                        message: "createEmpty=true 仅用于单独新建零字节 .txt 文件；operations 必须只有一个 create_document/file，且不得同时传 initialContent。本批未执行。".into(),
+                    };
+                }
+            } else if creates == 1
+                && !params
+                    .get("initialContent")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                return ToolDecision::InvalidArguments { field: "initialContent", constraint: "non_blank_frozen_content",
+                    message: "create_document必须提供确认前冻结的非空initialContent。空HTML文档使用<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body></body></html>，不能传空字符串或空白；修正参数后用新调用ID提交原计划，不增加任务范围。".into() };
+            }
+        }
     }
     if let Some(schema) = common_tool_definitions_json()
         .as_array()
@@ -659,16 +781,6 @@ pub fn validate_requested_tool_for_grant(
                 item.get("kind").and_then(|value| value.as_str()) == Some("create_document")
             })
             .count();
-        let initial_content = params
-            .get("initialContent")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty());
-        if create_count > 0 && (create_count != 1 || initial_content.is_none()) {
-            return ToolDecision::Reject(
-                "新建文档计划必须且只能包含一个 create_document，并提供确认前冻结的完整 initialContent"
-                    .to_string(),
-            );
-        }
         if create_count == 0 && params.get("initialContent").is_some() {
             return ToolDecision::Reject(
                 "initialContent 只能与单个 create_document 操作绑定".to_string(),
@@ -955,6 +1067,18 @@ fn validate_common_parameters(
             return Err("数值超出边界");
         }
     }
+    if let Some(text) = params.as_str() {
+        if schema["minLength"]
+            .as_u64()
+            .is_some_and(|min| text.chars().count() < min as usize)
+        {
+            return Err("字符串长度不足");
+        }
+        // The common manifest uses only this fixed non-whitespace string pattern.
+        if schema["pattern"] == "\\S" && text.trim().is_empty() {
+            return Err("字符串不得仅含空白");
+        }
+    }
     Ok(())
 }
 
@@ -1001,7 +1125,7 @@ fn common_tool_definitions_json() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "plan_workspace_operation",
-                "description": "为工作区资源创建、建目录、重命名、移动或删除生成不可变操作计划和独立确认卡。工具成功只表示正在等待用户确认；确认前不修改磁盘，也不生成 DiffCard。确认后系统重新核验目标并直接执行。新建文档时必须同时提供 initialContent；系统确认后先创建真实文件，再把初始内容作为普通内容 Diff 投影。",
+                "description": "为工作区资源操作生成不可变计划和独立确认卡；工具成功仅表示等待确认。普通新建文档须提供非空 initialContent，确认后创建文件并投影内容 Diff。仅用户明确要求新建零字节 TXT 时，可单独提交一个 create_document/file、createEmpty=true 且不传 initialContent；确认后直接创建空文件，不产生内容 Diff。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1021,9 +1145,11 @@ fn common_tool_definitions_json() -> serde_json::Value {
                                 "additionalProperties": false
                             }
                         },
-                        "initialContent": { "type": "string", "description": "仅 create_document：确认前生成并冻结的新文档完整初始内容" }
+                        "initialContent": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "普通create_document必填：确认前冻结的完整非空初始内容。空HTML指空正文，提交<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body></body></html>；不要传空串/空白。" },
+                        "createEmpty": { "type": "boolean", "description": "仅明确要求零字节 TXT 时设为 true；operations 只能有一个 create_document/file，targetPath 以 .txt 结尾，且必须省略 initialContent。其他创建不要传此字段。" }
                     },
                     "required": ["operations"],
+                    "allOf": [{"if":{"properties":{"operations":{"contains":{"type":"object","properties":{"kind":{"const":"create_document"}},"required":["kind"]}}},"required":["operations"]},"then":{"anyOf":[{"required":["initialContent"]},{"properties":{"createEmpty":{"const":true}},"required":["createEmpty"]}]}}],
                     "additionalProperties": false
                 }
             }
@@ -1099,16 +1225,16 @@ fn common_tool_definitions_json() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "read_doc",
-                "description": "读取workspace文档。默认正文view=text，去除HTML/编辑结构并按容量成页；根据has_more/next_offset继续读取，不能把一页当全文。非首页必须传上一页version_hash为expected_hash。readonly限制编辑，不禁止读取表格正文。需要编辑节点时传blocks（默认structure）；需要原HTML全文时显式view=structure，结构结果超限会失败，不截断JSON/节点。",
+                "description": "读取workspace文档。默认正文view=text，按容量成页；has_more=true 时下一次传回原样的 next_cursor 作为 cursor，不要自行计算 offset。cursor 同时绑定路径和版本，版本变化时从第一页重读。readonly限制编辑，不禁止读取表格正文。需要编辑节点时传blocks（默认structure）；需要原HTML全文时显式view=structure，结构结果超限会失败。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" },
                         "view": { "type": "string", "enum": ["text", "structure"], "description": "默认text正文分页；blocks默认structure完整编辑投影，不能与text混用" },
-                        "offset": { "type": "integer", "minimum": 0, "description": "text阅读游标，默认0；后续使用返回的next_offset，不是块号" },
+                        "cursor": { "type": "string", "description": "仅正文续页：原样复制上一页的 next_cursor；第一页省略" },
                         "limit_chars": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "text页字符上限，默认10000；实际按序列化安全预算装页" },
                         "blocks": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "需要读取的块 id 或块索引数组；任一不存在即失败" },
-                        "expected_hash": { "type": "string", "description": "list_blocks 返回的 version_hash；若提供则版本不匹配时拒绝读取，跨步骤/分页读取应提供" }
+                        "expected_hash": { "type": "string", "description": "仅结构/块读取：已知版本哈希；版本不匹配时拒绝读取。正文续页只传 cursor" }
                     },
                     "required": ["path"]
                 }
@@ -1118,7 +1244,7 @@ fn common_tool_definitions_json() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "search_text",
-                "description": "在当前工作区内按关键词搜索文档内容，返回命中的文件与片段。b-docx 会按 DOC 编辑模型转 HTML 后搜索块文本。",
+                "description": "在当前工作区内按关键词搜索文档内容，返回命中的文件、block_id/block_index 与片段。已知标题或占位句时用此工具定位块，再以 read_doc(blocks) 读取完整节点；无需遍历 list_blocks。b-docx 会按 DOC 编辑模型转 HTML 后搜索块文本。",
                 "parameters": {
                     "type": "object",
                     "properties": { "query": { "type": "string", "description": "搜索关键词" } },
@@ -1130,14 +1256,13 @@ fn common_tool_definitions_json() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "list_blocks",
-                "description": "读取指定文档的块目录（轻量投影，不含 node_json/完整文本）。返回 block_id/block_index/node_type/role/parent_block_id/depth/text(前40字)/fingerprint/capabilities；需要某块完整投影（node_json）时调用 read_doc 并传入非空 blocks 字符串数组。第一页 offset 默认为0，可省 expected_hash；后续页 offset>0 必须传上一页返回的 version_hash 作为 expected_hash，否则调用会被拒绝。当前富文档直接返回 ProseMirror 层级投影；只有 capabilities 含 replace_node 的 content 块可用于 block_ops，容器与原子块只读。",
+                "description": "读取指定文档的块目录（轻量投影，不含 node_json/完整文本），仅在确需目录结构时使用；已知文字定位请用 search_text。需要某块完整投影时调用 read_doc(blocks)。第一页只传 path；后续页只能原样复制同一路径上一页实际返回的 next_cursor 到 cursor，不能猜造。cursor 绑定路径和版本，版本变化时从第一页重读。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "文档相对路径（相对 workspace 根）" },
-                        "offset": { "type": "integer", "minimum": 0, "description": "目录起点（不是块编号或页码），首次调用省略或传0；offset>0 必须携带上一页 version_hash 作为 expected_hash，后续起点仅使用上一页返回的 next_offset" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "每页块数，默认20；返回 next_offset、total_blocks、version_hash，不代表全文已读" },
-                        "expected_hash": { "type": "string", "description": "上一页的 version_hash，版本变化时重新开始" }
+                        "cursor": { "type": "string", "description": "仅续页：原样复制上一页的 next_cursor；第一页省略" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "每页块数，默认20；返回 next_cursor、total_blocks、version_hash，不代表全文已读" }
                     },
                     "required": ["path"]
                 }
@@ -1591,17 +1716,22 @@ mod tests {
         assert!(list_blocks["function"]["description"]
             .as_str()
             .unwrap()
-            .contains("offset>0 必须传上一页返回的 version_hash"));
-        assert!(
-            list_blocks["function"]["parameters"]["properties"]["offset"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("offset>0 必须携带上一页 version_hash")
-        );
+            .contains("next_cursor"));
+        assert!(list_blocks["function"]["parameters"]["properties"]["cursor"].is_object());
+        assert!(list_blocks["function"]["parameters"]["properties"]
+            .get("offset")
+            .is_none());
+        assert!(list_blocks["function"]["parameters"]["properties"]
+            .get("expected_hash")
+            .is_none());
         let read_doc = find("read_doc");
         let description = read_doc["function"]["description"].as_str().unwrap();
-        assert!(description.contains("结构结果超限会失败，不截断JSON/节点"));
-        assert!(description.contains("默认正文view=text") && description.contains("next_offset"));
+        assert!(description.contains("结构结果超限会失败"));
+        assert!(description.contains("默认正文view=text") && description.contains("next_cursor"));
+        assert!(read_doc["function"]["parameters"]["properties"]["cursor"].is_object());
+        assert!(read_doc["function"]["parameters"]["properties"]
+            .get("offset")
+            .is_none());
         assert_eq!(
             read_doc["function"]["parameters"]["properties"]["limit_chars"]["maximum"],
             10000
@@ -1804,6 +1934,191 @@ mod tests {
                 &invalid_plan,
                 &grant,
                 "turn-2",
+                "call-plan",
+                10,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::InvalidArguments {
+                field: "initialContent",
+                constraint: "non_blank_frozen_content",
+                ..
+            }
+        ));
+
+        // Ordinary create still needs frozen content; only an explicit, single
+        // zero-byte TXT create may omit it.
+        let shell =
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body></body></html>";
+        let definitions = common_tool_definitions_json();
+        let schema = &definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["function"]["name"] == "plan_workspace_operation")
+            .unwrap()["function"]["parameters"];
+        assert_eq!(
+            schema["allOf"][0]["then"]["anyOf"][0]["required"],
+            serde_json::json!(["initialContent"])
+        );
+        assert_eq!(
+            schema["allOf"][0]["then"]["anyOf"][1]["required"],
+            serde_json::json!(["createEmpty"])
+        );
+        assert_eq!(schema["properties"]["initialContent"]["minLength"], 1);
+        assert_eq!(schema["properties"]["initialContent"]["pattern"], "\\S");
+        for content in [
+            serde_json::Value::Null,
+            serde_json::json!(""),
+            serde_json::json!(" \r\n\t"),
+            serde_json::json!(5),
+        ] {
+            let mut params = invalid_plan.clone();
+            params["initialContent"] = content;
+            assert!(validate_common_parameters(schema, &params, 0).is_err());
+            let mut tracker = CapabilityGrantUseTrackerV2::default();
+            assert!(matches!(
+                validate_requested_tool_for_grant(
+                    "plan_workspace_operation",
+                    &params,
+                    &grant,
+                    "turn-2",
+                    "call-plan",
+                    10,
+                    Some(test_workspace_root()),
+                    &mut tracker,
+                ),
+                ToolDecision::InvalidArguments {
+                    field: "initialContent",
+                    ..
+                }
+            ));
+            assert!(matches!(validate_requested_tool_for_grant(
+                "plan_workspace_operation", &params, &grant, "turn-2", "call-plan", 10,
+                Some(test_workspace_root()), &mut tracker,
+            ), ToolDecision::Reject(reason) if reason.contains("已使用")));
+        }
+        let mut valid = invalid_plan.clone();
+        valid["initialContent"] = serde_json::json!(shell);
+        assert!(validate_common_parameters(schema, &valid, 0).is_ok());
+        assert_eq!(
+            validate_requested_tool_for_grant(
+                "plan_workspace_operation",
+                &valid,
+                &grant,
+                "turn-2",
+                "call-plan",
+                10,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::Allow
+        );
+        let empty_txt = serde_json::json!({
+            "operations":[{"kind":"create_document","targetPath":"empty.txt","resourceKind":"file"}],
+            "createEmpty":true
+        });
+        assert!(validate_common_parameters(schema, &empty_txt, 0).is_ok());
+        assert_eq!(
+            validate_requested_tool_for_grant(
+                "plan_workspace_operation",
+                &empty_txt,
+                &grant,
+                "turn-2",
+                "call-plan",
+                10,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::Allow
+        );
+        for mut invalid in [
+            serde_json::json!({"operations":[{"kind":"create_document","targetPath":"empty.html","resourceKind":"file"}],"createEmpty":true}),
+            serde_json::json!({"operations":[{"kind":"create_document","targetPath":"empty.txt","resourceKind":"folder"}],"createEmpty":true}),
+            serde_json::json!({"operations":[{"kind":"create_document","targetPath":"empty.txt","resourceKind":"file"},{"kind":"delete_resource","sourcePath":"old.txt","resourceKind":"file"}],"createEmpty":true}),
+            serde_json::json!({"operations":[{"kind":"create_folder","targetPath":"folder","resourceKind":"folder"}],"createEmpty":true}),
+            serde_json::json!({"operations":[{"kind":"create_document","targetPath":"empty.txt","resourceKind":"file"}],"createEmpty":false}),
+        ] {
+            assert!(matches!(
+                validate_requested_tool_for_grant(
+                    "plan_workspace_operation",
+                    &invalid,
+                    &grant,
+                    "turn-2",
+                    "call-plan",
+                    10,
+                    Some(test_workspace_root()),
+                    &mut CapabilityGrantUseTrackerV2::default(),
+                ),
+                ToolDecision::InvalidArguments {
+                    field: "createEmpty",
+                    ..
+                }
+            ));
+            invalid["initialContent"] = serde_json::json!(" ");
+            assert!(matches!(
+                validate_requested_tool_for_grant(
+                    "plan_workspace_operation",
+                    &invalid,
+                    &grant,
+                    "turn-2",
+                    "call-plan",
+                    10,
+                    Some(test_workspace_root()),
+                    &mut CapabilityGrantUseTrackerV2::default(),
+                ),
+                ToolDecision::InvalidArguments {
+                    field: "createEmpty",
+                    ..
+                }
+            ));
+        }
+        let mut both = empty_txt.clone();
+        both["initialContent"] = serde_json::json!("nonempty");
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "plan_workspace_operation",
+                &both,
+                &grant,
+                "turn-2",
+                "call-plan",
+                10,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::InvalidArguments {
+                field: "createEmpty",
+                ..
+            }
+        ));
+        let mut multiple = valid.clone();
+        multiple["operations"] = serde_json::json!([
+            {"kind":"create_document","targetPath":"a.html","resourceKind":"file"},
+            {"kind":"create_document","targetPath":"b.html","resourceKind":"file"}
+        ]);
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "plan_workspace_operation",
+                &multiple,
+                &grant,
+                "turn-2",
+                "call-plan",
+                10,
+                Some(test_workspace_root()),
+                &mut CapabilityGrantUseTrackerV2::default(),
+            ),
+            ToolDecision::InvalidArguments {
+                field: "operations",
+                ..
+            }
+        ));
+        // Invalid content is not grounds to bypass authorization or identity guards.
+        assert!(matches!(
+            validate_requested_tool_for_grant(
+                "plan_workspace_operation",
+                &invalid_plan,
+                &grant,
+                "wrong-turn",
                 "call-plan",
                 10,
                 Some(test_workspace_root()),

@@ -26,18 +26,14 @@ use std::sync::{
     Arc,
 };
 
-pub(super) const MAX_MODEL_ROUNDS: usize = 6;
-/// Malformed model-control batches may be corrected, but never consume unbounded rounds.
-const MAX_PROTOCOL_CORRECTION_ROUNDS: usize = 2;
-
 // A protocol repair must never turn an already issued non-read operation into a new call.
-// Keep this conservative even for rejected/unknown receipts; ordinary successful runs do not
-// enter this restriction. The trusted correction marker survives checkpoint continuation.
-fn correction_final_only(messages: &[serde_json::Value]) -> bool {
-    super::turn_prompt::final_only_continuation(messages) || has_non_read_calls(messages)
+// A matching runtime rejection proves the call never crossed the execution boundary.
+// Missing/conflicting receipts and any actual/unknown non-read effect stay conservative.
+fn correction_final_only(messages: &[serde_json::Value], scope: (&str, &str, &str)) -> bool {
+    super::turn_prompt::final_only_continuation(messages) || has_non_read_calls(messages, scope)
 }
 
-fn has_non_read_calls(messages: &[serde_json::Value]) -> bool {
+fn has_non_read_calls(messages: &[serde_json::Value], scope: (&str, &str, &str)) -> bool {
     messages.iter().any(|message| {
         message
             .get("tool_calls")
@@ -50,20 +46,62 @@ fn has_non_read_calls(messages: &[serde_json::Value]) -> bool {
                         .unwrap_or("");
                     !ag::tool_registry::lookup(name).is_some_and(|tool| {
                         tool.permission == ag::tool_registry::ToolPermission::ReadOnly
-                    })
+                    }) && !rejected_before_execution(messages, call, name, scope)
                 })
             })
     })
 }
 
-fn checkpoint_after_read_clarification(messages: &mut Vec<serde_json::Value>) {
+fn rejected_before_execution(
+    messages: &[serde_json::Value],
+    call: &serde_json::Value,
+    name: &str,
+    scope: (&str, &str, &str),
+) -> bool {
+    let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) else {
+        return false;
+    };
+    let mut replies = messages
+        .iter()
+        .filter(|m| m["role"] == "tool" && m["tool_call_id"] == id);
+    let Some(reply) = replies.next() else {
+        return false;
+    };
+    if replies.next().is_some() {
+        return false;
+    }
+    let receipt = reply["content"]
+        .as_str()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|mut v| v.get_mut("executionReceipt").map(serde_json::Value::take))
+        .and_then(|v| serde_json::from_value::<crate::types::ToolCallReceiptV1>(v).ok());
+    receipt.is_some_and(|r| {
+        r.identity.tool_call_id == id
+            && r.identity.tool_name == name
+            && r.identity.workspace_id == scope.0
+            && r.identity.session_id == scope.1
+            && r.identity.turn_id == scope.2
+            && r.execution_status == crate::types::ToolCallExecutionStatus::Rejected
+            && r.completion_status == crate::types::ToolCallCompletionStatus::Blocked
+            && r.effect_status == crate::types::ToolCallEffectStatus::NotStarted
+            && r.next_action == crate::types::ToolCallNextAction::RespondBlocked
+            && r.failure.is_some()
+            && r.references.is_empty()
+            && r.evidence_ids.is_empty()
+    })
+}
+
+fn checkpoint_after_read_clarification(
+    messages: &mut Vec<serde_json::Value>,
+    scope: (&str, &str, &str),
+) {
     // Parking cannot execute anything. A validated user clarification may choose a new
     // read scope on resume, under the same cumulative budgets. Never release a guard
     // protecting any prior non-read operation (including uncertain/rejected receipts).
     let read_guard = messages.iter().any(|message| {
         message["role"] == "system" && message["layer"] == "read_failure_final_only"
     });
-    if read_guard && !has_non_read_calls(messages) {
+    if read_guard && !has_non_read_calls(messages, scope) {
         messages.retain(|message| {
             !(message["role"] == "system"
                 && matches!(
@@ -74,16 +112,51 @@ fn checkpoint_after_read_clarification(messages: &mut Vec<serde_json::Value>) {
     }
 }
 
+#[cfg(test)]
 fn correction_instruction(final_only: bool) -> serde_json::Value {
+    correction_instruction_for_protocol(final_only, ag::model_output::BATCH_TOOL_PROTOCOL)
+}
+
+fn correction_instruction_for_protocol(final_only: bool, protocol: &str) -> serde_json::Value {
     serde_json::json!({
         "role":"system",
         "layer": if final_only { "protocol_correction_final_only" } else { "protocol_correction" },
         "content": if final_only {
-            "上一响应的回合控制协议被拒绝，本批未执行。已有工具回执和操作证据保留，禁止重新提交工具或重放操作。只重新输出合法 final 或 clarify 控制封套及回答；只能陈述既有回执支持的事实。"
+            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。工具权限已冻结，禁止重新提交工具或重放操作。只重新输出合法 final 或 clarify 控制封套及回答；只能陈述既有回执支持的事实。"
+        } else if protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
+            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清（包括工具失败、受阻或解释错误）都须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。修正未执行参数可在原剩余额度内用新调用ID提交一次binder_tool_batch，参数含唯一control及calls[{toolName,params}]，业务params不重复控制；不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
         } else {
-            "上一响应的回合控制协议被拒绝，本批未执行。重新提交完整合法的响应：直接回答/澄清须以控制封套开头；原生工具在首个参数的 _binderTurn 提交响应级控制。不要输出代码围栏或前置说明，不重复已执行操作。"
+            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。可在原剩余额度内用新调用ID直接调用本轮授权的业务工具，每个工具arguments携带一致的_binderTurn语义；多项仅限独立只读，计划、提案和裁决须单项提交。不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
         }
     })
+}
+
+#[cfg(test)]
+fn response_correction_instruction(final_only: bool, rejection_kind: &str) -> serde_json::Value {
+    response_correction_instruction_for_protocol(
+        final_only,
+        rejection_kind,
+        ag::model_output::BATCH_TOOL_PROTOCOL,
+    )
+}
+
+fn response_correction_instruction_for_protocol(
+    final_only: bool,
+    rejection_kind: &str,
+    protocol: &str,
+) -> serde_json::Value {
+    let mut instruction = correction_instruction_for_protocol(final_only, protocol);
+    let detail = match rejection_kind {
+        "text_tool_action" if final_only => "本次实际错误：没有原生工具调用，模型却把nextAction=tool写进了文本；该文本未触发工具。当前工具权限已冻结，只能以合法final/clarify封套说明未执行和已有回执，不能重放操作。",
+        "text_tool_action" if protocol == ag::model_output::BATCH_TOOL_PROTOCOL => "本次实际错误：没有原生工具调用，模型却把nextAction=tool写进了文本；该文本未触发工具。若仍需工具，下一响应必须调用API原生函数binder_tool_batch，把control.nextAction=tool和calls放在函数arguments内；不要在content中打印工具JSON、控制标签或供应商内部工具标记。若无需工具则以合法final/clarify文本封套如实说明未执行。",
+        "text_tool_action" => "本次实际错误：没有原生工具调用，模型却把nextAction=tool写进了文本；该文本未触发工具。若仍需工具，下一响应须直接调用本轮授权的原生业务工具，在每个arguments中携带nextAction=tool的_binderTurn；不要在content中打印工具JSON或控制标签。无需工具则以合法final/clarify封套说明未执行。",
+        "control_incomplete" => "本次实际错误：文本控制封套未以精确的</binder-turn-control>结束，正文未展示。请完整输出一个final或clarify控制封套，再输出正文；不要输出伪工具标记。",
+        "control_missing" => "本次实际错误：文本回答没有以<binder-turn-control>开始，正文未展示。直接回答或澄清时须先输出合法final/clarify控制封套。",
+        _ => "本次实际错误：文本控制封套结构无效，正文未展示。请按本轮协议重新输出完整合法控制封套，不要重复无效结构。",
+    };
+    let base = instruction["content"].as_str().unwrap_or_default();
+    instruction["content"] = serde_json::json!(format!("{detail}\n{base}"));
+    instruction
 }
 
 fn rejected_tool_call_ids(messages: &[serde_json::Value]) -> BTreeSet<String> {
@@ -447,11 +520,26 @@ fn safe_tool_receipt_summary(
     }
 }
 
-fn tool_is_visible_in_manifest(tools: &serde_json::Value, tool_name: &str) -> bool {
+pub(super) fn tool_is_visible_in_manifest(tools: &serde_json::Value, tool_name: &str) -> bool {
     tools.as_array().is_some_and(|definitions| {
-        definitions
-            .iter()
-            .any(|definition| definition["function"]["name"].as_str() == Some(tool_name))
+        definitions.iter().any(|definition| {
+            definition["function"]["name"].as_str() == Some(tool_name)
+                || (definition["function"]["name"].as_str()
+                    == Some(ag::model_output::TOOL_BATCH_NAME)
+                    && definition
+                        .pointer("/function/parameters/properties/calls/items/oneOf")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|variants| {
+                            variants.iter().any(|variant| {
+                                variant
+                                    .pointer("/properties/toolName/enum")
+                                    .and_then(|v| v.as_array())
+                                    .is_some_and(|names| {
+                                        names.iter().any(|name| name.as_str() == Some(tool_name))
+                                    })
+                            })
+                        }))
+        })
     })
 }
 
@@ -527,6 +615,17 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
     on_context_request: Option<tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
 ) -> Result<(), IpcError> {
     let event_emitter = TurnEventEmitter::new(&state, &on_event, &turn_id);
+    let transport_protocol = event_emitter.frozen_transport_protocol()?.ok_or_else(|| {
+        IpcError::new(
+            "AG_MODEL_PROTOCOL_VERSION_UNSUPPORTED",
+            "AgentTurn 尚未冻结模型工具传输协议",
+            false,
+            false,
+        )
+    })?;
+    let model_capacity = ag::prompt_runtime::model_capacity(&provider, &model);
+    let execution_policy = event_emitter.execution_policy()?;
+    let workspace_plan_completed = event_emitter.has_workspace_plan_receipt()?;
     let (open_resource_path_hashes, selection_path_hashes) = match &agent_context_facts {
         crate::types::AgentContextFacts::V1(facts) => (
             facts
@@ -572,7 +671,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
     let mut proposed_diff = false;
     let mut edit_blocked_reported = false;
 
-    // SM-AG-02 工具循环（BR-AG-STATE-002：注册/权限校验 + 上限）。dev 上限 6 轮。
+    // SM-AG-02 工具循环：注册/权限校验与本回合冻结的执行策略。
     // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultRecording→
     // Recorded 后回归 SM-AG-01 并重新装配；FinalAnswer→LoopCompleted；达上限→LoopAborted。
     // 工具卡数据仍由 Channel 投影（互不替代）。
@@ -580,9 +679,23 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
     let mut current_doc_read_confirmed = !current_doc_requires_tool_read;
     // AG-CTX-01：本轮是否调用过任何工具（用于区分"已读未提案"与"零工具调用"的失败文案）。
     let mut any_tool_called = false;
-    let (previous_model_calls, mut protocol_correction_rounds) =
-        event_emitter.protocol_attempt_counts()?;
+    let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
+    let (mut protocol_correction_rounds, mut parameter_correction_rounds) =
+        event_emitter.correction_attempt_breakdown()?;
     let mut failed_read_signatures = BTreeSet::new();
+    // Rejected tool IDs are still used by this AgentTurn. Do not make malformed
+    // arguments model-visible merely to retain duplicate-ID protection.
+    let mut seen_tool_call_ids = continuation_messages
+        .iter()
+        .filter_map(|message| {
+            message
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+        })
+        .flatten()
+        .filter_map(|call| call.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
     // 完整 Prompt 审计只保留本次 AgentTurn 最后一次实际发给模型的请求；回合退出时由 Drop
     // 统一输出一次，避免工具续轮把前序 messages/tools 反复打印。
     let mut final_prompt_audit = prompt_audit_enabled().then(FinalPromptAuditLog::default);
@@ -590,11 +703,14 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
     let mut capability_use_tracker = ag::tool_registry::CapabilityGrantUseTrackerV2::default();
     let (mut remaining_tool_calls, continuation_rounds) = continuation_execution_budget(
         &continuation_messages,
-        capability_factors.remaining_tool_calls,
-        MAX_MODEL_ROUNDS,
+        execution_policy.max_tool_calls,
+        execution_policy.max_model_calls,
     );
-    let remaining_rounds =
-        continuation_rounds.min(MAX_MODEL_ROUNDS.saturating_sub(previous_model_calls));
+    let remaining_rounds = continuation_rounds.min(
+        execution_policy
+            .max_model_calls
+            .saturating_sub(previous_model_calls),
+    );
     let mut turn_state = ag::turn::TurnState::Streaming;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
@@ -615,7 +731,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             }
         }};
     }
-    if remaining_tool_calls == 0 || remaining_rounds == 0 {
+    if (remaining_tool_calls == 0 && execution_policy.final_reserve == 0) || remaining_rounds == 0 {
         let error = IpcError::new(
             "AG_TOOL_LOOP_LIMIT",
             "原回合执行预算已用尽；确认或恢复不会重置预算。此前结果保留，未启动下一次调用。",
@@ -634,7 +750,17 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         return Ok(());
     }
     for _round in 0..remaining_rounds {
+        let budget_closing = messages
+            .iter()
+            .any(|m| m["role"] == "system" && m["layer"] == "execution_budget_final_only");
         let model_call_ordinal = previous_model_calls + _round + 1;
+        event_emitter.record_internal("execution_budget_checked", serde_json::json!({
+            "roundIndex": model_call_ordinal, "maxModelCalls":execution_policy.max_model_calls,
+            "maxToolCalls":execution_policy.max_tool_calls, "maxCorrectionsPerCategory":execution_policy.max_corrections,
+            "controlCorrections":protocol_correction_rounds, "parameterCorrections":parameter_correction_rounds,
+            "finalReserve":execution_policy.final_reserve, "remainingModelCalls":remaining_rounds - _round,
+            "remainingToolCalls":remaining_tool_calls, "budgetClosing":budget_closing
+        }))?;
         if cancelled.load(Ordering::Acquire) {
             // Between rounds SM-AG-02 is already frozen; only the outer AgentTurn is active.
             if !ag::tool::is_terminal(tool_loop_state) {
@@ -798,6 +924,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         }
         let mut output_decoder = ag::model_output::ModelOutputDecoder::default();
         let mut visible_output_chars = 0usize;
+        let mut visible_output = String::new();
         let round = match futures_util::future::Abortable::new(
             ent::gateway::stream_round(
                 &turn_id,
@@ -808,12 +935,29 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 &tools,
                 |text| {
                     for visible in output_decoder.push(&text)? {
+                        // Reject a resource-final handoff before exposing its finished-looking
+                        // prose. The response can then be corrected without a duplicate answer.
+                        if output_decoder.parsed_control().is_some_and(|control| {
+                            control.next_action == ag::model_output::ModelNextAction::Final
+                                && control.intent.side_effect_intent
+                                    == ag::context::SideEffectIntentV2::StructurePlan
+                                && control.completion.is_none()
+                                && !budget_closing
+                                && !workspace_plan_completed
+                                || budget_closing
+                                    && control.next_action
+                                        != ag::model_output::ModelNextAction::Final
+                        }) {
+                            continue;
+                        }
                         visible_output_chars += visible.chars().count();
+                        visible_output.push_str(&visible);
                         event_emitter
                             .emit(&terminal_latch, AgTurnEventPayload::Chunk { text: visible })?;
                     }
                     Ok(())
                 },
+                |kind, details| event_emitter.record_internal(kind, details).map(|_| ()),
             ),
             abort_registration,
         )
@@ -878,10 +1022,35 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         // A provider completion and an accepted Binder response are separate facts. Text
         // protocol errors are collected until the native response kind is known, before any
         // intent/task projection or tool execution. Network failures never enter correction.
-        let final_only_after_rejection = correction_final_only(&continuation_messages);
+        let final_only_after_rejection = correction_final_only(
+            &continuation_messages,
+            (&workspace_id_for_turn, &session_id, &turn_id),
+        );
         let response_control = match &round {
             ent::gateway::RoundOutcome::Done { .. } => {
                 output_decoder.clone().finish().and_then(|control| {
+                    if budget_closing
+                        && control.next_action != ag::model_output::ModelNextAction::Final
+                    {
+                        return Err(IpcError::new(
+                            "AG_MODEL_CONTROL_INVALID",
+                            "额度收尾仅允许final，不得创建工具或无法恢复的等待",
+                            true,
+                            false,
+                        ));
+                    }
+                    if !budget_closing
+                        && control.next_action == ag::model_output::ModelNextAction::Final
+                        && control.intent.side_effect_intent
+                            == ag::context::SideEffectIntentV2::StructurePlan
+                        && control.completion.is_none()
+                        && !workspace_plan_completed
+                    {
+                        return Err(required_terminal_tool_error(
+                            Some("plan_workspace_operation"),
+                            any_tool_called,
+                        ));
+                    }
                     if control.next_action == ag::model_output::ModelNextAction::Tool {
                         return Err(IpcError::new(
                             "AG_MODEL_CONTROL_INVALID",
@@ -904,7 +1073,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 })
             }
             ent::gateway::RoundOutcome::ToolCalls(_) => {
-                if super::turn_prompt::final_only_continuation(&continuation_messages) {
+                if budget_closing
+                    || super::turn_prompt::final_only_continuation(&continuation_messages)
+                {
                     Err(IpcError::new(
                         "AG_MODEL_CONTROL_INVALID",
                         "结果纠错禁止重新提交工具；请依据已保留回执回答或澄清",
@@ -918,7 +1089,11 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             ent::gateway::RoundOutcome::Failed(_) => Ok(None),
         };
         let response_rejected = response_control.is_err();
+        let response_rejection_kind = matches!(round, ent::gateway::RoundOutcome::Done { .. })
+            .then(|| output_decoder.response_rejection_kind());
         let mut final_only_correction_pending = false;
+        let mut parameter_correction_pending = false;
+        let mut protocol_correction_diagnostic = None;
         let mut read_failure_final_pending = false;
         if let Err(error) = &response_control {
             protocol_correction_rounds += 1;
@@ -927,13 +1102,39 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 "code": error.code, "prefixKind": output_decoder.prefix_kind(),
                 "rejectionStage":"response_completion", "correctionAttempt":protocol_correction_rounds,
                 "providerCompletionSeen":true, "finalOnly":final_only,
+                "responseRejectionKind":response_rejection_kind,
             }))?;
             // Once visible body has streamed, do not append a second answer to the same body.
             // Oversized quarantine failures also stop immediately in the callback above.
-            if protocol_correction_rounds > MAX_PROTOCOL_CORRECTION_ROUNDS
+            if protocol_correction_rounds > execution_policy.max_corrections
                 || _round + 1 == remaining_rounds
                 || visible_output_chars > 0
             {
+                if budget_closing && visible_output_chars == 0 {
+                    event_emitter.record_internal(
+                        "budget_close_fallback",
+                        serde_json::json!({"code":error.code,"budgetClosing":true}),
+                    )?;
+                    event_emitter.emit(&terminal_latch, AgTurnEventPayload::Chunk { text: "本次执行额度已到；模型未提供可验证的收尾回答。此前工具回执和效果记录保留，未完成部分不代表成功；请核对执行效果后明确提出后续请求。系统没有自动重放操作。".into() })?;
+                    if let Ok(conn) = state.db.lock() {
+                        settle_optional_task_run(
+                            &conn,
+                            task_run_id.as_deref(),
+                            &turn_id,
+                            ag::task::TurnOutcome::Failed,
+                        );
+                    }
+                    advance_or_finish!(TlEv::ProtocolRejected);
+                    emit_ag_turn_done(
+                        &event_emitter,
+                        &terminal_latch,
+                        &app,
+                        &turn_id,
+                        "budget_exhausted",
+                        turn_state,
+                    );
+                    return Ok(());
+                }
                 let terminal_error = if visible_output_chars > 0 {
                     error.clone()
                 } else {
@@ -956,8 +1157,20 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 );
                 return Ok(());
             }
-            let instruction = correction_instruction(final_only);
+            let instruction = response_rejection_kind.map_or_else(
+                || correction_instruction_for_protocol(final_only, &transport_protocol),
+                |kind| {
+                    response_correction_instruction_for_protocol(
+                        final_only,
+                        kind,
+                        &transport_protocol,
+                    )
+                },
+            );
             continuation_messages.push(instruction);
+            if error.code == "AG_WORKSPACE_PLAN_TOOL_REQUIRED" {
+                continuation_messages.push(serde_json::json!({"role":"system", "layer":"action_handoff_correction", "content":"上一final声明需要结构计划但没有计划，本段正文未展示。若本轮已要求恢复资源，请在核对当前对象后调用plan_workspace_operation生成真实裁决请求；缺信息则clarify；若确实仅报告、阻断或无需操作，final必须提供completion.status和具体reason，不得假称已执行或已进入等待。不得重放已有操作。"}));
+            }
             advance_or_finish!(TlEv::ProtocolRejected);
         }
         match round {
@@ -976,6 +1189,13 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 return Ok(());
             }
             ent::gateway::RoundOutcome::Done { stop_reason } => {
+                let structure_warning = ag::model_output::answer_structure_warning(&visible_output);
+                event_emitter.record_internal("answer_delivery_observed",serde_json::json!({
+                    "roundIndex":model_call_ordinal,"stopReason":stop_reason,
+                    "textUtf8Bytes":visible_output.len(),"textSha256":ag::context::sha256_text(&visible_output),
+                    "contentBasis":"visible_body_excluding_control",
+                    "answerStructureWarning":structure_warning,
+                }))?;
                 let control = response_control
                     .expect("validated response")
                     .expect("done control");
@@ -1040,7 +1260,10 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             .clarification_question
                             .expect("validated clarification must include a question");
                         let mut checkpoint_messages = continuation_messages;
-                        checkpoint_after_read_clarification(&mut checkpoint_messages);
+                        checkpoint_after_read_clarification(
+                            &mut checkpoint_messages,
+                            (&workspace_id_for_turn, &session_id, &turn_id),
+                        );
                         checkpoint_messages.push(serde_json::json!({
                             "role": "assistant",
                             "content": clarification_question,
@@ -1098,11 +1321,16 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     }
                     ag::context::SideEffectIntentV2::None => None,
                 };
-                if terminal_tool_is_missing(
-                    required_terminal_tool,
-                    proposed_diff,
-                    edit_blocked_reported,
-                ) {
+                if !budget_closing
+                    && control.completion.is_none()
+                    && !(required_terminal_tool == Some("plan_workspace_operation")
+                        && workspace_plan_completed)
+                    && terminal_tool_is_missing(
+                        required_terminal_tool,
+                        proposed_diff,
+                        edit_blocked_reported,
+                    )
+                {
                     let error =
                         required_terminal_tool_error(required_terminal_tool, any_tool_called);
                     advance_or_finish!(TlEv::LoopError);
@@ -1200,12 +1428,39 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         return Ok(());
                     }
                 }
+                let final_stop_reason = if budget_closing {
+                    "budget_exhausted"
+                } else if control.completion.is_none() && structure_warning.is_some() {
+                    "answer_incomplete"
+                } else {
+                    control
+                        .completion
+                        .as_ref()
+                        .map(|c| c.status.as_str())
+                        .unwrap_or(&stop_reason)
+                };
+                if budget_closing || control.completion.is_some() {
+                    event_emitter.record_internal("completion_stage", serde_json::json!({"completionStatus":final_stop_reason,"budgetClosing":budget_closing}))?;
+                    event_emitter.emit(&terminal_latch, AgTurnEventPayload::Chunk { text: if budget_closing { "\n\n本次执行额度已到，尚未完成的范围未被标记为完成。此前结果和效果记录保留；需要继续时请明确提出，未知效果须先核对。" } else { "\n\n以上为当前阶段说明，不是资源已修改或已进入正式确认等待的凭证；实际效果以执行回执为准。" }.into() })?;
+                }
                 if let Ok(conn) = state.db.lock() {
                     settle_optional_task_run(
                         &conn,
                         task_run_id.as_deref(),
                         &turn_id,
-                        ag::task::TurnOutcome::Completed,
+                        if budget_closing
+                            || control.completion.as_ref().is_some_and(|c| {
+                                c.status == "partial"
+                                    || c.status == "blocked"
+                                    || (c.status == "report_only"
+                                        && control.intent.side_effect_intent
+                                            != ag::context::SideEffectIntentV2::None)
+                            })
+                        {
+                            ag::task::TurnOutcome::Failed
+                        } else {
+                            ag::task::TurnOutcome::Completed
+                        },
                     );
                 }
                 emit_ag_turn_done(
@@ -1213,12 +1468,25 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     &terminal_latch,
                     &app,
                     &turn_id,
-                    &stop_reason,
+                    final_stop_reason,
                     ag::turn::TurnState::Finalizing,
                 );
                 return Ok(());
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
+                let group_rejection =
+                    ag::model_output::validate_transport_call_group(&transport_protocol, &calls)
+                        .err();
+                let native_transport = (calls.len() == 1
+                    && calls[0].name == ag::model_output::TOOL_BATCH_NAME)
+                    .then(|| calls[0].clone());
+                let (calls, transport_rejection) = match group_rejection
+                    .map_or_else(|| ag::model_output::expand_native_batch(&calls), Err)
+                {
+                    Ok(Some(expanded)) => (expanded, None),
+                    Ok(None) => (calls, None),
+                    Err(error) => (calls, Some(error)),
+                };
                 if calls.is_empty() {
                     let error = IpcError::new(
                         "AG_TOOL_CALLS_EMPTY",
@@ -1241,17 +1509,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 let output_control = response_control.expect("validated optional control");
                 // Validate the whole batch before creating any task/tool product. Continuation
                 // messages belong to this AgentTurn and survive decision parking/resumption.
-                let mut call_ids = continuation_messages
-                    .iter()
-                    .filter_map(|message| message.get("tool_calls").and_then(|v| v.as_array()))
-                    .flatten()
-                    .filter_map(|call| call.get("id").and_then(|v| v.as_str()))
-                    .map(str::to_owned)
-                    .collect::<BTreeSet<_>>();
-                if calls
-                    .iter()
-                    .any(|call| call.id.trim().is_empty() || !call_ids.insert(call.id.clone()))
-                {
+                if calls.iter().any(|call| {
+                    call.id.trim().is_empty() || !seen_tool_call_ids.insert(call.id.clone())
+                }) {
                     let error = IpcError::new("AG_MODEL_TOOL_ID_INVALID",
                         "模型工具调用标识为空或重复；本批未执行。此前执行证据保留，请核对结果后显式重试。", true, false);
                     advance_or_finish!(TlEv::LoopError);
@@ -1270,50 +1530,82 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     .iter()
                     .map(|call| call.arguments.as_str())
                     .collect::<Vec<_>>();
-                let (control, parsed_params, control_error) =
-                    match ag::model_output::parse_tool_batch(&arguments, output_control) {
-                        Ok((control, params)) => (Some(control), params, None),
-                        Err(error) => {
-                            if final_only_after_rejection {
-                                continuation_messages.push(correction_instruction(true));
-                            }
-                            protocol_correction_rounds += 1;
-                            event_emitter.record_internal(
-                                "model_control_rejected",
-                                serde_json::json!({
-                                    "code": &error.code,
-                                    "toolCallCount": calls.len(),
-                                    "correctionAttempt": protocol_correction_rounds,
-                                    "rejectionStage":"tool_batch",
-                                    "conflictFieldsOnly": (error.code == "AG_MODEL_CONTROL_CONFLICT")
-                                        .then_some(error.message.as_str()),
-                                }),
-                            )?;
-                            if protocol_correction_rounds > MAX_PROTOCOL_CORRECTION_ROUNDS {
-                                let terminal_error = IpcError::new(
+                let independent_read_only_direct_group = transport_protocol
+                    == ag::model_output::DIRECT_TOOL_PROTOCOL
+                    && calls.iter().all(|call| {
+                        ag::tool_registry::lookup(&call.name).is_some_and(|tool| {
+                            tool.permission == ag::tool_registry::ToolPermission::ReadOnly
+                        })
+                    });
+                let (control, parsed_params, control_error) = match transport_rejection.map_or_else(
+                    || {
+                        ag::model_output::parse_tool_batch_detailed_with_policy(
+                            &arguments,
+                            output_control,
+                            independent_read_only_direct_group,
+                        )
+                    },
+                    Err,
+                ) {
+                    Ok(batch) => {
+                        if !batch.observations.is_empty() {
+                            event_emitter.record_internal("model_control_description_reconciled",serde_json::json!({"toolCallCount":calls.len(),"observations":batch.observations}))?;
+                        }
+                        (Some(batch.control), batch.params, None)
+                    }
+                    Err(rejection) => {
+                        let protocol_diagnostic = rejection.diagnostic();
+                        protocol_correction_diagnostic = Some(protocol_diagnostic.clone());
+                        let error = rejection.error;
+                        protocol_correction_rounds += 1;
+                        event_emitter.record_internal(
+                            "model_control_rejected",
+                            serde_json::json!({
+                                "code": &error.code,
+                                "toolCallCount": calls.len(),
+                                "correctionAttempt": protocol_correction_rounds,
+                                "rejectionStage":"tool_batch",
+                                "protocolDiagnostic": protocol_diagnostic,
+                                "conflictFieldsOnly": (error.code == "AG_MODEL_CONTROL_CONFLICT")
+                                    .then_some(error.message.as_str()),
+                            }),
+                        )?;
+                        if protocol_correction_rounds > execution_policy.max_corrections {
+                            let terminal_error = IpcError::new(
                                     "AG_MODEL_CORRECTION_LIMIT",
-                                    "模型连续返回无效工具协议；已达到有限纠错上限，本批未执行。请检查模型协议或显式重试。",
+                                "本回合控制封套拒绝已超过独立纠错上限；本批未执行，此前结果保留。请检查协议或显式重试。",
                                     true,
                                     false,
                                 );
-                                advance_or_finish!(TlEv::LoopError);
-                                settle_and_emit_ag_turn_error(
-                                    &state,
-                                    task_run_id.as_deref(),
-                                    &event_emitter,
-                                    &terminal_latch,
-                                    &app,
-                                    &turn_id,
-                                    &terminal_error,
-                                );
-                                return Ok(());
-                            }
-                            // 一整批均未执行；逐个回注失败，复用 ValidateFail→Recorded→Assembling→Gate。
-                            // 不从工具名猜测意图，不复用旧语义替代本次模型结论。
-                            (None, vec![serde_json::json!({}); calls.len()], Some(error))
+                            advance_or_finish!(TlEv::LoopError);
+                            settle_and_emit_ag_turn_error(
+                                &state,
+                                task_run_id.as_deref(),
+                                &event_emitter,
+                                &terminal_latch,
+                                &app,
+                                &turn_id,
+                                &terminal_error,
+                            );
+                            return Ok(());
                         }
-                    };
+                        // 一整批均未执行；逐个回注失败，复用 ValidateFail→Recorded→Assembling→Gate。
+                        // 不从工具名猜测意图，不复用旧语义替代本次模型结论。
+                        (None, vec![serde_json::json!({}); calls.len()], Some(error))
+                    }
+                };
                 let mut correction_counted_this_round = control_error.is_some();
+                if control_error.is_some() {
+                    // The response-level rejection happened before the per-tool parameter
+                    // branch below. It still needs an explicit correction on the next model
+                    // request; otherwise the model sees neither the rejected arguments nor
+                    // the reason to rebuild them.
+                    if final_only_after_rejection {
+                        final_only_correction_pending = true;
+                    } else {
+                        parameter_correction_pending = true;
+                    }
+                }
                 if let Some(control) = control {
                     intent_result = match apply_model_control(
                         &event_emitter,
@@ -1388,9 +1680,22 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         })
                     })
                     .collect();
-                let assistant_tool_calls = serde_json::json!({ "role": "assistant", "content": null, "tool_calls": tc_json });
+                let mut assistant_tool_calls = serde_json::json!({ "role": "assistant", "content": null, "tool_calls": tc_json });
+                if control_error.is_none() {
+                    if let Some(native) = native_transport.as_ref() {
+                        event_emitter.record_internal("tool_transport_observed", serde_json::json!({"protocolVersion":"binder-tool-batch-v1","businessCallCount":calls.len()}))?;
+                        assistant_tool_calls["nativeBatch"] = serde_json::json!({"id":native.id,"type":"function","function":{"name":native.name,"arguments":native.arguments}});
+                    } else {
+                        event_emitter.record_internal("tool_transport_observed", serde_json::json!({"protocolVersion":&transport_protocol,"businessCallCount":calls.len()}))?;
+                    }
+                }
                 messages.push(assistant_tool_calls.clone());
-                continuation_messages.push(assistant_tool_calls);
+                // A batch rejected before execution must remain in the internal event and
+                // receipt trail, but its malformed arguments are not a useful model example.
+                // Keep only the safe correction instruction in the next provider request.
+                if control_error.is_none() {
+                    continuation_messages.push(assistant_tool_calls);
+                }
 
                 let mut stop_after_current_tool = false;
                 for (call_index, c) in calls.iter().enumerate() {
@@ -1412,7 +1717,12 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     let arg_parse_error = control_error.as_ref().map(|error| {
                         serde_json::json!({
                             "code": &error.code,
-                            "message": format!("{}；本批没有执行任何工具。请修正后重新提交，使用首个工具的 _binderTurn 或单个文本封套。", error.message),
+                            "message": format!("{}；本批没有执行任何工具。{}", error.message,
+                                if transport_protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
+                                    "请按当前schema修正并仅提交一次binder_tool_batch，参数为唯一control和calls[{toolName,params}]，业务params不得含_binderTurn；不要重复已有操作。"
+                                } else {
+                                    "请按本原回合已冻结的工具schema修正响应控制，不得更换协议或重复已有操作。"
+                                }),
                             "retriable": true,
                         }).to_string()
                     });
@@ -1609,19 +1919,33 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         .as_ref()
                         .and_then(|decision| match decision {
                             ag::tool::ToolDecision::Reject(reason) => Some(reason.as_str()),
-                            ag::tool::ToolDecision::Allow => None,
+                            ag::tool::ToolDecision::Allow
+                            | ag::tool::ToolDecision::InvalidArguments { .. } => None,
                         })
                         .is_some_and(|reason| {
                             reason.starts_with(&format!("工具 {} 参数", c.name))
                                 || reason.starts_with("工具参数结构")
-                        });
+                        })
+                        || matches!(
+                            tool_decision.as_ref(),
+                            Some(ag::tool::ToolDecision::InvalidArguments { .. })
+                        );
+                    let parameter_diagnostic = match tool_decision.as_ref() {
+                        Some(ag::tool::ToolDecision::InvalidArguments {
+                            field,
+                            constraint,
+                            ..
+                        }) => Some(serde_json::json!({"fieldPath":field,"constraint":constraint})),
+                        _ => None,
+                    };
                     if parameter_contract_rejection && !correction_counted_this_round {
+                        parameter_correction_pending = true;
                         if final_only_after_rejection {
                             // Append only after the assistant tool-call/result group is paired.
                             final_only_correction_pending = true;
                         }
                         correction_counted_this_round = true;
-                        protocol_correction_rounds += 1;
+                        parameter_correction_rounds += 1;
                         event_emitter.record_internal(
                             "tool_parameter_contract_rejected",
                             serde_json::json!({
@@ -1629,13 +1953,14 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                                 "rejectionStage":"tool_validation",
                                 "toolName": &c.name,
                                 "parameterKeys": safe_tool_params(&params)["parameterKeys"],
-                                "correctionAttempt": protocol_correction_rounds,
+                                "parameterDiagnostic": parameter_diagnostic,
+                                "correctionAttempt": parameter_correction_rounds,
                             }),
                         )?;
-                        if protocol_correction_rounds > MAX_PROTOCOL_CORRECTION_ROUNDS {
+                        if parameter_correction_rounds > execution_policy.max_corrections {
                             let terminal_error = IpcError::new(
                                 "AG_MODEL_CORRECTION_LIMIT",
-                                "模型连续提交不符合工具参数契约的请求；已达到有限纠错上限，本次未执行。请检查参数或显式重试。",
+                                "本回合参数拒绝已超过独立纠错上限；本次未执行，此前结果保留。请检查参数或显式重试。",
                                 true,
                                 false,
                             );
@@ -1794,10 +2119,14 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                                 ag::tool_exec::validate_read_arguments(&c.name, &params)
                                     .err()
                                     .unwrap_or_else(|| {
+                                        let message = match tool_decision.as_ref() {
+                                            Some(ag::tool::ToolDecision::InvalidArguments { message, .. }) => message.as_str(),
+                                            _ => "工具参数不符合声明；本次未执行，请依据工具契约修正。",
+                                        };
                                         IpcError::new(
                                             "AG_TOOL_ARG",
-                                            "工具参数不符合声明；本次未执行，请依据工具契约修正。",
-                                            false,
+                                            message,
+                                            true,
                                             false,
                                         )
                                     })
@@ -1886,6 +2215,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             .expect("parsed tool arguments must have a validation decision")
                         {
                             ag::tool::ToolDecision::Reject(reason) => (reason, false),
+                            ag::tool::ToolDecision::InvalidArguments { field, constraint, message } => (
+                                serde_json::json!({"code":"AG_TOOL_ARG","fieldPath":field,"constraint":constraint,
+                                    "message":message,"notExecuted":true,"requiresNewToolCallId":true}).to_string(), false),
                             ag::tool::ToolDecision::Allow if c.name == "edit_blocked" => {
                                 match ag::tool_exec::exec_edit_blocked(&params) {
                                     Ok(result) => {
@@ -2191,7 +2523,8 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             "toolName": &c.name, "toolCallId": &c.id, "code": &error.code,
                             "rejectionStage": if validation_allows_execution { "tool_execution" } else { "tool_validation" },
                             "hasExpectedHash": params.get("expected_hash").is_some(),
-                            "nonInitialPage": params.get("offset").and_then(|v|v.as_u64()).is_some_and(|offset|offset>0),
+                            "hasCursor": params.get("cursor").is_some(),
+                            "nonInitialPage": params.get("cursor").is_some() || params.get("offset").and_then(|v|v.as_u64()).is_some_and(|offset|offset>0),
                             "requestFingerprint": ag::context::sha256_text(&params.to_string()),
                             "requestedReadOffset": params.get("offset").and_then(|value|value.as_u64()),
                             "requestedLimitChars": params.get("limit_chars").and_then(|value|value.as_u64()),
@@ -2398,10 +2731,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         "content": model_tool_result,
                     });
                     messages.push(tool_message.clone());
-                    continuation_messages.push(tool_message);
+                    if control_error.is_none() {
+                        continuation_messages.push(tool_message);
+                    }
                     if let Some(decision) = decision_event_after_tool {
                         if final_only_correction_pending {
-                            continuation_messages.push(correction_instruction(true));
+                            continuation_messages.push(correction_instruction_for_protocol(
+                                true,
+                                &transport_protocol,
+                            ));
                         }
                         let request_id = decision.request_id.clone();
                         advance_or_finish!(TlEv::DecisionHandoff);
@@ -2466,8 +2804,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     // passes the original Gate, prompt budget, cancellation and round limits.
                     read_failure_final_pending |= repeated_read_failure;
                     let has_more_calls = call_index + 1 < calls.len();
-                    let loop_budget_reached = remaining_tool_calls == 0
-                        || (_round + 1 == remaining_rounds && !has_more_calls);
+                    let loop_budget_reached = execution_policy.final_reserve == 0
+                        && (remaining_tool_calls == 0
+                            || (_round + 1 == remaining_rounds && !has_more_calls));
                     if loop_budget_reached {
                         advance_or_finish!(TlEv::LoopLimit);
                         stop_after_current_tool = true;
@@ -2484,7 +2823,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         tool_loop_state = TlSt::ModelStreaming;
                     }
                 }
-                if _round + 1 == remaining_rounds || remaining_tool_calls == 0 {
+                if _round + 1 == remaining_rounds
+                    || (remaining_tool_calls == 0 && execution_policy.final_reserve == 0)
+                {
                     let error = IpcError::new(
                         "AG_TOOL_LOOP_LIMIT",
                         "工具循环达到上限，当前 AgentTurn 已中止；未完成步骤不会被标记为完成。",
@@ -2514,7 +2855,26 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         // ToolResult/Proposal 或响应拒绝已落事实后先回 SM-AG-01 Assembling；不能从 ResultRecording
         // 直接调用 provider，也不能复用首次 PromptPackage/CapabilityGrant。
         if final_only_correction_pending {
-            continuation_messages.push(correction_instruction(true));
+            continuation_messages.push(correction_instruction_for_protocol(
+                true,
+                &transport_protocol,
+            ));
+        } else if parameter_correction_pending {
+            let mut instruction = correction_instruction_for_protocol(false, &transport_protocol);
+            if let Some(diagnostic) = protocol_correction_diagnostic.as_ref() {
+                // Both values are generated from fixed schema vocabulary, never from the
+                // rejected provider arguments. Give the model a precise repair target
+                // without reintroducing the malformed payload as an example.
+                let reason = diagnostic["reasonCode"]
+                    .as_str()
+                    .unwrap_or("schema_invalid");
+                let field = diagnostic["fieldPath"].as_str().unwrap_or("$batch");
+                let base = instruction["content"].as_str().unwrap_or_default();
+                instruction["content"] = serde_json::json!(format!(
+                    "本次拒绝位置：{field}；原因类别：{reason}。请从当前 schema 重新生成完整参数，不复制上一份被拒参数。\n{base}"
+                ));
+            }
+            continuation_messages.push(instruction);
         }
         if read_failure_final_pending {
             continuation_messages.push(serde_json::json!({
@@ -2564,6 +2924,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             &capability_factors.decision_receipt_ids,
             (model_call_ordinal + 1) as u32,
             remaining_tool_calls,
+            model_capacity,
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -2589,6 +2950,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             },
             &budget_measurement,
             budget_sources,
+            model_capacity,
         ) {
             settle_and_emit_ag_turn_error_from(
                 &state,
@@ -2602,7 +2964,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             );
             return Ok(());
         }
-        if budget_measurement.estimated_tokens > super::prompt_runtime::PROMPT_INPUT_LIMIT {
+        if budget_measurement.estimated_tokens > model_capacity.input_tokens() {
             let error = IpcError::new(
                 "AG_PROMPT_BUDGET_EXCEEDED",
                 &super::prompt_runtime::budget_failure_message(
@@ -2612,6 +2974,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     } else {
                         "tool_result"
                     },
+                    model_capacity,
                 ),
                 true,
                 false,
@@ -2666,13 +3029,45 @@ mod tests {
         assert_eq!(continuation_execution_budget(&messages, 6, 6), (3, 4));
         assert_eq!(continuation_execution_budget(&messages, 2, 1), (0, 0));
         assert_eq!(continuation_execution_budget(&[], 6, 6), (6, 6));
-        assert!(!correction_final_only(&[
-            serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"workspace_glob"}}]})
-        ]));
-        assert!(correction_final_only(&[
-            serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"plan_workspace_operation"}}]})
-        ]));
-        assert!(correction_final_only(&[correction_instruction(true)]));
+        assert!(!correction_final_only(
+            &[
+                serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"workspace_glob"}}]})
+            ],
+            ("w", "s", "t")
+        ));
+        assert!(correction_final_only(
+            &[
+                serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"plan_workspace_operation"}}]})
+            ],
+            ("w", "s", "t")
+        ));
+        assert!(correction_final_only(
+            &[correction_instruction(true)],
+            ("w", "s", "t")
+        ));
+    }
+
+    // covers: BR-AG-STATE-001, BR-AG-STATE-002
+    #[test]
+    fn text_tool_action_correction_is_specific_and_never_grants_execution() {
+        let instruction = response_correction_instruction(false, "text_tool_action");
+        let content = instruction["content"].as_str().unwrap();
+        assert_eq!(instruction["role"], "system");
+        assert_eq!(instruction["layer"], "protocol_correction");
+        assert!(content.contains("没有原生工具调用"));
+        assert!(content.contains("binder_tool_batch"));
+        assert!(content.contains("该文本未触发工具"));
+        assert!(!content.contains("</｜｜DSML｜｜"));
+        let frozen = response_correction_instruction(true, "text_tool_action");
+        assert_eq!(frozen["layer"], "protocol_correction_final_only");
+        assert!(frozen["content"]
+            .as_str()
+            .unwrap()
+            .contains("只能以合法final/clarify"));
+        assert!(!frozen["content"]
+            .as_str()
+            .unwrap()
+            .contains("下一响应必须调用"));
     }
 
     #[test]
@@ -2687,6 +3082,56 @@ mod tests {
                 "{\"executionReceipt\":{\"executionStatus\":\"succeeded\"}}"}),
         ];
         assert_eq!(continuation_execution_budget(&messages, 6, 6), (4, 5));
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn correction_uses_owned_pre_execution_receipt_not_transport_name() {
+        let call = serde_json::json!({"id":"batch-1","function":{"name":ag::model_output::TOOL_BATCH_NAME}});
+        let assistant = serde_json::json!({"role":"assistant","tool_calls":[call]});
+        let receipt = serde_json::json!({"version":"tool-call-receipt-v1","workspaceId":"w","sessionId":"s","turnId":"t",
+            "toolCallId":"batch-1","toolName":ag::model_output::TOOL_BATCH_NAME,"capabilityId":"unregistered","grantId":"g","attempt":1,
+            "executionStatus":"rejected","completionStatus":"blocked","effectStatus":"not_started","references":[],"evidenceIds":[],
+            "failure":{"code":"AG_MODEL_CONTROL_INVALID","retriable":true,"reauthRequired":false},"nextAction":"respond_blocked"});
+        let reply = |receipt: &serde_json::Value| serde_json::json!({"role":"tool","tool_call_id":"batch-1","content":serde_json::json!({"executionReceipt":receipt}).to_string()});
+        assert!(correction_final_only(&[assistant.clone()], ("w", "s", "t")));
+        assert!(!correction_final_only(
+            &[assistant.clone(), reply(&receipt)],
+            ("w", "s", "t")
+        ));
+        for (field, value) in [
+            ("workspaceId", serde_json::json!("other")),
+            ("sessionId", serde_json::json!("other")),
+            ("turnId", serde_json::json!("other")),
+            ("toolCallId", serde_json::json!("other")),
+            ("toolName", serde_json::json!("read_doc")),
+            ("effectStatus", serde_json::json!("unknown")),
+            ("effectStatus", serde_json::json!("resource_executed")),
+            ("executionStatus", serde_json::json!("succeeded")),
+            ("completionStatus", serde_json::json!("waiting")),
+            (
+                "references",
+                serde_json::json!([{"kind":"pending_diff","id":"d"}]),
+            ),
+            ("evidenceIds", serde_json::json!(["e"])),
+            ("failure", serde_json::Value::Null),
+        ] {
+            let mut changed = receipt.clone();
+            changed[field] = value;
+            assert!(
+                correction_final_only(&[assistant.clone(), reply(&changed)], ("w", "s", "t")),
+                "unsafe receipt field {field}"
+            );
+        }
+        assert!(correction_final_only(
+            &[assistant.clone(), reply(&receipt), reply(&receipt)],
+            ("w", "s", "t")
+        ));
+        let non_read = serde_json::json!({"role":"assistant","tool_calls":[{"id":"issued","function":{"name":"propose_edit"}}]});
+        assert!(correction_final_only(
+            &[non_read, assistant, reply(&receipt)],
+            ("w", "s", "t")
+        ));
     }
 
     #[test]
@@ -2730,18 +3175,18 @@ mod tests {
         read.push(
             serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"read_doc"}}]}),
         );
-        checkpoint_after_read_clarification(&mut read);
+        checkpoint_after_read_clarification(&mut read, ("w", "s", "t"));
         assert!(!super::super::turn_prompt::final_only_continuation(&read));
         assert_eq!(read.len(), 1);
         let mut non_read = guards.clone();
         non_read.push(serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"propose_decision"}}]}));
-        checkpoint_after_read_clarification(&mut non_read);
+        checkpoint_after_read_clarification(&mut non_read, ("w", "s", "t"));
         assert!(super::super::turn_prompt::final_only_continuation(
             &non_read
         ));
         assert_eq!(non_read.len(), 3);
         let mut only_protocol = vec![correction_instruction(true)];
-        checkpoint_after_read_clarification(&mut only_protocol);
+        checkpoint_after_read_clarification(&mut only_protocol, ("w", "s", "t"));
         assert_eq!(only_protocol.len(), 1);
     }
 

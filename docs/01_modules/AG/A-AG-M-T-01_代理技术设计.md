@@ -317,8 +317,8 @@ AG 代理（本文 SSOT）——Agent 1.0 代理编辑（TERM-AG-008）面板：
 
 | 维度 | 1.0 激活策略 |
 |---|---|
-| 目标 | 当前活动文档与用户输入中指向 active workspace 既有文档的显式 ReferencePayload 身份可初始化 ExplicitEditTargetSet；引用内容保持 data-only，成员资格不单独授予写工具；工具发现目标另经 scope DecisionRequest 确认；新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认建盘后才追加目标并投影初始内容 Diff |
-| 工作策略 | 模型在运行时硬边界内理解目标、选择工具并根据 ToolResult 调整路线；新建文档仍固定走 CreateDocumentBundle，不产出空基准 ChangeProposal；简单目标只使用单个 AgentTurn，复杂或跨执行片段目标才派生 TaskRun/TaskPlan 投影，不启用后台队列或多 Agent |
+| 目标 | 当前活动文档与用户输入中指向 active workspace 既有文档的显式 ReferencePayload 身份可初始化 ExplicitEditTargetSet；引用内容保持 data-only，成员资格不单独授予写工具；工具发现目标另经 scope DecisionRequest 确认；有初始内容的新建文档经 `plan_workspace_operation`（CreateDocumentBundle）前置裁决，确认建盘后才追加目标并投影初始内容 Diff；明确零字节 TXT 仍经同一资源计划与裁决链，但不绑定初始内容 Diff |
+| 工作策略 | 模型在运行时硬边界内理解目标、选择工具并根据 ToolResult 调整路线；有初始内容的新建文档固定走 CreateDocumentBundle，不产出空基准 ChangeProposal；明确零字节 TXT 只允许单文件无初始内容计划，确认后直接创建零字节文件；简单目标只使用单个 AgentTurn，复杂或跨执行片段目标才派生 TaskRun/TaskPlan 投影，不启用后台队列或多 Agent |
 | 工具 | Prompt 只暴露运行时按当前事实计算的 CapabilityGrant；模型从中选择工具，执行器对每次请求重新计算并校验；文件移动/建目录、表格/图片高级操作仅在既有专项能力与动态条件同时满足时启用 |
 | 上下文 | 当前输入 + 资源身份/可用性 + 显式引用 + 必要历史；v2 按需取得专业 LogicalState，取得后仍为文档主事实；v1 兼容边界见 I-P-01；AST/KB/TPL 自动供给关闭 |
 | Prompt | 统一 Prompt Runtime 装配；系统约束与 data-only 文档/引用分离；携 runtime version |
@@ -367,7 +367,7 @@ CapabilityGrant、目标版本、取消和期限；返回执行状态、效果�
 端口先提交 started 身份，再执行能力，再提交 settled 安全回执，结算持久化成功后才能返回成功；
 未知/迟到结果归原调用的独立效果事实，既不回注新模型片段，也不改写原回合终态。查询契约见 SYS §3.1.0。
 同 AgentTurn 的历史 ToolCall 标识（含裁决恢复检查点）不得重复；整批身份非法时整批未执行。
-同一回合最多六轮模型调用及既有工具调用预算，裁决检查点恢复扣除先前已提交工具批次/调用数，
+同一回合使用可信运行策略冻结模型/工具预算（开发默认模型12次、工具16次、控制封套与参数错误分别最多纠错2次、模型预留2次收尾；数值不是供应商容量保证），裁决检查点恢复扣除先前已提交工具批次/调用数，
 不得通过反复等待和确认重置执行额度。用户等待不计模型/只读工具等待期限，可显式取消；
 网关和只读执行分别保留独立期限，而非宣称可以强制终止任意专业同步写入。
 无需理解回执背后的具体编辑器。回执只消费一次，旧操作只能更新/清理自己的身份；专业效果不确定时保留
@@ -424,9 +424,9 @@ read_doc、search_docs、list_docs 等读取成功、模型正文提及路径或
 创建 TaskRun。集合外既有文档必须在 ChangeProposal / PendingDiff 生成前失败关闭；`cross_doc` 仅可标识集合内
 非当前文档的展示位置，不能作为越权放行或人后裁决替代前置授权。
 
-新建文档不以空基准 ChangeProposal 进入集合，必须先经 `plan_workspace_operation` 生成 CreateDocumentBundle 与
+有初始内容的新建文档不以空基准 ChangeProposal 进入集合，必须先经 `plan_workspace_operation` 生成 CreateDocumentBundle 与
 DecisionRequest，确认后由 WS 创建真实资源并打开编辑标签；只有真实资源建立成功后，目标才追加到原 AgentTurn 的
-显式编辑目标集（存在 TaskRun 时同步投影），再以该 DiskState 为基线投影初始内容 Diff（承 A-WS-M-T-02 §6；内容 Diff 不得创建资源，
+显式编辑目标集（存在 TaskRun 时同步投影），再以该 DiskState 为基线投影初始内容 Diff。用户明确要求零字节 TXT 时，`plan_workspace_operation` 只接受一个 `.txt` 创建项与显式 `createEmpty=true` 标记，不携带 `initialContent`；仍由相同 DecisionRequest 前置裁决、WS 重验创建，完成后无初始 Diff 或内容保存屏障（承 A-WS-M-T-02 §6；内容 Diff 不得创建资源，
 X-FORBID-006——WS-RESOURCE-WRITE-GUARD-01）。一切内容产出仍经 DE/ED 受控转正，不得由 AG 直写
 LogicalState 或 DiskState（X-FORBID-006 / X-FORBID-009）。已打开目标必须以 OpenDocSnapshot 中的
 LogicalState 为 ChangeProposal 基线；未打开目标才允许读取 DiskState。Agent 1.0 不识别或触发 Build/CBT 接管；遇到超出当前冻结能力的请求时只能明确拒绝或收敛到已授权的 Agent 1.0 能力，不得复用 BR-CBT-STATE-002。**DE 侧协同复核**同步调整：`de.generate_diff` 校验 target 在 workspace 内且属回合
@@ -540,8 +540,8 @@ AgentReadContext 并限定 workspace 内（X-FORBID-004）：已打开文档优�
 直接执行：工具只能生成不可变 WorkspaceOperationPlan 与 DecisionRequest；用户确认后由 WS 按
 BR-WS-STATE-003 重新核验并执行。模型参数、工具返回或 Prompt 文案均不能伪造用户确认。批量执行按
 BR-WS-PERSIST-003 失败即停并逆序补偿，重启后的未完成计划进入 Interrupted 且不自动执行。
-用户明确要求新建文档时使用 CreateDocumentBundle：初始内容在确认前生成，确认后先创建目标 DiskState，
-再进入普通内容 Diff；不得使用 `create_doc` 或 `propose_edit(delete_*)` 绕过资源计划。状态转移归
+用户明确要求新建且有初始内容时使用 CreateDocumentBundle：初始内容在确认前生成，确认后先创建目标 DiskState，
+再进入普通内容 Diff；明确零字节 TXT 使用同一 `plan_workspace_operation` 的单文件无初始内容计划，确认后直接创建空文件，不生成无变化的 Diff；不得使用 `create_doc` 或 `propose_edit(delete_*)` 绕过资源计划。状态转移归
 SM-AG-02（工具循环）与 SM-WS-04（资源执行）。
 当前工具集合按硬能力分层计算：workspace 内只读工具仅在其读取范围和数据来源可校验时开放；内容 Proposal
 工具还必须具备 ExplicitEditTargetSet 成员、可用基线、格式/动态能力和无终态/取消；资源计划工具只生成
@@ -1107,6 +1107,9 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-28 | v2.62 | 模型可恢复错误按控制封套和参数独立有限计数，仍受总调用预算；只读续页改用绑定路径/版本的单游标。 |
+| 2026-10-26 | v2.61 | 零字节 TXT 的显式创建例外：仅单文件 createEmpty=true 且省略初始内容，沿原资源计划/确认/重验链创建，不产生初始内容 Diff；其余新文档仍需冻结非空内容。 |
+| 2026-10-23 | v2.60 | 统一回合冻结执行额度12/16/2及2次收尾预留；动作交接前置纠错与显式阶段结果，保留授权和未知效果边界。 |
 | 2026-10-07 | v2.59 | 通用写能力接拥有生命周期的执行端口；30 秒等待期限、非阻塞取消、迟到效果独立核对及防重放；同步专业操作不承诺强杀/回滚，不改变编辑器或 DOCX 路线。 |
 | 2026-10-06 | v2.58 | 经人类确认同步 ENT/SYS：明确授权拒绝与认证/门禁调用失败分离，均禁止后续模型调用，保留执行证据且新请求重新裁决。 |
 | 2026-09-15 | v2.57 | P00：确认 Binder 独立验证运行边界；定义 v2 资源身份先行、按需专业快照及 revision，保留 v1 兼容、LogicalState 真值、授权/裁决/保存边界；仅设计，尚未证明生产实现。 |

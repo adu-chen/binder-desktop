@@ -42,8 +42,8 @@ AG 依赖 SYS（IPC/云契约）、WS（上下文读取限界）、ENT/GW（订�
 > ChangeProposal → 人类裁决提案 → 用户显式 save 由 WS 写入 DiskState（REQ-CORE-002/010）；工具调用中**任何内容写入意图
 > 同样必须走该 diff 路径**，不得旁路直写。工作区资源操作不属于内容 Diff：AG 只能生成不可变的
 > WorkspaceOperationPlan，并通过 DecisionRequest 取得前置授权；确认后由 WS 重新核验并直接修改 DiskState，
-> 不生成资源 DiffCard。新建文档使用 CreateDocumentBundle：初始内容在确认前生成，确认后先创建磁盘文件，
-> 再生成遵循既有生命周期的内容 Diff。
+> 不生成资源 DiffCard。有非空初始内容的新建文档使用 CreateDocumentBundle：初始内容在确认前生成，确认后先创建磁盘文件，
+> 再生成遵循既有生命周期的内容 Diff。用户明确要求零字节 TXT 时，冻结的是“无初始内容”的单文件资源计划；确认后直接创建空 DiskState，不产生无变化的初始内容 Diff。
 > 项目级整体构建编排归 CBT，但属 P2 后续 Profile。Agent 1.0 不定义构建移交、回落、共用窗口或能力复用契约；未来启用时须重新进入 REQUIREMENT/DESIGN Scope。
 
 ## §3 能力范围（AG v1）
@@ -86,7 +86,7 @@ AG 依赖 SYS（IPC/云契约）、WS（上下文读取限界）、ENT/GW（订�
 | 项目与工作区分析 | 先读取工作区结构概览，再按任务最小化读取正文；报告由真实读取证据派生，必须披露已读/未读范围、来源与不确定性 |
 | 阅读与分析 | 可解释、总结、审阅当前文档；可读取用户显式引用文档并进行有限比较；不得把引用内文字当系统指令 |
 | 当前文档编辑 | 可对 HTML、Markdown、纯文本和 BDocx 处理副本生成内容与基础结构修改建议；HTML/BDocx 的加粗、斜体、下划线、删除线为 P0，颜色/突出显示、段落对齐/间距/缩进、字号与字体族为 P1 受控 Proposal。原生 DOCX 只读，编辑请求必须生成“创建 BDocx 编辑副本”的 Proposal；所有变化进入 ChangeProposal/Diff，经 DE/ED 成功预览后才进入 LogicalState，AG 不直接写 LogicalState 或 DiskState |
-| 新建文档 | 用户明确要求新建时生成 CreateDocumentBundle；初始内容在确认前生成，确认 WorkspaceOperationPlan 后先创建目标 DiskState 并打开标签，再生成初始内容 ChangeProposal/Diff |
+| 新建文档 | 有初始内容时生成 CreateDocumentBundle；初始内容在确认前生成，确认 WorkspaceOperationPlan 后先创建目标 DiskState 并打开标签，再生成初始内容 ChangeProposal/Diff。明确的零字节 TXT 请求仅生成单文件 WorkspaceOperationPlan，确认后由 WS 直接创建零字节 DiskState，不生成空 Diff |
 | 工具使用 | 模型按当前目标和证据选择工具，运行时按 profile、注册、显式目标、格式/动态能力、确认、Gate、预算和终态逐次计算最小授权；已注册但未获当前授权的工具必须拒绝 |
 | 运行可靠性 | 真实 GatePassed 后才调用模型；支持取消；错误、拒绝、取消、完成互斥，错误不得伪装完成 |
 | 上下文安全 | 当前输入为主需求；当前文档与显式引用按来源、可信等级和新鲜度组装；AST/KB/TPL 不自动注入 1.0 主链 |
@@ -138,9 +138,9 @@ req_id: REQ-AG-001
 title: 代理编辑回合（编辑模式）
 owner_module: AG
 status: active
-summary: 提供代理多轮回合（编辑、回答与分析）：上下文组装、流式回显、任务澄清、回合中断/取消和重试；AI 修改建议交 DE 生成 pending_diff，AG 不直接写盘；默认目标当前文档，用户显式指向可跨既有文档，新建文档统一按 REQ-AG-008 的 CreateDocumentBundle 前置裁决路径执行。原生 DOCX 只读，编辑请求转为创建 BDocx 编辑副本的受控新建流程
+summary: 提供代理多轮回合（编辑、回答与分析）：上下文组装、流式回显、任务澄清、回合中断/取消和重试；AI 修改建议交 DE 生成 pending_diff，AG 不直接写盘；默认目标当前文档，用户显式指向可跨既有文档，有初始内容的新建文档按 REQ-AG-008 的 CreateDocumentBundle 前置裁决路径执行，明确零字节 TXT 按同一 WorkspaceOperationPlan 前置裁决路径直接创建。原生 DOCX 只读，编辑请求转为创建 BDocx 编辑副本的受控新建流程
 source_doc: REQ-CORE-002/004/010/011、A-CORE-X-D-02 §3/§4、APC §4.1
-acceptance: 可进行多轮对话并流式回显；可中断/取消；回答、只读分析、修改 Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；修改建议经 DE/ED 进入提案预览与裁决，AG 无直接 LogicalState 或 DiskState 写入路径；原生 DOCX 的编辑请求只以新 BDocx 编辑副本为目标，原文件不被修改；新建意图确认前不得创建物理文件，确认后按 REQ-AG-008 先创建目标 DiskState、打开编辑标签，再投影初始内容 Diff，成功预览后可继续编辑
+acceptance: 可进行多轮对话并流式回显；可中断/取消；回答、只读分析、修改 Proposal 与文件操作具有可区分结果，取消/失败不伪装完成；修改建议经 DE/ED 进入提案预览与裁决，AG 无直接 LogicalState 或 DiskState 写入路径；原生 DOCX 的编辑请求只以新 BDocx 编辑副本为目标，原文件不被修改；新建意图确认前不得创建物理文件，有初始内容时确认后按 REQ-AG-008 先创建目标 DiskState、打开编辑标签，再投影初始内容 Diff；明确零字节 TXT 确认后直接创建零字节文件，不伪造待接受/保存的空 Diff
 open_issues: 无 L1 未决；状态机见 A-AG-M-S-01 SM-AG-01，持久化见 BR-AG-PERSIST-001 / A-SYS-I-P-01；实现与验证状态不在本 REQ 中判定
 -->
 
@@ -215,9 +215,9 @@ req_id: REQ-AG-008
 title: 新建文档意图与 CreateDocumentBundle 协同
 owner_module: AG
 status: active
-summary: 对明确的新建文档意图，AG 在确认前完成目标路径、资源计划和初始内容生成，形成 CreateDocumentBundle；DecisionRequest 确认后由 WS 重新核验并创建空的目标 DiskState，ED 打开标签，随后 DE/ED 以该磁盘基线生成并预览初始内容 Diff。资源创建授权与内容 Diff 裁决相互独立
+summary: 对明确且有初始内容的新建文档意图，AG 在确认前完成目标路径、资源计划和初始内容生成，形成 CreateDocumentBundle；DecisionRequest 确认后由 WS 重新核验并创建空的目标 DiskState，ED 打开标签，随后 DE/ED 以该磁盘基线生成并预览初始内容 Diff。用户明确要求零字节 TXT 时只冻结单文件、无初始内容的 WorkspaceOperationPlan；DecisionRequest 确认后由 WS 重验并直接创建零字节文件，不生成无变化的初始 Diff。资源创建授权与内容 Diff 裁决相互独立
 source_doc: REQ-CORE-010、A-CORE-X-D-02 §3/§4、A-WS-M-T-02 §6
-acceptance: 确认前不得创建文件；确认后先创建 DiskState 并自动打开标签，再生成初始内容 Diff；初始 Diff 接受只改变卡片生命周期，保存把 LogicalState 写入既有 DiskState；初始 Diff 拒绝仅在资源基线、DiskState 与 LogicalState 自创建以来均未变化时删除刚创建的文件并关闭标签，任一基线变化即使卡片失效且文件继续存在；创建或 Diff 投影失败不得伪报成功
+acceptance: 确认前不得创建文件；有初始内容时确认后先创建 DiskState 并自动打开标签，再生成初始内容 Diff；初始 Diff 接受只改变卡片生命周期，保存把 LogicalState 写入既有 DiskState；初始 Diff 拒绝仅在资源基线、DiskState 与 LogicalState 自创建以来均未变化时删除刚创建的文件并关闭标签，任一基线变化即使卡片失效且文件继续存在；明确零字节 TXT 确认后直接创建零字节文件、无初始 Diff 或后续保存屏障；创建或 Diff 投影失败不得伪报成功
 open_issues: 无；对象、状态机和补偿条件由 A-WS-M-T-02 / A-WS-M-S-02 统一定义
 -->
 
@@ -331,7 +331,7 @@ REQ-AG-015 只在本文件声明用户可见需求与验收边界。TaskRun、Ta
 - **云薄端硬边界**（APC §4.3/§13）：AG 不持密钥、不内置 provider SDK、不绕过订阅门禁；一切模型
   调用经 SYS I-P-03 契约（CLOUD-AUTH/GATE/INVOKE）。
 - **唯一落盘路径**：AG 产出的文档内容修改必经 DE/ED 提案预览与人类裁决 → 用户显式 save → WS 落盘；工具调用不得旁路直写内容。
-  工作区资源整理不是内容写入：AG 只生成 WorkspaceOperationPlan 和 DecisionRequest，确认后由 WS 重新核验并直接修改 DiskState，不生成资源 DiffCard，也不存在后置“保存文件树”。新建文档使用 CreateDocumentBundle，资源创建完成后初始内容仍走普通 Diff 生命周期。多既有文档编辑仍先确认冻结目标清单并逐目标执行。
+  工作区资源整理不是内容写入：AG 只生成 WorkspaceOperationPlan 和 DecisionRequest，确认后由 WS 重新核验并直接修改 DiskState，不生成资源 DiffCard，也不存在后置“保存文件树”。有初始内容的新建文档使用 CreateDocumentBundle，资源创建完成后初始内容仍走普通 Diff 生命周期；明确零字节 TXT 无初始内容 Diff。多既有文档编辑仍先确认冻结目标清单并逐目标执行。
 - **职责边界**：代理回合归 AG；项目级构建编排的模块归属是 CBT，但 Agent 1.0 不消费 BR-CBT-STATE-002，不存在当前构建移交/回落契约；解析归 REF、存储归 AST/KB、呈现归 ED。
 - **状态机边界**（APC §6）：当前注册链路为 AG-TURN / AG-TOOL / AG-ASSIST，由 SM-AG-01/02/03/04 四台状态机承载；autocomplete 与 inline-assist 共用 SM-AG-03，TaskRun 是 AG-TURN 内的 SM-AG-04，不另造重复链路。
 - **运行时授权与可见性边界**：只有 `agent-edit-1.0` 可进入 1.0 回合；模型维护可更新 IntentResult、选择工具与路线，运行时按 profile、注册、目标/格式/动态能力、确认、Gate、预算和终态计算 CapabilityGrant。缺失/未知 profile 不能以兼容默认值、前端参数、关键词分类、IntentResult、已注册工具或 Prompt 扩权。用户只见 append-only 事件投影，不见模型内部推理；ProjectReport 只从真实读取证据派生；项目记忆仅在用户明确选择时作为 data-only 引用进入。
@@ -411,3 +411,4 @@ REQ-AG-015 只在本文件声明用户可见需求与验收边界。TaskRun、Ta
 | 2026-08-27 | v2.30 | AG-CONFORMANCE-GOVERNANCE-S1：将新建文档唯一化为 REQ-AG-008 CreateDocumentBundle 路径；明确澄清补充继续原 AgentTurn；限定简单目标只使用 AgentTurn，复杂或跨执行片段目标才建立 TaskRun/TaskPlan；将实现对齐留给后续独立 Scope。 |
 | 2026-08-31 | v2.31 | AG-DOC-CONSOLIDATION-01：本文收敛为 AG 模块需求真源，上游范围唯一指向 A-CORE-X-D-02；四个模型偏好仅保留配置槽位，Agent 1.0 不因 Build 偏好产生新入口或能力；移除本文中重复的实现合同。 |
 | 2026-09-03 | v2.33 | AG-ADAPTIVE-RUNTIME-REQ-01：在既有范围内收敛模型/运行时职责，IntentResult 去授权化，CapabilityGrant 动态化，TaskRun/TaskPlan 投影化，ProjectReport 证据派生化，并固定 ProposalBatch 下可独立裁决的 DiffCard 分组。 |
+| 2026-10-26 | v2.34 | REQ-AG-008：明确零字节 TXT 的无初始内容例外；仍经 WorkspaceOperationPlan/DecisionRequest 前置裁决，但不生成无变化的初始 Diff，其他新文档绑定创建不变。 |

@@ -111,6 +111,7 @@ impl Gateway {
                                 if scenario == "read-failure-clarification"
                                     || scenario == "repeated-oversized-read"
                                     || scenario == "repeated-read-tools-blocked"
+                                    || scenario == "execution-budget-wrap"
                                 {
                                     observed_prompts.lock().map_err(|error|error.to_string())?.push(serde_json::json!({
                                         "nativeToolCount": request["tools"].as_array().map_or(0,Vec::len),
@@ -203,6 +204,14 @@ impl Gateway {
                                     }).ok_or("missing real text cursor")?;
                                     body.replace("\\\"VERIFICATION_TEXT_OFFSET\\\"", &offset.to_string())
                                 } else { body };
+                                let body = if body.contains("VERIFICATION_NEXT_CURSOR") {
+                                    let captured = captured.lock().map_err(|error|error.to_string())?;
+                                    let cursor = captured.iter().rev().find_map(|message| {
+                                        let value:serde_json::Value=serde_json::from_str(message["content"].as_str()?).ok()?;
+                                        value["toolResult"]["next_cursor"].as_str().map(str::to_owned)
+                                    }).ok_or("missing real next cursor")?;
+                                    body.replace("VERIFICATION_NEXT_CURSOR", &cursor)
+                                } else { body };
                                 ("200 OK", "text/event-stream", body)
                             },
                             None => ("500 Internal Server Error", "text/plain", "fixed responses exhausted".into()),
@@ -277,6 +286,57 @@ fn responses(scenario: &str) -> VecDeque<String> {
         )
     };
     match scenario {
+        "native-business-tools" => {
+            let native=|id:&str,args:serde_json::Value| format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[{"id":id,"name":"list_docs","arguments":args.to_string()}]}));
+            VecDeque::from([
+                native("verification-native-first",serde_json::json!({"_binderTurn":control("tool")})),
+                native("verification-native-missing",serde_json::json!({})),
+                native("verification-native-type",serde_json::json!({"_binderTurn":"PRIVATE_BAD_CALL"})),
+                format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[
+                    {"id":"verification-native-list","name":"list_docs","arguments":serde_json::json!({"_binderTurn":control("tool")}).to_string()},
+                    {"id":"verification-native-glob","name":"workspace_glob","arguments":serde_json::json!({"pattern":"*.txt"}).to_string()}
+                ]})),
+                final_response,
+            ])
+        },
+        "tool-description-compatible" => {
+            let calls=[("list_docs",serde_json::json!({})),("workspace_glob",serde_json::json!({"pattern":"*.txt"})),("workspace_glob",serde_json::json!({"pattern":"*.md"}))].into_iter().enumerate().map(|(index,(name,mut args))| {
+                let mut semantic=control("tool"); semantic["intent"]["goal"]=serde_json::json!(format!("private goal {index}"));
+                semantic["route"]["summary"]=serde_json::json!(format!("private route {index}")); semantic["route"]["steps"]=serde_json::json!([format!("private step {index}")]);
+                args["_binderTurn"]=semantic; serde_json::json!({"id":format!("description-{index}"),"name":name,"arguments":args.to_string()})
+            }).collect::<Vec<_>>();
+            VecDeque::from([format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":calls})),final_response])
+        }
+        "tool-read-only-control-variants" => {
+            let primary = control("tool");
+            let mut duplicate = primary.clone();
+            duplicate["intent"]["requiredContext"] = serde_json::json!(["PRIVATE_BLOCK_HINT"]);
+            let calls = serde_json::json!({"tool_calls":[
+                {"id":"read-primary","name":"list_docs","arguments":serde_json::json!({"_binderTurn":primary}).to_string()},
+                {"id":"read-duplicate","name":"workspace_glob","arguments":serde_json::json!({"pattern":"*.txt","_binderTurn":duplicate}).to_string()}
+            ]});
+            VecDeque::from([format!("event: tool_calls\ndata: {calls}\n\n"), final_response])
+        }
+        "protocol-cumulative" => {
+            let call=|id:&str,semantic:serde_json::Value| format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[{"id":id,"name":"list_docs","arguments":serde_json::json!({"_binderTurn":semantic}).to_string()}]}));
+            let mut bad=control("tool"); bad["intent"]["ambiguity"]=serde_json::json!("blocking");
+            VecDeque::from([call("bad-first",bad),glob(),call("bad-second",control("final")),call("bad-third",control("final"))])
+        }
+        "action-handoff-plan" => {
+            let mut pending=control("final"); pending["intent"]["sideEffectIntent"]=serde_json::json!("structure_plan");
+            let invalid=text_response(&format!("<binder-turn-control>{pending}</binder-turn-control>UNDELIVERED_PLAN_PROMISE"));
+            let final_text=text_response(&format!("<binder-turn-control>{pending}</binder-turn-control>仅依据实际计划与执行回执说明结果，不再创建重复计划。"));
+            pending["nextAction"]=serde_json::json!("tool");
+            let args=serde_json::json!({"operations":[{"kind":"rename_resource","sourcePath":"verification.txt","targetPath":"renamed.txt","resourceKind":"file"}],"_binderTurn":pending});
+            VecDeque::from([invalid,format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[{"id":"handoff-resource-plan","name":"plan_workspace_operation","arguments":args.to_string()}]})),final_text])
+        }
+        "execution-budget-wrap" => VecDeque::from([glob(), final_response]),
+        "action-handoff-stage" => {
+            let mut pending=control("final"); pending["intent"]["sideEffectIntent"]=serde_json::json!("structure_plan");
+            let invalid=text_response(&format!("<binder-turn-control>{pending}</binder-turn-control>UNDELIVERED_PLAN_PROMISE"));
+            pending["completion"]=serde_json::json!({"status":"report_only","reason":"本次仅分析新增文件清单，未请求执行"});
+            VecDeque::from([invalid,text_response(&format!("<binder-turn-control>{pending}</binder-turn-control>本次仅报告候选清单，未创建文件、未进入确认等待。"))])
+        }
         "bounded-reading" | "bounded-reading-four-pages" => {
             let call = |id:&str, mut args:serde_json::Value| {
                 args["_binderTurn"] = control("tool");
@@ -285,7 +345,7 @@ fn responses(scenario: &str) -> VecDeque<String> {
             let page_count = if scenario == "bounded-reading-four-pages" { 4 } else { 2 };
             let mut replies = vec![call("reading-first",serde_json::json!({"path":"reading.html"}))];
             for index in 1..page_count {
-                replies.push(call(&format!("reading-next-{index}"),serde_json::json!({"path":"reading.html","offset":"VERIFICATION_TEXT_OFFSET","expected_hash":"VERIFICATION_PAGE_HASH"})));
+                replies.push(call(&format!("reading-next-{index}"),serde_json::json!({"path":"reading.html","cursor":"VERIFICATION_NEXT_CURSOR"})));
             }
             replies.push(final_response);
             replies.into()
@@ -297,18 +357,25 @@ fn responses(scenario: &str) -> VecDeque<String> {
             };
             let read = call("page-read","read_doc",serde_json::json!({"path":"pages.txt","blocks":["0"]}));
             if scenario=="page-contract-exhausted" {
-                std::iter::once(read).chain((0..3).map(|index|call(&format!("page-invalid-{index}"),"list_blocks",serde_json::json!({"path":"pages.txt","offset":1,"limit":20})))).collect()
+                std::iter::once(read).chain((0..3).map(|index|call(&format!("page-invalid-{index}"),"list_blocks",serde_json::json!({"path":"pages.txt","cursor":"bad-cursor","limit":20})))).collect()
             } else {
                 vec![read,
-                    call("page-invalid","list_blocks",serde_json::json!({"path":"pages.txt","offset":1,"limit":20})),
-                    call("page-first","list_blocks",serde_json::json!({"path":"pages.txt","offset":0,"limit":20})),
-                    call("page-next","list_blocks",serde_json::json!({"path":"pages.txt","offset":20,"expected_hash":"VERIFICATION_PAGE_HASH"})),final_response].into()
+                    call("page-invalid","list_blocks",serde_json::json!({"path":"pages.txt","cursor":"bad-cursor","limit":20})),
+                    call("page-first","list_blocks",serde_json::json!({"path":"pages.txt","limit":20})),
+                    call("page-next","list_blocks",serde_json::json!({"path":"pages.txt","cursor":"VERIFICATION_NEXT_CURSOR"})),final_response].into()
             }
         }
         "argument-decision-shared-limit" => {
             let args=serde_json::json!({"pattern":7,"_binderTurn":control("tool")});
             let invalid=format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[{"id":"bad-param-before-wait","name":"workspace_glob","arguments":args.to_string()}]}));
-            vec![invalid,decision_response("arg-A"),missing.clone(),missing].into()
+            vec![invalid,decision_response("arg-A"),missing.clone(),missing.clone(),missing].into()
+        }
+        "parameter-and-control-recover" => {
+            let bad = |id: &str| format!(
+                "event: tool_calls\ndata: {}\n\n",
+                serde_json::json!({"tool_calls":[{"id":id,"name":"workspace_glob","arguments":serde_json::json!({"pattern":7,"_binderTurn":control("tool")}).to_string()}]})
+            );
+            vec![bad("bad-param-1"), bad("bad-param-2"), missing, glob(), final_response].into()
         }
         "decision-native-replay-blocked" => {
             let invalid=format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[{"id":"missing-control-after-wait","name":"workspace_glob","arguments":"{\"pattern\":\"*.txt\"}"}]}));
@@ -504,24 +571,65 @@ async fn verify_session_memory<R: tauri::Runtime>(
             let rejected_turn_id = uuid::Uuid::new_v4().to_string();
             let mut rejected_facts = facts.clone();
             rejected_facts["turnId"] = serde_json::json!(rejected_turn_id);
-            let wrong_scope = ent::gateway::with_test_gateway(
+            let wrong_scope = ag::tool_registry::with_verification_execution_policy(
+                ag::tool_registry::ExecutionBudgetPolicy::legacy(),
+                ent::gateway::with_test_gateway(
+                    gateway.url.clone(),
+                    ag::turn_runtime::run_agent_turn(
+                        rejected_turn_id,
+                        session_b.clone(),
+                        Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
+                        "跨会话历史应拒绝".into(),
+                        Some("fixture".into()),
+                        Some("fixture-model".into()),
+                        None,
+                        None,
+                        None,
+                        vec![],
+                        Some(rejected_facts),
+                        vec![old.clone()],
+                        vec![],
+                        vec![],
+                        vec![],
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        on_event.clone(),
+                        ag::turn_runtime::AgentContextChannel(None),
+                        state,
+                        app.clone(),
+                    ),
+                ),
+            )
+            .await;
+            if !matches!(wrong_scope, Err(ref error) if error.code == "AG_HISTORY_SCOPE_MISMATCH") {
+                return Err(failure(
+                    "Cross-session history was not rejected before Gate",
+                ));
+            }
+        }
+        ag::tool_registry::with_verification_execution_policy(
+            ag::tool_registry::ExecutionBudgetPolicy::legacy(),
+            ent::gateway::with_test_gateway(
                 gateway.url.clone(),
                 ag::turn_runtime::run_agent_turn(
-                    rejected_turn_id,
-                    session_b.clone(),
+                    turn_id.clone(),
+                    session_id.to_string(),
                     Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
-                    "跨会话历史应拒绝".into(),
+                    prompts[index].into(),
                     Some("fixture".into()),
                     Some("fixture-model".into()),
                     None,
                     None,
                     None,
                     vec![],
-                    Some(rejected_facts),
-                    vec![old.clone()],
+                    Some(facts),
+                    history,
                     vec![],
                     vec![],
-                    vec![],
+                    references,
                     None,
                     None,
                     None,
@@ -532,41 +640,6 @@ async fn verify_session_memory<R: tauri::Runtime>(
                     state,
                     app.clone(),
                 ),
-            )
-            .await;
-            if !matches!(wrong_scope, Err(ref error) if error.code == "AG_HISTORY_SCOPE_MISMATCH") {
-                return Err(failure(
-                    "Cross-session history was not rejected before Gate",
-                ));
-            }
-        }
-        ent::gateway::with_test_gateway(
-            gateway.url.clone(),
-            ag::turn_runtime::run_agent_turn(
-                turn_id.clone(),
-                session_id.to_string(),
-                Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
-                prompts[index].into(),
-                Some("fixture".into()),
-                Some("fixture-model".into()),
-                None,
-                None,
-                None,
-                vec![],
-                Some(facts),
-                history,
-                vec![],
-                vec![],
-                references,
-                None,
-                None,
-                None,
-                None,
-                None,
-                on_event.clone(),
-                ag::turn_runtime::AgentContextChannel(None),
-                state,
-                app.clone(),
             ),
         )
         .await?;
@@ -975,7 +1048,7 @@ async fn verify_effect_port<R: tauri::Runtime>(
         )
         .map_err(failure)?;
         let terminal_while_scan_pending = lock_available
-            && before.len() == 1
+            && before.len() == (if cancel { 1 } else { 2 })
             && terminal_started.elapsed() < Duration::from_millis(500);
         let takeover_rejected = ag::turn_control::register_active_agent_turn(
             state,
@@ -1017,7 +1090,7 @@ async fn verify_effect_port<R: tauri::Runtime>(
             0,
         )
         .map_err(failure)?;
-        let terminal_unchanged = before.len() == 1
+        let terminal_unchanged = before.len() == (if cancel { 1 } else { 2 })
             && serde_json::to_value(&before).map_err(failure)?
                 == serde_json::to_value(&after).map_err(failure)?;
         let settled = facts
@@ -1097,6 +1170,13 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
     if ![
         "chat",
         "glob",
+        "execution-budget-wrap",
+        "action-handoff-stage",
+        "action-handoff-plan",
+        "tool-description-compatible",
+        "tool-read-only-control-variants",
+        "native-business-tools",
+        "protocol-cumulative",
         "invalid-json",
         "truncated",
         "tool-failure",
@@ -1112,6 +1192,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         "protocol-exhausted",
         "text-control-corrects",
         "argument-decision-shared-limit",
+        "parameter-and-control-recover",
         "decision-native-replay-blocked",
         "text-correction-gate-denied",
         "text-correction-delay",
@@ -1319,6 +1400,9 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
             })
         });
     let prompt = match scenario.as_str() {
+        "action-handoff-plan" => {
+            "准备将 verification.txt 改名为 renamed.txt，执行前通过确认卡询问。".into()
+        }
         "chat" => "你好".to_string(),
         "bounded-reading" | "bounded-reading-four-pages" => {
             "完整读取 reading.html 的全部测试条目并分析，只读，不修改文件。".to_string()
@@ -1331,6 +1415,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
     let mut decision_trace = Vec::new();
     let mut continuation: Option<(String, String)> = None;
     let segment_count = match scenario.as_str() {
+        "action-handoff-plan" => 2,
         "read-failure-clarification" => 2,
         "decision-chain" => 3,
         "decision-duplicate" => 2,
@@ -1370,49 +1455,64 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         } else {
             vec![]
         };
-        ent::gateway::with_test_gateway(
-            gateway.url.clone(),
-            ag::turn_runtime::run_agent_turn(
-                run_id.clone(),
-                run_id.clone(),
-                Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
-                if clarification_resume {
-                    "只读取 oversized.txt 的第0块，不改文件。".into()
-                } else {
-                    prompt.clone()
-                },
-                Some("fixture".into()),
-                Some("fixture-model".into()),
-                reading_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.rel_path.clone()),
-                None,
-                None,
-                vec![],
-                Some(segment_facts),
-                history,
-                vec![],
-                vec![],
-                vec![],
-                continuation.as_ref().map(|(task, _)| task.clone()),
-                continuation.as_ref().map(|(_, decision)| decision.clone()),
-                None,
-                Some(clarification_resume),
-                Some(segment > 0 && !clarification_resume),
-                on_event.clone(),
-                ag::turn_runtime::AgentContextChannel(if segment == 0 || clarification_resume {
-                    context_channel.clone()
-                } else {
-                    None
-                }),
-                &state,
-                app.clone(),
+        ag::tool_registry::with_verification_execution_policy(
+            if scenario == "execution-budget-wrap" {
+                ag::tool_registry::ExecutionBudgetPolicy {
+                    max_model_calls: 4,
+                    max_tool_calls: 1,
+                    max_corrections: 2,
+                    final_reserve: 2,
+                }
+            } else {
+                ag::tool_registry::ExecutionBudgetPolicy::legacy()
+            },
+            ent::gateway::with_test_gateway(
+                gateway.url.clone(),
+                ag::turn_runtime::run_agent_turn(
+                    run_id.clone(),
+                    run_id.clone(),
+                    Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
+                    if clarification_resume {
+                        "只读取 oversized.txt 的第0块，不改文件。".into()
+                    } else {
+                        prompt.clone()
+                    },
+                    Some("fixture".into()),
+                    Some("fixture-model".into()),
+                    reading_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.rel_path.clone()),
+                    None,
+                    None,
+                    vec![],
+                    Some(segment_facts),
+                    history,
+                    vec![],
+                    vec![],
+                    vec![],
+                    continuation.as_ref().map(|(task, _)| task.clone()),
+                    continuation.as_ref().map(|(_, decision)| decision.clone()),
+                    None,
+                    Some(clarification_resume),
+                    Some(segment > 0 && !clarification_resume),
+                    on_event.clone(),
+                    ag::turn_runtime::AgentContextChannel(
+                        if segment == 0 || clarification_resume {
+                            context_channel.clone()
+                        } else {
+                            None
+                        },
+                    ),
+                    &state,
+                    app.clone(),
+                ),
             ),
         )
         .await?;
         if matches!(
             scenario.as_str(),
             "decision-chain"
+                | "action-handoff-plan"
                 | "decision-duplicate"
                 | "decision-limit"
                 | "decision-text-corrects"
@@ -1481,33 +1581,36 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         let mut next_facts = facts.clone();
         next_facts["turnId"] = serde_json::json!(next_turn_id);
         next_facts["contextRevision"] = serde_json::json!(2);
-        ent::gateway::with_test_gateway(
-            gateway.url.clone(),
-            ag::turn_runtime::run_agent_turn(
-                next_turn_id.clone(),
-                run_id.clone(),
-                Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
-                "你好".into(),
-                Some("fixture".into()),
-                Some("fixture-model".into()),
-                None,
-                None,
-                None,
-                vec![],
-                Some(next_facts),
-                vec![],
-                vec![],
-                vec![],
-                vec![],
-                None,
-                None,
-                None,
-                None,
-                None,
-                on_event.clone(),
-                ag::turn_runtime::AgentContextChannel(None),
-                &state,
-                app.clone(),
+        ag::tool_registry::with_verification_execution_policy(
+            ag::tool_registry::ExecutionBudgetPolicy::legacy(),
+            ent::gateway::with_test_gateway(
+                gateway.url.clone(),
+                ag::turn_runtime::run_agent_turn(
+                    next_turn_id.clone(),
+                    run_id.clone(),
+                    Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
+                    "你好".into(),
+                    Some("fixture".into()),
+                    Some("fixture-model".into()),
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    Some(next_facts),
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    on_event.clone(),
+                    ag::turn_runtime::AgentContextChannel(None),
+                    &state,
+                    app.clone(),
+                ),
             ),
         )
         .await?;
@@ -1607,10 +1710,19 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         .into_iter().map(|raw| {
             let stored:serde_json::Value=serde_json::from_str(&raw).map_err(failure)?;
             // Export only format/error metadata, never control values or model text.
-            Ok(serde_json::json!({"code":stored["code"],"prefixKind":stored["prefixKind"],"rejectionStage":stored["rejectionStage"],"correctionAttempt":stored["correctionAttempt"],"finalOnly":stored["finalOnly"]}))
+            Ok(serde_json::json!({"code":stored["code"],"prefixKind":stored["prefixKind"],"rejectionStage":stored["rejectionStage"],"correctionAttempt":stored["correctionAttempt"],"finalOnly":stored["finalOnly"],"protocolDiagnostic":stored["protocolDiagnostic"]}))
         }).collect::<Result<Vec<serde_json::Value>,IpcError>>()?;
+    let mut observed = conn.prepare("SELECT payload_json FROM agent_turn_events WHERE turn_id=?1 AND kind='model_control_description_reconciled' ORDER BY seq").map_err(failure)?;
+    let description_trace = observed
+        .query_map([&run_id], |row| row.get::<_, String>(0))
+        .map_err(failure)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(failure)?
+        .into_iter()
+        .map(|encoded| serde_json::from_str::<serde_json::Value>(&encoded).map_err(failure))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(
-        serde_json::json!({"runId":run_id,"status":status,"followUp":follow_up,"events":events,"budgetChecks":budget_checks,"requestCounts":request_counts,"decisionTrace":decision_trace,"modelToolMessages":model_tool_messages,"protocolTrace":protocol_trace,"transportTrace":transport_trace,"environment":"development-isolated","realSubscriptionVerified":false}),
+        serde_json::json!({"runId":run_id,"status":status,"followUp":follow_up,"events":events,"budgetChecks":budget_checks,"requestCounts":request_counts,"decisionTrace":decision_trace,"modelToolMessages":model_tool_messages,"protocolTrace":protocol_trace,"descriptionTrace":description_trace,"transportTrace":transport_trace,"environment":"development-isolated","realSubscriptionVerified":false}),
     )
 }
 
@@ -1700,6 +1812,13 @@ mod tests {
         for scenario in [
             "chat",
             "glob",
+            "execution-budget-wrap",
+            "action-handoff-stage",
+            "action-handoff-plan",
+            "tool-description-compatible",
+            "tool-read-only-control-variants",
+            "native-business-tools",
+            "protocol-cumulative",
             "invalid-json",
             "truncated",
             "tool-failure",
@@ -1715,6 +1834,7 @@ mod tests {
             "protocol-exhausted",
             "text-control-corrects",
             "argument-decision-shared-limit",
+            "parameter-and-control-recover",
             "decision-native-replay-blocked",
             "text-correction-gate-denied",
             "text-correction-delay",
@@ -1870,10 +1990,147 @@ mod tests {
                 .to_string()
                 .contains("VERIFICATION_OVERSIZED_PATTERN"));
             match scenario {
-                "argument-decision-shared-limit" | "decision-native-replay-blocked" => {
+                "native-business-tools" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert_eq!(tools.len(), 5);
+                    assert_eq!(
+                        tools
+                            .iter()
+                            .filter(|event| event["success"] == true)
+                            .count(),
+                        3
+                    );
+                    for tool in tools.iter().filter(|event| event["success"] == false) {
+                        assert_eq!(tool["executionReceipt"]["executionStatus"], "rejected");
+                        assert_eq!(tool["executionReceipt"]["effectStatus"], "not_started");
+                    }
+                    assert_eq!(receipt["requestCounts"]["model"], 5);
+                    let rejects = receipt["protocolTrace"].as_array().unwrap();
+                    assert_eq!(rejects.len(), 2);
+                    assert_eq!(rejects[0]["protocolDiagnostic"]["fieldPath"], "_binderTurn");
+                    assert_eq!(rejects[1]["protocolDiagnostic"]["fieldPath"], "$control");
+                    let returned = receipt["modelToolMessages"].as_array().unwrap();
+                    assert_eq!(returned.len(), 3);
+                    assert!(returned.iter().all(|row| {
+                        row["toolCallId"] != "verification-native-missing"
+                            && row["toolCallId"] != "verification-native-type"
+                    }));
+                    assert!(returned.iter().any(|row| row["toolCallId"]
+                        == "verification-native-glob"
+                        && row["content"]
+                            .as_str()
+                            .unwrap()
+                            .contains("verification.txt")));
+                }
+                "tool-description-compatible" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert_eq!(tools.len(), 3);
+                    assert!(tools.iter().all(|tool| tool["success"] == true));
+                    assert_eq!(receipt["requestCounts"]["model"], 2);
+                    assert!(receipt["protocolTrace"].as_array().unwrap().is_empty());
+                    assert_eq!(
+                        receipt["descriptionTrace"][0]["observations"]
+                            .as_array()
+                            .unwrap()
+                            .len(),
+                        2
+                    );
+                    assert!(!receipt["descriptionTrace"].to_string().contains("private"));
+                }
+                "tool-read-only-control-variants" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert_eq!(tools.len(), 2);
+                    assert!(tools.iter().all(|tool| tool["success"] == true));
+                    assert!(receipt["protocolTrace"].as_array().unwrap().is_empty());
+                    assert_eq!(
+                        receipt["descriptionTrace"][0]["observations"][0]["controlFields"],
+                        serde_json::json!(["intent.requiredContext"])
+                    );
+                    assert!(!receipt["descriptionTrace"]
+                        .to_string()
+                        .contains("PRIVATE_BLOCK_HINT"));
+                }
+                "protocol-cumulative" => {
                     assert_eq!(receipt["status"], "error");
                     assert_eq!(receipt["requestCounts"]["model"], 4);
-                    assert_eq!(receipt["requestCounts"]["gate"], 4);
+                    assert_eq!(
+                        tools.iter().filter(|tool| tool["success"] == true).count(),
+                        1
+                    );
+                    for (index, row) in receipt["protocolTrace"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .enumerate()
+                    {
+                        assert_eq!(row["correctionAttempt"], index + 1);
+                        assert!(row["protocolDiagnostic"]["reasonCode"].is_string());
+                        assert_eq!(row["protocolDiagnostic"]["controlSource"], "tool[0]");
+                    }
+                    assert_eq!(receipt["protocolTrace"].as_array().unwrap().len(), 3);
+                    assert!(events
+                        .iter()
+                        .any(|e| e["code"] == "AG_MODEL_CORRECTION_LIMIT"
+                            && e["diagnostic"]["category"] == "model_protocol"));
+                }
+                "action-handoff-plan" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert_eq!(receipt["requestCounts"]["model"], 3);
+                    assert_eq!(tools.len(), 1);
+                    assert_eq!(tools[0]["toolName"], "plan_workspace_operation");
+                    assert_eq!(tools[0]["success"], true);
+                    assert_eq!(
+                        events
+                            .iter()
+                            .filter(|e| e["type"] == "decision_request_proposed")
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        events
+                            .iter()
+                            .filter(|e| e["type"] == "decision_request_resolved")
+                            .count(),
+                        1
+                    );
+                    assert!(!serde_json::to_string(events)
+                        .unwrap()
+                        .contains("UNDELIVERED_PLAN_PROMISE"));
+                }
+                "execution-budget-wrap" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert_eq!(tools.len(), 1);
+                    assert_eq!(tools[0]["success"], true);
+                    assert_eq!(receipt["requestCounts"]["model"], 2);
+                    assert_eq!(receipt["transportTrace"][1]["nativeToolCount"], 0);
+                    assert!(events
+                        .iter()
+                        .any(|e| e["type"] == "done" && e["stopReason"] == "budget_exhausted"));
+                }
+                "action-handoff-stage" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert!(tools.is_empty());
+                    assert_eq!(receipt["requestCounts"]["model"], 2);
+                    assert!(!serde_json::to_string(events)
+                        .unwrap()
+                        .contains("UNDELIVERED_PLAN_PROMISE"));
+                    assert_eq!(
+                        receipt["protocolTrace"][0]["code"],
+                        "AG_WORKSPACE_PLAN_TOOL_REQUIRED"
+                    );
+                    assert!(events
+                        .iter()
+                        .any(|e| e["type"] == "done" && e["stopReason"] == "report_only"));
+                }
+                "argument-decision-shared-limit" | "decision-native-replay-blocked" => {
+                    assert_eq!(receipt["status"], "error");
+                    let attempts = if scenario == "argument-decision-shared-limit" {
+                        5
+                    } else {
+                        4
+                    };
+                    assert_eq!(receipt["requestCounts"]["model"], attempts);
+                    assert_eq!(receipt["requestCounts"]["gate"], attempts);
                     assert_eq!(tools.len(), 2);
                     assert_eq!(
                         tools.iter().filter(|tool| tool["success"] == true).count(),
@@ -1883,11 +2140,38 @@ mod tests {
                         .iter()
                         .any(|e| e["type"] == "error" && e["code"] == "AG_MODEL_CORRECTION_LIMIT"));
                     let rejects = receipt["protocolTrace"].as_array().unwrap();
-                    assert_eq!(rejects.len(), 3);
+                    assert_eq!(
+                        rejects.len(),
+                        if scenario == "argument-decision-shared-limit" {
+                            4
+                        } else {
+                            3
+                        }
+                    );
                     for (index, rejected) in rejects.iter().enumerate() {
-                        assert_eq!(rejected["correctionAttempt"], index + 1);
+                        let expected = if scenario == "argument-decision-shared-limit" && index > 0
+                        {
+                            index
+                        } else {
+                            index + 1
+                        };
+                        assert_eq!(rejected["correctionAttempt"], expected);
                     }
                     assert_eq!(receipt["decisionTrace"].as_array().unwrap().len(), 1);
+                }
+                "parameter-and-control-recover" => {
+                    assert_eq!(receipt["status"], "completed");
+                    assert_eq!(receipt["requestCounts"]["model"], 5);
+                    assert_eq!(receipt["requestCounts"]["gate"], 5);
+                    assert_eq!(tools.len(), 3);
+                    assert!(tools[..2].iter().all(|tool| tool["success"] == false));
+                    assert_eq!(tools[2]["success"], true);
+                    let rejects = receipt["protocolTrace"].as_array().unwrap();
+                    assert_eq!(rejects.len(), 3);
+                    assert_eq!(rejects[0]["correctionAttempt"], 1);
+                    assert_eq!(rejects[1]["correctionAttempt"], 2);
+                    assert_eq!(rejects[2]["correctionAttempt"], 1);
+                    assert!(events.iter().any(|e| e["type"] == "done"));
                 }
                 "text-correction-gate-denied"
                 | "text-correction-delay"
@@ -2215,7 +2499,7 @@ mod tests {
                     assert_eq!(tools[1]["executionReceipt"]["executionStatus"], "rejected");
                     assert_eq!(
                         tools[1]["executionReceipt"]["failure"]["code"],
-                        "AG_READ_PAGE_VERSION_REQUIRED"
+                        "AG_READ_CURSOR_INVALID"
                     );
                     assert_eq!(tools[1]["diagnostic"]["category"], "model_protocol");
                     assert_eq!(tools[1]["diagnostic"]["observedAt"], "tool_validation");

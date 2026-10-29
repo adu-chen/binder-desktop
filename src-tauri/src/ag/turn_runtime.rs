@@ -1,5 +1,6 @@
 //! AgentTurn 请求装配、模型轮次与受控工具循环。
 
+#[cfg(test)]
 use crate::ag::prompt_runtime::PROMPT_INPUT_LIMIT;
 use crate::ipc::{AgTurnEvent, AgTurnEventPayload, IpcError};
 use crate::types::{
@@ -1001,6 +1002,7 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
             model.as_deref(),
         )?
     };
+    let model_capacity = ag::prompt_runtime::model_capacity(&bound_provider, &bound_model);
 
     let (
         _active_turn_lease,
@@ -1101,8 +1103,12 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
             "runtimeProfile": &runtime_profile,
             "clarificationResume": clarification_resume,
             "decisionResume": decision_resume,
+            "previewContinuationDiffId": continuation_preview_diff_id,
         }),
     )?;
+    event_emitter.freeze_execution_policy()?;
+    event_emitter.freeze_transport_protocol()?;
+    let execution_policy = event_emitter.execution_policy()?;
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：先校验显式 TaskRun 续片段；
     // 普通 AgentTurn 此时不创建 TaskRun。只有后续确定需要 TaskPlan，或工具真实产生任务级产物时，
     // 才按需创建并绑定。应用启动时已清理陈旧活动态（重启不续跑）。
@@ -1447,35 +1453,54 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
         let current_task_run_id = task_run_id
             .as_deref()
             .expect("decision resume was validated with a task run");
-        let outcome = started_turn_or_finish!((|| {
+        let decision_receipt = started_turn_or_finish!((|| {
             let conn = state
                 .db
                 .lock()
                 .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
-            ag::task::resolved_decision_outcome(&conn, current_task_run_id, decision_request_id)
-                .map_err(|error| {
-                    IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
-                })?
-                .ok_or_else(|| {
-                    IpcError::new(
-                        "AG_TASK_CONTINUATION_INVALID",
-                        "裁决结果不存在，无法恢复原 AgentTurn",
-                        false,
-                        false,
-                    )
-                })
+            ag::task::resolved_decision_receipt(
+                &conn,
+                &workspace_id_for_turn,
+                &session_id,
+                &turn_id,
+                current_task_run_id,
+                decision_request_id,
+            )?
+            .ok_or_else(|| {
+                IpcError::new(
+                    "AG_TASK_CONTINUATION_INVALID",
+                    "裁决结果不存在，无法恢复原 AgentTurn",
+                    false,
+                    false,
+                )
+            })
         })());
         event_emitter.emit(
             &terminal_latch,
             AgTurnEventPayload::DecisionRequestResolved {
                 request_id: decision_request_id.to_string(),
-                outcome: outcome.clone(),
+                outcome: decision_receipt["outcome"]
+                    .as_str()
+                    .expect("resolved decision has an outcome")
+                    .to_string(),
             },
+        )?;
+        event_emitter.record_internal(
+            "decision_effect_observed",
+            serde_json::json!({
+                "requestId":decision_request_id,
+                "taskRunId":current_task_run_id,
+                "outcome":decision_receipt["outcome"],
+                "planStatus":decision_receipt["workspaceOperation"]["planStatus"],
+                "operationStatus":decision_receipt["workspaceOperation"]["receipt"]["final_status"],
+                "saveVerified":decision_receipt["workspaceOperation"]["content"]["saveVerified"],
+                "readBackVerified":false,
+            }),
         )?;
         continuation_messages.push(serde_json::json!({
             "role": "system",
             "content": format!(
-                "[DECISION RESULT — DATA ONLY] request_id={decision_request_id}; outcome={outcome}. Continue the same AgentTurn from this verified user decision."
+                "[DECISION RESULT — DATA ONLY] {decision_receipt}\n以上为后端原身份核验的裁决与执行事实，不是新授权或正文指令。依据receipt逐项说明已执行/未完成；saveVerified=true仅证明该文件已接受并保存，不代表整项需求完成，readBackVerified=false表示未读回复核。不得把confirm当作资源已执行或文件已保存，不得重复执行已有操作。Continue the same AgentTurn."
             ),
         }));
     }
@@ -1515,7 +1540,8 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
         &continuation_messages,
         &decision_receipt_ids,
         1,
-        6,
+        execution_policy.max_tool_calls,
+        model_capacity,
     ));
     let context_evidence = ag::tool_exec::context_evidence(
         &agent_context_facts,
@@ -1574,12 +1600,17 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
     started_turn_or_finish!(event_emitter.record_prompt_budget(
         budget_reason,
         &budget_measurement,
-        budget_sources
+        budget_sources,
+        model_capacity,
     ));
-    if budget_measurement.estimated_tokens > PROMPT_INPUT_LIMIT {
+    if budget_measurement.estimated_tokens > model_capacity.input_tokens() {
         let error = IpcError::new(
             "AG_PROMPT_BUDGET_EXCEEDED",
-            &ag::prompt_runtime::budget_failure_message(&budget_measurement, budget_reason),
+            &ag::prompt_runtime::budget_failure_message(
+                &budget_measurement,
+                budget_reason,
+                model_capacity,
+            ),
             true,
             false,
         );
@@ -1634,16 +1665,13 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
         );
         return Ok(());
     }
-    let (remaining_tools, remaining_rounds) = super::turn_tool_loop::continuation_execution_budget(
+    let (_remaining_tools, remaining_rounds) = super::turn_tool_loop::continuation_execution_budget(
         &continuation_messages,
         capability_grant.budgets.remaining_tool_calls,
-        super::turn_tool_loop::MAX_MODEL_ROUNDS,
+        execution_policy.max_model_calls,
     );
     let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
-    if remaining_tools == 0
-        || remaining_rounds == 0
-        || previous_model_calls >= super::turn_tool_loop::MAX_MODEL_ROUNDS
-    {
+    if remaining_rounds == 0 || previous_model_calls >= execution_policy.max_model_calls {
         let error = IpcError::new(
             "AG_TOOL_LOOP_LIMIT",
             "原回合执行预算已用尽，确认或恢复不会重置预算；未启动下一次调用。",
@@ -2240,6 +2268,228 @@ mod tests {
         }
     }
 
+    // covers: BR-SYS-STATE-008, BR-AG-DATA-001, BR-AG-STATE-001
+    #[test]
+    fn preview_continuation_admission_requires_fresh_snapshot_and_preserves_terminal_parent() {
+        use std::sync::{Arc, Mutex};
+        use tauri::Manager;
+        for scenario in ["fresh", "missing-snapshot", "stale-snapshot", "failed-task"] {
+            let root =
+                std::env::temp_dir().join(format!("binder-preview-entry-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            let _cleanup = FixedWorkspace(root.clone());
+            std::fs::write(root.join("new.txt"), "DISK").unwrap();
+            let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+            crate::db::migrate(&mut conn).unwrap();
+            let ws =
+                workspace::lifecycle::open_workspace(&mut conn, root.to_str().unwrap()).unwrap();
+            let run =
+                ag::task::begin_turn(&conn, &ws.workspace_id, "preview-session", Some("核对预览"))
+                    .unwrap();
+            ag::history::save_turn(
+                &conn,
+                &ws.workspace_id,
+                "preview-session",
+                "preview-parent",
+                Some("new.txt"),
+                "completed",
+                &serde_json::from_value(serde_json::json!({"version":1,"userMessage":{"id":"preview-user","role":"user","content":"核对预览"},"toolSummaries":[],"diffRefs":[]})).unwrap(),
+            )
+            .unwrap();
+            conn.execute("INSERT INTO pending_diffs (diff_id,workspace_id,rel_path,origin_module,status,payload_ref,created_at) VALUES ('entry-preview',?1,'new.txt','AG','pending','entry-payload',1)",[&ws.workspace_id]).unwrap();
+            ag::task::create_preview_checkpoint(
+                &conn,
+                &run,
+                &ws.workspace_id,
+                "preview-session",
+                "preview-parent",
+                "entry-preview",
+                "new.txt",
+            )
+            .unwrap();
+            let checkpoint = ag::task::PreviewCheckpoint {
+                diff_id: "entry-preview".into(),
+                task_run_id: run.clone(),
+                workspace_id: ws.workspace_id.clone(),
+                session_id: "preview-session".into(),
+                turn_id: "preview-parent".into(),
+                rel_path: "new.txt".into(),
+                session_version: 2,
+                content_hash: "preview-hash".into(),
+            };
+            ag::task::acknowledge_preview_checkpoint(&conn, &checkpoint).unwrap();
+            if scenario == "failed-task" {
+                ag::task::settle_turn(&conn, &run, ag::task::TurnOutcome::Failed).unwrap();
+            }
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            app.manage(AppState {
+                db: Arc::new(Mutex::new(conn)),
+                registry: crate::build_registry(),
+                assist_terminals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                active_agent_turns: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            });
+            let hash = if scenario == "stale-snapshot" {
+                "old-hash"
+            } else {
+                "preview-hash"
+            };
+            let snapshot = serde_json::json!({"relPath":"new.txt","content":"PREVIEW","source":"active_editor_session","editFormat":"text","contentFormat":"text","dirty":true,"baseline":null,"sessionVersion":2,"contentHash":hash,"capturedAt":1});
+            let has_snapshot = scenario != "missing-snapshot";
+            let facts = serde_json::json!({"version":AGENT_CONTEXT_FACTS_VERSION_V2,"workspaceId":ws.workspace_id,"sessionId":"preview-session","turnId":"preview-child","contextRevision":1,"activeTarget":{"relPath":"new.txt","loadSeq":1},"openResources":[{"relPath":"new.txt","availability":if has_snapshot {"ready"} else {"not_requested"},"reasonCode":null,"snapshot":if has_snapshot {serde_json::json!({"source":"active_editor_session","editFormat":"text","contentFormat":"text","dirty":true,"baseline":null,"sessionVersion":2,"contentHash":hash})} else {serde_json::Value::Null}}],"selections":[],"proposalFacts":[]});
+            let gateway = FixedGateway::start_fault(true, vec![fixed_final()], None, None);
+            tauri::async_runtime::block_on(ent::gateway::with_test_gateway(
+                gateway.url.clone(),
+                run_agent_turn(
+                    "preview-child".into(),
+                    "preview-session".into(),
+                    Some(ag::turn::AGENT_EDIT_1_0_PROFILE.into()),
+                    "核对预览".into(),
+                    Some("fixture".into()),
+                    Some("fixture-model".into()),
+                    Some("new.txt".into()),
+                    None,
+                    Some("text".into()),
+                    if has_snapshot {
+                        vec![serde_json::from_value(snapshot).unwrap()]
+                    } else {
+                        vec![]
+                    },
+                    Some(facts),
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                    Some(run.clone()),
+                    None,
+                    Some("entry-preview".into()),
+                    None,
+                    None,
+                    tauri::ipc::Channel::new(|_| Ok(())),
+                    AgentContextChannel(None),
+                    &app.state(),
+                    app.handle().clone(),
+                ),
+            ))
+            .unwrap();
+            let state = app.state::<AppState>();
+            let conn = state.db.lock().unwrap();
+            let status: String = conn
+                .query_row(
+                    "SELECT status FROM agent_turns WHERE turn_id='preview-child'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let checkpoint_status: String = conn
+                .query_row(
+                    "SELECT status FROM task_preview_checkpoints WHERE diff_id='entry-preview'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let calls = gateway.requests.lock().unwrap();
+            let records =
+                ag::history::list_turns(&conn, &ws.workspace_id, "preview-session").unwrap();
+            assert!(
+                records
+                    .iter()
+                    .find(|record| record.turn_id == "preview-child")
+                    .unwrap()
+                    .internal_continuation
+            );
+            assert!(
+                !records
+                    .iter()
+                    .find(|record| record.turn_id == "preview-parent")
+                    .unwrap()
+                    .internal_continuation
+            );
+            if scenario == "fresh" {
+                // The normal frontend owns the display cache, while safe events
+                // remain authoritative. Exercise that same cache write contract.
+                let events =
+                    ag::turn_events::list_safe_events(&conn, &ws.workspace_id, "preview-child", 0)
+                        .unwrap();
+                let body: String = events
+                    .iter()
+                    .filter_map(|event| match &event.event {
+                        AgTurnEventPayload::Chunk { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(body.contains("本次检查已结束"));
+                let mut projection = records
+                    .iter()
+                    .find(|record| record.turn_id == "preview-child")
+                    .unwrap()
+                    .payload
+                    .clone();
+                projection.last_event_seq = events.last().unwrap().seq;
+                projection.assistant_message=Some(serde_json::from_value(serde_json::json!({"id":"preview-assistant","role":"assistant","content":body})).unwrap());
+                ag::history::save_turn_projection(
+                    &conn,
+                    &ws.workspace_id,
+                    "preview-session",
+                    "preview-child",
+                    Some("new.txt"),
+                    &projection,
+                )
+                .unwrap();
+                assert!(
+                    ag::history::list_turns(&conn, &ws.workspace_id, "preview-session")
+                        .unwrap()
+                        .iter()
+                        .find(|record| record.turn_id == "preview-child")
+                        .unwrap()
+                        .payload
+                        .assistant_message
+                        .as_ref()
+                        .unwrap()
+                        .content
+                        .contains("本次检查已结束")
+                );
+            }
+            assert_eq!(
+                status,
+                if scenario == "fresh" {
+                    "completed"
+                } else {
+                    "error"
+                },
+                "{scenario}"
+            );
+            assert_eq!(
+                checkpoint_status,
+                if scenario == "fresh" {
+                    "consumed"
+                } else {
+                    "acknowledged"
+                },
+                "{scenario}"
+            );
+            assert_eq!(
+                calls.iter().filter(|(p, _)| p == "/invoke/stream").count(),
+                usize::from(scenario == "fresh"),
+                "{scenario}"
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT status FROM agent_turns WHERE turn_id='preview-parent'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "completed"
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("new.txt")).unwrap(),
+                "DISK"
+            );
+        }
+    }
+
     fn fixed_control(action: &str) -> serde_json::Value {
         serde_json::json!({
             "version":"binder-turn-control-v1", "nextAction":action,
@@ -2250,10 +2500,158 @@ mod tests {
     }
 
     fn fixed_final() -> String {
+        fixed_text(fixed_control("final"), "本次检查已结束。")
+    }
+
+    // covers: BR-AG-STATE-001
+    // covers: BR-AG-STATE-002
+    // covers: BR-AG-OBS-001
+    #[test]
+    fn output_length_freezes_execution_and_delivers_one_failure_baseline_with_actual_capacity() {
         let text = format!(
-            "<binder-turn-control>{}</binder-turn-control>本次检查已结束。",
-            fixed_control("final")
+            "<binder-turn-control>{}</binder-turn-control>",
+            fixed_control("tool")
         );
+        let response = format!(
+            "event: chunk\ndata: {}\n\nevent: done\ndata: {}\n\n",
+            serde_json::json!({"text":text}),
+            serde_json::json!({"stop_reason":"length","completion_observation":{
+                "requestedMaxTokens":8192,"usage":{"completionTokens":8192},
+                "pendingToolArguments":[{"toolIndex":0,"argumentsUtf8Bytes":65000,"argumentsSha256":"a".repeat(64),"jsonValid":false}]}})
+        );
+        let result = run_fixed_turn(true, vec![response]);
+        assert_eq!(result.status, "error");
+        assert_eq!(
+            result.events.iter().filter(|(k, _)| k == "error").count(),
+            1
+        );
+        assert!(!result
+            .events
+            .iter()
+            .any(|(k, _)| matches!(k.as_str(), "tool_request" | "tool_result" | "done")));
+        let interaction = &result
+            .events
+            .iter()
+            .find(|(k, _)| k == "interaction_result")
+            .unwrap()
+            .1;
+        assert_eq!(interaction["succeededTools"], 0);
+        assert_eq!(interaction["unknownEffects"], 0);
+        let capacity = &result
+            .events
+            .iter()
+            .find(|(k, _)| k == "provider_capacity_observed")
+            .unwrap()
+            .1;
+        assert_eq!(capacity["usage"]["completionTokens"], 8192);
+        let summaries = result
+            .safe_events
+            .iter()
+            .filter_map(|e| match &e.event {
+                AgTurnEventPayload::Chunk { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert!(summaries.contains("本次任务未完成"));
+        assert!(summaries.contains("长度限制"));
+        assert_eq!(
+            result
+                .requests
+                .iter()
+                .filter(|(p, _)| p == "/invoke/stream")
+                .count(),
+            1
+        );
+        assert_eq!(
+            result
+                .requests
+                .iter()
+                .find(|(p, _)| p == "/invoke/stream")
+                .unwrap()
+                .1["max_tokens"],
+            8192
+        );
+    }
+
+    // covers: BR-AG-OBS-001, BR-AG-STATE-001, BR-SYS-STATE-007
+    #[test]
+    fn normal_stop_keeps_partial_body_and_separates_structure_warning_from_transport_failure() {
+        for (body, reason) in [
+            ("说明\n\n| 层级 | 能说什", "answer_incomplete"),
+            ("完整回答，无须工具。", "stop"),
+        ] {
+            let result = run_fixed_turn_with_prompt(
+                true,
+                vec![fixed_text(fixed_control("final"), body)],
+                "只讨论概念，不读取或修改文件",
+            );
+            assert_eq!(result.status, "completed");
+            assert_eq!(
+                result
+                    .events
+                    .iter()
+                    .filter(|(kind, _)| kind == "done")
+                    .count(),
+                1
+            );
+            assert!(!result
+                .events
+                .iter()
+                .any(|(kind, _)| matches!(kind.as_str(), "error" | "tool_request")));
+            let text: String = result
+                .events
+                .iter()
+                .filter(|(kind, _)| kind == "chunk")
+                .map(|(_, value)| value["text"].as_str().unwrap())
+                .collect();
+            assert_eq!(text, body);
+            assert_eq!(
+                result
+                    .events
+                    .iter()
+                    .find(|(kind, _)| kind == "done")
+                    .unwrap()
+                    .1["stopReason"],
+                reason
+            );
+            let build = &result
+                .events
+                .iter()
+                .find(|(kind, _)| kind == "runtime_build_observed")
+                .unwrap()
+                .1;
+            assert_eq!(build["clientBuildId"].as_str().unwrap().len(), 64);
+            let gateway = &result
+                .events
+                .iter()
+                .find(|(kind, _)| kind == "gateway_build_observed")
+                .unwrap()
+                .1;
+            assert_eq!(
+                gateway["gatewayBuildPresent"], false,
+                "legacy gateway is not silently certified"
+            );
+            let delivery = &result
+                .events
+                .iter()
+                .find(|(kind, _)| kind == "answer_delivery_observed")
+                .unwrap()
+                .1;
+            assert_eq!(delivery["textSha256"], ag::context::sha256_text(body));
+            assert_eq!(
+                result
+                    .requests
+                    .iter()
+                    .filter(|(path, _)| path == "/invoke/stream")
+                    .count(),
+                1,
+                "no automatic retry or second chain"
+            );
+        }
+    }
+
+    fn fixed_text(control: serde_json::Value, body: &str) -> String {
+        let text = format!("<binder-turn-control>{control}</binder-turn-control>{body}",);
         format!(
             "event: chunk\ndata: {}\n\nevent: done\ndata: {{\"stop_reason\":\"stop\"}}\n\n",
             serde_json::json!({"text":text})
@@ -2267,6 +2665,383 @@ mod tests {
                 "id":format!("fixture-{}", uuid::Uuid::new_v4()), "name":name, "arguments":arguments.to_string()
             }]})
         )
+    }
+
+    fn fixed_tools(calls: Vec<(&str, serde_json::Value)>) -> String {
+        format!(
+            "event: tool_calls\ndata: {}\n\n",
+            serde_json::json!({"tool_calls":calls.into_iter().enumerate().map(|(index,(name,arguments))|serde_json::json!({
+                "id":format!("fixture-group-{index}"),"name":name,"arguments":arguments.to_string()
+            })).collect::<Vec<_>>()})
+        )
+    }
+
+    // covers: BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-OBS-001
+    #[test]
+    fn rejected_direct_transport_is_audited_but_not_echoed_into_model_correction() {
+        let mut rejected_control = fixed_control("tool");
+        rejected_control["intent"]["goal"] =
+            serde_json::json!("REJECTED_ARGUMENTS_MUST_NOT_RETURN");
+        let old_batch = fixed_tool(
+            ag::model_output::TOOL_BATCH_NAME,
+            serde_json::json!({"control": rejected_control, "calls":[{"toolName":"workspace_glob","params":{"pattern":"*.txt"}}]}),
+        );
+        let truncated_json = format!(
+            "event: tool_calls\ndata: {}\n\n",
+            serde_json::json!({"tool_calls":[{"id":"verification-native-truncated",
+                "name":"workspace_glob",
+                "arguments":"{\"private\":\"REJECTED_ARGUMENTS_MUST_NOT_RETURN\",\"pattern\":"}]}),
+        );
+        for (rejected, reason) in [
+            (old_batch, "transport_protocol_mismatch"),
+            (truncated_json, "arguments_not_object"),
+        ] {
+            let accepted = fixed_tool(
+                "workspace_glob",
+                serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+            );
+            let evidence = run_fixed_turn(true, vec![rejected, accepted, fixed_final()]);
+            assert_eq!(evidence.status, "completed");
+            let requests = evidence
+                .requests
+                .iter()
+                .filter(|(path, _)| path == "/invoke/stream")
+                .collect::<Vec<_>>();
+            assert_eq!(requests.len(), 3);
+            let correction = requests[1].1["messages"].to_string();
+            assert!(correction.contains("上一响应的控制封套或工具参数被拒绝"));
+            assert!(correction.contains(reason));
+            assert!(!correction.contains("REJECTED_ARGUMENTS_MUST_NOT_RETURN"));
+            assert_eq!(
+                evidence
+                    .safe_events
+                    .iter()
+                    .filter(|event| matches!(
+                        &event.event,
+                        AgTurnEventPayload::ToolResult { success: true, .. }
+                    ))
+                    .count(),
+                1,
+                "only the corrected business call executes"
+            );
+            assert!(evidence
+                .events
+                .iter()
+                .any(|(kind, _)| kind == "model_control_rejected"));
+        }
+    }
+
+    // covers: BR-AG-STATE-002, BR-AG-DATA-004, BR-AG-DATA-005
+    #[test]
+    fn fixed_runtime_direct_tools_execute_independent_reads_with_individual_provider_replies() {
+        let evidence = run_fixed_turn(
+            true,
+            vec![
+                fixed_tools(vec![
+                    (
+                        "workspace_glob",
+                        serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+                    ),
+                    ("list_docs", serde_json::json!({})),
+                ]),
+                fixed_final(),
+            ],
+        );
+        assert_eq!(evidence.status, "completed");
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(
+                    e.event,
+                    AgTurnEventPayload::ToolResult { success: true, .. }
+                ))
+                .count(),
+            2
+        );
+        let invokes = evidence
+            .requests
+            .iter()
+            .filter(|(path, _)| path == "/invoke/stream")
+            .collect::<Vec<_>>();
+        assert_eq!(invokes.len(), 2);
+        let exposed = invokes[0].1["tools"].as_array().unwrap();
+        assert!(exposed
+            .iter()
+            .any(|tool| tool["function"]["name"] == "workspace_glob"));
+        assert!(exposed
+            .iter()
+            .any(|tool| tool["function"]["name"] == "list_docs"));
+        assert!(exposed
+            .iter()
+            .all(|tool| tool["function"]["name"] != ag::model_output::TOOL_BATCH_NAME));
+        let replies = invokes[1].1["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .collect::<Vec<_>>();
+        assert_eq!(replies.len(), 2);
+        assert!(replies.iter().any(|reply| reply["content"]
+            .as_str()
+            .unwrap()
+            .contains("unique-result.txt")));
+        assert!(replies.iter().all(|reply| reply["tool_call_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("fixture-group-")));
+        assert!(!evidence
+            .events
+            .iter()
+            .any(|(kind, _)| kind == "model_control_rejected"));
+    }
+
+    // covers: BR-AG-STATE-002, BR-AG-DATA-004, BR-AG-OBS-001, BR-SYS-STATE-007
+    #[test]
+    fn fixed_runtime_direct_rejection_corrects_on_same_chain_or_stops_at_shared_limit() {
+        let native = |args| fixed_tool("list_docs", args);
+        let first = native(serde_json::json!({"_binderTurn":fixed_control("tool")}));
+        let missing = native(serde_json::json!({}));
+        let wrong_type = native(serde_json::json!({"_binderTurn":"PRIVATE_BAD_CALL"}));
+        let recovered = fixed_tools(vec![
+            (
+                "workspace_glob",
+                serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+            ),
+            ("list_docs", serde_json::json!({})),
+        ]);
+        for (last, expected_status, success_count, model_count) in [
+            (vec![recovered, fixed_final()], "completed", 3, 5),
+            (vec![native(serde_json::json!({}))], "error", 1, 4),
+        ] {
+            let mut responses = vec![first.clone(), missing.clone(), wrong_type.clone()];
+            responses.extend(last);
+            let evidence = run_fixed_turn(true, responses);
+            assert_eq!(evidence.status, expected_status);
+            let invokes = evidence
+                .requests
+                .iter()
+                .filter(|(p, _)| p == "/invoke/stream")
+                .collect::<Vec<_>>();
+            assert_eq!(invokes.len(), model_count);
+            for (_, request) in &invokes {
+                assert!(request["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|tool| tool["function"]["name"] != ag::model_output::TOOL_BATCH_NAME));
+                for message in request["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|m| m["role"] == "tool")
+                {
+                    assert!(!message["content"]
+                        .as_str()
+                        .unwrap()
+                        .contains("PRIVATE_BAD_CALL"));
+                }
+            }
+            assert_eq!(
+                evidence
+                    .safe_events
+                    .iter()
+                    .filter(|e| matches!(
+                        e.event,
+                        AgTurnEventPayload::ToolResult { success: true, .. }
+                    ))
+                    .count(),
+                success_count
+            );
+            let rejections = evidence
+                .events
+                .iter()
+                .filter(|(k, _)| k == "model_control_rejected")
+                .map(|(_, v)| v)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rejections.len(),
+                if expected_status == "error" { 3 } else { 2 }
+            );
+            assert_eq!(
+                rejections[0]["protocolDiagnostic"]["fieldPath"],
+                "_binderTurn"
+            );
+            assert_eq!(rejections[1]["protocolDiagnostic"]["fieldPath"], "$control");
+            for (index, rejection) in rejections.iter().enumerate() {
+                assert_eq!(rejection["correctionAttempt"], index + 1);
+                assert!(!rejection.to_string().contains("PRIVATE"));
+            }
+            assert_eq!(
+                evidence
+                    .safe_events
+                    .iter()
+                    .filter(|e| matches!(
+                        e.event,
+                        AgTurnEventPayload::Done { .. } | AgTurnEventPayload::Error { .. }
+                    ))
+                    .count(),
+                1
+            );
+            if expected_status == "error" {
+                assert!(evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Error{code,..} if code=="AG_MODEL_CORRECTION_LIMIT")));
+            } else {
+                let replies = invokes.last().unwrap().1["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|m| m["role"] == "tool")
+                    .collect::<Vec<_>>();
+                // Rejected, never-executed transport calls remain in the event ledger,
+                // not in the next model request as malformed examples.
+                assert_eq!(replies.len(), 3);
+                assert!(replies.iter().all(|reply| {
+                    !reply.to_string().contains("AG_MODEL_CONTROL_INVALID")
+                        && !reply.to_string().contains("PRIVATE_BAD_CALL")
+                }));
+                assert!(replies.iter().any(|reply| reply["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unique-result.txt")));
+            }
+        }
+    }
+
+    // covers: BR-AG-STATE-002, BR-AG-DATA-004, BR-AG-OBS-001
+    #[test]
+    fn fixed_runtime_three_tool_descriptions_keep_one_control_and_execute_real_reads() {
+        let mut calls = Vec::new();
+        for (index, name, args) in [
+            (0, "list_docs", serde_json::json!({})),
+            (1, "workspace_glob", serde_json::json!({"pattern":"*.txt"})),
+            (2, "workspace_glob", serde_json::json!({"pattern":"*.md"})),
+        ] {
+            let mut control = fixed_control("tool");
+            control["intent"]["goal"] = serde_json::json!(format!("PRIVATE_GOAL_{index}"));
+            control["route"]["summary"] = serde_json::json!(format!("PRIVATE_ROUTE_{index}"));
+            control["route"]["steps"] = serde_json::json!([format!("PRIVATE_STEP_{index}")]);
+            let mut args = args;
+            args["_binderTurn"] = control;
+            calls.push(serde_json::json!({"id":format!("compat-{index}"),"name":name,"arguments":args.to_string()}));
+        }
+        let batch = format!(
+            "event: tool_calls\ndata: {}\n\n",
+            serde_json::json!({"tool_calls":calls})
+        );
+        let evidence = run_fixed_turn(true, vec![batch, fixed_final()]);
+        assert_eq!(evidence.status, "completed");
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(
+                    e.event,
+                    AgTurnEventPayload::ToolResult { success: true, .. }
+                ))
+                .count(),
+            3
+        );
+        assert!(!evidence
+            .events
+            .iter()
+            .any(|(k, _)| k == "model_control_rejected"));
+        let reconciled = &evidence
+            .events
+            .iter()
+            .find(|(k, _)| k == "model_control_description_reconciled")
+            .unwrap()
+            .1;
+        assert_eq!(reconciled["observations"].as_array().unwrap().len(), 2);
+        assert!(!reconciled.to_string().contains("PRIVATE"));
+        let first_projection = evidence
+            .events
+            .iter()
+            .find(|(k, _)| k == "intent_updated")
+            .unwrap();
+        assert_eq!(first_projection.1["projection"]["goal"], "PRIVATE_GOAL_0");
+        let invokes: Vec<_> = evidence
+            .requests
+            .iter()
+            .filter(|(p, _)| p == "/invoke/stream")
+            .collect();
+        assert_eq!(invokes.len(), 2);
+        assert_eq!(
+            invokes[1].1["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "tool")
+                .count(),
+            3
+        );
+    }
+
+    // covers: BR-AG-STATE-002, BR-AG-OBS-001, BR-SYS-STATE-007
+    #[test]
+    fn fixed_runtime_correction_budget_is_cumulative_across_success_with_precise_rejections() {
+        let mut invalid = fixed_control("tool");
+        invalid["intent"]["ambiguity"] = serde_json::json!("blocking");
+        let bad = fixed_tool("list_docs", serde_json::json!({"_binderTurn":invalid}));
+        let success = fixed_tool(
+            "workspace_glob",
+            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+        );
+        let mut invalid = fixed_control("final");
+        invalid["intent"]["goal"] = serde_json::json!("PRIVATE_VALUE");
+        let bad_after_success = fixed_tool("list_docs", serde_json::json!({"_binderTurn":invalid}));
+        let mut conflicting = fixed_control("tool");
+        conflicting["PRIVATE_UNKNOWN_FIELD"] = serde_json::json!("PRIVATE_VALUE");
+        let final_batch = format!(
+            "event: tool_calls\ndata: {}\n\n",
+            serde_json::json!({"tool_calls":[
+                {"id":"last-first","name":"workspace_glob","arguments":serde_json::json!({"pattern":"*","_binderTurn":fixed_control("tool")}).to_string()},
+                {"id":"last-second","name":"workspace_glob","arguments":serde_json::json!({"pattern":"*","_binderTurn":conflicting}).to_string()}
+            ]})
+        );
+        let evidence = run_fixed_turn(true, vec![bad, success, bad_after_success, final_batch]);
+        assert_eq!(evidence.status, "error");
+        let rejections: Vec<_> = evidence
+            .events
+            .iter()
+            .filter(|(k, _)| k == "model_control_rejected")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(rejections.len(), 3);
+        for (index, reason) in [
+            "action_ambiguity_conflict",
+            "tool_action_required",
+            "schema_unknown_field",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(rejections[index]["correctionAttempt"], index + 1);
+            assert_eq!(
+                rejections[index]["protocolDiagnostic"]["reasonCode"],
+                *reason
+            );
+            assert!(!rejections[index].to_string().contains("PRIVATE"));
+        }
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(
+                    e.event,
+                    AgTurnEventPayload::ToolResult { success: true, .. }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            evidence
+                .requests
+                .iter()
+                .filter(|(p, _)| p == "/invoke/stream")
+                .count(),
+            4
+        );
+        assert!(evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Error {code,message,diagnostic,..} if code=="AG_MODEL_CORRECTION_LIMIT" && message.contains("控制封套拒绝") && diagnostic.as_ref().is_some_and(|d|d.category=="model_protocol"))));
     }
 
     // covers: BR-AG-STATE-002
@@ -2333,6 +3108,7 @@ mod tests {
         events: Vec<(String, serde_json::Value)>,
         requests: Vec<(String, serde_json::Value)>,
         safe_events: Vec<AgTurnEvent>,
+        workspace_files: Vec<String>,
     }
 
     struct FixedWorkspace(std::path::PathBuf);
@@ -2450,6 +3226,58 @@ mod tests {
         fault: Option<(usize, GateFixtureFault)>,
         prior_messages: Vec<(&str, String)>,
     ) -> RuntimeEvidence {
+        run_fixed_turn_with_policy(
+            allowed,
+            responses,
+            prompt,
+            v2_ready,
+            file_content,
+            cancel_on_gate,
+            fault,
+            prior_messages,
+            ag::tool_registry::ExecutionBudgetPolicy::legacy(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_fixed_turn_with_policy(
+        allowed: bool,
+        responses: Vec<String>,
+        prompt: &str,
+        v2_ready: Option<bool>,
+        file_content: &str,
+        cancel_on_gate: Option<usize>,
+        fault: Option<(usize, GateFixtureFault)>,
+        prior_messages: Vec<(&str, String)>,
+        policy: ag::tool_registry::ExecutionBudgetPolicy,
+    ) -> RuntimeEvidence {
+        run_fixed_turn_with_policy_and_files(
+            allowed,
+            responses,
+            prompt,
+            v2_ready,
+            file_content,
+            cancel_on_gate,
+            fault,
+            prior_messages,
+            policy,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_fixed_turn_with_policy_and_files(
+        allowed: bool,
+        responses: Vec<String>,
+        prompt: &str,
+        v2_ready: Option<bool>,
+        file_content: &str,
+        cancel_on_gate: Option<usize>,
+        fault: Option<(usize, GateFixtureFault)>,
+        prior_messages: Vec<(&str, String)>,
+        policy: ag::tool_registry::ExecutionBudgetPolicy,
+        extra_files: &[(&str, &str)],
+    ) -> RuntimeEvidence {
         use std::sync::{Arc, Mutex};
         use tauri::Manager;
         let root = std::env::temp_dir().join(format!("binder-fixed-turn-{}", uuid::Uuid::new_v4()));
@@ -2458,6 +3286,9 @@ mod tests {
         // 从真实目录取证，响应夹具中不提供这些结果。
         std::fs::write(root.join("unique-result.txt"), file_content).unwrap();
         std::fs::write(root.join("excluded.md"), "not a txt").unwrap();
+        for (path, content) in extra_files {
+            std::fs::write(root.join(path), content).unwrap();
+        }
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&mut conn).unwrap();
         let ws = workspace::lifecycle::open_workspace(&mut conn, root.to_str().unwrap()).unwrap();
@@ -2598,6 +3429,7 @@ mod tests {
                     | GateFixtureFault::AuthTimeout
             ))
         );
+        let execution = ag::tool_registry::with_verification_execution_policy(policy, execution);
         if timed {
             tauri::async_runtime::block_on(ent::gateway::with_test_gateway_deadline(
                 std::time::Duration::from_millis(200),
@@ -2608,12 +3440,8 @@ mod tests {
             tauri::async_runtime::block_on(execution).unwrap();
         }
         let state = app.state::<AppState>();
-        assert!(
-            state.active_agent_turns.lock().unwrap().is_empty(),
-            "finished turn must release active lease"
-        );
         let conn = state.db.lock().unwrap();
-        let status = conn
+        let status: String = conn
             .query_row(
                 "SELECT status FROM agent_turns WHERE turn_id='fixed-turn'",
                 [],
@@ -2627,6 +3455,26 @@ mod tests {
             super::super::turn_events::list_safe_events(&conn, &ws.workspace_id, "fixed-turn", 0)
                 .unwrap();
         let safe_events = projected.lock().unwrap().clone();
+        if status == "draft" || status == "clarifying" {
+            assert_eq!(
+                state.active_agent_turns.lock().unwrap().len(),
+                1,
+                "waiting turn must retain exactly one resumable lease"
+            );
+            assert!(
+                safe_events.iter().any(|event| matches!(
+                    event.event,
+                    AgTurnEventPayload::ClarificationRequired { .. }
+                        | AgTurnEventPayload::DecisionRequestProposed { .. }
+                )),
+                "retained lease must have a real waiting event"
+            );
+        } else {
+            assert!(
+                state.active_agent_turns.lock().unwrap().is_empty(),
+                "finished turn must release active lease"
+            );
+        }
         assert_eq!(
             serde_json::to_value(&replay).unwrap(),
             serde_json::to_value(&safe_events).unwrap()
@@ -2636,7 +3484,11 @@ mod tests {
                 .iter()
                 .filter(|event| event.event.terminal_status().is_some())
                 .count(),
-            1
+            if status == "draft" || status == "clarifying" {
+                0
+            } else {
+                1
+            }
         );
         assert_eq!(
             std::fs::read_to_string(root.join("unique-result.txt")).unwrap(),
@@ -2649,12 +3501,532 @@ mod tests {
             0
         );
         let requests = gateway.requests.lock().unwrap().clone();
+        let workspace_files = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         drop(conn);
         RuntimeEvidence {
             status,
             events,
             requests,
             safe_events,
+            workspace_files,
+        }
+    }
+
+    // covers: BR-AG-STATE-001
+    // covers: BR-AG-STATE-002
+    // covers: BR-AG-DATA-004
+    #[test]
+    fn fixed_runtime_action_handoff_corrects_before_prose_and_supports_explicit_stages() {
+        // Real core + temporary workspace/database + fixed HTTP transport. This
+        // replays the observed empty-create -> unframed reply -> corrected plan.
+        let create = |content: &str| {
+            let mut control = fixed_control("tool");
+            control["intent"]["intentType"] = serde_json::json!("organize_workspace");
+            control["intent"]["sideEffectIntent"] = serde_json::json!("structure_plan");
+            fixed_tool(
+                "plan_workspace_operation",
+                serde_json::json!({
+                    "operations":[{"kind":"create_document","targetPath":"empty.html","resourceKind":"file"}],
+                    "initialContent":content,
+                    "_binderTurn":control
+                }),
+            )
+        };
+        let unframed = format!(
+            "event: chunk\ndata: {}\n\nevent: done\ndata: {{\"stop_reason\":\"stop\"}}\n\n",
+            serde_json::json!({"text":"UNFRAMED_FAILURE_EXPLANATION"})
+        );
+        let evidence = run_fixed_turn_with_prompt(true, vec![
+            create(""), unframed,
+            create("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body></body></html>"),
+        ], "新建一个空HTML文档empty.html，先生成确认卡，不要自动确认、接受或保存");
+        assert_eq!(evidence.status, "draft");
+        assert!(
+            !evidence
+                .workspace_files
+                .iter()
+                .any(|path| path == "empty.html"),
+            "preparing a confirmation must not create the HTML file"
+        );
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    AgTurnEventPayload::DecisionRequestProposed { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(!evidence.safe_events.iter().any(|event| matches!(
+            event.event,
+            AgTurnEventPayload::Done { .. } | AgTurnEventPayload::Error { .. }
+        )));
+        assert!(!serde_json::to_string(&evidence.safe_events)
+            .unwrap()
+            .contains("UNFRAMED_FAILURE_EXPLANATION"));
+        let failed = evidence
+            .safe_events
+            .iter()
+            .find_map(|event| match &event.event {
+                AgTurnEventPayload::ToolResult {
+                    success: false,
+                    execution_receipt,
+                    ..
+                } => execution_receipt.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        let receipt = serde_json::to_value(failed).unwrap();
+        assert_eq!(receipt["executionStatus"], "rejected");
+        assert_eq!(receipt["completionStatus"], "blocked");
+        assert_eq!(receipt["effectStatus"], "not_started");
+        assert_eq!(receipt["failure"]["code"], "AG_TOOL_ARG");
+        assert_eq!(receipt["failure"]["retriable"], true);
+        let waiting = evidence
+            .safe_events
+            .iter()
+            .find_map(|event| match &event.event {
+                AgTurnEventPayload::ToolResult {
+                    success: true,
+                    execution_receipt,
+                    ..
+                } => execution_receipt.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        let waiting = serde_json::to_value(waiting).unwrap();
+        assert_eq!(waiting["completionStatus"], "waiting");
+        assert_eq!(waiting["effectStatus"], "not_started");
+        let rejection = &evidence
+            .events
+            .iter()
+            .find(|(kind, _)| kind == "tool_parameter_contract_rejected")
+            .unwrap()
+            .1;
+        assert_eq!(
+            rejection["parameterDiagnostic"]["fieldPath"],
+            "initialContent"
+        );
+        assert_eq!(rejection["correctionAttempt"], 1);
+        let missing = &evidence
+            .events
+            .iter()
+            .find(|(kind, _)| kind == "model_control_rejected")
+            .unwrap()
+            .1;
+        assert_eq!(missing["code"], "AG_MODEL_CONTROL_MISSING");
+        assert_eq!(missing["correctionAttempt"], 1);
+        let requests = evidence
+            .requests
+            .iter()
+            .filter(|(path, _)| path == "/invoke/stream")
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 3);
+        for (_, request) in &requests {
+            assert!(request["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["function"]["name"] == "plan_workspace_operation"));
+            assert!(request["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["function"]["name"] != ag::model_output::TOOL_BATCH_NAME));
+        }
+        let feedback = requests[1].1["messages"].to_string();
+        assert!(
+            feedback.contains("initialContent") && feedback.contains("non_blank_frozen_content")
+        );
+        assert!(feedback.contains("requiresNewToolCallId"));
+
+        let capped = run_fixed_turn_with_prompt(
+            true,
+            vec![create(""), create(" \n"), create("")],
+            "新建empty.html，先给确认卡",
+        );
+        assert_eq!(capped.status, "error");
+        assert!(!capped
+            .workspace_files
+            .iter()
+            .any(|path| path == "empty.html"));
+        assert!(capped.safe_events.iter().any(|event| matches!(&event.event,
+            AgTurnEventPayload::Error { code, .. } if code == "AG_MODEL_CORRECTION_LIMIT")));
+        assert!(!capped.safe_events.iter().any(|event| matches!(
+            event.event,
+            AgTurnEventPayload::DecisionRequestProposed { .. }
+        )));
+        assert_eq!(
+            capped
+                .events
+                .iter()
+                .filter(|(kind, _)| kind == "tool_parameter_contract_rejected")
+                .count(),
+            3
+        );
+
+        let mut incomplete = fixed_control("final");
+        incomplete["intent"]["sideEffectIntent"] = serde_json::json!("structure_plan");
+        let mut clarify = incomplete.clone();
+        clarify["nextAction"] = serde_json::json!("clarify");
+        clarify["intent"]["ambiguity"] = serde_json::json!("blocking");
+        clarify["clarificationQuestion"] = serde_json::json!("请指定源文件");
+        let evidence = run_fixed_turn(
+            true,
+            vec![
+                fixed_text(incomplete.clone(), "UNDELIVERED_PLAN_PROMISE"),
+                fixed_text(clarify, "请指定源文件"),
+            ],
+        );
+        assert_eq!(evidence.status, "draft"); // 等待是非终态，前端由事件投影 clarifying。
+        assert!(evidence
+            .safe_events
+            .iter()
+            .any(|e| matches!(e.event, AgTurnEventPayload::ClarificationRequired { .. })));
+        assert!(!serde_json::to_string(&evidence.safe_events)
+            .unwrap()
+            .contains("UNDELIVERED_PLAN_PROMISE"));
+        assert_eq!(
+            evidence
+                .events
+                .iter()
+                .filter(|(k, _)| k == "model_control_rejected")
+                .count(),
+            1
+        );
+        assert_eq!(
+            evidence
+                .requests
+                .iter()
+                .filter(|(p, _)| p == "/invoke/stream")
+                .count(),
+            2
+        );
+        for status in ["report_only", "blocked", "no_op", "partial"] {
+            let mut control = incomplete.clone();
+            control["completion"] =
+                serde_json::json!({"status":status,"reason":"本阶段未执行操作，不是确认等待"});
+            let evidence = run_fixed_turn(
+                true,
+                vec![fixed_text(control, "当前阶段报告，未进行修改。")],
+            );
+            assert_eq!(evidence.status, "completed");
+            assert!(evidence.safe_events.iter().any(|e| matches!(&e.event, AgTurnEventPayload::Done { stop_reason } if stop_reason == status)));
+            assert!(!evidence.safe_events.iter().any(|e| matches!(
+                e.event,
+                AgTurnEventPayload::ToolRequest { .. }
+                    | AgTurnEventPayload::DecisionRequestProposed { .. }
+            )));
+        }
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn fixed_runtime_explicit_empty_txt_reaches_one_real_decision_without_creating_file() {
+        let mut control = fixed_control("tool");
+        control["intent"]["intentType"] = serde_json::json!("organize_workspace");
+        control["intent"]["sideEffectIntent"] = serde_json::json!("structure_plan");
+        let evidence = run_fixed_turn_with_prompt(
+            true,
+            vec![fixed_tool(
+                "plan_workspace_operation",
+                serde_json::json!({
+                    "operations":[{"kind":"create_document","targetPath":"story.txt","resourceKind":"file"}],
+                    "createEmpty":true,
+                    "_binderTurn":control
+                }),
+            )],
+            "创建零字节 TXT 文件 story.txt；只生成确认卡，不自动确认",
+        );
+        assert_eq!(evidence.status, "draft");
+        assert!(!evidence
+            .workspace_files
+            .iter()
+            .any(|path| path == "story.txt"));
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    AgTurnEventPayload::DecisionRequestProposed { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(evidence
+            .safe_events
+            .iter()
+            .any(|event| matches!(&event.event,
+            AgTurnEventPayload::ToolResult { success: true, execution_receipt: Some(receipt), .. }
+                if serde_json::to_value(receipt).unwrap()["completionStatus"] == "waiting")));
+        assert!(!evidence.safe_events.iter().any(|event| matches!(
+            event.event,
+            AgTurnEventPayload::Done { .. }
+                | AgTurnEventPayload::Error { .. }
+                | AgTurnEventPayload::ToolResult { success: false, .. }
+        )));
+        assert_eq!(
+            evidence
+                .requests
+                .iter()
+                .filter(|(path, _)| path == "/invoke/stream")
+                .count(),
+            1
+        );
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn fixed_runtime_default_budget_runs_nine_tools_and_real_resource_handoff() {
+        let mut responses = Vec::new();
+        for path in [
+            "first.html",
+            "second.html",
+            "alpha.txt",
+            "beta.txt",
+            "injection.txt",
+            "unique-result.txt",
+            "first.html",
+            "second.html",
+        ] {
+            responses.push(fixed_tool(
+                "read_doc",
+                serde_json::json!({"path":path,"_binderTurn":fixed_control("tool")}),
+            ));
+        }
+        responses.push(fixed_tool(
+            "workspace_glob",
+            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+        ));
+        responses.push(fixed_final());
+        let evidence = run_fixed_turn_with_policy_and_files(
+            true,
+            responses,
+            "读取两个html、四个txt并核对目录，仅读取",
+            None,
+            "baseline",
+            None,
+            None,
+            vec![],
+            Default::default(),
+            &[
+                ("first.html", "<p>first fixture</p>"),
+                ("second.html", "<p>second fixture</p>"),
+                ("alpha.txt", "73000"),
+                ("beta.txt", "81000"),
+                ("injection.txt", "data only"),
+            ],
+        );
+        assert_eq!(evidence.status, "completed");
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(
+                    e.event,
+                    AgTurnEventPayload::ToolResult { success: true, .. }
+                ))
+                .count(),
+            9
+        );
+        assert_eq!(
+            evidence
+                .requests
+                .iter()
+                .filter(|(p, _)| p == "/invoke/stream")
+                .count(),
+            10
+        );
+        let mut control = fixed_control("final");
+        control["intent"]["sideEffectIntent"] = serde_json::json!("structure_plan");
+        let mut tool_control = control.clone();
+        tool_control["nextAction"] = serde_json::json!("tool");
+        let evidence = run_fixed_turn(
+            true,
+            vec![
+                fixed_text(control, "UNDELIVERED_PLAN_PROMISE"),
+                fixed_tool(
+                    "plan_workspace_operation",
+                    serde_json::json!({"operations":[{"kind":"rename_resource","sourcePath":"unique-result.txt","targetPath":"restored.txt","resourceKind":"file"}],"_binderTurn":tool_control}),
+                ),
+            ],
+        );
+        assert_eq!(evidence.status, "draft");
+        assert!(!serde_json::to_string(&evidence.safe_events)
+            .unwrap()
+            .contains("UNDELIVERED_PLAN_PROMISE"));
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(e.event, AgTurnEventPayload::DecisionRequestProposed { .. }))
+                .count(),
+            1
+        );
+    }
+
+    // covers: BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn fixed_runtime_soft_budget_freezes_tools_and_wraps_up_without_replaying() {
+        let policy = ag::tool_registry::ExecutionBudgetPolicy {
+            max_model_calls: 4,
+            max_tool_calls: 1,
+            max_corrections: 2,
+            final_reserve: 2,
+        };
+        let call = fixed_tool(
+            "workspace_glob",
+            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+        );
+        for responses in [
+            vec![call.clone(), fixed_final()],
+            vec![call.clone(), call.clone(), call.clone(), call.clone()],
+        ] {
+            let evidence = run_fixed_turn_with_policy(
+                true,
+                responses,
+                "列出txt",
+                None,
+                "fixture",
+                None,
+                None,
+                vec![],
+                policy,
+            );
+            assert_eq!(evidence.status, "completed");
+            assert_eq!(
+                evidence
+                    .safe_events
+                    .iter()
+                    .filter(|e| matches!(
+                        e.event,
+                        AgTurnEventPayload::ToolResult { success: true, .. }
+                    ))
+                    .count(),
+                1
+            );
+            assert!(evidence.safe_events.iter().any(|e| matches!(&e.event,AgTurnEventPayload::Done {stop_reason} if stop_reason=="budget_exhausted")));
+            let invokes: Vec<_> = evidence
+                .requests
+                .iter()
+                .filter(|(p, _)| p == "/invoke/stream")
+                .collect();
+            assert!(invokes.len() <= 4);
+            for (_, request) in &invokes[1..] {
+                assert!(request["tools"].as_array().unwrap().is_empty());
+            }
+            assert_eq!(
+                evidence
+                    .events
+                    .iter()
+                    .filter(|(k, _)| k == "execution_budget_frozen")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    // covers: BR-AG-STATE-001, BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn fixed_runtime_soft_budget_batch_cap_and_gate_cancel_are_not_success_fallbacks() {
+        let policy = ag::tool_registry::ExecutionBudgetPolicy {
+            max_model_calls: 4,
+            max_tool_calls: 1,
+            max_corrections: 2,
+            final_reserve: 2,
+        };
+        let arguments =
+            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}).to_string();
+        let batch = format!(
+            "event: tool_calls\ndata: {}\n\n",
+            serde_json::json!({"tool_calls":[
+                {"id":"batch-first","name":"workspace_glob","arguments":arguments},
+                {"id":"batch-second","name":"workspace_glob","arguments":arguments}
+            ]})
+        );
+        let evidence = run_fixed_turn_with_policy(
+            true,
+            vec![batch, fixed_final()],
+            "枚举txt",
+            None,
+            "fixture",
+            None,
+            None,
+            vec![],
+            policy,
+        );
+        assert_eq!(evidence.status, "completed");
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(
+                    e.event,
+                    AgTurnEventPayload::ToolResult { success: true, .. }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            evidence
+                .safe_events
+                .iter()
+                .filter(|e| matches!(
+                    e.event,
+                    AgTurnEventPayload::ToolResult { success: false, .. }
+                ))
+                .count(),
+            1
+        );
+        let requests: Vec<_> = evidence
+            .requests
+            .iter()
+            .filter(|(p, _)| p == "/invoke/stream")
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].1["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "tool")
+                .count(),
+            2
+        );
+        for cancelled in [false, true] {
+            let evidence = run_fixed_turn_with_policy(
+                true,
+                vec![fixed_tool(
+                    "workspace_glob",
+                    serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+                )],
+                "枚举txt",
+                None,
+                "fixture",
+                cancelled.then_some(2),
+                (!cancelled).then_some((2, GateFixtureFault::HeadersTimeout)),
+                vec![],
+                policy,
+            );
+            assert_eq!(
+                evidence.status,
+                if cancelled { "cancelled" } else { "error" }
+            );
+            assert!(!evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Done {stop_reason} if stop_reason=="budget_exhausted")));
+            assert_eq!(
+                evidence
+                    .requests
+                    .iter()
+                    .filter(|(p, _)| p == "/invoke/stream")
+                    .count(),
+                1
+            );
         }
     }
 
@@ -2682,6 +4054,22 @@ mod tests {
             .filter(|(path, _)| path == "/invoke/stream")
             .collect::<Vec<_>>();
         assert_eq!(invokes.len(), 2);
+        let exposed_names = invokes[0].1["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(exposed_names.contains(&"workspace_glob"));
+        assert!(!exposed_names.contains(&ag::model_output::TOOL_BATCH_NAME));
+        assert!(invokes[0].1["messages"]
+            .to_string()
+            .contains("后续独立只读工具可省略 _binderTurn"));
+        assert!(evidence.events.iter().any(|(kind, payload)| {
+            kind == "tool_transport_observed"
+                && payload["protocolVersion"] == ag::model_output::DIRECT_TOOL_PROTOCOL
+                && payload["businessCallCount"] == 1
+        }));
         let budgets = evidence
             .events
             .iter()
@@ -2889,7 +4277,12 @@ mod tests {
     // covers: BR-AG-STATE-001
     #[test]
     fn fixed_runtime_budget_denial_stops_before_first_or_next_model_call() {
-        let initial = run_fixed_turn_with_prompt(true, vec![], &"PRIVATE_INPUT".repeat(12000));
+        // Exceed the mandatory input alone; schema deduplication must not invalidate this fixture.
+        let initial = run_fixed_turn_with_prompt(
+            true,
+            vec![],
+            &"PRIVATE_INPUT".repeat(PROMPT_INPUT_LIMIT * 4 / "PRIVATE_INPUT".len() + 1),
+        );
         assert_eq!(initial.status, "error");
         assert!(!initial
             .requests
@@ -3246,11 +4639,10 @@ mod tests {
             assert!(core.contains("CapabilityGrant"));
             let runtime = messages[1]["content"].as_str().unwrap();
             assert!(runtime.contains("capabilityInstructions"));
-            let edit_allowed = request["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|tool| tool["function"]["name"].as_str() == Some("propose_edit"));
+            let edit_allowed = super::super::turn_tool_loop::tool_is_visible_in_manifest(
+                &request["tools"],
+                "propose_edit",
+            );
             assert_eq!(runtime.contains("block_ops"), edit_allowed);
         }
     }
@@ -3287,6 +4679,12 @@ mod tests {
             .filter(|(p, _)| p == "/invoke/stream")
             .collect::<Vec<_>>();
         assert_eq!(invokes.len(), 2);
+        for (_, request) in &invokes {
+            assert_eq!(
+                request["max_tokens"],
+                ag::prompt_runtime::CONTINUATION_RESERVE_TOKENS
+            );
+        }
         assert!(!invokes[1].1.to_string().contains("PRIVATE_HUGE_BODY"));
         assert!(invokes[1].1.to_string().contains("未返回截断正文"));
         for (kind, payload) in &evidence.events {
@@ -3295,7 +4693,10 @@ mod tests {
             }
             if kind == "prompt_budget_checked" {
                 assert_eq!(payload["exceeded"], false);
-                assert_eq!(payload["continuationReserveTokens"], 4096);
+                assert_eq!(
+                    payload["continuationReserveTokens"],
+                    ag::prompt_runtime::CONTINUATION_RESERVE_TOKENS
+                );
                 assert_eq!(
                     payload["totalTokenLimit"],
                     ag::prompt_runtime::PROMPT_TOKEN_BUDGET
@@ -3445,6 +4846,66 @@ mod tests {
                 .iter()
                 .any(|(kind, _)| kind == "tool_request"));
         }
+    }
+
+    // covers: BR-AG-STATE-001
+    // covers: BR-AG-STATE-002
+    #[test]
+    fn fixed_runtime_text_tool_action_cannot_execute_and_correction_uses_native_channel() {
+        let malformed = format!(
+            "event: chunk\ndata: {}\n\nevent: done\ndata: {{\"stop_reason\":\"stop\"}}\n\n",
+            serde_json::json!({"text":format!(
+                "<binder-turn-control>{}</｜｜DSML｜｜ parameter>",
+                fixed_control("tool")
+            )})
+        );
+        let native = fixed_tool(
+            "workspace_glob",
+            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
+        );
+        let recovered = run_fixed_turn(true, vec![malformed.clone(), native, fixed_final()]);
+        assert_eq!(recovered.status, "completed");
+        let requests = recovered
+            .requests
+            .iter()
+            .filter(|(path, _)| path == "/invoke/stream")
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].1["messages"]
+            .to_string()
+            .contains("没有原生工具调用"));
+        let rejections = recovered
+            .events
+            .iter()
+            .filter(|(kind, _)| kind == "model_control_rejected")
+            .collect::<Vec<_>>();
+        assert_eq!(rejections.len(), 1);
+        assert_eq!(rejections[0].1["code"], "AG_MODEL_CONTROL_INCOMPLETE");
+        assert_eq!(rejections[0].1["responseRejectionKind"], "text_tool_action");
+        assert_eq!(
+            recovered
+                .events
+                .iter()
+                .filter(|(kind, _)| kind == "tool_request")
+                .count(),
+            1,
+            "only the later native call may reach tool execution"
+        );
+        assert!(!serde_json::to_string(&recovered.safe_events)
+            .unwrap()
+            .contains("DSML"));
+
+        let exhausted = run_fixed_turn(true, vec![malformed.clone(), malformed.clone(), malformed]);
+        assert_eq!(exhausted.status, "error");
+        assert!(exhausted
+            .safe_events
+            .iter()
+            .any(|event| matches!(&event.event,
+            AgTurnEventPayload::Error { code, .. } if code == "AG_MODEL_CORRECTION_LIMIT")));
+        assert!(!exhausted
+            .events
+            .iter()
+            .any(|(kind, _)| kind == "tool_request"));
     }
 
     fn history(workspace_id: &str, session_id: &str) -> ag::context::HistTurn {

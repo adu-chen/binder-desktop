@@ -481,6 +481,7 @@ pub enum WorkspaceOperationStatus {
     WaitingConfirm,
     Revalidating,
     Executing,
+    AwaitingContent,
     Compensating,
     Completed,
     Rejected,

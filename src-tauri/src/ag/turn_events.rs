@@ -36,6 +36,21 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
         "deduplicatedCount",
         "gateAttempt",
         "remainingToolCalls",
+        "maxModelCalls",
+        "maxToolCalls",
+        "maxCorrections",
+        "finalReserve",
+        "remainingModelCalls",
+        "budgetClosing",
+        "protocolDiagnostic",
+        "reasonCode",
+        "fieldPath",
+        "controlSource",
+        "canonicalSource",
+        "toolIndex",
+        "descriptionFields",
+        "controlFields",
+        "observations",
         "grantId",
         "computedAtSeq",
         "allowedToolCount",
@@ -82,6 +97,15 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
         "prefixKind",
         "rejectionStage",
         "protocolVersion",
+        "businessCallCount",
+        "taskOutcome",
+        "executionFrozen",
+        "succeededTools",
+        "unsuccessfulTools",
+        "unsettledEffects",
+        "unknownEffects",
+        "replySource",
+        "failureCode",
         "finalOnly",
         "providerCompletionSeen",
         "hasExpectedHash",
@@ -94,6 +118,14 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
         "requestedBlockCount",
         "requestedReadOffset",
         "requestedLimitChars",
+        "requestedMaxTokens",
+        "roundDeadlineMs",
+        "streamIdleDeadlineMs",
+        "promptTokens",
+        "completionTokens",
+        "totalTokens",
+        "reasoningTokens",
+        "jsonValid",
         "requestedDirectoryLimit",
         "returnedBlockCount",
         "readOffset",
@@ -109,6 +141,24 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
         "historyOriginalChars",
         "historyIncludedChars",
         "historyAllowanceChars",
+        "clientBuildId",
+        "gatewayBuildId",
+        "gatewayBuildPresent",
+        "textUtf8Bytes",
+        "textSha256",
+        "contentChunkCount",
+        "contentBasis",
+        "upstreamProofPresent",
+        "upstreamProofMatches",
+        "argumentsUtf8Bytes",
+        "argumentsSha256",
+        "jsonErrorLine",
+        "jsonErrorColumn",
+        "answerStructureWarning",
+        "planStatus",
+        "operationStatus",
+        "saveVerified",
+        "readBackVerified",
     ] {
         if let Some(value) = payload.get(key) {
             match value {
@@ -117,9 +167,38 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
                 }
                 Value::String(text)
                     if text.len() <= 160
-                        && text
+                        && (text
                             .bytes()
-                            .all(|ch| ch.is_ascii_alphanumeric() || b"_:-.".contains(&ch)) =>
+                            .all(|ch| ch.is_ascii_alphanumeric() || b"_:-.".contains(&ch))
+                            || (key == "fieldPath"
+                                && matches!(
+                                    text.as_str(),
+                                    "$control"
+                                        | "$arguments"
+                                        | "$control.arrays"
+                                        | "$batch"
+                                        | "calls[]"
+                                        | "calls[].toolName"
+                                        | "calls[].params"
+                                        | "control.intent.targetCandidates[]"
+                                        | "control.intent.targetCandidates[].kind"
+                                        | "control.intent.targetCandidates[].relPath"
+                                        | "control.intent.requiredContext[]"
+                                        | "control.intent.confirmationPoints[]"
+                                        | "control.route.steps[]"
+                                        | "control.findings[]"
+                                        | "control.findings[].statement"
+                                        | "control.findings[].evidenceIds"
+                                        | "control.findings[].evidenceIds[]"
+                                        | "control.findings[].uncertainty"
+                                ))
+                            || (matches!(key, "controlSource" | "canonicalSource")
+                                && text
+                                    .strip_prefix("tool[")
+                                    .and_then(|s| s.strip_suffix(']'))
+                                    .is_some_and(|s| {
+                                        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+                                    }))) =>
                 {
                     metadata.insert(key.into(), value.clone());
                 }
@@ -128,12 +207,30 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
         }
     }
     if include_containers {
+        if let Some(diagnostic) = payload.get("parameterDiagnostic") {
+            let field = diagnostic["fieldPath"].as_str();
+            let constraint = diagnostic["constraint"].as_str();
+            if matches!(
+                (field, constraint),
+                (Some("initialContent"), Some("non_blank_frozen_content"))
+                    | (Some("operations"), Some("single_create_document"))
+            ) {
+                metadata.insert(
+                    "parameterDiagnostic".into(),
+                    serde_json::json!({
+                        "fieldPath":field,"constraint":constraint
+                    }),
+                );
+            }
+        }
         for key in [
             "projection",
             "diagnostic",
             "executionReceipt",
             "identity",
             "measurement",
+            "protocolDiagnostic",
+            "usage",
         ] {
             if let Some(value) = payload.get(key).filter(|value| value.is_object()) {
                 // Read only fixed-depth metadata; never clone or traverse content-bearing objects.
@@ -147,6 +244,21 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
                     }
                 }
                 metadata.insert(key.into(), projected);
+            }
+        }
+        for key in ["observations", "pendingToolArguments"] {
+            if let Some(items) = payload.get(key).and_then(Value::as_array) {
+                metadata.insert(
+                    key.into(),
+                    Value::Array(
+                        items
+                            .iter()
+                            .take(16)
+                            .map(|item| audit_metadata_level(item, false))
+                            .collect(),
+                    ),
+                );
+                metadata.insert(format!("{key}Count"), Value::from(items.len()));
             }
         }
     }
@@ -190,6 +302,55 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         metadata.insert("messageLayers".into(), Value::Object(counts));
+    }
+    // Observation entries use the same fixed field-name allowlist as top-level records.
+    if let Some(fields) = payload.get("descriptionFields").and_then(Value::as_array) {
+        metadata.insert(
+            "descriptionFields".into(),
+            Value::Array(
+                fields
+                    .iter()
+                    .filter(|v| {
+                        matches!(
+                            v.as_str(),
+                            Some("intent.goal" | "route.summary" | "route.steps")
+                        )
+                    })
+                    .cloned()
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(fields) = payload.get("controlFields").and_then(Value::as_array) {
+        metadata.insert(
+            "controlFields".into(),
+            Value::Array(
+                fields
+                    .iter()
+                    .filter(|v| {
+                        matches!(
+                            v.as_str(),
+                            Some(
+                                "version"
+                                    | "nextAction"
+                                    | "intent.goal"
+                                    | "intent.intentType"
+                                    | "intent.targetCandidates"
+                                    | "intent.sideEffectIntent"
+                                    | "intent.ambiguity"
+                                    | "intent.requiredContext"
+                                    | "intent.confirmationPoints"
+                                    | "route.summary"
+                                    | "route.steps"
+                                    | "clarificationQuestion"
+                                    | "findings"
+                            )
+                        )
+                    })
+                    .cloned()
+                    .collect(),
+            ),
+        );
     }
     Value::Object(metadata)
 }
@@ -327,6 +488,187 @@ pub(super) struct TurnEventEmitter<'a> {
 }
 
 impl<'a> TurnEventEmitter<'a> {
+    fn failure_summary(
+        &self,
+        latch: &ag::turn::TerminalLatch,
+        error: &IpcError,
+    ) -> Result<(), IpcError> {
+        if latch.is_set() {
+            return Ok(());
+        }
+        let baseline = {
+            let conn = self
+                .state
+                .db
+                .lock()
+                .map_err(|_| event_db_error("database lock poisoned"))?;
+            let live: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM agent_turns WHERE turn_id=?1 AND status='draft')",
+                    [self.turn_id],
+                    |row| row.get(0),
+                )
+                .map_err(event_db_error)?;
+            if !live {
+                return Ok(());
+            }
+            let (succeeded, rejected): (u64,u64) = conn.query_row(
+                "SELECT COALESCE(SUM(json_extract(payload_json,'$.success')=1),0),COALESCE(SUM(json_extract(payload_json,'$.success')=0),0) FROM agent_turn_events WHERE turn_id=?1 AND kind='tool_result'",
+                [self.turn_id], |row| Ok((row.get(0)?,row.get(1)?))).map_err(event_db_error)?;
+            let mut stmt = conn.prepare("SELECT plan_id,COALESCE(json_extract(outcome_json,'$.final_status'),status) FROM workspace_operation_plans WHERE source_turn_id=?1 ORDER BY created_at LIMIT 32").map_err(event_db_error)?;
+            let operations = stmt.query_map([self.turn_id], |row| Ok(serde_json::json!({"planId":row.get::<_,String>(0)?,"status":row.get::<_,String>(1)?}))).map_err(event_db_error)?
+                .collect::<rusqlite::Result<Vec<_>>>().map_err(event_db_error)?;
+            let (workspace, session): (String, String) = conn
+                .query_row(
+                    "SELECT workspace_id,session_id FROM agent_turns WHERE turn_id=?1",
+                    [self.turn_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(event_db_error)?;
+            let facts =
+                super::capability_runtime::facts(&conn, &workspace, Some((&session, self.turn_id)))
+                    .map_err(event_db_error)?;
+            let unsettled = facts
+                .iter()
+                .filter(|fact| {
+                    fact.phase == crate::types::CapabilityExecutionPhase::Started
+                        && !facts.iter().any(|settled| {
+                            settled.phase == crate::types::CapabilityExecutionPhase::Settled
+                                && settled.identity == fact.identity
+                        })
+                })
+                .count();
+            let unknown = facts
+                .iter()
+                .filter(|fact| {
+                    fact.receipt.as_ref().is_some_and(|receipt| {
+                        receipt.effect_status == crate::types::ToolCallEffectStatus::Unknown
+                    })
+                })
+                .count();
+            serde_json::json!({"version":"interaction-result-v1","turnId":self.turn_id,"taskOutcome":"failed","executionFrozen":true,
+                "succeededTools":succeeded,"unsuccessfulTools":rejected,"operations":operations,"unsettledEffects":unsettled,"unknownEffects":unknown,"replySource":"core","failureCode":error.code})
+        };
+        self.record_internal("interaction_result", baseline.clone())?;
+        let operations = baseline["operations"]
+            .as_array()
+            .expect("constructed array");
+        let operation_text = if operations.is_empty() {
+            "未登记资源操作计划；这不证明所有在途操作均无效果。".to_string()
+        } else {
+            format!(
+                "资源操作当前结果：{}。",
+                operations
+                    .iter()
+                    .map(|p| format!(
+                        "{}：{}",
+                        p["planId"].as_str().unwrap_or("?"),
+                        p["status"].as_str().unwrap_or("unknown")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("；")
+            )
+        };
+        self.emit(latch, AgTurnEventPayload::Chunk { text: format!("\n\n本次任务未完成，已停止启动后续操作。原因：[{}] {}\n已有 {} 项工具成功回执，{} 项失败或受阻回执；成功调用不等于业务目标完成。{}尚有 {} 项执行未结算、{} 项效果未知，不能据此认定没有修改；迟到结果以执行记录为准。系统没有自动重放操作。请先核对或恢复受影响对象，再明确提出后续请求。",
+            error.code,error.message,baseline["succeededTools"],baseline["unsuccessfulTools"],operation_text,baseline["unsettledEffects"],baseline["unknownEffects"]) })?;
+        Ok(())
+    }
+    pub(super) fn has_workspace_plan_receipt(&self) -> Result<bool, IpcError> {
+        let conn = self
+            .state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法核对计划回执", true, false))?;
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM agent_turn_events WHERE turn_id=?1 AND kind='tool_result' AND json_extract(payload_json,'$.toolName')='plan_workspace_operation' AND json_extract(payload_json,'$.success')=1)", [self.turn_id], |row| row.get(0)).map_err(event_db_error)
+    }
+    pub(super) fn execution_policy(
+        &self,
+    ) -> Result<ag::tool_registry::ExecutionBudgetPolicy, IpcError> {
+        let conn = self
+            .state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取冻结执行策略", true, false))?;
+        let saved: Option<String> = conn.query_row(
+            "SELECT payload_json FROM agent_turn_events WHERE turn_id=?1 AND kind='execution_budget_frozen' ORDER BY seq LIMIT 1",
+            [self.turn_id], |row| row.get(0),
+        ).optional().map_err(event_db_error)?;
+        let policy = match saved {
+            Some(saved) => serde_json::from_str(&saved).map_err(event_db_error)?,
+            None => ag::tool_registry::configured_execution_policy(),
+        };
+        if !policy.valid() {
+            return Err(IpcError::new(
+                "AG_EXECUTION_POLICY_INVALID",
+                "冻结执行策略无效，未执行",
+                false,
+                false,
+            ));
+        }
+        Ok(policy)
+    }
+
+    pub(super) fn freeze_execution_policy(&self) -> Result<(), IpcError> {
+        let policy = self.execution_policy()?;
+        let exists = {
+            let conn = self
+                .state
+                .db
+                .lock()
+                .map_err(|_| IpcError::new("WS_DB_BUSY", "无法核验执行策略", true, false))?;
+            conn.query_row("SELECT COUNT(*) FROM agent_turn_events WHERE turn_id=?1 AND kind='execution_budget_frozen'", [self.turn_id], |row| row.get::<_, i64>(0)).map_err(event_db_error)? > 0
+        };
+        if !exists {
+            let policy = if self.protocol_attempt_counts()?.0 > 0 {
+                ag::tool_registry::ExecutionBudgetPolicy::legacy()
+            } else {
+                policy
+            };
+            self.record_internal(
+                "execution_budget_frozen",
+                serde_json::to_value(policy).map_err(event_db_error)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn frozen_transport_protocol(&self) -> Result<Option<String>, IpcError> {
+        let conn = self
+            .state
+            .db
+            .lock()
+            .map_err(|_| event_db_error("database lock poisoned"))?;
+        let version: Option<String>=conn.query_row("SELECT json_extract(payload_json,'$.protocolVersion') FROM agent_turn_events WHERE turn_id=?1 AND kind='transport_protocol_frozen' ORDER BY seq LIMIT 1",[self.turn_id],|row|row.get(0)).optional().map_err(event_db_error)?;
+        if version.as_deref().is_some_and(|version| {
+            !matches!(
+                version,
+                "native-business-tool-v1" | "binder-tool-batch-v1" | "legacy-tool-control-v1"
+            )
+        }) {
+            return Err(IpcError::new(
+                "AG_MODEL_PROTOCOL_VERSION_UNSUPPORTED",
+                "原回合协议版本不受支持；未自动迁移或重放",
+                false,
+                false,
+            ));
+        }
+        Ok(version)
+    }
+
+    pub(super) fn freeze_transport_protocol(&self) -> Result<(), IpcError> {
+        if self.frozen_transport_protocol()?.is_none() {
+            let version = if self.protocol_attempt_counts()?.0 == 0 {
+                "native-business-tool-v1"
+            } else {
+                "legacy-tool-control-v1"
+            };
+            self.record_internal(
+                "transport_protocol_frozen",
+                serde_json::json!({"protocolVersion":version}),
+            )?;
+        }
+        Ok(())
+    }
     /// Recover budgets from actual invocation/rejection facts, including text-only rounds and
     /// attempts before a clarification/decision checkpoint. No prompt or response text is read.
     pub(super) fn protocol_attempt_counts(&self) -> Result<(usize, usize), IpcError> {
@@ -338,6 +680,24 @@ impl<'a> TurnEventEmitter<'a> {
         conn.query_row(
             "SELECT COALESCE(SUM(kind='provider_started'),0), \
              COALESCE(SUM(kind IN ('model_control_rejected','tool_parameter_contract_rejected')),0) \
+             FROM agent_turn_events WHERE turn_id=?1",
+            [self.turn_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(event_db_error)
+    }
+
+    /// Persisted per-category correction counts survive decision and clarification resumes.
+    /// A recoverable parameter mistake must not consume the separate control-envelope budget.
+    pub(super) fn correction_attempt_breakdown(&self) -> Result<(usize, usize), IpcError> {
+        let conn = self
+            .state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取回合纠错预算", true, false))?;
+        conn.query_row(
+            "SELECT COALESCE(SUM(kind='model_control_rejected'),0), \
+             COALESCE(SUM(kind='tool_parameter_contract_rejected'),0) \
              FROM agent_turn_events WHERE turn_id=?1",
             [self.turn_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -379,6 +739,7 @@ impl<'a> TurnEventEmitter<'a> {
         reason: &str,
         measurement: &ag::context::PromptBudgetMeasurement,
         sources: Value,
+        capacity: ag::prompt_runtime::ModelCapacity,
     ) -> Result<(), IpcError> {
         let mut conn = self
             .state
@@ -393,13 +754,13 @@ impl<'a> TurnEventEmitter<'a> {
             "SELECT COUNT(*) + 1 FROM agent_turn_events WHERE turn_id=?1 AND kind='provider_started'",
             [self.turn_id], |row| row.get(0),
         ).map_err(event_db_error)?;
-        let limit = ag::prompt_runtime::PROMPT_INPUT_LIMIT;
+        let limit = capacity.input_tokens();
         let payload = serde_json::json!({
             "assemblyOrdinal": ordinal, "nextModelCallOrdinal": next_model_call, "assemblyReason": reason,
             "estimator": "ceil_serialized_unicode_chars_div_4",
-            "configVersion": format!("prompt-budget-v3-total{}-reserve{}", ag::prompt_runtime::PROMPT_TOKEN_BUDGET, ag::prompt_runtime::CONTINUATION_RESERVE_TOKENS),
-            "totalTokenLimit": ag::prompt_runtime::PROMPT_TOKEN_BUDGET,
-            "continuationReserveTokens": ag::prompt_runtime::CONTINUATION_RESERVE_TOKENS,
+            "configVersion": format!("prompt-budget-v5-total{}-reserve{}", capacity.total_tokens, capacity.output_tokens),
+            "totalTokenLimit": capacity.total_tokens,
+            "continuationReserveTokens": capacity.output_tokens,
             "tokenLimit": limit, "measurement": measurement,
             "remainingInputTokens": limit.saturating_sub(measurement.estimated_tokens),
             "exceeded": measurement.estimated_tokens > limit,
@@ -495,13 +856,9 @@ impl<'a> TurnEventEmitter<'a> {
         let Some(appended) = appended else {
             return Ok(None);
         };
+        // Parked callbacks have no live Channel; the committed event is delivered by afterSeq.
         let Some(channel) = self.channel else {
-            return Err(IpcError::new(
-                "AG_TURN_CHANNEL_REQUIRED",
-                "非终态回合事件缺少 Channel 投影目标",
-                false,
-                false,
-            ));
+            return Ok(Some(appended));
         };
         if let Err(error) = channel.send(AgTurnEvent {
             event_id: appended.event_id.clone(),
@@ -885,6 +1242,125 @@ pub(super) fn persist_parked_ag_turn_cancelled<R: tauri::Runtime>(
     Ok(emitted)
 }
 
+/** @GOV
+ * codes: BR-AG-STATE-001-EFFECT-AG-AG-TURN-069, BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-069
+ * type: EFFECT
+ * chain: AG-TURN, WS-OPERATION
+ * rules: BR-AG-STATE-001, BR-AG-PERSIST-001
+ * term_ref: TERM-AG-001, TERM-WS-004
+ * boundary: in=FailedWorkspaceOperationPlanAndOriginalAgentTurnIdentity | out=PersistedFailureSummaryAndSingleErrorTerminal | does_not=ReplayResourceOperationOrOverwriteExistingTerminal
+ */
+pub(crate) fn finish_failed_operation(
+    state: &AppState,
+    plan_id: &str,
+    error: &IpcError,
+) -> Result<(), IpcError> {
+    finish_parked_operation(state, plan_id, error, false)
+}
+
+pub(crate) fn finish_rejected_operation(state: &AppState, plan_id: &str) -> Result<(), IpcError> {
+    finish_parked_operation(
+        state,
+        plan_id,
+        &IpcError::new(
+            "WS_INITIAL_CONTENT_REJECTED",
+            "初始内容已拒绝；同组后续操作不会执行，资源效果请核对逐项回执",
+            false,
+            false,
+        ),
+        true,
+    )
+}
+
+fn finish_parked_operation(
+    state: &AppState,
+    plan_id: &str,
+    error: &IpcError,
+    rejected: bool,
+) -> Result<(), IpcError> {
+    let owner = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| event_db_error("database lock poisoned"))?;
+        conn.query_row("SELECT t.turn_id,t.session_id,p.task_run_id FROM workspace_operation_plans p JOIN agent_turns t ON t.turn_id=p.source_turn_id AND t.task_run_id=p.task_run_id AND t.workspace_id=p.workspace_id WHERE p.plan_id=?1 AND t.status='draft'", [plan_id],
+            |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?))).optional().map_err(event_db_error)?
+    };
+    let Some((turn, session, run)) = owner else {
+        return Ok(());
+    };
+    terminal_transition(
+        ag::turn::TurnState::AwaitingDecision,
+        if rejected {
+            ag::turn::TurnEvent::Cancel
+        } else {
+            ag::turn::TurnEvent::OperationFailed
+        },
+        if rejected {
+            ag::turn::TurnState::Cancelled
+        } else {
+            ag::turn::TurnState::TurnError
+        },
+    )
+    .ok_or_else(sm_error)?;
+    let emitter = TurnEventEmitter::without_channel(state, &turn);
+    let latch = ag::turn::TerminalLatch::default();
+    emitter.record_internal("operation_post_processing_failed", serde_json::json!({"planId":plan_id,"code":error.code,"observedAt":"operation_post_processing"}))?;
+    if rejected {
+        emitter.emit(&latch,AgTurnEventPayload::Chunk{text:"\n\n已拒绝初始内容，当前任务已取消，同组后续资源操作不会执行。只补偿基线仍匹配的本次创建；已有文件及实际效果请以逐项执行回执为准。系统没有自动重放。".into()})?;
+    } else {
+        emitter.failure_summary(&latch, error)?;
+    }
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| event_db_error("database lock poisoned"))?;
+        let settled_status = ag::task::settle_turn(
+            &conn,
+            &run,
+            if rejected {
+                ag::task::TurnOutcome::Cancelled
+            } else {
+                ag::task::TurnOutcome::Failed
+            },
+        )
+        .map_err(event_db_error)?;
+        ag::task::record_projection_fact(
+            &conn,
+            &turn,
+            "task_status_observed",
+            serde_json::json!({"taskRunId":run,"status":settled_status}),
+        )
+        .map_err(event_db_error)?;
+    }
+    let terminal = if rejected {
+        AgTurnEventPayload::Done {
+            stop_reason: "cancelled".into(),
+        }
+    } else {
+        AgTurnEventPayload::Error {
+            code: error.code.clone(),
+            message: error.message.clone(),
+            retriable: false,
+            diagnostic: Some(AgentFailureDiagnostic::observed(
+                "operation_post_processing",
+                &error.code,
+            )),
+        }
+    };
+    emitter.emit_terminal(
+        &latch,
+        if rejected {
+            ag::turn::TerminalKind::Cancelled
+        } else {
+            ag::turn::TerminalKind::Error
+        },
+        terminal,
+    )?;
+    super::turn_control::release_failed_parked_turn(state, &session, &turn)
+}
+
 pub(super) fn emit_ag_turn_denied<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
@@ -964,6 +1440,12 @@ pub(super) fn emit_ag_turn_error_from<R: tauri::Runtime>(
     else {
         return false;
     };
+    if let Err(summary_error) = emitter.failure_summary(latch, error) {
+        eprintln!(
+            "[ag-trace] turn_id={turn_id} failure_summary_unavailable={}",
+            summary_error.code
+        );
+    }
     let emitted = emitter
         .emit_terminal(
             latch,
@@ -1079,6 +1561,197 @@ mod tests {
         conn
     }
 
+    // covers: BR-AG-OBS-001
+    #[test]
+    fn protocol_diagnostics_and_reconciliation_log_only_fixed_fields() {
+        let payload = serde_json::json!({"protocolDiagnostic":{"reasonCode":"schema_enum_invalid","fieldPath":"$control","controlSource":"tool[1]","toolIndex":1,"raw":"PRIVATE_VALUE"},
+            "observations":[{"canonicalSource":"text","controlSource":"tool[2]","toolIndex":2,"descriptionFields":["intent.goal","route.summary","PRIVATE_KEY"],"controlFields":["intent.requiredContext","intent.sideEffectIntent","PRIVATE_KEY"],"content":"PRIVATE_BODY"}]});
+        let safe = audit_metadata(&payload);
+        assert_eq!(safe["protocolDiagnostic"]["fieldPath"], "$control");
+        assert_eq!(safe["protocolDiagnostic"]["controlSource"], "tool[1]");
+        for path in [
+            "$batch",
+            "calls[]",
+            "calls[].params",
+            "control.intent.targetCandidates[].kind",
+            "control.route.steps[]",
+        ] {
+            let safe = audit_metadata(
+                &serde_json::json!({"protocolDiagnostic":{"fieldPath":path,"reasonCode":"schema_type_invalid","raw":"PRIVATE"}}),
+            );
+            assert_eq!(safe["protocolDiagnostic"]["fieldPath"], path);
+            assert!(!safe.to_string().contains("PRIVATE"));
+        }
+        let unsafe_path = audit_metadata(
+            &serde_json::json!({"protocolDiagnostic":{"fieldPath":"calls[].PRIVATE_KEY"}}),
+        );
+        assert!(unsafe_path["protocolDiagnostic"].get("fieldPath").is_none());
+        assert_eq!(
+            safe["observations"][0]["descriptionFields"],
+            serde_json::json!(["intent.goal", "route.summary"])
+        );
+        assert_eq!(
+            safe["observations"][0]["controlFields"],
+            serde_json::json!(["intent.requiredContext", "intent.sideEffectIntent"])
+        );
+        assert!(!safe.to_string().contains("PRIVATE"));
+        let parameter = audit_metadata(&serde_json::json!({"parameterDiagnostic":{
+            "fieldPath":"initialContent","constraint":"non_blank_frozen_content","raw":"PRIVATE_BODY"
+        }}));
+        assert_eq!(
+            parameter["parameterDiagnostic"]["fieldPath"],
+            "initialContent"
+        );
+        assert_eq!(
+            parameter["parameterDiagnostic"]["constraint"],
+            "non_blank_frozen_content"
+        );
+        assert!(!parameter.to_string().contains("PRIVATE"));
+        assert!(audit_metadata(&serde_json::json!({"parameterDiagnostic":{
+            "fieldPath":"initialContent","constraint":"PRIVATE"
+        }}))
+        .get("parameterDiagnostic")
+        .is_none());
+    }
+
+    // covers: BR-AG-STATE-001, BR-AG-STATE-002, BR-SYS-STATE-007
+    #[test]
+    fn execution_policy_and_attempts_survive_recreation_and_configuration_change() {
+        let state = AppState {
+            db: Arc::new(Mutex::new(fresh_turn())),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let policy = ag::tool_registry::ExecutionBudgetPolicy {
+            max_model_calls: 4,
+            max_tool_calls: 3,
+            max_corrections: 1,
+            final_reserve: 1,
+        };
+        tauri::async_runtime::block_on(ag::tool_registry::with_verification_execution_policy(
+            policy,
+            async {
+                let emitter = TurnEventEmitter::without_channel(&state, "t1");
+                emitter.freeze_execution_policy().unwrap();
+                emitter.freeze_transport_protocol().unwrap();
+                emitter
+                    .record_internal("provider_started", serde_json::json!({"roundIndex":1}))
+                    .unwrap();
+                emitter
+                    .record_internal(
+                        "model_control_rejected",
+                        serde_json::json!({"code":"AG_MODEL_CONTROL_INVALID"}),
+                    )
+                    .unwrap();
+            },
+        ));
+        let emitter = TurnEventEmitter::without_channel(&state, "t1");
+        assert_eq!(
+            ag::tool_registry::configured_execution_policy(),
+            Default::default()
+        );
+        emitter.freeze_execution_policy().unwrap();
+        emitter.freeze_transport_protocol().unwrap();
+        assert_eq!(
+            emitter.frozen_transport_protocol().unwrap().as_deref(),
+            Some("native-business-tool-v1")
+        );
+        assert_eq!(emitter.execution_policy().unwrap(), policy);
+        assert_eq!(emitter.protocol_attempt_counts().unwrap(), (1, 1));
+        assert_eq!(
+            state
+                .db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_turn_events WHERE kind='transport_protocol_frozen'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            state
+                .db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_turn_events WHERE kind='execution_budget_frozen'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let legacy = AppState {
+            db: Arc::new(Mutex::new(fresh_turn())),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let old = TurnEventEmitter::without_channel(&legacy, "t1");
+        old.record_internal("provider_started", serde_json::json!({"roundIndex":1}))
+            .unwrap();
+        old.freeze_transport_protocol().unwrap();
+        assert_eq!(
+            old.frozen_transport_protocol().unwrap().as_deref(),
+            Some("legacy-tool-control-v1")
+        );
+        let unsupported = AppState {
+            db: Arc::new(Mutex::new(fresh_turn())),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let unknown = TurnEventEmitter::without_channel(&unsupported, "t1");
+        unknown
+            .record_internal(
+                "transport_protocol_frozen",
+                serde_json::json!({"protocolVersion":"unsupported"}),
+            )
+            .unwrap();
+        assert_eq!(
+            unknown.freeze_transport_protocol().unwrap_err().code,
+            "AG_MODEL_PROTOCOL_VERSION_UNSUPPORTED"
+        );
+    }
+
+    // covers: BR-AG-STATE-001, BR-AG-DATA-004
+    #[test]
+    fn historical_batch_transport_is_not_migrated_when_turn_resumes() {
+        let state = AppState {
+            db: Arc::new(Mutex::new(fresh_turn())),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let emitter = TurnEventEmitter::without_channel(&state, "t1");
+        emitter
+            .record_internal(
+                "transport_protocol_frozen",
+                serde_json::json!({"protocolVersion": ag::model_output::BATCH_TOOL_PROTOCOL}),
+            )
+            .unwrap();
+        emitter.freeze_transport_protocol().unwrap();
+        assert_eq!(
+            emitter.frozen_transport_protocol().unwrap().as_deref(),
+            Some(ag::model_output::BATCH_TOOL_PROTOCOL)
+        );
+        let frozen_count: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM agent_turn_events WHERE turn_id='t1' AND kind='transport_protocol_frozen'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(frozen_count, 1);
+    }
+
     // covers: BR-AG-STATE-001, BR-SYS-STATE-007, BR-AG-PERSIST-001
     // covers: BR-AG-DATA-005
     #[test]
@@ -1104,7 +1777,12 @@ mod tests {
         {
             let emitter = TurnEventEmitter::without_channel(&state, "t1");
             emitter
-                .record_prompt_budget(reason, &measurement, serde_json::json!([]))
+                .record_prompt_budget(
+                    reason,
+                    &measurement,
+                    serde_json::json!([]),
+                    ag::prompt_runtime::model_capacity("deepseek", "deepseek-chat"),
+                )
                 .unwrap();
             let payload: String = state.db.lock().unwrap().query_row(
                 "SELECT payload_json FROM agent_turn_events WHERE kind='prompt_budget_checked' ORDER BY seq DESC LIMIT 1", [], |r| r.get(0)).unwrap();
@@ -1120,6 +1798,16 @@ mod tests {
                 measurement.estimated_tokens
             );
             assert_eq!(audit["assemblyReason"], reason);
+            let service_limits = audit_metadata(&serde_json::json!({
+                "requestedMaxTokens": 16384,
+                "roundDeadlineMs": 1200000,
+                "streamIdleDeadlineMs": 90000,
+                "rawPrompt": "PRIVATE",
+            }));
+            assert_eq!(service_limits["requestedMaxTokens"], 16384);
+            assert_eq!(service_limits["roundDeadlineMs"], 1200000);
+            assert_eq!(service_limits["streamIdleDeadlineMs"], 90000);
+            assert!(!service_limits.to_string().contains("PRIVATE"));
             let sensitive = serde_json::json!({
                 "text":"PRIVATE", "message":"PRIVATE", "content":"PRIVATE", "params":{"path":"PRIVATE"},
                 "projection":{"goal":"PRIVATE", "intentType":"inspect", "targetCandidates":["PRIVATE"]},
@@ -1182,7 +1870,12 @@ mod tests {
         .unwrap();
         drop(conn);
         assert!(TurnEventEmitter::without_channel(&state, "t1")
-            .record_prompt_budget("initial", &measurement, serde_json::json!([]))
+            .record_prompt_budget(
+                "initial",
+                &measurement,
+                serde_json::json!([]),
+                ag::prompt_runtime::model_capacity("deepseek", "deepseek-chat")
+            )
             .is_err());
     }
 

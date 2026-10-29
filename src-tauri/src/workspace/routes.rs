@@ -436,6 +436,146 @@ mod command_param_tests {
             "AG_DECISION_ALREADY_RESOLVED"
         );
     }
+
+    // covers: BR-WS-STATE-003
+    // covers: BR-WS-DATA-003
+    // covers: BR-WS-OBS-002
+    #[test]
+    fn explicit_empty_txt_plan_waits_for_confirmation_then_creates_zero_bytes() {
+        let root = std::env::temp_dir().join(format!("binder-empty-txt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::migrate(&mut conn).unwrap();
+        conn.execute("INSERT INTO workspaces(workspace_id,root_path,is_active,opened_at) VALUES ('ws',?1,1,0)", [root.to_string_lossy().as_ref()]).unwrap();
+        ag::history::ensure_session(&conn, "ws", "s", "empty txt", "edit", 0, true).unwrap();
+        let task = ag::task::begin_turn(&conn, "ws", "s", None).unwrap();
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let plan_request = |name: &str, extra: serde_json::Value| {
+            let mut params = serde_json::json!({
+                "taskRunId": task,
+                "operations": [{"kind":"create_document","targetPath":name,"resourceKind":"file"}],
+                "createEmpty": true,
+            });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            CommandRequest {
+                command: "ws.plan_operation".into(),
+                correlation_id: format!("empty-{name}"),
+                params,
+            }
+        };
+        let invalid = plan_request("not-empty.html", serde_json::json!({}));
+        assert_eq!(
+            route_plan_workspace_operation(&invalid, &state)
+                .unwrap_err()
+                .code,
+            "WS_EMPTY_TXT_CREATE_INVALID"
+        );
+        let with_content = plan_request(
+            "with-content.txt",
+            serde_json::json!({"initialContent":"x"}),
+        );
+        assert_eq!(
+            route_plan_workspace_operation(&with_content, &state)
+                .unwrap_err()
+                .code,
+            "WS_EMPTY_TXT_CREATE_INVALID"
+        );
+        let planned = route_plan_workspace_operation(
+            &plan_request("empty.txt", serde_json::json!({})),
+            &state,
+        )
+        .unwrap();
+        assert!(!root.join("empty.txt").exists());
+        assert!(planned["plan"]["initial_content_ref"].is_null());
+        let detail = planned["decision_request"]["payload"]["detail"]
+            .as_str()
+            .unwrap();
+        assert!(detail.contains("零字节 TXT"));
+        assert!(!detail.contains("仍需审阅与保存"));
+        let plan_id = planned["plan"]["plan_id"].as_str().unwrap();
+        let request_id = planned["decision_request"]["request_id"].as_str().unwrap();
+        {
+            let conn = state.db.lock().unwrap();
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM create_document_bundles", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+                0
+            );
+            ag::task::resolve_decision(&conn, request_id, "confirm").unwrap();
+        }
+        let receipt = route_execute_workspace_operation(
+            &CommandRequest {
+                command: "ws.execute_operation".into(),
+                correlation_id: "execute-empty".into(),
+                params: serde_json::json!({"planId": plan_id, "requestId": request_id}),
+            },
+            &state,
+        )
+        .unwrap();
+        assert_eq!(receipt["final_status"], "completed");
+        assert_eq!(std::fs::metadata(root.join("empty.txt")).unwrap().len(), 0);
+        assert!(std::fs::read(root.join("empty.txt")).unwrap().is_empty());
+        drop(state);
+        std::fs::remove_file(root.join("empty.txt")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    // covers: BR-WS-STATE-003
+    // covers: BR-WS-DATA-003
+    #[test]
+    fn cancelled_empty_txt_decision_leaves_no_file() {
+        let root =
+            std::env::temp_dir().join(format!("binder-empty-txt-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::migrate(&mut conn).unwrap();
+        conn.execute("INSERT INTO workspaces(workspace_id,root_path,is_active,opened_at) VALUES ('ws',?1,1,0)", [root.to_string_lossy().as_ref()]).unwrap();
+        ag::history::ensure_session(&conn, "ws", "s", "empty txt", "edit", 0, true).unwrap();
+        let task = ag::task::begin_turn(&conn, "ws", "s", None).unwrap();
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            registry: build_registry(),
+            assist_terminals: Arc::new(Mutex::new(HashMap::new())),
+            active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let planned = route_plan_workspace_operation(&CommandRequest {
+            command: "ws.plan_operation".into(),
+            correlation_id: "empty-cancel".into(),
+            params: serde_json::json!({
+                "taskRunId":task,
+                "operations":[{"kind":"create_document","targetPath":"cancel.txt","resourceKind":"file"}],
+                "createEmpty":true,
+            }),
+        }, &state).unwrap();
+        let plan_id = planned["plan"]["plan_id"].as_str().unwrap();
+        let request_id = planned["decision_request"]["request_id"].as_str().unwrap();
+        {
+            let conn = state.db.lock().unwrap();
+            ag::task::resolve_decision(&conn, request_id, "cancel").unwrap();
+        }
+        route_cancel_workspace_operation(
+            &CommandRequest {
+                command: "ws.cancel_operation".into(),
+                correlation_id: "cancel-empty".into(),
+                params: serde_json::json!({"planId":plan_id,"requestId":request_id}),
+            },
+            &state,
+        )
+        .unwrap();
+        assert!(!root.join("cancel.txt").exists());
+        drop(state);
+        std::fs::remove_dir(root).unwrap();
+    }
 }
 
 /// 取可选 u64 参数；baseline 允许字符串形态，避免 JS number 精度损失。
@@ -1392,6 +1532,29 @@ pub(crate) fn plan_workspace_operation_with_prepare(
                 false,
             )
         })?;
+    let empty_txt_create = if request.params.get("createEmpty").is_some() {
+        let valid = request.params.get("createEmpty") == Some(&serde_json::Value::Bool(true))
+            && initial_content.is_none()
+            && supplied_initial_content_ref.is_none()
+            && intents.len() == 1
+            && intents[0].kind == crate::types::WorkspaceOperationKind::CreateDocument
+            && intents[0].resource_kind == Some(crate::types::WorkspaceResourceKind::File)
+            && intents[0]
+                .target_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with(".txt"));
+        if !valid {
+            return Err(IpcError::new(
+                "WS_EMPTY_TXT_CREATE_INVALID",
+                "createEmpty 仅用于单独创建零字节 TXT，且不得包含初始内容",
+                false,
+                false,
+            ));
+        }
+        true
+    } else {
+        false
+    };
     // sourceTurnId is also an audit correlation for non-Agent UI routes (e.g. Timeline).
     // Only an actual persisted AgentTurn carries turn authority; do not infer it from a prefix.
     let initial_task: Option<(String, String)> = {
@@ -1582,7 +1745,11 @@ pub(crate) fn plan_workspace_operation_with_prepare(
         serde_json::json!({
             "workspaceOperationPlanId": plan.plan_id,
             "summary": format!("确认执行 {} 项工作区资源操作", plan.operation_items.len()),
-            "detail": "确认后系统将重新核验目标；核验通过后直接修改磁盘，不会再生成资源 DiffCard。",
+            "detail": if empty_txt_create {
+                "确认前不创建文件。确认后系统将重新核验目标，并直接创建零字节 TXT 文件；没有初始内容建议，也不需要后续内容保存。"
+            } else if plan.initial_content_ref.is_some() {
+                "确认后先创建资源并展示初始内容建议；接受不等于保存。请保存新文件后，系统才会重验并执行同组后续操作；保存前不会删除旧资源。"
+            } else { "确认后系统将重新核验目标；核验通过后直接修改磁盘。新建文档的初始内容仍需审阅与保存。" },
             "operations": operation_summary,
             "consequences": plan.consequences,
             "failurePolicy": plan.compensation_policy,
@@ -1743,19 +1910,15 @@ pub(crate) fn route_project_create_document_bundle(
             false,
         ));
     }
-    if let Some(diff_id) = bundle.initial_diff_id.as_deref() {
-        return Ok(serde_json::json!({
-            "bundle": bundle,
-            "diff_id": diff_id,
-            "already_projected": true,
-        }));
-    }
     let plan = workspace::operation::load_plan(&conn, &plan_id)
         .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
         .ok_or_else(|| {
             IpcError::new("WS_OPERATION_NOT_FOUND", "资源操作计划不存在", false, false)
         })?;
-    if plan.status != WorkspaceOperationStatus::Completed {
+    if !matches!(
+        plan.status,
+        WorkspaceOperationStatus::Completed | WorkspaceOperationStatus::AwaitingContent
+    ) {
         return Err(IpcError::new(
             "WS_CREATE_BUNDLE_OPERATION_INCOMPLETE",
             "只有已完成的创建资源操作可以投影初始内容",
@@ -1787,6 +1950,40 @@ pub(crate) fn route_project_create_document_bundle(
             false,
         )
     })?;
+    let owner_matches: bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM agent_turns t JOIN task_runs r ON r.task_run_id=t.task_run_id WHERE t.turn_id=?1 AND t.workspace_id=?2 AND t.session_id=?3 AND t.status='draft' AND r.task_run_id=?4 AND r.workspace_id=?2 AND r.session_id=?3 AND r.status IN ('waiting','active','executing'))",
+        rusqlite::params![source_turn_id,ws.workspace_id,session_id,task_run_id],|row|row.get(0))
+        .map_err(|e|IpcError::new("AG_TASK_DB_ERROR",&e.to_string(),true,false))?;
+    if !owner_matches {
+        return Err(IpcError::new(
+            "WS_CREATE_BUNDLE_IDENTITY_MISMATCH",
+            "初始内容投影不属于当前活动的原回合与会话",
+            false,
+            false,
+        ));
+    }
+    ag::turn_control::validate_agent_turn_decision_resume(
+        state,
+        &session_id,
+        source_turn_id,
+        plan.decision_request_id.as_deref().unwrap_or(""),
+    )?;
+    if let Some(diff_id) = bundle.initial_diff_id.as_deref() {
+        return Ok(serde_json::json!({"bundle":bundle,"diff_id":diff_id,"already_projected":true}));
+    }
+    let persisted_snapshot: Option<String>=conn.query_row("SELECT content FROM ed_session_snapshots WHERE workspace_id=?1 AND rel_path=?2 AND session_version=?3 AND content_hash=?4",
+        rusqlite::params![ws.workspace_id,rel_path,base_session_version,base_content_hash],|row|row.get(0)).optional()
+        .map_err(|e|IpcError::new("ED_SESSION_SNAPSHOT_INVALID",&e.to_string(),true,false))?;
+    let snapshot_matches = persisted_snapshot.is_some_and(|snapshot| {
+        crate::doc::image_media::decode_snapshot_content(&snapshot).0 == before_snapshot
+    });
+    if !snapshot_matches {
+        return Err(IpcError::new(
+            "WS_CREATE_BUNDLE_BASELINE_ADVANCED",
+            "编辑器基线已变化，未投影初始内容",
+            false,
+            false,
+        ));
+    }
     let initial_content: String =
         workspace::operation::load_payload(&conn, &bundle.initial_content_ref)
             .map_err(|error| {
@@ -1885,25 +2082,35 @@ pub(crate) fn route_project_create_document_bundle(
     let updated_bundle = match projection_write {
         Ok(bundle) => bundle,
         Err(projection_error) => {
-            match workspace::operation::compensate_create_document_projection_failure(
+            let compensation = workspace::operation::compensate_create_document_projection_failure(
                 &conn,
                 &ws,
                 &plan_id,
                 base_session_version,
                 &base_content_hash,
-            ) {
+            );
+            eprintln!(
+                "[workspace-operation] {}",
+                serde_json::json!({"event":"initial_projection_failed","plan_id":plan_id,"root_code":projection_error.code,"phase":"initial_projection","compensated":compensation.is_ok()})
+            );
+            match compensation {
                 Ok(entry) => {
-                    let _ =
-                        ag::task::settle_turn(&conn, task_run_id, ag::task::TurnOutcome::Failed);
-                    return Ok(serde_json::json!({
+                    let response = serde_json::json!({
                         "bundle": workspace::operation::load_create_document_bundle(&conn, &plan_id)
                             .ok().flatten(),
                         "projection_failed_compensated": true,
                         "workspace_timeline_entry_id": entry.entry_id,
                         "error": projection_error,
-                    }));
+                    });
+                    drop(conn);
+                    ag::turn_events::finish_failed_operation(state, &plan_id, &projection_error)?;
+                    return Ok(response);
                 }
-                Err(compensation_error) => return Err(compensation_error),
+                Err(compensation_error) => {
+                    drop(conn);
+                    ag::turn_events::finish_failed_operation(state, &plan_id, &compensation_error)?;
+                    return Err(compensation_error);
+                }
             }
         }
     };
@@ -1948,7 +2155,14 @@ pub(crate) fn route_compensate_create_document_open_failure(
     let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
     let conn = lock_db(state)?;
     let entry =
-        workspace::operation::compensate_create_document_open_failure(&conn, &ws, &plan_id)?;
+        match workspace::operation::compensate_create_document_open_failure(&conn, &ws, &plan_id) {
+            Ok(entry) => entry,
+            Err(error) => {
+                drop(conn);
+                ag::turn_events::finish_failed_operation(state, &plan_id, &error)?;
+                return Err(error);
+            }
+        };
     if let Some(plan) = workspace::operation::load_plan(&conn, &plan_id)
         .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
     {
@@ -1956,7 +2170,19 @@ pub(crate) fn route_compensate_create_document_open_failure(
             let _ = ag::task::settle_turn(&conn, task_run_id, ag::task::TurnOutcome::Failed);
         }
     }
-    ws_json(&entry)
+    let response = ws_json(&entry)?;
+    drop(conn);
+    ag::turn_events::finish_failed_operation(
+        state,
+        &plan_id,
+        &IpcError::new(
+            "ED_CREATE_BUNDLE_OPEN_FAILED_COMPENSATED",
+            "新文件打开失败，已补偿本次创建；其他效果以操作组回执为准",
+            false,
+            false,
+        ),
+    )?;
+    Ok(response)
 }
 
 pub(crate) fn route_compensate_create_document_projection_preflight_failure(
@@ -1966,9 +2192,16 @@ pub(crate) fn route_compensate_create_document_projection_preflight_failure(
     let ws = active_ws(state)?;
     let plan_id = str_param(request, "planId", "WS_OPERATION_PLAN_ID_REQUIRED")?;
     let conn = lock_db(state)?;
-    let entry = workspace::operation::compensate_create_document_projection_preflight_failure(
+    let entry = match workspace::operation::compensate_create_document_projection_preflight_failure(
         &conn, &ws, &plan_id,
-    )?;
+    ) {
+        Ok(entry) => entry,
+        Err(error) => {
+            drop(conn);
+            ag::turn_events::finish_failed_operation(state, &plan_id, &error)?;
+            return Err(error);
+        }
+    };
     if let Some(plan) = workspace::operation::load_plan(&conn, &plan_id)
         .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
     {
@@ -1976,7 +2209,19 @@ pub(crate) fn route_compensate_create_document_projection_preflight_failure(
             let _ = ag::task::settle_turn(&conn, task_run_id, ag::task::TurnOutcome::Failed);
         }
     }
-    ws_json(&entry)
+    let response = ws_json(&entry)?;
+    drop(conn);
+    ag::turn_events::finish_failed_operation(
+        state,
+        &plan_id,
+        &IpcError::new(
+            "WS_CREATE_BUNDLE_PROJECTION_FAILED_COMPENSATED",
+            "初始内容投影失败，已补偿本次创建；其他效果以操作组回执为准",
+            false,
+            false,
+        ),
+    )?;
+    Ok(response)
 }
 
 pub(crate) fn route_compensate_create_document_preview_failure(
@@ -2010,13 +2255,20 @@ pub(crate) fn route_compensate_create_document_preview_failure(
     else {
         return Ok(serde_json::json!({ "compensated": false, "not_create_bundle": true }));
     };
-    let entry = workspace::operation::compensate_create_document_projection_failure(
+    let entry = match workspace::operation::compensate_create_document_projection_failure(
         &conn,
         &ws,
         &bundle.plan_id,
         logical_session_version,
         &logical_content_hash,
-    )?;
+    ) {
+        Ok(entry) => entry,
+        Err(error) => {
+            drop(conn);
+            ag::turn_events::finish_failed_operation(state, &bundle.plan_id, &error)?;
+            return Err(error);
+        }
+    };
     if let Some(plan) = workspace::operation::load_plan(&conn, &bundle.plan_id)
         .map_err(|error| IpcError::new("WS_OPERATION_DB_ERROR", &error.to_string(), true, false))?
     {
@@ -2024,8 +2276,20 @@ pub(crate) fn route_compensate_create_document_preview_failure(
             let _ = ag::task::settle_turn(&conn, task_run_id, ag::task::TurnOutcome::Failed);
         }
     }
-    Ok(serde_json::json!({
+    let response = serde_json::json!({
         "compensated": true,
         "workspace_timeline_entry_id": entry.entry_id,
-    }))
+    });
+    drop(conn);
+    ag::turn_events::finish_failed_operation(
+        state,
+        &bundle.plan_id,
+        &IpcError::new(
+            "WS_CREATE_BUNDLE_PREVIEW_FAILED_COMPENSATED",
+            "初始内容预览失败，已补偿创建；实际效果以逐项回执为准",
+            false,
+            false,
+        ),
+    )?;
+    Ok(response)
 }

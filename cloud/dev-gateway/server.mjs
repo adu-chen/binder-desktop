@@ -6,6 +6,8 @@
 
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { PROVIDERS, sse, streamProvider } from './providers.mjs';
 import { login } from './auth.mjs';
 import { checkGate } from './gate.mjs';
@@ -13,9 +15,14 @@ import { setByokKey, getByokKey, listByokProviders, deleteByokKey } from './byok
 import { recordUsage } from './usage.mjs';
 
 const PORT = Number(process.env.GW_PORT) || 8787;
+// Frozen at process start: editing files without restarting cannot claim a new build.
+const GATEWAY_BUILD = createHash('sha256')
+  .update(readFileSync(new URL('./server.mjs', import.meta.url)))
+  .update(readFileSync(new URL('./providers.mjs', import.meta.url))).digest('hex');
 
 // 预设模型清单（dev；TERM-AG-010 正式版由云端运营配置经 GET /models 下发，桌面端仅消费）。
 const PRESET_MODELS = [
+  { provider: 'deepseek', model: 'deepseek-flash', label: 'DeepSeek Flash', source: 'preset' },
   { provider: 'deepseek', model: 'deepseek-chat', label: 'DeepSeek Chat', source: 'preset' },
   { provider: 'deepseek', model: 'deepseek-reasoner', label: 'DeepSeek Reasoner', source: 'preset' },
   { provider: 'openai', model: 'gpt-4o-mini', label: 'GPT-4o mini', source: 'preset' },
@@ -58,7 +65,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/health') {
-    return json(res, 200, { ok: true, dev: true, providers: Object.keys(PROVIDERS) });
+    return json(res, 200, { ok: true, dev: true, providers: Object.keys(PROVIDERS), gatewayBuild: GATEWAY_BUILD });
   }
 
   // AUTH：登录签发会话令牌（dev 最小）。
@@ -172,8 +179,12 @@ const server = createServer(async (req, res) => {
       trace('request_rejected', { reason: 'invalid_request_shape' });
       return json(res, 400, { error: 'require { model, messages[] }' });
     }
+    if (body.max_tokens != null && (!Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1)) {
+      trace('request_rejected', { reason: 'invalid_output_limit' });
+      return json(res, 400, { error: 'max_tokens must be a positive safe integer' });
+    }
 
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Binder-Gateway-Build': GATEWAY_BUILD });
     res.flushHeaders();
     trace('response_headers_sent');
     try {
@@ -189,8 +200,20 @@ const server = createServer(async (req, res) => {
       if (abortController.signal.aborted) {
         trace('upstream_cancelled');
       } else {
-        trace('upstream_failed', { errorName: traceHeader(e?.name) || 'Error' });
-        sse(res, 'error', { code: 'GW_STREAM_ERR', message: String(e?.message || e), retriable: true });
+        // The provider adapter records the read/processing boundary. Keep only
+        // machine-safe codes here; arbitrary error messages may contain content.
+        const safeCode = (value) => typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : null;
+        trace('upstream_failed', {
+          errorName: traceHeader(e?.name) || 'Error',
+          errorCode: safeCode(e?.code),
+          causeCode: safeCode(e?.cause?.code),
+        });
+        const protocolError = e?.code === 'GW_PROVIDER_PROTOCOL';
+        sse(res, 'error', {
+          code: protocolError ? 'GW_PROVIDER_PROTOCOL' : 'GW_STREAM_ERR',
+          message: protocolError ? '上游模型响应格式无效，本次响应不能继续使用。' : '上游模型流异常结束，本次响应不完整。',
+          retriable: true,
+        });
       }
     }
     if (!res.destroyed && !res.writableEnded) res.end();
@@ -202,6 +225,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(
-    `[dev-gateway] http://localhost:${PORT} — providers: ${Object.keys(PROVIDERS).join(', ')} | 模块: providers/auth/gate/lic/byok/db(sqlite)/kms(信封)`,
+    `[dev-gateway] http://localhost:${PORT} build=${GATEWAY_BUILD} — providers: ${Object.keys(PROVIDERS).join(', ')} | 模块: providers/auth/gate/lic/byok/db(sqlite)/kms(信封)`,
   );
 });

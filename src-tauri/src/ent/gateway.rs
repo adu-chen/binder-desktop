@@ -182,8 +182,14 @@ const GATE_REQUEST_DEADLINE: std::time::Duration = std::time::Duration::from_sec
 const ASSIST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
 // A long but active reasoning stream must not be confused with a stalled connection. The
 // idle deadline is refreshed by content-free progress frames; the whole round remains bounded.
-const MODEL_ROUND_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
-const MODEL_STREAM_IDLE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
+fn model_deadlines(provider: &str, model: &str) -> (std::time::Duration, std::time::Duration) {
+    let capacity = crate::ag::prompt_runtime::model_capacity(provider, model);
+    // One frozen model policy drives both output allowance and bounded deadlines.
+    (
+        std::time::Duration::from_secs(capacity.round_deadline_secs),
+        std::time::Duration::from_secs(capacity.stream_idle_deadline_secs),
+    )
+}
 
 #[cfg(any(test, debug_assertions))]
 thread_local! {
@@ -199,12 +205,12 @@ fn gateway_deadline(default: std::time::Duration) -> std::time::Duration {
     default
 }
 
-fn gateway_idle_deadline() -> std::time::Duration {
+fn gateway_idle_deadline(default: std::time::Duration) -> std::time::Duration {
     #[cfg(any(test, debug_assertions))]
     if let Some(deadline) = TEST_GATEWAY_IDLE_DEADLINE.with(std::cell::Cell::get) {
         return deadline;
     }
-    gateway_deadline(MODEL_STREAM_IDLE_DEADLINE)
+    gateway_deadline(default)
 }
 
 #[cfg(test)]
@@ -527,8 +533,8 @@ pub enum RoundOutcome {
 enum GatewaySseEvent {
     Chunk(String),
     Progress(&'static str),
-    ToolCalls(Vec<GwToolCall>),
-    Done(String),
+    ToolCalls(Vec<GwToolCall>, Option<serde_json::Value>),
+    Done(String, Option<serde_json::Value>, Option<serde_json::Value>),
     Error(IpcError),
 }
 
@@ -537,8 +543,8 @@ impl GatewaySseEvent {
         match self {
             Self::Chunk(_) => "chunk",
             Self::Progress(_) => "progress",
-            Self::ToolCalls(_) => "tool_calls",
-            Self::Done(_) => "done",
+            Self::ToolCalls(..) => "tool_calls",
+            Self::Done(..) => "done",
             Self::Error(_) => "error",
         }
     }
@@ -598,6 +604,7 @@ fn parse_gateway_sse_frame(raw: &[u8]) -> Result<(GatewaySseEvent, usize), IpcEr
             let phase = match fields.get("phase").and_then(serde_json::Value::as_str) {
                 Some("reasoning") => "reasoning",
                 Some("upstream") => "upstream",
+                Some("tool_arguments") => "tool_arguments",
                 _ => return Err(invalid_shape()),
             };
             GatewaySseEvent::Progress(phase)
@@ -621,7 +628,7 @@ fn parse_gateway_sse_frame(raw: &[u8]) -> Result<(GatewaySseEvent, usize), IpcEr
                 }
                 calls.push(call);
             }
-            GatewaySseEvent::ToolCalls(calls)
+            GatewaySseEvent::ToolCalls(calls, json.get("argument_proofs").cloned())
         }
         "done" => {
             let reason = json
@@ -629,13 +636,19 @@ fn parse_gateway_sse_frame(raw: &[u8]) -> Result<(GatewaySseEvent, usize), IpcEr
                 .and_then(serde_json::Value::as_str)
                 .filter(|reason| !reason.is_empty())
                 .ok_or_else(invalid_shape)?;
-            if matches!(reason, "length" | "max_tokens" | "content_filter") {
-                return Err(incomplete_sse_event("模型在完整答复前停止，不能标记为完成"));
-            }
-            if !matches!(reason, "stop" | "end_turn" | "stop_sequence") {
+            if !matches!(
+                reason,
+                "stop" | "end_turn" | "stop_sequence" | "length" | "max_tokens" | "content_filter"
+            ) {
                 return Err(invalid_shape());
             }
-            GatewaySseEvent::Done(reason.to_string())
+            GatewaySseEvent::Done(
+                reason.to_string(),
+                json.get("text_proof").cloned(),
+                json.get("completion_observation")
+                    .filter(|value| value.is_object())
+                    .map(completion_accounting),
+            )
         }
         "error" => {
             let code = json
@@ -699,7 +712,7 @@ impl GatewaySseDecoder {
             )));
         }
         let parsed = parse_gateway_sse_frame(&raw);
-        if let Ok((GatewaySseEvent::Done(_) | GatewaySseEvent::ToolCalls(_), _)) = &parsed {
+        if let Ok((GatewaySseEvent::Done(..) | GatewaySseEvent::ToolCalls(..), _)) = &parsed {
             self.completion_seen = true;
         }
         Some(parsed)
@@ -730,6 +743,139 @@ fn request_trace_enabled() -> bool {
         .unwrap_or(false)
 }
 
+// Explicit local-development opt-in: these records contain document/history text.
+// Never enable this from a model instruction, IPC request, or a release build.
+fn model_io_audit_allowed(development_build: bool, configured: Option<&str>) -> bool {
+    development_build
+        && configured.is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+// Some terminal/CLI collectors truncate a physical line at 64 KiB. Bound the
+// serialized line, not character count: JSON escaping and CJK change byte size.
+fn model_io_audit_lines(record: &serde_json::Value) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    const PREFIX: &str = "[MODEL-IO-AUDIT] ";
+    const MAX_LINE_BYTES: usize = 8192;
+    let serialized = record.to_string();
+    if PREFIX.len() + serialized.len() + 1 <= MAX_LINE_BYTES {
+        return vec![format!("{PREFIX}{serialized}")];
+    }
+    let mut fragments = Vec::new();
+    let mut start = 0;
+    while start < serialized.len() {
+        let mut end = (start + 1024).min(serialized.len());
+        while !serialized.is_char_boundary(end) {
+            end -= 1;
+        }
+        fragments.push(&serialized[start..end]);
+        start = end;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let hash = format!("{:x}", Sha256::digest(serialized.as_bytes()));
+    fragments.iter().enumerate().map(|(index, fragment)| {
+        let part = serde_json::json!({
+            "audit_marker":"[MODEL-IO-AUDIT]", "version":2, "phase":"record_fragment",
+            // Full identity remains in the reconstructed record; bound repeated metadata too.
+            "turn_id":record["turn_id"].as_str().map(|value| value.chars().take(128).collect::<String>()),
+            "model_call_round":record["model_call_round"].as_u64(),
+            "record_phase":record["phase"].as_str().map(|value| value.chars().take(64).collect::<String>()), "record_id":id,
+            "part_index":index+1, "total_parts":fragments.len(),
+            "total_utf8_bytes":serialized.len(), "record_sha256":hash,
+            "fragment":fragment, "warning":"LOCAL DEBUG PLAINTEXT; do not publish or commit",
+        });
+        format!("{PREFIX}{part}")
+    }).collect()
+}
+
+fn write_model_io_record(
+    writer: &mut impl std::io::Write,
+    record: &serde_json::Value,
+) -> std::io::Result<()> {
+    for line in model_io_audit_lines(record) {
+        writeln!(writer, "{line}")?;
+    }
+    writer.flush()
+}
+
+fn open_model_io_file(
+    directory: &std::path::Path,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    let path = directory.join(format!(
+        "binder-model-io-{}-{}.jsonl",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path)?;
+    Ok((path, file))
+}
+
+fn emit_model_io_record(record: &serde_json::Value) {
+    // The dev CLI can truncate a whole burst despite short physical lines. Bypass it for
+    // the authoritative plaintext copy, only after the explicit development opt-in.
+    static FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> =
+        std::sync::OnceLock::new();
+    let file = FILE.get_or_init(|| match open_model_io_file(&std::env::temp_dir()) {
+        Ok((path, file)) => {
+            eprintln!(
+                "[MODEL-IO-AUDIT] plaintext_file={} warning=LOCAL_PRIVATE_DO_NOT_PUBLISH",
+                path.display()
+            );
+            Some(std::sync::Mutex::new(file))
+        }
+        Err(error) => {
+            eprintln!(
+                "[MODEL-IO-AUDIT] plaintext_file_unavailable kind={:?}",
+                error.kind()
+            );
+            None
+        }
+    });
+    if let Some(file) = file {
+        match file.lock() {
+            Ok(mut file) => {
+                if let Err(error) = write_model_io_record(&mut *file, record) {
+                    eprintln!(
+                        "[MODEL-IO-AUDIT] plaintext_write_failed kind={:?}",
+                        error.kind()
+                    );
+                }
+            }
+            Err(_) => eprintln!("[MODEL-IO-AUDIT] plaintext_write_failed kind=lock_poisoned"),
+        }
+    }
+    for line in model_io_audit_lines(record) {
+        eprintln!("{line}");
+    }
+}
+
+// Rebuild a fixed numeric/hash vocabulary; never persist arbitrary provider objects.
+fn completion_accounting(raw: &serde_json::Value) -> serde_json::Value {
+    let number = |value: &serde_json::Value| value.as_u64().filter(|n| *n <= 9_007_199_254_740_991);
+    let usage = raw.get("usage").filter(|u| u.is_object()).map(|usage| {
+        serde_json::json!({"promptTokens":number(&usage["promptTokens"]),
+            "completionTokens":number(&usage["completionTokens"]),"totalTokens":number(&usage["totalTokens"]),
+            "reasoningTokens":number(&usage["reasoningTokens"])})
+    });
+    let pending = raw["pendingToolArguments"].as_array().map(|calls| calls.iter().take(16).map(|call| {
+        let hash = call["argumentsSha256"].as_str().filter(|s| s.len()==64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        serde_json::json!({"toolIndex":number(&call["toolIndex"]),"argumentsUtf8Bytes":number(&call["argumentsUtf8Bytes"]),
+            "argumentsSha256":hash,"jsonValid":call["jsonValid"].as_bool()})
+    }).collect::<Vec<_>>());
+    serde_json::json!({"requestedMaxTokens":number(&raw["requestedMaxTokens"]),"usage":usage,"pendingToolArguments":pending})
+}
+
 fn serialized_chars(value: &serde_json::Value) -> usize {
     serde_json::to_string(value)
         .map(|serialized| serialized.chars().count())
@@ -750,6 +896,7 @@ fn request_shape(messages: &serde_json::Value, tools: &serde_json::Value) -> ser
 
 struct RequestLifecycleTrace {
     enabled: bool,
+    model_io_enabled: bool,
     turn_id: String,
     round_index: usize,
     started_at: std::time::Instant,
@@ -760,6 +907,10 @@ impl RequestLifecycleTrace {
     fn new(turn_id: &str, round_index: usize) -> Self {
         Self {
             enabled: request_trace_enabled(),
+            model_io_enabled: model_io_audit_allowed(
+                cfg!(debug_assertions),
+                std::env::var("BINDER_MODEL_IO_AUDIT").ok().as_deref(),
+            ),
             turn_id: turn_id.to_string(),
             round_index,
             started_at: std::time::Instant::now(),
@@ -792,14 +943,96 @@ impl RequestLifecycleTrace {
         eprintln!("[REQUEST-TRACE] {output}");
     }
 
+    fn model_io_record(
+        &self,
+        phase: &str,
+        details: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        self.model_io_enabled.then(|| {
+            serde_json::json!({
+                "audit_marker": "[MODEL-IO-AUDIT]",
+                "version": 1,
+                "warning": "LOCAL DEBUG ONLY: contains plaintext prompts, document/history text and model output; do not publish or commit",
+                "boundary": "client_gateway_normalized_not_provider_raw_sse",
+                "turn_id": self.turn_id,
+                "model_call_round": self.round_index,
+                "phase": phase,
+                "elapsed_ms": self.elapsed_ms(),
+                "details": details,
+            })
+        })
+    }
+
+    fn emit_model_io(&self, phase: &str, details: serde_json::Value) {
+        if let Some(record) = self.model_io_record(phase, details) {
+            emit_model_io_record(&record);
+        }
+    }
+
+    fn model_io_response(
+        &self,
+        event: &GatewaySseEvent,
+        event_seq: usize,
+    ) -> Option<serde_json::Value> {
+        if !self.model_io_enabled {
+            return None;
+        }
+        let response = match event {
+            GatewaySseEvent::Chunk(text) => serde_json::json!({"text": text}),
+            GatewaySseEvent::ToolCalls(calls, _) => {
+                use sha2::{Digest, Sha256};
+                serde_json::json!({"tool_calls": calls.iter().map(|call| {
+                    let json_error = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                        .err().map(|error| serde_json::json!({
+                            "category": format!("{:?}", error.classify()),
+                            "line": error.line(), "column": error.column(),
+                        }));
+                    serde_json::json!({
+                        "id": call.id, "name": call.name,
+                        "arguments": call.arguments,
+                        "arguments_utf8_bytes": call.arguments.len(),
+                        "arguments_sha256": format!("{:x}", Sha256::digest(call.arguments.as_bytes())),
+                        "arguments_json_error": json_error,
+                    })
+                }).collect::<Vec<_>>()})
+            }
+            GatewaySseEvent::Done(reason, proof, accounting) => {
+                serde_json::json!({"stop_reason": reason,"text_proof":proof,"completion_observation":accounting})
+            }
+            GatewaySseEvent::Progress(phase) => serde_json::json!({"phase": phase}),
+            // Error messages can echo upstream credentials; keep fixed error metadata only.
+            GatewaySseEvent::Error(error) => {
+                serde_json::json!({"code": error.code, "retriable": error.retriable})
+            }
+        };
+        self.model_io_record(
+            "response_event",
+            serde_json::json!({
+                "event_seq": event_seq, "event": event.kind(), "response": response,
+            }),
+        )
+    }
+
     fn finish(&mut self, phase: &str, details: serde_json::Value) {
         self.emit(phase, details);
+        self.emit_model_io(
+            "request_finished",
+            serde_json::json!({"terminal_phase": phase}),
+        );
         self.terminal_emitted = true;
     }
 }
 
 impl Drop for RequestLifecycleTrace {
     fn drop(&mut self) {
+        if !self.terminal_emitted {
+            self.emit_model_io(
+                "request_future_dropped",
+                serde_json::json!({
+                    "outcome": "not_confirmed_complete",
+                }),
+            );
+        }
         if self.enabled && !self.terminal_emitted {
             self.emit(
                 "request_future_dropped",
@@ -889,7 +1122,7 @@ impl StreamTraceCounters {
     }
 }
 
-pub async fn stream_round<F>(
+pub async fn stream_round<F, O>(
     turn_id: &str,
     round_index: usize,
     provider: &str,
@@ -897,12 +1130,20 @@ pub async fn stream_round<F>(
     messages: &serde_json::Value,
     tools: &serde_json::Value,
     on_chunk: F,
+    mut on_observation: O,
 ) -> Result<RoundOutcome, IpcError>
 where
     F: FnMut(String) -> Result<(), IpcError>,
+    O: FnMut(&str, serde_json::Value) -> Result<(), IpcError>,
 {
     let url = format!("{}/invoke/stream", gw_base_url());
     let mut trace = RequestLifecycleTrace::new(turn_id, round_index);
+    on_observation(
+        "runtime_build_observed",
+        serde_json::json!({
+            "roundIndex": round_index, "clientBuildId": runtime_build_id(),
+        }),
+    )?;
     trace.emit(
         "request_started",
         serde_json::json!({
@@ -920,48 +1161,67 @@ where
             "token_present": true,
         }),
     );
+    let output_limit = crate::ag::prompt_runtime::model_capacity(provider, model).output_tokens;
+    let (round_deadline, idle_deadline) = model_deadlines(provider, model);
+    on_observation(
+        "model_request_capacity",
+        serde_json::json!({"roundIndex":round_index,"requestedMaxTokens":output_limit,
+            "roundDeadlineMs":round_deadline.as_millis(),"streamIdleDeadlineMs":idle_deadline.as_millis()}),
+    )?;
     let body = serde_json::json!({
-        "provider": provider, "model": model, "messages": messages, "tools": tools, "token": token
+        "provider": provider, "model": model, "messages": messages, "tools": tools, "token": token,
+        "max_tokens": output_limit,
     });
 
-    let resp = match invocation_client_with_read_timeout(Some(gateway_idle_deadline()))?
-        .post(&url)
-        .header("X-Binder-Turn-Id", turn_id)
-        .header("X-Binder-Round-Index", round_index.to_string())
-        .json(&body)
-        .timeout(gateway_deadline(MODEL_ROUND_DEADLINE))
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            trace.finish(
-                "http_send_failed",
-                serde_json::json!({
-                    "error": e.to_string(),
-                    "retriable": true,
-                }),
-            );
-            if !trace.enabled {
-                eprintln!("[ag-gw] ✗ unreachable {url}: {e}");
-            }
-            return Ok(RoundOutcome::Failed(if e.is_timeout() {
-                IpcError::new(
+    if trace.model_io_enabled {
+        // Whitelist only model-bound fields, never the authenticated HTTP body or headers.
+        trace.emit_model_io(
+            "request_sending",
+            serde_json::json!({
+                "provider": provider, "model": model, "messages": messages, "tools": tools,
+                "stream": true, "max_tokens": output_limit,
+            }),
+        );
+    }
+    let resp =
+        match invocation_client_with_read_timeout(Some(gateway_idle_deadline(idle_deadline)))?
+            .post(&url)
+            .header("X-Binder-Turn-Id", turn_id)
+            .header("X-Binder-Round-Index", round_index.to_string())
+            .json(&body)
+            .timeout(gateway_deadline(round_deadline))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                trace.finish(
+                    "http_send_failed",
+                    serde_json::json!({
+                        "error": e.to_string(),
+                        "retriable": true,
+                    }),
+                );
+                if !trace.enabled {
+                    eprintln!("[ag-gw] ✗ unreachable {url}: {e}");
+                }
+                return Ok(RoundOutcome::Failed(if e.is_timeout() {
+                    IpcError::new(
                     "AG_GW_TIMEOUT",
                     "模型网关在本轮期限内未返回响应；本次调用已停止，请核对实际效果后显式重试。",
                     true,
                     false,
                 )
-            } else {
-                IpcError::new(
-                    "AG_GW_UNREACHABLE",
-                    &format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
-                    true,
-                    false,
-                )
-            }));
-        }
-    };
+                } else {
+                    IpcError::new(
+                        "AG_GW_UNREACHABLE",
+                        &format!("dev 网关不可达（{url}）：{e}。请先启动 cloud/dev-gateway。"),
+                        true,
+                        false,
+                    )
+                }));
+            }
+        };
 
     let status = resp.status();
     let response_content_type = resp
@@ -970,6 +1230,18 @@ where
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string();
+    let gateway_build = resp
+        .headers()
+        .get("x-binder-gateway-build")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()));
+    on_observation(
+        "gateway_build_observed",
+        serde_json::json!({
+            "roundIndex": round_index, "gatewayBuildId":gateway_build,
+            "gatewayBuildPresent":gateway_build.is_some(),
+        }),
+    )?;
     trace.emit(
         "http_response_received",
         serde_json::json!({
@@ -1017,7 +1289,27 @@ where
         )));
     }
 
-    consume_round_stream(resp.bytes_stream(), &mut trace, on_chunk).await
+    consume_round_stream(resp.bytes_stream(), &mut trace, on_chunk, on_observation).await
+}
+
+// Compile-embedded source identity, not the current files on disk or a permission token.
+fn runtime_build_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        for source in [
+            include_str!("gateway.rs"),
+            include_str!("../ag/model_output.rs"),
+            include_str!("../ag/turn_tool_loop.rs"),
+            include_str!("../ag/turn_runtime.rs"),
+            include_str!("../ag/task.rs"),
+            include_str!("../ag/prompt_runtime.rs"),
+        ] {
+            hash.update(source.as_bytes());
+        }
+        format!("{:x}", hash.finalize())
+    })
 }
 
 /**
@@ -1026,19 +1318,21 @@ where
  * type: RB
  * chain: CLOUD-INVOKE
  * rules: BR-ENT-STATE-001
- * boundary: in=GatewayByteStreamAndChunkCallback | out=RoundOutcomeOrCallbackError | does_not=grantCapabilityOrEmitAgentTurnTerminal
+ * boundary: in=GatewayByteStreamChunkAndEvidenceCallbacks | out=RoundOutcomeAndSafeCompletionEvidenceOrCallbackError | does_not=grantCapabilityOrEmitAgentTurnTerminal
  */
 // HTTP 与测试字节流共享此解析路径；本函数不产生授权或 AgentTurn 终态。
-async fn consume_round_stream<S, B, E, F>(
+async fn consume_round_stream<S, B, E, F, O>(
     stream: S,
     trace: &mut RequestLifecycleTrace,
     mut on_chunk: F,
+    mut on_observation: O,
 ) -> Result<RoundOutcome, IpcError>
 where
     S: futures_util::Stream<Item = Result<B, E>>,
     B: AsRef<[u8]>,
     E: Into<GatewayStreamFailure>,
     F: FnMut(String) -> Result<(), IpcError>,
+    O: FnMut(&str, serde_json::Value) -> Result<(), IpcError>,
 {
     use futures_util::StreamExt;
     futures_util::pin_mut!(stream);
@@ -1046,12 +1340,23 @@ where
     let mut tool_calls: Vec<GwToolCall> = Vec::new();
     let mut final_stop_reason: Option<String> = None;
     let mut counters = StreamTraceCounters::default();
+    use sha2::{Digest, Sha256};
+    let mut response_text_hash = Sha256::new();
+    let mut response_text_bytes = 0usize;
 
     while let Some(item) = stream.next().await {
         let bytes = match item {
             Ok(b) => b,
             Err(e) => {
                 let error = gateway_stream_error(e.into());
+                on_observation(
+                    "stream_failure_observed",
+                    serde_json::json!({
+                        "roundIndex":trace.round_index,"code":error.code,"textUtf8Bytes":response_text_bytes,
+                        "textSha256":format!("{:x}",response_text_hash.clone().finalize()),
+                        "contentChunkCount":counters.content_chunk_count,"providerCompletionSeen":final_stop_reason.is_some(),
+                    }),
+                )?;
                 trace.finish(
                     "stream_transport_failed",
                     serde_json::json!({
@@ -1079,6 +1384,14 @@ where
                 Ok(parsed) => parsed,
                 Err(error) => {
                     counters.malformed_event_count += 1;
+                    on_observation(
+                        "stream_failure_observed",
+                        serde_json::json!({
+                            "roundIndex":trace.round_index,"code":error.code,"textUtf8Bytes":response_text_bytes,
+                            "textSha256":format!("{:x}",response_text_hash.clone().finalize()),
+                            "contentChunkCount":counters.content_chunk_count,"providerCompletionSeen":final_stop_reason.is_some(),
+                        }),
+                    )?;
                     trace.emit(
                         "malformed_sse_event",
                         serde_json::json!({ "code": &error.code }),
@@ -1088,6 +1401,9 @@ where
                 }
             };
             counters.sse_event_count += 1;
+            if let Some(record) = trace.model_io_response(&event, counters.sse_event_count) {
+                emit_model_io_record(&record);
+            }
             if counters.sse_event_count == 1 {
                 trace.emit(
                     "first_sse_event",
@@ -1099,6 +1415,8 @@ where
             }
             match event {
                 GatewaySseEvent::Chunk(text) => {
+                    response_text_hash.update(text.as_bytes());
+                    response_text_bytes += text.len();
                     counters.content_chunk_count += 1;
                     counters.content_chars += text.chars().count();
                     if counters.content_chunk_count == 1 {
@@ -1118,7 +1436,46 @@ where
                         );
                     }
                 }
-                GatewaySseEvent::ToolCalls(calls) => {
+                GatewaySseEvent::ToolCalls(calls, proofs) => {
+                    let mut batch_proof_matches = true;
+                    for (index, call) in calls.iter().enumerate() {
+                        let argument_hash =
+                            format!("{:x}", Sha256::digest(call.arguments.as_bytes()));
+                        let proof_matches = proofs.as_ref().map(|value| {
+                            value.as_array().is_some_and(|items| {
+                                items.len() == calls.len()
+                                    && items.get(index).is_some_and(|p| {
+                                        p["toolIndex"].as_u64() == Some(index as u64)
+                                            && p["toolCallId"].as_str() == Some(call.id.as_str())
+                                            && p["toolName"].as_str() == Some(call.name.as_str())
+                                            && p["argumentsUtf8Bytes"].as_u64()
+                                                == Some(call.arguments.len() as u64)
+                                            && p["argumentsSha256"].as_str()
+                                                == Some(argument_hash.as_str())
+                                    })
+                            })
+                        });
+                        batch_proof_matches &= proof_matches != Some(false);
+                        let json_error =
+                            serde_json::from_str::<serde_json::Value>(&call.arguments).err();
+                        on_observation(
+                            "tool_arguments_observed",
+                            serde_json::json!({
+                                "roundIndex":trace.round_index,"toolIndex":index,
+                                "toolCallId":call.id,"toolName":call.name,
+                                "argumentsUtf8Bytes":call.arguments.len(),
+                                "argumentsSha256":argument_hash,
+                                "upstreamProofPresent":proofs.is_some(),"upstreamProofMatches":proof_matches,
+                                "jsonErrorLine":json_error.as_ref().map(|e|e.line()),
+                                "jsonErrorColumn":json_error.as_ref().map(|e|e.column()),
+                            }),
+                        )?;
+                    }
+                    if !batch_proof_matches {
+                        return Ok(RoundOutcome::Failed(incomplete_sse_event(
+                            "上下游工具参数摘要或身份不一致；本批未执行，不能继续使用",
+                        )));
+                    }
                     counters.tool_call_event_count += 1;
                     trace.emit(
                         "tool_calls_received",
@@ -1130,7 +1487,42 @@ where
                     );
                     tool_calls = calls;
                 }
-                GatewaySseEvent::Done(reason) => {
+                GatewaySseEvent::Done(reason, proof, accounting) => {
+                    if let Some(mut accounting) = accounting {
+                        accounting["roundIndex"] = trace.round_index.into();
+                        on_observation("provider_capacity_observed", accounting)?;
+                    }
+                    let client_hash = format!("{:x}", response_text_hash.clone().finalize());
+                    let proof_matches = proof.as_ref().map(|proof| {
+                        proof["textUtf8Bytes"].as_u64() == Some(response_text_bytes as u64)
+                            && proof["textSha256"].as_str() == Some(client_hash.as_str())
+                            && proof["contentDeltaCount"].as_u64()
+                                == Some(counters.content_chunk_count as u64)
+                    });
+                    on_observation(
+                        "provider_completion_observed",
+                        serde_json::json!({
+                            "roundIndex":trace.round_index,"stopReason":reason,
+                            "upstreamProofPresent":proof.is_some(),"upstreamProofMatches":proof_matches,
+                            "textUtf8Bytes":response_text_bytes,"textSha256":client_hash,
+                            "contentChunkCount":counters.content_chunk_count,
+                        }),
+                    )?;
+                    if proof_matches == Some(false) {
+                        return Ok(RoundOutcome::Failed(incomplete_sse_event(
+                            "上下游正文摘要不一致；已保留接收片段，不能确认响应完整",
+                        )));
+                    }
+                    if matches!(reason.as_str(), "length" | "max_tokens") {
+                        return Ok(RoundOutcome::Failed(incomplete_sse_event(
+                            &format!("模型输出因长度限制提前结束（{reason}）；回答或工具参数不完整，不能标记为完成。已有执行结果保留，请核对后明确继续。"),
+                        )));
+                    }
+                    if reason == "content_filter" {
+                        return Ok(RoundOutcome::Failed(incomplete_sse_event(
+                            "模型在完整答复前停止，不能标记为完成",
+                        )));
+                    }
                     // 仅记录 provider stop reason；唯一 wire 终态由上层 Runtime 发射。
                     final_stop_reason = Some(reason.clone());
                     trace.emit(
@@ -1157,9 +1549,36 @@ where
     }
 
     if let Err(error) = decoder.finish() {
+        on_observation(
+            "stream_failure_observed",
+            serde_json::json!({
+                "roundIndex":trace.round_index,"code":error.code,"textUtf8Bytes":response_text_bytes,
+                "textSha256":format!("{:x}",response_text_hash.clone().finalize()),
+                "contentChunkCount":counters.content_chunk_count,"providerCompletionSeen":final_stop_reason.is_some(),
+            }),
+        )?;
         trace.finish("stream_completion_invalid", counters.to_json());
         return Ok(RoundOutcome::Failed(error));
     }
+    let text_hash = format!("{:x}", response_text_hash.finalize());
+    on_observation(
+        "stream_completion_observed",
+        serde_json::json!({
+            "roundIndex":trace.round_index,"stopReason":final_stop_reason,
+            "textUtf8Bytes":response_text_bytes,"textSha256":text_hash,
+            "contentChunkCount":counters.content_chunk_count,
+            "providerCompletionSeen":true,"toolCallCount":tool_calls.len(),
+            "contentBasis":"normalized_content_including_control",
+        }),
+    )?;
+    trace.emit_model_io(
+        "response_text_fingerprint",
+        serde_json::json!({
+            "text_utf8_bytes":response_text_bytes,
+            "text_sha256":text_hash,
+            "complete_stream":true,
+        }),
+    );
     if !tool_calls.is_empty() {
         trace.finish(
             "request_completed",
@@ -1201,12 +1620,13 @@ where
 {
     let mut trace = RequestLifecycleTrace {
         enabled: false,
+        model_io_enabled: false,
         turn_id: "fixed-stream-test".into(),
         round_index: 1,
         started_at: std::time::Instant::now(),
         terminal_emitted: false,
     };
-    consume_round_stream(stream, &mut trace, on_chunk).await
+    consume_round_stream(stream, &mut trace, on_chunk, |_, _| Ok(())).await
 }
 
 async fn consume_assist_stream<S, B, E>(stream: S) -> Result<String, IpcError>
@@ -1226,8 +1646,12 @@ where
             match parsed?.0 {
                 GatewaySseEvent::Chunk(text) => out.push_str(&text),
                 GatewaySseEvent::Progress(_) => {}
-                GatewaySseEvent::Done(_) => {}
-                GatewaySseEvent::ToolCalls(_) => {
+                GatewaySseEvent::Done(reason, _, _) => {
+                    if matches!(reason.as_str(), "length" | "max_tokens" | "content_filter") {
+                        return Err(incomplete_sse_event("模型在完整答复前停止，不能标记为完成"));
+                    }
+                }
+                GatewaySseEvent::ToolCalls(..) => {
                     return Err(invalid_sse_event("辅助产出不接受工具请求"));
                 }
                 GatewaySseEvent::Error(error) => return Err(error),
@@ -1346,6 +1770,254 @@ mod tests {
     use super::InvokeState::*;
     use super::*;
 
+    // covers: BR-ENT-STATE-001
+    // covers: BR-SYS-OBS-001
+    #[test]
+    fn truncated_capacity_is_observed_without_promoting_pending_arguments_to_tools() {
+        let done = serde_json::json!({"stop_reason":"length","completion_observation":{
+            "requestedMaxTokens":8192,"usage":{"promptTokens":12000,"completionTokens":8192,
+                "totalTokens":20192,"reasoningTokens":0,"private":"SECRET"},
+            "pendingToolArguments":[{"toolIndex":0,"argumentsUtf8Bytes":65000,
+                "argumentsSha256":"a".repeat(64),"jsonValid":false,"arguments":"SECRET"}],"secret":"SECRET"}});
+        let wire = format!("event: done\ndata: {done}\n\n");
+        let mut trace = RequestLifecycleTrace {
+            enabled: false,
+            model_io_enabled: false,
+            turn_id: "capacity".into(),
+            round_index: 2,
+            started_at: std::time::Instant::now(),
+            terminal_emitted: false,
+        };
+        let mut observations = Vec::new();
+        let outcome = tauri::async_runtime::block_on(consume_round_stream(
+            fixed_bytes(wire.as_bytes()),
+            &mut trace,
+            |_| panic!("partial arguments are metadata only"),
+            |kind, value| {
+                observations.push((kind.to_owned(), value));
+                Ok(())
+            },
+        ))
+        .unwrap();
+        let RoundOutcome::Failed(error) = outcome else {
+            panic!("length cannot complete or execute")
+        };
+        assert_eq!(error.code, "AG_GW_STREAM_INCOMPLETE");
+        assert!(error.message.contains("长度限制"));
+        let capacity = &observations
+            .iter()
+            .find(|(kind, _)| kind == "provider_capacity_observed")
+            .unwrap()
+            .1;
+        assert_eq!(capacity["roundIndex"], 2);
+        assert_eq!(capacity["requestedMaxTokens"], 8192);
+        assert_eq!(capacity["usage"]["completionTokens"], 8192);
+        assert_eq!(
+            capacity["pendingToolArguments"][0]["argumentsUtf8Bytes"],
+            65000
+        );
+        assert!(!serde_json::to_string(&observations)
+            .unwrap()
+            .contains("SECRET"));
+        let empty = completion_accounting(
+            &serde_json::json!({"requestedMaxTokens":-1,"usage":{"completionTokens":"SECRET"}}),
+        );
+        assert!(empty["requestedMaxTokens"].is_null());
+        assert!(empty["usage"]["completionTokens"].is_null());
+    }
+
+    // covers: BR-SYS-OBS-001
+    #[test]
+    fn plaintext_audit_file_is_private_and_preserves_every_large_record_fragment() {
+        use sha2::{Digest, Sha256};
+        let (path, mut file) = open_model_io_file(&std::env::temp_dir()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let record = serde_json::json!({"turn_id":"synthetic","model_call_round":1,"phase":"request_sending",
+            "details":{"messages":[{"content":"中文🙂PRIVATE_SYNTHETIC".repeat(10000)}]}});
+        write_model_io_record(&mut file, &record).unwrap();
+        drop(file);
+        let stored = std::fs::read_to_string(&path).unwrap();
+        let parts = stored
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(
+                    l.strip_prefix("[MODEL-IO-AUDIT] ").unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(parts.len() > 100);
+        assert_eq!(
+            parts.len() as u64,
+            parts[0]["total_parts"].as_u64().unwrap()
+        );
+        for (i, p) in parts.iter().enumerate() {
+            assert_eq!(p["part_index"], i + 1);
+            assert_eq!(p["record_id"], parts[0]["record_id"]);
+        }
+        let rebuilt = parts
+            .iter()
+            .map(|p| p["fragment"].as_str().unwrap())
+            .collect::<String>();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rebuilt).unwrap(),
+            record
+        );
+        assert_eq!(
+            rebuilt.len() as u64,
+            parts[0]["total_utf8_bytes"].as_u64().unwrap()
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(rebuilt.as_bytes())),
+            parts[0]["record_sha256"]
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    // covers: BR-ENT-STATE-001, BR-SYS-OBS-001
+    #[test]
+    fn completion_evidence_preserves_stop_and_checks_upstream_text_before_accepting_done() {
+        use sha2::{Digest, Sha256};
+        for (reason, proof_kind, expected_error) in [
+            ("stop", "match", None),
+            ("stop", "missing", None),
+            ("stop", "wrong", Some("AG_GW_STREAM_INCOMPLETE")),
+            ("length", "match", Some("AG_GW_STREAM_INCOMPLETE")),
+        ] {
+            let body = "中文🙂\n\n| A | 未写完";
+            let mut done = serde_json::json!({"stop_reason":reason});
+            if proof_kind != "missing" {
+                done["text_proof"] = serde_json::json!({"textUtf8Bytes":body.len(),
+                "textSha256":if proof_kind=="wrong" {"0".repeat(64)} else {format!("{:x}",Sha256::digest(body.as_bytes()))},"contentDeltaCount":1});
+            }
+            let wire = format!(
+                "event: chunk\ndata: {}\n\nevent: done\ndata: {done}\n\n",
+                serde_json::json!({"text":body})
+            );
+            let mut trace = RequestLifecycleTrace {
+                enabled: false,
+                model_io_enabled: false,
+                turn_id: "observed".into(),
+                round_index: 1,
+                started_at: std::time::Instant::now(),
+                terminal_emitted: false,
+            };
+            let mut observed = Vec::new();
+            let mut visible = String::new();
+            let outcome = tauri::async_runtime::block_on(consume_round_stream(
+                fixed_bytes(wire.as_bytes()),
+                &mut trace,
+                |text| {
+                    visible.push_str(&text);
+                    Ok(())
+                },
+                |kind, value| {
+                    observed.push((kind.to_owned(), value));
+                    Ok(())
+                },
+            ))
+            .unwrap();
+            assert_eq!(visible, body);
+            match (outcome, expected_error) {
+                (RoundOutcome::Done { stop_reason }, None) => assert_eq!(stop_reason, reason),
+                (RoundOutcome::Failed(error), Some(code)) => assert_eq!(error.code, code),
+                _ => panic!("completion proof mismatch must not be accepted as success"),
+            }
+            let completion = &observed
+                .iter()
+                .find(|(kind, _)| kind == "provider_completion_observed")
+                .unwrap()
+                .1;
+            assert_eq!(completion["stopReason"], reason);
+            assert_eq!(completion["upstreamProofPresent"], proof_kind != "missing");
+            assert_eq!(
+                completion["upstreamProofMatches"],
+                if proof_kind == "missing" {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(proof_kind == "match")
+                }
+            );
+        }
+    }
+
+    // covers: BR-ENT-STATE-001, BR-SYS-OBS-001
+    #[test]
+    fn tool_argument_proof_distinguishes_transport_change_from_invalid_original_json() {
+        use sha2::{Digest, Sha256};
+        for proof_kind in ["match", "missing", "wrong_hash", "wrong_id", "missing_item"] {
+            let arguments = "{\"broken\":\"中文🙂";
+            let mut data = serde_json::json!({"tool_calls":[{"id":"original-call","name":"binder_tool_batch","arguments":arguments}]});
+            if proof_kind != "missing" {
+                let mut proof = serde_json::json!({"toolIndex":0,"toolCallId":"original-call","toolName":"binder_tool_batch",
+                    "argumentsUtf8Bytes":arguments.len(),"argumentsSha256":format!("{:x}",Sha256::digest(arguments.as_bytes()))});
+                if proof_kind == "wrong_hash" {
+                    proof["argumentsSha256"] = serde_json::json!("0".repeat(64));
+                }
+                if proof_kind == "wrong_id" {
+                    proof["toolCallId"] = serde_json::json!("another-call");
+                }
+                data["argument_proofs"] = if proof_kind == "missing_item" {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([proof])
+                };
+            }
+            let wire = format!("event: tool_calls\ndata: {data}\n\n");
+            let mut trace = RequestLifecycleTrace {
+                enabled: false,
+                model_io_enabled: false,
+                turn_id: "argument-proof".into(),
+                round_index: 1,
+                started_at: std::time::Instant::now(),
+                terminal_emitted: false,
+            };
+            let mut observed = Vec::new();
+            let result = tauri::async_runtime::block_on(consume_round_stream(
+                fixed_bytes(wire.as_bytes()),
+                &mut trace,
+                |_| Ok(()),
+                |kind, value| {
+                    observed.push((kind.to_owned(), value));
+                    Ok(())
+                },
+            ))
+            .unwrap();
+            match result {
+                RoundOutcome::ToolCalls(calls) if matches!(proof_kind, "match" | "missing") => {
+                    assert_eq!(calls[0].arguments, arguments, "never repair invalid JSON")
+                }
+                RoundOutcome::Failed(error) if !matches!(proof_kind, "match" | "missing") => {
+                    assert_eq!(error.code, "AG_GW_STREAM_INCOMPLETE")
+                }
+                _ => panic!("mismatched argument proof cannot reach the tool validator"),
+            }
+            let fact = &observed
+                .iter()
+                .find(|(kind, _)| kind == "tool_arguments_observed")
+                .unwrap()
+                .1;
+            assert!(fact["jsonErrorLine"].as_u64().unwrap() > 0);
+            assert_eq!(fact["upstreamProofPresent"], proof_kind != "missing");
+            assert_eq!(
+                fact["upstreamProofMatches"],
+                if proof_kind == "missing" {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(proof_kind == "match")
+                }
+            );
+            assert!(
+                !fact.to_string().contains("broken"),
+                "safe evidence must not include original arguments"
+            );
+        }
+    }
+
     fn stalled_round(send_headers: bool) -> RoundOutcome {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1392,6 +2064,7 @@ mod tests {
                     &serde_json::json!([]),
                     &serde_json::json!([]),
                     |_| Ok(()),
+                    |_, _| Ok(()),
                 )
                 .await
                 .unwrap()
@@ -1399,6 +2072,100 @@ mod tests {
         ));
         worker.join().unwrap();
         outcome
+    }
+
+    // covers: BR-ENT-STATE-001
+    #[test]
+    fn long_output_deadlines_are_model_scoped_and_still_bounded() {
+        assert_eq!(
+            model_deadlines("deepseek", "deepseek-flash"),
+            (
+                std::time::Duration::from_secs(1_200),
+                std::time::Duration::from_secs(90)
+            )
+        );
+        assert_eq!(
+            model_deadlines("deepseek", "deepseek-chat"),
+            (
+                std::time::Duration::from_secs(300),
+                std::time::Duration::from_secs(45)
+            )
+        );
+    }
+
+    // covers: BR-AG-DATA-005, BR-ENT-STATE-001
+    #[test]
+    fn flash_capacity_reaches_the_actual_gateway_request() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut auth, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 4096];
+            auth.read(&mut buf).unwrap();
+            let token = r#"{"token":"fixture-token"}"#;
+            write!(
+                auth,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{token}",
+                token.len()
+            )
+            .unwrap();
+            drop(auth);
+
+            let (mut invoke, _) = listener.accept().unwrap();
+            let mut received = Vec::new();
+            let (header_end, content_length) = loop {
+                let count = invoke.read(&mut buf).unwrap();
+                assert!(count > 0, "gateway request ended before headers");
+                received.extend_from_slice(&buf[..count]);
+                if let Some(end) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&received[..end]).to_ascii_lowercase();
+                    let length = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    break (end + 4, length);
+                }
+            };
+            while received.len() - header_end < content_length {
+                let count = invoke.read(&mut buf).unwrap();
+                assert!(count > 0, "gateway request body ended early");
+                received.extend_from_slice(&buf[..count]);
+            }
+            let request: serde_json::Value =
+                serde_json::from_slice(&received[header_end..header_end + content_length]).unwrap();
+            write!(invoke, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: done\ndata: {{\"stop_reason\":\"stop\"}}\n\n").unwrap();
+            request
+        });
+        let mut capacity = None;
+        let _outcome = tauri::async_runtime::block_on(with_test_gateway(url, async {
+            stream_round(
+                "flash-capacity-turn",
+                1,
+                "deepseek",
+                "deepseek-flash",
+                &serde_json::json!([]),
+                &serde_json::json!([]),
+                |_| Ok(()),
+                |kind, value| {
+                    if kind == "model_request_capacity" {
+                        capacity = Some(value);
+                    }
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap()
+        }));
+        let request = worker.join().unwrap();
+        assert_eq!(request["model"], "deepseek-flash");
+        assert_eq!(request["max_tokens"], 16_384);
+        let observed = capacity.unwrap();
+        assert_eq!(observed["requestedMaxTokens"], 16_384);
+        assert_eq!(observed["roundDeadlineMs"], 1_200_000);
+        assert_eq!(observed["streamIdleDeadlineMs"], 90_000);
     }
 
     // covers: BR-ENT-STATE-001
@@ -1466,6 +2233,7 @@ mod tests {
                             visible.push_str(&text);
                             Ok(())
                         },
+                        |_, _| Ok(()),
                     )
                     .await
                     .unwrap()
@@ -1589,6 +2357,39 @@ mod tests {
                 fixed_assist_stream(fixed_bytes(assist)).await.unwrap(),
                 "answer"
             );
+        });
+    }
+
+    // covers: BR-ENT-STATE-001
+    #[test]
+    fn fixed_stream_accepts_gateway_tool_argument_progress_without_executing_it() {
+        tauri::async_runtime::block_on(async {
+            let progress = "event: progress\ndata: {\"phase\":\"tool_arguments\"}\n\n";
+            assert_eq!(progress.len(), 50);
+            let source = format!(
+                "{progress}event: tool_calls\ndata: {{\"tool_calls\":[{{\"id\":\"call-1\",\"name\":\"binder_tool_batch\",\"arguments\":\"{{}}\"}}]}}\n\n"
+            );
+            let outcome = fixed_round_stream(fixed_bytes(source.as_bytes()), |_| {
+                panic!("tool argument progress must not become visible content")
+            })
+            .await
+            .unwrap();
+            match outcome {
+                RoundOutcome::ToolCalls(calls) => {
+                    assert_eq!(calls.len(), 1);
+                    assert_eq!(calls[0].name, "binder_tool_batch");
+                    assert_eq!(calls[0].arguments, "{}");
+                }
+                _ => panic!("a complete tool_calls event must still be required"),
+            }
+
+            let outcome = fixed_round_stream(fixed_bytes(progress.as_bytes()), |_| {
+                panic!("tool argument progress must not become visible content")
+            })
+            .await
+            .unwrap();
+            assert!(matches!(outcome, RoundOutcome::Failed(error)
+                if error.code == "AG_GW_STREAM_INCOMPLETE"));
         });
     }
 
@@ -1907,6 +2708,7 @@ mod tests {
         }]);
         let trace = RequestLifecycleTrace {
             enabled: false,
+            model_io_enabled: false,
             turn_id: "turn-trace".to_string(),
             round_index: 2,
             started_at: std::time::Instant::now(),
@@ -1931,5 +2733,183 @@ mod tests {
         assert!(!serialized.contains("SECRET_USER_DOCUMENT"));
         assert!(!serialized.contains("SECRET_TOOL_DESCRIPTION"));
         assert_eq!(serialized.lines().count(), 1);
+
+        // Full payloads require a separate, development-only opt-in. The ordinary
+        // request trace above remains metadata-only even when audit helpers exist.
+        for configured in [None, Some(""), Some("0"), Some("false")] {
+            assert!(!model_io_audit_allowed(true, configured));
+        }
+        for configured in ["1", "true", "YES", " on "] {
+            assert!(model_io_audit_allowed(true, Some(configured)));
+            assert!(!model_io_audit_allowed(false, Some(configured)));
+        }
+        assert!(trace
+            .model_io_record("request_sending", messages.clone())
+            .is_none());
+        let invalid_arguments = "{\"control\":,\"calls\":[]}";
+        let response = GatewaySseEvent::ToolCalls(
+            vec![GwToolCall {
+                id: "synthetic-call".into(),
+                name: "binder_tool_batch".into(),
+                arguments: invalid_arguments.into(),
+            }],
+            None,
+        );
+        assert!(trace.model_io_response(&response, 1).is_none());
+        let full_trace = RequestLifecycleTrace {
+            enabled: false,
+            model_io_enabled: true,
+            turn_id: trace.turn_id.clone(),
+            round_index: trace.round_index,
+            started_at: std::time::Instant::now(),
+            terminal_emitted: true,
+        };
+        let full_request = full_trace
+            .model_io_record(
+                "request_sending",
+                serde_json::json!({
+                    "provider": "synthetic", "model": "synthetic",
+                    "messages": messages, "tools": tools, "stream": true,
+                }),
+            )
+            .unwrap();
+        assert_eq!(full_request["turn_id"], "turn-trace");
+        assert_eq!(full_request["model_call_round"], 2);
+        assert_eq!(
+            full_request["details"]["messages"][0]["content"],
+            "SECRET_SYSTEM_PROMPT"
+        );
+        assert!(full_request["details"].get("token").is_none());
+        assert!(full_request["details"].get("headers").is_none());
+        let full_response = full_trace.model_io_response(&response, 3).unwrap();
+        let call = &full_response["details"]["response"]["tool_calls"][0];
+        assert_eq!(call["arguments"], invalid_arguments);
+        assert_eq!(call["arguments_utf8_bytes"], invalid_arguments.len());
+        assert_eq!(call["arguments_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(call["arguments_json_error"]["category"], "Syntax");
+        assert_eq!(call["arguments_json_error"]["line"], 1);
+        assert!(call["arguments_json_error"]["column"].as_u64().unwrap() > 0);
+        assert_eq!(full_response["details"]["event_seq"], 3);
+
+        let valid_arguments =
+            serde_json::json!({"html":"<p class=\"test\">中文\n第二行</p>"}).to_string();
+        let valid_response = full_trace
+            .model_io_response(
+                &GatewaySseEvent::ToolCalls(
+                    vec![GwToolCall {
+                        id: "synthetic-valid".into(),
+                        name: "binder_tool_batch".into(),
+                        arguments: valid_arguments.clone(),
+                    }],
+                    None,
+                ),
+                4,
+            )
+            .unwrap();
+        let valid_call = &valid_response["details"]["response"]["tool_calls"][0];
+        assert_eq!(valid_call["arguments"], valid_arguments);
+        assert!(valid_call["arguments_json_error"].is_null());
+        assert_ne!(valid_call["arguments_sha256"], call["arguments_sha256"]);
+
+        let raw_text =
+            "<binder-turn-control>{\"nextAction\":\"final\"}</binder-turn-control>\n中文";
+        let text_response = full_trace
+            .model_io_response(&GatewaySseEvent::Chunk(raw_text.into()), 5)
+            .unwrap();
+        assert_eq!(text_response["details"]["response"]["text"], raw_text);
+        assert_eq!(text_response.to_string().lines().count(), 1);
+        let error_response = full_trace
+            .model_io_response(
+                &GatewaySseEvent::Error(IpcError::new(
+                    "SYNTHETIC_FAILURE",
+                    "SECRET_UPSTREAM_CREDENTIAL",
+                    true,
+                    false,
+                )),
+                6,
+            )
+            .unwrap();
+        assert!(!error_response
+            .to_string()
+            .contains("SECRET_UPSTREAM_CREDENTIAL"));
+
+        use sha2::{Digest, Sha256};
+        // Exercise the actual formatter with >64KiB, multibyte text, escapes and
+        // worst-case JSON escaping, not a mocked/truncated record.
+        for repeated in ["中文🙂\n\"\\", "\u{0001}\t\r"] {
+            let record = full_trace
+                .model_io_record(
+                    "request_sending",
+                    serde_json::json!({"synthetic":repeated.repeat(40_000)}),
+                )
+                .unwrap();
+            let original = record.to_string();
+            assert!(original.len() > 65_536);
+            let lines = model_io_audit_lines(&record);
+            let parts = lines
+                .iter()
+                .map(|line| {
+                    assert!(
+                        line.len() + 1 <= 8192,
+                        "physical log line exceeded collector-safe bound"
+                    );
+                    assert_eq!(line.lines().count(), 1);
+                    serde_json::from_str::<serde_json::Value>(
+                        line.strip_prefix("[MODEL-IO-AUDIT] ").unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert!(parts.len() > 1);
+            for (index, part) in parts.iter().enumerate() {
+                assert_eq!(part["phase"], "record_fragment");
+                assert_eq!(part["part_index"], index + 1);
+                assert_eq!(part["total_parts"], parts.len());
+                assert_eq!(part["record_id"], parts[0]["record_id"]);
+                assert_eq!(part["record_sha256"], parts[0]["record_sha256"]);
+                assert_eq!(part["total_utf8_bytes"], original.len());
+            }
+            let reconstructed = parts
+                .iter()
+                .map(|part| part["fragment"].as_str().unwrap())
+                .collect::<String>();
+            assert_eq!(reconstructed, original);
+            assert_eq!(
+                format!("{:x}", Sha256::digest(reconstructed.as_bytes())),
+                parts[0]["record_sha256"]
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&reconstructed).unwrap(),
+                record
+            );
+            let missing = parts[1..]
+                .iter()
+                .map(|part| part["fragment"].as_str().unwrap())
+                .collect::<String>();
+            assert_ne!(
+                missing.len(),
+                parts[0]["total_utf8_bytes"].as_u64().unwrap() as usize
+            );
+            assert_ne!(
+                format!("{:x}", Sha256::digest(missing.as_bytes())),
+                parts[0]["record_sha256"]
+            );
+            let duplicated = format!(
+                "{}{}",
+                reconstructed,
+                parts[0]["fragment"].as_str().unwrap()
+            );
+            assert_ne!(
+                format!("{:x}", Sha256::digest(duplicated.as_bytes())),
+                parts[0]["record_sha256"]
+            );
+        }
+        let small = model_io_audit_lines(&text_response);
+        assert_eq!(small, vec![format!("[MODEL-IO-AUDIT] {text_response}")]);
+        let oversized_identity =
+            serde_json::json!({"turn_id":"中".repeat(10_000),"phase":"p".repeat(10_000)});
+        assert!(model_io_audit_lines(&oversized_identity)
+            .iter()
+            .all(|line| line.len() + 1 <= 8192));
     }
 }

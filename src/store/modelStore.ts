@@ -36,10 +36,11 @@ const DEFAULT_CAPABILITY_PREF: CapabilityPref = {
   build: { mode: "followGlobal" },
 };
 
-/** 默认预设清单（BR-AG-DATA-006：source=preset）与 dev 网关三供应商对齐（lib.rs default_model）。
- *  正式版清单由云端 GET /models 下发（TERM-AG-010，桌面端仅消费）。 */
+/** 本地兜底预设清单（BR-AG-DATA-006：source=preset）；正式清单由云端 GET /models 下发。
+ *  保留既有 Chat 默认与已保存选择；Flash 仅在用户显式选择后生效（BR-AG-DATA-007）。 */
 const DEFAULT_MODELS: ModelOption[] = [
   { provider: "deepseek", model: "deepseek-chat", label: "DeepSeek Chat", source: "preset" },
+  { provider: "deepseek", model: "deepseek-flash", label: "DeepSeek Flash", source: "preset" },
   { provider: "openai", model: "gpt-4o-mini", label: "GPT-4o mini", source: "preset" },
   { provider: "anthropic", model: "claude-sonnet-4-6", label: "Claude Sonnet", source: "preset" },
 ];
