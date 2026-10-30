@@ -338,6 +338,14 @@ fn control_schema() -> serde_json::Value {
 /// control would be accepted by the schema and then rejected by the runtime whenever the call
 /// happened to be the response's only one. The runtime still keeps the first control as
 /// canonical and tolerates an identical redundant copy on later calls.
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-004-DATA-AG-AG-TOOL-061
+ * type:     DATA
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-DATA-004
+ * boundary: in=ToolDefinitionsAndReadOnlyPermissions | out=ModelVisibleToolSchemaWithResponseControl | does_not=executeToolsOrGrantCapabilities
+ */
 pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), IpcError> {
     let definitions = tools.as_array_mut().ok_or_else(|| {
         IpcError::new(

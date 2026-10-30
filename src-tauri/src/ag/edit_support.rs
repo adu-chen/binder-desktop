@@ -100,10 +100,10 @@ pub(crate) const MAX_BLOCK_OPS_BYTES_PER_BATCH: usize = 64 * 1024;
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-058
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-058, BR-AG-DATA-009-GUARD-AG-AG-TOOL-058
  * type:     GUARD
  * chain:    AG-TOOL
- * rules:    BR-AG-STATE-002
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-009
  * boundary: in=ProposeEditParamsAndTargetExistence | out=ValidatedAgentEditOperationOrIpcError | does_not=executeEditPersistProposalOrWriteFile
  */
 pub(super) fn resolve_agent_edit_operation(
@@ -145,6 +145,10 @@ pub(super) fn resolve_agent_edit_operation(
         .unwrap_or(0);
     let has_structured_base = params.get("base").is_some();
 
+    // 预算门禁在操作解析前统一执行：与 BR-AG-DATA-010 一对一，不再与载荷完备性守卫混在同一块。
+    if operation == Some("block_ops") {
+        enforce_block_ops_budget(block_ops_len, block_ops_bytes)?;
+    }
     let op = match operation {
         Some("replace_block") => AgentEditOperation::ReplaceBlock,
         Some("block_ops") => AgentEditOperation::BlockOps,
@@ -243,40 +247,6 @@ pub(super) fn resolve_agent_edit_operation(
                 false,
             ))
         }
-        // 单次调用上限：数量与序列化字节双重门禁，防止模型一次提交超大载荷撑爆上下文。
-        // 单张卡仍按 MAX_BLOCK_OPS_PER_BATCH 切分；一个调用可以带多张卡，因此这里放行到
-        // 单回合批预算（5 张卡）为止，模型不必为了凑数把一章拆成多次重提。
-        AgentEditOperation::BlockOps if has_table_ops && block_ops_len > MAX_BLOCK_OPS_PER_CALL => {
-            let batches = block_ops_len.div_ceil(MAX_BLOCK_OPS_PER_CALL);
-            let plan = (0..batches)
-                .map(|index| {
-                    let start = index * MAX_BLOCK_OPS_PER_CALL + 1;
-                    let end = (start + MAX_BLOCK_OPS_PER_CALL - 1).min(block_ops_len);
-                    format!("{start}–{end}")
-                })
-                .collect::<Vec<_>>()
-                .join("、");
-            Err(IpcError::new(
-                "AG_TOOL_ARG",
-                &format!(
-                    "operation=block_ops 单次调用操作数 {block_ops_len} 超过上限 {MAX_BLOCK_OPS_PER_CALL}；请按区间 {plan} 分次提交；同一章连续追加用相同 adjudicationGroup 合成一张卡，正文末尾追加请使用 append"
-                ),
-                false,
-                false,
-            ))
-        }
-        AgentEditOperation::BlockOps
-            if has_table_ops && block_ops_bytes > MAX_BLOCK_OPS_BYTES_PER_BATCH =>
-        {
-            Err(IpcError::new(
-                "AG_TOOL_ARG",
-                &format!(
-                    "operation=block_ops 单批序列化载荷 {block_ops_bytes} 字节超过上限 {MAX_BLOCK_OPS_BYTES_PER_BATCH} 字节；请减少单批内容或分批提交"
-                ),
-                false,
-                false,
-            ))
-        }
         AgentEditOperation::StyleOps if !has_style_ops => Err(IpcError::new(
             "AG_TOOL_ARG",
             "operation=style_ops 必须提供 style_ops",
@@ -321,12 +291,54 @@ pub(super) fn resolve_agent_edit_operation(
 /// 检查 insert_before/insert_after 是否引用同一 blockId 作为多个操作的锚点。
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-059
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-059, BR-AG-DATA-010-GUARD-AG-AG-TOOL-059
  * type:     GUARD
  * chain:    AG-TOOL
- * rules:    BR-AG-STATE-002
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-010
  * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit
  */
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-010-GUARD-AG-AG-TOOL-061
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-DATA-010
+ * boundary: in=BlockOpsOperationCountAndSerializedBytes | out=OkOrIpcErrorWithSplitPlan | does_not=acceptPartiallyTruncateOrRewriteOperations
+ */
+fn enforce_block_ops_budget(block_ops_len: usize, block_ops_bytes: usize) -> Result<(), IpcError> {
+    if block_ops_len > MAX_BLOCK_OPS_PER_CALL {
+        let batches = block_ops_len.div_ceil(MAX_BLOCK_OPS_PER_CALL);
+        let plan = (0..batches)
+            .map(|index| {
+                let start = index * MAX_BLOCK_OPS_PER_CALL + 1;
+                let end = (start + MAX_BLOCK_OPS_PER_CALL - 1).min(block_ops_len);
+                format!("{start}–{end}")
+            })
+            .collect::<Vec<_>>()
+            .join("、");
+        return Err(IpcError::new(
+            "AG_TOOL_ARG",
+            &format!(
+                "operation=block_ops 单次调用操作数 {block_ops_len} 超过上限 {MAX_BLOCK_OPS_PER_CALL}；请按区间 {plan} 分次提交；同一章连续追加用相同 adjudicationGroup 合成一张卡，正文末尾追加请使用 append"
+            ),
+            false,
+            false,
+        ));
+    }
+    if block_ops_bytes > MAX_BLOCK_OPS_BYTES_PER_BATCH {
+        return Err(IpcError::new(
+            "AG_TOOL_ARG",
+            &format!(
+                "operation=block_ops 单批序列化载荷 {block_ops_bytes} 字节超过上限 {MAX_BLOCK_OPS_BYTES_PER_BATCH} 字节；请减少单批内容或分批提交"
+            ),
+            false,
+            false,
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn find_block_ops_anchor_conflict(
     operations: Option<&serde_json::Value>,
 ) -> Option<String> {

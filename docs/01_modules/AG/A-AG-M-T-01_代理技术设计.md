@@ -896,6 +896,30 @@ REQ-AG-010（网络研究）、012（格式转换）、014（多个既有文档�
 `deferred / DESIGN_PENDING`，不得从代码、工具注册、Prompt 或历史情况说明推导设计完成；补齐时只能在独立 DESIGN Scope
 新增或映射规则。本节只登记真实存在的映射，不为追求全量映射伪造 RULE。
 
+<!-- RULE
+rule_id: BR-AG-DATA-009
+主链路: AG-TOOL
+域: DATA
+-->
+propose_edit 的操作载荷必须完整且互斥。输入为一次 propose_edit 的 params；输出为唯一一个
+AgentEditOperation。每种操作必须满足：block_ops 提供 base 与非空 operations；replace_block 提供
+block_id 或 block_index，并提供 new_text；replace_document 提供 content；style_ops、table_ops、image_ops
+分别提供各自载荷。禁止未知 operation、禁止把不同 operation 的载荷字段混在同一请求（例如同时带
+content 与 operations）；字段可推导时按固定优先级推导，推导不出即失败。失败信号统一为 AG_TOOL_ARG，
+消息必须指出缺失或冲突的字段名，且不得回显载荷内容。
+
+<!-- RULE
+rule_id: BR-AG-DATA-010
+主链路: AG-TOOL
+域: DATA
+-->
+block_ops 单次提交必须受数量与字节双重预算约束，且预算只有一处来源。输入为 operations 数组；
+输出为通过校验的待投影操作序列。数量上限为单次调用上限（默认 320，按每卡 64 拆卡），序列化字节
+上限为 64 KiB；模型可见 schema 的 maxItems 与运行时判定必须引用同一常量，不得各自写死数字。
+超过任一上限时整批拒绝，失败信号为 AG_TOOL_ARG，消息必须包含实际数量或字节、上限值，以及可执行的
+拆分区间；禁止部分接受、禁止静默截断。正文尾部追加必须使用 append（无锚点），不得以同一末块重复
+insert_after 表达顺序追加。
+
 <!-- REQ_MAP
 req_id: REQ-AG-001
 target_type: CHAIN

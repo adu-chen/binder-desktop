@@ -266,6 +266,8 @@ fn block_ops_rejects_conflicting_anchor_usage() {
 }
 
 // covers: BR-AG-DATA-005
+// covers: BR-AG-DATA-009
+// covers: BR-AG-DATA-010
 // 单次调用上限：只有超过单回合卡预算才拒绝，并给出可执行拆分区间。
 #[test]
 fn block_ops_rejects_oversized_batch() {
@@ -321,6 +323,7 @@ fn block_ops_accepts_long_chapter_within_single_call_cap() {
 }
 
 // covers: BR-AG-DATA-005
+// covers: BR-AG-DATA-010
 // 数量在限内但序列化载荷超限时同样拒绝：字节才是真正的上下文预算。
 #[test]
 fn block_ops_rejects_oversized_serialized_payload() {

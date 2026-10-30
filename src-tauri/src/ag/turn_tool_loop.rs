@@ -117,6 +117,14 @@ fn correction_instruction(final_only: bool) -> serde_json::Value {
     correction_instruction_for_protocol(final_only, ag::model_output::BATCH_TOOL_PROTOCOL)
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-004-DATA-AG-AG-TURN-062
+ * type:     DATA
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-004
+ * boundary: in=RejectionKindAndFrozenTransportProtocol | out=ProtocolCorrectionSystemMessage | does_not=grantToolsReplayOperationsOrChangeBudget
+ */
 fn correction_instruction_for_protocol(final_only: bool, protocol: &str) -> serde_json::Value {
     serde_json::json!({
         "role":"system",
