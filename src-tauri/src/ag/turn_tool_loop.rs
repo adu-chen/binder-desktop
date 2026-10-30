@@ -3253,8 +3253,128 @@ enum ToolCallLoopResult {
  * type:     RB
  * chain:    AG-TOOL, AG-TURN
  * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=PreparedToolBatchParsedParamsAndToolCallRoundState | out=ToolCallLoopContinueWithUpdatedStateOrEndedTerminal | delegate=preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=rebuildPromptOrCloseRound
+ * boundary: in=PreparedToolBatchParsedParamsAndToolCallRoundState | out=ToolCallLoopContinueWithUpdatedStateOrEndedTerminal | delegate=preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=rebuildPromptOrCloseRound
  */
+/// 决策停放：可选 final-only 纠正、DecisionHandoff 转移、DecisionProposed 终态停放与广播。
+/// 该路径必然结束本轮；停车失败且已取消时走取消结算，其余错误向上传播。
+struct DecisionHandoffFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    session_id: &'a str,
+    turn_id: &'a str,
+    task_run_id: Option<String>,
+    turn_state: ag::turn::TurnState,
+    intent_result: ag::context::IntentResultV2,
+    raw_prompt: String,
+    continuation_messages: Vec<serde_json::Value>,
+    decision: crate::types::DecisionRequestV1,
+    final_only_correction_pending: bool,
+    transport_protocol: &'a str,
+    cancelled: &'a Arc<AtomicBool>,
+    tool_loop_state: &'a mut ag::tool::ToolLoopState,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-077, BR-SYS-STATE-008-RB-AG-AG-TOOL-077
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-SYS-STATE-008
+ * boundary: in=DecisionRequestCheckpointAndFinalOnlyCorrectionFlag | out=ParkedAwaitingDecisionAndDecisionRequestProposedEvent | delegate=park_agent_turn_for_decision,finish_cancelled_turn | consumer=BR-AG-STATE-001,BR-SYS-STATE-008 | does_not=executeToolOrResumeTurn
+ */
+fn park_decision_handoff<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: DecisionHandoffFacts<'_>,
+) -> Result<(), IpcError> {
+    let DecisionHandoffFacts {
+        state,
+        latch,
+        session_id,
+        turn_id,
+        task_run_id,
+        turn_state,
+        intent_result,
+        raw_prompt,
+        continuation_messages,
+        decision,
+        final_only_correction_pending,
+        transport_protocol,
+        cancelled,
+        tool_loop_state,
+    } = facts;
+    let mut continuation_messages = continuation_messages;
+    if final_only_correction_pending {
+        continuation_messages.push(correction_instruction_for_protocol(
+            true,
+            transport_protocol,
+        ));
+    }
+    let request_id = decision.request_id.clone();
+    if !advance_or_settle(
+        state,
+        app,
+        emitter,
+        latch,
+        turn_id,
+        task_run_id.as_deref(),
+        tool_loop_state,
+        ag::tool::ToolLoopEvent::DecisionHandoff,
+    ) {
+        return Ok(());
+    }
+    let mut turn_state = turn_state;
+    turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::DecisionProposed)
+        .ok_or_else(sm_error)?;
+    let current_task_run_id = task_run_id
+        .as_deref()
+        .expect("DecisionRequest must retain its TaskRun");
+    let park_result = park_agent_turn_for_decision(
+        state,
+        session_id,
+        turn_id,
+        current_task_run_id,
+        &request_id,
+        AgentTurnRuntimeCheckpoint {
+            intent: intent_result,
+            initial_prompt: raw_prompt,
+            continuation_messages,
+        },
+    );
+    if let Err(error) = park_result {
+        if cancelled.load(Ordering::Acquire) {
+            finish_cancelled_turn(
+                state,
+                app,
+                emitter,
+                latch,
+                turn_id,
+                task_run_id.as_deref(),
+                turn_state,
+            );
+            return Ok(());
+        }
+        return Err(error);
+    }
+    let projected = emitter.emit(
+        latch,
+        AgTurnEventPayload::DecisionRequestProposed {
+            request_id: decision.request_id,
+            kind: decision.kind,
+            payload: decision.payload,
+        },
+    )?;
+    if !projected {
+        return Ok(());
+    }
+    emitter.record_internal(
+        "decision_wait_started",
+        serde_json::json!({"requestId": request_id}),
+    )?;
+    emit_ag01(app, turn_id, turn_state);
+    Ok(())
+}
+
 async fn run_tool_call_loop<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -3723,62 +3843,26 @@ async fn run_tool_call_loop<R: tauri::Runtime>(
             return Ok(ToolCallLoopResult::Ended);
         }
         if let Some(decision) = decision_event_after_tool {
-            if flags.final_only_correction_pending {
-                continuation_messages.push(correction_instruction_for_protocol(
-                    true,
-                    &transport_protocol,
-                ));
-            }
-            let request_id = decision.request_id.clone();
-            advance_or_finish!(TlEv::DecisionHandoff);
-            turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::DecisionProposed)
-                .ok_or_else(sm_error)?;
-            let current_task_run_id = task_run_id
-                .as_deref()
-                .expect("DecisionRequest must retain its TaskRun");
-            let park_result = park_agent_turn_for_decision(
-                &state,
-                &session_id,
-                &turn_id,
-                current_task_run_id,
-                &request_id,
-                AgentTurnRuntimeCheckpoint {
-                    intent: intent_result,
-                    initial_prompt: raw_prompt.to_string(),
+            park_decision_handoff(
+                &app,
+                &event_emitter,
+                DecisionHandoffFacts {
+                    state,
+                    latch: &terminal_latch,
+                    session_id: &session_id,
+                    turn_id: &turn_id,
+                    task_run_id,
+                    turn_state,
+                    intent_result,
+                    raw_prompt: raw_prompt.to_string(),
                     continuation_messages,
-                },
-            );
-            if let Err(error) = park_result {
-                if cancelled.load(Ordering::Acquire) {
-                    finish_cancelled_turn(
-                        &state,
-                        &app,
-                        &event_emitter,
-                        &terminal_latch,
-                        &turn_id,
-                        task_run_id.as_deref(),
-                        turn_state,
-                    );
-                    return Ok(ToolCallLoopResult::Ended);
-                }
-                return Err(error);
-            }
-            let projected = event_emitter.emit(
-                &terminal_latch,
-                AgTurnEventPayload::DecisionRequestProposed {
-                    request_id: decision.request_id,
-                    kind: decision.kind,
-                    payload: decision.payload,
+                    decision,
+                    final_only_correction_pending: flags.final_only_correction_pending,
+                    transport_protocol: &transport_protocol,
+                    cancelled: &cancelled,
+                    tool_loop_state: &mut tool_loop_state,
                 },
             )?;
-            if !projected {
-                return Ok(ToolCallLoopResult::Ended);
-            }
-            event_emitter.record_internal(
-                "decision_wait_started",
-                serde_json::json!({"requestId": request_id}),
-            )?;
-            emit_ag01(&app, &turn_id, turn_state);
             return Ok(ToolCallLoopResult::Ended);
         }
         // Stop tool retries, not the user's entire conversation. The next response
@@ -4025,7 +4109,7 @@ fn handle_response_rejection<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
