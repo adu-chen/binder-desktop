@@ -3855,6 +3855,169 @@ async fn run_tool_call_loop<R: tauri::Runtime>(
     }))
 }
 
+/// 处理模型响应控制拒绝：记录拒绝、纠错计数、预算收尾兜底、纠错上限与正常纠正指令。
+/// Continue 表示已推进 SM-AG-02 ProtocolRejected、应继续 round close；Ended 表示回合已结算。
+struct ResponseCorrectionFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    turn_id: &'a str,
+    task_run_id: Option<&'a str>,
+    turn_state: ag::turn::TurnState,
+    tool_loop_state: &'a mut ag::tool::ToolLoopState,
+    protocol_correction_rounds: &'a mut usize,
+    final_only_after_rejection: bool,
+    response_rejection_kind: Option<&'a str>,
+    error: &'a IpcError,
+    output_decoder: &'a ag::model_output::ModelOutputDecoder,
+    max_corrections: usize,
+    round_index: usize,
+    remaining_rounds: usize,
+    visible_output_chars: usize,
+    budget_closing: bool,
+    continuation_messages: &'a mut Vec<serde_json::Value>,
+    transport_protocol: &'a str,
+}
+
+enum ResponseCorrection {
+    Continue,
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-076, BR-AG-DATA-004-RB-AG-AG-TOOL-076
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-DATA-004
+ * boundary: in=ModelControlRejectionCorrectionCountersAndBudgetState | out=ResponseCorrectionContinueOrEndedTerminal | delegate=advance_or_settle,settle_and_emit_ag_turn_error | consumer=BR-AG-STATE-001,BR-AG-DATA-004 | does_not=executeToolOrCloseRound
+ */
+fn handle_response_rejection<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: ResponseCorrectionFacts<'_>,
+) -> Result<ResponseCorrection, IpcError> {
+    let ResponseCorrectionFacts {
+        state,
+        latch,
+        turn_id,
+        task_run_id,
+        turn_state,
+        tool_loop_state,
+        protocol_correction_rounds,
+        final_only_after_rejection,
+        response_rejection_kind,
+        error,
+        output_decoder,
+        max_corrections,
+        round_index,
+        remaining_rounds,
+        visible_output_chars,
+        budget_closing,
+        continuation_messages,
+        transport_protocol,
+    } = facts;
+    *protocol_correction_rounds += 1;
+    let final_only = final_only_after_rejection;
+    emitter.record_internal(
+        "model_control_rejected",
+        serde_json::json!({
+            "code": error.code, "prefixKind": output_decoder.prefix_kind(),
+            "rejectionStage":"response_completion", "correctionAttempt":*protocol_correction_rounds,
+            "providerCompletionSeen":true, "finalOnly":final_only,
+            "responseRejectionKind":response_rejection_kind,
+        }),
+    )?;
+    // Once visible body has streamed, do not append a second answer to the same body.
+    // Oversized quarantine failures also stop immediately in the callback above.
+    if *protocol_correction_rounds > max_corrections
+        || round_index + 1 == remaining_rounds
+        || visible_output_chars > 0
+    {
+        if budget_closing && visible_output_chars == 0 {
+            emitter.record_internal(
+                "budget_close_fallback",
+                serde_json::json!({"code":error.code,"budgetClosing":true}),
+            )?;
+            emitter.emit(latch, AgTurnEventPayload::Chunk { text: "本次执行额度已到；模型未提供可验证的收尾回答。此前工具回执和效果记录保留，未完成部分不代表成功；请核对执行效果后明确提出后续请求。系统没有自动重放操作。".into() })?;
+            if let Ok(conn) = state.db.lock() {
+                settle_optional_task_run(
+                    &conn,
+                    task_run_id,
+                    turn_id,
+                    ag::task::TurnOutcome::Failed,
+                );
+            }
+            if !advance_or_settle(
+                state,
+                app,
+                emitter,
+                latch,
+                turn_id,
+                task_run_id,
+                tool_loop_state,
+                ag::tool::ToolLoopEvent::ProtocolRejected,
+            ) {
+                return Ok(ResponseCorrection::Ended);
+            }
+            emit_ag_turn_done(emitter, latch, app, turn_id, "budget_exhausted", turn_state);
+            return Ok(ResponseCorrection::Ended);
+        }
+        let terminal_error = if visible_output_chars > 0 {
+            error.clone()
+        } else {
+            IpcError::new(
+                "AG_MODEL_CORRECTION_LIMIT",
+                "模型响应协议纠错达到上限；本批未执行，此前证据保留，请显式重试。",
+                true,
+                false,
+            )
+        };
+        if !advance_or_settle(
+            state,
+            app,
+            emitter,
+            latch,
+            turn_id,
+            task_run_id,
+            tool_loop_state,
+            ag::tool::ToolLoopEvent::LoopError,
+        ) {
+            return Ok(ResponseCorrection::Ended);
+        }
+        settle_and_emit_ag_turn_error(
+            state,
+            task_run_id,
+            emitter,
+            latch,
+            app,
+            turn_id,
+            &terminal_error,
+        );
+        return Ok(ResponseCorrection::Ended);
+    }
+    let instruction = response_rejection_kind.map_or_else(
+        || correction_instruction_for_protocol(final_only, transport_protocol),
+        |kind| response_correction_instruction_for_protocol(final_only, kind, transport_protocol),
+    );
+    continuation_messages.push(instruction);
+    if error.code == "AG_WORKSPACE_PLAN_TOOL_REQUIRED" {
+        continuation_messages.push(serde_json::json!({"role":"system", "layer":"action_handoff_correction", "content":"上一final声明需要结构计划但没有计划，本段正文未展示。若本轮已要求恢复资源，请在核对当前对象后调用plan_workspace_operation生成真实裁决请求；缺信息则clarify；若确实仅报告、阻断或无需操作，final必须提供completion.status和具体reason，不得假称已执行或已进入等待。不得重放已有操作。"}));
+    }
+    if !advance_or_settle(
+        state,
+        app,
+        emitter,
+        latch,
+        turn_id,
+        task_run_id,
+        tool_loop_state,
+        ag::tool::ToolLoopEvent::ProtocolRejected,
+    ) {
+        return Ok(ResponseCorrection::Ended);
+    }
+    Ok(ResponseCorrection::Continue)
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
@@ -3862,7 +4025,7 @@ async fn run_tool_call_loop<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,run_tool_call_loop,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -4132,82 +4295,33 @@ async fn run_round_loop<R: tauri::Runtime>(
         let mut protocol_correction_diagnostic = None;
         let mut read_failure_final_pending = false;
         if let Err(error) = &response_control {
-            protocol_correction_rounds += 1;
-            let final_only = final_only_after_rejection;
-            event_emitter.record_internal("model_control_rejected", serde_json::json!({
-                "code": error.code, "prefixKind": output_decoder.prefix_kind(),
-                "rejectionStage":"response_completion", "correctionAttempt":protocol_correction_rounds,
-                "providerCompletionSeen":true, "finalOnly":final_only,
-                "responseRejectionKind":response_rejection_kind,
-            }))?;
-            // Once visible body has streamed, do not append a second answer to the same body.
-            // Oversized quarantine failures also stop immediately in the callback above.
-            if protocol_correction_rounds > execution_policy.max_corrections
-                || _round + 1 == remaining_rounds
-                || visible_output_chars > 0
-            {
-                if budget_closing && visible_output_chars == 0 {
-                    event_emitter.record_internal(
-                        "budget_close_fallback",
-                        serde_json::json!({"code":error.code,"budgetClosing":true}),
-                    )?;
-                    event_emitter.emit(&terminal_latch, AgTurnEventPayload::Chunk { text: "本次执行额度已到；模型未提供可验证的收尾回答。此前工具回执和效果记录保留，未完成部分不代表成功；请核对执行效果后明确提出后续请求。系统没有自动重放操作。".into() })?;
-                    if let Ok(conn) = state.db.lock() {
-                        settle_optional_task_run(
-                            &conn,
-                            task_run_id.as_deref(),
-                            &turn_id,
-                            ag::task::TurnOutcome::Failed,
-                        );
-                    }
-                    advance_or_finish!(TlEv::ProtocolRejected);
-                    emit_ag_turn_done(
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        "budget_exhausted",
-                        turn_state,
-                    );
-                    return Ok(());
-                }
-                let terminal_error = if visible_output_chars > 0 {
-                    error.clone()
-                } else {
-                    IpcError::new(
-                        "AG_MODEL_CORRECTION_LIMIT",
-                        "模型响应协议纠错达到上限；本批未执行，此前证据保留，请显式重试。",
-                        true,
-                        false,
-                    )
-                };
-                advance_or_finish!(TlEv::LoopError);
-                settle_and_emit_ag_turn_error(
-                    &state,
-                    task_run_id.as_deref(),
-                    &event_emitter,
-                    &terminal_latch,
-                    &app,
-                    &turn_id,
-                    &terminal_error,
-                );
-                return Ok(());
-            }
-            let instruction = response_rejection_kind.map_or_else(
-                || correction_instruction_for_protocol(final_only, &transport_protocol),
-                |kind| {
-                    response_correction_instruction_for_protocol(
-                        final_only,
-                        kind,
-                        &transport_protocol,
-                    )
+            match handle_response_rejection(
+                &app,
+                &event_emitter,
+                ResponseCorrectionFacts {
+                    state,
+                    latch: &terminal_latch,
+                    turn_id: &turn_id,
+                    task_run_id: task_run_id.as_deref(),
+                    turn_state,
+                    tool_loop_state: &mut tool_loop_state,
+                    protocol_correction_rounds: &mut protocol_correction_rounds,
+                    final_only_after_rejection,
+                    response_rejection_kind,
+                    error,
+                    output_decoder: &output_decoder,
+                    max_corrections: execution_policy.max_corrections,
+                    round_index: _round,
+                    remaining_rounds,
+                    visible_output_chars,
+                    budget_closing,
+                    continuation_messages: &mut continuation_messages,
+                    transport_protocol: &transport_protocol,
                 },
-            );
-            continuation_messages.push(instruction);
-            if error.code == "AG_WORKSPACE_PLAN_TOOL_REQUIRED" {
-                continuation_messages.push(serde_json::json!({"role":"system", "layer":"action_handoff_correction", "content":"上一final声明需要结构计划但没有计划，本段正文未展示。若本轮已要求恢复资源，请在核对当前对象后调用plan_workspace_operation生成真实裁决请求；缺信息则clarify；若确实仅报告、阻断或无需操作，final必须提供completion.status和具体reason，不得假称已执行或已进入等待。不得重放已有操作。"}));
+            )? {
+                ResponseCorrection::Continue => {}
+                ResponseCorrection::Ended => return Ok(()),
             }
-            advance_or_finish!(TlEv::ProtocolRejected);
         }
         match round {
             _ if response_rejected => {}
