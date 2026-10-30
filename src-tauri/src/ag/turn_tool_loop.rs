@@ -1290,7 +1290,6 @@ struct ToolExecutionOutcome {
     success: bool,
     diff_events: Vec<(String, u32, u32, String, String)>,
     decision: Option<crate::types::DecisionRequestV1>,
-    preview_checkpoint: bool,
     end_after_diff: bool,
     proposed_diff: bool,
     edit_blocked_reported: bool,
@@ -1597,7 +1596,6 @@ async fn execute_tool_call<R: tauri::Runtime>(
         success,
         diff_events,
         decision,
-        preview_checkpoint,
         end_after_diff,
         proposed_diff,
         edit_blocked_reported,
@@ -2673,147 +2671,132 @@ fn finish_final_answer<R: tauri::Runtime>(
     )
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-002
- * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,terminal_tool_requirement_error,park_clarification,finish_final_answer,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
- */
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
-    state: &AppState,
+struct RoundContext<'a, R: tauri::Runtime> {
+    state: &'a AppState,
     app: tauri::AppHandle<R>,
-    on_event: tauri::ipc::Channel<AgTurnEvent>,
     cancelled: Arc<AtomicBool>,
     terminal_latch: ag::turn::TerminalLatch,
     turn_id: String,
     session_id: String,
-    mut task_run_id: Option<String>,
     workspace_id_for_turn: String,
     provider: String,
     model: String,
     runtime_profile: String,
-    mut prompt_package: ag::context::PromptPackageV2,
-    mut agent_context_facts: crate::types::AgentContextFacts,
-    mut current_doc_prompt_coverage: Option<&'static str>,
-    mut messages: Vec<serde_json::Value>,
-    mut tools: serde_json::Value,
-    mut capability_factors: ag::tool_registry::CapabilityFactorsV2,
-    mut read_ctx: ag::blocks::AgentReadContext,
     active_doc_path: Option<String>,
     explicit_edit_target_set: ag::target_set::ExplicitEditTargetSet,
     ws_root: Option<String>,
-    mut current_doc_requires_tool_read: bool,
-    mut intent_result: ag::context::IntentResultV2,
-    mut continuation_messages: Vec<serde_json::Value>,
     history: Vec<ag::context::HistTurn>,
     raw_prompt: String,
     mention_block: Option<String>,
     reference_envelopes: Vec<ag::context::PromptDataEnvelopeV1>,
-    mut active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
     on_context_request: Option<tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
-) -> Result<(), IpcError> {
-    let event_emitter = TurnEventEmitter::new(&state, &on_event, &turn_id);
-    let transport_protocol = event_emitter.frozen_transport_protocol()?.ok_or_else(|| {
-        IpcError::new(
-            "AG_MODEL_PROTOCOL_VERSION_UNSUPPORTED",
-            "AgentTurn 尚未冻结模型工具传输协议",
-            false,
-            false,
-        )
-    })?;
-    let model_capacity = ag::prompt_runtime::model_capacity(&provider, &model);
-    let execution_policy = event_emitter.execution_policy()?;
-    let workspace_plan_completed = event_emitter.has_workspace_plan_receipt()?;
-    let (open_resource_path_hashes, selection_path_hashes) = match &agent_context_facts {
-        crate::types::AgentContextFacts::V1(facts) => (
-            facts
-                .open_docs
-                .iter()
-                .map(|item| ag::context::sha256_text(&item.rel_path))
-                .collect::<Vec<_>>(),
-            facts
-                .selections
-                .iter()
-                .map(|item| ag::context::sha256_text(&item.rel_path))
-                .collect::<Vec<_>>(),
-        ),
-        crate::types::AgentContextFacts::V2(facts) => (
-            facts
-                .open_resources
-                .iter()
-                .map(|item| ag::context::sha256_text(&item.rel_path))
-                .collect::<Vec<_>>(),
-            facts
-                .selections
-                .iter()
-                .map(|item| ag::context::sha256_text(&item.rel_path))
-                .collect::<Vec<_>>(),
-        ),
-    };
-    event_emitter.record_internal(
-        "target_resolution_inputs",
-        serde_json::json!({
-            "sameSessionHistorySubmittedCount": history.len(),
-            "sameSessionHistoryVisible": messages.iter().any(|item| {
-                matches!(item.get("layer").and_then(serde_json::Value::as_str), Some("history" | "cross_doc_history"))
-            }),
-            "activeTargetPresent": active_doc_path.is_some(),
-            "activeTargetPathHash": active_doc_path.as_deref().map(ag::context::sha256_text),
-            "openResourcePathHashes": open_resource_path_hashes,
-            "selectionPathHashes": selection_path_hashes,
-            "explicitReferenceEnvelopeCount": reference_envelopes.len(),
-            "selectionCount": agent_context_facts.selection_count(),
-            "contextRevision": agent_context_facts.revision(),
-        }),
-    )?;
-    let mut proposed_diff = false;
-    let mut edit_blocked_reported = false;
+    transport_protocol: String,
+    model_capacity: ag::prompt_runtime::ModelCapacity,
+    execution_policy: ag::tool_registry::ExecutionBudgetPolicy,
+    workspace_plan_completed: bool,
+    previous_model_calls: usize,
+    remaining_rounds: usize,
+}
 
-    // SM-AG-02 工具循环：注册/权限校验与本回合冻结的执行策略。
-    // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultRecording→
-    // Recorded 后回归 SM-AG-01 并重新装配；FinalAnswer→LoopCompleted；达上限→LoopAborted。
-    // 工具卡数据仍由 Channel 投影（互不替代）。
+struct RoundState {
+    messages: Vec<serde_json::Value>,
+    tools: serde_json::Value,
+    capability_factors: ag::tool_registry::CapabilityFactorsV2,
+    read_ctx: ag::blocks::AgentReadContext,
+    active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
+    intent_result: ag::context::IntentResultV2,
+    continuation_messages: Vec<serde_json::Value>,
+    task_run_id: Option<String>,
+    remaining_tool_calls: u32,
+    protocol_correction_rounds: usize,
+    parameter_correction_rounds: usize,
+    failed_read_signatures: BTreeSet<String>,
+    seen_tool_call_ids: BTreeSet<String>,
+    tool_loop_state: ag::tool::ToolLoopState,
+    turn_state: ag::turn::TurnState,
+    current_doc_prompt_coverage: Option<&'static str>,
+    current_doc_requires_tool_read: bool,
+    current_doc_read_confirmed: bool,
+    any_tool_called: bool,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+    final_prompt_audit: Option<FinalPromptAuditLog>,
+    capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
+    prompt_package: ag::context::PromptPackageV2,
+    agent_context_facts: crate::types::AgentContextFacts,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,execute_tool_call,record_tool_result,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ */
+/// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
+/// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
+async fn run_round_loop<R: tauri::Runtime>(
+    emitter: &TurnEventEmitter<'_>,
+    ctx: RoundContext<'_, R>,
+    round: RoundState,
+) -> Result<(), IpcError> {
+    let RoundContext {
+        state,
+        app,
+        cancelled,
+        terminal_latch,
+        turn_id,
+        session_id,
+        workspace_id_for_turn,
+        provider,
+        model,
+        runtime_profile,
+        active_doc_path,
+        explicit_edit_target_set,
+        ws_root,
+        history,
+        raw_prompt,
+        mention_block,
+        reference_envelopes,
+        on_context_request,
+        transport_protocol,
+        model_capacity,
+        execution_policy,
+        workspace_plan_completed,
+        previous_model_calls,
+        remaining_rounds,
+    } = ctx;
+    let event_emitter = emitter;
+    let RoundState {
+        mut messages,
+        mut tools,
+        mut capability_factors,
+        mut read_ctx,
+        mut active_snapshot,
+        mut intent_result,
+        mut continuation_messages,
+        mut task_run_id,
+        mut remaining_tool_calls,
+        mut protocol_correction_rounds,
+        mut parameter_correction_rounds,
+        mut failed_read_signatures,
+        mut seen_tool_call_ids,
+        mut tool_loop_state,
+        mut turn_state,
+        mut current_doc_prompt_coverage,
+        mut current_doc_requires_tool_read,
+        mut current_doc_read_confirmed,
+        mut any_tool_called,
+        mut proposed_diff,
+        mut edit_blocked_reported,
+        mut final_prompt_audit,
+        mut capability_use_tracker,
+        mut prompt_package,
+        mut agent_context_facts,
+    } = round;
     use ag::tool::{ToolLoopEvent as TlEv, ToolLoopState as TlSt};
-    let mut current_doc_read_confirmed = !current_doc_requires_tool_read;
-    // AG-CTX-01：本轮是否调用过任何工具（用于区分"已读未提案"与"零工具调用"的失败文案）。
-    let mut any_tool_called = false;
-    let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
-    let (mut protocol_correction_rounds, mut parameter_correction_rounds) =
-        event_emitter.correction_attempt_breakdown()?;
-    let mut failed_read_signatures = BTreeSet::new();
-    // Rejected tool IDs are still used by this AgentTurn. Do not make malformed
-    // arguments model-visible merely to retain duplicate-ID protection.
-    let mut seen_tool_call_ids = continuation_messages
-        .iter()
-        .filter_map(|message| {
-            message
-                .get("tool_calls")
-                .and_then(serde_json::Value::as_array)
-        })
-        .flatten()
-        .filter_map(|call| call.get("id").and_then(serde_json::Value::as_str))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    // 完整 Prompt 审计只保留本次 AgentTurn 最后一次实际发给模型的请求；回合退出时由 Drop
-    // 统一输出一次，避免工具续轮把前序 messages/tools 反复打印。
-    let mut final_prompt_audit = prompt_audit_enabled().then(FinalPromptAuditLog::default);
-    let mut tool_loop_state = TlSt::ModelStreaming;
-    let mut capability_use_tracker = ag::tool_registry::CapabilityGrantUseTrackerV2::default();
-    let (mut remaining_tool_calls, continuation_rounds) = continuation_execution_budget(
-        &continuation_messages,
-        execution_policy.max_tool_calls,
-        execution_policy.max_model_calls,
-    );
-    let remaining_rounds = continuation_rounds.min(
-        execution_policy
-            .max_model_calls
-            .saturating_sub(previous_model_calls),
-    );
-    let mut turn_state = ag::turn::TurnState::Streaming;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
             match advance_tool_loop(&app, &turn_id, &mut tool_loop_state, $event) {
@@ -3413,7 +3396,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     let mut diff_events_after_tool: Vec<(String, u32, u32, String, String)> =
                         Vec::new();
                     let mut decision_event_after_tool = None;
-                    let mut preview_checkpoint_after_tool = false;
                     let mut end_after_diff_proposal = false;
                     // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
                     // The real one-use execution grant is computed below after acquisition.
@@ -3611,7 +3593,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     let success = execution.success;
                     diff_events_after_tool = execution.diff_events;
                     decision_event_after_tool = execution.decision;
-                    preview_checkpoint_after_tool = execution.preview_checkpoint;
                     end_after_diff_proposal = execution.end_after_diff;
                     proposed_diff = execution.proposed_diff;
                     edit_blocked_reported = execution.edit_blocked_reported;
@@ -3955,6 +3936,203 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
 
     debug_assert!(false, "每个 provider 结果都应在循环内部返回或推进");
     Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=run_round_loop,resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,terminal_tool_requirement_error,park_clarification,finish_final_answer,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ */
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
+    state: &AppState,
+    app: tauri::AppHandle<R>,
+    on_event: tauri::ipc::Channel<AgTurnEvent>,
+    cancelled: Arc<AtomicBool>,
+    terminal_latch: ag::turn::TerminalLatch,
+    turn_id: String,
+    session_id: String,
+    task_run_id: Option<String>,
+    workspace_id_for_turn: String,
+    provider: String,
+    model: String,
+    runtime_profile: String,
+    prompt_package: ag::context::PromptPackageV2,
+    agent_context_facts: crate::types::AgentContextFacts,
+    current_doc_prompt_coverage: Option<&'static str>,
+    messages: Vec<serde_json::Value>,
+    tools: serde_json::Value,
+    capability_factors: ag::tool_registry::CapabilityFactorsV2,
+    read_ctx: ag::blocks::AgentReadContext,
+    active_doc_path: Option<String>,
+    explicit_edit_target_set: ag::target_set::ExplicitEditTargetSet,
+    ws_root: Option<String>,
+    current_doc_requires_tool_read: bool,
+    intent_result: ag::context::IntentResultV2,
+    continuation_messages: Vec<serde_json::Value>,
+    history: Vec<ag::context::HistTurn>,
+    raw_prompt: String,
+    mention_block: Option<String>,
+    reference_envelopes: Vec<ag::context::PromptDataEnvelopeV1>,
+    active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
+    on_context_request: Option<tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
+) -> Result<(), IpcError> {
+    let event_emitter = TurnEventEmitter::new(&state, &on_event, &turn_id);
+    let transport_protocol = event_emitter.frozen_transport_protocol()?.ok_or_else(|| {
+        IpcError::new(
+            "AG_MODEL_PROTOCOL_VERSION_UNSUPPORTED",
+            "AgentTurn 尚未冻结模型工具传输协议",
+            false,
+            false,
+        )
+    })?;
+    let model_capacity = ag::prompt_runtime::model_capacity(&provider, &model);
+    let execution_policy = event_emitter.execution_policy()?;
+    let workspace_plan_completed = event_emitter.has_workspace_plan_receipt()?;
+    let (open_resource_path_hashes, selection_path_hashes) = match &agent_context_facts {
+        crate::types::AgentContextFacts::V1(facts) => (
+            facts
+                .open_docs
+                .iter()
+                .map(|item| ag::context::sha256_text(&item.rel_path))
+                .collect::<Vec<_>>(),
+            facts
+                .selections
+                .iter()
+                .map(|item| ag::context::sha256_text(&item.rel_path))
+                .collect::<Vec<_>>(),
+        ),
+        crate::types::AgentContextFacts::V2(facts) => (
+            facts
+                .open_resources
+                .iter()
+                .map(|item| ag::context::sha256_text(&item.rel_path))
+                .collect::<Vec<_>>(),
+            facts
+                .selections
+                .iter()
+                .map(|item| ag::context::sha256_text(&item.rel_path))
+                .collect::<Vec<_>>(),
+        ),
+    };
+    event_emitter.record_internal(
+        "target_resolution_inputs",
+        serde_json::json!({
+            "sameSessionHistorySubmittedCount": history.len(),
+            "sameSessionHistoryVisible": messages.iter().any(|item| {
+                matches!(item.get("layer").and_then(serde_json::Value::as_str), Some("history" | "cross_doc_history"))
+            }),
+            "activeTargetPresent": active_doc_path.is_some(),
+            "activeTargetPathHash": active_doc_path.as_deref().map(ag::context::sha256_text),
+            "openResourcePathHashes": open_resource_path_hashes,
+            "selectionPathHashes": selection_path_hashes,
+            "explicitReferenceEnvelopeCount": reference_envelopes.len(),
+            "selectionCount": agent_context_facts.selection_count(),
+            "contextRevision": agent_context_facts.revision(),
+        }),
+    )?;
+    let proposed_diff = false;
+    let edit_blocked_reported = false;
+
+    // SM-AG-02 工具循环：注册/权限校验与本回合冻结的执行策略。
+    // 循环经状态机驱动 + 广播 sm:SM-AG-02（ModelStreaming→ToolValidating→ToolExecuting→ResultRecording→
+    // Recorded 后回归 SM-AG-01 并重新装配；FinalAnswer→LoopCompleted；达上限→LoopAborted。
+    // 工具卡数据仍由 Channel 投影（互不替代）。
+    use ag::tool::ToolLoopState as TlSt;
+    let current_doc_read_confirmed = !current_doc_requires_tool_read;
+    // AG-CTX-01：本轮是否调用过任何工具（用于区分"已读未提案"与"零工具调用"的失败文案）。
+    let any_tool_called = false;
+    let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
+    let (protocol_correction_rounds, parameter_correction_rounds) =
+        event_emitter.correction_attempt_breakdown()?;
+    let failed_read_signatures = BTreeSet::new();
+    // Rejected tool IDs are still used by this AgentTurn. Do not make malformed
+    // arguments model-visible merely to retain duplicate-ID protection.
+    let seen_tool_call_ids = continuation_messages
+        .iter()
+        .filter_map(|message| {
+            message
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+        })
+        .flatten()
+        .filter_map(|call| call.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    // 完整 Prompt 审计只保留本次 AgentTurn 最后一次实际发给模型的请求；回合退出时由 Drop
+    // 统一输出一次，避免工具续轮把前序 messages/tools 反复打印。
+    let final_prompt_audit = prompt_audit_enabled().then(FinalPromptAuditLog::default);
+    let tool_loop_state = TlSt::ModelStreaming;
+    let capability_use_tracker = ag::tool_registry::CapabilityGrantUseTrackerV2::default();
+    let (remaining_tool_calls, continuation_rounds) = continuation_execution_budget(
+        &continuation_messages,
+        execution_policy.max_tool_calls,
+        execution_policy.max_model_calls,
+    );
+    let remaining_rounds = continuation_rounds.min(
+        execution_policy
+            .max_model_calls
+            .saturating_sub(previous_model_calls),
+    );
+    let turn_state = ag::turn::TurnState::Streaming;
+    let round_context = RoundContext {
+        state,
+        app,
+        cancelled,
+        terminal_latch,
+        turn_id: turn_id.clone(),
+        session_id,
+        workspace_id_for_turn,
+        provider,
+        model,
+        runtime_profile,
+        active_doc_path,
+        explicit_edit_target_set,
+        ws_root,
+        history,
+        raw_prompt,
+        mention_block,
+        reference_envelopes,
+        on_context_request,
+        transport_protocol,
+        model_capacity,
+        execution_policy,
+        workspace_plan_completed,
+        previous_model_calls,
+        remaining_rounds,
+    };
+    let round_state = RoundState {
+        messages,
+        tools,
+        capability_factors,
+        read_ctx,
+        active_snapshot,
+        intent_result,
+        continuation_messages,
+        task_run_id,
+        remaining_tool_calls,
+        protocol_correction_rounds,
+        parameter_correction_rounds,
+        failed_read_signatures,
+        seen_tool_call_ids,
+        tool_loop_state,
+        turn_state,
+        current_doc_prompt_coverage,
+        current_doc_requires_tool_read,
+        current_doc_read_confirmed,
+        any_tool_called,
+        proposed_diff,
+        edit_blocked_reported,
+        final_prompt_audit,
+        capability_use_tracker,
+        prompt_package,
+        agent_context_facts,
+    };
+    run_round_loop(&event_emitter, round_context, round_state).await
 }
 
 #[cfg(test)]
