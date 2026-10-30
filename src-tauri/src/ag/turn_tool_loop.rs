@@ -3190,6 +3190,671 @@ fn close_round<R: tauri::Runtime>(
     Ok(RoundClose::Continue)
 }
 
+struct ToolCallContext<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    runtime_profile: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    tools: &'a serde_json::Value,
+    ws_root: Option<&'a str>,
+    on_context_request: Option<&'a tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
+    active_doc_path: Option<&'a str>,
+    history: &'a [ag::context::HistTurn],
+    raw_prompt: &'a str,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
+    transport_protocol: &'a str,
+    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
+    model_call_ordinal: usize,
+    round_index: usize,
+    remaining_rounds: usize,
+}
+
+struct ToolCallState {
+    messages: Vec<serde_json::Value>,
+    continuation_messages: Vec<serde_json::Value>,
+    task_run_id: Option<String>,
+    intent_result: ag::context::IntentResultV2,
+    agent_context_facts: crate::types::AgentContextFacts,
+    read_ctx: ag::blocks::AgentReadContext,
+    active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
+    capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
+    remaining_tool_calls: u32,
+    parameter_correction_rounds: usize,
+    failed_read_signatures: BTreeSet<String>,
+    tool_loop_state: ag::tool::ToolLoopState,
+    turn_state: ag::turn::TurnState,
+    current_doc_requires_tool_read: bool,
+    current_doc_read_confirmed: bool,
+    any_tool_called: bool,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+}
+
+struct ToolCallFlags {
+    final_only_correction_pending: bool,
+    parameter_correction_pending: bool,
+    read_failure_final_pending: bool,
+}
+
+enum ToolCallLoopResult {
+    Continue(ToolCallState),
+    Ended,
+}
+
+#[allow(clippy::too_many_arguments)]
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-075, BR-AG-STATE-001-RB-AG-AG-TOOL-075
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-STATE-002, BR-AG-STATE-001
+ * boundary: in=PreparedToolBatchParsedParamsAndToolCallRoundState | out=ToolCallLoopContinueWithUpdatedStateOrEndedTerminal | delegate=preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=rebuildPromptOrCloseRound
+ */
+async fn run_tool_call_loop<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    ctx: ToolCallContext<'_>,
+    tool_state: ToolCallState,
+    calls: Vec<crate::ent::gateway::GwToolCall>,
+    parsed_params: Vec<serde_json::Value>,
+    control_error: Option<IpcError>,
+    final_only_after_rejection: bool,
+    mut correction_counted_this_round: bool,
+    flags: &mut ToolCallFlags,
+) -> Result<ToolCallLoopResult, IpcError> {
+    let ToolCallContext {
+        state,
+        latch: terminal_latch,
+        cancelled,
+        session_id,
+        workspace_id: workspace_id_for_turn,
+        turn_id,
+        runtime_profile,
+        explicit_edit_target_set,
+        tools,
+        ws_root,
+        on_context_request,
+        active_doc_path,
+        history,
+        raw_prompt,
+        reference_envelopes,
+        capability_factors,
+        transport_protocol,
+        execution_policy,
+        model_call_ordinal,
+        round_index,
+        remaining_rounds,
+    } = ctx;
+    let event_emitter = emitter;
+    let ToolCallState {
+        mut messages,
+        mut continuation_messages,
+        mut task_run_id,
+        intent_result,
+        mut agent_context_facts,
+        mut read_ctx,
+        mut active_snapshot,
+        mut capability_use_tracker,
+        mut remaining_tool_calls,
+        mut parameter_correction_rounds,
+        mut failed_read_signatures,
+        mut tool_loop_state,
+        mut turn_state,
+        current_doc_requires_tool_read,
+        mut current_doc_read_confirmed,
+        any_tool_called,
+        mut proposed_diff,
+        mut edit_blocked_reported,
+    } = tool_state;
+    let _round = round_index;
+    use ag::tool::ToolLoopEvent as TlEv;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut tool_loop_state,
+                $event,
+            ) {
+                return Ok(ToolCallLoopResult::Ended);
+            }
+        }};
+    }
+    let mut stop_after_current_tool = false;
+    for (call_index, c) in calls.iter().enumerate() {
+        if cancelled.load(Ordering::Acquire) {
+            advance_or_finish!(TlEv::Cancel);
+            finish_cancelled_turn(
+                &state,
+                &app,
+                &event_emitter,
+                &terminal_latch,
+                &turn_id,
+                task_run_id.as_deref(),
+                turn_state,
+            );
+            return Ok(ToolCallLoopResult::Ended);
+        }
+        advance_or_finish!(TlEv::ToolRequest);
+        let params = parsed_params[call_index].clone();
+        let arg_parse_error = control_error.as_ref().map(|error| {
+                        serde_json::json!({
+                            "code": &error.code,
+                            "message": format!("{}；本批没有执行任何工具。{}", error.message,
+                                if transport_protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
+                                    "请按当前schema修正并仅提交一次binder_tool_batch，参数为唯一control和calls[{toolName,params}]，业务params不得含_binderTurn；不要重复已有操作。"
+                                } else {
+                                    "请按本原回合已冻结的工具schema修正响应控制，不得更换协议或重复已有操作。"
+                                }),
+                            "retriable": true,
+                        }).to_string()
+                    });
+        if c.name == "workspace_glob" && arg_parse_error.is_none() {
+            event_emitter.record_internal(
+                "workspace_glob_query_observed",
+                serde_json::json!({
+                    "toolCallId": &c.id,
+                    "query": workspace_glob_query_observation(
+                        &params,
+                        &raw_prompt,
+                        &history,
+                        &messages,
+                        active_doc_path.as_deref(),
+                        &reference_envelopes,
+                        &continuation_messages,
+                    ),
+                }),
+            )?;
+        }
+        event_emitter.emit(
+            &terminal_latch,
+            AgTurnEventPayload::ToolRequest {
+                tool_call_id: c.id.clone(),
+                tool_name: c.name.clone(),
+                params: safe_tool_params(&params),
+            },
+        )?;
+        // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
+        event_emitter.emit(
+            &terminal_latch,
+            AgTurnEventPayload::StepProgress {
+                action: if c.name == "propose_decision" || c.name == "plan_workspace_operation" {
+                    "deciding".to_string()
+                } else {
+                    "tool".to_string()
+                },
+                label: c.name.clone(),
+                detail: None,
+            },
+        )?;
+        let diff_events_after_tool: Vec<(String, u32, u32, String, String)>;
+        let decision_event_after_tool;
+        let end_after_diff_proposal;
+        // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
+        // The real one-use execution grant is computed below after acquisition.
+        let acquisition_allowed = preflight_tool_acquisition_allowed(
+            &capability_factors,
+            &cancelled,
+            &terminal_latch,
+            &runtime_profile,
+            &turn_id,
+            &explicit_edit_target_set,
+            model_call_ordinal,
+            remaining_tool_calls,
+            &tools,
+            ws_root.as_deref(),
+            flags.read_failure_final_pending,
+            arg_parse_error.is_none(),
+            c,
+            &params,
+        );
+        let context_refresh_error = if acquisition_allowed
+            && ag::tool_registry::lookup(&c.name)
+                .is_some_and(|tool| tool.requires_fresh_host_context)
+        {
+            refresh_tool_context(
+                &event_emitter,
+                on_context_request,
+                &mut agent_context_facts,
+                &mut read_ctx,
+                &mut active_snapshot,
+                active_doc_path.as_deref(),
+                &c.id,
+                &c.name,
+                &params,
+                cancelled.clone(),
+            )
+            .await?
+        } else {
+            None
+        };
+        let context_failure_summary = context_refresh_error.as_ref().map(|error| {
+            format!(
+                "[{}] 专业上下文未就绪、已变化或采集失败；本次工具未执行，请就绪后重新提交",
+                error.code
+            )
+        });
+        // 每个 ToolCall 在真实 GatePassed 后重新取得一次性 CapabilityGrantV2。Prompt Manifest
+        // 只决定模型当时可见的工具，不能拿来执行；TaskPlan/IntentResult/ToolResult 内容均不授权。
+        let grant = match resolve_execution_grant_and_decision(
+            &event_emitter,
+            ToolGrantFacts {
+                latch: &terminal_latch,
+                cancelled: &cancelled,
+                runtime_profile: &runtime_profile,
+                turn_id: &turn_id,
+                has_task_run: task_run_id.is_some(),
+                capability_factors: &capability_factors,
+                model_call_ordinal,
+                remaining_tool_calls,
+                explicit_edit_target_set: &explicit_edit_target_set,
+                tools: &tools,
+                ws_root: ws_root.as_deref(),
+                read_failure_final_pending: flags.read_failure_final_pending,
+                arg_parse_error_none: arg_parse_error.is_none(),
+                final_only_after_rejection,
+                max_corrections: execution_policy.max_corrections,
+                call: c,
+                params: &params,
+                capability_use_tracker: &mut capability_use_tracker,
+                parameter_correction_rounds: &mut parameter_correction_rounds,
+                correction_counted_this_round: &mut correction_counted_this_round,
+                parameter_correction_pending: &mut flags.parameter_correction_pending,
+                final_only_correction_pending: &mut flags.final_only_correction_pending,
+            },
+        ) {
+            Ok(grant) => grant,
+            Err(ToolGrantFailure::Propagate(error)) => return Err(error),
+            Err(ToolGrantFailure::Settle(error)) => {
+                advance_or_finish!(TlEv::LoopError);
+                settle_and_emit_ag_turn_error(
+                    &state,
+                    task_run_id.as_deref(),
+                    &event_emitter,
+                    &terminal_latch,
+                    &app,
+                    &turn_id,
+                    &error,
+                );
+                return Ok(ToolCallLoopResult::Ended);
+            }
+        };
+        let execution_grant = grant.execution_grant;
+        let tool_decision = grant.tool_decision;
+        let parameter_contract_rejection = grant.parameter_contract_rejection;
+        let scope_candidates = compute_scope_candidates(
+            tool_decision.as_ref(),
+            &c.name,
+            &params,
+            ws_root.as_deref(),
+            &explicit_edit_target_set,
+        );
+        // 简单回合保持无 TaskRun。只有已获准的任务级工具真的到达执行边界时，
+        // 才在创建 DecisionRequest / WorkspaceOperationPlan 之前取得并绑定 TaskRun。
+        let task_run_prepare_error = prepare_task_run_for_tool(
+            &state,
+            &event_emitter,
+            &session_id,
+            &workspace_id_for_turn,
+            &turn_id,
+            &c.name,
+            &intent_result.goal,
+            &explicit_edit_target_set,
+            scope_candidates.is_ok(),
+            matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow)),
+            &mut task_run_id,
+        );
+        let (execution_failure, execution_guard_error) = compute_execution_failure(
+            control_error.as_ref(),
+            parameter_contract_rejection,
+            tool_decision.as_ref(),
+            &c.name,
+            &params,
+            flags.read_failure_final_pending,
+            context_refresh_error.as_ref(),
+            &scope_candidates,
+            task_run_prepare_error.as_ref(),
+        );
+        let mut execution_failure = execution_failure;
+        let read_execution = if arg_parse_error.is_none()
+            && execution_guard_error.is_none()
+            && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
+            && ws_root.is_some()
+            && ag::tool_registry::lookup(&c.name)
+                .is_some_and(|tool| tool.permission == ag::tool_registry::ToolPermission::ReadOnly)
+        {
+            advance_or_finish!(TlEv::ValidateOk);
+            Some(
+                ag::tool_exec::exec_read_only_with_deadline(
+                    read_ctx.clone(),
+                    c.name.clone(),
+                    params.clone(),
+                    cancelled.clone(),
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        let capability_identity = tool_call_receipt_identity(
+            &workspace_id_for_turn,
+            &session_id,
+            &turn_id,
+            &c.id,
+            &c.name,
+            &execution_grant.grant_id,
+        );
+        let validation_allows_execution = arg_parse_error.is_none()
+            && execution_guard_error.is_none()
+            && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow));
+        if validation_allows_execution {
+            // Only a validated call that crosses the execution boundary consumes the
+            // tool budget. Rejected protocol/argument/permission calls consume rounds,
+            // but not the execution allowance.
+            remaining_tool_calls = remaining_tool_calls.saturating_sub(1);
+        }
+        if validation_allows_execution && read_execution.is_none() {
+            advance_or_finish!(TlEv::ValidateOk);
+        } else if !validation_allows_execution {
+            advance_or_finish!(TlEv::ValidateFail);
+        }
+        let execution = execute_tool_call(
+            &app,
+            ToolExecutionFacts {
+                state,
+                cancelled: &cancelled,
+                call: c,
+                params: &params,
+                arg_parse_error: arg_parse_error.as_ref(),
+                execution_guard_error: execution_guard_error.as_ref(),
+                tool_decision: tool_decision.as_ref(),
+                execution_failure,
+                read_execution,
+                ws_root: ws_root.as_deref(),
+                read_ctx: &read_ctx,
+                active_doc_path: active_doc_path.as_deref(),
+                explicit_edit_target_set: &explicit_edit_target_set,
+                capability_identity: &capability_identity,
+                task_run_id: task_run_id.as_deref(),
+                scope_candidates: &scope_candidates,
+                current_doc_requires_tool_read,
+                current_doc_read_confirmed,
+                workspace_id: &workspace_id_for_turn,
+                session_id: &session_id,
+                turn_id: &turn_id,
+                proposed_diff,
+                edit_blocked_reported,
+            },
+        )
+        .await;
+        let result = execution.result;
+        let success = execution.success;
+        diff_events_after_tool = execution.diff_events;
+        decision_event_after_tool = execution.decision;
+        end_after_diff_proposal = execution.end_after_diff;
+        proposed_diff = execution.proposed_diff;
+        edit_blocked_reported = execution.edit_blocked_reported;
+        execution_failure = execution.execution_failure;
+        let repeated_read_failure = if validation_allows_execution && !success {
+            let is_read_only = ag::tool_registry::lookup(&c.name)
+                .is_some_and(|tool| tool.permission == ag::tool_registry::ToolPermission::ReadOnly);
+            execution_failure.as_ref().is_some_and(|error| {
+                is_read_only
+                    && repeated_read_failure(
+                        &mut failed_read_signatures,
+                        &c.name,
+                        &params,
+                        &error.code,
+                    )
+            })
+        } else {
+            false
+        };
+        if let Some(error) = &execution_failure {
+            event_emitter.record_internal("tool_failure_observed", serde_json::json!({
+                            "toolName": &c.name, "toolCallId": &c.id, "code": &error.code,
+                            "rejectionStage": if validation_allows_execution { "tool_execution" } else { "tool_validation" },
+                            "hasExpectedHash": params.get("expected_hash").is_some(),
+                            "hasCursor": params.get("cursor").is_some(),
+                            "nonInitialPage": params.get("cursor").is_some() || params.get("offset").and_then(|v|v.as_u64()).is_some_and(|offset|offset>0),
+                            "requestFingerprint": ag::context::sha256_text(&params.to_string()),
+                            "requestedReadOffset": params.get("offset").and_then(|value|value.as_u64()),
+                            "requestedLimitChars": params.get("limit_chars").and_then(|value|value.as_u64()),
+                            "requestedDirectoryLimit": params.get("limit").and_then(|value|value.as_u64()),
+                            "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
+                            "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
+                            "repeatedFailure": repeated_read_failure,
+                        }))?;
+        }
+        if success && is_current_doc_read_tool(&c.name, &params, active_doc_path.as_deref()) {
+            current_doc_read_confirmed = true;
+        }
+        if cancelled.load(Ordering::Acquire) {
+            advance_or_finish!(TlEv::Cancel);
+            finish_cancelled_turn(
+                &state,
+                &app,
+                &event_emitter,
+                &terminal_latch,
+                &turn_id,
+                task_run_id.as_deref(),
+                turn_state,
+            );
+            return Ok(ToolCallLoopResult::Ended);
+        }
+        if validation_allows_execution {
+            advance_or_finish!(if success {
+                TlEv::ExecOk
+            } else {
+                TlEv::ExecFail
+            });
+        }
+        if let Some(error) = execution_failure.as_ref().filter(|error| {
+            matches!(
+                error.code.as_str(),
+                "AG_CAPABILITY_TIMEOUT"
+                    | "AG_CAPABILITY_WORKER_FAILED"
+                    | "AG_EFFECT_FACT_UNAVAILABLE"
+                    | "AG_EFFECT_PENDING"
+            )
+        }) {
+            advance_or_finish!(TlEv::LoopError);
+            settle_and_emit_ag_turn_error(
+                &state,
+                task_run_id.as_deref(),
+                &event_emitter,
+                &terminal_latch,
+                &app,
+                &turn_id,
+                error,
+            );
+            return Ok(ToolCallLoopResult::Ended);
+        }
+        if success && c.name == "read_doc" {
+            if let Ok(read) = serde_json::from_str::<serde_json::Value>(&result) {
+                event_emitter.record_internal("read_result_observed", serde_json::json!({
+                                "toolCallId": c.id, "toolName": c.name,
+                                "requestFingerprint": ag::context::sha256_text(&params.to_string()),
+                                "readView": read.get("view").and_then(|value|value.as_str()).unwrap_or("structure"),
+                                "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
+                                "returnedBlockCount": read.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
+                                "readOffset": read.get("offset"), "readEndOffset": read.get("end_offset"),
+                                "readTotalChars": read.get("total_chars"), "readHasMore": read.get("has_more"),
+                                "readComplete": read.get("complete"), "readVersion": read.get("version_hash"),
+                                "resultChars": serde_json::to_string(&result).expect("String serialization").chars().count(),
+                                "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
+                            }))?;
+            }
+        }
+        if !record_tool_result(
+            &event_emitter,
+            &terminal_latch,
+            ToolResultFacts {
+                workspace_id: &workspace_id_for_turn,
+                turn_id: &turn_id,
+                tool_call_id: &c.id,
+                tool_name: &c.name,
+                params: &params,
+                read_ctx: &read_ctx,
+                result: &result,
+                success,
+                validation_allows_execution,
+                execution_failure: execution_failure.as_ref(),
+                context_failure_summary,
+                identity: &capability_identity,
+                diff_events: &diff_events_after_tool,
+                decision: decision_event_after_tool.as_ref(),
+                repeated_read_failure,
+                control_error: control_error.is_some(),
+                task_run_id: task_run_id.as_deref(),
+            },
+            &mut messages,
+            &mut continuation_messages,
+        )? {
+            return Ok(ToolCallLoopResult::Ended);
+        }
+        if let Some(decision) = decision_event_after_tool {
+            if flags.final_only_correction_pending {
+                continuation_messages.push(correction_instruction_for_protocol(
+                    true,
+                    &transport_protocol,
+                ));
+            }
+            let request_id = decision.request_id.clone();
+            advance_or_finish!(TlEv::DecisionHandoff);
+            turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::DecisionProposed)
+                .ok_or_else(sm_error)?;
+            let current_task_run_id = task_run_id
+                .as_deref()
+                .expect("DecisionRequest must retain its TaskRun");
+            let park_result = park_agent_turn_for_decision(
+                &state,
+                &session_id,
+                &turn_id,
+                current_task_run_id,
+                &request_id,
+                AgentTurnRuntimeCheckpoint {
+                    intent: intent_result,
+                    initial_prompt: raw_prompt.to_string(),
+                    continuation_messages,
+                },
+            );
+            if let Err(error) = park_result {
+                if cancelled.load(Ordering::Acquire) {
+                    finish_cancelled_turn(
+                        &state,
+                        &app,
+                        &event_emitter,
+                        &terminal_latch,
+                        &turn_id,
+                        task_run_id.as_deref(),
+                        turn_state,
+                    );
+                    return Ok(ToolCallLoopResult::Ended);
+                }
+                return Err(error);
+            }
+            let projected = event_emitter.emit(
+                &terminal_latch,
+                AgTurnEventPayload::DecisionRequestProposed {
+                    request_id: decision.request_id,
+                    kind: decision.kind,
+                    payload: decision.payload,
+                },
+            )?;
+            if !projected {
+                return Ok(ToolCallLoopResult::Ended);
+            }
+            event_emitter.record_internal(
+                "decision_wait_started",
+                serde_json::json!({"requestId": request_id}),
+            )?;
+            emit_ag01(&app, &turn_id, turn_state);
+            return Ok(ToolCallLoopResult::Ended);
+        }
+        // Stop tool retries, not the user's entire conversation. The next response
+        // may only explain existing evidence or ask for clarification. It still
+        // passes the original Gate, prompt budget, cancellation and round limits.
+        flags.read_failure_final_pending |= repeated_read_failure;
+        let has_more_calls = call_index + 1 < calls.len();
+        let loop_budget_reached = execution_policy.final_reserve == 0
+            && (remaining_tool_calls == 0 || (_round + 1 == remaining_rounds && !has_more_calls));
+        if loop_budget_reached {
+            advance_or_finish!(TlEv::LoopLimit);
+            stop_after_current_tool = true;
+        } else if end_after_diff_proposal && success {
+            advance_or_finish!(TlEv::ProposalRecorded);
+            stop_after_current_tool = true;
+        } else if has_more_calls {
+            // 同一响应还有独立 ToolCall：经转移引擎保持当前激活，
+            // 不直接改写状态，也不回归 SM-AG-01。
+            advance_or_finish!(TlEv::NextToolCall);
+        } else {
+            advance_or_finish!(TlEv::Recorded);
+        }
+        if stop_after_current_tool {
+            break;
+        }
+    }
+    if _round + 1 == remaining_rounds
+        || (remaining_tool_calls == 0 && execution_policy.final_reserve == 0)
+    {
+        let error = IpcError::new(
+            "AG_TOOL_LOOP_LIMIT",
+            "工具循环达到上限，当前 AgentTurn 已中止；未完成步骤不会被标记为完成。",
+            true,
+            false,
+        );
+        if let Ok(conn) = state.db.lock() {
+            settle_optional_task_run(
+                &conn,
+                task_run_id.as_deref(),
+                &turn_id,
+                ag::task::TurnOutcome::Failed,
+            );
+        }
+        emit_ag_turn_error_from(
+            &event_emitter,
+            &terminal_latch,
+            &app,
+            &turn_id,
+            &error,
+            turn_state,
+        );
+        return Ok(ToolCallLoopResult::Ended);
+    }
+
+    Ok(ToolCallLoopResult::Continue(ToolCallState {
+        messages,
+        continuation_messages,
+        task_run_id,
+        intent_result,
+        agent_context_facts,
+        read_ctx,
+        active_snapshot,
+        capability_use_tracker,
+        remaining_tool_calls,
+        parameter_correction_rounds,
+        failed_read_signatures,
+        tool_loop_state,
+        turn_state,
+        current_doc_requires_tool_read,
+        current_doc_read_confirmed,
+        any_tool_called,
+        proposed_diff,
+        edit_blocked_reported,
+    }))
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
@@ -3197,7 +3862,7 @@ fn close_round<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,run_tool_call_loop,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -3645,7 +4310,7 @@ async fn run_round_loop<R: tauri::Runtime>(
                 let parsed_params = prepared.parsed_params;
                 let control_error = prepared.control_error;
                 let native_transport = prepared.native_transport;
-                let mut correction_counted_this_round = control_error.is_some();
+                let correction_counted_this_round = control_error.is_some();
                 if control_error.is_some() {
                     // The response-level rejection happened before the per-tool parameter
                     // branch below. It still needs an explicit correction on the next model
@@ -3691,511 +4356,93 @@ async fn run_round_loop<R: tauri::Runtime>(
                     continuation_messages.push(assistant_tool_calls);
                 }
 
-                let mut stop_after_current_tool = false;
-                for (call_index, c) in calls.iter().enumerate() {
-                    if cancelled.load(Ordering::Acquire) {
-                        advance_or_finish!(TlEv::Cancel);
-                        finish_cancelled_turn(
-                            &state,
-                            &app,
-                            &event_emitter,
-                            &terminal_latch,
-                            &turn_id,
-                            task_run_id.as_deref(),
-                            turn_state,
-                        );
-                        return Ok(());
-                    }
-                    advance_or_finish!(TlEv::ToolRequest);
-                    let params = parsed_params[call_index].clone();
-                    let arg_parse_error = control_error.as_ref().map(|error| {
-                        serde_json::json!({
-                            "code": &error.code,
-                            "message": format!("{}；本批没有执行任何工具。{}", error.message,
-                                if transport_protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
-                                    "请按当前schema修正并仅提交一次binder_tool_batch，参数为唯一control和calls[{toolName,params}]，业务params不得含_binderTurn；不要重复已有操作。"
-                                } else {
-                                    "请按本原回合已冻结的工具schema修正响应控制，不得更换协议或重复已有操作。"
-                                }),
-                            "retriable": true,
-                        }).to_string()
-                    });
-                    if c.name == "workspace_glob" && arg_parse_error.is_none() {
-                        event_emitter.record_internal(
-                            "workspace_glob_query_observed",
-                            serde_json::json!({
-                                "toolCallId": &c.id,
-                                "query": workspace_glob_query_observation(
-                                    &params,
-                                    &raw_prompt,
-                                    &history,
-                                    &messages,
-                                    active_doc_path.as_deref(),
-                                    &reference_envelopes,
-                                    &continuation_messages,
-                                ),
-                            }),
-                        )?;
-                    }
-                    event_emitter.emit(
-                        &terminal_latch,
-                        AgTurnEventPayload::ToolRequest {
-                            tool_call_id: c.id.clone(),
-                            tool_name: c.name.clone(),
-                            params: safe_tool_params(&params),
-                        },
-                    )?;
-                    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
-                    event_emitter.emit(
-                        &terminal_latch,
-                        AgTurnEventPayload::StepProgress {
-                            action: if c.name == "propose_decision"
-                                || c.name == "plan_workspace_operation"
-                            {
-                                "deciding".to_string()
-                            } else {
-                                "tool".to_string()
-                            },
-                            label: c.name.clone(),
-                            detail: None,
-                        },
-                    )?;
-                    let mut diff_events_after_tool: Vec<(String, u32, u32, String, String)> =
-                        Vec::new();
-                    let mut decision_event_after_tool = None;
-                    let mut end_after_diff_proposal = false;
-                    // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
-                    // The real one-use execution grant is computed below after acquisition.
-                    let acquisition_allowed = preflight_tool_acquisition_allowed(
-                        &capability_factors,
-                        &cancelled,
-                        &terminal_latch,
-                        &runtime_profile,
-                        &turn_id,
-                        &explicit_edit_target_set,
-                        model_call_ordinal,
-                        remaining_tool_calls,
-                        &tools,
-                        ws_root.as_deref(),
-                        read_failure_final_pending,
-                        arg_parse_error.is_none(),
-                        c,
-                        &params,
-                    );
-                    let context_refresh_error = if acquisition_allowed
-                        && ag::tool_registry::lookup(&c.name)
-                            .is_some_and(|tool| tool.requires_fresh_host_context)
-                    {
-                        refresh_tool_context(
-                            &event_emitter,
-                            on_context_request.as_ref(),
-                            &mut agent_context_facts,
-                            &mut read_ctx,
-                            &mut active_snapshot,
-                            active_doc_path.as_deref(),
-                            &c.id,
-                            &c.name,
-                            &params,
-                            cancelled.clone(),
-                        )
-                        .await?
-                    } else {
-                        None
-                    };
-                    let context_failure_summary = context_refresh_error.as_ref().map(|error| format!("[{}] 专业上下文未就绪、已变化或采集失败；本次工具未执行，请就绪后重新提交", error.code));
-                    // 每个 ToolCall 在真实 GatePassed 后重新取得一次性 CapabilityGrantV2。Prompt Manifest
-                    // 只决定模型当时可见的工具，不能拿来执行；TaskPlan/IntentResult/ToolResult 内容均不授权。
-                    let grant = match resolve_execution_grant_and_decision(
-                        &event_emitter,
-                        ToolGrantFacts {
-                            latch: &terminal_latch,
-                            cancelled: &cancelled,
-                            runtime_profile: &runtime_profile,
-                            turn_id: &turn_id,
-                            has_task_run: task_run_id.is_some(),
-                            capability_factors: &capability_factors,
-                            model_call_ordinal,
-                            remaining_tool_calls,
-                            explicit_edit_target_set: &explicit_edit_target_set,
-                            tools: &tools,
-                            ws_root: ws_root.as_deref(),
-                            read_failure_final_pending,
-                            arg_parse_error_none: arg_parse_error.is_none(),
-                            final_only_after_rejection,
-                            max_corrections: execution_policy.max_corrections,
-                            call: c,
-                            params: &params,
-                            capability_use_tracker: &mut capability_use_tracker,
-                            parameter_correction_rounds: &mut parameter_correction_rounds,
-                            correction_counted_this_round: &mut correction_counted_this_round,
-                            parameter_correction_pending: &mut parameter_correction_pending,
-                            final_only_correction_pending: &mut final_only_correction_pending,
-                        },
-                    ) {
-                        Ok(grant) => grant,
-                        Err(ToolGrantFailure::Propagate(error)) => return Err(error),
-                        Err(ToolGrantFailure::Settle(error)) => {
-                            advance_or_finish!(TlEv::LoopError);
-                            settle_and_emit_ag_turn_error(
-                                &state,
-                                task_run_id.as_deref(),
-                                &event_emitter,
-                                &terminal_latch,
-                                &app,
-                                &turn_id,
-                                &error,
-                            );
-                            return Ok(());
-                        }
-                    };
-                    let execution_grant = grant.execution_grant;
-                    let tool_decision = grant.tool_decision;
-                    let parameter_contract_rejection = grant.parameter_contract_rejection;
-                    let scope_candidates = compute_scope_candidates(
-                        tool_decision.as_ref(),
-                        &c.name,
-                        &params,
-                        ws_root.as_deref(),
-                        &explicit_edit_target_set,
-                    );
-                    // 简单回合保持无 TaskRun。只有已获准的任务级工具真的到达执行边界时，
-                    // 才在创建 DecisionRequest / WorkspaceOperationPlan 之前取得并绑定 TaskRun。
-                    let task_run_prepare_error = prepare_task_run_for_tool(
-                        &state,
-                        &event_emitter,
-                        &session_id,
-                        &workspace_id_for_turn,
-                        &turn_id,
-                        &c.name,
-                        &intent_result.goal,
-                        &explicit_edit_target_set,
-                        scope_candidates.is_ok(),
-                        matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow)),
-                        &mut task_run_id,
-                    );
-                    let (execution_failure, execution_guard_error) = compute_execution_failure(
-                        control_error.as_ref(),
-                        parameter_contract_rejection,
-                        tool_decision.as_ref(),
-                        &c.name,
-                        &params,
-                        read_failure_final_pending,
-                        context_refresh_error.as_ref(),
-                        &scope_candidates,
-                        task_run_prepare_error.as_ref(),
-                    );
-                    let mut execution_failure = execution_failure;
-                    let read_execution = if arg_parse_error.is_none()
-                        && execution_guard_error.is_none()
-                        && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
-                        && ws_root.is_some()
-                        && ag::tool_registry::lookup(&c.name).is_some_and(|tool| {
-                            tool.permission == ag::tool_registry::ToolPermission::ReadOnly
-                        }) {
-                        advance_or_finish!(TlEv::ValidateOk);
-                        Some(
-                            ag::tool_exec::exec_read_only_with_deadline(
-                                read_ctx.clone(),
-                                c.name.clone(),
-                                params.clone(),
-                                cancelled.clone(),
-                            )
-                            .await,
-                        )
-                    } else {
-                        None
-                    };
-                    let capability_identity = tool_call_receipt_identity(
-                        &workspace_id_for_turn,
-                        &session_id,
-                        &turn_id,
-                        &c.id,
-                        &c.name,
-                        &execution_grant.grant_id,
-                    );
-                    let validation_allows_execution = arg_parse_error.is_none()
-                        && execution_guard_error.is_none()
-                        && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow));
-                    if validation_allows_execution {
-                        // Only a validated call that crosses the execution boundary consumes the
-                        // tool budget. Rejected protocol/argument/permission calls consume rounds,
-                        // but not the execution allowance.
-                        remaining_tool_calls = remaining_tool_calls.saturating_sub(1);
-                    }
-                    if validation_allows_execution && read_execution.is_none() {
-                        advance_or_finish!(TlEv::ValidateOk);
-                    } else if !validation_allows_execution {
-                        advance_or_finish!(TlEv::ValidateFail);
-                    }
-                    let execution = execute_tool_call(
-                        &app,
-                        ToolExecutionFacts {
-                            state,
-                            cancelled: &cancelled,
-                            call: c,
-                            params: &params,
-                            arg_parse_error: arg_parse_error.as_ref(),
-                            execution_guard_error: execution_guard_error.as_ref(),
-                            tool_decision: tool_decision.as_ref(),
-                            execution_failure,
-                            read_execution,
-                            ws_root: ws_root.as_deref(),
-                            read_ctx: &read_ctx,
-                            active_doc_path: active_doc_path.as_deref(),
-                            explicit_edit_target_set: &explicit_edit_target_set,
-                            capability_identity: &capability_identity,
-                            task_run_id: task_run_id.as_deref(),
-                            scope_candidates: &scope_candidates,
-                            current_doc_requires_tool_read,
-                            current_doc_read_confirmed,
-                            workspace_id: &workspace_id_for_turn,
-                            session_id: &session_id,
-                            turn_id: &turn_id,
-                            proposed_diff,
-                            edit_blocked_reported,
-                        },
-                    )
-                    .await;
-                    let result = execution.result;
-                    let success = execution.success;
-                    diff_events_after_tool = execution.diff_events;
-                    decision_event_after_tool = execution.decision;
-                    end_after_diff_proposal = execution.end_after_diff;
-                    proposed_diff = execution.proposed_diff;
-                    edit_blocked_reported = execution.edit_blocked_reported;
-                    execution_failure = execution.execution_failure;
-                    let repeated_read_failure = if validation_allows_execution && !success {
-                        let is_read_only = ag::tool_registry::lookup(&c.name).is_some_and(|tool| {
-                            tool.permission == ag::tool_registry::ToolPermission::ReadOnly
-                        });
-                        execution_failure.as_ref().is_some_and(|error| {
-                            is_read_only
-                                && repeated_read_failure(
-                                    &mut failed_read_signatures,
-                                    &c.name,
-                                    &params,
-                                    &error.code,
-                                )
-                        })
-                    } else {
-                        false
-                    };
-                    if let Some(error) = &execution_failure {
-                        event_emitter.record_internal("tool_failure_observed", serde_json::json!({
-                            "toolName": &c.name, "toolCallId": &c.id, "code": &error.code,
-                            "rejectionStage": if validation_allows_execution { "tool_execution" } else { "tool_validation" },
-                            "hasExpectedHash": params.get("expected_hash").is_some(),
-                            "hasCursor": params.get("cursor").is_some(),
-                            "nonInitialPage": params.get("cursor").is_some() || params.get("offset").and_then(|v|v.as_u64()).is_some_and(|offset|offset>0),
-                            "requestFingerprint": ag::context::sha256_text(&params.to_string()),
-                            "requestedReadOffset": params.get("offset").and_then(|value|value.as_u64()),
-                            "requestedLimitChars": params.get("limit_chars").and_then(|value|value.as_u64()),
-                            "requestedDirectoryLimit": params.get("limit").and_then(|value|value.as_u64()),
-                            "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
-                            "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
-                            "repeatedFailure": repeated_read_failure,
-                        }))?;
-                    }
-                    if success
-                        && is_current_doc_read_tool(&c.name, &params, active_doc_path.as_deref())
-                    {
-                        current_doc_read_confirmed = true;
-                    }
-                    if cancelled.load(Ordering::Acquire) {
-                        advance_or_finish!(TlEv::Cancel);
-                        finish_cancelled_turn(
-                            &state,
-                            &app,
-                            &event_emitter,
-                            &terminal_latch,
-                            &turn_id,
-                            task_run_id.as_deref(),
-                            turn_state,
-                        );
-                        return Ok(());
-                    }
-                    if validation_allows_execution {
-                        advance_or_finish!(if success {
-                            TlEv::ExecOk
-                        } else {
-                            TlEv::ExecFail
-                        });
-                    }
-                    if let Some(error) = execution_failure.as_ref().filter(|error| {
-                        matches!(
-                            error.code.as_str(),
-                            "AG_CAPABILITY_TIMEOUT"
-                                | "AG_CAPABILITY_WORKER_FAILED"
-                                | "AG_EFFECT_FACT_UNAVAILABLE"
-                                | "AG_EFFECT_PENDING"
-                        )
-                    }) {
-                        advance_or_finish!(TlEv::LoopError);
-                        settle_and_emit_ag_turn_error(
-                            &state,
-                            task_run_id.as_deref(),
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            error,
-                        );
-                        return Ok(());
-                    }
-                    if success && c.name == "read_doc" {
-                        if let Ok(read) = serde_json::from_str::<serde_json::Value>(&result) {
-                            event_emitter.record_internal("read_result_observed", serde_json::json!({
-                                "toolCallId": c.id, "toolName": c.name,
-                                "requestFingerprint": ag::context::sha256_text(&params.to_string()),
-                                "readView": read.get("view").and_then(|value|value.as_str()).unwrap_or("structure"),
-                                "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
-                                "returnedBlockCount": read.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
-                                "readOffset": read.get("offset"), "readEndOffset": read.get("end_offset"),
-                                "readTotalChars": read.get("total_chars"), "readHasMore": read.get("has_more"),
-                                "readComplete": read.get("complete"), "readVersion": read.get("version_hash"),
-                                "resultChars": serde_json::to_string(&result).expect("String serialization").chars().count(),
-                                "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
-                            }))?;
-                        }
-                    }
-                    if !record_tool_result(
-                        &event_emitter,
-                        &terminal_latch,
-                        ToolResultFacts {
-                            workspace_id: &workspace_id_for_turn,
-                            turn_id: &turn_id,
-                            tool_call_id: &c.id,
-                            tool_name: &c.name,
-                            params: &params,
-                            read_ctx: &read_ctx,
-                            result: &result,
-                            success,
-                            validation_allows_execution,
-                            execution_failure: execution_failure.as_ref(),
-                            context_failure_summary,
-                            identity: &capability_identity,
-                            diff_events: &diff_events_after_tool,
-                            decision: decision_event_after_tool.as_ref(),
-                            repeated_read_failure,
-                            control_error: control_error.is_some(),
-                            task_run_id: task_run_id.as_deref(),
-                        },
-                        &mut messages,
-                        &mut continuation_messages,
-                    )? {
-                        return Ok(());
-                    }
-                    if let Some(decision) = decision_event_after_tool {
-                        if final_only_correction_pending {
-                            continuation_messages.push(correction_instruction_for_protocol(
-                                true,
-                                &transport_protocol,
-                            ));
-                        }
-                        let request_id = decision.request_id.clone();
-                        advance_or_finish!(TlEv::DecisionHandoff);
-                        turn_state =
-                            ag::turn::transition(turn_state, ag::turn::TurnEvent::DecisionProposed)
-                                .ok_or_else(sm_error)?;
-                        let current_task_run_id = task_run_id
-                            .as_deref()
-                            .expect("DecisionRequest must retain its TaskRun");
-                        let park_result = park_agent_turn_for_decision(
-                            &state,
-                            &session_id,
-                            &turn_id,
-                            current_task_run_id,
-                            &request_id,
-                            AgentTurnRuntimeCheckpoint {
-                                intent: intent_result,
-                                initial_prompt: raw_prompt,
-                                continuation_messages,
-                            },
-                        );
-                        if let Err(error) = park_result {
-                            if cancelled.load(Ordering::Acquire) {
-                                finish_cancelled_turn(
-                                    &state,
-                                    &app,
-                                    &event_emitter,
-                                    &terminal_latch,
-                                    &turn_id,
-                                    task_run_id.as_deref(),
-                                    turn_state,
-                                );
-                                return Ok(());
-                            }
-                            return Err(error);
-                        }
-                        let projected = event_emitter.emit(
-                            &terminal_latch,
-                            AgTurnEventPayload::DecisionRequestProposed {
-                                request_id: decision.request_id,
-                                kind: decision.kind,
-                                payload: decision.payload,
-                            },
-                        )?;
-                        if !projected {
-                            return Ok(());
-                        }
-                        event_emitter.record_internal(
-                            "decision_wait_started",
-                            serde_json::json!({"requestId": request_id}),
-                        )?;
-                        emit_ag01(&app, &turn_id, turn_state);
-                        return Ok(());
-                    }
-                    // Stop tool retries, not the user's entire conversation. The next response
-                    // may only explain existing evidence or ask for clarification. It still
-                    // passes the original Gate, prompt budget, cancellation and round limits.
-                    read_failure_final_pending |= repeated_read_failure;
-                    let has_more_calls = call_index + 1 < calls.len();
-                    let loop_budget_reached = execution_policy.final_reserve == 0
-                        && (remaining_tool_calls == 0
-                            || (_round + 1 == remaining_rounds && !has_more_calls));
-                    if loop_budget_reached {
-                        advance_or_finish!(TlEv::LoopLimit);
-                        stop_after_current_tool = true;
-                    } else if end_after_diff_proposal && success {
-                        advance_or_finish!(TlEv::ProposalRecorded);
-                        stop_after_current_tool = true;
-                    } else if has_more_calls {
-                        // 同一响应还有独立 ToolCall：经转移引擎保持当前激活，
-                        // 不直接改写状态，也不回归 SM-AG-01。
-                        advance_or_finish!(TlEv::NextToolCall);
-                    } else {
-                        advance_or_finish!(TlEv::Recorded);
-                    }
-                    if stop_after_current_tool {
-                        break;
-                    }
-                }
-                if _round + 1 == remaining_rounds
-                    || (remaining_tool_calls == 0 && execution_policy.final_reserve == 0)
+                let tool_call_context = ToolCallContext {
+                    state,
+                    latch: &terminal_latch,
+                    cancelled: &cancelled,
+                    session_id: &session_id,
+                    workspace_id: &workspace_id_for_turn,
+                    turn_id: &turn_id,
+                    runtime_profile: &runtime_profile,
+                    explicit_edit_target_set: &explicit_edit_target_set,
+                    tools: &tools,
+                    ws_root: ws_root.as_deref(),
+                    on_context_request: on_context_request.as_ref(),
+                    active_doc_path: active_doc_path.as_deref(),
+                    history: &history,
+                    raw_prompt: &raw_prompt,
+                    reference_envelopes: &reference_envelopes,
+                    capability_factors: &capability_factors,
+                    transport_protocol: &transport_protocol,
+                    execution_policy: &execution_policy,
+                    model_call_ordinal,
+                    round_index: _round,
+                    remaining_rounds,
+                };
+                let tool_call_state = ToolCallState {
+                    messages,
+                    continuation_messages,
+                    task_run_id,
+                    intent_result,
+                    agent_context_facts,
+                    read_ctx,
+                    active_snapshot,
+                    capability_use_tracker,
+                    remaining_tool_calls,
+                    parameter_correction_rounds,
+                    failed_read_signatures,
+                    tool_loop_state,
+                    turn_state,
+                    current_doc_requires_tool_read,
+                    current_doc_read_confirmed,
+                    any_tool_called,
+                    proposed_diff,
+                    edit_blocked_reported,
+                };
+                let mut tool_call_flags = ToolCallFlags {
+                    final_only_correction_pending,
+                    parameter_correction_pending,
+                    read_failure_final_pending,
+                };
+                match run_tool_call_loop(
+                    &app,
+                    &event_emitter,
+                    tool_call_context,
+                    tool_call_state,
+                    calls,
+                    parsed_params,
+                    control_error,
+                    final_only_after_rejection,
+                    correction_counted_this_round,
+                    &mut tool_call_flags,
+                )
+                .await?
                 {
-                    let error = IpcError::new(
-                        "AG_TOOL_LOOP_LIMIT",
-                        "工具循环达到上限，当前 AgentTurn 已中止；未完成步骤不会被标记为完成。",
-                        true,
-                        false,
-                    );
-                    if let Ok(conn) = state.db.lock() {
-                        settle_optional_task_run(
-                            &conn,
-                            task_run_id.as_deref(),
-                            &turn_id,
-                            ag::task::TurnOutcome::Failed,
-                        );
+                    ToolCallLoopResult::Ended => return Ok(()),
+                    ToolCallLoopResult::Continue(state) => {
+                        messages = state.messages;
+                        continuation_messages = state.continuation_messages;
+                        task_run_id = state.task_run_id;
+                        intent_result = state.intent_result;
+                        agent_context_facts = state.agent_context_facts;
+                        read_ctx = state.read_ctx;
+                        active_snapshot = state.active_snapshot;
+                        capability_use_tracker = state.capability_use_tracker;
+                        remaining_tool_calls = state.remaining_tool_calls;
+                        parameter_correction_rounds = state.parameter_correction_rounds;
+                        failed_read_signatures = state.failed_read_signatures;
+                        tool_loop_state = state.tool_loop_state;
+                        turn_state = state.turn_state;
+                        current_doc_requires_tool_read = state.current_doc_requires_tool_read;
+                        current_doc_read_confirmed = state.current_doc_read_confirmed;
+                        any_tool_called = state.any_tool_called;
+                        proposed_diff = state.proposed_diff;
+                        edit_blocked_reported = state.edit_blocked_reported;
+                        final_only_correction_pending =
+                            tool_call_flags.final_only_correction_pending;
+                        parameter_correction_pending = tool_call_flags.parameter_correction_pending;
+                        read_failure_final_pending = tool_call_flags.read_failure_final_pending;
                     }
-                    emit_ag_turn_error_from(
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                        turn_state,
-                    );
-                    return Ok(());
                 }
             }
         }
