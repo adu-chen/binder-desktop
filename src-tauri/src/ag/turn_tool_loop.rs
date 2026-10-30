@@ -770,12 +770,195 @@ fn settle_completed_turn<R: tauri::Runtime>(
 
 /**
  * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018, BR-AG-OBS-001-RB-AG-AG-TOOL-018
+ * codes:    BR-AG-DATA-013-RB-AG-AG-TOOL-065
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-DATA-013
+ * boundary: in=GatewayRoundOutcomeStreamedModelControlBudgetClosingAndContinuationGuards | out=ValidatedModelTurnControlOrIpcError | does_not=projectIntentCreateTaskRunOrExecuteToolBeforeValidation
+ */
+fn validate_round_response(
+    round: &ent::gateway::RoundOutcome,
+    decoder: &ag::model_output::ModelOutputDecoder,
+    budget_closing: bool,
+    workspace_plan_completed: bool,
+    visible_output_chars: usize,
+    any_tool_called: bool,
+    continuation_messages: &[serde_json::Value],
+) -> Result<Option<ag::model_output::ModelTurnControl>, IpcError> {
+    match round {
+        ent::gateway::RoundOutcome::Done { .. } => decoder.clone().finish().and_then(|control| {
+            if budget_closing && control.next_action != ag::model_output::ModelNextAction::Final {
+                return Err(IpcError::new(
+                    "AG_MODEL_CONTROL_INVALID",
+                    "额度收尾仅允许final，不得创建工具或无法恢复的等待",
+                    true,
+                    false,
+                ));
+            }
+            if !budget_closing
+                && control.next_action == ag::model_output::ModelNextAction::Final
+                && control.intent.side_effect_intent
+                    == ag::context::SideEffectIntentV2::StructurePlan
+                && control.completion.is_none()
+                && !workspace_plan_completed
+            {
+                return Err(required_terminal_tool_error(
+                    Some("plan_workspace_operation"),
+                    any_tool_called,
+                ));
+            }
+            if control.next_action == ag::model_output::ModelNextAction::Tool {
+                return Err(IpcError::new(
+                    "AG_MODEL_CONTROL_INVALID",
+                    "tool 动作缺少原生工具调用",
+                    true,
+                    false,
+                ));
+            }
+            if control.next_action == ag::model_output::ModelNextAction::Final
+                && visible_output_chars == 0
+            {
+                return Err(IpcError::new(
+                    "AG_MODEL_FINAL_EMPTY",
+                    "final 缺少可见回答",
+                    true,
+                    false,
+                ));
+            }
+            Ok(Some(control))
+        }),
+        ent::gateway::RoundOutcome::ToolCalls(_) => {
+            if budget_closing || super::turn_prompt::final_only_continuation(continuation_messages)
+            {
+                Err(IpcError::new(
+                    "AG_MODEL_CONTROL_INVALID",
+                    "结果纠错禁止重新提交工具；请依据已保留回执回答或澄清",
+                    true,
+                    false,
+                ))
+            } else {
+                decoder.clone().finish_optional()
+            }
+        }
+        ent::gateway::RoundOutcome::Failed(_) => Ok(None),
+    }
+}
+
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-RB-AG-AG-TOOL-064
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-SYS-STATE-008
+ * term_ref: TERM-AG-012, TERM-AG-015
+ * boundary: in=ValidatedModelControlObservationFactsAndExplicitEditTargetSet | out=IntentUpdatedRouteUpdatedTargetCandidateObservationAndOptionalTaskRunProjection | consumer=BR-SYS-STATE-008 | does_not=treatModelControlAsAuthorizationOrCreateTaskRunForSimpleTurn
+ */
+#[allow(clippy::too_many_arguments)]
+fn apply_control_and_observe(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    session_id: &str,
+    workspace_id: &str,
+    turn_id: &str,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    task_run_id: &mut Option<String>,
+    intent_result: &mut ag::context::IntentResultV2,
+    control: &ag::model_output::ModelTurnControl,
+    raw_prompt: &str,
+    history: &[ag::context::HistTurn],
+    messages: &[serde_json::Value],
+    active_doc_path: Option<&str>,
+    references: &[ag::context::PromptDataEnvelopeV1],
+    continuation_messages: &[serde_json::Value],
+) -> Result<(), IpcError> {
+    *intent_result = apply_model_control(emitter, latch, intent_result, control)?;
+    emitter.record_internal(
+        "target_candidate_observed",
+        target_candidate_observation(
+            intent_result,
+            raw_prompt,
+            history,
+            messages,
+            active_doc_path,
+            references,
+            continuation_messages,
+        ),
+    )?;
+    ensure_route_task_projection(
+        state,
+        emitter,
+        session_id,
+        workspace_id,
+        turn_id,
+        explicit_edit_target_set,
+        task_run_id,
+        control,
+    )
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-OBS-001-EFFECT-AG-AG-TURN-072
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-OBS-001
+ * term_ref: TERM-AG-021, TERM-AG-023
+ * boundary: in=IntentResultVisibleAnswerEvidenceLedgerAndModelFindings | out=ProjectReportTurnEventOrSkipForToolFreeAnswer | effect=DB-rebuild_evidence_ledger | does_not=acceptModelClaimedCoverageOrTreatProjectReportAsCompletionGate
+ */
+#[allow(clippy::too_many_arguments)]
+fn emit_project_report(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    workspace_id: &str,
+    turn_id: &str,
+    intent: &ag::context::IntentResultV2,
+    active_doc_path: Option<&str>,
+    findings: &[ag::model_output::ModelFinalFindingV2],
+    any_tool_called: bool,
+) -> Result<bool, IpcError> {
+    // 直接回答且没有工具或证据结论时，不把打开资源的 session_metadata
+    // 强行包装成项目调查报告；专业事实仍保留在 EvidenceLedger 中。
+    if intent.intent_type == ag::context::IntentTypeV2::Answer
+        && !any_tool_called
+        && findings.is_empty()
+    {
+        return Ok(true);
+    }
+    let evidence_ledger = {
+        let conn = state.db.lock().map_err(|_| {
+            IpcError::new(
+                "WS_DB_BUSY",
+                "数据库连接繁忙，无法派生 ProjectReport",
+                true,
+                false,
+            )
+        })?;
+        super::turn_events::rebuild_evidence_ledger(&conn, workspace_id, turn_id)?
+    };
+    let project_report = ag::tool_exec::derive_project_report(
+        turn_id,
+        requested_report_scope(intent, active_doc_path),
+        &evidence_ledger,
+        findings,
+    );
+    emitter.emit(
+        latch,
+        AgTurnEventPayload::ProjectReport {
+            report: project_report,
+        },
+    )
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-002, BR-SYS-STATE-008, BR-AG-OBS-001
- * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,derive_project_report,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * rules:    BR-AG-STATE-002
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -1223,68 +1406,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             &continuation_messages,
             (&workspace_id_for_turn, &session_id, &turn_id),
         );
-        let response_control = match &round {
-            ent::gateway::RoundOutcome::Done { .. } => {
-                output_decoder.clone().finish().and_then(|control| {
-                    if budget_closing
-                        && control.next_action != ag::model_output::ModelNextAction::Final
-                    {
-                        return Err(IpcError::new(
-                            "AG_MODEL_CONTROL_INVALID",
-                            "额度收尾仅允许final，不得创建工具或无法恢复的等待",
-                            true,
-                            false,
-                        ));
-                    }
-                    if !budget_closing
-                        && control.next_action == ag::model_output::ModelNextAction::Final
-                        && control.intent.side_effect_intent
-                            == ag::context::SideEffectIntentV2::StructurePlan
-                        && control.completion.is_none()
-                        && !workspace_plan_completed
-                    {
-                        return Err(required_terminal_tool_error(
-                            Some("plan_workspace_operation"),
-                            any_tool_called,
-                        ));
-                    }
-                    if control.next_action == ag::model_output::ModelNextAction::Tool {
-                        return Err(IpcError::new(
-                            "AG_MODEL_CONTROL_INVALID",
-                            "tool 动作缺少原生工具调用",
-                            true,
-                            false,
-                        ));
-                    }
-                    if control.next_action == ag::model_output::ModelNextAction::Final
-                        && visible_output_chars == 0
-                    {
-                        return Err(IpcError::new(
-                            "AG_MODEL_FINAL_EMPTY",
-                            "final 缺少可见回答",
-                            true,
-                            false,
-                        ));
-                    }
-                    Ok(Some(control))
-                })
-            }
-            ent::gateway::RoundOutcome::ToolCalls(_) => {
-                if budget_closing
-                    || super::turn_prompt::final_only_continuation(&continuation_messages)
-                {
-                    Err(IpcError::new(
-                        "AG_MODEL_CONTROL_INVALID",
-                        "结果纠错禁止重新提交工具；请依据已保留回执回答或澄清",
-                        true,
-                        false,
-                    ))
-                } else {
-                    output_decoder.clone().finish_optional()
-                }
-            }
-            ent::gateway::RoundOutcome::Failed(_) => Ok(None),
-        };
+        let response_control = validate_round_response(
+            &round,
+            &output_decoder,
+            budget_closing,
+            workspace_plan_completed,
+            visible_output_chars,
+            any_tool_called,
+            &continuation_messages,
+        );
         let response_rejected = response_control.is_err();
         let response_rejection_kind = matches!(round, ent::gateway::RoundOutcome::Done { .. })
             .then(|| output_decoder.response_rejection_kind());
@@ -1396,48 +1526,23 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 let control = response_control
                     .expect("validated response")
                     .expect("done control");
-                intent_result = match apply_model_control(
-                    &event_emitter,
-                    &terminal_latch,
-                    &intent_result,
-                    &control,
-                ) {
-                    Ok(intent) => intent,
-                    Err(error) => {
-                        advance_or_finish!(TlEv::LoopError);
-                        settle_and_emit_ag_turn_error(
-                            &state,
-                            task_run_id.as_deref(),
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            &error,
-                        );
-                        return Ok(());
-                    }
-                };
-                event_emitter.record_internal(
-                    "target_candidate_observed",
-                    target_candidate_observation(
-                        &intent_result,
-                        &raw_prompt,
-                        &history,
-                        &messages,
-                        active_doc_path.as_deref(),
-                        &reference_envelopes,
-                        &continuation_messages,
-                    ),
-                )?;
-                if let Err(error) = ensure_route_task_projection(
+                if let Err(error) = apply_control_and_observe(
                     &state,
                     &event_emitter,
+                    &terminal_latch,
                     &session_id,
                     &workspace_id_for_turn,
                     &turn_id,
                     &explicit_edit_target_set,
                     &mut task_run_id,
+                    &mut intent_result,
                     &control,
+                    &raw_prompt,
+                    &history,
+                    &messages,
+                    active_doc_path.as_deref(),
+                    &reference_envelopes,
+                    &continuation_messages,
                 ) {
                     advance_or_finish!(TlEv::LoopError);
                     settle_and_emit_ag_turn_error(
@@ -1565,44 +1670,17 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::ModelFinal)
                     .ok_or_else(sm_error)?;
                 emit_ag01(&app, &turn_id, turn_state);
-                // 直接回答且没有工具或证据结论时，不把打开资源的 session_metadata
-                // 强行包装成项目调查报告；专业事实仍保留在 EvidenceLedger 中。
-                let report_result = (|| -> Result<bool, IpcError> {
-                    if intent_result.intent_type == ag::context::IntentTypeV2::Answer
-                        && !any_tool_called
-                        && control.findings.is_empty()
-                    {
-                        return Ok(true);
-                    }
-                    let evidence_ledger = {
-                        let conn = state.db.lock().map_err(|_| {
-                            IpcError::new(
-                                "WS_DB_BUSY",
-                                "数据库连接繁忙，无法派生 ProjectReport",
-                                true,
-                                false,
-                            )
-                        })?;
-                        super::turn_events::rebuild_evidence_ledger(
-                            &conn,
-                            &workspace_id_for_turn,
-                            &turn_id,
-                        )?
-                    };
-                    let project_report = ag::tool_exec::derive_project_report(
-                        &turn_id,
-                        requested_report_scope(&intent_result, active_doc_path.as_deref()),
-                        &evidence_ledger,
-                        &control.findings,
-                    );
-                    event_emitter.emit(
-                        &terminal_latch,
-                        AgTurnEventPayload::ProjectReport {
-                            report: project_report,
-                        },
-                    )
-                })();
-                match report_result {
+                match emit_project_report(
+                    &state,
+                    &event_emitter,
+                    &terminal_latch,
+                    &workspace_id_for_turn,
+                    &turn_id,
+                    &intent_result,
+                    active_doc_path.as_deref(),
+                    &control.findings,
+                    any_tool_called,
+                ) {
                     Ok(true) => {}
                     Ok(false) => return Ok(()),
                     Err(error) => {
@@ -1776,48 +1854,23 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     }
                 }
                 if let Some(control) = control {
-                    intent_result = match apply_model_control(
-                        &event_emitter,
-                        &terminal_latch,
-                        &intent_result,
-                        &control,
-                    ) {
-                        Ok(intent) => intent,
-                        Err(error) => {
-                            advance_or_finish!(TlEv::LoopError);
-                            settle_and_emit_ag_turn_error(
-                                &state,
-                                task_run_id.as_deref(),
-                                &event_emitter,
-                                &terminal_latch,
-                                &app,
-                                &turn_id,
-                                &error,
-                            );
-                            return Ok(());
-                        }
-                    };
-                    event_emitter.record_internal(
-                        "target_candidate_observed",
-                        target_candidate_observation(
-                            &intent_result,
-                            &raw_prompt,
-                            &history,
-                            &messages,
-                            active_doc_path.as_deref(),
-                            &reference_envelopes,
-                            &continuation_messages,
-                        ),
-                    )?;
-                    if let Err(error) = ensure_route_task_projection(
+                    if let Err(error) = apply_control_and_observe(
                         &state,
                         &event_emitter,
+                        &terminal_latch,
                         &session_id,
                         &workspace_id_for_turn,
                         &turn_id,
                         &explicit_edit_target_set,
                         &mut task_run_id,
+                        &mut intent_result,
                         &control,
+                        &raw_prompt,
+                        &history,
+                        &messages,
+                        active_doc_path.as_deref(),
+                        &reference_envelopes,
+                        &continuation_messages,
                     ) {
                         advance_or_finish!(TlEv::LoopError);
                         settle_and_emit_ag_turn_error(
@@ -2899,11 +2952,12 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                                         ag::task::TurnOutcome::Cancelled,
                                     );
                                 }
-                                emit_ag_turn_cancelled(
+                                super::turn_events::emit_ag_turn_cancelled_from(
                                     &event_emitter,
                                     &terminal_latch,
                                     &app,
                                     &turn_id,
+                                    turn_state,
                                 );
                                 return Ok(());
                             }
@@ -3668,5 +3722,35 @@ mod tests {
             completed_turn_stop_reason(false, None, None, "stop"),
             "stop"
         );
+    }
+
+    // covers: BR-AG-DATA-013
+    #[test]
+    fn round_response_validation_rejects_budget_closing_tools_and_defers_failed_rounds() {
+        let decoder = ag::model_output::ModelOutputDecoder::default();
+        let failed = ent::gateway::RoundOutcome::Failed(IpcError::new(
+            "AG_GATEWAY_TEST",
+            "test transport failure",
+            false,
+            false,
+        ));
+        assert!(
+            validate_round_response(&failed, &decoder, false, false, 0, false, &[])
+                .expect("failed round has no control")
+                .is_none()
+        );
+
+        let tools = ent::gateway::RoundOutcome::ToolCalls(Vec::new());
+        let error = validate_round_response(&tools, &decoder, true, false, 0, false, &[])
+            .expect_err("budget closing must reject tool calls");
+        assert_eq!(error.code, "AG_MODEL_CONTROL_INVALID");
+
+        let final_only = vec![serde_json::json!({
+            "role": "system",
+            "layer": "read_failure_final_only",
+        })];
+        let error = validate_round_response(&tools, &decoder, false, false, 0, false, &final_only)
+            .expect_err("final-only continuation must reject tool calls");
+        assert_eq!(error.code, "AG_MODEL_CONTROL_INVALID");
     }
 }

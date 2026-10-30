@@ -636,6 +636,21 @@ preview_checkpoint_required 反映真实 checkpoint 结果。禁止：声称已�
 pending_user_review 投影；checkpoint 建立失败只清空
 preview_checkpoint_required，Diff 仍作为当前回合待裁决提案可见，不得伪造成功续写。
 
+<!-- RULE
+rule_id: BR-AG-DATA-013
+主链路: AG-TOOL
+域: DATA
+-->
+本轮模型响应的控制封套必须在产生任何 Intent/TaskRun 投影或工具执行前完成终态前置校验。输入为网关
+RoundOutcome、已流式解析的 ModelOutputDecoder、budget_closing、workspace_plan_completed、可见正文字符数、
+any_tool_called 与 continuation_messages；输出为 Some(可用的 ModelTurnControl)、失败轮次的 None，或明确
+IpcError。禁止：收尾态接受
+非 final 控制；把缺少原生 ToolCall 的 nextAction=tool 当工具请求；接受无可见正文的 final；在结构计划缺失
+且未完成时接受无 completion 的 final；在本轮已进入 final-only 纠正时重新接受工具批次。失败信号：
+AG_MODEL_CONTROL_INVALID（收尾非 final、tool 无原生调用、final-only 下工具批次）、AG_MODEL_FINAL_EMPTY
+（无可见正文）、AG_WORKSPACE_PLAN_TOOL_REQUIRED（结构计划缺失）。校验失败不得写入 IntentResult、
+TaskRun 或执行任何工具。
+
 ## §5 上下文组装（AG-TURN）
 
 <!-- RULE
@@ -1179,6 +1194,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-30 | v2.64 | 继续细化 turn_tool_loop：新增 BR-AG-DATA-013（控制封套终态前置校验）并抽出 validate_round_response；把重复的 Intent/TaskRun 投影收敛为 apply_control_and_observe（BR-SYS-STATE-008），把 ProjectReport 派生收敛为 emit_project_report（BR-AG-OBS-001）；修正裁决停放失败取消事件使用真实 turn_state；不改变授权、工具执行、裁决与保存语义。 |
 | 2026-10-30 | v2.63 | AG-TOOL/AG-TURN 规则细化：新增 BR-AG-DATA-011（ToolCall 回执身份与工具结果回注）、BR-AG-DATA-012（修改建议结果投影）、BR-AG-STATE-005（额度收尾与终态结算），对应 turn_tool_loop 三个独立生产块；不改变执行、授权、确认与保存语义。 |
 | 2026-10-28 | v2.62 | 模型可恢复错误按控制封套和参数独立有限计数，仍受总调用预算；只读续页改用绑定路径/版本的单游标。 |
 | 2026-10-26 | v2.61 | 零字节 TXT 的显式创建例外：仅单文件 createEmpty=true 且省略初始内容，沿原资源计划/确认/重验链创建，不产生初始内容 Diff；其余新文档仍需冻结非空内容。 |
