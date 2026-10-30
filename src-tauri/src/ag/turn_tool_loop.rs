@@ -974,6 +974,14 @@ struct ToolResultFacts<'a> {
     task_run_id: Option<&'a str>,
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-011-EFFECT-AG-AG-TOOL-070
+ * type:     EFFECT
+ * chain:    AG-TOOL
+ * rules:    BR-AG-DATA-011
+ * boundary: in=ExecutedToolCallResultEvidenceAndReceipt | out=ToolResultEventEvidenceLedgerItemsDiffProposedEventsAndModelToolMessage | delegate=tool_call_receipt_identity,tool_result_references,model_tool_result_message | consumer=BR-AG-DATA-011 | does_not=fabricateEvidenceOrEmitSecondTerminal
+ */
 fn record_tool_result(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
@@ -1095,6 +1103,14 @@ fn record_tool_result(
     Ok(true)
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-EFFECT-AG-AG-TURN-074
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-STATE-001
+ * boundary: in=ActiveAgentTurnCancellationSourceStateAndOptionalTaskRun | out=SettledCancelledTaskRunAndSingleCancelledTerminalEvent | effect=DB-settle_optional_task_run | consumer=BR-AG-STATE-001 | does_not=emitSecondTerminalOrMarkCompleted
+ */
 /// 结算取消终态：TaskRun 取消 + SM-AG-01 Cancelled 广播。
 /// 规则由 BR-AG-STATE-001 / BR-SYS-STATE-007 的既有块承接；调用方负责先推进 SM-AG-02 取消转移。
 fn finish_cancelled_turn<R: tauri::Runtime>(
@@ -1157,6 +1173,14 @@ struct PromptRebuildFacts<'a> {
     response_rejected: bool,
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-001-EFFECT-AG-AG-TURN-078
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-001
+ * boundary: in=RoundIntentContextFactsReadContextHistoryAndBudgetFacts | out=RebuiltRoundPromptOrSettlePropagateFailure | effect=DB-record_prompt_budget | consumer=BR-AG-DATA-001 | does_not=widenContextSourcesOrRaiseBudget
+ */
 fn rebuild_round_prompt(
     emitter: &TurnEventEmitter<'_>,
     facts: PromptRebuildFacts<'_>,
@@ -1273,6 +1297,14 @@ struct ToolExecutionOutcome {
     execution_failure: Option<IpcError>,
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-068
+ * type:     RB
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * boundary: in=ValidatedToolDecisionGrantParamsReadContextAndTaskRun | out=ToolExecutionOutcomePendingDiffDecisionRequestPreviewCheckpointOrFailure | delegate=exec_edit_blocked,execute_proposal,exec_read_only,exec_structure_tool,create_preview_checkpoint | consumer=BR-AG-STATE-002 | does_not=computeGrantAdvanceToolLoopStateOrSettleAgentTurn
+ */
 async fn execute_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     facts: ToolExecutionFacts<'_>,
@@ -1573,6 +1605,14 @@ async fn execute_tool_call<R: tauri::Runtime>(
     }
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-008-EFFECT-AG-AG-TURN-073
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-DATA-008
+ * boundary: in=FreshHostContextRequestPreviousContextFactsAndAgentReadContext | out=RefreshedContextFactsReadContextActiveSnapshotOrToolContextFailure | consumer=BR-AG-DATA-008 | does_not=executeToolOrTreatContextRefreshAsAuthorization
+ */
 /// 为需要新鲜宿主上下文的工具刷新 AgentContextFacts / AgentReadContext。
 /// Ok(None)=无需刷新或刷新成功；Ok(Some(error))=工具级上下文失败（非终态）；
 /// Err(error)=context_frozen 写事件失败，按原路径向上传播，不在这里结算终态。
@@ -1667,6 +1707,14 @@ fn compute_scope_candidates(
     }
 }
 
+/**
+ * @GOV
+ * codes:    BR-SYS-STATE-008-EFFECT-AG-AG-TOOL-071
+ * type:     EFFECT
+ * chain:    AG-TOOL
+ * rules:    BR-SYS-STATE-008
+ * boundary: in=AllowedToolProductExplicitEditTargetSetAndGoal | out=PersistedAndBoundTaskRunOrPreparationFailure | effect=DB-begin_for_tool_product | consumer=BR-SYS-STATE-008 | does_not=executeToolOrCreateTaskRunForSimpleTurn
+ */
 /// 仅当已获准的任务级工具真的到达执行边界且尚无 TaskRun 时，创建/绑定/持久化 TaskRun 投影。
 /// 返回 Some(error) 表示本调用的 TaskRun 投影失败；不在这里执行工具或推进 SM-AG-02。
 #[allow(clippy::too_many_arguments)]
@@ -1797,6 +1845,14 @@ struct ToolGrantOutcome {
     parameter_contract_rejection: bool,
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-067
+ * type:     RB
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * boundary: in=ToolCallBoundGrantFactsAndCorrectionCounters | out=ToolGrantOutcomeOrToolGrantFailure | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant | consumer=BR-AG-STATE-002 | does_not=executeToolAdvanceToolLoopStateOrSettleAgentTurn
+ */
 fn resolve_execution_grant_and_decision(
     emitter: &TurnEventEmitter<'_>,
     facts: ToolGrantFacts<'_>,
@@ -1930,6 +1986,14 @@ fn resolve_execution_grant_and_decision(
     })
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-066
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * boundary: in=ToolCallCapabilityFactorsManifestAndPreflightGrant | out=boolean（true 当 预检校验允许进入上下文刷新） | consumer=BR-AG-STATE-002 | does_not=executeToolOrReplaceExecutionGrant
+ */
 /// 执行前的 acquisition 预检：同一硬边界下计算临时 grant 并校验，仅决定是否需要刷新上下文。
 /// 该临时 grant 不执行工具，也不替代后续真实的一次性执行授权。
 #[allow(clippy::too_many_arguments)]
@@ -2075,6 +2139,14 @@ enum ToolBatchFailure {
     Settle(IpcError),
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-069
+ * type:     RB
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * boundary: in=RawToolCallBatchTransportProtocolContinuationAndSeenIds | out=PreparedToolBatchOrToolBatchFailure | delegate=validate_transport_call_group,expand_native_batch,parse_tool_batch_detailed_with_policy,apply_control_and_observe | consumer=BR-AG-STATE-002 | does_not=executeToolOrSettleAgentTurn
+ */
 fn prepare_tool_batch(
     emitter: &TurnEventEmitter<'_>,
     facts: ToolBatchFacts<'_>,
@@ -2215,6 +2287,14 @@ enum RoundGate {
     Failed(IpcError),
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-VERIFY-001-RB-AG-AG-TURN-076
+ * type:     RB
+ * chain:    AG-TURN
+ * rules:    BR-AG-VERIFY-001
+ * boundary: in=ContinuationRoundSessionTurnAndGateProbe | out=RoundGateProceedCancelledDeniedOrFailed | delegate=await_turn_operation,check_gate | consumer=BR-AG-VERIFY-001 | does_not=transitionTurnStateOrSettleTerminal
+ */
 async fn await_round_gate(
     state: &AppState,
     emitter: &TurnEventEmitter<'_>,
@@ -2290,6 +2370,14 @@ enum ProviderRoundResult {
 }
 
 #[allow(clippy::too_many_arguments)]
+/**
+ * @GOV
+ * codes:    BR-AG-VERIFY-001-EFFECT-AG-AG-TURN-077
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-VERIFY-001
+ * boundary: in=PreparedProviderMessagesToolsAuditContextAndAbortState | out=ProviderRoundReadyCancelledOrFailedWithVisibleOutput | delegate=stream_round,install_agent_turn_abort_handle | effect=IPC-stream_round | consumer=BR-AG-VERIFY-001 | does_not=transitionTurnStateOrSettleTerminal
+ */
 async fn run_provider_round(
     state: &AppState,
     emitter: &TurnEventEmitter<'_>,
@@ -2445,6 +2533,14 @@ fn terminal_tool_requirement_error(
         .then(|| required_terminal_tool_error(required_terminal_tool, any_tool_called))
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-EFFECT-AG-AG-TURN-075
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-STATE-001
+ * boundary: in=ClarificationQuestionIntentInitialPromptAndContinuationMessages | out=ParkedAwaitingClarificationCheckpointAndClarificationRequiredEvent | effect=DB-park_agent_turn_for_clarification | consumer=BR-AG-STATE-001 | does_not=createNewAgentTurnOrAutoResume
+ */
 /// 进入 AwaitingClarification：整理 checkpoint、转移 SM-AG-01、停放并广播澄清请求。
 /// 写事件/停放失败按原路径向上传播；不新建 AgentTurn。
 #[allow(clippy::too_many_arguments)]
