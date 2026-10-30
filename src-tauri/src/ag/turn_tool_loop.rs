@@ -1233,6 +1233,346 @@ fn rebuild_round_prompt(
     })
 }
 
+/// 逐 ToolCall 执行分派：edit_blocked / 任务级确认 / propose_edit / 只读工具。
+/// 不推进 SM-AG-02，也不重新计算授权；授权与状态转移仍由调用方完成。
+struct ToolExecutionFacts<'a> {
+    state: &'a AppState,
+    cancelled: &'a Arc<AtomicBool>,
+    call: &'a crate::ent::gateway::GwToolCall,
+    params: &'a serde_json::Value,
+    arg_parse_error: Option<&'a String>,
+    execution_guard_error: Option<&'a String>,
+    tool_decision: Option<&'a ag::tool::ToolDecision>,
+    execution_failure: Option<IpcError>,
+    read_execution: Option<Result<String, IpcError>>,
+    ws_root: Option<&'a str>,
+    read_ctx: &'a ag::blocks::AgentReadContext,
+    active_doc_path: Option<&'a str>,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    capability_identity: &'a crate::types::ToolCallReceiptIdentityV1,
+    task_run_id: Option<&'a str>,
+    scope_candidates: &'a Result<Option<Vec<String>>, IpcError>,
+    current_doc_requires_tool_read: bool,
+    current_doc_read_confirmed: bool,
+    workspace_id: &'a str,
+    session_id: &'a str,
+    turn_id: &'a str,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+}
+
+struct ToolExecutionOutcome {
+    result: String,
+    success: bool,
+    diff_events: Vec<(String, u32, u32, String, String)>,
+    decision: Option<crate::types::DecisionRequestV1>,
+    preview_checkpoint: bool,
+    end_after_diff: bool,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+    execution_failure: Option<IpcError>,
+}
+
+async fn execute_tool_call<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    facts: ToolExecutionFacts<'_>,
+) -> ToolExecutionOutcome {
+    let mut diff_events = Vec::new();
+    let mut decision = None;
+    let mut preview_checkpoint = false;
+    let mut end_after_diff = false;
+    let mut proposed_diff = facts.proposed_diff;
+    let mut edit_blocked_reported = facts.edit_blocked_reported;
+    let mut execution_failure = facts.execution_failure;
+    let (result, success) = if let Some(error_msg) = facts.arg_parse_error {
+        (error_msg.to_string(), false)
+    } else if let Some(error_msg) = facts.execution_guard_error {
+        (error_msg.to_string(), false)
+    } else {
+        let tool_decision: ag::tool::ToolDecision = facts
+            .tool_decision
+            .expect("parsed tool arguments must have a validation decision")
+            .clone();
+        match tool_decision {
+            ag::tool::ToolDecision::Reject(reason) => (reason, false),
+            ag::tool::ToolDecision::InvalidArguments {
+                field,
+                constraint,
+                message,
+            } => (
+                serde_json::json!({"code":"AG_TOOL_ARG","fieldPath":field,"constraint":constraint,
+                    "message":message,"notExecuted":true,"requiresNewToolCallId":true})
+                .to_string(),
+                false,
+            ),
+            ag::tool::ToolDecision::Allow if facts.call.name == "edit_blocked" => {
+                match ag::tool_exec::exec_edit_blocked(facts.params) {
+                    Ok(result) => {
+                        edit_blocked_reported = true;
+                        (result, true)
+                    }
+                    Err(error) => {
+                        execution_failure = Some(error.clone());
+                        (format!("阻断报告无效：{}", error.message), false)
+                    }
+                }
+            }
+            // 任务级确认只创建 DecisionRequest，不修改文档或 Diff。成功后当前执行片段必须
+            // 停在 AwaitingDecision；由调用方事件分派统一发送确认卡，但不得发送 Done。
+            ag::tool::ToolDecision::Allow
+                if matches!(
+                    facts.call.name.as_str(),
+                    "propose_decision" | "plan_workspace_operation"
+                ) =>
+            {
+                let task = facts
+                    .task_run_id
+                    .expect("control capability binds TaskRun")
+                    .to_string();
+                let name = facts.call.name.clone();
+                let parameters = (*facts.params).clone();
+                let target_paths = facts
+                    .scope_candidates
+                    .as_ref()
+                    .ok()
+                    .and_then(|paths| paths.clone());
+                let source_turn = facts.turn_id.to_string();
+                let executed = ag::capability_runtime::execute(
+                    (*facts.state).clone(),
+                    (*facts.capability_identity).clone(),
+                    Arc::clone(facts.cancelled),
+                    std::time::Duration::from_secs(30),
+                    move |state| {
+                        if name == "propose_decision" {
+                            if !parameters.get("summary").and_then(|value| value.as_str()).is_some_and(|summary| !summary.trim().is_empty())
+                                || parameters.get("detail").is_some_and(|value| !value.is_string())
+                                || parameters.get("options").is_some_and(|value| !value.as_array().is_some_and(|options| options.iter().all(|option| option.as_str().is_some_and(|option| !option.trim().is_empty())))) {
+                                return Err(IpcError::new("AG_TOOL_ARG", "确认参数无效", false, false));
+                            }
+                            let kind = parameters.get("kind").and_then(|value| value.as_str()).ok_or_else(|| IpcError::new("AG_TOOL_ARG", "缺少 kind", false, false))?;
+                            let payload = serde_json::json!({
+                                "summary": parameters.get("summary"), "detail": parameters.get("detail"),
+                                "options": parameters.get("options"), "targetPaths": target_paths,
+                            });
+                            let conn = state.db.lock().map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+                            let decision = ag::task::propose_decision(&conn, &task, kind, payload)
+                                .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+                            let result = serde_json::json!({ "request_id": decision.request_id, "status": "waiting_confirm",
+                                "summary": "已创建任务级确认请求；原 AgentTurn 正在等待用户确认或取消。" });
+                            Ok((decision, result))
+                        } else {
+                            let mut parameters = parameters;
+                            if let Some(object) = parameters.as_object_mut() {
+                                object.insert("taskRunId".into(), serde_json::Value::String(task));
+                                object.insert("sourceTurnId".into(), serde_json::Value::String(source_turn.clone()));
+                            }
+                            let value = route_plan_workspace_operation(&CommandRequest {
+                                command: "ws.plan_operation".into(), correlation_id: format!("ag-wop-{source_turn}"), params: parameters,
+                            }, state)?;
+                            let decision: crate::types::DecisionRequestV1 = value.get("decision_request").cloned()
+                                .and_then(|value| serde_json::from_value(value).ok())
+                                .ok_or_else(|| IpcError::new("AG_DECISION_RECEIPT_MISSING", "资源操作计划已创建，但确认回执缺失；请核对效果", false, false))?;
+                            let result = serde_json::json!({ "plan_id": value.get("plan").and_then(|plan| plan.get("plan_id")),
+                                "status": "waiting_confirm", "summary": "已生成工作区资源操作确认卡；确认前未修改磁盘，原 AgentTurn 正在等待裁决。" });
+                            Ok((decision, result))
+                        }
+                    },
+                    |(decision, _)| vec![crate::types::ToolCallReceiptReferenceV1 {
+                        kind: crate::types::ToolCallReceiptReferenceKind::DecisionRequest, id: decision.request_id.clone(),
+                    }],
+                ).await;
+                match executed {
+                    Ok((decision_request, result)) => {
+                        decision = Some(decision_request);
+                        (result.to_string(), true)
+                    }
+                    Err(error) => {
+                        execution_failure = Some(error.clone());
+                        (
+                            format!("能力执行失败：[{}] {}", error.code, error.message),
+                            false,
+                        )
+                    }
+                }
+            }
+            // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
+            ag::tool::ToolDecision::Allow if facts.call.name == "propose_edit" => {
+                if current_doc_edit_requires_prior_read(
+                    facts.params,
+                    facts.active_doc_path,
+                    facts.current_doc_requires_tool_read,
+                    facts.current_doc_read_confirmed,
+                ) {
+                    execution_failure = Some(IpcError::new(
+                        "AG_CURRENT_DOC_READ_REQUIRED",
+                        "当前文档目标内容尚未读取",
+                        true,
+                        false,
+                    ));
+                    (
+                    serde_json::json!({
+                        "code": "AG_CURRENT_DOC_READ_REQUIRED",
+                        "message": "当前文档较长，本轮只注入了块目录；请先调用 read_doc 或 list_blocks 读取当前文档目标内容，再重新调用 propose_edit。",
+                        "retriable": true,
+                    })
+                    .to_string(),
+                    false,
+                )
+                } else {
+                    let guarded_result = execute_proposal(
+                        (*facts.state).clone(),
+                        (*app).clone(),
+                        (*facts.params).clone(),
+                        (*facts.read_ctx).clone(),
+                        facts.active_doc_path.map(str::to_string),
+                        (*facts.explicit_edit_target_set).clone(),
+                        (*facts.capability_identity).clone(),
+                        Arc::clone(facts.cancelled),
+                    )
+                    .await;
+                    match guarded_result {
+                        Ok(mut edit_result) => {
+                            let checkpoint_diff_id = edit_result
+                                .projections
+                                .first()
+                                .filter(|projection| {
+                                    matches!(
+                                        projection.draft_mode.as_str(),
+                                        "current_editor" | "open_session"
+                                    )
+                                })
+                                .map(|projection| projection.diff_id.clone());
+                            let needs_preview_checkpoint = checkpoint_diff_id.is_some();
+                            if needs_preview_checkpoint {
+                                if let Some(current_task_run_id) = facts.task_run_id {
+                                    let checkpoint_result = match facts.state.db.lock() {
+                                        Ok(conn) => ag::task::create_preview_checkpoint(
+                                            &conn,
+                                            current_task_run_id,
+                                            facts.workspace_id,
+                                            facts.session_id,
+                                            facts.turn_id,
+                                            checkpoint_diff_id.as_deref().unwrap_or(""),
+                                            &edit_result.rel_path,
+                                        ),
+                                        Err(_) => Err(rusqlite::Error::InvalidQuery),
+                                    };
+                                    match checkpoint_result {
+                                        Ok(()) => {
+                                            preview_checkpoint = true;
+                                        }
+                                        Err(error) => {
+                                            for projection in &mut edit_result.projections {
+                                                projection.preview_checkpoint_required = false;
+                                            }
+                                            // Diff 已经持久化。此处不得把它变成前端不可见的孤儿
+                                            // 提案，也绝不能在没有 checkpoint 的情况下续用旧 read_ctx。
+                                            eprintln!(
+                                                "[ag-preview] checkpoint unavailable for diff {}: {error}",
+                                                checkpoint_diff_id.as_deref().unwrap_or("")
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    // 简单局部编辑不创建 TaskRun，也不伪造依赖任务身份的
+                                    // 自动续片段。Diff 仍作为当前 AgentTurn 的待审提案可见。
+                                    for projection in &mut edit_result.projections {
+                                        projection.preview_checkpoint_required = false;
+                                    }
+                                }
+                            }
+                            if preview_checkpoint {
+                                for projection in edit_result.projections.iter_mut().skip(1) {
+                                    projection.preview_checkpoint_required = false;
+                                }
+                            }
+                            proposed_diff = true;
+                            // 无 LogicalState 的 background Diff 同样不得让模型在同一份旧 read_ctx
+                            // 上继续续编；它没有 PreviewAck checkpoint，需经既有迁移或裁决后由
+                            // 人类下一次显式操作开启新片段。
+                            end_after_diff = true;
+                            let group_count =
+                                u32::try_from(edit_result.projections.len()).unwrap_or(u32::MAX);
+                            diff_events = edit_result
+                                .projections
+                                .iter()
+                                .enumerate()
+                                .map(|(offset, projection)| {
+                                    (
+                                        edit_result.proposal_batch_id.clone(),
+                                        u32::try_from(offset + 1).unwrap_or(u32::MAX),
+                                        group_count,
+                                        projection.diff_id.clone(),
+                                        edit_result.rel_path.clone(),
+                                    )
+                                })
+                                .collect();
+                            let result = proposal_result_projection(
+                                &edit_result.proposal_batch_id,
+                                &edit_result.rel_path,
+                                &edit_result.projections,
+                                preview_checkpoint,
+                            );
+                            (result.to_string(), true)
+                        }
+                        Err(e) => {
+                            execution_failure = Some(e.clone());
+                            (format!("生成修改建议失败：{}", e.message), false)
+                        }
+                    }
+                }
+            }
+            // 只读工具：经 WS/KB 执行（限 active workspace）。
+            ag::tool::ToolDecision::Allow => match facts.ws_root {
+                None => ("无活动 workspace，无法执行工具".to_string(), false),
+                Some(_) => {
+                    let executed = if let Some(result) = facts.read_execution {
+                        result
+                    } else if facts.call.name == "import_image_asset" {
+                        let root =
+                            std::path::PathBuf::from(facts.ws_root.expect("workspace exists"));
+                        let name = facts.call.name.clone();
+                        let parameters = (*facts.params).clone();
+                        ag::capability_runtime::execute(
+                            (*facts.state).clone(),
+                            (*facts.capability_identity).clone(),
+                            Arc::clone(facts.cancelled),
+                            std::time::Duration::from_secs(30),
+                            move |_| ag::tool_exec::exec_structure_tool(&root, &name, &parameters),
+                            |_| vec![],
+                        )
+                        .await
+                    } else {
+                        ag::tool_exec::exec_read_only(
+                            facts.read_ctx,
+                            &facts.call.name,
+                            facts.params,
+                        )
+                    };
+                    match executed {
+                        Ok(r) => (r, true),
+                        Err(e) => {
+                            execution_failure = Some(e.clone());
+                            (format!("工具执行失败：{}", e.message), false)
+                        }
+                    }
+                }
+            },
+        }
+    };
+    ToolExecutionOutcome {
+        result,
+        success,
+        diff_events,
+        decision,
+        preview_checkpoint,
+        end_after_diff,
+        proposed_diff,
+        edit_blocked_reported,
+        execution_failure,
+    }
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -1240,7 +1580,7 @@ fn rebuild_round_prompt(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2669,7 +3009,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     } else {
                         None
                     };
-                    let effect_lock_error: Option<String> = None;
                     let capability_identity = tool_call_receipt_identity(
                         &workspace_id_for_turn,
                         &session_id,
@@ -2680,7 +3019,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     );
                     let validation_allows_execution = arg_parse_error.is_none()
                         && execution_guard_error.is_none()
-                        && effect_lock_error.is_none()
                         && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow));
                     if validation_allows_execution {
                         // Only a validated call that crosses the execution boundary consumes the
@@ -2693,294 +3031,44 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     } else if !validation_allows_execution {
                         advance_or_finish!(TlEv::ValidateFail);
                     }
-                    let (result, success) = if let Some(error_msg) = arg_parse_error {
-                        (error_msg, false)
-                    } else if let Some(error_msg) = execution_guard_error {
-                        (error_msg, false)
-                    } else if let Some(error_msg) = effect_lock_error {
-                        (error_msg, false)
-                    } else {
-                        match tool_decision
-                            .expect("parsed tool arguments must have a validation decision")
-                        {
-                            ag::tool::ToolDecision::Reject(reason) => (reason, false),
-                            ag::tool::ToolDecision::InvalidArguments { field, constraint, message } => (
-                                serde_json::json!({"code":"AG_TOOL_ARG","fieldPath":field,"constraint":constraint,
-                                    "message":message,"notExecuted":true,"requiresNewToolCallId":true}).to_string(), false),
-                            ag::tool::ToolDecision::Allow if c.name == "edit_blocked" => {
-                                match ag::tool_exec::exec_edit_blocked(&params) {
-                                    Ok(result) => {
-                                        edit_blocked_reported = true;
-                                        (result, true)
-                                    }
-                                    Err(error) => {
-                                        execution_failure = Some(error.clone());
-                                        (format!("阻断报告无效：{}", error.message), false)
-                                    }
-                                }
-                            }
-                            // 任务级确认只创建 DecisionRequest，不修改文档或 Diff。成功后当前执行片段必须
-                            // 停在 AwaitingDecision；由下方事件分派统一发送确认卡，但不得发送 Done。
-                            ag::tool::ToolDecision::Allow
-                                if matches!(
-                                    c.name.as_str(),
-                                    "propose_decision" | "plan_workspace_operation"
-                                ) =>
-                            {
-                                let task = task_run_id
-                                    .clone()
-                                    .expect("control capability binds TaskRun");
-                                let name = c.name.clone();
-                                let parameters = params.clone();
-                                let target_paths = scope_candidates
-                                    .as_ref()
-                                    .ok()
-                                    .and_then(|paths| paths.clone());
-                                let source_turn = turn_id.clone();
-                                let executed = ag::capability_runtime::execute(
-                                    state.clone(), capability_identity.clone(), cancelled.clone(), std::time::Duration::from_secs(30),
-                                    move |state| {
-                                        if name == "propose_decision" {
-                                            if !parameters.get("summary").and_then(|value| value.as_str()).is_some_and(|summary| !summary.trim().is_empty())
-                                                || parameters.get("detail").is_some_and(|value| !value.is_string())
-                                                || parameters.get("options").is_some_and(|value| !value.as_array().is_some_and(|options| options.iter().all(|option| option.as_str().is_some_and(|option| !option.trim().is_empty())))) {
-                                                return Err(IpcError::new("AG_TOOL_ARG", "确认参数无效", false, false));
-                                            }
-                                            let kind = parameters.get("kind").and_then(|value| value.as_str()).ok_or_else(|| IpcError::new("AG_TOOL_ARG", "缺少 kind", false, false))?;
-                                            let payload = serde_json::json!({
-                                                "summary": parameters.get("summary"), "detail": parameters.get("detail"),
-                                                "options": parameters.get("options"), "targetPaths": target_paths,
-                                            });
-                                            let conn = state.db.lock().map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
-                                            let decision = ag::task::propose_decision(&conn, &task, kind, payload)
-                                                .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
-                                            let result = serde_json::json!({ "request_id": decision.request_id, "status": "waiting_confirm",
-                                                "summary": "已创建任务级确认请求；原 AgentTurn 正在等待用户确认或取消。" });
-                                            Ok((decision, result))
-                                        } else {
-                                            let mut parameters = parameters;
-                                            if let Some(object) = parameters.as_object_mut() {
-                                                object.insert("taskRunId".into(), serde_json::Value::String(task));
-                                                object.insert("sourceTurnId".into(), serde_json::Value::String(source_turn.clone()));
-                                            }
-                                            let value = route_plan_workspace_operation(&CommandRequest {
-                                                command: "ws.plan_operation".into(), correlation_id: format!("ag-wop-{source_turn}"), params: parameters,
-                                            }, state)?;
-                                            let decision: crate::types::DecisionRequestV1 = value.get("decision_request").cloned()
-                                                .and_then(|value| serde_json::from_value(value).ok())
-                                                .ok_or_else(|| IpcError::new("AG_DECISION_RECEIPT_MISSING", "资源操作计划已创建，但确认回执缺失；请核对效果", false, false))?;
-                                            let result = serde_json::json!({ "plan_id": value.get("plan").and_then(|plan| plan.get("plan_id")),
-                                                "status": "waiting_confirm", "summary": "已生成工作区资源操作确认卡；确认前未修改磁盘，原 AgentTurn 正在等待裁决。" });
-                                            Ok((decision, result))
-                                        }
-                                    },
-                                    |(decision, _)| vec![crate::types::ToolCallReceiptReferenceV1 {
-                                        kind: crate::types::ToolCallReceiptReferenceKind::DecisionRequest, id: decision.request_id.clone(),
-                                    }],
-                                ).await;
-                                match executed {
-                                    Ok((decision, result)) => {
-                                        decision_event_after_tool = Some(decision);
-                                        (result.to_string(), true)
-                                    }
-                                    Err(error) => {
-                                        execution_failure = Some(error.clone());
-                                        (
-                                            format!(
-                                                "能力执行失败：[{}] {}",
-                                                error.code, error.message
-                                            ),
-                                            false,
-                                        )
-                                    }
-                                }
-                            }
-                            // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
-                            ag::tool::ToolDecision::Allow if c.name == "propose_edit" => {
-                                if current_doc_edit_requires_prior_read(
-                                    &params,
-                                    active_doc_path.as_deref(),
-                                    current_doc_requires_tool_read,
-                                    current_doc_read_confirmed,
-                                ) {
-                                    execution_failure = Some(IpcError::new(
-                                        "AG_CURRENT_DOC_READ_REQUIRED",
-                                        "当前文档目标内容尚未读取",
-                                        true,
-                                        false,
-                                    ));
-                                    (
-                                    serde_json::json!({
-                                        "code": "AG_CURRENT_DOC_READ_REQUIRED",
-                                        "message": "当前文档较长，本轮只注入了块目录；请先调用 read_doc 或 list_blocks 读取当前文档目标内容，再重新调用 propose_edit。",
-                                        "retriable": true,
-                                    })
-                                    .to_string(),
-                                    false,
-                                )
-                                } else {
-                                    let guarded_result = execute_proposal(
-                                        state.clone(),
-                                        app.clone(),
-                                        params.clone(),
-                                        read_ctx.clone(),
-                                        active_doc_path.clone(),
-                                        explicit_edit_target_set.clone(),
-                                        capability_identity.clone(),
-                                        cancelled.clone(),
-                                    )
-                                    .await;
-                                    match guarded_result {
-                                        Ok(mut edit_result) => {
-                                            let checkpoint_diff_id = edit_result
-                                                .projections
-                                                .first()
-                                                .filter(|projection| {
-                                                    matches!(
-                                                        projection.draft_mode.as_str(),
-                                                        "current_editor" | "open_session"
-                                                    )
-                                                })
-                                                .map(|projection| projection.diff_id.clone());
-                                            let needs_preview_checkpoint =
-                                                checkpoint_diff_id.is_some();
-                                            if needs_preview_checkpoint {
-                                                if let Some(current_task_run_id) =
-                                                    task_run_id.as_deref()
-                                                {
-                                                    let checkpoint_result = match state.db.lock() {
-                                                        Ok(conn) => {
-                                                            ag::task::create_preview_checkpoint(
-                                                                &conn,
-                                                                current_task_run_id,
-                                                                &workspace_id_for_turn,
-                                                                &session_id,
-                                                                &turn_id,
-                                                                checkpoint_diff_id
-                                                                    .as_deref()
-                                                                    .unwrap_or(""),
-                                                                &edit_result.rel_path,
-                                                            )
-                                                        }
-                                                        Err(_) => {
-                                                            Err(rusqlite::Error::InvalidQuery)
-                                                        }
-                                                    };
-                                                    match checkpoint_result {
-                                                        Ok(()) => {
-                                                            preview_checkpoint_after_tool = true;
-                                                        }
-                                                        Err(error) => {
-                                                            for projection in
-                                                                &mut edit_result.projections
-                                                            {
-                                                                projection
-                                                                    .preview_checkpoint_required =
-                                                                    false;
-                                                            }
-                                                            // Diff 已经持久化。此处不得把它变成前端不可见的孤儿
-                                                            // 提案，也绝不能在没有 checkpoint 的情况下续用旧 read_ctx。
-                                                            eprintln!(
-                                                                "[ag-preview] checkpoint unavailable for diff {}: {error}",
-                                                                checkpoint_diff_id.as_deref().unwrap_or("")
-                                                            );
-                                                        }
-                                                    }
-                                                } else {
-                                                    // 简单局部编辑不创建 TaskRun，也不伪造依赖任务身份的
-                                                    // 自动续片段。Diff 仍作为当前 AgentTurn 的待审提案可见。
-                                                    for projection in &mut edit_result.projections {
-                                                        projection.preview_checkpoint_required =
-                                                            false;
-                                                    }
-                                                }
-                                            }
-                                            if preview_checkpoint_after_tool {
-                                                for projection in
-                                                    edit_result.projections.iter_mut().skip(1)
-                                                {
-                                                    projection.preview_checkpoint_required = false;
-                                                }
-                                            }
-                                            proposed_diff = true;
-                                            // 无 LogicalState 的 background Diff 同样不得让模型在同一份旧 read_ctx
-                                            // 上继续续编；它没有 PreviewAck checkpoint，需经既有迁移或裁决后由
-                                            // 人类下一次显式操作开启新片段。
-                                            end_after_diff_proposal = true;
-                                            let group_count =
-                                                u32::try_from(edit_result.projections.len())
-                                                    .unwrap_or(u32::MAX);
-                                            diff_events_after_tool = edit_result
-                                                .projections
-                                                .iter()
-                                                .enumerate()
-                                                .map(|(offset, projection)| {
-                                                    (
-                                                        edit_result.proposal_batch_id.clone(),
-                                                        u32::try_from(offset + 1)
-                                                            .unwrap_or(u32::MAX),
-                                                        group_count,
-                                                        projection.diff_id.clone(),
-                                                        edit_result.rel_path.clone(),
-                                                    )
-                                                })
-                                                .collect();
-                                            let result = proposal_result_projection(
-                                                &edit_result.proposal_batch_id,
-                                                &edit_result.rel_path,
-                                                &edit_result.projections,
-                                                preview_checkpoint_after_tool,
-                                            );
-                                            (result.to_string(), true)
-                                        }
-                                        Err(e) => {
-                                            execution_failure = Some(e.clone());
-                                            (format!("生成修改建议失败：{}", e.message), false)
-                                        }
-                                    }
-                                }
-                            }
-                            // 只读工具：经 WS/KB 执行（限 active workspace）。
-                            ag::tool::ToolDecision::Allow => match ws_root.as_deref() {
-                                None => ("无活动 workspace，无法执行工具".to_string(), false),
-                                Some(_) => {
-                                    let executed = if let Some(result) = read_execution {
-                                        result
-                                    } else if c.name == "import_image_asset" {
-                                        let root = std::path::PathBuf::from(
-                                            ws_root.as_deref().expect("workspace exists"),
-                                        );
-                                        let name = c.name.clone();
-                                        let parameters = params.clone();
-                                        ag::capability_runtime::execute(
-                                            state.clone(),
-                                            capability_identity.clone(),
-                                            cancelled.clone(),
-                                            std::time::Duration::from_secs(30),
-                                            move |_| {
-                                                ag::tool_exec::exec_structure_tool(
-                                                    &root,
-                                                    &name,
-                                                    &parameters,
-                                                )
-                                            },
-                                            |_| vec![],
-                                        )
-                                        .await
-                                    } else {
-                                        ag::tool_exec::exec_read_only(&read_ctx, &c.name, &params)
-                                    };
-                                    match executed {
-                                        Ok(r) => (r, true),
-                                        Err(e) => {
-                                            execution_failure = Some(e.clone());
-                                            (format!("工具执行失败：{}", e.message), false)
-                                        }
-                                    }
-                                }
-                            },
-                        }
-                    };
+                    let execution = execute_tool_call(
+                        &app,
+                        ToolExecutionFacts {
+                            state,
+                            cancelled: &cancelled,
+                            call: c,
+                            params: &params,
+                            arg_parse_error: arg_parse_error.as_ref(),
+                            execution_guard_error: execution_guard_error.as_ref(),
+                            tool_decision: tool_decision.as_ref(),
+                            execution_failure,
+                            read_execution,
+                            ws_root: ws_root.as_deref(),
+                            read_ctx: &read_ctx,
+                            active_doc_path: active_doc_path.as_deref(),
+                            explicit_edit_target_set: &explicit_edit_target_set,
+                            capability_identity: &capability_identity,
+                            task_run_id: task_run_id.as_deref(),
+                            scope_candidates: &scope_candidates,
+                            current_doc_requires_tool_read,
+                            current_doc_read_confirmed,
+                            workspace_id: &workspace_id_for_turn,
+                            session_id: &session_id,
+                            turn_id: &turn_id,
+                            proposed_diff,
+                            edit_blocked_reported,
+                        },
+                    )
+                    .await;
+                    let result = execution.result;
+                    let success = execution.success;
+                    diff_events_after_tool = execution.diff_events;
+                    decision_event_after_tool = execution.decision;
+                    preview_checkpoint_after_tool = execution.preview_checkpoint;
+                    end_after_diff_proposal = execution.end_after_diff;
+                    proposed_diff = execution.proposed_diff;
+                    edit_blocked_reported = execution.edit_blocked_reported;
+                    execution_failure = execution.execution_failure;
                     let repeated_read_failure = if validation_allows_execution && !success {
                         let is_read_only = ag::tool_registry::lookup(&c.name).is_some_and(|tool| {
                             tool.permission == ag::tool_registry::ToolPermission::ReadOnly
