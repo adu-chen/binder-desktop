@@ -547,7 +547,9 @@ rule_id: BR-AG-STATE-002
 DecisionRequest、预算、取消与终态。IntentResult/TaskPlan、模型文字、历史授权和注册表存在性均不得
 放行工具；未注册、当前未授权或越权请求一律拒绝并以 ToolResult 回注模型。执行结果（含失败）追加为
 TurnEvent 与 EvidenceLedger 证据后，模型可调整 IntentResult 与后续路线；任何 provider 续调仍重新经过
-Gate。循环有运行时上限，达上限中止；用户可随时中断，中断为终态。**任何文件内容写入意图不得由工具
+Gate。同一响应内的多个 ToolCall 按响应顺序逐个重新计算授权并执行；中间项经 nextToolCall 保持同一
+SM-AG-02 激活，最后一项 recorded 后才回归 Assembling；不得直接改写状态或绕过转移引擎。循环有运行时上限，
+达上限中止；用户可随时中断，中断为终态。**任何文件内容写入意图不得由工具
 直接落盘，必须产出修改建议走 DE diff 路径**（X-FORBID-006）；只读类工具（读文档/搜索/列块）必须经
 AgentReadContext 并限定 workspace 内（X-FORBID-004）：已打开文档优先读取 OpenDocSnapshot 的 LogicalState，
 未打开文档才经 WS/DOC 读取 DiskState；已打开文档快照缺失、版本缺失或锚校验失败时必须拒绝工具结果
@@ -1194,6 +1196,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-30 | v2.65 | 补齐 BR-AG-STATE-002 的同批多 ToolCall 语义：中间项经 nextToolCall 保持同一 SM-AG-02 激活，最后一项 recorded 后回归 Assembling，禁止直接改写状态绕过转移引擎；与 A-AG-M-S-01 v2.37 的 nextToolCall 转移同步。 |
 | 2026-10-30 | v2.64 | 继续细化 turn_tool_loop：新增 BR-AG-DATA-013（控制封套终态前置校验）并抽出 validate_round_response；把重复的 Intent/TaskRun 投影收敛为 apply_control_and_observe（BR-SYS-STATE-008），把 ProjectReport 派生收敛为 emit_project_report（BR-AG-OBS-001）；修正裁决停放失败取消事件使用真实 turn_state；不改变授权、工具执行、裁决与保存语义。 |
 | 2026-10-30 | v2.63 | AG-TOOL/AG-TURN 规则细化：新增 BR-AG-DATA-011（ToolCall 回执身份与工具结果回注）、BR-AG-DATA-012（修改建议结果投影）、BR-AG-STATE-005（额度收尾与终态结算），对应 turn_tool_loop 三个独立生产块；不改变执行、授权、确认与保存语义。 |
 | 2026-10-28 | v2.62 | 模型可恢复错误按控制封套和参数独立有限计数，仍受总调用预算；只读续页改用绑定路径/版本的单游标。 |

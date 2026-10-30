@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-10-30T13:38:36.510Z -->
+<!-- 最后生成时间：2026-10-30T14:27:27.182Z -->
 
 ### 模块编码表
 
@@ -747,8 +747,8 @@
 | BR-SYS-STATE-008-GUARD-AG-AG-TASK-004                                                                                                                                                                                                                   | GUARD  | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                                                                                                                              | src-tauri/src/ag/task.rs               | 995  |
 | BR-SYS-STATE-008-GUARD-AG-AG-TASK-003                                                                                                                                                                                                                   | GUARD  | BR-SYS-STATE-008 term_ref: TERM-AG-015, TERM-AG-018                                                                                                                                                                                              | src-tauri/src/ag/task.rs               | 1019 |
 | BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-AG-DATA-003-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005    | API    | BR-AG-STATE-002, BR-AG-DATA-003, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002 term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019, TERM-WS-003                                                                                | src-tauri/src/ag/task_runtime.rs       | 197  |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-001                                                                                                                                                                                                                       | RB     | BR-AG-STATE-002 term_ref: TERM-AG-002                                                                                                                                                                                                            | src-tauri/src/ag/tool.rs               | 59   |
-| BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                                                                                                                                                                    | GUARD  | BR-AG-STATE-002                                                                                                                                                                                                                                  | src-tauri/src/ag/tool.rs               | 98   |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-001                                                                                                                                                                                                                       | RB     | BR-AG-STATE-002 term_ref: TERM-AG-002                                                                                                                                                                                                            | src-tauri/src/ag/tool.rs               | 60   |
+| BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                                                                                                                                                                    | GUARD  | BR-AG-STATE-002                                                                                                                                                                                                                                  | src-tauri/src/ag/tool.rs               | 102  |
 | BR-AG-STATE-002-DATA-AG-AG-TOOL-044, BR-SYS-DATA-008-DATA-AG-AG-TOOL-044                                                                                                                                                                                | DATA   | BR-AG-STATE-002, BR-SYS-DATA-008 term_ref: TERM-AG-002, TERM-AG-014                                                                                                                                                                              | src-tauri/src/ag/tool_exec.rs          | 18   |
 | BR-AG-OBS-001-DATA-AG-AG-TOOL-043, BR-AG-DATA-008-DATA-AG-AG-TOOL-043, BR-SYS-DATA-008-DATA-AG-AG-TOOL-043                                                                                                                                              | DATA   | BR-AG-OBS-001, BR-AG-DATA-008, BR-SYS-DATA-008 term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023                                                                                                                                                   | src-tauri/src/ag/tool_exec.rs          | 173  |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012                                                                                                                                          | QUERY  | BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001 term_ref: TERM-ED-008, TERM-WS-001                                                                                                                                                               | src-tauri/src/ag/tool_exec.rs          | 483  |
@@ -1588,7 +1588,7 @@
 | BR-AG-STATE-002-GUARD-AG-AG-TOOL-058, BR-AG-DATA-009-GUARD-AG-AG-TOOL-058                                                                                                                                                                            | GUARD  | AG-TOOL                        | src-tauri/src/ag/edit_support.rs       | 102 |
 | BR-AG-STATE-002-GUARD-AG-AG-TOOL-059, BR-AG-DATA-010-GUARD-AG-AG-TOOL-059                                                                                                                                                                            | GUARD  | AG-TOOL                        | src-tauri/src/ag/edit_support.rs       | 293 |
 | BR-AG-STATE-002-API-AG-WS-OPERATION-005, BR-AG-DATA-003-API-AG-WS-OPERATION-005, BR-SYS-STATE-008-API-AG-WS-OPERATION-005, BR-WS-STATE-003-API-AG-WS-OPERATION-005, BR-WS-PERSIST-003-API-AG-WS-OPERATION-005, BR-WS-OBS-002-API-AG-WS-OPERATION-005 | API    | AG-TURN, AG-TOOL, WS-OPERATION | src-tauri/src/ag/task_runtime.rs       | 197 |
-| BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                                                                                                                                                                 | GUARD  | AG-TOOL                        | src-tauri/src/ag/tool.rs               | 98  |
+| BR-AG-STATE-002-GUARD-AG-AG-TOOL-001                                                                                                                                                                                                                 | GUARD  | AG-TOOL                        | src-tauri/src/ag/tool.rs               | 102 |
 | BR-AG-STATE-002-DATA-AG-AG-TOOL-044, BR-SYS-DATA-008-DATA-AG-AG-TOOL-044                                                                                                                                                                             | DATA   | AG-TOOL                        | src-tauri/src/ag/tool_exec.rs          | 18  |
 | BR-AG-STATE-002-QUERY-AG-AG-TOOL-012, BR-AG-DATA-001-QUERY-AG-AG-TOOL-012, BR-WS-DATA-001-QUERY-AG-AG-TOOL-012                                                                                                                                       | QUERY  | AG-TOOL                        | src-tauri/src/ag/tool_exec.rs          | 483 |
 | BR-AG-STATE-002-GUARD-AG-AG-TOOL-045, BR-SYS-STATE-007-GUARD-AG-AG-TOOL-045                                                                                                                                                                          | GUARD  | AG-TOOL                        | src-tauri/src/ag/tool_exec.rs          | 954 |
@@ -1601,7 +1601,7 @@
 
 | codes                                 | type   | chain   | 文件                                 | 行号  |
 | ------------------------------------- | ------ | ------- | ---------------------------------- | --- |
-| BR-AG-STATE-002-RB-AG-AG-TOOL-001     | RB     | AG-TOOL | src-tauri/src/ag/tool.rs           | 59  |
+| BR-AG-STATE-002-RB-AG-AG-TOOL-001     | RB     | AG-TOOL | src-tauri/src/ag/tool.rs           | 60  |
 | BR-AG-STATE-002-EFFECT-AG-AG-TOOL-038 | EFFECT | AG-TOOL | src-tauri/src/ag/turn_tool_loop.rs | 555 |
 
 #### BR-AG-STATE-002 term_ref: TERM-AG-014
@@ -3024,16 +3024,16 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 85；Rust 集成测试文件 2；测试用例约 1174。
+动态发现：前端测试文件 26；Rust 内联测试文件 85；Rust 集成测试文件 2；测试用例约 1175。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
 | CORE | high | 6 | 113 | governance:1, service:2, unit:3 | 1/1 → 1 |
-| SYS | critical | 43 | 594 | component:3, integration:2, service:5, state:1, unit:32 | 3/3 → 3 |
+| SYS | critical | 43 | 595 | component:3, integration:2, service:5, state:1, unit:32 | 3/3 → 3 |
 | WS | critical | 23 | 345 | component:1, integration:1, service:4, unit:17 | 2/2 → 2 |
 | ED | critical | 25 | 550 | component:4, service:7, state:1, unit:13 | 11/11 → 11 |
 | DE | critical | 22 | 365 | component:3, integration:1, service:3, unit:15 | 2/2 → 2 |
-| AG | critical | 41 | 492 | component:1, integration:1, service:1, state:1, unit:37 | 3/3 → 3 |
+| AG | critical | 41 | 493 | component:1, integration:1, service:1, state:1, unit:37 | 3/3 → 3 |
 | CBT | critical | 4 | 12 | unit:4 | 0/0 → 0 |
 | DOC | critical | 16 | 97 | service:1, unit:15 | 1/1 → 1 |
 | PRV | high | 4 | 24 | component:1, service:1, unit:2 | 2/2 → 2 |

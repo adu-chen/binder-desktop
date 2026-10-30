@@ -1257,6 +1257,8 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::GatePassed)
                 .ok_or_else(sm_error)?;
             emit_ag01(&app, &turn_id, turn_state);
+            // SM-AG-01 已完成 Assembling→AwaitingGate→GatePassed；这里是新的嵌套激活起点，
+            // 从初始态 ModelStreaming 开始，不是同一 SM-AG-02 激活内的状态转移。
             tool_loop_state = TlSt::ModelStreaming;
         }
         debug_assert_eq!(tool_loop_state, TlSt::ModelStreaming);
@@ -2995,14 +2997,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     } else if end_after_diff_proposal && success {
                         advance_or_finish!(TlEv::ProposalRecorded);
                         stop_after_current_tool = true;
+                    } else if has_more_calls {
+                        // 同一响应还有独立 ToolCall：经转移引擎保持当前激活，
+                        // 不直接改写状态，也不回归 SM-AG-01。
+                        advance_or_finish!(TlEv::NextToolCall);
                     } else {
                         advance_or_finish!(TlEv::Recorded);
                     }
                     if stop_after_current_tool {
                         break;
-                    }
-                    if has_more_calls {
-                        tool_loop_state = TlSt::ModelStreaming;
                     }
                 }
                 if _round + 1 == remaining_rounds
@@ -3752,5 +3755,29 @@ mod tests {
         let error = validate_round_response(&tools, &decoder, false, false, 0, false, &final_only)
             .expect_err("final-only continuation must reject tool calls");
         assert_eq!(error.code, "AG_MODEL_CONTROL_INVALID");
+    }
+
+    // covers: BR-AG-STATE-002
+    // 同批多 ToolCall 必须经 nextToolCall 转移；直接赋值状态只允许出现在每次激活起点。
+    #[test]
+    fn multi_tool_call_batch_uses_transition_instead_of_direct_state_reset() {
+        let source = include_str!("turn_tool_loop.rs");
+        let production = &source[..source
+            .rfind("#[cfg(test)]")
+            .expect("test module starts after production code")];
+        let next = production
+            .find("TlEv::NextToolCall")
+            .expect("同批下一 ToolCall 必须有显式转移");
+        let branch = production[..next]
+            .rfind("let has_more_calls")
+            .expect("NextToolCall 必须位于同批剩余调用判断之后");
+        assert!(branch < next);
+        assert_eq!(
+            production
+                .matches("tool_loop_state = TlSt::ModelStreaming")
+                .count(),
+            2,
+            "唯一允许的直接赋值是初始状态与每次 provider 激活起点"
+        );
     }
 }

@@ -28,6 +28,7 @@ pub enum ToolLoopEvent {
     ExecOk,
     ExecFail,
     Recorded,
+    NextToolCall,
     ProposalRecorded,
     DecisionHandoff,
     LoopLimit,
@@ -65,7 +66,8 @@ pub fn is_terminal(state: ToolLoopState) -> bool {
  * boundary: in=ToolLoopEvent | out=ToolLoopState(validateGatedResultRecordedProposalDecisionLoopLimitedErrorCancelTerminal)
  */
 /// SM-AG-02 转移引擎（BR-AG-STATE-002）：toolRequest→校验；validateFail/execOk/execFail 均进入
-/// ResultRecording；记录完成、Proposal 或 DecisionRequest 后结束本次嵌套循环并回归 SM-AG-01；
+/// ResultRecording；同一响应仍有未处理 ToolCall 时经 nextToolCall 保持激活回到 ModelStreaming；
+/// 记录完成、Proposal 或 DecisionRequest 后结束本次嵌套循环并回归 SM-AG-01；
 /// 达上限/循环级错误→LoopAborted；
 /// 任意非终态 cancel→LoopAborted（无半落盘）。返回 `None` = 无合法转移。
 pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoopState> {
@@ -87,6 +89,8 @@ pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoop
         (ToolExecuting, ExecOk) => ResultRecording,
         (ToolExecuting, ExecFail) => ResultRecording,
         (ResultRecording, Recorded | ProposalRecorded | DecisionHandoff) => LoopCompleted,
+        // 同一响应内的下一 ToolCall 仍在当前 SM-AG-02 激活内，必须经转移引擎而非直接赋值状态。
+        (ResultRecording, NextToolCall) => ModelStreaming,
         (ResultRecording, LoopLimit) => LoopAborted,
         // 其余无合法转移（终态冻结；未校验不得执行；未注入不得续调）。
         _ => return None,
@@ -160,6 +164,11 @@ mod tests {
         assert_eq!(
             transition(ResultRecording, DecisionHandoff),
             Some(LoopCompleted)
+        );
+        // 同批下一 ToolCall 保持同一激活，不进入终态。
+        assert_eq!(
+            transition(ResultRecording, NextToolCall),
+            Some(ModelStreaming)
         );
         assert_eq!(transition(ResultRecording, LoopLimit), Some(LoopAborted));
         // 未校验不得执行

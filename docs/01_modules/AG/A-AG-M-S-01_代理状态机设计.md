@@ -205,7 +205,7 @@ terminal_states: LoopCompleted, LoopAborted
 - **scope**：一次代理回合内的工具调用循环（首个工具请求出现→终轮答复/中止）
 - **context**：工具注册清单、当前运行事实、短生命周期 CapabilityGrant、AgentReadContext、循环计数与上限、当前工具请求/结果、CancellationToken、terminal_latch
 - **states**：ModelStreaming、ToolValidating、ToolExecuting、ResultRecording、LoopCompleted、LoopAborted
-- **events**：toolRequest、validateOk、validateFail、execOk、execFail、recorded、finalAnswer、protocolRejected、proposalRecorded、decisionHandoff、loopLimit、loopError、cancel
+- **events**：toolRequest、validateOk、validateFail、execOk、execFail、recorded、nextToolCall、finalAnswer、protocolRejected、proposalRecorded、decisionHandoff、loopLimit、loopError、cancel
 - **transitions（主表）**：
 
 | from | event | guard | to | action |
@@ -217,7 +217,8 @@ terminal_states: LoopCompleted, LoopAborted
 | ToolValidating | validateFail | 未注册/当前未授权/越权/目标或参数失效 | ResultRecording | 记录结构化拒绝，不执行副作用 |
 | ToolExecuting | execOk | terminal_latch 未锁定 | ResultRecording | 追加成功 ToolResult；由事件重建 EvidenceLedger 的可证明覆盖 |
 | ToolExecuting | execFail | — | ResultRecording | 追加失败 ToolResult；不增加证据覆盖 |
-| ResultRecording | recorded | 当前响应内工具项处理完；循环计数 < 上限；未形成等待 | LoopCompleted | 回归 SM-AG-01 toolRoundCompleted→Assembling；不直接调用 provider |
+| ResultRecording | nextToolCall | 当前响应仍有未处理 ToolCall；未达上限；未形成等待 | ModelStreaming | 保持同一 SM-AG-02 激活，按响应顺序处理下一 ToolCall；不回归 SM-AG-01，不重新 Gate |
+| ResultRecording | recorded | 当前响应最后一项 ToolCall 已记录；循环计数 < 上限；未形成等待 | LoopCompleted | 回归 SM-AG-01 toolRoundCompleted→Assembling；不直接调用 provider |
 | ResultRecording | proposalRecorded | `propose_edit` 已真实形成 ProposalBatch | LoopCompleted | 追加逐卡 DiffProposed，当前响应剩余工具不再执行；回归 SM-AG-01 toolRoundCompleted→Assembling，后续 provider 调用重过 Gate |
 | ResultRecording | decisionHandoff | 已真实形成不可变 DecisionRequest | LoopCompleted | 回归 SM-AG-01 decisionProposed→AwaitingDecision；当前响应剩余工具不再执行 |
 | ResultRecording | loopLimit | 达循环上限 | LoopAborted | 中止并回报（统一错误形状） |
@@ -225,9 +226,13 @@ terminal_states: LoopCompleted, LoopAborted
 | 任意非终态 | cancel | 用户中断 | LoopAborted | 中断终态，无半落盘 |
 
 - **多 ToolCall 顺序**：一个模型轮次返回多个 ToolCall 时，按响应顺序为每个 ToolCall 独立执行
-  `toolRequest→validateOk/validateFail→可选执行→结果记录`；前一 ToolCall 完成 `recorded` 后才处理下一项。
-  校验失败项只回注拒绝原因，不进入 ToolExecuting，也不阻止后续独立 ToolCall 重新接受校验；任一项形成
-  ProposalBatch/DecisionRequest 并触发 proposalRecorded/decisionHandoff 后，当前批次剩余 ToolCall 不再执行。
+  `toolRequest→validateOk/validateFail→可选执行→结果记录`；中间项完成 `nextToolCall` 保持同一激活后处理
+  下一项，最后一项完成 `recorded` 后才回归 SM-AG-01。校验失败项只回注拒绝原因，不进入 ToolExecuting，也不阻止
+  后续独立 ToolCall 重新接受校验；任一项形成 ProposalBatch/DecisionRequest 并触发 proposalRecorded/
+  decisionHandoff 后，当前批次剩余 ToolCall 不再执行。
+  每次 provider continuation 经 SM-AG-01 Assembling→AwaitingGate→GatePassed 后开启新的 SM-AG-02 激活，
+  初始态为 ModelStreaming；上一激活的 LoopCompleted 不复用为同一激活内的内部转移。激活边界由 SM-AG-01
+  的 toolRoundCompleted→Assembling→AwaitingGate→GatePassed 事件标识；跨激活的状态变化不套用本表转移。
 - **error_states**：无独立错误状态——单个工具执行失败经 execFail→ResultRecording 记录，后续由新 provider 轮次决定路线；
   循环级错误以 loopError 进入 LoopAborted，回归 SM-AG-01 TurnError，不得映射为 Completed/Done
 - **recovery_paths**：LoopAborted→SM-AG-01 TurnError/Cancelled 路径处置
@@ -243,6 +248,7 @@ terminal_states: LoopCompleted, LoopAborted
   - ToolExecuting → DiskState 读取，当目标文档已打开且 AgentReadContext 中应存在 OpenDocSnapshot
   - ResultRecording → 直接调用 provider（必须回 SM-AG-01 Assembling→AwaitingGate）
   - 任意生产状态广播未经过 SM-AG-02 转移引擎
+  - ResultRecording → ModelStreaming 无 nextToolCall（同批下一 ToolCall 必须经转移引擎，不得直接赋值状态）
   - LoopAborted → TaskRun Completed 或 AgentTurn Done
 - **acceptance_criteria**：IntentResult/TaskPlan 内容改变不能单独改变 validate 结果；未注册、当前未授权或越权工具不可达 ToolExecuting；循环上限强制生效；任何工具执行
   不产生直接文件写入；read_doc/search_text/list_blocks 对已打开文档命中 OpenDocSnapshot，缺失时拒绝；
@@ -329,7 +335,8 @@ terminal_states: Accepted, Dismissed
   中止；cancel 随时中止；断言无任何工具执行产生直接文件写入（与 DE/WS G5 联合验证）；
   read_doc/search_text/list_blocks 已打开文档覆盖 LogicalState，未打开文档读取 DiskState。
   已注册但不在当前 CapabilityGrant 的工具必须 validateFail；状态事件顺序必须先 ToolExecuting、后真实执行、
-  再 ResultRecording，不得在工具完成后补发状态；IntentResult/TaskPlan 不能使工具从拒绝变为允许；每次
+  再 ResultRecording，不得在工具完成后补发状态；同批多 ToolCall 中间项必须经 nextToolCall 回到 ModelStreaming，
+  最后一项才 recorded 完成，不得直接赋值状态；IntentResult/TaskPlan 不能使工具从拒绝变为允许；每次
   ToolResult 后的 provider continuation 必须重新取得真实 GatePassed，不能复用首次或上一轮门禁结果。
 - **SM-AG-03**：重复 trigger 下 throttleDrop 或 latest-wins 覆盖生效；无订阅/断网 throttlePass 后静默回
   Idle；过期 requestId 的 candidateOk 被丢弃；候选不足 3 条 candidateUnderflow 且记录 parse_underflow；candidateOk→Presenting→accept→Accepted
@@ -381,6 +388,7 @@ terminal_states: Accepted, Dismissed
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-30 | v2.37 | 补齐 SM-AG-02 同批多 ToolCall 转移：新增 nextToolCall（ResultRecording→ModelStreaming），中间项保持同一激活，最后一项 recorded 完成；明确每次 provider continuation 经 SM-AG-01 Gate 后开启新激活；禁止直接赋值状态绕过转移引擎。 |
 | 2026-10-25 | v2.36 | 正常停止与正文结构风险分离，保留既有Completed转移及TaskRun真实未完成语义；裁决恢复消费真实效果。 |
 | 2026-10-24 | v2.35 | 单独创建与组合操作共用原保存等待；预览续片段不生成用户消息，绑定原请求/模型和入场新快照，不复活旧终态。 |
 | 2026-10-24 | v2.34 | 完整工作流：保存等待不以TaskRun状态授予权限；operationFailed收尾、拒绝取消及核心失败说明与唯一终态分开。 |
