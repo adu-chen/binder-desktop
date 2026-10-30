@@ -581,12 +581,201 @@ fn advance_tool_loop<R: tauri::Runtime>(
 
 /**
  * @GOV
+ * codes:    BR-AG-DATA-011-DATA-AG-AG-TOOL-062
+ * type:     DATA
+ * chain:    AG-TOOL
+ * rules:    BR-AG-DATA-011
+ * boundary: in=ValidatedToolCallBoundGrantCreatedPendingDiffIdsAndDecisionRequestId | out=ToolCallReceiptIdentityReceiptReferencesAndModelToolMessage | does_not=fabricateExecutionOutcomeEvidenceOrReferenceUncreatedProducts
+ */
+fn tool_call_receipt_identity(
+    workspace_id: &str,
+    session_id: &str,
+    turn_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    grant_id: &str,
+) -> crate::types::ToolCallReceiptIdentityV1 {
+    crate::types::ToolCallReceiptIdentityV1 {
+        workspace_id: workspace_id.to_string(),
+        session_id: session_id.to_string(),
+        turn_id: turn_id.to_string(),
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        capability_id: ag::tool_registry::lookup(tool_name)
+            .map(|tool| tool.capability_id)
+            .unwrap_or("unregistered")
+            .into(),
+        grant_id: grant_id.to_string(),
+        attempt: 1,
+    }
+}
+
+fn tool_result_references(
+    pending_diff_ids: impl IntoIterator<Item = String>,
+    decision_request_id: Option<&str>,
+) -> Vec<crate::types::ToolCallReceiptReferenceV1> {
+    let mut references = pending_diff_ids
+        .into_iter()
+        .map(|diff_id| crate::types::ToolCallReceiptReferenceV1 {
+            kind: crate::types::ToolCallReceiptReferenceKind::PendingDiff,
+            id: diff_id,
+        })
+        .collect::<Vec<_>>();
+    if let Some(request_id) = decision_request_id {
+        references.push(crate::types::ToolCallReceiptReferenceV1 {
+            kind: crate::types::ToolCallReceiptReferenceKind::DecisionRequest,
+            id: request_id.to_string(),
+        });
+    }
+    references
+}
+
+fn model_tool_result_message(
+    tool_call_id: &str,
+    result: &str,
+    evidence_ids: &[String],
+    receipt: &crate::types::ToolCallReceiptV1,
+) -> serde_json::Value {
+    let content = serde_json::json!({
+        "toolResult": serde_json::from_str::<serde_json::Value>(result)
+            .unwrap_or_else(|_| serde_json::Value::String(result.to_string())),
+        "evidenceIds": evidence_ids,
+        "executionReceipt": receipt,
+    })
+    .to_string();
+    serde_json::json!({
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": content,
+    })
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-012-DATA-AG-AG-TOOL-063
+ * type:     DATA
+ * chain:    AG-TOOL
+ * rules:    BR-AG-DATA-012
+ * boundary: in=ProposalBatchIdRelPathDiffProjectionsAndPreviewCheckpointOutcome | out=PendingReviewToolResultProjection | does_not=claimEditorPreviewAcceptanceOrDiskPersistence
+ */
+fn proposal_result_projection(
+    proposal_batch_id: &str,
+    rel_path: &str,
+    projections: &[crate::types::DiffProjection],
+    preview_checkpoint_required: bool,
+) -> serde_json::Value {
+    let group_count = u32::try_from(projections.len()).unwrap_or(u32::MAX);
+    let diff_ids = projections
+        .iter()
+        .map(|projection| projection.diff_id.clone())
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "summary": format!("已生成 {group_count} 张可独立裁决的修改卡（proposal_batch_id={proposal_batch_id}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」，不得声称已应用或已保存。"),
+        "proposal_batch_id": proposal_batch_id,
+        "diff_ids": diff_ids,
+        "rel_path": rel_path,
+        "projections": projections,
+        "proposal_status": "pending_user_review",
+        "editor_preview_status": "not_reported",
+        "disk_persistence_status": "not_saved",
+        "preview_checkpoint_required": preview_checkpoint_required,
+    })
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-005-EFFECT-AG-AG-TURN-071
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-STATE-005
+ * boundary: in=FrozenExecutionBudgetCompletionStatusRemainingCallCountsAndStructureWarning | out=CompletionStageEventUserClosingChunkTaskRunOutcomeAndDoneTerminal | does_not=resetExecutionBudgetReopenToolsOrMarkPartialCompletionAsCompleted
+ */
+fn completed_turn_stop_reason<'a>(
+    budget_closing: bool,
+    completion: Option<&'a ag::model_output::ModelCompletion>,
+    structure_warning: Option<&str>,
+    stop_reason: &'a str,
+) -> &'a str {
+    if budget_closing {
+        "budget_exhausted"
+    } else if completion.is_none() && structure_warning.is_some() {
+        "answer_incomplete"
+    } else {
+        completion
+            .map(|completion| completion.status.as_str())
+            .unwrap_or(stop_reason)
+    }
+}
+
+fn completion_settles_as_failed(
+    budget_closing: bool,
+    completion: Option<&ag::model_output::ModelCompletion>,
+    side_effect_intent: &ag::context::SideEffectIntentV2,
+) -> bool {
+    budget_closing
+        || completion.is_some_and(|completion| {
+            completion.status == "partial"
+                || completion.status == "blocked"
+                || (completion.status == "report_only"
+                    && side_effect_intent != &ag::context::SideEffectIntentV2::None)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn settle_completed_turn<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    budget_closing: bool,
+    completion: Option<&ag::model_output::ModelCompletion>,
+    side_effect_intent: &ag::context::SideEffectIntentV2,
+    structure_warning: Option<&str>,
+    stop_reason: &str,
+    remaining_tool_calls: u32,
+    remaining_rounds: usize,
+) -> Result<(), IpcError> {
+    let final_stop_reason =
+        completed_turn_stop_reason(budget_closing, completion, structure_warning, stop_reason);
+    if budget_closing || completion.is_some() {
+        // 记录收尾时的剩余额度：回合以 partial 结束却仍有余量，说明是模型提前收工，
+        // 而不是门禁拦停。把两个计数一起落事件，事后可直接区分"真耗尽"和"误报"。
+        emitter.record_internal("completion_stage", serde_json::json!({"completionStatus":final_stop_reason,"budgetClosing":budget_closing,"remainingToolCalls":remaining_tool_calls,"remainingRounds":remaining_rounds}))?;
+        emitter.emit(latch, AgTurnEventPayload::Chunk { text: if budget_closing { "\n\n本次执行额度已到，尚未完成的范围未被标记为完成。此前结果和效果记录保留；需要继续时请明确提出，未知效果须先核对。" } else { "\n\n以上为当前阶段说明，不是资源已修改或已进入正式确认等待的凭证；实际效果以执行回执为准。" }.into() })?;
+    }
+    if let Ok(conn) = state.db.lock() {
+        settle_optional_task_run(
+            &conn,
+            task_run_id,
+            turn_id,
+            if completion_settles_as_failed(budget_closing, completion, side_effect_intent) {
+                ag::task::TurnOutcome::Failed
+            } else {
+                ag::task::TurnOutcome::Completed
+            },
+        );
+    }
+    emit_ag_turn_done(
+        emitter,
+        latch,
+        app,
+        turn_id,
+        final_stop_reason,
+        ag::turn::TurnState::Finalizing,
+    );
+    Ok(())
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018, BR-SYS-STATE-008-RB-AG-AG-TOOL-018, BR-AG-OBS-001-RB-AG-AG-TOOL-018
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-STATE-008, BR-AG-OBS-001
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,derive_project_report | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,derive_project_report,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -1436,51 +1625,21 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         return Ok(());
                     }
                 }
-                let final_stop_reason = if budget_closing {
-                    "budget_exhausted"
-                } else if control.completion.is_none() && structure_warning.is_some() {
-                    "answer_incomplete"
-                } else {
-                    control
-                        .completion
-                        .as_ref()
-                        .map(|c| c.status.as_str())
-                        .unwrap_or(&stop_reason)
-                };
-                if budget_closing || control.completion.is_some() {
-                    // 记录收尾时的剩余额度：回合以 partial 结束却仍有余量，说明是模型提前收工，
-                    // 而不是门禁拦停。把两个计数一起落事件，事后可直接区分"真耗尽"和"误报"。
-                    event_emitter.record_internal("completion_stage", serde_json::json!({"completionStatus":final_stop_reason,"budgetClosing":budget_closing,"remainingToolCalls":remaining_tool_calls,"remainingRounds":remaining_rounds}))?;
-                    event_emitter.emit(&terminal_latch, AgTurnEventPayload::Chunk { text: if budget_closing { "\n\n本次执行额度已到，尚未完成的范围未被标记为完成。此前结果和效果记录保留；需要继续时请明确提出，未知效果须先核对。" } else { "\n\n以上为当前阶段说明，不是资源已修改或已进入正式确认等待的凭证；实际效果以执行回执为准。" }.into() })?;
-                }
-                if let Ok(conn) = state.db.lock() {
-                    settle_optional_task_run(
-                        &conn,
-                        task_run_id.as_deref(),
-                        &turn_id,
-                        if budget_closing
-                            || control.completion.as_ref().is_some_and(|c| {
-                                c.status == "partial"
-                                    || c.status == "blocked"
-                                    || (c.status == "report_only"
-                                        && control.intent.side_effect_intent
-                                            != ag::context::SideEffectIntentV2::None)
-                            })
-                        {
-                            ag::task::TurnOutcome::Failed
-                        } else {
-                            ag::task::TurnOutcome::Completed
-                        },
-                    );
-                }
-                emit_ag_turn_done(
+                settle_completed_turn(
+                    &state,
+                    &app,
                     &event_emitter,
                     &terminal_latch,
-                    &app,
                     &turn_id,
-                    final_stop_reason,
-                    ag::turn::TurnState::Finalizing,
-                );
+                    task_run_id.as_deref(),
+                    budget_closing,
+                    control.completion.as_ref(),
+                    &control.intent.side_effect_intent,
+                    structure_warning,
+                    &stop_reason,
+                    remaining_tool_calls,
+                    remaining_rounds,
+                )?;
                 return Ok(());
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
@@ -2186,19 +2345,14 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         None
                     };
                     let effect_lock_error: Option<String> = None;
-                    let capability_identity = crate::types::ToolCallReceiptIdentityV1 {
-                        workspace_id: workspace_id_for_turn.clone(),
-                        session_id: session_id.clone(),
-                        turn_id: turn_id.clone(),
-                        tool_call_id: c.id.clone(),
-                        tool_name: c.name.clone(),
-                        capability_id: ag::tool_registry::lookup(&c.name)
-                            .map(|tool| tool.capability_id)
-                            .unwrap_or("unregistered")
-                            .into(),
-                        grant_id: execution_grant.grant_id.clone(),
-                        attempt: 1,
-                    };
+                    let capability_identity = tool_call_receipt_identity(
+                        &workspace_id_for_turn,
+                        &session_id,
+                        &turn_id,
+                        &c.id,
+                        &c.name,
+                        &execution_grant.grant_id,
+                    );
                     let validation_allows_execution = arg_parse_error.is_none()
                         && execution_guard_error.is_none()
                         && effect_lock_error.is_none()
@@ -2446,22 +2600,12 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                                                     )
                                                 })
                                                 .collect();
-                                            let diff_ids = edit_result
-                                                .projections
-                                                .iter()
-                                                .map(|projection| projection.diff_id.clone())
-                                                .collect::<Vec<_>>();
-                                            let result = serde_json::json!({
-                                                "summary": format!("已生成 {} 张可独立裁决的修改卡（proposal_batch_id={}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」，不得声称已应用或已保存。", group_count, edit_result.proposal_batch_id),
-                                                "proposal_batch_id": edit_result.proposal_batch_id,
-                                                "diff_ids": diff_ids,
-                                                "rel_path": edit_result.rel_path,
-                                                "projections": edit_result.projections,
-                                                "proposal_status": "pending_user_review",
-                                                "editor_preview_status": "not_reported",
-                                                "disk_persistence_status": "not_saved",
-                                                "preview_checkpoint_required": preview_checkpoint_after_tool,
-                                            });
+                                            let result = proposal_result_projection(
+                                                &edit_result.proposal_batch_id,
+                                                &edit_result.rel_path,
+                                                &edit_result.projections,
+                                                preview_checkpoint_after_tool,
+                                            );
                                             (result.to_string(), true)
                                         }
                                         Err(e) => {
@@ -2619,39 +2763,19 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         &c.id,
                         &pending_evidence,
                     );
-                    let mut receipt_references = diff_events_after_tool
-                        .iter()
-                        .map(
-                            |(_, _, _, diff_id, _)| crate::types::ToolCallReceiptReferenceV1 {
-                                kind: crate::types::ToolCallReceiptReferenceKind::PendingDiff,
-                                id: diff_id.clone(),
-                            },
-                        )
-                        .collect::<Vec<_>>();
-                    if let Some(decision) = &decision_event_after_tool {
-                        receipt_references.push(crate::types::ToolCallReceiptReferenceV1 {
-                            kind: crate::types::ToolCallReceiptReferenceKind::DecisionRequest,
-                            id: decision.request_id.clone(),
-                        });
-                    }
                     let execution_receipt = ag::tool_exec::tool_call_receipt(
-                        crate::types::ToolCallReceiptIdentityV1 {
-                            workspace_id: workspace_id_for_turn.clone(),
-                            session_id: session_id.clone(),
-                            turn_id: turn_id.clone(),
-                            tool_call_id: c.id.clone(),
-                            tool_name: c.name.clone(),
-                            capability_id: ag::tool_registry::lookup(&c.name)
-                                .map(|tool| tool.capability_id)
-                                .unwrap_or("unregistered")
-                                .into(),
-                            grant_id: execution_grant.grant_id.clone(),
-                            attempt: 1,
-                        },
+                        capability_identity.clone(),
                         validation_allows_execution,
                         success,
                         execution_failure.as_ref(),
-                        receipt_references,
+                        tool_result_references(
+                            diff_events_after_tool
+                                .iter()
+                                .map(|(_, _, _, diff_id, _)| diff_id.clone()),
+                            decision_event_after_tool
+                                .as_ref()
+                                .map(|decision| decision.request_id.as_str()),
+                        ),
                         evidence_ids.clone(),
                     );
                     let tool_result_event = event_emitter.emit_recorded(
@@ -2728,18 +2852,12 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             },
                         )?;
                     }
-                    let model_tool_result = serde_json::json!({
-                        "toolResult": serde_json::from_str::<serde_json::Value>(&result)
-                            .unwrap_or_else(|_| serde_json::Value::String(result.clone())),
-                        "evidenceIds": evidence_ids,
-                        "executionReceipt": execution_receipt,
-                    })
-                    .to_string();
-                    let tool_message = serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": c.id,
-                        "content": model_tool_result,
-                    });
+                    let tool_message = model_tool_result_message(
+                        &c.id,
+                        &result,
+                        &evidence_ids,
+                        &execution_receipt,
+                    );
                     messages.push(tool_message.clone());
                     if control_error.is_none() {
                         continuation_messages.push(tool_message);
@@ -3387,5 +3505,168 @@ mod tests {
             .map(|offset| manifest_guard + offset)
             .expect("ToolExecuting must occur only after grant validation");
         assert!(boundary < recompute && recompute < validate && validate < executing);
+    }
+
+    // covers: BR-AG-DATA-011
+    #[test]
+    fn tool_receipt_projection_binds_grant_identity_and_actual_products() {
+        let identity = tool_call_receipt_identity(
+            "ws",
+            "session",
+            "turn",
+            "call-1",
+            "propose_edit",
+            "grant-1",
+        );
+        assert_eq!(identity.workspace_id, "ws");
+        assert_eq!(identity.session_id, "session");
+        assert_eq!(identity.turn_id, "turn");
+        assert_eq!(identity.tool_call_id, "call-1");
+        assert_eq!(identity.tool_name, "propose_edit");
+        assert_eq!(identity.grant_id, "grant-1");
+        assert_eq!(identity.attempt, 1);
+
+        let references = tool_result_references(
+            vec!["diff-1".to_string(), "diff-2".to_string()],
+            Some("decision-1"),
+        );
+        assert_eq!(references.len(), 3);
+        assert_eq!(
+            references[0].kind,
+            crate::types::ToolCallReceiptReferenceKind::PendingDiff
+        );
+        assert_eq!(references[0].id, "diff-1");
+        assert_eq!(
+            references[2].kind,
+            crate::types::ToolCallReceiptReferenceKind::DecisionRequest
+        );
+        assert_eq!(references[2].id, "decision-1");
+
+        let receipt = ag::tool_exec::tool_call_receipt(
+            identity,
+            true,
+            true,
+            None,
+            references,
+            vec!["ev-1".to_string()],
+        );
+        let message =
+            model_tool_result_message("call-1", "{\"ok\":true}", &["ev-1".to_string()], &receipt);
+        assert_eq!(message["role"], "tool");
+        assert_eq!(message["tool_call_id"], "call-1");
+        let content = serde_json::from_str::<serde_json::Value>(
+            message["content"]
+                .as_str()
+                .expect("tool content is a string"),
+        )
+        .expect("tool content is JSON");
+        assert_eq!(content["toolResult"]["ok"], true);
+        assert_eq!(content["evidenceIds"][0], "ev-1");
+        assert_eq!(content["executionReceipt"]["toolCallId"], "call-1");
+        assert_eq!(content["executionReceipt"]["grantId"], "grant-1");
+        assert_eq!(content["executionReceipt"]["evidenceIds"][0], "ev-1");
+    }
+
+    fn test_projection(diff_id: &str) -> crate::types::DiffProjection {
+        crate::types::DiffProjection {
+            diff_id: diff_id.into(),
+            rel_path: "notes/a.md".into(),
+            patch_kind: "block_ops".into(),
+            block_id: None,
+            block_index: None,
+            before_text: String::new(),
+            after_text: String::new(),
+            location_label: "…".into(),
+            draft_mode: "current_editor".into(),
+            snapshot_source: "active_editor".into(),
+            base_session_version: Some(1),
+            base_content_hash: Some("hash".into()),
+            style_ops: None,
+            block_ops: None,
+            table_ops: None,
+            image_ops: None,
+            proposal_batch_id: "batch-1".into(),
+            group_index: 1,
+            group_count: 2,
+            preview_checkpoint_required: true,
+            cross_doc: None,
+        }
+    }
+
+    // covers: BR-AG-DATA-012
+    #[test]
+    fn proposal_result_projection_derives_card_count_and_keeps_pending_semantics() {
+        let projections = vec![test_projection("diff-1"), test_projection("diff-2")];
+        let result = proposal_result_projection("batch-1", "notes/a.md", &projections, false);
+        let summary = result["summary"].as_str().expect("summary string");
+        assert!(summary.contains("2 张"), "{summary}");
+        assert!(summary.contains("待确认"), "{summary}");
+        assert_eq!(result["proposal_batch_id"], "batch-1");
+        assert_eq!(result["diff_ids"], serde_json::json!(["diff-1", "diff-2"]));
+        assert_eq!(result["rel_path"], "notes/a.md");
+        assert_eq!(
+            result["projections"].as_array().map(Vec::len),
+            Some(projections.len())
+        );
+        assert_eq!(result["proposal_status"], "pending_user_review");
+        assert_eq!(result["editor_preview_status"], "not_reported");
+        assert_eq!(result["disk_persistence_status"], "not_saved");
+        assert_eq!(result["preview_checkpoint_required"], false);
+    }
+
+    // covers: BR-AG-STATE-005
+    #[test]
+    fn completion_settlement_marks_partial_blocked_and_budget_closing_as_failed() {
+        let none = ag::context::SideEffectIntentV2::None;
+        let proposal = ag::context::SideEffectIntentV2::ContentProposal;
+        let completion = |status: &str| ag::model_output::ModelCompletion {
+            status: status.to_string(),
+            reason: "test".to_string(),
+        };
+        assert!(completion_settles_as_failed(true, None, &none));
+        assert!(completion_settles_as_failed(
+            false,
+            Some(&completion("partial")),
+            &none
+        ));
+        assert!(completion_settles_as_failed(
+            false,
+            Some(&completion("blocked")),
+            &none
+        ));
+        assert!(completion_settles_as_failed(
+            false,
+            Some(&completion("report_only")),
+            &proposal
+        ));
+        assert!(!completion_settles_as_failed(
+            false,
+            Some(&completion("report_only")),
+            &none
+        ));
+        assert!(!completion_settles_as_failed(
+            false,
+            Some(&completion("completed")),
+            &proposal
+        ));
+        assert!(!completion_settles_as_failed(false, None, &proposal));
+
+        assert_eq!(
+            completed_turn_stop_reason(true, None, None, "stop"),
+            "budget_exhausted"
+        );
+        assert_eq!(
+            completed_turn_stop_reason(false, None, Some("warning"), "stop"),
+            "answer_incomplete"
+        );
+        let partial = completion("partial");
+        assert_eq!(
+            completed_turn_stop_reason(false, Some(&partial), None, "stop"),
+            "partial"
+        );
+        assert_eq!(
+            completed_turn_stop_reason(false, None, None, "stop"),
+            "stop"
+        );
     }
 }

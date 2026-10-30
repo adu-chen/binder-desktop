@@ -447,6 +447,22 @@ SM-SYS-01 达 GatePassed 并经 AiGateway 发起（X-SEQ-001 承接）；代码�
 不提供且不打断编辑。本规则是 SYS 门禁契约在 AG 的承接执行，不重定义裁决语义（裁决归服务端）。
 
 <!-- RULE
+rule_id: BR-AG-STATE-005
+主链路: AG-TURN
+域: STATE
+-->
+回合额度收尾必须与真实终态结算一致，不得把提前收工或额度耗尽伪装成完成。输入为原回合冻结的执行策略
+（模型/工具上限与收尾预留）、已按续调与实际执行扣减后的剩余工具调用与剩余模型轮次、本轮模型
+completion（status/reason）、side_effect_intent、结构告警和原始 stop_reason；输出为收尾判定（是否进入
+completion_stage）、收尾记录（completionStatus、budgetClosing、remainingToolCalls、remainingRounds）、
+向用户的一条收尾说明、TaskRun 终态结算和 done 停止原因。禁止：额度耗尽或 completion=partial/
+blocked、或 report_only 且存在副作用意图时把 TaskRun 结算为 Completed；用冻结前的旧计数冒充收尾时
+剩余额度；在收尾记录与 done 落库前提前返回成功。失败信号：剩余额度与 completion 只允许结算
+Completed/Failed 二选一；收尾记录或广播失败必须向上返回 IpcError，不得吞掉后按成功处理；
+额度耗尽且模型未给出可验证收尾时，done 的 stopReason 必须为 budget_exhausted，既有工具回执与效果
+证据保留、未完成范围不得标记为完成。
+
+<!-- RULE
 rule_id: BR-AG-PERSIST-001
 主链路: AG-TURN
 域: PERSIST
@@ -587,6 +603,38 @@ ED 在单一 ProseMirror transaction 中先处理同锚点的 replace/delete，�
 replace_document` 仅当当前 LogicalState 没有表格且没有图片时可用于完整 HTML 整篇改写，执行器同时拒绝
 既有或新引入的表格/图片，其余 BDocx 内容分别走 block_ops/table_ops/image_ops。HTML 字符串扫描只保留
 未打开文档只读兼容，不再承担受保护结构的编辑或重建职责。
+
+<!-- RULE
+rule_id: BR-AG-DATA-011
+主链路: AG-TOOL
+域: DATA
+-->
+ToolCall 回执必须由同一次执行授权身份构造，并与模型回注、事件投影保持同一事实。输入为已校验并通过
+执行边界的 ToolCall（workspace/session/turn/tool_call_id/tool_name）、本次重新计算的 CapabilityGrant、
+执行结果或失败、本次调用实际产生的 PendingDiff/DecisionRequest 与成功只读执行的 evidenceIds；输出为唯一
+ToolCallReceiptV1（attempt=1，身份与 grantId 来自同一授权计算）、只含本次实际产物的 references、
+模型可见的 tool 消息（完整 toolResult + evidenceIds + executionReceipt）；公开事件复用同一回执与
+evidenceIds。字段形状与枚举
+归 BR-SYS-DATA-008，本规则只约束 AG 的构造与投影。禁止：成功标志与 validation_allows_execution 不一致；
+把未创建产物写成 references；为失败调用伪造 evidenceIds；把原始错误正文、文档正文或凭据写入回执；
+以另一个 grant 或另一身份重建回执。失败信号：执行前拒绝为 rejected/blocked/not_started；
+执行器失败保留真实 IpcError code 且不得写成 succeeded；有副作用的失败保持 effect=unknown 与
+inspect_effect，不自动重放。
+
+<!-- RULE
+rule_id: BR-AG-DATA-012
+主链路: AG-TOOL
+域: DATA
+-->
+propose_edit 成功生成建议卡后，给模型的工具结果必须如实区分「已生成待裁决卡」与「已预览/已接受/已保存」。
+输入为本次 execute_proposal 的 proposal_batch_id、rel_path、projections，以及预览 checkpoint 是否真实建立；
+输出为一个结果投影：summary 的卡数由 projections 长度派生，diff_ids 按 projections 顺序逐项对应，
+proposal_status=pending_user_review、editor_preview_status=not_reported、disk_persistence_status=not_saved，
+preview_checkpoint_required 反映真实 checkpoint 结果。禁止：声称已应用、已保存或已收到编辑器预览；
+卡数与 diff_ids 数量不一致；丢弃、重排或截断 projections；checkpoint 建立失败时仍标记为可续写成功。
+失败信号：execute_proposal 失败沿用其错误 code 并回注「生成修改建议失败」，不得为该结果生成
+pending_user_review 投影；checkpoint 建立失败只清空
+preview_checkpoint_required，Diff 仍作为当前回合待裁决提案可见，不得伪造成功续写。
 
 ## §5 上下文组装（AG-TURN）
 
@@ -1131,6 +1179,7 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-30 | v2.63 | AG-TOOL/AG-TURN 规则细化：新增 BR-AG-DATA-011（ToolCall 回执身份与工具结果回注）、BR-AG-DATA-012（修改建议结果投影）、BR-AG-STATE-005（额度收尾与终态结算），对应 turn_tool_loop 三个独立生产块；不改变执行、授权、确认与保存语义。 |
 | 2026-10-28 | v2.62 | 模型可恢复错误按控制封套和参数独立有限计数，仍受总调用预算；只读续页改用绑定路径/版本的单游标。 |
 | 2026-10-26 | v2.61 | 零字节 TXT 的显式创建例外：仅单文件 createEmpty=true 且省略初始内容，沿原资源计划/确认/重验链创建，不产生初始内容 Diff；其余新文档仍需冻结非空内容。 |
 | 2026-10-23 | v2.60 | 统一回合冻结执行额度12/16/2及2次收尾预留；动作交接前置纠错与显式阶段结果，保留授权和未知效果边界。 |
