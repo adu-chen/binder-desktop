@@ -1117,6 +1117,122 @@ fn finish_cancelled_turn<R: tauri::Runtime>(
     super::turn_events::emit_ag_turn_cancelled_from(emitter, latch, app, turn_id, turn_state);
 }
 
+/// 重建下一轮 PromptPackage 并记录预算证据；装配与预算规则由既有 Prompt 规则块承接。
+/// 本函数不新增授权、终态或错误分类判断；`history_assembled` 的写事件失败仍按原路径向上传播。
+struct RebuiltRoundPrompt {
+    current_doc_prompt_coverage: Option<&'static str>,
+    messages: Vec<serde_json::Value>,
+    tools: serde_json::Value,
+    capability_factors: ag::tool_registry::CapabilityFactorsV2,
+    prompt_package: ag::context::PromptPackageV2,
+}
+
+enum PromptRebuildFailure {
+    Propagate(IpcError),
+    Settle(IpcError),
+}
+
+struct PromptRebuildFacts<'a> {
+    state: &'a AppState,
+    session_id: &'a str,
+    turn_id: &'a str,
+    runtime_profile: &'a str,
+    task_run_id: Option<&'a str>,
+    intent_result: &'a ag::context::IntentResultV2,
+    agent_context_facts: &'a crate::types::AgentContextFacts,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    read_ctx: &'a ag::blocks::AgentReadContext,
+    active_doc_path: Option<&'a str>,
+    active_snapshot: Option<&'a ag::blocks::AgentEditableSnapshot>,
+    history: &'a [ag::context::HistTurn],
+    raw_prompt: &'a str,
+    mention_block: Option<&'a str>,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    proposed_diff: bool,
+    continuation_messages: &'a [serde_json::Value],
+    decision_receipt_ids: &'a [String],
+    next_model_call: u32,
+    remaining_tool_calls: u32,
+    model_capacity: ag::prompt_runtime::ModelCapacity,
+    response_rejected: bool,
+}
+
+fn rebuild_round_prompt(
+    emitter: &TurnEventEmitter<'_>,
+    facts: PromptRebuildFacts<'_>,
+) -> Result<RebuiltRoundPrompt, PromptRebuildFailure> {
+    let PreparedTurnPrompt {
+        current_doc_requires_tool_read: _,
+        current_doc_prompt_coverage,
+        messages,
+        tools,
+        capability_grant: _rebuilt_grant,
+        capability_factors,
+        prompt_package,
+        budget_measurement,
+        budget_sources,
+        history_selection,
+    } = prepare_turn_prompt(
+        facts.state,
+        facts.runtime_profile,
+        facts.turn_id,
+        facts.session_id,
+        facts.task_run_id,
+        facts.intent_result,
+        facts.agent_context_facts,
+        &facts.explicit_edit_target_set.paths(),
+        facts.read_ctx,
+        facts.active_doc_path,
+        facts.active_snapshot,
+        facts.history,
+        facts.raw_prompt,
+        facts.mention_block,
+        facts.reference_envelopes,
+        facts.proposed_diff,
+        facts.continuation_messages,
+        facts.decision_receipt_ids,
+        facts.next_model_call,
+        facts.remaining_tool_calls,
+        facts.model_capacity,
+    )
+    .map_err(PromptRebuildFailure::Settle)?;
+    emitter
+        .record_internal("history_assembled", history_selection)
+        .map_err(PromptRebuildFailure::Propagate)?;
+    let stage = if facts.response_rejected {
+        "protocol_correction"
+    } else {
+        "tool_result"
+    };
+    emitter
+        .record_prompt_budget(
+            stage,
+            &budget_measurement,
+            budget_sources,
+            facts.model_capacity,
+        )
+        .map_err(PromptRebuildFailure::Settle)?;
+    if budget_measurement.estimated_tokens > facts.model_capacity.input_tokens() {
+        return Err(PromptRebuildFailure::Settle(IpcError::new(
+            "AG_PROMPT_BUDGET_EXCEEDED",
+            &super::prompt_runtime::budget_failure_message(
+                &budget_measurement,
+                stage,
+                facts.model_capacity,
+            ),
+            true,
+            false,
+        )));
+    }
+    Ok(RebuiltRoundPrompt {
+        current_doc_prompt_coverage,
+        messages,
+        tools,
+        capability_factors,
+        prompt_package,
+    })
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -1124,7 +1240,7 @@ fn finish_cancelled_turn<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -3140,42 +3256,36 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         )
         .ok_or_else(sm_error)?;
         emit_ag01(&app, &turn_id, turn_state);
-        let PreparedTurnPrompt {
-            current_doc_requires_tool_read: _,
-            current_doc_prompt_coverage: rebuilt_coverage,
-            messages: rebuilt_messages,
-            tools: rebuilt_tools,
-            capability_grant: _rebuilt_grant,
-            capability_factors: rebuilt_factors,
-            prompt_package: rebuilt_package,
-            budget_measurement,
-            budget_sources,
-            history_selection,
-        } = match prepare_turn_prompt(
-            &state,
-            &runtime_profile,
-            &turn_id,
-            &session_id,
-            task_run_id.as_deref(),
-            &intent_result,
-            &agent_context_facts,
-            &explicit_edit_target_set.paths(),
-            &read_ctx,
-            active_doc_path.as_deref(),
-            active_snapshot.as_ref(),
-            &history,
-            &raw_prompt,
-            mention_block.as_deref(),
-            &reference_envelopes,
-            proposed_diff,
-            &continuation_messages,
-            &capability_factors.decision_receipt_ids,
-            (model_call_ordinal + 1) as u32,
-            remaining_tool_calls,
-            model_capacity,
+        let rebuilt = match rebuild_round_prompt(
+            &event_emitter,
+            PromptRebuildFacts {
+                state,
+                session_id: &session_id,
+                turn_id: &turn_id,
+                runtime_profile: &runtime_profile,
+                task_run_id: task_run_id.as_deref(),
+                intent_result: &intent_result,
+                agent_context_facts: &agent_context_facts,
+                explicit_edit_target_set: &explicit_edit_target_set,
+                read_ctx: &read_ctx,
+                active_doc_path: active_doc_path.as_deref(),
+                active_snapshot: active_snapshot.as_ref(),
+                history: &history,
+                raw_prompt: &raw_prompt,
+                mention_block: mention_block.as_deref(),
+                reference_envelopes: &reference_envelopes,
+                proposed_diff,
+                continuation_messages: &continuation_messages,
+                decision_receipt_ids: &capability_factors.decision_receipt_ids,
+                next_model_call: (model_call_ordinal + 1) as u32,
+                remaining_tool_calls,
+                model_capacity,
+                response_rejected,
+            },
         ) {
-            Ok(prepared) => prepared,
-            Err(error) => {
+            Ok(rebuilt) => rebuilt,
+            Err(PromptRebuildFailure::Propagate(error)) => return Err(error),
+            Err(PromptRebuildFailure::Settle(error)) => {
                 settle_and_emit_ag_turn_error_from(
                     &state,
                     task_run_id.as_deref(),
@@ -3189,61 +3299,11 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 return Ok(());
             }
         };
-        event_emitter.record_internal("history_assembled", history_selection)?;
-        if let Err(error) = event_emitter.record_prompt_budget(
-            if response_rejected {
-                "protocol_correction"
-            } else {
-                "tool_result"
-            },
-            &budget_measurement,
-            budget_sources,
-            model_capacity,
-        ) {
-            settle_and_emit_ag_turn_error_from(
-                &state,
-                task_run_id.as_deref(),
-                &event_emitter,
-                &terminal_latch,
-                &app,
-                &turn_id,
-                &error,
-                ag::turn::TurnState::Assembling,
-            );
-            return Ok(());
-        }
-        if budget_measurement.estimated_tokens > model_capacity.input_tokens() {
-            let error = IpcError::new(
-                "AG_PROMPT_BUDGET_EXCEEDED",
-                &super::prompt_runtime::budget_failure_message(
-                    &budget_measurement,
-                    if response_rejected {
-                        "protocol_correction"
-                    } else {
-                        "tool_result"
-                    },
-                    model_capacity,
-                ),
-                true,
-                false,
-            );
-            settle_and_emit_ag_turn_error_from(
-                &state,
-                task_run_id.as_deref(),
-                &event_emitter,
-                &terminal_latch,
-                &app,
-                &turn_id,
-                &error,
-                ag::turn::TurnState::Assembling,
-            );
-            return Ok(());
-        }
-        messages = rebuilt_messages;
-        tools = rebuilt_tools;
-        capability_factors = rebuilt_factors;
-        prompt_package = rebuilt_package;
-        current_doc_prompt_coverage = rebuilt_coverage;
+        messages = rebuilt.messages;
+        tools = rebuilt.tools;
+        capability_factors = rebuilt.capability_factors;
+        prompt_package = rebuilt.prompt_package;
+        current_doc_prompt_coverage = rebuilt.current_doc_prompt_coverage;
         event_emitter.record_internal(
             "prompt_rebuilt",
             serde_json::json!({
