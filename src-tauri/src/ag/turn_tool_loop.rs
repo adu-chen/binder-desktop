@@ -1573,6 +1573,192 @@ async fn execute_tool_call<R: tauri::Runtime>(
     }
 }
 
+/// 为需要新鲜宿主上下文的工具刷新 AgentContextFacts / AgentReadContext。
+/// Ok(None)=无需刷新或刷新成功；Ok(Some(error))=工具级上下文失败（非终态）；
+/// Err(error)=context_frozen 写事件失败，按原路径向上传播，不在这里结算终态。
+#[allow(clippy::too_many_arguments)]
+async fn refresh_tool_context(
+    emitter: &TurnEventEmitter<'_>,
+    on_context_request: Option<&tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
+    agent_context_facts: &mut crate::types::AgentContextFacts,
+    read_ctx: &mut ag::blocks::AgentReadContext,
+    active_snapshot: &mut Option<ag::blocks::AgentEditableSnapshot>,
+    active_doc_path: Option<&str>,
+    tool_call_id: &str,
+    tool_name: &str,
+    params: &serde_json::Value,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Option<IpcError>, IpcError> {
+    let crate::types::AgentContextFacts::V2(previous) = &*agent_context_facts else {
+        return Ok(None);
+    };
+    match super::turn_runtime::refresh_agent_context(
+        on_context_request,
+        previous,
+        read_ctx,
+        tool_name,
+        params,
+        cancelled,
+    )
+    .await
+    {
+        Ok((facts, context)) => {
+            emitter.record_internal(
+                "context_frozen",
+                serde_json::json!({
+                    "contextVersion": facts.version(),
+                    "contextRevision": facts.revision(),
+                    "activeTarget": previous.active_target,
+                    "toolCallId": tool_call_id,
+                    "readyDocuments": facts.ready_documents(),
+                }),
+            )?;
+            *active_snapshot = active_doc_path.and_then(|path| {
+                context
+                    .open_snapshot(path)
+                    .and_then(|_| context.snapshot(path).ok())
+            });
+            *agent_context_facts = facts;
+            *read_ctx = context;
+            Ok(None)
+        }
+        Err(error) => Ok(Some(error)),
+    }
+}
+
+/// 计算 propose_decision(kind=scope) 可追加的显式目标候选；非 scope 调用返回 Ok(None)。
+/// 不在本函数内追加目标，也不把读取/历史发现升级为目标。
+fn compute_scope_candidates(
+    tool_decision: Option<&ag::tool::ToolDecision>,
+    tool_name: &str,
+    params: &serde_json::Value,
+    ws_root: Option<&str>,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+) -> Result<Option<Vec<String>>, IpcError> {
+    if !matches!(tool_decision, Some(ag::tool::ToolDecision::Allow))
+        || tool_name != "propose_decision"
+        || params.get("kind").and_then(|value| value.as_str()) != Some("scope")
+    {
+        return Ok(None);
+    }
+    let raw_paths = params
+        .get("targetPaths")
+        .and_then(|value| value.as_array())
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| path.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    match ws_root {
+        Some(root) => ag::target_set::validated_scope_candidates(
+            std::path::Path::new(root),
+            &raw_paths,
+            explicit_edit_target_set,
+        )
+        .map(Some),
+        None => Err(IpcError::new(
+            "WS_NO_ACTIVE",
+            "缺少 active workspace，不能冻结范围追加目标",
+            false,
+            false,
+        )),
+    }
+}
+
+/// 仅当已获准的任务级工具真的到达执行边界且尚无 TaskRun 时，创建/绑定/持久化 TaskRun 投影。
+/// 返回 Some(error) 表示本调用的 TaskRun 投影失败；不在这里执行工具或推进 SM-AG-02。
+#[allow(clippy::too_many_arguments)]
+fn prepare_task_run_for_tool(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    session_id: &str,
+    workspace_id: &str,
+    turn_id: &str,
+    tool_name: &str,
+    goal: &str,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    scope_candidates_ok: bool,
+    tool_decision_allows: bool,
+    task_run_id: &mut Option<String>,
+) -> Option<IpcError> {
+    if !tool_decision_allows
+        || !scope_candidates_ok
+        || !ag::task::tool_requires_task_run(tool_name)
+        || task_run_id.is_some()
+    {
+        return None;
+    }
+    let created = match state.db.lock() {
+        Ok(conn) => ag::task::begin_for_tool_product(&conn, workspace_id, session_id, tool_name)
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))
+            .and_then(|task_run_id| {
+                task_run_id.ok_or_else(|| {
+                    IpcError::new(
+                        "AG_TASK_REQUIREMENT_DRIFT",
+                        "任务级工具判据在 TaskRun 创建边界发生漂移",
+                        false,
+                        false,
+                    )
+                })
+            }),
+        Err(_) => Err(IpcError::new(
+            "WS_DB_BUSY",
+            "数据库连接繁忙，无法创建任务级产物",
+            true,
+            false,
+        )),
+    };
+    let created_task_run_id = match created {
+        Ok(created_task_run_id) => created_task_run_id,
+        Err(error) => return Some(error),
+    };
+    *task_run_id = Some(created_task_run_id.clone());
+    match bind_agent_turn_task_run(state, session_id, turn_id, &created_task_run_id) {
+        Ok(()) => match state.db.lock() {
+            Ok(conn) => {
+                if let Err(error) = ag::task::link_turn(&conn, turn_id, &created_task_run_id)
+                    .and_then(|_| {
+                        ag::target_set::persist_for_task_run(
+                            &conn,
+                            &created_task_run_id,
+                            explicit_edit_target_set,
+                        )
+                    })
+                {
+                    return Some(IpcError::new(
+                        "AG_TASK_DB_ERROR",
+                        &format!("TaskRun 无法固化当前回合范围：{error}"),
+                        true,
+                        false,
+                    ));
+                }
+            }
+            Err(_) => {
+                return Some(IpcError::new(
+                    "WS_DB_BUSY",
+                    "数据库连接繁忙，无法固化 TaskRun 回合范围",
+                    true,
+                    false,
+                ))
+            }
+        },
+        Err(error) => return Some(error),
+    }
+    if let Err(error) = emitter.record_internal(
+        "task_projected",
+        serde_json::json!({
+            "taskRunId": created_task_run_id,
+            "goal": goal,
+            "reason": "task_level_waiting_point",
+        }),
+    ) {
+        return Some(error);
+    }
+    None
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -1580,7 +1766,7 @@ async fn execute_tool_call<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2643,34 +2829,19 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         && ag::tool_registry::lookup(&c.name)
                             .is_some_and(|tool| tool.requires_fresh_host_context)
                     {
-                        if let crate::types::AgentContextFacts::V2(previous) = &agent_context_facts
-                        {
-                            match super::turn_runtime::refresh_agent_context(
-                                on_context_request.as_ref(),
-                                previous,
-                                &read_ctx,
-                                &c.name,
-                                &params,
-                                cancelled.clone(),
-                            )
-                            .await
-                            {
-                                Ok((facts, context)) => {
-                                    event_emitter.record_internal("context_frozen", serde_json::json!({"contextVersion": facts.version(), "contextRevision": facts.revision(), "activeTarget": previous.active_target, "toolCallId": &c.id, "readyDocuments": facts.ready_documents()}))?;
-                                    active_snapshot = active_doc_path.as_deref().and_then(|path| {
-                                        context
-                                            .open_snapshot(path)
-                                            .and_then(|_| context.snapshot(path).ok())
-                                    });
-                                    agent_context_facts = facts;
-                                    read_ctx = context;
-                                    None
-                                }
-                                Err(error) => Some(error),
-                            }
-                        } else {
-                            None
-                        }
+                        refresh_tool_context(
+                            &event_emitter,
+                            on_context_request.as_ref(),
+                            &mut agent_context_facts,
+                            &mut read_ctx,
+                            &mut active_snapshot,
+                            active_doc_path.as_deref(),
+                            &c.id,
+                            &c.name,
+                            &params,
+                            cancelled.clone(),
+                        )
+                        .await?
                     } else {
                         None
                     };
@@ -2811,141 +2982,28 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             return Ok(());
                         }
                     }
-                    let scope_candidates =
-                        if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
-                            && c.name == "propose_decision"
-                            && params.get("kind").and_then(|value| value.as_str()) == Some("scope")
-                        {
-                            let raw_paths = params
-                                .get("targetPaths")
-                                .and_then(|value| value.as_array())
-                                .map(|paths| {
-                                    paths
-                                        .iter()
-                                        .filter_map(|path| path.as_str().map(str::to_string))
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default();
-                            match ws_root.as_deref() {
-                                Some(root) => ag::target_set::validated_scope_candidates(
-                                    std::path::Path::new(root),
-                                    &raw_paths,
-                                    &explicit_edit_target_set,
-                                )
-                                .map(Some),
-                                None => Err(IpcError::new(
-                                    "WS_NO_ACTIVE",
-                                    "缺少 active workspace，不能冻结范围追加目标",
-                                    false,
-                                    false,
-                                )),
-                            }
-                        } else {
-                            Ok(None)
-                        };
+                    let scope_candidates = compute_scope_candidates(
+                        tool_decision.as_ref(),
+                        &c.name,
+                        &params,
+                        ws_root.as_deref(),
+                        &explicit_edit_target_set,
+                    );
                     // 简单回合保持无 TaskRun。只有已获准的任务级工具真的到达执行边界时，
                     // 才在创建 DecisionRequest / WorkspaceOperationPlan 之前取得并绑定 TaskRun。
-                    let task_run_was_missing = task_run_id.is_none();
-                    let mut task_run_prepare_error =
-                        if matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
-                            && scope_candidates.is_ok()
-                            && ag::task::tool_requires_task_run(&c.name)
-                            && task_run_id.is_none()
-                        {
-                            let created = match state.db.lock() {
-                                Ok(conn) => ag::task::begin_for_tool_product(
-                                    &conn,
-                                    &workspace_id_for_turn,
-                                    &session_id,
-                                    &c.name,
-                                )
-                                .map_err(|error| {
-                                    IpcError::new(
-                                        "AG_TASK_DB_ERROR",
-                                        &error.to_string(),
-                                        true,
-                                        false,
-                                    )
-                                })
-                                .and_then(|task_run_id| {
-                                    task_run_id.ok_or_else(|| {
-                                        IpcError::new(
-                                            "AG_TASK_REQUIREMENT_DRIFT",
-                                            "任务级工具判据在 TaskRun 创建边界发生漂移",
-                                            false,
-                                            false,
-                                        )
-                                    })
-                                }),
-                                Err(_) => Err(IpcError::new(
-                                    "WS_DB_BUSY",
-                                    "数据库连接繁忙，无法创建任务级产物",
-                                    true,
-                                    false,
-                                )),
-                            };
-                            match created {
-                                Ok(created_task_run_id) => {
-                                    task_run_id = Some(created_task_run_id.clone());
-                                    match bind_agent_turn_task_run(
-                                        &state,
-                                        &session_id,
-                                        &turn_id,
-                                        &created_task_run_id,
-                                    ) {
-                                        Ok(()) => match state.db.lock() {
-                                            Ok(conn) => ag::task::link_turn(
-                                                &conn,
-                                                &turn_id,
-                                                &created_task_run_id,
-                                            )
-                                            .and_then(|_| {
-                                                ag::target_set::persist_for_task_run(
-                                                    &conn,
-                                                    &created_task_run_id,
-                                                    &explicit_edit_target_set,
-                                                )
-                                            })
-                                            .err()
-                                            .map(|error| {
-                                                IpcError::new(
-                                                    "AG_TASK_DB_ERROR",
-                                                    &format!(
-                                                        "TaskRun 无法固化当前回合范围：{error}"
-                                                    ),
-                                                    true,
-                                                    false,
-                                                )
-                                            }),
-                                            Err(_) => Some(IpcError::new(
-                                                "WS_DB_BUSY",
-                                                "数据库连接繁忙，无法固化 TaskRun 回合范围",
-                                                true,
-                                                false,
-                                            )),
-                                        },
-                                        Err(error) => Some(error),
-                                    }
-                                }
-                                Err(error) => Some(error),
-                            }
-                        } else {
-                            None
-                        };
-                    if task_run_prepare_error.is_none() && task_run_was_missing {
-                        if let Some(created_task_run_id) = task_run_id.as_deref() {
-                            if let Err(error) = event_emitter.record_internal(
-                                "task_projected",
-                                serde_json::json!({
-                                    "taskRunId": created_task_run_id,
-                                    "goal": &intent_result.goal,
-                                    "reason": "task_level_waiting_point",
-                                }),
-                            ) {
-                                task_run_prepare_error = Some(error);
-                            }
-                        }
-                    }
+                    let task_run_prepare_error = prepare_task_run_for_tool(
+                        &state,
+                        &event_emitter,
+                        &session_id,
+                        &workspace_id_for_turn,
+                        &turn_id,
+                        &c.name,
+                        &intent_result.goal,
+                        &explicit_edit_target_set,
+                        scope_candidates.is_ok(),
+                        matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow)),
+                        &mut task_run_id,
+                    );
                     let mut execution_failure = control_error
                         .clone()
                         .or_else(|| {
