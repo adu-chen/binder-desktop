@@ -2726,14 +2726,6 @@ struct RoundState {
     agent_context_facts: crate::types::AgentContextFacts,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-073, BR-AG-STATE-002-RB-AG-AG-TOOL-073
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002
- * boundary: in=DoneRoundControlVisibleAnswerAndRoundState | out=SingleAgentTurnTerminalOrClarificationParked | delegate=apply_control_and_observe,terminal_tool_requirement_error,park_clarification,finish_final_answer | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=continueProviderLoopOrEmitSecondTerminal
- */
 /// 处理本轮 Done 结果：应用控制、澄清停放、终态工具检查与 final 收尾。
 /// 该分支必然结束本轮；状态转移/结算仍在本函数内完成，错误按原路径传播。
 struct DoneRoundFacts<'a> {
@@ -2786,6 +2778,14 @@ fn advance_or_settle<R: tauri::Runtime>(
     }
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-073, BR-AG-STATE-002-RB-AG-AG-TOOL-073
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002
+ * boundary: in=DoneRoundControlVisibleAnswerAndRoundState | out=SingleAgentTurnTerminalOrClarificationParked | delegate=apply_control_and_observe,terminal_tool_requirement_error,park_clarification,finish_final_answer | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=continueProviderLoopOrEmitSecondTerminal
+ */
 fn handle_done_round<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -2998,6 +2998,198 @@ fn handle_done_round<R: tauri::Runtime>(
     )
 }
 
+/// 回合收尾：纠正指令、只读失败守卫、SM-AG-01 转移、Prompt 重建与 Assembled。
+/// Prompt 重建的 Settle 失败在这里结算并返回 Ended；Propagate 失败向上传播。
+struct CloseRoundFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    session_id: &'a str,
+    turn_id: &'a str,
+    runtime_profile: &'a str,
+    task_run_id: &'a mut Option<String>,
+    intent_result: &'a mut ag::context::IntentResultV2,
+    agent_context_facts: &'a mut crate::types::AgentContextFacts,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    read_ctx: &'a mut ag::blocks::AgentReadContext,
+    active_doc_path: Option<&'a str>,
+    active_snapshot: &'a mut Option<ag::blocks::AgentEditableSnapshot>,
+    history: &'a [ag::context::HistTurn],
+    raw_prompt: &'a str,
+    mention_block: Option<&'a str>,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    proposed_diff: bool,
+    continuation_messages: &'a mut Vec<serde_json::Value>,
+    model_call_ordinal: usize,
+    remaining_tool_calls: u32,
+    model_capacity: ag::prompt_runtime::ModelCapacity,
+    response_rejected: bool,
+    transport_protocol: &'a str,
+    final_only_correction_pending: bool,
+    parameter_correction_pending: bool,
+    protocol_correction_diagnostic: &'a Option<serde_json::Value>,
+    read_failure_final_pending: bool,
+    turn_state: &'a mut ag::turn::TurnState,
+    messages: &'a mut Vec<serde_json::Value>,
+    tools: &'a mut serde_json::Value,
+    capability_factors: &'a mut ag::tool_registry::CapabilityFactorsV2,
+    prompt_package: &'a mut ag::context::PromptPackageV2,
+    current_doc_prompt_coverage: &'a mut Option<&'static str>,
+}
+
+enum RoundClose {
+    Continue,
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-074, BR-AG-DATA-001-RB-AG-AG-TOOL-074
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-DATA-001
+ * boundary: in=RoundCorrectionFlagsContinuationMessagesAndPromptFacts | out=RoundCloseContinueOrEndedWithRebuiltPrompt | delegate=rebuild_round_prompt | consumer=BR-AG-STATE-001,BR-AG-DATA-001 | does_not=executeToolOrCallProvider
+ */
+fn close_round<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: CloseRoundFacts<'_>,
+) -> Result<RoundClose, IpcError> {
+    let CloseRoundFacts {
+        state,
+        latch,
+        session_id,
+        turn_id,
+        runtime_profile,
+        task_run_id,
+        intent_result,
+        agent_context_facts,
+        explicit_edit_target_set,
+        read_ctx,
+        active_doc_path,
+        active_snapshot,
+        history,
+        raw_prompt,
+        mention_block,
+        reference_envelopes,
+        proposed_diff,
+        continuation_messages,
+        model_call_ordinal,
+        remaining_tool_calls,
+        model_capacity,
+        response_rejected,
+        transport_protocol,
+        final_only_correction_pending,
+        parameter_correction_pending,
+        protocol_correction_diagnostic,
+        read_failure_final_pending,
+        turn_state,
+        messages,
+        tools,
+        capability_factors,
+        prompt_package,
+        current_doc_prompt_coverage,
+    } = facts;
+    if final_only_correction_pending {
+        continuation_messages.push(correction_instruction_for_protocol(
+            true,
+            transport_protocol,
+        ));
+    } else if parameter_correction_pending {
+        let mut instruction = correction_instruction_for_protocol(false, transport_protocol);
+        if let Some(diagnostic) = protocol_correction_diagnostic.as_ref() {
+            // Both values are generated from fixed schema vocabulary, never from the
+            // rejected provider arguments. Give the model a precise repair target
+            // without reintroducing the malformed payload as an example.
+            let reason = diagnostic["reasonCode"]
+                .as_str()
+                .unwrap_or("schema_invalid");
+            let field = diagnostic["fieldPath"].as_str().unwrap_or("$batch");
+            let base = instruction["content"].as_str().unwrap_or_default();
+            instruction["content"] = serde_json::json!(format!(
+                "本次拒绝位置：{field}；原因类别：{reason}。请从当前 schema 重新生成完整参数，不复制上一份被拒参数。\n{base}"
+            ));
+        }
+        continuation_messages.push(instruction);
+    }
+    if read_failure_final_pending {
+        continuation_messages.push(serde_json::json!({
+            "role":"system", "layer":"read_failure_final_only",
+            "content":"相同只读请求已重复失败，禁止再调用任何工具。请只输出合法 final 或 clarify：说明已有成功证据、失败的读取及未完成范围，不能将失败读取视为已读，不能宣称原业务任务成功；如无法继续，明确说明需要用户补充或缩小什么范围。不要重放任何已有操作。"
+        }));
+    }
+    *turn_state = ag::turn::transition(
+        *turn_state,
+        if response_rejected {
+            ag::turn::TurnEvent::ModelProtocolRejected
+        } else {
+            ag::turn::TurnEvent::ToolRoundCompleted
+        },
+    )
+    .ok_or_else(sm_error)?;
+    emit_ag01(app, turn_id, *turn_state);
+    let rebuilt = match rebuild_round_prompt(
+        emitter,
+        PromptRebuildFacts {
+            state,
+            session_id,
+            turn_id,
+            runtime_profile,
+            task_run_id: task_run_id.as_deref(),
+            intent_result,
+            agent_context_facts,
+            explicit_edit_target_set,
+            read_ctx,
+            active_doc_path,
+            active_snapshot: active_snapshot.as_ref(),
+            history,
+            raw_prompt,
+            mention_block,
+            reference_envelopes,
+            proposed_diff,
+            continuation_messages,
+            decision_receipt_ids: &capability_factors.decision_receipt_ids,
+            next_model_call: (model_call_ordinal + 1) as u32,
+            remaining_tool_calls,
+            model_capacity,
+            response_rejected,
+        },
+    ) {
+        Ok(rebuilt) => rebuilt,
+        Err(PromptRebuildFailure::Propagate(error)) => return Err(error),
+        Err(PromptRebuildFailure::Settle(error)) => {
+            settle_and_emit_ag_turn_error_from(
+                state,
+                task_run_id.as_deref(),
+                emitter,
+                latch,
+                app,
+                turn_id,
+                &error,
+                ag::turn::TurnState::Assembling,
+            );
+            return Ok(RoundClose::Ended);
+        }
+    };
+    *messages = rebuilt.messages;
+    *tools = rebuilt.tools;
+    *capability_factors = rebuilt.capability_factors;
+    *prompt_package = rebuilt.prompt_package;
+    *current_doc_prompt_coverage = rebuilt.current_doc_prompt_coverage;
+    emitter.record_internal(
+        "prompt_rebuilt",
+        serde_json::json!({
+            "nextRound": model_call_ordinal + 1,
+            "intentRevision": intent_result.revision,
+            "contextTraceId": prompt_package.context_trace_id,
+            "toolManifestHash": prompt_package.tool_manifest_hash,
+        }),
+    )?;
+    *turn_state =
+        ag::turn::transition(*turn_state, ag::turn::TurnEvent::Assembled).ok_or_else(sm_error)?;
+    emit_ag01(app, turn_id, *turn_state);
+    Ok(RoundClose::Continue)
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
@@ -3005,7 +3197,7 @@ fn handle_done_round<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,execute_tool_call,record_tool_result,handle_done_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -4007,106 +4199,48 @@ async fn run_round_loop<R: tauri::Runtime>(
                 }
             }
         }
-        // ToolResult/Proposal 或响应拒绝已落事实后先回 SM-AG-01 Assembling；不能从 ResultRecording
-        // 直接调用 provider，也不能复用首次 PromptPackage/CapabilityGrant。
-        if final_only_correction_pending {
-            continuation_messages.push(correction_instruction_for_protocol(
-                true,
-                &transport_protocol,
-            ));
-        } else if parameter_correction_pending {
-            let mut instruction = correction_instruction_for_protocol(false, &transport_protocol);
-            if let Some(diagnostic) = protocol_correction_diagnostic.as_ref() {
-                // Both values are generated from fixed schema vocabulary, never from the
-                // rejected provider arguments. Give the model a precise repair target
-                // without reintroducing the malformed payload as an example.
-                let reason = diagnostic["reasonCode"]
-                    .as_str()
-                    .unwrap_or("schema_invalid");
-                let field = diagnostic["fieldPath"].as_str().unwrap_or("$batch");
-                let base = instruction["content"].as_str().unwrap_or_default();
-                instruction["content"] = serde_json::json!(format!(
-                    "本次拒绝位置：{field}；原因类别：{reason}。请从当前 schema 重新生成完整参数，不复制上一份被拒参数。\n{base}"
-                ));
-            }
-            continuation_messages.push(instruction);
-        }
-        if read_failure_final_pending {
-            continuation_messages.push(serde_json::json!({
-                "role":"system", "layer":"read_failure_final_only",
-                "content":"相同只读请求已重复失败，禁止再调用任何工具。请只输出合法 final 或 clarify：说明已有成功证据、失败的读取及未完成范围，不能将失败读取视为已读，不能宣称原业务任务成功；如无法继续，明确说明需要用户补充或缩小什么范围。不要重放任何已有操作。"
-            }));
-        }
-        turn_state = ag::turn::transition(
-            turn_state,
-            if response_rejected {
-                ag::turn::TurnEvent::ModelProtocolRejected
-            } else {
-                ag::turn::TurnEvent::ToolRoundCompleted
-            },
-        )
-        .ok_or_else(sm_error)?;
-        emit_ag01(&app, &turn_id, turn_state);
-        let rebuilt = match rebuild_round_prompt(
+        match close_round(
+            &app,
             &event_emitter,
-            PromptRebuildFacts {
+            CloseRoundFacts {
                 state,
+                latch: &terminal_latch,
                 session_id: &session_id,
                 turn_id: &turn_id,
                 runtime_profile: &runtime_profile,
-                task_run_id: task_run_id.as_deref(),
-                intent_result: &intent_result,
-                agent_context_facts: &agent_context_facts,
+                task_run_id: &mut task_run_id,
+                intent_result: &mut intent_result,
+                agent_context_facts: &mut agent_context_facts,
                 explicit_edit_target_set: &explicit_edit_target_set,
-                read_ctx: &read_ctx,
+                read_ctx: &mut read_ctx,
                 active_doc_path: active_doc_path.as_deref(),
-                active_snapshot: active_snapshot.as_ref(),
+                active_snapshot: &mut active_snapshot,
                 history: &history,
                 raw_prompt: &raw_prompt,
                 mention_block: mention_block.as_deref(),
                 reference_envelopes: &reference_envelopes,
                 proposed_diff,
-                continuation_messages: &continuation_messages,
-                decision_receipt_ids: &capability_factors.decision_receipt_ids,
-                next_model_call: (model_call_ordinal + 1) as u32,
+                continuation_messages: &mut continuation_messages,
+                model_call_ordinal,
                 remaining_tool_calls,
                 model_capacity,
                 response_rejected,
+                transport_protocol: &transport_protocol,
+                final_only_correction_pending,
+                parameter_correction_pending,
+                protocol_correction_diagnostic: &protocol_correction_diagnostic,
+                read_failure_final_pending,
+                turn_state: &mut turn_state,
+                messages: &mut messages,
+                tools: &mut tools,
+                capability_factors: &mut capability_factors,
+                prompt_package: &mut prompt_package,
+                current_doc_prompt_coverage: &mut current_doc_prompt_coverage,
             },
-        ) {
-            Ok(rebuilt) => rebuilt,
-            Err(PromptRebuildFailure::Propagate(error)) => return Err(error),
-            Err(PromptRebuildFailure::Settle(error)) => {
-                settle_and_emit_ag_turn_error_from(
-                    &state,
-                    task_run_id.as_deref(),
-                    &event_emitter,
-                    &terminal_latch,
-                    &app,
-                    &turn_id,
-                    &error,
-                    ag::turn::TurnState::Assembling,
-                );
-                return Ok(());
-            }
-        };
-        messages = rebuilt.messages;
-        tools = rebuilt.tools;
-        capability_factors = rebuilt.capability_factors;
-        prompt_package = rebuilt.prompt_package;
-        current_doc_prompt_coverage = rebuilt.current_doc_prompt_coverage;
-        event_emitter.record_internal(
-            "prompt_rebuilt",
-            serde_json::json!({
-                "nextRound": model_call_ordinal + 1,
-                "intentRevision": intent_result.revision,
-                "contextTraceId": prompt_package.context_trace_id,
-                "toolManifestHash": prompt_package.tool_manifest_hash,
-            }),
-        )?;
-        turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::Assembled)
-            .ok_or_else(sm_error)?;
-        emit_ag01(&app, &turn_id, turn_state);
+        )? {
+            RoundClose::Continue => {}
+            RoundClose::Ended => return Ok(()),
+        }
     }
 
     debug_assert!(false, "每个 provider 结果都应在循环内部返回或推进");
