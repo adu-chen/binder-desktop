@@ -2274,6 +2274,151 @@ async fn await_round_gate(
     }
 }
 
+/// 执行一次 provider 流式调用并返回结果/取消/失败归类。
+/// 只记录 provider_started/provider_finished；abort 安装失败、传输错误的终态转移与结算仍由调用方完成。
+struct ProviderRoundReady {
+    round: ent::gateway::RoundOutcome,
+    decoder: ag::model_output::ModelOutputDecoder,
+    visible_output: String,
+    visible_output_chars: usize,
+}
+
+enum ProviderRoundResult {
+    Ready(ProviderRoundReady),
+    Cancelled,
+    Failed(IpcError),
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_provider_round(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    session_id: &str,
+    turn_id: &str,
+    provider: &str,
+    model: &str,
+    runtime_profile: &str,
+    messages: &[serde_json::Value],
+    tools: &serde_json::Value,
+    prompt_package: &ag::context::PromptPackageV2,
+    final_prompt_audit: &mut Option<FinalPromptAuditLog>,
+    model_call_ordinal: usize,
+    budget_closing: bool,
+    workspace_plan_completed: bool,
+) -> Result<ProviderRoundResult, IpcError> {
+    let provider_messages = provider_messages_for_model(messages);
+    if let Some(audit_log) = final_prompt_audit.as_mut() {
+        let audit = build_prompt_audit_record(
+            turn_id,
+            session_id,
+            model_call_ordinal,
+            runtime_profile,
+            provider,
+            model,
+            prompt_package,
+            tools,
+            &provider_messages,
+        );
+        audit_log.capture(audit);
+    }
+    let msgs = serde_json::Value::Array(provider_messages);
+    emitter.record_internal(
+        "provider_started",
+        serde_json::json!({
+            "roundIndex": model_call_ordinal,
+            "provider": provider,
+            "model": model,
+            "protocolVersion": "binder-response-v2",
+        }),
+    )?;
+    let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+    if let Err(error) = install_agent_turn_abort_handle(state, session_id, turn_id, abort_handle) {
+        return Ok(ProviderRoundResult::Failed(error));
+    }
+    let mut decoder = ag::model_output::ModelOutputDecoder::default();
+    let mut visible_output_chars = 0usize;
+    let mut visible_output = String::new();
+    let round = match futures_util::future::Abortable::new(
+        ent::gateway::stream_round(
+            turn_id,
+            model_call_ordinal,
+            provider,
+            model,
+            &msgs,
+            tools,
+            |text| {
+                for visible in decoder.push(&text)? {
+                    // Reject a resource-final handoff before exposing its finished-looking
+                    // prose. The response can then be corrected without a duplicate answer.
+                    if decoder.parsed_control().is_some_and(|control| {
+                        control.next_action == ag::model_output::ModelNextAction::Final
+                            && control.intent.side_effect_intent
+                                == ag::context::SideEffectIntentV2::StructurePlan
+                            && control.completion.is_none()
+                            && !budget_closing
+                            && !workspace_plan_completed
+                            || budget_closing
+                                && control.next_action != ag::model_output::ModelNextAction::Final
+                    }) {
+                        continue;
+                    }
+                    visible_output_chars += visible.chars().count();
+                    visible_output.push_str(&visible);
+                    emitter.emit(latch, AgTurnEventPayload::Chunk { text: visible })?;
+                }
+                Ok(())
+            },
+            |kind, details| emitter.record_internal(kind, details).map(|_| ()),
+        ),
+        abort_registration,
+    )
+    .await
+    {
+        Err(_) => {
+            emitter.record_internal(
+                "provider_finished",
+                serde_json::json!({"roundIndex": model_call_ordinal, "outcome": "cancelled"}),
+            )?;
+            return Ok(ProviderRoundResult::Cancelled);
+        }
+        Ok(Err(error)) => {
+            emitter.record_internal(
+                "provider_finished",
+                serde_json::json!({
+                    "roundIndex": model_call_ordinal,
+                    "outcome": if error.code.starts_with("AG_MODEL_CONTROL_") {
+                        "model_protocol_rejected"
+                    } else { "transport_error" },
+                    "code": &error.code,
+                    "prefixKind": decoder.prefix_kind(),
+                }),
+            )?;
+            return Ok(ProviderRoundResult::Failed(error));
+        }
+        Ok(Ok(outcome)) => {
+            emitter.record_internal(
+                "provider_finished",
+                serde_json::json!({
+                    "roundIndex": model_call_ordinal,
+                    "outcome": match &outcome {
+                        ent::gateway::RoundOutcome::Failed(_) => "failed",
+                        ent::gateway::RoundOutcome::Done { .. } => "done",
+                        ent::gateway::RoundOutcome::ToolCalls(_) => "tool_calls",
+                    },
+                }),
+            )?;
+            outcome
+        }
+    };
+    Ok(ProviderRoundResult::Ready(ProviderRoundReady {
+        round,
+        decoder,
+        visible_output,
+        visible_output_chars,
+    }))
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -2281,7 +2426,7 @@ async fn await_round_gate(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2545,93 +2690,32 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         }
         debug_assert_eq!(tool_loop_state, TlSt::ModelStreaming);
         // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
-        let provider_messages = provider_messages_for_model(&messages);
-        if let Some(audit_log) = final_prompt_audit.as_mut() {
-            let audit = build_prompt_audit_record(
-                &turn_id,
-                &session_id,
-                model_call_ordinal,
-                &runtime_profile,
-                &provider,
-                &model,
-                &prompt_package,
-                &tools,
-                &provider_messages,
-            );
-            audit_log.capture(audit);
-        }
-        let msgs = serde_json::Value::Array(provider_messages);
-        event_emitter.record_internal(
-            "provider_started",
-            serde_json::json!({
-                "roundIndex": model_call_ordinal,
-                "provider": &provider,
-                "model": &model,
-                "protocolVersion": "binder-response-v2",
-            }),
-        )?;
-        let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
-        if let Err(error) =
-            install_agent_turn_abort_handle(&state, &session_id, &turn_id, abort_handle)
-        {
-            advance_or_finish!(TlEv::LoopError);
-            settle_and_emit_ag_turn_error(
-                &state,
-                task_run_id.as_deref(),
-                &event_emitter,
-                &terminal_latch,
-                &app,
-                &turn_id,
-                &error,
-            );
-            return Ok(());
-        }
-        let mut output_decoder = ag::model_output::ModelOutputDecoder::default();
-        let mut visible_output_chars = 0usize;
-        let mut visible_output = String::new();
-        let round = match futures_util::future::Abortable::new(
-            ent::gateway::stream_round(
-                &turn_id,
-                model_call_ordinal,
-                &provider,
-                &model,
-                &msgs,
-                &tools,
-                |text| {
-                    for visible in output_decoder.push(&text)? {
-                        // Reject a resource-final handoff before exposing its finished-looking
-                        // prose. The response can then be corrected without a duplicate answer.
-                        if output_decoder.parsed_control().is_some_and(|control| {
-                            control.next_action == ag::model_output::ModelNextAction::Final
-                                && control.intent.side_effect_intent
-                                    == ag::context::SideEffectIntentV2::StructurePlan
-                                && control.completion.is_none()
-                                && !budget_closing
-                                && !workspace_plan_completed
-                                || budget_closing
-                                    && control.next_action
-                                        != ag::model_output::ModelNextAction::Final
-                        }) {
-                            continue;
-                        }
-                        visible_output_chars += visible.chars().count();
-                        visible_output.push_str(&visible);
-                        event_emitter
-                            .emit(&terminal_latch, AgTurnEventPayload::Chunk { text: visible })?;
-                    }
-                    Ok(())
-                },
-                |kind, details| event_emitter.record_internal(kind, details).map(|_| ()),
-            ),
-            abort_registration,
+        let provider_result = run_provider_round(
+            state,
+            &event_emitter,
+            &terminal_latch,
+            &session_id,
+            &turn_id,
+            &provider,
+            &model,
+            &runtime_profile,
+            &messages,
+            &tools,
+            &prompt_package,
+            &mut final_prompt_audit,
+            model_call_ordinal,
+            budget_closing,
+            workspace_plan_completed,
         )
-        .await
-        {
-            Err(_) => {
-                event_emitter.record_internal(
-                    "provider_finished",
-                    serde_json::json!({"roundIndex": model_call_ordinal, "outcome": "cancelled"}),
-                )?;
+        .await?;
+        let (round, output_decoder, visible_output, visible_output_chars) = match provider_result {
+            ProviderRoundResult::Ready(ready) => (
+                ready.round,
+                ready.decoder,
+                ready.visible_output,
+                ready.visible_output_chars,
+            ),
+            ProviderRoundResult::Cancelled => {
                 advance_or_finish!(TlEv::Cancel);
                 finish_cancelled_turn(
                     &state,
@@ -2644,43 +2728,18 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 );
                 return Ok(());
             }
-            Ok(Err(error)) => {
-                event_emitter.record_internal(
-                    "provider_finished",
-                    serde_json::json!({
-                        "roundIndex": model_call_ordinal,
-                        "outcome": if error.code.starts_with("AG_MODEL_CONTROL_") {
-                            "model_protocol_rejected"
-                        } else { "transport_error" },
-                        "code": &error.code,
-                        "prefixKind": output_decoder.prefix_kind(),
-                    }),
-                )?;
+            ProviderRoundResult::Failed(error) => {
                 advance_or_finish!(TlEv::LoopError);
-                if let Ok(conn) = state.db.lock() {
-                    settle_optional_task_run(
-                        &conn,
-                        task_run_id.as_deref(),
-                        &turn_id,
-                        ag::task::TurnOutcome::Failed,
-                    );
-                }
-                emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
+                settle_and_emit_ag_turn_error(
+                    &state,
+                    task_run_id.as_deref(),
+                    &event_emitter,
+                    &terminal_latch,
+                    &app,
+                    &turn_id,
+                    &error,
+                );
                 return Ok(());
-            }
-            Ok(Ok(outcome)) => {
-                event_emitter.record_internal(
-                    "provider_finished",
-                    serde_json::json!({
-                        "roundIndex": model_call_ordinal,
-                        "outcome": match &outcome {
-                            ent::gateway::RoundOutcome::Failed(_) => "failed",
-                            ent::gateway::RoundOutcome::Done { .. } => "done",
-                            ent::gateway::RoundOutcome::ToolCalls(_) => "tool_calls",
-                        },
-                    }),
-                )?;
-                outcome
             }
         };
         // A provider completion and an accepted Binder response are separate facts. Text
