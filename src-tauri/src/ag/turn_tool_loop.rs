@@ -2419,6 +2419,80 @@ async fn run_provider_round(
     }))
 }
 
+/// 判定 final 响应是否缺少本轮必需的终态工具产物；返回 Some(error) 表示应终止本轮。
+/// 预算收尾或已提供 completion 时明确不要求终态工具。
+fn terminal_tool_requirement_error(
+    budget_closing: bool,
+    has_completion: bool,
+    workspace_plan_completed: bool,
+    intent: &ag::context::IntentResultV2,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+    any_tool_called: bool,
+) -> Option<IpcError> {
+    if budget_closing || has_completion {
+        return None;
+    }
+    let required_terminal_tool = match intent.side_effect_intent {
+        ag::context::SideEffectIntentV2::ContentProposal => Some("propose_edit"),
+        ag::context::SideEffectIntentV2::StructurePlan => Some("plan_workspace_operation"),
+        ag::context::SideEffectIntentV2::None => None,
+    };
+    if required_terminal_tool == Some("plan_workspace_operation") && workspace_plan_completed {
+        return None;
+    }
+    terminal_tool_is_missing(required_terminal_tool, proposed_diff, edit_blocked_reported)
+        .then(|| required_terminal_tool_error(required_terminal_tool, any_tool_called))
+}
+
+/// 进入 AwaitingClarification：整理 checkpoint、转移 SM-AG-01、停放并广播澄清请求。
+/// 写事件/停放失败按原路径向上传播；不新建 AgentTurn。
+#[allow(clippy::too_many_arguments)]
+fn park_clarification<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    session_id: &str,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    turn_state: &mut ag::turn::TurnState,
+    intent: ag::context::IntentResultV2,
+    initial_prompt: String,
+    question: String,
+    continuation_messages: Vec<serde_json::Value>,
+    workspace_id: &str,
+) -> Result<(), IpcError> {
+    let mut checkpoint_messages = continuation_messages;
+    checkpoint_after_read_clarification(
+        &mut checkpoint_messages,
+        (workspace_id, session_id, turn_id),
+    );
+    checkpoint_messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": question,
+    }));
+    *turn_state = ag::turn::transition(*turn_state, ag::turn::TurnEvent::ModelClarification)
+        .ok_or_else(sm_error)?;
+    park_agent_turn_for_clarification(
+        state,
+        session_id,
+        turn_id,
+        task_run_id,
+        AgentTurnRuntimeCheckpoint {
+            intent,
+            initial_prompt,
+            continuation_messages: checkpoint_messages,
+        },
+    )?;
+    emit_ag01(app, turn_id, *turn_state);
+    emitter.emit(
+        latch,
+        AgTurnEventPayload::ClarificationRequired { text: question },
+    )?;
+    Ok(())
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -2426,7 +2500,7 @@ async fn run_provider_round(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,terminal_tool_requirement_error,park_clarification,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2904,37 +2978,20 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         let clarification_question = control
                             .clarification_question
                             .expect("validated clarification must include a question");
-                        let mut checkpoint_messages = continuation_messages;
-                        checkpoint_after_read_clarification(
-                            &mut checkpoint_messages,
-                            (&workspace_id_for_turn, &session_id, &turn_id),
-                        );
-                        checkpoint_messages.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": clarification_question,
-                        }));
-                        turn_state = ag::turn::transition(
-                            turn_state,
-                            ag::turn::TurnEvent::ModelClarification,
-                        )
-                        .ok_or_else(sm_error)?;
-                        park_agent_turn_for_clarification(
+                        park_clarification(
                             &state,
+                            &app,
+                            &event_emitter,
+                            &terminal_latch,
                             &session_id,
                             &turn_id,
                             task_run_id.as_deref(),
-                            AgentTurnRuntimeCheckpoint {
-                                intent: intent_result,
-                                initial_prompt: raw_prompt,
-                                continuation_messages: checkpoint_messages,
-                            },
-                        )?;
-                        emit_ag01(&app, &turn_id, turn_state);
-                        event_emitter.emit(
-                            &terminal_latch,
-                            AgTurnEventPayload::ClarificationRequired {
-                                text: clarification_question,
-                            },
+                            &mut turn_state,
+                            intent_result,
+                            raw_prompt,
+                            clarification_question,
+                            continuation_messages,
+                            &workspace_id_for_turn,
                         )?;
                         return Ok(());
                     }
@@ -2959,25 +3016,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     }
                     ag::model_output::ModelNextAction::Final => {}
                 }
-                let required_terminal_tool = match intent_result.side_effect_intent {
-                    ag::context::SideEffectIntentV2::ContentProposal => Some("propose_edit"),
-                    ag::context::SideEffectIntentV2::StructurePlan => {
-                        Some("plan_workspace_operation")
-                    }
-                    ag::context::SideEffectIntentV2::None => None,
-                };
-                if !budget_closing
-                    && control.completion.is_none()
-                    && !(required_terminal_tool == Some("plan_workspace_operation")
-                        && workspace_plan_completed)
-                    && terminal_tool_is_missing(
-                        required_terminal_tool,
-                        proposed_diff,
-                        edit_blocked_reported,
-                    )
-                {
-                    let error =
-                        required_terminal_tool_error(required_terminal_tool, any_tool_called);
+                if let Some(error) = terminal_tool_requirement_error(
+                    budget_closing,
+                    control.completion.is_some(),
+                    workspace_plan_completed,
+                    &intent_result,
+                    proposed_diff,
+                    edit_blocked_reported,
+                    any_tool_called,
+                ) {
                     advance_or_finish!(TlEv::LoopError);
                     if let Ok(conn) = state.db.lock() {
                         settle_optional_task_run(
@@ -2990,25 +3037,8 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
                     return Ok(());
                 }
-                if visible_output_chars == 0 {
-                    let error = IpcError::new(
-                        "AG_MODEL_FINAL_EMPTY",
-                        "模型声明 final 但没有提供可见回答",
-                        true,
-                        false,
-                    );
-                    advance_or_finish!(TlEv::LoopError);
-                    settle_and_emit_ag_turn_error(
-                        &state,
-                        task_run_id.as_deref(),
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                    );
-                    return Ok(());
-                }
+                // final 空正文已由 validate_round_response 在控制校验阶段拒绝；
+                // 此处不再重复检查，避免维护两条不可达的终态路径。
                 advance_or_finish!(TlEv::FinalAnswer);
                 turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::ModelFinal)
                     .ok_or_else(sm_error)?;
@@ -4397,5 +4427,45 @@ mod tests {
             "WS_SCOPE"
         );
         assert_eq!(guard.as_deref(), Some("scope failure"));
+    }
+
+    #[test]
+    fn terminal_tool_requirement_error_matches_existing_terminal_semantics() {
+        let mut intent = ag::context::IntentResultV2::unresolved();
+        intent.side_effect_intent = ag::context::SideEffectIntentV2::ContentProposal;
+        assert!(
+            terminal_tool_requirement_error(true, false, false, &intent, false, false, false)
+                .is_none()
+        );
+        assert!(
+            terminal_tool_requirement_error(false, true, false, &intent, false, false, false)
+                .is_none()
+        );
+        assert_eq!(
+            terminal_tool_requirement_error(false, false, false, &intent, false, false, false)
+                .expect("missing propose_edit")
+                .code,
+            "AG_EDIT_TOOL_REQUIRED"
+        );
+        assert!(
+            terminal_tool_requirement_error(false, false, false, &intent, true, false, false)
+                .is_none()
+        );
+        intent.side_effect_intent = ag::context::SideEffectIntentV2::StructurePlan;
+        assert!(
+            terminal_tool_requirement_error(false, false, true, &intent, false, false, false)
+                .is_none()
+        );
+        assert_eq!(
+            terminal_tool_requirement_error(false, false, false, &intent, false, false, false)
+                .expect("missing plan")
+                .code,
+            "AG_WORKSPACE_PLAN_TOOL_REQUIRED"
+        );
+        intent.side_effect_intent = ag::context::SideEffectIntentV2::None;
+        assert!(
+            terminal_tool_requirement_error(false, false, false, &intent, false, false, false)
+                .is_none()
+        );
     }
 }
