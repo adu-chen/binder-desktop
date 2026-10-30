@@ -2206,6 +2206,74 @@ fn prepare_tool_batch(
     })
 }
 
+/// 续调轮次的门禁等待与结果归类；只记录 gate 事件并返回结果，状态转移/终态结算仍由调用方完成。
+/// Err = gate 事件写失败，按原路径向上传播。
+enum RoundGate {
+    Proceed,
+    Cancelled,
+    Denied(IpcError),
+    Failed(IpcError),
+}
+
+async fn await_round_gate(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    session_id: &str,
+    turn_id: &str,
+    model_call_ordinal: usize,
+) -> Result<RoundGate, IpcError> {
+    emitter.record_internal(
+        "gate_requested",
+        serde_json::json!({"attempt": model_call_ordinal}),
+    )?;
+    match super::turn_control::await_turn_operation(
+        state,
+        session_id,
+        turn_id,
+        ent::gateway::check_gate(),
+    )
+    .await
+    {
+        Ok(ent::gateway::GateOutcome::Pass) => {
+            emitter.record_internal(
+                "gate_evaluated",
+                serde_json::json!({"attempt": model_call_ordinal, "outcome": "passed"}),
+            )?;
+            Ok(RoundGate::Proceed)
+        }
+        Ok(ent::gateway::GateOutcome::Deny) => {
+            emitter.record_internal(
+                "gate_evaluated",
+                serde_json::json!({"attempt": model_call_ordinal, "outcome": "denied"}),
+            )?;
+            Ok(RoundGate::Denied(IpcError::new(
+                "AG_GATE_DENIED",
+                "续调门禁被服务端拒绝，本轮已停止。",
+                false,
+                true,
+            )))
+        }
+        Err(error) if error.code == "AG_TURN_CANCELLED" => {
+            emitter.record_internal(
+                "gate_evaluated",
+                serde_json::json!({"attempt": model_call_ordinal, "outcome": "cancelled"}),
+            )?;
+            Ok(RoundGate::Cancelled)
+        }
+        Err(error) => {
+            emitter.record_internal(
+                "gate_evaluated",
+                serde_json::json!({
+                    "attempt": model_call_ordinal,
+                    "outcome": "error",
+                    "code": &error.code,
+                }),
+            )?;
+            Ok(RoundGate::Failed(error))
+        }
+    }
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -2213,7 +2281,7 @@ fn prepare_tool_batch(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2414,42 +2482,24 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         }
         if _round > 0 {
             debug_assert_eq!(turn_state, ag::turn::TurnState::AwaitingGate);
-            event_emitter.record_internal(
-                "gate_requested",
-                serde_json::json!({"attempt": model_call_ordinal}),
-            )?;
-            let gate_error = match super::turn_control::await_turn_operation(
+            match await_round_gate(
                 &state,
+                &event_emitter,
                 &session_id,
                 &turn_id,
-                ent::gateway::check_gate(),
+                model_call_ordinal,
             )
-            .await
+            .await?
             {
-                Ok(ent::gateway::GateOutcome::Pass) => {
-                    event_emitter.record_internal(
-                        "gate_evaluated",
-                        serde_json::json!({"attempt": model_call_ordinal, "outcome": "passed"}),
-                    )?;
-                    None
+                RoundGate::Proceed => {
+                    turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::GatePassed)
+                        .ok_or_else(sm_error)?;
+                    emit_ag01(&app, &turn_id, turn_state);
+                    // SM-AG-01 已完成 Assembling→AwaitingGate→GatePassed；这里是新的嵌套激活起点，
+                    // 从初始态 ModelStreaming 开始，不是同一 SM-AG-02 激活内的状态转移。
+                    tool_loop_state = TlSt::ModelStreaming;
                 }
-                Ok(ent::gateway::GateOutcome::Deny) => {
-                    event_emitter.record_internal(
-                        "gate_evaluated",
-                        serde_json::json!({"attempt": model_call_ordinal, "outcome": "denied"}),
-                    )?;
-                    Some(IpcError::new(
-                        "AG_GATE_DENIED",
-                        "续调门禁被服务端拒绝，本轮已停止。",
-                        false,
-                        true,
-                    ))
-                }
-                Err(error) if error.code == "AG_TURN_CANCELLED" => {
-                    event_emitter.record_internal(
-                        "gate_evaluated",
-                        serde_json::json!({"attempt": model_call_ordinal, "outcome": "cancelled"}),
-                    )?;
+                RoundGate::Cancelled => {
                     // The preceding nested loop completed before this Gate wait.
                     finish_cancelled_turn(
                         &state,
@@ -2462,47 +2512,36 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     );
                     return Ok(());
                 }
-                Err(error) => {
-                    event_emitter.record_internal(
-                        "gate_evaluated",
-                        serde_json::json!({
-                            "attempt": model_call_ordinal,
-                            "outcome": "error",
-                            "code": &error.code,
-                        }),
-                    )?;
-                    Some(error)
+                RoundGate::Denied(error) | RoundGate::Failed(error) => {
+                    if let Ok(conn) = state.db.lock() {
+                        settle_optional_task_run(
+                            &conn,
+                            task_run_id.as_deref(),
+                            &turn_id,
+                            ag::task::TurnOutcome::Failed,
+                        );
+                    }
+                    if error.code == "AG_GATE_DENIED" {
+                        emit_ag_turn_denied(
+                            &event_emitter,
+                            &terminal_latch,
+                            &app,
+                            &turn_id,
+                            &error,
+                        );
+                    } else {
+                        emit_ag_turn_error_from(
+                            &event_emitter,
+                            &terminal_latch,
+                            &app,
+                            &turn_id,
+                            &error,
+                            turn_state,
+                        );
+                    }
+                    return Ok(());
                 }
-            };
-            if let Some(error) = gate_error {
-                if let Ok(conn) = state.db.lock() {
-                    settle_optional_task_run(
-                        &conn,
-                        task_run_id.as_deref(),
-                        &turn_id,
-                        ag::task::TurnOutcome::Failed,
-                    );
-                }
-                if error.code == "AG_GATE_DENIED" {
-                    emit_ag_turn_denied(&event_emitter, &terminal_latch, &app, &turn_id, &error);
-                } else {
-                    emit_ag_turn_error_from(
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                        turn_state,
-                    );
-                }
-                return Ok(());
             }
-            turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::GatePassed)
-                .ok_or_else(sm_error)?;
-            emit_ag01(&app, &turn_id, turn_state);
-            // SM-AG-01 已完成 Assembling→AwaitingGate→GatePassed；这里是新的嵌套激活起点，
-            // 从初始态 ModelStreaming 开始，不是同一 SM-AG-02 激活内的状态转移。
-            tool_loop_state = TlSt::ModelStreaming;
         }
         debug_assert_eq!(tool_loop_state, TlSt::ModelStreaming);
         // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
