@@ -1930,6 +1930,113 @@ fn resolve_execution_grant_and_decision(
     })
 }
 
+/// 执行前的 acquisition 预检：同一硬边界下计算临时 grant 并校验，仅决定是否需要刷新上下文。
+/// 该临时 grant 不执行工具，也不替代后续真实的一次性执行授权。
+#[allow(clippy::too_many_arguments)]
+fn preflight_tool_acquisition_allowed(
+    capability_factors: &ag::tool_registry::CapabilityFactorsV2,
+    cancelled: &Arc<AtomicBool>,
+    latch: &ag::turn::TerminalLatch,
+    runtime_profile: &str,
+    turn_id: &str,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    model_call_ordinal: usize,
+    remaining_tool_calls: u32,
+    tools: &serde_json::Value,
+    ws_root: Option<&str>,
+    read_failure_final_pending: bool,
+    arg_parse_error_none: bool,
+    call: &crate::ent::gateway::GwToolCall,
+    params: &serde_json::Value,
+) -> bool {
+    let mut acquisition_factors = capability_factors.clone();
+    acquisition_factors.gate_passed = true;
+    acquisition_factors.gate_attempt = model_call_ordinal as u32;
+    acquisition_factors.remaining_tool_calls = remaining_tool_calls;
+    acquisition_factors.cancelled = cancelled.load(Ordering::Acquire);
+    acquisition_factors.terminal = latch.is_set();
+    let acquisition_grant = ag::tool_registry::resolve_capability_grant_v2(
+        runtime_profile,
+        turn_id,
+        &explicit_edit_target_set.paths(),
+        acquisition_factors,
+        ag::tool_registry::CapabilityGrantPurposeV2::ToolCall {
+            tool_call_id: call.id.clone(),
+            computed_at_seq: 1,
+        },
+    );
+    !read_failure_final_pending
+        && arg_parse_error_none
+        && tool_is_visible_in_manifest(tools, &call.name)
+        && matches!(
+            ag::tool_registry::validate_requested_tool_for_grant(
+                &call.name,
+                params,
+                &acquisition_grant,
+                turn_id,
+                &call.id,
+                1,
+                ws_root.map(std::path::Path::new),
+                &mut Default::default()
+            ),
+            ag::tool::ToolDecision::Allow
+        )
+}
+
+/// 组合本次 ToolCall 的初始执行失败与 guard 文案；只做错误优先级归并，不执行工具或推进状态。
+fn compute_execution_failure(
+    control_error: Option<&IpcError>,
+    parameter_contract_rejection: bool,
+    tool_decision: Option<&ag::tool::ToolDecision>,
+    tool_name: &str,
+    params: &serde_json::Value,
+    read_failure_final_pending: bool,
+    context_refresh_error: Option<&IpcError>,
+    scope_candidates: &Result<Option<Vec<String>>, IpcError>,
+    task_run_prepare_error: Option<&IpcError>,
+) -> (Option<IpcError>, Option<String>) {
+    let execution_failure = control_error
+        .cloned()
+        .or_else(|| {
+            parameter_contract_rejection.then(|| {
+                ag::tool_exec::validate_read_arguments(tool_name, params)
+                    .err()
+                    .unwrap_or_else(|| {
+                        let message = match tool_decision {
+                            Some(ag::tool::ToolDecision::InvalidArguments { message, .. }) => {
+                                message.as_str()
+                            }
+                            _ => "工具参数不符合声明；本次未执行，请依据工具契约修正。",
+                        };
+                        IpcError::new("AG_TOOL_ARG", message, true, false)
+                    })
+            })
+        })
+        .or_else(|| {
+            read_failure_final_pending.then(|| {
+                IpcError::new(
+                    "AG_TOOL_REPEATED_FAILURE",
+                    "重复只读失败后停止工具调用，请依据已有回执说明未完成范围。",
+                    false,
+                    false,
+                )
+            })
+        })
+        .or_else(|| context_refresh_error.cloned())
+        .or_else(|| scope_candidates.as_ref().err().cloned())
+        .or_else(|| task_run_prepare_error.cloned());
+    let execution_guard_error = if context_refresh_error.is_some() {
+        context_refresh_error.map(|error| format!("[{}] {}", error.code, error.message))
+    } else if let Err(error) = scope_candidates {
+        Some(error.message.clone())
+    } else if task_run_prepare_error.is_some() {
+        task_run_prepare_error.map(|error| error.message.clone())
+    } else {
+        None
+    };
+    (execution_failure, execution_guard_error)
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -1937,7 +2044,7 @@ fn resolve_execution_grant_and_decision(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,resolve_execution_grant_and_decision,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2964,38 +3071,22 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     let mut end_after_diff_proposal = false;
                     // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
                     // The real one-use execution grant is computed below after acquisition.
-                    let mut acquisition_factors = capability_factors.clone();
-                    acquisition_factors.gate_passed = true;
-                    acquisition_factors.gate_attempt = model_call_ordinal as u32;
-                    acquisition_factors.remaining_tool_calls = remaining_tool_calls;
-                    acquisition_factors.cancelled = cancelled.load(Ordering::Acquire);
-                    acquisition_factors.terminal = terminal_latch.is_set();
-                    let acquisition_grant = ag::tool_registry::resolve_capability_grant_v2(
+                    let acquisition_allowed = preflight_tool_acquisition_allowed(
+                        &capability_factors,
+                        &cancelled,
+                        &terminal_latch,
                         &runtime_profile,
                         &turn_id,
-                        &explicit_edit_target_set.paths(),
-                        acquisition_factors,
-                        ag::tool_registry::CapabilityGrantPurposeV2::ToolCall {
-                            tool_call_id: c.id.clone(),
-                            computed_at_seq: 1,
-                        },
+                        &explicit_edit_target_set,
+                        model_call_ordinal,
+                        remaining_tool_calls,
+                        &tools,
+                        ws_root.as_deref(),
+                        read_failure_final_pending,
+                        arg_parse_error.is_none(),
+                        c,
+                        &params,
                     );
-                    let acquisition_allowed = !read_failure_final_pending
-                        && arg_parse_error.is_none()
-                        && tool_is_visible_in_manifest(&tools, &c.name)
-                        && matches!(
-                            ag::tool_registry::validate_requested_tool_for_grant(
-                                &c.name,
-                                &params,
-                                &acquisition_grant,
-                                &turn_id,
-                                &c.id,
-                                1,
-                                ws_root.as_deref().map(std::path::Path::new),
-                                &mut Default::default()
-                            ),
-                            ag::tool::ToolDecision::Allow
-                        );
                     let context_refresh_error = if acquisition_allowed
                         && ag::tool_registry::lookup(&c.name)
                             .is_some_and(|tool| tool.requires_fresh_host_context)
@@ -3087,49 +3178,18 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow)),
                         &mut task_run_id,
                     );
-                    let mut execution_failure = control_error
-                        .clone()
-                        .or_else(|| {
-                            parameter_contract_rejection.then(|| {
-                                ag::tool_exec::validate_read_arguments(&c.name, &params)
-                                    .err()
-                                    .unwrap_or_else(|| {
-                                        let message = match tool_decision.as_ref() {
-                                            Some(ag::tool::ToolDecision::InvalidArguments { message, .. }) => message.as_str(),
-                                            _ => "工具参数不符合声明；本次未执行，请依据工具契约修正。",
-                                        };
-                                        IpcError::new(
-                                            "AG_TOOL_ARG",
-                                            message,
-                                            true,
-                                            false,
-                                        )
-                                    })
-                            })
-                        })
-                        .or_else(|| {
-                            read_failure_final_pending.then(|| {
-                                IpcError::new(
-                                    "AG_TOOL_REPEATED_FAILURE",
-                                    "重复只读失败后停止工具调用，请依据已有回执说明未完成范围。",
-                                    false,
-                                    false,
-                                )
-                            })
-                        })
-                        .or_else(|| context_refresh_error.clone())
-                        .or_else(|| scope_candidates.as_ref().err().cloned())
-                        .or_else(|| task_run_prepare_error.clone());
-                    let execution_guard_error = if context_refresh_error.is_some() {
-                        context_refresh_error
-                            .map(|error| format!("[{}] {}", error.code, error.message))
-                    } else if let Err(error) = &scope_candidates {
-                        Some(error.message.clone())
-                    } else if task_run_prepare_error.is_some() {
-                        task_run_prepare_error.map(|error| error.message)
-                    } else {
-                        None
-                    };
+                    let (execution_failure, execution_guard_error) = compute_execution_failure(
+                        control_error.as_ref(),
+                        parameter_contract_rejection,
+                        tool_decision.as_ref(),
+                        &c.name,
+                        &params,
+                        read_failure_final_pending,
+                        context_refresh_error.as_ref(),
+                        &scope_candidates,
+                        task_run_prepare_error.as_ref(),
+                    );
+                    let mut execution_failure = execution_failure;
                     let read_execution = if arg_parse_error.is_none()
                         && execution_guard_error.is_none()
                         && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
@@ -4131,5 +4191,49 @@ mod tests {
             2,
             "唯一允许的直接赋值是初始状态与每次 provider 激活起点"
         );
+    }
+
+    #[test]
+    fn execution_failure_priority_and_guard_projection_are_stable() {
+        let control = IpcError::new("AG_CONTROL", "control failure", true, false);
+        let refresh = IpcError::new("AG_CONTEXT", "context failure", true, false);
+        let scope: Result<Option<Vec<String>>, IpcError> =
+            Err(IpcError::new("WS_SCOPE", "scope failure", false, false));
+        let task = IpcError::new("AG_TASK", "task failure", true, false);
+
+        let (failure, guard) = compute_execution_failure(
+            Some(&control),
+            true,
+            Some(&ag::tool::ToolDecision::InvalidArguments {
+                field: "operations",
+                constraint: "required",
+                message: "missing".into(),
+            }),
+            "read_doc",
+            &serde_json::json!({}),
+            true,
+            Some(&refresh),
+            &scope,
+            Some(&task),
+        );
+        assert_eq!(failure.expect("control error wins").code, "AG_CONTROL");
+        assert_eq!(guard.as_deref(), Some("[AG_CONTEXT] context failure"));
+
+        let (failure, guard) = compute_execution_failure(
+            None,
+            false,
+            None,
+            "read_doc",
+            &serde_json::json!({}),
+            false,
+            None,
+            &scope,
+            Some(&task),
+        );
+        assert_eq!(
+            failure.expect("scope error wins over task").code,
+            "WS_SCOPE"
+        );
+        assert_eq!(guard.as_deref(), Some("scope failure"));
     }
 }
