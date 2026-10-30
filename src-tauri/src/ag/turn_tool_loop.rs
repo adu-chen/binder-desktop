@@ -2728,12 +2728,284 @@ struct RoundState {
 
 /**
  * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-073, BR-AG-STATE-002-RB-AG-AG-TOOL-073
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002
+ * boundary: in=DoneRoundControlVisibleAnswerAndRoundState | out=SingleAgentTurnTerminalOrClarificationParked | delegate=apply_control_and_observe,terminal_tool_requirement_error,park_clarification,finish_final_answer | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=continueProviderLoopOrEmitSecondTerminal
+ */
+/// 处理本轮 Done 结果：应用控制、澄清停放、终态工具检查与 final 收尾。
+/// 该分支必然结束本轮；状态转移/结算仍在本函数内完成，错误按原路径传播。
+struct DoneRoundFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    task_run_id: Option<String>,
+    intent_result: ag::context::IntentResultV2,
+    tool_loop_state: ag::tool::ToolLoopState,
+    turn_state: ag::turn::TurnState,
+    control: ag::model_output::ModelTurnControl,
+    raw_prompt: String,
+    history: &'a [ag::context::HistTurn],
+    messages: &'a [serde_json::Value],
+    active_doc_path: Option<&'a str>,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    continuation_messages: Vec<serde_json::Value>,
+    budget_closing: bool,
+    workspace_plan_completed: bool,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+    any_tool_called: bool,
+    visible_output: &'a str,
+    stop_reason: &'a str,
+    model_call_ordinal: usize,
+    remaining_tool_calls: u32,
+    remaining_rounds: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_or_settle<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    tool_loop_state: &mut ag::tool::ToolLoopState,
+    event: ag::tool::ToolLoopEvent,
+) -> bool {
+    match advance_tool_loop(app, turn_id, tool_loop_state, event) {
+        Ok(_) => true,
+        Err(error) => {
+            settle_and_emit_ag_turn_error(state, task_run_id, emitter, latch, app, turn_id, &error);
+            false
+        }
+    }
+}
+
+fn handle_done_round<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: DoneRoundFacts<'_>,
+) -> Result<(), IpcError> {
+    let DoneRoundFacts {
+        state,
+        latch,
+        session_id,
+        workspace_id,
+        turn_id,
+        explicit_edit_target_set,
+        mut task_run_id,
+        mut intent_result,
+        mut tool_loop_state,
+        mut turn_state,
+        control,
+        raw_prompt,
+        history,
+        messages,
+        active_doc_path,
+        reference_envelopes,
+        continuation_messages,
+        budget_closing,
+        workspace_plan_completed,
+        proposed_diff,
+        edit_blocked_reported,
+        any_tool_called,
+        visible_output,
+        stop_reason,
+        model_call_ordinal,
+        remaining_tool_calls,
+        remaining_rounds,
+    } = facts;
+    let structure_warning = ag::model_output::answer_structure_warning(visible_output);
+    emitter.record_internal(
+        "answer_delivery_observed",
+        serde_json::json!({
+            "roundIndex": model_call_ordinal,
+            "stopReason": stop_reason,
+            "textUtf8Bytes": visible_output.len(),
+            "textSha256": ag::context::sha256_text(visible_output),
+            "contentBasis": "visible_body_excluding_control",
+            "answerStructureWarning": structure_warning,
+        }),
+    )?;
+    if let Err(error) = apply_control_and_observe(
+        state,
+        emitter,
+        latch,
+        session_id,
+        workspace_id,
+        turn_id,
+        explicit_edit_target_set,
+        &mut task_run_id,
+        &mut intent_result,
+        &control,
+        raw_prompt.as_str(),
+        history,
+        messages,
+        active_doc_path,
+        reference_envelopes,
+        &continuation_messages,
+    ) {
+        if !advance_or_settle(
+            state,
+            app,
+            emitter,
+            latch,
+            turn_id,
+            task_run_id.as_deref(),
+            &mut tool_loop_state,
+            ag::tool::ToolLoopEvent::LoopError,
+        ) {
+            return Ok(());
+        }
+        settle_and_emit_ag_turn_error(
+            state,
+            task_run_id.as_deref(),
+            emitter,
+            latch,
+            app,
+            turn_id,
+            &error,
+        );
+        return Ok(());
+    }
+    match control.next_action {
+        ag::model_output::ModelNextAction::Clarify => {
+            let clarification_question = control
+                .clarification_question
+                .expect("validated clarification must include a question");
+            park_clarification(
+                state,
+                app,
+                emitter,
+                latch,
+                session_id,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut turn_state,
+                intent_result,
+                raw_prompt,
+                clarification_question,
+                continuation_messages,
+                workspace_id,
+            )?;
+            return Ok(());
+        }
+        ag::model_output::ModelNextAction::Tool => {
+            let error = IpcError::new(
+                "AG_MODEL_CONTROL_INVALID",
+                "无 ToolCall 的模型响应不能声明 nextAction=tool",
+                true,
+                false,
+            );
+            if !advance_or_settle(
+                state,
+                app,
+                emitter,
+                latch,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut tool_loop_state,
+                ag::tool::ToolLoopEvent::LoopError,
+            ) {
+                return Ok(());
+            }
+            settle_and_emit_ag_turn_error(
+                state,
+                task_run_id.as_deref(),
+                emitter,
+                latch,
+                app,
+                turn_id,
+                &error,
+            );
+            return Ok(());
+        }
+        ag::model_output::ModelNextAction::Final => {}
+    }
+    if let Some(error) = terminal_tool_requirement_error(
+        budget_closing,
+        control.completion.is_some(),
+        workspace_plan_completed,
+        &intent_result,
+        proposed_diff,
+        edit_blocked_reported,
+        any_tool_called,
+    ) {
+        if !advance_or_settle(
+            state,
+            app,
+            emitter,
+            latch,
+            turn_id,
+            task_run_id.as_deref(),
+            &mut tool_loop_state,
+            ag::tool::ToolLoopEvent::LoopError,
+        ) {
+            return Ok(());
+        }
+        if let Ok(conn) = state.db.lock() {
+            settle_optional_task_run(
+                &conn,
+                task_run_id.as_deref(),
+                turn_id,
+                ag::task::TurnOutcome::Failed,
+            );
+        }
+        emit_ag_turn_error(emitter, latch, app, turn_id, &error);
+        return Ok(());
+    }
+    if !advance_or_settle(
+        state,
+        app,
+        emitter,
+        latch,
+        turn_id,
+        task_run_id.as_deref(),
+        &mut tool_loop_state,
+        ag::tool::ToolLoopEvent::FinalAnswer,
+    ) {
+        return Ok(());
+    }
+    turn_state =
+        ag::turn::transition(turn_state, ag::turn::TurnEvent::ModelFinal).ok_or_else(sm_error)?;
+    emit_ag01(app, turn_id, turn_state);
+    finish_final_answer(
+        app,
+        emitter,
+        FinalAnswerFacts {
+            state,
+            latch,
+            workspace_id,
+            turn_id,
+            task_run_id: task_run_id.as_deref(),
+            intent: &intent_result,
+            active_doc_path,
+            findings: &control.findings,
+            any_tool_called,
+            budget_closing,
+            completion: control.completion.as_ref(),
+            side_effect_intent: &control.intent.side_effect_intent,
+            structure_warning,
+            stop_reason,
+            remaining_tool_calls,
+            remaining_rounds,
+        },
+    )
+}
+
+/**
+ * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,execute_tool_call,record_tool_result,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,execute_tool_call,record_tool_result,handle_done_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -3096,139 +3368,42 @@ async fn run_round_loop<R: tauri::Runtime>(
                 return Ok(());
             }
             ent::gateway::RoundOutcome::Done { stop_reason } => {
-                let structure_warning = ag::model_output::answer_structure_warning(&visible_output);
-                event_emitter.record_internal("answer_delivery_observed",serde_json::json!({
-                    "roundIndex":model_call_ordinal,"stopReason":stop_reason,
-                    "textUtf8Bytes":visible_output.len(),"textSha256":ag::context::sha256_text(&visible_output),
-                    "contentBasis":"visible_body_excluding_control",
-                    "answerStructureWarning":structure_warning,
-                }))?;
                 let control = response_control
                     .expect("validated response")
                     .expect("done control");
-                if let Err(error) = apply_control_and_observe(
-                    &state,
-                    &event_emitter,
-                    &terminal_latch,
-                    &session_id,
-                    &workspace_id_for_turn,
-                    &turn_id,
-                    &explicit_edit_target_set,
-                    &mut task_run_id,
-                    &mut intent_result,
-                    &control,
-                    &raw_prompt,
-                    &history,
-                    &messages,
-                    active_doc_path.as_deref(),
-                    &reference_envelopes,
-                    &continuation_messages,
-                ) {
-                    advance_or_finish!(TlEv::LoopError);
-                    settle_and_emit_ag_turn_error(
-                        &state,
-                        task_run_id.as_deref(),
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                    );
-                    return Ok(());
-                }
-                match control.next_action {
-                    ag::model_output::ModelNextAction::Clarify => {
-                        let clarification_question = control
-                            .clarification_question
-                            .expect("validated clarification must include a question");
-                        park_clarification(
-                            &state,
-                            &app,
-                            &event_emitter,
-                            &terminal_latch,
-                            &session_id,
-                            &turn_id,
-                            task_run_id.as_deref(),
-                            &mut turn_state,
-                            intent_result,
-                            raw_prompt,
-                            clarification_question,
-                            continuation_messages,
-                            &workspace_id_for_turn,
-                        )?;
-                        return Ok(());
-                    }
-                    ag::model_output::ModelNextAction::Tool => {
-                        let error = IpcError::new(
-                            "AG_MODEL_CONTROL_INVALID",
-                            "无 ToolCall 的模型响应不能声明 nextAction=tool",
-                            true,
-                            false,
-                        );
-                        advance_or_finish!(TlEv::LoopError);
-                        settle_and_emit_ag_turn_error(
-                            &state,
-                            task_run_id.as_deref(),
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            &error,
-                        );
-                        return Ok(());
-                    }
-                    ag::model_output::ModelNextAction::Final => {}
-                }
-                if let Some(error) = terminal_tool_requirement_error(
-                    budget_closing,
-                    control.completion.is_some(),
-                    workspace_plan_completed,
-                    &intent_result,
-                    proposed_diff,
-                    edit_blocked_reported,
-                    any_tool_called,
-                ) {
-                    advance_or_finish!(TlEv::LoopError);
-                    if let Ok(conn) = state.db.lock() {
-                        settle_optional_task_run(
-                            &conn,
-                            task_run_id.as_deref(),
-                            &turn_id,
-                            ag::task::TurnOutcome::Failed,
-                        );
-                    }
-                    emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
-                    return Ok(());
-                }
-                // final 空正文已由 validate_round_response 在控制校验阶段拒绝；
-                // 此处不再重复检查，避免维护两条不可达的终态路径。
-                advance_or_finish!(TlEv::FinalAnswer);
-                turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::ModelFinal)
-                    .ok_or_else(sm_error)?;
-                emit_ag01(&app, &turn_id, turn_state);
-                finish_final_answer(
+                return handle_done_round(
                     &app,
                     &event_emitter,
-                    FinalAnswerFacts {
+                    DoneRoundFacts {
                         state,
                         latch: &terminal_latch,
+                        session_id: &session_id,
                         workspace_id: &workspace_id_for_turn,
                         turn_id: &turn_id,
-                        task_run_id: task_run_id.as_deref(),
-                        intent: &intent_result,
+                        explicit_edit_target_set: &explicit_edit_target_set,
+                        task_run_id,
+                        intent_result,
+                        tool_loop_state,
+                        turn_state,
+                        control,
+                        raw_prompt,
+                        history: &history,
+                        messages: &messages,
                         active_doc_path: active_doc_path.as_deref(),
-                        findings: &control.findings,
-                        any_tool_called,
+                        reference_envelopes: &reference_envelopes,
+                        continuation_messages,
                         budget_closing,
-                        completion: control.completion.as_ref(),
-                        side_effect_intent: &control.intent.side_effect_intent,
-                        structure_warning,
+                        workspace_plan_completed,
+                        proposed_diff,
+                        edit_blocked_reported,
+                        any_tool_called,
+                        visible_output: &visible_output,
                         stop_reason: &stop_reason,
+                        model_call_ordinal,
                         remaining_tool_calls,
                         remaining_rounds,
                     },
-                )?;
-                return Ok(());
+                );
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
                 let output_control = response_control.expect("validated optional control");
