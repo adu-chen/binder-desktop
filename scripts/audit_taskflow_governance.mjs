@@ -876,6 +876,58 @@ addCheck({
   code_blocks: codeBlockOwners.size,
 });
 
+// ── 治理覆盖：受治理模块的生产文件必须被标注，或显式豁免 ─────────────────
+const GOVERNED_DIRS = ['src-tauri/src/ag/'];
+const EXEMPT_HEADER = /@GOV-EXEMPT|不\s*@GOV|不入规则、不\s*@GOV/;
+const governedProdFiles = sourceFiles
+  .map(f => f.replace(/\\/g, '/'))
+  .filter(f => GOVERNED_DIRS.some(dir => f.includes(dir)))
+  .filter(f => !/test/i.test(f.split('/').pop()));
+const annotatedFiles = new Set(govBlocks.map(b => b.file.replace(/\\/g, '/')));
+const uncoveredGovernedFiles = governedProdFiles.filter(f => {
+  if (annotatedFiles.has(f)) return false;
+  const head = readText(f).split('\n').slice(0, 25).join('\n');
+  return !EXEMPT_HEADER.test(head);
+});
+addCheck({
+  name: 'governed production files annotated or explicitly exempt',
+  status: uncoveredGovernedFiles.length === 0 ? 'passed' : 'failed',
+  uncovered_files: uncoveredGovernedFiles,
+});
+
+// 规则孤岛：active 规则必须至少有一个非测试代码块承接。
+const productionRuleRefs = new Set();
+for (const b of govBlocks) {
+  const name = b.file.replace(/\\/g, '/').split('/').pop();
+  if (/test/i.test(name)) continue;
+  for (const r of splitCsv(b.fields.rules)) productionRuleRefs.add(r);
+}
+const orphanRules = [...rules].filter(id => {
+  if (CLIENT_OUT_OF_SCOPE_RULES.has(id)) return false;
+  if (ruleStatus.get(id) !== 'active') return false;
+  return !productionRuleRefs.has(id);
+});
+addCheck({
+  name: 'active rules have a production code block',
+  status: orphanRules.length === 0 ? 'passed' : 'failed',
+  orphan_rules: orphanRules,
+});
+
+// 映射可索引：每个代码块 ID 必须出现在 ADUS 规则视图里。
+let unindexedBlockIds = [];
+try {
+  const adusPath = JSON.parse(readText('governance.config.json')).adus_path;
+  const adusText = readText(adusPath);
+  unindexedBlockIds = [...codeBlockOwners.keys()].filter(id => !adusText.includes(id));
+} catch (error) {
+  unindexedBlockIds = [`ADUS-UNAVAILABLE:${error.message}`];
+}
+addCheck({
+  name: 'code block IDs appear in ADUS rule view',
+  status: unindexedBlockIds.length === 0 ? 'passed' : 'failed',
+  unindexed_block_ids: unindexedBlockIds,
+});
+
 for (const ruleId of rules) {
   if (CLIENT_OUT_OF_SCOPE_RULES.has(ruleId)) continue;
   if (!activeReferenceMayUseRule(ruleStatus.get(ruleId))) continue;

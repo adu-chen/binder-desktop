@@ -1,3 +1,4 @@
+//! @GOV-EXEMPT: 运行时类型再导出，无执行分支；行为由 turn_runtime/tool_loop 的 @GOV 块承接。
 //! Agent runtime 的兼容门面。
 //!
 //! 应用组合根继续从单一入口装配 command；具体实现按 AG-TURN、AG-TOOL、TaskRun、

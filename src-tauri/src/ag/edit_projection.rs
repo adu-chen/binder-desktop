@@ -8,6 +8,14 @@ use crate::ag;
 use crate::ipc::IpcError;
 
 #[allow(clippy::too_many_arguments)]
+/**
+ * @GOV
+ * codes:    BR-DE-DATA-002-DATA-AG-AG-TOOL-060, BR-DE-DATA-001-DATA-AG-AG-TOOL-060
+ * type:     DATA
+ * chain:    AG-TOOL, DE-DIFF
+ * rules:    BR-DE-DATA-002, BR-DE-DATA-001
+ * boundary: in=ProposeEditParamsAndDocumentSnapshot | out=EditProjectionDraftWithBeforeAfterPayload | does_not=generatePendingDiffPersistProposalOrWriteFile
+ */
 pub(super) fn build_edit_projection(
     params: &serde_json::Value,
     edit_operation: AgentEditOperation,

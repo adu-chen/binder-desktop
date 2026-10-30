@@ -1,3 +1,4 @@
+//! @GOV-EXEMPT: 纯类型定义（编辑操作枚举与结果投影类型），无执行分支；语义由 edit_projection/edit_runtime 的 @GOV 块承接。
 //! Agent 编辑运行时内部类型与跨 DE/WS 的结果投影。
 
 use crate::types::DiffProjection;

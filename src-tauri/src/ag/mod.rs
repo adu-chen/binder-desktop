@@ -1,3 +1,4 @@
+//! @GOV-EXEMPT: 模块声明与再导出，无执行分支；行为由各子模块的 @GOV 块承接。
 //! Agent 1.0 回合、工具、Prompt、历史与辅助运行时。
 //!
 //! 唯一主回合 Profile 为 `agent-edit-1.0`。SM-AG-01/02/03/04、显式编辑目标集、受控 Proposal 与

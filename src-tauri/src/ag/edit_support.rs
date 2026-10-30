@@ -98,6 +98,14 @@ pub(crate) const MAX_BLOCK_OPS_PER_CALL: usize = MAX_BLOCK_OPS_PER_BATCH * 5;
 /// context: a few blocks can still carry an entire chapter. Bytes are the real budget.
 pub(crate) const MAX_BLOCK_OPS_BYTES_PER_BATCH: usize = 64 * 1024;
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-058
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * boundary: in=ProposeEditParamsAndTargetExistence | out=ValidatedAgentEditOperationOrIpcError | does_not=executeEditPersistProposalOrWriteFile
+ */
 pub(super) fn resolve_agent_edit_operation(
     params: &serde_json::Value,
     target_exists: bool,
@@ -311,6 +319,14 @@ pub(super) fn resolve_agent_edit_operation(
 
 /// P5 锚点校验（AG-R2-01）：返回首个自相矛盾的锚点描述；无冲突返回 None。
 /// 检查 insert_before/insert_after 是否引用同一 blockId 作为多个操作的锚点。
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-059
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit
+ */
 pub(super) fn find_block_ops_anchor_conflict(
     operations: Option<&serde_json::Value>,
 ) -> Option<String> {
