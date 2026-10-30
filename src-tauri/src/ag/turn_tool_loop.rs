@@ -1759,6 +1759,177 @@ fn prepare_task_run_for_tool(
     None
 }
 
+/// 计算本次 ToolCall 的一次性 CapabilityGrantV2，并完成注册/权限/参数校验与参数纠错计数。
+/// Propagate = 事件写失败或授权边界发现回合已终结；Settle = 参数纠错达到上限，由调用方结算终态。
+struct ToolGrantFacts<'a> {
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    runtime_profile: &'a str,
+    turn_id: &'a str,
+    has_task_run: bool,
+    capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
+    model_call_ordinal: usize,
+    remaining_tool_calls: u32,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    tools: &'a serde_json::Value,
+    ws_root: Option<&'a str>,
+    read_failure_final_pending: bool,
+    arg_parse_error_none: bool,
+    final_only_after_rejection: bool,
+    max_corrections: usize,
+    call: &'a crate::ent::gateway::GwToolCall,
+    params: &'a serde_json::Value,
+    capability_use_tracker: &'a mut ag::tool_registry::CapabilityGrantUseTrackerV2,
+    parameter_correction_rounds: &'a mut usize,
+    correction_counted_this_round: &'a mut bool,
+    parameter_correction_pending: &'a mut bool,
+    final_only_correction_pending: &'a mut bool,
+}
+
+enum ToolGrantFailure {
+    Propagate(IpcError),
+    Settle(IpcError),
+}
+
+struct ToolGrantOutcome {
+    execution_grant: ag::tool_registry::CapabilityGrantV2,
+    tool_decision: Option<ag::tool::ToolDecision>,
+    parameter_contract_rejection: bool,
+}
+
+fn resolve_execution_grant_and_decision(
+    emitter: &TurnEventEmitter<'_>,
+    facts: ToolGrantFacts<'_>,
+) -> Result<ToolGrantOutcome, ToolGrantFailure> {
+    let computed_at_seq = emitter
+        .record_internal(
+            "capability_grant_boundary",
+            serde_json::json!({
+                "toolCallId": &facts.call.id,
+                "gateAttempt": facts.model_call_ordinal,
+                "remainingToolCalls": facts.remaining_tool_calls,
+            }),
+        )
+        .map_err(ToolGrantFailure::Propagate)?
+        .ok_or_else(|| {
+            ToolGrantFailure::Propagate(IpcError::new(
+                "AG_CAPABILITY_GRANT_TERMINAL",
+                "AgentTurn 已终结，不能再计算工具执行授权",
+                false,
+                false,
+            ))
+        })?;
+    let mut action_factors = facts.capability_factors.clone();
+    action_factors.has_task_run = facts.has_task_run;
+    action_factors.gate_attempt = facts.model_call_ordinal as u32;
+    action_factors.gate_passed = true;
+    action_factors.remaining_tool_calls = facts.remaining_tool_calls;
+    action_factors.cancelled = facts.cancelled.load(Ordering::Acquire);
+    action_factors.terminal = facts.latch.is_set();
+    let execution_grant = ag::tool_registry::resolve_capability_grant_v2(
+        facts.runtime_profile,
+        facts.turn_id,
+        &facts.explicit_edit_target_set.paths(),
+        action_factors,
+        ag::tool_registry::CapabilityGrantPurposeV2::ToolCall {
+            tool_call_id: facts.call.id.clone(),
+            computed_at_seq,
+        },
+    );
+    emitter
+        .record_internal(
+            "capability_grant_computed",
+            serde_json::json!({
+                "grantId": &execution_grant.grant_id,
+                "toolCallId": &facts.call.id,
+                "computedAtSeq": computed_at_seq,
+                "authorizationFactsHash": &execution_grant.authorization_facts_hash,
+                "allowedToolCount": execution_grant.allowed_tools.len(),
+            }),
+        )
+        .map_err(ToolGrantFailure::Propagate)?;
+    let tool_was_visible = tool_is_visible_in_manifest(facts.tools, &facts.call.name);
+    let tool_decision = facts.arg_parse_error_none.then(|| {
+        let validated = ag::tool_registry::validate_requested_tool_for_grant(
+            &facts.call.name,
+            facts.params,
+            &execution_grant,
+            facts.turn_id,
+            &facts.call.id,
+            computed_at_seq,
+            facts.ws_root.map(std::path::Path::new),
+            facts.capability_use_tracker,
+        );
+        if facts.read_failure_final_pending {
+            ag::tool::ToolDecision::Reject(
+                "重复只读失败后禁止继续工具调用；此前证据保留，请说明未完成范围。".into(),
+            )
+        } else if matches!(validated, ag::tool::ToolDecision::Allow) && !tool_was_visible {
+            ag::tool::ToolDecision::Reject(format!(
+                "工具 {} 不在当前 Prompt Tool Manifest 中",
+                facts.call.name
+            ))
+        } else {
+            validated
+        }
+    });
+    let parameter_contract_rejection = tool_decision
+        .as_ref()
+        .and_then(|decision| match decision {
+            ag::tool::ToolDecision::Reject(reason) => Some(reason.as_str()),
+            ag::tool::ToolDecision::Allow | ag::tool::ToolDecision::InvalidArguments { .. } => None,
+        })
+        .is_some_and(|reason| {
+            reason.starts_with(&format!("工具 {} 参数", facts.call.name))
+                || reason.starts_with("工具参数结构")
+        })
+        || matches!(
+            tool_decision.as_ref(),
+            Some(ag::tool::ToolDecision::InvalidArguments { .. })
+        );
+    let parameter_diagnostic = match tool_decision.as_ref() {
+        Some(ag::tool::ToolDecision::InvalidArguments {
+            field, constraint, ..
+        }) => Some(serde_json::json!({"fieldPath":field,"constraint":constraint})),
+        _ => None,
+    };
+    if parameter_contract_rejection && !*facts.correction_counted_this_round {
+        *facts.parameter_correction_pending = true;
+        if facts.final_only_after_rejection {
+            // Append only after the assistant tool-call/result group is paired.
+            *facts.final_only_correction_pending = true;
+        }
+        *facts.correction_counted_this_round = true;
+        *facts.parameter_correction_rounds += 1;
+        emitter
+            .record_internal(
+                "tool_parameter_contract_rejected",
+                serde_json::json!({
+                    "code":"AG_TOOL_ARG",
+                    "rejectionStage":"tool_validation",
+                    "toolName": &facts.call.name,
+                    "parameterKeys": safe_tool_params(facts.params)["parameterKeys"],
+                    "parameterDiagnostic": parameter_diagnostic,
+                    "correctionAttempt": *facts.parameter_correction_rounds,
+                }),
+            )
+            .map_err(ToolGrantFailure::Propagate)?;
+        if *facts.parameter_correction_rounds > facts.max_corrections {
+            return Err(ToolGrantFailure::Settle(IpcError::new(
+                "AG_MODEL_CORRECTION_LIMIT",
+                "本回合参数拒绝已超过独立纠错上限；本次未执行，此前结果保留。请检查参数或显式重试。",
+                true,
+                false,
+            )));
+        }
+    }
+    Ok(ToolGrantOutcome {
+        execution_grant,
+        tool_decision,
+        parameter_contract_rejection,
+    })
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -1766,7 +1937,7 @@ fn prepare_task_run_for_tool(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,resolve_execution_grant_and_decision,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2848,127 +3019,36 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     let context_failure_summary = context_refresh_error.as_ref().map(|error| format!("[{}] 专业上下文未就绪、已变化或采集失败；本次工具未执行，请就绪后重新提交", error.code));
                     // 每个 ToolCall 在真实 GatePassed 后重新取得一次性 CapabilityGrantV2。Prompt Manifest
                     // 只决定模型当时可见的工具，不能拿来执行；TaskPlan/IntentResult/ToolResult 内容均不授权。
-                    let computed_at_seq = event_emitter
-                        .record_internal(
-                            "capability_grant_boundary",
-                            serde_json::json!({
-                                "toolCallId": &c.id,
-                                "gateAttempt": model_call_ordinal,
-                                "remainingToolCalls": remaining_tool_calls,
-                            }),
-                        )?
-                        .ok_or_else(|| {
-                            IpcError::new(
-                                "AG_CAPABILITY_GRANT_TERMINAL",
-                                "AgentTurn 已终结，不能再计算工具执行授权",
-                                false,
-                                false,
-                            )
-                        })?;
-                    let mut action_factors = capability_factors.clone();
-                    action_factors.has_task_run = task_run_id.is_some();
-                    action_factors.gate_attempt = model_call_ordinal as u32;
-                    action_factors.gate_passed = true;
-                    action_factors.remaining_tool_calls = remaining_tool_calls;
-                    action_factors.cancelled = cancelled.load(Ordering::Acquire);
-                    action_factors.terminal = terminal_latch.is_set();
-                    let execution_grant = ag::tool_registry::resolve_capability_grant_v2(
-                        &runtime_profile,
-                        &turn_id,
-                        &explicit_edit_target_set.paths(),
-                        action_factors,
-                        ag::tool_registry::CapabilityGrantPurposeV2::ToolCall {
-                            tool_call_id: c.id.clone(),
-                            computed_at_seq,
+                    let grant = match resolve_execution_grant_and_decision(
+                        &event_emitter,
+                        ToolGrantFacts {
+                            latch: &terminal_latch,
+                            cancelled: &cancelled,
+                            runtime_profile: &runtime_profile,
+                            turn_id: &turn_id,
+                            has_task_run: task_run_id.is_some(),
+                            capability_factors: &capability_factors,
+                            model_call_ordinal,
+                            remaining_tool_calls,
+                            explicit_edit_target_set: &explicit_edit_target_set,
+                            tools: &tools,
+                            ws_root: ws_root.as_deref(),
+                            read_failure_final_pending,
+                            arg_parse_error_none: arg_parse_error.is_none(),
+                            final_only_after_rejection,
+                            max_corrections: execution_policy.max_corrections,
+                            call: c,
+                            params: &params,
+                            capability_use_tracker: &mut capability_use_tracker,
+                            parameter_correction_rounds: &mut parameter_correction_rounds,
+                            correction_counted_this_round: &mut correction_counted_this_round,
+                            parameter_correction_pending: &mut parameter_correction_pending,
+                            final_only_correction_pending: &mut final_only_correction_pending,
                         },
-                    );
-                    event_emitter.record_internal(
-                        "capability_grant_computed",
-                        serde_json::json!({
-                            "grantId": &execution_grant.grant_id,
-                            "toolCallId": &c.id,
-                            "computedAtSeq": computed_at_seq,
-                            "authorizationFactsHash": &execution_grant.authorization_facts_hash,
-                            "allowedToolCount": execution_grant.allowed_tools.len(),
-                        }),
-                    )?;
-                    let tool_was_visible = tool_is_visible_in_manifest(&tools, &c.name);
-                    let tool_decision = arg_parse_error.is_none().then(|| {
-                        let validated = ag::tool_registry::validate_requested_tool_for_grant(
-                            &c.name,
-                            &params,
-                            &execution_grant,
-                            &turn_id,
-                            &c.id,
-                            computed_at_seq,
-                            ws_root.as_deref().map(std::path::Path::new),
-                            &mut capability_use_tracker,
-                        );
-                        if read_failure_final_pending {
-                            ag::tool::ToolDecision::Reject(
-                                "重复只读失败后禁止继续工具调用；此前证据保留，请说明未完成范围。"
-                                    .into(),
-                            )
-                        } else if matches!(validated, ag::tool::ToolDecision::Allow)
-                            && !tool_was_visible
-                        {
-                            ag::tool::ToolDecision::Reject(format!(
-                                "工具 {} 不在当前 Prompt Tool Manifest 中",
-                                c.name
-                            ))
-                        } else {
-                            validated
-                        }
-                    });
-                    let parameter_contract_rejection = tool_decision
-                        .as_ref()
-                        .and_then(|decision| match decision {
-                            ag::tool::ToolDecision::Reject(reason) => Some(reason.as_str()),
-                            ag::tool::ToolDecision::Allow
-                            | ag::tool::ToolDecision::InvalidArguments { .. } => None,
-                        })
-                        .is_some_and(|reason| {
-                            reason.starts_with(&format!("工具 {} 参数", c.name))
-                                || reason.starts_with("工具参数结构")
-                        })
-                        || matches!(
-                            tool_decision.as_ref(),
-                            Some(ag::tool::ToolDecision::InvalidArguments { .. })
-                        );
-                    let parameter_diagnostic = match tool_decision.as_ref() {
-                        Some(ag::tool::ToolDecision::InvalidArguments {
-                            field,
-                            constraint,
-                            ..
-                        }) => Some(serde_json::json!({"fieldPath":field,"constraint":constraint})),
-                        _ => None,
-                    };
-                    if parameter_contract_rejection && !correction_counted_this_round {
-                        parameter_correction_pending = true;
-                        if final_only_after_rejection {
-                            // Append only after the assistant tool-call/result group is paired.
-                            final_only_correction_pending = true;
-                        }
-                        correction_counted_this_round = true;
-                        parameter_correction_rounds += 1;
-                        event_emitter.record_internal(
-                            "tool_parameter_contract_rejected",
-                            serde_json::json!({
-                                "code":"AG_TOOL_ARG",
-                                "rejectionStage":"tool_validation",
-                                "toolName": &c.name,
-                                "parameterKeys": safe_tool_params(&params)["parameterKeys"],
-                                "parameterDiagnostic": parameter_diagnostic,
-                                "correctionAttempt": parameter_correction_rounds,
-                            }),
-                        )?;
-                        if parameter_correction_rounds > execution_policy.max_corrections {
-                            let terminal_error = IpcError::new(
-                                "AG_MODEL_CORRECTION_LIMIT",
-                                "本回合参数拒绝已超过独立纠错上限；本次未执行，此前结果保留。请检查参数或显式重试。",
-                                true,
-                                false,
-                            );
+                    ) {
+                        Ok(grant) => grant,
+                        Err(ToolGrantFailure::Propagate(error)) => return Err(error),
+                        Err(ToolGrantFailure::Settle(error)) => {
                             advance_or_finish!(TlEv::LoopError);
                             settle_and_emit_ag_turn_error(
                                 &state,
@@ -2977,11 +3057,14 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                                 &terminal_latch,
                                 &app,
                                 &turn_id,
-                                &terminal_error,
+                                &error,
                             );
                             return Ok(());
                         }
-                    }
+                    };
+                    let execution_grant = grant.execution_grant;
+                    let tool_decision = grant.tool_decision;
+                    let parameter_contract_rejection = grant.parameter_contract_rejection;
                     let scope_candidates = compute_scope_candidates(
                         tool_decision.as_ref(),
                         &c.name,
