@@ -11,9 +11,9 @@ use super::turn_control::{
     park_agent_turn_for_decision, AgentTurnRuntimeCheckpoint,
 };
 use super::turn_events::{
-    emit_ag01, emit_ag02, emit_ag_turn_cancelled, emit_ag_turn_denied, emit_ag_turn_done,
-    emit_ag_turn_error, emit_ag_turn_error_from, settle_and_emit_ag_turn_error,
-    settle_and_emit_ag_turn_error_from, sm_error, TurnEventEmitter,
+    emit_ag01, emit_ag02, emit_ag_turn_denied, emit_ag_turn_done, emit_ag_turn_error,
+    emit_ag_turn_error_from, settle_and_emit_ag_turn_error, settle_and_emit_ag_turn_error_from,
+    sm_error, TurnEventEmitter,
 };
 use super::turn_prompt::{prepare_turn_prompt, PreparedTurnPrompt};
 use crate::ag;
@@ -951,6 +951,172 @@ fn emit_project_report(
     )
 }
 
+/// 记录一次 ToolCall 的结果、证据与回执，并把同一回执回注模型。
+/// 规则由 BR-AG-DATA-011（回执/回注）、BR-AG-OBS-001（证据账本）与
+/// BR-AG-STATE-002（ToolResult 事实）的既有块承接；本函数不新增授权、终态或错误分类判断。
+struct ToolResultFacts<'a> {
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    tool_call_id: &'a str,
+    tool_name: &'a str,
+    params: &'a serde_json::Value,
+    read_ctx: &'a ag::blocks::AgentReadContext,
+    result: &'a str,
+    success: bool,
+    validation_allows_execution: bool,
+    execution_failure: Option<&'a IpcError>,
+    context_failure_summary: Option<String>,
+    identity: &'a crate::types::ToolCallReceiptIdentityV1,
+    diff_events: &'a [(String, u32, u32, String, String)],
+    decision: Option<&'a crate::types::DecisionRequestV1>,
+    repeated_read_failure: bool,
+    control_error: bool,
+    task_run_id: Option<&'a str>,
+}
+
+fn record_tool_result(
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    facts: ToolResultFacts<'_>,
+    messages: &mut Vec<serde_json::Value>,
+    continuation_messages: &mut Vec<serde_json::Value>,
+) -> Result<bool, IpcError> {
+    let pending_evidence = if facts.success {
+        ag::tool_exec::successful_tool_evidence(
+            facts.read_ctx,
+            facts.tool_name,
+            facts.params,
+            facts.result,
+        )
+    } else {
+        Vec::new()
+    };
+    let evidence_ids = ag::tool_exec::evidence_ids(
+        facts.workspace_id,
+        facts.turn_id,
+        facts.tool_call_id,
+        &pending_evidence,
+    );
+    let execution_receipt = ag::tool_exec::tool_call_receipt(
+        facts.identity.clone(),
+        facts.validation_allows_execution,
+        facts.success,
+        facts.execution_failure,
+        tool_result_references(
+            facts
+                .diff_events
+                .iter()
+                .map(|(_, _, _, diff_id, _)| diff_id.clone()),
+            facts.decision.map(|decision| decision.request_id.as_str()),
+        ),
+        evidence_ids.clone(),
+    );
+    let tool_result_event = emitter.emit_recorded(
+        latch,
+        AgTurnEventPayload::ToolResult {
+            tool_call_id: facts.tool_call_id.to_string(),
+            tool_name: facts.tool_name.to_string(),
+            result: facts.context_failure_summary.unwrap_or_else(|| {
+                safe_tool_receipt_summary(
+                    facts.tool_name,
+                    facts.validation_allows_execution,
+                    facts.success,
+                )
+            }),
+            success: facts.success,
+            evidence_ids: evidence_ids.clone(),
+            execution_receipt: Some(execution_receipt.clone()),
+            diagnostic: (!facts.success).then(|| {
+                crate::ipc::AgentFailureDiagnostic::observed(
+                    if facts.validation_allows_execution {
+                        "tool_execution"
+                    } else {
+                        "tool_validation"
+                    },
+                    facts
+                        .execution_failure
+                        .map(|error| error.code.as_str())
+                        .unwrap_or(""),
+                )
+            }),
+        },
+    )?;
+    let Some(source_event) = tool_result_event else {
+        return Ok(false);
+    };
+    let evidence_items = ag::tool_exec::materialize_evidence(
+        facts.workspace_id,
+        facts.turn_id,
+        &source_event.event_id,
+        source_event.seq,
+        facts.tool_call_id,
+        pending_evidence,
+    );
+    if !evidence_items.is_empty() {
+        emitter.record_internal(
+            "evidence_recorded",
+            serde_json::json!({ "evidenceItems": evidence_items }),
+        )?;
+    }
+    if facts.repeated_read_failure {
+        emitter.record_internal(
+            "repeated_read_failure_detected",
+            serde_json::json!({
+                "toolName": facts.tool_name,
+                "failureCode": facts.execution_failure.map(|error| error.code.as_str()),
+                "attempt": 2,
+                "parametersLogged": false,
+            }),
+        )?;
+    }
+    for (proposal_batch_id, group_index, group_count, diff_id, rel_path) in facts.diff_events {
+        emitter.emit(
+            latch,
+            AgTurnEventPayload::DiffProposed {
+                proposal_batch_id: proposal_batch_id.clone(),
+                group_index: *group_index,
+                group_count: *group_count,
+                diff_id: diff_id.clone(),
+                rel_path: rel_path.clone(),
+                task_run_id: facts.task_run_id.map(str::to_string),
+            },
+        )?;
+    }
+    let tool_message = model_tool_result_message(
+        facts.tool_call_id,
+        facts.result,
+        &evidence_ids,
+        &execution_receipt,
+    );
+    messages.push(tool_message.clone());
+    if !facts.control_error {
+        continuation_messages.push(tool_message);
+    }
+    Ok(true)
+}
+
+/// 结算取消终态：TaskRun 取消 + SM-AG-01 Cancelled 广播。
+/// 规则由 BR-AG-STATE-001 / BR-SYS-STATE-007 的既有块承接；调用方负责先推进 SM-AG-02 取消转移。
+fn finish_cancelled_turn<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    turn_state: ag::turn::TurnState,
+) {
+    if let Ok(conn) = state.db.lock() {
+        settle_optional_task_run(
+            &conn,
+            task_run_id,
+            turn_id,
+            ag::task::TurnOutcome::Cancelled,
+        );
+    }
+    super::turn_events::emit_ag_turn_cancelled_from(emitter, latch, app, turn_id, turn_state);
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -958,7 +1124,7 @@ fn emit_project_report(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -1146,19 +1312,13 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
             if !ag::tool::is_terminal(tool_loop_state) {
                 advance_or_finish!(TlEv::Cancel);
             }
-            if let Ok(conn) = state.db.lock() {
-                settle_optional_task_run(
-                    &conn,
-                    task_run_id.as_deref(),
-                    &turn_id,
-                    ag::task::TurnOutcome::Cancelled,
-                );
-            }
-            super::turn_events::emit_ag_turn_cancelled_from(
+            finish_cancelled_turn(
+                &state,
+                &app,
                 &event_emitter,
                 &terminal_latch,
-                &app,
                 &turn_id,
+                task_run_id.as_deref(),
                 turn_state,
             );
             return Ok(());
@@ -1202,19 +1362,13 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         serde_json::json!({"attempt": model_call_ordinal, "outcome": "cancelled"}),
                     )?;
                     // The preceding nested loop completed before this Gate wait.
-                    if let Ok(conn) = state.db.lock() {
-                        settle_optional_task_run(
-                            &conn,
-                            task_run_id.as_deref(),
-                            &turn_id,
-                            ag::task::TurnOutcome::Cancelled,
-                        );
-                    }
-                    super::turn_events::emit_ag_turn_cancelled_from(
+                    finish_cancelled_turn(
+                        &state,
+                        &app,
                         &event_emitter,
                         &terminal_latch,
-                        &app,
                         &turn_id,
+                        task_run_id.as_deref(),
                         turn_state,
                     );
                     return Ok(());
@@ -1351,15 +1505,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     serde_json::json!({"roundIndex": model_call_ordinal, "outcome": "cancelled"}),
                 )?;
                 advance_or_finish!(TlEv::Cancel);
-                if let Ok(conn) = state.db.lock() {
-                    settle_optional_task_run(
-                        &conn,
-                        task_run_id.as_deref(),
-                        &turn_id,
-                        ag::task::TurnOutcome::Cancelled,
-                    );
-                }
-                emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
+                finish_cancelled_turn(
+                    &state,
+                    &app,
+                    &event_emitter,
+                    &terminal_latch,
+                    &turn_id,
+                    task_run_id.as_deref(),
+                    turn_state,
+                );
                 return Ok(());
             }
             Ok(Err(error)) => {
@@ -1925,15 +2079,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 for (call_index, c) in calls.iter().enumerate() {
                     if cancelled.load(Ordering::Acquire) {
                         advance_or_finish!(TlEv::Cancel);
-                        if let Ok(conn) = state.db.lock() {
-                            settle_optional_task_run(
-                                &conn,
-                                task_run_id.as_deref(),
-                                &turn_id,
-                                ag::task::TurnOutcome::Cancelled,
-                            );
-                        }
-                        emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
+                        finish_cancelled_turn(
+                            &state,
+                            &app,
+                            &event_emitter,
+                            &terminal_latch,
+                            &turn_id,
+                            task_run_id.as_deref(),
+                            turn_state,
+                        );
                         return Ok(());
                     }
                     advance_or_finish!(TlEv::ToolRequest);
@@ -2750,15 +2904,15 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                     }
                     if cancelled.load(Ordering::Acquire) {
                         advance_or_finish!(TlEv::Cancel);
-                        if let Ok(conn) = state.db.lock() {
-                            settle_optional_task_run(
-                                &conn,
-                                task_run_id.as_deref(),
-                                &turn_id,
-                                ag::task::TurnOutcome::Cancelled,
-                            );
-                        }
-                        emit_ag_turn_cancelled(&event_emitter, &terminal_latch, &app, &turn_id);
+                        finish_cancelled_turn(
+                            &state,
+                            &app,
+                            &event_emitter,
+                            &terminal_latch,
+                            &turn_id,
+                            task_run_id.as_deref(),
+                            turn_state,
+                        );
                         return Ok(());
                     }
                     if validation_allows_execution {
@@ -2805,117 +2959,32 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             }))?;
                         }
                     }
-                    let pending_evidence = if success {
-                        ag::tool_exec::successful_tool_evidence(
-                            &read_ctx, &c.name, &params, &result,
-                        )
-                    } else {
-                        Vec::new()
-                    };
-                    let evidence_ids = ag::tool_exec::evidence_ids(
-                        &workspace_id_for_turn,
-                        &turn_id,
-                        &c.id,
-                        &pending_evidence,
-                    );
-                    let execution_receipt = ag::tool_exec::tool_call_receipt(
-                        capability_identity.clone(),
-                        validation_allows_execution,
-                        success,
-                        execution_failure.as_ref(),
-                        tool_result_references(
-                            diff_events_after_tool
-                                .iter()
-                                .map(|(_, _, _, diff_id, _)| diff_id.clone()),
-                            decision_event_after_tool
-                                .as_ref()
-                                .map(|decision| decision.request_id.as_str()),
-                        ),
-                        evidence_ids.clone(),
-                    );
-                    let tool_result_event = event_emitter.emit_recorded(
+                    if !record_tool_result(
+                        &event_emitter,
                         &terminal_latch,
-                        AgTurnEventPayload::ToolResult {
-                            tool_call_id: c.id.clone(),
-                            tool_name: c.name.clone(),
-                            result: context_failure_summary.unwrap_or_else(|| {
-                                safe_tool_receipt_summary(
-                                    &c.name,
-                                    validation_allows_execution,
-                                    success,
-                                )
-                            }),
+                        ToolResultFacts {
+                            workspace_id: &workspace_id_for_turn,
+                            turn_id: &turn_id,
+                            tool_call_id: &c.id,
+                            tool_name: &c.name,
+                            params: &params,
+                            read_ctx: &read_ctx,
+                            result: &result,
                             success,
-                            evidence_ids: evidence_ids.clone(),
-                            execution_receipt: Some(execution_receipt.clone()),
-                            diagnostic: (!success).then(|| {
-                                crate::ipc::AgentFailureDiagnostic::observed(
-                                    if validation_allows_execution {
-                                        "tool_execution"
-                                    } else {
-                                        "tool_validation"
-                                    },
-                                    execution_failure
-                                        .as_ref()
-                                        .map(|error| error.code.as_str())
-                                        .unwrap_or(""),
-                                )
-                            }),
+                            validation_allows_execution,
+                            execution_failure: execution_failure.as_ref(),
+                            context_failure_summary,
+                            identity: &capability_identity,
+                            diff_events: &diff_events_after_tool,
+                            decision: decision_event_after_tool.as_ref(),
+                            repeated_read_failure,
+                            control_error: control_error.is_some(),
+                            task_run_id: task_run_id.as_deref(),
                         },
-                    )?;
-                    if let Some(source_event) = tool_result_event {
-                        let evidence_items = ag::tool_exec::materialize_evidence(
-                            &workspace_id_for_turn,
-                            &turn_id,
-                            &source_event.event_id,
-                            source_event.seq,
-                            &c.id,
-                            pending_evidence,
-                        );
-                        if !evidence_items.is_empty() {
-                            event_emitter.record_internal(
-                                "evidence_recorded",
-                                serde_json::json!({ "evidenceItems": evidence_items }),
-                            )?;
-                        }
-                    } else {
+                        &mut messages,
+                        &mut continuation_messages,
+                    )? {
                         return Ok(());
-                    }
-                    if repeated_read_failure {
-                        event_emitter.record_internal(
-                            "repeated_read_failure_detected",
-                            serde_json::json!({
-                                "toolName": &c.name,
-                                "failureCode": execution_failure.as_ref().map(|error| error.code.as_str()),
-                                "attempt": 2,
-                                "parametersLogged": false,
-                            }),
-                        )?;
-                    }
-                    for (proposal_batch_id, group_index, group_count, diff_id, rel_path) in
-                        diff_events_after_tool
-                    {
-                        event_emitter.emit(
-                            &terminal_latch,
-                            AgTurnEventPayload::DiffProposed {
-                                proposal_batch_id,
-                                group_index,
-                                group_count,
-                                diff_id,
-                                rel_path,
-                                task_run_id: task_run_id.clone(),
-                            },
-                        )?;
-                    }
-                    let tool_message = model_tool_result_message(
-                        &c.id,
-                        &result,
-                        &evidence_ids,
-                        &execution_receipt,
-                    );
-                    messages.push(tool_message.clone());
-                    if control_error.is_none() {
-                        continuation_messages.push(tool_message);
                     }
                     if let Some(decision) = decision_event_after_tool {
                         if final_only_correction_pending {
@@ -2946,19 +3015,13 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                         );
                         if let Err(error) = park_result {
                             if cancelled.load(Ordering::Acquire) {
-                                if let Ok(conn) = state.db.lock() {
-                                    settle_optional_task_run(
-                                        &conn,
-                                        task_run_id.as_deref(),
-                                        &turn_id,
-                                        ag::task::TurnOutcome::Cancelled,
-                                    );
-                                }
-                                super::turn_events::emit_ag_turn_cancelled_from(
+                                finish_cancelled_turn(
+                                    &state,
+                                    &app,
                                     &event_emitter,
                                     &terminal_latch,
-                                    &app,
                                     &turn_id,
+                                    task_run_id.as_deref(),
                                     turn_state,
                                 );
                                 return Ok(());
