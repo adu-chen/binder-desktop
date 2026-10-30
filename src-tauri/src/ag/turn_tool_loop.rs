@@ -2589,6 +2589,90 @@ fn park_clarification<R: tauri::Runtime>(
     Ok(())
 }
 
+/// final 回答的收尾：派生/emit ProjectReport，并在成功时执行额度收尾与终态结算。
+/// ProjectReport 失败仍按原路径结算 TaskRun Failed 并广播 Finalizing 错误；不推进 SM-AG-01。
+struct FinalAnswerFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    task_run_id: Option<&'a str>,
+    intent: &'a ag::context::IntentResultV2,
+    active_doc_path: Option<&'a str>,
+    findings: &'a [ag::model_output::ModelFinalFindingV2],
+    any_tool_called: bool,
+    budget_closing: bool,
+    completion: Option<&'a ag::model_output::ModelCompletion>,
+    side_effect_intent: &'a ag::context::SideEffectIntentV2,
+    structure_warning: Option<&'a str>,
+    stop_reason: &'a str,
+    remaining_tool_calls: u32,
+    remaining_rounds: usize,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-005-EFFECT-AG-AG-TURN-079, BR-AG-OBS-001-EFFECT-AG-AG-TURN-079
+ * type:     EFFECT
+ * chain:    AG-TURN
+ * rules:    BR-AG-STATE-005, BR-AG-OBS-001
+ * boundary: in=FinalAnswerIntentFindingsCompletionAndExecutionBudget | out=ProjectReportEventCompletedSettlementOrReportFailureSettlement | delegate=emit_project_report,settle_completed_turn | consumer=BR-AG-STATE-005,BR-AG-OBS-001 | does_not=advanceToolLoopTransitionOrCreateNewEvidence
+ */
+fn finish_final_answer<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: FinalAnswerFacts<'_>,
+) -> Result<(), IpcError> {
+    match emit_project_report(
+        facts.state,
+        emitter,
+        facts.latch,
+        facts.workspace_id,
+        facts.turn_id,
+        facts.intent,
+        facts.active_doc_path,
+        facts.findings,
+        facts.any_tool_called,
+    ) {
+        Ok(true) => {}
+        Ok(false) => return Ok(()),
+        Err(error) => {
+            if let Ok(conn) = facts.state.db.lock() {
+                settle_optional_task_run(
+                    &conn,
+                    facts.task_run_id,
+                    facts.turn_id,
+                    ag::task::TurnOutcome::Failed,
+                );
+            }
+            emit_ag_turn_error_from(
+                emitter,
+                facts.latch,
+                app,
+                facts.turn_id,
+                &error,
+                ag::turn::TurnState::Finalizing,
+            );
+            return Ok(());
+        }
+    }
+    settle_completed_turn(
+        facts.state,
+        app,
+        emitter,
+        facts.latch,
+        facts.turn_id,
+        facts.task_run_id,
+        facts.budget_closing,
+        facts.completion,
+        facts.side_effect_intent,
+        facts.structure_warning,
+        facts.stop_reason,
+        facts.remaining_tool_calls,
+        facts.remaining_rounds,
+    )
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -2596,7 +2680,7 @@ fn park_clarification<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,terminal_tool_requirement_error,park_clarification,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,await_round_gate,run_provider_round,terminal_tool_requirement_error,park_clarification,finish_final_answer,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -3139,53 +3223,27 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::ModelFinal)
                     .ok_or_else(sm_error)?;
                 emit_ag01(&app, &turn_id, turn_state);
-                match emit_project_report(
-                    &state,
-                    &event_emitter,
-                    &terminal_latch,
-                    &workspace_id_for_turn,
-                    &turn_id,
-                    &intent_result,
-                    active_doc_path.as_deref(),
-                    &control.findings,
-                    any_tool_called,
-                ) {
-                    Ok(true) => {}
-                    Ok(false) => return Ok(()),
-                    Err(error) => {
-                        if let Ok(conn) = state.db.lock() {
-                            settle_optional_task_run(
-                                &conn,
-                                task_run_id.as_deref(),
-                                &turn_id,
-                                ag::task::TurnOutcome::Failed,
-                            );
-                        }
-                        emit_ag_turn_error_from(
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            &error,
-                            ag::turn::TurnState::Finalizing,
-                        );
-                        return Ok(());
-                    }
-                }
-                settle_completed_turn(
-                    &state,
+                finish_final_answer(
                     &app,
                     &event_emitter,
-                    &terminal_latch,
-                    &turn_id,
-                    task_run_id.as_deref(),
-                    budget_closing,
-                    control.completion.as_ref(),
-                    &control.intent.side_effect_intent,
-                    structure_warning,
-                    &stop_reason,
-                    remaining_tool_calls,
-                    remaining_rounds,
+                    FinalAnswerFacts {
+                        state,
+                        latch: &terminal_latch,
+                        workspace_id: &workspace_id_for_turn,
+                        turn_id: &turn_id,
+                        task_run_id: task_run_id.as_deref(),
+                        intent: &intent_result,
+                        active_doc_path: active_doc_path.as_deref(),
+                        findings: &control.findings,
+                        any_tool_called,
+                        budget_closing,
+                        completion: control.completion.as_ref(),
+                        side_effect_intent: &control.intent.side_effect_intent,
+                        structure_warning,
+                        stop_reason: &stop_reason,
+                        remaining_tool_calls,
+                        remaining_rounds,
+                    },
                 )?;
                 return Ok(());
             }
