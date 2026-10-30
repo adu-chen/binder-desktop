@@ -2037,6 +2037,175 @@ fn compute_execution_failure(
     (execution_failure, execution_guard_error)
 }
 
+/// 归一化并校验一个模型工具批次：transport group/expand、空批、重复 ID、batch parse、控制应用。
+/// Propagate = 事件写失败；Settle = 空批/重复 ID/纠错达上限/控制应用失败，由调用方 LoopError + 结算。
+struct ToolBatchFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    calls: Vec<crate::ent::gateway::GwToolCall>,
+    transport_protocol: &'a str,
+    output_control: Option<ag::model_output::ModelTurnControl>,
+    seen_tool_call_ids: &'a mut BTreeSet<String>,
+    protocol_correction_rounds: &'a mut usize,
+    protocol_correction_diagnostic: &'a mut Option<serde_json::Value>,
+    max_corrections: usize,
+    task_run_id: &'a mut Option<String>,
+    intent_result: &'a mut ag::context::IntentResultV2,
+    raw_prompt: &'a str,
+    history: &'a [ag::context::HistTurn],
+    messages: &'a [serde_json::Value],
+    active_doc_path: Option<&'a str>,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    continuation_messages: &'a [serde_json::Value],
+}
+
+struct PreparedToolBatch {
+    calls: Vec<crate::ent::gateway::GwToolCall>,
+    parsed_params: Vec<serde_json::Value>,
+    control_error: Option<IpcError>,
+    native_transport: Option<crate::ent::gateway::GwToolCall>,
+}
+
+enum ToolBatchFailure {
+    Propagate(IpcError),
+    Settle(IpcError),
+}
+
+fn prepare_tool_batch(
+    emitter: &TurnEventEmitter<'_>,
+    facts: ToolBatchFacts<'_>,
+) -> Result<PreparedToolBatch, ToolBatchFailure> {
+    let group_rejection =
+        ag::model_output::validate_transport_call_group(facts.transport_protocol, &facts.calls)
+            .err();
+    let native_transport = (facts.calls.len() == 1
+        && facts.calls[0].name == ag::model_output::TOOL_BATCH_NAME)
+        .then(|| facts.calls[0].clone());
+    let (calls, transport_rejection) = match group_rejection
+        .map_or_else(|| ag::model_output::expand_native_batch(&facts.calls), Err)
+    {
+        Ok(Some(expanded)) => (expanded, None),
+        Ok(None) => (facts.calls, None),
+        Err(error) => (facts.calls, Some(error)),
+    };
+    if calls.is_empty() {
+        return Err(ToolBatchFailure::Settle(IpcError::new(
+            "AG_TOOL_CALLS_EMPTY",
+            "模型返回了空 ToolCall 集合，当前工具循环已中止。",
+            true,
+            false,
+        )));
+    }
+    // Validate the whole batch before creating any task/tool product. Continuation
+    // messages belong to this AgentTurn and survive decision parking/resumption.
+    if calls
+        .iter()
+        .any(|call| call.id.trim().is_empty() || !facts.seen_tool_call_ids.insert(call.id.clone()))
+    {
+        return Err(ToolBatchFailure::Settle(IpcError::new(
+            "AG_MODEL_TOOL_ID_INVALID",
+            "模型工具调用标识为空或重复；本批未执行。此前执行证据保留，请核对结果后显式重试。",
+            true,
+            false,
+        )));
+    }
+    let arguments = calls
+        .iter()
+        .map(|call| call.arguments.as_str())
+        .collect::<Vec<_>>();
+    let independent_read_only_direct_group = facts.transport_protocol
+        == ag::model_output::DIRECT_TOOL_PROTOCOL
+        && calls.iter().all(|call| {
+            ag::tool_registry::lookup(&call.name)
+                .is_some_and(|tool| tool.permission == ag::tool_registry::ToolPermission::ReadOnly)
+        });
+    let (control, parsed_params, control_error) = match transport_rejection.map_or_else(
+        || {
+            ag::model_output::parse_tool_batch_detailed_with_policy(
+                &arguments,
+                facts.output_control,
+                independent_read_only_direct_group,
+            )
+        },
+        Err,
+    ) {
+        Ok(batch) => {
+            if !batch.observations.is_empty() {
+                emitter
+                        .record_internal(
+                            "model_control_description_reconciled",
+                            serde_json::json!({"toolCallCount":calls.len(),"observations":batch.observations}),
+                        )
+                        .map_err(ToolBatchFailure::Propagate)?;
+            }
+            (Some(batch.control), batch.params, None)
+        }
+        Err(rejection) => {
+            let protocol_diagnostic = rejection.diagnostic();
+            *facts.protocol_correction_diagnostic = Some(protocol_diagnostic.clone());
+            let error = rejection.error;
+            *facts.protocol_correction_rounds += 1;
+            emitter
+                .record_internal(
+                    "model_control_rejected",
+                    serde_json::json!({
+                        "code": &error.code,
+                        "toolCallCount": calls.len(),
+                        "correctionAttempt": *facts.protocol_correction_rounds,
+                        "rejectionStage":"tool_batch",
+                        "protocolDiagnostic": protocol_diagnostic,
+                        "conflictFieldsOnly": (error.code == "AG_MODEL_CONTROL_CONFLICT")
+                            .then_some(error.message.as_str()),
+                    }),
+                )
+                .map_err(ToolBatchFailure::Propagate)?;
+            if *facts.protocol_correction_rounds > facts.max_corrections {
+                return Err(ToolBatchFailure::Settle(IpcError::new(
+                        "AG_MODEL_CORRECTION_LIMIT",
+                        "本回合控制封套拒绝已超过独立纠错上限；本批未执行，此前结果保留。请检查协议或显式重试。",
+                        true,
+                        false,
+                    )));
+            }
+            // 一整批均未执行；逐个回注失败，复用 ValidateFail→Recorded→Assembling→Gate。
+            // 不从工具名猜测意图，不复用旧语义替代本次模型结论。
+            (None, vec![serde_json::json!({}); calls.len()], Some(error))
+        }
+    };
+    if let Some(control) = control {
+        if let Err(error) = apply_control_and_observe(
+            facts.state,
+            emitter,
+            facts.latch,
+            facts.session_id,
+            facts.workspace_id,
+            facts.turn_id,
+            facts.explicit_edit_target_set,
+            facts.task_run_id,
+            facts.intent_result,
+            &control,
+            facts.raw_prompt,
+            facts.history,
+            facts.messages,
+            facts.active_doc_path,
+            facts.reference_envelopes,
+            facts.continuation_messages,
+        ) {
+            return Err(ToolBatchFailure::Settle(error));
+        }
+    }
+    Ok(PreparedToolBatch {
+        calls,
+        parsed_params,
+        control_error,
+        native_transport,
+    })
+}
+
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-018
@@ -2044,7 +2213,7 @@ fn compute_execution_failure(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
+ * boundary: in=PreparedPromptAgentContextFactsPromptManifestCapabilityFactorsAndActiveAgentTurnWithOptionalTaskRun | out=PerToolCallCapabilityGrantValidatedToolResultsEvidenceLedgerDerivedProjectReportPendingDiffOrWorkspaceOperationDecisionRequestAndSingleAgentTurnTerminal | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant,advance_tool_loop,validate_round_response,apply_control_and_observe,emit_project_report,record_tool_result,finish_cancelled_turn,rebuild_round_prompt,execute_tool_call,refresh_tool_context,compute_scope_candidates,prepare_task_run_for_tool,preflight_tool_acquisition_allowed,resolve_execution_grant_and_decision,compute_execution_failure,prepare_tool_batch,tool_call_receipt_identity,tool_result_references,model_tool_result_message,proposal_result_projection,settle_completed_turn | consumer=OptionalTaskRunStatus | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentProjectReportOrWorkspaceOperationPlanAsAuthorization
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
@@ -2797,157 +2966,36 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                 return Ok(());
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
-                let group_rejection =
-                    ag::model_output::validate_transport_call_group(&transport_protocol, &calls)
-                        .err();
-                let native_transport = (calls.len() == 1
-                    && calls[0].name == ag::model_output::TOOL_BATCH_NAME)
-                    .then(|| calls[0].clone());
-                let (calls, transport_rejection) = match group_rejection
-                    .map_or_else(|| ag::model_output::expand_native_batch(&calls), Err)
-                {
-                    Ok(Some(expanded)) => (expanded, None),
-                    Ok(None) => (calls, None),
-                    Err(error) => (calls, Some(error)),
-                };
-                if calls.is_empty() {
-                    let error = IpcError::new(
-                        "AG_TOOL_CALLS_EMPTY",
-                        "模型返回了空 ToolCall 集合，当前工具循环已中止。",
-                        true,
-                        false,
-                    );
-                    advance_or_finish!(TlEv::LoopError);
-                    settle_and_emit_ag_turn_error(
-                        &state,
-                        task_run_id.as_deref(),
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                    );
-                    return Ok(());
-                }
                 let output_control = response_control.expect("validated optional control");
-                // Validate the whole batch before creating any task/tool product. Continuation
-                // messages belong to this AgentTurn and survive decision parking/resumption.
-                if calls.iter().any(|call| {
-                    call.id.trim().is_empty() || !seen_tool_call_ids.insert(call.id.clone())
-                }) {
-                    let error = IpcError::new("AG_MODEL_TOOL_ID_INVALID",
-                        "模型工具调用标识为空或重复；本批未执行。此前执行证据保留，请核对结果后显式重试。", true, false);
-                    advance_or_finish!(TlEv::LoopError);
-                    settle_and_emit_ag_turn_error(
-                        &state,
-                        task_run_id.as_deref(),
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                    );
-                    return Ok(());
-                }
-                let arguments = calls
-                    .iter()
-                    .map(|call| call.arguments.as_str())
-                    .collect::<Vec<_>>();
-                let independent_read_only_direct_group = transport_protocol
-                    == ag::model_output::DIRECT_TOOL_PROTOCOL
-                    && calls.iter().all(|call| {
-                        ag::tool_registry::lookup(&call.name).is_some_and(|tool| {
-                            tool.permission == ag::tool_registry::ToolPermission::ReadOnly
-                        })
-                    });
-                let (control, parsed_params, control_error) = match transport_rejection.map_or_else(
-                    || {
-                        ag::model_output::parse_tool_batch_detailed_with_policy(
-                            &arguments,
-                            output_control,
-                            independent_read_only_direct_group,
-                        )
+                let prepared = match prepare_tool_batch(
+                    &event_emitter,
+                    ToolBatchFacts {
+                        state,
+                        latch: &terminal_latch,
+                        session_id: &session_id,
+                        workspace_id: &workspace_id_for_turn,
+                        turn_id: &turn_id,
+                        explicit_edit_target_set: &explicit_edit_target_set,
+                        calls,
+                        transport_protocol: &transport_protocol,
+                        output_control,
+                        seen_tool_call_ids: &mut seen_tool_call_ids,
+                        protocol_correction_rounds: &mut protocol_correction_rounds,
+                        protocol_correction_diagnostic: &mut protocol_correction_diagnostic,
+                        max_corrections: execution_policy.max_corrections,
+                        task_run_id: &mut task_run_id,
+                        intent_result: &mut intent_result,
+                        raw_prompt: &raw_prompt,
+                        history: &history,
+                        messages: &messages,
+                        active_doc_path: active_doc_path.as_deref(),
+                        reference_envelopes: &reference_envelopes,
+                        continuation_messages: &continuation_messages,
                     },
-                    Err,
                 ) {
-                    Ok(batch) => {
-                        if !batch.observations.is_empty() {
-                            event_emitter.record_internal("model_control_description_reconciled",serde_json::json!({"toolCallCount":calls.len(),"observations":batch.observations}))?;
-                        }
-                        (Some(batch.control), batch.params, None)
-                    }
-                    Err(rejection) => {
-                        let protocol_diagnostic = rejection.diagnostic();
-                        protocol_correction_diagnostic = Some(protocol_diagnostic.clone());
-                        let error = rejection.error;
-                        protocol_correction_rounds += 1;
-                        event_emitter.record_internal(
-                            "model_control_rejected",
-                            serde_json::json!({
-                                "code": &error.code,
-                                "toolCallCount": calls.len(),
-                                "correctionAttempt": protocol_correction_rounds,
-                                "rejectionStage":"tool_batch",
-                                "protocolDiagnostic": protocol_diagnostic,
-                                "conflictFieldsOnly": (error.code == "AG_MODEL_CONTROL_CONFLICT")
-                                    .then_some(error.message.as_str()),
-                            }),
-                        )?;
-                        if protocol_correction_rounds > execution_policy.max_corrections {
-                            let terminal_error = IpcError::new(
-                                    "AG_MODEL_CORRECTION_LIMIT",
-                                "本回合控制封套拒绝已超过独立纠错上限；本批未执行，此前结果保留。请检查协议或显式重试。",
-                                    true,
-                                    false,
-                                );
-                            advance_or_finish!(TlEv::LoopError);
-                            settle_and_emit_ag_turn_error(
-                                &state,
-                                task_run_id.as_deref(),
-                                &event_emitter,
-                                &terminal_latch,
-                                &app,
-                                &turn_id,
-                                &terminal_error,
-                            );
-                            return Ok(());
-                        }
-                        // 一整批均未执行；逐个回注失败，复用 ValidateFail→Recorded→Assembling→Gate。
-                        // 不从工具名猜测意图，不复用旧语义替代本次模型结论。
-                        (None, vec![serde_json::json!({}); calls.len()], Some(error))
-                    }
-                };
-                let mut correction_counted_this_round = control_error.is_some();
-                if control_error.is_some() {
-                    // The response-level rejection happened before the per-tool parameter
-                    // branch below. It still needs an explicit correction on the next model
-                    // request; otherwise the model sees neither the rejected arguments nor
-                    // the reason to rebuild them.
-                    if final_only_after_rejection {
-                        final_only_correction_pending = true;
-                    } else {
-                        parameter_correction_pending = true;
-                    }
-                }
-                if let Some(control) = control {
-                    if let Err(error) = apply_control_and_observe(
-                        &state,
-                        &event_emitter,
-                        &terminal_latch,
-                        &session_id,
-                        &workspace_id_for_turn,
-                        &turn_id,
-                        &explicit_edit_target_set,
-                        &mut task_run_id,
-                        &mut intent_result,
-                        &control,
-                        &raw_prompt,
-                        &history,
-                        &messages,
-                        active_doc_path.as_deref(),
-                        &reference_envelopes,
-                        &continuation_messages,
-                    ) {
+                    Ok(prepared) => prepared,
+                    Err(ToolBatchFailure::Propagate(error)) => return Err(error),
+                    Err(ToolBatchFailure::Settle(error)) => {
                         advance_or_finish!(TlEv::LoopError);
                         settle_and_emit_ag_turn_error(
                             &state,
@@ -2959,6 +3007,22 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
                             &error,
                         );
                         return Ok(());
+                    }
+                };
+                let calls = prepared.calls;
+                let parsed_params = prepared.parsed_params;
+                let control_error = prepared.control_error;
+                let native_transport = prepared.native_transport;
+                let mut correction_counted_this_round = control_error.is_some();
+                if control_error.is_some() {
+                    // The response-level rejection happened before the per-tool parameter
+                    // branch below. It still needs an explicit correction on the next model
+                    // request; otherwise the model sees neither the rejected arguments nor
+                    // the reason to rebuild them.
+                    if final_only_after_rejection {
+                        final_only_correction_pending = true;
+                    } else {
+                        parameter_correction_pending = true;
                     }
                 }
                 current_doc_requires_tool_read = matches!(
