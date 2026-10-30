@@ -17,3 +17,6 @@ src-tauri/resources/libreoffice/LibreOffice.app/
 # Bundled Pandoc is a verified release asset prepared by scripts/prepare_bundled_tools.sh.
 # The release build refuses to proceed when it is absent or does not match tools/manifest.json.
 src-tauri/resources/tools/pandoc/*/pandoc
+
+# 本地可行性验证工程（非产品代码）
+.p1-spike/
