@@ -486,7 +486,7 @@ fn string_arg(args: &serde_json::Value, key: &str, tool: &str) -> Result<String,
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001
  * term_ref: TERM-ED-008, TERM-WS-001
- * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets) | consumer=BR-AG-STATE-002,BR-AG-DATA-001
+ * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets) | consumer=BR-AG-STATE-002,BR-AG-DATA-001,BR-WS-DATA-001
  */
 fn exec_list_images(
     ctx: &crate::ag::blocks::AgentReadContext,

@@ -11,7 +11,7 @@ use crate::ipc::IpcError;
  * chain:    AG-TOOL, DE-DIFF, ED-EDIT
  * rules:    BR-ED-DATA-007
  * term_ref: TERM-ED-007
- * boundary: in=UntrustedTableOperationAndActiveTableSnapshot | out=ValidatedTableOperationPayloadOrPreDiffRejection
+ * boundary: in=UntrustedTableOperationAndActiveTableSnapshot | out=ValidatedTableOperationPayloadOrPreDiffRejection | consumer=BR-ED-DATA-007
  */
 pub(super) fn table_ops_payload(
     params: &serde_json::Value,

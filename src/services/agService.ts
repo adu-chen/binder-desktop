@@ -185,7 +185,7 @@ export interface AgentContextFacts {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020
- * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=BR-AG-DATA-008,BR-SYS-DATA-008| does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
+ * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=BR-AG-DATA-008,BR-SYS-DATA-008,BR-ED-DATA-008| does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
  */
 export function buildAgentContextFacts(
   turnId: string,

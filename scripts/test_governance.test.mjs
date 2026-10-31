@@ -572,4 +572,38 @@ describe('Product Capability Graph', () => {
     }
     expect(failures).toEqual([]);
   });
+
+
+  it('AG primary 块对外部规则只做 consumer，不抢 ED/DE/WS/REF/SYS/CORE 主责', () => {
+    const pinned = new Set(['BR-SYS-STATE-007', 'BR-SYS-STATE-008', 'BR-SYS-DATA-008']);
+    const external = (rule) => /^BR-(CORE|DE|ED|REF|SYS|WS)-/.test(rule) && !pinned.has(rule);
+    const roots = ['src-tauri/src/ag', 'src/components/ag', 'src/components/ed', 'src/services', 'src/store', 'src-tauri/src/ipc', 'src-tauri/src/de'];
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (/\.(rs|ts|tsx)$/.test(entry.name)) files.push(path);
+      }
+    };
+    for (const root of roots) walk(join(DEFAULT_ROOT, root));
+    const failures = [];
+    for (const file of files) {
+      const source = readFileSync(file, 'utf8');
+      for (const match of source.matchAll(/\/\*\*[\s\S]*?@GOV[\s\S]*?\*\//g)) {
+        const block = match[0];
+        const chain = /chain:\s*(.+)/.exec(block)?.[1]?.split(',')[0]?.trim() ?? '';
+        if (!chain.startsWith('AG-')) continue;
+        const rules = (/rules:\s*(.+)/.exec(block)?.[1] ?? '').split(',').map((rule) => rule.trim()).filter(Boolean);
+        const boundary = /boundary:\s*([\s\S]*?)(?:\*\/|$)/.exec(block)?.[1] ?? '';
+        const consumers = [...boundary.matchAll(/consumer=([\s\S]*?)(?=\||$)/g)]
+          .flatMap((entry) => [...entry[1].matchAll(/BR-[A-Z0-9-]+/g)].map((rule) => rule[0]));
+        const rel = file.slice(DEFAULT_ROOT.length + 1);
+        for (const rule of rules.filter(external)) {
+          if (!consumers.includes(rule)) failures.push(`${rel}: ${rule} missing external consumer`);
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
 });

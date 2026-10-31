@@ -14,7 +14,7 @@ use crate::ipc::IpcError;
  * type:     DATA
  * chain:    AG-TOOL, DE-DIFF
  * rules:    BR-DE-DATA-002, BR-DE-DATA-001
- * boundary: in=ProposeEditParamsAndDocumentSnapshot | out=EditProjectionDraftWithBeforeAfterPayload | does_not=generatePendingDiffPersistProposalOrWriteFile
+ * boundary: in=ProposeEditParamsAndDocumentSnapshot | out=EditProjectionDraftWithBeforeAfterPayload | does_not=generatePendingDiffPersistProposalOrWriteFile | consumer=BR-DE-DATA-002,BR-DE-DATA-001
  */
 pub(super) fn build_edit_projection(
     params: &serde_json::Value,

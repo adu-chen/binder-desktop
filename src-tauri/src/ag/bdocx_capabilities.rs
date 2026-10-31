@@ -614,7 +614,7 @@ fn validate_manifest(value: &BDocxCapabilityManifest) -> Result<(), String> {
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006
  * term_ref: TERM-SYS-002
- * boundary: in=bundledBDocxCapabilityManifestJson | out=BDocxCapabilityManifest(validatedVersionedSingleRuntimeSource)
+ * boundary: in=bundledBDocxCapabilityManifestJson | out=BDocxCapabilityManifest(validatedVersionedSingleRuntimeSource) | consumer=BR-SYS-DATA-006
  */
 pub fn manifest() -> Result<&'static BDocxCapabilityManifest, CapabilityValidationError> {
     let result = MANIFEST.get_or_init(|| {
@@ -900,7 +900,7 @@ fn image_operations_schema(value: &BDocxCapabilityManifest) -> Value {
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006
  * term_ref: TERM-SYS-002, TERM-ED-008
- * boundary: in=BDocxCapabilityManifest | out=ProposeEditJsonSchema(conditionallyRequiredBlockStyleTableImageOperations)
+ * boundary: in=BDocxCapabilityManifest | out=ProposeEditJsonSchema(conditionallyRequiredBlockStyleTableImageOperations) | consumer=BR-SYS-DATA-006
  */
 pub fn propose_edit_parameters_schema() -> Result<Value, CapabilityValidationError> {
     let value = manifest()?;
@@ -1301,7 +1301,7 @@ pub fn bdocx_rewrite_route_instruction(has_tables: bool, has_images: bool) -> St
  * chain:    AG-TURN
  * rules:    BR-SYS-DATA-006
  * term_ref: TERM-SYS-002
- * boundary: in=BDocxCapabilityManifest | out=AgentPromptCapabilityProjection(versionHashAgentManualDiffRoundtrip)
+ * boundary: in=BDocxCapabilityManifest | out=AgentPromptCapabilityProjection(versionHashAgentManualDiffRoundtrip) | consumer=BR-SYS-DATA-006
  */
 pub fn prompt_projection() -> Result<String, CapabilityValidationError> {
     let value = manifest()?;
@@ -1569,7 +1569,7 @@ fn validate_style_attrs(
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006, BR-ED-DATA-005
  * term_ref: TERM-SYS-002, TERM-ED-006, TERM-ED-004
- * boundary: in=UntrustedStyleOpBatchAndAgentEditableSnapshot | out=ValidatedStyleOpBatchOrPreDiffRejection
+ * boundary: in=UntrustedStyleOpBatchAndAgentEditableSnapshot | out=ValidatedStyleOpBatchOrPreDiffRejection | consumer=BR-SYS-DATA-006,BR-ED-DATA-005
  */
 pub fn validate_style_ops(
     ops: &Value,
@@ -1921,7 +1921,7 @@ fn validate_image_field(field: &TableFieldCapability, value: &Value) -> bool {
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006, BR-ED-DATA-003
  * term_ref: TERM-SYS-002, TERM-ED-008
- * boundary: in=UntrustedImageOperationBatch | out=ManifestValidatedImageOperationShapesOrPreDiffRejection
+ * boundary: in=UntrustedImageOperationBatch | out=ManifestValidatedImageOperationShapesOrPreDiffRejection | consumer=BR-SYS-DATA-006,BR-ED-DATA-003
  */
 pub fn validate_image_operation_shapes(
     operations: &[Value],

@@ -11,7 +11,7 @@ use crate::{ag, doc, workspace};
  * chain:    AG-TOOL
  * rules:    BR-SYS-DATA-006, BR-ED-DATA-001, BR-ED-DATA-003
  * term_ref: TERM-SYS-002, TERM-ED-008
- * boundary: in=UntrustedImageOperationAndActiveBDocxSnapshot | out=ValidatedMaterializedImageOperationPayloadOrPreDiffRejection | consumer=BDocxCapabilityManifest
+ * boundary: in=UntrustedImageOperationAndActiveBDocxSnapshot | out=ValidatedMaterializedImageOperationPayloadOrPreDiffRejection | consumer=BR-SYS-DATA-006,BR-ED-DATA-001,BR-ED-DATA-003
  */
 pub(super) fn image_ops_payload(
     params: &serde_json::Value,

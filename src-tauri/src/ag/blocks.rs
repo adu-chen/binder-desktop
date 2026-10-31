@@ -310,7 +310,7 @@ impl AgentReadContext {
      * chain:    AG-TOOL
      * rules:    BR-AG-DATA-001, BR-ED-DATA-003
      * term_ref: TERM-ED-008, TERM-DOC-003
-     * boundary: in=ActiveBDocxOpenDocSnapshot | out=CurrentImageSnapshots(sameSessionVersionAndContentHash) | consumer=BR-AG-DATA-001
+     * boundary: in=ActiveBDocxOpenDocSnapshot | out=CurrentImageSnapshots(sameSessionVersionAndContentHash) | consumer=BR-AG-DATA-001,BR-ED-DATA-003
      */
     pub fn image_snapshots(&self, rel_path: &str) -> Result<&[serde_json::Value], IpcError> {
         let snapshot = self.open_snapshot(rel_path).ok_or_else(|| {
