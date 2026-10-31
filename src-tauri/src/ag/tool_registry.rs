@@ -172,7 +172,7 @@ pub struct CapabilityGrantUseTrackerV2 {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-004
  * term_ref: TERM-AG-013, TERM-AG-014, TERM-AG-019
- * boundary: in=RuntimeProfileExplicitEditTargetSetGateDecisionFormatDynamicBudgetCancellationTerminalAndToolCallFacts | out=PromptManifestProjectionOrSingleUseCapabilityGrantV2IndependentOfIntentText | does_not=useIntentTaskPlanPromptHistoryToolResultContentOrRegistryPresenceAloneAsAuthorization | consumer=BR-AG-STATE-002
+ * boundary: in=RuntimeProfileExplicitEditTargetSetGateDecisionFormatDynamicBudgetCancellationTerminalAndToolCallFacts | out=PromptManifestProjectionOrSingleUseCapabilityGrantV2IndependentOfIntentText | does_not=useIntentTaskPlanPromptHistoryToolResultContentOrRegistryPresenceAloneAsAuthorization | consumer=BR-AG-STATE-002,BR-AG-DATA-004
  */
 /// Prompt Manifest 与 ToolCall 执行授权共用同一硬事实算法。Prompt 投影不绑定动作，因此不可用于执行；
 /// 执行 grant 必须绑定真实 Gate 后的唯一 ToolCall 与 append-only 事件序号，校验尝试后立即失效。

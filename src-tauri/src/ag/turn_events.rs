@@ -732,7 +732,7 @@ impl<'a> TurnEventEmitter<'a> {
      * type: IO
      * chain: AG-TURN
      * rules: BR-AG-DATA-005, BR-AG-OBS-001
-     * boundary: in=PromptBudgetMeasurementAndHashedSourceProjections | out=OrderedPromptBudgetCheckpoint | effect=DB-agent_turn_events | does_not=storePromptContentOrAuthorizeModelInvocation
+     * boundary: in=PromptBudgetMeasurementAndHashedSourceProjections | out=OrderedPromptBudgetCheckpoint | effect=DB-agent_turn_events | does_not=storePromptContentOrAuthorizeModelInvocation | consumer=BR-AG-DATA-005,BR-AG-OBS-001
      */
     pub(super) fn record_prompt_budget(
         &self,
@@ -991,7 +991,7 @@ pub fn list_safe_events(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-PERSIST-001, BR-SYS-DATA-008
  * term_ref: TERM-AG-021, TERM-AG-023
- * boundary: in=WorkspaceScopedTurnAndAppendOnlyEvidenceEvents | out=EvidenceLedgerV1(validSameTurnSourceEventOrder) | does_not=acceptCrossWorkspaceFailedReadOrModelSuppliedEvidence | consumer=BR-AG-PERSIST-001
+ * boundary: in=WorkspaceScopedTurnAndAppendOnlyEvidenceEvents | out=EvidenceLedgerV1(validSameTurnSourceEventOrder) | does_not=acceptCrossWorkspaceFailedReadOrModelSuppliedEvidence | consumer=BR-AG-PERSIST-001,BR-AG-OBS-001
  */
 pub(super) fn rebuild_evidence_ledger(
     conn: &Connection,

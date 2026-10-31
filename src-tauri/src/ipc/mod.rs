@@ -130,7 +130,7 @@ pub struct AgTurnEvent {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-021, TERM-AG-022
- * boundary: in=SafePersistedTurnEventPayload | out=VersionedAgTurnEventPayload(chunkIntentRouteToolEvidenceReportProposalDecisionWaitOrTerminal) | does_not=exposeGateContextProviderSecretsCapabilityGrantOrHiddenReasoning | consumer=BR-AG-STATE-001,BR-AG-STATE-002,BR-AG-PERSIST-001
+ * boundary: in=SafePersistedTurnEventPayload | out=VersionedAgTurnEventPayload(chunkIntentRouteToolEvidenceReportProposalDecisionWaitOrTerminal) | does_not=exposeGateContextProviderSecretsCapabilityGrantOrHiddenReasoning | consumer=BR-AG-STATE-001,BR-AG-STATE-002,BR-AG-PERSIST-001,BR-AG-OBS-001
  */
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

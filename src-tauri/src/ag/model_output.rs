@@ -335,7 +335,7 @@ fn control_schema() -> serde_json::Value {
  * type:     DATA
  * chain:    AG-TOOL, AG-TURN
  * rules:    BR-AG-DATA-004
- * boundary: in=ToolDefinitionsAndReadOnlyPermissions | out=ModelVisibleToolSchemaWithResponseControl | does_not=executeToolsOrGrantCapabilities
+ * boundary: in=ToolDefinitionsAndReadOnlyPermissions | out=ModelVisibleToolSchemaWithResponseControl | does_not=executeToolsOrGrantCapabilities | consumer=BR-AG-DATA-004
  */
 pub fn decorate_tool_definitions(tools: &mut serde_json::Value) -> Result<(), IpcError> {
     let definitions = tools.as_array_mut().ok_or_else(|| {
@@ -1033,7 +1033,7 @@ impl ModelOutputDecoder {
      * chain:    AG-TURN
      * rules:    BR-AG-DATA-004, BR-AG-STATE-001
      * term_ref: TERM-AG-012
-     * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence | consumer=BR-AG-STATE-001
+     * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence | consumer=BR-AG-STATE-001,BR-AG-DATA-004
      */
     pub fn finish(self) -> Result<ModelTurnControl, IpcError> {
         if let Some(error) = self.rejection {

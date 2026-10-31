@@ -176,7 +176,7 @@ fn snapshot_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> Stri
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage | consumer=BR-AG-DATA-008
+ * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage | consumer=BR-AG-DATA-008,BR-AG-OBS-001
  */
 pub fn context_evidence(
     facts: &crate::types::AgentContextFacts,
@@ -846,7 +846,7 @@ fn serialized_result_chars(result: &str) -> usize {
  * type: DATA
  * chain: AG-TOOL
  * rules: BR-AG-DATA-005, BR-AG-OBS-001
- * boundary: in=AgentEditableSnapshotAndValidatedReadingCursor | out=SerializedReadingPageWithVersionRangeAndNextCursor | does_not=TruncateEditNodesOrUpgradePartialCoverage
+ * boundary: in=AgentEditableSnapshotAndValidatedReadingCursor | out=SerializedReadingPageWithVersionRangeAndNextCursor | does_not=TruncateEditNodesOrUpgradePartialCoverage | consumer=BR-AG-DATA-005,BR-AG-OBS-001
  */
 fn reading_page(
     snapshot: &crate::ag::blocks::AgentEditableSnapshot,
@@ -924,7 +924,7 @@ fn reading_page(
  * type: GUARD
  * chain: AG-TOOL
  * rules: BR-AG-DATA-005, BR-AG-OBS-001
- * boundary: in=AuthorizedReadOnlyToolArgumentsAndAgentReadContext | out=CompleteBoundedToolResultOrExplicitFailure | does_not=TruncateStructuredBlocksOrClaimFailedReadsAsEvidence
+ * boundary: in=AuthorizedReadOnlyToolArgumentsAndAgentReadContext | out=CompleteBoundedToolResultOrExplicitFailure | does_not=TruncateStructuredBlocksOrClaimFailedReadsAsEvidence | consumer=BR-AG-DATA-005,BR-AG-OBS-001
  */
 pub fn exec_read_only(
     ctx: &crate::ag::blocks::AgentReadContext,

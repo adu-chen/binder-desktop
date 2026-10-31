@@ -166,7 +166,7 @@ pub struct PromptBudgetMeasurement {
  * type: DATA
  * chain: AG-TURN
  * rules: BR-AG-DATA-002, BR-AG-DATA-005
- * boundary: in=PromptMessagesAndToolSchema | out=ProviderProjectedSerializedCharacterLedgerAndApproximateTokenTotal | does_not=retainContentAlterAuthorizationOrTruncateRequiredSources | consumer=BR-AG-DATA-002
+ * boundary: in=PromptMessagesAndToolSchema | out=ProviderProjectedSerializedCharacterLedgerAndApproximateTokenTotal | does_not=retainContentAlterAuthorizationOrTruncateRequiredSources | consumer=BR-AG-DATA-002,BR-AG-DATA-005
  */
 pub fn measure_prompt_budget(
     messages: &[serde_json::Value],
@@ -438,7 +438,7 @@ fn history_excerpt(content: &str, allowance: usize) -> Option<String> {
  * type:     DATA
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-005
- * boundary: in=IdentityScopedHistTurnsAndDerivedCharAllowance | out=RecentHistorySelectionWithTurnGroupsMarkedVerbatimExcerptsAndDropCounts | does_not=mutatePersistedHistoryOrGrantAuthority
+ * boundary: in=IdentityScopedHistTurnsAndDerivedCharAllowance | out=RecentHistorySelectionWithTurnGroupsMarkedVerbatimExcerptsAndDropCounts | does_not=mutatePersistedHistoryOrGrantAuthority | consumer=BR-AG-DATA-005
  */
 pub(super) fn select_recent_history(turns: &[HistTurn], budget_chars: usize) -> HistorySelection {
     if budget_chars == 0 {
@@ -570,7 +570,7 @@ pub struct ScopedHistory {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-004
  * term_ref: TERM-AG-005
- * boundary: in=currentDocPathAndIdentityValidatedHistTurns | out=ScopedHistory(sameDocHistoryAndCrossDocWeakCandidatesWithoutKeywordJudgment)
+ * boundary: in=currentDocPathAndIdentityValidatedHistTurns | out=ScopedHistory(sameDocHistoryAndCrossDocWeakCandidatesWithoutKeywordJudgment) | consumer=BR-AG-DATA-004
  */
 /// 历史归属分流（BR-AG-DATA-004）：有当前文档时，只有同 relPath 历史可作为同文档 P1 背景；
 /// 跨文档或无 relPath 的历史只进入有界弱候选。是否沿用由模型 IntentResult 表达，本层不解析关键词。

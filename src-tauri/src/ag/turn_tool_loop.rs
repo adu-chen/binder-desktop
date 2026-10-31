@@ -123,7 +123,7 @@ fn correction_instruction(final_only: bool) -> serde_json::Value {
  * type:     DATA
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-004
- * boundary: in=RejectionKindAndFrozenTransportProtocol | out=ProtocolCorrectionSystemMessage | does_not=grantToolsReplayOperationsOrChangeBudget
+ * boundary: in=RejectionKindAndFrozenTransportProtocol | out=ProtocolCorrectionSystemMessage | does_not=grantToolsReplayOperationsOrChangeBudget | consumer=BR-AG-DATA-004
  */
 fn correction_instruction_for_protocol(final_only: bool, protocol: &str) -> serde_json::Value {
     serde_json::json!({
@@ -904,7 +904,7 @@ fn apply_control_and_observe(
  * chain:    AG-TURN
  * rules:    BR-AG-OBS-001
  * term_ref: TERM-AG-021, TERM-AG-023
- * boundary: in=IntentResultVisibleAnswerEvidenceLedgerAndModelFindings | out=ProjectReportTurnEventOrSkipForToolFreeAnswer | effect=DB-rebuild_evidence_ledger | does_not=acceptModelClaimedCoverageOrTreatProjectReportAsCompletionGate
+ * boundary: in=IntentResultVisibleAnswerEvidenceLedgerAndModelFindings | out=ProjectReportTurnEventOrSkipForToolFreeAnswer | effect=DB-rebuild_evidence_ledger | does_not=acceptModelClaimedCoverageOrTreatProjectReportAsCompletionGate | consumer=BR-AG-OBS-001
  */
 #[allow(clippy::too_many_arguments)]
 fn emit_project_report(

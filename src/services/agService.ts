@@ -2181,7 +2181,7 @@ const retryRequests = new Set<string>();
  * chain:    AG-TURN
  * rules:    BR-AG-OBS-001, BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-021
- * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=Composer,BR-AG-STATE-001| does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
+ * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=BR-AG-STATE-001,BR-AG-OBS-001| does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
  */
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。

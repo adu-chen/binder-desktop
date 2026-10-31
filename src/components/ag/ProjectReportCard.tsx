@@ -8,7 +8,7 @@ import type { ProjectReportView } from "../../store/agStore";
  * chain:    AG-TURN
  * rules:    BR-AG-OBS-001, BR-AG-UI-001
  * term_ref: TERM-AG-021, TERM-AG-023
- * boundary: in=RuntimeDerivedProjectReportForAssistantTurn | out=ReadUnreadFindingAndUncertaintyReadOnlyCard | effect=none | does_not=inferCoverageFromMessageToolCardOrUIState
+ * boundary: in=RuntimeDerivedProjectReportForAssistantTurn | out=ReadUnreadFindingAndUncertaintyReadOnlyCard | effect=none | does_not=inferCoverageFromMessageToolCardOrUIState | consumer=BR-AG-OBS-001
  *
  * ProjectReport（TERM-AG-021）只读呈现：内容完全来自运行时基于 EvidenceLedger 派生的安全事件，
  * 不从 assistant 正文、工具卡状态或界面缓存推断读取覆盖与确定性。

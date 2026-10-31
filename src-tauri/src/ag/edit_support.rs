@@ -336,7 +336,7 @@ fn enforce_block_ops_budget(block_ops_len: usize, block_ops_bytes: usize) -> Res
  * type:     GUARD
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-010
- * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit | consumer=BR-AG-STATE-002
+ * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit | consumer=BR-AG-STATE-002,BR-AG-DATA-010
  */
 pub(super) fn find_block_ops_anchor_conflict(
     operations: Option<&serde_json::Value>,

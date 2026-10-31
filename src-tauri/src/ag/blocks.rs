@@ -622,7 +622,7 @@ pub fn block_texts(content: &str, is_html: bool) -> Vec<String> {
  * type: DATA
  * chain: AG-TOOL
  * rules: BR-AG-DATA-005
- * boundary: in=AgentEditableSnapshot | out=ReadingTextWithParagraphAndTableSeparators | does_not=ChangeEditorProjectionOrCreateEditBaseline
+ * boundary: in=AgentEditableSnapshot | out=ReadingTextWithParagraphAndTableSeparators | does_not=ChangeEditorProjectionOrCreateEditBaseline | consumer=BR-AG-DATA-005
  */
 /// Reading projection, not an edit baseline. Scan the original HTML once so parent
 /// containers never duplicate their descendants. Keep table cell/row boundaries.

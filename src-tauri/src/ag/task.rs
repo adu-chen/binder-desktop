@@ -753,7 +753,7 @@ pub fn resolved_decision_outcome(
  * chain: AG-TURN, WS-OPERATION
  * rules: BR-AG-DATA-004, BR-SYS-STATE-008
  * term_ref: TERM-AG-017, TERM-AG-015
- * boundary: in=OriginalWorkspaceSessionTurnTaskAndResolvedDecisionIdentity | out=IdentityBoundDecisionAndWorkspaceOperationEffectProjection | does_not=authorizeExecutionReadDocumentBodyInferSaveFromConfirmationOrRewriteTaskOutcome
+ * boundary: in=OriginalWorkspaceSessionTurnTaskAndResolvedDecisionIdentity | out=IdentityBoundDecisionAndWorkspaceOperationEffectProjection | does_not=authorizeExecutionReadDocumentBodyInferSaveFromConfirmationOrRewriteTaskOutcome | consumer=BR-AG-DATA-004
  */
 pub(super) fn resolved_decision_receipt(
     conn: &Connection,
