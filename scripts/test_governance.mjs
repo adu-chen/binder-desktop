@@ -180,7 +180,7 @@ export function buildTestInventory(root = DEFAULT_ROOT, providedRegistry = null)
     .filter((file) => file.endsWith('.rs'));
   const rustInlineFiles = rustSourceFiles.filter((file) => {
     try {
-      return /#\s*\[cfg\s*\(\s*test\s*\)\s*\]/.test(readFileSync(join(root, file), 'utf8'));
+      return /#!?\s*\[cfg\s*\(\s*test\s*\)\s*\]/.test(readFileSync(join(root, file), 'utf8'));
     } catch {
       return false;
     }

@@ -179,7 +179,8 @@
       ],
       "test_globs": [
         "src/components/ag/AgentUI.test.tsx", "src/services/agRuntime.test.ts",
-        "src/store/assistRuntime.test.ts", "src-tauri/tests/core_chain.rs"
+        "src/store/assistRuntime.test.ts", "src-tauri/tests/core_chain.rs",
+        "src-tauri/src/ag/edit_runtime_tests.rs"
       ],
       "downstream": ["SYS"],
       "baseline_frontend_test_files": 3,

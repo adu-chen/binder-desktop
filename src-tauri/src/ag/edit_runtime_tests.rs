@@ -1,4 +1,5 @@
 //! Agent 编辑解析、TableOperation 与 ImageOperation 的回归测试。
+#![cfg(test)]
 
 use super::edit_image_runtime::*;
 use super::edit_support::*;
@@ -230,6 +231,7 @@ fn explicit_block_ops_requires_base_and_non_empty_operations() {
 }
 
 // covers: BR-AG-STATE-002
+// covers: BR-AG-DATA-010
 // P5（AG-R2-01）：block_ops 锚点矛盾校验——同一锚点被 insert_before 与 insert_after 同时引用 → 拒绝。
 #[test]
 fn block_ops_rejects_conflicting_anchor_usage() {
@@ -265,8 +267,25 @@ fn block_ops_rejects_conflicting_anchor_usage() {
     assert!(err.message.contains("锚点矛盾"));
 }
 
-// covers: BR-AG-DATA-005
 // covers: BR-AG-DATA-009
+// 目标存在性区分：整篇重写只作为目标不存在时的防御分支，已有文本目标必须走显式按块/结构化操作。
+#[test]
+fn block_ops_target_existence_distinguishes_replace_document() {
+    let params = json!({ "content": "# 新正文" });
+    assert_eq!(
+        resolve_agent_edit_operation(&params, false).unwrap(),
+        AgentEditOperation::ReplaceDocument
+    );
+    let existing = resolve_agent_edit_operation(&params, true).unwrap_err();
+    assert_eq!(existing.code, "AG_PRECISE_TARGET_REQUIRED");
+    let unknown =
+        resolve_agent_edit_operation(&json!({ "operation": "unknown" }), true).unwrap_err();
+    assert_eq!(unknown.code, "AG_TOOL_ARG");
+    let missing = resolve_agent_edit_operation(&json!({}), true).unwrap_err();
+    assert_eq!(missing.code, "AG_TOOL_ARG");
+}
+
+// covers: BR-AG-DATA-005
 // covers: BR-AG-DATA-010
 // 单次调用上限：只有超过单回合卡预算才拒绝，并给出可执行拆分区间。
 #[test]
