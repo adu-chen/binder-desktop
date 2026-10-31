@@ -11,6 +11,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection, type Transaction } from "@tiptap/pm/state";
 import { generateJSON, type Editor as TiptapEditor } from "@tiptap/core";
 import { buildEditorExtensions } from "./extensions";
+import { applyAssistAdoption } from "./assistAdoption";
 import {
   isPaginationSettledTransaction,
   PAGINATION_VIEWPORT_CORRECTION_EVENT,
@@ -1949,15 +1950,21 @@ export function Editor() {
   /// 门禁不可用/失败时静默不提供（不打断编辑）。
   const applyInline = (text: string) => {
     const snap = assistStore.getSnapshot();
-    if (!editor || snap.kind !== "inline" || !isAssistTargetCurrent(snap.target)) {
-      finishCurrentAssist("anchor_lost");
-      return;
-    }
-    const target = snap.target;
-    const requestId = snap.requestId;
-    assistStore.close();
-    const applied = applyEditOps([{ op: "replace_text", blockId: target.blockId, start: target.start, end: target.end, text }]);
-    if (requestId) finishAssistId(requestId, applied.ok ? "accept" : "anchor_lost");
+    applyAssistAdoption(text, {
+      editorReady: Boolean(editor),
+      targetCurrent: isAssistTargetCurrent(snap.target),
+      snapshot: snap,
+      close: () => assistStore.close(),
+      apply: (target, value) => applyEditOps([{
+        op: "replace_text",
+        blockId: target.blockId,
+        start: target.start,
+        end: target.end,
+        text: value,
+      }]),
+      finishRequest: (requestId, event) => finishAssistId(requestId, event),
+      finishCurrent: (event) => finishCurrentAssist(event),
+    });
   };
   const pickAutocomplete = (text: string) => {
     const snap = assistStore.getSnapshot();

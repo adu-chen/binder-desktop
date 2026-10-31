@@ -205,7 +205,7 @@ describe('Test Governance', () => {
     expect(inventory.modules.ED.frontend_owned).toBe(11);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'ED')
-      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(243); // ED-TEXT-SAVE-REPAIR-01：旧草稿保存恢复 +2，错误展示重试 +1。
+      .reduce((sum, asset) => sum + asset.test_count, 0)).toBe(247); // ED-TEXT-SAVE-REPAIR-01：旧草稿保存恢复 +2，错误展示重试 +1；AG-ASSIST 采纳 seam +4。
     expect(inventory.modules.SYS.frontend_owned).toBe(3);
     expect(inventory.assets
       .filter((asset) => asset.kind === 'frontend' && asset.owner === 'SYS')

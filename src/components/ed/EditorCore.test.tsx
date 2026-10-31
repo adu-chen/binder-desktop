@@ -15,6 +15,11 @@ import {
   isManagedImageClipboardHtml,
   selectionContainsImage,
 } from "./Editor";
+import {
+  applyAssistAdoption,
+  type AssistAdoptionDeps,
+  type AssistAdoptionTarget,
+} from "./assistAdoption";
 import { DOC_REF_MIME } from "../../services/edLocate";
 import { projectDocumentImages } from "../../services/edImageOps";
 import { deStore, type DiffView } from "../../store/deStore";
@@ -473,6 +478,62 @@ describe("Editor BDocx 首轮揭示门禁", () => {
   it("只有当前 loadSeq settled 后才揭示；0 不是有效载入", () => {
     expect(isEditorContentReady("<p>合同</p>", 8, 8)).toBe(true);
     expect(isEditorContentReady("<p>合同</p>", 0, 0)).toBe(false);
+  });
+});
+}
+
+// AG-ASSIST 采纳落地；拆到纯函数 seam，避免 Tiptap DOM 渲染。
+{
+// covers: BR-AG-STATE-003
+describe("AG-ASSIST 采纳落地", () => {
+  const target: AssistAdoptionTarget = { blockId: "block-1", start: 2, end: 5 };
+
+  function adoptionDependencies(overrides: Partial<AssistAdoptionDeps> = {}): AssistAdoptionDeps {
+    return {
+      editorReady: true,
+      targetCurrent: true,
+      snapshot: { kind: "inline", requestId: "assist-1", target },
+      close: vi.fn(),
+      apply: vi.fn(() => ({ ok: true })),
+      finishRequest: vi.fn(),
+      finishCurrent: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("成功时经 ED apply 恰好一次并回写 accept", () => {
+    const deps = adoptionDependencies();
+    expect(applyAssistAdoption("新文本", deps)).toBe("accepted");
+    expect(deps.close).toHaveBeenCalledTimes(1);
+    expect(deps.apply).toHaveBeenCalledTimes(1);
+    expect(deps.apply).toHaveBeenCalledWith(target, "新文本");
+    expect(deps.finishRequest).toHaveBeenCalledTimes(1);
+    expect(deps.finishRequest).toHaveBeenCalledWith("assist-1", "accept");
+    expect(deps.finishCurrent).not.toHaveBeenCalled();
+  });
+
+  it("ED apply 失败时回写 anchor_lost，不伪装 accept", () => {
+    const deps = adoptionDependencies({ apply: vi.fn(() => ({ ok: false })) });
+    expect(applyAssistAdoption("新文本", deps)).toBe("anchor_lost");
+    expect(deps.apply).toHaveBeenCalledTimes(1);
+    expect(deps.finishRequest).toHaveBeenCalledWith("assist-1", "anchor_lost");
+    expect(deps.finishRequest).not.toHaveBeenCalledWith("assist-1", "accept");
+  });
+
+  it("锚失效时关闭当前 assist，不执行 ED apply", () => {
+    const deps = adoptionDependencies({ targetCurrent: false });
+    expect(applyAssistAdoption("新文本", deps)).toBe("anchor_lost");
+    expect(deps.finishCurrent).toHaveBeenCalledWith("anchor_lost");
+    expect(deps.close).not.toHaveBeenCalled();
+    expect(deps.apply).not.toHaveBeenCalled();
+    expect(deps.finishRequest).not.toHaveBeenCalled();
+  });
+
+  it("编辑器缺失时同样不执行 ED apply", () => {
+    const deps = adoptionDependencies({ editorReady: false });
+    expect(applyAssistAdoption("新文本", deps)).toBe("anchor_lost");
+    expect(deps.finishCurrent).toHaveBeenCalledWith("anchor_lost");
+    expect(deps.apply).not.toHaveBeenCalled();
   });
 });
 }
