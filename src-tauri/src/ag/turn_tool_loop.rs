@@ -3378,24 +3378,78 @@ enum ToolCallStep {
  * type:     RB
  * chain:    AG-TOOL, AG-TURN
  * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
+ * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
+ */
+struct ToolCallAuthContext<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    runtime_profile: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    tools: &'a serde_json::Value,
+    ws_root: Option<&'a str>,
+    on_context_request: Option<&'a tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
+    active_doc_path: Option<&'a str>,
+    capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
+    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
+    model_call_ordinal: usize,
+    intent: &'a ag::context::IntentResultV2,
+}
+
+struct ToolCallAuthState {
+    task_run_id: Option<String>,
+    agent_context_facts: crate::types::AgentContextFacts,
+    read_ctx: ag::blocks::AgentReadContext,
+    active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
+    capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
+    remaining_tool_calls: u32,
+    parameter_correction_rounds: usize,
+    tool_loop_state: ag::tool::ToolLoopState,
+}
+
+struct ToolCallAuthOutcome {
+    state: ToolCallAuthState,
+    capability_identity: crate::types::ToolCallReceiptIdentityV1,
+    tool_decision: Option<ag::tool::ToolDecision>,
+    execution_failure: Option<IpcError>,
+    execution_guard_error: Option<String>,
+    read_execution: Option<Result<String, IpcError>>,
+    validation_allows_execution: bool,
+    scope_candidates: Result<Option<Vec<String>>, IpcError>,
+    context_failure_summary: Option<String>,
+}
+
+enum ToolCallAuthResult {
+    Continue(ToolCallAuthOutcome),
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-079, BR-AG-STATE-001-RB-AG-AG-TOOL-079
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-STATE-002, BR-AG-STATE-001
+ * boundary: in=SingleToolCallPreflightGrantAndExecutionReadiness | out=ToolCallAuthContinueWithGrantDecisionAndFailureFactsOrEnded | delegate=preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=executeToolOrRecordResult
  */
 #[allow(clippy::too_many_arguments)]
-async fn run_one_tool_call<R: tauri::Runtime>(
+async fn authorize_one_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
-    ctx: ToolCallContext<'_>,
-    tool_state: ToolCallState,
-    call: &crate::ent::gateway::GwToolCall,
-    parsed_params: &[serde_json::Value],
-    call_index: usize,
-    calls_len: usize,
-    control_error: Option<IpcError>,
-    final_only_after_rejection: bool,
+    ctx: ToolCallAuthContext<'_>,
+    auth_state: ToolCallAuthState,
     flags: &mut ToolCallFlags,
+    call: &crate::ent::gateway::GwToolCall,
+    params: &serde_json::Value,
+    arg_parse_error: Option<&String>,
+    control_error: Option<&IpcError>,
+    final_only_after_rejection: bool,
     correction_counted_this_round: &mut bool,
-) -> Result<ToolCallStep, IpcError> {
-    let ToolCallContext {
+) -> Result<ToolCallAuthResult, IpcError> {
+    let ToolCallAuthContext {
         state,
         latch: terminal_latch,
         cancelled,
@@ -3408,39 +3462,23 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         ws_root,
         on_context_request,
         active_doc_path,
-        history,
-        raw_prompt,
-        reference_envelopes,
         capability_factors,
-        transport_protocol,
         execution_policy,
         model_call_ordinal,
-        round_index,
-        remaining_rounds,
+        intent: intent_result,
     } = ctx;
     let event_emitter = emitter;
     let c = call;
-    let ToolCallState {
-        mut messages,
-        mut continuation_messages,
+    let ToolCallAuthState {
         mut task_run_id,
-        intent_result,
         mut agent_context_facts,
         mut read_ctx,
         mut active_snapshot,
         mut capability_use_tracker,
         mut remaining_tool_calls,
         mut parameter_correction_rounds,
-        mut failed_read_signatures,
         mut tool_loop_state,
-        turn_state,
-        current_doc_requires_tool_read,
-        mut current_doc_read_confirmed,
-        any_tool_called,
-        mut proposed_diff,
-        mut edit_blocked_reported,
-    } = tool_state;
-    let _round = round_index;
+    } = auth_state;
     use ag::tool::ToolLoopEvent as TlEv;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
@@ -3454,82 +3492,10 @@ async fn run_one_tool_call<R: tauri::Runtime>(
                 &mut tool_loop_state,
                 $event,
             ) {
-                return Ok(ToolCallStep::Ended);
+                return Ok(ToolCallAuthResult::Ended);
             }
         }};
     }
-    let mut stop_after_current_tool = false;
-
-    if cancelled.load(Ordering::Acquire) {
-        advance_or_finish!(TlEv::Cancel);
-        finish_cancelled_turn(
-            &state,
-            &app,
-            &event_emitter,
-            &terminal_latch,
-            &turn_id,
-            task_run_id.as_deref(),
-            turn_state,
-        );
-        return Ok(ToolCallStep::Ended);
-    }
-    advance_or_finish!(TlEv::ToolRequest);
-    let params = parsed_params[call_index].clone();
-    let arg_parse_error = control_error.as_ref().map(|error| {
-                        serde_json::json!({
-                            "code": &error.code,
-                            "message": format!("{}；本批没有执行任何工具。{}", error.message,
-                                if transport_protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
-                                    "请按当前schema修正并仅提交一次binder_tool_batch，参数为唯一control和calls[{toolName,params}]，业务params不得含_binderTurn；不要重复已有操作。"
-                                } else {
-                                    "请按本原回合已冻结的工具schema修正响应控制，不得更换协议或重复已有操作。"
-                                }),
-                            "retriable": true,
-                        }).to_string()
-                    });
-    if c.name == "workspace_glob" && arg_parse_error.is_none() {
-        event_emitter.record_internal(
-            "workspace_glob_query_observed",
-            serde_json::json!({
-                "toolCallId": &c.id,
-                "query": workspace_glob_query_observation(
-                    &params,
-                    &raw_prompt,
-                    &history,
-                    &messages,
-                    active_doc_path.as_deref(),
-                    &reference_envelopes,
-                    &continuation_messages,
-                ),
-            }),
-        )?;
-    }
-    event_emitter.emit(
-        &terminal_latch,
-        AgTurnEventPayload::ToolRequest {
-            tool_call_id: c.id.clone(),
-            tool_name: c.name.clone(),
-            params: safe_tool_params(&params),
-        },
-    )?;
-    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
-    event_emitter.emit(
-        &terminal_latch,
-        AgTurnEventPayload::StepProgress {
-            action: if c.name == "propose_decision" || c.name == "plan_workspace_operation" {
-                "deciding".to_string()
-            } else {
-                "tool".to_string()
-            },
-            label: c.name.clone(),
-            detail: None,
-        },
-    )?;
-    let diff_events_after_tool: Vec<(String, u32, u32, String, String)>;
-    let decision_event_after_tool;
-    let end_after_diff_proposal;
-    // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
-    // The real one-use execution grant is computed below after acquisition.
     let acquisition_allowed = preflight_tool_acquisition_allowed(
         &capability_factors,
         &cancelled,
@@ -3613,7 +3579,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
                 &turn_id,
                 &error,
             );
-            return Ok(ToolCallStep::Ended);
+            return Ok(ToolCallAuthResult::Ended);
         }
     };
     let execution_grant = grant.execution_grant;
@@ -3642,7 +3608,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         &mut task_run_id,
     );
     let (execution_failure, execution_guard_error) = compute_execution_failure(
-        control_error.as_ref(),
+        control_error,
         parameter_contract_rejection,
         tool_decision.as_ref(),
         &c.name,
@@ -3652,7 +3618,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         &scope_candidates,
         task_run_prepare_error.as_ref(),
     );
-    let mut execution_failure = execution_failure;
+    let execution_failure = execution_failure;
     let read_execution = if arg_parse_error.is_none()
         && execution_guard_error.is_none()
         && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
@@ -3694,6 +3660,262 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         advance_or_finish!(TlEv::ValidateOk);
     } else if !validation_allows_execution {
         advance_or_finish!(TlEv::ValidateFail);
+    }
+    Ok(ToolCallAuthResult::Continue(ToolCallAuthOutcome {
+        state: ToolCallAuthState {
+            task_run_id,
+            agent_context_facts,
+            read_ctx,
+            active_snapshot,
+            capability_use_tracker,
+            remaining_tool_calls,
+            parameter_correction_rounds,
+            tool_loop_state,
+        },
+        capability_identity,
+        tool_decision,
+        execution_failure,
+        execution_guard_error,
+        read_execution,
+        validation_allows_execution,
+        scope_candidates,
+        context_failure_summary,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_one_tool_call<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    ctx: ToolCallContext<'_>,
+    tool_state: ToolCallState,
+    call: &crate::ent::gateway::GwToolCall,
+    parsed_params: &[serde_json::Value],
+    call_index: usize,
+    calls_len: usize,
+    control_error: Option<IpcError>,
+    final_only_after_rejection: bool,
+    flags: &mut ToolCallFlags,
+    correction_counted_this_round: &mut bool,
+) -> Result<ToolCallStep, IpcError> {
+    let ToolCallContext {
+        state,
+        latch: terminal_latch,
+        cancelled,
+        session_id,
+        workspace_id: workspace_id_for_turn,
+        turn_id,
+        runtime_profile,
+        explicit_edit_target_set,
+        tools,
+        ws_root,
+        on_context_request,
+        active_doc_path,
+        history,
+        raw_prompt,
+        reference_envelopes,
+        capability_factors,
+        transport_protocol,
+        execution_policy,
+        model_call_ordinal,
+        round_index,
+        remaining_rounds,
+    } = ctx;
+    let event_emitter = emitter;
+    let c = call;
+    let ToolCallState {
+        mut messages,
+        mut continuation_messages,
+        task_run_id,
+        intent_result,
+        agent_context_facts,
+        read_ctx,
+        active_snapshot,
+        capability_use_tracker,
+        remaining_tool_calls,
+        parameter_correction_rounds,
+        mut failed_read_signatures,
+        mut tool_loop_state,
+        turn_state,
+        current_doc_requires_tool_read,
+        mut current_doc_read_confirmed,
+        any_tool_called,
+        mut proposed_diff,
+        mut edit_blocked_reported,
+    } = tool_state;
+    let _round = round_index;
+    use ag::tool::ToolLoopEvent as TlEv;
+    let mut stop_after_current_tool = false;
+
+    if cancelled.load(Ordering::Acquire) {
+        if !advance_or_settle(
+            state,
+            app,
+            event_emitter,
+            terminal_latch,
+            turn_id,
+            task_run_id.as_deref(),
+            &mut tool_loop_state,
+            TlEv::Cancel,
+        ) {
+            return Ok(ToolCallStep::Ended);
+        }
+        finish_cancelled_turn(
+            &state,
+            &app,
+            &event_emitter,
+            &terminal_latch,
+            &turn_id,
+            task_run_id.as_deref(),
+            turn_state,
+        );
+        return Ok(ToolCallStep::Ended);
+    }
+    if !advance_or_settle(
+        state,
+        app,
+        event_emitter,
+        terminal_latch,
+        turn_id,
+        task_run_id.as_deref(),
+        &mut tool_loop_state,
+        TlEv::ToolRequest,
+    ) {
+        return Ok(ToolCallStep::Ended);
+    }
+    let params = parsed_params[call_index].clone();
+    let arg_parse_error = control_error.as_ref().map(|error| {
+                        serde_json::json!({
+                            "code": &error.code,
+                            "message": format!("{}；本批没有执行任何工具。{}", error.message,
+                                if transport_protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
+                                    "请按当前schema修正并仅提交一次binder_tool_batch，参数为唯一control和calls[{toolName,params}]，业务params不得含_binderTurn；不要重复已有操作。"
+                                } else {
+                                    "请按本原回合已冻结的工具schema修正响应控制，不得更换协议或重复已有操作。"
+                                }),
+                            "retriable": true,
+                        }).to_string()
+                    });
+    if c.name == "workspace_glob" && arg_parse_error.is_none() {
+        event_emitter.record_internal(
+            "workspace_glob_query_observed",
+            serde_json::json!({
+                "toolCallId": &c.id,
+                "query": workspace_glob_query_observation(
+                    &params,
+                    &raw_prompt,
+                    &history,
+                    &messages,
+                    active_doc_path.as_deref(),
+                    &reference_envelopes,
+                    &continuation_messages,
+                ),
+            }),
+        )?;
+    }
+    event_emitter.emit(
+        &terminal_latch,
+        AgTurnEventPayload::ToolRequest {
+            tool_call_id: c.id.clone(),
+            tool_name: c.name.clone(),
+            params: safe_tool_params(&params),
+        },
+    )?;
+    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
+    event_emitter.emit(
+        &terminal_latch,
+        AgTurnEventPayload::StepProgress {
+            action: if c.name == "propose_decision" || c.name == "plan_workspace_operation" {
+                "deciding".to_string()
+            } else {
+                "tool".to_string()
+            },
+            label: c.name.clone(),
+            detail: None,
+        },
+    )?;
+    let diff_events_after_tool: Vec<(String, u32, u32, String, String)>;
+    let decision_event_after_tool;
+    let end_after_diff_proposal;
+    // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
+    // The real one-use execution grant is computed below after acquisition.
+    let auth = match authorize_one_tool_call(
+        &app,
+        &event_emitter,
+        ToolCallAuthContext {
+            state,
+            latch: &terminal_latch,
+            cancelled: &cancelled,
+            session_id: &session_id,
+            workspace_id: &workspace_id_for_turn,
+            turn_id: &turn_id,
+            runtime_profile: &runtime_profile,
+            explicit_edit_target_set: &explicit_edit_target_set,
+            tools: &tools,
+            ws_root: ws_root.as_deref(),
+            on_context_request,
+            active_doc_path: active_doc_path.as_deref(),
+            capability_factors: &capability_factors,
+            execution_policy: &execution_policy,
+            model_call_ordinal,
+            intent: &intent_result,
+        },
+        ToolCallAuthState {
+            task_run_id,
+            agent_context_facts,
+            read_ctx,
+            active_snapshot,
+            capability_use_tracker,
+            remaining_tool_calls,
+            parameter_correction_rounds,
+            tool_loop_state,
+        },
+        flags,
+        c,
+        &params,
+        arg_parse_error.as_ref(),
+        control_error.as_ref(),
+        final_only_after_rejection,
+        correction_counted_this_round,
+    )
+    .await?
+    {
+        ToolCallAuthResult::Ended => return Ok(ToolCallStep::Ended),
+        ToolCallAuthResult::Continue(outcome) => outcome,
+    };
+    let ToolCallAuthState {
+        task_run_id,
+        agent_context_facts,
+        read_ctx,
+        active_snapshot,
+        capability_use_tracker,
+        remaining_tool_calls,
+        parameter_correction_rounds,
+        mut tool_loop_state,
+    } = auth.state;
+    let capability_identity = auth.capability_identity;
+    let tool_decision = auth.tool_decision;
+    let mut execution_failure = auth.execution_failure;
+    let execution_guard_error = auth.execution_guard_error;
+    let read_execution = auth.read_execution;
+    let validation_allows_execution = auth.validation_allows_execution;
+    let scope_candidates = auth.scope_candidates;
+    let context_failure_summary = auth.context_failure_summary;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut tool_loop_state,
+                $event,
+            ) {
+                return Ok(ToolCallStep::Ended);
+            }
+        }};
     }
     let execution = execute_tool_call(
         &app,
