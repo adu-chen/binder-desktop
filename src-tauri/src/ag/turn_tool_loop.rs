@@ -3378,7 +3378,7 @@ enum ToolCallStep {
  * type:     RB
  * chain:    AG-TOOL, AG-TURN
  * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
+ * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,execute_and_record_tool_call,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
  */
 struct ToolCallAuthContext<'a> {
     state: &'a AppState,
@@ -3683,6 +3683,282 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
     }))
 }
 
+struct ToolCallExecContext<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    ws_root: Option<&'a str>,
+    active_doc_path: Option<&'a str>,
+    read_ctx: &'a ag::blocks::AgentReadContext,
+}
+
+struct ToolCallExecState {
+    messages: Vec<serde_json::Value>,
+    continuation_messages: Vec<serde_json::Value>,
+    failed_read_signatures: BTreeSet<String>,
+    tool_loop_state: ag::tool::ToolLoopState,
+    current_doc_read_confirmed: bool,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+}
+
+struct ToolCallExecOutcome {
+    state: ToolCallExecState,
+    success: bool,
+    end_after_diff_proposal: bool,
+    decision: Option<crate::types::DecisionRequestV1>,
+    repeated_read_failure: bool,
+}
+
+enum ToolCallExecResult {
+    Continue(ToolCallExecOutcome),
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-080, BR-AG-STATE-001-RB-AG-AG-TOOL-080
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-STATE-002, BR-AG-STATE-001
+ * boundary: in=AuthorizedToolCallAndExecutionState | out=ToolCallExecContinueWithRecordedResultOrEndedTerminal | delegate=execute_tool_call,record_tool_result,advance_or_settle | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=authorizeToolOrIterateBatch
+ */
+#[allow(clippy::too_many_arguments)]
+async fn execute_and_record_tool_call<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    ctx: ToolCallExecContext<'_>,
+    exec_state: ToolCallExecState,
+    call: &crate::ent::gateway::GwToolCall,
+    params: &serde_json::Value,
+    arg_parse_error: Option<&String>,
+    control_error: Option<&IpcError>,
+    validation_allows_execution: bool,
+    mut execution_failure: Option<IpcError>,
+    execution_guard_error: Option<String>,
+    read_execution: Option<Result<String, IpcError>>,
+    capability_identity: crate::types::ToolCallReceiptIdentityV1,
+    tool_decision: Option<ag::tool::ToolDecision>,
+    scope_candidates: Result<Option<Vec<String>>, IpcError>,
+    context_failure_summary: Option<String>,
+    task_run_id: Option<&str>,
+    turn_state: ag::turn::TurnState,
+    current_doc_requires_tool_read: bool,
+) -> Result<ToolCallExecResult, IpcError> {
+    let ToolCallExecContext {
+        state,
+        latch: terminal_latch,
+        cancelled,
+        session_id,
+        workspace_id: workspace_id_for_turn,
+        turn_id,
+        explicit_edit_target_set,
+        ws_root,
+        active_doc_path,
+        read_ctx,
+    } = ctx;
+    let event_emitter = emitter;
+    let c = call;
+    let ToolCallExecState {
+        mut messages,
+        mut continuation_messages,
+        mut failed_read_signatures,
+        mut tool_loop_state,
+        mut current_doc_read_confirmed,
+        mut proposed_diff,
+        mut edit_blocked_reported,
+    } = exec_state;
+    use ag::tool::ToolLoopEvent as TlEv;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id,
+                &mut tool_loop_state,
+                $event,
+            ) {
+                return Ok(ToolCallExecResult::Ended);
+            }
+        }};
+    }
+    let diff_events_after_tool: Vec<(String, u32, u32, String, String)>;
+    let decision_event_after_tool;
+    let end_after_diff_proposal;
+    let execution = execute_tool_call(
+        &app,
+        ToolExecutionFacts {
+            state,
+            cancelled,
+            call: c,
+            params: &params,
+            arg_parse_error,
+            execution_guard_error: execution_guard_error.as_ref(),
+            tool_decision: tool_decision.as_ref(),
+            execution_failure,
+            read_execution,
+            ws_root: ws_root.as_deref(),
+            read_ctx,
+            active_doc_path: active_doc_path.as_deref(),
+            explicit_edit_target_set,
+            capability_identity: &capability_identity,
+            task_run_id: task_run_id.as_deref(),
+            scope_candidates: &scope_candidates,
+            current_doc_requires_tool_read,
+            current_doc_read_confirmed,
+            workspace_id: &workspace_id_for_turn,
+            session_id: &session_id,
+            turn_id: &turn_id,
+            proposed_diff,
+            edit_blocked_reported,
+        },
+    )
+    .await;
+    let result = execution.result;
+    let success = execution.success;
+    diff_events_after_tool = execution.diff_events;
+    decision_event_after_tool = execution.decision;
+    end_after_diff_proposal = execution.end_after_diff;
+    proposed_diff = execution.proposed_diff;
+    edit_blocked_reported = execution.edit_blocked_reported;
+    execution_failure = execution.execution_failure;
+    let repeated_read_failure = if validation_allows_execution && !success {
+        let is_read_only = ag::tool_registry::lookup(&c.name)
+            .is_some_and(|tool| tool.permission == ag::tool_registry::ToolPermission::ReadOnly);
+        execution_failure.as_ref().is_some_and(|error| {
+            is_read_only
+                && repeated_read_failure(&mut failed_read_signatures, &c.name, &params, &error.code)
+        })
+    } else {
+        false
+    };
+    if let Some(error) = &execution_failure {
+        event_emitter.record_internal("tool_failure_observed", serde_json::json!({
+                            "toolName": &c.name, "toolCallId": &c.id, "code": &error.code,
+                            "rejectionStage": if validation_allows_execution { "tool_execution" } else { "tool_validation" },
+                            "hasExpectedHash": params.get("expected_hash").is_some(),
+                            "hasCursor": params.get("cursor").is_some(),
+                            "nonInitialPage": params.get("cursor").is_some() || params.get("offset").and_then(|v|v.as_u64()).is_some_and(|offset|offset>0),
+                            "requestFingerprint": ag::context::sha256_text(&params.to_string()),
+                            "requestedReadOffset": params.get("offset").and_then(|value|value.as_u64()),
+                            "requestedLimitChars": params.get("limit_chars").and_then(|value|value.as_u64()),
+                            "requestedDirectoryLimit": params.get("limit").and_then(|value|value.as_u64()),
+                            "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
+                            "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
+                            "repeatedFailure": repeated_read_failure,
+                        }))?;
+    }
+    if success && is_current_doc_read_tool(&c.name, &params, active_doc_path.as_deref()) {
+        current_doc_read_confirmed = true;
+    }
+    if cancelled.load(Ordering::Acquire) {
+        advance_or_finish!(TlEv::Cancel);
+        finish_cancelled_turn(
+            &state,
+            &app,
+            &event_emitter,
+            terminal_latch,
+            &turn_id,
+            task_run_id.as_deref(),
+            turn_state,
+        );
+        return Ok(ToolCallExecResult::Ended);
+    }
+    if validation_allows_execution {
+        advance_or_finish!(if success {
+            TlEv::ExecOk
+        } else {
+            TlEv::ExecFail
+        });
+    }
+    if let Some(error) = execution_failure.as_ref().filter(|error| {
+        matches!(
+            error.code.as_str(),
+            "AG_CAPABILITY_TIMEOUT"
+                | "AG_CAPABILITY_WORKER_FAILED"
+                | "AG_EFFECT_FACT_UNAVAILABLE"
+                | "AG_EFFECT_PENDING"
+        )
+    }) {
+        advance_or_finish!(TlEv::LoopError);
+        settle_and_emit_ag_turn_error(
+            &state,
+            task_run_id.as_deref(),
+            &event_emitter,
+            terminal_latch,
+            &app,
+            &turn_id,
+            error,
+        );
+        return Ok(ToolCallExecResult::Ended);
+    }
+    if success && c.name == "read_doc" {
+        if let Ok(read) = serde_json::from_str::<serde_json::Value>(&result) {
+            event_emitter.record_internal("read_result_observed", serde_json::json!({
+                                "toolCallId": c.id, "toolName": c.name,
+                                "requestFingerprint": ag::context::sha256_text(&params.to_string()),
+                                "readView": read.get("view").and_then(|value|value.as_str()).unwrap_or("structure"),
+                                "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
+                                "returnedBlockCount": read.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
+                                "readOffset": read.get("offset"), "readEndOffset": read.get("end_offset"),
+                                "readTotalChars": read.get("total_chars"), "readHasMore": read.get("has_more"),
+                                "readComplete": read.get("complete"), "readVersion": read.get("version_hash"),
+                                "resultChars": serde_json::to_string(&result).expect("String serialization").chars().count(),
+                                "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
+                            }))?;
+        }
+    }
+    if !record_tool_result(
+        &event_emitter,
+        terminal_latch,
+        ToolResultFacts {
+            workspace_id: &workspace_id_for_turn,
+            turn_id: &turn_id,
+            tool_call_id: &c.id,
+            tool_name: &c.name,
+            params: &params,
+            read_ctx,
+            result: &result,
+            success,
+            validation_allows_execution,
+            execution_failure: execution_failure.as_ref(),
+            context_failure_summary,
+            identity: &capability_identity,
+            diff_events: &diff_events_after_tool,
+            decision: decision_event_after_tool.as_ref(),
+            repeated_read_failure,
+            control_error: control_error.is_some(),
+            task_run_id: task_run_id.as_deref(),
+        },
+        &mut messages,
+        &mut continuation_messages,
+    )? {
+        return Ok(ToolCallExecResult::Ended);
+    }
+    Ok(ToolCallExecResult::Continue(ToolCallExecOutcome {
+        state: ToolCallExecState {
+            messages,
+            continuation_messages,
+            failed_read_signatures,
+            tool_loop_state,
+            current_doc_read_confirmed,
+            proposed_diff,
+            edit_blocked_reported,
+        },
+        success,
+        end_after_diff_proposal,
+        decision: decision_event_after_tool,
+        repeated_read_failure,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_one_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -3724,8 +4000,8 @@ async fn run_one_tool_call<R: tauri::Runtime>(
     let event_emitter = emitter;
     let c = call;
     let ToolCallState {
-        mut messages,
-        mut continuation_messages,
+        messages,
+        continuation_messages,
         task_run_id,
         intent_result,
         agent_context_facts,
@@ -3734,14 +4010,14 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         capability_use_tracker,
         remaining_tool_calls,
         parameter_correction_rounds,
-        mut failed_read_signatures,
+        failed_read_signatures,
         mut tool_loop_state,
         turn_state,
         current_doc_requires_tool_read,
-        mut current_doc_read_confirmed,
+        current_doc_read_confirmed,
         any_tool_called,
-        mut proposed_diff,
-        mut edit_blocked_reported,
+        proposed_diff,
+        edit_blocked_reported,
     } = tool_state;
     let _round = round_index;
     use ag::tool::ToolLoopEvent as TlEv;
@@ -3834,9 +4110,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             detail: None,
         },
     )?;
-    let diff_events_after_tool: Vec<(String, u32, u32, String, String)>;
-    let decision_event_after_tool;
-    let end_after_diff_proposal;
     // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
     // The real one-use execution grant is computed below after acquisition.
     let auth = match authorize_one_tool_call(
@@ -3891,16 +4164,74 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         capability_use_tracker,
         remaining_tool_calls,
         parameter_correction_rounds,
-        mut tool_loop_state,
+        tool_loop_state,
     } = auth.state;
     let capability_identity = auth.capability_identity;
     let tool_decision = auth.tool_decision;
-    let mut execution_failure = auth.execution_failure;
+    let execution_failure = auth.execution_failure;
     let execution_guard_error = auth.execution_guard_error;
     let read_execution = auth.read_execution;
     let validation_allows_execution = auth.validation_allows_execution;
     let scope_candidates = auth.scope_candidates;
     let context_failure_summary = auth.context_failure_summary;
+    let exec = match execute_and_record_tool_call(
+        &app,
+        &event_emitter,
+        ToolCallExecContext {
+            state,
+            latch: &terminal_latch,
+            cancelled: &cancelled,
+            session_id: &session_id,
+            workspace_id: &workspace_id_for_turn,
+            turn_id: &turn_id,
+            explicit_edit_target_set: &explicit_edit_target_set,
+            ws_root: ws_root.as_deref(),
+            active_doc_path: active_doc_path.as_deref(),
+            read_ctx: &read_ctx,
+        },
+        ToolCallExecState {
+            messages,
+            continuation_messages,
+            failed_read_signatures,
+            tool_loop_state,
+            current_doc_read_confirmed,
+            proposed_diff,
+            edit_blocked_reported,
+        },
+        c,
+        &params,
+        arg_parse_error.as_ref(),
+        control_error.as_ref(),
+        validation_allows_execution,
+        execution_failure,
+        execution_guard_error,
+        read_execution,
+        capability_identity,
+        tool_decision,
+        scope_candidates,
+        context_failure_summary,
+        task_run_id.as_deref(),
+        turn_state,
+        current_doc_requires_tool_read,
+    )
+    .await?
+    {
+        ToolCallExecResult::Ended => return Ok(ToolCallStep::Ended),
+        ToolCallExecResult::Continue(outcome) => outcome,
+    };
+    let ToolCallExecState {
+        messages,
+        continuation_messages,
+        failed_read_signatures,
+        mut tool_loop_state,
+        current_doc_read_confirmed,
+        proposed_diff,
+        edit_blocked_reported,
+    } = exec.state;
+    let success = exec.success;
+    let end_after_diff_proposal = exec.end_after_diff_proposal;
+    let decision_event_after_tool = exec.decision;
+    let repeated_read_failure = exec.repeated_read_failure;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
             if !advance_or_settle(
@@ -3916,156 +4247,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
                 return Ok(ToolCallStep::Ended);
             }
         }};
-    }
-    let execution = execute_tool_call(
-        &app,
-        ToolExecutionFacts {
-            state,
-            cancelled: &cancelled,
-            call: c,
-            params: &params,
-            arg_parse_error: arg_parse_error.as_ref(),
-            execution_guard_error: execution_guard_error.as_ref(),
-            tool_decision: tool_decision.as_ref(),
-            execution_failure,
-            read_execution,
-            ws_root: ws_root.as_deref(),
-            read_ctx: &read_ctx,
-            active_doc_path: active_doc_path.as_deref(),
-            explicit_edit_target_set: &explicit_edit_target_set,
-            capability_identity: &capability_identity,
-            task_run_id: task_run_id.as_deref(),
-            scope_candidates: &scope_candidates,
-            current_doc_requires_tool_read,
-            current_doc_read_confirmed,
-            workspace_id: &workspace_id_for_turn,
-            session_id: &session_id,
-            turn_id: &turn_id,
-            proposed_diff,
-            edit_blocked_reported,
-        },
-    )
-    .await;
-    let result = execution.result;
-    let success = execution.success;
-    diff_events_after_tool = execution.diff_events;
-    decision_event_after_tool = execution.decision;
-    end_after_diff_proposal = execution.end_after_diff;
-    proposed_diff = execution.proposed_diff;
-    edit_blocked_reported = execution.edit_blocked_reported;
-    execution_failure = execution.execution_failure;
-    let repeated_read_failure = if validation_allows_execution && !success {
-        let is_read_only = ag::tool_registry::lookup(&c.name)
-            .is_some_and(|tool| tool.permission == ag::tool_registry::ToolPermission::ReadOnly);
-        execution_failure.as_ref().is_some_and(|error| {
-            is_read_only
-                && repeated_read_failure(&mut failed_read_signatures, &c.name, &params, &error.code)
-        })
-    } else {
-        false
-    };
-    if let Some(error) = &execution_failure {
-        event_emitter.record_internal("tool_failure_observed", serde_json::json!({
-                            "toolName": &c.name, "toolCallId": &c.id, "code": &error.code,
-                            "rejectionStage": if validation_allows_execution { "tool_execution" } else { "tool_validation" },
-                            "hasExpectedHash": params.get("expected_hash").is_some(),
-                            "hasCursor": params.get("cursor").is_some(),
-                            "nonInitialPage": params.get("cursor").is_some() || params.get("offset").and_then(|v|v.as_u64()).is_some_and(|offset|offset>0),
-                            "requestFingerprint": ag::context::sha256_text(&params.to_string()),
-                            "requestedReadOffset": params.get("offset").and_then(|value|value.as_u64()),
-                            "requestedLimitChars": params.get("limit_chars").and_then(|value|value.as_u64()),
-                            "requestedDirectoryLimit": params.get("limit").and_then(|value|value.as_u64()),
-                            "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
-                            "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
-                            "repeatedFailure": repeated_read_failure,
-                        }))?;
-    }
-    if success && is_current_doc_read_tool(&c.name, &params, active_doc_path.as_deref()) {
-        current_doc_read_confirmed = true;
-    }
-    if cancelled.load(Ordering::Acquire) {
-        advance_or_finish!(TlEv::Cancel);
-        finish_cancelled_turn(
-            &state,
-            &app,
-            &event_emitter,
-            &terminal_latch,
-            &turn_id,
-            task_run_id.as_deref(),
-            turn_state,
-        );
-        return Ok(ToolCallStep::Ended);
-    }
-    if validation_allows_execution {
-        advance_or_finish!(if success {
-            TlEv::ExecOk
-        } else {
-            TlEv::ExecFail
-        });
-    }
-    if let Some(error) = execution_failure.as_ref().filter(|error| {
-        matches!(
-            error.code.as_str(),
-            "AG_CAPABILITY_TIMEOUT"
-                | "AG_CAPABILITY_WORKER_FAILED"
-                | "AG_EFFECT_FACT_UNAVAILABLE"
-                | "AG_EFFECT_PENDING"
-        )
-    }) {
-        advance_or_finish!(TlEv::LoopError);
-        settle_and_emit_ag_turn_error(
-            &state,
-            task_run_id.as_deref(),
-            &event_emitter,
-            &terminal_latch,
-            &app,
-            &turn_id,
-            error,
-        );
-        return Ok(ToolCallStep::Ended);
-    }
-    if success && c.name == "read_doc" {
-        if let Ok(read) = serde_json::from_str::<serde_json::Value>(&result) {
-            event_emitter.record_internal("read_result_observed", serde_json::json!({
-                                "toolCallId": c.id, "toolName": c.name,
-                                "requestFingerprint": ag::context::sha256_text(&params.to_string()),
-                                "readView": read.get("view").and_then(|value|value.as_str()).unwrap_or("structure"),
-                                "requestedBlockCount": params.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
-                                "returnedBlockCount": read.get("blocks").and_then(|value|value.as_array()).map(|blocks|blocks.len()),
-                                "readOffset": read.get("offset"), "readEndOffset": read.get("end_offset"),
-                                "readTotalChars": read.get("total_chars"), "readHasMore": read.get("has_more"),
-                                "readComplete": read.get("complete"), "readVersion": read.get("version_hash"),
-                                "resultChars": serde_json::to_string(&result).expect("String serialization").chars().count(),
-                                "resultLimitChars": ag::prompt_runtime::TOOL_RESULT_MAX_SERIALIZED_CHARS,
-                            }))?;
-        }
-    }
-    if !record_tool_result(
-        &event_emitter,
-        &terminal_latch,
-        ToolResultFacts {
-            workspace_id: &workspace_id_for_turn,
-            turn_id: &turn_id,
-            tool_call_id: &c.id,
-            tool_name: &c.name,
-            params: &params,
-            read_ctx: &read_ctx,
-            result: &result,
-            success,
-            validation_allows_execution,
-            execution_failure: execution_failure.as_ref(),
-            context_failure_summary,
-            identity: &capability_identity,
-            diff_events: &diff_events_after_tool,
-            decision: decision_event_after_tool.as_ref(),
-            repeated_read_failure,
-            control_error: control_error.is_some(),
-            task_run_id: task_run_id.as_deref(),
-        },
-        &mut messages,
-        &mut continuation_messages,
-    )? {
-        return Ok(ToolCallStep::Ended);
     }
     if let Some(decision) = decision_event_after_tool {
         park_decision_handoff(
