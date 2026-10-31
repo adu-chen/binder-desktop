@@ -4712,10 +4712,363 @@ fn handle_response_rejection<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
+struct ToolCallsRoundContext<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    runtime_profile: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    tools: &'a serde_json::Value,
+    ws_root: Option<&'a str>,
+    on_context_request: Option<&'a tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
+    active_doc_path: Option<&'a str>,
+    history: &'a [ag::context::HistTurn],
+    raw_prompt: &'a str,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
+    transport_protocol: &'a str,
+    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
+    model_call_ordinal: usize,
+    round_index: usize,
+    remaining_rounds: usize,
+    current_doc_prompt_coverage: Option<&'static str>,
+}
+
+struct ToolCallsRoundState {
+    messages: Vec<serde_json::Value>,
+    continuation_messages: Vec<serde_json::Value>,
+    task_run_id: Option<String>,
+    intent_result: ag::context::IntentResultV2,
+    agent_context_facts: crate::types::AgentContextFacts,
+    read_ctx: ag::blocks::AgentReadContext,
+    active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
+    capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
+    remaining_tool_calls: u32,
+    protocol_correction_rounds: usize,
+    protocol_correction_diagnostic: Option<serde_json::Value>,
+    parameter_correction_rounds: usize,
+    failed_read_signatures: BTreeSet<String>,
+    seen_tool_call_ids: BTreeSet<String>,
+    tool_loop_state: ag::tool::ToolLoopState,
+    turn_state: ag::turn::TurnState,
+    current_doc_requires_tool_read: bool,
+    current_doc_read_confirmed: bool,
+    any_tool_called: bool,
+    proposed_diff: bool,
+    edit_blocked_reported: bool,
+    final_only_correction_pending: bool,
+    parameter_correction_pending: bool,
+    read_failure_final_pending: bool,
+}
+
+enum ToolCallsRoundResult {
+    Continue(ToolCallsRoundState),
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-082, BR-AG-STATE-002-RB-AG-AG-TOOL-082
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002
+ * boundary: in=ValidatedToolCallsBatchAndToolCallsRoundState | out=ToolCallsRoundContinueWithPreparedBatchOrEndedTerminal | delegate=prepare_tool_batch,run_tool_call_loop | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=callProviderOrCloseRound
+ */
+#[allow(clippy::too_many_arguments)]
+async fn handle_tool_calls_round<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    ctx: ToolCallsRoundContext<'_>,
+    round_state: ToolCallsRoundState,
+    response_control: Result<Option<ag::model_output::ModelTurnControl>, IpcError>,
+    calls: Vec<crate::ent::gateway::GwToolCall>,
+    final_only_after_rejection: bool,
+) -> Result<ToolCallsRoundResult, IpcError> {
+    let ToolCallsRoundContext {
+        state,
+        latch: terminal_latch,
+        cancelled,
+        session_id,
+        workspace_id: workspace_id_for_turn,
+        turn_id,
+        runtime_profile,
+        explicit_edit_target_set,
+        tools,
+        ws_root,
+        on_context_request,
+        active_doc_path,
+        history,
+        raw_prompt,
+        reference_envelopes,
+        capability_factors,
+        transport_protocol,
+        execution_policy,
+        model_call_ordinal,
+        round_index,
+        remaining_rounds,
+        current_doc_prompt_coverage,
+    } = ctx;
+    let event_emitter = emitter;
+    let ToolCallsRoundState {
+        mut messages,
+        mut continuation_messages,
+        mut task_run_id,
+        mut intent_result,
+        mut agent_context_facts,
+        mut read_ctx,
+        mut active_snapshot,
+        mut capability_use_tracker,
+        mut remaining_tool_calls,
+        mut protocol_correction_rounds,
+        mut protocol_correction_diagnostic,
+        mut parameter_correction_rounds,
+        mut failed_read_signatures,
+        mut seen_tool_call_ids,
+        mut tool_loop_state,
+        mut turn_state,
+        mut current_doc_requires_tool_read,
+        mut current_doc_read_confirmed,
+        mut any_tool_called,
+        mut proposed_diff,
+        mut edit_blocked_reported,
+        mut final_only_correction_pending,
+        mut parameter_correction_pending,
+        mut read_failure_final_pending,
+    } = round_state;
+    let _round = round_index;
+    use ag::tool::ToolLoopEvent as TlEv;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut tool_loop_state,
+                $event,
+            ) {
+                return Ok(ToolCallsRoundResult::Ended);
+            }
+        }};
+    }
+
+    let output_control = response_control.expect("validated optional control");
+    let prepared = match prepare_tool_batch(
+        &event_emitter,
+        ToolBatchFacts {
+            state,
+            latch: &terminal_latch,
+            session_id: &session_id,
+            workspace_id: &workspace_id_for_turn,
+            turn_id: &turn_id,
+            explicit_edit_target_set: &explicit_edit_target_set,
+            calls,
+            transport_protocol: &transport_protocol,
+            output_control,
+            seen_tool_call_ids: &mut seen_tool_call_ids,
+            protocol_correction_rounds: &mut protocol_correction_rounds,
+            protocol_correction_diagnostic: &mut protocol_correction_diagnostic,
+            max_corrections: execution_policy.max_corrections,
+            task_run_id: &mut task_run_id,
+            intent_result: &mut intent_result,
+            raw_prompt: &raw_prompt,
+            history: &history,
+            messages: &messages,
+            active_doc_path: active_doc_path.as_deref(),
+            reference_envelopes: &reference_envelopes,
+            continuation_messages: &continuation_messages,
+        },
+    ) {
+        Ok(prepared) => prepared,
+        Err(ToolBatchFailure::Propagate(error)) => return Err(error),
+        Err(ToolBatchFailure::Settle(error)) => {
+            advance_or_finish!(TlEv::LoopError);
+            settle_and_emit_ag_turn_error(
+                &state,
+                task_run_id.as_deref(),
+                &event_emitter,
+                &terminal_latch,
+                &app,
+                &turn_id,
+                &error,
+            );
+            return Ok(ToolCallsRoundResult::Ended);
+        }
+    };
+    let calls = prepared.calls;
+    let parsed_params = prepared.parsed_params;
+    let control_error = prepared.control_error;
+    let native_transport = prepared.native_transport;
+    let correction_counted_this_round = control_error.is_some();
+    if control_error.is_some() {
+        // The response-level rejection happened before the per-tool parameter
+        // branch below. It still needs an explicit correction on the next model
+        // request; otherwise the model sees neither the rejected arguments nor
+        // the reason to rebuild them.
+        if final_only_after_rejection {
+            final_only_correction_pending = true;
+        } else {
+            parameter_correction_pending = true;
+        }
+    }
+    current_doc_requires_tool_read = matches!(
+        intent_result.side_effect_intent,
+        ag::context::SideEffectIntentV2::ContentProposal
+    ) && current_doc_prompt_coverage != Some("full_document")
+        && !current_doc_read_confirmed;
+    any_tool_called = true;
+    // 先把 assistant 的 tool_calls 入历史（OpenAI 要求 tool 结果前有对应 assistant.tool_calls）。
+    let tc_json: Vec<serde_json::Value> = calls
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id, "type": "function",
+                "function": { "name": c.name, "arguments": c.arguments }
+            })
+        })
+        .collect();
+    let mut assistant_tool_calls =
+        serde_json::json!({ "role": "assistant", "content": null, "tool_calls": tc_json });
+    if control_error.is_none() {
+        if let Some(native) = native_transport.as_ref() {
+            event_emitter.record_internal("tool_transport_observed", serde_json::json!({"protocolVersion":"binder-tool-batch-v1","businessCallCount":calls.len()}))?;
+            assistant_tool_calls["nativeBatch"] = serde_json::json!({"id":native.id,"type":"function","function":{"name":native.name,"arguments":native.arguments}});
+        } else {
+            event_emitter.record_internal("tool_transport_observed", serde_json::json!({"protocolVersion":&transport_protocol,"businessCallCount":calls.len()}))?;
+        }
+    }
+    messages.push(assistant_tool_calls.clone());
+    // A batch rejected before execution must remain in the internal event and
+    // receipt trail, but its malformed arguments are not a useful model example.
+    // Keep only the safe correction instruction in the next provider request.
+    if control_error.is_none() {
+        continuation_messages.push(assistant_tool_calls);
+    }
+
+    let tool_call_context = ToolCallContext {
+        state,
+        latch: &terminal_latch,
+        cancelled: &cancelled,
+        session_id: &session_id,
+        workspace_id: &workspace_id_for_turn,
+        turn_id: &turn_id,
+        runtime_profile: &runtime_profile,
+        explicit_edit_target_set: &explicit_edit_target_set,
+        tools: &tools,
+        ws_root: ws_root.as_deref(),
+        on_context_request,
+        active_doc_path: active_doc_path.as_deref(),
+        history: &history,
+        raw_prompt: &raw_prompt,
+        reference_envelopes: &reference_envelopes,
+        capability_factors: &capability_factors,
+        transport_protocol: &transport_protocol,
+        execution_policy: &execution_policy,
+        model_call_ordinal,
+        round_index: _round,
+        remaining_rounds,
+    };
+    let tool_call_state = ToolCallState {
+        messages,
+        continuation_messages,
+        task_run_id,
+        intent_result,
+        agent_context_facts,
+        read_ctx,
+        active_snapshot,
+        capability_use_tracker,
+        remaining_tool_calls,
+        parameter_correction_rounds,
+        failed_read_signatures,
+        tool_loop_state,
+        turn_state,
+        current_doc_requires_tool_read,
+        current_doc_read_confirmed,
+        any_tool_called,
+        proposed_diff,
+        edit_blocked_reported,
+    };
+    let mut tool_call_flags = ToolCallFlags {
+        final_only_correction_pending,
+        parameter_correction_pending,
+        read_failure_final_pending,
+    };
+    match run_tool_call_loop(
+        &app,
+        &event_emitter,
+        tool_call_context,
+        tool_call_state,
+        calls,
+        parsed_params,
+        control_error,
+        final_only_after_rejection,
+        correction_counted_this_round,
+        &mut tool_call_flags,
+    )
+    .await?
+    {
+        ToolCallLoopResult::Ended => return Ok(ToolCallsRoundResult::Ended),
+        ToolCallLoopResult::Continue(state) => {
+            messages = state.messages;
+            continuation_messages = state.continuation_messages;
+            task_run_id = state.task_run_id;
+            intent_result = state.intent_result;
+            agent_context_facts = state.agent_context_facts;
+            read_ctx = state.read_ctx;
+            active_snapshot = state.active_snapshot;
+            capability_use_tracker = state.capability_use_tracker;
+            remaining_tool_calls = state.remaining_tool_calls;
+            parameter_correction_rounds = state.parameter_correction_rounds;
+            failed_read_signatures = state.failed_read_signatures;
+            tool_loop_state = state.tool_loop_state;
+            turn_state = state.turn_state;
+            current_doc_requires_tool_read = state.current_doc_requires_tool_read;
+            current_doc_read_confirmed = state.current_doc_read_confirmed;
+            any_tool_called = state.any_tool_called;
+            proposed_diff = state.proposed_diff;
+            edit_blocked_reported = state.edit_blocked_reported;
+            final_only_correction_pending = tool_call_flags.final_only_correction_pending;
+            parameter_correction_pending = tool_call_flags.parameter_correction_pending;
+            read_failure_final_pending = tool_call_flags.read_failure_final_pending;
+        }
+    }
+    Ok(ToolCallsRoundResult::Continue(ToolCallsRoundState {
+        messages,
+        continuation_messages,
+        task_run_id,
+        intent_result,
+        agent_context_facts,
+        read_ctx,
+        active_snapshot,
+        capability_use_tracker,
+        remaining_tool_calls,
+        protocol_correction_rounds,
+        protocol_correction_diagnostic,
+        parameter_correction_rounds,
+        failed_read_signatures,
+        seen_tool_call_ids,
+        tool_loop_state,
+        turn_state,
+        current_doc_requires_tool_read,
+        current_doc_read_confirmed,
+        any_tool_called,
+        proposed_diff,
+        edit_blocked_reported,
+        final_only_correction_pending,
+        parameter_correction_pending,
+        read_failure_final_pending,
+    }))
+}
+
 async fn run_round_loop<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     ctx: RoundContext<'_, R>,
@@ -5064,100 +5417,7 @@ async fn run_round_loop<R: tauri::Runtime>(
                 );
             }
             ent::gateway::RoundOutcome::ToolCalls(calls) => {
-                let output_control = response_control.expect("validated optional control");
-                let prepared = match prepare_tool_batch(
-                    &event_emitter,
-                    ToolBatchFacts {
-                        state,
-                        latch: &terminal_latch,
-                        session_id: &session_id,
-                        workspace_id: &workspace_id_for_turn,
-                        turn_id: &turn_id,
-                        explicit_edit_target_set: &explicit_edit_target_set,
-                        calls,
-                        transport_protocol: &transport_protocol,
-                        output_control,
-                        seen_tool_call_ids: &mut seen_tool_call_ids,
-                        protocol_correction_rounds: &mut protocol_correction_rounds,
-                        protocol_correction_diagnostic: &mut protocol_correction_diagnostic,
-                        max_corrections: execution_policy.max_corrections,
-                        task_run_id: &mut task_run_id,
-                        intent_result: &mut intent_result,
-                        raw_prompt: &raw_prompt,
-                        history: &history,
-                        messages: &messages,
-                        active_doc_path: active_doc_path.as_deref(),
-                        reference_envelopes: &reference_envelopes,
-                        continuation_messages: &continuation_messages,
-                    },
-                ) {
-                    Ok(prepared) => prepared,
-                    Err(ToolBatchFailure::Propagate(error)) => return Err(error),
-                    Err(ToolBatchFailure::Settle(error)) => {
-                        advance_or_finish!(TlEv::LoopError);
-                        settle_and_emit_ag_turn_error(
-                            &state,
-                            task_run_id.as_deref(),
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            &error,
-                        );
-                        return Ok(());
-                    }
-                };
-                let calls = prepared.calls;
-                let parsed_params = prepared.parsed_params;
-                let control_error = prepared.control_error;
-                let native_transport = prepared.native_transport;
-                let correction_counted_this_round = control_error.is_some();
-                if control_error.is_some() {
-                    // The response-level rejection happened before the per-tool parameter
-                    // branch below. It still needs an explicit correction on the next model
-                    // request; otherwise the model sees neither the rejected arguments nor
-                    // the reason to rebuild them.
-                    if final_only_after_rejection {
-                        final_only_correction_pending = true;
-                    } else {
-                        parameter_correction_pending = true;
-                    }
-                }
-                current_doc_requires_tool_read = matches!(
-                    intent_result.side_effect_intent,
-                    ag::context::SideEffectIntentV2::ContentProposal
-                ) && current_doc_prompt_coverage
-                    != Some("full_document")
-                    && !current_doc_read_confirmed;
-                any_tool_called = true;
-                // 先把 assistant 的 tool_calls 入历史（OpenAI 要求 tool 结果前有对应 assistant.tool_calls）。
-                let tc_json: Vec<serde_json::Value> = calls
-                    .iter()
-                    .map(|c| {
-                        serde_json::json!({
-                            "id": c.id, "type": "function",
-                            "function": { "name": c.name, "arguments": c.arguments }
-                        })
-                    })
-                    .collect();
-                let mut assistant_tool_calls = serde_json::json!({ "role": "assistant", "content": null, "tool_calls": tc_json });
-                if control_error.is_none() {
-                    if let Some(native) = native_transport.as_ref() {
-                        event_emitter.record_internal("tool_transport_observed", serde_json::json!({"protocolVersion":"binder-tool-batch-v1","businessCallCount":calls.len()}))?;
-                        assistant_tool_calls["nativeBatch"] = serde_json::json!({"id":native.id,"type":"function","function":{"name":native.name,"arguments":native.arguments}});
-                    } else {
-                        event_emitter.record_internal("tool_transport_observed", serde_json::json!({"protocolVersion":&transport_protocol,"businessCallCount":calls.len()}))?;
-                    }
-                }
-                messages.push(assistant_tool_calls.clone());
-                // A batch rejected before execution must remain in the internal event and
-                // receipt trail, but its malformed arguments are not a useful model example.
-                // Keep only the safe correction instruction in the next provider request.
-                if control_error.is_none() {
-                    continuation_messages.push(assistant_tool_calls);
-                }
-
-                let tool_call_context = ToolCallContext {
+                let tool_calls_ctx = ToolCallsRoundContext {
                     state,
                     latch: &terminal_latch,
                     cancelled: &cancelled,
@@ -5179,8 +5439,9 @@ async fn run_round_loop<R: tauri::Runtime>(
                     model_call_ordinal,
                     round_index: _round,
                     remaining_rounds,
+                    current_doc_prompt_coverage,
                 };
-                let tool_call_state = ToolCallState {
+                let tool_calls_state = ToolCallsRoundState {
                     messages,
                     continuation_messages,
                     task_run_id,
@@ -5190,8 +5451,11 @@ async fn run_round_loop<R: tauri::Runtime>(
                     active_snapshot,
                     capability_use_tracker,
                     remaining_tool_calls,
+                    protocol_correction_rounds,
+                    protocol_correction_diagnostic,
                     parameter_correction_rounds,
                     failed_read_signatures,
+                    seen_tool_call_ids,
                     tool_loop_state,
                     turn_state,
                     current_doc_requires_tool_read,
@@ -5199,50 +5463,51 @@ async fn run_round_loop<R: tauri::Runtime>(
                     any_tool_called,
                     proposed_diff,
                     edit_blocked_reported,
-                };
-                let mut tool_call_flags = ToolCallFlags {
                     final_only_correction_pending,
                     parameter_correction_pending,
                     read_failure_final_pending,
                 };
-                match run_tool_call_loop(
+                match handle_tool_calls_round(
                     &app,
                     &event_emitter,
-                    tool_call_context,
-                    tool_call_state,
+                    tool_calls_ctx,
+                    tool_calls_state,
+                    response_control,
                     calls,
-                    parsed_params,
-                    control_error,
                     final_only_after_rejection,
-                    correction_counted_this_round,
-                    &mut tool_call_flags,
                 )
                 .await?
                 {
-                    ToolCallLoopResult::Ended => return Ok(()),
-                    ToolCallLoopResult::Continue(state) => {
-                        messages = state.messages;
-                        continuation_messages = state.continuation_messages;
-                        task_run_id = state.task_run_id;
-                        intent_result = state.intent_result;
-                        agent_context_facts = state.agent_context_facts;
-                        read_ctx = state.read_ctx;
-                        active_snapshot = state.active_snapshot;
-                        capability_use_tracker = state.capability_use_tracker;
-                        remaining_tool_calls = state.remaining_tool_calls;
-                        parameter_correction_rounds = state.parameter_correction_rounds;
-                        failed_read_signatures = state.failed_read_signatures;
-                        tool_loop_state = state.tool_loop_state;
-                        turn_state = state.turn_state;
-                        current_doc_requires_tool_read = state.current_doc_requires_tool_read;
-                        current_doc_read_confirmed = state.current_doc_read_confirmed;
-                        any_tool_called = state.any_tool_called;
-                        proposed_diff = state.proposed_diff;
-                        edit_blocked_reported = state.edit_blocked_reported;
+                    ToolCallsRoundResult::Ended => return Ok(()),
+                    ToolCallsRoundResult::Continue(tool_calls_state) => {
+                        messages = tool_calls_state.messages;
+                        continuation_messages = tool_calls_state.continuation_messages;
+                        task_run_id = tool_calls_state.task_run_id;
+                        intent_result = tool_calls_state.intent_result;
+                        agent_context_facts = tool_calls_state.agent_context_facts;
+                        read_ctx = tool_calls_state.read_ctx;
+                        active_snapshot = tool_calls_state.active_snapshot;
+                        capability_use_tracker = tool_calls_state.capability_use_tracker;
+                        remaining_tool_calls = tool_calls_state.remaining_tool_calls;
+                        protocol_correction_rounds = tool_calls_state.protocol_correction_rounds;
+                        protocol_correction_diagnostic =
+                            tool_calls_state.protocol_correction_diagnostic;
+                        parameter_correction_rounds = tool_calls_state.parameter_correction_rounds;
+                        failed_read_signatures = tool_calls_state.failed_read_signatures;
+                        seen_tool_call_ids = tool_calls_state.seen_tool_call_ids;
+                        tool_loop_state = tool_calls_state.tool_loop_state;
+                        turn_state = tool_calls_state.turn_state;
+                        current_doc_requires_tool_read =
+                            tool_calls_state.current_doc_requires_tool_read;
+                        current_doc_read_confirmed = tool_calls_state.current_doc_read_confirmed;
+                        any_tool_called = tool_calls_state.any_tool_called;
+                        proposed_diff = tool_calls_state.proposed_diff;
+                        edit_blocked_reported = tool_calls_state.edit_blocked_reported;
                         final_only_correction_pending =
-                            tool_call_flags.final_only_correction_pending;
-                        parameter_correction_pending = tool_call_flags.parameter_correction_pending;
-                        read_failure_final_pending = tool_call_flags.read_failure_final_pending;
+                            tool_calls_state.final_only_correction_pending;
+                        parameter_correction_pending =
+                            tool_calls_state.parameter_correction_pending;
+                        read_failure_final_pending = tool_calls_state.read_failure_final_pending;
                     }
                 }
             }
