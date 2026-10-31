@@ -12,6 +12,7 @@ use crate::{ag, ent, workspace, AppState};
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
+use super::cancel_settlement::settle_cancelled_turn;
 use super::edit_support::is_active_editor_snapshot_source;
 use super::reference_runtime::BlockRef;
 use super::task_runtime::settle_optional_task_run;
@@ -20,7 +21,7 @@ use super::turn_control::{
     register_active_agent_turn, validate_agent_turn_decision_resume, AgentTurnResumeKind,
 };
 use super::turn_events::{
-    emit_ag01, emit_ag_turn_cancelled_from, emit_ag_turn_denied, emit_ag_turn_error_from,
+    emit_ag01, emit_ag_turn_denied, emit_ag_turn_error_from,
     settle_and_emit_ag_turn_error_from, sm_error, TurnEventEmitter,
 };
 use super::turn_prompt::{prepare_turn_prompt, PreparedTurnPrompt};
@@ -1648,21 +1649,17 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
     let s = started_turn_or_finish!(transition(s, TurnEvent::Assembled).ok_or_else(sm_error)); // → AwaitingGate
     emit_ag01(&app, &turn_id, s);
     if cancelled.load(Ordering::Acquire) {
-        if let Ok(conn) = state.db.lock() {
-            settle_optional_task_run(
-                &conn,
-                task_run_id.as_deref(),
-                &turn_id,
-                ag::task::TurnOutcome::Cancelled,
-            );
-        }
-        emit_ag_turn_cancelled_from(
+        if let Err(error) = settle_cancelled_turn(
+            &state,
+            &app,
             &event_emitter,
             &terminal_latch,
-            &app,
             &turn_id,
+            task_run_id.as_deref(),
             TurnState::AwaitingGate,
-        );
+        ) {
+            eprintln!("[ag-trace] turn_id={turn_id} cancel_settlement_failed={}", error.message);
+        }
         return Ok(());
     }
     let (_remaining_tools, remaining_rounds) = super::turn_tool_loop::continuation_execution_budget(
@@ -1710,21 +1707,17 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
                 "gate_evaluated",
                 serde_json::json!({"attempt": gate_attempt, "outcome": "cancelled"}),
             )?;
-            if let Ok(conn) = state.db.lock() {
-                settle_optional_task_run(
-                    &conn,
-                    task_run_id.as_deref(),
-                    &turn_id,
-                    ag::task::TurnOutcome::Cancelled,
-                );
-            }
-            emit_ag_turn_cancelled_from(
+            if let Err(error) = settle_cancelled_turn(
+                &state,
+                &app,
                 &event_emitter,
                 &terminal_latch,
-                &app,
                 &turn_id,
+                task_run_id.as_deref(),
                 TurnState::AwaitingGate,
-            );
+            ) {
+                eprintln!("[ag-trace] turn_id={turn_id} cancel_settlement_failed={}", error.message);
+            }
             return Ok(());
         }
         Err(error) => {
@@ -1772,21 +1765,17 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
         return Ok(());
     }
     if cancelled.load(Ordering::Acquire) {
-        if let Ok(conn) = state.db.lock() {
-            settle_optional_task_run(
-                &conn,
-                task_run_id.as_deref(),
-                &turn_id,
-                ag::task::TurnOutcome::Cancelled,
-            );
-        }
-        emit_ag_turn_cancelled_from(
+        if let Err(error) = settle_cancelled_turn(
+            &state,
+            &app,
             &event_emitter,
             &terminal_latch,
-            &app,
             &turn_id,
+            task_run_id.as_deref(),
             TurnState::AwaitingGate,
-        );
+        ) {
+            eprintln!("[ag-trace] turn_id={turn_id} cancel_settlement_failed={}", error.message);
+        }
         return Ok(());
     }
     let s = transition(s, TurnEvent::GatePassed)

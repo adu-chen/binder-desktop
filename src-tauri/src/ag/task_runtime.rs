@@ -1634,20 +1634,20 @@ mod ag_task_plan_runtime_tests {
                             "session-runtime-effect",
                             "turn-runtime-effect",
                         )?;
-                        ag::turn_events::persist_parked_ag_turn_cancelled(
+                        let emitter = ag::turn_events::TurnEventEmitter::without_channel(
+                            &state,
+                            "turn-runtime-effect",
+                        );
+                        let latch = ag::turn::TerminalLatch::default();
+                        ag::cancel_settlement::settle_cancelled_turn(
                             &state,
                             app.handle(),
+                            &emitter,
+                            &latch,
                             "turn-runtime-effect",
+                            Some(&task_run_id),
                             ag::turn::TurnState::AwaitingDecision,
                         )?;
-                        let conn = db.lock().unwrap();
-                        settle_task_run(
-                            &conn,
-                            &task_run_id,
-                            "turn-runtime-effect",
-                            ag::task::TurnOutcome::Cancelled,
-                        )
-                        .unwrap();
                     }
                     workspace::operation::execute_operation_plan_shared(db, ws, plan, decision)
                 })

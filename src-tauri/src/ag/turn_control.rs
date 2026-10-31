@@ -634,17 +634,18 @@ pub(crate) fn ag_cancel_turn(
 ) -> Result<(), IpcError> {
     let outcome = cancel_active_agent_turn(&state, &session_id, &turn_id)?;
     if let Some(source) = outcome.parked_source {
-        super::turn_events::persist_parked_ag_turn_cancelled(&state, &app, &turn_id, source)?;
-        if let Some(task_run_id) = outcome.task_run_id {
-            if let Ok(conn) = state.db.lock() {
-                super::task_runtime::settle_task_run(
-                    &conn,
-                    &task_run_id,
-                    &turn_id,
-                    ag::task::TurnOutcome::Cancelled,
-                );
-            }
-        }
+        let emitter = super::turn_events::TurnEventEmitter::without_channel(&state, &turn_id);
+        let latch = ag::turn::TerminalLatch::default();
+        super::cancel_settlement::settle_cancelled_turn(
+            &state,
+            &app,
+            &emitter,
+            &latch,
+            &turn_id,
+            outcome.task_run_id.as_deref(),
+            source,
+        )?
+        .ok_or_else(super::turn_events::sm_error)?;
         finish_cancelled_parked_turn(&state, &session_id, &turn_id)?;
     }
     Ok(())

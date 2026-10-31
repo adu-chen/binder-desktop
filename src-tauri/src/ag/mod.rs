@@ -58,6 +58,9 @@ pub mod turn_control;
 /// AgentTurn 和 ToolLoop 的状态事件输出。
 pub mod turn_events;
 
+/// 取消终态的唯一结算入口（TaskRun 收束 + Cancelled 事件）。
+pub mod cancel_settlement;
+
 /// AgentTurn 显式目标集合与引用上下文装配。
 pub mod turn_reference;
 

@@ -1176,6 +1176,34 @@ pub(super) fn emit_ag_turn_cancelled<R: tauri::Runtime>(
     emit_ag_turn_cancelled_from(emitter, latch, app, turn_id, ag::turn::TurnState::Streaming)
 }
 
+pub(super) fn emit_cancelled_terminal<R: tauri::Runtime>(
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    app: &tauri::AppHandle<R>,
+    turn_id: &str,
+    source: ag::turn::TurnState,
+) -> Result<Option<bool>, IpcError> {
+    let Some(cancelled) = terminal_transition(
+        source,
+        ag::turn::TurnEvent::Cancel,
+        ag::turn::TurnState::Cancelled,
+    ) else {
+        return Ok(None);
+    };
+    let emitted = emitter.emit_terminal(
+        latch,
+        ag::turn::TerminalKind::Cancelled,
+        AgTurnEventPayload::Done {
+            stop_reason: "cancelled".to_string(),
+        },
+    )?;
+    if emitted {
+        eprintln!("[ag-trace] turn_id={turn_id} terminal=cancelled");
+        emit_ag01(app, turn_id, cancelled);
+    }
+    Ok(Some(emitted))
+}
+
 pub(super) fn emit_ag_turn_cancelled_from<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     latch: &ag::turn::TerminalLatch,
@@ -1183,63 +1211,17 @@ pub(super) fn emit_ag_turn_cancelled_from<R: tauri::Runtime>(
     turn_id: &str,
     source: ag::turn::TurnState,
 ) -> bool {
-    let Some(cancelled) = terminal_transition(
-        source,
-        ag::turn::TurnEvent::Cancel,
-        ag::turn::TurnState::Cancelled,
-    ) else {
-        return false;
-    };
-    let emitted = emitter
-        .emit_terminal(
-            latch,
-            ag::turn::TerminalKind::Cancelled,
-            AgTurnEventPayload::Done {
-                stop_reason: "cancelled".to_string(),
-            },
-        )
-        .unwrap_or_else(|error| {
+    match emit_cancelled_terminal(emitter, latch, app, turn_id, source) {
+        Ok(Some(true)) => true,
+        Ok(_) => false,
+        Err(error) => {
             eprintln!(
                 "[ag-trace] turn_id={turn_id} terminal_persist_failed={}",
                 error.message
             );
             false
-        });
-    if !emitted {
-        return false;
+        }
     }
-    eprintln!("[ag-trace] turn_id={turn_id} terminal=cancelled");
-    emit_ag01(app, turn_id, cancelled);
-    true
-}
-
-/// 非终态等待已无活动 Channel；取消在数据库中原子锁存，再由安全补流返回同一事件。
-pub(super) fn persist_parked_ag_turn_cancelled<R: tauri::Runtime>(
-    state: &AppState,
-    app: &tauri::AppHandle<R>,
-    turn_id: &str,
-    source: ag::turn::TurnState,
-) -> Result<bool, IpcError> {
-    let Some(cancelled) = terminal_transition(
-        source,
-        ag::turn::TurnEvent::Cancel,
-        ag::turn::TurnState::Cancelled,
-    ) else {
-        return Err(sm_error());
-    };
-    let emitter = TurnEventEmitter::without_channel(state, turn_id);
-    let latch = ag::turn::TerminalLatch::default();
-    let emitted = emitter.emit_terminal(
-        &latch,
-        ag::turn::TerminalKind::Cancelled,
-        AgTurnEventPayload::Done {
-            stop_reason: "cancelled".to_string(),
-        },
-    )?;
-    if emitted {
-        emit_ag01(app, turn_id, cancelled);
-    }
-    Ok(emitted)
 }
 
 /** @GOV

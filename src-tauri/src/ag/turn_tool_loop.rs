@@ -1122,15 +1122,20 @@ fn finish_cancelled_turn<R: tauri::Runtime>(
     task_run_id: Option<&str>,
     turn_state: ag::turn::TurnState,
 ) {
-    if let Ok(conn) = state.db.lock() {
-        settle_optional_task_run(
-            &conn,
-            task_run_id,
-            turn_id,
-            ag::task::TurnOutcome::Cancelled,
+    if let Err(error) = super::cancel_settlement::settle_cancelled_turn(
+        state,
+        app,
+        emitter,
+        latch,
+        turn_id,
+        task_run_id,
+        turn_state,
+    ) {
+        eprintln!(
+            "[ag-trace] turn_id={turn_id} cancel_settlement_failed={}",
+            error.message
         );
     }
-    super::turn_events::emit_ag_turn_cancelled_from(emitter, latch, app, turn_id, turn_state);
 }
 
 /// 重建下一轮 PromptPackage 并记录预算证据；装配与预算规则由既有 Prompt 规则块承接。
