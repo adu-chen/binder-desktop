@@ -21,7 +21,7 @@ pub(super) struct AssistPromptInput<'a> {
  * type:     DATA
  * chain:    AG-ASSIST
  * rules:    BR-AG-DATA-002
- * boundary: in=AssistPromptInput | out=KindSpecificAssistGatewayMessages(noConversationHistory)
+ * boundary: in=AssistPromptInput | out=KindSpecificAssistGatewayMessages(noConversationHistory) | consumer=BR-AG-DATA-002
  */
 pub(super) fn build_assist_messages(input: AssistPromptInput<'_>) -> serde_json::Value {
     let system_prompt = if input.kind == "autocomplete" {

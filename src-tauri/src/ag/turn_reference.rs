@@ -18,7 +18,7 @@ pub(super) struct TurnReferenceRuntime {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001
  * term_ref: TERM-REF-003
- * boundary: in=ExplicitDocumentBlockAndReferencePayloads | out=ValidatedReferenceContext | delegate=format_reference_payload_context | does_not=grantDocumentEditAuthorization
+ * boundary: in=ExplicitDocumentBlockAndReferencePayloads | out=ValidatedReferenceContext | delegate=format_reference_payload_context | does_not=grantDocumentEditAuthorization | consumer=BR-AG-DATA-001
  */
 pub(super) fn build_turn_reference_runtime(
     mentions: &[String],

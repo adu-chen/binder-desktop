@@ -185,7 +185,7 @@ export interface AgentContextFacts {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020
- * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=ag_start_turn | does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
+ * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=BR-AG-DATA-008| does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
  */
 export function buildAgentContextFacts(
   turnId: string,
@@ -548,7 +548,7 @@ interface AgentContextRequest {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020
- * boundary: in=FrozenAgentTurnTargetCurrentHostResourcesAndRequestedPaths | out=AgentContextFactsV2AndRequestedLogicalStateSnapshots | does_not=waitForUnrelatedEditorOrReadDiskOrChangeFrozenTarget
+ * boundary: in=FrozenAgentTurnTargetCurrentHostResourcesAndRequestedPaths | out=AgentContextFactsV2AndRequestedLogicalStateSnapshots | does_not=waitForUnrelatedEditorOrReadDiskOrChangeFrozenTarget | consumer=BR-AG-DATA-008
  */
 function collectAgentContextV2(
   turnId: string, sessionId: string, target: ActiveDocTarget, revision: number,
@@ -651,7 +651,7 @@ function attachActiveStructuredSnapshots(snapshots: OpenDocSnapshot[], activePat
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001
  * term_ref: TERM-DOC-003, TERM-ED-008
- * boundary: in=CurrentOpenDocumentLogicalStateAndEditorBinding | out=AgentOpenDocSnapshotList(withSameVersionBlockTableImageSnapshots) | effect=memory | delegate=projectAgentEditableBlocks,projectTables,projectDocumentImages | caller_context=agentTurnSnapshotAssembly | does_not=fall_back_to_DiskState_or_reparse_HTML_for_open_document
+ * boundary: in=CurrentOpenDocumentLogicalStateAndEditorBinding | out=AgentOpenDocSnapshotList(withSameVersionBlockTableImageSnapshots) | effect=memory | delegate=projectAgentEditableBlocks,projectTables,projectDocumentImages | caller_context=agentTurnSnapshotAssembly | does_not=fall_back_to_DiskState_or_reparse_HTML_for_open_document | consumer=BR-AG-DATA-001
  */
 export function collectOpenDocSnapshots(target?: ActiveDocTarget): AgentOpenDocSnapshot[] {
   const ed = edStore.getSnapshot();
@@ -1538,7 +1538,7 @@ const PREVIEW_ACK_DEADLINE_MS = 15_000;
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckThenFreshSnapshotContinuation(noDiffAcceptNoDiskWriteNoBackgroundCall)
+ * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckThenFreshSnapshotContinuation(noDiffAcceptNoDiskWriteNoBackgroundCall) | consumer=BR-AG-DATA-001
  */
 /** 只有 ED/DE 已成功标记 draftApplied 后才回报 PreviewAck，并由前端明确启动下一执行片段。
  * 此处不从 Diff payload 推断内容，也不会对 background Diff 或无 checkpoint 的卡片续编。 */

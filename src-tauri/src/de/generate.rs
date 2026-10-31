@@ -64,7 +64,7 @@ pub fn build_payload(proposal: &ChangeProposal) -> DiffPayload {
  * chain:    DE-DIFF
  * rules:    BR-AG-DATA-003
  * term_ref: TERM-AG-019
- * boundary: in=proposalTargetAndExplicitEditTargetSet | out=AuthorizedTargetOrStableRejection(beforePendingDiffGeneration)
+ * boundary: in=proposalTargetAndExplicitEditTargetSet | out=AuthorizedTargetOrStableRejection(beforePendingDiffGeneration) | consumer=BR-AG-DATA-003
  */
 /// DE 侧协同硬守：AG 产出的 ChangeProposal 必须属于 ExplicitEditTargetSet；集合外在 PendingDiff
 /// 生成前失败关闭。CBT 构建路径不经本函数（BR-CBT-DATA-001 绑定）。

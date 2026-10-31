@@ -459,7 +459,7 @@ pub(super) fn validate_workspace_operation_effect_for_grant(
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-STATE-007, BR-AG-DATA-003, BR-WS-DATA-001
  * term_ref: TERM-AG-014, TERM-AG-017, TERM-AG-019, TERM-WS-001
- * boundary: in=ToolCallParametersAndCurrentCapabilityGrant | out=RegisteredAllowedTargetedAndParameterValidToolCallOrStableRejection | does_not=upgradeGrantFromRepeatedFailureOrToolParameters | consumer=BR-AG-STATE-002
+ * boundary: in=ToolCallParametersAndCurrentCapabilityGrant | out=RegisteredAllowedTargetedAndParameterValidToolCallOrStableRejection | does_not=upgradeGrantFromRepeatedFailureOrToolParameters | consumer=BR-AG-STATE-002,BR-AG-DATA-003
  */
 pub fn validate_requested_tool_for_grant(
     name: &str,
@@ -853,7 +853,7 @@ pub fn validate_requested_tool_for_grant(
  * chain:    AG-TOOL
  * rules:    BR-AG-DATA-003, BR-AG-STATE-002
  * term_ref: TERM-AG-019, TERM-AG-017
- * boundary: in=DecisionRequestToolParameters | out=ScopeDecisionWithFrozenNonEmptyTargetPathsOrRejection | does_not=appendTargetsOrTreatReadResultsAsAuthorization | consumer=BR-AG-STATE-002
+ * boundary: in=DecisionRequestToolParameters | out=ScopeDecisionWithFrozenNonEmptyTargetPathsOrRejection | does_not=appendTargetsOrTreatReadResultsAsAuthorization | consumer=BR-AG-STATE-002,BR-AG-DATA-003
  */
 fn validate_scope_decision_parameters(params: &serde_json::Value) -> Result<(), String> {
     let kind = params.get("kind").and_then(|value| value.as_str());

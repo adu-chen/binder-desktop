@@ -91,7 +91,7 @@ impl Drop for ContextRequestLease {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-DATA-008, BR-SYS-STATE-007
  * term_ref: TERM-AG-020
- * boundary: in=HostContextResponseBoundToPendingRequestIdentity | out=SingleConsumedContextResponseOrStableRejection | does_not=resumeTaskOrAcceptExpiredCrossSessionResponseOrAuthorizeTool
+ * boundary: in=HostContextResponseBoundToPendingRequestIdentity | out=SingleConsumedContextResponseOrStableRejection | does_not=resumeTaskOrAcceptExpiredCrossSessionResponseOrAuthorizeTool | consumer=BR-AG-DATA-008
  */
 #[tauri::command]
 pub(crate) fn ag_supply_context(response: AgentContextResponse) -> Result<(), IpcError> {
@@ -394,7 +394,7 @@ fn validate_history_scope(
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020
- * boundary: in=AgentContextFactsV1WorkspaceTurnOpenDocSnapshotsAndExplicitReferences | out=VerifiedSameTurnLogicalStateFactsOrStablePreGateRejection | does_not=acceptUnknownVersionCrossWorkspaceFactsOrGrantReadWriteCapability
+ * boundary: in=AgentContextFactsV1WorkspaceTurnOpenDocSnapshotsAndExplicitReferences | out=VerifiedSameTurnLogicalStateFactsOrStablePreGateRejection | does_not=acceptUnknownVersionCrossWorkspaceFactsOrGrantReadWriteCapability | consumer=BR-AG-DATA-008
  */
 fn validate_agent_context_facts(
     facts: Option<&AgentContextFactsV1>,
@@ -756,7 +756,7 @@ fn parse_agent_context_facts(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-AG-STATE-004, BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-STATE-007, BR-SYS-DATA-008
  * term_ref: TERM-AG-001, TERM-AG-012, TERM-AG-013, TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnResumeAndAgentReadContext | out=AdaptiveModelToolEventStreamContextEvidenceOrNonTerminalWaitAndOptionalTaskRunProjection | effect=IPC-ag_start_turn | delegate=require_runtime_profile,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=classifyIntentByKeywordsDefaultMissingRuntimeProfileCreateNewTurnForResumeBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff | consumer=BR-AG-STATE-001
+ * boundary: in=ValidatedRuntimeProfileAndAgentTurnRequestOrSameTurnResumeAndAgentReadContext | out=AdaptiveModelToolEventStreamContextEvidenceOrNonTerminalWaitAndOptionalTaskRunProjection | effect=IPC-ag_start_turn | delegate=require_runtime_profile,prepare_turn_prompt,ent::gateway::check_gate,ag::turn::transition,run_turn_tool_loop,register_active_agent_turn | does_not=classifyIntentByKeywordsDefaultMissingRuntimeProfileCreateNewTurnForResumeBypassCurrentGateOutcomeOrWriteDocumentContentOutsidePendingDiff | consumer=BR-AG-STATE-001,BR-AG-DATA-008
  */
 /// PI-AG-WIRE-01 · `ag_start_turn`（独立 async tauri command，不走 dispatch 信封）。
 ///

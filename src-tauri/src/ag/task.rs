@@ -113,7 +113,7 @@ pub fn begin_turn(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite) | does_not=callModelOrWriteDiskOrCompleteTurnOrResumeExecution
+ * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite) | does_not=callModelOrWriteDiskOrCompleteTurnOrResumeExecution | consumer=BR-AG-DATA-001
  */
 /// 为一个会改变已有 LogicalState 的 pending Diff 建立续片段检查点。创建卡片不等于预览成功：
 /// checkpoint 只能处于 awaiting_ack，直到编辑器回报实际 sessionVersion/contentHash。
@@ -172,7 +172,7 @@ pub fn create_preview_checkpoint(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=EditorAppliedLogicalStateVersionHash | out=AcknowledgedPreviewCheckpoint(rejectsWrongSessionTurnDiffPathOrTerminalDiff)
+ * boundary: in=EditorAppliedLogicalStateVersionHash | out=AcknowledgedPreviewCheckpoint(rejectsWrongSessionTurnDiffPathOrTerminalDiff) | consumer=BR-AG-DATA-001
  */
 /// 接收真实 ED LogicalState 预览回执。只接受对应 pending Diff 的第一份回执；模型文本、卡片显示态
 /// 和旧快照均不能伪造此转移。
@@ -290,7 +290,7 @@ pub fn acknowledged_preview_checkpoint(
  * chain:    AG-TURN, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=FreshOpenDocSnapshotMatchingAcknowledgedPreviewCheckpoint | out=SameTaskRunContinuationIdentity(consumedExactlyOnceNoBackgroundQueue)
+ * boundary: in=FreshOpenDocSnapshotMatchingAcknowledgedPreviewCheckpoint | out=SameTaskRunContinuationIdentity(consumedExactlyOnceNoBackgroundQueue) | consumer=BR-AG-DATA-001
  */
 /// 消费一次已确认预览检查点，授权同一 TaskRun 的下一 AgentTurn。必须再次传入和 Ack 完全一致的
 /// fresh LogicalState 基线；这切断旧 AgentReadContext 与新 Diff 的联系。
@@ -508,7 +508,7 @@ fn frozen_scope_targets(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=ActiveOrActivityObservedTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=treatDecisionResolutionAloneAsActivityAppendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection
+ * boundary: in=ActiveOrActivityObservedTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=treatDecisionResolutionAloneAsActivityAppendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection | consumer=BR-AG-DATA-003
  */
 pub fn propose_decision(
     conn: &Connection,
@@ -583,7 +583,7 @@ pub(crate) fn resolve_decision(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=DecisionRequestOutcomeAndRevalidatedFrozenScopeTargets | out=ResolvedDecisionTaskRunStatusAndAtomicExplicitEditTargetSetAppend | effect=workspaceDb | does_not=appendOnCancelMismatchOrReplayWithDifferentOutcome
+ * boundary: in=DecisionRequestOutcomeAndRevalidatedFrozenScopeTargets | out=ResolvedDecisionTaskRunStatusAndAtomicExplicitEditTargetSetAppend | effect=workspaceDb | does_not=appendOnCancelMismatchOrReplayWithDifferentOutcome | consumer=BR-AG-DATA-003
  */
 /// 裁决任务级请求：confirm 只解除等待条件并恢复原 AgentTurn，cancel 终结该路线。
 /// scope confirm 与 ExplicitEditTargetSet 追加在同一事务内完成；后续活动仍须由真实回合事件证明。

@@ -166,7 +166,7 @@ pub struct PromptBudgetMeasurement {
  * type: DATA
  * chain: AG-TURN
  * rules: BR-AG-DATA-002, BR-AG-DATA-005
- * boundary: in=PromptMessagesAndToolSchema | out=ProviderProjectedSerializedCharacterLedgerAndApproximateTokenTotal | does_not=retainContentAlterAuthorizationOrTruncateRequiredSources
+ * boundary: in=PromptMessagesAndToolSchema | out=ProviderProjectedSerializedCharacterLedgerAndApproximateTokenTotal | does_not=retainContentAlterAuthorizationOrTruncateRequiredSources | consumer=BR-AG-DATA-002
  */
 pub fn measure_prompt_budget(
     messages: &[serde_json::Value],
@@ -346,7 +346,7 @@ impl LayerKind {
  * type:     DATA
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-002
- * boundary: in=PromptLayerKinds | out=LayerOrder(systemRuntimeControlIntentFactsDocRefHistoryUser)
+ * boundary: in=PromptLayerKinds | out=LayerOrder(systemRuntimeControlIntentFactsDocRefHistoryUser) | consumer=BR-AG-DATA-002
  */
 /// 提示词装配层序（BR-AG-DATA-002）：恒为 System→RuntimeControl→IntentHint→CurrentDocument→Reference→
 /// History→CrossDocHistory→User；LayerKind 是装配顺序、审计层名与版本登记的唯一真源，取代旧四层骨架。

@@ -19,7 +19,7 @@ fn now_millis() -> i64 {
  * chain:    AG-TURN, WS-OPERATION
  * rules:    BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-019, TERM-WS-003
- * boundary: in=CompletedCreateDocumentBundleWithExistingWorkspaceResource | out=PersistedTaskRunExplicitEditTarget | effect=workspaceDb | does_not=authorizePlannedOrMissingResource
+ * boundary: in=CompletedCreateDocumentBundleWithExistingWorkspaceResource | out=PersistedTaskRunExplicitEditTarget | effect=workspaceDb | does_not=authorizePlannedOrMissingResource | consumer=BR-AG-DATA-003
  */
 #[cfg(test)]
 fn persist_completed_create_document_target(
@@ -82,7 +82,7 @@ pub(super) fn settle_optional_task_run(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingTaskProjection | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargetsScheduleTaskPlanOrStartProvider
+ * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingTaskProjection | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargetsScheduleTaskPlanOrStartProvider | consumer=BR-AG-DATA-003
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.propose_decision` —— 发起任务级裁决请求
 /// （TERM-AG-017；kind：permission/plan_choice/scope/manual_confirm；投影进入 Waiting）。
@@ -200,7 +200,7 @@ pub(crate) fn route_propose_decision(
  * chain:    AG-TURN, AG-TOOL, WS-OPERATION
  * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019, TERM-WS-003
- * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan | consumer=BR-AG-STATE-002
+ * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan | consumer=BR-AG-STATE-002,BR-AG-DATA-003
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.resolve_decision` —— 任务级裁决
 /// confirm/cancel 只裁决对应请求；同回合恢复和后续 activity 由 AgentTurn 入口证明。

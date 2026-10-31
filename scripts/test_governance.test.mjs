@@ -513,12 +513,16 @@ describe('Product Capability Graph', () => {
     }
   });
 
-  it('P1-1 pilot 四条规则只有指定 primary，其余块标 consumer', () => {
+  it('P1-1 pilot 八条规则只有指定 primary，其余块标 consumer', () => {
     const primary = {
       'BR-AG-STATE-001': 'BR-AG-STATE-001-RB-AG-AG-TURN-001',
       'BR-AG-STATE-002': 'BR-AG-STATE-002-RB-AG-AG-TOOL-001',
       'BR-AG-STATE-003': 'BR-AG-STATE-003-RB-AG-AG-ASSIST-001',
       'BR-AG-PERSIST-001': 'BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-003',
+      'BR-AG-DATA-001': 'BR-AG-DATA-001-DATA-AG-AG-TURN-011',
+      'BR-AG-DATA-002': 'BR-AG-DATA-002-DATA-AG-AG-TURN-031',
+      'BR-AG-DATA-003': 'BR-AG-DATA-003-DATA-AG-AG-TARGETSET-001',
+      'BR-AG-DATA-008': 'BR-AG-DATA-008-GUARD-AG-AG-TURN-052',
     };
     const roots = ['src-tauri/src/ag', 'src/components/ag', 'src/components/ed', 'src/services', 'src/store', 'src-tauri/src/ipc', 'src-tauri/src/de'];
     const files = [];

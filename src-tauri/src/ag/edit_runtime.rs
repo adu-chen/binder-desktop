@@ -20,7 +20,7 @@ use crate::{active_ws, ag, doc, lock_db, workspace, AppState};
  * type: EFFECT
  * chain: AG-TOOL, DE-DIFF
  * rules: BR-AG-STATE-002, BR-AG-DATA-003
- * boundary: in=OwnedAuthorizedProposalRequestAndFrozenAgentReadContext | out=BoundedProposalWaitAndPersistentCapabilityEffectReceipt | delegate=capability_runtime::execute,ag_propose_edit | does_not=ChangeDocumentAlgorithmsOrAcceptDiffOrSaveFile | consumer=BR-AG-STATE-002
+ * boundary: in=OwnedAuthorizedProposalRequestAndFrozenAgentReadContext | out=BoundedProposalWaitAndPersistentCapabilityEffectReceipt | delegate=capability_runtime::execute,ag_propose_edit | does_not=ChangeDocumentAlgorithmsOrAcceptDiffOrSaveFile | consumer=BR-AG-STATE-002,BR-AG-DATA-003
  */
 pub(super) async fn execute_proposal<R: tauri::Runtime>(
     state: AppState,
@@ -75,7 +75,7 @@ pub(super) async fn execute_proposal<R: tauri::Runtime>(
  * type:     EFFECT
  * chain:    AG-TOOL, DE-DIFF, ED-EDIT
  * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-DE-DATA-001, BR-DE-DATA-002
- * boundary: in=ValidatedAgentEditOperationAndAgentReadContext | out=PendingDiffAndDiffProjection | delegate=de::generate::generate_diff | does_not=createWorkspaceResourceOrWriteLogicalStateOrDiskState | consumer=BR-AG-STATE-002
+ * boundary: in=ValidatedAgentEditOperationAndAgentReadContext | out=PendingDiffAndDiffProjection | delegate=de::generate::generate_diff | does_not=createWorkspaceResourceOrWriteLogicalStateOrDiskState | consumer=BR-AG-STATE-002,BR-AG-DATA-003
  */
 /// PI-AG-08C/08E/08F + PI-AG-SEM-01 · propose_edit 写工具执行（复用 route_generate_diff 逻辑）。
 ///

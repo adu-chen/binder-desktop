@@ -478,7 +478,7 @@ pub(super) fn bind_agent_turn_task_run(
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-003, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-019
- * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory | does_not=removeTargetsOrRewriteTurnIdentityOrExecuteEdit
+ * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory | does_not=removeTargetsOrRewriteTurnIdentityOrExecuteEdit | consumer=BR-AG-DATA-003
  */
 pub(super) fn bind_agent_turn_edit_target_set(
     state: &AppState,
@@ -657,7 +657,7 @@ pub(crate) fn ag_cancel_turn(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=EditorAppliedLogicalStatePreviewIdentity | out=PreviewContinuationCheckpointAcknowledged(noModelCallNoDiffDecisionNoDiskWrite)
+ * boundary: in=EditorAppliedLogicalStatePreviewIdentity | out=PreviewContinuationCheckpointAcknowledged(noModelCallNoDiffDecisionNoDiskWrite) | consumer=BR-AG-DATA-001
  */
 /// 编辑器只在受控预览已真实写入 LogicalState 后回报基线。该命令不接受 DiffCard、不写盘，也不
 /// 自行调用模型；下一 AgentTurn 必须由前端显式发起。

@@ -178,7 +178,7 @@ impl AgentReadContext {
      * chain:    AG-TURN, AG-TOOL
      * rules:    BR-AG-DATA-001, BR-AG-DATA-008
      * term_ref: TERM-AG-020
-     * boundary: in=VerifiedResourceIdentitiesOpenDocSnapshotsAndRequestedPaths | out=AgentReadContextWithExplicitDiskReadBoundary | does_not=inferClosedResourceFromMissingSnapshot
+     * boundary: in=VerifiedResourceIdentitiesOpenDocSnapshotsAndRequestedPaths | out=AgentReadContextWithExplicitDiskReadBoundary | does_not=inferClosedResourceFromMissingSnapshot | consumer=BR-AG-DATA-001,BR-AG-DATA-008
      */
     pub fn with_resources(
         root: &Path,
@@ -310,7 +310,7 @@ impl AgentReadContext {
      * chain:    AG-TOOL
      * rules:    BR-AG-DATA-001, BR-ED-DATA-003
      * term_ref: TERM-ED-008, TERM-DOC-003
-     * boundary: in=ActiveBDocxOpenDocSnapshot | out=CurrentImageSnapshots(sameSessionVersionAndContentHash)
+     * boundary: in=ActiveBDocxOpenDocSnapshot | out=CurrentImageSnapshots(sameSessionVersionAndContentHash) | consumer=BR-AG-DATA-001
      */
     pub fn image_snapshots(&self, rel_path: &str) -> Result<&[serde_json::Value], IpcError> {
         let snapshot = self.open_snapshot(rel_path).ok_or_else(|| {
@@ -536,7 +536,7 @@ pub fn project_blocks(content: &str, is_html: bool) -> Vec<AgentEditableBlock> {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001, BR-DOC-DATA-003
  * term_ref: TERM-DOC-003, TERM-ED-001
- * boundary: in=WorkspaceDocumentOrActiveEditorSnapshot | out=AgentEditableSnapshot(activeProseMirrorHierarchyOrReadOnlyLegacyProjection)
+ * boundary: in=WorkspaceDocumentOrActiveEditorSnapshot | out=AgentEditableSnapshot(activeProseMirrorHierarchyOrReadOnlyLegacyProjection) | consumer=BR-AG-DATA-001
  */
 /// AgentEdit 统一快照读取：当前编辑器实时内容优先；非当前 BDocx 只经 DOC 转换链读取 HTML 编辑模型；
 /// 普通文本文件走 WS 文本读取。AG/REF/DE 下游不得绕过该快照另读 BDocx 二进制。

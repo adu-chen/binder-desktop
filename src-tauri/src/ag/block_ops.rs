@@ -308,7 +308,7 @@ fn ensure_new_block_id(after_node: Value) -> Value {
  * chain:    AG-TOOL
  * rules:    BR-AG-DATA-003, BR-ED-DATA-001, BR-DE-DATA-001
  * term_ref: TERM-ED-001
- * boundary: in=RequestedStructuredBlockOperationsAndCurrentAgentEditableSnapshot | out=CanonicalStructuredBlockEditPayloadWithExactBeforeNode | effect=none
+ * boundary: in=RequestedStructuredBlockOperationsAndCurrentAgentEditableSnapshot | out=CanonicalStructuredBlockEditPayloadWithExactBeforeNode | effect=none | consumer=BR-AG-DATA-003
  */
 pub fn validate_and_build(
     params: &Value,

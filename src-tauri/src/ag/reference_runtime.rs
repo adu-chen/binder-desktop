@@ -170,7 +170,7 @@ fn payload_identity(
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001
  * term_ref: TERM-REF-003
- * boundary: in=ReferencePayloadAndAgentReadContext | out=explicitReferenceContextBlock(validatedReadSnapshot) | delegate=reference::context::format_payload_context
+ * boundary: in=ReferencePayloadAndAgentReadContext | out=explicitReferenceContextBlock(validatedReadSnapshot) | delegate=reference::context::format_payload_context | consumer=BR-AG-DATA-001
  */
 pub(super) fn build_reference_context_projection(
     payload: &ReferencePayload,
@@ -284,7 +284,7 @@ pub(super) fn build_reference_context_projection(
  * type:     QUERY
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001
- * boundary: in=WorkspaceDocumentIdentityAndOpenDocSnapshots | out=AgentEditableBlockSnapshotFromLogicalStateOrDiskState
+ * boundary: in=WorkspaceDocumentIdentityAndOpenDocSnapshots | out=AgentEditableBlockSnapshotFromLogicalStateOrDiskState | consumer=BR-AG-DATA-001
  */
 pub(crate) fn route_list_blocks(
     request: &CommandRequest,

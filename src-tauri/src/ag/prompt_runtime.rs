@@ -286,7 +286,7 @@ fn intent_hint_for_prompt(dropped_history: usize, excerpted_history: usize) -> S
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-DATA-008
  * term_ref: TERM-AG-005, TERM-AG-020
- * boundary: in=promptRuntimeControlAgentContextFactsCurrentDocAndDocScopedHistory | out=AgentTurnMessages(layerTaggedSystemIntentFactsCurrentDocReferenceHistoryUserOrder)
+ * boundary: in=promptRuntimeControlAgentContextFactsCurrentDocAndDocScopedHistory | out=AgentTurnMessages(layerTaggedSystemIntentFactsCurrentDocReferenceHistoryUserOrder) | consumer=BR-AG-DATA-002,BR-AG-DATA-008
  */
 pub fn assemble_agent_turn_messages(
     system_prompt: &str,

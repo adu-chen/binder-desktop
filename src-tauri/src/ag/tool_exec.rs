@@ -176,7 +176,7 @@ fn snapshot_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> Stri
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage
+ * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage | consumer=BR-AG-DATA-008
  */
 pub fn context_evidence(
     facts: &crate::types::AgentContextFacts,
@@ -486,7 +486,7 @@ fn string_arg(args: &serde_json::Value, key: &str, tool: &str) -> Result<String,
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001
  * term_ref: TERM-ED-008, TERM-WS-001
- * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets) | consumer=BR-AG-STATE-002
+ * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets) | consumer=BR-AG-STATE-002,BR-AG-DATA-001
  */
 fn exec_list_images(
     ctx: &crate::ag::blocks::AgentReadContext,

@@ -205,7 +205,7 @@ pub fn validated_scope_candidates(
  * chain:    AG-TURN, AG-TOOL, DATA-MIGRATE
  * rules:    BR-AG-DATA-003, BR-SYS-PERSIST-001
  * term_ref: TERM-AG-019, TERM-AG-015
- * boundary: in=TaskRunAndAuthorizedExistingDocumentPaths | out=PersistedMonotonicTaskRunEditTargets(withSourceProvenance) | effect=workspaceDb | does_not=removeTargetsOrGrantExecutionOrRewriteTaskRunIdentity
+ * boundary: in=TaskRunAndAuthorizedExistingDocumentPaths | out=PersistedMonotonicTaskRunEditTargets(withSourceProvenance) | effect=workspaceDb | does_not=removeTargetsOrGrantExecutionOrRewriteTaskRunIdentity | consumer=BR-AG-DATA-003
  */
 pub fn persist_for_task_run(
     conn: &Connection,
@@ -275,7 +275,7 @@ pub fn load_for_task_run(
  * chain:    AG-TOOL, DE-DIFF
  * rules:    BR-AG-DATA-003
  * term_ref: TERM-AG-019, TERM-DE-002
- * boundary: in=ExistingChangeProposalTargetAndExplicitEditTargetSet | out=AuthorizedTargetOrStableRejection(noPendingDiff)
+ * boundary: in=ExistingChangeProposalTargetAndExplicitEditTargetSet | out=AuthorizedTargetOrStableRejection(noPendingDiff) | consumer=BR-AG-DATA-003
  */
 pub fn ensure_authorized(targets: &ExplicitEditTargetSet, rel_path: &str) -> Result<(), IpcError> {
     if targets.contains(rel_path) {
