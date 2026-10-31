@@ -476,4 +476,11 @@ describe('Product Capability Graph', () => {
     }
     expect(failures).toEqual([]);
   });
+
+  it('AG 链路边表覆盖内部转移与跨模块 handoff', () => {
+    const text = readFileSync(join(DEFAULT_ROOT, 'docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md'), 'utf8');
+    const edges = new Set([...text.matchAll(/^\| (EDGE-AG-\d{3}) \|/gm)].map((match) => match[1]));
+    const required = Array.from({ length: 14 }, (_, index) => `EDGE-AG-${String(index + 1).padStart(3, '0')}`);
+    expect(required.filter((edge) => !edges.has(edge))).toEqual([]);
+  });
 });

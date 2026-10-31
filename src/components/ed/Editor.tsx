@@ -1941,7 +1941,7 @@ export function Editor() {
    * chain:    AG-ASSIST
    * rules:    BR-AG-STATE-003
    * term_ref: TERM-AG-003, TERM-AG-004
-   * boundary: in=assistApplyIntent | out=applyEditOps(inlineReplaceOrCursorInsertAutocompleteInsertNoDiffCard)
+   * boundary: in=assistApplyIntent | out=applyEditOps(inlineReplaceOrCursorInsertAutocompleteInsertNoDiffCard) | consumer=BR-ED-STATE-001,BR-ED-DATA-001 | does_not=writeDiskOrCallProviderOrCreateDiffCardOrBypassEditorHistory
    */
   /// AG-ASSIST 落地守则（BR-AG-STATE-003）：⌘K InlineAssist Apply 替换选区或在光标处插入、
   /// ⌘J Autocomplete 插入光标处，二者均经 ED 受控编辑接口（X-FORBID-005 不绕过），**不产 DiffCard、不进入 SM-DE-01**——

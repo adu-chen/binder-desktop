@@ -388,6 +388,27 @@ terminal_states: Accepted, Dismissed
 
 裁决恢复的confirm/cancel仍只解除原等待条件。恢复模型必须消费同身份后端资源回执及接受/保存事实；资源步骤成功不强制TaskRun整体Completed，真正partial/blocked及未知效果继续保持原不变量。
 
+## §6 链路边表（内部转移与跨模块 handoff）
+
+本表是规则链审计的边清单，不替代 §2/§3/§4 主转移表；`rules` 列给出该边的最小规则证据。跨模块边以 `consumer=` 规则表达，不并入 AG 状态机 `rules` 闭包。
+
+| edge_id | from | event | to | rules | owner |
+|---|---|---|---|---|---|
+| EDGE-AG-001 | SM-AG-01 Idle | send | Assembling | BR-AG-STATE-001 | turn_runtime |
+| EDGE-AG-002 | SM-AG-01 Assembling | assembled | AwaitingGate | BR-AG-STATE-001 | turn_runtime |
+| EDGE-AG-003 | SM-AG-01 AwaitingGate | gatePassed | Streaming | BR-AG-STATE-001, BR-SYS-VERIFY-001 | await_round_gate |
+| EDGE-AG-004 | SM-AG-01 Streaming | toolRequest | SM-AG-02 ToolValidating | BR-AG-STATE-002 | run_one_tool_call |
+| EDGE-AG-005 | SM-AG-02 ResultRecording | recorded | SM-AG-01 Assembling | BR-AG-STATE-001, BR-AG-STATE-002 | run_round_loop |
+| EDGE-AG-006 | SM-AG-01 Streaming | modelFinal | Finalizing | BR-AG-STATE-001 | handle_done_round |
+| EDGE-AG-007 | SM-AG-01 Streaming | modelClarification | AwaitingClarification | BR-AG-STATE-001, BR-SYS-STATE-007 | park_clarification |
+| EDGE-AG-008 | SM-AG-01 Streaming | decisionProposed | AwaitingDecision | BR-AG-STATE-001, BR-SYS-STATE-008 | park_decision_handoff |
+| EDGE-AG-009 | SM-AG-01 active | cancel | Cancelled | BR-AG-STATE-001, BR-SYS-STATE-007 | cancel_between_rounds |
+| EDGE-AG-010 | AG-ASSIST accept | accept | ED-EDIT apply | BR-AG-STATE-003, BR-ED-STATE-001 | applyInline |
+| EDGE-AG-011 | AG-TURN AwaitingGate | gate verdict | SYS CLOUD-GATE | BR-AG-STATE-001, BR-SYS-VERIFY-001 | await_round_gate |
+| EDGE-AG-012 | AG AwaitingDecision | decisionResolved(confirm) | WS-OPERATION revalidate | BR-SYS-STATE-008, BR-WS-STATE-003 | task_runtime |
+| EDGE-AG-013 | AG ToolResult(proposal) | proposalRecorded | DE-DIFF pending_diff | BR-AG-STATE-002, BR-DE-DATA-001 | edit_runtime |
+| EDGE-AG-014 | SM-AG-04 Projected/Active | terminalObserved | TaskRun terminal | BR-SYS-STATE-008, BR-AG-STATE-001 | task_runtime |
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |

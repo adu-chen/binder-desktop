@@ -2291,7 +2291,7 @@ enum RoundGate {
  * type:     RB
  * chain:    AG-TURN
  * rules:    BR-AG-VERIFY-001
- * boundary: in=ContinuationRoundSessionTurnAndGateProbe | out=RoundGateProceedCancelledDeniedOrFailed | delegate=await_turn_operation,check_gate | consumer=BR-AG-VERIFY-001 | does_not=transitionTurnStateOrSettleTerminal
+ * boundary: in=ContinuationRoundSessionTurnAndGateProbe | out=RoundGateProceedCancelledDeniedOrFailed | delegate=await_turn_operation,check_gate | consumer=BR-AG-VERIFY-001,BR-SYS-VERIFY-001,BR-SYS-STATE-001 | does_not=transitionTurnStateOrSettleTerminal
  */
 async fn await_round_gate(
     state: &AppState,
