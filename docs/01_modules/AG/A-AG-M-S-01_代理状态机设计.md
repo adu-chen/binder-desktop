@@ -25,6 +25,10 @@ autocomplete 与 inline-assist 由 **SM-AG-03 同机承载**（二者生命周�
 轻量调用→装饰层呈现→采纳/弃，区别仅在触发源与候选形态，归 context 字段），总图两行回填同一
 machine_id 并注明。
 
+### 1.1 `STATE_MACHINE.rules` 字段语义
+
+`rules` 只登记**直接约束本机转移、守卫、终态、等待语义、证据/观察**的 AG/SYS 规则。ED/DE/DOC/WS 等下游效果规则通过链路视图表达，不进入本机规则闭包；若未来需要引入外部规则，必须新增显式字段并经治理评审，不得混入 `rules`。该语义用于保证四台 AG 状态机的规则闭包可比较、可审计。
+
 ## §2 SM-AG-01 · 代理回合机
 
 <!-- STATE_MACHINE
@@ -34,7 +38,7 @@ status: active
 summary: 一次代理回合的事件化生命周期（冻结事实→门禁→模型/工具自适应循环→产出处置；可澄清/裁决/中断，无半落盘）
 source_type: design
 chain: AG-TURN
-rules: BR-AG-STATE-001, BR-AG-VERIFY-001, BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-PERSIST-001
+rules: BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-STATE-005, BR-AG-VERIFY-001, BR-AG-DATA-001, BR-AG-DATA-002, BR-AG-DATA-003, BR-AG-DATA-004, BR-AG-DATA-005, BR-AG-DATA-008, BR-AG-PERSIST-001, BR-AG-OBS-001, BR-SYS-STATE-007, BR-SYS-STATE-008
 initial_state: Idle
 terminal_states: Completed, Cancelled, Denied, TurnError
 -->
@@ -129,7 +133,7 @@ status: active
 summary: 复杂或跨执行片段目标的 TaskRun 可观察投影——由 TurnEvent 归纳目标、真实进度、等待点与模型当前候选路线；不调度、不授权、非后台队列；简单目标不创建
 source_type: design
 chain: AG-TURN
-rules: BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002
+rules: BR-SYS-STATE-008, BR-AG-STATE-001, BR-AG-STATE-002, BR-CORE-STATE-001, BR-AG-DATA-003, BR-AG-DATA-008
 initial_state: Projected
 terminal_states: Completed, Failed, Cancelled, Interrupted
 -->
@@ -196,7 +200,7 @@ status: active
 summary: 回合内逐 ToolCall 事实循环（按当前硬事实计算 CapabilityGrant→校验→执行→记录结果→回上层重新装配；写盘禁令、上限、可中断）
 source_type: design
 chain: AG-TOOL
-rules: BR-AG-STATE-002, BR-AG-VERIFY-001
+rules: BR-AG-STATE-002, BR-AG-VERIFY-001, BR-AG-DATA-003, BR-AG-DATA-008, BR-AG-DATA-009, BR-AG-DATA-010, BR-AG-DATA-011, BR-AG-DATA-012, BR-AG-DATA-013, BR-AG-OBS-001, BR-AG-PERSIST-001, BR-SYS-STATE-008
 initial_state: ModelStreaming
 terminal_states: LoopCompleted, LoopAborted
 -->
@@ -266,7 +270,7 @@ status: active
 summary: 辅助续写/局部修改回合（快捷键手动触发→防抖/latest-wins→门禁→轻量调用→装饰层呈现→采纳即编辑；辅助续写 3 候选；局部修改可多轮；失败静默）
 source_type: design
 chain: AG-ASSIST
-rules: BR-AG-STATE-003, BR-AG-VERIFY-001
+rules: BR-AG-STATE-003, BR-AG-VERIFY-001, BR-AG-DATA-002, BR-AG-DATA-007
 initial_state: Idle
 terminal_states: Accepted, Dismissed
 -->

@@ -388,4 +388,40 @@ describe('Product Capability Graph', () => {
     expect(JSON.parse(readFileSync(join(root, 'generated', 'product-capability-coverage.json'), 'utf8')).variants).toHaveLength(1);
     expect(readFileSync(join(root, 'generated', 'product-capability-chain-audit.md'), 'utf8')).toContain('正式主链');
   }));
+
+  it('AG STATE_MACHINE rules 闭包覆盖关键规则且不混入外部效果规则', () => {
+    const text = readFileSync(join(DEFAULT_ROOT, 'docs/01_modules/AG/A-AG-M-S-01_代理状态机设计.md'), 'utf8');
+    const blocks = [...text.matchAll(/<!--\s*STATE_MACHINE\s*([\s\S]*?)-->/g)]
+      .map((match) => {
+        const body = match[1];
+        const id = /machine_id:\s*(SM-AG-\d+)/.exec(body)?.[1];
+        const rules = (/rules:\s*(.+)/.exec(body)?.[1] ?? '')
+          .split(',')
+          .map((rule) => rule.trim())
+          .filter(Boolean);
+        return { id, rules };
+      })
+      .filter((block) => block.id);
+    const required = {
+      'SM-AG-01': ['BR-AG-STATE-001', 'BR-AG-STATE-002', 'BR-AG-STATE-005', 'BR-SYS-STATE-007', 'BR-SYS-STATE-008', 'BR-AG-DATA-003', 'BR-AG-DATA-008', 'BR-AG-OBS-001'],
+      'SM-AG-02': ['BR-AG-STATE-002', 'BR-AG-DATA-011', 'BR-AG-DATA-012', 'BR-AG-DATA-013', 'BR-SYS-STATE-008', 'BR-AG-OBS-001'],
+      'SM-AG-03': ['BR-AG-STATE-003', 'BR-AG-DATA-002', 'BR-AG-DATA-007'],
+      'SM-AG-04': ['BR-SYS-STATE-008', 'BR-AG-STATE-001', 'BR-AG-STATE-002', 'BR-CORE-STATE-001'],
+    };
+    const failures = [];
+    for (const [id, expected] of Object.entries(required)) {
+      const block = blocks.find((entry) => entry.id === id);
+      if (!block) {
+        failures.push(`${id}: STATE_MACHINE block missing`);
+        continue;
+      }
+      for (const rule of expected) {
+        if (!block.rules.includes(rule)) failures.push(`${id}: missing ${rule}`);
+      }
+      for (const rule of block.rules) {
+        if (!/^BR-(AG|SYS|CORE)-/.test(rule)) failures.push(`${id}: external rule ${rule}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
 });
