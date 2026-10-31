@@ -1033,7 +1033,7 @@ impl ModelOutputDecoder {
      * chain:    AG-TURN
      * rules:    BR-AG-DATA-004, BR-AG-STATE-001
      * term_ref: TERM-AG-012
-     * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence
+     * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence | consumer=BR-AG-STATE-001
      */
     pub fn finish(self) -> Result<ModelTurnControl, IpcError> {
         if let Some(error) = self.rejection {

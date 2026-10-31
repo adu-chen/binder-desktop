@@ -175,7 +175,7 @@ fn normalize_mode(mode: &str) -> &str {
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-009
- * boundary: in=AgentSessionMetadata | out=persistedAgentSession(localWorkspaceScoped) | does_not=deleteTurnsOrDiffsOrTouchOtherWorkspace
+ * boundary: in=AgentSessionMetadata | out=persistedAgentSession(localWorkspaceScoped) | does_not=deleteTurnsOrDiffsOrTouchOtherWorkspace | consumer=BR-AG-PERSIST-001
  */
 /// 持久化代理编辑会话标签元数据：标题、模式、归档、打开顺序与激活态可重启恢复。
 pub fn upsert_session(
@@ -257,7 +257,7 @@ pub fn ensure_session_exists(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-009
- * boundary: in=workspaceId | out=agentSessionsMetadata(allTagsRecoverable)
+ * boundary: in=workspaceId | out=agentSessionsMetadata(allTagsRecoverable) | consumer=BR-AG-PERSIST-001
  */
 /// 列出当前 workspace 的全部代理编辑会话标签元数据，不加载回合 payload。
 pub fn list_sessions(
@@ -369,7 +369,7 @@ pub fn save_turn(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-009, TERM-AG-022
- * boundary: in=SameIdentityAgentTurnResumeRequest | out=ExistingDraftAgentTurnOrStableRejection | does_not=overwritePayloadStatusEventCursorOrCreateReplacementTurn
+ * boundary: in=SameIdentityAgentTurnResumeRequest | out=ExistingDraftAgentTurnOrStableRejection | does_not=overwritePayloadStatusEventCursorOrCreateReplacementTurn | consumer=BR-AG-PERSIST-001
  */
 pub fn ensure_turn_resumable(
     conn: &Connection,
@@ -401,7 +401,7 @@ pub fn ensure_turn_resumable(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-001, TERM-AG-009, TERM-AG-022
- * boundary: in=ExistingAgentTurnIdentityAndAgentTurnPayloadV2Projection | out=UpdatedRecoverableDisplayCacheAtCommittedEventSeq | does_not=createAgentTurnOverwriteRuntimeStatusEventOrderToolResultDecisionOrDiffFact
+ * boundary: in=ExistingAgentTurnIdentityAndAgentTurnPayloadV2Projection | out=UpdatedRecoverableDisplayCacheAtCommittedEventSeq | does_not=createAgentTurnOverwriteRuntimeStatusEventOrderToolResultDecisionOrDiffFact | consumer=BR-AG-PERSIST-001
  */
 pub fn save_turn_projection(
     conn: &Connection,
@@ -465,7 +465,7 @@ pub fn save_turn_projection(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-001, TERM-AG-009
- * boundary: in=sessionId | out=agentTurns(lazyHydratedInOrder)
+ * boundary: in=sessionId | out=agentTurns(lazyHydratedInOrder) | consumer=BR-AG-PERSIST-001
  */
 /// 懒加载指定代理编辑会话的回合历史；只返回当前 workspace + session_id 匹配的记录。
 pub fn list_turns(
@@ -512,7 +512,7 @@ pub fn list_turns(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-001, TERM-AG-009
- * boundary: in=agentSessionDeleteRequest | out=agentSessionHistoryDeleted(deDiffsPreserved) | does_not=deleteDiffArtifactsOrFilesOrOtherSessions
+ * boundary: in=agentSessionDeleteRequest | out=agentSessionHistoryDeleted(deDiffsPreserved) | does_not=deleteDiffArtifactsOrFilesOrOtherSessions | consumer=BR-AG-PERSIST-001
  */
 /// 删除当前 workspace 内指定代理编辑会话及其回合历史；不删除 DE pending_diffs / diff_payloads。
 pub fn delete_session(

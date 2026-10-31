@@ -862,7 +862,7 @@ fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequestV1> {
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001, BR-AG-PERSIST-001
  * term_ref: TERM-AG-015
- * boundary: in=DerivedTaskProjectionFactBoundToExistingAgentTurn | out=AppendOnlyInternalTurnEvent | effect=workspaceDb | does_not=appendLateBusinessSideEffectsOrMutateSourceFacts
+ * boundary: in=DerivedTaskProjectionFactBoundToExistingAgentTurn | out=AppendOnlyInternalTurnEvent | effect=workspaceDb | does_not=appendLateBusinessSideEffectsOrMutateSourceFacts | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001
  */
 pub fn record_projection_fact(
     conn: &Connection,
@@ -932,7 +932,7 @@ pub fn record_projection_fact(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
  * term_ref: TERM-AG-015
- * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation) | does_not=resumeExecutionOrReplayToolOrTerminalizeNonStaleRun
+ * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation) | does_not=resumeExecutionOrReplayToolOrTerminalizeNonStaleRun | consumer=BR-AG-STATE-001
  */
 pub fn mark_all_stale_as_interrupted(conn: &Connection) -> rusqlite::Result<usize> {
     let mut statement = conn.prepare(
@@ -1140,7 +1140,7 @@ fn event_string<'a>(payload: &'a serde_json::Value, field: &str, legacy: &str) -
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-PERSIST-001
  * term_ref: TERM-AG-015, TERM-AG-016, TERM-AG-018, TERM-AG-022
- * boundary: in=AppendOnlyTurnEventsLinkedToTaskRunIdentity | out=DeterministicTaskRunProjectionV2WithObservedWaitingAndCurrentRouteFacts | does_not=readLegacyPlanCursorScheduleCandidateWorkOrMutateDecisionProposalToolAndWorkspaceFacts
+ * boundary: in=AppendOnlyTurnEventsLinkedToTaskRunIdentity | out=DeterministicTaskRunProjectionV2WithObservedWaitingAndCurrentRouteFacts | does_not=readLegacyPlanCursorScheduleCandidateWorkOrMutateDecisionProposalToolAndWorkspaceFacts | consumer=BR-AG-PERSIST-001
  */
 pub fn rebuild_task_projection(
     conn: &Connection,

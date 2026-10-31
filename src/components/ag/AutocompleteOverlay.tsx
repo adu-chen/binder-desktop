@@ -19,7 +19,7 @@ interface Props {
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-004
- * boundary: in=AutocompleteAssistViewState
+ * boundary: in=AutocompleteAssistViewState | consumer=BR-AG-STATE-003
  *           | out=AutocompleteOverlay(threeCandidatesOrEmptyStateWithDiagnosticReason)
  *           | does_not=expose_internal_failure_as_user_error_or_drop_diagnostic_reason
  */

@@ -39,7 +39,7 @@ export const ASSIST_FLOATING_SIZE: Record<AssistOverlayKind, AssistFloatingSize>
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
- * boundary: in=viewportDomRectangle | out=AssistVisualRectangle(finiteViewportCoordinates)
+ * boundary: in=viewportDomRectangle | out=AssistVisualRectangle(finiteViewportCoordinates) | consumer=BR-AG-STATE-003
  */
 export function toAssistRect(rect: Pick<DOMRectReadOnly, "left" | "top" | "right" | "bottom">): AssistRect {
   const left = finite(rect.left);
@@ -63,7 +63,7 @@ export function toAssistRect(rect: Pick<DOMRectReadOnly, "left" | "top" | "right
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
- * boundary: in=assistSelectionEndpointRectangles | out=AssistSelectionVisualRectangle(containingSelectionEndpoints)
+ * boundary: in=assistSelectionEndpointRectangles | out=AssistSelectionVisualRectangle(containingSelectionEndpoints) | consumer=BR-AG-STATE-003
  */
 export function unionAssistRects(a: AssistRect, b: AssistRect): AssistRect {
   return toAssistRect({
@@ -81,7 +81,7 @@ export function unionAssistRects(a: AssistRect, b: AssistRect): AssistRect {
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
- * boundary: in=editorScrollViewportAndPageRectangle | out=AssistVisibleContentRectangle(intersectionOrAnchorLost)
+ * boundary: in=editorScrollViewportAndPageRectangle | out=AssistVisibleContentRectangle(intersectionOrAnchorLost) | consumer=BR-AG-STATE-003
  */
 export function intersectAssistRects(a: AssistRect, b: AssistRect): AssistRect | null {
   const left = Math.max(a.left, b.left);
@@ -99,7 +99,7 @@ export function intersectAssistRects(a: AssistRect, b: AssistRect): AssistRect |
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
- * boundary: in=assistVisualAnchorAndEditorViewport | out=AssistOverlayPlacement(targetAdjacentFlipAndBoundedShift)
+ * boundary: in=assistVisualAnchorAndEditorViewport | out=AssistOverlayPlacement(targetAdjacentFlipAndBoundedShift) | consumer=BR-AG-STATE-003
  */
 /// AG-ASSIST 视觉放置守则（BR-AG-STATE-003）：逻辑写入锚由 AssistTarget 持有，视觉浮层消费
 /// 缩放后的光标/选区矩形与未缩放的编辑宿主可视区；优先贴近目标，上下空间不足时翻转，横向仅做最小边界偏移。

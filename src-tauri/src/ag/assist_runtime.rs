@@ -52,7 +52,7 @@ pub(crate) struct AssistResult {
  * type:     EFFECT
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
- * boundary: in=AssistTerminalEvent(acceptOrDismissOrAnchorLost) | out=DeduplicatedAssistTerminalState | does_not=callProviderOrToolOrWriteEditorOrCreateSecondTerminal
+ * boundary: in=AssistTerminalEvent(acceptOrDismissOrAnchorLost) | out=DeduplicatedAssistTerminalState | does_not=callProviderOrToolOrWriteEditorOrCreateSecondTerminal | consumer=BR-AG-STATE-003
  */
 #[tauri::command]
 pub(crate) fn ag_finish_assist(
@@ -94,7 +94,7 @@ pub(crate) fn ag_finish_assist(
  * type:     EFFECT
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003, BR-AG-VERIFY-001
- * boundary: in=AssistRequest | out=AssistCandidate(gateGatedSilentOnDenyOrFailNeverInterruptsEditing) | delegate=ent::gateway::check_gate | does_not=mutateDocumentLogicalState
+ * boundary: in=AssistRequest | out=AssistCandidate(gateGatedSilentOnDenyOrFailNeverInterruptsEditing) | delegate=ent::gateway::check_gate | does_not=mutateDocumentLogicalState | consumer=BR-AG-STATE-003
  */
 /// 命令 `ag_request_assist`（A-AG-I-P-01 request_assist · SM-AG-03 · 独立 async，不走 dispatch 信封）：
 /// 前端经 SM-AG-03 节流（Idle→Throttling）后调本命令承接 throttlePass 之后。**门禁前置**（BR-AG-VERIFY-001）：

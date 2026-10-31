@@ -104,7 +104,7 @@ pub fn transition(state: ToolLoopState, event: ToolLoopEvent) -> Option<ToolLoop
  * type:     GUARD
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002
- * boundary: in=toolRegistrationPermissionAndWriteIntent | out=ToolDecision(rejectUnregisteredOverreachNoDirectWrite)
+ * boundary: in=toolRegistrationPermissionAndWriteIntent | out=ToolDecision(rejectUnregisteredOverreachNoDirectWrite) | consumer=BR-AG-STATE-002
  */
 /// 工具校验守卫（BR-AG-STATE-002 / X-FORBID-006）：未注册 → 拒绝；越权（不在权限边界）→ 拒绝；
 /// **写入意图工具不得直接落盘** → 拒绝直写（须产出修改建议走 DE diff）。拒绝均带原因（回注模型）。

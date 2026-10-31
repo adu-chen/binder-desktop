@@ -1852,7 +1852,7 @@ export async function listTurnEvents(turnId: string, afterSeq = 0): Promise<AgTu
  * type: QUERY
  * chain: AG-TURN
  * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
- * boundary: in=AgentTurnWorkspaceSessionIdentity | out=ValidatedTurnEventsToolCallReceiptsAndUnresolvedToolCallIds | does_not=RestoreAuthorizationExecuteToolsOrClaimAcceptanceOrSave
+ * boundary: in=AgentTurnWorkspaceSessionIdentity | out=ValidatedTurnEventsToolCallReceiptsAndUnresolvedToolCallIds | does_not=RestoreAuthorizationExecuteToolsOrClaimAcceptanceOrSave | consumer=BR-AG-PERSIST-001
  */
 /** 只查询持久执行事实；不复活授权、不恢复执行、不把专业对象引用推导为接受/保存。 */
 export async function queryTurnExecutionEvidence(identity: {
@@ -1891,7 +1891,7 @@ export async function queryTurnExecutionEvidence(identity: {
  * type: QUERY
  * chain: AG-TURN, IPC-CALL
  * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
- * boundary: in=WorkspaceScopedAgentSessionAndAgentTurnIdentity | out=ValidatedLateCapabilityEffectSummaryAndProfessionalObjectReferences | does_not=ExecuteCapabilityRestoreAuthorizationOrInferAcceptanceOrSave
+ * boundary: in=WorkspaceScopedAgentSessionAndAgentTurnIdentity | out=ValidatedLateCapabilityEffectSummaryAndProfessionalObjectReferences | does_not=ExecuteCapabilityRestoreAuthorizationOrInferAcceptanceOrSave | consumer=BR-AG-PERSIST-001
  */
 export async function inspectTurnEffects(sessionId: string, turnId: string): Promise<string> {
   const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
@@ -2114,7 +2114,7 @@ export interface AssistResponse {
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
- * boundary: in=AssistReq
+ * boundary: in=AssistReq | consumer=BR-AG-STATE-003
  *           | out=AssistResponse(candidatesOrInternalFailureReasonPreserved)
  *           | delegate=ag_request_assist
  *           | does_not=swallow_invoke_error_as_reasonless_empty_state
@@ -2181,7 +2181,7 @@ const retryRequests = new Set<string>();
  * chain:    AG-TURN
  * rules:    BR-AG-OBS-001, BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-021
- * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=Composer | does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
+ * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=Composer,BR-AG-STATE-001| does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
  */
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。

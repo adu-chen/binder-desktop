@@ -21,7 +21,7 @@ use std::path::Path;
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-DATA-008
  * term_ref: TERM-AG-002, TERM-AG-014
- * boundary: in=ToolCallReceiptIdentityV1AndExecutionFactsAndArtifactReferences | out=ToolCallReceiptV1 | does_not=authorizeExecutionOrClaimAcceptanceOrSaveOrReplay
+ * boundary: in=ToolCallReceiptIdentityV1AndExecutionFactsAndArtifactReferences | out=ToolCallReceiptV1 | does_not=authorizeExecutionOrClaimAcceptanceOrSaveOrReplay | consumer=BR-AG-STATE-002
  */
 pub(super) fn tool_call_receipt(
     identity: crate::types::ToolCallReceiptIdentityV1,
@@ -486,7 +486,7 @@ fn string_arg(args: &serde_json::Value, key: &str, tool: &str) -> Result<String,
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-001, BR-WS-DATA-001
  * term_ref: TERM-ED-008, TERM-WS-001
- * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets)
+ * boundary: in=ActiveBDocxLogicalStateAndWorkspaceProjectImages | out=ListImagesProjection(currentInstancesAndValidatedAssets) | consumer=BR-AG-STATE-002
  */
 fn exec_list_images(
     ctx: &crate::ag::blocks::AgentReadContext,
@@ -956,7 +956,7 @@ pub fn exec_read_only(
  * type: GUARD
  * chain: AG-TOOL
  * rules: BR-AG-STATE-002, BR-SYS-STATE-007
- * boundary: in=AuthorizedReadOnlyToolCallAndFrozenAgentReadContextAndCancellationSignal | out=ReadOnlyToolResultOrDeadlineCancellationWorkerFailure | does_not=ExecuteWritesOrInjectLateResultsOrRetryAutomatically
+ * boundary: in=AuthorizedReadOnlyToolCallAndFrozenAgentReadContextAndCancellationSignal | out=ReadOnlyToolResultOrDeadlineCancellationWorkerFailure | does_not=ExecuteWritesOrInjectLateResultsOrRetryAutomatically | consumer=BR-AG-STATE-002
  */
 pub(super) async fn exec_read_only_with_deadline(
     ctx: crate::ag::blocks::AgentReadContext,

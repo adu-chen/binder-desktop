@@ -88,7 +88,7 @@ impl Drop for ActiveAgentTurnLease {
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-019
- * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,resumeKind) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume)
+ * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,resumeKind) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume) | consumer=BR-AG-STATE-001
  */
 pub(super) fn register_active_agent_turn(
     state: &AppState,
@@ -303,7 +303,7 @@ pub(super) fn bind_new_agent_turn_model(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015
- * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce) | does_not=callProviderOrToolOrWriteEditorOrCancelTurn
+ * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce) | does_not=callProviderOrToolOrWriteEditorOrCancelTurn | consumer=BR-AG-STATE-001
  */
 pub(super) fn park_agent_turn_for_clarification(
     state: &AppState,
@@ -623,7 +623,7 @@ pub(super) fn lock_agent_turn_effect(
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-001, BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-022
- * boundary: in=AgentTurnCancellationIdentity(sessionId,turnId) | out=CancelledAgentTurnWithPersistedTerminalEvent(abortedGatewayStreamOrClosedClarificationWaitAndNoFurtherToolStart)
+ * boundary: in=AgentTurnCancellationIdentity(sessionId,turnId) | out=CancelledAgentTurnWithPersistedTerminalEvent(abortedGatewayStreamOrClosedClarificationWaitAndNoFurtherToolStart) | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001
  */
 #[tauri::command]
 pub(crate) fn ag_cancel_turn(

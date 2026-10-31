@@ -1158,7 +1158,7 @@ async fn verify_effect_port<R: tauri::Runtime>(
  * type: API
  * chain: AG-TURN
  * rules: BR-AG-OBS-001, BR-AG-STATE-001
- * boundary: in=DevelopmentScenarioIdAndEventChannel | out=IsolatedProductionAgentTurnEvidence | does_not=useUserDatabaseOrGrantProductionPermission
+ * boundary: in=DevelopmentScenarioIdAndEventChannel | out=IsolatedProductionAgentTurnEvidence | does_not=useUserDatabaseOrGrantProductionPermission | consumer=BR-AG-STATE-001
  */
 #[tauri::command]
 pub(crate) async fn ag_verify_run<R: tauri::Runtime>(

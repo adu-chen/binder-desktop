@@ -104,7 +104,7 @@ pub(crate) const MAX_BLOCK_OPS_BYTES_PER_BATCH: usize = 64 * 1024;
  * type:     GUARD
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-009
- * boundary: in=ProposeEditParamsAndTargetExistence | out=ValidatedAgentEditOperationOrIpcError | does_not=executeEditPersistProposalOrWriteFile
+ * boundary: in=ProposeEditParamsAndTargetExistence | out=ValidatedAgentEditOperationOrIpcError | does_not=executeEditPersistProposalOrWriteFile | consumer=BR-AG-STATE-002
  */
 pub(super) fn resolve_agent_edit_operation(
     params: &serde_json::Value,
@@ -336,7 +336,7 @@ fn enforce_block_ops_budget(block_ops_len: usize, block_ops_bytes: usize) -> Res
  * type:     GUARD
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-AG-DATA-010
- * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit
+ * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit | consumer=BR-AG-STATE-002
  */
 pub(super) fn find_block_ops_anchor_conflict(
     operations: Option<&serde_json::Value>,

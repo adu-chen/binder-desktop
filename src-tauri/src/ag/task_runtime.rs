@@ -200,7 +200,7 @@ pub(crate) fn route_propose_decision(
  * chain:    AG-TURN, AG-TOOL, WS-OPERATION
  * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019, TERM-WS-003
- * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan
+ * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan | consumer=BR-AG-STATE-002
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.resolve_decision` —— 任务级裁决
 /// confirm/cancel 只裁决对应请求；同回合恢复和后续 activity 由 AgentTurn 入口证明。
@@ -728,7 +728,7 @@ fn resolve_decision_with_executor(
  * chain: AG-TURN, WS-OPERATION
  * rules: BR-AG-STATE-001, BR-AG-PERSIST-001
  * term_ref: TERM-AG-001, TERM-WS-004
- * boundary: in=OriginalConfirmedResourceDecisionAndClientPostprocessingFailure | out=PersistedOriginalInteractionFailureOrExistingTerminal | does_not=ReadDocumentMutateResourcesGrantPermissionReplayOrAffectOtherSession
+ * boundary: in=OriginalConfirmedResourceDecisionAndClientPostprocessingFailure | out=PersistedOriginalInteractionFailureOrExistingTerminal | does_not=ReadDocumentMutateResourcesGrantPermissionReplayOrAffectOtherSession | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001
  */
 pub(crate) fn route_finish_operation_interaction(
     request: &CommandRequest,

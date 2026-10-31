@@ -563,7 +563,7 @@ export const agStore = {
    * chain:    AG-TURN
    * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-SYS-STATE-007, BR-SYS-STATE-008
    * term_ref: TERM-AG-021, TERM-AG-022
-   * boundary: in=OrderedSafeTurnEventIdentityKindAndDerivedProjectReport | out=MonotonicFrontendTurnProjectionCursorInputGateAndReadOnlyProjectReport | consumer=agService | does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromReportOrCardState
+   * boundary: in=OrderedSafeTurnEventIdentityKindAndDerivedProjectReport | out=MonotonicFrontendTurnProjectionCursorInputGateAndReadOnlyProjectReport | consumer=agService,BR-AG-STATE-001| does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromReportOrCardState
    */
   acceptTurnEvent(turnId: string, eventSeq: number, eventType: string): boolean {
     const current = state.turnEventProjection[turnId] ?? { lastSeq: 0, terminal: false };

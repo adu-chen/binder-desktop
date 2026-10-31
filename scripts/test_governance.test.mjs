@@ -512,4 +512,51 @@ describe('Product Capability Graph', () => {
       expect([...owners.values()].some((sections) => sections.has(chain))).toBe(true);
     }
   });
+
+  it('P1-1 pilot 四条规则只有指定 primary，其余块标 consumer', () => {
+    const primary = {
+      'BR-AG-STATE-001': 'BR-AG-STATE-001-RB-AG-AG-TURN-001',
+      'BR-AG-STATE-002': 'BR-AG-STATE-002-RB-AG-AG-TOOL-001',
+      'BR-AG-STATE-003': 'BR-AG-STATE-003-RB-AG-AG-ASSIST-001',
+      'BR-AG-PERSIST-001': 'BR-AG-PERSIST-001-EFFECT-AG-AG-TURN-003',
+    };
+    const roots = ['src-tauri/src/ag', 'src/components/ag', 'src/components/ed', 'src/services', 'src/store', 'src-tauri/src/ipc', 'src-tauri/src/de'];
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (/\.(rs|ts|tsx)$/.test(entry.name)) files.push(path);
+      }
+    };
+    for (const root of roots) walk(join(DEFAULT_ROOT, root));
+    const failures = [];
+    const seenPrimary = new Set();
+    for (const file of files) {
+      const source = readFileSync(file, 'utf8');
+      for (const match of source.matchAll(/\/\*\*[\s\S]*?@GOV[\s\S]*?\*\//g)) {
+        const block = match[0];
+        const codes = /codes:\s*(.+)/.exec(block)?.[1] ?? '';
+        const rules = (/rules:\s*(.+)/.exec(block)?.[1] ?? '').split(',').map((rule) => rule.trim()).filter(Boolean);
+        const boundary = /boundary:\s*([\s\S]*?)(?:\*\/|$)/.exec(block)?.[1] ?? '';
+        const consumers = [...boundary.matchAll(/consumer=([\s\S]*?)(?=\||$)/g)]
+          .flatMap((match) => [...match[1].matchAll(/BR-[A-Z0-9-]+/g)].map((entry) => entry[0]));
+        const rel = file.slice(DEFAULT_ROOT.length + 1);
+        for (const rule of rules) {
+          if (!(rule in primary)) continue;
+          const isPrimary = codes.includes(primary[rule]);
+          if (isPrimary) {
+            seenPrimary.add(rule);
+            if (consumers.includes(rule)) failures.push(`${rel}: ${rule} primary also consumer`);
+          } else if (!consumers.includes(rule)) {
+            failures.push(`${rel}: ${rule} missing consumer`);
+          }
+        }
+      }
+    }
+    for (const [rule, code] of Object.entries(primary)) {
+      if (!seenPrimary.has(rule)) failures.push(`${rule}: primary ${code} not found`);
+    }
+    expect(failures).toEqual([]);
+  });
 });

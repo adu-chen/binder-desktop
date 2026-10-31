@@ -97,7 +97,7 @@ function nextRequestId(): string {
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
  * term_ref: TERM-AG-003, TERM-AG-004
- * boundary: in=AssistViewEventAndAssistBackendResult
+ * boundary: in=AssistViewEventAndAssistBackendResult | consumer=BR-AG-STATE-003
  *           | out=AssistViewState(latestWinsCandidatesOrInternalFailureReason)
  *           | does_not=drop_assist_failure_reason_or_apply_stale_candidate
  */

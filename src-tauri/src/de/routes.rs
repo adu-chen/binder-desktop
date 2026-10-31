@@ -633,7 +633,7 @@ pub(crate) fn route_list_diffs(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-001
- * boundary: in=agentHistoryDiffIds | out=diffDetailsForHistoryRestore(allStatusesNoPendingRevival)
+ * boundary: in=agentHistoryDiffIds | out=diffDetailsForHistoryRestore(allStatusesNoPendingRevival) | consumer=BR-AG-PERSIST-001
  */
 /// 历史 DiffCard 恢复查询：按 diff_id 返回 DE/WS 当前状态与展示投影，覆盖 pending/accepted/rejected/expired；
 /// 找不到的 diff 由前端投只读不可用，不得默认复活为 pending。

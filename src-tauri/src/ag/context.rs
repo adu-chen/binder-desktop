@@ -56,7 +56,7 @@ pub struct IntentTargetCandidateV2 {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-004, BR-AG-STATE-001
  * term_ref: TERM-AG-012
- * boundary: in=ModelVisibleCurrentTurnSemanticProjection | out=VersionedIntentResultWithoutAuthorizationOrHiddenReasoning | does_not=containAllowedToolsOrOverrideExplicitEditTargetSet
+ * boundary: in=ModelVisibleCurrentTurnSemanticProjection | out=VersionedIntentResultWithoutAuthorizationOrHiddenReasoning | does_not=containAllowedToolsOrOverrideExplicitEditTargetSet | consumer=BR-AG-STATE-001
  */
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

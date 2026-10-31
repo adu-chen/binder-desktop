@@ -9,7 +9,7 @@ use crate::{active_ws, ag, lock_db, str_param, ws_json, AppState};
  * type:     QUERY
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=ActiveWorkspaceIdentity | out=PersistedAgentSessionSummaries
+ * boundary: in=ActiveWorkspaceIdentity | out=PersistedAgentSessionSummaries | consumer=BR-AG-PERSIST-001
  */
 pub(crate) fn route_list_agent_sessions(state: &AppState) -> Result<serde_json::Value, IpcError> {
     let ws = active_ws(state)?;
@@ -25,7 +25,7 @@ pub(crate) fn route_list_agent_sessions(state: &AppState) -> Result<serde_json::
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentSessionMetadataCommand | out=PersistedAgentSessionMetadata | does_not=validateBusinessPayloadOrExecuteTurnOrWriteWorkspace
+ * boundary: in=AgentSessionMetadataCommand | out=PersistedAgentSessionMetadata | does_not=validateBusinessPayloadOrExecuteTurnOrWriteWorkspace | consumer=BR-AG-PERSIST-001
  */
 pub(crate) fn route_save_agent_session(
     request: &CommandRequest,
@@ -74,7 +74,7 @@ pub(crate) fn route_save_agent_session(
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=ExistingAgentTurnIdentityAndAgentTurnPayloadV2Projection | out=UpdatedAgentTurnDisplayCache | does_not=writeRuntimeStatusOrTurnEvent
+ * boundary: in=ExistingAgentTurnIdentityAndAgentTurnPayloadV2Projection | out=UpdatedAgentTurnDisplayCache | does_not=writeRuntimeStatusOrTurnEvent | consumer=BR-AG-PERSIST-001
  */
 pub(crate) fn route_save_agent_turn(
     request: &CommandRequest,
@@ -113,7 +113,7 @@ pub(crate) fn route_save_agent_turn(
  * type:     QUERY
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentSessionIdentity | out=PersistedAgentTurnHistory
+ * boundary: in=AgentSessionIdentity | out=PersistedAgentTurnHistory | consumer=BR-AG-PERSIST-001
  */
 pub(crate) fn route_list_agent_turns(
     request: &CommandRequest,
@@ -134,7 +134,7 @@ pub(crate) fn route_list_agent_turns(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-022
- * boundary: in=ActiveWorkspaceTurnIdAndOptionalAfterSeq | out=AscendingSafeAgTurnEventProjection | effect=IPC-ag.list_turn_events | does_not=returnInternalEventsOrCrossWorkspaceTurn
+ * boundary: in=ActiveWorkspaceTurnIdAndOptionalAfterSeq | out=AscendingSafeAgTurnEventProjection | effect=IPC-ag.list_turn_events | does_not=returnInternalEventsOrCrossWorkspaceTurn | consumer=BR-AG-PERSIST-001
  */
 pub(crate) fn route_list_agent_turn_events(
     request: &CommandRequest,
@@ -173,7 +173,7 @@ pub(crate) fn route_list_agent_turn_events(
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentSessionDeletionIdentity | out=DeletedAgentSessionAndOwnedTurnHistory | does_not=deleteDiffArtifactsOrFilesOrOtherSessions
+ * boundary: in=AgentSessionDeletionIdentity | out=DeletedAgentSessionAndOwnedTurnHistory | does_not=deleteDiffArtifactsOrFilesOrOtherSessions | consumer=BR-AG-PERSIST-001
  */
 pub(crate) fn route_delete_agent_session(
     request: &CommandRequest,
