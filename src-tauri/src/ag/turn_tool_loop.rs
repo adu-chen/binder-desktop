@@ -4712,7 +4712,7 @@ fn handle_response_rejection<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=ensure_round_budget,cancel_between_rounds,await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -5440,7 +5440,7 @@ enum RoundOutcomeResult {
  * type:     RB
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-001, BR-AG-STATE-002
- * boundary: in=ValidatedRoundOutcomeAndOwnedRoundState | out=RoundOutcomeContinueWithClosedRoundOrEndedTerminal | delegate=handle_done_round,handle_tool_calls_round,close_round | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=callProviderOrValidateResponse
+ * boundary: in=ValidatedRoundOutcomeAndOwnedRoundState | out=RoundOutcomeContinueWithClosedRoundOrEndedTerminal | delegate=finish_failed_round,handle_done_round,handle_tool_calls_round,close_round | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=callProviderOrValidateResponse
  */
 async fn handle_round_outcome<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -5510,10 +5510,10 @@ async fn handle_round_outcome<R: tauri::Runtime>(
         mut prompt_package,
         mut agent_context_facts,
     } = round_state;
-    use ag::tool::ToolLoopEvent as TlEv;
-    macro_rules! advance_or_finish {
-        ($event:expr) => {{
-            if !advance_or_settle(
+    match round {
+        _ if response_rejected => {}
+        ent::gateway::RoundOutcome::Failed(error) => {
+            finish_failed_round(
                 state,
                 app,
                 event_emitter,
@@ -5521,25 +5521,8 @@ async fn handle_round_outcome<R: tauri::Runtime>(
                 turn_id,
                 task_run_id.as_deref(),
                 &mut tool_loop_state,
-                $event,
-            ) {
-                return Ok(RoundOutcomeResult::Ended);
-            }
-        }};
-    }
-    match round {
-        _ if response_rejected => {}
-        ent::gateway::RoundOutcome::Failed(error) => {
-            advance_or_finish!(TlEv::LoopError);
-            if let Ok(conn) = state.db.lock() {
-                settle_optional_task_run(
-                    &conn,
-                    task_run_id.as_deref(),
-                    &turn_id,
-                    ag::task::TurnOutcome::Failed,
-                );
-            }
-            emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
+                &error,
+            );
             return Ok(RoundOutcomeResult::Ended);
         }
         ent::gateway::RoundOutcome::Done { stop_reason } => {
@@ -5746,6 +5729,89 @@ async fn handle_round_outcome<R: tauri::Runtime>(
     }))
 }
 
+fn ensure_round_budget<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    remaining_tool_calls: u32,
+    final_reserve: usize,
+    remaining_rounds: usize,
+) -> bool {
+    if (remaining_tool_calls == 0 && final_reserve == 0) || remaining_rounds == 0 {
+        let error = IpcError::new(
+            "AG_TOOL_LOOP_LIMIT",
+            "原回合执行预算已用尽；确认或恢复不会重置预算。此前结果保留，未启动下一次调用。",
+            true,
+            false,
+        );
+        settle_and_emit_ag_turn_error(state, task_run_id, emitter, latch, app, turn_id, &error);
+        false
+    } else {
+        true
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cancel_between_rounds<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    tool_loop_state: &mut ag::tool::ToolLoopState,
+    turn_state: ag::turn::TurnState,
+) -> Result<(), IpcError> {
+    if !ag::tool::is_terminal(*tool_loop_state) {
+        if !advance_or_settle(
+            state,
+            app,
+            emitter,
+            latch,
+            turn_id,
+            task_run_id,
+            tool_loop_state,
+            ag::tool::ToolLoopEvent::Cancel,
+        ) {
+            return Ok(());
+        }
+    }
+    finish_cancelled_turn(state, app, emitter, latch, turn_id, task_run_id, turn_state);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_failed_round<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    turn_id: &str,
+    task_run_id: Option<&str>,
+    tool_loop_state: &mut ag::tool::ToolLoopState,
+    error: &IpcError,
+) {
+    if !advance_or_settle(
+        state,
+        app,
+        emitter,
+        latch,
+        turn_id,
+        task_run_id,
+        tool_loop_state,
+        ag::tool::ToolLoopEvent::LoopError,
+    ) {
+        return;
+    }
+    if let Ok(conn) = state.db.lock() {
+        settle_optional_task_run(&conn, task_run_id, turn_id, ag::task::TurnOutcome::Failed);
+    }
+    emit_ag_turn_error(emitter, latch, app, turn_id, error);
+}
+
 async fn run_round_loop<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     ctx: RoundContext<'_, R>,
@@ -5778,72 +5844,48 @@ async fn run_round_loop<R: tauri::Runtime>(
         remaining_rounds,
     } = ctx;
     let event_emitter = emitter;
-    let RoundState {
-        mut messages,
-        mut tools,
-        mut capability_factors,
-        mut read_ctx,
-        mut active_snapshot,
-        mut intent_result,
-        mut continuation_messages,
-        mut task_run_id,
-        mut remaining_tool_calls,
-        mut protocol_correction_rounds,
-        mut parameter_correction_rounds,
-        mut failed_read_signatures,
-        mut seen_tool_call_ids,
-        mut tool_loop_state,
-        mut turn_state,
-        mut current_doc_prompt_coverage,
-        mut current_doc_requires_tool_read,
-        mut current_doc_read_confirmed,
-        mut any_tool_called,
-        mut proposed_diff,
-        mut edit_blocked_reported,
-        mut final_prompt_audit,
-        mut capability_use_tracker,
-        mut prompt_package,
-        mut agent_context_facts,
-    } = round;
-    use ag::tool::ToolLoopEvent as TlEv;
-    macro_rules! advance_or_finish {
-        ($event:expr) => {{
-            match advance_tool_loop(&app, &turn_id, &mut tool_loop_state, $event) {
-                Ok(next) => next,
-                Err(error) => {
-                    settle_and_emit_ag_turn_error(
-                        &state,
-                        task_run_id.as_deref(),
-                        &event_emitter,
-                        &terminal_latch,
-                        &app,
-                        &turn_id,
-                        &error,
-                    );
-                    return Ok(());
-                }
-            }
-        }};
-    }
-    if (remaining_tool_calls == 0 && execution_policy.final_reserve == 0) || remaining_rounds == 0 {
-        let error = IpcError::new(
-            "AG_TOOL_LOOP_LIMIT",
-            "原回合执行预算已用尽；确认或恢复不会重置预算。此前结果保留，未启动下一次调用。",
-            true,
-            false,
-        );
-        settle_and_emit_ag_turn_error(
-            &state,
-            task_run_id.as_deref(),
-            &event_emitter,
-            &terminal_latch,
-            &app,
-            &turn_id,
-            &error,
-        );
+    let mut round_state = round;
+    if !ensure_round_budget(
+        state,
+        &app,
+        &event_emitter,
+        &terminal_latch,
+        &turn_id,
+        round_state.task_run_id.as_deref(),
+        round_state.remaining_tool_calls,
+        execution_policy.final_reserve,
+        remaining_rounds,
+    ) {
         return Ok(());
     }
     for _round in 0..remaining_rounds {
+        let RoundState {
+            messages,
+            tools,
+            capability_factors,
+            read_ctx,
+            active_snapshot,
+            intent_result,
+            mut continuation_messages,
+            task_run_id,
+            remaining_tool_calls,
+            mut protocol_correction_rounds,
+            parameter_correction_rounds,
+            failed_read_signatures,
+            seen_tool_call_ids,
+            mut tool_loop_state,
+            mut turn_state,
+            current_doc_prompt_coverage,
+            current_doc_requires_tool_read,
+            current_doc_read_confirmed,
+            any_tool_called,
+            proposed_diff,
+            edit_blocked_reported,
+            mut final_prompt_audit,
+            capability_use_tracker,
+            prompt_package,
+            agent_context_facts,
+        } = round_state;
         let budget_closing = messages
             .iter()
             .any(|m| m["role"] == "system" && m["layer"] == "execution_budget_final_only");
@@ -5856,19 +5898,16 @@ async fn run_round_loop<R: tauri::Runtime>(
             "remainingToolCalls":remaining_tool_calls, "budgetClosing":budget_closing
         }))?;
         if cancelled.load(Ordering::Acquire) {
-            // Between rounds SM-AG-02 is already frozen; only the outer AgentTurn is active.
-            if !ag::tool::is_terminal(tool_loop_state) {
-                advance_or_finish!(TlEv::Cancel);
-            }
-            finish_cancelled_turn(
-                &state,
+            cancel_between_rounds(
+                state,
                 &app,
                 &event_emitter,
                 &terminal_latch,
                 &turn_id,
                 task_run_id.as_deref(),
+                &mut tool_loop_state,
                 turn_state,
-            );
+            )?;
             return Ok(());
         }
         let (round, output_decoder, visible_output, visible_output_chars) =
@@ -5942,8 +5981,8 @@ async fn run_round_loop<R: tauri::Runtime>(
         let response_rejected = validation.rejected;
         let final_only_after_rejection = validation.final_only_after_rejection;
         let final_only_correction_pending = validation.final_only_correction_pending;
-        let mut parameter_correction_pending = validation.parameter_correction_pending;
-        let mut protocol_correction_diagnostic = validation.protocol_correction_diagnostic;
+        let parameter_correction_pending = validation.parameter_correction_pending;
+        let protocol_correction_diagnostic = validation.protocol_correction_diagnostic;
         let mut read_failure_final_pending = validation.read_failure_final_pending;
         let outcome = match Box::pin(handle_round_outcome(
             &app,
@@ -6015,58 +6054,7 @@ async fn run_round_loop<R: tauri::Runtime>(
             RoundOutcomeResult::Ended => return Ok(()),
             RoundOutcomeResult::Continue(state) => state,
         };
-        let RoundState {
-            messages: next_messages,
-            tools: next_tools,
-            capability_factors: next_capability_factors,
-            read_ctx: next_read_ctx,
-            active_snapshot: next_active_snapshot,
-            intent_result: next_intent_result,
-            continuation_messages: next_continuation_messages,
-            task_run_id: next_task_run_id,
-            remaining_tool_calls: next_remaining_tool_calls,
-            protocol_correction_rounds: next_protocol_correction_rounds,
-            parameter_correction_rounds: next_parameter_correction_rounds,
-            failed_read_signatures: next_failed_read_signatures,
-            seen_tool_call_ids: next_seen_tool_call_ids,
-            tool_loop_state: next_tool_loop_state,
-            turn_state: next_turn_state,
-            current_doc_prompt_coverage: next_current_doc_prompt_coverage,
-            current_doc_requires_tool_read: next_current_doc_requires_tool_read,
-            current_doc_read_confirmed: next_current_doc_read_confirmed,
-            any_tool_called: next_any_tool_called,
-            proposed_diff: next_proposed_diff,
-            edit_blocked_reported: next_edit_blocked_reported,
-            final_prompt_audit: next_final_prompt_audit,
-            capability_use_tracker: next_capability_use_tracker,
-            prompt_package: next_prompt_package,
-            agent_context_facts: next_agent_context_facts,
-        } = outcome;
-        messages = next_messages;
-        tools = next_tools;
-        capability_factors = next_capability_factors;
-        read_ctx = next_read_ctx;
-        active_snapshot = next_active_snapshot;
-        intent_result = next_intent_result;
-        continuation_messages = next_continuation_messages;
-        task_run_id = next_task_run_id;
-        remaining_tool_calls = next_remaining_tool_calls;
-        protocol_correction_rounds = next_protocol_correction_rounds;
-        parameter_correction_rounds = next_parameter_correction_rounds;
-        failed_read_signatures = next_failed_read_signatures;
-        seen_tool_call_ids = next_seen_tool_call_ids;
-        tool_loop_state = next_tool_loop_state;
-        turn_state = next_turn_state;
-        current_doc_prompt_coverage = next_current_doc_prompt_coverage;
-        current_doc_requires_tool_read = next_current_doc_requires_tool_read;
-        current_doc_read_confirmed = next_current_doc_read_confirmed;
-        any_tool_called = next_any_tool_called;
-        proposed_diff = next_proposed_diff;
-        edit_blocked_reported = next_edit_blocked_reported;
-        final_prompt_audit = next_final_prompt_audit;
-        capability_use_tracker = next_capability_use_tracker;
-        prompt_package = next_prompt_package;
-        agent_context_facts = next_agent_context_facts;
+        round_state = outcome;
     }
 
     debug_assert!(false, "每个 provider 结果都应在循环内部返回或推进");
