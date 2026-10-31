@@ -4521,21 +4521,10 @@ async fn run_tool_call_loop<R: tauri::Runtime>(
     if ctx.round_index + 1 == ctx.remaining_rounds
         || (state.remaining_tool_calls == 0 && ctx.execution_policy.final_reserve == 0)
     {
-        let error = IpcError::new(
-            "AG_TOOL_LOOP_LIMIT",
-            "工具循环达到上限，当前 AgentTurn 已中止；未完成步骤不会被标记为完成。",
-            true,
-            false,
-        );
-        if let Ok(conn) = ctx.state.db.lock() {
-            settle_optional_task_run(
-                &conn,
-                state.task_run_id.as_deref(),
-                ctx.turn_id,
-                ag::task::TurnOutcome::Failed,
-            );
-        }
-        emit_ag_turn_error_from(
+        let error = round_budget_limit_error();
+        settle_and_emit_ag_turn_error_from(
+            ctx.state,
+            state.task_run_id.as_deref(),
             emitter,
             ctx.latch,
             app,
@@ -5723,6 +5712,15 @@ async fn handle_round_outcome<R: tauri::Runtime>(
     }))
 }
 
+pub(super) fn round_budget_limit_error() -> IpcError {
+    IpcError::new(
+        "AG_TOOL_LOOP_LIMIT",
+        "原回合执行预算已用尽；确认或恢复不会重置预算。此前结果和效果记录保留，未启动下一次调用。",
+        true,
+        false,
+    )
+}
+
 fn ensure_round_budget<R: tauri::Runtime>(
     state: &AppState,
     app: &tauri::AppHandle<R>,
@@ -5735,12 +5733,7 @@ fn ensure_round_budget<R: tauri::Runtime>(
     remaining_rounds: usize,
 ) -> bool {
     if (remaining_tool_calls == 0 && final_reserve == 0) || remaining_rounds == 0 {
-        let error = IpcError::new(
-            "AG_TOOL_LOOP_LIMIT",
-            "原回合执行预算已用尽；确认或恢复不会重置预算。此前结果保留，未启动下一次调用。",
-            true,
-            false,
-        );
+        let error = round_budget_limit_error();
         settle_and_emit_ag_turn_error(state, task_run_id, emitter, latch, app, turn_id, &error);
         false
     } else {
@@ -6266,6 +6259,16 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // covers: BR-AG-STATE-005
+    #[test]
+    fn round_budget_limit_error_has_single_shape() {
+        let error = round_budget_limit_error();
+        assert_eq!(error.code, "AG_TOOL_LOOP_LIMIT");
+        assert!(error.retriable);
+        assert!(!error.reauth_required);
+        assert!(error.message.contains("未启动下一次调用"));
+    }
 
     // covers: BR-AG-STATE-002
     #[test]

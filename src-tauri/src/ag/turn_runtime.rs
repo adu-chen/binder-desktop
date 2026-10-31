@@ -1669,12 +1669,7 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
     );
     let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
     if remaining_rounds == 0 || previous_model_calls >= execution_policy.max_model_calls {
-        let error = IpcError::new(
-            "AG_TOOL_LOOP_LIMIT",
-            "原回合执行预算已用尽，确认或恢复不会重置预算；未启动下一次调用。",
-            true,
-            false,
-        );
+        let error = super::turn_tool_loop::round_budget_limit_error();
         settle_and_emit_ag_turn_error_from(
             &state,
             task_run_id.as_deref(),
