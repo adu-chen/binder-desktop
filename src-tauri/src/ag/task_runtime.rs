@@ -49,7 +49,7 @@ fn persist_completed_create_document_target(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015
- * boundary: in=ActiveWorkspaceAgentSessionIdentity | out=TurnEventDerivedTaskRunProjectionV2List
+ * boundary: in=ActiveWorkspaceAgentSessionIdentity | out=TurnEventDerivedTaskRunProjectionV2List | consumer=BR-SYS-STATE-008
  */
 pub(crate) fn route_list_agent_task_runs(
     request: &CommandRequest,
@@ -82,7 +82,7 @@ pub(super) fn settle_optional_task_run(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingTaskProjection | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargetsScheduleTaskPlanOrStartProvider | consumer=BR-AG-DATA-003
+ * boundary: in=TaskRunDecisionRequestProposalAndActiveWorkspace | out=PersistedDecisionRequestWithNormalizedFrozenScopeAndWaitingTaskProjection | does_not=persistMissingOutsideWorkspaceOrAlreadyAuthorizedScopeTargetsScheduleTaskPlanOrStartProvider | consumer=BR-AG-DATA-003,BR-SYS-STATE-008
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.propose_decision` —— 发起任务级裁决请求
 /// （TERM-AG-017；kind：permission/plan_choice/scope/manual_confirm；投影进入 Waiting）。
@@ -200,7 +200,7 @@ pub(crate) fn route_propose_decision(
  * chain:    AG-TURN, AG-TOOL, WS-OPERATION
  * rules:    BR-AG-STATE-002, BR-AG-DATA-003, BR-SYS-STATE-008, BR-WS-STATE-003, BR-WS-PERSIST-003, BR-WS-OBS-002
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019, TERM-WS-003
- * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan | consumer=BR-AG-STATE-002,BR-AG-DATA-003
+ * boundary: in=DecisionRequestOutcomeBoundToFrozenScopeOrWorkspaceOperationPlan | out=DecisionReceiptWorkspaceOperationReceiptAndPersistedExplicitEditTargetSet | does_not=executeUnconfirmedPlanTreatModelTextAsUserConfirmationOrAdvanceTaskPlan | consumer=BR-AG-STATE-002,BR-AG-DATA-003,BR-SYS-STATE-008
  */
 /// AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：`ag.resolve_decision` —— 任务级裁决
 /// confirm/cancel 只裁决对应请求；同回合恢复和后续 activity 由 AgentTurn 入口证明。
@@ -778,7 +778,7 @@ pub(crate) fn route_finish_operation_interaction(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=ActiveWorkspaceTaskRunIdentity | out=CurrentRouteDerivedTaskPlanProjectionV2
+ * boundary: in=ActiveWorkspaceTaskRunIdentity | out=CurrentRouteDerivedTaskPlanProjectionV2 | consumer=BR-SYS-STATE-008
  */
 /// `ag.list_plans` 是兼容查询名；结果只来自当前 route revision，不读取旧 task_plans 执行字段。
 pub(crate) fn route_list_plans(

@@ -17,7 +17,7 @@ const readRecoveryCases = [
  * type: IO
  * chain: AG-TURN
  * rules: BR-AG-UI-001
- * boundary: in=DevelopmentScenarioSelectionSafeTurnEventsAndIsolatedToolMessages | out=ObservedVerificationStatusAndEvidence | does_not=manufactureToolSuccessOrMutateUserWorkspace
+ * boundary: in=DevelopmentScenarioSelectionSafeTurnEventsAndIsolatedToolMessages | out=ObservedVerificationStatusAndEvidence | does_not=manufactureToolSuccessOrMutateUserWorkspace | consumer=BR-AG-UI-001
  */
 export function AgentVerificationPanel() {
   const [scenario, setScenario] = useState("chat");

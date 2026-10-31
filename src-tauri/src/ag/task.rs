@@ -113,7 +113,7 @@ pub fn begin_turn(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite) | does_not=callModelOrWriteDiskOrCompleteTurnOrResumeExecution | consumer=BR-AG-DATA-001
+ * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite) | does_not=callModelOrWriteDiskOrCompleteTurnOrResumeExecution | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
  */
 /// 为一个会改变已有 LogicalState 的 pending Diff 建立续片段检查点。创建卡片不等于预览成功：
 /// checkpoint 只能处于 awaiting_ack，直到编辑器回报实际 sessionVersion/contentHash。
@@ -172,7 +172,7 @@ pub fn create_preview_checkpoint(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=EditorAppliedLogicalStateVersionHash | out=AcknowledgedPreviewCheckpoint(rejectsWrongSessionTurnDiffPathOrTerminalDiff) | consumer=BR-AG-DATA-001
+ * boundary: in=EditorAppliedLogicalStateVersionHash | out=AcknowledgedPreviewCheckpoint(rejectsWrongSessionTurnDiffPathOrTerminalDiff) | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
  */
 /// 接收真实 ED LogicalState 预览回执。只接受对应 pending Diff 的第一份回执；模型文本、卡片显示态
 /// 和旧快照均不能伪造此转移。
@@ -290,7 +290,7 @@ pub fn acknowledged_preview_checkpoint(
  * chain:    AG-TURN, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=FreshOpenDocSnapshotMatchingAcknowledgedPreviewCheckpoint | out=SameTaskRunContinuationIdentity(consumedExactlyOnceNoBackgroundQueue) | consumer=BR-AG-DATA-001
+ * boundary: in=FreshOpenDocSnapshotMatchingAcknowledgedPreviewCheckpoint | out=SameTaskRunContinuationIdentity(consumedExactlyOnceNoBackgroundQueue) | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
  */
 /// 消费一次已确认预览检查点，授权同一 TaskRun 的下一 AgentTurn。必须再次传入和 Ack 完全一致的
 /// fresh LogicalState 基线；这切断旧 AgentReadContext 与新 Diff 的联系。
@@ -508,7 +508,7 @@ fn frozen_scope_targets(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=ActiveOrActivityObservedTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=treatDecisionResolutionAloneAsActivityAppendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection | consumer=BR-AG-DATA-003
+ * boundary: in=ActiveOrActivityObservedTaskRunProjectionIdentityAndValidatedDecisionPayload | out=PersistedProposedDecisionRequestAndWaitingTaskProjectionCache | effect=workspaceDb | does_not=treatDecisionResolutionAloneAsActivityAppendScopeTargetsBeforeConfirmScheduleWorkOrReplaceTurnEventProjection | consumer=BR-AG-DATA-003,BR-SYS-STATE-008
  */
 pub fn propose_decision(
     conn: &Connection,
@@ -583,7 +583,7 @@ pub(crate) fn resolve_decision(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-003
  * term_ref: TERM-AG-015, TERM-AG-017, TERM-AG-019
- * boundary: in=DecisionRequestOutcomeAndRevalidatedFrozenScopeTargets | out=ResolvedDecisionTaskRunStatusAndAtomicExplicitEditTargetSetAppend | effect=workspaceDb | does_not=appendOnCancelMismatchOrReplayWithDifferentOutcome | consumer=BR-AG-DATA-003
+ * boundary: in=DecisionRequestOutcomeAndRevalidatedFrozenScopeTargets | out=ResolvedDecisionTaskRunStatusAndAtomicExplicitEditTargetSetAppend | effect=workspaceDb | does_not=appendOnCancelMismatchOrReplayWithDifferentOutcome | consumer=BR-AG-DATA-003,BR-SYS-STATE-008
  */
 /// 裁决任务级请求：confirm 只解除等待条件并恢复原 AgentTurn，cancel 终结该路线。
 /// scope confirm 与 ExplicitEditTargetSet 追加在同一事务内完成；后续活动仍须由真实回合事件证明。
@@ -753,7 +753,7 @@ pub fn resolved_decision_outcome(
  * chain: AG-TURN, WS-OPERATION
  * rules: BR-AG-DATA-004, BR-SYS-STATE-008
  * term_ref: TERM-AG-017, TERM-AG-015
- * boundary: in=OriginalWorkspaceSessionTurnTaskAndResolvedDecisionIdentity | out=IdentityBoundDecisionAndWorkspaceOperationEffectProjection | does_not=authorizeExecutionReadDocumentBodyInferSaveFromConfirmationOrRewriteTaskOutcome | consumer=BR-AG-DATA-004
+ * boundary: in=OriginalWorkspaceSessionTurnTaskAndResolvedDecisionIdentity | out=IdentityBoundDecisionAndWorkspaceOperationEffectProjection | does_not=authorizeExecutionReadDocumentBodyInferSaveFromConfirmationOrRewriteTaskOutcome | consumer=BR-AG-DATA-004,BR-SYS-STATE-008
  */
 pub(super) fn resolved_decision_receipt(
     conn: &Connection,
@@ -862,7 +862,7 @@ fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequestV1> {
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001, BR-AG-PERSIST-001
  * term_ref: TERM-AG-015
- * boundary: in=DerivedTaskProjectionFactBoundToExistingAgentTurn | out=AppendOnlyInternalTurnEvent | effect=workspaceDb | does_not=appendLateBusinessSideEffectsOrMutateSourceFacts | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001
+ * boundary: in=DerivedTaskProjectionFactBoundToExistingAgentTurn | out=AppendOnlyInternalTurnEvent | effect=workspaceDb | does_not=appendLateBusinessSideEffectsOrMutateSourceFacts | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub fn record_projection_fact(
     conn: &Connection,
@@ -932,7 +932,7 @@ pub fn record_projection_fact(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
  * term_ref: TERM-AG-015
- * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation) | does_not=resumeExecutionOrReplayToolOrTerminalizeNonStaleRun | consumer=BR-AG-STATE-001
+ * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation) | does_not=resumeExecutionOrReplayToolOrTerminalizeNonStaleRun | consumer=BR-AG-STATE-001,BR-SYS-STATE-008
  */
 pub fn mark_all_stale_as_interrupted(conn: &Connection) -> rusqlite::Result<usize> {
     let mut statement = conn.prepare(
@@ -998,7 +998,7 @@ pub(crate) fn load_task_run(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=ModelVisibleRouteRevisionTargetCandidatesAndConfirmationPoints | out=boolean（true 当 route证明复杂目标或跨可见片段）
+ * boundary: in=ModelVisibleRouteRevisionTargetCandidatesAndConfirmationPoints | out=boolean（true 当 route证明复杂目标或跨可见片段） | consumer=BR-SYS-STATE-008
  */
 pub fn route_requires_task_projection(
     route_steps: &[String],
@@ -1022,7 +1022,7 @@ pub fn tool_requires_task_run(tool_name: &str) -> bool {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-SYS-STATE-008
  * term_ref: TERM-AG-015, TERM-AG-018
- * boundary: in=ModelVisibleComplexRouteOrTaskLevelWaitingTool | out=OptionalStableTaskRunProjectionIdentity | does_not=classifyPromptKeywordsCreateSimpleTurnProjectionOrExecuteCandidateRoute
+ * boundary: in=ModelVisibleComplexRouteOrTaskLevelWaitingTool | out=OptionalStableTaskRunProjectionIdentity | does_not=classifyPromptKeywordsCreateSimpleTurnProjectionOrExecuteCandidateRoute | consumer=BR-SYS-STATE-008
  */
 pub fn begin_for_model_route(
     conn: &Connection,
@@ -1140,7 +1140,7 @@ fn event_string<'a>(payload: &'a serde_json::Value, field: &str, legacy: &str) -
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-PERSIST-001
  * term_ref: TERM-AG-015, TERM-AG-016, TERM-AG-018, TERM-AG-022
- * boundary: in=AppendOnlyTurnEventsLinkedToTaskRunIdentity | out=DeterministicTaskRunProjectionV2WithObservedWaitingAndCurrentRouteFacts | does_not=readLegacyPlanCursorScheduleCandidateWorkOrMutateDecisionProposalToolAndWorkspaceFacts | consumer=BR-AG-PERSIST-001
+ * boundary: in=AppendOnlyTurnEventsLinkedToTaskRunIdentity | out=DeterministicTaskRunProjectionV2WithObservedWaitingAndCurrentRouteFacts | does_not=readLegacyPlanCursorScheduleCandidateWorkOrMutateDecisionProposalToolAndWorkspaceFacts | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-008
  */
 pub fn rebuild_task_projection(
     conn: &Connection,

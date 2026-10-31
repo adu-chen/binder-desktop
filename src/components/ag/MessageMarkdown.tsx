@@ -11,7 +11,7 @@ import type { Components } from "react-markdown";
  * chain:    AG-TURN
  * rules:    BR-AG-UI-001
  * term_ref: TERM-AG-011
- * boundary: in=AssistantMessageText | out=sanitizedMarkdownElements | effect=memory | caller_context=messageFlowRender | does_not=execute_raw_HTML_or_allow_webview_navigation
+ * boundary: in=AssistantMessageText | out=sanitizedMarkdownElements | effect=memory | caller_context=messageFlowRender | does_not=execute_raw_HTML_or_allow_webview_navigation | consumer=BR-AG-UI-001
  */
 export const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
   return (

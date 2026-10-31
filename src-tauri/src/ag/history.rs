@@ -369,7 +369,7 @@ pub fn save_turn(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-009, TERM-AG-022
- * boundary: in=SameIdentityAgentTurnResumeRequest | out=ExistingDraftAgentTurnOrStableRejection | does_not=overwritePayloadStatusEventCursorOrCreateReplacementTurn | consumer=BR-AG-PERSIST-001
+ * boundary: in=SameIdentityAgentTurnResumeRequest | out=ExistingDraftAgentTurnOrStableRejection | does_not=overwritePayloadStatusEventCursorOrCreateReplacementTurn | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub fn ensure_turn_resumable(
     conn: &Connection,

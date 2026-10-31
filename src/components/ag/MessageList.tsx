@@ -15,7 +15,7 @@ import { startTurn, inspectTurnEffects, continueSavedResourceGroup } from "../..
  * chain:    AG-TURN
  * rules:    BR-AG-UI-001
  * term_ref: TERM-AG-011
- * boundary: in=ActiveSessionMessagesToolCallsAndAnchoredDiffs | out=orderedMessageStreamRender | effect=memory | caller_context=agentPanelMessageListRender | does_not=render_user_message_as_markdown_or_move_diffs_off_turn
+ * boundary: in=ActiveSessionMessagesToolCallsAndAnchoredDiffs | out=orderedMessageStreamRender | effect=memory | caller_context=agentPanelMessageListRender | does_not=render_user_message_as_markdown_or_move_diffs_off_turn | consumer=BR-AG-UI-001
  *
  * 消息流（A-SYS-C-T-02 §3 · PI-FE-06 / PI-AG-UI-01 · AG-MSG-RENDER-01）。
  * 渲染活动会话的 AgentTurn 消息（含流式回显光标）+ ToolCall 状态卡。

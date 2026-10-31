@@ -513,7 +513,7 @@ describe('Product Capability Graph', () => {
     }
   });
 
-  it('P1-1 pilot 十二条规则只有指定 primary，其余块标 consumer', () => {
+  it('P1-1 pilot 十七条规则只有指定 primary，其余块标 consumer', () => {
     const primary = {
       'BR-AG-STATE-001': 'BR-AG-STATE-001-RB-AG-AG-TURN-001',
       'BR-AG-STATE-002': 'BR-AG-STATE-002-RB-AG-AG-TOOL-001',
@@ -527,8 +527,13 @@ describe('Product Capability Graph', () => {
       'BR-AG-DATA-005': 'BR-AG-DATA-005-DATA-AG-AG-TURN-011',
       'BR-AG-DATA-010': 'BR-AG-DATA-010-GUARD-AG-AG-TOOL-061',
       'BR-AG-OBS-001': 'BR-AG-OBS-001-EFFECT-AG-AG-TURN-044',
+      'BR-AG-UI-001': 'BR-AG-UI-001-RB-AG-AG-TURN-013',
+      'BR-AG-VERIFY-001': 'BR-AG-VERIFY-001-GUARD-AG-AG-TURN-020',
+      'BR-SYS-STATE-007': 'BR-SYS-STATE-007-RB-AG-AG-TURN-001',
+      'BR-SYS-STATE-008': 'BR-SYS-STATE-008-EFFECT-AG-AG-TASK-002',
+      'BR-SYS-DATA-008': 'BR-SYS-DATA-008-DATA-SYS-DATA-MIGRATE-001',
     };
-    const roots = ['src-tauri/src/ag', 'src/components/ag', 'src/components/ed', 'src/services', 'src/store', 'src-tauri/src/ipc', 'src-tauri/src/de'];
+    const roots = ['src-tauri/src/ag', 'src/components/ag', 'src/components/ed', 'src/services', 'src/store', 'src-tauri/src/ipc', 'src-tauri/src/de', 'src-tauri/src/types'];
     const files = [];
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {

@@ -134,7 +134,7 @@ pub(crate) fn route_list_agent_turns(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-022
- * boundary: in=ActiveWorkspaceTurnIdAndOptionalAfterSeq | out=AscendingSafeAgTurnEventProjection | effect=IPC-ag.list_turn_events | does_not=returnInternalEventsOrCrossWorkspaceTurn | consumer=BR-AG-PERSIST-001
+ * boundary: in=ActiveWorkspaceTurnIdAndOptionalAfterSeq | out=AscendingSafeAgTurnEventProjection | effect=IPC-ag.list_turn_events | does_not=returnInternalEventsOrCrossWorkspaceTurn | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub(crate) fn route_list_agent_turn_events(
     request: &CommandRequest,

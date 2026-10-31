@@ -21,7 +21,7 @@ use std::path::Path;
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002, BR-SYS-DATA-008
  * term_ref: TERM-AG-002, TERM-AG-014
- * boundary: in=ToolCallReceiptIdentityV1AndExecutionFactsAndArtifactReferences | out=ToolCallReceiptV1 | does_not=authorizeExecutionOrClaimAcceptanceOrSaveOrReplay | consumer=BR-AG-STATE-002
+ * boundary: in=ToolCallReceiptIdentityV1AndExecutionFactsAndArtifactReferences | out=ToolCallReceiptV1 | does_not=authorizeExecutionOrClaimAcceptanceOrSaveOrReplay | consumer=BR-AG-STATE-002,BR-SYS-DATA-008
  */
 pub(super) fn tool_call_receipt(
     identity: crate::types::ToolCallReceiptIdentityV1,
@@ -176,7 +176,7 @@ fn snapshot_version(snapshot: &crate::ag::blocks::AgentEditableSnapshot) -> Stri
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage | consumer=BR-AG-DATA-008,BR-AG-OBS-001
+ * boundary: in=VerifiedContextFrozenOrSuccessfulReadOnlyToolResult | out=CoverageDistinctPendingEvidenceItemsAndRuntimeMaterializedEvidenceLedger | does_not=recordFailedCrossWorkspaceOrModelDeclaredReadsOrUpgradeCoverage | consumer=BR-AG-DATA-008,BR-AG-OBS-001,BR-SYS-DATA-008
  */
 pub fn context_evidence(
     facts: &crate::types::AgentContextFacts,
@@ -956,7 +956,7 @@ pub fn exec_read_only(
  * type: GUARD
  * chain: AG-TOOL
  * rules: BR-AG-STATE-002, BR-SYS-STATE-007
- * boundary: in=AuthorizedReadOnlyToolCallAndFrozenAgentReadContextAndCancellationSignal | out=ReadOnlyToolResultOrDeadlineCancellationWorkerFailure | does_not=ExecuteWritesOrInjectLateResultsOrRetryAutomatically | consumer=BR-AG-STATE-002
+ * boundary: in=AuthorizedReadOnlyToolCallAndFrozenAgentReadContextAndCancellationSignal | out=ReadOnlyToolResultOrDeadlineCancellationWorkerFailure | does_not=ExecuteWritesOrInjectLateResultsOrRetryAutomatically | consumer=BR-AG-STATE-002,BR-SYS-STATE-007
  */
 pub(super) async fn exec_read_only_with_deadline(
     ctx: crate::ag::blocks::AgentReadContext,

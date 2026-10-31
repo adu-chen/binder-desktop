@@ -35,7 +35,7 @@ pub struct TargetAuthorization {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-DATA-003, BR-SYS-STATE-007, BR-SYS-STATE-008
  * term_ref: TERM-AG-019, TERM-AG-001, TERM-AG-015, TERM-REF-003
- * boundary: in=CurrentDocumentExplicitReferenceOrConfirmedTaskScopeTarget | out=MonotonicExplicitEditTargetSet | does_not=grantFromReadSearchModelTextHistoryOrOpenTabs
+ * boundary: in=CurrentDocumentExplicitReferenceOrConfirmedTaskScopeTarget | out=MonotonicExplicitEditTargetSet | does_not=grantFromReadSearchModelTextHistoryOrOpenTabs | consumer=BR-SYS-STATE-007,BR-SYS-STATE-008
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplicitEditTargetSet {

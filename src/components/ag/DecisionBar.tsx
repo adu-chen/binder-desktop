@@ -43,7 +43,7 @@ export function DecisionBar() {
  * chain: AG-TURN
  * rules: BR-SYS-STATE-007, BR-AG-UI-001
  * term_ref: TERM-AG-017
- * boundary: in=DecisionRequestAndOriginSession | out=IdentityScopedSubmissionFeedbackAndReceiptMessages | does_not=clearSuccessorDecisionOrRetargetReceiptToActiveSession
+ * boundary: in=DecisionRequestAndOriginSession | out=IdentityScopedSubmissionFeedbackAndReceiptMessages | does_not=clearSuccessorDecisionOrRetargetReceiptToActiveSession | consumer=BR-SYS-STATE-007,BR-AG-UI-001
  */
 function DecisionRequestControls({ decision, sessionId }: { decision: PendingDecisionView; sessionId: string }) {
   const state = useAgStore();

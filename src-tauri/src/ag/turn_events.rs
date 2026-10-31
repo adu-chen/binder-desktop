@@ -479,7 +479,7 @@ fn append_event_record(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-AG-STATE-002, BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-002, TERM-AG-022, TERM-AG-023
- * boundary: in=CurrentAgentTurnAndSafeOrInternalTurnEventIncludingRuntimeEvidence | out=AppendOnlyMonotonicTurnEventSameIdentityChannelOrAfterSeqProjectionAndEvidenceSourceIdentity | effect=workspaceDb,IPC-ag_turn_stream | does_not=overwriteCommittedEventExposeInternalPayloadAcceptModelEvidenceOrAppendAfterFirstTerminal | consumer=BR-AG-STATE-001,BR-AG-STATE-002,BR-AG-PERSIST-001
+ * boundary: in=CurrentAgentTurnAndSafeOrInternalTurnEventIncludingRuntimeEvidence | out=AppendOnlyMonotonicTurnEventSameIdentityChannelOrAfterSeqProjectionAndEvidenceSourceIdentity | effect=workspaceDb,IPC-ag_turn_stream | does_not=overwriteCommittedEventExposeInternalPayloadAcceptModelEvidenceOrAppendAfterFirstTerminal | consumer=BR-AG-STATE-001,BR-AG-STATE-002,BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub(super) struct TurnEventEmitter<'a> {
     state: &'a AppState,
@@ -936,7 +936,7 @@ impl<'a> TurnEventEmitter<'a> {
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-022
- * boundary: in=WorkspaceScopedAgentTurnIdentityAndAfterSeq | out=AscendingSafeAgTurnEventsWithOriginalSeqGaps | does_not=exposeInternalContextGateProviderEventsOrCrossWorkspaceTurn | consumer=BR-AG-PERSIST-001
+ * boundary: in=WorkspaceScopedAgentTurnIdentityAndAfterSeq | out=AscendingSafeAgTurnEventsWithOriginalSeqGaps | does_not=exposeInternalContextGateProviderEventsOrCrossWorkspaceTurn | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub fn list_safe_events(
     conn: &Connection,
@@ -991,7 +991,7 @@ pub fn list_safe_events(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-OBS-001, BR-AG-PERSIST-001, BR-SYS-DATA-008
  * term_ref: TERM-AG-021, TERM-AG-023
- * boundary: in=WorkspaceScopedTurnAndAppendOnlyEvidenceEvents | out=EvidenceLedgerV1(validSameTurnSourceEventOrder) | does_not=acceptCrossWorkspaceFailedReadOrModelSuppliedEvidence | consumer=BR-AG-PERSIST-001,BR-AG-OBS-001
+ * boundary: in=WorkspaceScopedTurnAndAppendOnlyEvidenceEvents | out=EvidenceLedgerV1(validSameTurnSourceEventOrder) | does_not=acceptCrossWorkspaceFailedReadOrModelSuppliedEvidence | consumer=BR-AG-PERSIST-001,BR-AG-OBS-001,BR-SYS-DATA-008
  */
 pub(super) fn rebuild_evidence_ledger(
     conn: &Connection,

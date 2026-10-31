@@ -185,7 +185,7 @@ export interface AgentContextFacts {
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-008, BR-ED-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020
- * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=BR-AG-DATA-008| does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
+ * boundary: in=ActiveWorkspaceOpenDocSnapshotsExplicitSelectionRefsAndProposalProjection | out=AgentContextFactsV1(noDocumentBodyNoAuthorization) | consumer=BR-AG-DATA-008,BR-SYS-DATA-008| does_not=copyDocumentBodyOrExpandCapabilityGrantOrExplicitEditTargetSet
  */
 export function buildAgentContextFacts(
   turnId: string,
@@ -548,7 +548,7 @@ interface AgentContextRequest {
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-020
- * boundary: in=FrozenAgentTurnTargetCurrentHostResourcesAndRequestedPaths | out=AgentContextFactsV2AndRequestedLogicalStateSnapshots | does_not=waitForUnrelatedEditorOrReadDiskOrChangeFrozenTarget | consumer=BR-AG-DATA-008
+ * boundary: in=FrozenAgentTurnTargetCurrentHostResourcesAndRequestedPaths | out=AgentContextFactsV2AndRequestedLogicalStateSnapshots | does_not=waitForUnrelatedEditorOrReadDiskOrChangeFrozenTarget | consumer=BR-AG-DATA-008,BR-SYS-DATA-008
  */
 function collectAgentContextV2(
   turnId: string, sessionId: string, target: ActiveDocTarget, revision: number,
@@ -1538,7 +1538,7 @@ const PREVIEW_ACK_DEADLINE_MS = 15_000;
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckThenFreshSnapshotContinuation(noDiffAcceptNoDiskWriteNoBackgroundCall) | consumer=BR-AG-DATA-001
+ * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckThenFreshSnapshotContinuation(noDiffAcceptNoDiskWriteNoBackgroundCall) | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
  */
 /** 只有 ED/DE 已成功标记 draftApplied 后才回报 PreviewAck，并由前端明确启动下一执行片段。
  * 此处不从 Diff payload 推断内容，也不会对 background Diff 或无 checkpoint 的卡片续编。 */
@@ -1653,7 +1653,7 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
  * chain: AG-TURN, IPC-CALL
  * rules: BR-SYS-STATE-007, BR-SYS-STATE-008
  * term_ref: TERM-AG-017, TERM-AG-001
- * boundary: in=DecisionRequestIdAndUserOutcome | out=SingleInFlightResolutionAndIdentityBoundAgentTurnContinuation | does_not=grantPermissionOrFabricateHistoricalTurn
+ * boundary: in=DecisionRequestIdAndUserOutcome | out=SingleInFlightResolutionAndIdentityBoundAgentTurnContinuation | does_not=grantPermissionOrFabricateHistoricalTurn | consumer=BR-SYS-STATE-007,BR-SYS-STATE-008
  */
 export async function resolveDecisionAndContinue(
   requestId: string,
@@ -1852,7 +1852,7 @@ export async function listTurnEvents(turnId: string, afterSeq = 0): Promise<AgTu
  * type: QUERY
  * chain: AG-TURN
  * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
- * boundary: in=AgentTurnWorkspaceSessionIdentity | out=ValidatedTurnEventsToolCallReceiptsAndUnresolvedToolCallIds | does_not=RestoreAuthorizationExecuteToolsOrClaimAcceptanceOrSave | consumer=BR-AG-PERSIST-001
+ * boundary: in=AgentTurnWorkspaceSessionIdentity | out=ValidatedTurnEventsToolCallReceiptsAndUnresolvedToolCallIds | does_not=RestoreAuthorizationExecuteToolsOrClaimAcceptanceOrSave | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 /** 只查询持久执行事实；不复活授权、不恢复执行、不把专业对象引用推导为接受/保存。 */
 export async function queryTurnExecutionEvidence(identity: {
@@ -1891,7 +1891,7 @@ export async function queryTurnExecutionEvidence(identity: {
  * type: QUERY
  * chain: AG-TURN, IPC-CALL
  * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
- * boundary: in=WorkspaceScopedAgentSessionAndAgentTurnIdentity | out=ValidatedLateCapabilityEffectSummaryAndProfessionalObjectReferences | does_not=ExecuteCapabilityRestoreAuthorizationOrInferAcceptanceOrSave | consumer=BR-AG-PERSIST-001
+ * boundary: in=WorkspaceScopedAgentSessionAndAgentTurnIdentity | out=ValidatedLateCapabilityEffectSummaryAndProfessionalObjectReferences | does_not=ExecuteCapabilityRestoreAuthorizationOrInferAcceptanceOrSave | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 export async function inspectTurnEffects(sessionId: string, turnId: string): Promise<string> {
   const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
@@ -2181,7 +2181,7 @@ const retryRequests = new Set<string>();
  * chain:    AG-TURN
  * rules:    BR-AG-OBS-001, BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-021
- * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=BR-AG-STATE-001,BR-AG-OBS-001| does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
+ * boundary: in=UserPromptOrClarificationForCurrentSessionAndOrderedSafeTurnEvents | out=NewOrSameIdentityAgentTurnInvocationMessageProjectionAndReadOnlyProjectReport | effect=memory,IPC-ag_start_turn | consumer=BR-AG-STATE-001,BR-AG-OBS-001,BR-SYS-STATE-007| does_not=cancelClarifyingTurnCreateNewTurnIdForClarificationCrossSessionResumeOrTreatProjectReportAsAuthorization
  */
 /**
  * 发起对话回合：`ag_start_turn`（async + Channel）→ 真实流式 `AgTurnEvent` 投影到 agStore。

@@ -128,7 +128,7 @@ async function expireDiff(diffId: string, reason: ExpiredReason, errorCode: stri
  * type:     EFFECT
  * chain:    DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008
- * boundary: in=NewProposalBaseAdvanced | out=PriorStalePendingCardsExpired(documentRevisionAdvanced) | does_not=rollback_or_touch_disk
+ * boundary: in=NewProposalBaseAdvanced | out=PriorStalePendingCardsExpired(documentRevisionAdvanced) | does_not=rollback_or_touch_disk | consumer=BR-SYS-STATE-008
  */
 /** 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：后续 Proposal 基于最新 LogicalState 生成/预览
  * 成功后，使同文档所有基于旧基准的 pending 卡失效（document_revision_advanced）。旧卡保留历史、不可再

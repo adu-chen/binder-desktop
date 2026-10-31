@@ -88,7 +88,7 @@ impl Drop for ActiveAgentTurnLease {
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015, TERM-AG-019
- * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,resumeKind) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume) | consumer=BR-AG-STATE-001
+ * boundary: in=AgentTurnStartIdentity(sessionId,workspaceId,turnId,resumeKind) | out=ExclusiveActiveAgentTurnLeaseOptionalOriginalTaskRunAndExplicitEditTargetSet(rejectsWrongSessionWorkspaceTurnRepeatedOrTerminalResume) | consumer=BR-AG-STATE-001,BR-SYS-STATE-007
  */
 pub(super) fn register_active_agent_turn(
     state: &AppState,
@@ -303,7 +303,7 @@ pub(super) fn bind_new_agent_turn_model(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015
- * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce) | does_not=callProviderOrToolOrWriteEditorOrCancelTurn | consumer=BR-AG-STATE-001
+ * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce) | does_not=callProviderOrToolOrWriteEditorOrCancelTurn | consumer=BR-AG-STATE-001,BR-SYS-STATE-007
  */
 pub(super) fn park_agent_turn_for_clarification(
     state: &AppState,
@@ -478,7 +478,7 @@ pub(super) fn bind_agent_turn_task_run(
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-003, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-019
- * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory | does_not=removeTargetsOrRewriteTurnIdentityOrExecuteEdit | consumer=BR-AG-DATA-003
+ * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory | does_not=removeTargetsOrRewriteTurnIdentityOrExecuteEdit | consumer=BR-AG-DATA-003,BR-SYS-STATE-007
  */
 pub(super) fn bind_agent_turn_edit_target_set(
     state: &AppState,
@@ -623,7 +623,7 @@ pub(super) fn lock_agent_turn_effect(
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-001, BR-AG-PERSIST-001, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-022
- * boundary: in=AgentTurnCancellationIdentity(sessionId,turnId) | out=CancelledAgentTurnWithPersistedTerminalEvent(abortedGatewayStreamOrClosedClarificationWaitAndNoFurtherToolStart) | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001
+ * boundary: in=AgentTurnCancellationIdentity(sessionId,turnId) | out=CancelledAgentTurnWithPersistedTerminalEvent(abortedGatewayStreamOrClosedClarificationWaitAndNoFurtherToolStart) | consumer=BR-AG-STATE-001,BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 #[tauri::command]
 pub(crate) fn ag_cancel_turn(
@@ -657,7 +657,7 @@ pub(crate) fn ag_cancel_turn(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=EditorAppliedLogicalStatePreviewIdentity | out=PreviewContinuationCheckpointAcknowledged(noModelCallNoDiffDecisionNoDiskWrite) | consumer=BR-AG-DATA-001
+ * boundary: in=EditorAppliedLogicalStatePreviewIdentity | out=PreviewContinuationCheckpointAcknowledged(noModelCallNoDiffDecisionNoDiskWrite) | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
  */
 /// 编辑器只在受控预览已真实写入 LogicalState 后回报基线。该命令不接受 DiffCard、不写盘，也不
 /// 自行调用模型；下一 AgentTurn 必须由前端显式发起。

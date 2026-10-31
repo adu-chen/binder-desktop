@@ -68,7 +68,7 @@ fn db_error(error: impl std::fmt::Display) -> IpcError {
  * type: QUERY
  * chain: AG-TOOL, AG-TURN
  * rules: BR-AG-PERSIST-001, BR-SYS-STATE-007
- * boundary: in=WorkspaceIdentityAndOptionalSessionTurnIdentity | out=PersistedCapabilityExecutionFacts | does_not=RestoreExecutionAuthorityOrAppendAfterTerminalTurnEvent | consumer=BR-AG-PERSIST-001
+ * boundary: in=WorkspaceIdentityAndOptionalSessionTurnIdentity | out=PersistedCapabilityExecutionFacts | does_not=RestoreExecutionAuthorityOrAppendAfterTerminalTurnEvent | consumer=BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub(super) fn facts(
     conn: &Connection,
@@ -241,7 +241,7 @@ pub(super) fn delete_settled_session_facts(
  * type: EFFECT
  * chain: AG-TOOL, AG-TURN
  * rules: BR-AG-STATE-002, BR-SYS-STATE-007, BR-AG-PERSIST-001
- * boundary: in=ConfirmedWorkspaceOperationClosureAndFrozenToolCallIdentityAndCallerOwnedEffectLease | out=WorkspaceOperationReceiptAndPersistentEffectSettlement | effect=workspaceDb,DelegatedCapability | does_not=InferDiskSuccessFromModelTextOrRewriteAgentTurnTerminal | consumer=BR-AG-STATE-002,BR-AG-PERSIST-001
+ * boundary: in=ConfirmedWorkspaceOperationClosureAndFrozenToolCallIdentityAndCallerOwnedEffectLease | out=WorkspaceOperationReceiptAndPersistentEffectSettlement | effect=workspaceDb,DelegatedCapability | does_not=InferDiskSuccessFromModelTextOrRewriteAgentTurnTerminal | consumer=BR-AG-STATE-002,BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub(super) fn record_owned_execution(
     state: &AppState,
@@ -310,7 +310,7 @@ pub(super) fn record_owned_execution(
  * type: EFFECT
  * chain: AG-TOOL, AG-TURN
  * rules: BR-AG-STATE-002, BR-SYS-STATE-007, BR-AG-PERSIST-001
- * boundary: in=AuthorizedCapabilityClosureAndFrozenToolCallIdentityAndEffectLease | out=CapabilityResultOrBoundedWaitFailureAndPersistentEffectSettlement | effect=workspaceDb,DelegatedCapability | does_not=ReplayWritesOrInjectLateResultIntoModelOrRewriteAgentTurnTerminal | consumer=BR-AG-STATE-002,BR-AG-PERSIST-001
+ * boundary: in=AuthorizedCapabilityClosureAndFrozenToolCallIdentityAndEffectLease | out=CapabilityResultOrBoundedWaitFailureAndPersistentEffectSettlement | effect=workspaceDb,DelegatedCapability | does_not=ReplayWritesOrInjectLateResultIntoModelOrRewriteAgentTurnTerminal | consumer=BR-AG-STATE-002,BR-AG-PERSIST-001,BR-SYS-STATE-007
  */
 pub(super) async fn execute<T: Send + 'static>(
     state: AppState,

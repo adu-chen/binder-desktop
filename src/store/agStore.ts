@@ -495,7 +495,7 @@ export const agStore = {
    * chain: AG-TURN
    * rules: BR-SYS-STATE-007, BR-SYS-STATE-008
    * term_ref: TERM-AG-017
-   * boundary: in=ExpectedDecisionRequestIdentity | out=MatchingPendingDecisionAndOwnedWaitingActionCleared | does_not=clearNewerDecisionRequestOrOtherTurnAction
+   * boundary: in=ExpectedDecisionRequestIdentity | out=MatchingPendingDecisionAndOwnedWaitingActionCleared | does_not=clearNewerDecisionRequestOrOtherTurnAction | consumer=BR-SYS-STATE-007,BR-SYS-STATE-008
    */
   clearPendingDecision(expected: Pick<PendingDecisionView, "requestId" | "sessionId" | "turnId">): boolean {
     const pending = state.pendingDecision;
@@ -563,7 +563,7 @@ export const agStore = {
    * chain:    AG-TURN
    * rules:    BR-AG-OBS-001, BR-AG-STATE-001, BR-SYS-STATE-007, BR-SYS-STATE-008
    * term_ref: TERM-AG-021, TERM-AG-022
-   * boundary: in=OrderedSafeTurnEventIdentityKindAndDerivedProjectReport | out=MonotonicFrontendTurnProjectionCursorInputGateAndReadOnlyProjectReport | consumer=BR-AG-STATE-001,BR-AG-OBS-001| does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromReportOrCardState
+   * boundary: in=OrderedSafeTurnEventIdentityKindAndDerivedProjectReport | out=MonotonicFrontendTurnProjectionCursorInputGateAndReadOnlyProjectReport | consumer=BR-AG-STATE-001,BR-AG-OBS-001,BR-SYS-STATE-007,BR-SYS-STATE-008| does_not=acceptDuplicateOutOfOrderWrongTurnOrPostTerminalEventOrDeriveExecutionFromReportOrCardState
    */
   acceptTurnEvent(turnId: string, eventSeq: number, eventType: string): boolean {
     const current = state.turnEventProjection[turnId] ?? { lastSeq: 0, terminal: false };

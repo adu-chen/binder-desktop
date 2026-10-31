@@ -98,7 +98,7 @@ fn current_document_prompt_context(
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-002, BR-AG-DATA-008, BR-SYS-DATA-008
  * term_ref: TERM-AG-005, TERM-AG-020
- * boundary: in=IntentRevisionAgentContextFactsCurrentDocumentReferenceHistoryToolResultsAndCurrentHardCapabilityFacts | out=BudgetedPromptPackageV2MessagesAndPromptManifestCapabilityGrantV2 | delegate=assemble_agent_turn_messages | consumer=BR-AG-DATA-008| does_not=authorizeConcreteToolCallFromPromptOrIntentText
+ * boundary: in=IntentRevisionAgentContextFactsCurrentDocumentReferenceHistoryToolResultsAndCurrentHardCapabilityFacts | out=BudgetedPromptPackageV2MessagesAndPromptManifestCapabilityGrantV2 | delegate=assemble_agent_turn_messages | consumer=BR-AG-DATA-008,BR-SYS-DATA-008| does_not=authorizeConcreteToolCallFromPromptOrIntentText
  */
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_turn_prompt(
