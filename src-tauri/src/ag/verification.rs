@@ -2005,6 +2005,10 @@ mod tests {
                         assert_eq!(tool["executionReceipt"]["effectStatus"], "not_started");
                     }
                     assert_eq!(receipt["requestCounts"]["model"], 5);
+                    assert_eq!(
+                        receipt["requestCounts"]["gate"], 5,
+                        "every provider continuation must re-enter Gate"
+                    );
                     let rejects = receipt["protocolTrace"].as_array().unwrap();
                     assert_eq!(rejects.len(), 2);
                     assert_eq!(rejects[0]["protocolDiagnostic"]["fieldPath"], "_binderTurn");

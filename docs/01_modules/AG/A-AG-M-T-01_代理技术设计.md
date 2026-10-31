@@ -385,7 +385,7 @@ chain_id: AG-TURN
 主责模块: AG
 status: active
 risk_tier: P1
-integration_test: deferred: phase-5
+integration_test: src-tauri/src/ag/verification.rs::development_scenarios_execute_real_core_and_release_isolated_state
 -->
 
 <!-- RULE
@@ -534,7 +534,7 @@ chain_id: AG-TOOL
 主责模块: AG
 status: active
 risk_tier: P1
-integration_test: deferred: phase-5
+integration_test: src-tauri/src/ag/verification.rs::development_scenarios_execute_real_core_and_release_isolated_state
 -->
 
 <!-- RULE
@@ -790,7 +790,7 @@ chain_id: AG-ASSIST
 主责模块: AG
 status: active
 risk_tier: P1
-integration_test: deferred: phase-5
+integration_test: src/services/agRuntime.test.ts::finishes assist lifecycle with terminal event
 -->
 
 <!-- RULE
@@ -857,7 +857,7 @@ A-ED-M-T-01 §5.1）经 ed.apply_edit 视为用户编辑直改；chat/agent **�
 chain_id: AG-MODEL-CATALOG
 主责模块: AG
 status: active
-integration_test: deferred: phase-5
+integration_test: src/store/assistRuntime.test.ts::resolves explicit capability preference to the specified model
 -->
 模型注册表维护与预设清单拉取、能力偏好配置与解析、调用前按能力偏好解析 provider/model。
 

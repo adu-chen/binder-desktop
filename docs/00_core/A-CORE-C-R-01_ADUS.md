@@ -40,7 +40,7 @@
 
 <!-- 自动生成。禁止人工编辑。-->
 <!-- 运行：npm run governance:generate -->
-<!-- 最后生成时间：2026-10-31T02:49:09.384Z -->
+<!-- 最后生成时间：2026-10-31T02:52:37.355Z -->
 
 ### 模块编码表
 
@@ -423,10 +423,10 @@
 | ---------------- | ---- | ------ | ------------------------------------------------------------------------------------------------------------- |
 | PCG-GENERATE     | PCG  | active | scripts/test_governance.test.mjs::生成可点击的产品故事地图和格式矩阵                                                           |
 | PCG-AUDIT        | PCG  | active | scripts/test_governance.test.mjs::接受具有完整追溯、主链和独立状态的注册表                                                        |
-| AG-TURN          | AG   | active | deferred: phase-5                                                                                             |
-| AG-TOOL          | AG   | active | deferred: phase-5                                                                                             |
-| AG-ASSIST        | AG   | active | deferred: phase-5                                                                                             |
-| AG-MODEL-CATALOG | AG   | active | deferred: phase-5                                                                                             |
+| AG-TURN          | AG   | active | src-tauri/src/ag/verification.rs::development_scenarios_execute_real_core_and_release_isolated_state          |
+| AG-TOOL          | AG   | active | src-tauri/src/ag/verification.rs::development_scenarios_execute_real_core_and_release_isolated_state          |
+| AG-ASSIST        | AG   | active | src/services/agRuntime.test.ts::finishes assist lifecycle with terminal event                                 |
+| AG-MODEL-CATALOG | AG   | active | src/store/assistRuntime.test.ts::resolves explicit capability preference to the specified model               |
 | AST-MEMORY       | AST  | active | deferred: phase-5                                                                                             |
 | CBT-BUILD        | CBT  | active | deferred: phase-5                                                                                             |
 | DE-DIFF          | DE   | active | src-tauri/tests/core_chain.rs::accepted_proposal_flows_through_de_to_ws_landing                               |
@@ -3109,11 +3109,11 @@
 
 ### 测试能力索引
 
-动态发现：前端测试文件 26；Rust 内联测试文件 86；Rust 集成测试文件 2；测试用例约 1196。
+动态发现：前端测试文件 26；Rust 内联测试文件 86；Rust 集成测试文件 2；测试用例约 1197。
 
 | module | risk | test assets | test cases | layers | frontend baseline → target |
 |---|---|---:|---:|---|---:|
-| CORE | high | 6 | 113 | governance:1, service:2, unit:3 | 1/1 → 1 |
+| CORE | high | 6 | 114 | governance:1, service:2, unit:3 | 1/1 → 1 |
 | SYS | critical | 44 | 616 | component:3, integration:2, service:5, state:1, unit:33 | 3/3 → 3 |
 | WS | critical | 24 | 364 | component:1, integration:1, service:4, unit:18 | 2/2 → 2 |
 | ED | critical | 26 | 569 | component:4, service:7, state:1, unit:14 | 11/11 → 11 |
