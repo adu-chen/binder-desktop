@@ -4712,7 +4712,7 @@ fn handle_response_rejection<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,run_provider_round_with_gate,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -5267,6 +5267,142 @@ async fn run_provider_round_with_gate<R: tauri::Runtime>(
     }
 }
 
+struct ResponseValidationFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    workspace_id: &'a str,
+    session_id: &'a str,
+    turn_id: &'a str,
+    task_run_id: Option<&'a str>,
+    turn_state: ag::turn::TurnState,
+    tool_loop_state: &'a mut ag::tool::ToolLoopState,
+    protocol_correction_rounds: &'a mut usize,
+    continuation_messages: &'a mut Vec<serde_json::Value>,
+    transport_protocol: &'a str,
+    max_corrections: usize,
+    round_index: usize,
+    remaining_rounds: usize,
+    budget_closing: bool,
+    visible_output_chars: usize,
+    round: &'a crate::ent::gateway::RoundOutcome,
+    decoder: &'a ag::model_output::ModelOutputDecoder,
+    workspace_plan_completed: bool,
+    any_tool_called: bool,
+}
+
+struct ResponseValidationOutcome {
+    control: Result<Option<ag::model_output::ModelTurnControl>, IpcError>,
+    rejected: bool,
+    final_only_after_rejection: bool,
+    final_only_correction_pending: bool,
+    parameter_correction_pending: bool,
+    protocol_correction_diagnostic: Option<serde_json::Value>,
+    read_failure_final_pending: bool,
+}
+
+enum ResponseValidationResult {
+    Continue(ResponseValidationOutcome),
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-084, BR-AG-DATA-004-RB-AG-AG-TOOL-084
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-DATA-004
+ * boundary: in=ProviderRoundOutputContinuationAndCorrectionBudget | out=ValidatedResponseControlOrEndedTerminal | delegate=validate_round_response,handle_response_rejection | consumer=BR-AG-STATE-001,BR-AG-DATA-004 | does_not=callProviderOrCloseRound
+ */
+fn validate_and_correct_response<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: ResponseValidationFacts<'_>,
+) -> Result<ResponseValidationResult, IpcError> {
+    let ResponseValidationFacts {
+        state,
+        latch: terminal_latch,
+        workspace_id,
+        session_id,
+        turn_id,
+        task_run_id,
+        turn_state,
+        tool_loop_state,
+        protocol_correction_rounds,
+        continuation_messages,
+        transport_protocol,
+        max_corrections,
+        round_index,
+        remaining_rounds,
+        budget_closing,
+        visible_output_chars,
+        round,
+        decoder,
+        workspace_plan_completed,
+        any_tool_called,
+    } = facts;
+    let event_emitter = emitter;
+    let final_only_after_rejection = correction_final_only(
+        continuation_messages,
+        (&workspace_id, &session_id, &turn_id),
+    );
+    let response_control = validate_round_response(
+        round,
+        decoder,
+        budget_closing,
+        workspace_plan_completed,
+        visible_output_chars,
+        any_tool_called,
+        continuation_messages,
+    );
+    let response_rejected = response_control.is_err();
+    let response_rejection_kind = matches!(round, ent::gateway::RoundOutcome::Done { .. })
+        .then(|| decoder.response_rejection_kind());
+    let final_only_correction_pending = false;
+    let parameter_correction_pending = false;
+    let mut protocol_correction_diagnostic = None;
+    let mut read_failure_final_pending = false;
+    if let Err(error) = &response_control {
+        match handle_response_rejection(
+            &app,
+            &event_emitter,
+            ResponseCorrectionFacts {
+                state,
+                latch: terminal_latch,
+                turn_id: &turn_id,
+                task_run_id: task_run_id.as_deref(),
+                turn_state,
+                tool_loop_state,
+                protocol_correction_rounds,
+                final_only_after_rejection,
+                response_rejection_kind,
+                error,
+                output_decoder: decoder,
+                max_corrections,
+                round_index,
+                remaining_rounds,
+                visible_output_chars,
+                budget_closing,
+                continuation_messages,
+                transport_protocol: &transport_protocol,
+            },
+        )? {
+            ResponseCorrection::Continue => {}
+            ResponseCorrection::Ended => return Ok(ResponseValidationResult::Ended),
+        }
+    }
+    Ok(ResponseValidationResult::Continue(
+        ResponseValidationOutcome {
+            control: response_control,
+            rejected: response_rejected,
+            final_only_after_rejection,
+            final_only_correction_pending,
+            parameter_correction_pending,
+            protocol_correction_diagnostic,
+            read_failure_final_pending,
+        },
+    ))
+}
+
 async fn run_round_loop<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     ctx: RoundContext<'_, R>,
@@ -5430,55 +5566,42 @@ async fn run_round_loop<R: tauri::Runtime>(
         // A provider completion and an accepted Binder response are separate facts. Text
         // protocol errors are collected until the native response kind is known, before any
         // intent/task projection or tool execution. Network failures never enter correction.
-        let final_only_after_rejection = correction_final_only(
-            &continuation_messages,
-            (&workspace_id_for_turn, &session_id, &turn_id),
-        );
-        let response_control = validate_round_response(
-            &round,
-            &output_decoder,
-            budget_closing,
-            workspace_plan_completed,
-            visible_output_chars,
-            any_tool_called,
-            &continuation_messages,
-        );
-        let response_rejected = response_control.is_err();
-        let response_rejection_kind = matches!(round, ent::gateway::RoundOutcome::Done { .. })
-            .then(|| output_decoder.response_rejection_kind());
-        let mut final_only_correction_pending = false;
-        let mut parameter_correction_pending = false;
-        let mut protocol_correction_diagnostic = None;
-        let mut read_failure_final_pending = false;
-        if let Err(error) = &response_control {
-            match handle_response_rejection(
-                &app,
-                &event_emitter,
-                ResponseCorrectionFacts {
-                    state,
-                    latch: &terminal_latch,
-                    turn_id: &turn_id,
-                    task_run_id: task_run_id.as_deref(),
-                    turn_state,
-                    tool_loop_state: &mut tool_loop_state,
-                    protocol_correction_rounds: &mut protocol_correction_rounds,
-                    final_only_after_rejection,
-                    response_rejection_kind,
-                    error,
-                    output_decoder: &output_decoder,
-                    max_corrections: execution_policy.max_corrections,
-                    round_index: _round,
-                    remaining_rounds,
-                    visible_output_chars,
-                    budget_closing,
-                    continuation_messages: &mut continuation_messages,
-                    transport_protocol: &transport_protocol,
-                },
-            )? {
-                ResponseCorrection::Continue => {}
-                ResponseCorrection::Ended => return Ok(()),
-            }
-        }
+        let validation = match validate_and_correct_response(
+            &app,
+            &event_emitter,
+            ResponseValidationFacts {
+                state,
+                latch: &terminal_latch,
+                workspace_id: &workspace_id_for_turn,
+                session_id: &session_id,
+                turn_id: &turn_id,
+                task_run_id: task_run_id.as_deref(),
+                turn_state,
+                tool_loop_state: &mut tool_loop_state,
+                protocol_correction_rounds: &mut protocol_correction_rounds,
+                continuation_messages: &mut continuation_messages,
+                transport_protocol: &transport_protocol,
+                max_corrections: execution_policy.max_corrections,
+                round_index: _round,
+                remaining_rounds,
+                budget_closing,
+                visible_output_chars,
+                round: &round,
+                decoder: &output_decoder,
+                workspace_plan_completed,
+                any_tool_called,
+            },
+        )? {
+            ResponseValidationResult::Ended => return Ok(()),
+            ResponseValidationResult::Continue(outcome) => outcome,
+        };
+        let response_control = validation.control;
+        let response_rejected = validation.rejected;
+        let final_only_after_rejection = validation.final_only_after_rejection;
+        let mut final_only_correction_pending = validation.final_only_correction_pending;
+        let mut parameter_correction_pending = validation.parameter_correction_pending;
+        let mut protocol_correction_diagnostic = validation.protocol_correction_diagnostic;
+        let mut read_failure_final_pending = validation.read_failure_final_pending;
         match round {
             _ if response_rejected => {}
             ent::gateway::RoundOutcome::Failed(error) => {
