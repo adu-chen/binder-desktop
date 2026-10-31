@@ -287,17 +287,6 @@ pub(super) fn resolve_agent_edit_operation(
     }
 }
 
-/// P5 锚点校验（AG-R2-01）：返回首个自相矛盾的锚点描述；无冲突返回 None。
-/// 检查 insert_before/insert_after 是否引用同一 blockId 作为多个操作的锚点。
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-059, BR-AG-DATA-010-GUARD-AG-AG-TOOL-059
- * type:     GUARD
- * chain:    AG-TOOL
- * rules:    BR-AG-STATE-002, BR-AG-DATA-010
- * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit
- */
-
 /**
  * @GOV
  * codes:    BR-AG-DATA-010-GUARD-AG-AG-TOOL-061
@@ -339,6 +328,16 @@ fn enforce_block_ops_budget(block_ops_len: usize, block_ops_bytes: usize) -> Res
     Ok(())
 }
 
+/// P5 锚点校验（AG-R2-01）：返回首个自相矛盾的锚点描述；无冲突返回 None。
+/// 检查 insert_before/insert_after 是否引用同一 blockId 作为多个操作的锚点。
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-059, BR-AG-DATA-010-GUARD-AG-AG-TOOL-059
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-STATE-002, BR-AG-DATA-010
+ * boundary: in=BlockOpsOperationList | out=OptionalAnchorConflictDescription | does_not=rewriteOperationsOrExecuteEdit
+ */
 pub(super) fn find_block_ops_anchor_conflict(
     operations: Option<&serde_json::Value>,
 ) -> Option<String> {

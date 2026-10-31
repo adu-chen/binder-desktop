@@ -3372,14 +3372,6 @@ enum ToolCallStep {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-078, BR-AG-STATE-001-RB-AG-AG-TOOL-078
- * type:     RB
- * chain:    AG-TOOL, AG-TURN
- * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,execute_and_record_tool_call,finalize_tool_call,emit_tool_call_request,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
- */
 struct ToolCallAuthContext<'a> {
     state: &'a AppState,
     latch: &'a ag::turn::TerminalLatch,
@@ -4176,6 +4168,14 @@ fn finalize_tool_call<R: tauri::Runtime>(
     })
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-078, BR-AG-STATE-001-RB-AG-AG-TOOL-078
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-STATE-002, BR-AG-STATE-001
+ * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,execute_and_record_tool_call,finalize_tool_call,emit_tool_call_request,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
+ */
 async fn run_one_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -4705,17 +4705,6 @@ fn handle_response_rejection<R: tauri::Runtime>(
     Ok(ResponseCorrection::Continue)
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-002
- * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=ensure_round_budget,cancel_between_rounds,await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
- */
-/// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
-/// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
 struct ToolCallsRoundContext<'a> {
     state: &'a AppState,
     latch: &'a ag::turn::TerminalLatch,
@@ -5812,6 +5801,17 @@ fn finish_failed_round<R: tauri::Runtime>(
     emit_ag_turn_error(emitter, latch, app, turn_id, error);
 }
 
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-072
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-002
+ * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=ensure_round_budget,cancel_between_rounds,await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ */
+/// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
+/// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
 async fn run_round_loop<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     ctx: RoundContext<'_, R>,
