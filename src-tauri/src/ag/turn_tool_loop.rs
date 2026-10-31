@@ -11,9 +11,8 @@ use super::turn_control::{
     park_agent_turn_for_decision, AgentTurnRuntimeCheckpoint,
 };
 use super::turn_events::{
-    emit_ag01, emit_ag02, emit_ag_turn_denied, emit_ag_turn_done,
-    emit_ag_turn_error_from, settle_and_emit_ag_turn_error, settle_and_emit_ag_turn_error_from,
-    sm_error, TurnEventEmitter,
+    emit_ag01, emit_ag02, emit_ag_turn_denied, emit_ag_turn_done, emit_ag_turn_error_from,
+    settle_and_emit_ag_turn_error, settle_and_emit_ag_turn_error_from, sm_error, TurnEventEmitter,
 };
 use super::turn_prompt::{prepare_turn_prompt, PreparedTurnPrompt};
 use crate::ag;
@@ -2777,14 +2776,6 @@ fn advance_or_settle<R: tauri::Runtime>(
     }
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-073, BR-AG-STATE-002-RB-AG-AG-TOOL-073
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002
- * boundary: in=DoneRoundControlVisibleAnswerAndRoundState | out=SingleAgentTurnTerminalOrClarificationParked | delegate=apply_control_and_observe,terminal_tool_requirement_error,park_clarification,finish_final_answer | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=continueProviderLoopOrEmitSecondTerminal
- */
 fn handle_done_round<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -3040,14 +3031,6 @@ enum RoundClose {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-074, BR-AG-DATA-001-RB-AG-AG-TOOL-074
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-DATA-001
- * boundary: in=RoundCorrectionFlagsContinuationMessagesAndPromptFacts | out=RoundCloseContinueOrEndedWithRebuiltPrompt | delegate=rebuild_round_prompt | consumer=BR-AG-STATE-001,BR-AG-DATA-001 | does_not=executeToolOrCallProvider
- */
 fn close_round<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -3265,14 +3248,6 @@ struct DecisionHandoffFacts<'a> {
     tool_loop_state: &'a mut ag::tool::ToolLoopState,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-077, BR-SYS-STATE-008-RB-AG-AG-TOOL-077
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-SYS-STATE-008
- * boundary: in=DecisionRequestCheckpointAndFinalOnlyCorrectionFlag | out=ParkedAwaitingDecisionAndDecisionRequestProposedEvent | delegate=park_agent_turn_for_decision,finish_cancelled_turn | consumer=BR-AG-STATE-001,BR-SYS-STATE-008 | does_not=executeToolOrResumeTurn
- */
 fn park_decision_handoff<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -3418,14 +3393,6 @@ enum ToolCallAuthResult {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-079, BR-AG-STATE-001-RB-AG-AG-TOOL-079
- * type:     RB
- * chain:    AG-TOOL, AG-TURN
- * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=SingleToolCallPreflightGrantAndExecutionReadiness | out=ToolCallAuthContinueWithGrantDecisionAndFailureFactsOrEnded | delegate=preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=executeToolOrRecordResult
- */
 #[allow(clippy::too_many_arguments)]
 async fn authorize_one_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -3710,14 +3677,6 @@ enum ToolCallExecResult {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-080, BR-AG-STATE-001-RB-AG-AG-TOOL-080
- * type:     RB
- * chain:    AG-TOOL, AG-TURN
- * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=AuthorizedToolCallAndExecutionState | out=ToolCallExecContinueWithRecordedResultOrEndedTerminal | delegate=execute_tool_call,record_tool_result,advance_or_settle | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=authorizeToolOrIterateBatch
- */
 #[allow(clippy::too_many_arguments)]
 async fn execute_and_record_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -4026,14 +3985,6 @@ fn emit_tool_call_request(
     Ok(())
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-081, BR-AG-STATE-002-RB-AG-AG-TOOL-081
- * type:     RB
- * chain:    AG-TOOL, AG-TURN
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002
- * boundary: in=FinalizedToolCallDecisionAndLoopBudget | out=ToolCallStepContinueOrEndedTerminal | delegate=park_decision_handoff,advance_or_settle | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=executeToolOrRecordResult
- */
 fn finalize_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -4464,14 +4415,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
     )
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-002-RB-AG-AG-TOOL-075, BR-AG-STATE-001-RB-AG-AG-TOOL-075
- * type:     RB
- * chain:    AG-TOOL, AG-TURN
- * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=PreparedToolBatchParsedParamsAndToolCallRoundState | out=ToolCallLoopContinueWithUpdatedStateOrEndedTerminal | delegate=run_one_tool_call,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=rebuildPromptOrCloseRound
- */
 #[allow(clippy::too_many_arguments)]
 async fn run_tool_call_loop<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -4556,15 +4499,6 @@ enum ResponseCorrection {
     Continue,
     Ended,
 }
-
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-076, BR-AG-DATA-004-RB-AG-AG-TOOL-076
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-DATA-004
- * boundary: in=ModelControlRejectionCorrectionCountersAndBudgetState | out=ResponseCorrectionContinueOrEndedTerminal | delegate=advance_or_settle,settle_and_emit_ag_turn_error | consumer=BR-AG-STATE-001,BR-AG-DATA-004 | does_not=executeToolOrCloseRound
- */
 
 fn handle_response_rejection<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -4750,14 +4684,6 @@ enum ToolCallsRoundResult {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-082, BR-AG-STATE-002-RB-AG-AG-TOOL-082
- * type:     RB
- * chain:    AG-TOOL, AG-TURN
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002
- * boundary: in=ValidatedToolCallsBatchAndToolCallsRoundState | out=ToolCallsRoundContinueWithPreparedBatchOrEndedTerminal | delegate=prepare_tool_batch,run_tool_call_loop | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=callProviderOrCloseRound
- */
 #[allow(clippy::too_many_arguments)]
 async fn handle_tool_calls_round<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -5077,14 +5003,6 @@ enum ProviderRoundOutcome {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-083, BR-AG-STATE-002-RB-AG-AG-TOOL-083
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-STATE-002
- * boundary: in=RoundGateWaitProviderFactsAndToolLoopState | out=ProviderRoundReadyOrEndedTerminal | delegate=await_round_gate,run_provider_round | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=validateResponseOrCloseRound
- */
 async fn run_provider_round_with_gate<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -5282,14 +5200,6 @@ enum ResponseValidationResult {
     Ended,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-084, BR-AG-DATA-004-RB-AG-AG-TOOL-084
- * type:     RB
- * chain:    AG-TURN, AG-TOOL
- * rules:    BR-AG-STATE-001, BR-AG-DATA-004
- * boundary: in=ProviderRoundOutputContinuationAndCorrectionBudget | out=ValidatedResponseControlOrEndedTerminal | delegate=validate_round_response,handle_response_rejection | consumer=BR-AG-STATE-001,BR-AG-DATA-004 | does_not=callProviderOrCloseRound
- */
 fn validate_and_correct_response<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,

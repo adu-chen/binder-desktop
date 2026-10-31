@@ -606,4 +606,14 @@ describe('Product Capability Graph', () => {
     }
     expect(failures).toEqual([]);
   });
+
+
+  it('turn_tool_loop 只保留 4 个工具循环逻辑块，冗余块 ID 已退役', () => {
+    const source = readFileSync(join(DEFAULT_ROOT, 'src-tauri/src/ag/turn_tool_loop.rs'), 'utf8');
+    const codes = new Set([...source.matchAll(/BR-AG-(?:STATE|DATA|SYS|OBS|VERIFY)-\d{3}-[A-Z]+-AG-AG-TOOL-\d{3}/g)].map((match) => match[0]));
+    const retired = ['073', '074', '075', '076', '077', '079', '080', '081', '082', '083', '084'];
+    const kept = ['018', '072', '078', '085'];
+    expect(retired.filter((suffix) => [...codes].some((code) => code.endsWith(`TOOL-${suffix}`)))).toEqual([]);
+    expect(kept.filter((suffix) => ![...codes].some((code) => code.endsWith(`TOOL-${suffix}`)))).toEqual([]);
+  });
 });
