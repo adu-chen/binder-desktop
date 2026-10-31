@@ -52,7 +52,7 @@ pub(crate) struct AssistResult {
  * type:     EFFECT
  * chain:    AG-ASSIST
  * rules:    BR-AG-STATE-003
- * boundary: in=AssistTerminalEvent(acceptOrDismissOrAnchorLost) | out=DeduplicatedAssistTerminalState
+ * boundary: in=AssistTerminalEvent(acceptOrDismissOrAnchorLost) | out=DeduplicatedAssistTerminalState | does_not=callProviderOrToolOrWriteEditorOrCreateSecondTerminal
  */
 #[tauri::command]
 pub(crate) fn ag_finish_assist(

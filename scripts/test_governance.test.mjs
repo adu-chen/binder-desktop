@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   DEFAULT_ROOT,
   auditTestGovernance,
+  buildCoverageMapFromInventory,
   buildRelatedTestPlan,
   buildTestInventory,
   expandAffectedModules,
   extractCovers,
+  extractCoverCases,
   extractRuleModules,
   globToRegExp,
   loadTestGovernance,
@@ -420,6 +422,56 @@ describe('Product Capability Graph', () => {
       }
       for (const rule of block.rules) {
         if (!/^BR-(AG|SYS|CORE)-/.test(rule)) failures.push(`${id}: external rule ${rule}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('规则覆盖映射到测试用例名而非 file-level', () => {
+    const rust = [
+      '// covers: BR-AG-DATA-009',
+      '#[test]',
+      'fn target_case() {}',
+      '',
+      '// covers: BR-AG-DATA-010',
+      '#[tokio::test]',
+      'async fn async_case() {}',
+    ].join('\n');
+    expect(extractCoverCases(rust, 'rust_inline')).toEqual([
+      { rule: 'BR-AG-DATA-009', test: 'target_case' },
+      { rule: 'BR-AG-DATA-010', test: 'async_case' },
+    ]);
+
+    const ts = [
+      '// covers: BR-AG-DATA-010',
+      'it("anchor case", () => {});',
+    ].join('\n');
+    expect(extractCoverCases(ts, 'frontend')).toEqual([
+      { rule: 'BR-AG-DATA-010', test: 'anchor case' },
+    ]);
+
+    const map = buildCoverageMapFromInventory({
+      assets: [{
+        path: 'x.rs',
+        covers: ['BR-AG-DATA-009'],
+        cover_cases: [{ rule: 'BR-AG-DATA-009', test: 'target_case' }],
+      }],
+    });
+    expect(map.get('BR-AG-DATA-009')).toEqual(['x.rs::target_case']);
+  });
+
+  it('AG EFFECT 块必须声明 does_not 边界', () => {
+    const agDir = join(DEFAULT_ROOT, 'src-tauri/src/ag');
+    const failures = [];
+    for (const file of readdirSync(agDir).filter((entry) => entry.endsWith('.rs'))) {
+      const source = readFileSync(join(agDir, file), 'utf8');
+      for (const match of source.matchAll(/\/\*\*[\s\S]*?@GOV[\s\S]*?\*\//g)) {
+        const block = match[0];
+        if (!/type:\s*EFFECT/.test(block)) continue;
+        if (!/does_not=/.test(block)) {
+          const line = source.slice(0, match.index).split('\n').length;
+          failures.push(`${file}:${line}`);
+        }
       }
     }
     expect(failures).toEqual([]);

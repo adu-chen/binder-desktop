@@ -113,7 +113,7 @@ pub fn begin_turn(
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite)
+ * boundary: in=LogicalStateDiffProposalIdentity | out=AwaitingEditorPreviewCheckpoint(noModelContinuationOrDiskWrite) | does_not=callModelOrWriteDiskOrCompleteTurnOrResumeExecution
  */
 /// 为一个会改变已有 LogicalState 的 pending Diff 建立续片段检查点。创建卡片不等于预览成功：
 /// checkpoint 只能处于 awaiting_ack，直到编辑器回报实际 sessionVersion/contentHash。
@@ -932,7 +932,7 @@ pub fn record_projection_fact(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-008, BR-AG-STATE-001
  * term_ref: TERM-AG-015
- * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation)
+ * boundary: in=applicationStartupPersistedNonTerminalTaskRuns | out=InterruptedTaskRuns(noCrossRestartContinuation) | does_not=resumeExecutionOrReplayToolOrTerminalizeNonStaleRun
  */
 pub fn mark_all_stale_as_interrupted(conn: &Connection) -> rusqlite::Result<usize> {
     let mut statement = conn.prepare(

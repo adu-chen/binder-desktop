@@ -205,7 +205,7 @@ pub fn validated_scope_candidates(
  * chain:    AG-TURN, AG-TOOL, DATA-MIGRATE
  * rules:    BR-AG-DATA-003, BR-SYS-PERSIST-001
  * term_ref: TERM-AG-019, TERM-AG-015
- * boundary: in=TaskRunAndAuthorizedExistingDocumentPaths | out=PersistedMonotonicTaskRunEditTargets(withSourceProvenance) | effect=workspaceDb
+ * boundary: in=TaskRunAndAuthorizedExistingDocumentPaths | out=PersistedMonotonicTaskRunEditTargets(withSourceProvenance) | effect=workspaceDb | does_not=removeTargetsOrGrantExecutionOrRewriteTaskRunIdentity
  */
 pub fn persist_for_task_run(
     conn: &Connection,

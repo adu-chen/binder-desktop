@@ -50,15 +50,6 @@ pub struct ModelFinalFindingV2 {
     pub uncertainty: String,
 }
 
-/**
- * @GOV
- * codes:    BR-AG-DATA-004-GUARD-AG-AG-TURN-047, BR-AG-STATE-001-GUARD-AG-AG-TURN-047
- * type:     GUARD
- * chain:    AG-TURN
- * rules:    BR-AG-DATA-004, BR-AG-STATE-001
- * term_ref: TERM-AG-012
- * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence
- */
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelTurnControl {
@@ -1035,6 +1026,15 @@ impl ModelOutputDecoder {
         Ok((!body.is_empty()).then_some(body).into_iter().collect())
     }
 
+    /**
+     * @GOV
+     * codes:    BR-AG-DATA-004-GUARD-AG-AG-TURN-047, BR-AG-STATE-001-GUARD-AG-AG-TURN-047
+     * type:     GUARD
+     * chain:    AG-TURN
+     * rules:    BR-AG-DATA-004, BR-AG-STATE-001
+     * term_ref: TERM-AG-012
+     * boundary: in=ProviderVisibleTextPrefix | out=ValidatedModelIntentRouteNextActionAndOptionalEvidenceReferencesWithHiddenControlRemoved | does_not=acceptAuthorizationHiddenReasoningUnknownFieldsUnstructuredFirstIntentOrModelDefinedEvidence
+     */
     pub fn finish(self) -> Result<ModelTurnControl, IpcError> {
         if let Some(error) = self.rejection {
             return Err(error);

@@ -303,7 +303,7 @@ pub(super) fn bind_new_agent_turn_model(
  * chain:    AG-TURN
  * rules:    BR-SYS-STATE-007, BR-AG-STATE-001
  * term_ref: TERM-AG-001, TERM-AG-015
- * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce)
+ * boundary: in=RunningAgentTurnWithBlockingIntentAndOptionalTaskRunIdentity | out=AwaitingClarificationAgentTurnIdentity(retainedAfterCommandReturnAndClaimableExactlyOnce) | does_not=callProviderOrToolOrWriteEditorOrCancelTurn
  */
 pub(super) fn park_agent_turn_for_clarification(
     state: &AppState,
@@ -478,7 +478,7 @@ pub(super) fn bind_agent_turn_task_run(
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-003, BR-SYS-STATE-007
  * term_ref: TERM-AG-001, TERM-AG-019
- * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory
+ * boundary: in=ActiveAgentTurnAndMonotonicExplicitEditTargetSet | out=SameAgentTurnWithExpandedTargets(rejectsRemovalOrIdentityDrift) | effect=memory | does_not=removeTargetsOrRewriteTurnIdentityOrExecuteEdit
  */
 pub(super) fn bind_agent_turn_edit_target_set(
     state: &AppState,

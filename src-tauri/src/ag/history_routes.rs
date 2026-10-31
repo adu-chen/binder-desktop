@@ -25,7 +25,7 @@ pub(crate) fn route_list_agent_sessions(state: &AppState) -> Result<serde_json::
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentSessionMetadataCommand | out=PersistedAgentSessionMetadata
+ * boundary: in=AgentSessionMetadataCommand | out=PersistedAgentSessionMetadata | does_not=validateBusinessPayloadOrExecuteTurnOrWriteWorkspace
  */
 pub(crate) fn route_save_agent_session(
     request: &CommandRequest,
@@ -173,7 +173,7 @@ pub(crate) fn route_list_agent_turn_events(
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
- * boundary: in=AgentSessionDeletionIdentity | out=DeletedAgentSessionAndOwnedTurnHistory
+ * boundary: in=AgentSessionDeletionIdentity | out=DeletedAgentSessionAndOwnedTurnHistory | does_not=deleteDiffArtifactsOrFilesOrOtherSessions
  */
 pub(crate) fn route_delete_agent_session(
     request: &CommandRequest,

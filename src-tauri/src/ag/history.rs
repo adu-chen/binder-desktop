@@ -175,7 +175,7 @@ fn normalize_mode(mode: &str) -> &str {
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-009
- * boundary: in=AgentSessionMetadata | out=persistedAgentSession(localWorkspaceScoped)
+ * boundary: in=AgentSessionMetadata | out=persistedAgentSession(localWorkspaceScoped) | does_not=deleteTurnsOrDiffsOrTouchOtherWorkspace
  */
 /// 持久化代理编辑会话标签元数据：标题、模式、归档、打开顺序与激活态可重启恢复。
 pub fn upsert_session(
@@ -307,7 +307,7 @@ pub fn list_sessions(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-001, TERM-AG-009
- * boundary: in=AgentTurnPayloadAndStatus | out=persistedAgentTurn(fullStatusRecoverable)
+ * boundary: in=AgentTurnPayloadAndStatus | out=persistedAgentTurn(fullStatusRecoverable) | does_not=mutateSessionMetadataOrDiffsOrOtherTurns
  */
 /// 写入或更新代理回合历史。payload 只保存消息、工具摘要与 Diff 引用，不保存 diff 快照。
 pub fn save_turn(
@@ -512,7 +512,7 @@ pub fn list_turns(
  * chain:    AG-TURN
  * rules:    BR-AG-PERSIST-001
  * term_ref: TERM-AG-001, TERM-AG-009
- * boundary: in=agentSessionDeleteRequest | out=agentSessionHistoryDeleted(deDiffsPreserved)
+ * boundary: in=agentSessionDeleteRequest | out=agentSessionHistoryDeleted(deDiffsPreserved) | does_not=deleteDiffArtifactsOrFilesOrOtherSessions
  */
 /// 删除当前 workspace 内指定代理编辑会话及其回合历史；不删除 DE pending_diffs / diff_payloads。
 pub fn delete_session(

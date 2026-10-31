@@ -100,6 +100,43 @@ export function extractCovers(source) {
   return [...source.matchAll(COVER_RE)].map((match) => match[1]);
 }
 
+export function extractCoverCases(source, kind) {
+  const lines = source.split(/\r?\n/);
+  const cases = [];
+  const pending = [];
+  let awaitingRustTest = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const cover = /^\/\/\s*covers:\s*(\S+)/.exec(trimmed);
+    if (cover) {
+      pending.push(cover[1]);
+      continue;
+    }
+    if (kind === 'rust_inline' || kind === 'rust_integration') {
+      if (/^#\s*\[\s*(?:tokio::)?test\s*\]/.test(trimmed)) {
+        awaitingRustTest = true;
+        continue;
+      }
+      if (awaitingRustTest) {
+        const fn = /^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/.exec(line);
+        if (fn) {
+          for (const rule of pending) cases.push({ rule, test: fn[1] });
+          pending.length = 0;
+          awaitingRustTest = false;
+        }
+      }
+      continue;
+    }
+    const it = /^\s*(?:it|test)(?:\.(?:each|concurrent))?\s*\(\s*(['"])(.+?)\1/.exec(line);
+    if (it) {
+      for (const rule of pending) cases.push({ rule, test: it[2] });
+      pending.length = 0;
+    }
+  }
+  for (const rule of pending) cases.push({ rule, test: null });
+  return cases;
+}
+
 export function extractRuleModules(source) {
   return unique([...source.matchAll(MODULE_FROM_RULE_RE)].map((match) => match[1]));
 }
@@ -164,6 +201,7 @@ function buildAsset(root, registry, filePath, kind) {
     owner: testPathModules[0] ?? sourcePathModules[0] ?? coverModules[0] ?? contentModules[0] ?? null,
     modules,
     covers: unique(covers),
+    cover_cases: extractCoverCases(source, kind),
     test_count: countTests(source, kind),
     focused_or_skipped: FOCUSED_OR_SKIPPED_RE.test(source),
     rust_ignored: kind.startsWith('rust_') && RUST_IGNORED_RE.test(source),
@@ -569,7 +607,14 @@ export function runRelatedTestPlan(plan, root = DEFAULT_ROOT) {
 export function buildCoverageMapFromInventory(inventory) {
   const map = new Map();
   for (const asset of inventory.assets) {
+    const represented = new Set();
+    for (const entry of asset.cover_cases ?? []) {
+      represented.add(entry.rule);
+      if (!map.has(entry.rule)) map.set(entry.rule, []);
+      map.get(entry.rule).push(`${asset.path}::${entry.test ?? 'file-level'}`);
+    }
     for (const rule of asset.covers) {
+      if (represented.has(rule)) continue;
       if (!map.has(rule)) map.set(rule, []);
       map.get(rule).push(`${asset.path}::file-level`);
     }
