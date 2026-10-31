@@ -3378,7 +3378,7 @@ enum ToolCallStep {
  * type:     RB
  * chain:    AG-TOOL, AG-TURN
  * rules:    BR-AG-STATE-002, BR-AG-STATE-001
- * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,execute_and_record_tool_call,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
+ * boundary: in=SingleToolCallAndOwnedToolCallState | out=ToolCallStepContinueWithUpdatedStateOrEndedTerminal | delegate=authorize_one_tool_call,execute_and_record_tool_call,finalize_tool_call,emit_tool_call_request,preflight_tool_acquisition_allowed,refresh_tool_context,resolve_execution_grant_and_decision,prepare_task_run_for_tool,compute_execution_failure,execute_tool_call,record_tool_result,park_decision_handoff | consumer=BR-AG-STATE-002,BR-AG-STATE-001 | does_not=iterateBatchOrRebuildPrompt
  */
 struct ToolCallAuthContext<'a> {
     state: &'a AppState,
@@ -3960,6 +3960,222 @@ async fn execute_and_record_tool_call<R: tauri::Runtime>(
 }
 
 #[allow(clippy::too_many_arguments)]
+struct ToolCallFinalizeFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    session_id: &'a str,
+    turn_id: &'a str,
+    raw_prompt: &'a str,
+    transport_protocol: &'a str,
+    decision: Option<crate::types::DecisionRequestV1>,
+    repeated_read_failure: bool,
+    success: bool,
+    end_after_diff_proposal: bool,
+    call_index: usize,
+    calls_len: usize,
+    round_index: usize,
+    remaining_rounds: usize,
+    final_reserve: usize,
+    flags: &'a mut ToolCallFlags,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_tool_call_request(
+    emitter: &TurnEventEmitter<'_>,
+    latch: &ag::turn::TerminalLatch,
+    c: &crate::ent::gateway::GwToolCall,
+    params: &serde_json::Value,
+    arg_parse_error_none: bool,
+    raw_prompt: &str,
+    history: &[ag::context::HistTurn],
+    messages: &[serde_json::Value],
+    active_doc_path: Option<&str>,
+    reference_envelopes: &[ag::context::PromptDataEnvelopeV1],
+    continuation_messages: &[serde_json::Value],
+) -> Result<(), IpcError> {
+    if c.name == "workspace_glob" && arg_parse_error_none {
+        emitter.record_internal(
+            "workspace_glob_query_observed",
+            serde_json::json!({
+                "toolCallId": &c.id,
+                "query": workspace_glob_query_observation(
+                    params,
+                    raw_prompt,
+                    history,
+                    messages,
+                    active_doc_path,
+                    reference_envelopes,
+                    continuation_messages,
+                ),
+            }),
+        )?;
+    }
+    emitter.emit(
+        latch,
+        AgTurnEventPayload::ToolRequest {
+            tool_call_id: c.id.clone(),
+            tool_name: c.name.clone(),
+            params: safe_tool_params(params),
+        },
+    )?;
+    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
+    emitter.emit(
+        latch,
+        AgTurnEventPayload::StepProgress {
+            action: if c.name == "propose_decision" || c.name == "plan_workspace_operation" {
+                "deciding".to_string()
+            } else {
+                "tool".to_string()
+            },
+            label: c.name.clone(),
+            detail: None,
+        },
+    )?;
+    Ok(())
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-081, BR-AG-STATE-002-RB-AG-AG-TOOL-081
+ * type:     RB
+ * chain:    AG-TOOL, AG-TURN
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002
+ * boundary: in=FinalizedToolCallDecisionAndLoopBudget | out=ToolCallStepContinueOrEndedTerminal | delegate=park_decision_handoff,advance_or_settle | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=executeToolOrRecordResult
+ */
+fn finalize_tool_call<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: ToolCallFinalizeFacts<'_>,
+    tool_state: ToolCallState,
+) -> Result<ToolCallStep, IpcError> {
+    let ToolCallFinalizeFacts {
+        state,
+        latch: terminal_latch,
+        cancelled,
+        session_id,
+        turn_id,
+        raw_prompt,
+        transport_protocol,
+        decision,
+        repeated_read_failure,
+        success,
+        end_after_diff_proposal,
+        call_index,
+        calls_len,
+        round_index,
+        remaining_rounds,
+        final_reserve,
+        flags,
+    } = facts;
+    let event_emitter = emitter;
+    let decision_event_after_tool = decision;
+    let ToolCallState {
+        messages,
+        continuation_messages,
+        task_run_id,
+        intent_result,
+        agent_context_facts,
+        read_ctx,
+        active_snapshot,
+        capability_use_tracker,
+        remaining_tool_calls,
+        parameter_correction_rounds,
+        failed_read_signatures,
+        mut tool_loop_state,
+        turn_state,
+        current_doc_requires_tool_read,
+        current_doc_read_confirmed,
+        any_tool_called,
+        proposed_diff,
+        edit_blocked_reported,
+    } = tool_state;
+    let mut stop_after_current_tool = false;
+    use ag::tool::ToolLoopEvent as TlEv;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut tool_loop_state,
+                $event,
+            ) {
+                return Ok(ToolCallStep::Ended);
+            }
+        }};
+    }
+    if let Some(decision) = decision_event_after_tool {
+        park_decision_handoff(
+            &app,
+            &event_emitter,
+            DecisionHandoffFacts {
+                state,
+                latch: terminal_latch,
+                session_id: session_id,
+                turn_id: turn_id,
+                task_run_id,
+                turn_state,
+                intent_result,
+                raw_prompt: raw_prompt.to_string(),
+                continuation_messages,
+                decision,
+                final_only_correction_pending: flags.final_only_correction_pending,
+                transport_protocol: transport_protocol,
+                cancelled: cancelled,
+                tool_loop_state: &mut tool_loop_state,
+            },
+        )?;
+        return Ok(ToolCallStep::Ended);
+    }
+    // Stop tool retries, not the user's entire conversation. The next response
+    // may only explain existing evidence or ask for clarification. It still
+    // passes the original Gate, prompt budget, cancellation and round limits.
+    flags.read_failure_final_pending |= repeated_read_failure;
+    let has_more_calls = call_index + 1 < calls_len;
+    let loop_budget_reached = final_reserve == 0
+        && (remaining_tool_calls == 0 || (round_index + 1 == remaining_rounds && !has_more_calls));
+    if loop_budget_reached {
+        advance_or_finish!(TlEv::LoopLimit);
+        stop_after_current_tool = true;
+    } else if end_after_diff_proposal && success {
+        advance_or_finish!(TlEv::ProposalRecorded);
+        stop_after_current_tool = true;
+    } else if has_more_calls {
+        // 同一响应还有独立 ToolCall：经转移引擎保持当前激活，
+        // 不直接改写状态，也不回归 SM-AG-01。
+        advance_or_finish!(TlEv::NextToolCall);
+    } else {
+        advance_or_finish!(TlEv::Recorded);
+    }
+    Ok(ToolCallStep::Continue {
+        state: ToolCallState {
+            messages,
+            continuation_messages,
+            task_run_id,
+            intent_result,
+            agent_context_facts,
+            read_ctx,
+            active_snapshot,
+            capability_use_tracker,
+            remaining_tool_calls,
+            parameter_correction_rounds,
+            failed_read_signatures,
+            tool_loop_state,
+            turn_state,
+            current_doc_requires_tool_read,
+            current_doc_read_confirmed,
+            any_tool_called,
+            proposed_diff,
+            edit_blocked_reported,
+        },
+        stop: stop_after_current_tool,
+    })
+}
+
 async fn run_one_tool_call<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     emitter: &TurnEventEmitter<'_>,
@@ -4021,7 +4237,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
     } = tool_state;
     let _round = round_index;
     use ag::tool::ToolLoopEvent as TlEv;
-    let mut stop_after_current_tool = false;
 
     if cancelled.load(Ordering::Acquire) {
         if !advance_or_settle(
@@ -4072,46 +4287,19 @@ async fn run_one_tool_call<R: tauri::Runtime>(
                             "retriable": true,
                         }).to_string()
                     });
-    if c.name == "workspace_glob" && arg_parse_error.is_none() {
-        event_emitter.record_internal(
-            "workspace_glob_query_observed",
-            serde_json::json!({
-                "toolCallId": &c.id,
-                "query": workspace_glob_query_observation(
-                    &params,
-                    &raw_prompt,
-                    &history,
-                    &messages,
-                    active_doc_path.as_deref(),
-                    &reference_envelopes,
-                    &continuation_messages,
-                ),
-            }),
-        )?;
-    }
-    event_emitter.emit(
+    emit_tool_call_request(
+        &event_emitter,
         &terminal_latch,
-        AgTurnEventPayload::ToolRequest {
-            tool_call_id: c.id.clone(),
-            tool_name: c.name.clone(),
-            params: safe_tool_params(&params),
-        },
+        c,
+        &params,
+        arg_parse_error.is_none(),
+        raw_prompt,
+        history,
+        &messages,
+        active_doc_path,
+        reference_envelopes,
+        &continuation_messages,
     )?;
-    // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：实时当前动作（信息流底部状态条，不伪造）。
-    event_emitter.emit(
-        &terminal_latch,
-        AgTurnEventPayload::StepProgress {
-            action: if c.name == "propose_decision" || c.name == "plan_workspace_operation" {
-                "deciding".to_string()
-            } else {
-                "tool".to_string()
-            },
-            label: c.name.clone(),
-            detail: None,
-        },
-    )?;
-    // Preflight acquisition under the same hard boundaries; this temporary grant never executes a tool.
-    // The real one-use execution grant is computed below after acquisition.
     let auth = match authorize_one_tool_call(
         &app,
         &event_emitter,
@@ -4223,7 +4411,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         messages,
         continuation_messages,
         failed_read_signatures,
-        mut tool_loop_state,
+        tool_loop_state,
         current_doc_read_confirmed,
         proposed_diff,
         edit_blocked_reported,
@@ -4232,67 +4420,29 @@ async fn run_one_tool_call<R: tauri::Runtime>(
     let end_after_diff_proposal = exec.end_after_diff_proposal;
     let decision_event_after_tool = exec.decision;
     let repeated_read_failure = exec.repeated_read_failure;
-    macro_rules! advance_or_finish {
-        ($event:expr) => {{
-            if !advance_or_settle(
-                state,
-                app,
-                event_emitter,
-                terminal_latch,
-                turn_id,
-                task_run_id.as_deref(),
-                &mut tool_loop_state,
-                $event,
-            ) {
-                return Ok(ToolCallStep::Ended);
-            }
-        }};
-    }
-    if let Some(decision) = decision_event_after_tool {
-        park_decision_handoff(
-            &app,
-            &event_emitter,
-            DecisionHandoffFacts {
-                state,
-                latch: &terminal_latch,
-                session_id: &session_id,
-                turn_id: &turn_id,
-                task_run_id,
-                turn_state,
-                intent_result,
-                raw_prompt: raw_prompt.to_string(),
-                continuation_messages,
-                decision,
-                final_only_correction_pending: flags.final_only_correction_pending,
-                transport_protocol: &transport_protocol,
-                cancelled: &cancelled,
-                tool_loop_state: &mut tool_loop_state,
-            },
-        )?;
-        return Ok(ToolCallStep::Ended);
-    }
-    // Stop tool retries, not the user's entire conversation. The next response
-    // may only explain existing evidence or ask for clarification. It still
-    // passes the original Gate, prompt budget, cancellation and round limits.
-    flags.read_failure_final_pending |= repeated_read_failure;
-    let has_more_calls = call_index + 1 < calls_len;
-    let loop_budget_reached = execution_policy.final_reserve == 0
-        && (remaining_tool_calls == 0 || (_round + 1 == remaining_rounds && !has_more_calls));
-    if loop_budget_reached {
-        advance_or_finish!(TlEv::LoopLimit);
-        stop_after_current_tool = true;
-    } else if end_after_diff_proposal && success {
-        advance_or_finish!(TlEv::ProposalRecorded);
-        stop_after_current_tool = true;
-    } else if has_more_calls {
-        // 同一响应还有独立 ToolCall：经转移引擎保持当前激活，
-        // 不直接改写状态，也不回归 SM-AG-01。
-        advance_or_finish!(TlEv::NextToolCall);
-    } else {
-        advance_or_finish!(TlEv::Recorded);
-    }
-    Ok(ToolCallStep::Continue {
-        state: ToolCallState {
+    finalize_tool_call(
+        &app,
+        &event_emitter,
+        ToolCallFinalizeFacts {
+            state,
+            latch: terminal_latch,
+            cancelled,
+            session_id,
+            turn_id,
+            raw_prompt,
+            transport_protocol,
+            decision: decision_event_after_tool,
+            repeated_read_failure,
+            success,
+            end_after_diff_proposal,
+            call_index,
+            calls_len,
+            round_index: _round,
+            remaining_rounds,
+            final_reserve: execution_policy.final_reserve,
+            flags,
+        },
+        ToolCallState {
             messages,
             continuation_messages,
             task_run_id,
@@ -4312,8 +4462,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             proposed_diff,
             edit_blocked_reported,
         },
-        stop: stop_after_current_tool,
-    })
+    )
 }
 
 /**
