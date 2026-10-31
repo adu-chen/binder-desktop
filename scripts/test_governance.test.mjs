@@ -483,4 +483,33 @@ describe('Product Capability Graph', () => {
     const required = Array.from({ length: 14 }, (_, index) => `EDGE-AG-${String(index + 1).padStart(3, '0')}`);
     expect(required.filter((edge) => !edges.has(edge))).toEqual([]);
   });
+
+  it('链路视图按 primary_chain 唯一分组，跨链只出现在 consumer_chains', () => {
+    const text = readFileSync(join(DEFAULT_ROOT, 'docs/00_core/A-CORE-C-R-01_ADUS.md'), 'utf8');
+    const start = text.indexOf('### 链路视图');
+    const end = text.indexOf('### 规则视图');
+    const region = text.slice(start, end);
+    const owners = new Map();
+    let section = null;
+    for (const line of region.split('\n')) {
+      const heading = /^#### ([A-Z0-9-]+)$/.exec(line.trim());
+      if (heading) {
+        section = heading[1];
+        continue;
+      }
+      if (!section || !line.startsWith('| BR-')) continue;
+      const cells = line.split('|').map((cell) => cell.trim());
+      for (const code of (cells[1] ?? '').split(',').map((entry) => entry.trim()).filter(Boolean)) {
+        if (!owners.has(code)) owners.set(code, new Set());
+        owners.get(code).add(section);
+      }
+    }
+    const duplicates = [...owners.entries()]
+      .filter(([, sections]) => sections.size > 1)
+      .map(([code, sections]) => `${code}: ${[...sections].join(', ')}`);
+    expect(duplicates).toEqual([]);
+    for (const chain of ['AG-TURN', 'AG-TOOL', 'AG-ASSIST', 'AG-MODEL-CATALOG']) {
+      expect([...owners.values()].some((sections) => sections.has(chain))).toBe(true);
+    }
+  });
 });

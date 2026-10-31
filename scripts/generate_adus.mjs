@@ -502,9 +502,11 @@ function buildChainView(govBlocks, knownChainIds) {
   const unknownChains = new Set();
 
   for (const b of govBlocks) {
+    const primaryChain = b.chains[0] ?? 'UNKNOWN';
+    const consumerChains = b.chains.slice(1);
+    if (!chainMap.has(primaryChain)) chainMap.set(primaryChain, []);
+    chainMap.get(primaryChain).push({ block: b, consumerChains });
     for (const chain of b.chains) {
-      if (!chainMap.has(chain)) chainMap.set(chain, []);
-      chainMap.get(chain).push(b);
       if (knownChainIds.size > 0 && !knownChainIds.has(chain)) {
         unknownChains.add(chain);
       }
@@ -524,17 +526,18 @@ function buildChainView(govBlocks, knownChainIds) {
   }
 
   const parts = [...chainMap.keys()].sort().map(chainId => {
-    const rows = chainMap.get(chainId).map(b => [
+    const rows = chainMap.get(chainId).map(({ block: b, consumerChains }) => [
       b.codes,
       b.type,
       b.rules.length ? b.rules.join(', ') : '[]',
       b.file,
       String(b.line),
+      consumerChains.length ? consumerChains.join(', ') : '-',
     ]);
     const warning = unknownChains.has(chainId)
       ? `\n> ⚠ P1：chain_id \`${chainId}\` 未在链路注册表中找到对应 <!-- CHAIN --> 标注块\n`
       : '';
-    return `#### ${chainId}${warning}\n\n` + mdTable(['codes', 'type', 'rules', '文件', '行号'], rows);
+    return `#### ${chainId}${warning}\n\n` + mdTable(['codes', 'type', 'rules', '文件', '行号', 'consumer_chains'], rows);
   });
 
   return parts.join('\n\n');

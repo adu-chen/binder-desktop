@@ -29,6 +29,8 @@ machine_id 并注明。
 
 `rules` 只登记**直接约束本机转移、守卫、终态、等待语义、证据/观察**的 AG/SYS 规则。ED/DE/DOC/WS 等下游效果规则通过链路视图表达，不进入本机规则闭包；若未来需要引入外部规则，必须新增显式字段并经治理评审，不得混入 `rules`。该语义用于保证四台 AG 状态机的规则闭包可比较、可审计。
 
+`@GOV chain` 字段采用有序约定：**首项为 primary_chain，其余项为 consumer_chains**。ADUS 链路视图只按 primary_chain 分组，consumer_chains 列展示跨链消费者；同一 code 不得在多个链视图中拥有主责。外部模块块（WS/DE/SYS 等）以自身主链为主，AG 只作为 consumer_chains 出现，不计入 AG owned 统计。
+
 ## §2 SM-AG-01 · 代理回合机
 
 <!-- STATE_MACHINE
