@@ -4712,7 +4712,7 @@ fn handle_response_rejection<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,run_provider_round_with_gate,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -5069,6 +5069,204 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
     }))
 }
 
+struct ProviderRoundFacts<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    session_id: &'a str,
+    turn_id: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    runtime_profile: &'a str,
+    messages: &'a [serde_json::Value],
+    tools: &'a serde_json::Value,
+    prompt_package: &'a ag::context::PromptPackageV2,
+    final_prompt_audit: &'a mut Option<FinalPromptAuditLog>,
+    turn_state: &'a mut ag::turn::TurnState,
+    tool_loop_state: &'a mut ag::tool::ToolLoopState,
+    task_run_id: Option<&'a str>,
+    round_index: usize,
+    model_call_ordinal: usize,
+    budget_closing: bool,
+    workspace_plan_completed: bool,
+}
+
+enum ProviderRoundOutcome {
+    Ready {
+        round: crate::ent::gateway::RoundOutcome,
+        decoder: ag::model_output::ModelOutputDecoder,
+        visible_output: String,
+        visible_output_chars: usize,
+    },
+    Ended,
+}
+
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-083, BR-AG-STATE-002-RB-AG-AG-TOOL-083
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002
+ * boundary: in=RoundGateWaitProviderFactsAndToolLoopState | out=ProviderRoundReadyOrEndedTerminal | delegate=await_round_gate,run_provider_round | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=validateResponseOrCloseRound
+ */
+async fn run_provider_round_with_gate<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    facts: ProviderRoundFacts<'_>,
+) -> Result<ProviderRoundOutcome, IpcError> {
+    let ProviderRoundFacts {
+        state,
+        latch: terminal_latch,
+        session_id,
+        turn_id,
+        provider,
+        model,
+        runtime_profile,
+        messages,
+        tools,
+        prompt_package,
+        final_prompt_audit,
+        turn_state,
+        tool_loop_state,
+        task_run_id,
+        round_index,
+        model_call_ordinal,
+        budget_closing,
+        workspace_plan_completed,
+    } = facts;
+    let event_emitter = emitter;
+    use ag::tool::{ToolLoopEvent as TlEv, ToolLoopState as TlSt};
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id,
+                &mut *tool_loop_state,
+                $event,
+            ) {
+                return Ok(ProviderRoundOutcome::Ended);
+            }
+        }};
+    }
+    let _round = round_index;
+    if _round > 0 {
+        debug_assert_eq!(*turn_state, ag::turn::TurnState::AwaitingGate);
+        match await_round_gate(
+            state,
+            event_emitter,
+            session_id,
+            turn_id,
+            model_call_ordinal,
+        )
+        .await?
+        {
+            RoundGate::Proceed => {
+                *turn_state = ag::turn::transition(*turn_state, ag::turn::TurnEvent::GatePassed)
+                    .ok_or_else(sm_error)?;
+                emit_ag01(app, turn_id, *turn_state);
+                // SM-AG-01 已完成 Assembling→AwaitingGate→GatePassed；这里是新的嵌套激活起点，
+                // 从初始态 ModelStreaming 开始，不是同一 SM-AG-02 激活内的状态转移。
+                *tool_loop_state = TlSt::ModelStreaming;
+            }
+            RoundGate::Cancelled => {
+                // The preceding nested loop completed before this Gate wait.
+                finish_cancelled_turn(
+                    state,
+                    app,
+                    event_emitter,
+                    terminal_latch,
+                    turn_id,
+                    task_run_id,
+                    *turn_state,
+                );
+                return Ok(ProviderRoundOutcome::Ended);
+            }
+            RoundGate::Denied(error) | RoundGate::Failed(error) => {
+                if let Ok(conn) = state.db.lock() {
+                    settle_optional_task_run(
+                        &conn,
+                        task_run_id,
+                        turn_id,
+                        ag::task::TurnOutcome::Failed,
+                    );
+                }
+                if error.code == "AG_GATE_DENIED" {
+                    emit_ag_turn_denied(event_emitter, terminal_latch, app, turn_id, &error);
+                } else {
+                    emit_ag_turn_error_from(
+                        event_emitter,
+                        terminal_latch,
+                        app,
+                        turn_id,
+                        &error,
+                        *turn_state,
+                    );
+                }
+                return Ok(ProviderRoundOutcome::Ended);
+            }
+        }
+    }
+    debug_assert_eq!(*tool_loop_state, TlSt::ModelStreaming);
+    // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
+    let provider_result = run_provider_round(
+        state,
+        event_emitter,
+        terminal_latch,
+        session_id,
+        turn_id,
+        provider,
+        model,
+        runtime_profile,
+        messages,
+        tools,
+        prompt_package,
+        final_prompt_audit,
+        model_call_ordinal,
+        budget_closing,
+        workspace_plan_completed,
+    )
+    .await?;
+    match provider_result {
+        ProviderRoundResult::Ready(ready) => {
+            return Ok(ProviderRoundOutcome::Ready {
+                round: ready.round,
+                decoder: ready.decoder,
+                visible_output: ready.visible_output,
+                visible_output_chars: ready.visible_output_chars,
+            });
+        }
+        ProviderRoundResult::Cancelled => {
+            advance_or_finish!(TlEv::Cancel);
+            finish_cancelled_turn(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id,
+                *turn_state,
+            );
+            return Ok(ProviderRoundOutcome::Ended);
+        }
+        ProviderRoundResult::Failed(error) => {
+            advance_or_finish!(TlEv::LoopError);
+            settle_and_emit_ag_turn_error(
+                state,
+                task_run_id,
+                event_emitter,
+                terminal_latch,
+                app,
+                turn_id,
+                &error,
+            );
+            return Ok(ProviderRoundOutcome::Ended);
+        }
+    }
+}
+
 async fn run_round_loop<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     ctx: RoundContext<'_, R>,
@@ -5128,7 +5326,7 @@ async fn run_round_loop<R: tauri::Runtime>(
         mut prompt_package,
         mut agent_context_facts,
     } = round;
-    use ag::tool::{ToolLoopEvent as TlEv, ToolLoopState as TlSt};
+    use ag::tool::ToolLoopEvent as TlEv;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
             match advance_tool_loop(&app, &turn_id, &mut tool_loop_state, $event) {
@@ -5194,123 +5392,41 @@ async fn run_round_loop<R: tauri::Runtime>(
             );
             return Ok(());
         }
-        if _round > 0 {
-            debug_assert_eq!(turn_state, ag::turn::TurnState::AwaitingGate);
-            match await_round_gate(
-                &state,
+        let (round, output_decoder, visible_output, visible_output_chars) =
+            match run_provider_round_with_gate(
+                &app,
                 &event_emitter,
-                &session_id,
-                &turn_id,
-                model_call_ordinal,
+                ProviderRoundFacts {
+                    state,
+                    latch: &terminal_latch,
+                    session_id: &session_id,
+                    turn_id: &turn_id,
+                    provider: &provider,
+                    model: &model,
+                    runtime_profile: &runtime_profile,
+                    messages: &messages,
+                    tools: &tools,
+                    prompt_package: &prompt_package,
+                    final_prompt_audit: &mut final_prompt_audit,
+                    turn_state: &mut turn_state,
+                    tool_loop_state: &mut tool_loop_state,
+                    task_run_id: task_run_id.as_deref(),
+                    round_index: _round,
+                    model_call_ordinal,
+                    budget_closing,
+                    workspace_plan_completed,
+                },
             )
             .await?
             {
-                RoundGate::Proceed => {
-                    turn_state = ag::turn::transition(turn_state, ag::turn::TurnEvent::GatePassed)
-                        .ok_or_else(sm_error)?;
-                    emit_ag01(&app, &turn_id, turn_state);
-                    // SM-AG-01 已完成 Assembling→AwaitingGate→GatePassed；这里是新的嵌套激活起点，
-                    // 从初始态 ModelStreaming 开始，不是同一 SM-AG-02 激活内的状态转移。
-                    tool_loop_state = TlSt::ModelStreaming;
-                }
-                RoundGate::Cancelled => {
-                    // The preceding nested loop completed before this Gate wait.
-                    finish_cancelled_turn(
-                        &state,
-                        &app,
-                        &event_emitter,
-                        &terminal_latch,
-                        &turn_id,
-                        task_run_id.as_deref(),
-                        turn_state,
-                    );
-                    return Ok(());
-                }
-                RoundGate::Denied(error) | RoundGate::Failed(error) => {
-                    if let Ok(conn) = state.db.lock() {
-                        settle_optional_task_run(
-                            &conn,
-                            task_run_id.as_deref(),
-                            &turn_id,
-                            ag::task::TurnOutcome::Failed,
-                        );
-                    }
-                    if error.code == "AG_GATE_DENIED" {
-                        emit_ag_turn_denied(
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            &error,
-                        );
-                    } else {
-                        emit_ag_turn_error_from(
-                            &event_emitter,
-                            &terminal_latch,
-                            &app,
-                            &turn_id,
-                            &error,
-                            turn_state,
-                        );
-                    }
-                    return Ok(());
-                }
-            }
-        }
-        debug_assert_eq!(tool_loop_state, TlSt::ModelStreaming);
-        // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
-        let provider_result = run_provider_round(
-            state,
-            &event_emitter,
-            &terminal_latch,
-            &session_id,
-            &turn_id,
-            &provider,
-            &model,
-            &runtime_profile,
-            &messages,
-            &tools,
-            &prompt_package,
-            &mut final_prompt_audit,
-            model_call_ordinal,
-            budget_closing,
-            workspace_plan_completed,
-        )
-        .await?;
-        let (round, output_decoder, visible_output, visible_output_chars) = match provider_result {
-            ProviderRoundResult::Ready(ready) => (
-                ready.round,
-                ready.decoder,
-                ready.visible_output,
-                ready.visible_output_chars,
-            ),
-            ProviderRoundResult::Cancelled => {
-                advance_or_finish!(TlEv::Cancel);
-                finish_cancelled_turn(
-                    &state,
-                    &app,
-                    &event_emitter,
-                    &terminal_latch,
-                    &turn_id,
-                    task_run_id.as_deref(),
-                    turn_state,
-                );
-                return Ok(());
-            }
-            ProviderRoundResult::Failed(error) => {
-                advance_or_finish!(TlEv::LoopError);
-                settle_and_emit_ag_turn_error(
-                    &state,
-                    task_run_id.as_deref(),
-                    &event_emitter,
-                    &terminal_latch,
-                    &app,
-                    &turn_id,
-                    &error,
-                );
-                return Ok(());
-            }
-        };
+                ProviderRoundOutcome::Ended => return Ok(()),
+                ProviderRoundOutcome::Ready {
+                    round,
+                    decoder,
+                    visible_output,
+                    visible_output_chars,
+                } => (round, decoder, visible_output, visible_output_chars),
+            };
         // A provider completion and an accepted Binder response are separate facts. Text
         // protocol errors are collected until the native response kind is known, before any
         // intent/task projection or tool execution. Network failures never enter correction.
