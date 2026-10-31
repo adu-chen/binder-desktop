@@ -11,7 +11,7 @@ use super::turn_control::{
     park_agent_turn_for_decision, AgentTurnRuntimeCheckpoint,
 };
 use super::turn_events::{
-    emit_ag01, emit_ag02, emit_ag_turn_denied, emit_ag_turn_done, emit_ag_turn_error,
+    emit_ag01, emit_ag02, emit_ag_turn_denied, emit_ag_turn_done,
     emit_ag_turn_error_from, settle_and_emit_ag_turn_error, settle_and_emit_ag_turn_error_from,
     sm_error, TurnEventEmitter,
 };
@@ -2640,15 +2640,9 @@ fn finish_final_answer<R: tauri::Runtime>(
         Ok(true) => {}
         Ok(false) => return Ok(()),
         Err(error) => {
-            if let Ok(conn) = facts.state.db.lock() {
-                settle_optional_task_run(
-                    &conn,
-                    facts.task_run_id,
-                    facts.turn_id,
-                    ag::task::TurnOutcome::Failed,
-                );
-            }
-            emit_ag_turn_error_from(
+            settle_and_emit_ag_turn_error_from(
+                facts.state,
+                facts.task_run_id,
                 emitter,
                 facts.latch,
                 app,
@@ -2953,15 +2947,15 @@ fn handle_done_round<R: tauri::Runtime>(
         ) {
             return Ok(());
         }
-        if let Ok(conn) = state.db.lock() {
-            settle_optional_task_run(
-                &conn,
-                task_run_id.as_deref(),
-                turn_id,
-                ag::task::TurnOutcome::Failed,
-            );
-        }
-        emit_ag_turn_error(emitter, latch, app, turn_id, &error);
+        settle_and_emit_ag_turn_error(
+            state,
+            task_run_id.as_deref(),
+            emitter,
+            latch,
+            app,
+            turn_id,
+            &error,
+        );
         return Ok(());
     }
     if !advance_or_settle(
@@ -5793,10 +5787,7 @@ fn finish_failed_round<R: tauri::Runtime>(
     ) {
         return;
     }
-    if let Ok(conn) = state.db.lock() {
-        settle_optional_task_run(&conn, task_run_id, turn_id, ag::task::TurnOutcome::Failed);
-    }
-    emit_ag_turn_error(emitter, latch, app, turn_id, error);
+    settle_and_emit_ag_turn_error(state, task_run_id, emitter, latch, app, turn_id, error);
 }
 
 /**
