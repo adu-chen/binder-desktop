@@ -4437,7 +4437,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             end_after_diff_proposal,
             call_index,
             calls_len,
-            round_index: _round,
+            round_index,
             remaining_rounds,
             final_reserve: execution_policy.final_reserve,
             flags,
@@ -4712,7 +4712,7 @@ fn handle_response_rejection<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -4974,7 +4974,7 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
         transport_protocol: &transport_protocol,
         execution_policy: &execution_policy,
         model_call_ordinal,
-        round_index: _round,
+        round_index,
         remaining_rounds,
     };
     let tool_call_state = ToolCallState {
@@ -5403,6 +5403,349 @@ fn validate_and_correct_response<R: tauri::Runtime>(
     ))
 }
 
+struct RoundOutcomeContext<'a> {
+    state: &'a AppState,
+    latch: &'a ag::turn::TerminalLatch,
+    cancelled: &'a Arc<AtomicBool>,
+    session_id: &'a str,
+    workspace_id: &'a str,
+    turn_id: &'a str,
+    runtime_profile: &'a str,
+    explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
+    on_context_request: Option<&'a tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
+    active_doc_path: Option<&'a str>,
+    ws_root: Option<&'a str>,
+    history: &'a [ag::context::HistTurn],
+    raw_prompt: &'a str,
+    mention_block: Option<&'a str>,
+    reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
+    transport_protocol: &'a str,
+    model_capacity: ag::prompt_runtime::ModelCapacity,
+    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
+    workspace_plan_completed: bool,
+    remaining_rounds: usize,
+    round_index: usize,
+    visible_output: &'a str,
+}
+
+enum RoundOutcomeResult {
+    Continue(RoundState),
+    Ended,
+}
+
+#[allow(clippy::too_many_arguments)]
+/**
+ * @GOV
+ * codes:    BR-AG-STATE-001-RB-AG-AG-TOOL-085, BR-AG-STATE-002-RB-AG-AG-TOOL-085
+ * type:     RB
+ * chain:    AG-TURN, AG-TOOL
+ * rules:    BR-AG-STATE-001, BR-AG-STATE-002
+ * boundary: in=ValidatedRoundOutcomeAndOwnedRoundState | out=RoundOutcomeContinueWithClosedRoundOrEndedTerminal | delegate=handle_done_round,handle_tool_calls_round,close_round | consumer=BR-AG-STATE-001,BR-AG-STATE-002 | does_not=callProviderOrValidateResponse
+ */
+async fn handle_round_outcome<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    emitter: &TurnEventEmitter<'_>,
+    ctx: RoundOutcomeContext<'_>,
+    round_state: RoundState,
+    round: crate::ent::gateway::RoundOutcome,
+    response_control: Result<Option<ag::model_output::ModelTurnControl>, IpcError>,
+    response_rejected: bool,
+    final_only_after_rejection: bool,
+    budget_closing: bool,
+    model_call_ordinal: usize,
+    mut final_only_correction_pending: bool,
+    mut parameter_correction_pending: bool,
+    mut protocol_correction_diagnostic: Option<serde_json::Value>,
+    mut read_failure_final_pending: bool,
+) -> Result<RoundOutcomeResult, IpcError> {
+    let RoundOutcomeContext {
+        state,
+        latch: terminal_latch,
+        cancelled,
+        session_id,
+        workspace_id: workspace_id_for_turn,
+        turn_id,
+        runtime_profile,
+        explicit_edit_target_set,
+        on_context_request,
+        active_doc_path,
+        ws_root,
+        history,
+        raw_prompt,
+        mention_block,
+        reference_envelopes,
+        transport_protocol,
+        model_capacity,
+        execution_policy,
+        workspace_plan_completed,
+        remaining_rounds,
+        round_index,
+        visible_output,
+    } = ctx;
+    let event_emitter = emitter;
+    let RoundState {
+        mut messages,
+        mut tools,
+        mut capability_factors,
+        mut read_ctx,
+        mut active_snapshot,
+        mut intent_result,
+        mut continuation_messages,
+        mut task_run_id,
+        mut remaining_tool_calls,
+        mut protocol_correction_rounds,
+        mut parameter_correction_rounds,
+        mut failed_read_signatures,
+        mut seen_tool_call_ids,
+        mut tool_loop_state,
+        mut turn_state,
+        mut current_doc_prompt_coverage,
+        mut current_doc_requires_tool_read,
+        mut current_doc_read_confirmed,
+        mut any_tool_called,
+        mut proposed_diff,
+        mut edit_blocked_reported,
+        final_prompt_audit,
+        mut capability_use_tracker,
+        mut prompt_package,
+        mut agent_context_facts,
+    } = round_state;
+    use ag::tool::ToolLoopEvent as TlEv;
+    macro_rules! advance_or_finish {
+        ($event:expr) => {{
+            if !advance_or_settle(
+                state,
+                app,
+                event_emitter,
+                terminal_latch,
+                turn_id,
+                task_run_id.as_deref(),
+                &mut tool_loop_state,
+                $event,
+            ) {
+                return Ok(RoundOutcomeResult::Ended);
+            }
+        }};
+    }
+    match round {
+        _ if response_rejected => {}
+        ent::gateway::RoundOutcome::Failed(error) => {
+            advance_or_finish!(TlEv::LoopError);
+            if let Ok(conn) = state.db.lock() {
+                settle_optional_task_run(
+                    &conn,
+                    task_run_id.as_deref(),
+                    &turn_id,
+                    ag::task::TurnOutcome::Failed,
+                );
+            }
+            emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
+            return Ok(RoundOutcomeResult::Ended);
+        }
+        ent::gateway::RoundOutcome::Done { stop_reason } => {
+            let control = response_control
+                .expect("validated response")
+                .expect("done control");
+            handle_done_round(
+                &app,
+                &event_emitter,
+                DoneRoundFacts {
+                    state,
+                    latch: &terminal_latch,
+                    session_id: &session_id,
+                    workspace_id: &workspace_id_for_turn,
+                    turn_id: &turn_id,
+                    explicit_edit_target_set: &explicit_edit_target_set,
+                    task_run_id,
+                    intent_result,
+                    tool_loop_state,
+                    turn_state,
+                    control,
+                    raw_prompt: raw_prompt.to_string(),
+                    history: &history,
+                    messages: &messages,
+                    active_doc_path: active_doc_path.as_deref(),
+                    reference_envelopes: &reference_envelopes,
+                    continuation_messages,
+                    budget_closing,
+                    workspace_plan_completed,
+                    proposed_diff,
+                    edit_blocked_reported,
+                    any_tool_called,
+                    visible_output: &visible_output,
+                    stop_reason: &stop_reason,
+                    model_call_ordinal,
+                    remaining_tool_calls,
+                    remaining_rounds,
+                },
+            )?;
+            return Ok(RoundOutcomeResult::Ended);
+        }
+        ent::gateway::RoundOutcome::ToolCalls(calls) => {
+            let tool_calls_ctx = ToolCallsRoundContext {
+                state,
+                latch: &terminal_latch,
+                cancelled: &cancelled,
+                session_id: &session_id,
+                workspace_id: &workspace_id_for_turn,
+                turn_id: &turn_id,
+                runtime_profile: &runtime_profile,
+                explicit_edit_target_set: &explicit_edit_target_set,
+                tools: &tools,
+                ws_root: ws_root.as_deref(),
+                on_context_request,
+                active_doc_path: active_doc_path.as_deref(),
+                history: &history,
+                raw_prompt: &raw_prompt,
+                reference_envelopes: &reference_envelopes,
+                capability_factors: &capability_factors,
+                transport_protocol: &transport_protocol,
+                execution_policy: &execution_policy,
+                model_call_ordinal,
+                round_index,
+                remaining_rounds,
+                current_doc_prompt_coverage,
+            };
+            let tool_calls_state = ToolCallsRoundState {
+                messages,
+                continuation_messages,
+                task_run_id,
+                intent_result,
+                agent_context_facts,
+                read_ctx,
+                active_snapshot,
+                capability_use_tracker,
+                remaining_tool_calls,
+                protocol_correction_rounds,
+                protocol_correction_diagnostic,
+                parameter_correction_rounds,
+                failed_read_signatures,
+                seen_tool_call_ids,
+                tool_loop_state,
+                turn_state,
+                current_doc_requires_tool_read,
+                current_doc_read_confirmed,
+                any_tool_called,
+                proposed_diff,
+                edit_blocked_reported,
+                final_only_correction_pending,
+                parameter_correction_pending,
+                read_failure_final_pending,
+            };
+            match handle_tool_calls_round(
+                &app,
+                &event_emitter,
+                tool_calls_ctx,
+                tool_calls_state,
+                response_control,
+                calls,
+                final_only_after_rejection,
+            )
+            .await?
+            {
+                ToolCallsRoundResult::Ended => return Ok(RoundOutcomeResult::Ended),
+                ToolCallsRoundResult::Continue(tool_calls_state) => {
+                    messages = tool_calls_state.messages;
+                    continuation_messages = tool_calls_state.continuation_messages;
+                    task_run_id = tool_calls_state.task_run_id;
+                    intent_result = tool_calls_state.intent_result;
+                    agent_context_facts = tool_calls_state.agent_context_facts;
+                    read_ctx = tool_calls_state.read_ctx;
+                    active_snapshot = tool_calls_state.active_snapshot;
+                    capability_use_tracker = tool_calls_state.capability_use_tracker;
+                    remaining_tool_calls = tool_calls_state.remaining_tool_calls;
+                    protocol_correction_rounds = tool_calls_state.protocol_correction_rounds;
+                    protocol_correction_diagnostic =
+                        tool_calls_state.protocol_correction_diagnostic;
+                    parameter_correction_rounds = tool_calls_state.parameter_correction_rounds;
+                    failed_read_signatures = tool_calls_state.failed_read_signatures;
+                    seen_tool_call_ids = tool_calls_state.seen_tool_call_ids;
+                    tool_loop_state = tool_calls_state.tool_loop_state;
+                    turn_state = tool_calls_state.turn_state;
+                    current_doc_requires_tool_read =
+                        tool_calls_state.current_doc_requires_tool_read;
+                    current_doc_read_confirmed = tool_calls_state.current_doc_read_confirmed;
+                    any_tool_called = tool_calls_state.any_tool_called;
+                    proposed_diff = tool_calls_state.proposed_diff;
+                    edit_blocked_reported = tool_calls_state.edit_blocked_reported;
+                    final_only_correction_pending = tool_calls_state.final_only_correction_pending;
+                    parameter_correction_pending = tool_calls_state.parameter_correction_pending;
+                    read_failure_final_pending = tool_calls_state.read_failure_final_pending;
+                }
+            }
+        }
+    }
+    match close_round(
+        &app,
+        &event_emitter,
+        CloseRoundFacts {
+            state,
+            latch: &terminal_latch,
+            session_id: &session_id,
+            turn_id: &turn_id,
+            runtime_profile: &runtime_profile,
+            task_run_id: &mut task_run_id,
+            intent_result: &mut intent_result,
+            agent_context_facts: &mut agent_context_facts,
+            explicit_edit_target_set: &explicit_edit_target_set,
+            read_ctx: &mut read_ctx,
+            active_doc_path: active_doc_path.as_deref(),
+            active_snapshot: &mut active_snapshot,
+            history: &history,
+            raw_prompt: &raw_prompt,
+            mention_block: mention_block.as_deref(),
+            reference_envelopes: &reference_envelopes,
+            proposed_diff,
+            continuation_messages: &mut continuation_messages,
+            model_call_ordinal,
+            remaining_tool_calls,
+            model_capacity,
+            response_rejected,
+            transport_protocol: &transport_protocol,
+            final_only_correction_pending,
+            parameter_correction_pending,
+            protocol_correction_diagnostic: &protocol_correction_diagnostic,
+            read_failure_final_pending,
+            turn_state: &mut turn_state,
+            messages: &mut messages,
+            tools: &mut tools,
+            capability_factors: &mut capability_factors,
+            prompt_package: &mut prompt_package,
+            current_doc_prompt_coverage: &mut current_doc_prompt_coverage,
+        },
+    )? {
+        RoundClose::Continue => {}
+        RoundClose::Ended => return Ok(RoundOutcomeResult::Ended),
+    }
+    Ok(RoundOutcomeResult::Continue(RoundState {
+        messages,
+        tools,
+        capability_factors,
+        read_ctx,
+        active_snapshot,
+        intent_result,
+        continuation_messages,
+        task_run_id,
+        remaining_tool_calls,
+        protocol_correction_rounds,
+        parameter_correction_rounds,
+        failed_read_signatures,
+        seen_tool_call_ids,
+        tool_loop_state,
+        turn_state,
+        current_doc_prompt_coverage,
+        current_doc_requires_tool_read,
+        current_doc_read_confirmed,
+        any_tool_called,
+        proposed_diff,
+        edit_blocked_reported,
+        final_prompt_audit,
+        capability_use_tracker,
+        prompt_package,
+        agent_context_facts,
+    }))
+}
+
 async fn run_round_loop<R: tauri::Runtime>(
     emitter: &TurnEventEmitter<'_>,
     ctx: RoundContext<'_, R>,
@@ -5598,201 +5941,132 @@ async fn run_round_loop<R: tauri::Runtime>(
         let response_control = validation.control;
         let response_rejected = validation.rejected;
         let final_only_after_rejection = validation.final_only_after_rejection;
-        let mut final_only_correction_pending = validation.final_only_correction_pending;
+        let final_only_correction_pending = validation.final_only_correction_pending;
         let mut parameter_correction_pending = validation.parameter_correction_pending;
         let mut protocol_correction_diagnostic = validation.protocol_correction_diagnostic;
         let mut read_failure_final_pending = validation.read_failure_final_pending;
-        match round {
-            _ if response_rejected => {}
-            ent::gateway::RoundOutcome::Failed(error) => {
-                advance_or_finish!(TlEv::LoopError);
-                if let Ok(conn) = state.db.lock() {
-                    settle_optional_task_run(
-                        &conn,
-                        task_run_id.as_deref(),
-                        &turn_id,
-                        ag::task::TurnOutcome::Failed,
-                    );
-                }
-                emit_ag_turn_error(&event_emitter, &terminal_latch, &app, &turn_id, &error);
-                return Ok(());
-            }
-            ent::gateway::RoundOutcome::Done { stop_reason } => {
-                let control = response_control
-                    .expect("validated response")
-                    .expect("done control");
-                return handle_done_round(
-                    &app,
-                    &event_emitter,
-                    DoneRoundFacts {
-                        state,
-                        latch: &terminal_latch,
-                        session_id: &session_id,
-                        workspace_id: &workspace_id_for_turn,
-                        turn_id: &turn_id,
-                        explicit_edit_target_set: &explicit_edit_target_set,
-                        task_run_id,
-                        intent_result,
-                        tool_loop_state,
-                        turn_state,
-                        control,
-                        raw_prompt,
-                        history: &history,
-                        messages: &messages,
-                        active_doc_path: active_doc_path.as_deref(),
-                        reference_envelopes: &reference_envelopes,
-                        continuation_messages,
-                        budget_closing,
-                        workspace_plan_completed,
-                        proposed_diff,
-                        edit_blocked_reported,
-                        any_tool_called,
-                        visible_output: &visible_output,
-                        stop_reason: &stop_reason,
-                        model_call_ordinal,
-                        remaining_tool_calls,
-                        remaining_rounds,
-                    },
-                );
-            }
-            ent::gateway::RoundOutcome::ToolCalls(calls) => {
-                let tool_calls_ctx = ToolCallsRoundContext {
-                    state,
-                    latch: &terminal_latch,
-                    cancelled: &cancelled,
-                    session_id: &session_id,
-                    workspace_id: &workspace_id_for_turn,
-                    turn_id: &turn_id,
-                    runtime_profile: &runtime_profile,
-                    explicit_edit_target_set: &explicit_edit_target_set,
-                    tools: &tools,
-                    ws_root: ws_root.as_deref(),
-                    on_context_request: on_context_request.as_ref(),
-                    active_doc_path: active_doc_path.as_deref(),
-                    history: &history,
-                    raw_prompt: &raw_prompt,
-                    reference_envelopes: &reference_envelopes,
-                    capability_factors: &capability_factors,
-                    transport_protocol: &transport_protocol,
-                    execution_policy: &execution_policy,
-                    model_call_ordinal,
-                    round_index: _round,
-                    remaining_rounds,
-                    current_doc_prompt_coverage,
-                };
-                let tool_calls_state = ToolCallsRoundState {
-                    messages,
-                    continuation_messages,
-                    task_run_id,
-                    intent_result,
-                    agent_context_facts,
-                    read_ctx,
-                    active_snapshot,
-                    capability_use_tracker,
-                    remaining_tool_calls,
-                    protocol_correction_rounds,
-                    protocol_correction_diagnostic,
-                    parameter_correction_rounds,
-                    failed_read_signatures,
-                    seen_tool_call_ids,
-                    tool_loop_state,
-                    turn_state,
-                    current_doc_requires_tool_read,
-                    current_doc_read_confirmed,
-                    any_tool_called,
-                    proposed_diff,
-                    edit_blocked_reported,
-                    final_only_correction_pending,
-                    parameter_correction_pending,
-                    read_failure_final_pending,
-                };
-                match handle_tool_calls_round(
-                    &app,
-                    &event_emitter,
-                    tool_calls_ctx,
-                    tool_calls_state,
-                    response_control,
-                    calls,
-                    final_only_after_rejection,
-                )
-                .await?
-                {
-                    ToolCallsRoundResult::Ended => return Ok(()),
-                    ToolCallsRoundResult::Continue(tool_calls_state) => {
-                        messages = tool_calls_state.messages;
-                        continuation_messages = tool_calls_state.continuation_messages;
-                        task_run_id = tool_calls_state.task_run_id;
-                        intent_result = tool_calls_state.intent_result;
-                        agent_context_facts = tool_calls_state.agent_context_facts;
-                        read_ctx = tool_calls_state.read_ctx;
-                        active_snapshot = tool_calls_state.active_snapshot;
-                        capability_use_tracker = tool_calls_state.capability_use_tracker;
-                        remaining_tool_calls = tool_calls_state.remaining_tool_calls;
-                        protocol_correction_rounds = tool_calls_state.protocol_correction_rounds;
-                        protocol_correction_diagnostic =
-                            tool_calls_state.protocol_correction_diagnostic;
-                        parameter_correction_rounds = tool_calls_state.parameter_correction_rounds;
-                        failed_read_signatures = tool_calls_state.failed_read_signatures;
-                        seen_tool_call_ids = tool_calls_state.seen_tool_call_ids;
-                        tool_loop_state = tool_calls_state.tool_loop_state;
-                        turn_state = tool_calls_state.turn_state;
-                        current_doc_requires_tool_read =
-                            tool_calls_state.current_doc_requires_tool_read;
-                        current_doc_read_confirmed = tool_calls_state.current_doc_read_confirmed;
-                        any_tool_called = tool_calls_state.any_tool_called;
-                        proposed_diff = tool_calls_state.proposed_diff;
-                        edit_blocked_reported = tool_calls_state.edit_blocked_reported;
-                        final_only_correction_pending =
-                            tool_calls_state.final_only_correction_pending;
-                        parameter_correction_pending =
-                            tool_calls_state.parameter_correction_pending;
-                        read_failure_final_pending = tool_calls_state.read_failure_final_pending;
-                    }
-                }
-            }
-        }
-        match close_round(
+        let outcome = match Box::pin(handle_round_outcome(
             &app,
             &event_emitter,
-            CloseRoundFacts {
+            RoundOutcomeContext {
                 state,
                 latch: &terminal_latch,
+                cancelled: &cancelled,
                 session_id: &session_id,
+                workspace_id: &workspace_id_for_turn,
                 turn_id: &turn_id,
                 runtime_profile: &runtime_profile,
-                task_run_id: &mut task_run_id,
-                intent_result: &mut intent_result,
-                agent_context_facts: &mut agent_context_facts,
                 explicit_edit_target_set: &explicit_edit_target_set,
-                read_ctx: &mut read_ctx,
+                on_context_request: on_context_request.as_ref(),
                 active_doc_path: active_doc_path.as_deref(),
-                active_snapshot: &mut active_snapshot,
+                ws_root: ws_root.as_deref(),
                 history: &history,
                 raw_prompt: &raw_prompt,
                 mention_block: mention_block.as_deref(),
                 reference_envelopes: &reference_envelopes,
-                proposed_diff,
-                continuation_messages: &mut continuation_messages,
-                model_call_ordinal,
-                remaining_tool_calls,
-                model_capacity,
-                response_rejected,
                 transport_protocol: &transport_protocol,
-                final_only_correction_pending,
-                parameter_correction_pending,
-                protocol_correction_diagnostic: &protocol_correction_diagnostic,
-                read_failure_final_pending,
-                turn_state: &mut turn_state,
-                messages: &mut messages,
-                tools: &mut tools,
-                capability_factors: &mut capability_factors,
-                prompt_package: &mut prompt_package,
-                current_doc_prompt_coverage: &mut current_doc_prompt_coverage,
+                model_capacity,
+                execution_policy: &execution_policy,
+                workspace_plan_completed,
+                remaining_rounds,
+                round_index: _round,
+                visible_output: &visible_output,
             },
-        )? {
-            RoundClose::Continue => {}
-            RoundClose::Ended => return Ok(()),
-        }
+            RoundState {
+                messages,
+                tools,
+                capability_factors,
+                read_ctx,
+                active_snapshot,
+                intent_result,
+                continuation_messages,
+                task_run_id,
+                remaining_tool_calls,
+                protocol_correction_rounds,
+                parameter_correction_rounds,
+                failed_read_signatures,
+                seen_tool_call_ids,
+                tool_loop_state,
+                turn_state,
+                current_doc_prompt_coverage,
+                current_doc_requires_tool_read,
+                current_doc_read_confirmed,
+                any_tool_called,
+                proposed_diff,
+                edit_blocked_reported,
+                final_prompt_audit,
+                capability_use_tracker,
+                prompt_package,
+                agent_context_facts,
+            },
+            round,
+            response_control,
+            response_rejected,
+            final_only_after_rejection,
+            budget_closing,
+            model_call_ordinal,
+            final_only_correction_pending,
+            parameter_correction_pending,
+            protocol_correction_diagnostic,
+            read_failure_final_pending,
+        ))
+        .await?
+        {
+            RoundOutcomeResult::Ended => return Ok(()),
+            RoundOutcomeResult::Continue(state) => state,
+        };
+        let RoundState {
+            messages: next_messages,
+            tools: next_tools,
+            capability_factors: next_capability_factors,
+            read_ctx: next_read_ctx,
+            active_snapshot: next_active_snapshot,
+            intent_result: next_intent_result,
+            continuation_messages: next_continuation_messages,
+            task_run_id: next_task_run_id,
+            remaining_tool_calls: next_remaining_tool_calls,
+            protocol_correction_rounds: next_protocol_correction_rounds,
+            parameter_correction_rounds: next_parameter_correction_rounds,
+            failed_read_signatures: next_failed_read_signatures,
+            seen_tool_call_ids: next_seen_tool_call_ids,
+            tool_loop_state: next_tool_loop_state,
+            turn_state: next_turn_state,
+            current_doc_prompt_coverage: next_current_doc_prompt_coverage,
+            current_doc_requires_tool_read: next_current_doc_requires_tool_read,
+            current_doc_read_confirmed: next_current_doc_read_confirmed,
+            any_tool_called: next_any_tool_called,
+            proposed_diff: next_proposed_diff,
+            edit_blocked_reported: next_edit_blocked_reported,
+            final_prompt_audit: next_final_prompt_audit,
+            capability_use_tracker: next_capability_use_tracker,
+            prompt_package: next_prompt_package,
+            agent_context_facts: next_agent_context_facts,
+        } = outcome;
+        messages = next_messages;
+        tools = next_tools;
+        capability_factors = next_capability_factors;
+        read_ctx = next_read_ctx;
+        active_snapshot = next_active_snapshot;
+        intent_result = next_intent_result;
+        continuation_messages = next_continuation_messages;
+        task_run_id = next_task_run_id;
+        remaining_tool_calls = next_remaining_tool_calls;
+        protocol_correction_rounds = next_protocol_correction_rounds;
+        parameter_correction_rounds = next_parameter_correction_rounds;
+        failed_read_signatures = next_failed_read_signatures;
+        seen_tool_call_ids = next_seen_tool_call_ids;
+        tool_loop_state = next_tool_loop_state;
+        turn_state = next_turn_state;
+        current_doc_prompt_coverage = next_current_doc_prompt_coverage;
+        current_doc_requires_tool_read = next_current_doc_requires_tool_read;
+        current_doc_read_confirmed = next_current_doc_read_confirmed;
+        any_tool_called = next_any_tool_called;
+        proposed_diff = next_proposed_diff;
+        edit_blocked_reported = next_edit_blocked_reported;
+        final_prompt_audit = next_final_prompt_audit;
+        capability_use_tracker = next_capability_use_tracker;
+        prompt_package = next_prompt_package;
+        agent_context_facts = next_agent_context_facts;
     }
 
     debug_assert!(false, "每个 provider 结果都应在循环内部返回或推进");
