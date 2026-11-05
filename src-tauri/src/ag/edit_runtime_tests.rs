@@ -232,7 +232,7 @@ fn explicit_block_ops_requires_base_and_non_empty_operations() {
 
 // covers: BR-AG-STATE-002
 // covers: BR-AG-DATA-010
-// P5（AG-R2-01）：block_ops 锚点矛盾校验——同一锚点被 insert_before 与 insert_after 同时引用 → 拒绝。
+// P5（AG-R2-01）：同一锚点只允许一个插入方向；同向多插入是合法能力，不得误判为锚点矛盾。
 #[test]
 fn block_ops_rejects_conflicting_anchor_usage() {
     let ok = resolve_agent_edit_operation(
@@ -249,6 +249,22 @@ fn block_ops_rejects_conflicting_anchor_usage() {
     )
     .unwrap();
     assert_eq!(ok, AgentEditOperation::BlockOps);
+
+    // 同一锚点的同向连续插入必须放行（顺序由 operations 数组保证，分组由 split 合并）。
+    let same_direction = resolve_agent_edit_operation(
+        &json!({
+            "path": "notes/a.docx",
+            "operation": "block_ops",
+            "base": { "sessionVersion": 1, "contentHash": "h1" },
+            "operations": [
+                { "op": "insert_after", "blockId": "anchor-y", "afterNode": { "type": "paragraph" } },
+                { "op": "insert_after", "blockId": "anchor-y", "afterNode": { "type": "paragraph" } }
+            ]
+        }),
+        true,
+    )
+    .unwrap();
+    assert_eq!(same_direction, AgentEditOperation::BlockOps);
 
     let err = resolve_agent_edit_operation(
         &json!({
@@ -286,39 +302,7 @@ fn block_ops_target_existence_distinguishes_replace_document() {
 }
 
 // covers: BR-AG-DATA-005
-// covers: BR-AG-DATA-010
-// 单次调用上限：只有超过单回合卡预算才拒绝，并给出可执行拆分区间。
-#[test]
-fn block_ops_rejects_oversized_batch() {
-    let mut operations = Vec::new();
-    for i in 0..=MAX_BLOCK_OPS_PER_CALL {
-        operations.push(serde_json::json!({
-            "op": "replace_node",
-            "blockId": format!("p-{i}"),
-            "fingerprint": "fp",
-            "expectedNodeType": "paragraph",
-            "afterNode": { "type": "paragraph" }
-        }));
-    }
-    let err = resolve_agent_edit_operation(
-        &json!({
-            "path": "notes/a.docx",
-            "operation": "block_ops",
-            "base": { "sessionVersion": 1, "contentHash": "h1" },
-            "operations": operations
-        }),
-        true,
-    )
-    .unwrap_err();
-    assert_eq!(err.code, "AG_TOOL_ARG");
-    // 拒绝必须给出可执行的拆分计划，而不是只报"超限"。
-    assert!(err.message.contains("adjudicationGroup"));
-    assert!(err.message.contains(&format!("1–{MAX_BLOCK_OPS_PER_CALL}")));
-    assert!(err.message.contains("append"));
-}
-
-// covers: BR-AG-DATA-005
-// 一章 90 块不再被退回：单次上限放行，落卡时按每 64 个自动拆成两张卡。
+// 一章 90 块不再被退回：单次调用不设操作总数上限，落卡时按每 64 个自动拆卡。
 #[test]
 fn block_ops_accepts_long_chapter_within_single_call_cap() {
     let mut operations = Vec::new();
@@ -339,36 +323,6 @@ fn block_ops_accepts_long_chapter_within_single_call_cap() {
     )
     .unwrap();
     assert_eq!(resolved, AgentEditOperation::BlockOps);
-}
-
-// covers: BR-AG-DATA-005
-// covers: BR-AG-DATA-010
-// 数量在限内但序列化载荷超限时同样拒绝：字节才是真正的上下文预算。
-#[test]
-fn block_ops_rejects_oversized_serialized_payload() {
-    let mut operations = Vec::new();
-    // 远小于数量上限，但单块正文足够大，序列化后超过字节上限。
-    for i in 0..8 {
-        operations.push(serde_json::json!({
-            "op": "replace_node",
-            "blockId": format!("p-{i}"),
-            "fingerprint": "fp",
-            "expectedNodeType": "paragraph",
-            "afterNode": { "type": "paragraph", "text": "文".repeat(MAX_BLOCK_OPS_BYTES_PER_BATCH / 4) }
-        }));
-    }
-    let err = resolve_agent_edit_operation(
-        &json!({
-            "path": "notes/a.docx",
-            "operation": "block_ops",
-            "base": { "sessionVersion": 1, "contentHash": "h1" },
-            "operations": operations
-        }),
-        true,
-    )
-    .unwrap_err();
-    assert_eq!(err.code, "AG_TOOL_ARG");
-    assert!(err.message.contains("字节"));
 }
 
 #[test]

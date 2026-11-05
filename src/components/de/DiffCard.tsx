@@ -33,6 +33,9 @@ function statusText(diff: DiffView, locateFailed: boolean): { text: string; tone
   if (diff.state === "pending" && diff.draftPreviewState === "queued") {
     return { text: "待确认建议已生成，正在等待编辑器预览；尚未写入文件", tone: "muted" };
   }
+  if (diff.state === "pending" && diff.readonly) {
+    return { text: "历史回合的待裁决建议，仅可回看，不可裁决", tone: "muted" };
+  }
   if (diff.state === "pending" && diff.draftPreviewState === "applied") {
     return { text: "编辑器预览已显示；接受将确认，保存后才写入文件", tone: "warn" };
   }

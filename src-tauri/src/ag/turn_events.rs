@@ -35,13 +35,6 @@ fn audit_metadata_level(payload: &Value, include_containers: bool) -> Value {
         "contextRevision",
         "deduplicatedCount",
         "gateAttempt",
-        "remainingToolCalls",
-        "maxModelCalls",
-        "maxToolCalls",
-        "maxCorrections",
-        "finalReserve",
-        "remainingModelCalls",
-        "budgetClosing",
         "protocolDiagnostic",
         "reasonCode",
         "fieldPath",
@@ -581,57 +574,6 @@ impl<'a> TurnEventEmitter<'a> {
             .map_err(|_| IpcError::new("WS_DB_BUSY", "无法核对计划回执", true, false))?;
         conn.query_row("SELECT EXISTS(SELECT 1 FROM agent_turn_events WHERE turn_id=?1 AND kind='tool_result' AND json_extract(payload_json,'$.toolName')='plan_workspace_operation' AND json_extract(payload_json,'$.success')=1)", [self.turn_id], |row| row.get(0)).map_err(event_db_error)
     }
-    pub(super) fn execution_policy(
-        &self,
-    ) -> Result<ag::tool_registry::ExecutionBudgetPolicy, IpcError> {
-        let conn = self
-            .state
-            .db
-            .lock()
-            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取冻结执行策略", true, false))?;
-        let saved: Option<String> = conn.query_row(
-            "SELECT payload_json FROM agent_turn_events WHERE turn_id=?1 AND kind='execution_budget_frozen' ORDER BY seq LIMIT 1",
-            [self.turn_id], |row| row.get(0),
-        ).optional().map_err(event_db_error)?;
-        let policy = match saved {
-            Some(saved) => serde_json::from_str(&saved).map_err(event_db_error)?,
-            None => ag::tool_registry::configured_execution_policy(),
-        };
-        if !policy.valid() {
-            return Err(IpcError::new(
-                "AG_EXECUTION_POLICY_INVALID",
-                "冻结执行策略无效，未执行",
-                false,
-                false,
-            ));
-        }
-        Ok(policy)
-    }
-
-    pub(super) fn freeze_execution_policy(&self) -> Result<(), IpcError> {
-        let policy = self.execution_policy()?;
-        let exists = {
-            let conn = self
-                .state
-                .db
-                .lock()
-                .map_err(|_| IpcError::new("WS_DB_BUSY", "无法核验执行策略", true, false))?;
-            conn.query_row("SELECT COUNT(*) FROM agent_turn_events WHERE turn_id=?1 AND kind='execution_budget_frozen'", [self.turn_id], |row| row.get::<_, i64>(0)).map_err(event_db_error)? > 0
-        };
-        if !exists {
-            let policy = if self.protocol_attempt_counts()?.0 > 0 {
-                ag::tool_registry::ExecutionBudgetPolicy::legacy()
-            } else {
-                policy
-            };
-            self.record_internal(
-                "execution_budget_frozen",
-                serde_json::to_value(policy).map_err(event_db_error)?,
-            )?;
-        }
-        Ok(())
-    }
-
     pub(super) fn frozen_transport_protocol(&self) -> Result<Option<String>, IpcError> {
         let conn = self
             .state
@@ -657,7 +599,7 @@ impl<'a> TurnEventEmitter<'a> {
 
     pub(super) fn freeze_transport_protocol(&self) -> Result<(), IpcError> {
         if self.frozen_transport_protocol()?.is_none() {
-            let version = if self.protocol_attempt_counts()?.0 == 0 {
+            let version = if self.protocol_attempt_counts()? == 0 {
                 "native-business-tool-v1"
             } else {
                 "legacy-tool-control-v1"
@@ -669,38 +611,18 @@ impl<'a> TurnEventEmitter<'a> {
         }
         Ok(())
     }
-    /// Recover budgets from actual invocation/rejection facts, including text-only rounds and
+    /// Count actual provider invocations from persisted facts, including text-only rounds and
     /// attempts before a clarification/decision checkpoint. No prompt or response text is read.
-    pub(super) fn protocol_attempt_counts(&self) -> Result<(usize, usize), IpcError> {
+    pub(super) fn protocol_attempt_counts(&self) -> Result<usize, IpcError> {
         let conn = self
             .state
             .db
             .lock()
-            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取回合调用预算", true, false))?;
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取回合调用次数", true, false))?;
         conn.query_row(
-            "SELECT COALESCE(SUM(kind='provider_started'),0), \
-             COALESCE(SUM(kind IN ('model_control_rejected','tool_parameter_contract_rejected')),0) \
-             FROM agent_turn_events WHERE turn_id=?1",
+            "SELECT COALESCE(SUM(kind='provider_started'),0) FROM agent_turn_events WHERE turn_id=?1",
             [self.turn_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(event_db_error)
-    }
-
-    /// Persisted per-category correction counts survive decision and clarification resumes.
-    /// A recoverable parameter mistake must not consume the separate control-envelope budget.
-    pub(super) fn correction_attempt_breakdown(&self) -> Result<(usize, usize), IpcError> {
-        let conn = self
-            .state
-            .db
-            .lock()
-            .map_err(|_| IpcError::new("WS_DB_BUSY", "无法读取回合纠错预算", true, false))?;
-        conn.query_row(
-            "SELECT COALESCE(SUM(kind='model_control_rejected'),0), \
-             COALESCE(SUM(kind='tool_parameter_contract_rejected'),0) \
-             FROM agent_turn_events WHERE turn_id=?1",
-            [self.turn_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )
         .map_err(event_db_error)
     }
@@ -1598,49 +1520,25 @@ mod tests {
 
     // covers: BR-AG-STATE-001, BR-AG-STATE-002, BR-SYS-STATE-007
     #[test]
-    fn execution_policy_and_attempts_survive_recreation_and_configuration_change() {
+    fn transport_protocol_and_attempts_survive_recreation() {
         let state = AppState {
             db: Arc::new(Mutex::new(fresh_turn())),
             registry: build_registry(),
             assist_terminals: Arc::new(Mutex::new(HashMap::new())),
             active_agent_turns: Arc::new(Mutex::new(HashMap::new())),
         };
-        let policy = ag::tool_registry::ExecutionBudgetPolicy {
-            max_model_calls: 4,
-            max_tool_calls: 3,
-            max_corrections: 1,
-            final_reserve: 1,
-        };
-        tauri::async_runtime::block_on(ag::tool_registry::with_verification_execution_policy(
-            policy,
-            async {
-                let emitter = TurnEventEmitter::without_channel(&state, "t1");
-                emitter.freeze_execution_policy().unwrap();
-                emitter.freeze_transport_protocol().unwrap();
-                emitter
-                    .record_internal("provider_started", serde_json::json!({"roundIndex":1}))
-                    .unwrap();
-                emitter
-                    .record_internal(
-                        "model_control_rejected",
-                        serde_json::json!({"code":"AG_MODEL_CONTROL_INVALID"}),
-                    )
-                    .unwrap();
-            },
-        ));
         let emitter = TurnEventEmitter::without_channel(&state, "t1");
-        assert_eq!(
-            ag::tool_registry::configured_execution_policy(),
-            Default::default()
-        );
-        emitter.freeze_execution_policy().unwrap();
+        emitter.freeze_transport_protocol().unwrap();
+        emitter
+            .record_internal("provider_started", serde_json::json!({"roundIndex":1}))
+            .unwrap();
+        let emitter = TurnEventEmitter::without_channel(&state, "t1");
         emitter.freeze_transport_protocol().unwrap();
         assert_eq!(
             emitter.frozen_transport_protocol().unwrap().as_deref(),
             Some("native-business-tool-v1")
         );
-        assert_eq!(emitter.execution_policy().unwrap(), policy);
-        assert_eq!(emitter.protocol_attempt_counts().unwrap(), (1, 1));
+        assert_eq!(emitter.protocol_attempt_counts().unwrap(), 1);
         assert_eq!(
             state
                 .db
@@ -1648,19 +1546,6 @@ mod tests {
                 .unwrap()
                 .query_row(
                     "SELECT COUNT(*) FROM agent_turn_events WHERE kind='transport_protocol_frozen'",
-                    [],
-                    |row| row.get::<_, i64>(0)
-                )
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            state
-                .db
-                .lock()
-                .unwrap()
-                .query_row(
-                    "SELECT COUNT(*) FROM agent_turn_events WHERE kind='execution_budget_frozen'",
                     [],
                     |row| row.get::<_, i64>(0)
                 )
@@ -1783,12 +1668,12 @@ mod tests {
             let service_limits = audit_metadata(&serde_json::json!({
                 "requestedMaxTokens": 16384,
                 "roundDeadlineMs": 1200000,
-                "streamIdleDeadlineMs": 90000,
+                "streamIdleDeadlineMs": 300000,
                 "rawPrompt": "PRIVATE",
             }));
             assert_eq!(service_limits["requestedMaxTokens"], 16384);
             assert_eq!(service_limits["roundDeadlineMs"], 1200000);
-            assert_eq!(service_limits["streamIdleDeadlineMs"], 90000);
+            assert_eq!(service_limits["streamIdleDeadlineMs"], 300000);
             assert!(!service_limits.to_string().contains("PRIVATE"));
             let sensitive = serde_json::json!({
                 "text":"PRIVATE", "message":"PRIVATE", "content":"PRIVATE", "params":{"path":"PRIVATE"},
@@ -1833,7 +1718,7 @@ mod tests {
                 TurnEventEmitter::without_channel(&state, "t1")
                     .protocol_attempt_counts()
                     .unwrap(),
-                (index + 1, index + 1)
+                index + 1
             );
             let audit = audit_metadata(&serde_json::json!({
                 "prefixKind":"plain_text","rejectionStage":"response_completion","correctionAttempt":index+1,

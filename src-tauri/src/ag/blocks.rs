@@ -223,7 +223,7 @@ impl AgentReadContext {
                     return Err(IpcError::new(
                         "AG_CONTEXT_RESOURCE_UNAVAILABLE",
                         &format!(
-                            "文档 {path} 的逻辑态尚不可用（{}），请就绪后重新提交；未读取磁盘副本",
+                            "文档 {path} 的逻辑态尚不可用（{}）；请缩小目标或先使目标就绪，未读取磁盘副本。不要用全量分页硬扛。",
                             resource
                                 .reason_code
                                 .as_deref()

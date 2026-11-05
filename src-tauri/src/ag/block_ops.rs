@@ -10,9 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-// 单次调用可携带的操作数上限来自运行时单一来源；每张卡的切分上限另由
-// `edit_support::MAX_BLOCK_OPS_PER_BATCH` 负责，二者不得再各自写死数字。
-const MAX_OPERATIONS: usize = crate::ag::edit_support::MAX_BLOCK_OPS_PER_CALL;
+// 单张裁决卡的切分与载荷上限由 `edit_support` 的单一来源负责。
 const MAX_TEXT_UTF16: usize = 200_000;
 const WRITABLE_NODE_TYPES: &[&str] = &["paragraph", "heading", "codeBlock"];
 const INLINE_NODE_TYPES: &[&str] = &["text", "hardBreak"];
@@ -343,10 +341,8 @@ pub fn validate_and_build(
             .ok_or_else(|| invalid("operation=block_ops 必须提供 operations"))?,
     )
     .map_err(|error| invalid(format!("operations 无效: {error}")))?;
-    if requested.is_empty() || requested.len() > MAX_OPERATIONS {
-        return Err(invalid(format!(
-            "operations 数量必须为 1..={MAX_OPERATIONS}"
-        )));
+    if requested.is_empty() {
+        return Err(invalid("operations 数量必须至少为 1".to_string()));
     }
     let mut seen = BTreeSet::new();
     let mut canonical = Vec::with_capacity(requested.len());
@@ -584,6 +580,14 @@ pub fn validate_and_build(
  * term_ref: TERM-DE-005
  * boundary: in=CanonicalStructuredBlockEditPayloadAndStableDocumentOrder | out=IndependentAdjudicationGroupPayloads(stableOrderAndSharedBase) | effect=none
  */
+/**
+ * @GOV
+ * codes:    BR-AG-DATA-010-GUARD-AG-AG-TOOL-061
+ * type:     GUARD
+ * chain:    AG-TOOL
+ * rules:    BR-AG-DATA-010
+ * boundary: in=CanonicalBlockOperationsAndCurrentSnapshot | out=OrderedAdjudicationCardsEachWithinOperationAndSerializedByteCeilingOrIpcError | does_not=truncateReorderOrSilentlyDropOperations
+ */
 pub fn split_adjudication_groups(
     payload: &StructuredBlockEditPayload,
     snapshot: &AgentEditableSnapshot,
@@ -615,6 +619,10 @@ pub fn split_adjudication_groups(
     ordered.sort_by_key(|(position, source_index, _)| (*position, *source_index));
 
     let mut groups: Vec<Vec<(usize, StructuredBlockOperation)>> = Vec::new();
+    // 同一锚点的操作必须落在同一裁决组：同坐标插入只有在同一张卡内才能按 operations 顺序落位。
+    let mut anchor_groups: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut implicit_anchor: Option<String> = None;
     for (position, _, operation) in ordered {
         let group_name = operation
             .adjudication_group
@@ -622,7 +630,10 @@ pub fn split_adjudication_groups(
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_string);
+        let anchor = operation.block_id.trim().to_string();
+        let group_index;
         if let Some(name) = group_name.as_deref() {
+            implicit_anchor = None;
             if let Some(existing_index) = groups.iter().position(|group| {
                 group
                     .first()
@@ -632,7 +643,7 @@ pub fn split_adjudication_groups(
                 if existing_index + 1 != groups.len() {
                     return Err(IpcError::new(
                         "DE_INVALID_ADJUDICATION_GROUP",
-                        "adjudication_group 不能跨过其他独立裁决组",
+                        "adjudication_group 不能跨过其他独立裁决组：同组操作必须在文档中连续。请按文档顺序排列 operations，或去掉该组名让同一锚点的操作自动合并",
                         false,
                         false,
                     ));
@@ -645,29 +656,75 @@ pub fn split_adjudication_groups(
                 if position > previous.saturating_add(1) {
                     return Err(IpcError::new(
                         "DE_INVALID_ADJUDICATION_GROUP",
-                        "adjudication_group 只能合并文档顺序相邻的内容块",
+                        &format!(
+                            "adjudication_group 只能合并文档顺序相邻的块：组内前一操作位于文档位置 {previous}，当前操作位于 {position}，中间跨越其他块。请让同组操作在文档中连续；若要在同一位置连续插入多段，请让这些操作共享同一锚点（insert_before 或 insert_after 二选一），append 只落在文档末尾、不能与中部块同组"
+                        ),
                         false,
                         false,
                     ));
                 }
                 existing.push((position, operation));
-                continue;
+                group_index = existing_index;
+            } else {
+                groups.push(vec![(position, operation)]);
+                group_index = groups.len() - 1;
+            }
+        } else if !anchor.is_empty() && implicit_anchor.as_deref() == Some(anchor.as_str()) {
+            groups
+                .last_mut()
+                .expect("implicit anchor group exists")
+                .push((position, operation));
+            group_index = groups.len() - 1;
+        } else {
+            groups.push(vec![(position, operation)]);
+            group_index = groups.len() - 1;
+            implicit_anchor = (!anchor.is_empty()).then(|| anchor.clone());
+        }
+        if !anchor.is_empty() {
+            match anchor_groups.get(&anchor) {
+                Some(existing) if *existing != group_index => {
+                    return Err(IpcError::new(
+                        "DE_INVALID_ADJUDICATION_GROUP",
+                        "同一锚点的操作必须在同一裁决组；请去掉拆分该锚点的显式 adjudicationGroup",
+                        false,
+                        false,
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    anchor_groups.insert(anchor.clone(), group_index);
+                }
             }
         }
-        groups.push(vec![(position, operation)]);
     }
 
-    // 裁决粒度按设计保持"每块独立成卡"：显式 adjudication_group 才合并为一张卡。
-    // 单次调用上限已放宽到单回合卡预算，章节较长时不再整批退回。
-    let chunked = groups;
-    Ok(chunked
-        .into_iter()
-        .map(|group| StructuredBlockEditPayload {
-            payload_version: payload.payload_version,
-            base: payload.base.clone(),
-            operations: group.into_iter().map(|(_, operation)| operation).collect(),
-        })
-        .collect())
+    // 未显式分组的裁决粒度：同一锚点的 replace/delete/insert 合成一张卡（保证顺序）；
+    // 不同锚点仍逐块成卡；append 无锚点，保持逐块。
+    let mut payloads = Vec::new();
+    for group in groups {
+        for chunk in group.chunks(crate::ag::edit_support::MAX_BLOCK_OPS_PER_BATCH) {
+            // 单张裁决卡只能承载一页操作；超出的操作自动进入下一张卡，调用本身不设总量上限。
+            let operations = chunk
+                .iter()
+                .map(|(_, operation)| operation.clone())
+                .collect::<Vec<_>>();
+            let bytes = serde_json::to_string(&operations)
+                .map_err(|error| invalid(format!("结构化块载荷序列化失败: {error}")))?
+                .len();
+            if bytes > crate::ag::edit_support::MAX_BLOCK_OPS_BYTES_PER_BATCH {
+                return Err(invalid(format!(
+                    "operation=block_ops 单批序列化载荷 {bytes} 字节超过上限 {} 字节；请减少单批内容或分批提交",
+                    crate::ag::edit_support::MAX_BLOCK_OPS_BYTES_PER_BATCH
+                )));
+            }
+            payloads.push(StructuredBlockEditPayload {
+                payload_version: payload.payload_version,
+                base: payload.base.clone(),
+                operations,
+            });
+        }
+    }
+    Ok(payloads)
 }
 
 pub fn node_text(value: &Value) -> String {
@@ -812,6 +869,38 @@ mod tests {
         .unwrap();
         let error = split_adjudication_groups(&payload, &current).unwrap_err();
         assert_eq!(error.code, "DE_INVALID_ADJUDICATION_GROUP");
+        // 错误必须可执行：说明同组必须连续，并给出替代写法。
+        assert!(error.message.contains("不能跨过其他独立裁决组"));
+        assert!(error.message.contains("按文档顺序"));
+    }
+
+    // covers: BR-AG-DATA-010
+    // 中部 replace 与文末 append 不能放入同一裁决组：位置不相邻时必须报出位置并给出替代写法。
+    #[test]
+    fn non_adjacent_group_between_mid_block_and_append_is_rejected_with_guidance() {
+        let current = three_block_snapshot();
+        let payload = validate_and_build(
+            &serde_json::json!({
+                "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+                "operations": [
+                    {"op": "replace_node", "blockId": "p-0", "fingerprint": "fp-0",
+                     "expectedNodeType": "paragraph", "adjudicationGroup": "chapter",
+                     "afterNode": {"type": "paragraph",
+                                   "attrs": {"blockId": "p-0", "textAlign": null},
+                                   "content": [{"type": "text", "text": "改"}]}},
+                    {"op": "append", "adjudicationGroup": "chapter",
+                     "afterNode": {"type": "paragraph",
+                                   "content": [{"type": "text", "text": "末尾"}]}}
+                ]
+            }),
+            &current,
+        )
+        .unwrap_or_else(|error| panic!("validate failed: {} {}", error.code, error.message));
+        let error = split_adjudication_groups(&payload, &current).unwrap_err();
+        assert_eq!(error.code, "DE_INVALID_ADJUDICATION_GROUP");
+        assert!(error.message.contains("文档位置"));
+        assert!(error.message.contains("共享同一锚点"));
+        assert!(error.message.contains("append 只落在文档末尾"));
     }
 
     #[test]
@@ -993,7 +1082,80 @@ mod tests {
         });
         let canonical = validate_and_build(&grouped, &current).unwrap();
         let groups = split_adjudication_groups(&canonical, &current).unwrap();
-        assert_eq!(groups.len(), 1, "同一章显式分组后合成一张卡");
-        assert_eq!(groups[0].operations.len(), 90);
+        assert_eq!(groups.len(), 2, "同一章超过单卡 64 操作后自动拆成两张卡");
+        assert_eq!(groups[0].operations.len(), 64);
+        assert_eq!(groups[1].operations.len(), 26);
+        let total = groups.iter().map(|group| group.operations.len()).sum::<usize>();
+        assert_eq!(total, 90, "自动拆卡不得丢弃操作");
+    }
+
+    // covers: BR-AG-DATA-010
+    // 单张卡片的序列化载荷仍有 64KB 硬边界；调用总量不设上限。
+    #[test]
+    fn single_card_payload_over_64kb_is_rejected() {
+        let current = three_block_snapshot();
+        let params = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": [{
+                "op": "append",
+                "adjudicationGroup": "巨型段落",
+                "afterNode": {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "文".repeat(70_000)}]
+                }
+            }]
+        });
+        let canonical = validate_and_build(&params, &current).unwrap();
+        let error = split_adjudication_groups(&canonical, &current).unwrap_err();
+        assert_eq!(error.code, "AG_BLOCK_OPERATION_INVALID");
+        assert!(error.message.contains("字节"));
+    }
+
+    // covers: BR-AG-DATA-010
+    // 同一锚点的连续插入必须合成一张卡并保持 operations 顺序（P5 收窄后的合法能力）。
+    #[test]
+    fn same_anchor_inserts_share_one_group_in_source_order() {
+        let current = three_block_snapshot();
+        let insert = |index: usize| {
+            serde_json::json!({
+                "op": "insert_after",
+                "blockId": "p-1",
+                "afterNode": {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": format!("新段 {index}")}]
+                }
+            })
+        };
+        let params = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": (0..3).map(insert).collect::<Vec<_>>()
+        });
+        let canonical = validate_and_build(&params, &current).unwrap();
+        let groups = split_adjudication_groups(&canonical, &current).unwrap();
+        assert_eq!(groups.len(), 1, "同一锚点的插入应在同一张卡内");
+        assert_eq!(groups[0].operations.len(), 3);
+        assert_eq!(
+            groups[0]
+                .operations
+                .iter()
+                .map(|operation| node_text(&operation.after_node))
+                .collect::<Vec<_>>(),
+            vec!["新段 0", "新段 1", "新段 2"],
+            "同卡内必须保持 operations 顺序"
+        );
+
+        // 同一锚点被显式拆进不同裁决组 → 拒绝，否则跨卡顺序不可控。
+        let split = serde_json::json!({
+            "base": {"sessionVersion": 7, "contentHash": "base-hash"},
+            "operations": [
+                {"op": "insert_after", "blockId": "p-1", "adjudicationGroup": "a",
+                 "afterNode": {"type": "paragraph", "content": [{"type": "text", "text": "甲"}]}},
+                {"op": "insert_after", "blockId": "p-1", "adjudicationGroup": "b",
+                 "afterNode": {"type": "paragraph", "content": [{"type": "text", "text": "乙"}]}}
+            ]
+        });
+        let canonical = validate_and_build(&split, &current).unwrap();
+        let error = split_adjudication_groups(&canonical, &current).unwrap_err();
+        assert_eq!(error.code, "DE_INVALID_ADJUDICATION_GROUP");
     }
 }

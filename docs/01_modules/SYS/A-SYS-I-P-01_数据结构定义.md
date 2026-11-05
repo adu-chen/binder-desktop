@@ -270,7 +270,7 @@ REQ-SYS-002（L1）→ 本文（共享数据结构 SSOT）→ REQ_MAP → RULE/C
 | base_content_hash | 生成时内容哈希 | 已打开文档必填；同一文档同批结构化卡必须相同；未打开文档可使用 DiskState baseline |
 | style_ops / block_ops / table_ops / image_ops | 可空的类型化操作载荷 | 与 patch_kind 对应的字段必填；执行与详细 Diff 的唯一真值 |
 | proposal_batch_id / group_index / group_count | ProposalBatch 身份与卡片稳定顺序 | 新载荷必填；每卡独立裁决，三字段不得藏入自由形状 JSON |
-| preview_checkpoint_required | 是否要求编辑器预览回执 | true 时必须完成预览检查点后才能续片段 |
+| preview_checkpoint_required | 是否要求编辑器预览回执 | true 时只要求技术预览回执；回执不启动/恢复 TaskRun，不作为用户接受/保存或任务继续条件 |
 | cross_doc | 是否跨文档提案 | 可空兼容旧载荷；新载荷应显式给出 |
 
 > 边界：DiffProjection 是跨 AG/DE/ED 的最小互操作载荷。`draft_mode=open_session` 时，
@@ -376,7 +376,7 @@ TaskRun/TaskPlan/TaskStep 是复杂目标的 TurnEvent 派生投影，不是调�
 CapabilityGrant、执行游标或“执行下一步”命令，不自动启动候选工作、不自动重试、不跨重启续跑、不越过
 确认点；“工作中”只能由真实 provider、工具或领域事件驱动，等待补充、卡片 pending、失败、取消或中断
 不得伪装为执行。简单 AgentTurn 不创建空 TaskRun/TaskPlan。
-同文档连续 Proposal 必须以最新 LogicalState 为基准接力：前卡因基准推进失效且不可再接受/拒绝，不形成
+同文档连续 Proposal 以最新 LogicalState 为基准接力：后预览不自动失效前批 pending 卡，多卡并存、接受/拒绝时按各自 base 校验，不形成
 补丁栈或任务级回滚；无 LogicalState 的 background pending Proposal 必须先迁移（BR-CORE-STATE-003）或
 依 BR-CORE-STATE-002 完成背景分流裁决后才可继续。
 
@@ -432,7 +432,7 @@ data-only/只读投影，不构成 CapabilityGrant、ExplicitEditTargetSet、Tas
 | nextAction | none / await_user / respond_blocked / retry_explicitly / inspect_effect；可重试不构成自动重放许可 |
 
 成功读取为 succeeded/completed/not_applicable；成功阻断报告为 succeeded/blocked/not_applicable；
-创建 DecisionRequest 为 succeeded/waiting/not_started；生成 PendingDiff 为 succeeded/waiting/proposal_created；
+创建 DecisionRequest 为 succeeded/waiting/not_started；生成 PendingDiff（propose_edit 或 write_content）为 succeeded/waiting/proposal_created；
 受控资源准备为 succeeded/completed/resource_prepared，不代表文档已保存。执行前拒绝为 rejected/blocked/not_started。
 有副作用的执行器失败时效果 unknown，下一步 inspect_effect，禁止自动重放；只读失败不具备写效果。
 上述效果是本次调用观察值，不覆盖 PendingDiff.status/effect_status、编辑器预览、裁决或 DiskState。
@@ -446,7 +446,9 @@ ToolResult 加法字段 `executionReceipt` 可空：旧事件无此字段按原�
 含 identity（与 ToolCallReceiptIdentityV1 相同）、phase=started/settled、receipt（started 为 null，
 settled 为同一安全回执）。启动与结算各追加一次，存既有 agent_turn_payloads 的保留 `ag-effect:`
 命名空间，不修改回合展示缓存、不新增表/迁移，不向模型或 TurnEvent 终态后追加结果。
-启动记录是已保留执行身份，不等于业务成功；结算失败或缺失时不得重放。历史 `ag.list_turns`
+启动记录是已保留执行身份，不等于业务成功；结算失败或缺失时不得重放。
+已结算 `unknown` 且引用 `pending_diff` 的事实，可在后续核对中收敛：diff 为 accepted+saved 或 rejected/expired
+视为已解决；pending/awaiting_save 仍阻断新写入。该收敛只释放写入守卫，不改写原回执或终态。历史 `ag.list_turns`
 回合 DTO 加法字段 execution_facts 返回同 workspace/session/turn 的效果事实；旧服务无字段视为空，
 不能视为已经核对成功。结算仅引用实际 DecisionRequest/PendingDiff，不存正文，不表示接受/保存。
 运行核心的取消/30 秒等待期限与能力结算独立：已开始的同步操作不能强杀；原回合终态保持，迟到结果
@@ -483,6 +485,13 @@ AgentTurnPayload.failure 可携可选 `diagnostic`，旧数据缺字段合法。
 | snapshot | ready 必填既有文档事实 `{source,editFormat,contentFormat,dirty,baseline,sessionVersion,contentHash}`；其他状态必须为空，不伪造 0 版本或空 hash |
 | selections | 用户显式 SelectionFact；每项关联 `relPath/blockId/start/end`、`validation=unverified/valid/stale`、`contextRevision`；valid 必须有同版本快照，其他状态不能成为编辑锚 |
 | proposalFacts | 沿用 v1 专业对象事实字段，必须属于本 session；不携正文，不改变 DE 状态 |
+| currentDocument | 可选加法事实；仅在 activeTarget 有 ready 快照时出现，`{relPath,sessionVersion,contentHash,dirty}` 由后端从 activeTarget + 快照派生。客户端可声明但必须与派生值一致，否则失败关闭；无 ready 快照为 null，不得伪造版本 |
+| pendingPreviews | 可选加法事实（≤20 条）；单卡 `{diffId,relPath,baseVersion,baseContentHash,createdBlockIds,state,taskRunId?}`，`state=previewed/accepted/saved`。`previewed` 只来自宿主已确认的草稿应用（`draftApplied` 或 `draftPreviewState=applied`），表示已写入当前 LogicalState、仅待裁决，不是“未生效”；`accepted` 表示已裁决但可能未保存；`saved` 表示已落盘。`createdBlockIds` 每条 ≤32 个、仅来自 block_ops 插入操作；不携正文，不授予编辑/保存权限 |
+
+`currentDocument` 与 `pendingPreviews` 是 v2 的向后兼容加法字段：旧载荷缺省为 null/空数组，前后端
+必须同时支持后才写入；字段只增加事实，不改变 v1 解释、不扩 CapabilityGrant 或 ExplicitEditTargetSet。
+后端只校验形状、归属、上限与 `previewed` 的 ready 快照一致性，不读取编辑器正文，因此不能替宿主证明
+块真实存在；`previewed` 的块存在性由宿主在提交事实前确认。
 
 `OpenDocSnapshot` 正文与结构仍是单独对象；ready 的元数据必须与实际快照一致。availability 仅描述
 采集结果，不代表所有格式操作可执行；结构化编辑仍须专业格式与 Block 守卫。活动目标存在时必须出现在
@@ -731,6 +740,9 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-31 | v1.25 | PI-AG-CONTINUATION-13：连续 Proposal 改为多卡并存，后预览不自动失效前卡；实际基线冲突在裁决/保存时失败并保留卡片。 |
+| 2026-10-31 | v1.24 | PI-AG-EFFECT-12：write_content 生成 PendingDiff 时回执为 succeeded/waiting/proposal_created；已结算 unknown 的 pending_diff 可经 accepted+saved 或 rejected/expired 收敛，避免永久阻断写入；无迁移。 |
+| 2026-10-31 | v1.23 | PI-AG-CTX-FACTS-07：§3.1.1 增 currentDocument 与 pendingPreviews 加法事实（预览三态 previewed/accepted/saved、createdBlockIds、base 与上限）；previewed 只来自宿主已确认的草稿应用，不授予编辑/保存权限；旧载荷缺省兼容，无 schema 迁移。 |
 | 2026-10-08 | v1.22 | ToolCallReceiptV1 增实际资源执行结算 resource_executed 和 workspace_operation_plan 引用，仅源自 Completed WorkspaceOperationReceipt，不代表编辑接受/保存；无 schema 迁移或新权限。 |
 | 2026-10-07 | v1.21 | 增 CapabilityExecutionFactV1 started/settled 事实与既有 payload 命名空间契约；迟到效果独立于回合终态，未结算/未知效果禁止删除与盲目重放；无迁移或新授权。 |
 | 2026-10-07 | v1.20 | P10：登记不可变 ToolCallReceiptV1 执行/完成/效果分离契约，模型回注与安全事件同源；只引用既有等待或修改对象，不替代裁决、接受、保存真值，不新增迁移或授权。 |

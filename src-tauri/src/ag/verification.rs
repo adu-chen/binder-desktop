@@ -111,7 +111,6 @@ impl Gateway {
                                 if scenario == "read-failure-clarification"
                                     || scenario == "repeated-oversized-read"
                                     || scenario == "repeated-read-tools-blocked"
-                                    || scenario == "execution-budget-wrap"
                                 {
                                     observed_prompts.lock().map_err(|error|error.to_string())?.push(serde_json::json!({
                                         "nativeToolCount": request["tools"].as_array().map_or(0,Vec::len),
@@ -330,7 +329,6 @@ fn responses(scenario: &str) -> VecDeque<String> {
             let args=serde_json::json!({"operations":[{"kind":"rename_resource","sourcePath":"verification.txt","targetPath":"renamed.txt","resourceKind":"file"}],"_binderTurn":pending});
             VecDeque::from([invalid,format!("event: tool_calls\ndata: {}\n\n",serde_json::json!({"tool_calls":[{"id":"handoff-resource-plan","name":"plan_workspace_operation","arguments":args.to_string()}]})),final_text])
         }
-        "execution-budget-wrap" => VecDeque::from([glob(), final_response]),
         "action-handoff-stage" => {
             let mut pending=control("final"); pending["intent"]["sideEffectIntent"]=serde_json::json!("structure_plan");
             let invalid=text_response(&format!("<binder-turn-control>{pending}</binder-turn-control>UNDELIVERED_PLAN_PROMISE"));
@@ -571,9 +569,7 @@ async fn verify_session_memory<R: tauri::Runtime>(
             let rejected_turn_id = uuid::Uuid::new_v4().to_string();
             let mut rejected_facts = facts.clone();
             rejected_facts["turnId"] = serde_json::json!(rejected_turn_id);
-            let wrong_scope = ag::tool_registry::with_verification_execution_policy(
-                ag::tool_registry::ExecutionBudgetPolicy::legacy(),
-                ent::gateway::with_test_gateway(
+            let wrong_scope = ent::gateway::with_test_gateway(
                     gateway.url.clone(),
                     ag::turn_runtime::run_agent_turn(
                         rejected_turn_id,
@@ -601,8 +597,7 @@ async fn verify_session_memory<R: tauri::Runtime>(
                         state,
                         app.clone(),
                     ),
-                ),
-            )
+                )
             .await;
             if !matches!(wrong_scope, Err(ref error) if error.code == "AG_HISTORY_SCOPE_MISMATCH") {
                 return Err(failure(
@@ -610,9 +605,7 @@ async fn verify_session_memory<R: tauri::Runtime>(
                 ));
             }
         }
-        ag::tool_registry::with_verification_execution_policy(
-            ag::tool_registry::ExecutionBudgetPolicy::legacy(),
-            ent::gateway::with_test_gateway(
+        ent::gateway::with_test_gateway(
                 gateway.url.clone(),
                 ag::turn_runtime::run_agent_turn(
                     turn_id.clone(),
@@ -640,8 +633,7 @@ async fn verify_session_memory<R: tauri::Runtime>(
                     state,
                     app.clone(),
                 ),
-            ),
-        )
+            )
         .await?;
     }
     let observations = gateway.prompt_observations.lock().map_err(failure)?.clone();
@@ -1170,7 +1162,6 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
     if ![
         "chat",
         "glob",
-        "execution-budget-wrap",
         "action-handoff-stage",
         "action-handoff-plan",
         "tool-description-compatible",
@@ -1455,18 +1446,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         } else {
             vec![]
         };
-        ag::tool_registry::with_verification_execution_policy(
-            if scenario == "execution-budget-wrap" {
-                ag::tool_registry::ExecutionBudgetPolicy {
-                    max_model_calls: 4,
-                    max_tool_calls: 1,
-                    max_corrections: 2,
-                    final_reserve: 2,
-                }
-            } else {
-                ag::tool_registry::ExecutionBudgetPolicy::legacy()
-            },
-            ent::gateway::with_test_gateway(
+        ent::gateway::with_test_gateway(
                 gateway.url.clone(),
                 ag::turn_runtime::run_agent_turn(
                     run_id.clone(),
@@ -1506,8 +1486,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
                     &state,
                     app.clone(),
                 ),
-            ),
-        )
+            )
         .await?;
         if matches!(
             scenario.as_str(),
@@ -1581,9 +1560,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         let mut next_facts = facts.clone();
         next_facts["turnId"] = serde_json::json!(next_turn_id);
         next_facts["contextRevision"] = serde_json::json!(2);
-        ag::tool_registry::with_verification_execution_policy(
-            ag::tool_registry::ExecutionBudgetPolicy::legacy(),
-            ent::gateway::with_test_gateway(
+        ent::gateway::with_test_gateway(
                 gateway.url.clone(),
                 ag::turn_runtime::run_agent_turn(
                     next_turn_id.clone(),
@@ -1611,8 +1588,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
                     &state,
                     app.clone(),
                 ),
-            ),
-        )
+            )
         .await?;
         Some(next_turn_id)
     } else {
@@ -1710,7 +1686,7 @@ pub(crate) async fn ag_verify_run<R: tauri::Runtime>(
         .into_iter().map(|raw| {
             let stored:serde_json::Value=serde_json::from_str(&raw).map_err(failure)?;
             // Export only format/error metadata, never control values or model text.
-            Ok(serde_json::json!({"code":stored["code"],"prefixKind":stored["prefixKind"],"rejectionStage":stored["rejectionStage"],"correctionAttempt":stored["correctionAttempt"],"finalOnly":stored["finalOnly"],"protocolDiagnostic":stored["protocolDiagnostic"]}))
+            Ok(serde_json::json!({"code":stored["code"],"prefixKind":stored["prefixKind"],"rejectionStage":stored["rejectionStage"],"finalOnly":stored["finalOnly"],"protocolDiagnostic":stored["protocolDiagnostic"]}))
         }).collect::<Result<Vec<serde_json::Value>,IpcError>>()?;
     let mut observed = conn.prepare("SELECT payload_json FROM agent_turn_events WHERE turn_id=?1 AND kind='model_control_description_reconciled' ORDER BY seq").map_err(failure)?;
     let description_trace = observed
@@ -1812,8 +1788,7 @@ mod tests {
         for scenario in [
             "chat",
             "glob",
-            "execution-budget-wrap",
-            "action-handoff-stage",
+                "action-handoff-stage",
             "action-handoff-plan",
             "tool-description-compatible",
             "tool-read-only-control-variants",
@@ -2056,26 +2031,17 @@ mod tests {
                 }
                 "protocol-cumulative" => {
                     assert_eq!(receipt["status"], "error");
-                    assert_eq!(receipt["requestCounts"]["model"], 4);
+                    assert_eq!(receipt["requestCounts"]["model"], 5);
                     assert_eq!(
                         tools.iter().filter(|tool| tool["success"] == true).count(),
                         1
                     );
-                    for (index, row) in receipt["protocolTrace"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .enumerate()
-                    {
-                        assert_eq!(row["correctionAttempt"], index + 1);
+                    for row in receipt["protocolTrace"].as_array().unwrap().iter() {
                         assert!(row["protocolDiagnostic"]["reasonCode"].is_string());
                         assert_eq!(row["protocolDiagnostic"]["controlSource"], "tool[0]");
                     }
                     assert_eq!(receipt["protocolTrace"].as_array().unwrap().len(), 3);
-                    assert!(events
-                        .iter()
-                        .any(|e| e["code"] == "AG_MODEL_CORRECTION_LIMIT"
-                            && e["diagnostic"]["category"] == "model_protocol"));
+                    assert!(events.iter().any(|e| e["code"] == "AG_GW_HTTP_500"));
                 }
                 "action-handoff-plan" => {
                     assert_eq!(receipt["status"], "completed");
@@ -2101,16 +2067,6 @@ mod tests {
                         .unwrap()
                         .contains("UNDELIVERED_PLAN_PROMISE"));
                 }
-                "execution-budget-wrap" => {
-                    assert_eq!(receipt["status"], "completed");
-                    assert_eq!(tools.len(), 1);
-                    assert_eq!(tools[0]["success"], true);
-                    assert_eq!(receipt["requestCounts"]["model"], 2);
-                    assert_eq!(receipt["transportTrace"][1]["nativeToolCount"], 0);
-                    assert!(events
-                        .iter()
-                        .any(|e| e["type"] == "done" && e["stopReason"] == "budget_exhausted"));
-                }
                 "action-handoff-stage" => {
                     assert_eq!(receipt["status"], "completed");
                     assert!(tools.is_empty());
@@ -2129,9 +2085,9 @@ mod tests {
                 "argument-decision-shared-limit" | "decision-native-replay-blocked" => {
                     assert_eq!(receipt["status"], "error");
                     let attempts = if scenario == "argument-decision-shared-limit" {
-                        5
+                        6
                     } else {
-                        4
+                        5
                     };
                     assert_eq!(receipt["requestCounts"]["model"], attempts);
                     assert_eq!(receipt["requestCounts"]["gate"], attempts);
@@ -2142,7 +2098,7 @@ mod tests {
                     );
                     assert!(events
                         .iter()
-                        .any(|e| e["type"] == "error" && e["code"] == "AG_MODEL_CORRECTION_LIMIT"));
+                        .any(|e| e["type"] == "error" && e["code"] == "AG_GW_HTTP_500"));
                     let rejects = receipt["protocolTrace"].as_array().unwrap();
                     assert_eq!(
                         rejects.len(),
@@ -2152,15 +2108,6 @@ mod tests {
                             3
                         }
                     );
-                    for (index, rejected) in rejects.iter().enumerate() {
-                        let expected = if scenario == "argument-decision-shared-limit" && index > 0
-                        {
-                            index
-                        } else {
-                            index + 1
-                        };
-                        assert_eq!(rejected["correctionAttempt"], expected);
-                    }
                     assert_eq!(receipt["decisionTrace"].as_array().unwrap().len(), 1);
                 }
                 "parameter-and-control-recover" => {
@@ -2172,9 +2119,6 @@ mod tests {
                     assert_eq!(tools[2]["success"], true);
                     let rejects = receipt["protocolTrace"].as_array().unwrap();
                     assert_eq!(rejects.len(), 3);
-                    assert_eq!(rejects[0]["correctionAttempt"], 1);
-                    assert_eq!(rejects[1]["correctionAttempt"], 2);
-                    assert_eq!(rejects[2]["correctionAttempt"], 1);
                     assert!(events.iter().any(|e| e["type"] == "done"));
                 }
                 "text-correction-gate-denied"
@@ -2223,11 +2167,11 @@ mod tests {
                         "tool-text-invalid-corrects"
                         | "after-read-text-corrects"
                         | "decision-text-corrects" => ("completed", 3, 1),
-                        "text-protocol-exhausted" => ("error", 3, 0),
+                        "text-protocol-exhausted" => ("error", 4, 0),
                         "decision-text-replay-blocked" | "text-decision-shared-limit" => {
-                            ("error", 4, 1)
+                            ("error", 5, 1)
                         }
-                        "text-decision-model-budget" => ("error", 6, 5),
+                        "text-decision-model-budget" => ("error", 7, 5),
                         _ => ("completed", 2, 0),
                     };
                     assert_eq!(receipt["status"], expected_status, "{scenario}");
@@ -2258,8 +2202,7 @@ mod tests {
                         _ => 1,
                     };
                     assert_eq!(rejects.len(), expected_rejections, "{scenario}");
-                    for (index, rejected) in rejects.iter().enumerate() {
-                        assert_eq!(rejected["correctionAttempt"], index + 1);
+                    for rejected in rejects.iter() {
                         assert_eq!(rejected["rejectionStage"], "response_completion");
                     }
                     assert!(!receipt.to_string().contains("PRIVATE_UNVALIDATED_TEXT"));
@@ -2269,14 +2212,9 @@ mod tests {
                             && e["report"]["evidenceThroughSeq"].as_u64().unwrap_or(0) > 0));
                     }
                     if expected_status == "error" {
-                        let expected_code = if scenario == "text-decision-model-budget" {
-                            "AG_TOOL_LOOP_LIMIT"
-                        } else {
-                            "AG_MODEL_CORRECTION_LIMIT"
-                        };
                         assert!(events
                             .iter()
-                            .any(|e| e["type"] == "error" && e["code"] == expected_code));
+                            .any(|e| e["type"] == "error" && e["code"] == "AG_GW_HTTP_500"));
                     }
                 }
                 "decision-duplicate" | "decision-limit" => {
@@ -2284,14 +2222,14 @@ mod tests {
                     let expected = if scenario == "decision-duplicate" {
                         2
                     } else {
-                        6
+                        7
                     };
                     assert_eq!(receipt["requestCounts"]["model"], expected);
                     assert_eq!(receipt["requestCounts"]["gate"], expected);
                     let code = if scenario == "decision-duplicate" {
                         "AG_MODEL_TOOL_ID_INVALID"
                     } else {
-                        "AG_TOOL_LOOP_LIMIT"
+                        "AG_GW_HTTP_500"
                     };
                     assert!(receipt["events"]
                         .as_array()
@@ -2383,14 +2321,14 @@ mod tests {
                 }
                 "protocol-exhausted" => {
                     assert_eq!(receipt["status"], "error");
-                    assert_eq!(receipt["requestCounts"]["gate"], 3);
-                    assert_eq!(receipt["requestCounts"]["model"], 3);
-                    assert_eq!(tools.len(), 2);
+                    assert_eq!(receipt["requestCounts"]["gate"], 4);
+                    assert_eq!(receipt["requestCounts"]["model"], 4);
+                    assert_eq!(tools.len(), 3);
                     assert!(tools
                         .iter()
                         .all(|tool| tool["executionReceipt"]["executionStatus"] == "rejected"));
                     assert!(events.iter().any(|event| event["type"] == "error"
-                        && event["code"] == "AG_MODEL_CORRECTION_LIMIT"));
+                        && event["code"] == "AG_GW_HTTP_500"));
                 }
                 "repeated-oversized-read" | "repeated-read-tools-blocked" => {
                     assert_eq!(receipt["status"], "completed");
@@ -2492,13 +2430,13 @@ mod tests {
                     );
                     assert_eq!(
                         receipt["requestCounts"]["model"],
-                        if recovery { 5 } else { 4 }
+                        if recovery { 5 } else { 5 }
                     );
                     assert_eq!(
                         receipt["requestCounts"]["gate"],
-                        if recovery { 5 } else { 4 }
+                        if recovery { 5 } else { 5 }
                     );
-                    assert_eq!(tools.len(), if recovery { 4 } else { 3 });
+                    assert_eq!(tools.len(), if recovery { 4 } else { 4 });
                     assert_eq!(tools[0]["success"], true);
                     assert_eq!(tools[1]["executionReceipt"]["executionStatus"], "rejected");
                     assert_eq!(
@@ -2520,7 +2458,7 @@ mod tests {
                     } else {
                         assert!(events
                             .iter()
-                            .any(|event| event["code"] == "AG_MODEL_CORRECTION_LIMIT"));
+                            .any(|event| event["code"] == "AG_GW_HTTP_500"));
                     }
                 }
                 "bounded-reading" | "bounded-reading-four-pages" => {

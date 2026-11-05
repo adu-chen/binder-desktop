@@ -134,6 +134,24 @@ function pendingArguments(toolAcc) {
   });
 }
 
+
+// One connect-level retry: a transient TCP/proxy connect failure must not surface as a
+// failed model turn. Retries happen before any response byte is forwarded.
+async function fetchUpstream(url, init, { signal, onStage }) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      const code = error?.cause?.code ?? null;
+      const retriable = error?.name === 'TypeError'
+        && (code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ECONNRESET' || code === null);
+      if (signal?.aborted || attempt >= 2 || !retriable) throw error;
+      onStage?.('upstream_connect_retry', { attempt, causeCode: code });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+}
+
 // OpenAI 兼容（OpenAI + DeepSeek）：Bearer + chat/completions 流式 + tool_calls 累积。
 async function streamOpenAiCompat(provider, { model, messages, apiKey, tools, maxTokens }, res, { signal, onStage }) {
   const reqBody = { model, messages, stream: true, stream_options: { include_usage: true } };
@@ -147,12 +165,12 @@ async function streamOpenAiCompat(provider, { model, messages, apiKey, tools, ma
   if (requestedMaxTokens !== undefined) reqBody.max_tokens = requestedMaxTokens;
   if (Array.isArray(tools) && tools.length) reqBody.tools = tools;
   onStage?.('upstream_request_configured', { requestedMaxTokens: requestedMaxTokens ?? null });
-  const resp = await fetch(provider.url, {
+  const resp = await fetchUpstream(provider.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify(reqBody),
     signal,
-  });
+  }, { signal, onStage });
   onStage?.('upstream_headers', { status: resp.status });
   if (!resp.ok) {
     onStage?.('upstream_http_error', { status: resp.status });
@@ -304,12 +322,12 @@ async function streamAnthropic(provider, { model, messages, apiKey, maxTokens, t
   const atools = toAnthropicTools(tools);
   if (atools) body.tools = atools;
 
-  const resp = await fetch(provider.url, {
+  const resp = await fetchUpstream(provider.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify(body),
     signal,
-  });
+  }, { signal, onStage });
   onStage?.('upstream_headers', { status: resp.status });
   if (!resp.ok) {
     onStage?.('upstream_http_error', { status: resp.status });

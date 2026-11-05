@@ -60,11 +60,7 @@ pub(super) fn final_only_continuation(messages: &[serde_json::Value]) -> bool {
         message["role"] == "system"
             && matches!(
                 message["layer"].as_str(),
-                Some(
-                    "protocol_correction_final_only"
-                        | "read_failure_final_only"
-                        | "execution_budget_final_only"
-                )
+                Some("protocol_correction_final_only" | "read_failure_final_only")
             )
     })
 }
@@ -101,6 +97,44 @@ fn current_document_prompt_context(
  * boundary: in=IntentRevisionAgentContextFactsCurrentDocumentReferenceHistoryToolResultsAndCurrentHardCapabilityFacts | out=BudgetedPromptPackageV2MessagesAndPromptManifestCapabilityGrantV2 | delegate=assemble_agent_turn_messages | consumer=BR-AG-DATA-008,BR-SYS-DATA-008| does_not=authorizeConcreteToolCallFromPromptOrIntentText
  */
 #[allow(clippy::too_many_arguments)]
+
+/// 模型只需要 pending 块的锚点与当前文档基线，不需要 accepted/saved/lifecycle。
+/// 完整 AgentContextFacts 仍用于运行时校验；这里只做模型可见投影。
+fn model_visible_agent_context_facts(
+    facts: &crate::types::AgentContextFacts,
+) -> Result<String, IpcError> {
+    let mut value = serde_json::to_value(facts).map_err(|error| {
+        IpcError::new(
+            "AG_CONTEXT_FACTS_SERIALIZE_FAILED",
+            &format!("AgentContextFacts 无法序列化: {error}"),
+            false,
+            false,
+        )
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("proposalFacts");
+        if let Some(previews) = object
+            .get_mut("pendingPreviews")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for preview in previews {
+                if let Some(preview) = preview.as_object_mut() {
+                    preview.remove("state");
+                    preview.remove("taskRunId");
+                }
+            }
+        }
+    }
+    serde_json::to_string(&value).map_err(|error| {
+        IpcError::new(
+            "AG_CONTEXT_FACTS_SERIALIZE_FAILED",
+            &format!("AgentContextFacts 无法序列化: {error}"),
+            false,
+            false,
+        )
+    })
+}
+
 pub(super) fn prepare_turn_prompt(
     _state: &AppState,
     runtime_profile: &str,
@@ -117,13 +151,27 @@ pub(super) fn prepare_turn_prompt(
     prompt: &str,
     mention_block: Option<&str>,
     reference_envelopes: &[ag::context::PromptDataEnvelopeV1],
-    freeze_tools_after_proposal: bool,
     continuation_messages: &[serde_json::Value],
     decision_receipt_ids: &[String],
     gate_attempt: u32,
-    remaining_tool_calls: u32,
     capacity: ag::prompt_runtime::ModelCapacity,
 ) -> Result<PreparedTurnPrompt, IpcError> {
+    // 所有回合都注入单次输出预算：模型看不到 max_tokens，只能靠这里知道
+    // 工具参数 JSON、base 与控制封套同样占预算。
+    let suggested_chars = (capacity.output_tokens / 8).clamp(600, 1_800);
+    let chunk_budget_messages = vec![serde_json::json!({
+        "role": "system",
+        "content": format!(
+            "[CHUNK BUDGET — DATA ONLY] 当前模型单次输出预算约 {} tokens。write_content 建议 6–8 个内容块、约 {} 个中文字符；24 块是硬上限，不是建议批次。参数 JSON、base 与控制封套同样占预算；长文按章节拆批，同一回合继续提交下一批，不要等待用户接受。",
+            capacity.output_tokens, suggested_chars
+        ),
+    })];
+    let continuation_messages: Vec<serde_json::Value> = chunk_budget_messages
+        .into_iter()
+        .chain(continuation_messages.iter().cloned())
+        .collect();
+    let continuation_messages = continuation_messages.as_slice();
+
     // P0 当前文档块视图（PI-AG-08E/08F/08G）。短文档注入完整块内容；超长文档注入块目录并要求工具读取。
     // 2026-08-09：DOC_CTX_CAP 9000→16000（AG-LIMIT-01 扩大内联注入上限，长文档测试可直接编辑；G5 标定）。
     let (active_bdocx, has_bdocx_tables, _has_bdocx_images) =
@@ -150,14 +198,7 @@ pub(super) fn prepare_turn_prompt(
     });
     let current_doc_requires_tool_read = current_doc_prompt_context.requires_read_before_edit;
     let doc_ctx = current_doc_prompt_context.text;
-    let agent_context_facts_json = serde_json::to_string(agent_context_facts).map_err(|error| {
-        IpcError::new(
-            "AG_CONTEXT_FACTS_SERIALIZE_FAILED",
-            &format!("AgentContextFacts 无法序列化: {error}"),
-            false,
-            false,
-        )
-    })?;
+    let agent_context_facts_json = model_visible_agent_context_facts(agent_context_facts)?;
 
     // Prompt 只获得当前硬事实的工具可见投影；它没有 ToolCall 绑定，不能直接作为执行授权。
     let emitter = super::turn_events::TurnEventEmitter::without_channel(_state, turn_id);
@@ -169,34 +210,17 @@ pub(super) fn prepare_turn_prompt(
             false,
         )
     })?;
-    let policy = emitter.execution_policy()?;
-    let used_models = emitter.protocol_attempt_counts()?.0;
-    let remaining_tool_calls = remaining_tool_calls.min(
-        super::turn_tool_loop::continuation_execution_budget(
-            continuation_messages,
-            policy.max_tool_calls,
-            policy.max_model_calls,
-        )
-        .0,
-    );
-    let remaining_models = policy.max_model_calls.saturating_sub(used_models);
-    let budget_closing = policy.final_reserve > 0
-        && (remaining_models <= policy.final_reserve || remaining_tool_calls == 0);
     let capability_factors = ag::tool_registry::CapabilityFactorsV2 {
-        execution_policy: policy,
         has_task_run: task_run_id.is_some(),
         active_bdocx,
         table_ops_available: has_bdocx_tables,
         // 图片插入需要先调用 list_images 发现受控资产；活动 BDocx 即具备查询动态能力，
         // 具体图片实例能力仍由 ToolCall 执行层校验。
         image_ops_available: active_bdocx,
-        tools_frozen: budget_closing
-            || freeze_tools_after_proposal
-            || final_only_continuation(continuation_messages),
+        tools_frozen: final_only_continuation(continuation_messages),
         decision_receipt_ids: decision_receipt_ids.to_vec(),
         gate_attempt,
         gate_passed: false,
-        remaining_tool_calls,
         cancelled: false,
         terminal: false,
     };
@@ -343,10 +367,6 @@ pub(super) fn prepare_turn_prompt(
             &capability_instructions,
             &transport_protocol,
         );
-        assembled_messages.messages.push(serde_json::json!({
-            "role":"system", "layer":if budget_closing {"execution_budget_final_only"} else {"execution_budget"},
-            "content":format!("[TRUSTED EXECUTION BUDGET] maxModelCalls={}; remainingModelCalls={remaining_models}; maxToolCalls={}; remainingToolCalls={remaining_tool_calls}; maxCorrectionsPerCategory={}; finalReserve={}; budgetClosing={budget_closing}. remainingModelCalls/remainingToolCalls 是还可用次数，不是已用次数。控制封套和参数错误分别累计，各有上限。{} 额度属于原AgentTurn，等待/确认不重置，不能自行提高。", policy.max_model_calls, policy.max_tool_calls, policy.max_corrections, policy.final_reserve, if budget_closing {"本次只允许final说明部分结果、已有事实及未完成范围；禁止工具和新的等待，不得宣称业务全完成。"} else {"剩余工具调用>0 时不得声称额度用尽或提前收工；请继续推进未完成的工作，只在真正接近上限时才预留最终说明。"}),
-        }));
         if let Some(resume) = edit_resume_message(agent_context_facts, session_id) {
             assembled_messages.messages.push(serde_json::json!({
                 "role": "system",
@@ -580,11 +600,9 @@ mod tests {
             prompt,
             Some(reference),
             &[envelope],
-            false,
             continuation,
             &[],
             1,
-            6,
             ag::prompt_runtime::model_capacity("deepseek", "deepseek-chat"),
         )
         .unwrap()
@@ -622,9 +640,11 @@ mod tests {
         assert!(!names.contains(&ag::model_output::TOOL_BATCH_NAME));
         let messages = serde_json::to_string(&prepared.messages).unwrap();
         assert!(messages.contains("每次业务工具调用的 arguments 顶层都必须包含完整 _binderTurn"));
-        // 预算语义必须说清"剩余"不是"已用"，否则模型会误报额度用尽并提前收工。
-        assert!(messages.contains("是还可用次数，不是已用次数"));
-        assert!(messages.contains("剩余工具调用>0 时不得声称额度用尽"));
+        // 模型可见输入不再包含执行额度提示或第二套 budgets。
+        assert!(!messages.contains("TRUSTED EXECUTION BUDGET"));
+        assert!(!messages.contains("remainingReadToolCalls"));
+        assert!(!messages.contains("remainingWriteToolCalls"));
+        assert!(!messages.contains("\"budgets\""));
         assert!(!messages.contains(ag::model_output::TOOL_BATCH_NAME));
     }
 

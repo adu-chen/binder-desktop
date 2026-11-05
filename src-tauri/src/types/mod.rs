@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
  * chain:    DATA-MIGRATE
  * rules:    BR-SYS-DATA-002, BR-SYS-DATA-008
  * term_ref: TERM-AG-020, TERM-AG-021, TERM-AG-023
- * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFacts,AgentContextFactsV1,AgentContextFactsV2,EvidenceLedgerV1,ProjectReportV2,ToolCallReceiptV1
+ * boundary: in=structDefinitions | out=WorkspaceRef,DocRef,PendingDiff,DiffProjection,TimelineEntry,WorkspaceTimelineEntry,WorkspaceOperationPlan,WorkspaceOperationEntry,CreateDocumentBundle,RefInjection,ReferencePayload,MemoryInjection,KnowledgeInjection,AgentContextFacts,AgentContextFactsV1,AgentContextFactsV2,AgentContextCurrentDocumentV2,AgentPendingPreviewV2,EvidenceLedgerV1,ProjectReportV2,ToolCallReceiptV1
  */
 // 跨模块共享实体与枚举集合的单一契约来源（BR-SYS-DATA-002）：任何模块不得在本模块之外
 // 私自重定义这些结构或枚举集合；状态转移语义不属本块，归各 owner 状态机。
@@ -254,6 +254,40 @@ pub struct AgentContextSelectionFactV2 {
     pub context_revision: u64,
 }
 
+/// 当前文档唯一版本事实：只由后端从 activeTarget + ready 快照派生；
+/// 客户端声明时只能与派生值一致，避免第二版本源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextCurrentDocumentV2 {
+    pub rel_path: String,
+    pub session_version: u64,
+    pub content_hash: String,
+    pub dirty: bool,
+}
+
+/// 预览三态：previewed 表示已写入当前 LogicalState，仅表示待裁决，不是“未生效”。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPreviewStateV2 {
+    Previewed,
+    Accepted,
+    Saved,
+}
+
+/// 单张待裁决预览的事实投影；不携正文，不授予编辑或保存权限。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPendingPreviewV2 {
+    pub diff_id: String,
+    pub rel_path: String,
+    pub base_version: u64,
+    pub base_content_hash: String,
+    pub created_block_ids: Vec<String>,
+    pub state: AgentPreviewStateV2,
+    #[serde(default)]
+    pub task_run_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentContextFactsV2 {
@@ -266,6 +300,12 @@ pub struct AgentContextFactsV2 {
     pub open_resources: Vec<AgentContextResourceV2>,
     pub selections: Vec<AgentContextSelectionFactV2>,
     pub proposal_facts: Vec<AgentContextProposalFactV1>,
+    /// 加法事实（v2 向后兼容）：旧载荷缺省为 null，由后端从 ready 快照派生。
+    #[serde(default)]
+    pub current_document: Option<AgentContextCurrentDocumentV2>,
+    /// 加法事实（v2 向后兼容）：旧载荷缺省为空数组。
+    #[serde(default)]
+    pub pending_previews: Vec<AgentPendingPreviewV2>,
 }
 
 impl AgentContextFactsV2 {

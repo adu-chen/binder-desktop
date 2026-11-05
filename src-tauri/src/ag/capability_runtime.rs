@@ -3,11 +3,11 @@ use crate::{
     ipc::IpcError,
     types::{
         CapabilityExecutionFactV1, CapabilityExecutionPhase, ToolCallReceiptIdentityV1,
-        ToolCallReceiptReferenceV1,
+        ToolCallReceiptReferenceV1, ToolCallReceiptV1,
     },
     AppState,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -123,6 +123,12 @@ fn start_fact(conn: &Connection, identity: &ToolCallReceiptIdentityV1) -> Result
                 Some(receipt) => {
                     receipt.effect_status == crate::types::ToolCallEffectStatus::Unknown
                         && !legacy_proposal_precommit_failure(conn, item).map_err(db_error)?
+                        && !resolved_pending_diff_effect(
+                            conn,
+                            &item.identity.workspace_id,
+                            receipt,
+                        )
+                        .map_err(db_error)?
                 }
             },
         };
@@ -155,6 +161,41 @@ fn start_fact(conn: &Connection, identity: &ToolCallReceiptIdentityV1) -> Result
     )
 }
 
+/// 已结算为 unknown 的写入若引用了持久化 PendingDiff，可用后续裁决事实收敛：
+/// accepted+saved 表示修改已落盘；rejected/expired 表示没有待生效修改。其他状态仍视为未结算。
+fn resolved_pending_diff_effect(
+    conn: &Connection,
+    workspace_id: &str,
+    receipt: &ToolCallReceiptV1,
+) -> rusqlite::Result<bool> {
+    let mut saw_pending_diff = false;
+    for reference in &receipt.references {
+        if reference.kind != crate::types::ToolCallReceiptReferenceKind::PendingDiff {
+            continue;
+        }
+        saw_pending_diff = true;
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT status, effect_status FROM pending_diffs WHERE diff_id=?1 AND workspace_id=?2",
+                params![reference.id, workspace_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((status, effect_status)) = row else {
+            return Ok(false);
+        };
+        let resolved = match status.as_str() {
+            "accepted" => effect_status.as_deref() == Some("saved"),
+            "rejected" | "expired" => true,
+            _ => false,
+        };
+        if !resolved {
+            return Ok(false);
+        }
+    }
+    Ok(saw_pending_diff)
+}
+
 /// Older builds classified every failed write adapter as an unknown effect. A propose_edit
 /// AG_TOOL_ARG is emitted before persist_proposal_batch, and that store commits its batch and
 /// pending diffs in one transaction. Require the absence of that exact call's batch as a second
@@ -166,13 +207,26 @@ fn legacy_proposal_precommit_failure(
     let Some(receipt) = fact.receipt.as_ref() else {
         return Ok(false);
     };
-    if fact.identity.tool_name != "propose_edit"
+    let failure_code = receipt
+        .failure
+        .as_ref()
+        .map(|failure| failure.code.as_str());
+    let pre_write_code = matches!(
+        failure_code,
+        Some(
+            "AG_TOOL_ARG"
+                | "AG_TOOL_ARGUMENTS_INVALID"
+                | "AG_WRITE_CONTENT_INVALID"
+                | "AG_BLOCK_OPERATION_BASE_STALE"
+                | "AG_BLOCK_OPERATION_INVALID"
+                | "AG_BLOCK_OPERATION_EMPTY"
+                | "AG_BLOCK_OPERATION_TOO_LARGE"
+                | "AG_BLOCK_OPERATION_UNSUPPORTED"
+        )
+    ) || failure_code.is_some_and(|code| code.starts_with("AG_BLOCK_OP_"));
+    if !matches!(fact.identity.tool_name.as_str(), "propose_edit" | "write_content")
         || receipt.effect_status != crate::types::ToolCallEffectStatus::Unknown
-        || receipt
-            .failure
-            .as_ref()
-            .map(|failure| failure.code.as_str())
-            != Some("AG_TOOL_ARG")
+        || !pre_write_code
         || !receipt.references.is_empty()
     {
         return Ok(false);
@@ -208,9 +262,14 @@ pub(super) fn delete_settled_session_facts(
                 fact.phase == CapabilityExecutionPhase::Settled && fact.identity == started.identity
             })
             .and_then(|fact| fact.receipt.as_ref());
-        if receipt.is_none_or(|receipt| {
-            receipt.effect_status == crate::types::ToolCallEffectStatus::Unknown
-        }) {
+        let unresolved = match receipt {
+            None => true,
+            Some(receipt) => {
+                receipt.effect_status == crate::types::ToolCallEffectStatus::Unknown
+                    && !resolved_pending_diff_effect(conn, workspace, receipt)?
+            }
+        };
+        if unresolved {
             return Err(rusqlite::Error::InvalidParameterName(
                 "AG_EFFECT_PENDING: cannot delete unresolved effect identity".into(),
             ));
@@ -602,11 +661,71 @@ mod tests {
     // covers: BR-AG-STATE-002
     // covers: BR-AG-PERSIST-001
     #[test]
+    fn resolved_pending_diff_clears_stale_unknown_effect() {
+        for (status, effect_status, expect_start) in [
+            ("accepted", Some("saved"), true),
+            ("rejected", Some("not_applicable"), true),
+            ("pending", Some("not_applicable"), false),
+        ] {
+            let (_root, state) = state();
+            add_turn(&state, "session", "turn");
+            let conn = state.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO pending_diffs (diff_id, workspace_id, rel_path, origin_module, status, payload_ref, created_at, effect_status) \
+                 VALUES ('diff-x','ws','notes.txt','AG',?1,'payload',1,?2)",
+                params![status, effect_status],
+            )
+            .unwrap();
+            let mut old = identity();
+            old.tool_name = "write_content".into();
+            old.tool_call_id = "old".into();
+            let mut receipt = super::super::tool_exec::tool_call_receipt(
+                old.clone(),
+                true,
+                true,
+                None,
+                vec![ToolCallReceiptReferenceV1 {
+                    kind: crate::types::ToolCallReceiptReferenceKind::PendingDiff,
+                    id: "diff-x".into(),
+                }],
+                vec![],
+            );
+            receipt.effect_status = crate::types::ToolCallEffectStatus::Unknown;
+            receipt.completion_status = crate::types::ToolCallCompletionStatus::Blocked;
+            receipt.next_action = crate::types::ToolCallNextAction::InspectEffect;
+            persist_fact(
+                &conn,
+                &CapabilityExecutionFactV1 {
+                    identity: old.clone(),
+                    phase: CapabilityExecutionPhase::Started,
+                    receipt: None,
+                },
+            )
+            .unwrap();
+            persist_fact(
+                &conn,
+                &CapabilityExecutionFactV1 {
+                    identity: old.clone(),
+                    phase: CapabilityExecutionPhase::Settled,
+                    receipt: Some(receipt),
+                },
+            )
+            .unwrap();
+            let mut next = old;
+            next.tool_call_id = "new".into();
+            let result = start_fact(&conn, &next);
+            assert_eq!(result.is_ok(), expect_start, "status={status}");
+        }
+    }
+
+    // covers: BR-AG-STATE-002
+    // covers: BR-AG-PERSIST-001
+    #[test]
     fn legacy_proposal_argument_error_requires_no_batch_proof_before_new_effect() {
         for batch_exists in [false, true] {
             let (_root, state) = state();
             let original = identity();
-            let receipt = super::super::tool_exec::tool_call_receipt(
+            let mut receipt = super::super::tool_exec::tool_call_receipt(
                 original.clone(),
                 true,
                 false,
@@ -619,10 +738,9 @@ mod tests {
                 vec![],
                 vec![],
             );
-            assert_eq!(
-                receipt.effect_status,
-                crate::types::ToolCallEffectStatus::Unknown
-            );
+            // 模拟旧版本已落库的 Unknown 回执；当前映射会把 AG_TOOL_ARG 记为 NotStarted。
+            receipt.effect_status = crate::types::ToolCallEffectStatus::Unknown;
+            receipt.next_action = crate::types::ToolCallNextAction::InspectEffect;
             let conn = state.db.lock().unwrap();
             persist_fact(
                 &conn,

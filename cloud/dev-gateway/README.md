@@ -60,6 +60,16 @@ node server.mjs          # 或 npm start
   - **KMS 同形**：`kms.mjs` 的 `LocalKms` 与真实云 KMS 实现同一 `generateDataKey` / `unwrapDataKey` 接口，正式仓 `GW_KMS_PROVIDER=aws|gcp` 换 provider 即可，KEK 永不离开 KMS。
 - 配置：`GW_MASTER_KEY`（KEK）、`GW_KMS_PROVIDER`（默认 `local`）。
 
+## 日志（dev 回查）
+
+- `[GW-INVOKE]` 阶段日志**同时写 stdout 和 `.data/gateway.log`**（JSONL，0600；单文件 + 一份 `gateway.log.1` 轮转，
+  默认 8 MiB，`GW_LOG_MAX_BYTES` 可调）。
+- 每请求最后一条是 `invoke_completed`：`status`（`ok` / `upstream_http_error` / `upstream_protocol_error` /
+  `upstream_stream_error` / `upstream_error` / `upstream_cancelled` / `client_disconnected` / `incomplete_stream`）、
+  `stopReason`、`usage`、`completionObserved`、`textSha256`/`textUtf8Bytes`、`contentChunkCount`。
+- 记录只含请求身份（`requestId`/`turnId`/轮次）、阶段、耗时和脱敏计量；**不含正文、令牌或密钥**（REQ-GW-006）。
+- `GW-INVOKE` 的 `turnId` 取自客户端 `X-Binder-Turn-Id` 请求头，可用于和客户端回合日志按 `turnId` 对齐。
+
 ## 自验（需你自己的 key）
 
 ```bash

@@ -367,12 +367,12 @@ CapabilityGrant、目标版本、取消和期限；返回执行状态、效果�
 端口先提交 started 身份，再执行能力，再提交 settled 安全回执，结算持久化成功后才能返回成功；
 未知/迟到结果归原调用的独立效果事实，既不回注新模型片段，也不改写原回合终态。查询契约见 SYS §3.1.0。
 同 AgentTurn 的历史 ToolCall 标识（含裁决恢复检查点）不得重复；整批身份非法时整批未执行。
-同一回合使用可信运行策略冻结模型/工具预算（开发默认模型12次、工具16次、控制封套与参数错误分别最多纠错2次、模型预留2次收尾；数值不是供应商容量保证），裁决检查点恢复扣除先前已提交工具批次/调用数，
-不得通过反复等待和确认重置执行额度。用户等待不计模型/只读工具等待期限，可显式取消；
+同一回合不再冻结模型轮次/工具次数/纠错/收尾预算；仅保留模型容量、工具结果大小、原子块操作与副作用边界。
+裁决检查点恢复不重置任何执行次数（已无执行次数）。用户等待不计模型/工具等待期限，可显式取消；
 网关和只读执行分别保留独立期限，而非宣称可以强制终止任意专业同步写入。
 无需理解回执背后的具体编辑器。回执只消费一次，旧操作只能更新/清理自己的身份；专业效果不确定时保留
 阻断与核对动作，不得自动重放。此处不新增跨进程自动续跑、普遍 exactly-once 或任务级回滚承诺。
-DecisionRequest 的等待恢复沿用同 AgentTurn；专业预览续片段沿用既有 TaskRun/checkpoint 路径，不混成同一语义。
+DecisionRequest 的等待恢复沿用同 AgentTurn；预览回执只做技术基线核验，不启动/恢复 TaskRun。TaskRun 调度器在片段 `partial` 且仍有剩余工作时自动续跑；用户接受/拒绝/保存不进入执行控制路径。
 
 **失败分类**：模型传输、模型协议、核心上下文、核心控制、授权、专业能力、UI 投影、环境分别记录。
 每条失败区分“最先观察的边界”和“已确认根因”；模型结构错误被安全拒绝可证明核心错误路径，不证明业务成功。
@@ -451,16 +451,13 @@ rule_id: BR-AG-STATE-005
 主链路: AG-TURN
 域: STATE
 -->
-回合额度收尾必须与真实终态结算一致，不得把提前收工或额度耗尽伪装成完成。输入为原回合冻结的执行策略
-（模型/工具上限与收尾预留）、已按续调与实际执行扣减后的剩余工具调用与剩余模型轮次、本轮模型
-completion（status/reason）、side_effect_intent、结构告警和原始 stop_reason；输出为收尾判定（是否进入
-completion_stage）、收尾记录（completionStatus、budgetClosing、remainingToolCalls、remainingRounds）、
-向用户的一条收尾说明、TaskRun 终态结算和 done 停止原因。禁止：额度耗尽或 completion=partial/
-blocked、或 report_only 且存在副作用意图时把 TaskRun 结算为 Completed；用冻结前的旧计数冒充收尾时
-剩余额度；在收尾记录与 done 落库前提前返回成功。失败信号：剩余额度与 completion 只允许结算
-Completed/Failed 二选一；收尾记录或广播失败必须向上返回 IpcError，不得吞掉后按成功处理；
-额度耗尽且模型未给出可验证收尾时，done 的 stopReason 必须为 budget_exhausted，既有工具回执与效果
-证据保留、未完成范围不得标记为完成。
+回合终态结算必须与真实完成/失败一致，不得把提前收工伪装成完成。输入为本轮模型 completion（status/reason）、
+side_effect_intent、结构告警和原始 stop_reason；输出为收尾判定（是否进入 completion_stage）、收尾记录
+（completionStatus）、向用户的一条收尾说明、TaskRun 终态结算和 done 停止原因。禁止：completion=partial/
+blocked、或 report_only 且存在副作用意图时把 TaskRun 结算为 Completed；在收尾记录与 done 落库前提前返回成功。
+失败信号：收尾记录或广播失败必须向上返回 IpcError，不得吞掉后按成功处理；模型未给出可验证收尾时，
+既有工具回执与效果证据保留、未完成范围不得标记为完成。执行侧不再有模型轮次/工具次数/纠错/收尾预留额度，
+`done.stopReason=budget_exhausted` 不再产生。
 
 <!-- RULE
 rule_id: BR-AG-PERSIST-001
@@ -902,7 +899,7 @@ constraint_id: X-FORBID-006
 | AgentTurn | 所有运行事实按序追加 TurnEvent；模型请求澄清时进入 AwaitingClarification，用户补充后原 AgentTurn 重新冻结事实并继续；DecisionRequest 进入独立等待，错误/中断重试仍创建新回合 | BR-AG-STATE-001、SM-AG-01 |
 | IntentResult | 模型驱动、可随模型输出和 ToolResult 更新的语义投影；表达目标/候选/副作用意图/上下文/歧义/确认点，不含工具授权 | BR-SYS-STATE-007、TERM-AG-012 |
 | CapabilityGrant | Prompt 暴露工具与每个工具执行前均由运行时按当前硬事实计算；注册表存在 ≠ 当前可调用；事实变化或动作完成即失效 | BR-SYS-STATE-007、BR-AG-STATE-002 |
-| TaskRun/TaskPlan/TaskStep | 简单目标不创建；复杂目标从 TurnEvent 派生可观察投影，只描述真实进度、等待与模型当前候选路线，不调度工具、不持有授权；连续 Proposal 以最新 LogicalState 接力 | BR-SYS-STATE-008、TERM-AG-015/016/018 |
+| TaskRun/TaskPlan/TaskStep | 简单目标不创建；复杂目标从 TurnEvent 派生可观察投影，只描述真实进度、等待与模型当前候选路线，不调度工具、不持有授权；连续 Proposal 以最新 LogicalState 接力，多批 pending 卡并存 | BR-SYS-STATE-008、TERM-AG-015/016/018 |
 | TurnEvent | 用户可见事件只是 append-only 回合事件的安全投影；不展示模型内部推理，状态、恢复、EvidenceLedger 与任务投影均可由事件重建 | BR-SYS-STATE-007、TERM-AG-022 |
 | EvidenceLedger/ProjectReport | 上下文和成功读取工具事件派生证据账本；运行时把证据与最终回答关联生成 ProjectReport，不调用 `report_project` | BR-AG-OBS-001、TERM-AG-021/023 |
 
@@ -927,6 +924,9 @@ X-FORBID-005（不绕过 ED 接口）、X-SHARED-001（共享结构经 SYS）、
 - `task_runs`、`task_plans`、`task_plan_steps` 为可丢弃并重建的查询投影：只保存/缓存目标、当前状态、已发生
   工作、等待点、模型当前候选路线与结果引用，不保存 `required_grant` 或执行游标；
 - `decision_requests` 是独立业务事实，必须绑定 `turn_id`，可选绑定 `task_run_id`；投影丢失不影响裁决恢复；
+- `task_runs.steps_json` 可保存 `content_chunk` 与 `verified_anchor` 控制摘要：锚点只含
+  relPath/blockId/nodeType/fingerprint/baseVersion/contentHash/label，不含正文；仅在同一 TaskRun 内、
+  当前 document 版本与哈希都匹配时注入后续片段，最多 20 条，不构成编辑授权；
 - IntentResult、EvidenceLedger 与 ProjectReport 同样从 TurnEvent 及其引用的上下文/ToolResult 业务事实重建。
 
 #### 7.2.2 事件契约
@@ -936,7 +936,8 @@ X-FORBID-005（不绕过 ED 接口）、X-SHARED-001（共享结构经 SYS）、
 - `step_progress` 是已发生事件的 UI 投影，不是可执行命令；`route_updated` 只记录模型当前候选路线，不能
   创建授权或自动启动下一步；
 - `decision_request_proposed/resolved` 保留真实裁决；confirm 只使原回合具备重新 Gate/计算授权的条件；
-- `diff_proposed` 只驱动 Diff 生命周期，不驱动 TaskRun 或 provider 自动续调。
+- `diff_proposed` 只驱动 Diff 生命周期，不驱动 TaskRun 或 provider 自动续调；
+- `task_anchors_injected` 记录锚点注入数量、createdBlockIds 数量与已完成块数；`turn_metrics` 记录收尾原因与预览块数，两者均为内部指标，不进入模型上下文，不构成业务成功证据。
 
 #### 7.2.3 UI 契约
 
@@ -1196,6 +1197,27 @@ status: mapped
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-11-01 | v2.86 | PI-AG-TASKRUN-27：仅 awaiting_ack 阻止完成；interrupted 可凭 checkpoint/锚点恢复；acknowledged 不参与完成判定。 |
+| 2026-11-01 | v2.85 | PI-AG-DEADLOCK-26：锚点注入先释放 DB 锁再 record_internal，避免自锁。 |
+| 2026-11-01 | v2.84 | PI-AG-LENGTH-25：单次输出预算全回合注入；AG_GW_STREAM_INCOMPLETE(length) 缩小批次重试一次。 |
+| 2026-11-01 | v2.83 | PI-AG-TASKRUN-24：内容提案前建立 TaskRun；checkpoint 必需；partial 结算 active 不 failed。 |
+| 2026-11-01 | v2.82 | PI-AG-PROMPT-23：模型 facts 投影去除 proposalFacts 与 pendingPreviews 生命周期字段；提示词/工具描述去生命周期化。 |
+| 2026-11-01 | v2.81 | PI-AG-CONTEXT-22：自动续跑强制包含 active target 快照；启动前等预览 draftApplied；空上下文不启动模型。 |
+| 2026-11-01 | v2.80 | PI-AG-TASKRUN-21：预览 ack 与 TaskRun 执行解耦；partial 自动续跑；接受/保存只改变卡片/磁盘状态。 |
+| 2026-11-01 | v2.79 | PI-AG-TASKRUN-20：新目标开始前收束旧非终态 TaskRun 为 interrupted；前端按需核验 active TaskRun；预览续跑退回 TaskRun 续跑。 |
+| 2026-11-01 | v2.78 | PI-AG-STREAM-19：网关连接失败一次重试；RoundOutcome::Failed 进入客户端重试判定。 |
+| 2026-11-01 | v2.77 | PI-AG-STREAM-18：deepseek-flash stream idle 90→300s；网关重启；round deadline 保持 1200s。 |
+| 2026-11-01 | v2.76 | PI-AG-STREAM-17：恢复 write_content 单次 24 块载荷边界；拆批不阻断同回合后续批次。 |
+| 2026-11-01 | v2.75 | PI-AG-LIFECYCLE-16：写入前校验失败映射 NotStarted 并兼容旧 Unknown；提示词去除生命周期复述。 |
+| 2026-10-31 | v2.74 | PI-AG-PROPOSAL-FREEZE-15：删除 proposal 后 tools_frozen；同回合可继续提交后续批次；提示词禁止以“等待接受”停滞。 |
+| 2026-10-31 | v2.73 | PI-AG-LIMIT-REMOVE-14：删除模型轮次/只读/写入/纠错/收尾额度、budget_exhausted 与预算事件字段；仅保留上下文/原子操作/副作用边界。 |
+| 2026-10-31 | v2.72 | PI-AG-CONTINUATION-13：新消息“继续/接着/续写”接回 active TaskRun；预览 ack 在父回合终态后排队续跑；提示词不再要求先接受 pending 卡。 |
+| 2026-10-31 | v2.71 | PI-AG-CONTINUATION-13：连续 Proposal 多批 pending 卡并存，后预览不自动失效前卡；预算行增加执行轮次，TaskRun 在待预览时保持 active，轮次耗尽自动续跑。 |
+| 2026-10-31 | v2.70 | PI-AG-EFFECT-12：write_content 产生 PendingDiff 时回执改为 proposal_created；已结算 unknown 的 pending_diff 经 saved/rejected/expired 收敛后释放写入守卫，避免跨回合永久 AG_EFFECT_PENDING。 |
+| 2026-10-31 | v2.69 | PI-AG-METRICS-11：新增内部 `turn_metrics` 与 `task_anchors_injected` 事件（读写剩余、轮次、预览块数、锚点注入数），不进入模型上下文、不改变终态。 |
+| 2026-10-31 | v2.68 | PI-AG-CONTROL-10：控制冲突错误给冲突字段与脱敏期望/实际（枚举/数量；文本省略）及修正建议；当前文档版本只以 currentDocument 为权威，其他资源版本不作锚点。 |
+| 2026-10-31 | v2.67 | PI-AG-ANCHOR-09：TaskRun 增 verified_anchor 控制摘要（身份/类型/指纹/基线，无正文），同块去重、最多 20 条；仅在版本与哈希匹配时向后续片段注入，不构成授权。 |
+| 2026-10-31 | v2.66 | PI-AG-BUDGET-08：执行策略拆为只读 100 / 写入 5，读写独立扣减；TaskControl 不计写入；模型可见额度收敛为单行且按剩余轮次折算只读，CapabilityGrant.budgets 不再进入模型上下文；收尾记录改用 remainingReadCalls/remainingWriteCalls。 |
 | 2026-10-30 | v2.65 | 补齐 BR-AG-STATE-002 的同批多 ToolCall 语义：中间项经 nextToolCall 保持同一 SM-AG-02 激活，最后一项 recorded 后回归 Assembling，禁止直接改写状态绕过转移引擎；与 A-AG-M-S-01 v2.37 的 nextToolCall 转移同步。 |
 | 2026-10-30 | v2.64 | 继续细化 turn_tool_loop：新增 BR-AG-DATA-013（控制封套终态前置校验）并抽出 validate_round_response；把重复的 Intent/TaskRun 投影收敛为 apply_control_and_observe（BR-SYS-STATE-008），把 ProjectReport 派生收敛为 emit_project_report（BR-AG-OBS-001）；修正裁决停放失败取消事件使用真实 turn_state；不改变授权、工具执行、裁决与保存语义。 |
 | 2026-10-30 | v2.63 | AG-TOOL/AG-TURN 规则细化：新增 BR-AG-DATA-011（ToolCall 回执身份与工具结果回注）、BR-AG-DATA-012（修改建议结果投影）、BR-AG-STATE-005（额度收尾与终态结算），对应 turn_tool_loop 三个独立生产块；不改变执行、授权、确认与保存语义。 |

@@ -640,7 +640,7 @@ takeoverRejected / terminalUnchanged / fileUnchanged / proposalOnly 均 true，G
 
 | 验证点 | 入口与输入 | 必须观察的事实 | 失败判定 |
 |---|---|---|---|
-| 控制冲突、零执行 | `model_output::tests` 的两份不同 `_binderTurn` 固定原生 ToolCall；再运行真实 Agent 验证入口中的协议错误场景 | `AG_MODEL_CONTROL_CONFLICT` 只暴露来源和字段名；整批执行回执 `rejected/not_started`、无成功证据；可见工具卡为“受阻，未执行”，没有无动作的“重试/跳过”按钮 | 把第一份封套当授权继续执行、回执记为已执行失败、泄漏目标路径/正文、卡片暗示按钮可操作 |
+| 控制冲突、零执行 | `model_output::tests` 的两份不同 `_binderTurn` 固定原生 ToolCall；再运行真实 Agent 验证入口中的协议错误场景 | `AG_MODEL_CONTROL_CONFLICT` 暴露来源、字段名与脱敏期望/实际（枚举字面值、数组数量；文本类“已省略”）及修正建议；整批执行回执 `rejected/not_started`、无成功证据；可见工具卡为“受阻，未执行”，没有无动作的“重试/跳过”按钮 | 把第一份封套当授权继续执行、回执记为已执行失败、泄漏目标路径/正文、卡片暗示按钮可操作 |
 | 有进度的慢流 | `gateway.rs` 本机 HTTP 夹具在总期限内持续给 `progress`，再给 `chunk`/`done`；`providers.test.mjs` 分别输入 DeepSeek 隐藏推理、Anthropic ping/工具参数与分片工具调用 | `reasoning`/`upstream` 进度不出现在回答正文，也不完成回合；按进度刷新空闲期限，最终仍依真实 `done` 或合法 `tool_calls` 结束；工具调用参数不被改写 | 进度变成回答/终态、活跃流被空闲期限误杀、丢工具参数 |
 | 真正无进度或不完整 | 本机夹具给一次 `progress` 后停止；固定流只给 `progress` 后 EOF | 前者在空闲期限报 `AG_GW_STREAM_TIMEOUT`，后者报 `AG_GW_STREAM_INCOMPLETE`；均不自动重放已有工具效果 | 无限等待、伪造 completed、自动重试可能产生副作用的步骤 |
 | 隔离真实供应商观察 | 仅在 8788 隔离网关用无用户数据测试提示；记录上游首字节、隐藏推理事件数、正文事件数、客户端断连；原 8787 网关和真实工作区不动 | 可确认网关发内容为空的进度帧，取消连接后上游请求停止；若供应商再现超过 180 秒响应，记录完整阶段时序 | 用短样本宣称供应商长期稳定，或把网关总时长直接归因于模型/编辑器之一 |
@@ -754,7 +754,7 @@ takeoverRejected / terminalUnchanged / fileUnchanged / proposalOnly 均 true，G
 | 编号 | 前置与操作 | 通过标准 | 失败、清理与重试 |
 |---|---|---|---|
 | PC01 描述兼容 | 开发验证选择“多工具描述兼容”；临时工作区、首批list_docs及两个glob各有不同goal/route文字 | 3个工具真实成功、2次模型、0协议拒绝；主控制保持首来源，2个描述差异观察仅含字段名 | 改写主控制、少执行、吞畸形字段均失败；每次临时身份自动清理，可重复运行 |
-| PC02 实质冲突 | 自动化逐项改变意图类型、目标、副作用、歧义、上下文需求或确认点 | 仍整批拒绝，不返回可执行参数；原因control_decision_conflict、来源及工具序号正确；不泄露原值 | 任一被兼容或透露私有标记失败；内存夹具自动释放 |
+| PC02 实质冲突 | 自动化逐项改变意图类型、目标、副作用、歧义、上下文需求或确认点 | 仍整批拒绝，不返回可执行参数；原因control_decision_conflict、来源及工具序号正确；诊断含 conflict[field,expected,actual]，文本类不泄露原值 | 任一被兼容或透露私有标记失败；内存夹具自动释放 |
 | PC03 累计纠错 | 开发验证选择“拒绝→成功→拒绝累计纠错”；响应依次非法、成功、非法、非法 | 4次模型、1次工具成功；拒绝计数1/2/3，触顶提示“累计”、分类model_protocol，先前成功证据保留；每次有protocolDiagnostic | 成功清零、扩大2次额度、抹去结果或伪装业务成功失败；重复使用新临时身份 |
 | PC04 INVALID定位与隐私 | 自动化注入畸形枚举、类型、空描述、blocking/tool矛盾、非tool动作、未知属性 | 独立校验每份副本，记录固定reasonCode/fieldPath/controlSource/toolIndex；serde缺路径明示$control；日志/错误不含测试原值或未知属性名 | 通过任一畸形副本或泄露标记失败；无用户文档依赖 |
 
@@ -833,10 +833,264 @@ takeoverRejected / terminalUnchanged / fileUnchanged / proposalOnly 均 true，G
 
 边界：本工作包不承诺任意长输出必成功，也不改变12/16/2调用额度，不新增分段执行器/备用模型。开发明文文件由BINDER_MODEL_IO_AUDIT=1显式启用，路径随进程打印plaintext_file，含文档/聊天内容，不能提交或公开；关闭该开关后不生成新的明文副本。历史原始请求缺片不得反向认定模型请求损坏。
 
+## §15 PI-AG-CTX-FACTS-07 预览事实（2026-10-31）
+
+**状态**：自动化 READY；真实长文复现未执行，不提升系统验收。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| CF07-A 事实与校验（自动化） | `cargo test --manifest-path src-tauri/Cargo.toml context_v2_preview_facts_are_derived_and_bounded`；`npx vitest run src/services/agRuntime.test.ts -t "projects previewed cards"` | v2 解析保留 pendingPreviews；previewed 仅来自宿主已确认草稿应用；currentDocument 只由后端派生，客户端伪造失败关闭；>20 条、重复 diffId、越界路径、非法 state、createdBlockIds 超限均拒绝 | 断言失败即失败；不读编辑器正文，不替代真实预览 |
+| CF07-B 长文复现（待人工） | 同《夜班守则》4000+3000 任务，在预览后发普通新消息（非 ack） | 下一回合 facts 含 previewed 与 createdBlockIds，模型不再要求先接受；无全量分页 | 仍要求先接受或 facts 缺失即失败；清理待裁决卡后重复 |
+
+边界：后端只校验形状、归属、上限与版本可解释性，不能替宿主证明新块真实存在；`previewed` 的块存在性由宿主提交前确认。本工作包不改变预算、授权、裁决或保存语义。
+
+## §16 PI-AG-BUDGET-08（已由 PI-AG-LIMIT-REMOVE-14 取代）
+
+执行额度系统已整体删除：不再有只读 100/写入 5、模型轮次、纠错次数或收尾预留。原 §16 的验收口径失效，
+相关测试已删除；保留的仅为 Prompt token、工具结果 12k、分页、`block_ops` 单卡 64/64KB 与
+`write_content` 12k 字符等上下文/原子性边界。见 §22。
+
+## §17 PI-AG-ANCHOR-09 已验证锚点复用（2026-10-31）
+
+**状态**：自动化 READY；真实长文与新消息入口未验收。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| AN09-A 锚点存储（自动化） | `cargo test --manifest-path src-tauri/Cargo.toml verified_anchors_are_scoped_deduped_and_capped` | 同一 (relPath, blockId) 去重并移到队尾；最多 20 条；错误 session / 终态 run 不写入；不含正文 | 断言失败即失败；不改变 TaskRun 终态 |
+| AN09-B 续片段注入（自动化/人工） | 同一 TaskRun 走 PreviewAck 或 DecisionRequest 确认 | 有当前块快照时按 blockId+fingerprint 校验，无块快照时退回 currentDocument 的 relPath/sessionVersion/contentHash 全匹配；注入 ≤8 条，与 createdBlockIds 去重；文案声明不构成授权 | 注入过期锚点或跳过读取条件即失败 |
+| AN09-C 新消息续接（未实现） | 普通新消息（非 ack）在同一 TaskRun 内 | 需显式“继续任务”入口；当前不自动挂 TaskRun，避免吞掉新任务 | 自动吞并新任务即失败 |
+
+边界：锚点只含身份/类型/指纹/标签/基线，不含正文；无 ready 快照时不注入；P1-4 普通新消息入口待产品决策。
+
+## §18 PI-AG-CONTROL-10 控制冲突可执行与版本唯一（2026-10-31）
+
+**状态**：自动化 READY；真实 Provider 复现待人工。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| CT10-A 冲突可执行（自动化） | `cargo test --manifest-path src-tauri/Cargo.toml duplicate_description_compatibility_never_accepts_changed_decision_fields` | 错误含冲突字段、期望/实际（枚举/数量）、修正建议；诊断含 `conflict[]`；仍整批拒绝 | 回显用户目标/路径/正文、放行冲突副本即失败 |
+| CT10-B 版本唯一（自动化） | `cargo test ... new_turn_prompt_exposes_business_tools_without_batch_wrapper` | 提示词明确 `currentDocument` 为唯一权威，其他资源版本不是锚点，pending 预览各自带 base | 仍让模型猜多版本或使用旧 base 即失败 |
+| CT10-C 真实复现（待人工） | 同一长文任务触发控制冲突 | 模型能按字段一次改对，不再引用多个版本号 | 重复同一冲突或误用旧 base 即失败 |
+
+边界：冲突诊断只展开枚举与数量；文本类（goal/route/clarification/findings）不进入模型消息或事件。版本权威只适用于 facts 中存在 `currentDocument` 的情况。
+
+## §19 PI-AG-METRICS-11 长任务指标与回归基线（2026-10-31）
+
+**状态**：指标事件与回归矩阵 READY；真实基线未执行；提示词瘦身延后。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| MT11-A 指标事件（自动化/人工） | 任一完成回合 | `turn_metrics` 含 stopReason、previewChunkCount；续片段另见 `task_anchors_injected` | 事件缺失、含正文/参数/目标即失败 |
+| MT11-B 短文基线（待人工） | 约 1000 字单块 | 1 卡、1 次写入、无全量分页 | 多次分页或多余卡即失败 |
+| MT11-C 长文基线（待人工） | 约 4000 字、3–5 块 | 每块 1 次写入、自动续跑、锚点注入、无 332 块分页 | 出现全量分页或重复块即失败 |
+| MT11-D 超长文基线（待人工） | 4000 正文 + 3000 续写 | 统一 pending 卡、一次保存、中断可从 k 续跑 | 重复块或必须逐块确认即失败 |
+
+边界：指标只记录计数/枚举/布尔，不进入模型上下文，不构成业务成功或保存证据；提示词瘦身必须在 M1–M4 回归全绿且指标可对比后进行。
+
+## §20 PI-AG-EFFECT-12 write_content 未知效果收敛（2026-10-31）
+
+**状态**：自动化 READY；旧库真实重启复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| EF12-A 回执映射（自动化） | `cargo test --manifest-path src-tauri/Cargo.toml tool_call_receipt` | `write_content` 生成 PendingDiff 时为 succeeded/waiting/proposal_created/await_user，不再是 unknown | 仍返回 unknown 即失败 |
+| EF12-B 收敛（自动化） | `cargo test ... resolved_pending_diff_clears_stale_unknown_effect` | accepted+saved / rejected 放行新写入；pending/awaiting_save 仍 `AG_EFFECT_PENDING` | 把未保存当已解决、或永久阻断即失败 |
+| EF12-C 真实重启（待人工） | 重启应用后打开原 workspace，发起一次写入 | 旧 `unknown` 事实因 diff 已 saved 被收敛，不再直接 `AG_EFFECT_PENDING` | 仍被永久阻断即失败 |
+
+边界：收敛只释放写入守卫，不改写原 unknown 回执为成功，不自动重放；无 PendingDiff 引用的 unknown 仍阻断。
+
+## §21 PI-AG-CONTINUATION-13 多卡并存与自动续跑（2026-10-31）
+
+**状态**：自动化 READY；真实应用重启复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| CT13-A 预览回执（自动化/人工） | 生成一张 `current_editor` 卡 | `de.list_diffs` projection 带 `preview_checkpoint_required=true`；Editor 应用后触发 ack，checkpoint 转 acknowledged/consumed | 仍无 ack、checkpoint 长期 awaiting 即失败 |
+| CT13-B TaskRun 等待（自动化） | 回合以 partial 结束但仍有待预览 checkpoint | TaskRun 保持 active（不是 failed），可按预览回执续跑 | 标 failed 导致无法续跑即失败 |
+| CT13-C 多卡并存（自动化/人工） | 同一 TaskRun 连续生成第二张卡 | 第一张仍 pending，不被 `DE_CONSECUTIVE_PROPOSAL_ADVANCED` 自动置 expired；可分别接受/拒绝 | 新卡到达即旧卡 expired 即失败 |
+| CT13-D 轮次续跑（自动化/人工） | 12 轮耗尽且仍有 active TaskRun | 前端自动以同 taskRunId 启动下一回合，最多 3 次；预算行显示执行轮次剩余 | 直接 failed/要求用户手动继续即失败 |
+| CT13-E ack 排队（自动化/人工） | 预览 ack 早于父回合 done | 先排队，父回合终态后再续跑，不出现 `AG_TURN_ACTIVE` 丢弃 | ack 后无任何续跑且无排队即失败 |
+| CT13-F 新消息续接（自动化） | active TaskRun 存在时发送“继续直到完成” | `ag_start_turn` 携带同一 `continuationTaskRunId`，不再新建空任务回合 | 未携带 taskRunId 即失败 |
+
+边界：多卡并存后，接受/拒绝旧卡若实际 base 冲突会失败并保留卡片；不回滚已预览内容。自动续跑不绕过裁决、保存或授权。
+
+## §23 PI-AG-PROPOSAL-FREEZE-15 proposal 后工具冻结（2026-10-31）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| PF15-A 同回合续批（自动化/人工） | 第一轮 `write_content` 生成卡后模型继续 | 下一轮工具清单仍含 `write_content`/`propose_edit`，可提交续写批次；不出现空工具 | 提案后工具被清空即失败 |
+| PF15-B 不再询问接受（自动化/人工） | 已生成 pending 卡 | 模型不再以“是否先接受/接受后再继续”为由 clarify/final；直接续批或真实 final | 仍因 pending 卡停住即失败 |
+
+边界：用户提前接受卡片后的 accepted-diff 续跑入口尚未实现；流超时仍可能中断。
+
+## §24 PI-AG-LIFECYCLE-16 写入前失败与生命周期叙述（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| LC16-A base stale 映射（自动化） | `write_content` 因 base stale 被拒 | 回执 `effectStatus=not_started`，不是 unknown；下一次写入不被 `AG_EFFECT_PENDING` 阻断 | 仍为 unknown 即失败 |
+| LC16-B 旧 Unknown 兼容（自动化） | 旧库已有 AG_TOOL_ARG/base stale 的 Unknown | `start_fact` 判定未执行并放行新写入 | 仍 AG_EFFECT_PENDING 即失败 |
+| LC16-C 不再复述生命周期（人工） | 生成 proposal 后继续 | 回复不主动罗列接受/保存/生命周期；base stale 时重读并同回合重试 | 仍以“下一步我会”结束即失败 |
+
+边界：简单路线仍无 TaskRun/checkpoint；accepted diff 续跑入口未实现。
+
+## §25 PI-AG-STREAM-17 单次载荷与上游流（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| ST17-A 单次 24 块（自动化） | `write_content` 提交 25 块 | 工具在参数校验拒绝并提示拆批；不启动上游大流 | 接受 25 块即失败 |
+| ST17-B 拆批续写（人工） | 第一张卡后继续 | 同回合可再提交下一批，不等待用户；不出现 proposal 后 tools_frozen | 拆批后停住即失败 |
+| ST17-C 大流错误（人工） | 上游返回 GW_STREAM_ERR | 回合如实 error；不伪称完成；网关记录上游错误 | 吞掉错误/伪成功即失败 |
+
+边界：24 块是单次载荷边界，不是执行次数；`GW_STREAM_ERR` 仍可能由上游/网络触发。
+
+## §26 PI-AG-STREAM-18 流空闲期限（2026-11-01）
+
+**状态**：网关已重启；自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| ST18-A 慢速 tool_arguments（人工） | 上游 90s 无增量但仍在生成 | 客户端不提前断开；300s idle 内收到完成或真实上游错误 | 90s 即 `AG_GW_STREAM_TIMEOUT` 即失败 |
+| ST18-B 网关重启（人工） | 旧网关进程停止后重启 | `/health` ok；新请求正常；旧连接不残留 | 请求仍连旧进程即失败 |
+
+边界：300s 是时间边界；若上游 300s 无增量仍会超时，需网关原始错误与重试策略。
+
+## §27 PI-AG-STREAM-19 连接失败重试（2026-11-01）
+
+**状态**：网关已重启；自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| ST19-A 网关连接重试（自动化/人工） | 首次 connect timeout，第二次成功 | 网关记录 `upstream_connect_retry` 后继续，客户端不立即 error | 首次 timeout 即返回 GW_STREAM_ERR 即失败 |
+| ST19-B 客户端重试（自动化） | 网关返回 `GW_STREAM_ERR` 且无可见输出 | `attempt_retry` 出现，第二次模型调用发生 | 仍无重试即失败 |
+
+边界：只重试一次；有可见输出后不重试；连续两次失败仍 error。
+
+## §28 PI-AG-TASKRUN-20 新目标与旧 TaskRun（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| TR20-A 新目标收束（自动化） | 旧 TaskRun active，发送非“继续”新目标 | 旧 TaskRun 转 interrupted，新回合可建新 TaskRun；不跑 21 轮后报 DB 错误 | 仍 `AG_TASK_DB_ERROR` 即失败 |
+| TR20-B 继续水合（自动化/人工） | store 无 active TaskRun，发送“继续” | 后端核验后携带同一 taskRunId，不新建空任务回合 | task_run_id 为空即失败 |
+| TR20-C 预览续跑回退（自动化/人工） | checkpoint ack 后 preview 续跑失败 | 退回 TaskRun-only 续跑；仍失败给出“请发送继续” | 静默停住即失败 |
+
+边界：新目标不等于同一任务；旧 pending 卡不自动接受/保存。
+
+## §29 PI-AG-TASKRUN-21 预览回执与执行解耦（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| TR21-A ack 不启动（自动化） | 预览 ack 成功 | 只调用 `ag_ack_preview`，不调用 `ag_start_turn`；不新增用户消息 | 仍启动新回合即失败 |
+| TR21-B 接受/保存不控制执行（人工） | 卡片保持 pending，任务 partial | TaskRun 继续下一片段；接受/保存只改变卡片/文件 | 不接受就停住即失败 |
+| TR21-C partial 自动续跑（自动化） | 片段 done=partial，仍有 active TaskRun | 自动以同 taskRunId 开下一片段；无新 diff/步骤时暂停 | 无动作停住即失败 |
+
+边界：`waiting_preview` 等待 800ms 技术预览写入；有阻塞 DecisionRequest 或用户暂停时不自动续跑。
+
+## §30 PI-AG-CONTEXT-22 自动续跑上下文交接（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| CT22-A active target（自动化） | partial 自动续跑 | 续跑片段 `openDocCount>0`，currentDocument 为预览后 v2 | 仍 0/not_requested 即失败 |
+| CT22-B 等待预览（自动化/人工） | 有 pending preview 未 draftApplied | 不启动模型；应用后自动继续 | 空上下文启动即失败 |
+| CT22-C 单卡不等于完成（人工） | 第一张卡已应用，任务仍 partial | 继续下一批，不要求接受第一张 | 停住要求接受即失败 |
+
+边界：普通新回合仍按需读取，不强制注入正文；只有自动续跑携带 active target。
+
+## §31 PI-AG-PROMPT-23 生命周期声明清理（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| PR23-A 提示词去生命周期（自动化） | 任一回合 Prompt | 无“按 executionStatus/… 汇报”、无“成功后仍需接受/保存”、无 PreviewAck 等待句 | 仍出现即失败 |
+| PR23-B 模型 facts 投影（自动化） | 带 proposalFacts/pendingPreviews state 的 facts | 模型投影无 proposalFacts、无 state/taskRunId；保留 createdBlockIds/currentDocument | 仍暴露 accepted/saved 即失败 |
+| PR23-C 工具描述（自动化） | propose_edit/write_content schema | 描述为“建议卡已生成；pending 不阻塞”，不再要求等待接受 | 仍称“待用户裁决”即失败 |
+
+边界：运行时仍保留完整 facts 与 DE/ED 生命周期；仅模型可见投影收敛。
+
+## §32 PI-AG-TASKRUN-24 提案前任务身份（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| TR24-A 提案前建任务（自动化） | 首次 `write_content` 前无 TaskRun | `task_projected` 先于 `diff_proposed`；turn/task 已 link | diff 先出现即失败 |
+| TR24-B checkpoint（自动化） | 内容提案成功 | `task_preview_checkpoints` 有记录 | 有 diff 无 checkpoint 即失败 |
+| TR24-C partial 结算（自动化） | 片段 partial 且有 active TaskRun | TaskRun 保持 active，不 failed | 仍 failed 即失败 |
+
+边界：真实错误仍 failed；checkpoint 创建失败时的删除补偿待加强。
+
+## §33 PI-AG-LENGTH-25 长度截断与分批预算（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| LN25-A 全回合预算（自动化） | 初始回合 Prompt | 含 `[CHUNK BUDGET]`，建议 6–8 块/约 1/8 output 字符 | 缺预算即失败 |
+| LN25-B 长度重试（自动化） | 首次 length 且无可见输出 | `attempt_retry` + `[LENGTH RETRY]`，第二次最多 6 块 | 直接终结即失败 |
+| LN25-C 二次失败（自动化） | 第二次仍 length | 仅一次重试后 error，不无限循环 | 多次重试即失败 |
+
+边界：重试仅一次；有可见输出不重试；TaskRun/diff 不参与长度判断。
+
+## §34 PI-AG-DEADLOCK-26 锚点注入自锁（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| DL26-A 带锚点续跑（人工） | TaskRun 有 verified anchors 的续片段 | 回合进入 gate/provider，不卡在 `reference_projection` | 14 分钟无 provider 即失败 |
+| DL26-B DB 锁释放（代码审查） | `task_anchors_injected` 路径 | `record_internal` 调用前已 drop `conn` | 持锁记录事件即失败 |
+
+边界：其他持 DB 锁记录事件的路径仍需评审。
+
+## §35 PI-AG-TASKRUN-27 完成与 checkpoint 解耦（2026-11-01）
+
+**状态**：自动化 READY；真实复验待执行。
+
+| 卡 | 前置与操作 | 预期行为与证据 | 失败判定 |
+|---|---|---|---|
+| TR27-A 完成后不拉回（自动化） | checkpoint acknowledged/consumed，模型 stop | TaskRun completed | 仍 Active 即失败 |
+| TR27-B 等待技术预览（自动化） | checkpoint awaiting_ack | TaskRun Active，等待应用 | 直接 Completed 即失败 |
+| TR27-C 重启恢复（人工） | TaskRun interrupted 且有进度，用户“继续” | 恢复 same taskRunId 为 active | 新建 TaskRun 或拒绝即失败 |
+
+边界：重启自动恢复未实现；需用户“继续”。
+
 ## 变更记录
 
 | 日期 | 版本 | 变更内容 |
 |---|---|---|
+| 2026-11-01 | v3.48 | §35 PI-AG-TASKRUN-27：仅 awaiting_ack 阻止完成；interrupted 可恢复。 |
+| 2026-11-01 | v3.47 | §34 PI-AG-DEADLOCK-26：锚点注入先释放 DB 锁，避免自锁。 |
+| 2026-11-01 | v3.46 | §33 PI-AG-LENGTH-25：全回合 chunk budget；长度截断缩小批次重试一次。 |
+| 2026-11-01 | v3.45 | §32 PI-AG-TASKRUN-24：提案前建 TaskRun；checkpoint 必需；partial 保持 active。 |
+| 2026-11-01 | v3.44 | §31 PI-AG-PROMPT-23：提示词/工具描述/facts 投影去 diff 生命周期。 |
+| 2026-11-01 | v3.43 | §30 PI-AG-CONTEXT-22：自动续跑注入 active target；等预览应用；单卡不等于完成。 |
+| 2026-11-01 | v3.42 | §29 PI-AG-TASKRUN-21：预览回执与执行解耦；partial 自动续跑；接受/保存不进入执行控制。 |
+| 2026-11-01 | v3.41 | §28 PI-AG-TASKRUN-20：新目标收束旧 TaskRun；继续前核验 active TaskRun；预览续跑回退。 |
+| 2026-11-01 | v3.40 | §27 PI-AG-STREAM-19：网关一次连接重试；客户端 RoundOutcome::Failed 重试。 |
+| 2026-11-01 | v3.39 | §26 PI-AG-STREAM-18：流空闲 90→300s；网关重启；保留 1200s round deadline。 |
+| 2026-11-01 | v3.38 | §25 PI-AG-STREAM-17：单次 write_content 24 块载荷边界；拆批同回合继续。 |
+| 2026-11-01 | v3.37 | §24 PI-AG-LIFECYCLE-16：写入前失败映射 not_started、旧 Unknown 兼容、提示词去除生命周期复述。 |
+| 2026-10-31 | v3.36 | §23 PI-AG-PROPOSAL-FREEZE-15：删除 proposal 后 tools_frozen，允许同回合续批；提示词禁止以等待接受停滞。 |
+| 2026-10-31 | v3.35 | §22 PI-AG-LIMIT-REMOVE-14：删除模型轮次/只读/写入/纠错/收尾额度与 budget_exhausted；保留上下文与副作用边界。 |
+| 2026-10-31 | v3.34 | §21 PI-AG-CONTINUATION-13：checkpoint 标志、TaskRun 等待态、多卡并存与轮次自动续跑验收；真实重启复验单列。 |
+| 2026-10-31 | v3.33 | §20 PI-AG-EFFECT-12：write_content 回执映射与 unknown 效果按 PendingDiff 收敛的验收；旧库重启复验单列。 |
+| 2026-10-31 | v3.32 | §19 PI-AG-METRICS-11：回合指标事件与 1000/4000/4000+3000 回归矩阵；提示词瘦身延后。 |
+| 2026-10-31 | v3.31 | §18 PI-AG-CONTROL-10：控制冲突脱敏期望/实际与修正建议、currentDocument 唯一版本口径的自动化验收；真实复现单列待办。 |
+| 2026-10-31 | v3.30 | §17 PI-AG-ANCHOR-09：TaskRun 已验证锚点的去重/上限/失效注入自动化验收；新消息续接入口单列待决。 |
+| 2026-10-31 | v3.29 | §16 PI-AG-BUDGET-08：只读 100/写入 5 分离、TaskControl 不计写入、模型可见额度单行化的自动化验收；真实长文复现单列待办。 |
+| 2026-10-31 | v3.28 | §15 PI-AG-CTX-FACTS-07：预览三态与 currentDocument 加法事实的自动化验收；真实长文复现单列待办。 |
 | 2026-10-25 | v3.27 | OC01～02：输出预算实际出站、截断用量/参数摘要、失败正文持久恢复及私有明文文件；真实Provider和窗口另验。 |
 | 2026-10-25 | v3.26 | CE01～03：运行版本/正文摘要、正常stop结构风险与原裁决执行事实回注；窗口验证明确保留。 |
 | 2026-10-24 | v3.25 | §14.68 CT01～05：空创建契约、原链字段反馈/累计纠错、上游帧完整性及本机日志分片校验；真实Provider/窗口单列。 |

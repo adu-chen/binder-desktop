@@ -130,10 +130,8 @@ async function expireDiff(diffId: string, reason: ExpiredReason, errorCode: stri
  * rules:    BR-SYS-STATE-008
  * boundary: in=NewProposalBaseAdvanced | out=PriorStalePendingCardsExpired(documentRevisionAdvanced) | does_not=rollback_or_touch_disk | consumer=BR-SYS-STATE-008
  */
-/** 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：后续 Proposal 基于最新 LogicalState 生成/预览
- * 成功后，使同文档所有基于旧基准的 pending 卡失效（document_revision_advanced）。旧卡保留历史、不可再
- * 裁决；不构成补丁栈、无任务级回滚、不触碰磁盘内容。并行同基准卡（同版本同哈希）不受影响；background
- * pending 卡（无 LogicalState 基准）不参与。 */
+/** 显式失效工具（保留给显式冲突/测试）：不再由新 Proposal 生成或预览自动调用。
+ * PI-AG-CONTINUATION-13 起，多批 pending 卡并存；旧卡是否可安全裁决由 accept/save 按实际 base 校验。 */
 export async function expireStalePendingForPath(
   relPath: string,
   exceptDiffId: string,
@@ -285,12 +283,8 @@ export async function applyOpenSessionDiff(diffId: string): Promise<void> {
   // 不调用 de.accept_draft_diff。accept 由后续用户操作驱动。
   await persistSessionSnapshot(applied.snapshot);
   deStore.markDraftApplied(diffId, session.content, session.tabState, nextContent);
-  // 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：本卡成功预览推进 session 基准，
-  // 使同文档基于旧基准的 pending 卡失效（保留历史、不可裁决；不产生任务级回滚）。
-  await expireStalePendingForPath(diff.relPath, diffId, {
-    sessionVersion: applied.snapshot.sessionVersion,
-    contentHash: applied.snapshot.contentHash,
-  });
+  // 预览推进基准不再自动失效同文档其他 pending 卡：多块任务必须允许并存，
+  // 接受/保存时再由实际基线检验，不在预览时静默改写其他卡的生命周期。
 }
 
 /**

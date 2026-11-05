@@ -414,7 +414,9 @@ PromptPackageV2
 CapabilityGrantV2
   grant_id / turn_id / computed_at_seq / allowed_tools / readable_scope
   explicit_edit_targets_hash / permitted_effect_paths / format_capability_hash
-  dynamic_capability_hash / decision_receipt_ids[] / budgets / expires_after_tool_call
+  dynamic_capability_hash / decision_receipt_ids[] /
+  budgets{maxReadToolCalls,remainingReadToolCalls,maxWriteToolCalls,remainingWriteToolCalls} /
+  expires_after_tool_call
 ```
 
 `CapabilityGrantV2` 在每次工具请求前按当前事实重新计算，动作结束即失效；IntentResult、TaskPlan 和兼容
@@ -461,8 +463,9 @@ ModelFinalEnvelopeV2 派生 ProjectReport：只保留当前 turn、`evidence_thr
 后续副本若存在仍须独立合法且`nextAction=tool`，但不作为新的任务级意图；其字段差异仅记录固定字段名，主控制及各项业务参数原样保留。
 这一兼容只适用于运行时已验证的只读直接工具组；有副作用工具和历史冻结协议仍严格要求副本的动作、意图类型、目标候选、副作用意图、歧义、上下文需求、确认点一致，
 仅`intent.goal / route.summary / route.steps`允许不同。该兼容不修改参数、不扩大grant、不覆盖已解析控制、不放行畸形副本，
-也不合并或执行副本路线；无主控制、非法副本、非只读组的实质控制矛盾仍整批未执行。纠错额度按回合累计，成功不清零。协议诊断应包含固定reasonCode、fieldPath、controlSource、toolIndex；
-反序列化不能精确定位时明示`$control`，不从原始异常回显用户值或未知键名，不伪称已确定具体字段。
+也不合并或执行副本路线；无主控制、非法副本、非只读组的实质控制矛盾仍整批未执行。纠错额度按回合累计，成功不清零。协议诊断应包含固定 reasonCode、fieldPath、controlSource、toolIndex；实质冲突另含
+`conflict[{field,expected,actual}]`：枚举给字面值、数组给数量、文本类只给“<文本已省略>”。
+反序列化不能精确定位时明示 `$control`，不从原始异常回显用户值或未知键名，不伪称已确定具体字段。
 
 #### 执行额度与动作交接（AG-ACTION-HANDOFF-BUDGET-01）
 
@@ -472,14 +475,13 @@ ModelFinalEnvelopeV2 派生 ProjectReport：只保留当前 turn、`evidence_thr
 资源请求没有真实计划时，普通 final 在正文展示前拒绝并进入原有共享有界纠错；模型应生成
 `plan_workspace_operation`、提出阻断性澄清，或如实声明阶段结果。已成功产生的同回合计划回执在续行时保留，不能再次强制生成计划。
 
-唯一开发侧 `ExecutionBudgetPolicy` 默认模型 12 次、工具 16 次、共享协议纠错 2 次、模型收尾预留 2 次；
-四项分别计量，不合并成 token 上限，也不允许模型调大。策略于回合首次进入时冻结为内部
-`execution_budget_frozen` 事实；调用/纠错从持久事件恢复，澄清/裁决不重置。旧在途无冻结记录但已有调用的回合沿用旧 6/6 硬边界。
-`execution_budget_checked` 只记录计数与收尾标记，不记录正文/参数。Prompt token、单工具结果及能力期限仍各自负责不同风险。
+Agent 执行侧**不存在模型轮次、只读/写入工具、纠错或收尾预留额度**；回合只由模型 `final`/`clarify`、
+真实错误或用户取消结束。运行时不再冻结或暴露 `ExecutionBudgetPolicy`，`CapabilityGrant` 也不再携带
+`budgets`。仍保留的只是硬边界：Prompt token 容量、单工具结果 12,000 字符、`read_doc`/`list_blocks`
+分页、`block_ops` 单卡 64 操作/64KB、`write_content` 12,000 字符、单 session 单活回合、待裁决
+DecisionRequest、`AG_EFFECT_PENDING` 与各时间期限。这些边界防止上下文溢出或副作用失控，不是执行次数额度。
+`done.stopReason` 不再出现 `budget_exhausted`；未完成任务按真实 completion/终态结算。
 
-工具归零或进入模型预留额度后，native tools 清空，禁止新工具和新等待，只允许依据既有事实收尾。
-模型不能提供合规收尾时，在硬额度/纠错上限内由运行时输出最小未完成说明；网络/Gate/取消仍走原有真实错误/取消出口。
-`done.stopReason=budget_exhausted` 表示执行额度收尾，**不是业务完成**；存在 TaskRun 时未完成任务不标为 Completed。
 `done.stopReason=report_only/blocked/no_op/partial` 表示上述阶段结果，不创建裁决等待、不表示接受或保存。
 
 前端保留阶段原因并从真实事件恢复；额度收尾显示“继续未完成部分”。该按钮仅在原回合证据完整且只读时
@@ -719,7 +721,7 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 
 带初始内容的创建（含单独创建）统一等待原资源计划的真实保存屏障；预览ack只记录检查点，不启动第二AgentTurn。原裁决回合保持等待，接受不等于保存，保存后经原裁决入口重验并一次续行。初始内容卡的sessionId/turnId/anchorMessageId归属原助手消息，不能掉入未归属建议区。
 
-普通提案预览沿用已存在的检查点续片段协议：冻结原用户请求、provider/model、会话及工作区；新片段不插入role=user、不伪造用户输入、不复活旧终态。只有真实回执和新快照验证通过才提交，缺失原身份不得猜用当前全局模型；后端终态/取消/一次消费保护仍有效。
+普通提案预览回执只是技术事实：编辑器已把预览写入当前 LogicalState。它不启动、不恢复、不停止 TaskRun，也不等于接受或保存；`preview_checkpoint_required` 只用于技术基线核验。TaskRun 是否继续由调度器按 `partial`/剩余工作/无阻塞裁决决定，用户接受/拒绝/保存只改变卡片与磁盘状态。
 
 历史列表增加只读`internal_continuation`来源投影，取自同workspace/session/turn的运行时turn_started.previewContinuationDiffId；不由前端历史缓存提供，不参与执行授权。旧记录缺失时按普通记录读取，不按正文猜测来源。内部片段沿用旧payload中的原请求快照以支持审计，但恢复UI不把它插入用户发言；实际助手回复仍从后端事件归约恢复，不恢复自动继续资格。
 
@@ -742,6 +744,9 @@ list_tables 返回值为准，ImageOperation 仍以 list_images 的当前基线�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-10-31 | v1.52 | PI-AG-LIMIT-REMOVE-14：删除模型轮次/只读/写入/纠错/收尾额度与 budget_exhausted；仅保留上下文、原子块操作与副作用边界。 |
+| 2026-10-31 | v1.51 | PI-AG-CONTROL-10：控制冲突诊断增脱敏 expected/actual（枚举/数量；文本省略）与修正建议，仍不回显用户目标、路径、正文或澄清问题。 |
+| 2026-10-31 | v1.50 | PI-AG-BUDGET-08：CapabilityGrantV2.budgets 拆为只读/写入四项；模型可见额度只保留预算行，grant budgets 不进入模型上下文；默认只读 100 / 写入 5，TaskControl 不计写入，旧在途保持 6/6。 |
 | 2026-10-25 | v1.49 | 显式max_tokens、容量/未完成参数观察及失败正文与诊断分别持久恢复；截断不执行半截批次。 |
 | 2026-10-25 | v1.48 | 结束原因/运行版本/正文摘要取证、结构风险提示与同身份裁决效果回注；不新增自动执行或权限。 |
 | 2026-10-24 | v1.47 | 空HTML冻结初始内容、字段级参数纠正、失败文本控制与本机分片审计完整性契约；不增加执行权。 |

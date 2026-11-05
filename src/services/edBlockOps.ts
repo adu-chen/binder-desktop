@@ -309,7 +309,15 @@ function insertedNodeId(operation: StructuredBlockOperation): string | null {
 }
 
 function nodeMatchesJson(node: PMNode, expected: Record<string, unknown> | null): boolean {
-  return Boolean(expected) && stableJson(node.toJSON()) === stableJson(expected);
+  if (!expected) return false;
+  // 后端只带业务显式 attrs（如 blockId）；编辑器 schema 会补齐默认 attrs（如 textAlign:null）。
+  // 两侧都先按同一 schema 归一化，再比较，避免把 schema 默认值误判为结构不一致。
+  try {
+    const normalized = node.type.schema.nodeFromJSON(expected);
+    return stableJson(node.toJSON()) === stableJson(normalized.toJSON());
+  } catch {
+    return false;
+  }
 }
 
 function countAddressableBlocks(doc: PMNode): number {

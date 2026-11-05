@@ -12,81 +12,9 @@ use super::tool::{validate_tool, ToolDecision};
 use super::turn::AGENT_EDIT_1_0_PROFILE;
 use std::collections::BTreeSet;
 
-/// Trusted execution policy, not a model-supplied permission or provider token budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ExecutionBudgetPolicy {
-    pub max_model_calls: usize,
-    pub max_tool_calls: u32,
-    pub max_corrections: usize,
-    pub final_reserve: usize,
-}
-
-impl Default for ExecutionBudgetPolicy {
-    fn default() -> Self {
-        Self {
-            max_model_calls: 12,
-            max_tool_calls: 16,
-            max_corrections: 2,
-            final_reserve: 2,
-        }
-    }
-}
-
-impl ExecutionBudgetPolicy {
-    pub(super) fn legacy() -> Self {
-        Self {
-            max_model_calls: 6,
-            max_tool_calls: 6,
-            max_corrections: 2,
-            final_reserve: 0,
-        }
-    }
-    pub(super) fn valid(self) -> bool {
-        self.max_model_calls > 0
-            && self.max_model_calls <= 12
-            && self.max_tool_calls > 0
-            && self.max_tool_calls <= 16
-            && self.max_corrections <= 2
-            && self.final_reserve < self.max_model_calls
-    }
-}
-
-#[cfg(any(test, debug_assertions))]
-thread_local! { static VERIFICATION_POLICY: std::cell::Cell<Option<ExecutionBudgetPolicy>> = const { std::cell::Cell::new(None) }; }
-
-pub(super) fn configured_execution_policy() -> ExecutionBudgetPolicy {
-    #[cfg(any(test, debug_assertions))]
-    if let Some(policy) = VERIFICATION_POLICY.with(|slot| slot.get()) {
-        return policy;
-    }
-    ExecutionBudgetPolicy::default()
-}
-
-#[cfg(any(test, debug_assertions))]
-pub(super) async fn with_verification_execution_policy<F: std::future::Future>(
-    policy: ExecutionBudgetPolicy,
-    future: F,
-) -> F::Output {
-    assert!(policy.valid());
-    struct Restore(Option<ExecutionBudgetPolicy>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            VERIFICATION_POLICY.with(|slot| slot.set(self.0));
-        }
-    }
-    futures_util::pin_mut!(future);
-    futures_util::future::poll_fn(|cx| {
-        let _restore = Restore(VERIFICATION_POLICY.with(|slot| slot.replace(Some(policy))));
-        future.as_mut().poll(cx)
-    })
-    .await
-}
-
 /// Prompt 装配时已核验的当前格式/动态事实；只用于继续收窄，不作为独立授权来源。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct CapabilityFactorsV2 {
-    pub(super) execution_policy: ExecutionBudgetPolicy,
     pub(super) has_task_run: bool,
     pub(super) active_bdocx: bool,
     pub(super) table_ops_available: bool,
@@ -95,16 +23,8 @@ pub(super) struct CapabilityFactorsV2 {
     pub(super) decision_receipt_ids: Vec<String>,
     pub(super) gate_attempt: u32,
     pub(super) gate_passed: bool,
-    pub(super) remaining_tool_calls: u32,
     pub(super) cancelled: bool,
     pub(super) terminal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityBudgetsV2 {
-    pub max_tool_calls: u32,
-    pub remaining_tool_calls: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,7 +57,6 @@ pub struct CapabilityGrantV2 {
     pub format_capability_hash: String,
     pub dynamic_capability_hash: String,
     pub decision_receipt_ids: Vec<String>,
-    pub budgets: CapabilityBudgetsV2,
     pub expires_after_tool_call: Option<String>,
     pub expires_after_runtime_effect: Option<String>,
     pub grant_kind: String,
@@ -189,10 +108,7 @@ pub(super) fn resolve_capability_grant_v2(
             tool_call_id,
             computed_at_seq,
         } => {
-            !tool_call_id.trim().is_empty()
-                && *computed_at_seq > 0
-                && factors.gate_passed
-                && factors.remaining_tool_calls > 0
+            !tool_call_id.trim().is_empty() && *computed_at_seq > 0 && factors.gate_passed
         }
         CapabilityGrantPurposeV2::RuntimeWorkspaceEffect {
             plan_id,
@@ -216,30 +132,34 @@ pub(super) fn resolve_capability_grant_v2(
         && !factors.tools_frozen
         && !factors.cancelled
         && !factors.terminal
-        && factors.remaining_tool_calls > 0
         && execution_is_valid
         && !is_runtime_workspace_effect;
     let mut allowed_tools = if runtime_is_active {
-        vec![
+        // TaskControl 只创建确认点，不直接写文档或资源。
+        vec!["plan_workspace_operation", "propose_decision"]
+    } else {
+        Vec::new()
+    };
+    if runtime_is_active {
+        allowed_tools.extend([
             "list_docs",
             "workspace_glob",
             "search_text",
             "read_doc",
             "list_blocks",
-            "plan_workspace_operation",
-            "propose_decision",
-        ]
-    } else {
-        Vec::new()
-    };
+        ]);
+    }
     if !explicit_edit_targets.is_empty() && runtime_is_active {
-        allowed_tools.extend(["propose_edit", "edit_blocked"]);
+        allowed_tools.extend(["propose_edit", "write_content", "edit_blocked"]);
     }
     if runtime_is_active && factors.active_bdocx && factors.table_ops_available {
         allowed_tools.push("list_tables");
     }
     if runtime_is_active && factors.active_bdocx && factors.image_ops_available {
-        allowed_tools.extend(["list_images", "import_image_asset"]);
+        allowed_tools.push("list_images");
+    }
+    if runtime_is_active && factors.active_bdocx && factors.image_ops_available {
+        allowed_tools.push("import_image_asset");
     }
     allowed_tools.retain(|tool| is_registered(tool));
     allowed_tools.sort_unstable();
@@ -369,7 +289,6 @@ pub(super) fn resolve_capability_grant_v2(
             "formatCapabilityHash": &format_capability_hash,
             "dynamicCapabilityHash": &dynamic_capability_hash,
             "decisionReceiptIds": &factors.decision_receipt_ids,
-            "remainingToolCalls": factors.remaining_tool_calls,
             "expiresAfterToolCall": &expires_after_tool_call,
             "expiresAfterRuntimeEffect": &expires_after_runtime_effect,
             "grantKind": &grant_kind,
@@ -395,10 +314,6 @@ pub(super) fn resolve_capability_grant_v2(
         format_capability_hash,
         dynamic_capability_hash,
         decision_receipt_ids: factors.decision_receipt_ids,
-        budgets: CapabilityBudgetsV2 {
-            max_tool_calls: factors.execution_policy.max_tool_calls,
-            remaining_tool_calls: factors.remaining_tool_calls,
-        },
         expires_after_tool_call,
         expires_after_runtime_effect,
         grant_kind,
@@ -477,7 +392,6 @@ pub fn validate_requested_tool_for_grant(
         || grant.computed_at_seq != computed_at_seq
         || grant.expires_after_tool_call.as_deref() != Some(tool_call_id)
         || !grant.gate_passed
-        || grant.budgets.remaining_tool_calls == 0
     {
         return ToolDecision::Reject("工具授权已过期或不属于当前回合".to_string());
     }
@@ -715,6 +629,88 @@ pub fn validate_requested_tool_for_grant(
                 return ToolDecision::Reject("本轮未获 BDocx 图片动态能力".to_string());
             }
             _ => {}
+        }
+    }
+    if name == "write_content" {
+        if grant
+            .parameter_constraints
+            .iter()
+            .any(|constraint| constraint == "new_document_requires_workspace_operation_plan")
+        {
+            return ToolDecision::Reject(
+                "新建文档必须使用 plan_workspace_operation；write_content 只用于既有文档"
+                    .to_string(),
+            );
+        }
+        let raw_target = params
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if raw_target.trim().is_empty() {
+            return ToolDecision::Reject("write_content 缺少目标 path".to_string());
+        }
+        let target = match normalize_workspace_path(raw_target) {
+            Ok(target) => target,
+            Err(reason) => return ToolDecision::Reject(reason),
+        };
+        if !grant.target_scope.iter().any(|allowed| allowed == &target) {
+            return ToolDecision::Reject(format!(
+                "既有文档 {target} 不在当前 ExplicitEditTargetSet"
+            ));
+        }
+        let action = params.get("action").and_then(|value| value.as_str());
+        if !matches!(
+            action,
+            Some("insert_before" | "insert_after" | "append")
+        ) {
+            return ToolDecision::Reject(
+                "write_content.action 仅支持 insert_before/insert_after/append".to_string(),
+            );
+        }
+        if action != Some("append")
+            && params
+                .get("targetBlockId")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+        {
+            return ToolDecision::Reject("write_content 插入操作必须提供 targetBlockId".to_string());
+        }
+        let blocks = params
+            .get("blocks")
+            .and_then(|value| value.as_array())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if blocks.is_empty() {
+            return ToolDecision::Reject("write_content.blocks 不能为空".to_string());
+        }
+        if blocks.len() > 24 {
+            return ToolDecision::Reject(
+                "write_content 单次最多 24 个内容块；请拆分为多次写入，后续批次可在同一回合继续"
+                    .to_string(),
+            );
+        }
+        let mut total_chars = 0usize;
+        for block in blocks {
+            let block_type = block.get("type").and_then(|value| value.as_str());
+            if !matches!(block_type, Some("paragraph" | "heading")) {
+                return ToolDecision::Reject(
+                    "write_content.blocks[].type 仅支持 paragraph/heading".to_string(),
+                );
+            }
+            let text = block.get("text").and_then(|value| value.as_str()).unwrap_or("");
+            if text.trim().is_empty() {
+                return ToolDecision::Reject(
+                    "write_content.blocks[].text 不能为空".to_string(),
+                );
+            }
+            total_chars = total_chars.saturating_add(text.chars().count());
+            if total_chars > 12_000 {
+                return ToolDecision::Reject(
+                    "write_content 单次正文超过 12000 字符；请拆分为多次写入".to_string(),
+                );
+            }
         }
     }
     if name == "list_docs" {
@@ -970,6 +966,12 @@ pub const TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "propose_edit",
+        permission: ToolPermission::WriteIntent,
+        capability_id: "document_edit",
+        requires_fresh_host_context: true,
+    },
+    ToolDef {
+        name: "write_content",
         permission: ToolPermission::WriteIntent,
         capability_id: "document_edit",
         requires_fresh_host_context: true,
@@ -1302,9 +1304,124 @@ fn propose_edit_definition_json(
         "type": "function",
         "function": {
             "name": "propose_edit",
-            "description": "对文档提出待用户裁决的修改建议，不直接写盘。工具成功只表示 pending 建议卡已生成，不表示编辑器预览已应用、用户已接受或文件已保存；没有客户端状态回执时，回复只能说「已提出建议，待确认」。纯文本局部编辑使用 replace_block。当前 BDocx 的整篇重写只有运行时声明确认无表格且无图片时才可用 replace_document + 完整 HTML；否则 replace_document 会被后端拒绝，既有文字内容用 block_ops，表格/图片分别用 table_ops/image_ops。block_ops 只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交。可用 insert_before/insert_after/append 插入一个新的 heading 块；replace_node 必须保留既有块类型，不能把既有段落转换为标题。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档受保护结构。",
+            "description": "对文档生成修改建议，不直接写盘。工具成功只表示建议卡已生成；不主动汇报接受/保存/预览状态，pending 不阻塞后续批次。纯文本局部编辑使用 replace_block。当前 BDocx 的整篇重写只有运行时声明确认无表格且无图片时才可用 replace_document + 完整 HTML；否则 replace_document 会被后端拒绝，既有文字内容用 block_ops，表格/图片分别用 table_ops/image_ops。block_ops 只能命中 list_blocks 返回 capabilities=replace_node 的内容块，并带回稳定 blockId/fingerprint/expectedNodeType 和受控 afterNode；容器/原子块不可通用替换，相关多块须同批提交。可用 insert_before/insert_after/append 插入新块（paragraph/heading/codeBlock）；append 只追加到文档末尾、不能用于章节中部；章节中部多段插入须以同一锚点承载全部新块，同一锚点可连续插入多段、按 operations 数组顺序落位并自动合为一张卡，但同一锚点不得混用 insert_before 与 insert_after；adjudicationGroup 只能合并文档顺序相邻的块，不能把中部修改与文末 append 同组；replace_node 必须保留既有块类型，不能把既有段落转换为标题。只改样式使用 style_ops。表格先 list_tables 再用 table_ops；图片先 list_images 再用 image_ops，支持受控插入、删除、缩放、上下移动、独立段落对齐及 resize/layout/move。不得用原始 HTML 绕过富文档受保护结构。长文按章节拆成 6–8 块/批，参数 JSON 必须落在单次模型输出预算内。",
             "parameters": propose_edit_parameters
         }
+    }))
+}
+
+pub fn write_content_definition_json() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "write_content",
+            "description": "语义级正文写入：只提供要写的正文，运行时编译为 block_ops 并生成修改建议卡，不直接写盘。适用于插入/追加正文段落或小标题；表格、图片、删除、属性修改仍用 propose_edit。append 只落文档末尾；章节中部插入用 insert_before/insert_after + targetBlockId。成功后只表示建议已生成；继续下一批，不要等待接受。单次建议 6–8 个内容块、约 1,200–1,800 个中文字符；24 块只是硬上限，参数 JSON 必须落在单次模型输出预算内。多个新块按 blocks 数组顺序落位。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "已授权的既有文档路径"},
+                    "base": {
+                        "type": "object",
+                        "properties": {
+                            "sessionVersion": {"type": "integer"},
+                            "contentHash": {"type": "string"}
+                        },
+                        "required": ["sessionVersion", "contentHash"],
+                        "additionalProperties": false
+                    },
+                    "action": {"type": "string", "enum": ["insert_before", "insert_after", "append"]},
+                    "targetBlockId": {"type": "string", "description": "插入锚点块 id；append 时省略"},
+                    "blocks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 24,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "enum": ["paragraph", "heading"]},
+                                "text": {"type": "string"},
+                                "level": {"type": "integer", "enum": [1, 2, 3]}
+                            },
+                            "required": ["type", "text"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["path", "base", "action", "blocks"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+/// 把语义级 write_content 参数编译成既有 propose_edit(block_ops) 参数，复用同一条 DE 写路径。
+pub fn compile_write_content_params(
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, crate::ipc::IpcError> {
+    let invalid = |message: &str| {
+        crate::ipc::IpcError::new("AG_WRITE_CONTENT_INVALID", message, true, false)
+    };
+    let path = params
+        .get("path")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| invalid("write_content 缺少 path"))?;
+    let base = params
+        .get("base")
+        .cloned()
+        .ok_or_else(|| invalid("write_content 缺少 base"))?;
+    let action = params
+        .get("action")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| invalid("write_content 缺少 action"))?;
+    if !matches!(action, "insert_before" | "insert_after" | "append") {
+        return Err(invalid("write_content.action 不受支持"));
+    }
+    let target = params
+        .get("targetBlockId")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if action != "append" && target.trim().is_empty() {
+        return Err(invalid("write_content 插入操作缺少 targetBlockId"));
+    }
+    let blocks = params
+        .get("blocks")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| invalid("write_content 缺少 blocks"))?;
+    let mut operations = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let block_type = block
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let text = block
+            .get("text")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !matches!(block_type, "paragraph" | "heading") || text.trim().is_empty() {
+            return Err(invalid("write_content.blocks 含不支持的块或空文本"));
+        }
+        let mut attrs = serde_json::Map::new();
+        if block_type == "heading" {
+            attrs.insert(
+                "level".to_string(),
+                serde_json::json!(block.get("level").and_then(|value| value.as_u64()).unwrap_or(2)),
+            );
+        }
+        operations.push(serde_json::json!({
+            "op": action,
+            "blockId": if action == "append" { "" } else { target },
+            "afterNode": {
+                "type": block_type,
+                "attrs": serde_json::Value::Object(attrs),
+                "content": [{"type": "text", "text": text}]
+            }
+        }));
+    }
+    Ok(serde_json::json!({
+        "path": path,
+        "operation": "block_ops",
+        "base": base,
+        "operations": operations
     }))
 }
 
@@ -1314,6 +1431,9 @@ pub fn tool_definitions_json(
     all.as_array_mut()
         .expect("tool definitions must be an array")
         .push(propose_edit_definition_json()?);
+    all.as_array_mut()
+        .expect("tool definitions must be an array")
+        .push(write_content_definition_json());
     Ok(all)
 }
 
@@ -1326,6 +1446,11 @@ pub fn tool_definitions_json_for_grant(
         all.as_array_mut()
             .expect("tool definitions must be an array")
             .push(propose_edit_definition_json()?);
+    }
+    if grant.allows("write_content") {
+        all.as_array_mut()
+            .expect("tool definitions must be an array")
+            .push(write_content_definition_json());
     }
     let filtered = all
         .as_array()
@@ -1354,7 +1479,7 @@ pub fn tool_definitions_json_for_grant(
             .any(|value| value == "bdocx_image_ops_allowed");
         // Do not advertise table/image routes in a generic description after their
         // schemas have been removed. Format-specific instructions remain separately gated.
-        definition["function"]["description"] = "对已授权既有文档生成待裁决修改建议，不直接写盘。成功不表示预览、接受或保存。只选择operation枚举及当前文档声明允许的操作；精确节点修改先read_doc(blocks)取得完整结构、base及fingerprint，正文阅读页不是HTML编辑载荷。新建文档用plan_workspace_operation。".into();
+        definition["function"]["description"] = "对已授权既有文档生成修改建议，不直接写盘；成功只表示建议已生成，pending 不阻塞后续批次。只选择operation枚举及当前文档声明允许的操作；精确节点修改先read_doc(blocks)取得完整结构、base及fingerprint，正文阅读页不是HTML编辑载荷。新建文档用plan_workspace_operation。结果中的created_block_ids是本次新建块；分块续写时下一块以最后一个新块为insert_after锚点，并使用预览回执后的新base。".into();
         let allowed = |operation: &str| match operation {
             "table_ops" => table_allowed,
             "image_ops" => image_allowed,
@@ -1606,8 +1731,58 @@ mod tests {
     }
 
     #[test]
+    fn write_content_compiles_to_block_ops_with_ordered_blocks() {
+        let params = serde_json::json!({
+            "path": "notes/a.md",
+            "base": {"sessionVersion": 1, "contentHash": "h"},
+            "action": "insert_after",
+            "targetBlockId": "b1",
+            "blocks": [
+                {"type": "paragraph", "text": "第一段"},
+                {"type": "heading", "text": "小标题", "level": 2}
+            ]
+        });
+        let compiled = compile_write_content_params(&params).unwrap();
+        assert_eq!(compiled["operation"], "block_ops");
+        assert_eq!(compiled["base"]["contentHash"], "h");
+        let operations = compiled["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 2);
+        assert_eq!(operations[0]["op"], "insert_after");
+        assert_eq!(operations[0]["blockId"], "b1");
+        assert_eq!(operations[0]["afterNode"]["content"][0]["text"], "第一段");
+        assert_eq!(operations[1]["afterNode"]["attrs"]["level"], 2);
+    }
+
+    #[test]
+    fn write_content_append_uses_empty_anchor_and_rejects_empty_text() {
+        let params = serde_json::json!({
+            "path": "notes/a.md",
+            "base": {"sessionVersion": 1, "contentHash": "h"},
+            "action": "append",
+            "blocks": [{"type": "paragraph", "text": "末尾"}]
+        });
+        let compiled = compile_write_content_params(&params).unwrap();
+        assert_eq!(compiled["operations"][0]["blockId"], "");
+        let empty = serde_json::json!({
+            "path": "notes/a.md",
+            "base": {"sessionVersion": 1, "contentHash": "h"},
+            "action": "append",
+            "blocks": [{"type": "paragraph", "text": "   "}]
+        });
+        assert!(compile_write_content_params(&empty).is_err());
+    }
+
+    #[test]
+    fn write_content_definition_is_in_manifest() {
+        let definitions = tool_definitions_json().unwrap();
+        assert!(definitions.as_array().unwrap().iter().any(|definition| {
+            definition["function"]["name"] == "write_content"
+        }));
+    }
+
+    #[test]
     fn tools_registered_with_expected_permissions() {
-        assert_eq!(TOOLS.len(), 12);
+        assert_eq!(TOOLS.len(), 13);
         assert!(is_registered("read_doc"));
         assert!(is_registered("list_docs"));
         assert!(is_registered("search_text"));
@@ -1621,6 +1796,7 @@ mod tests {
         assert!(is_registered("import_image_asset"));
         assert!(is_registered("edit_blocked"));
         assert!(is_registered("propose_edit"));
+        assert!(is_registered("write_content"));
         assert!(is_registered("propose_decision"));
         assert!(is_registered("plan_workspace_operation"));
         assert!(!is_registered("delete_file"));
@@ -1751,10 +1927,7 @@ mod tests {
             AGENT_EDIT_1_0_PROFILE,
             turn_id,
             targets,
-            CapabilityFactorsV2 {
-                remaining_tool_calls: 6,
-                ..factors
-            },
+            factors,
             CapabilityGrantPurposeV2::PromptManifest,
         )
     }
@@ -1773,7 +1946,6 @@ mod tests {
             CapabilityFactorsV2 {
                 gate_attempt: 1,
                 gate_passed: true,
-                remaining_tool_calls: 6,
                 ..factors
             },
             CapabilityGrantPurposeV2::ToolCall {
@@ -1822,7 +1994,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_grant_binds_turn_call_seq_gate_budget_and_is_single_use() {
+    fn execution_grant_binds_turn_call_seq_gate_and_is_single_use() {
         let grant = execution_grant(
             "turn-1",
             "call-1",
@@ -1881,23 +2053,15 @@ mod tests {
         for factors in [
             CapabilityFactorsV2 {
                 gate_passed: false,
-                remaining_tool_calls: 6,
                 ..Default::default()
             },
             CapabilityFactorsV2 {
                 gate_passed: true,
-                remaining_tool_calls: 0,
-                ..Default::default()
-            },
-            CapabilityFactorsV2 {
-                gate_passed: true,
-                remaining_tool_calls: 6,
                 cancelled: true,
                 ..Default::default()
             },
             CapabilityFactorsV2 {
                 gate_passed: true,
-                remaining_tool_calls: 6,
                 terminal: true,
                 ..Default::default()
             },
@@ -2454,11 +2618,11 @@ mod tests {
         assert!(schema.contains("allOf"));
         assert!(schema.contains("oneOf"));
         let description = propose["function"]["description"].as_str().unwrap();
-        assert!(description.contains("pending 建议卡已生成"));
-        assert!(description.contains("不表示编辑器预览已应用"));
+        assert!(description.contains("建议卡已生成"));
+        assert!(description.contains("pending 不阻塞后续批次"));
         assert!(description.contains("无表格且无图片"));
         assert!(description.contains("replace_document 会被后端拒绝"));
-        assert!(description.contains("插入一个新的 heading 块"));
+        assert!(description.contains("同一锚点可连续插入多段"));
         assert!(description.contains("不能把既有段落转换为标题"));
         assert!(!description.contains("草稿可先应用到 LogicalState"));
         assert!(description.contains("缩放"));

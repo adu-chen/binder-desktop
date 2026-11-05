@@ -68,8 +68,7 @@ export function MessageList() {
     setRetrying(key);
     setRetryFeedback((previous) => ({ ...previous, [key]: "" }));
     try {
-      await startTurn(message.content, { displayParts: message.parts, references: referencesFromParts(message.parts), retryOf: { sessionId: session.id, turnId: message.turnId,
-        ...(message.completionReason === "budget_exhausted" ? { continuationOnly: true } : {}) } });
+      await startTurn(message.content, { displayParts: message.parts, references: referencesFromParts(message.parts), retryOf: { sessionId: session.id, turnId: message.turnId } });
     } catch (error) {
       setRetryFeedback((previous) => ({ ...previous, [key]: error instanceof Error ? error.message : "重试核验失败，未重新执行。" }));
     } finally {
@@ -156,13 +155,6 @@ export function MessageList() {
             <div className="msg-effect-inspection">
               <button className="ghost" disabled={inspecting !== null} onClick={() => void inspectMessage(m)}>核对执行效果</button>
               {effectFeedback[`${session.id}:${m.id}`] && <pre role="status">{effectFeedback[`${session.id}:${m.id}`]}</pre>}
-            </div>
-          )}
-          {m.role === "user" && m.turnStatus === "completed" && m.completionReason === "budget_exhausted" && (
-            <div className="msg-budget-summary" role="status">
-              本次额度已到，仍有未完成内容；不代表业务成功。
-              <button className="ghost" disabled={retrying !== null || state.sending} onClick={() => void retryMessage(m)}>继续未完成部分</button>
-              <span>{retryFeedback[`${session.id}:${m.id}`]}</span>
             </div>
           )}
           {m.role === "assistant" && m.awaitingResourceSave && (

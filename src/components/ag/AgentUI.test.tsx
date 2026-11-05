@@ -171,7 +171,7 @@ describe("development verification entry", () => {
     fireEvent.click(screen.getByText("批量运行核心验收"));
     fireEvent.click(screen.getByText("批量运行核心验收"));
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByRole("status").textContent).toContain("批量验收失败，已核验 2/31");
+    expect(screen.getByRole("status").textContent).toContain("批量验收失败，已核验 2/30");
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "ag_verify_run")).toHaveLength(3);
     const evidence = JSON.parse(screen.getByLabelText("批量核心验收证据").textContent!);
     expect(evidence[0]).toMatchObject({ scenario: "chat", matched: true, receipt: { marker: "chat" } });
@@ -1002,18 +1002,6 @@ describe("MessageList migrated suite", () => {
       expect(screen.getByText(/能说什/)).toBeTruthy();
       expect(screen.queryByText("重试")).toBeNull();
       expect(startTurn).not.toHaveBeenCalled();
-    });
-
-    it("额度收尾不展示成功或错误重试，显式续办保留来源并显示效果核验阻断", async () => {
-      const sessionId=agStore.newSession();
-      agStore.pushMessage(sessionId,{id:"budget-user",role:"user",content:"读取剩余文件",turnId:"budget-origin",turnStatus:"completed",completionReason:"budget_exhausted"});
-      render(<MessageList/>);
-      expect(screen.queryByText("重试")).toBeNull();
-      expect(screen.getByText(/仍有未完成内容/)).toBeTruthy();
-      vi.mocked(startTurn).mockRejectedValueOnce(new Error("AG_RETRY_EFFECT_UNVERIFIED：先核对已有结果"));
-      fireEvent.click(screen.getByRole("button",{name:"继续未完成部分"}));
-      await waitFor(()=>expect(screen.getByText(/AG_RETRY_EFFECT_UNVERIFIED/)).toBeTruthy());
-      expect(startTurn).toHaveBeenCalledWith("读取剩余文件",expect.objectContaining({retryOf:{sessionId,turnId:"budget-origin",continuationOnly:true}}));
     });
 
     it("draft 重试保留身份和引用，并展示被阻断的真实原因", async () => {

@@ -9,7 +9,13 @@ import { acceptAllDiffs, rejectAllDiffs } from "../../services/deService";
  */
 export function DiffAllActionsBar() {
   const { diffs, batchState } = useDeStore();
-  const pendingCount = diffs.filter((d) => d.state === "pending").length;
+  // 只读历史卡不是可裁决项：计数与动作必须一致，否则会出现“显示 1 条待裁决、点全部接受无反应”。
+  const pending = diffs.filter((d) => d.state === "pending" && !d.readonly);
+  const pendingCount = pending.length;
+  // 同一 TaskRun 的分块卡合并显示，避免长任务被误认为多个互不相关的任务。
+  const taskCount = new Set(
+    pending.map((diff) => diff.taskRunId).filter((taskRunId): taskRunId is string => Boolean(taskRunId)),
+  ).size;
 
   if (batchState === "applying") {
     return (
@@ -23,7 +29,9 @@ export function DiffAllActionsBar() {
 
   return (
     <div className="diffbar diffbar-idle">
-      <span className="diffbar-count">{pendingCount} 条待裁决</span>
+      <span className="diffbar-count">
+        {pendingCount} 条待裁决{taskCount > 1 ? ` · ${taskCount} 个任务` : ""}
+      </span>
       <div className="diffbar-actions">
         <button className="diffcard-accept" onClick={() => void acceptAllDiffs()}>全部接受</button>
         <button className="ghost" onClick={() => void rejectAllDiffs()}>全部拒绝</button>

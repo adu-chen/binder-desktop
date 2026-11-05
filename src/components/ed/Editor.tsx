@@ -86,7 +86,7 @@ import { persistImageDiffSnapshots, promotePendingDiffOnOpen } from "../../servi
 import { outlineStore, extractOutline } from "../../store/outlineStore";
 import { modelStore } from "../../store/modelStore";
 import {
-  acknowledgePreviewAndContinue,
+  acknowledgePreview,
   compensateCreateDocumentPreviewFailure,
   finishAssist,
   requestAssist,
@@ -1748,7 +1748,32 @@ export function Editor() {
       const hasTableOps = Boolean(d.tableOpsPayload);
       const hasImageOps = Boolean(d.imageOpsPayload);
       let imageDiffFinalized = false;
-      if (d.relPath !== open || d.state !== "pending" || d.draftApplied || d.draftSaved) continue;
+      // 只读历史卡不自动预览：避免整页重启后把同一批操作重复应用到已含预览内容的草稿。
+      if (d.relPath !== open || d.state !== "pending" || d.readonly || d.draftApplied || d.draftSaved) continue;
+      // 重载恢复：若草稿里已存在这批待插入的新块，说明预览已经应用过；只补记状态，绝不重复插入。
+      const insertedIds = (d.blockOpsPayload?.operations ?? []).flatMap((operation) => {
+        const isInsert = operation.op === "insert_before"
+          || operation.op === "insert_after"
+          || operation.op === "append";
+        if (!isInsert) return [];
+        const attrs = operation.afterNode && typeof operation.afterNode === "object"
+          ? (operation.afterNode as { attrs?: { blockId?: unknown } }).attrs
+          : undefined;
+        return typeof attrs?.blockId === "string" ? [attrs.blockId] : [];
+      });
+      const alreadyApplied = insertedIds.length > 0 && insertedIds.every((blockId) => {
+        let found = false;
+        editor.state.doc.descendants((node) => {
+          if (node.attrs?.blockId === blockId) found = true;
+          return !found;
+        });
+        return found;
+      });
+      if (alreadyApplied) {
+        const current = serialize(editor, editFormat, contentFormat, open);
+        deStore.markDraftApplied(d.diffId, current, tabState, current);
+        continue;
+      }
       const cohort = resolveProposalBatchCohort(deStore.getSnapshot().diffs, d);
       if (cohort.status === "waiting") continue;
       if (cohort.status === "invalid") {
@@ -1791,7 +1816,7 @@ export function Editor() {
         const appliedSession = edStore.getSnapshot().sessions[open];
         const checkpoint = cohort.diffs.find((item) => item.previewContinuationRequired);
         if (checkpoint && appliedSession?.content === appliedContent) {
-          void acknowledgePreviewAndContinue(checkpoint.diffId);
+          void acknowledgePreview(checkpoint.diffId);
         }
         continue;
       }
@@ -1889,7 +1914,7 @@ export function Editor() {
         && appliedDiff.draftApplied
         && appliedSession?.content === appliedContent
       ) {
-        void acknowledgePreviewAndContinue(d.diffId);
+        void acknowledgePreview(d.diffId);
       }
     }
 
@@ -1902,7 +1927,19 @@ export function Editor() {
         continue;
       }
       if (d.draftApplied && d.blockOpsPayload) {
-        for (const operation of d.blockOpsPayload.operations) map.set(operation.blockId, gr);
+        for (const operation of d.blockOpsPayload.operations) {
+          // 插入/追加改变的是新块，绿标必须落在 afterNode.attrs.blockId 上；
+          // 只有替换/删除才标操作目标块。否则多段插入只会标到锚点块。
+          const inserted = operation.op === "insert_before"
+            || operation.op === "insert_after"
+            || operation.op === "append";
+          const attrs = operation.afterNode && typeof operation.afterNode === "object"
+            ? (operation.afterNode as { attrs?: { blockId?: unknown } }).attrs
+            : undefined;
+          const insertedId = typeof attrs?.blockId === "string" ? attrs.blockId : "";
+          const target = inserted ? insertedId : operation.blockId;
+          if (target) map.set(target, gr);
+        }
         continue;
       }
       if (d.blockId && d.draftApplied) {

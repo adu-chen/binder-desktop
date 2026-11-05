@@ -23,6 +23,21 @@ use std::path::Path;
  * term_ref: TERM-AG-002, TERM-AG-014
  * boundary: in=ToolCallReceiptIdentityV1AndExecutionFactsAndArtifactReferences | out=ToolCallReceiptV1 | does_not=authorizeExecutionOrClaimAcceptanceOrSaveOrReplay | consumer=BR-AG-STATE-002,BR-SYS-DATA-008
  */
+fn failure_is_pre_write(failure: Option<&IpcError>) -> bool {
+    let Some(error) = failure else { return false };
+    matches!(
+        error.code.as_str(),
+        "AG_TOOL_ARG"
+            | "AG_TOOL_ARGUMENTS_INVALID"
+            | "AG_WRITE_CONTENT_INVALID"
+            | "AG_BLOCK_OPERATION_BASE_STALE"
+            | "AG_BLOCK_OPERATION_INVALID"
+            | "AG_BLOCK_OPERATION_EMPTY"
+            | "AG_BLOCK_OPERATION_TOO_LARGE"
+            | "AG_BLOCK_OPERATION_UNSUPPORTED"
+    ) || error.code.starts_with("AG_BLOCK_OP_")
+}
+
 pub(super) fn tool_call_receipt(
     identity: crate::types::ToolCallReceiptIdentityV1,
     validation_allowed: bool,
@@ -49,7 +64,18 @@ pub(super) fn tool_call_receipt(
             ToolCallNextAction::RespondBlocked,
         )
     } else if !success {
-        if read_only || identity.tool_name == "edit_blocked" {
+        if failure_is_pre_write(failure) {
+            // 参数/基线/载荷校验失败发生在任何写入之前：不是“未知效果”，不得阻断后续写入。
+            (
+                ToolCallCompletionStatus::Blocked,
+                ToolCallEffectStatus::NotStarted,
+                if failure.is_some_and(|error| error.retriable) {
+                    ToolCallNextAction::RetryExplicitly
+                } else {
+                    ToolCallNextAction::RespondBlocked
+                },
+            )
+        } else if read_only || identity.tool_name == "edit_blocked" {
             (
                 ToolCallCompletionStatus::Blocked,
                 ToolCallEffectStatus::NotApplicable,
@@ -83,7 +109,7 @@ pub(super) fn tool_call_receipt(
             ToolCallEffectStatus::NotStarted,
             ToolCallNextAction::AwaitUser,
         )
-    } else if identity.tool_name == "propose_edit"
+    } else if matches!(identity.tool_name.as_str(), "propose_edit" | "write_content")
         && references.iter().any(|reference| {
             reference.kind == ToolCallReceiptReferenceKind::PendingDiff && !reference.id.is_empty()
         })
@@ -639,7 +665,7 @@ fn decode_read_cursor(
     let token = value.as_str().ok_or_else(|| {
         IpcError::new(
             "AG_READ_CURSOR_INVALID",
-            "分页 cursor 必须是上一页返回的 next_cursor。",
+            "分页 cursor 必须是上一页返回的 next_cursor 字符串；第一页请省略 cursor。请重新调用 list_blocks 获取有效 next_cursor，不要自造或复用其他文档的游标。",
             false,
             false,
         )
@@ -654,7 +680,7 @@ fn decode_read_cursor(
     {
         return Err(IpcError::new(
             "AG_READ_CURSOR_INVALID",
-            "分页 cursor 无效或不属于此文档；请从第一页重新读取。",
+            "分页 cursor 无效或不属于此文档：必须是上一页原样返回的 next_cursor，且绑定同一路径与版本；第一页请省略 cursor，续页原样传回 next_cursor。",
             false,
             false,
         ));
@@ -795,7 +821,7 @@ pub(super) fn validate_read_arguments(
         {
             return Err(IpcError::new(
                 "AG_TOOL_ARG",
-                "正文分页与编辑结构读取不能混用；blocks/structure 不接受 cursor/offset/limit_chars。",
+                "read_doc 参数冲突：blocks 与 view=text 不能同时使用，blocks/structure 也不接受 cursor/offset/limit_chars。读取块请省略 view（默认 structure），读取正文分页请去掉 blocks。",
                 false,
                 false,
             ));
@@ -1071,12 +1097,14 @@ fn exec_read_only_unbounded(
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let needle = query.trim().to_lowercase();
             let mut hits: Vec<serde_json::Value> = Vec::new();
+            let mut skipped: Vec<String> = Vec::new();
             if !needle.is_empty() {
                 for entry in crate::workspace::listing::list_docs(ctx.root())? {
                     if entry.is_dir {
                         continue;
                     }
                     let Ok(snapshot) = ctx.snapshot(&entry.rel_path) else {
+                        skipped.push(entry.rel_path.clone());
                         continue;
                     };
                     for block in snapshot.blocks {
@@ -1098,6 +1126,14 @@ fn exec_read_only_unbounded(
                         break;
                     }
                 }
+            }
+            if !skipped.is_empty() {
+                skipped.sort();
+                skipped.dedup();
+                hits.push(serde_json::json!({
+                    "partial": true,
+                    "skipped_resources": skipped,
+                }));
             }
             Ok(serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into()))
         }
@@ -1441,9 +1477,30 @@ mod tests {
         );
         assert_eq!(failed_write.effect_status, ToolCallEffectStatus::Unknown);
         assert_eq!(failed_write.next_action, ToolCallNextAction::InspectEffect);
+        let pre_write = IpcError::new(
+            "AG_BLOCK_OPERATION_BASE_STALE",
+            "baseline moved before write",
+            true,
+            false,
+        );
+        let stale = tool_call_receipt(
+            identity("write_content"),
+            true,
+            false,
+            Some(&pre_write),
+            vec![],
+            vec![],
+        );
+        assert_eq!(stale.effect_status, ToolCallEffectStatus::NotStarted);
+        assert_eq!(stale.next_action, ToolCallNextAction::RetryExplicitly);
         for (name, kind, expected_effect) in [
             (
                 "propose_edit",
+                ToolCallReceiptReferenceKind::PendingDiff,
+                ToolCallEffectStatus::ProposalCreated,
+            ),
+            (
+                "write_content",
                 ToolCallReceiptReferenceKind::PendingDiff,
                 ToolCallEffectStatus::ProposalCreated,
             ),

@@ -273,7 +273,6 @@ impl AgentFailureDiagnostic {
             | "AG_READ_PAGE_VERSION_REQUIRED"
             | "AG_MODEL_CONTROL_MISSING"
             | "AG_MODEL_CONTROL_CONFLICT"
-            | "AG_MODEL_CORRECTION_LIMIT"
             | "AG_TOOL_ARGUMENTS_INVALID"
             | "AG_GW_STREAM_INVALID_JSON"
             | "AG_GW_STREAM_INCOMPLETE"
@@ -396,7 +395,6 @@ mod tests {
             "AG_MODEL_CONTROL_CONFLICT",
             "AG_TOOL_ARGUMENTS_INVALID",
             "AG_READ_CURSOR_INVALID",
-            "AG_MODEL_CORRECTION_LIMIT",
         ] {
             assert_eq!(
                 AgentFailureDiagnostic::observed("tool_validation", code).category,

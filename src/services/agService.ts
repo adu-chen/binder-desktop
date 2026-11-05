@@ -38,7 +38,7 @@ function sanitizeInlineHtml(html: string): string {
 }
 import { getActiveBlockSnapshotByIndex, getActiveDocumentContent, getActiveEditor, getActiveEditorBinding } from "./edLocate";
 import { loadDocs } from "./wsService";
-import { applyOpenSessionDiff, expireStalePendingForPath, loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
+import { applyOpenSessionDiff, loadDiffDetails, loadPersistedDiffs, type DiffDetailDto } from "./deService";
 import type { MessageContentPart, ReferencePayload } from "./referencePayload";
 import { parseStyleOps, type StyleOp } from "./edStyleOps";
 import {
@@ -529,6 +529,15 @@ interface AgentContextFactsV2 {
   }[];
   selections: (AgentContextFacts["selections"][number] & { validation: "unverified" | "valid" | "stale"; contextRevision: number })[];
   proposalFacts: AgentContextFacts["proposalFacts"];
+  pendingPreviews: {
+    diffId: string;
+    relPath: string;
+    baseVersion: number;
+    baseContentHash: string;
+    createdBlockIds: string[];
+    state: "previewed" | "accepted" | "saved";
+    taskRunId?: string;
+  }[];
 }
 
 interface AgentContextRequest {
@@ -539,6 +548,53 @@ interface AgentContextRequest {
   contextRevision: number;
   paths: string[];
   allDocuments: boolean;
+}
+
+/** 从 block_ops 插入操作提取新块 id；仅用于事实投影，不推断内容。 */
+function previewCreatedBlockIds(diff: DiffView): string[] {
+  return (diff.blockOpsPayload?.operations ?? []).flatMap((operation) => {
+    if (operation.op !== "insert_before" && operation.op !== "insert_after" && operation.op !== "append") return [];
+    const attrs = operation.afterNode && typeof operation.afterNode === "object"
+      ? (operation.afterNode as { attrs?: { blockId?: unknown } }).attrs
+      : undefined;
+    return typeof attrs?.blockId === "string" && attrs.blockId ? [attrs.blockId] : [];
+  });
+}
+
+/**
+ * 预览三态事实：previewed 只来自宿主已确认的草稿应用（draftApplied / draftPreviewState=applied），
+ * 不从“卡片存在”推断；queued/failed 与只读历史卡不输出。
+ */
+function pendingPreviewFacts(
+  sessionId: string,
+  resources: AgentContextFactsV2["openResources"],
+): AgentContextFactsV2["pendingPreviews"] {
+  const availabilityByPath = new Map(resources.map((resource) => [resource.relPath, resource.availability]));
+  return deStore.getSnapshot().diffs.flatMap((diff) => {
+    if (!diff.relPath || diff.readonly === true || diff.sessionId !== sessionId) return [];
+    const availability = availabilityByPath.get(diff.relPath);
+    if (!availability || availability === "loading" || availability === "unavailable") return [];
+    const baseVersion = diff.baseSessionVersion;
+    const baseContentHash = diff.baseContentHash;
+    if (typeof baseVersion !== "number" || !baseContentHash) return [];
+    const createdBlockIds = previewCreatedBlockIds(diff).slice(0, 32);
+    const applied = diff.draftApplied === true || diff.draftPreviewState === "applied";
+    const state: "previewed" | "accepted" | "saved" | null = diff.draftSaved === true || diff.effectStatus === "saved"
+      ? "saved"
+      : diff.state === "accepted"
+        ? "accepted"
+        : diff.state === "pending" && applied ? "previewed" : null;
+    if (!state) return [];
+    return [{
+      diffId: diff.diffId,
+      relPath: diff.relPath,
+      baseVersion,
+      baseContentHash,
+      createdBlockIds,
+      state,
+      ...(diff.taskRunId ? { taskRunId: diff.taskRunId } : {}),
+    }];
+  }).slice(0, 20);
 }
 
 /**
@@ -620,6 +676,7 @@ function collectAgentContextV2(
       return { ...s, validation, contextRevision: revision };
     }),
     proposalFacts: projection.proposalFacts,
+    pendingPreviews: pendingPreviewFacts(sessionId, resources),
   } };
 }
 
@@ -1073,6 +1130,13 @@ async function hydrateDiffRefsForTurns(turns: AgentTurnDto[]): Promise<void> {
       continue;
     }
     const patch = hydratedDiffPatch(ref, detail);
+    // 当前活跃会话里仍为 pending 的 diff 属于用户尚未裁决的实时建议：恢复为可裁决。
+    // 编辑器若已包含这批新块，预览 effect 会识别并只补记“已预览”，不会重复插入。
+    // 其他会话与终态仍只读回看。
+    if (detail.status === "pending" && ref.sessionId === agStore.getSnapshot().activeSessionId) {
+      patch.readonly = false;
+      patch.title = `AI 建议修改 ${patch.relPath}`;
+    }
     if (existing.has(ref.diffId)) {
       deStore.attachMeta(ref.diffId, patch);
     } else {
@@ -1163,6 +1227,83 @@ export async function refreshSessionTaskRuns(sessionId: string): Promise<void> {
   } catch {
     // 保持上次状态或空；不伪造进度（BR-SYS-STATE-008）。
   }
+}
+
+
+
+async function waitForPreviewApplied(taskRunId: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const waiting = deStore.getSnapshot().diffs.some((diff) =>
+      diff.taskRunId === taskRunId
+      && diff.state === "pending"
+      && diff.previewContinuationRequired
+      && !diff.draftApplied);
+    if (!waiting) return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
+}
+
+/** TaskRun 调度器（前端过渡版）：片段以 partial/waiting_preview 结束且仍有 active TaskRun 时，
+ * 自动以同一 TaskRun 开下一片段。用户对 DiffCard 的接受/保存不是触发条件；
+ * 无新 diff/候选步骤时暂停，避免无进展循环。 */
+async function maybeAutoContinueTask(
+  sessionId: string,
+  turnId: string,
+  stopReason: string,
+  relPath: string | null | undefined,
+): Promise<void> {
+  if (stopReason !== "partial" && stopReason !== "waiting_preview") return;
+  const readActive = () => agStore.getSnapshot().sessions
+    .find((candidate) => candidate.id === sessionId)
+    ?.taskRuns?.find((candidate) => candidate.status === "active");
+  let run = readActive();
+  if (!run) {
+    await refreshSessionTaskRuns(sessionId);
+    run = readActive();
+  }
+  if (!run || agStore.getSnapshot().sending || agStore.getSnapshot().pendingDecision) return;
+  const ed = edStore.getSnapshot();
+  const targetPath = relPath ?? ed.openPath;
+  const targetSession = targetPath ? ed.sessions[targetPath] : undefined;
+  if (!targetPath || !targetSession || targetSession.content === null) {
+    agStore.setCurrentAction({
+      sessionId,
+      turnId,
+      action: "previewing",
+      label: "等待编辑器加载当前文档后再继续",
+    });
+    return;
+  }
+  const previewApplied = await waitForPreviewApplied(run.taskRunId, stopReason === "waiting_preview" ? 15_000 : 10_000);
+  if (!previewApplied) {
+    agStore.setCurrentAction({
+      sessionId,
+      turnId,
+      action: "previewing",
+      label: "修改建议尚未应用到编辑器，任务暂停；应用后将自动继续",
+    });
+    return;
+  }
+  const diffCount = deStore.getSnapshot().diffs.filter((candidate) => candidate.taskRunId === run.taskRunId).length;
+  const signature = `${diffCount}:${run.observedSteps.length}:${run.candidateSteps.length}`;
+  const previous = autoContinueProgress.get(run.taskRunId);
+  if (previous === signature) {
+    agStore.setCurrentAction({
+      sessionId,
+      turnId,
+      action: "previewing",
+      label: "任务没有新进展，已暂停；请检查 diff 或发送「继续」",
+    });
+    return;
+  }
+  autoContinueProgress.set(run.taskRunId, signature);
+  await startTurn("继续完成当前任务；从最后一个已完成块之后继续，不要重复已生成的批次。", {
+    autoContinue: true,
+    continuation: { taskRunId: run.taskRunId },
+    mentions: relPath ? [relPath] : [],
+  });
 }
 
 function resolvedDecisionPostProcessingError(cause: unknown, taskRunId: string) {
@@ -1526,10 +1667,12 @@ export interface WorkspaceOperationReceiptDto {
   invalidated_diff_ids?: string[];
 }
 
-const previewAckInFlight = new Set<string>();
-const previewContinuations = new Map<string, ClarifyingTurnIdentity & { workspaceId: string }>();
-const previewAckEffectUnknown = new Set<string>();
 const PREVIEW_ACK_DEADLINE_MS = 15_000;
+const previewAckEffectUnknown = new Set<string>();
+const previewAckInFlight = new Set<string>();
+const resumedTaskRunIds = new Set<string>();
+const autoContinueProgress = new Map<string, string>();
+const previewContinuations = new Map<string, ClarifyingTurnIdentity & { workspaceId: string }>();
 
 /**
  * @GOV
@@ -1538,11 +1681,12 @@ const PREVIEW_ACK_DEADLINE_MS = 15_000;
  * chain:    AG-TURN, DE-DIFF, ED-EDIT
  * rules:    BR-SYS-STATE-008, BR-AG-DATA-001
  * term_ref: TERM-AG-015, TERM-ED-008
- * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckThenFreshSnapshotContinuation(noDiffAcceptNoDiskWriteNoBackgroundCall) | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
+ * boundary: in=AppliedDiffCardAndCurrentLogicalStateSnapshot | out=PreviewAckTechnicalFact(noTaskStartNoTaskResumeNoDiffAcceptNoDiskWrite) | consumer=BR-AG-DATA-001,BR-SYS-STATE-008
  */
-/** 只有 ED/DE 已成功标记 draftApplied 后才回报 PreviewAck，并由前端明确启动下一执行片段。
- * 此处不从 Diff payload 推断内容，也不会对 background Diff 或无 checkpoint 的卡片续编。 */
-export async function acknowledgePreviewAndContinue(diffId: string): Promise<void> {
+/** 只有 ED/DE 已成功标记 draftApplied 后才回报 PreviewAck。
+ * 它只记录“编辑器已把预览写入当前 LogicalState”的技术事实；不启动/恢复 TaskRun，
+ * 不改变接受/保存状态。任务是否继续由 TaskRun 调度器按 partial/剩余工作决定。 */
+export async function acknowledgePreview(diffId: string): Promise<void> {
   if (previewAckInFlight.has(diffId) || previewAckEffectUnknown.has(diffId)) return;
   const diff = deStore.getSnapshot().diffs.find((candidate) => candidate.diffId === diffId);
   if (
@@ -1560,7 +1704,7 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
   if (!workspaceId) return;
   const action = {
     sessionId: diff.sessionId,
-    turnId: diff.turnId,
+    turnId: diff.turnId ?? "pending",
     action: "previewing" as const,
     label: "已应用预览，正在校验最新文档状态",
   };
@@ -1579,7 +1723,7 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
       invoke<{ task_run_id: string; ready: boolean; awaiting_save?: boolean }>("ag_ack_preview", {
         taskRunId: diff.taskRunId,
         sessionId: diff.sessionId,
-        turnId: diff.turnId,
+        turnId: diff.turnId ?? "pending",
         diffId,
         relPath: diff.relPath,
         sessionVersion: session.sessionVersion,
@@ -1613,15 +1757,12 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
     if (closeStore.getSnapshot().phase !== "idle") {
       throw new Error("AG_PREVIEW_CLOSE_PENDING：应用正在关闭，未继续执行。");
     }
-    const origin = previewContinuations.get(diffId);
-    if (!origin || origin.turnId !== diff.turnId || origin.sessionId !== diff.sessionId
-      || origin.workspaceId !== workspaceId || !origin.modelBinding?.provider || !origin.modelBinding.model) {
-      throw new Error("AG_PREVIEW_ORIGIN_UNAVAILABLE：原请求或模型绑定不可用，未创建替代请求；请核对任务状态。");
-    }
-    await startTurn(origin.prompt, {
-      autoContinue: true,
-      mentions: [diff.relPath],
-      continuation: { taskRunId: diff.taskRunId, previewDiffId: diffId },
+    // 预览回执只是技术事实：编辑器已把预览写入当前 LogicalState。
+    // 它不启动、不恢复、不停止 TaskRun；任务是否继续由 TaskRun 调度器决定。
+    agStore.setCurrentAction({
+      ...action,
+      action: "previewing",
+      label: "预览已应用；任务将继续由任务调度器推进",
     });
   } catch (error) {
     // 不自动重试：传输失败不能证明服务端未提交。错误仅投影到仍存在的原工作区会话。
@@ -1641,7 +1782,6 @@ export async function acknowledgePreviewAndContinue(diffId: string): Promise<voi
     }
   } finally {
     agStore.clearCurrentAction(action);
-    previewContinuations.delete(diffId);
     previewAckInFlight.delete(diffId);
   }
 }
@@ -2215,7 +2355,7 @@ async function startTurnWithOptions(
     references?: ReferencePayload[];
     displayParts?: MessageContentPart[];
     /** 显式重试必须先核实原回合；不复用其执行身份或裁决。 */
-    retryOf?: { sessionId: string; turnId: string; continuationOnly?: boolean };
+    retryOf?: { sessionId: string; turnId: string };
     /** 受控恢复入口；只供已确认的裁决或编辑器预览回执使用。 */
     autoContinue?: boolean;
     /** 已确认的 DecisionRequest 或预览回执所属任务。 */
@@ -2225,6 +2365,32 @@ async function startTurnWithOptions(
   const trimmed = prompt.trim();
   const submittedReferences = opts?.references ?? [];
   if (!trimmed && submittedReferences.length === 0) return;
+  // 用户以“继续/接着/往下/续写”发起的新消息，自动接回当前 active TaskRun；
+  // 不再要求用户先接受已预览卡，也不新建一个无任务身份的空回合。
+  if (!opts?.continuation && !opts?.retryOf) {
+    const snap = agStore.getSnapshot();
+    const session = activeSession(snap);
+    const continuationIntent = /^(继续|接着|往下|续写|continue|go on)/i.test(trimmed);
+    const resumable = (candidate: { status: string; observedSteps: unknown[]; candidateSteps: unknown[] }) =>
+      candidate.status === "active"
+      || (candidate.status === "interrupted"
+        && (candidate.observedSteps.length > 0 || candidate.candidateSteps.length > 0));
+    let run = session.taskRuns?.find(resumable);
+    // done 后的 TaskRun 刷新是 best-effort 异步；用户可能立刻发“继续”，
+    // 此时 store 里仍是旧摘要。按需向后端核验一次，避免新建无任务身份的回合。
+    if (!run && continuationIntent) {
+      try {
+        const runs = await listSessionTaskRuns(session.id);
+        agStore.hydrateSessionTaskRuns(session.id, runs);
+        run = runs.find(resumable);
+      } catch {
+        // 核验失败不伪造任务；按普通新回合继续，由后端任务守卫给出明确错误。
+      }
+    }
+    if (run && continuationIntent && !snap.pendingDecision) {
+      opts = { ...opts, autoContinue: true, continuation: { taskRunId: run.taskRunId } };
+    }
+  }
   if (opts?.retryOf) {
     const origin = opts.retryOf;
     const workspaceId = workspaceShell.getSnapshot().activeWorkspace?.workspaceId;
@@ -2236,9 +2402,7 @@ async function startTurnWithOptions(
         || current.activeSessionId !== origin.sessionId || current.activeTurn || current.sending
         || current.pendingDecision || clarifyingTurns.has(origin.sessionId)
         || opts.autoContinue || opts.continuation || !source
-        || (origin.continuationOnly
-          ? source.turnStatus !== "completed" || source.completionReason !== "budget_exhausted"
-          : source.turnStatus !== "draft")
+        || source.turnStatus !== "draft"
         || (source.relPath ?? null) !== edStore.getSnapshot().openPath
         || source.content !== prompt) {
         throw new Error("AG_RETRY_CONTEXT_CHANGED：原回合、会话或工作区状态已变化，未重新执行。");
@@ -2269,9 +2433,8 @@ async function startTurnWithOptions(
     const terminal = events.filter((event) => event.type === "done" || event.type === "error");
     const last = events[events.length - 1];
     const safeTerminal = terminal.length === 1 && last === terminal[0]
-      && (origin.continuationOnly
-        ? last?.type === "done" && last.stopReason === "budget_exhausted"
-        : (last?.type === "error" && last.retriable) || (last?.type === "done" && last.stopReason === "cancelled"));
+      && ((last?.type === "error" && last.retriable)
+        || (last?.type === "done" && last.stopReason === "cancelled"));
     const possibleEffect = events.some((event) =>
       ((event.type === "tool_request" || event.type === "tool_result") && !readonlyTools.has(event.toolName))
       || event.type === "diff_proposed" || event.type === "decision_request_proposed"
@@ -2283,11 +2446,15 @@ async function startTurnWithOptions(
   if (opts?.continuation && !opts.autoContinue) {
     throw new Error("任务续片段只能由已确认的任务级裁决自动启动");
   }
+  const resumeOnly = Boolean(opts?.continuation?.taskRunId)
+    && !opts?.continuation?.decisionRequestId
+    && !opts?.continuation?.previewDiffId;
   if (
     opts?.continuation
+    && !resumeOnly
     && Boolean(opts.continuation.decisionRequestId) === Boolean(opts.continuation.previewDiffId)
   ) {
-    throw new Error("任务续片段必须且只能关联已确认裁决或已确认预览回执之一");
+    throw new Error("任务续片段必须且只能关联已确认裁决、已确认预览回执或可续跑 TaskRun 之一");
   }
   // AG-1.0-DECISION-CARD-01：存在待裁决任务级请求时，所有普通发送均被门控；
   // 必须先完成裁决（DecisionBar），避免"确认"等文本被当作新编辑请求触发 AG_EDIT_TOOL_REQUIRED。
@@ -2334,9 +2501,7 @@ async function startTurnWithOptions(
   }
   const effectivePrompt = decision?.prompt ?? preview?.prompt ?? (clarification?.pendingInput
     ? `${clarification.pendingInput}${trimmed ? `\n\n${trimmed}` : ""}`
-    : opts?.retryOf?.continuationOnly
-      ? `继续以下原请求尚未完成的部分。已有结果只作历史参考，当前对象须重新核验；不得重放既有副作用，不确定的效果须先核对。\n原请求：${trimmed}`
-      : trimmed);
+    : trimmed);
   const references = mergeReferencePayloads(
     clarification?.references ?? decision?.references ?? preview?.references ?? [],
     submittedReferences,
@@ -2548,6 +2713,8 @@ async function startTurnWithOptions(
             agStore.clearTurnAction(sessionId, turnId);
           }
           finish();
+          void maybeAutoContinueTask(sessionId, turnId, ev.stopReason, turnActiveDocPath)
+            .catch((error) => console.error("[ag-task] auto continue failed", error));
           break;
         case "error":
           terminalSeen = true;
@@ -2573,6 +2740,21 @@ async function startTurnWithOptions(
           );
           // AG-1.0-IMP-TASKRUN-UI-01：回合失败后刷新 TaskRun 摘要（Failed 终态已落库）。
           void refreshSessionTaskRuns(sessionId);
+          // 首字节前流超时：若仍有 active TaskRun 且未自动续跑过，带 taskRunId 续跑一次。
+          if (["AG_GW_STREAM_TIMEOUT", "AG_GW_STREAM_ERR", "GW_STREAM_ERR"].includes(ev.code) && ev.retriable) {
+            void (async () => {
+              await refreshSessionTaskRuns(sessionId);
+              const runs = agStore.getSnapshot().sessions.find((candidate) => candidate.id === sessionId)?.taskRuns ?? [];
+              const run = runs.find((candidate) => candidate.status === "active");
+              if (!run || resumedTaskRunIds.has(run.taskRunId)) return;
+              resumedTaskRunIds.add(run.taskRunId);
+              await startTurn("继续上次未完成的任务，从最后一个已完成块之后继续。", {
+                autoContinue: true,
+                continuation: { taskRunId: run.taskRunId },
+                mentions: turnActiveDocPath ? [turnActiveDocPath] : [],
+              });
+            })().catch((error) => console.error("[ag-resume] task run resume failed", error));
+          }
           // AG-1.0-TASKRUN-REWORK-INTENT-01：回合失败后刷新任务计划。
           void refreshSessionPlans(sessionId);
           agStore.clearTurnAction(sessionId, turnId);
@@ -2757,17 +2939,11 @@ async function startTurnWithOptions(
             imageOpsPayload,
             imageOps: imageOpsPayload?.operations.map(summarizeImageOperation),
           });
-          // 连续 Proposal 接力（BR-SYS-STATE-008 / REQ-DE-009）：新 Proposal 基于最新 LogicalState，
-          // 使同文档基于旧基准的 pending 卡失效（保留历史、不可裁决；不构成补丁栈/任务级回滚）。
-          if (projection?.base_session_version != null || projection?.base_content_hash != null) {
-            void expireStalePendingForPath(ev.relPath, ev.diffId, {
-              sessionVersion: projection.base_session_version,
-              contentHash: projection.base_content_hash,
-            });
-          }
+          // 新 Proposal 不再自动让旧 pending 卡失效：分块任务需要多张卡并存并统一裁决。
+          // 旧卡是否还能安全裁决由 accept/save 路径按实际基线校验，不在生成时静默改写生命周期。
           // 已打开非激活文档在 diff 返回时即受控预览到其 LogicalState；预览不自动接受。
           if (projection?.draft_mode === "open_session" && state === "pending") {
-            void applyOpenSessionDiff(ev.diffId).then(() => void acknowledgePreviewAndContinue(ev.diffId));
+            void applyOpenSessionDiff(ev.diffId).then(() => void acknowledgePreview(ev.diffId));
           }
           // 消息片段（TERM-AG-011）：DiffCard 内嵌于回合内时序位置（紧随其产出工具/正文）。
           agStore.addDiffSegment(sessionId, assistantId, ev.diffId);
@@ -2833,8 +3009,10 @@ async function startTurnWithOptions(
         const previewPath = opts?.continuation?.previewDiffId
           ? deStore.getSnapshot().diffs.find(diff => diff.diffId === opts.continuation?.previewDiffId)?.relPath
           : undefined;
+        const autoContinueTarget = opts?.autoContinue && opts.continuation?.taskRunId
+          && turnActiveDocTarget.relPath ? [turnActiveDocTarget.relPath] : [];
         const captured = collectAgentContextV2(turnId, sessionId, turnActiveDocTarget, ++contextRevision, references, factBlockRefs, undefined,
-          [...new Set([...selectionPaths, ...(previewPath ? [previewPath] : [])])]);
+          [...new Set([...selectionPaths, ...(previewPath ? [previewPath] : []), ...autoContinueTarget])]);
         openDocSnapshots = captured.snapshots;
         agentContextFacts = captured.facts;
       } catch (e) {

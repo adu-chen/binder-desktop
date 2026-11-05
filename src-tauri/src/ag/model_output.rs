@@ -71,6 +71,9 @@ pub struct ModelTurnControl {
 pub struct ModelCompletion {
     pub status: String,
     pub reason: String,
+    /// 可选结构化原因码；只允许稳定的阶段原因，不代表执行授权或业务完成。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 /// Fixed diagnostic vocabulary only; never retain provider values or serde's raw error text.
@@ -81,6 +84,8 @@ pub(super) struct ControlProtocolRejection {
     field_path: String,
     control_source: Option<String>,
     tool_index: Option<usize>,
+    /// 只含枚举/数量/脱敏文本；不复制用户目标、路径或正文。
+    conflict_details: Option<serde_json::Value>,
 }
 
 impl ControlProtocolRejection {
@@ -96,11 +101,13 @@ impl ControlProtocolRejection {
             field_path: path.into(),
             control_source: None,
             tool_index: None,
+            conflict_details: None,
         }
     }
     pub(super) fn diagnostic(&self) -> serde_json::Value {
         serde_json::json!({"reasonCode":self.reason_code,"fieldPath":self.field_path,
-            "controlSource":self.control_source,"toolIndex":self.tool_index})
+            "controlSource":self.control_source,"toolIndex":self.tool_index,
+            "conflict":self.conflict_details})
     }
     fn at(mut self, source: &str, index: usize) -> Self {
         self.control_source = Some(source.into());
@@ -134,6 +141,17 @@ impl ModelTurnControl {
                 || completion.reason.chars().count() > 2000
             {
                 return Err(invalid("completion_invalid", "completion", "completion仅final可选，status须为report_only/blocked/no_op/partial并有非空reason；不能以此制造等待或执行证据"));
+            }
+            if let Some(code) = completion.reason_code.as_deref() {
+                if !matches!(
+                    code,
+                    "missing_authorization"
+                        | "target_ambiguous"
+                        | "baseline_stale"
+                        | "tool_unavailable"
+                ) {
+                    return Err(invalid("completion_reason_unsupported", "completion.reasonCode", "reasonCode 仅支持 missing_authorization/target_ambiguous/baseline_stale/tool_unavailable；provider_interrupted 由运行时生成"));
+                }
             }
         }
         if self.intent.intent_type == IntentTypeV2::Unresolved {
@@ -577,7 +595,7 @@ fn native_batch_rejection(argument: &str, error: &serde_json::Error) -> ControlP
             },"required":["statement","uncertainty"],"additionalProperties":false}});
             diagnostic_control["properties"]["clarificationQuestion"] =
                 serde_json::json!({"type":["string","null"]});
-            diagnostic_control["properties"]["completion"] = serde_json::json!({"type":["object","null"],"properties":{"status":{"type":"string"},"reason":{"type":"string"}},"required":["status","reason"],"additionalProperties":false});
+            diagnostic_control["properties"]["completion"] = serde_json::json!({"type":["object","null"],"properties":{"status":{"type":"string"},"reason":{"type":"string"},"reasonCode":{"type":["string","null"]}},"required":["status","reason"],"additionalProperties":false});
             let schema = serde_json::json!({"type":"object","properties":{
                 "control":diagnostic_control,"calls":{"type":"array","items":{
                     "type":"object","properties":{"toolName":{"type":"string"},"params":{"type":"object"}},
@@ -759,6 +777,32 @@ fn take_tool_control_detailed(
     Ok(control)
 }
 
+/// 冲突字段的可执行说明：枚举给字面值，数组给数量，文本类只给“已省略”。
+/// 用户目标、路径、正文与清问题一律不进入模型消息或诊断事件。
+fn json_scalar<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "<unknown>".to_string())
+}
+
+fn control_field_display(control: &ModelTurnControl, field: &str) -> String {
+    match field {
+        "version" => format!("\"{}\"", control.version.chars().take(48).collect::<String>()),
+        "nextAction" => json_scalar(&control.next_action),
+        "intent.intentType" => json_scalar(&control.intent.intent_type),
+        "intent.sideEffectIntent" => json_scalar(&control.intent.side_effect_intent),
+        "intent.ambiguity" => json_scalar(&control.intent.ambiguity),
+        "intent.targetCandidates" => format!("{} 个目标", control.intent.target_candidates.len()),
+        "intent.requiredContext" => format!("{} 项", control.intent.required_context.len()),
+        "intent.confirmationPoints" => format!("{} 项", control.intent.confirmation_points.len()),
+        "route.steps" => format!("{} 步", control.route.steps.len()),
+        "findings" => format!("{} 条", control.findings.len()),
+        "intent.goal" | "route.summary" | "clarificationQuestion" => "<文本已省略>".to_string(),
+        _ => "<未展开>".to_string(),
+    }
+}
+
 // Only field names leave this boundary. The compared values may include user paths or text and
 // must never be copied into the diagnostic event or model-visible validation response.
 fn changed_control_fields(left: &ModelTurnControl, right: &ModelTurnControl) -> Vec<&'static str> {
@@ -899,17 +943,51 @@ pub(super) fn parse_tool_batch_detailed_with_policy(
                     } else {
                         conflicts.join(",")
                     };
+                    let details = conflicts
+                        .iter()
+                        .take(3)
+                        .map(|field| {
+                            serde_json::json!({
+                                "field": field,
+                                "expected": control_field_display(expected, field),
+                                "actual": control_field_display(&control, field),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let detail_text = details
+                        .iter()
+                        .map(|detail| {
+                            format!(
+                                "{}：期望 {}，实际 {}",
+                                detail["field"].as_str().unwrap_or("$control"),
+                                detail["expected"].as_str().unwrap_or("<unknown>"),
+                                detail["actual"].as_str().unwrap_or("<unknown>")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("；");
                     let mut rejection = ControlProtocolRejection::invalid(
                         "control_decision_conflict",
                         path,
                         "同一响应的动作或范围结论冲突",
                     )
                     .at(&source, index);
+                    rejection.conflict_details = if details.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::Value::Array(details))
+                    };
+                    let detail_text = if detail_text.is_empty() {
+                        format!("差异字段：{fields}")
+                    } else {
+                        detail_text
+                    };
                     rejection.error = IpcError::new(
                         "AG_MODEL_CONTROL_CONFLICT",
                         &format!(
-                            "同一响应的语义结论冲突（{} 与 tool[{index}]；差异字段：{fields}）",
-                            control_source.as_deref().unwrap_or("unknown")
+                            "同一响应的语义结论冲突（{} 与 tool[{index}]；{}）。修正：后续工具副本的 _binderTurn 必须与首项逐字一致；仅 intent.goal/route.summary/route.steps 可不同。",
+                            control_source.as_deref().unwrap_or("unknown"),
+                            detail_text
                         ),
                         true,
                         false,
@@ -1145,7 +1223,7 @@ pub fn protocol_prompt() -> &'static str {
 需要工具时只能通过API原生tool_calls提交binder_tool_batch；绝不能把nextAction=tool的控制对象、函数调用JSON或供应商内部工具标记打印到content。文本中的工具意图不会执行；若本轮不能提交原生工具调用，只能用final或clarify完整封套如实说明尚未执行。\n\
 最小问候示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"final\",\"intent\":{\"goal\":\"回应问候\",\"intentType\":\"answer\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"直接回应\",\"steps\":[]}}</binder-turn-control>你好，有什么需要我帮忙？\n这不是隐藏推理：只写简短结论和候选步骤，不写思维链。它不授权工具。\n\
 若可直接回答，nextAction=final 并在封套后输出正文；若缺少必须信息，nextAction=clarify。需要工具时仅提交一个binder_tool_batch，不同时输出文本控制或多份控制。最终答复必须nextAction=final；阻断澄清必须nextAction=clarify且ambiguity=blocking。control和候选路线均不是授权，实际调用仍由运行时逐项核验。\n\
-final可选阶段说明：completion={\"status\":\"report_only\",\"reason\":\"本次仅列候选清单，未创建文件\"}。status仅report_only/blocked/no_op/partial四选一且reason非空；不是执行凭证。待裁决必须调用实际工具，缺信息用clarify，不能用此字段假造等待。\n\
+final可选阶段说明：completion={\"status\":\"report_only\",\"reason\":\"本次仅列候选清单，未创建文件\"}。status仅report_only/blocked/no_op/partial四选一且reason非空；不是执行凭证。待裁决必须调用实际工具，缺信息用clarify，不能用此字段假造等待。可附reasonCode（missing_authorization/target_ambiguous/baseline_stale/tool_unavailable）。\n\
 [/BINDER TURN OUTPUT PROTOCOL]"
 }
 
@@ -1158,7 +1236,7 @@ pub fn direct_protocol_prompt() -> &'static str {
 工具示例：调用原生 workspace_glob，arguments={\"pattern\":\"*.txt\",\"_binderTurn\":{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"tool\",\"intent\":{\"goal\":\"定位 TXT 文件\",\"intentType\":\"inspect\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"列出候选文件\",\"steps\":[]}}}。不要在 content 中打印工具 JSON、伪工具标记或 nextAction=tool 的文本封套；只有实际原生工具调用才会执行。\n\
 澄清示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"clarify\",\"intent\":{\"goal\":\"确定目标\",\"intentType\":\"organize_workspace\",\"targetCandidates\":[],\"sideEffectIntent\":\"structure_plan\",\"ambiguity\":\"blocking\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"等待目标补充\",\"steps\":[]},\"clarificationQuestion\":\"要处理哪份文件？\"}</binder-turn-control>要处理哪份文件？\n\
 直接回答示例：<binder-turn-control>{\"version\":\"binder-turn-control-v1\",\"nextAction\":\"final\",\"intent\":{\"goal\":\"回应问候\",\"intentType\":\"answer\",\"targetCandidates\":[],\"sideEffectIntent\":\"none\",\"ambiguity\":\"none\",\"requiredContext\":[],\"confirmationPoints\":[]},\"route\":{\"summary\":\"直接回应\",\"steps\":[]}}</binder-turn-control>你好，有什么需要我帮忙？\n\
-final 可选 completion={\"status\":\"report_only\",\"reason\":\"本轮仅列出清单，未创建文件\"}；它不是工具回执。findings 仅 final 可选，证据 ID 只能引用真实运行时证据。revision/sourceEventSeq 由系统维护，不能放入模型 intent。缺少必要信息用 clarify 且 ambiguity=blocking；实际执行、等待和效果只凭运行时回执，不由 control 授权或证明。\n\
+final 可选 completion={\"status\":\"report_only\",\"reason\":\"本轮仅列出清单，未创建文件\"}；它不是工具回执。可附reasonCode（missing_authorization/target_ambiguous/baseline_stale/tool_unavailable）。findings 仅 final 可选，证据 ID 只能引用真实运行时证据。revision/sourceEventSeq 由系统维护，不能放入模型 intent。缺少必要信息用 clarify 且 ambiguity=blocking；实际执行、等待和效果只凭运行时回执，不由 control 授权或证明。\n\
 [/BINDER TURN OUTPUT PROTOCOL]"
 }
 
@@ -1655,7 +1733,7 @@ mod tests {
         assert_eq!(params, vec![serde_json::json!({"path":"b.md"})]);
 
         // A lone read-only call without the control is exactly the shape that used to loop to
-        // AG_MODEL_CORRECTION_LIMIT: the schema accepted it, the runtime rejected it. The
+        // The schema accepted it, the runtime rejected it. The
         // rejection must name the required position and forbid the old transport envelope.
         let missing = parse_tool_batch(&[second], None).unwrap_err();
         assert_eq!(missing.code, "AG_MODEL_CONTROL_MISSING");
@@ -1797,11 +1875,19 @@ mod tests {
             let rejection = parse_tool_batch_detailed(&[&first, &second], None).unwrap_err();
             assert_eq!(rejection.error.code, "AG_MODEL_CONTROL_CONFLICT");
             assert!(rejection.error.message.contains("tool[0] 与 tool[1]"));
+            assert!(rejection.error.message.contains("期望"));
+            assert!(rejection.error.message.contains("实际"));
+            assert!(rejection.error.message.contains("修正："));
             assert_eq!(rejection.diagnostic()["toolIndex"], 1);
             assert_eq!(
                 rejection.diagnostic()["reasonCode"],
                 "control_decision_conflict"
             );
+            assert!(rejection.diagnostic()["conflict"].is_array());
+            if path == "/intent/intentType" {
+                assert!(rejection.error.message.contains("期望 inspect，实际 search"));
+                assert_eq!(rejection.diagnostic()["conflict"][0]["field"], "intent.intentType");
+            }
             assert!(
                 !format!("{}{}", rejection.error.message, rejection.diagnostic())
                     .contains("PRIVATE")
@@ -1929,6 +2015,7 @@ mod tests {
             current.completion = Some(ModelCompletion {
                 status: status.into(),
                 reason: "当前仅报告，未操作".into(),
+                reason_code: None,
             });
             current.validate().unwrap();
             current.next_action = ModelNextAction::Tool;
@@ -1941,6 +2028,7 @@ mod tests {
         current.completion = Some(ModelCompletion {
             status: "awaiting_confirm".into(),
             reason: "等待".into(),
+            reason_code: None,
         });
         assert!(current.validate().is_err());
     }

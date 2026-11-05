@@ -48,8 +48,22 @@ pub(crate) struct TaskRunControl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnOutcome {
     Completed,
+    Partial,
     Failed,
     Cancelled,
+}
+
+/// 已验证的块锚点：只保存身份、类型、指纹与基线，不含正文。
+/// 仅在同一 TaskRun 内跨回合复用；版本/哈希不匹配时必须丢弃。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAnchor {
+    pub rel_path: String,
+    pub block_id: String,
+    pub node_type: String,
+    pub fingerprint: String,
+    pub base_version: u64,
+    pub content_hash: String,
+    pub label: String,
 }
 
 /// 已确认的编辑器预览基线。它只作为 AgentTurn 续片段的控制态，绝不携带正文、Diff payload
@@ -75,6 +89,29 @@ pub struct PreviewCheckpoint {
  * term_ref: TERM-AG-015, TERM-AG-018
  * boundary: in=TurnEventBackedComplexRouteOrTaskLevelWaitingPointAndAgentSessionIdentity | out=StableTaskRunProjectionIdentity(rejectsUnfinishedRunWithoutExplicitContinuation) | does_not=createTaskRunForSimpleAgentTurnScheduleCandidateWorkOrSilentlyMergeUserGoals
  */
+
+/// 新目标回合开始前收束同会话的非终态 TaskRun：标记 interrupted，不冒充完成，
+/// 也不静默合并用户的新目标。旧卡/旧效果仍按各自事实保留。
+pub fn interrupt_non_terminal_for_session(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_run_id FROM task_runs WHERE workspace_id=?1 AND session_id=?2          AND status NOT IN ('completed','failed','cancelled','interrupted')",
+    )?;
+    let ids = stmt
+        .query_map(rusqlite::params![workspace_id, session_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !ids.is_empty() {
+        conn.execute(
+            "UPDATE task_runs SET status='interrupted', updated_at=?3              WHERE workspace_id=?1 AND session_id=?2              AND status NOT IN ('completed','failed','cancelled','interrupted')",
+            rusqlite::params![workspace_id, session_id, now_millis()],
+        )?;
+    }
+    Ok(ids)
+}
+
 /// 为已有复杂路线或任务级等待事实取得稳定 task_run_id。该行只服务身份关联和裁决控制，
 /// 用户可见状态与步骤必须从 TurnEvent 重建。
 /// - 会话内存在**非终态** TaskRun → 拒绝；复用只能经携带稳定 task_run_id 的显式 continuation；
@@ -317,14 +354,272 @@ pub fn begin_preview_continuation(
         ],
     )?;
     if changed == 1 {
+        let created_ids = preview_created_block_ids(conn, &checkpoint.diff_id).unwrap_or_default();
+        let steps_json: String = conn
+            .query_row(
+                "SELECT steps_json FROM task_runs WHERE task_run_id=?1",
+                rusqlite::params![checkpoint.task_run_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "[]".to_string());
+        let mut steps: Vec<serde_json::Value> =
+            serde_json::from_str(&steps_json).unwrap_or_default();
+        steps.push(serde_json::json!({
+            "kind": "content_chunk",
+            "diffId": checkpoint.diff_id,
+            "relPath": checkpoint.rel_path,
+            "createdBlockIds": created_ids,
+            "sessionVersion": checkpoint.session_version,
+            "contentHash": checkpoint.content_hash,
+            "status": "previewed",
+        }));
+        let steps_json = serde_json::to_string(&steps).unwrap_or_else(|_| "[]".to_string());
         conn.execute(
-            "UPDATE task_runs SET updated_at=?1 WHERE task_run_id=?2",
-            rusqlite::params![now_millis(), checkpoint.task_run_id],
+            "UPDATE task_runs SET updated_at=?1, steps_json=?2 WHERE task_run_id=?3",
+            rusqlite::params![now_millis(), steps_json, checkpoint.task_run_id],
         )?;
         Ok(Some(checkpoint.task_run_id.clone()))
     } else {
         Ok(None)
     }
+}
+
+/// 仅允许“有可复用进度（预览块/已验证锚点/待回执预览）、无未决裁决、仍 active”的 TaskRun 被显式续跑。
+pub fn begin_resume_task_run(
+    conn: &Connection,
+    workspace_id: &str,
+    session_id: &str,
+    task_run_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    let status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM task_runs WHERE task_run_id=?1 AND workspace_id=?2 AND session_id=?3",
+            rusqlite::params![task_run_id, workspace_id, session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    if !matches!(status.as_str(), "active" | "executing" | "interrupted") {
+        return Ok(None);
+    }
+    let has_progress = preview_chunk_count(conn, task_run_id) > 0
+        || !verified_anchors(conn, task_run_id)?.is_empty()
+        || has_preview_checkpoint(conn, task_run_id)?;
+    if !has_progress {
+        return Ok(None);
+    }
+    let pending_decisions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM decision_requests WHERE task_run_id=?1 AND status='proposed'",
+        rusqlite::params![task_run_id],
+        |row| row.get(0),
+    )?;
+    if pending_decisions > 0 {
+        return Ok(None);
+    }
+    conn.execute(
+        "UPDATE task_runs SET status=CASE WHEN status='interrupted' THEN 'active' ELSE status END, updated_at=?1 WHERE task_run_id=?2",
+        rusqlite::params![now_millis(), task_run_id],
+    )?;
+    Ok(Some(task_run_id.to_string()))
+}
+
+/// 已预览完成的内容块数量（steps_json 中的 content_chunk 条目）。
+pub fn preview_chunk_count(conn: &Connection, task_run_id: &str) -> usize {
+    let steps_json: String = conn
+        .query_row(
+            "SELECT steps_json FROM task_runs WHERE task_run_id=?1",
+            rusqlite::params![task_run_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+    serde_json::from_str::<Vec<serde_json::Value>>(&steps_json)
+        .map(|steps| {
+            steps
+                .iter()
+                .filter(|step| step.get("kind").and_then(|value| value.as_str()) == Some("content_chunk"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// 读取已确认预览 diff 的 block_ops 新块 id，用于续跑轮告知模型上一块实际创建了什么。
+pub fn preview_created_block_ids(
+    conn: &Connection,
+    diff_id: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let style_ops: Option<String> = conn
+        .query_row(
+            "SELECT p.style_ops FROM diff_payloads p              JOIN pending_diffs d ON d.payload_ref=p.payload_ref              WHERE d.diff_id=?1",
+            rusqlite::params![diff_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(style_ops) = style_ops else {
+        return Ok(Vec::new());
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&style_ops) else {
+        return Ok(Vec::new());
+    };
+    let Some(operations) = parsed
+        .get("payload")
+        .and_then(|payload| payload.get("operations"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut ids: Vec<String> = Vec::new();
+    for operation in operations {
+        let op = operation
+            .get("op")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if !matches!(op, "insert_before" | "insert_after" | "append") {
+            continue;
+        }
+        if let Some(block_id) = operation
+            .pointer("/afterNode/attrs/blockId")
+            .and_then(serde_json::Value::as_str)
+        {
+            if !ids.iter().any(|existing| existing == block_id) {
+                ids.push(block_id.to_string());
+            }
+        }
+    }
+    Ok(ids)
+}
+
+fn anchor_from_step(step: &serde_json::Value) -> Option<VerifiedAnchor> {
+    if step.get("kind").and_then(serde_json::Value::as_str) != Some("verified_anchor") {
+        return None;
+    }
+    Some(VerifiedAnchor {
+        rel_path: step.get("relPath")?.as_str()?.to_string(),
+        block_id: step.get("blockId")?.as_str()?.to_string(),
+        node_type: step
+            .get("nodeType")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        fingerprint: step
+            .get("fingerprint")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        base_version: step
+            .get("baseVersion")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        content_hash: step
+            .get("contentHash")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        label: step
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+/// 记录 read_doc(blocks) 已验证的锚点；只服务同一 TaskRun 的后续回合。
+/// 同一 (relPath, blockId) 以最新一次为准并移到队尾；最多保留 20 条，不携正文。
+pub fn record_verified_anchors(
+    conn: &Connection,
+    task_run_id: &str,
+    workspace_id: &str,
+    session_id: &str,
+    anchors: &[VerifiedAnchor],
+) -> rusqlite::Result<()> {
+    if anchors.is_empty() {
+        return Ok(());
+    }
+    let active: Option<String> = conn
+        .query_row(
+            "SELECT task_run_id FROM task_runs WHERE task_run_id=?1 AND workspace_id=?2 AND session_id=?3 AND status IN ('active','executing')",
+            rusqlite::params![task_run_id, workspace_id, session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if active.is_none() {
+        return Ok(());
+    }
+    let steps_json: String = conn
+        .query_row(
+            "SELECT steps_json FROM task_runs WHERE task_run_id=?1",
+            rusqlite::params![task_run_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+    let mut steps: Vec<serde_json::Value> =
+        serde_json::from_str(&steps_json).unwrap_or_default();
+    for anchor in anchors {
+        if anchor.rel_path.is_empty() || anchor.block_id.is_empty() {
+            continue;
+        }
+        steps.retain(|step| {
+            anchor_from_step(step).is_none_or(|existing| {
+                existing.rel_path != anchor.rel_path || existing.block_id != anchor.block_id
+            })
+        });
+        steps.push(serde_json::json!({
+            "kind": "verified_anchor",
+            "relPath": anchor.rel_path,
+            "blockId": anchor.block_id,
+            "nodeType": anchor.node_type,
+            "fingerprint": anchor.fingerprint,
+            "baseVersion": anchor.base_version,
+            "contentHash": anchor.content_hash,
+            "label": anchor.label,
+            "recordedAt": now_millis(),
+        }));
+    }
+    let anchor_count = steps
+        .iter()
+        .filter(|step| {
+            step.get("kind").and_then(serde_json::Value::as_str) == Some("verified_anchor")
+        })
+        .count();
+    if anchor_count > 20 {
+        let mut remove = anchor_count - 20;
+        steps.retain(|step| {
+            let is_anchor =
+                step.get("kind").and_then(serde_json::Value::as_str) == Some("verified_anchor");
+            if is_anchor && remove > 0 {
+                remove -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
+    let steps_json = serde_json::to_string(&steps).unwrap_or_else(|_| "[]".to_string());
+    conn.execute(
+        "UPDATE task_runs SET updated_at=?1, steps_json=?2 WHERE task_run_id=?3",
+        rusqlite::params![now_millis(), steps_json, task_run_id],
+    )?;
+    Ok(())
+}
+
+/// 读取 TaskRun 已验证锚点；调用方必须再与当前文档版本/哈希比对后才可注入。
+pub fn verified_anchors(
+    conn: &Connection,
+    task_run_id: &str,
+) -> rusqlite::Result<Vec<VerifiedAnchor>> {
+    let steps_json: String = conn
+        .query_row(
+            "SELECT steps_json FROM task_runs WHERE task_run_id=?1",
+            rusqlite::params![task_run_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+    Ok(serde_json::from_str::<Vec<serde_json::Value>>(&steps_json)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(anchor_from_step)
+        .collect())
 }
 
 /// 仅供正常回合收束使用：存在未消耗的预览检查点时，TaskRun 仍在等待本地事实，不能被标为 Completed。
@@ -333,7 +628,17 @@ pub fn has_pending_preview_checkpoint(
     task_run_id: &str,
 ) -> rusqlite::Result<bool> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM task_preview_checkpoints WHERE task_run_id=?1 AND status IN ('awaiting_ack','acknowledged')",
+        "SELECT COUNT(*) FROM task_preview_checkpoints WHERE task_run_id=?1 AND status='awaiting_ack'",
+        rusqlite::params![task_run_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// 是否已有任何技术预览回执（acknowledged/consumed 也算进度，但不是“待处理”）。
+pub fn has_preview_checkpoint(conn: &Connection, task_run_id: &str) -> rusqlite::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM task_preview_checkpoints WHERE task_run_id=?1 AND status IN ('awaiting_ack','acknowledged','consumed')",
         rusqlite::params![task_run_id],
         |row| row.get(0),
     )?;
@@ -397,6 +702,8 @@ pub(crate) fn settle_turn(
             TaskRunStatus::Waiting
         }
         TurnOutcome::Completed => TaskRunStatus::Completed,
+        TurnOutcome::Partial if has_pending_decision(conn, task_run_id)? => TaskRunStatus::Waiting,
+        TurnOutcome::Partial => TaskRunStatus::Active,
         TurnOutcome::Failed => TaskRunStatus::Failed,
         TurnOutcome::Cancelled => TaskRunStatus::Cancelled,
     };
@@ -1684,7 +1991,8 @@ mod tests {
         assert!(acknowledge_preview_checkpoint(&conn, &wrong_session).is_err());
         acknowledge_preview_checkpoint(&conn, &valid).unwrap();
         assert!(acknowledge_preview_checkpoint(&conn, &valid).is_err());
-        assert!(has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
+        assert!(!has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
+        assert!(has_preview_checkpoint(&conn, &task_run_id).unwrap());
 
         for terminal in ["accepted", "rejected", "expired"] {
             conn.execute(
@@ -1718,6 +2026,11 @@ mod tests {
         );
         assert_eq!(begin_preview_continuation(&conn, &valid).unwrap(), None);
         assert!(!has_pending_preview_checkpoint(&conn, &task_run_id).unwrap());
+        assert_eq!(
+            settle_turn(&conn, &task_run_id, TurnOutcome::Completed).unwrap(),
+            Completed,
+            "acknowledged/consumed 的技术回执不得把已完成任务拉回 Active"
+        );
     }
 
     // covers: BR-SYS-STATE-008, BR-AG-STATE-002
@@ -1744,6 +2057,39 @@ mod tests {
             pending_decision(&conn, &id).unwrap().unwrap().request_id,
             decision.request_id
         );
+    }
+
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn partial_turn_keeps_task_run_active() {
+        let conn = fresh();
+        let id = begin_turn(&conn, "ws1", "s1", Some("长文分块")).unwrap();
+        assert_eq!(
+            settle_turn(&conn, &id, TurnOutcome::Partial).unwrap(),
+            Active
+        );
+        assert_eq!(load_task_run(&conn, &id).unwrap().unwrap().status, Active);
+    }
+
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn new_goal_interrupts_non_terminal_task_run_before_reprojection() {
+        let conn = fresh();
+        let old = begin_turn(&conn, "ws1", "s1", Some("旧目标")).unwrap();
+        assert_eq!(
+            interrupt_non_terminal_for_session(&conn, "ws1", "s1").unwrap(),
+            vec![old.clone()]
+        );
+        assert_eq!(
+            load_task_run(&conn, &old).unwrap().unwrap().status,
+            Interrupted
+        );
+        assert!(interrupt_non_terminal_for_session(&conn, "ws1", "s1")
+            .unwrap()
+            .is_empty());
+        let next = begin_turn(&conn, "ws1", "s1", Some("新目标")).unwrap();
+        assert_ne!(next, old);
+        assert_eq!(load_task_run(&conn, &next).unwrap().unwrap().status, Active);
     }
 
     // covers: BR-SYS-STATE-008, BR-AG-STATE-002
@@ -2043,5 +2389,84 @@ mod tests {
         assert!(list_task_runs_by_session(&conn, "ws1", "s2")
             .unwrap()
             .is_empty());
+    }
+
+    // covers: BR-SYS-STATE-008
+    #[test]
+    fn resume_allows_verified_anchors_without_preview_chunks() {
+        let conn = fresh();
+        let task_run_id = begin_turn(&conn, "ws1", "s-resume", Some("长文分块")).unwrap();
+        assert!(begin_resume_task_run(&conn, "ws1", "s-resume", &task_run_id)
+            .unwrap()
+            .is_none());
+        record_verified_anchors(
+            &conn,
+            &task_run_id,
+            "ws1",
+            "s-resume",
+            &[VerifiedAnchor {
+                rel_path: "notes/a.md".into(),
+                block_id: "b1".into(),
+                node_type: "paragraph".into(),
+                fingerprint: "fp1".into(),
+                base_version: 3,
+                content_hash: "h3".into(),
+                label: "占位段".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            begin_resume_task_run(&conn, "ws1", "s-resume", &task_run_id).unwrap(),
+            Some(task_run_id.clone())
+        );
+        settle_turn(&conn, &task_run_id, TurnOutcome::Completed).unwrap();
+        assert!(begin_resume_task_run(&conn, "ws1", "s-resume", &task_run_id)
+            .unwrap()
+            .is_none());
+    }
+
+    // covers: BR-SYS-STATE-008
+    // 已验证锚点只服务同一 active TaskRun：同块去重并移到队尾、最多 20 条、错误 session/终态不写入。
+    #[test]
+    fn verified_anchors_are_scoped_deduped_and_capped() {
+        let conn = fresh();
+        let task_run_id = begin_turn(&conn, "ws1", "s-anchor", Some("长文分块")).unwrap();
+        let anchor = |index: usize| VerifiedAnchor {
+            rel_path: "notes/a.md".to_string(),
+            block_id: format!("b{index}"),
+            node_type: "paragraph".to_string(),
+            fingerprint: format!("fp{index}"),
+            base_version: 3,
+            content_hash: "h3".to_string(),
+            label: format!("段{index}"),
+        };
+        let anchors = (0..22).map(anchor).collect::<Vec<_>>();
+        record_verified_anchors(&conn, &task_run_id, "ws1", "s-anchor", &anchors).unwrap();
+        let loaded = verified_anchors(&conn, &task_run_id).unwrap();
+        assert_eq!(loaded.len(), 20);
+        assert_eq!(loaded[0].block_id, "b2");
+        assert_eq!(loaded[19].block_id, "b21");
+
+        record_verified_anchors(&conn, &task_run_id, "ws1", "s-anchor", &[anchor(5)]).unwrap();
+        let loaded = verified_anchors(&conn, &task_run_id).unwrap();
+        assert_eq!(loaded.len(), 20);
+        assert_eq!(loaded.last().unwrap().block_id, "b5");
+        assert_eq!(
+            loaded.iter().filter(|item| item.block_id == "b5").count(),
+            1
+        );
+
+        record_verified_anchors(&conn, &task_run_id, "ws1", "s-other", &[anchor(99)]).unwrap();
+        assert!(!verified_anchors(&conn, &task_run_id)
+            .unwrap()
+            .iter()
+            .any(|item| item.block_id == "b99"));
+
+        settle_turn(&conn, &task_run_id, TurnOutcome::Completed).unwrap();
+        record_verified_anchors(&conn, &task_run_id, "ws1", "s-anchor", &[anchor(100)]).unwrap();
+        assert!(!verified_anchors(&conn, &task_run_id)
+            .unwrap()
+            .iter()
+            .any(|item| item.block_id == "b100"));
     }
 }

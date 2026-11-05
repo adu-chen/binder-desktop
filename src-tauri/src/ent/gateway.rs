@@ -2089,7 +2089,7 @@ mod tests {
             model_deadlines("deepseek", "deepseek-flash"),
             (
                 std::time::Duration::from_secs(1_200),
-                std::time::Duration::from_secs(90)
+                std::time::Duration::from_secs(300)
             )
         );
         assert_eq!(
@@ -2173,7 +2173,7 @@ mod tests {
         let observed = capacity.unwrap();
         assert_eq!(observed["requestedMaxTokens"], 16_384);
         assert_eq!(observed["roundDeadlineMs"], 1_200_000);
-        assert_eq!(observed["streamIdleDeadlineMs"], 90_000);
+        assert_eq!(observed["streamIdleDeadlineMs"], 300_000);
     }
 
     // covers: BR-ENT-STATE-001

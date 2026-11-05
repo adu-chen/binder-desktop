@@ -50,7 +50,7 @@ export function AgentVerificationPanel() {
       ["preview-guard", "preview_guard_checked"], ["session-memory", "session_memory_checked"],
       ["effect-port", "effect_port_checked"],
       ...readRecoveryCases.map(([id, expected]) => [id, expected]),
-      ["execution-budget-wrap", "completed"], ["action-handoff-stage", "completed"],
+      ["action-handoff-stage", "completed"],
       ["action-handoff-plan", "completed"],
       ["tool-description-compatible", "completed"], ["protocol-cumulative", "error"],
       ["native-business-tools", "completed"],
@@ -125,17 +125,16 @@ export function AgentVerificationPanel() {
       <option value="budget-recovery-delay">预算错误后新回合延迟（可取消）</option>
       <option value="decision-chain">自动裁决 A→B（仅核心）</option>
       <option value="decision-duplicate">裁决恢复重复调用拒绝（仅核心）</option>
-      <option value="decision-limit">连续裁决预算不重置（仅核心）</option>
+      <option value="decision-limit">连续裁决不设次数上限（仅核心）</option>
       <option value="preview-guard">预览检查点守卫（无编辑器）</option>
       <option value="session-memory">多轮、跨会话与显式记忆（仅核心）</option>
       <option value="effect-port">执行端口：文本提案/资源扫描取消与超时（不接受、不保存）</option>
       {readRecoveryCases.map(([id, , label]) => <option key={id} value={id}>{label}</option>)}
-      <option value="execution-budget-wrap">执行额度用尽后收尾（仅核心）</option>
       <option value="action-handoff-stage">缺计划纠正为阶段报告（仅核心）</option>
       <option value="action-handoff-plan">缺计划纠正后确认续行（临时TXT）</option>
       <option value="tool-description-compatible">多工具描述兼容（仅核心）</option>
       <option value="native-business-tools">独立业务工具与双工具真实读取（仅核心）</option>
-      <option value="protocol-cumulative">拒绝→成功→拒绝累计纠错（仅核心）</option>
+      <option value="protocol-cumulative">拒绝→成功→拒绝持续纠错（仅核心）</option>
     </select>
     <button disabled={busy} onClick={() => void run()}>运行验证</button>
     <button disabled={busy} onClick={() => void runBatch()}>批量运行核心验收</button>

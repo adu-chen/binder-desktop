@@ -97,7 +97,7 @@ rejected/expired 后文件不变、装饰复位；externalChange 检测不可得
 | 场景 | SM-DE-01 语义 | 承接方 |
 |---|---|---|
 | 基准真值 | Diff2/3 的 before/base 必须来自上一张**成功预览后的当前 LogicalState**（`session_version` + `content_hash`），不是前卡 payload 叠加 | DE（生成前校验） |
-| 前卡失效 | 后续 Proposal 成功预览推进基准 → 基于旧基准的既有批次卡转 `Expired`（`terminal_reason=document_revision_advanced`），保留历史、接受/拒绝禁用；当前 ProposalBatch 的兄弟卡共享本次预览，不属于“前卡”；`nextProposalPreviewApplied` 等价于跨批次 revision-advanced 检测 | SM-DE-01（Pending→Expired） |
+| 前卡保留 | 后续 Proposal 成功预览推进基准时，前批 pending 卡**不自动转 Expired**；保留卡片与历史，接受/拒绝时按各自 base 校验，实际冲突才失败并说明。当前 ProposalBatch 的兄弟卡共享本次预览 | SM-DE-01（Pending 保持） |
 | 非补丁栈 | 连续卡不构成可叠加补丁栈；拒绝最新卡只回到其自身有效基准，**不产生任务级回滚** | SM-DE-01（userReject guard） |
 | background 限制 | 无 LogicalState 的 background pending 卡必须先迁移（BR-CORE-STATE-003）或完成背景分流裁决（BR-CORE-STATE-002），**不得作为后续编辑输入** | SM-DE-01 / SM-ED-01 / SM-WS-02 |
 | 任务投影关联 | 每张卡保留 turn_id 与可选 task_run_id 供 Trace 与事件投影；关联**不授予**叠加、续编、自动继续或回滚能力 | AG（事件投影）、DE（卡片关联） |
@@ -122,10 +122,9 @@ target_id: BR-CORE-STATE-003
 status: mapped
 -->
 
-> 后续 Proposal 的 `previewApplied` 是前卡 revision-advanced 检测源：运行时按 rel_path 与 base
-> sessionVersion/contentHash 找到基准已落后的旧 PendingDiff，追加 `document_revision_advanced` 失效事件；
-> 同一旧基准并行生成但尚未推进 LogicalState 的卡不能仅因创建顺序失效；同一 ProposalBatch 的结构化
-> 兄弟卡由一次聚合预览共同推进，必须按 proposal_batch_id 排除在彼此失效检查之外。不得依赖旧 payload 续编或补丁叠加。
+> 后续 Proposal 的 `previewApplied` **不再**作为前卡自动失效源。旧 PendingDiff 只在用户接受/拒绝或保存路径
+> 实际校验 base 失败时才转 Expired/报错，并保留卡片供核对；同一旧基准并行生成的卡不因创建顺序失效。
+> 仍不得依赖旧 payload 续编或补丁叠加。
 
 ### 2.2 WorkspaceOperation 与 CreateDocumentBundle 边界
 
@@ -230,6 +229,7 @@ Workspace/时间轴归 WS、代理回合归 AG，本文引用不抢注；状态�
 | 2026-07-30 | v1.8 | AG-RICH-BLOCK-STRUCTURED-EDIT-01 闭合补强：DiffCard 显式接受 block_ops 同样以前态 afterNode fingerprint 为门禁；后置编辑时保持 Pending/conflict。保存动作继续遵循已确认的“保存即接受”，不改变产品语义。 |
 | 2026-08-13 | v1.9 | DIFF-STATE-COMPASS-01：SM-DE-01 三分流与强制矩阵同步：已有或迁移 LogicalState 的预览保持 Pending，接受/拒绝仍可操作；保存不再映射 userAccept；仅持续无 LogicalState 的后台接受进入 SM-WS-02。 |
 | 2026-08-13 | v1.10 | 人类复核：保存有效 pending 预览应映射为 `userSave → Accepted/awaiting_save → save`；只有基线推进时 `userSave → Expired`，随后继续保存当前 LogicalState。 |
+| 2026-10-31 | v1.14 | PI-AG-CONTINUATION-13：REQ-DE-009 改为多批 pending 卡并存，后预览不自动失效前卡；仅在接受/拒绝/保存实际基线冲突时失败并保留卡片。 |
 | 2026-08-14 | v1.11 | AG-1.0-D2-DE-ED-WS-STATEMACHINE-01：新增 §2.1 连续 Proposal 接力契约（REQ-DE-009 / BR-SYS-STATE-008）——Diff2/3 以最新 LogicalState 为基准、后预览推进基准使前卡 Expired(document_revision_advanced)、非补丁栈/任务级回滚、background pending 先迁移或裁决；补 REQ-DE-009 的 REQ_MAP（BR-SYS-STATE-008、BR-CORE-STATE-001/003）。 |
 | 2026-08-14 | v1.12 | AG-1.0-IMP-CONSECUTIVE-PROPOSAL-01：§2.1 契约落地——前端 deService.expireStalePendingForPath（同文档旧 pending 卡按 base 版本/哈希比较失效 document_revision_advanced，并行同基准卡不失效、background 卡不参与），在 applyOpenSessionDiff 成功预览后与 diff_proposed 新卡加入后触发；deRuntime +4 用例；BR-SYS-STATE-008 进入代码 @GOV 引用与测试 covers。 |
 | 2026-08-21 | v1.13 | WorkspaceOperation 基线同步：新增 §2.2，锁定资源操作不得进入 SM-DE-01；CreateDocumentBundle 只在磁盘目标创建后投影普通初始内容 Diff，安全拒绝删除归 SM-WS-04 补偿。 |

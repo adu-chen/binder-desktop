@@ -95,8 +95,8 @@ fn checkpoint_after_read_clarification(
     scope: (&str, &str, &str),
 ) {
     // Parking cannot execute anything. A validated user clarification may choose a new
-    // read scope on resume, under the same cumulative budgets. Never release a guard
-    // protecting any prior non-read operation (including uncertain/rejected receipts).
+    // read scope on resume. Never release a guard protecting any prior non-read operation
+    // (including uncertain/rejected receipts).
     let read_guard = messages.iter().any(|message| {
         message["role"] == "system" && message["layer"] == "read_failure_final_only"
     });
@@ -131,9 +131,9 @@ fn correction_instruction_for_protocol(final_only: bool, protocol: &str) -> serd
         "content": if final_only {
             "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。工具权限已冻结，禁止重新提交工具或重放操作。只重新输出合法 final 或 clarify 控制封套及回答；只能陈述既有回执支持的事实。"
         } else if protocol == ag::model_output::BATCH_TOOL_PROTOCOL {
-            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清（包括工具失败、受阻或解释错误）都须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。修正未执行参数可在原剩余额度内用新调用ID提交一次binder_tool_batch，参数含唯一control及calls[{toolName,params}]，业务params不重复控制；不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
+            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清（包括工具失败、受阻或解释错误）都须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。修正未执行参数可用新调用ID提交一次binder_tool_batch，参数含唯一control及calls[{toolName,params}]，业务params不重复控制；不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
         } else {
-            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。可在原剩余额度内用新调用ID直接调用本轮授权的业务工具：每次调用的arguments顶层都必须带完整_binderTurn，并完整保留原有业务参数；不要使用calls/control传输封套，也不要把_binderTurn嵌套进params。若上次被拒原因是缺少_binderTurn，重试时必须补上完整控制，不能沿用被拒参数。多项仅限独立只读，计划、提案和裁决须单项提交。不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
+            "上一响应的控制封套或工具参数被拒绝。受拒调用未执行，其他调用的事实以已有回执为准。直接回答/澄清须先输出合法final/clarify控制封套，再输出正文；不得以Markdown标题开头。可用新调用ID直接调用本轮授权的业务工具：每次调用的arguments顶层都必须带完整_binderTurn，并完整保留原有业务参数；不要使用calls/control传输封套，也不要把_binderTurn嵌套进params。若上次被拒原因是缺少_binderTurn，重试时必须补上完整控制，不能沿用被拒参数。多项仅限独立只读，计划、提案和裁决须单项提交。不能增加范围或重放已执行/效果未知操作。不要输出代码围栏或前置说明。"
         }
     })
 }
@@ -166,26 +166,6 @@ fn response_correction_instruction_for_protocol(
     instruction
 }
 
-fn rejected_tool_call_ids(messages: &[serde_json::Value]) -> BTreeSet<String> {
-    messages
-        .iter()
-        .filter(|message| message.get("role").and_then(serde_json::Value::as_str) == Some("tool"))
-        .filter_map(|message| {
-            let id = message
-                .get("tool_call_id")
-                .and_then(serde_json::Value::as_str)?;
-            let content = message.get("content").and_then(serde_json::Value::as_str)?;
-            let value = serde_json::from_str::<serde_json::Value>(content).ok()?;
-            (value
-                .get("executionReceipt")
-                .and_then(|receipt| receipt.get("executionStatus"))
-                .and_then(serde_json::Value::as_str)
-                == Some("rejected"))
-            .then(|| id.to_owned())
-        })
-        .collect()
-}
-
 fn repeated_read_failure(
     seen: &mut BTreeSet<String>,
     tool_name: &str,
@@ -196,38 +176,6 @@ fn repeated_read_failure(
         ag::context::sha256_text(&serde_json::to_string(params).unwrap_or_default());
     let signature = format!("{tool_name}:{failure_code}:{params_fingerprint}");
     !seen.insert(signature)
-}
-
-pub(super) fn continuation_execution_budget(
-    messages: &[serde_json::Value],
-    tool_limit: u32,
-    round_limit: usize,
-) -> (u32, usize) {
-    let previous_batches = messages
-        .iter()
-        .filter_map(|message| {
-            message
-                .get("tool_calls")
-                .and_then(serde_json::Value::as_array)
-        })
-        .collect::<Vec<_>>();
-    // A rejected pre-execution call is a model correction attempt, not an executed tool.
-    // Missing receipts remain conservatively counted for legacy/interrupted histories.
-    let rejected_ids = rejected_tool_call_ids(messages);
-    let used_tools = previous_batches
-        .iter()
-        .flat_map(|calls| calls.iter())
-        .filter(|call| {
-            !call
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|id| rejected_ids.contains(id))
-        })
-        .count();
-    (
-        tool_limit.saturating_sub(u32::try_from(used_tools).unwrap_or(u32::MAX)),
-        round_limit.saturating_sub(previous_batches.len()),
-    )
 }
 
 fn apply_model_control(
@@ -282,6 +230,55 @@ fn apply_model_control(
         },
     )?;
     Ok(next)
+}
+
+
+/// 内容提案执行前确保稳定 TaskRun：没有任务身份就不能生成 diff/checkpoint。
+/// 纯读/聊天不建；已有任务直接复用；新建失败则拒绝本次写入。
+fn ensure_task_run_for_content_proposal(
+    state: &AppState,
+    emitter: &TurnEventEmitter<'_>,
+    session_id: &str,
+    workspace_id: &str,
+    turn_id: &str,
+    explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
+    task_run_id: &mut Option<String>,
+) -> Result<(), IpcError> {
+    if task_run_id.is_some() {
+        return Ok(());
+    }
+    let created = {
+        let conn = state.db.lock().map_err(|_| {
+            IpcError::new("WS_DB_BUSY", "数据库连接繁忙，无法建立任务身份", true, false)
+        })?;
+        let created = ag::task::begin_turn(
+            &conn,
+            workspace_id,
+            session_id,
+            Some("内容提案与后续批次"),
+        )
+        .map_err(|error| {
+            IpcError::new("AG_TASK_PROJECTION_FAILED", &error.to_string(), false, false)
+        })?;
+        ag::task::link_turn(&conn, turn_id, &created).map_err(|error| {
+            IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false)
+        })?;
+        ag::target_set::persist_for_task_run(&conn, &created, explicit_edit_target_set).map_err(
+            |error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false),
+        )?;
+        created
+    };
+    bind_agent_turn_task_run(state, session_id, turn_id, &created)?;
+    emitter.record_internal(
+        "task_projected",
+        serde_json::json!({
+            "taskRunId": &created,
+            "goal": "内容提案与后续批次",
+            "reason": "content_proposal",
+        }),
+    )?;
+    *task_run_id = Some(created);
+    Ok(())
 }
 
 fn ensure_route_task_projection(
@@ -657,6 +654,39 @@ fn model_tool_result_message(
  * rules:    BR-AG-DATA-012
  * boundary: in=ProposalBatchIdRelPathDiffProjectionsAndPreviewCheckpointOutcome | out=PendingReviewToolResultProjection | does_not=claimEditorPreviewAcceptanceOrDiskPersistence
  */
+/// 从 block_ops 提案中提取本次新建块的稳定 id（插入/追加操作的 afterNode.attrs.blockId）。
+fn created_block_ids(projections: &[crate::types::DiffProjection]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for projection in projections {
+        let Some(operations) = projection
+            .block_ops
+            .as_ref()
+            .and_then(|payload| payload.get("operations"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for operation in operations {
+            let op = operation
+                .get("op")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if !matches!(op, "insert_before" | "insert_after" | "append") {
+                continue;
+            }
+            if let Some(block_id) = operation
+                .pointer("/afterNode/attrs/blockId")
+                .and_then(serde_json::Value::as_str)
+            {
+                if !ids.iter().any(|existing| existing == block_id) {
+                    ids.push(block_id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
 fn proposal_result_projection(
     proposal_batch_id: &str,
     rel_path: &str,
@@ -668,11 +698,13 @@ fn proposal_result_projection(
         .iter()
         .map(|projection| projection.diff_id.clone())
         .collect::<Vec<_>>();
+    let created_block_ids = created_block_ids(projections);
     serde_json::json!({
-        "summary": format!("已生成 {group_count} 张可独立裁决的修改卡（proposal_batch_id={proposal_batch_id}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」，不得声称已应用或已保存。"),
+        "summary": format!("已生成 {group_count} 张可独立裁决的修改卡（proposal_batch_id={proposal_batch_id}）。本结果仅确认建议卡已生成；尚未收到编辑器预览、用户接受或文件保存的回执。回复请使用「已提出建议，待确认」，不得声称已应用或已保存。分块续写时，created_block_ids 是本次新建块；下一块应以其中最后一个块作为 insert_after 锚点，并使用预览回执后的新 base。"),
         "proposal_batch_id": proposal_batch_id,
         "diff_ids": diff_ids,
         "rel_path": rel_path,
+        "created_block_ids": created_block_ids,
         "projections": projections,
         "proposal_status": "pending_user_review",
         "editor_preview_status": "not_reported",
@@ -687,17 +719,14 @@ fn proposal_result_projection(
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-005
- * boundary: in=FrozenExecutionBudgetCompletionStatusRemainingCallCountsAndStructureWarning | out=CompletionStageEventUserClosingChunkTaskRunOutcomeAndDoneTerminal | does_not=resetExecutionBudgetReopenToolsOrMarkPartialCompletionAsCompleted
+ * boundary: in=EvidenceBackedCompletionStatusAndStructureWarning | out=CompletionStageEventUserClosingChunkTaskRunOutcomeAndDoneTerminal | does_not=resetExecutionAllowanceReopenToolsOrMarkPartialCompletionAsCompleted
  */
 fn completed_turn_stop_reason<'a>(
-    budget_closing: bool,
     completion: Option<&'a ag::model_output::ModelCompletion>,
     structure_warning: Option<&str>,
     stop_reason: &'a str,
 ) -> &'a str {
-    if budget_closing {
-        "budget_exhausted"
-    } else if completion.is_none() && structure_warning.is_some() {
+    if completion.is_none() && structure_warning.is_some() {
         "answer_incomplete"
     } else {
         completion
@@ -707,17 +736,14 @@ fn completed_turn_stop_reason<'a>(
 }
 
 fn completion_settles_as_failed(
-    budget_closing: bool,
     completion: Option<&ag::model_output::ModelCompletion>,
     side_effect_intent: &ag::context::SideEffectIntentV2,
 ) -> bool {
-    budget_closing
-        || completion.is_some_and(|completion| {
-            completion.status == "partial"
-                || completion.status == "blocked"
-                || (completion.status == "report_only"
-                    && side_effect_intent != &ag::context::SideEffectIntentV2::None)
-        })
+    completion.is_some_and(|completion| {
+        completion.status == "blocked"
+            || (completion.status == "report_only"
+                && side_effect_intent != &ag::context::SideEffectIntentV2::None)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -728,28 +754,64 @@ fn settle_completed_turn<R: tauri::Runtime>(
     latch: &ag::turn::TerminalLatch,
     turn_id: &str,
     task_run_id: Option<&str>,
-    budget_closing: bool,
     completion: Option<&ag::model_output::ModelCompletion>,
     side_effect_intent: &ag::context::SideEffectIntentV2,
     structure_warning: Option<&str>,
     stop_reason: &str,
-    remaining_tool_calls: u32,
-    remaining_rounds: usize,
 ) -> Result<(), IpcError> {
-    let final_stop_reason =
-        completed_turn_stop_reason(budget_closing, completion, structure_warning, stop_reason);
-    if budget_closing || completion.is_some() {
-        // 记录收尾时的剩余额度：回合以 partial 结束却仍有余量，说明是模型提前收工，
-        // 而不是门禁拦停。把两个计数一起落事件，事后可直接区分"真耗尽"和"误报"。
-        emitter.record_internal("completion_stage", serde_json::json!({"completionStatus":final_stop_reason,"budgetClosing":budget_closing,"remainingToolCalls":remaining_tool_calls,"remainingRounds":remaining_rounds}))?;
-        emitter.emit(latch, AgTurnEventPayload::Chunk { text: if budget_closing { "\n\n本次执行额度已到，尚未完成的范围未被标记为完成。此前结果和效果记录保留；需要继续时请明确提出，未知效果须先核对。" } else { "\n\n以上为当前阶段说明，不是资源已修改或已进入正式确认等待的凭证；实际效果以执行回执为准。" }.into() })?;
+    let final_stop_reason = completed_turn_stop_reason(completion, structure_warning, stop_reason);
+    emitter.record_internal(
+        "terminal_reason",
+        serde_json::json!({
+            "status": final_stop_reason,
+            "claimedReasonCode": completion.and_then(|completion| completion.reason_code.clone()),
+            "reasonSource": "model",
+        }),
+    )?;
+    let preview_chunk_count = task_run_id
+        .and_then(|task_run_id| {
+            state
+                .db
+                .lock()
+                .ok()
+                .map(|conn| ag::task::preview_chunk_count(&conn, task_run_id))
+        })
+        .unwrap_or(0);
+    emitter.record_internal(
+        "turn_metrics",
+        serde_json::json!({
+            "stopReason": final_stop_reason,
+            "previewChunkCount": preview_chunk_count,
+        }),
+    )?;
+    if completion.is_some() {
+        emitter.record_internal(
+            "completion_stage",
+            serde_json::json!({"completionStatus": final_stop_reason}),
+        )?;
+        emitter.emit(latch, AgTurnEventPayload::Chunk { text: "
+
+以上为当前阶段说明，不是资源已修改或已进入正式确认等待的凭证；实际效果以执行回执为准。".into() })?;
     }
+    // 已生成待预览卡片、但编辑器尚未回执时，TaskRun 仍在等宿主事实：
+    // 不能因为模型以 partial 收尾就把任务判失败，否则自动续跑与统一接受都失去身份。
+    let preview_waiting = task_run_id
+        .and_then(|task_run_id| {
+            state
+                .db
+                .lock()
+                .ok()
+                .map(|conn| ag::task::has_pending_preview_checkpoint(&conn, task_run_id).unwrap_or(false))
+        })
+        .unwrap_or(false);
     if let Ok(conn) = state.db.lock() {
         settle_optional_task_run(
             &conn,
             task_run_id,
             turn_id,
-            if completion_settles_as_failed(budget_closing, completion, side_effect_intent) {
+            if final_stop_reason == "partial" || preview_waiting {
+                ag::task::TurnOutcome::Partial
+            } else if completion_settles_as_failed(completion, side_effect_intent) {
                 ag::task::TurnOutcome::Failed
             } else {
                 ag::task::TurnOutcome::Completed
@@ -773,12 +835,11 @@ fn settle_completed_turn<R: tauri::Runtime>(
  * type:     RB
  * chain:    AG-TOOL, AG-TURN
  * rules:    BR-AG-DATA-013
- * boundary: in=GatewayRoundOutcomeStreamedModelControlBudgetClosingAndContinuationGuards | out=ValidatedModelTurnControlOrIpcError | does_not=projectIntentCreateTaskRunOrExecuteToolBeforeValidation
+ * boundary: in=GatewayRoundOutcomeStreamedModelControlAndContinuationGuards | out=ValidatedModelTurnControlOrIpcError | does_not=projectIntentCreateTaskRunOrExecuteToolBeforeValidation
  */
 fn validate_round_response(
     round: &ent::gateway::RoundOutcome,
     decoder: &ag::model_output::ModelOutputDecoder,
-    budget_closing: bool,
     workspace_plan_completed: bool,
     visible_output_chars: usize,
     any_tool_called: bool,
@@ -786,16 +847,7 @@ fn validate_round_response(
 ) -> Result<Option<ag::model_output::ModelTurnControl>, IpcError> {
     match round {
         ent::gateway::RoundOutcome::Done { .. } => decoder.clone().finish().and_then(|control| {
-            if budget_closing && control.next_action != ag::model_output::ModelNextAction::Final {
-                return Err(IpcError::new(
-                    "AG_MODEL_CONTROL_INVALID",
-                    "额度收尾仅允许final，不得创建工具或无法恢复的等待",
-                    true,
-                    false,
-                ));
-            }
-            if !budget_closing
-                && control.next_action == ag::model_output::ModelNextAction::Final
+            if control.next_action == ag::model_output::ModelNextAction::Final
                 && control.intent.side_effect_intent
                     == ag::context::SideEffectIntentV2::StructurePlan
                 && control.completion.is_none()
@@ -827,7 +879,7 @@ fn validate_round_response(
             Ok(Some(control))
         }),
         ent::gateway::RoundOutcome::ToolCalls(_) => {
-            if budget_closing || super::turn_prompt::final_only_continuation(continuation_messages)
+            if super::turn_prompt::final_only_continuation(continuation_messages)
             {
                 Err(IpcError::new(
                     "AG_MODEL_CONTROL_INVALID",
@@ -1168,11 +1220,9 @@ struct PromptRebuildFacts<'a> {
     raw_prompt: &'a str,
     mention_block: Option<&'a str>,
     reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
-    proposed_diff: bool,
     continuation_messages: &'a [serde_json::Value],
     decision_receipt_ids: &'a [String],
     next_model_call: u32,
-    remaining_tool_calls: u32,
     model_capacity: ag::prompt_runtime::ModelCapacity,
     response_rejected: bool,
 }
@@ -1183,7 +1233,7 @@ struct PromptRebuildFacts<'a> {
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-DATA-001
- * boundary: in=RoundIntentContextFactsReadContextHistoryAndBudgetFacts | out=RebuiltRoundPromptOrSettlePropagateFailure | effect=DB-record_prompt_budget | consumer=BR-AG-DATA-001 | does_not=widenContextSourcesOrRaiseBudget
+ * boundary: in=RoundIntentContextFactsReadContextAndHistory | out=RebuiltRoundPromptOrSettlePropagateFailure | effect=DB-record_prompt_budget | consumer=BR-AG-DATA-001 | does_not=widenContextSourcesOrRaisePromptBudget
  */
 fn rebuild_round_prompt(
     emitter: &TurnEventEmitter<'_>,
@@ -1216,11 +1266,9 @@ fn rebuild_round_prompt(
         facts.raw_prompt,
         facts.mention_block,
         facts.reference_envelopes,
-        facts.proposed_diff,
         facts.continuation_messages,
         facts.decision_receipt_ids,
         facts.next_model_call,
-        facts.remaining_tool_calls,
         facts.model_capacity,
     )
     .map_err(PromptRebuildFailure::Settle)?;
@@ -1319,6 +1367,23 @@ async fn execute_tool_call<R: tauri::Runtime>(
     let mut proposed_diff = facts.proposed_diff;
     let mut edit_blocked_reported = facts.edit_blocked_reported;
     let mut execution_failure = facts.execution_failure;
+    let compiled_write_content = if facts.call.name == "write_content" {
+        Some(ag::tool_registry::compile_write_content_params(facts.params))
+    } else {
+        None
+    };
+    if let Some(Err(error)) = &compiled_write_content {
+        return ToolExecutionOutcome {
+            result: format!("写入失败：{}", error.message),
+            success: false,
+            diff_events: Vec::new(),
+            decision: None,
+            end_after_diff: false,
+            proposed_diff: facts.proposed_diff,
+            edit_blocked_reported: facts.edit_blocked_reported,
+            execution_failure: Some(error.clone()),
+        };
+    }
     let (result, success) = if let Some(error_msg) = facts.arg_parse_error {
         (error_msg.to_string(), false)
     } else if let Some(error_msg) = facts.execution_guard_error {
@@ -1431,9 +1496,15 @@ async fn execute_tool_call<R: tauri::Runtime>(
                 }
             }
             // 写工具 propose_edit：经 DE 生成 pending diff（X-FORBID-006，不直写）→ emit DiffProposed。
-            ag::tool::ToolDecision::Allow if facts.call.name == "propose_edit" => {
+            ag::tool::ToolDecision::Allow
+                if facts.call.name == "propose_edit" || facts.call.name == "write_content" =>
+            {
+                let params = match &compiled_write_content {
+                    Some(Ok(value)) => value,
+                    _ => facts.params,
+                };
                 if current_doc_edit_requires_prior_read(
-                    facts.params,
+                    params,
                     facts.active_doc_path,
                     facts.current_doc_requires_tool_read,
                     facts.current_doc_read_confirmed,
@@ -1457,7 +1528,7 @@ async fn execute_tool_call<R: tauri::Runtime>(
                     let guarded_result = execute_proposal(
                         (*facts.state).clone(),
                         (*app).clone(),
-                        (*facts.params).clone(),
+                        params.clone(),
                         (*facts.read_ctx).clone(),
                         facts.active_doc_path.map(str::to_string),
                         (*facts.explicit_edit_target_set).clone(),
@@ -1809,8 +1880,8 @@ fn prepare_task_run_for_tool(
     None
 }
 
-/// 计算本次 ToolCall 的一次性 CapabilityGrantV2，并完成注册/权限/参数校验与参数纠错计数。
-/// Propagate = 事件写失败或授权边界发现回合已终结；Settle = 参数纠错达到上限，由调用方结算终态。
+/// 计算本次 ToolCall 的一次性 CapabilityGrantV2，并完成注册/权限/参数校验与参数纠错标注。
+/// Propagate = 事件写失败或授权边界发现回合已终结。
 struct ToolGrantFacts<'a> {
     latch: &'a ag::turn::TerminalLatch,
     cancelled: &'a Arc<AtomicBool>,
@@ -1819,18 +1890,15 @@ struct ToolGrantFacts<'a> {
     has_task_run: bool,
     capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
     model_call_ordinal: usize,
-    remaining_tool_calls: u32,
     explicit_edit_target_set: &'a ag::target_set::ExplicitEditTargetSet,
     tools: &'a serde_json::Value,
     ws_root: Option<&'a str>,
     read_failure_final_pending: bool,
     arg_parse_error_none: bool,
     final_only_after_rejection: bool,
-    max_corrections: usize,
     call: &'a crate::ent::gateway::GwToolCall,
     params: &'a serde_json::Value,
     capability_use_tracker: &'a mut ag::tool_registry::CapabilityGrantUseTrackerV2,
-    parameter_correction_rounds: &'a mut usize,
     correction_counted_this_round: &'a mut bool,
     parameter_correction_pending: &'a mut bool,
     final_only_correction_pending: &'a mut bool,
@@ -1838,7 +1906,6 @@ struct ToolGrantFacts<'a> {
 
 enum ToolGrantFailure {
     Propagate(IpcError),
-    Settle(IpcError),
 }
 
 struct ToolGrantOutcome {
@@ -1853,7 +1920,7 @@ struct ToolGrantOutcome {
  * type:     RB
  * chain:    AG-TOOL
  * rules:    BR-AG-STATE-002
- * boundary: in=ToolCallBoundGrantFactsAndCorrectionCounters | out=ToolGrantOutcomeOrToolGrantFailure | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant | consumer=BR-AG-STATE-002 | does_not=executeToolAdvanceToolLoopStateOrSettleAgentTurn
+ * boundary: in=ToolCallBoundGrantFacts | out=ToolGrantOutcomeOrToolGrantPropagateFailure | delegate=resolve_capability_grant_v2,validate_requested_tool_for_grant | consumer=BR-AG-STATE-002 | does_not=executeToolAdvanceToolLoopStateOrSettleAgentTurn
  */
 fn resolve_execution_grant_and_decision(
     emitter: &TurnEventEmitter<'_>,
@@ -1865,7 +1932,6 @@ fn resolve_execution_grant_and_decision(
             serde_json::json!({
                 "toolCallId": &facts.call.id,
                 "gateAttempt": facts.model_call_ordinal,
-                "remainingToolCalls": facts.remaining_tool_calls,
             }),
         )
         .map_err(ToolGrantFailure::Propagate)?
@@ -1881,7 +1947,6 @@ fn resolve_execution_grant_and_decision(
     action_factors.has_task_run = facts.has_task_run;
     action_factors.gate_attempt = facts.model_call_ordinal as u32;
     action_factors.gate_passed = true;
-    action_factors.remaining_tool_calls = facts.remaining_tool_calls;
     action_factors.cancelled = facts.cancelled.load(Ordering::Acquire);
     action_factors.terminal = facts.latch.is_set();
     let execution_grant = ag::tool_registry::resolve_capability_grant_v2(
@@ -1958,7 +2023,6 @@ fn resolve_execution_grant_and_decision(
             *facts.final_only_correction_pending = true;
         }
         *facts.correction_counted_this_round = true;
-        *facts.parameter_correction_rounds += 1;
         emitter
             .record_internal(
                 "tool_parameter_contract_rejected",
@@ -1968,18 +2032,9 @@ fn resolve_execution_grant_and_decision(
                     "toolName": &facts.call.name,
                     "parameterKeys": safe_tool_params(facts.params)["parameterKeys"],
                     "parameterDiagnostic": parameter_diagnostic,
-                    "correctionAttempt": *facts.parameter_correction_rounds,
                 }),
             )
             .map_err(ToolGrantFailure::Propagate)?;
-        if *facts.parameter_correction_rounds > facts.max_corrections {
-            return Err(ToolGrantFailure::Settle(IpcError::new(
-                "AG_MODEL_CORRECTION_LIMIT",
-                "本回合参数拒绝已超过独立纠错上限；本次未执行，此前结果保留。请检查参数或显式重试。",
-                true,
-                false,
-            )));
-        }
     }
     Ok(ToolGrantOutcome {
         execution_grant,
@@ -2007,7 +2062,6 @@ fn preflight_tool_acquisition_allowed(
     turn_id: &str,
     explicit_edit_target_set: &ag::target_set::ExplicitEditTargetSet,
     model_call_ordinal: usize,
-    remaining_tool_calls: u32,
     tools: &serde_json::Value,
     ws_root: Option<&str>,
     read_failure_final_pending: bool,
@@ -2018,7 +2072,6 @@ fn preflight_tool_acquisition_allowed(
     let mut acquisition_factors = capability_factors.clone();
     acquisition_factors.gate_passed = true;
     acquisition_factors.gate_attempt = model_call_ordinal as u32;
-    acquisition_factors.remaining_tool_calls = remaining_tool_calls;
     acquisition_factors.cancelled = cancelled.load(Ordering::Acquire);
     acquisition_factors.terminal = latch.is_set();
     let acquisition_grant = ag::tool_registry::resolve_capability_grant_v2(
@@ -2116,9 +2169,7 @@ struct ToolBatchFacts<'a> {
     transport_protocol: &'a str,
     output_control: Option<ag::model_output::ModelTurnControl>,
     seen_tool_call_ids: &'a mut BTreeSet<String>,
-    protocol_correction_rounds: &'a mut usize,
     protocol_correction_diagnostic: &'a mut Option<serde_json::Value>,
-    max_corrections: usize,
     task_run_id: &'a mut Option<String>,
     intent_result: &'a mut ag::context::IntentResultV2,
     raw_prompt: &'a str,
@@ -2222,14 +2273,12 @@ fn prepare_tool_batch(
             let protocol_diagnostic = rejection.diagnostic();
             *facts.protocol_correction_diagnostic = Some(protocol_diagnostic.clone());
             let error = rejection.error;
-            *facts.protocol_correction_rounds += 1;
             emitter
                 .record_internal(
                     "model_control_rejected",
                     serde_json::json!({
                         "code": &error.code,
                         "toolCallCount": calls.len(),
-                        "correctionAttempt": *facts.protocol_correction_rounds,
                         "rejectionStage":"tool_batch",
                         "protocolDiagnostic": protocol_diagnostic,
                         "conflictFieldsOnly": (error.code == "AG_MODEL_CONTROL_CONFLICT")
@@ -2237,14 +2286,6 @@ fn prepare_tool_batch(
                     }),
                 )
                 .map_err(ToolBatchFailure::Propagate)?;
-            if *facts.protocol_correction_rounds > facts.max_corrections {
-                return Err(ToolBatchFailure::Settle(IpcError::new(
-                        "AG_MODEL_CORRECTION_LIMIT",
-                        "本回合控制封套拒绝已超过独立纠错上限；本批未执行，此前结果保留。请检查协议或显式重试。",
-                        true,
-                        false,
-                    )));
-            }
             // 一整批均未执行；逐个回注失败，复用 ValidateFail→Recorded→Assembling→Gate。
             // 不从工具名猜测意图，不复用旧语义替代本次模型结论。
             (None, vec![serde_json::json!({}); calls.len()], Some(error))
@@ -2368,7 +2409,10 @@ struct ProviderRoundReady {
 enum ProviderRoundResult {
     Ready(ProviderRoundReady),
     Cancelled,
-    Failed(IpcError),
+    Failed {
+        error: IpcError,
+        visible_output_chars: usize,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2394,7 +2438,6 @@ async fn run_provider_round(
     prompt_package: &ag::context::PromptPackageV2,
     final_prompt_audit: &mut Option<FinalPromptAuditLog>,
     model_call_ordinal: usize,
-    budget_closing: bool,
     workspace_plan_completed: bool,
 ) -> Result<ProviderRoundResult, IpcError> {
     let provider_messages = provider_messages_for_model(messages);
@@ -2424,7 +2467,10 @@ async fn run_provider_round(
     )?;
     let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
     if let Err(error) = install_agent_turn_abort_handle(state, session_id, turn_id, abort_handle) {
-        return Ok(ProviderRoundResult::Failed(error));
+        return Ok(ProviderRoundResult::Failed {
+            error,
+            visible_output_chars: 0,
+        });
     }
     let mut decoder = ag::model_output::ModelOutputDecoder::default();
     let mut visible_output_chars = 0usize;
@@ -2446,10 +2492,7 @@ async fn run_provider_round(
                             && control.intent.side_effect_intent
                                 == ag::context::SideEffectIntentV2::StructurePlan
                             && control.completion.is_none()
-                            && !budget_closing
                             && !workspace_plan_completed
-                            || budget_closing
-                                && control.next_action != ag::model_output::ModelNextAction::Final
                     }) {
                         continue;
                     }
@@ -2484,20 +2527,24 @@ async fn run_provider_round(
                     "prefixKind": decoder.prefix_kind(),
                 }),
             )?;
-            return Ok(ProviderRoundResult::Failed(error));
+            return Ok(ProviderRoundResult::Failed {
+                error,
+                visible_output_chars,
+            });
         }
         Ok(Ok(outcome)) => {
+            let outcome_name = match &outcome {
+                ent::gateway::RoundOutcome::Failed(_) => "failed",
+                ent::gateway::RoundOutcome::Done { .. } => "done",
+                ent::gateway::RoundOutcome::ToolCalls(_) => "tool_calls",
+            };
             emitter.record_internal(
                 "provider_finished",
-                serde_json::json!({
-                    "roundIndex": model_call_ordinal,
-                    "outcome": match &outcome {
-                        ent::gateway::RoundOutcome::Failed(_) => "failed",
-                        ent::gateway::RoundOutcome::Done { .. } => "done",
-                        ent::gateway::RoundOutcome::ToolCalls(_) => "tool_calls",
-                    },
-                }),
+                serde_json::json!({"roundIndex": model_call_ordinal, "outcome": outcome_name}),
             )?;
+            if let ent::gateway::RoundOutcome::Failed(error) = outcome {
+                return Ok(ProviderRoundResult::Failed { error, visible_output_chars });
+            }
             outcome
         }
     };
@@ -2510,9 +2557,8 @@ async fn run_provider_round(
 }
 
 /// 判定 final 响应是否缺少本轮必需的终态工具产物；返回 Some(error) 表示应终止本轮。
-/// 预算收尾或已提供 completion 时明确不要求终态工具。
+/// 已提供 completion 时明确不要求终态工具。
 fn terminal_tool_requirement_error(
-    budget_closing: bool,
     has_completion: bool,
     workspace_plan_completed: bool,
     intent: &ag::context::IntentResultV2,
@@ -2520,7 +2566,7 @@ fn terminal_tool_requirement_error(
     edit_blocked_reported: bool,
     any_tool_called: bool,
 ) -> Option<IpcError> {
-    if budget_closing || has_completion {
+    if has_completion {
         return None;
     }
     let required_terminal_tool = match intent.side_effect_intent {
@@ -2591,7 +2637,7 @@ fn park_clarification<R: tauri::Runtime>(
     Ok(())
 }
 
-/// final 回答的收尾：派生/emit ProjectReport，并在成功时执行额度收尾与终态结算。
+/// final 回答的收尾：派生/emit ProjectReport，并在成功时执行终态结算。
 /// ProjectReport 失败仍按原路径结算 TaskRun Failed 并广播 Finalizing 错误；不推进 SM-AG-01。
 struct FinalAnswerFacts<'a> {
     state: &'a AppState,
@@ -2603,13 +2649,10 @@ struct FinalAnswerFacts<'a> {
     active_doc_path: Option<&'a str>,
     findings: &'a [ag::model_output::ModelFinalFindingV2],
     any_tool_called: bool,
-    budget_closing: bool,
     completion: Option<&'a ag::model_output::ModelCompletion>,
     side_effect_intent: &'a ag::context::SideEffectIntentV2,
     structure_warning: Option<&'a str>,
     stop_reason: &'a str,
-    remaining_tool_calls: u32,
-    remaining_rounds: usize,
 }
 
 /**
@@ -2618,7 +2661,7 @@ struct FinalAnswerFacts<'a> {
  * type:     EFFECT
  * chain:    AG-TURN
  * rules:    BR-AG-STATE-005, BR-AG-OBS-001
- * boundary: in=FinalAnswerIntentFindingsCompletionAndExecutionBudget | out=ProjectReportEventCompletedSettlementOrReportFailureSettlement | delegate=emit_project_report,settle_completed_turn | consumer=BR-AG-STATE-005,BR-AG-OBS-001 | does_not=advanceToolLoopTransitionOrCreateNewEvidence
+ * boundary: in=FinalAnswerIntentFindingsAndCompletion | out=ProjectReportEventCompletedSettlementOrReportFailureSettlement | delegate=emit_project_report,settle_completed_turn | consumer=BR-AG-STATE-005,BR-AG-OBS-001 | does_not=advanceToolLoopTransitionOrCreateNewEvidence
  */
 fn finish_final_answer<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -2659,13 +2702,10 @@ fn finish_final_answer<R: tauri::Runtime>(
         facts.latch,
         facts.turn_id,
         facts.task_run_id,
-        facts.budget_closing,
         facts.completion,
         facts.side_effect_intent,
         facts.structure_warning,
         facts.stop_reason,
-        facts.remaining_tool_calls,
-        facts.remaining_rounds,
     )
 }
 
@@ -2690,10 +2730,8 @@ struct RoundContext<'a, R: tauri::Runtime> {
     on_context_request: Option<tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
     transport_protocol: String,
     model_capacity: ag::prompt_runtime::ModelCapacity,
-    execution_policy: ag::tool_registry::ExecutionBudgetPolicy,
     workspace_plan_completed: bool,
     previous_model_calls: usize,
-    remaining_rounds: usize,
 }
 
 struct RoundState {
@@ -2705,9 +2743,6 @@ struct RoundState {
     intent_result: ag::context::IntentResultV2,
     continuation_messages: Vec<serde_json::Value>,
     task_run_id: Option<String>,
-    remaining_tool_calls: u32,
-    protocol_correction_rounds: usize,
-    parameter_correction_rounds: usize,
     failed_read_signatures: BTreeSet<String>,
     seen_tool_call_ids: BTreeSet<String>,
     tool_loop_state: ag::tool::ToolLoopState,
@@ -2744,7 +2779,6 @@ struct DoneRoundFacts<'a> {
     active_doc_path: Option<&'a str>,
     reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
     continuation_messages: Vec<serde_json::Value>,
-    budget_closing: bool,
     workspace_plan_completed: bool,
     proposed_diff: bool,
     edit_blocked_reported: bool,
@@ -2752,8 +2786,6 @@ struct DoneRoundFacts<'a> {
     visible_output: &'a str,
     stop_reason: &'a str,
     model_call_ordinal: usize,
-    remaining_tool_calls: u32,
-    remaining_rounds: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2799,7 +2831,6 @@ fn handle_done_round<R: tauri::Runtime>(
         active_doc_path,
         reference_envelopes,
         continuation_messages,
-        budget_closing,
         workspace_plan_completed,
         proposed_diff,
         edit_blocked_reported,
@@ -2807,8 +2838,6 @@ fn handle_done_round<R: tauri::Runtime>(
         visible_output,
         stop_reason,
         model_call_ordinal,
-        remaining_tool_calls,
-        remaining_rounds,
     } = facts;
     let structure_warning = ag::model_output::answer_structure_warning(visible_output);
     emitter.record_internal(
@@ -2918,7 +2947,6 @@ fn handle_done_round<R: tauri::Runtime>(
         ag::model_output::ModelNextAction::Final => {}
     }
     if let Some(error) = terminal_tool_requirement_error(
-        budget_closing,
         control.completion.is_some(),
         workspace_plan_completed,
         &intent_result,
@@ -2977,13 +3005,10 @@ fn handle_done_round<R: tauri::Runtime>(
             active_doc_path,
             findings: &control.findings,
             any_tool_called,
-            budget_closing,
             completion: control.completion.as_ref(),
             side_effect_intent: &control.intent.side_effect_intent,
             structure_warning,
             stop_reason,
-            remaining_tool_calls,
-            remaining_rounds,
         },
     )
 }
@@ -3007,10 +3032,8 @@ struct CloseRoundFacts<'a> {
     raw_prompt: &'a str,
     mention_block: Option<&'a str>,
     reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
-    proposed_diff: bool,
     continuation_messages: &'a mut Vec<serde_json::Value>,
     model_call_ordinal: usize,
-    remaining_tool_calls: u32,
     model_capacity: ag::prompt_runtime::ModelCapacity,
     response_rejected: bool,
     transport_protocol: &'a str,
@@ -3053,10 +3076,8 @@ fn close_round<R: tauri::Runtime>(
         raw_prompt,
         mention_block,
         reference_envelopes,
-        proposed_diff,
         continuation_messages,
         model_call_ordinal,
-        remaining_tool_calls,
         model_capacity,
         response_rejected,
         transport_protocol,
@@ -3127,11 +3148,9 @@ fn close_round<R: tauri::Runtime>(
             raw_prompt,
             mention_block,
             reference_envelopes,
-            proposed_diff,
             continuation_messages,
             decision_receipt_ids: &capability_factors.decision_receipt_ids,
             next_model_call: (model_call_ordinal + 1) as u32,
-            remaining_tool_calls,
             model_capacity,
             response_rejected,
         },
@@ -3191,10 +3210,7 @@ struct ToolCallContext<'a> {
     reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
     capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
     transport_protocol: &'a str,
-    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
     model_call_ordinal: usize,
-    round_index: usize,
-    remaining_rounds: usize,
 }
 
 struct ToolCallState {
@@ -3206,8 +3222,6 @@ struct ToolCallState {
     read_ctx: ag::blocks::AgentReadContext,
     active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
     capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
-    remaining_tool_calls: u32,
-    parameter_correction_rounds: usize,
     failed_read_signatures: BTreeSet<String>,
     tool_loop_state: ag::tool::ToolLoopState,
     turn_state: ag::turn::TurnState,
@@ -3360,7 +3374,6 @@ struct ToolCallAuthContext<'a> {
     on_context_request: Option<&'a tauri::ipc::Channel<super::turn_runtime::AgentContextRequest>>,
     active_doc_path: Option<&'a str>,
     capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
-    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
     model_call_ordinal: usize,
     intent: &'a ag::context::IntentResultV2,
 }
@@ -3371,8 +3384,6 @@ struct ToolCallAuthState {
     read_ctx: ag::blocks::AgentReadContext,
     active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
     capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
-    remaining_tool_calls: u32,
-    parameter_correction_rounds: usize,
     tool_loop_state: ag::tool::ToolLoopState,
 }
 
@@ -3421,7 +3432,6 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
         on_context_request,
         active_doc_path,
         capability_factors,
-        execution_policy,
         model_call_ordinal,
         intent: intent_result,
     } = ctx;
@@ -3433,8 +3443,6 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
         mut read_ctx,
         mut active_snapshot,
         mut capability_use_tracker,
-        mut remaining_tool_calls,
-        mut parameter_correction_rounds,
         mut tool_loop_state,
     } = auth_state;
     use ag::tool::ToolLoopEvent as TlEv;
@@ -3462,7 +3470,6 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
         &turn_id,
         &explicit_edit_target_set,
         model_call_ordinal,
-        remaining_tool_calls,
         &tools,
         ws_root.as_deref(),
         flags.read_failure_final_pending,
@@ -3490,9 +3497,10 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
         None
     };
     let context_failure_summary = context_refresh_error.as_ref().map(|error| {
+        // 具体原因必须同时回给模型与事件：只给代号会让模型重复同一错误直到纠错上限。
         format!(
-            "[{}] 专业上下文未就绪、已变化或采集失败；本次工具未执行，请就绪后重新提交",
-            error.code
+            "[{}] {}；本次工具未执行，请按上述原因修正后重试。",
+            error.code, error.message
         )
     });
     // 每个 ToolCall 在真实 GatePassed 后重新取得一次性 CapabilityGrantV2。Prompt Manifest
@@ -3507,18 +3515,15 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
             has_task_run: task_run_id.is_some(),
             capability_factors: &capability_factors,
             model_call_ordinal,
-            remaining_tool_calls,
             explicit_edit_target_set: &explicit_edit_target_set,
             tools: &tools,
             ws_root: ws_root.as_deref(),
             read_failure_final_pending: flags.read_failure_final_pending,
             arg_parse_error_none: arg_parse_error.is_none(),
             final_only_after_rejection,
-            max_corrections: execution_policy.max_corrections,
             call: c,
             params: &params,
             capability_use_tracker: &mut capability_use_tracker,
-            parameter_correction_rounds: &mut parameter_correction_rounds,
             correction_counted_this_round,
             parameter_correction_pending: &mut flags.parameter_correction_pending,
             final_only_correction_pending: &mut flags.final_only_correction_pending,
@@ -3526,19 +3531,6 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
     ) {
         Ok(grant) => grant,
         Err(ToolGrantFailure::Propagate(error)) => return Err(error),
-        Err(ToolGrantFailure::Settle(error)) => {
-            advance_or_finish!(TlEv::LoopError);
-            settle_and_emit_ag_turn_error(
-                &state,
-                task_run_id.as_deref(),
-                &event_emitter,
-                &terminal_latch,
-                &app,
-                &turn_id,
-                &error,
-            );
-            return Ok(ToolCallAuthResult::Ended);
-        }
     };
     let execution_grant = grant.execution_grant;
     let tool_decision = grant.tool_decision;
@@ -3608,12 +3600,6 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
     let validation_allows_execution = arg_parse_error.is_none()
         && execution_guard_error.is_none()
         && matches!(tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow));
-    if validation_allows_execution {
-        // Only a validated call that crosses the execution boundary consumes the
-        // tool budget. Rejected protocol/argument/permission calls consume rounds,
-        // but not the execution allowance.
-        remaining_tool_calls = remaining_tool_calls.saturating_sub(1);
-    }
     if validation_allows_execution && read_execution.is_none() {
         advance_or_finish!(TlEv::ValidateOk);
     } else if !validation_allows_execution {
@@ -3626,8 +3612,6 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
             read_ctx,
             active_snapshot,
             capability_use_tracker,
-            remaining_tool_calls,
-            parameter_correction_rounds,
             tool_loop_state,
         },
         capability_identity,
@@ -3639,6 +3623,67 @@ async fn authorize_one_tool_call<R: tauri::Runtime>(
         scope_candidates,
         context_failure_summary,
     }))
+}
+
+/// 从成功的 read_doc(blocks) 结果提取已验证锚点。只读取身份/类型/指纹/基线，不保留正文。
+fn verified_anchors_from_read(result: &str) -> Vec<ag::task::VerifiedAnchor> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(result) else {
+        return Vec::new();
+    };
+    let rel_path = value
+        .get("rel_path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let base_version = value
+        .get("session_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let content_hash = value
+        .get("content_hash")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if rel_path.is_empty() || base_version == 0 || content_hash.is_empty() {
+        return Vec::new();
+    }
+    value
+        .get("blocks")
+        .and_then(serde_json::Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|block| {
+                    let block_id = block.get("block_id")?.as_str()?.to_string();
+                    let node_type = block
+                        .get("node_type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let fingerprint = block
+                        .get("fingerprint")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let label: String = block
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .chars()
+                        .take(40)
+                        .collect();
+                    Some(ag::task::VerifiedAnchor {
+                        rel_path: rel_path.to_string(),
+                        block_id,
+                        node_type,
+                        fingerprint,
+                        base_version,
+                        content_hash: content_hash.to_string(),
+                        label,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 struct ToolCallExecContext<'a> {
@@ -3779,6 +3824,33 @@ async fn execute_and_record_tool_call<R: tauri::Runtime>(
     proposed_diff = execution.proposed_diff;
     edit_blocked_reported = execution.edit_blocked_reported;
     execution_failure = execution.execution_failure;
+    // 只把“目标属于本轮 ExplicitEditTargetSet 的真实块读取”记为已验证锚点；
+    // 检查失败、正文分页、未授权目标都不进入后续回合的锚点事实。
+    if success && c.name == "read_doc" && params.get("blocks").is_some() {
+        if let (Some(task_run_id), Some(path)) = (
+            task_run_id,
+            params.get("path").and_then(serde_json::Value::as_str),
+        ) {
+            if explicit_edit_target_set
+                .paths()
+                .iter()
+                .any(|target| target == path)
+            {
+                let anchors = verified_anchors_from_read(&result);
+                if !anchors.is_empty() {
+                    if let Ok(conn) = state.db.lock() {
+                        let _ = ag::task::record_verified_anchors(
+                            &conn,
+                            task_run_id,
+                            workspace_id_for_turn,
+                            session_id,
+                            &anchors,
+                        );
+                    }
+                }
+            }
+        }
+    }
     let repeated_read_failure = if validation_allows_execution && !success {
         let is_read_only = ag::tool_registry::lookup(&c.name)
             .is_some_and(|tool| tool.permission == ag::tool_registry::ToolPermission::ReadOnly);
@@ -3924,9 +3996,6 @@ struct ToolCallFinalizeFacts<'a> {
     end_after_diff_proposal: bool,
     call_index: usize,
     calls_len: usize,
-    round_index: usize,
-    remaining_rounds: usize,
-    final_reserve: usize,
     flags: &'a mut ToolCallFlags,
 }
 
@@ -4005,9 +4074,6 @@ fn finalize_tool_call<R: tauri::Runtime>(
         end_after_diff_proposal,
         call_index,
         calls_len,
-        round_index,
-        remaining_rounds,
-        final_reserve,
         flags,
     } = facts;
     let event_emitter = emitter;
@@ -4021,8 +4087,6 @@ fn finalize_tool_call<R: tauri::Runtime>(
         read_ctx,
         active_snapshot,
         capability_use_tracker,
-        remaining_tool_calls,
-        parameter_correction_rounds,
         failed_read_signatures,
         mut tool_loop_state,
         turn_state,
@@ -4075,15 +4139,10 @@ fn finalize_tool_call<R: tauri::Runtime>(
     }
     // Stop tool retries, not the user's entire conversation. The next response
     // may only explain existing evidence or ask for clarification. It still
-    // passes the original Gate, prompt budget, cancellation and round limits.
+    // passes the original Gate, prompt budget and cancellation.
     flags.read_failure_final_pending |= repeated_read_failure;
     let has_more_calls = call_index + 1 < calls_len;
-    let loop_budget_reached = final_reserve == 0
-        && (remaining_tool_calls == 0 || (round_index + 1 == remaining_rounds && !has_more_calls));
-    if loop_budget_reached {
-        advance_or_finish!(TlEv::LoopLimit);
-        stop_after_current_tool = true;
-    } else if end_after_diff_proposal && success {
+    if end_after_diff_proposal && success {
         advance_or_finish!(TlEv::ProposalRecorded);
         stop_after_current_tool = true;
     } else if has_more_calls {
@@ -4103,8 +4162,6 @@ fn finalize_tool_call<R: tauri::Runtime>(
             read_ctx,
             active_snapshot,
             capability_use_tracker,
-            remaining_tool_calls,
-            parameter_correction_rounds,
             failed_read_signatures,
             tool_loop_state,
             turn_state,
@@ -4158,10 +4215,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         reference_envelopes,
         capability_factors,
         transport_protocol,
-        execution_policy,
         model_call_ordinal,
-        round_index,
-        remaining_rounds,
     } = ctx;
     let event_emitter = emitter;
     let c = call;
@@ -4174,8 +4228,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         read_ctx,
         active_snapshot,
         capability_use_tracker,
-        remaining_tool_calls,
-        parameter_correction_rounds,
         failed_read_signatures,
         mut tool_loop_state,
         turn_state,
@@ -4185,7 +4237,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         proposed_diff,
         edit_blocked_reported,
     } = tool_state;
-    let _round = round_index;
     use ag::tool::ToolLoopEvent as TlEv;
 
     if cancelled.load(Ordering::Acquire) {
@@ -4250,7 +4301,7 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         reference_envelopes,
         &continuation_messages,
     )?;
-    let auth = match authorize_one_tool_call(
+    let mut auth = match authorize_one_tool_call(
         &app,
         &event_emitter,
         ToolCallAuthContext {
@@ -4267,7 +4318,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             on_context_request,
             active_doc_path: active_doc_path.as_deref(),
             capability_factors: &capability_factors,
-            execution_policy: &execution_policy,
             model_call_ordinal,
             intent: &intent_result,
         },
@@ -4277,8 +4327,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             read_ctx,
             active_snapshot,
             capability_use_tracker,
-            remaining_tool_calls,
-            parameter_correction_rounds,
             tool_loop_state,
         },
         flags,
@@ -4294,14 +4342,26 @@ async fn run_one_tool_call<R: tauri::Runtime>(
         ToolCallAuthResult::Ended => return Ok(ToolCallStep::Ended),
         ToolCallAuthResult::Continue(outcome) => outcome,
     };
+    if auth.validation_allows_execution
+        && matches!(c.name.as_str(), "write_content" | "propose_edit")
+        && matches!(auth.tool_decision.as_ref(), Some(ag::tool::ToolDecision::Allow))
+    {
+        ensure_task_run_for_content_proposal(
+            state,
+            &event_emitter,
+            &session_id,
+            &workspace_id_for_turn,
+            &turn_id,
+            &explicit_edit_target_set,
+            &mut auth.state.task_run_id,
+        )?;
+    }
     let ToolCallAuthState {
         task_run_id,
         agent_context_facts,
         read_ctx,
         active_snapshot,
         capability_use_tracker,
-        remaining_tool_calls,
-        parameter_correction_rounds,
         tool_loop_state,
     } = auth.state;
     let capability_identity = auth.capability_identity;
@@ -4387,9 +4447,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             end_after_diff_proposal,
             call_index,
             calls_len,
-            round_index,
-            remaining_rounds,
-            final_reserve: execution_policy.final_reserve,
             flags,
         },
         ToolCallState {
@@ -4401,8 +4458,6 @@ async fn run_one_tool_call<R: tauri::Runtime>(
             read_ctx,
             active_snapshot,
             capability_use_tracker,
-            remaining_tool_calls,
-            parameter_correction_rounds,
             failed_read_signatures,
             tool_loop_state,
             turn_state,
@@ -4455,22 +4510,6 @@ async fn run_tool_call_loop<R: tauri::Runtime>(
             }
         }
     }
-    if ctx.round_index + 1 == ctx.remaining_rounds
-        || (state.remaining_tool_calls == 0 && ctx.execution_policy.final_reserve == 0)
-    {
-        let error = round_budget_limit_error();
-        settle_and_emit_ag_turn_error_from(
-            ctx.state,
-            state.task_run_id.as_deref(),
-            emitter,
-            ctx.latch,
-            app,
-            ctx.turn_id,
-            &error,
-            state.turn_state,
-        );
-        return Ok(ToolCallLoopResult::Ended);
-    }
     Ok(ToolCallLoopResult::Continue(state))
 }
 
@@ -4479,18 +4518,12 @@ struct ResponseCorrectionFacts<'a> {
     latch: &'a ag::turn::TerminalLatch,
     turn_id: &'a str,
     task_run_id: Option<&'a str>,
-    turn_state: ag::turn::TurnState,
     tool_loop_state: &'a mut ag::tool::ToolLoopState,
-    protocol_correction_rounds: &'a mut usize,
     final_only_after_rejection: bool,
     response_rejection_kind: Option<&'a str>,
     error: &'a IpcError,
     output_decoder: &'a ag::model_output::ModelOutputDecoder,
-    max_corrections: usize,
-    round_index: usize,
-    remaining_rounds: usize,
     visible_output_chars: usize,
-    budget_closing: bool,
     continuation_messages: &'a mut Vec<serde_json::Value>,
     transport_protocol: &'a str,
 }
@@ -4510,77 +4543,31 @@ fn handle_response_rejection<R: tauri::Runtime>(
         latch,
         turn_id,
         task_run_id,
-        turn_state,
         tool_loop_state,
-        protocol_correction_rounds,
         final_only_after_rejection,
         response_rejection_kind,
         error,
         output_decoder,
-        max_corrections,
-        round_index,
-        remaining_rounds,
         visible_output_chars,
-        budget_closing,
         continuation_messages,
         transport_protocol,
     } = facts;
-    *protocol_correction_rounds += 1;
     let final_only = final_only_after_rejection;
     emitter.record_internal(
         "model_control_rejected",
         serde_json::json!({
             "code": error.code, "prefixKind": output_decoder.prefix_kind(),
-            "rejectionStage":"response_completion", "correctionAttempt":*protocol_correction_rounds,
+            "rejectionStage":"response_completion",
             "providerCompletionSeen":true, "finalOnly":final_only,
             "responseRejectionKind":response_rejection_kind,
         }),
     )?;
     // Once visible body has streamed, do not append a second answer to the same body.
     // Oversized quarantine failures also stop immediately in the callback above.
-    if *protocol_correction_rounds > max_corrections
-        || round_index + 1 == remaining_rounds
-        || visible_output_chars > 0
-    {
-        if budget_closing && visible_output_chars == 0 {
-            emitter.record_internal(
-                "budget_close_fallback",
-                serde_json::json!({"code":error.code,"budgetClosing":true}),
-            )?;
-            emitter.emit(latch, AgTurnEventPayload::Chunk { text: "本次执行额度已到；模型未提供可验证的收尾回答。此前工具回执和效果记录保留，未完成部分不代表成功；请核对执行效果后明确提出后续请求。系统没有自动重放操作。".into() })?;
-            if let Ok(conn) = state.db.lock() {
-                settle_optional_task_run(
-                    &conn,
-                    task_run_id,
-                    turn_id,
-                    ag::task::TurnOutcome::Failed,
-                );
-            }
-            if !advance_or_settle(
-                state,
-                app,
-                emitter,
-                latch,
-                turn_id,
-                task_run_id,
-                tool_loop_state,
-                ag::tool::ToolLoopEvent::ProtocolRejected,
-            ) {
-                return Ok(ResponseCorrection::Ended);
-            }
-            emit_ag_turn_done(emitter, latch, app, turn_id, "budget_exhausted", turn_state);
-            return Ok(ResponseCorrection::Ended);
-        }
-        let terminal_error = if visible_output_chars > 0 {
-            error.clone()
-        } else {
-            IpcError::new(
-                "AG_MODEL_CORRECTION_LIMIT",
-                "模型响应协议纠错达到上限；本批未执行，此前证据保留，请显式重试。",
-                true,
-                false,
-            )
-        };
+    // A response with no visible body is corrected until the model itself returns
+    // final/clarify or the turn is cancelled/failed.
+    if visible_output_chars > 0 {
+        let terminal_error = error.clone();
         if !advance_or_settle(
             state,
             app,
@@ -4645,10 +4632,7 @@ struct ToolCallsRoundContext<'a> {
     reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
     capability_factors: &'a ag::tool_registry::CapabilityFactorsV2,
     transport_protocol: &'a str,
-    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
     model_call_ordinal: usize,
-    round_index: usize,
-    remaining_rounds: usize,
     current_doc_prompt_coverage: Option<&'static str>,
 }
 
@@ -4661,10 +4645,7 @@ struct ToolCallsRoundState {
     read_ctx: ag::blocks::AgentReadContext,
     active_snapshot: Option<ag::blocks::AgentEditableSnapshot>,
     capability_use_tracker: ag::tool_registry::CapabilityGrantUseTrackerV2,
-    remaining_tool_calls: u32,
-    protocol_correction_rounds: usize,
     protocol_correction_diagnostic: Option<serde_json::Value>,
-    parameter_correction_rounds: usize,
     failed_read_signatures: BTreeSet<String>,
     seen_tool_call_ids: BTreeSet<String>,
     tool_loop_state: ag::tool::ToolLoopState,
@@ -4712,10 +4693,7 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
         reference_envelopes,
         capability_factors,
         transport_protocol,
-        execution_policy,
         model_call_ordinal,
-        round_index,
-        remaining_rounds,
         current_doc_prompt_coverage,
     } = ctx;
     let event_emitter = emitter;
@@ -4728,24 +4706,20 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
         mut read_ctx,
         mut active_snapshot,
         mut capability_use_tracker,
-        mut remaining_tool_calls,
-        mut protocol_correction_rounds,
         mut protocol_correction_diagnostic,
-        mut parameter_correction_rounds,
         mut failed_read_signatures,
         mut seen_tool_call_ids,
         mut tool_loop_state,
         mut turn_state,
-        mut current_doc_requires_tool_read,
+        current_doc_requires_tool_read: _,
         mut current_doc_read_confirmed,
-        mut any_tool_called,
+        any_tool_called: _,
         mut proposed_diff,
         mut edit_blocked_reported,
         mut final_only_correction_pending,
         mut parameter_correction_pending,
         mut read_failure_final_pending,
     } = round_state;
-    let _round = round_index;
     use ag::tool::ToolLoopEvent as TlEv;
     macro_rules! advance_or_finish {
         ($event:expr) => {{
@@ -4778,9 +4752,7 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
             transport_protocol: &transport_protocol,
             output_control,
             seen_tool_call_ids: &mut seen_tool_call_ids,
-            protocol_correction_rounds: &mut protocol_correction_rounds,
             protocol_correction_diagnostic: &mut protocol_correction_diagnostic,
-            max_corrections: execution_policy.max_corrections,
             task_run_id: &mut task_run_id,
             intent_result: &mut intent_result,
             raw_prompt: &raw_prompt,
@@ -4823,12 +4795,11 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
             parameter_correction_pending = true;
         }
     }
-    current_doc_requires_tool_read = matches!(
+    let tool_call_requires_read = matches!(
         intent_result.side_effect_intent,
         ag::context::SideEffectIntentV2::ContentProposal
     ) && current_doc_prompt_coverage != Some("full_document")
         && !current_doc_read_confirmed;
-    any_tool_called = true;
     // 先把 assistant 的 tool_calls 入历史（OpenAI 要求 tool 结果前有对应 assistant.tool_calls）。
     let tc_json: Vec<serde_json::Value> = calls
         .iter()
@@ -4875,10 +4846,7 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
         reference_envelopes: &reference_envelopes,
         capability_factors: &capability_factors,
         transport_protocol: &transport_protocol,
-        execution_policy: &execution_policy,
         model_call_ordinal,
-        round_index,
-        remaining_rounds,
     };
     let tool_call_state = ToolCallState {
         messages,
@@ -4889,17 +4857,17 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
         read_ctx,
         active_snapshot,
         capability_use_tracker,
-        remaining_tool_calls,
-        parameter_correction_rounds,
         failed_read_signatures,
         tool_loop_state,
         turn_state,
-        current_doc_requires_tool_read,
+        current_doc_requires_tool_read: tool_call_requires_read,
         current_doc_read_confirmed,
-        any_tool_called,
+        any_tool_called: true,
         proposed_diff,
         edit_blocked_reported,
     };
+    let current_doc_requires_tool_read;
+    let any_tool_called;
     let mut tool_call_flags = ToolCallFlags {
         final_only_correction_pending,
         parameter_correction_pending,
@@ -4929,8 +4897,6 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
             read_ctx = state.read_ctx;
             active_snapshot = state.active_snapshot;
             capability_use_tracker = state.capability_use_tracker;
-            remaining_tool_calls = state.remaining_tool_calls;
-            parameter_correction_rounds = state.parameter_correction_rounds;
             failed_read_signatures = state.failed_read_signatures;
             tool_loop_state = state.tool_loop_state;
             turn_state = state.turn_state;
@@ -4953,10 +4919,7 @@ async fn handle_tool_calls_round<R: tauri::Runtime>(
         read_ctx,
         active_snapshot,
         capability_use_tracker,
-        remaining_tool_calls,
-        protocol_correction_rounds,
         protocol_correction_diagnostic,
-        parameter_correction_rounds,
         failed_read_signatures,
         seen_tool_call_ids,
         tool_loop_state,
@@ -4989,7 +4952,6 @@ struct ProviderRoundFacts<'a> {
     task_run_id: Option<&'a str>,
     round_index: usize,
     model_call_ordinal: usize,
-    budget_closing: bool,
     workspace_plan_completed: bool,
 }
 
@@ -5001,6 +4963,24 @@ enum ProviderRoundOutcome {
         visible_output_chars: usize,
     },
     Ended,
+}
+
+/// 只在“首字节前超时且没有任何可见输出”时自动重试：已输出正文的重试会重复展示。
+fn stream_length_truncation(error: &IpcError) -> bool {
+    error.code == "AG_GW_STREAM_INCOMPLETE"
+        && (error.message.contains("长度限制")
+            || error.message.contains("length")
+            || error.message.contains("max_tokens"))
+}
+
+fn stream_timeout_is_retryable(error: &IpcError, visible_output_chars: usize, attempt: u32) -> bool {
+    attempt < 2
+        && (matches!(
+            error.code.as_str(),
+            "AG_GW_STREAM_TIMEOUT" | "AG_GW_STREAM_ERR" | "GW_STREAM_ERR"
+        ) || stream_length_truncation(error))
+        && error.retriable
+        && visible_output_chars == 0
 }
 
 async fn run_provider_round_with_gate<R: tauri::Runtime>(
@@ -5025,7 +5005,6 @@ async fn run_provider_round_with_gate<R: tauri::Runtime>(
         task_run_id,
         round_index,
         model_call_ordinal,
-        budget_closing,
         workspace_plan_completed,
     } = facts;
     let event_emitter = emitter;
@@ -5106,24 +5085,69 @@ async fn run_provider_round_with_gate<R: tauri::Runtime>(
     }
     debug_assert_eq!(*tool_loop_state, TlSt::ModelStreaming);
     // layer 是审计/装配内部元数据，发送 provider 前剥离（不进入模型输入）。
-    let provider_result = run_provider_round(
-        state,
-        event_emitter,
-        terminal_latch,
-        session_id,
-        turn_id,
-        provider,
-        model,
-        runtime_profile,
-        messages,
-        tools,
-        prompt_package,
-        final_prompt_audit,
-        model_call_ordinal,
-        budget_closing,
-        workspace_plan_completed,
-    )
-    .await?;
+    let mut active_messages = messages.to_vec();
+    let mut attempt = 0u32;
+    let provider_result = loop {
+        attempt += 1;
+        event_emitter.record_internal(
+            "attempt_started",
+            serde_json::json!({
+                "roundIndex": model_call_ordinal,
+                "attempt": attempt,
+            }),
+        )?;
+        let result = run_provider_round(
+            state,
+            event_emitter,
+            terminal_latch,
+            session_id,
+            turn_id,
+            provider,
+            model,
+            runtime_profile,
+            &active_messages,
+            tools,
+            prompt_package,
+            final_prompt_audit,
+            model_call_ordinal,
+            workspace_plan_completed,
+        )
+        .await?;
+        if let ProviderRoundResult::Failed { error, visible_output_chars } = &result {
+            event_emitter.record_internal(
+                "attempt_failed",
+                serde_json::json!({
+                    "roundIndex": model_call_ordinal,
+                    "attempt": attempt,
+                    "code": error.code,
+                    "retriable": error.retriable,
+                    "visibleOutputChars": visible_output_chars,
+                }),
+            )?;
+            if stream_timeout_is_retryable(error, *visible_output_chars, attempt) {
+                let reason = if stream_length_truncation(error) {
+                    active_messages.push(serde_json::json!({
+                        "role": "system",
+                        "content": "[LENGTH RETRY — DATA ONLY] 上一轮工具参数因单次输出长度被截断，JSON 未完成且未执行。本批最多 6 个内容块、约 1500 个中文字符；只提交本批，不要重复已生成内容，继续使用当前任务与 currentDocument。"
+                    }));
+                    "length_truncation"
+                } else {
+                    "no_visible_output"
+                };
+                event_emitter.record_internal(
+                    "attempt_retry",
+                    serde_json::json!({
+                        "roundIndex": model_call_ordinal,
+                        "attempt": attempt,
+                        "code": error.code,
+                        "reason": reason,
+                    }),
+                )?;
+                continue;
+            }
+        }
+        break result;
+    };
     match provider_result {
         ProviderRoundResult::Ready(ready) => {
             return Ok(ProviderRoundOutcome::Ready {
@@ -5146,7 +5170,7 @@ async fn run_provider_round_with_gate<R: tauri::Runtime>(
             );
             return Ok(ProviderRoundOutcome::Ended);
         }
-        ProviderRoundResult::Failed(error) => {
+        ProviderRoundResult::Failed { error, .. } => {
             advance_or_finish!(TlEv::LoopError);
             settle_and_emit_ag_turn_error(
                 state,
@@ -5169,15 +5193,9 @@ struct ResponseValidationFacts<'a> {
     session_id: &'a str,
     turn_id: &'a str,
     task_run_id: Option<&'a str>,
-    turn_state: ag::turn::TurnState,
     tool_loop_state: &'a mut ag::tool::ToolLoopState,
-    protocol_correction_rounds: &'a mut usize,
     continuation_messages: &'a mut Vec<serde_json::Value>,
     transport_protocol: &'a str,
-    max_corrections: usize,
-    round_index: usize,
-    remaining_rounds: usize,
-    budget_closing: bool,
     visible_output_chars: usize,
     round: &'a crate::ent::gateway::RoundOutcome,
     decoder: &'a ag::model_output::ModelOutputDecoder,
@@ -5212,15 +5230,9 @@ fn validate_and_correct_response<R: tauri::Runtime>(
         session_id,
         turn_id,
         task_run_id,
-        turn_state,
         tool_loop_state,
-        protocol_correction_rounds,
         continuation_messages,
         transport_protocol,
-        max_corrections,
-        round_index,
-        remaining_rounds,
-        budget_closing,
         visible_output_chars,
         round,
         decoder,
@@ -5235,7 +5247,6 @@ fn validate_and_correct_response<R: tauri::Runtime>(
     let response_control = validate_round_response(
         round,
         decoder,
-        budget_closing,
         workspace_plan_completed,
         visible_output_chars,
         any_tool_called,
@@ -5246,8 +5257,8 @@ fn validate_and_correct_response<R: tauri::Runtime>(
         .then(|| decoder.response_rejection_kind());
     let final_only_correction_pending = false;
     let parameter_correction_pending = false;
-    let mut protocol_correction_diagnostic = None;
-    let mut read_failure_final_pending = false;
+    let protocol_correction_diagnostic = None;
+    let read_failure_final_pending = false;
     if let Err(error) = &response_control {
         match handle_response_rejection(
             &app,
@@ -5257,18 +5268,12 @@ fn validate_and_correct_response<R: tauri::Runtime>(
                 latch: terminal_latch,
                 turn_id: &turn_id,
                 task_run_id: task_run_id.as_deref(),
-                turn_state,
                 tool_loop_state,
-                protocol_correction_rounds,
                 final_only_after_rejection,
                 response_rejection_kind,
                 error,
                 output_decoder: decoder,
-                max_corrections,
-                round_index,
-                remaining_rounds,
                 visible_output_chars,
-                budget_closing,
                 continuation_messages,
                 transport_protocol: &transport_protocol,
             },
@@ -5308,10 +5313,7 @@ struct RoundOutcomeContext<'a> {
     reference_envelopes: &'a [ag::context::PromptDataEnvelopeV1],
     transport_protocol: &'a str,
     model_capacity: ag::prompt_runtime::ModelCapacity,
-    execution_policy: &'a ag::tool_registry::ExecutionBudgetPolicy,
     workspace_plan_completed: bool,
-    remaining_rounds: usize,
-    round_index: usize,
     visible_output: &'a str,
 }
 
@@ -5338,7 +5340,6 @@ async fn handle_round_outcome<R: tauri::Runtime>(
     response_control: Result<Option<ag::model_output::ModelTurnControl>, IpcError>,
     response_rejected: bool,
     final_only_after_rejection: bool,
-    budget_closing: bool,
     model_call_ordinal: usize,
     mut final_only_correction_pending: bool,
     mut parameter_correction_pending: bool,
@@ -5363,10 +5364,7 @@ async fn handle_round_outcome<R: tauri::Runtime>(
         reference_envelopes,
         transport_protocol,
         model_capacity,
-        execution_policy,
         workspace_plan_completed,
-        remaining_rounds,
-        round_index,
         visible_output,
     } = ctx;
     let event_emitter = emitter;
@@ -5379,9 +5377,6 @@ async fn handle_round_outcome<R: tauri::Runtime>(
         mut intent_result,
         mut continuation_messages,
         mut task_run_id,
-        mut remaining_tool_calls,
-        mut protocol_correction_rounds,
-        mut parameter_correction_rounds,
         mut failed_read_signatures,
         mut seen_tool_call_ids,
         mut tool_loop_state,
@@ -5437,7 +5432,6 @@ async fn handle_round_outcome<R: tauri::Runtime>(
                     active_doc_path: active_doc_path.as_deref(),
                     reference_envelopes: &reference_envelopes,
                     continuation_messages,
-                    budget_closing,
                     workspace_plan_completed,
                     proposed_diff,
                     edit_blocked_reported,
@@ -5445,8 +5439,6 @@ async fn handle_round_outcome<R: tauri::Runtime>(
                     visible_output: &visible_output,
                     stop_reason: &stop_reason,
                     model_call_ordinal,
-                    remaining_tool_calls,
-                    remaining_rounds,
                 },
             )?;
             return Ok(RoundOutcomeResult::Ended);
@@ -5470,10 +5462,7 @@ async fn handle_round_outcome<R: tauri::Runtime>(
                 reference_envelopes: &reference_envelopes,
                 capability_factors: &capability_factors,
                 transport_protocol: &transport_protocol,
-                execution_policy: &execution_policy,
                 model_call_ordinal,
-                round_index,
-                remaining_rounds,
                 current_doc_prompt_coverage,
             };
             let tool_calls_state = ToolCallsRoundState {
@@ -5485,10 +5474,7 @@ async fn handle_round_outcome<R: tauri::Runtime>(
                 read_ctx,
                 active_snapshot,
                 capability_use_tracker,
-                remaining_tool_calls,
-                protocol_correction_rounds,
                 protocol_correction_diagnostic,
-                parameter_correction_rounds,
                 failed_read_signatures,
                 seen_tool_call_ids,
                 tool_loop_state,
@@ -5523,11 +5509,8 @@ async fn handle_round_outcome<R: tauri::Runtime>(
                     read_ctx = tool_calls_state.read_ctx;
                     active_snapshot = tool_calls_state.active_snapshot;
                     capability_use_tracker = tool_calls_state.capability_use_tracker;
-                    remaining_tool_calls = tool_calls_state.remaining_tool_calls;
-                    protocol_correction_rounds = tool_calls_state.protocol_correction_rounds;
                     protocol_correction_diagnostic =
                         tool_calls_state.protocol_correction_diagnostic;
-                    parameter_correction_rounds = tool_calls_state.parameter_correction_rounds;
                     failed_read_signatures = tool_calls_state.failed_read_signatures;
                     seen_tool_call_ids = tool_calls_state.seen_tool_call_ids;
                     tool_loop_state = tool_calls_state.tool_loop_state;
@@ -5565,10 +5548,8 @@ async fn handle_round_outcome<R: tauri::Runtime>(
             raw_prompt: &raw_prompt,
             mention_block: mention_block.as_deref(),
             reference_envelopes: &reference_envelopes,
-            proposed_diff,
             continuation_messages: &mut continuation_messages,
             model_call_ordinal,
-            remaining_tool_calls,
             model_capacity,
             response_rejected,
             transport_protocol: &transport_protocol,
@@ -5596,9 +5577,6 @@ async fn handle_round_outcome<R: tauri::Runtime>(
         intent_result,
         continuation_messages,
         task_run_id,
-        remaining_tool_calls,
-        protocol_correction_rounds,
-        parameter_correction_rounds,
         failed_read_signatures,
         seen_tool_call_ids,
         tool_loop_state,
@@ -5614,35 +5592,6 @@ async fn handle_round_outcome<R: tauri::Runtime>(
         prompt_package,
         agent_context_facts,
     }))
-}
-
-pub(super) fn round_budget_limit_error() -> IpcError {
-    IpcError::new(
-        "AG_TOOL_LOOP_LIMIT",
-        "原回合执行预算已用尽；确认或恢复不会重置预算。此前结果和效果记录保留，未启动下一次调用。",
-        true,
-        false,
-    )
-}
-
-fn ensure_round_budget<R: tauri::Runtime>(
-    state: &AppState,
-    app: &tauri::AppHandle<R>,
-    emitter: &TurnEventEmitter<'_>,
-    latch: &ag::turn::TerminalLatch,
-    turn_id: &str,
-    task_run_id: Option<&str>,
-    remaining_tool_calls: u32,
-    final_reserve: usize,
-    remaining_rounds: usize,
-) -> bool {
-    if (remaining_tool_calls == 0 && final_reserve == 0) || remaining_rounds == 0 {
-        let error = round_budget_limit_error();
-        settle_and_emit_ag_turn_error(state, task_run_id, emitter, latch, app, turn_id, &error);
-        false
-    } else {
-        true
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5707,7 +5656,7 @@ fn finish_failed_round<R: tauri::Runtime>(
  * chain:    AG-TURN, AG-TOOL
  * rules:    BR-AG-STATE-002
  * term_ref: TERM-AG-014, TERM-AG-015, TERM-AG-016, TERM-AG-020
- * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=ensure_round_budget,cancel_between_rounds,await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
+ * boundary: in=RoundContextAndRoundState | out=SingleAgentTurnTerminalOrContinuedRoundFacts | delegate=cancel_between_rounds,await_round_gate,run_provider_round,run_provider_round_with_gate,validate_and_correct_response,handle_round_outcome,handle_tool_calls_round,prepare_tool_batch,run_tool_call_loop,handle_response_rejection,park_decision_handoff,execute_tool_call,record_tool_result,handle_done_round,close_round,finish_final_answer,rebuild_round_prompt | consumer=BR-AG-STATE-002 | does_not=executeToolOutsideFreshGrantOrTreatPromptIntentAsAuthorization
  */
 /// 执行回合的 provider/tool 循环；不可变上下文与可变回合状态显式分离。
 /// 终态路径仍在本函数内结算并返回 Ok(())，错误按原路径向上传播。
@@ -5737,27 +5686,13 @@ async fn run_round_loop<R: tauri::Runtime>(
         on_context_request,
         transport_protocol,
         model_capacity,
-        execution_policy,
         workspace_plan_completed,
         previous_model_calls,
-        remaining_rounds,
     } = ctx;
     let event_emitter = emitter;
     let mut round_state = round;
-    if !ensure_round_budget(
-        state,
-        &app,
-        &event_emitter,
-        &terminal_latch,
-        &turn_id,
-        round_state.task_run_id.as_deref(),
-        round_state.remaining_tool_calls,
-        execution_policy.final_reserve,
-        remaining_rounds,
-    ) {
-        return Ok(());
-    }
-    for _round in 0..remaining_rounds {
+    let mut round_index = 0usize;
+    loop {
         let RoundState {
             messages,
             tools,
@@ -5767,9 +5702,6 @@ async fn run_round_loop<R: tauri::Runtime>(
             intent_result,
             mut continuation_messages,
             task_run_id,
-            remaining_tool_calls,
-            mut protocol_correction_rounds,
-            parameter_correction_rounds,
             failed_read_signatures,
             seen_tool_call_ids,
             mut tool_loop_state,
@@ -5785,17 +5717,7 @@ async fn run_round_loop<R: tauri::Runtime>(
             prompt_package,
             agent_context_facts,
         } = round_state;
-        let budget_closing = messages
-            .iter()
-            .any(|m| m["role"] == "system" && m["layer"] == "execution_budget_final_only");
-        let model_call_ordinal = previous_model_calls + _round + 1;
-        event_emitter.record_internal("execution_budget_checked", serde_json::json!({
-            "roundIndex": model_call_ordinal, "maxModelCalls":execution_policy.max_model_calls,
-            "maxToolCalls":execution_policy.max_tool_calls, "maxCorrectionsPerCategory":execution_policy.max_corrections,
-            "controlCorrections":protocol_correction_rounds, "parameterCorrections":parameter_correction_rounds,
-            "finalReserve":execution_policy.final_reserve, "remainingModelCalls":remaining_rounds - _round,
-            "remainingToolCalls":remaining_tool_calls, "budgetClosing":budget_closing
-        }))?;
+        let model_call_ordinal = previous_model_calls + round_index + 1;
         if cancelled.load(Ordering::Acquire) {
             cancel_between_rounds(
                 state,
@@ -5828,9 +5750,8 @@ async fn run_round_loop<R: tauri::Runtime>(
                     turn_state: &mut turn_state,
                     tool_loop_state: &mut tool_loop_state,
                     task_run_id: task_run_id.as_deref(),
-                    round_index: _round,
+                    round_index,
                     model_call_ordinal,
-                    budget_closing,
                     workspace_plan_completed,
                 },
             )
@@ -5857,15 +5778,9 @@ async fn run_round_loop<R: tauri::Runtime>(
                 session_id: &session_id,
                 turn_id: &turn_id,
                 task_run_id: task_run_id.as_deref(),
-                turn_state,
                 tool_loop_state: &mut tool_loop_state,
-                protocol_correction_rounds: &mut protocol_correction_rounds,
                 continuation_messages: &mut continuation_messages,
                 transport_protocol: &transport_protocol,
-                max_corrections: execution_policy.max_corrections,
-                round_index: _round,
-                remaining_rounds,
-                budget_closing,
                 visible_output_chars,
                 round: &round,
                 decoder: &output_decoder,
@@ -5882,7 +5797,7 @@ async fn run_round_loop<R: tauri::Runtime>(
         let final_only_correction_pending = validation.final_only_correction_pending;
         let parameter_correction_pending = validation.parameter_correction_pending;
         let protocol_correction_diagnostic = validation.protocol_correction_diagnostic;
-        let mut read_failure_final_pending = validation.read_failure_final_pending;
+        let read_failure_final_pending = validation.read_failure_final_pending;
         let outcome = match Box::pin(handle_round_outcome(
             &app,
             &event_emitter,
@@ -5904,10 +5819,7 @@ async fn run_round_loop<R: tauri::Runtime>(
                 reference_envelopes: &reference_envelopes,
                 transport_protocol: &transport_protocol,
                 model_capacity,
-                execution_policy: &execution_policy,
                 workspace_plan_completed,
-                remaining_rounds,
-                round_index: _round,
                 visible_output: &visible_output,
             },
             RoundState {
@@ -5919,9 +5831,6 @@ async fn run_round_loop<R: tauri::Runtime>(
                 intent_result,
                 continuation_messages,
                 task_run_id,
-                remaining_tool_calls,
-                protocol_correction_rounds,
-                parameter_correction_rounds,
                 failed_read_signatures,
                 seen_tool_call_ids,
                 tool_loop_state,
@@ -5941,7 +5850,6 @@ async fn run_round_loop<R: tauri::Runtime>(
             response_control,
             response_rejected,
             final_only_after_rejection,
-            budget_closing,
             model_call_ordinal,
             final_only_correction_pending,
             parameter_correction_pending,
@@ -5954,10 +5862,8 @@ async fn run_round_loop<R: tauri::Runtime>(
             RoundOutcomeResult::Continue(state) => state,
         };
         round_state = outcome;
+        round_index += 1;
     }
-
-    debug_assert!(false, "每个 provider 结果都应在循环内部返回或推进");
-    Ok(())
 }
 
 /**
@@ -6013,7 +5919,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         )
     })?;
     let model_capacity = ag::prompt_runtime::model_capacity(&provider, &model);
-    let execution_policy = event_emitter.execution_policy()?;
     let workspace_plan_completed = event_emitter.has_workspace_plan_receipt()?;
     let (open_resource_path_hashes, selection_path_hashes) = match &agent_context_facts {
         crate::types::AgentContextFacts::V1(facts) => (
@@ -6068,9 +5973,7 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
     let current_doc_read_confirmed = !current_doc_requires_tool_read;
     // AG-CTX-01：本轮是否调用过任何工具（用于区分"已读未提案"与"零工具调用"的失败文案）。
     let any_tool_called = false;
-    let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
-    let (protocol_correction_rounds, parameter_correction_rounds) =
-        event_emitter.correction_attempt_breakdown()?;
+    let previous_model_calls = event_emitter.protocol_attempt_counts()?;
     let failed_read_signatures = BTreeSet::new();
     // Rejected tool IDs are still used by this AgentTurn. Do not make malformed
     // arguments model-visible merely to retain duplicate-ID protection.
@@ -6090,16 +5993,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
     let final_prompt_audit = prompt_audit_enabled().then(FinalPromptAuditLog::default);
     let tool_loop_state = TlSt::ModelStreaming;
     let capability_use_tracker = ag::tool_registry::CapabilityGrantUseTrackerV2::default();
-    let (remaining_tool_calls, continuation_rounds) = continuation_execution_budget(
-        &continuation_messages,
-        execution_policy.max_tool_calls,
-        execution_policy.max_model_calls,
-    );
-    let remaining_rounds = continuation_rounds.min(
-        execution_policy
-            .max_model_calls
-            .saturating_sub(previous_model_calls),
-    );
     let turn_state = ag::turn::TurnState::Streaming;
     let round_context = RoundContext {
         state,
@@ -6122,10 +6015,8 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         on_context_request,
         transport_protocol,
         model_capacity,
-        execution_policy,
         workspace_plan_completed,
         previous_model_calls,
-        remaining_rounds,
     };
     let round_state = RoundState {
         messages,
@@ -6136,9 +6027,6 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
         intent_result,
         continuation_messages,
         task_run_id,
-        remaining_tool_calls,
-        protocol_correction_rounds,
-        parameter_correction_rounds,
         failed_read_signatures,
         seen_tool_call_ids,
         tool_loop_state,
@@ -6161,27 +6049,9 @@ pub(super) async fn run_turn_tool_loop<R: tauri::Runtime>(
 mod tests {
     use super::*;
 
-    // covers: BR-AG-STATE-005
-    #[test]
-    fn round_budget_limit_error_has_single_shape() {
-        let error = round_budget_limit_error();
-        assert_eq!(error.code, "AG_TOOL_LOOP_LIMIT");
-        assert!(error.retriable);
-        assert!(!error.reauth_required);
-        assert!(error.message.contains("未启动下一次调用"));
-    }
-
     // covers: BR-AG-STATE-002
     #[test]
-    fn checkpoint_continuation_preserves_total_execution_budget() {
-        let messages = vec![
-            serde_json::json!({"role":"assistant", "tool_calls":[{"id":"A"},{"id":"B"}]}),
-            serde_json::json!({"role":"tool", "tool_call_id":"A"}),
-            serde_json::json!({"role":"assistant", "tool_calls":[{"id":"C"}]}),
-        ];
-        assert_eq!(continuation_execution_budget(&messages, 6, 6), (3, 4));
-        assert_eq!(continuation_execution_budget(&messages, 2, 1), (0, 0));
-        assert_eq!(continuation_execution_budget(&[], 6, 6), (6, 6));
+    fn correction_final_only_distinguishes_read_and_non_read_calls() {
         assert!(!correction_final_only(
             &[
                 serde_json::json!({"role":"assistant","tool_calls":[{"function":{"name":"workspace_glob"}}]})
@@ -6221,20 +6091,6 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("下一响应必须调用"));
-    }
-
-    #[test]
-    fn rejected_calls_do_not_consume_execution_budget_but_legacy_calls_do() {
-        let messages = vec![
-            serde_json::json!({"role":"assistant", "tool_calls":[
-                {"id":"rejected"}, {"id":"executed"}, {"id":"legacy"}
-            ]}),
-            serde_json::json!({"role":"tool", "tool_call_id":"rejected", "content":
-                "{\"executionReceipt\":{\"executionStatus\":\"rejected\"}}"}),
-            serde_json::json!({"role":"tool", "tool_call_id":"executed", "content":
-                "{\"executionReceipt\":{\"executionStatus\":\"succeeded\"}}"}),
-        ];
-        assert_eq!(continuation_execution_budget(&messages, 6, 6), (4, 5));
     }
 
     // covers: BR-AG-STATE-002, BR-SYS-STATE-007
@@ -6621,7 +6477,14 @@ mod tests {
     // covers: BR-AG-DATA-012
     #[test]
     fn proposal_result_projection_derives_card_count_and_keeps_pending_semantics() {
-        let projections = vec![test_projection("diff-1"), test_projection("diff-2")];
+        let mut first = test_projection("diff-1");
+        first.block_ops = Some(serde_json::json!({
+            "operations": [
+                {"op": "insert_before", "blockId": "anchor", "afterNode": {"type": "paragraph", "attrs": {"blockId": "new-1"}, "content": []}},
+                {"op": "append", "blockId": "", "afterNode": {"type": "paragraph", "attrs": {"blockId": "new-2"}, "content": []}}
+            ]
+        }));
+        let projections = vec![first, test_projection("diff-2")];
         let result = proposal_result_projection("batch-1", "notes/a.md", &projections, false);
         let summary = result["summary"].as_str().expect("summary string");
         assert!(summary.contains("2 张"), "{summary}");
@@ -6637,67 +6500,94 @@ mod tests {
         assert_eq!(result["editor_preview_status"], "not_reported");
         assert_eq!(result["disk_persistence_status"], "not_saved");
         assert_eq!(result["preview_checkpoint_required"], false);
+        assert_eq!(
+            result["created_block_ids"],
+            serde_json::json!(["new-1", "new-2"])
+        );
+    }
+
+    #[test]
+    fn stream_timeout_retry_only_before_visible_output() {
+        let timeout = crate::ipc::IpcError::new(
+            "AG_GW_STREAM_TIMEOUT",
+            "模型流未完整结束",
+            true,
+            false,
+        );
+        assert!(stream_timeout_is_retryable(&timeout, 0, 1));
+        assert!(!stream_timeout_is_retryable(&timeout, 1, 1));
+        assert!(!stream_timeout_is_retryable(&timeout, 0, 2));
+        let other = crate::ipc::IpcError::new("AG_GW_STREAM", "流中断", true, false);
+        assert!(!stream_timeout_is_retryable(&other, 0, 1));
+        let stream_err = crate::ipc::IpcError::new("GW_STREAM_ERR", "流异常结束", true, false);
+        assert!(stream_timeout_is_retryable(&stream_err, 0, 1));
+        assert!(!stream_timeout_is_retryable(&stream_err, 1, 1));
+        let length = crate::ipc::IpcError::new(
+            "AG_GW_STREAM_INCOMPLETE",
+            "模型输出因长度限制提前结束（length）；参数不完整",
+            true,
+            false,
+        );
+        assert!(stream_length_truncation(&length));
+        assert!(stream_timeout_is_retryable(&length, 0, 1));
+        assert!(!stream_timeout_is_retryable(&length, 1, 1));
+        let other_incomplete = crate::ipc::IpcError::new(
+            "AG_GW_STREAM_INCOMPLETE",
+            "模型在完整答复前停止",
+            true,
+            false,
+        );
+        assert!(!stream_length_truncation(&other_incomplete));
+        assert!(!stream_timeout_is_retryable(&other_incomplete, 0, 1));
     }
 
     // covers: BR-AG-STATE-005
     #[test]
-    fn completion_settlement_marks_partial_blocked_and_budget_closing_as_failed() {
+    fn completion_settlement_keeps_partial_active_but_marks_blocked_and_report_only_failed() {
         let none = ag::context::SideEffectIntentV2::None;
         let proposal = ag::context::SideEffectIntentV2::ContentProposal;
         let completion = |status: &str| ag::model_output::ModelCompletion {
             status: status.to_string(),
             reason: "test".to_string(),
+            reason_code: None,
         };
-        assert!(completion_settles_as_failed(true, None, &none));
-        assert!(completion_settles_as_failed(
-            false,
+        assert!(!completion_settles_as_failed(
             Some(&completion("partial")),
             &none
         ));
         assert!(completion_settles_as_failed(
-            false,
             Some(&completion("blocked")),
             &none
         ));
         assert!(completion_settles_as_failed(
-            false,
             Some(&completion("report_only")),
             &proposal
         ));
         assert!(!completion_settles_as_failed(
-            false,
             Some(&completion("report_only")),
             &none
         ));
         assert!(!completion_settles_as_failed(
-            false,
             Some(&completion("completed")),
             &proposal
         ));
-        assert!(!completion_settles_as_failed(false, None, &proposal));
+        assert!(!completion_settles_as_failed(None, &proposal));
 
         assert_eq!(
-            completed_turn_stop_reason(true, None, None, "stop"),
-            "budget_exhausted"
-        );
-        assert_eq!(
-            completed_turn_stop_reason(false, None, Some("warning"), "stop"),
+            completed_turn_stop_reason(None, Some("warning"), "stop"),
             "answer_incomplete"
         );
         let partial = completion("partial");
         assert_eq!(
-            completed_turn_stop_reason(false, Some(&partial), None, "stop"),
+            completed_turn_stop_reason(Some(&partial), None, "stop"),
             "partial"
         );
-        assert_eq!(
-            completed_turn_stop_reason(false, None, None, "stop"),
-            "stop"
-        );
+        assert_eq!(completed_turn_stop_reason(None, None, "stop"), "stop");
     }
 
     // covers: BR-AG-DATA-013
     #[test]
-    fn round_response_validation_rejects_budget_closing_tools_and_defers_failed_rounds() {
+    fn round_response_validation_rejects_final_only_tools_and_defers_failed_rounds() {
         let decoder = ag::model_output::ModelOutputDecoder::default();
         let failed = ent::gateway::RoundOutcome::Failed(IpcError::new(
             "AG_GATEWAY_TEST",
@@ -6706,23 +6596,20 @@ mod tests {
             false,
         ));
         assert!(
-            validate_round_response(&failed, &decoder, false, false, 0, false, &[])
+            validate_round_response(&failed, &decoder, false, 0, false, &[])
                 .expect("failed round has no control")
                 .is_none()
         );
 
         let tools = ent::gateway::RoundOutcome::ToolCalls(Vec::new());
-        let error = validate_round_response(&tools, &decoder, true, false, 0, false, &[])
-            .expect_err("budget closing must reject tool calls");
-        assert_eq!(error.code, "AG_MODEL_CONTROL_INVALID");
-
         let final_only = vec![serde_json::json!({
             "role": "system",
             "layer": "read_failure_final_only",
         })];
-        let error = validate_round_response(&tools, &decoder, false, false, 0, false, &final_only)
+        let error = validate_round_response(&tools, &decoder, false, 0, false, &final_only)
             .expect_err("final-only continuation must reject tool calls");
         assert_eq!(error.code, "AG_MODEL_CONTROL_INVALID");
+        assert!(validate_round_response(&tools, &decoder, false, 0, false, &[]).is_ok());
     }
 
     // covers: BR-AG-STATE-002
@@ -6797,39 +6684,23 @@ mod tests {
     fn terminal_tool_requirement_error_matches_existing_terminal_semantics() {
         let mut intent = ag::context::IntentResultV2::unresolved();
         intent.side_effect_intent = ag::context::SideEffectIntentV2::ContentProposal;
-        assert!(
-            terminal_tool_requirement_error(true, false, false, &intent, false, false, false)
-                .is_none()
-        );
-        assert!(
-            terminal_tool_requirement_error(false, true, false, &intent, false, false, false)
-                .is_none()
-        );
+        assert!(terminal_tool_requirement_error(true, false, &intent, false, false, false).is_none());
         assert_eq!(
-            terminal_tool_requirement_error(false, false, false, &intent, false, false, false)
+            terminal_tool_requirement_error(false, false, &intent, false, false, false)
                 .expect("missing propose_edit")
                 .code,
             "AG_EDIT_TOOL_REQUIRED"
         );
-        assert!(
-            terminal_tool_requirement_error(false, false, false, &intent, true, false, false)
-                .is_none()
-        );
+        assert!(terminal_tool_requirement_error(false, false, &intent, true, false, false).is_none());
         intent.side_effect_intent = ag::context::SideEffectIntentV2::StructurePlan;
-        assert!(
-            terminal_tool_requirement_error(false, false, true, &intent, false, false, false)
-                .is_none()
-        );
+        assert!(terminal_tool_requirement_error(false, true, &intent, false, false, false).is_none());
         assert_eq!(
-            terminal_tool_requirement_error(false, false, false, &intent, false, false, false)
+            terminal_tool_requirement_error(false, false, &intent, false, false, false)
                 .expect("missing plan")
                 .code,
             "AG_WORKSPACE_PLAN_TOOL_REQUIRED"
         );
         intent.side_effect_intent = ag::context::SideEffectIntentV2::None;
-        assert!(
-            terminal_tool_requirement_error(false, false, false, &intent, false, false, false)
-                .is_none()
-        );
+        assert!(terminal_tool_requirement_error(false, false, &intent, false, false, false).is_none());
     }
 }

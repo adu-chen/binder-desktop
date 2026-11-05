@@ -92,10 +92,8 @@ pub(super) fn guard_propose_edit_target(target_exists: bool) -> Result<(), IpcEr
 /// same size by `block_ops::split_adjudication_groups`, so a long chapter never has to be
 /// resubmitted: one call may carry several cards.
 pub(crate) const MAX_BLOCK_OPS_PER_BATCH: usize = 64;
-/// Per-call ceiling. Five cards (the single-turn batch budget) of the per-card size.
-pub(crate) const MAX_BLOCK_OPS_PER_CALL: usize = MAX_BLOCK_OPS_PER_BATCH * 5;
-/// Hard ceiling on the serialized `operations` payload. The count alone does not bound the
-/// context: a few blocks can still carry an entire chapter. Bytes are the real budget.
+/// Hard ceiling on each card's serialized `operations` payload. The count alone does not bound
+/// the context: a few blocks can still carry an entire chapter. Bytes are the real boundary.
 pub(crate) const MAX_BLOCK_OPS_BYTES_PER_BATCH: usize = 64 * 1024;
 
 /**
@@ -133,22 +131,8 @@ pub(super) fn resolve_agent_edit_operation(
         .and_then(|v| v.as_array())
         .map(|v| !v.is_empty())
         .unwrap_or(false);
-    let block_ops_len = params
-        .get("operations")
-        .and_then(|v| v.as_array())
-        .map(|v| v.len())
-        .unwrap_or(0);
-    let block_ops_bytes = params
-        .get("operations")
-        .and_then(|v| serde_json::to_string(v).ok())
-        .map(|serialized| serialized.len())
-        .unwrap_or(0);
     let has_structured_base = params.get("base").is_some();
 
-    // 预算门禁在操作解析前统一执行：与 BR-AG-DATA-010 一对一，不再与载荷完备性守卫混在同一块。
-    if operation == Some("block_ops") {
-        enforce_block_ops_budget(block_ops_len, block_ops_bytes)?;
-    }
     let op = match operation {
         Some("replace_block") => AgentEditOperation::ReplaceBlock,
         Some("block_ops") => AgentEditOperation::BlockOps,
@@ -287,49 +271,9 @@ pub(super) fn resolve_agent_edit_operation(
     }
 }
 
-/**
- * @GOV
- * codes:    BR-AG-DATA-010-GUARD-AG-AG-TOOL-061
- * type:     GUARD
- * chain:    AG-TOOL
- * rules:    BR-AG-DATA-010
- * boundary: in=BlockOpsOperationCountAndSerializedBytes | out=OkOrIpcErrorWithSplitPlan | does_not=acceptPartiallyTruncateOrRewriteOperations
- */
-fn enforce_block_ops_budget(block_ops_len: usize, block_ops_bytes: usize) -> Result<(), IpcError> {
-    if block_ops_len > MAX_BLOCK_OPS_PER_CALL {
-        let batches = block_ops_len.div_ceil(MAX_BLOCK_OPS_PER_CALL);
-        let plan = (0..batches)
-            .map(|index| {
-                let start = index * MAX_BLOCK_OPS_PER_CALL + 1;
-                let end = (start + MAX_BLOCK_OPS_PER_CALL - 1).min(block_ops_len);
-                format!("{start}–{end}")
-            })
-            .collect::<Vec<_>>()
-            .join("、");
-        return Err(IpcError::new(
-            "AG_TOOL_ARG",
-            &format!(
-                "operation=block_ops 单次调用操作数 {block_ops_len} 超过上限 {MAX_BLOCK_OPS_PER_CALL}；请按区间 {plan} 分次提交；同一章连续追加用相同 adjudicationGroup 合成一张卡，正文末尾追加请使用 append"
-            ),
-            false,
-            false,
-        ));
-    }
-    if block_ops_bytes > MAX_BLOCK_OPS_BYTES_PER_BATCH {
-        return Err(IpcError::new(
-            "AG_TOOL_ARG",
-            &format!(
-                "operation=block_ops 单批序列化载荷 {block_ops_bytes} 字节超过上限 {MAX_BLOCK_OPS_BYTES_PER_BATCH} 字节；请减少单批内容或分批提交"
-            ),
-            false,
-            false,
-        ));
-    }
-    Ok(())
-}
-
-/// P5 锚点校验（AG-R2-01）：返回首个自相矛盾的锚点描述；无冲突返回 None。
-/// 检查 insert_before/insert_after 是否引用同一 blockId 作为多个操作的锚点。
+/// P5 锚点校验（AG-R2-01）：同一锚点只允许一个插入方向。
+/// 同向多插入是合法能力（同一坐标按 operations 顺序落位），不得误判为矛盾；
+/// 仅当同一 blockId 同时被 insert_before 与 insert_after 引用时拒绝。
 /**
  * @GOV
  * codes:    BR-AG-STATE-002-GUARD-AG-AG-TOOL-059, BR-AG-DATA-010-GUARD-AG-AG-TOOL-059
@@ -342,7 +286,7 @@ pub(super) fn find_block_ops_anchor_conflict(
     operations: Option<&serde_json::Value>,
 ) -> Option<String> {
     let operations = operations?.as_array()?;
-    let mut anchor_refs: Vec<(String, &str)> = Vec::new();
+    let mut directions: Vec<(String, &str)> = Vec::new();
     for operation in operations {
         let op_type = operation
             .get("op")
@@ -352,19 +296,19 @@ pub(super) fn find_block_ops_anchor_conflict(
             .get("blockId")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        match op_type {
-            "insert_before" | "insert_after" if !block_id.is_empty() => {
-                for (existing, existing_type) in &anchor_refs {
-                    if existing == block_id {
-                        return Some(format!(
-                            "块 {block_id} 被 {existing_type} 与 {op_type} 同时作为锚点"
-                        ));
-                    }
-                }
-                anchor_refs.push((block_id.to_string(), op_type));
-            }
-            _ => {}
+        if block_id.is_empty() || !matches!(op_type, "insert_before" | "insert_after") {
+            continue;
         }
+        if let Some((_, existing_type)) = directions.iter().find(|(existing, _)| existing == block_id)
+        {
+            if *existing_type != op_type {
+                return Some(format!(
+                    "块 {block_id} 同时被 {existing_type} 与 {op_type} 作为锚点；同一锚点只能选择一个插入方向"
+                ));
+            }
+            continue;
+        }
+        directions.push((block_id.to_string(), op_type));
     }
     None
 }

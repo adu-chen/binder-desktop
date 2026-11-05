@@ -663,7 +663,8 @@ pub(crate) fn route_list_diff_details(
     let sql = format!(
         "SELECT d.diff_id, d.workspace_id, d.rel_path, d.status, d.effect_status, d.terminal_reason, d.created_at, \
                 d.proposal_batch_id, d.group_index, d.group_count, \
-                p.before_snapshot, p.after_content, p.style_ops \
+                p.before_snapshot, p.after_content, p.style_ops, \
+                EXISTS(SELECT 1 FROM task_preview_checkpoints c WHERE c.diff_id=d.diff_id AND c.status IN ('awaiting_ack','acknowledged')) AS preview_checkpoint_required \
          FROM pending_diffs d LEFT JOIN diff_payloads p ON p.payload_ref = d.payload_ref \
          WHERE d.workspace_id = ? AND d.diff_id IN ({placeholders}) \
          ORDER BY d.created_at ASC"
@@ -691,6 +692,7 @@ pub(crate) fn route_list_diff_details(
             let before_snapshot: Option<String> = r.get(10)?;
             let after_content: Option<Vec<u8>> = r.get(11)?;
             let style_ops_json: Option<String> = r.get(12)?;
+            let preview_checkpoint_required: bool = r.get(13)?;
             let style_ops = style_ops_json
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
@@ -764,6 +766,7 @@ pub(crate) fn route_list_diff_details(
                 "terminal_reason": terminal_reason,
                 "created_at": created_at,
                 "projection": {
+                    "preview_checkpoint_required": preview_checkpoint_required,
                     "proposal_batch_id": proposal_batch_id,
                     "group_index": group_index,
                     "group_count": group_count,

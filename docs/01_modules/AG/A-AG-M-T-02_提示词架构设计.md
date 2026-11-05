@@ -69,7 +69,7 @@ v2 的 P0 是已激活必需内容的保留义务，不是所有请求的全量�
 | 工具/能力层 | 工具/能力定义层 | 当轮 CapabilityGrant.allowed_tools 的精确契约投影；不暴露完整注册表 | AG | P0 | BR-AG-STATE-002 |
 | 格式层 | 系统提示词层（子项） | 输出格式约束（**GFM Markdown 子集**：段落/标题/列表/加粗/围栏代码块标注语言/表格；**声明当前无图表/流程图（Mermaid）渲染能力**；HTML/docx 仅面向 BDocx 能力投影） | DOC/DE | P0 | BR-AG-DATA-002（骨架内）、BR-AG-UI-001 |
 | 任务状态层 | 上下文注入层 | 当前受限任务 + 阶段 + artifacts（仅存在 TaskRun 时） | AG | P1 | BR-SYS-STATE-008 / SM-AG-04 |
-| 代理上下文事实集层 | 上下文注入层 | 版本化 AgentContextFacts：workspace、活动/打开会话、格式、脏态、保存基准、LogicalState 版本、显式 SelectionRef、关联 Proposal 状态；不含正文 | SYS/ED/DE/WS | P0 当前轮事实元数据 | BR-AG-DATA-008 / BR-SYS-DATA-008 |
+| 代理上下文事实集层 | 上下文注入层 | 版本化 AgentContextFacts：workspace、活动/打开会话、格式、脏态、保存基准、LogicalState 版本、显式 SelectionRef、关联 Proposal 状态、唯一 currentDocument 版本与 pendingPreviews 三态（previewed/accepted/saved）；不含正文 | SYS/ED/DE/WS | P0 当前轮事实元数据 | BR-AG-DATA-008 / BR-SYS-DATA-008 |
 | 当前文档/编辑器层 | 上下文注入层 | v2 按需取得的文件/块/选区/基线；未激活时只在事实层声明身份与可用性，不携正文 | WS/ED/DE | **激活后 P0，不静默截断** | BR-AG-DATA-001/008 |
 | 引用层 | 上下文注入层 | 显式 @mention（精确锚点可编辑 / 阅读上下文仅理解） | REF | P1 最高保留 | BR-AG-DATA-001（@mention 优先） |
 | 当前对话层 | 用户输入层 | 当前轮 user 输入 + IntentResult（结构化决策不替代原文） | AG | P0 信号源 | BR-AG-DATA-004（本文） |
@@ -246,6 +246,8 @@ diff。未打开文档仍按 DiskState 读取规则处理。v2 未激活内容�
 
 P04 实现登记（2026-09-21，验证状态见开发计划 §14.14）：预算门禁、PromptPackage 和发送路径共用剥离内部 layer 的消息投影；按每条完整消息的 JSON 字符数分层，再加数组分隔开销及完整 tools JSON，汇总后统一 ceil(chars/4)。这不是 Provider 精确 tokenizer，也不覆盖响应输出额度。`prompt_budget_checked` 默认只存装配序号、下一模型调用序号、原因、配置版本、分项、上限与来源哈希/输入保留量；来源投影与消息分项有重叠，不重复相加。初始/工具结果/裁决/预览及澄清原因由宿主已校验入口确定。错误保持原代码，增加阶段和前三项占用；超限不发送下一模型请求。旧显式开启的完整请求审计不替代此安全明细。P05 的结果有界读取、去重和继续空间预留，以及真实 Provider 标定尚未由本次实现关闭。
 
+PI-AG-LIMIT-REMOVE-14（2026-10-31）：模型可见的执行额度行已删除，`CapabilityGrant.budgets` 不再存在；提示词不再出现模型轮次、只读/写入次数、纠错次数或收尾预留。保留的只是 Prompt token 容量、工具结果大小、分页、`block_ops` 单卡 64/64KB 与 `write_content` 12,000 字符等上下文/原子性边界。
+
 P05 实现登记（2026-09-21，验证状态见计划 §14.16）：同次装配中仅对有身份且完整序列化相同的 ReferencePayload 去重，跨来源、用途、不同内容或标签不合并；匿名 LongText 不去重，不建立跨轮缓存。`reference_projection` 只记录数量/原因。长文档默认目录至多 20 项/4,000 字符（整体条目），明确标注非全文；读取规模及版本分页见 I-P-01 §4.1.1。统一发送门禁保留原总额 24,000，将可用输入限制为 19,904，并记录 4,096 继续预留；不从旧历史字符预算重复扣减。此预留为估算容量裕量，不保证任意下一次结果都放得下；所有续轮仍重新核算。当前文档与 ToolResult、不同用途上下文不盲目合并，ToolCall/ToolResult 原始配对不裁掉。引用原有显式裁剪、累积结果仍可能触发预算失败；不承诺任意大块、无限历史或 Provider 精确 tokenizer。
 
 > 本节细化 BR-AG-DATA-002 的 Prompt 可信边界，并由 BR-AG-DATA-004 的 IntentResult 与
@@ -381,6 +383,18 @@ length/max_tokens保持未完成：记录实际输出限额、供应商安全用
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-11-01 | v1.47 | PI-AG-LENGTH-25：所有回合注入 CHUNK BUDGET（6–8 块/批）；长度截断自动缩小批次重试。 |
+| 2026-11-01 | v1.46 | PI-AG-PROMPT-23：清理 diff 生命周期声明；工具描述与模型 facts 投影不再暴露 accepted/saved/state。 |
+| 2026-11-01 | v1.45 | PI-AG-CONTEXT-22：pendingPreviews previewed 时直接继续；单卡不等于完成。 |
+| 2026-11-01 | v1.44 | PI-AG-TASKRUN-21：预览回执只做技术事实，不启动/恢复 TaskRun；任务按 partial/剩余工作自动续跑。 |
+| 2026-11-01 | v1.43 | PI-AG-STREAM-18：流空闲期限 300s（仅时间边界，不涉及提示词额度）。 |
+| 2026-11-01 | v1.42 | PI-AG-STREAM-17：单次 write_content 载荷边界 24 块/12000 字符；拆批可在同回合继续，不等待用户。 |
+| 2026-11-01 | v1.41 | PI-AG-LIFECYCLE-16：提示词不再要求主动复述 diff 生命周期；压缩 P1；base stale 明确为重读后同回合重试。 |
+| 2026-10-31 | v1.40 | PI-AG-PROPOSAL-FREEZE-15：proposal 后不再冻结工具；同回合可继续提交后续批次；不得以“等待接受”为由 clarify/final。 |
+| 2026-10-31 | v1.39 | PI-AG-LIMIT-REMOVE-14：删除执行额度提示与预算行，模型不再看到任何轮次/工具/纠错次数。 |
+| 2026-10-31 | v1.38 | PI-AG-CONTINUATION-13：后续批次在 PreviewAck 后继续；pending 卡不要求先接受、不因新批次自动失效；仅权限/范围/歧义需裁决。 |
+| 2026-10-31 | v1.37 | PI-AG-BUDGET-08：模型可见额度收敛为单行（只读/写入，只读按剩余轮次折算）；CapabilityGrant.budgets 不进入模型投影；读写独立扣减，TaskControl 不计写入。 |
+| 2026-10-31 | v1.36 | PI-AG-CTX-FACTS-07：代理上下文事实集层增唯一 currentDocument 版本与 pendingPreviews 三态（previewed/accepted/saved）；previewed 表示已写入 LogicalState、仅待裁决，不改变授权或保存语义。 |
 | 2026-10-28 | v1.34 | 新模型分页提示仅要求复制`next_cursor`，直接工具控制字段与schema必填一致；不改变数据来源与授权层级。 |
 | 2026-10-28 | v1.35 | 新回合只读多工具改为首项提交一份控制、副本可省略；已知文字使用 search_text 定点定位，目录分页只复制真实 next_cursor；不改历史协议和授权。 |
 | 2026-10-25 | v1.33 | 服务侧按冻结模型选择投影容量与非思考模式；保留旧选择和旧预算，不改注册表字段、权限或自动重试语义。 |

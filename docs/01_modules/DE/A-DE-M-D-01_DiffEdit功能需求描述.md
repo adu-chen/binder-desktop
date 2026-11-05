@@ -184,9 +184,9 @@ req_id: REQ-DE-009
 title: 复合任务内连续 Proposal 的基准接力
 owner_module: DE
 status: active
-summary: 对同一复杂任务投影中明确的同文档连续编辑，DE 为每个 ProposalBatch 及其 DiffCard 保留任务/回合历史关联，但后续 ProposalBatch 只可基于上一批成功预览后的当前 LogicalState 生成。同一批内的卡按各自连续块组独立裁决；后续批预览成功即推进基准，使所有基于旧基准的前批卡失效、保留历史且不可再裁决；连续 Proposal 不构成补丁栈或任务级回滚。无 LogicalState 的 background pending Proposal 不得作为后续编辑输入
+summary: 对同一复杂任务投影中明确的同文档连续编辑，DE 为每个 ProposalBatch 及其 DiffCard 保留任务/回合历史关联，后续 ProposalBatch 只可基于上一批成功预览后的当前 LogicalState 生成。同一批内的卡按各自连续块组独立裁决；后续批预览推进基准时，前批 pending 卡**不再自动失效**，保留待裁决；接受/拒绝时按各自 base 校验，实际冲突才失败并说明。多卡并存不构成补丁栈（各自独立 base/范围），拒绝不产生任务级回滚。无 LogicalState 的 background pending Proposal 不得作为后续编辑输入
 source_doc: REQ-CORE-017、REQ-AG-015、A-CORE-X-D-02 §3/§4、REQ-DE-003/005
-acceptance: Batch1 预览进入 LogicalState 后，Batch2/3 的 before/base 均来自最新 LogicalState 而非 Batch1 payload；同批不连续或可独立裁决块可分别接受/拒绝且结果只作用于各自范围，后续批成功预览后前批仍 pending 的卡明确显示为基准推进失效且不可再裁决；拒绝最新卡只依其有效基准恢复对应范围；背景 pending 目标必须先打开迁移为带绿色增量的 LogicalState，或按背景分流完成裁决后才可继续，不能后台叠加或错误写盘；任务取消、失败或中断不会把已成功预览内容伪装为未发生或自动回滚，卡片仍按各自生命周期呈现
+acceptance: Batch1 预览进入 LogicalState 后，Batch2/3 的 before/base 均来自最新 LogicalState 而非 Batch1 payload；同批不连续或可独立裁决块可分别接受/拒绝且结果只作用于各自范围；后续批成功预览不自动失效前批 pending 卡，前批卡保持可裁决，接受/拒绝时若实际基线冲突则失败并保留卡片；拒绝最新卡只依其有效基准恢复对应范围；背景 pending 目标必须先打开迁移为带绿色增量的 LogicalState，或按背景分流完成裁决后才可继续，不能后台叠加或错误写盘；任务取消、失败或中断不会把已成功预览内容伪装为未发生或自动回滚，卡片仍按各自生命周期呈现
 open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展示排序、跨模块事件、历史恢复、并发与 UI 投影归 DE/AG/ED/SYS DESIGN Scope；本 L1 不定义字段、状态机、事务、回滚或接口
 -->
 
@@ -200,7 +200,7 @@ open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展�
 - **呈现边界**：DE 经 ED 装饰层呈现（X-FORBID-005：不绕过 ED 接口直改编辑器状态）。
 - **资源操作边界**：删除、恢复、创建、重命名和移动不生成 DE Proposal/DiffCard；它们由 WorkspaceOperationPlan + DecisionRequest 前置裁决并由 WS 执行。DE 只处理 CreateDocumentBundle 创建目标后的初始内容 Diff，以及资源执行成功导致的内容卡失效。
 - **多文档边界**：多文档写入先经 AG 的目标计划确认并冻结成员；DE 只管理逐目标独立 Proposal/基准/裁决/失效，不提供总卡批量裁决、批量保存或跨文档事务。
-- **连续 Proposal 边界**：同文档连续任务以当前 LogicalState 接力，不以旧卡 payload 叠加；后预览推进基准即使前卡失效，拒绝最新卡不构成任务级回滚。background pending 卡必须先迁移或按背景分流裁决，不能作为续编基准。
+- **连续 Proposal 边界**：同文档连续任务以当前 LogicalState 接力，不以旧卡 payload 叠加；后预览推进基准不自动失效前批 pending 卡，多卡并存、各自按 base 裁决；实际基线冲突在接受/拒绝时失败并保留卡片，拒绝最新卡不构成任务级回滚。background pending 卡必须先迁移或按背景分流裁决，不能作为续编基准。
 - **状态机边界**（APC §6）：diff 终态为状态化核心链（总图 owner=DE，planned），DE G2 建机
   （X-SEQ-003）并登记 X-INTER-001 DE 侧。
 - **L4 原料边界**：取材台账 §4 Diff Edit/Decoration 原料（R-ED-M-R-22 等 P2），原料不为权威。
@@ -247,6 +247,7 @@ open_issues: TaskRun/步骤/Proposal 关联、基准版本与失效原因、展�
 | 2026-08-14 | v1.13 | AG-1.0-R3-STYLE-REQUIREMENTS-01：样式 Diff 收紧为已确认的 HTML/BDocx 受控操作；明确 P0/P1 档位、可读前后对比和禁止原始 HTML/CSS/OOXML 载荷。 |
 | 2026-08-14 | v1.14 | AG-1.0-R4-CONVERSION-REQUIREMENTS-01：REQ-DE-006 扩展承接 TXT→Markdown、Markdown→TXT 的目标副本 Proposal；转换目标预览后沿用新建逻辑文档、卡片裁决、基准失效与显式保存链，来源不进入写入目标。 |
 | 2026-08-14 | v1.15 | AG-1.0-R4-DELETE-MULTIDOC-REQUIREMENTS-01：新增 REQ-DE-007/008；删除/恢复卡只预览红色逻辑暂存、接受不执行物理变更、显式保存才交 WS；多既有文档先确认冻结目标计划，再以逐目标独立 Proposal/基准/裁决/保存处理，不提供批量裁决或事务。 |
+| 2026-10-31 | v1.19 | PI-AG-CONTINUATION-13：REQ-DE-009 改为多批 pending 卡并存，后预览不自动失效前卡；接受/拒绝时按各自 base 校验，实际冲突才失败；仍禁止旧 payload 叠补丁与任务级回滚。 |
 | 2026-08-14 | v1.16 | AG-1.0-R5B-TASK-ORCHESTRATION-REQUIREMENTS-01：新增 REQ-DE-009，固定复合任务中连续 Proposal 必须以最新 LogicalState 接力、后预览使前卡基准推进失效；禁止旧 payload 续编、补丁堆叠和任务级回滚，background pending 先迁移或裁决才可继续。 |
 | 2026-08-21 | v1.17 | 工作区资源操作基线重构：REQ-DE-006 改为 CreateDocumentBundle 创建磁盘目标后的初始内容 Diff；REQ-DE-007 明确资源操作不生成 DiffCard，DE 仅提供影响清单并接收资源基线变化导致的内容卡失效。 |
 | 2026-09-03 | v1.18 | AG-ADAPTIVE-RUNTIME-REQ-01：REQ-DE-001/002/004/009 引入 ProposalBatch 与可独立裁决连续块组；不连续块分卡、相邻不可分块可合并，同批关系不捆绑裁决。 |

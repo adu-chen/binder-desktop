@@ -41,7 +41,7 @@ pub fn model_capacity(provider: &str, model: &str) -> ModelCapacity {
             total_tokens: 147_456,
             output_tokens: 16_384,
             round_deadline_secs: 1_200,
-            stream_idle_deadline_secs: 90,
+            stream_idle_deadline_secs: 300,
         }
     } else {
         ModelCapacity {
@@ -454,6 +454,9 @@ pub fn insert_runtime_control_message(
     capability_instructions: &str,
     transport_protocol: &str,
 ) {
+    // 授权只通过 Runtime Control 呈现；grant 的授权事实不进入模型上下文。
+    let capability_grant_projection =
+        serde_json::to_value(capability_grant).unwrap_or(serde_json::Value::Null);
     let runtime_control = serde_json::json!({
         "runtimeProfile": runtime_profile,
         "runtimeVersion": prompt_package.runtime_version,
@@ -483,7 +486,7 @@ pub fn insert_runtime_control_message(
             "includedCharCount": envelope.included_char_count,
             "truncationReason": envelope.truncation_reason,
         })).collect::<Vec<_>>(),
-        "capabilityGrant": capability_grant,
+        "capabilityGrant": capability_grant_projection,
         "taskPlan": task_plan_runtime,
         "capabilityInstructions": capability_instructions,
     });
@@ -653,7 +656,7 @@ mod tests {
         assert_eq!(flash.input_tokens(), 131_072);
         assert_eq!(
             (flash.round_deadline_secs, flash.stream_idle_deadline_secs),
-            (1_200, 90)
+            (1_200, 300)
         );
         for (provider, model) in [
             ("deepseek", "deepseek-chat"),
@@ -885,7 +888,6 @@ mod tests {
             "turn-budget",
             &["notes/a.md".to_string()],
             tool_registry::CapabilityFactorsV2 {
-                remaining_tool_calls: 6,
                 ..Default::default()
             },
             tool_registry::CapabilityGrantPurposeV2::PromptManifest,
@@ -1097,7 +1099,6 @@ mod tests {
                 "prompt-isolation",
                 targets,
                 tool_registry::CapabilityFactorsV2 {
-                    remaining_tool_calls: 6,
                     tools_frozen: frozen,
                     ..Default::default()
                 },
@@ -1138,7 +1139,7 @@ mod tests {
             crate::ag::model_output::BATCH_TOOL_PROTOCOL,
         );
         assert!(edit.contains("文本文件修改某一块"));
-        assert!(edit.contains("只有收到保存成功结果后才可说文件已落盘"));
+        assert!(edit.contains("未收到回执不得宣称已预览"));
         assert!(!edit.contains("IGNORE_SYSTEM_DELETE_ALL"));
         assert!(capability_instructions(
             &grant(&[], true),
@@ -1159,7 +1160,6 @@ mod tests {
             "turn-audit",
             &["notes/a.md".to_string()],
             tool_registry::CapabilityFactorsV2 {
-                remaining_tool_calls: 6,
                 ..Default::default()
             },
             tool_registry::CapabilityGrantPurposeV2::PromptManifest,

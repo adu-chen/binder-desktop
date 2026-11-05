@@ -4,9 +4,9 @@
 use crate::ag::prompt_runtime::PROMPT_INPUT_LIMIT;
 use crate::ipc::{AgTurnEvent, AgTurnEventPayload, IpcError};
 use crate::types::{
-    AgentContextFacts, AgentContextFactsV1, AgentContextFactsV2, AgentResourceAvailabilityV2,
-    AgentSelectionValidationV2, ReferencePayload, AGENT_CONTEXT_FACTS_VERSION_V1,
-    AGENT_CONTEXT_FACTS_VERSION_V2,
+    AgentContextFacts, AgentContextFactsV1, AgentContextFactsV2, AgentPreviewStateV2,
+    AgentResourceAvailabilityV2, AgentSelectionValidationV2, ReferencePayload,
+    AGENT_CONTEXT_FACTS_VERSION_V1, AGENT_CONTEXT_FACTS_VERSION_V2,
 };
 use crate::{ag, ent, workspace, AppState};
 use std::collections::BTreeSet;
@@ -250,6 +250,11 @@ pub(super) async fn refresh_agent_context(
                 })
         })
         .collect::<Result<_, _>>()?;
+    // 诊断日志：只记录身份、版本与脱敏快照指纹，不记录文档正文。
+    eprintln!(
+        "[AG-CONTEXT-REFRESH] tool={tool} paths={paths:?} rev_previous={}",
+        previous.context_revision
+    );
     let all_documents = tool == "search_text";
     let response =
         request_agent_context(channel, previous, paths.clone(), all_documents, cancelled).await?;
@@ -283,18 +288,32 @@ pub(super) async fn refresh_agent_context(
             false,
         ));
     };
-    if next.context_revision != previous.context_revision + 1
-        || next.active_target != previous.active_target
-        || previous.open_resources.iter().any(|old| {
+    let revision_mismatch = next.context_revision != previous.context_revision + 1;
+    let active_target_changed = next.active_target != previous.active_target;
+    let dropped_resources: Vec<&str> = previous
+        .open_resources
+        .iter()
+        .filter(|old| {
             !next
                 .open_resources
                 .iter()
                 .any(|new| new.rel_path == old.rel_path)
         })
-    {
+        .map(|resource| resource.rel_path.as_str())
+        .collect();
+    if revision_mismatch || active_target_changed || !dropped_resources.is_empty() {
+        eprintln!(
+            "[AG-CONTEXT-STALE] stage=refresh_identity tool={tool} rev_previous={} rev_next={} \
+             revision_mismatch={revision_mismatch} active_target_changed={active_target_changed} \
+             dropped_resources={dropped_resources:?} active_target_previous={:?} active_target_next={:?}",
+            previous.context_revision, next.context_revision, previous.active_target, next.active_target
+        );
         return Err(IpcError::new(
             "AG_CONTEXT_RESOURCE_STALE",
-            "冻结目标或打开资源身份已改变，请重新提交",
+            &format!(
+                "上下文身份已变化：revision {}→{}，冻结目标变化={}，丢失的打开资源={:?}。请重新读取目标文档后再提交。",
+                previous.context_revision, next.context_revision, active_target_changed, dropped_resources
+            ),
             true,
             false,
         ));
@@ -303,15 +322,79 @@ pub(super) async fn refresh_agent_context(
         for path in &paths {
             if let Some(new) = next.open_resources.iter().find(|r| &r.rel_path == path) {
                 let old = previous.open_resources.iter().find(|r| &r.rel_path == path);
-                if old.and_then(|r| r.snapshot.as_ref()) != new.snapshot.as_ref()
-                    || new.snapshot.is_none()
-                    || next.selections.iter().any(|s| {
-                        &s.rel_path == path && s.validation != AgentSelectionValidationV2::Valid
-                    })
-                {
+                let old_snapshot = old.and_then(|r| r.snapshot.as_ref());
+                let new_snapshot = new.snapshot.as_ref();
+                // 旧基线缺失（例如澄清恢复后尚未采集）不等于“文档已变化”：本次采集就是基线建立。
+                let baseline_missing = old_snapshot.is_none();
+                let snapshot_changed = !baseline_missing && old_snapshot != new_snapshot;
+                let invalid_selection = next.selections.iter().find(|s| {
+                    &s.rel_path == path && s.validation != AgentSelectionValidationV2::Valid
+                });
+                if baseline_missing {
+                    eprintln!(
+                        "[AG-CONTEXT-BASELINE] stage=propose_edit_refresh path={path} \
+                         baseline=missing new_present={} accepted={}",
+                        new_snapshot.is_some(),
+                        new_snapshot.is_some() && invalid_selection.is_none()
+                    );
+                }
+                if snapshot_changed || new_snapshot.is_none() || invalid_selection.is_some() {
+                    let describe = |snapshot: Option<&crate::types::AgentContextSnapshotFactV2>| {
+                        match snapshot {
+                            Some(snapshot) => format!(
+                                "source={} edit_format={} content_format={} dirty={} session_version={} baseline={:?} content_hash={}",
+                                snapshot.source,
+                                snapshot.edit_format,
+                                snapshot.content_format,
+                                snapshot.dirty,
+                                snapshot.session_version,
+                                snapshot.baseline,
+                                snapshot.content_hash
+                            ),
+                            None => "none".to_string(),
+                        }
+                    };
+                    let cause = if new_snapshot.is_none() {
+                        "snapshot_missing"
+                    } else if invalid_selection.is_some() {
+                        "selection_invalid"
+                    } else {
+                        "snapshot_changed"
+                    };
+                    eprintln!(
+                        "[AG-CONTEXT-STALE] stage=propose_edit_refresh path={path} cause={cause} \
+                         old_present={} new_present={} old={} new={} selection={:?}",
+                        old_snapshot.is_some(),
+                        new_snapshot.is_some(),
+                        describe(old_snapshot),
+                        describe(new_snapshot),
+                        invalid_selection.map(|selection| (
+                            selection.block_id.as_str(),
+                            selection.start,
+                            selection.end,
+                            format!("{:?}", selection.validation),
+                        )),
+                    );
+                    let reason = match cause {
+                        "snapshot_missing" => format!(
+                            "文档 {path} 的编辑快照未能采集（availability={:?}，reason={:?}）。请先 read_doc 读取该文档并等待编辑器就绪后再提交修改。",
+                            new.availability, new.reason_code
+                        ),
+                        "selection_invalid" => format!(
+                            "文档 {path} 的选区已失效（block={}，validation={:?}）。请重新读取并重新选择该段后再提交修改。",
+                            invalid_selection.map(|selection| selection.block_id.as_str()).unwrap_or(""),
+                            invalid_selection.map(|selection| format!("{:?}", selection.validation)).unwrap_or_default()
+                        ),
+                        _ => format!(
+                            "文档 {path} 的快照与上次读取不一致（上次 session_version={}，本次 session_version={}，dirty={}）。请重新读取该文档后再提交修改。",
+                            old_snapshot.map(|snapshot| snapshot.session_version).unwrap_or(0),
+                            new_snapshot.map(|snapshot| snapshot.session_version).unwrap_or(0),
+                            new_snapshot.map(|snapshot| snapshot.dirty).unwrap_or(false)
+                        ),
+                    };
                     return Err(IpcError::new(
                         "AG_CONTEXT_RESOURCE_STALE",
-                        "文档或选区已变化，必须重新读取后再提出修改",
+                        &reason,
                         true,
                         false,
                     ));
@@ -319,6 +402,19 @@ pub(super) async fn refresh_agent_context(
             }
         }
     }
+    eprintln!(
+        "[AG-CONTEXT-REFRESH] tool={tool} rev_next={} resources={:?}",
+        next.context_revision,
+        next
+            .open_resources
+            .iter()
+            .map(|resource| (
+                resource.rel_path.as_str(),
+                format!("{:?}", resource.availability),
+                resource.snapshot.is_some(),
+            ))
+            .collect::<Vec<_>>()
+    );
     let context = ag::blocks::AgentReadContext::with_resources(
         read_ctx.root(),
         response.snapshots,
@@ -330,8 +426,14 @@ pub(super) async fn refresh_agent_context(
         context.check_resource_available(path)?;
     }
     if all_documents {
+        // 工作区级搜索：未就绪的文档不应让整个搜索失败；跳过并在调用方标记覆盖不完整。
         for resource in &next.open_resources {
-            context.check_resource_available(&resource.rel_path)?;
+            if let Err(error) = context.check_resource_available(&resource.rel_path) {
+                eprintln!(
+                    "[AG-CONTEXT-REFRESH] skip unavailable resource {}: {}",
+                    resource.rel_path, error.code
+                );
+            }
         }
     }
     Ok((facts, context))
@@ -571,6 +673,104 @@ fn validate_agent_context_facts(
     Ok(())
 }
 
+/// currentDocument 只从 activeTarget + ready 快照派生；无 ready 快照时为 null。
+/// 客户端不得自行声明权威版本，避免出现第二版本源。
+fn derive_current_document_v2(
+    facts: &AgentContextFactsV2,
+) -> Option<crate::types::AgentContextCurrentDocumentV2> {
+    let target = facts.active_target.as_ref()?;
+    let resource = facts
+        .open_resources
+        .iter()
+        .find(|resource| resource.rel_path == target.rel_path)?;
+    if resource.availability != AgentResourceAvailabilityV2::Ready {
+        return None;
+    }
+    let snapshot = resource.snapshot.as_ref()?;
+    Some(crate::types::AgentContextCurrentDocumentV2 {
+        rel_path: target.rel_path.clone(),
+        session_version: snapshot.session_version,
+        content_hash: snapshot.content_hash.clone(),
+        dirty: snapshot.dirty,
+    })
+}
+
+/// 预览事实只做形状、归属与上限校验。后端不持有编辑器正文，不能替宿主证明块真实存在；
+/// `previewed` 的 ready 快照要求只用于保证“版本可解释”，不是块存在性证明。
+fn validate_preview_facts_v2(facts: &mut AgentContextFactsV2) -> bool {
+    let derived = derive_current_document_v2(facts);
+    if facts.current_document.is_some() && facts.current_document != derived {
+        return false;
+    }
+    facts.current_document = derived;
+    if facts.pending_previews.len() > 20 {
+        return false;
+    }
+    let resources: BTreeSet<&str> = facts
+        .open_resources
+        .iter()
+        .map(|resource| resource.rel_path.as_str())
+        .collect();
+    let mut diff_ids = BTreeSet::new();
+    for preview in &facts.pending_previews {
+        if preview.diff_id.is_empty()
+            || preview.diff_id.len() > 160
+            || !diff_ids.insert(preview.diff_id.as_str())
+        {
+            return false;
+        }
+        if !resources.contains(preview.rel_path.as_str()) {
+            return false;
+        }
+        if preview.base_version == 0
+            || preview.base_content_hash.is_empty()
+            || preview.base_content_hash.len() > 96
+        {
+            return false;
+        }
+        if preview.created_block_ids.len() > 32 {
+            return false;
+        }
+        let mut block_ids = BTreeSet::new();
+        for block_id in &preview.created_block_ids {
+            if block_id.is_empty() || block_id.len() > 128 || !block_ids.insert(block_id.as_str()) {
+                return false;
+            }
+        }
+        if preview
+            .task_run_id
+            .as_ref()
+            .is_some_and(|task_run_id| task_run_id.is_empty() || task_run_id.len() > 128)
+        {
+            return false;
+        }
+        if preview.state == AgentPreviewStateV2::Previewed {
+            let resource = facts
+                .open_resources
+                .iter()
+                .find(|resource| resource.rel_path == preview.rel_path);
+            // 打开但尚未采集正文（not_requested）仍可携带宿主确认的预览事实；
+            // 已关闭/加载中/不可用不能声称块已写入当前 LogicalState。
+            if !resource.is_some_and(|resource| {
+                matches!(
+                    resource.availability,
+                    AgentResourceAvailabilityV2::Ready
+                        | AgentResourceAvailabilityV2::NotRequested
+                )
+            }) {
+                return false;
+            }
+            if !resource
+                .and_then(|resource| resource.snapshot.as_ref())
+                .is_none_or(|snapshot| preview.base_version <= snapshot.session_version)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /**
  * @GOV
  * codes:    BR-AG-DATA-008-GUARD-AG-AG-TURN-052, BR-SYS-DATA-008-GUARD-AG-AG-TURN-052
@@ -638,6 +838,7 @@ fn parse_agent_context_facts(
             }
             let facts: AgentContextFactsV2 =
                 serde_json::from_value(payload).map_err(|_| invalid())?;
+            let mut facts = facts;
             if facts.workspace_id != workspace_id
                 || facts.session_id != session_id
                 || facts.turn_id != turn_id
@@ -696,6 +897,9 @@ fn parse_agent_context_facts(
                 }
             }
             if active_path.is_some_and(|p| !paths.contains(p)) {
+                return Err(invalid());
+            }
+            if !validate_preview_facts_v2(&mut facts) {
                 return Err(invalid());
             }
             let ready = facts.ready_documents();
@@ -1023,6 +1227,31 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
     }
     let terminal_latch = ag::turn::TerminalLatch::default();
 
+    // 新目标（非显式续跑）遇到同会话非终态 TaskRun：先收束为 interrupted，
+    // 再允许新任务投影；不能静默合并目标，也不能等到 21 轮后才以 DB 错误失败。
+    if resume_kind == AgentTurnResumeKind::New && continuation_task_run_id.is_none() {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::new("WS_DB_BUSY", "数据库连接繁忙", true, false))?;
+        let pending_decision = ag::task::latest_pending_decision_for_session(
+            &conn, &workspace_id_for_turn, &session_id,
+        )
+        .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+        if pending_decision.is_none() {
+            let interrupted = ag::task::interrupt_non_terminal_for_session(
+                &conn, &workspace_id_for_turn, &session_id,
+            )
+            .map_err(|error| IpcError::new("AG_TASK_DB_ERROR", &error.to_string(), true, false))?;
+            if !interrupted.is_empty() {
+                TurnEventEmitter::without_channel(&state, &turn_id).record_internal(
+                    "task_superseded",
+                    serde_json::json!({"taskRunIds": interrupted, "reason": "new_goal_without_continuation"}),
+                )?;
+            }
+        }
+    }
+
     // 注册成功即执行 send / clarificationProvided；后续持久化与上下文构建都是
     // Assembling 的动作，失败只能由 assembleFail 收束为 TurnError。
     let s = match resume_kind {
@@ -1107,14 +1336,14 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
             "previewContinuationDiffId": continuation_preview_diff_id,
         }),
     )?;
-    event_emitter.freeze_execution_policy()?;
     event_emitter.freeze_transport_protocol()?;
-    let execution_policy = event_emitter.execution_policy()?;
     // AG-1.0-IMP-TASKRUN-01（SM-AG-04 / BR-SYS-STATE-008）：先校验显式 TaskRun 续片段；
     // 普通 AgentTurn 此时不创建 TaskRun。只有后续确定需要 TaskPlan，或工具真实产生任务级产物时，
     // 才按需创建并绑定。应用启动时已清理陈旧活动态（重启不续跑）。
     // AG-1.0-TASKRUN-REWORK-IMP-RUNTIME-01：新消息 gate——存在未决 DecisionRequest 时拒绝新回合
     // （不得绕过待确认，A-AG-M-S-01 §2.2.2；三层分离）。
+    let mut preview_continuation_note: Option<serde_json::Value> = None;
+    let mut continuation_created_block_ids: Vec<String> = Vec::new();
     let task_run_result = (|| -> Result<Option<String>, IpcError> {
         let conn = state
             .db
@@ -1176,7 +1405,7 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
                             false,
                         ));
                     }
-                    ag::task::begin_preview_continuation(&conn, &checkpoint)
+                    let resumed = ag::task::begin_preview_continuation(&conn, &checkpoint)
                         .map_err(|e| {
                             IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false)
                         })?
@@ -1187,7 +1416,48 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
                                 false,
                                 false,
                             )
-                        })?
+                        })?;
+                    let created_ids =
+                        ag::task::preview_created_block_ids(&conn, diff_id).unwrap_or_default();
+                    continuation_created_block_ids = created_ids.clone();
+                    let chunk_count =
+                        ag::task::preview_chunk_count(&conn, &checkpoint.task_run_id);
+                    preview_continuation_note = Some(serde_json::json!({
+                        "role": "system",
+                        "content": format!(
+                            "[PREVIEW CONTINUATION — DATA ONLY] 上一块已由编辑器预览写入当前草稿；已完成预览块数={chunk_count}，下一块为第 {} 块；createdBlockIds={created_ids:?}；base sessionVersion={} contentHash={}。下一块以最后一个 createdBlockId 为 insert_after 锚点，使用该 base；不得使用旧 base 或尚未创建的块。若还需多块，继续按块生成并在每块后等待预览回执。Continue the same AgentTurn.",
+                            chunk_count + 1,
+                            checkpoint.session_version,
+                            checkpoint.content_hash,
+                        ),
+                    }));
+                    resumed
+                }
+                (None, None) => {
+                    let resumed = ag::task::begin_resume_task_run(
+                        &conn,
+                        &ws.workspace_id,
+                        &session_id,
+                        task_run_id,
+                    )
+                    .map_err(|e| IpcError::new("AG_TASK_DB_ERROR", &e.to_string(), true, false))?
+                    .ok_or_else(|| {
+                        IpcError::new(
+                            "AG_TASK_RESUME_INVALID",
+                            "任务没有可续跑的进度或已结束；请重新发起任务。",
+                            false,
+                            false,
+                        )
+                    })?;
+                    let chunk_count = ag::task::preview_chunk_count(&conn, &resumed);
+                    preview_continuation_note = Some(serde_json::json!({
+                        "role": "system",
+                        "content": format!(
+                            "[TASK RESUME — DATA ONLY] 继续原任务；已完成预览块数={chunk_count}，下一块为第 {} 块。使用本轮当前文档快照的 base 与最后一个已存在块作为 insert_after 锚点；不得重复已完成的块。Continue the same AgentTurn.",
+                            chunk_count + 1,
+                        ),
+                    }));
+                    resumed
                 }
                 _ => {
                     return Err(IpcError::new(
@@ -1426,6 +1696,93 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
                 Vec::<serde_json::Value>::new(),
             ),
         };
+    let had_preview_note = preview_continuation_note.is_some();
+    if let Some(note) = preview_continuation_note.take() {
+        continuation_messages.push(note);
+    }
+    if let Some(task_run_id) = task_run_id.as_deref() {
+        if let Ok(conn) = state.db.lock() {
+            if !had_preview_note {
+                let chunk_count = ag::task::preview_chunk_count(&conn, task_run_id);
+                if chunk_count > 0 {
+                    continuation_messages.push(serde_json::json!({
+                        "role": "system",
+                        "content": format!(
+                            "[TASK PROGRESS — DATA ONLY] 继续原任务；已完成预览块数={chunk_count}，下一块为第 {} 块。使用本轮当前文档快照的 base 与最后一个已存在块作为 insert_after 锚点；不得重复已完成的块。Continue the same AgentTurn.",
+                            chunk_count + 1,
+                        ),
+                    }));
+                }
+            }
+            let current = match &agent_context_facts {
+                crate::types::AgentContextFacts::V2(facts) => facts.current_document.as_ref(),
+                _ => None,
+            };
+            let mut anchors = ag::task::verified_anchors(&conn, task_run_id).unwrap_or_default();
+            anchors.retain(|anchor| {
+                if continuation_created_block_ids
+                    .iter()
+                    .any(|id| id == &anchor.block_id)
+                {
+                    return false;
+                }
+                // 有当前块快照时按 blockId + fingerprint 校验；这是比版本文本更强的存在性证据。
+                if let Ok(snapshot) = read_ctx.snapshot(&anchor.rel_path) {
+                    return snapshot.blocks.iter().any(|block| {
+                        block.block_id.as_deref() == Some(anchor.block_id.as_str())
+                            && (anchor.fingerprint.is_empty()
+                                || block.fingerprint.as_deref()
+                                    == Some(anchor.fingerprint.as_str()))
+                    });
+                }
+                // 无块快照时退回严格版本/哈希相等；不猜。
+                current.is_some_and(|current| {
+                    current.rel_path == anchor.rel_path
+                        && current.session_version == anchor.base_version
+                        && current.content_hash == anchor.content_hash
+                })
+            });
+            anchors.truncate(8);
+            let anchor_count = anchors.len();
+            let anchor_chunk_count = ag::task::preview_chunk_count(&conn, task_run_id);
+            // 必须先释放 DB 锁：record_internal 会再次 lock 同一 state.db。
+            drop(conn);
+            if anchor_count > 0 {
+                event_emitter.record_internal(
+                    "task_anchors_injected",
+                    serde_json::json!({
+                        "anchorCount": anchor_count,
+                        "createdBlockIdCount": continuation_created_block_ids.len(),
+                        "chunkCount": anchor_chunk_count,
+                    }),
+                )?;
+            }
+            if !anchors.is_empty() {
+                let list = anchors
+                    .iter()
+                    .map(|anchor| {
+                        let label = if anchor.label.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {}", anchor.label)
+                        };
+                        format!(
+                            "{}#{} ({}{})",
+                            anchor.rel_path, anchor.block_id, anchor.node_type, label
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("；");
+                continuation_messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!(
+                        "[TASK ANCHORS — DATA ONLY] 以下锚点已通过当前文档块身份/指纹（或版本/哈希）校验：{}。仅在仍匹配时使用；不得据此跳过必要的读取，也不把锚点当作编辑授权。",
+                        list
+                    ),
+                }));
+            }
+        }
+    }
     if clarification_resume {
         continuation_messages.push(serde_json::json!({
             "role": "user",
@@ -1537,11 +1894,9 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
         &initial_prompt,
         mention_block.as_deref(),
         &reference_envelopes,
-        false,
         &continuation_messages,
         &decision_receipt_ids,
         1,
-        execution_policy.max_tool_calls,
         model_capacity,
     ));
     let context_evidence = ag::tool_exec::context_evidence(
@@ -1662,26 +2017,7 @@ pub(crate) async fn run_agent_turn<R: tauri::Runtime>(
         }
         return Ok(());
     }
-    let (_remaining_tools, remaining_rounds) = super::turn_tool_loop::continuation_execution_budget(
-        &continuation_messages,
-        capability_grant.budgets.remaining_tool_calls,
-        execution_policy.max_model_calls,
-    );
-    let (previous_model_calls, _) = event_emitter.protocol_attempt_counts()?;
-    if remaining_rounds == 0 || previous_model_calls >= execution_policy.max_model_calls {
-        let error = super::turn_tool_loop::round_budget_limit_error();
-        settle_and_emit_ag_turn_error_from(
-            &state,
-            task_run_id.as_deref(),
-            &event_emitter,
-            &terminal_latch,
-            &app,
-            &turn_id,
-            &error,
-            TurnState::AwaitingGate,
-        );
-        return Ok(());
-    }
+    let previous_model_calls = event_emitter.protocol_attempt_counts()?;
     let gate_attempt = previous_model_calls + 1;
     event_emitter.record_internal(
         "gate_requested",
@@ -1864,6 +2200,174 @@ mod tests {
             }
             assert!(parse(invalid).is_err(), "case {mutate}");
         }
+    }
+
+    // covers: BR-AG-DATA-008
+    // covers: BR-SYS-DATA-008
+    #[test]
+    fn context_v2_preview_facts_are_derived_and_bounded() {
+        let root = std::env::temp_dir();
+        let snapshot = ag::blocks::OpenDocSnapshot {
+            rel_path: "a.txt".into(),
+            content: "logical".into(),
+            baseline: None,
+            edit_format: "html".into(),
+            content_format: "html".into(),
+            source: "active_editor".into(),
+            dirty: true,
+            session_version: 3,
+            content_hash: "h3".into(),
+            captured_at: 1,
+            block_snapshots: vec![],
+            table_snapshots: vec![],
+            image_snapshots: vec![],
+        };
+        let parse = |v| {
+            parse_agent_context_facts(
+                Some(v),
+                "ws",
+                &root,
+                "t",
+                "s",
+                Some("a.txt"),
+                std::slice::from_ref(&snapshot),
+                &[],
+                &[],
+            )
+        };
+        let ready_payload = || {
+            let mut payload = context_v2_payload();
+            payload["openResources"][0] = serde_json::json!({
+                "relPath": "a.txt",
+                "availability": "ready",
+                "reasonCode": serde_json::Value::Null,
+                "snapshot": {
+                    "source": "active_editor",
+                    "editFormat": "html",
+                    "contentFormat": "html",
+                    "dirty": true,
+                    "baseline": null,
+                    "sessionVersion": 3,
+                    "contentHash": "h3"
+                }
+            });
+            payload
+        };
+        let preview = |state: &str, ids: serde_json::Value| {
+            serde_json::json!({
+                "diffId": "diff-1", "relPath": "a.txt", "baseVersion": 2,
+                "baseContentHash": "h2", "createdBlockIds": ids, "state": state
+            })
+        };
+
+        let mut valid = ready_payload();
+        valid["pendingPreviews"] =
+            serde_json::json!([preview("previewed", serde_json::json!(["b1", "b2"]))]);
+        let facts = parse(valid).unwrap();
+        let AgentContextFacts::V2(facts) = facts else {
+            panic!("v2 expected")
+        };
+        assert_eq!(facts.pending_previews.len(), 1);
+        assert_eq!(
+            facts.pending_previews[0].state,
+            AgentPreviewStateV2::Previewed
+        );
+        assert_eq!(facts.pending_previews[0].created_block_ids, ["b1", "b2"]);
+        assert_eq!(
+            facts.current_document,
+            Some(crate::types::AgentContextCurrentDocumentV2 {
+                rel_path: "a.txt".into(),
+                session_version: 3,
+                content_hash: "h3".into(),
+                dirty: true,
+            })
+        );
+
+        // 客户端声明的 currentDocument 必须与后端派生值一致。
+        let mut spoofed = ready_payload();
+        spoofed["currentDocument"] = serde_json::json!({
+            "relPath": "a.txt", "sessionVersion": 9, "contentHash": "h9", "dirty": false
+        });
+        assert!(parse(spoofed).is_err());
+
+        // previewed 允许“打开但未采集正文”的资源；loading/unavailable 与未来 base 拒绝。
+        let mut not_requested = context_v2_payload();
+        not_requested["openResources"][0] = serde_json::json!({
+            "relPath": "a.txt", "availability": "not_requested",
+            "reasonCode": serde_json::Value::Null, "snapshot": serde_json::Value::Null
+        });
+        not_requested["pendingPreviews"] =
+            serde_json::json!([preview("previewed", serde_json::json!(["b1"]))]);
+        assert!(parse_agent_context_facts(
+            Some(not_requested),
+            "ws",
+            &root,
+            "t",
+            "s",
+            Some("a.txt"),
+            &[],
+            &[],
+            &[]
+        )
+        .is_ok());
+        let mut loading = context_v2_payload();
+        loading["pendingPreviews"] =
+            serde_json::json!([preview("previewed", serde_json::json!(["b1"]))]);
+        assert!(parse(loading).is_err());
+        let mut future_base = ready_payload();
+        let mut future_preview = preview("previewed", serde_json::json!(["b1"]));
+        future_preview["baseVersion"] = serde_json::json!(4);
+        future_base["pendingPreviews"] = serde_json::json!([future_preview]);
+        assert!(parse(future_base).is_err());
+
+        // 上限：>20 条预览拒绝。
+        let mut too_many = ready_payload();
+        too_many["pendingPreviews"] = serde_json::Value::Array(
+            (0..21)
+                .map(|index| {
+                    let mut item = preview("previewed", serde_json::json!([format!("b{index}")]));
+                    item["diffId"] = serde_json::json!(format!("diff-{index}"));
+                    item
+                })
+                .collect(),
+        );
+        assert!(parse(too_many).is_err());
+
+        // 越界路径、重复 diffId、重复块 id、非法 state、createdBlockIds 超限。
+        let mut outside = ready_payload();
+        outside["pendingPreviews"] =
+            serde_json::json!([preview("previewed", serde_json::json!(["b1"]))]);
+        outside["pendingPreviews"][0]["relPath"] = serde_json::json!("other.txt");
+        assert!(parse(outside).is_err());
+
+        let mut duplicate_diff = ready_payload();
+        let mut first = preview("previewed", serde_json::json!(["b1"]));
+        let mut second = preview("previewed", serde_json::json!(["b2"]));
+        first["diffId"] = serde_json::json!("same");
+        second["diffId"] = serde_json::json!("same");
+        duplicate_diff["pendingPreviews"] = serde_json::json!([first, second]);
+        assert!(parse(duplicate_diff).is_err());
+
+        let mut duplicate_id = ready_payload();
+        duplicate_id["pendingPreviews"] =
+            serde_json::json!([preview("previewed", serde_json::json!(["b1", "b1"]))]);
+        assert!(parse(duplicate_id).is_err());
+
+        let mut invalid_state = ready_payload();
+        invalid_state["pendingPreviews"] =
+            serde_json::json!([preview("queued", serde_json::json!(["b1"]))]);
+        assert!(parse(invalid_state).is_err());
+
+        let mut too_many_ids = ready_payload();
+        too_many_ids["pendingPreviews"] = serde_json::json!([preview(
+            "previewed",
+            serde_json::Value::Array(
+                (0..33)
+                    .map(|index| serde_json::json!(format!("b{index}")))
+                    .collect()
+            )
+        )]);
+        assert!(parse(too_many_ids).is_err());
     }
 
     // covers: BR-AG-DATA-001
@@ -2503,7 +3007,7 @@ mod tests {
                 "requestedMaxTokens":8192,"usage":{"completionTokens":8192},
                 "pendingToolArguments":[{"toolIndex":0,"argumentsUtf8Bytes":65000,"argumentsSha256":"a".repeat(64),"jsonValid":false}]}})
         );
-        let result = run_fixed_turn(true, vec![response]);
+        let result = run_fixed_turn(true, vec![response.clone(), response]);
         assert_eq!(result.status, "error");
         assert_eq!(
             result.events.iter().filter(|(k, _)| k == "error").count(),
@@ -2544,7 +3048,7 @@ mod tests {
                 .iter()
                 .filter(|(p, _)| p == "/invoke/stream")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             result
@@ -2782,7 +3286,7 @@ mod tests {
 
     // covers: BR-AG-STATE-002, BR-AG-DATA-004, BR-AG-OBS-001, BR-SYS-STATE-007
     #[test]
-    fn fixed_runtime_direct_rejection_corrects_on_same_chain_or_stops_at_shared_limit() {
+    fn fixed_runtime_direct_rejection_corrects_without_a_shared_correction_limit() {
         let native = |args| fixed_tool("list_docs", args);
         let first = native(serde_json::json!({"_binderTurn":fixed_control("tool")}));
         let missing = native(serde_json::json!({}));
@@ -2796,7 +3300,7 @@ mod tests {
         ]);
         for (last, expected_status, success_count, model_count) in [
             (vec![recovered, fixed_final()], "completed", 3, 5),
-            (vec![native(serde_json::json!({}))], "error", 1, 4),
+            (vec![native(serde_json::json!({}))], "error", 1, 5),
         ] {
             let mut responses = vec![first.clone(), missing.clone(), wrong_type.clone()];
             responses.extend(last);
@@ -2852,8 +3356,7 @@ mod tests {
                 "_binderTurn"
             );
             assert_eq!(rejections[1]["protocolDiagnostic"]["fieldPath"], "$control");
-            for (index, rejection) in rejections.iter().enumerate() {
-                assert_eq!(rejection["correctionAttempt"], index + 1);
+            for rejection in &rejections {
                 assert!(!rejection.to_string().contains("PRIVATE"));
             }
             assert_eq!(
@@ -2868,7 +3371,7 @@ mod tests {
                 1
             );
             if expected_status == "error" {
-                assert!(evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Error{code,..} if code=="AG_MODEL_CORRECTION_LIMIT")));
+                assert!(evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Error{code,..} if code=="AG_GW_HTTP_500")));
             } else {
                 let replies = invokes.last().unwrap().1["messages"]
                     .as_array()
@@ -2962,7 +3465,7 @@ mod tests {
 
     // covers: BR-AG-STATE-002, BR-AG-OBS-001, BR-SYS-STATE-007
     #[test]
-    fn fixed_runtime_correction_budget_is_cumulative_across_success_with_precise_rejections() {
+    fn fixed_runtime_corrections_continue_across_success_with_precise_rejections() {
         let mut invalid = fixed_control("tool");
         invalid["intent"]["ambiguity"] = serde_json::json!("blocking");
         let bad = fixed_tool("list_docs", serde_json::json!({"_binderTurn":invalid}));
@@ -2999,7 +3502,6 @@ mod tests {
         .iter()
         .enumerate()
         {
-            assert_eq!(rejections[index]["correctionAttempt"], index + 1);
             assert_eq!(
                 rejections[index]["protocolDiagnostic"]["reasonCode"],
                 *reason
@@ -3023,9 +3525,9 @@ mod tests {
                 .iter()
                 .filter(|(p, _)| p == "/invoke/stream")
                 .count(),
-            4
+            5
         );
-        assert!(evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Error {code,message,diagnostic,..} if code=="AG_MODEL_CORRECTION_LIMIT" && message.contains("控制封套拒绝") && diagnostic.as_ref().is_some_and(|d|d.category=="model_protocol"))));
+        assert!(evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Error {code,..} if code=="AG_GW_HTTP_500")));
     }
 
     // covers: BR-AG-STATE-002
@@ -3210,31 +3712,6 @@ mod tests {
         fault: Option<(usize, GateFixtureFault)>,
         prior_messages: Vec<(&str, String)>,
     ) -> RuntimeEvidence {
-        run_fixed_turn_with_policy(
-            allowed,
-            responses,
-            prompt,
-            v2_ready,
-            file_content,
-            cancel_on_gate,
-            fault,
-            prior_messages,
-            ag::tool_registry::ExecutionBudgetPolicy::legacy(),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn run_fixed_turn_with_policy(
-        allowed: bool,
-        responses: Vec<String>,
-        prompt: &str,
-        v2_ready: Option<bool>,
-        file_content: &str,
-        cancel_on_gate: Option<usize>,
-        fault: Option<(usize, GateFixtureFault)>,
-        prior_messages: Vec<(&str, String)>,
-        policy: ag::tool_registry::ExecutionBudgetPolicy,
-    ) -> RuntimeEvidence {
         run_fixed_turn_with_policy_and_files(
             allowed,
             responses,
@@ -3244,7 +3721,6 @@ mod tests {
             cancel_on_gate,
             fault,
             prior_messages,
-            policy,
             &[],
         )
     }
@@ -3259,7 +3735,6 @@ mod tests {
         cancel_on_gate: Option<usize>,
         fault: Option<(usize, GateFixtureFault)>,
         prior_messages: Vec<(&str, String)>,
-        policy: ag::tool_registry::ExecutionBudgetPolicy,
         extra_files: &[(&str, &str)],
     ) -> RuntimeEvidence {
         use std::sync::{Arc, Mutex};
@@ -3413,7 +3888,6 @@ mod tests {
                     | GateFixtureFault::AuthTimeout
             ))
         );
-        let execution = ag::tool_registry::with_verification_execution_policy(policy, execution);
         if timed {
             tauri::async_runtime::block_on(ent::gateway::with_test_gateway_deadline(
                 std::time::Duration::from_millis(200),
@@ -3596,7 +4070,6 @@ mod tests {
             rejection["parameterDiagnostic"]["fieldPath"],
             "initialContent"
         );
-        assert_eq!(rejection["correctionAttempt"], 1);
         let missing = &evidence
             .events
             .iter()
@@ -3604,7 +4077,6 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(missing["code"], "AG_MODEL_CONTROL_MISSING");
-        assert_eq!(missing["correctionAttempt"], 1);
         let requests = evidence
             .requests
             .iter()
@@ -3640,7 +4112,7 @@ mod tests {
             .iter()
             .any(|path| path == "empty.html"));
         assert!(capped.safe_events.iter().any(|event| matches!(&event.event,
-            AgTurnEventPayload::Error { code, .. } if code == "AG_MODEL_CORRECTION_LIMIT")));
+            AgTurnEventPayload::Error { code, .. } if code == "AG_GW_HTTP_500")));
         assert!(!capped.safe_events.iter().any(|event| matches!(
             event.event,
             AgTurnEventPayload::DecisionRequestProposed { .. }
@@ -3767,7 +4239,7 @@ mod tests {
 
     // covers: BR-AG-STATE-002, BR-SYS-STATE-007
     #[test]
-    fn fixed_runtime_default_budget_runs_nine_tools_and_real_resource_handoff() {
+    fn fixed_runtime_runs_nine_tools_and_real_resource_handoff() {
         let mut responses = Vec::new();
         for path in [
             "first.html",
@@ -3798,7 +4270,6 @@ mod tests {
             None,
             None,
             vec![],
-            Default::default(),
             &[
                 ("first.html", "<p>first fixture</p>"),
                 ("second.html", "<p>second fixture</p>"),
@@ -3853,165 +4324,6 @@ mod tests {
                 .count(),
             1
         );
-    }
-
-    // covers: BR-AG-STATE-002, BR-SYS-STATE-007
-    #[test]
-    fn fixed_runtime_soft_budget_freezes_tools_and_wraps_up_without_replaying() {
-        let policy = ag::tool_registry::ExecutionBudgetPolicy {
-            max_model_calls: 4,
-            max_tool_calls: 1,
-            max_corrections: 2,
-            final_reserve: 2,
-        };
-        let call = fixed_tool(
-            "workspace_glob",
-            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
-        );
-        for responses in [
-            vec![call.clone(), fixed_final()],
-            vec![call.clone(), call.clone(), call.clone(), call.clone()],
-        ] {
-            let evidence = run_fixed_turn_with_policy(
-                true,
-                responses,
-                "列出txt",
-                None,
-                "fixture",
-                None,
-                None,
-                vec![],
-                policy,
-            );
-            assert_eq!(evidence.status, "completed");
-            assert_eq!(
-                evidence
-                    .safe_events
-                    .iter()
-                    .filter(|e| matches!(
-                        e.event,
-                        AgTurnEventPayload::ToolResult { success: true, .. }
-                    ))
-                    .count(),
-                1
-            );
-            assert!(evidence.safe_events.iter().any(|e| matches!(&e.event,AgTurnEventPayload::Done {stop_reason} if stop_reason=="budget_exhausted")));
-            let invokes: Vec<_> = evidence
-                .requests
-                .iter()
-                .filter(|(p, _)| p == "/invoke/stream")
-                .collect();
-            assert!(invokes.len() <= 4);
-            for (_, request) in &invokes[1..] {
-                assert!(request["tools"].as_array().unwrap().is_empty());
-            }
-            assert_eq!(
-                evidence
-                    .events
-                    .iter()
-                    .filter(|(k, _)| k == "execution_budget_frozen")
-                    .count(),
-                1
-            );
-        }
-    }
-
-    // covers: BR-AG-STATE-001, BR-AG-STATE-002, BR-SYS-STATE-007
-    #[test]
-    fn fixed_runtime_soft_budget_batch_cap_and_gate_cancel_are_not_success_fallbacks() {
-        let policy = ag::tool_registry::ExecutionBudgetPolicy {
-            max_model_calls: 4,
-            max_tool_calls: 1,
-            max_corrections: 2,
-            final_reserve: 2,
-        };
-        let arguments =
-            serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}).to_string();
-        let batch = format!(
-            "event: tool_calls\ndata: {}\n\n",
-            serde_json::json!({"tool_calls":[
-                {"id":"batch-first","name":"workspace_glob","arguments":arguments},
-                {"id":"batch-second","name":"workspace_glob","arguments":arguments}
-            ]})
-        );
-        let evidence = run_fixed_turn_with_policy(
-            true,
-            vec![batch, fixed_final()],
-            "枚举txt",
-            None,
-            "fixture",
-            None,
-            None,
-            vec![],
-            policy,
-        );
-        assert_eq!(evidence.status, "completed");
-        assert_eq!(
-            evidence
-                .safe_events
-                .iter()
-                .filter(|e| matches!(
-                    e.event,
-                    AgTurnEventPayload::ToolResult { success: true, .. }
-                ))
-                .count(),
-            1
-        );
-        assert_eq!(
-            evidence
-                .safe_events
-                .iter()
-                .filter(|e| matches!(
-                    e.event,
-                    AgTurnEventPayload::ToolResult { success: false, .. }
-                ))
-                .count(),
-            1
-        );
-        let requests: Vec<_> = evidence
-            .requests
-            .iter()
-            .filter(|(p, _)| p == "/invoke/stream")
-            .collect();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(
-            requests[1].1["messages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|m| m["role"] == "tool")
-                .count(),
-            2
-        );
-        for cancelled in [false, true] {
-            let evidence = run_fixed_turn_with_policy(
-                true,
-                vec![fixed_tool(
-                    "workspace_glob",
-                    serde_json::json!({"pattern":"*.txt","_binderTurn":fixed_control("tool")}),
-                )],
-                "枚举txt",
-                None,
-                "fixture",
-                cancelled.then_some(2),
-                (!cancelled).then_some((2, GateFixtureFault::HeadersTimeout)),
-                vec![],
-                policy,
-            );
-            assert_eq!(
-                evidence.status,
-                if cancelled { "cancelled" } else { "error" }
-            );
-            assert!(!evidence.safe_events.iter().any(|e|matches!(&e.event,AgTurnEventPayload::Done {stop_reason} if stop_reason=="budget_exhausted")));
-            assert_eq!(
-                evidence
-                    .requests
-                    .iter()
-                    .filter(|(p, _)| p == "/invoke/stream")
-                    .count(),
-                1
-            );
-        }
     }
 
     // covers: BR-AG-STATE-001
@@ -4803,7 +5115,7 @@ mod tests {
     fn fixed_runtime_invalid_control_and_truncation_end_as_error() {
         let malformed = "event: chunk\ndata: {\"text\":\"<binder-turn-control>{bad}</binder-turn-control>\"}\n\nevent: done\ndata: {\"stop_reason\":\"stop\"}\n\n".to_string();
         for (responses, code, expected_calls) in [
-            (vec![malformed; 3], "AG_MODEL_CORRECTION_LIMIT", 3),
+            (vec![malformed; 3], "AG_GW_HTTP_500", 4),
             (
                 vec![fixed_final()
                     .split("event: done")
@@ -4885,7 +5197,7 @@ mod tests {
             .safe_events
             .iter()
             .any(|event| matches!(&event.event,
-            AgTurnEventPayload::Error { code, .. } if code == "AG_MODEL_CORRECTION_LIMIT")));
+            AgTurnEventPayload::Error { code, .. } if code == "AG_GW_HTTP_500")));
         assert!(!exhausted
             .events
             .iter()
